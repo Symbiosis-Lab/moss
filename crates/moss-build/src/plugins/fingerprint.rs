@@ -4,8 +4,9 @@
 //! files, which forced a rebuild and browser refresh when plugin code changed.
 //! Retiring the `enhance` capability meant that digest covered an empty
 //! set on every build; it and its `SiteHashes.plugin_fingerprint` field went
-//! with it. Nothing a plugin does now reaches page bytes at render time: a
-//! process hook writes SOURCE files, and the content hashes already see those.
+//! with it. A process hook writes SOURCE files, which the content hashes see.
+//! A declared block reaches page bytes through the parse cache's inputs and
+//! each page's own features, which the incremental verdict compares.
 
 use sha2::{Digest, Sha256};
 use std::fs;

@@ -12,7 +12,7 @@ fn rows(v: &[&str]) -> Vec<String> {
 
 #[test]
 fn absent_rows_emit_nothing() {
-    assert_eq!(render_byline_html(&[], false, None), None);
+    assert_eq!(render_byline_html(&[], false, &[]), None);
     assert_eq!(render_colophon_html(&[], false), None);
 }
 
@@ -20,7 +20,7 @@ fn absent_rows_emit_nothing() {
 fn each_entry_is_one_row() {
     // Full-width space between role and name survives verbatim — the shape
     // content is being migrated to.
-    let html = render_byline_html(&rows(&["作者　陳遠山", "編輯　周一"]), false, None).unwrap();
+    let html = render_byline_html(&rows(&["作者　陳遠山", "編輯　周一"]), false, &[]).unwrap();
     assert_eq!(
         html,
         r#"<div class="moss-byline"><div class="moss-byline-row">作者　陳遠山</div><div class="moss-byline-row">編輯　周一</div></div>"#
@@ -58,7 +58,7 @@ fn inline_markdown_is_rendered_not_escaped() {
 
 #[test]
 fn plain_text_is_html_escaped() {
-    let html = render_byline_html(&rows(&["Q&A 統籌"]), false, None).unwrap();
+    let html = render_byline_html(&rows(&["Q&A 統籌"]), false, &[]).unwrap();
     assert!(html.contains("Q&amp;A"), "ampersand escaped: {html}");
 }
 
@@ -68,14 +68,14 @@ fn raw_html_passes_through_exactly_as_it_does_in_the_body() {
     // site author's own file, read by the same markdown path as the body,
     // where inline HTML has always passed through. Pinned so a future change
     // to that shared path is a visible decision rather than a surprise here.
-    let html = render_byline_html(&rows(&["作者 <span>X</span>"]), false, None).unwrap();
+    let html = render_byline_html(&rows(&["作者 <span>X</span>"]), false, &[]).unwrap();
     assert!(html.contains("<span>X</span>"), "got: {html}");
 }
 
 #[test]
 fn a_row_that_is_not_one_paragraph_falls_back_to_literal_text() {
     // A stray `#` must render as itself, never as a heading in the masthead.
-    let html = render_byline_html(&rows(&["# 作者 X"]), false, None).unwrap();
+    let html = render_byline_html(&rows(&["# 作者 X"]), false, &[]).unwrap();
     assert!(
         html.contains("# 作者 X"),
         "heading syntax renders as literal text: {html}"
@@ -85,28 +85,56 @@ fn a_row_that_is_not_one_paragraph_falls_back_to_literal_text() {
 
 #[test]
 fn source_mapping_attribute_is_opt_in_and_names_its_field() {
-    let on = render_byline_html(&rows(&["作者 X"]), true, None).unwrap();
+    let on = render_byline_html(&rows(&["作者 X"]), true, &[]).unwrap();
     assert!(on.contains(r#"data-source-fm="byline""#), "got: {on}");
     let on = render_colophon_html(&rows(&["首發媒體 X"]), true).unwrap();
     assert!(on.contains(r#"data-source-fm="colophon""#), "got: {on}");
-    let off = render_byline_html(&rows(&["作者 X"]), false, None).unwrap();
+    let off = render_byline_html(&rows(&["作者 X"]), false, &[]).unwrap();
     assert!(!off.contains("data-source-fm"), "got: {off}");
 }
 
-#[test]
-fn place_line_renders_on_a_page_with_no_byline() {
-    // The bug this round caught: keying the combined result on `rows`
-    // alone silently dropped the place line on the common case — a page
-    // with `location:` set and no `byline:` at all.
-    let html = render_byline_html(&[], false, Some("Location: [Kyoto](/about/kyoto/)")).unwrap();
-    assert!(html.contains(r#"<div class="moss-place-line">Location: <a href="/about/kyoto/">Kyoto</a></div>"#), "got: {html}");
+fn place_line() -> TermLine {
+    TermLine {
+        term: "places".into(),
+        field: "location".into(),
+        label: "Location".into(),
+        separator: ": ".into(),
+        links: "[Kyoto](/about/kyoto/)".into(),
+        is_place: true,
+    }
 }
 
 #[test]
-fn place_line_and_byline_both_render_independently() {
-    let html = render_byline_html(&rows(&["作者　陳遠山"]), false, Some("Location: [Kyoto](/about/kyoto/)")).unwrap();
-    assert!(html.contains("moss-byline"), "got: {html}");
-    assert!(html.contains("moss-place-line"), "got: {html}");
+fn the_place_line_keeps_its_class_and_text_on_a_page_with_no_byline() {
+    let html = render_byline_html(&[], false, &[place_line()]).unwrap();
+    assert_eq!(html, r#"<div class="moss-term-line moss-place-line" data-term="places" data-field="location"><span class="moss-term-line-label">Location</span>: <a href="/about/kyoto/">Kyoto</a></div>"#);
+}
+
+#[test]
+fn a_term_line_names_its_kind_and_field_and_links_each_name() {
+    let tags = TermLine {
+        term: "tags".into(),
+        field: "tags".into(),
+        label: "Tags".into(),
+        separator: ": ".into(),
+        links: "[Field Notes](/tags/field-notes/), [Slow Reading](/tags/slow-reading/)".into(),
+        is_place: false,
+    };
+    let html = render_byline_html(&[], false, &[tags]).unwrap();
+    assert_eq!(html, r#"<div class="moss-term-line" data-term="tags" data-field="tags"><span class="moss-term-line-label">Tags</span>: <a href="/tags/field-notes/">Field Notes</a>, <a href="/tags/slow-reading/">Slow Reading</a></div>"#);
+}
+
+#[test]
+fn a_term_line_maps_back_to_its_field_in_the_editor() {
+    let html = render_byline_html(&[], true, &[place_line()]).unwrap();
+    assert!(html.contains(r#"data-source-fm="location""#), "got: {html}");
+}
+
+#[test]
+fn term_lines_follow_the_byline() {
+    let html = render_byline_html(&rows(&["作者　陳遠山"]), false, &[place_line()]).unwrap();
+    let (byline, line) = (html.find("moss-byline").unwrap(), html.find("moss-place-line").unwrap());
+    assert!(byline < line, "got: {html}");
 }
 
 mod site_credit {

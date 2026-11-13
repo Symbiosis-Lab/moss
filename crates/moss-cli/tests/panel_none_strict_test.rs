@@ -60,7 +60,9 @@ fn plain_ink_over_a_hatched_sky_is_a_note_and_passes_strict() {
     let (out, stderr) = build(":::hero {image=hatch.png align=top panel=none}\n## Open all hours today\n:::");
     assert_eq!(out.status.code(), Some(0), "plain ink is the author's call and must not fail --strict:\n{stderr}");
     assert!(stderr.contains("[NOTE]") && stderr.contains("panel=none") && stderr.contains("Open all hours today"), "{stderr}");
-    assert!(stderr.contains("the words in the light theme") && stderr.contains(":1 at the worst spot,") && stderr.contains(":1 over the typical ground, needs"), "the note names where, with the ratio: {stderr}");
+    let note = stderr.lines().find(|l| l.contains("panel=none")).unwrap_or_default();
+    assert!(note.starts_with("[NOTE] index.md: the hero's words") && note.contains(":1, needs ") && note.contains("both themes"), "one line naming the worst ratio, where and the themes: {stderr}");
+    assert!(!note.contains("moss_build::"), "{note}");
     assert!(!stderr.contains("[WARN]"), "{stderr}");
 }
 

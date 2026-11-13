@@ -155,10 +155,12 @@ fn legend(rows: &[InventoryEntry]) -> Option<String> {
     let mut lines = vec!["HIDDEN — why a page is absent from generated listings:".to_string()];
     for k in kinds {
         lines.push(match k {
-            "draft" => "  draft      frontmatter `draft: true` — built for preview, never published; hidden from every listing, feed, the sitemap and nav".to_string(),
-            "unlisted" => "  unlisted   frontmatter `listed: false` — out of generated listings and feeds, but still a public, indexable page".to_string(),
-            "nav-item" => "  nav-item   a root-level file in a site that has content folders: it appears in the nav bar instead of the article list (set `nav: false` to move it back)".to_string(),
-            "slot" => "  slot       not a page: layout chrome (footer.md, or `slot:` frontmatter) that renders into a template slot, or a `partial: true` transclusion source".to_string(),
+            "draft" => "  draft           frontmatter `draft: true` — built for preview, never published; hidden from every listing, feed, the sitemap and nav".to_string(),
+            "unlisted" => "  unlisted        frontmatter `listed: false` — out of generated listings and feeds, but still a public, indexable page".to_string(),
+            "search-engines" => "  search-engines  frontmatter `search_engines: false` — noindex, and out of every listing, feed, the sitemap and search; reached only by its link".to_string(),
+            "hidden-folder" => "  hidden-folder   in a folder whose home says `search_engines: false` — noindex, and listed only inside that folder".to_string(),
+            "nav-item" => "  nav-item        a root-level file in a site that has content folders: it appears in the nav bar instead of the article list (set `nav: false` to move it back)".to_string(),
+            "slot" => "  slot            not a page: layout chrome (footer.md, or `slot:` frontmatter) that renders into a template slot, or a `partial: true` transclusion source".to_string(),
             other => format!("  {other}"),
         });
     }

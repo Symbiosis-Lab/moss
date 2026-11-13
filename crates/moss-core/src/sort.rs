@@ -450,8 +450,8 @@ fn cmp_weight(a: Option<i32>, b: Option<i32>) -> std::cmp::Ordering {
 }
 
 /// The one date-axis order. A folder's listing and its series chain both
-/// sort through here, so a reader walking the chain meets the pages in the
-/// order the folder's page lists them.
+/// sort through here: the chain reads a newest-first folder oldest first, and
+/// pages that share a date keep one order either way.
 ///
 /// Entries with one date go by [`cmp_weight`]; without weights the url path
 /// below settles them.

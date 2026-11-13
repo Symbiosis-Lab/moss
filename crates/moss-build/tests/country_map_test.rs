@@ -137,3 +137,26 @@ fn a_rated_country_carries_its_level_index_for_the_fade_in_delay() {
     assert!(tag("japan").contains("style=\"--i:1\""));
     assert!(!tag("chad").contains("--i:"), "Chad has no row");
 }
+
+#[test]
+fn as_of_today_marks_the_stamp_for_the_script_and_a_dateless_page_still_gets_one() {
+    let today = |date: &str| page("| Mexico | High | |\n").replace("date: 2026-11-03\n", date).replace("country_map:\n", "country_map:\n  as_of: today\n");
+    let site = Site::new(&[
+        ("index.md", "---\ntitle: Home\n---\n\nHi.\n"),
+        ("dated.md", &today("date: 2026-11-03\n")),
+        ("dateless.md", &today("")),
+        ("plain.md", &page("| Mexico | High | |\n").replace("date: 2026-11-03\n", "")),
+        ("guide.md", "---\ntitle: Guide\n---\n\n![[dated|style:map]]\n"),
+        ("japanese.md", &today("date: 2026-11-03\nlang: ja\n")),
+    ]);
+    let stamp = |file: &str| site.html(file).split("<p class=\"moss-country-stamp\"").nth(1).map(|s| s.split("</p>").next().unwrap().to_string());
+    let dated = stamp("dated/index.html").expect("a stamp");
+    assert!(dated.starts_with(" lang=\"en\" data-today=\"As of {date}\">") && dated.contains("datetime=\"2026-11-03\""), "{dated}");
+    assert_eq!(stamp("guide/index.html").as_deref(), Some(dated.as_str()), "an embed carries it too");
+    let dateless = stamp("dateless/index.html").expect("the build day stands in for the missing date");
+    assert!(dateless.contains("data-today=") && dateless.contains("datetime=\"20"), "{dateless}");
+    assert_eq!(stamp("plain/index.html"), None, "no date and no as_of: no stamp");
+    let japanese = site.html("japanese/index.html");
+    assert!(japanese.contains(" lang=\"ja\">\n<head>"), "the page's own language");
+    assert!(stamp("japanese/index.html").unwrap().starts_with(" lang=\"en\""), "the stamp's words are in the interface language");
+}

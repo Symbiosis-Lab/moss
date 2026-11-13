@@ -8,7 +8,6 @@ use moss_core::render::image::{
 };
 use crate::build::types::ParsedDocument;
 use moss_core::asset_snapshot::AssetSnapshot;
-use std::collections::HashSet;
 
 /// True when the document has an absolute `external_url:` in its frontmatter —
 /// a linkblog page whose canonical home is the outlet, not the local site.
@@ -114,61 +113,6 @@ fn add_utm_to_internal_links(html: &str, site_url: &str) -> String {
     result
 }
 
-/// Prefix every footnote anchor in one article's HTML so it stays unique
-/// inside the feed document.
-///
-/// A page's endnote ids (`fn-1`, `fnref-1`) are unique per PAGE. A feed
-/// concatenates every article into one XML document, so three footnoted
-/// articles would ship three `id="fn-1"`s — and in a reader that renders
-/// items into one document, clicking footnote 1 in article 3 jumps to
-/// article 1. Scoping by the article's own path makes each set unique and
-/// keeps every link resolving within its own item.
-///
-/// The fragment hrefs are otherwise left alone: `add_utm_to_internal_links`
-/// classifies `#…` as external and skips it, so a footnote link is never
-/// mangled — it is just ambiguous, which is what this fixes.
-///
-/// Takes the scope [`footnote_scope`] already made unique for this feed rather
-/// than the raw path, so uniqueness is decided in one place.
-fn scope_footnote_anchors(html: &str, scope: &str) -> String {
-    if !html.contains("moss-footnotes") {
-        return html.to_string();
-    }
-    html.replace("id=\"fn-", &format!("id=\"{scope}-fn-"))
-        .replace("id=\"fnref-", &format!("id=\"{scope}-fnref-"))
-        .replace("href=\"#fn-", &format!("href=\"#{scope}-fn-"))
-        .replace("href=\"#fnref-", &format!("href=\"#{scope}-fnref-"))
-}
-
-/// Derive one item's anchor prefix from its URL path, guaranteed distinct from
-/// every prefix already handed out for this feed.
-///
-/// The path is the only per-item name a feed item carries, but two properties
-/// of moss URLs make a naive sanitizer useless. moss slugs preserve CJK
-/// verbatim ([`moss_core::slug::generate_slug`]), so an ASCII-only character
-/// map erases a Chinese site's entire path; and pretty URLs all end in the
-/// constant `index.html`, so what survives is the same string for every
-/// article — three articles, three identical `fn-1`s, which is the collision
-/// this scoping exists to prevent. Reusing the slug SSOT keeps the CJK (HTML5
-/// ids accept any character but whitespace, and fragment refs percent-encode
-/// cleanly) and dropping the file segment leaves the part that actually
-/// differs. Where even that ties — `posts/a-b/` against `posts/a/b/`, or the
-/// site root, which slugifies to nothing — position in the feed decides.
-fn footnote_scope(url_path: &str, index: usize, used: &mut HashSet<String>) -> String {
-    let stem = url_path
-        .strip_suffix("index.html")
-        .or_else(|| url_path.strip_suffix(".html"))
-        .unwrap_or(url_path);
-    let mut scope = moss_core::slug::slugify_path_segments(stem).replace('/', "-");
-    let mut ordinal = index + 1;
-    while scope.is_empty() || used.contains(&scope) {
-        scope = format!("item-{ordinal}");
-        ordinal += 1;
-    }
-    used.insert(scope.clone());
-    scope
-}
-
 /// Generates an RSS 2.0 feed XML string from articles.
 ///
 /// # Arguments
@@ -229,7 +173,7 @@ pub fn generate_rss_feed(
     ));
 
     // Add items for each article
-    let mut used_scopes: HashSet<String> = HashSet::new();
+    let mut scopes = crate::build::folder_embed::inline_body::IdScopes::default();
     for (index, article) in articles.into_iter().enumerate() {
         let article_url = percent_encode_feed_url(&format!(
             "{}/{}",
@@ -246,10 +190,14 @@ pub fn generate_rss_feed(
             "<link>{}</link>\n",
             moss_core::media::xml_escape(&article_url_with_utm)
         ));
-        xml.push_str(&format!(
-            "<guid>{}</guid>\n",
-            moss_core::media::xml_escape(&article_url_with_utm)
-        ));
+        if let Some(id) = &article.import_feed_id {
+            xml.push_str(&format!("<guid isPermaLink=\"false\">{}</guid>\n", moss_core::media::xml_escape(id)));
+        } else {
+            xml.push_str(&format!(
+                "<guid>{}</guid>\n",
+                moss_core::media::xml_escape(&article_url_with_utm)
+            ));
+        }
 
         // Add pubDate in RFC 822 format
         if let Some(ref date) = article.date {
@@ -258,12 +206,12 @@ pub fn generate_rss_feed(
             }
         }
 
-        // Build description: scope footnote anchors to this item (the feed is
-        // one document holding every article), rewrite internal links with
-        // UTM, add optional tracking pixel.
-        let scope = footnote_scope(&article.url_path, index, &mut used_scopes);
+        // Build description: scope the item's ids (the feed is one document
+        // holding every article, so three footnoted articles would otherwise
+        // ship three `fn-1`s), rewrite internal links with UTM, add optional
+        // tracking pixel.
         let body = crate::build::feeds::calendar::strip_links_paragraphs(&article.html_content);
-        let scoped_html = scope_footnote_anchors(&body, &scope);
+        let scoped_html = scopes.scope(&body, &article.url_path, index);
         let mut description_html = add_utm_to_internal_links(&scoped_html, site_url);
 
         // The website HTML inlines typeset math as <svg>, which
@@ -516,12 +464,6 @@ mod tests {
 
         assert_eq!(rss.matches(r#"id="fn-1""#).count(), 0, "{rss}");
         assert_anchors_resolve_within_each_item(&rss);
-    }
-
-    #[test]
-    fn scoping_leaves_a_footnote_free_article_byte_identical() {
-        let html = r#"<p>Plain <a href="/other/">link</a>.</p>"#;
-        assert_eq!(scope_footnote_anchors(html, "posts-x"), html);
     }
 
     #[test]

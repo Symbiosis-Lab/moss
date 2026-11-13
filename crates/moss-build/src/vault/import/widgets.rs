@@ -108,6 +108,26 @@ pub(crate) const GALLERY_CONTAINER_CLASSES: &[&str] = &[
     // Not `sqs-gallery`: a summary-block listing carries it too, and its cards are text.
 ];
 
+/// A platform's link-preview card: a container holding one link around a
+/// title, a description, a metadata row (icon, publisher, author) and a
+/// thumbnail. Each field is the class token of the part that carries it; the
+/// metadata row has no field because it only repeats the site's own name.
+pub(crate) struct LinkCardClasses {
+    pub card: &'static str,
+    pub link: &'static str,
+    pub title: &'static str,
+    pub description: &'static str,
+    pub thumbnail: &'static str,
+}
+
+pub(crate) const LINK_CARD_CLASSES: &[LinkCardClasses] = &[LinkCardClasses {
+    card: "kg-bookmark-card",
+    link: "kg-bookmark-container",
+    title: "kg-bookmark-title",
+    description: "kg-bookmark-description",
+    thumbnail: "kg-bookmark-thumbnail",
+}];
+
 /// Class tokens a hosted site builder puts on a map block. The map is drawn
 /// by a script, so the served HTML holds no frame; the place is read from the
 /// element's `data-block-json`.
@@ -194,6 +214,7 @@ fn contains_ci(html: &str, needle: &str) -> bool {
 fn may_hold_widget(html: &str) -> bool {
     contains_ci(html, "<iframe")
         || GALLERY_CONTAINER_CLASSES.iter().any(|t| contains_ci(html, t))
+        || LINK_CARD_CLASSES.iter().any(|r| contains_ci(html, r.card))
         || MAP_BLOCK_CLASSES.iter().any(|t| contains_ci(html, t))
         || contains_ci(html, CODE_BLOCK_CLASS)
         || contains_ci(html, "<form")
@@ -212,6 +233,7 @@ fn has_hyphenated_tag(html: &str) -> bool {
 
 enum Kind {
     Gallery,
+    LinkCard(&'static LinkCardClasses),
     Map,
     Code,
     Custom,
@@ -254,6 +276,9 @@ fn mailto_address(href: &str) -> Option<String> {
 fn kind_of(el: &Element) -> Option<Kind> {
     if el.classes().any(|c| GALLERY_CONTAINER_CLASSES.contains(&c)) {
         return Some(Kind::Gallery);
+    }
+    if let Some(row) = LINK_CARD_CLASSES.iter().find(|r| el.classes().any(|c| c == r.card)) {
+        return Some(Kind::LinkCard(row));
     }
     if el.classes().any(|c| MAP_BLOCK_CLASSES.contains(&c)) {
         return Some(Kind::Map);
@@ -332,8 +357,9 @@ fn link_html(href: &str, label: &str) -> String {
 /// (Plain text `![[url]]` would be escaped by the converter.)
 const EMBED_TAG: &str = "moss-embed";
 
-/// htmd with three changes: a heading (h2 to h6) that is plainly a paragraph
-/// is written as one (see `is_paragraph_text`), `<moss-embed data-url="…">` becomes the
+/// htmd with four changes: a heading (h2 to h6) that is plainly a paragraph
+/// is written as one (see `is_paragraph_text`), a heading with a line break
+/// stays one line with `<br>` for the break, `<moss-embed data-url="…">` becomes the
 /// remote-embed wikilink on its own paragraph, with the label and size its
 /// attributes carry, and an `<img>` whose alt is only a file name is written
 /// with an empty alt (see `describing_alt`).
@@ -349,11 +375,17 @@ pub(crate) fn html_to_markdown(html: &str) -> std::io::Result<String> {
                 _ => handlers.fallback(el),
             }
         })
-        .add_handler(vec!["h2", "h3", "h4", "h5", "h6"], |handlers: &dyn Handlers, el: htmd::Element| {
+        .add_handler(vec!["h1", "h2", "h3", "h4", "h5", "h6"], |handlers: &dyn Handlers, el: htmd::Element| {
             let inner = handlers.walk_children(el.node).content;
             let text = inner.trim();
-            if is_paragraph_text(text) {
+            if el.tag != "h1" && is_paragraph_text(text) {
                 return Some(format!("\n\n{text}\n\n").into());
+            }
+            // A markdown hard break ends an ATX heading line; `<br>` keeps both parts in one heading.
+            if text.contains("  \n") {
+                let level = el.tag.trim_start_matches('h').parse().unwrap_or(2);
+                let line: Vec<&str> = text.split("  \n").map(str::trim).filter(|p| !p.is_empty()).collect();
+                return Some(format!("\n\n{} {}\n\n", "#".repeat(level), line.join("<br>")).into());
             }
             handlers.fallback(el)
         })
@@ -620,13 +652,7 @@ fn gallery_outcome(node: NodeRef<Node>) -> Outcome {
     let mut items = String::new();
     for img in container.select(&Selector::parse("img").expect("static selector")) {
         let el = img.value();
-        let src = LAZY_SRC_ATTRS
-            .iter()
-            .copied()
-            .chain(["src"])
-            .map(|a| attr(el, a))
-            .find(|v| !v.is_empty() && !v.starts_with("data:"));
-        if let Some(src) = src.filter(|s| seen.insert(s.to_string())) {
+        if let Some(src) = img_src(el).filter(|s| seen.insert(s.to_string())) {
             items.push_str(&format!("<p><img src=\"{}\" alt=\"{}\"></p>", moss_core::media::html_escape_attr(src), moss_core::media::html_escape_attr(attr(el, "alt"))));
         }
     }
@@ -635,6 +661,37 @@ fn gallery_outcome(node: NodeRef<Node>) -> Outcome {
     } else {
         Outcome::Replace(format!("<{GALLERY_TAG}>{items}</{GALLERY_TAG}>"))
     }
+}
+
+/// A picture's address, its lazy-load attributes first; a `data:` placeholder is no address.
+fn img_src(el: &Element) -> Option<&str> {
+    LAZY_SRC_ATTRS.iter().copied().chain(["src"]).map(|a| attr(el, a)).find(|v| !v.is_empty() && !v.starts_with("data:"))
+}
+
+/// A link-preview card as one paragraph holding one link around the
+/// thumbnail and the title, then the description as a paragraph of its own.
+/// A card with no link or no title is left for the converter.
+fn link_card_outcome(node: NodeRef<Node>, row: &LinkCardClasses) -> Outcome {
+    let card = ElementRef::wrap(node).expect("an element node");
+    let part = |class: &str| card.select(&Selector::parse(&format!(".{class}")).expect("static selector")).next();
+    let text = |class: &str| part(class).map(|e| label_text(&e.text().collect::<String>())).unwrap_or_default();
+    let href = part(row.link).map_or("", |e| attr(e.value(), "href"));
+    let title = text(row.title);
+    if href.is_empty() || title.is_empty() {
+        return Outcome::Leave;
+    }
+    let thumbnail = part(row.thumbnail)
+        .and_then(|t| t.select(&Selector::parse("img").expect("static selector")).next())
+        .and_then(|img| img_src(img.value()))
+        .map(|src| format!("<img src=\"{}\" alt=\"\"> ", moss_core::media::html_escape_attr(src)))
+        .unwrap_or_default();
+    let description = text(row.description);
+    let description = if description.is_empty() { String::new() } else { format!("<p>{}</p>", moss_core::media::html_escape_text(&description)) };
+    Outcome::Replace(format!(
+        "<p><a href=\"{}\">{thumbnail}{}</a></p>{description}",
+        moss_core::media::html_escape_attr(href),
+        moss_core::media::html_escape_text(&title)
+    ))
 }
 
 /// Whether an empty custom element belongs to a page builder's layout: an
@@ -789,6 +846,7 @@ pub fn carry_widgets(html: &str, base_url: &Url) -> (String, WidgetCount) {
         let Node::Element(el) = node.value() else { continue };
         let outcome = match kind {
             Kind::Gallery => gallery_outcome(node),
+            Kind::LinkCard(row) => link_card_outcome(node, row),
             Kind::Map => map_outcome(node),
             Kind::Code => code_outcome(node, base_url),
             Kind::Custom => custom_outcome(node, el),

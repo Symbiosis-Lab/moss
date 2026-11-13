@@ -52,21 +52,28 @@ describe("moss plugin", () => {
     );
   });
 
-  it("asks before a first build, and Cancel builds nothing", async () => {
+  it("asks before a first preview, and Cancel starts nothing", async () => {
     await browser.executeObsidianCommand("moss:preview");
     const modal = browser.$(".modal");
     await modal.waitForExist({ timeout: 10000 });
     const text = await modal.getText();
-    expect(text).toContain("moss has not built this vault before");
-    expect(text).toContain("uid: line");
-    expect(text).toContain("create a .moss folder");
+    expect(text).toContain("adds a .moss folder");
+    expect(text).not.toContain("uid");
+    // While the question is open, a second click asks nothing new and Stop is not offered: nothing runs yet.
+    await browser.executeObsidianCommand("moss:preview");
+    await browser.pause(1000);
+    expect(await browser.$$(".modal").length).toBe(1);
+    const stopOffered = await browser.executeObsidian(({ app }) =>
+      (app as unknown as { commands: { findCommand(id: string): { checkCallback?(checking: boolean): boolean } | undefined } })
+        .commands.findCommand("moss:stop-preview")?.checkCallback?.(true));
+    expect(stopOffered).toBe(false);
     await browser.$(".modal button:not(.mod-cta)").click();
     await browser.pause(1000);
     expect(await browser.$("iframe.moss-preview-iframe").isExisting()).toBe(false);
-    expect(await browser.$(".status-bar-item.plugin-moss").getText()).toContain("moss: idle");
+    expect(await browser.$(".status-bar-item.plugin-moss").isDisplayed()).toBe(false);
   });
 
-  it("runs Preview site: spawns the CLI, parses the URL, shows the page", async () => {
+  it("runs Preview this folder: spawns the CLI, parses the URL, shows the page", async () => {
     await startPreview();
 
     const iframe = browser.$("iframe.moss-preview-iframe");
@@ -89,32 +96,27 @@ describe("moss plugin", () => {
     // Status bar reflects the running server (the plugin's own item).
     const status = browser.$(".status-bar-item.plugin-moss");
     await status.waitForExist({ timeout: 10000 });
-    expect(await status.getText()).toContain("serving");
+    expect(await status.getText()).toContain("Previewing");
 
     await browser.executeObsidianCommand("moss:stop-preview");
-    let lastStatus = "";
-    try {
-      await browser.waitUntil(async () => {
-        lastStatus = await browser.$(".status-bar-item.plugin-moss").getText();
-        return lastStatus.includes("moss: idle");
-      }, { timeout: 15000 });
-    } catch {
-      throw new Error(`status bar never returned to idle (last: "${lastStatus}")`);
-    }
+    await browser.waitUntil(async () => !(await status.isDisplayed()), {
+      timeout: 15000,
+      timeoutMsg: "the status bar still shows a preview after Stop preview",
+    });
     // The pane says the preview stopped instead of showing the last page.
     expect(await browser.$("iframe.moss-preview-iframe").isExisting()).toBe(false);
-    expect(await browser.$(".moss-preview-message").getText()).toContain("No preview running");
+    expect(await browser.$(".moss-preview-message").getText()).toContain("Not previewing");
   });
 
   it("stops the server when the preview pane is closed", async () => {
     await startPreview();
     const status = browser.$(".status-bar-item.plugin-moss");
-    await browser.waitUntil(async () => (await status.getText()).includes("serving"), {
+    await browser.waitUntil(async () => (await status.getText()).includes("Previewing"), {
       timeout: 30000,
       timeoutMsg: "preview never started",
     });
     await browser.executeObsidian(({ app }) => app.workspace.detachLeavesOfType("moss-preview"));
-    await browser.waitUntil(async () => (await status.getText()).includes("moss: idle"), {
+    await browser.waitUntil(async () => !(await status.isDisplayed()), {
       timeout: 15000,
       timeoutMsg: "closing the pane left the server running",
     });

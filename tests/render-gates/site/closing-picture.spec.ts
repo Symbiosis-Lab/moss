@@ -266,16 +266,31 @@ for (const width of [1360, 390]) {
   });
 }
 
-// The words are measured where their box sits at each layout. A dark patch over the
-// far end of the words' rows spares the wide layout (a box of about 47% at the start)
-// but not the narrower ones, where the box reaches it or runs edge to edge.
-for (const [width, panel] of [[1360, false], [1000, true], [390, true]] as const) {
+// Words in ink are measured where their glyphs reach at each layout. A dark patch over
+// the right 44% of the words' rows spares a short heading at every desktop width,
+// where its lines and its button end before the patch, but not a phone, where the
+// words run edge to edge.
+for (const [width, panel] of [[1360, false], [1000, false], [390, true]] as const) {
   test(`a dark patch at the far end of the words' rows ${panel ? 'keeps' : 'spares'} the panel at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 800 });
     await page.goto('/hero/patch/', { waitUntil: 'load' });
-    const bg = await page.evaluate(() => getComputedStyle(document.querySelector('.moss-hero .moss-hero-content')!).backgroundColor);
+    const { bg, right } = await page.evaluate(() => {
+      const el = document.querySelector('.moss-hero .moss-hero-content')!;
+      // The glyphs: each text's own line boxes, and each button's box.
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      const rights = [...el.querySelectorAll('a')].map((a) => a.getBoundingClientRect().right);
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        const range = document.createRange();
+        range.selectNodeContents(n);
+        rights.push(...[...range.getClientRects()].map((r) => r.right));
+      }
+      return { bg: getComputedStyle(el).backgroundColor, right: Math.max(...rights) };
+    });
     if (panel) expect(parseColor(bg).a).toBeGreaterThan(0.5);
-    else expect(parseColor(bg).a).toBe(0);
+    else {
+      expect(right, 'the words end before the patch').toBeLessThan(width * 0.56);
+      expect(parseColor(bg).a).toBe(0);
+    }
   });
 }
 
@@ -351,9 +366,9 @@ test.describe('a picture taller than the window', () => {
 
 // On a phone a kept panel fades out toward the picture's subject instead of
 // ending in a seam. The words' own box stays solid (their contrast is measured
-// there); the fade hangs below it, inside the room the picture keeps clear.
+// there); the fade hangs outside it, inside the room the picture keeps clear.
 for (const scheme of SCHEMES) {
-  test(`phone, ${scheme}: a kept panel fades into the picture, below the words`, async ({ browser }) => {
+  test(`phone, ${scheme}: a kept panel fades into the picture around the words`, async ({ browser }) => {
     const context = await browser.newContext({ colorScheme: scheme, viewport: { width: 390, height: 800 } });
     const page = await context.newPage();
     await page.goto(SKY_PAGE, { waitUntil: 'load' });
@@ -362,13 +377,13 @@ for (const scheme of SCHEMES) {
       const hero = document.querySelector('footer .moss-hero-closing')!;
       const content = hero.querySelector('.moss-hero-content')!;
       const cs = getComputedStyle(content);
-      const tail = getComputedStyle(content, '::after');
+      const tail = getComputedStyle(content, '::before');
       const h = hero.getBoundingClientRect();
       const c = content.getBoundingClientRect();
       return {
         panel: cs.backgroundColor,
         ink: cs.color,
-        tail: { content: tail.content, bg: tail.backgroundColor, height: parseFloat(tail.height), mask: tail.maskImage || tail.webkitMaskImage, top: tail.top },
+        tail: { content: tail.content, bg: tail.backgroundColor, height: parseFloat(tail.paddingTop), mask: tail.maskImage || tail.webkitMaskImage },
         hero: { top: h.top, bottom: h.bottom, left: h.left, width: h.width },
         words: { bottom: c.bottom },
       };
@@ -672,7 +687,7 @@ for (const scheme of SCHEMES) {
           credit: { top: k.top, bottom: k.bottom },
           panels: [getComputedStyle(content).backgroundColor, getComputedStyle(credit).backgroundColor],
           ink: getComputedStyle(credit).color,
-          tail: getComputedStyle(content, '::after').content,
+          tail: getComputedStyle(content, '::before').content,
         };
       });
       expect(parseColor(m.panels[0]).a, 'the words keep their panel').toBeGreaterThan(0.5);
@@ -681,7 +696,7 @@ for (const scheme of SCHEMES) {
       expect(m.credit.bottom).toBeLessThanOrEqual(m.hero.bottom + 1);
       const { overBlack, overWhite } = worstCaseContrast(m.panels[1], m.ink);
       expect(Math.min(overBlack, overWhite), `credit ${m.ink} on ${m.panels[1]}`).toBeGreaterThanOrEqual(4.5);
-      if (width < 768) expect(m.tail, "the words' panel ends in its fade").toBe('""');
+      expect(m.tail, "the words' panel ends in its fade").toBe('""');
       await context.close();
     });
   }
@@ -731,7 +746,6 @@ for (const scheme of SCHEMES) {
         return {
           panels: [getComputedStyle(content).backgroundColor, getComputedStyle(credit).backgroundColor],
           ink: [getComputedStyle(content.querySelector('h2')!).color, getComputedStyle(credit).color],
-          tail: getComputedStyle(content, '::after').content,
           shadows: [content, content.querySelector('h2')!, content.querySelector('a')!].map((e) => getComputedStyle(e).textShadow),
         };
       });
@@ -747,9 +761,8 @@ for (const scheme of SCHEMES) {
 }
 
 // `max-height=` and a position on the picture are build data: the build measures
-// the part of the picture the capped box shows, and a phone gives the faded
-// picture a floor so its words sit on the faded top. The credit stays at the
-// foot. Contrast is read off the rendered pixels.
+// the part of the picture the capped box shows, and a phone's faded box is that
+// cap too, grown only where its words need more. The credit stays at the foot. Contrast is read off the rendered pixels.
 const CAPPED = `http://localhost:${gatePort('closing-picture:capped')}/`;
 for (const theme of THEMES) {
   for (const width of [1360, 1100, 900, 768, 390]) {
@@ -771,10 +784,9 @@ for (const theme of THEMES) {
       expect(extra.position, 'the position the image names').toBe('50% 72%');
       expect(extra.cap).toBe('clamp(440px, 50vw, 680px)');
 
-      // The box: the cap from 48rem; on a phone the faded floor, which is taller.
+      // The box is the cap at every width: on a phone the words and the room below them fit in it.
       const height = m.hero.bottom - m.hero.top;
-      if (width >= 768) expect(Math.abs(height - capAt(width)), `box ${height}`).toBeLessThanOrEqual(1);
-      else expect(height).toBeGreaterThanOrEqual(608 - 1);
+      expect(Math.abs(height - capAt(width)), `box ${height}`).toBeLessThanOrEqual(1);
 
       // Nothing follows the picture, and nothing of it is outside it.
       expect(m.hero.left).toBeCloseTo(0, 0);

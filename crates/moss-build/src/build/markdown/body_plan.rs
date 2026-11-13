@@ -35,6 +35,9 @@
 //! block boundaries) and is the falsifier the whole design rests on — see
 //! `body_plan_tests::plan_reassembles_to_render_document_output`.
 
+mod sections;
+pub use sections::{SectionEmission, SectionPart};
+
 use moss_core::ast::{
     grid_parts::TileKind, Block, Document, GridCellParts, GridParts, GridShortcode, RenderHooks, Shortcode,
     SubscribeShortcode,
@@ -89,6 +92,9 @@ pub struct BodyPlan {
     ///
     /// [`first_text_segments`]: BodyPlan::first_text_segments
     pub has_text: bool,
+    /// Each heading's anchor and the name it shares with headings of the same
+    /// name (the id it is numbered from, else its own), in document order.
+    pub heading_names: Vec<sections::HeadingName>,
 }
 
 /// One piece of the emitted body.
@@ -103,6 +109,9 @@ pub enum BodySegment {
     /// depends on the site's language sections, which exist only after every
     /// page has parsed. `email::stamp_inline_subscribe_scopes` re-renders it.
     Subscribe(SubscribeEmission),
+    /// A heading over nothing but folder embeds, dropped with them when they
+    /// all list nothing.
+    Section(SectionEmission),
 }
 
 /// An inline `:::subscribe` form as its typed arguments and the HTML they
@@ -113,6 +122,9 @@ pub struct SubscribeEmission {
     pub html: String,
     /// The id of the text that names the form's email input, when there is one.
     pub labelled_by: Option<String>,
+    /// The id of the members notice above the form, kept when the form is
+    /// rendered again with its section's scope.
+    pub members_lead: Option<String>,
 }
 
 /// A `:::grid` block as both the HTML that was emitted and the typed cells it
@@ -131,6 +143,8 @@ pub struct GridEmission {
     pub collage: bool,
     /// `{rows=equal}`, which [`GridParts::assemble`] counts the cards' parts for.
     pub equal_rows: bool,
+    /// The `sizes=` a card's cover takes in one of this grid's cells.
+    pub cell_sizes: String,
     pub cells: Vec<GridCellEmission>,
 }
 
@@ -203,12 +217,27 @@ impl GridEmission {
 }
 
 impl BodySegment {
+    fn map_html(&mut self, f: &dyn Fn(&str) -> String) {
+        match self {
+            BodySegment::Html(s) => *s = f(s),
+            BodySegment::Grid(g) => {
+                g.open_tag = f(&g.open_tag);
+                for cell in &mut g.cells {
+                    cell.parts.inner = f(&cell.parts.inner);
+                }
+            }
+            BodySegment::Subscribe(s) => s.html = f(&s.html),
+            BodySegment::Section(s) => s.map_html(f),
+        }
+    }
+
     /// This segment's HTML.
     pub fn html(&self) -> std::borrow::Cow<'_, str> {
         match self {
             BodySegment::Html(s) => std::borrow::Cow::Borrowed(s),
             BodySegment::Grid(g) => std::borrow::Cow::Owned(g.to_html()),
             BodySegment::Subscribe(s) => std::borrow::Cow::Borrowed(&s.html),
+            BodySegment::Section(s) => std::borrow::Cow::Owned(s.to_html()),
         }
     }
 }
@@ -223,6 +252,7 @@ impl BodyPlan {
             first_text_segments: 0,
             after_first_text_segments: 0,
             has_text: false,
+            heading_names: Vec::new(),
         }
     }
 
@@ -264,6 +294,7 @@ impl BodyPlan {
                     }
                 }
                 BodySegment::Subscribe(s) => f(&s.html),
+                BodySegment::Section(s) => s.for_each_html(f),
             }
         }
     }
@@ -280,17 +311,44 @@ impl BodyPlan {
     /// [`to_html`]: BodyPlan::to_html
     pub fn map_html(&mut self, f: &dyn Fn(&str) -> String) {
         for seg in &mut self.segments {
-            match seg {
-                BodySegment::Html(s) => *s = f(s),
-                BodySegment::Grid(g) => {
-                    g.open_tag = f(&g.open_tag);
-                    for cell in &mut g.cells {
-                        cell.parts.inner = f(&cell.parts.inner);
-                    }
+            seg.map_html(f);
+        }
+    }
+
+    /// [`map_html`] with `expand` for the folder embeds: a section whose embeds
+    /// all expand to nothing is left out, and the ids of those left out are
+    /// returned, each with whether a kept heading of the same name answers its
+    /// anchor. No heading left changes its id; a kept heading of the same
+    /// name also answers a dropped one's anchor, so `#posts` still lands on
+    /// the first "Posts" the page shows.
+    ///
+    /// [`map_html`]: BodyPlan::map_html
+    pub fn expand_html(&mut self, expand: &dyn Fn(&str) -> String) -> Vec<(String, bool)> {
+        let mut dropped = Vec::new();
+        let mut at = 0;
+        while let Some(seg) = self.segments.get_mut(at) {
+            let BodySegment::Section(section) = seg else {
+                seg.map_html(expand);
+                at += 1;
+                continue;
+            };
+            if !section.settle(expand, &mut dropped) {
+                at += 1;
+                continue;
+            }
+            dropped.extend(section.id.clone());
+            self.segments.remove(at);
+            for cut in [&mut self.lede_segments, &mut self.first_text_segments, &mut self.after_first_text_segments] {
+                if *cut > at {
+                    *cut -= 1;
                 }
-                BodySegment::Subscribe(s) => s.html = f(&s.html),
             }
         }
+        let answered = sections::answered_by_namesakes(&self.heading_names, &dropped);
+        for (kept, alias) in &answered {
+            self.map_html(&|html| sections::add_heading_alias(html, kept, alias));
+        }
+        dropped.into_iter().map(|id| { let is_answered = answered.iter().any(|(_, alias)| *alias == id); (id, is_answered) }).collect()
     }
 
     /// Every inline subscribe form in the body, for the Reduce pass that
@@ -319,6 +377,18 @@ impl BodyPlan {
         self.lede_segments += 1;
         self.first_text_segments += 1;
         self.after_first_text_segments += 1;
+    }
+
+    /// Put `html` after the body, inside the cover column when the whole body
+    /// is. No-op for an empty fragment.
+    pub fn append_html(&mut self, html: String) {
+        if html.is_empty() {
+            return;
+        }
+        if self.lede_segments >= self.segments.len() {
+            self.lede_segments += 1;
+        }
+        self.segments.push(BodySegment::Html(html));
     }
 
     /// Insert the place-map locator `html` into the body at `placement`:
@@ -546,12 +616,24 @@ fn is_full_width_block(block: &Block) -> bool {
     match block {
         Block::Shortcode(Shortcode::Grid(_)) | Block::Shortcode(Shortcode::Gallery(_)) => true,
         Block::Table { .. } => true,
+        Block::Shortcode(Shortcode::Block(args)) => args.body.iter().any(is_full_width_block),
         // Width tokens: `body` is the default measure, so only a
         // widened figure forces a release.
         Block::Figure { width: Some(w), .. } => w != "body",
         _ => false,
     }
 }
+
+/// The hooks a segmented render takes: the page's [`RenderHooks`], plus what
+/// the last `:::subscribe` form they drew needs kept beside its HTML.
+pub trait SegmentHooks: RenderHooks {
+    /// The id of the members notice the last subscribe form drew, if it drew one.
+    fn take_members_lead(&self) -> Option<String> {
+        None
+    }
+}
+
+impl SegmentHooks for moss_core::ast::DefaultHooks<'_> {}
 
 /// Serialize `doc` into a [`BodyPlan`].
 ///
@@ -560,7 +642,7 @@ fn is_full_width_block(block: &Block) -> bool {
 /// `render_block_with_meta`, sharing one [`FootnoteCtx`] across the walk so
 /// numbering/hoisting stays document-wide, and `:::grid` blocks go through
 /// the same `RenderHooks::render_grid_parts` the flat `Grid` arm uses.
-pub fn render_segmented<H: RenderHooks + ?Sized>(doc: &Document, hooks: &H) -> BodyPlan {
+pub fn render_segmented<H: SegmentHooks + ?Sized>(doc: &Document, hooks: &H) -> BodyPlan {
     let lede_end_block = lede_end(&doc.blocks);
     let text_block_index = first_text_block(&doc.blocks);
     let mut segments: Vec<BodySegment> = Vec::new();
@@ -570,6 +652,7 @@ pub fn render_segmented<H: RenderHooks + ?Sized>(doc: &Document, hooks: &H) -> B
     let mut after_first_text_segments: Option<usize> = None;
     let mut fnotes = moss_core::ast::footnotes::FootnoteCtx::for_document(&doc.blocks);
     let mut tagged_prompt = false;
+    let mut section_until = 0;
 
     for (i, block) in doc.blocks.iter().enumerate() {
         if i == lede_end_block {
@@ -583,6 +666,21 @@ pub fn render_segmented<H: RenderHooks + ?Sized>(doc: &Document, hooks: &H) -> B
         if text_block_index.is_some_and(|t| i == t + 1) {
             flush(&mut buf, &mut segments);
             after_first_text_segments = Some(segments.len());
+        }
+        if i < section_until {
+            continue;
+        }
+        if let Some(end) = sections::section_end(&doc.blocks, i) {
+            flush(&mut buf, &mut segments);
+            let mut render = |at: usize| {
+                let mut html = String::new();
+                let meta = doc.block_meta.get(at).copied().unwrap_or_default();
+                moss_core::ast::render_block_with_meta(hooks, &mut html, &doc.blocks[at], &meta, &mut fnotes);
+                html
+            };
+            segments.push(BodySegment::Section(sections::build(&doc.blocks, i, end, &mut render)));
+            section_until = end;
+            continue;
         }
         let meta = doc.block_meta.get(i).copied().unwrap_or_default();
         match block {
@@ -607,12 +705,13 @@ pub fn render_segmented<H: RenderHooks + ?Sized>(doc: &Document, hooks: &H) -> B
                 flush(&mut buf, &mut segments);
                 let mut html = String::new();
                 moss_core::ast::render_block_with_meta(hooks, &mut html, block, &meta, &mut fnotes);
+                let members_lead = hooks.take_members_lead();
                 let above_is_paragraph = matches!(i.checked_sub(1).and_then(|p| doc.blocks.get(p)), Some(Block::Paragraph(_)));
                 let labelled_by = doc.subscribe_labels.get(&i).filter(|_| !above_is_paragraph || std::mem::take(&mut tagged_prompt)).cloned();
                 if let Some(id) = &labelled_by {
                     html = crate::build::features::email::label_subscribe_input(&html, id);
                 }
-                segments.push(BodySegment::Subscribe(SubscribeEmission { args: args.clone(), html, labelled_by }));
+                segments.push(BodySegment::Subscribe(SubscribeEmission { args: args.clone(), html, labelled_by, members_lead }));
             }
             _ => moss_core::ast::render_block_with_meta(hooks, &mut buf, block, &meta, &mut fnotes),
         }
@@ -641,6 +740,7 @@ pub fn render_segmented<H: RenderHooks + ?Sized>(doc: &Document, hooks: &H) -> B
     let after_first_text_segments = after_first_text_segments.unwrap_or(first_text_segments);
     moss_core::ast::footnotes::render_section(hooks, &mut buf, &doc.blocks, &mut fnotes);
     flush(&mut buf, &mut segments);
+    let heading_names = sections::heading_names(doc);
 
     BodyPlan {
         segments,
@@ -648,6 +748,7 @@ pub fn render_segmented<H: RenderHooks + ?Sized>(doc: &Document, hooks: &H) -> B
         first_text_segments,
         after_first_text_segments,
         has_text,
+        heading_names,
     }
 }
 
@@ -675,6 +776,7 @@ fn emission(args: &GridShortcode, parts: GridParts) -> GridEmission {
         classes: args.classes.clone(),
         collage: args.is_collage(),
         equal_rows: parts.equal_rows,
+        cell_sizes: args.cell_sizes(),
         cells: args
             .cells
             .iter()

@@ -438,11 +438,23 @@ impl MossPaths {
         self.cache_dir().join("hash-index.json")
     }
 
+    /// `.moss/build.nosync/cache/page-sources.json` — the source oid of each page the
+    /// last slot pass used, read by the cache sweep. Machine-local.
+    pub fn cache_page_sources(&self) -> PathBuf {
+        self.cache_dir().join("page-sources.json")
+    }
+
     /// `.moss/build.nosync/cache/verified-blobs.json` — which CAS blobs the last
     /// seal pass read and found matching their names, keyed by absolute path and
     /// stat. Machine-local: the key and the inode mean nothing on another machine.
     pub fn cache_verified_blobs(&self) -> PathBuf {
         self.cache_dir().join("verified-blobs.json")
+    }
+
+    /// `.moss/build.nosync/cache/verified-slot-blobs.json` — the same record for the
+    /// slot pass, which checks page and summary blobs the seal never asks about.
+    pub fn cache_verified_slot_blobs(&self) -> PathBuf {
+        self.cache_dir().join("verified-slot-blobs.json")
     }
 
     /// `.moss/build.nosync/cache/verified-video-blobs.json` — the same record for

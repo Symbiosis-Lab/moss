@@ -117,6 +117,7 @@ fn plan_reassembles_with_source_lines_on() {
     // the regression guard for using `render_block_with_meta` over
     // `render_blocks`.
     let cfg = ParseConfig {
+        blocks: None,
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 0,
@@ -732,4 +733,59 @@ fn a_prompt_above_a_subscribe_form_changes_only_the_id_and_aria_labelledby() {
         .replace(r#" id="moss-subscribe-prompt-0""#, "")
         .replace(r#" id="moss-subscribe-prompt-0-field" aria-labelledby="moss-subscribe-prompt-0 moss-subscribe-prompt-0-field""#, "");
     assert_eq!(stripped, flat);
+}
+
+const POSTS_EMBED: &str = "<!--MOSS_MARKER_FOLDER_LIST:path=posts/|from=a.md-->";
+
+#[test]
+fn a_heading_over_only_folder_embeds_is_one_section_segment_in_the_trailer() {
+    let hooks = DefaultHooks::new();
+    let md = format!("First.\n\nSecond.\n\n## Posts\n\n{POSTS_EMBED}\n\n## Other\n\nTail.\n");
+    let doc = parse(&md);
+    let plan = render_segmented(&doc, &hooks);
+    assert_eq!(plan.to_html(), moss_core::ast::render_document(&doc, &hooks));
+    let section = plan.segments.iter().position(|s| matches!(s, BodySegment::Section(_))).expect("a section segment");
+    assert_eq!(plan.lede_segments, section, "both paragraphs stay in the lede, the heading goes to the trailer");
+    let (lead, _) = plan.split_at_lede();
+    assert!(lead.contains("First.") && lead.contains("Second.") && !lead.contains("<h2"), "{lead}");
+}
+
+#[test]
+fn a_heading_over_a_sub_heading_over_embeds_nests_and_prose_stops_it() {
+    let hooks = DefaultHooks::new();
+    let nested = render_segmented(&parse(&format!("## A\n\n### B\n\n{POSTS_EMBED}\n")), &hooks);
+    let [BodySegment::Section(a)] = nested.segments.as_slice() else { panic!("one section: {:?}", nested.segments) };
+    assert!(matches!(a.parts.as_slice(), [SectionPart::Section(b)] if b.parts.len() == 1));
+    let prose = render_segmented(&parse(&format!("## A\n\nWords.\n\n{POSTS_EMBED}\n")), &hooks);
+    assert!(!prose.segments.iter().any(|s| matches!(s, BodySegment::Section(_))));
+    let top = render_segmented(&parse(&format!("# A\n\n{POSTS_EMBED}\n")), &hooks);
+    assert!(!top.segments.iter().any(|s| matches!(s, BodySegment::Section(_))));
+}
+
+#[test]
+fn expanding_drops_a_section_whose_embeds_are_empty_innermost_first_and_keeps_the_rest() {
+    let hooks = DefaultHooks::new();
+    let md = format!("Lede.\n\n## A\n\n### B\n\n{POSTS_EMBED}\n\n## C\n\n{POSTS_EMBED}\n");
+    let mut plan = render_segmented(&parse(&md), &hooks);
+    let dropped = plan.expand_html(&|html| if html.contains("MOSS_MARKER") { String::new() } else { html.to_string() });
+    assert_eq!(dropped, [("b".to_string(), false), ("a".to_string(), false), ("c".to_string(), false)]);
+    assert!(!plan.to_html().contains("<h"), "{}", plan.to_html());
+    let mut plan = render_segmented(&parse(&md), &hooks);
+    plan.expand_html(&|html| html.replace(POSTS_EMBED, "<ul>x</ul>"));
+    assert!(plan.to_html().contains("<h3") && plan.to_html().contains("<h2") && plan.to_html().contains("<ul>x</ul>"));
+}
+
+#[test]
+fn a_kept_namesake_answers_the_dropped_id_by_rendered_place_not_by_its_id_text() {
+    let name = |id: &str, place| sections::HeadingName { id: id.into(), name: "posts".into(), place };
+    // `posts-9` renders first, so it holds the bare name's place.
+    let names = [name("posts", 1), name("posts-9", 0)];
+    assert_eq!(sections::answered_by_namesakes(&names, &["posts-9".into()]), [("posts".to_string(), "posts-9".to_string())]);
+}
+
+#[test]
+fn a_block_holding_a_full_width_child_releases_the_lede() {
+    let block = |body| Block::Shortcode(Shortcode::Block(moss_core::ast::BlockShortcode { body, ..Default::default() }));
+    assert!(is_full_width_block(&block(vec![Block::Shortcode(Shortcode::Gallery(Default::default()))])));
+    assert!(!is_full_width_block(&block(vec![Block::ThematicBreak])));
 }

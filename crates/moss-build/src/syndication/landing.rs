@@ -43,6 +43,15 @@ impl Before {
 
     /// Decide without writing anything: what a publish of `live` would plan.
     pub fn decide(&self, folder: &Path, live: &ArticleMap) -> Vec<plan::PostPlan> {
+        let config = match crate::build::site_config::read_project_config(&folder.to_string_lossy()) {
+            Ok(config) => config,
+            Err(e) => { log::warn!(target: "syndication", "no copies planned: {e}"); return Vec::new(); }
+        };
+        self.decide_with(folder, live, &config, &Records::in_vault(&MossPaths::new(folder)))
+    }
+
+    /// Decide using the preview's already-loaded configuration and records.
+    pub(super) fn decide_with(&self, folder: &Path, live: &ArticleMap, config: &crate::config::ConfigFile, records: &Records) -> Vec<plan::PostPlan> {
         let previously_live = match &self.baseline {
             Baseline::Present(b) => Some(b.entries.as_slice()),
             Baseline::Absent => None,
@@ -51,8 +60,8 @@ impl Before {
                 return Vec::new();
             }
         };
-        let inputs = PlanInputs { articles: live, previously_live, edited_sources: &self.edited, channels: &self.channels };
-        plan::decide(&inputs, &Records::in_vault(&MossPaths::new(folder)))
+        let inputs = PlanInputs { config, folder, site_url: self.site_url.as_deref(), articles: live, previously_live, edited_sources: &self.edited, channels: &self.channels };
+        plan::decide(&inputs, records)
     }
 
     pub fn channels(&self) -> &BTreeMap<String, ChannelInfo> {
@@ -66,8 +75,10 @@ impl Before {
         let records = Records::in_vault(&MossPaths::new(folder));
         let planned = plan::apply(plans, &records, self.site_url.as_deref(), live, unstamped);
         for p in &planned {
-            if let plan::Action::Skip { reason } = &p.action {
-                log::info!(target: "syndication", "{} — no copy on {}: {reason}", p.source_path, p.channel);
+            match &p.action {
+                plan::Action::Unavailable { reason } => crate::build::cli_output::log_note!("{} — no copy on {}: {reason}", p.source_path, p.channel),
+                plan::Action::Skip { reason } => log::info!(target: "syndication", "{} — no copy on {}: {reason}", p.source_path, p.channel),
+                _ => {}
             }
         }
         planned

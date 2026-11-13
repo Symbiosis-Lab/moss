@@ -526,3 +526,11 @@ fn a_paragraph_heading_keeps_its_line_breaks() {
     assert!(md.contains("first line") && !md.contains("#### first"), "{md}");
     assert!(!md.contains("first line word"), "the break is not collapsed to a space:\n{md}");
 }
+
+#[test]
+fn a_heading_with_line_breaks_stays_one_heading_at_every_level() {
+    let md = run(&page("", "<h1>One<br>Two</h1><h2>Step 1.<br>Find the room</h2><p>Body.</p><h4>A<br>B<br>C</h4>")).0;
+    assert!(md.contains("\n# One<br>Two\n"), "{md}");
+    assert!(md.contains("\n## Step 1.<br>Find the room\n\nBody."), "{md}");
+    assert!(md.contains("#### A<br>B<br>C"), "{md}");
+}

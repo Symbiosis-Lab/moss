@@ -56,7 +56,7 @@ pub struct PushContext<'a> {
 /// `needs_setup` and `failed` are the same answer to "did bytes land" and
 /// completely different things to find in a log. Its exhaustive match is what
 /// makes a new variant pick a label instead of inheriting one.
-fn deploy_status_label(result: &Result<PushResult, String>) -> &'static str {
+fn deploy_status_label(result: &Result<PushResult, crate::deploy::PublishError>) -> &'static str {
     match result {
         Ok(PushResult::Success { .. }) => "success",
         Ok(PushResult::NeedsSetup) => "needs_setup",
@@ -75,7 +75,7 @@ fn deploy_status_label(result: &Result<PushResult, String>) -> &'static str {
 /// `DEPLOY END … status=failed`; `deploy_id` correlates the two lines. A
 /// `NeedsSetup` short-circuits earlier in `push_site_command_body`, so reaching
 /// here is always a genuine deploy attempt.
-pub async fn push_site_inner(sealed: &SealedManifest, cx: &PushContext<'_>) -> Result<PushResult, String> {
+pub async fn push_site_inner(sealed: &SealedManifest, cx: &PushContext<'_>) -> Result<PushResult, crate::deploy::PublishError> {
     super::profile::record(cx.folder_path, "seta", false, async {
     super::refuse_before_upload(cx.folder_path, sealed)?;
     let full = uuid::Uuid::new_v4().simple().to_string();
@@ -101,6 +101,40 @@ pub async fn push_site_inner(sealed: &SealedManifest, cx: &PushContext<'_>) -> R
     }).await
 }
 
+/// The bytes are live, so nothing uploads, but a landing's local half can still
+/// be owed: naming a channel changes no output, so this is the only place that
+/// copy gets planned. The app waits for a verdict either way, checked against
+/// what the server said is live when it answered.
+async fn settle_already_live(
+    sealed: &SealedManifest,
+    cx: &PushContext<'_>,
+    environment: crate::config::environment::HostingEnvironment,
+    server_says: Option<&str>,
+) -> PushResult {
+    let PushContext { folder_path, identity, site_id, ports, .. } = *cx;
+    let folder = folder_path.to_string_lossy().to_string();
+    let target = crate::config::deployment::slot_for("moss", Some(site_id));
+    let summary = match target {
+        Some(target) if sources_moved(folder_path, sealed, &target) => {
+            let history = crate::deploy::history::HistoryStore::in_vault(folder_path);
+            landed::record_landed(folder_path, sealed, &target, ports, &history).await
+        }
+        _ => crate::deploy::change_record::PageChangeSummary::default(),
+    };
+    ports
+        .begin_moss_verification(identity, environment.clone(), site_id, &folder, server_says.unwrap_or(sealed.generation_id()), &summary)
+        .await;
+    PushResult::Success { url: view_site_url(&folder, site_id, environment), files_uploaded: 0, files_removed: 0 }
+}
+
+/// Whether publishing would change a page against what this target last recorded. With no
+/// record the answer is no: a landing there would read every post as new and
+/// post the back catalogue.
+fn sources_moved(folder: &Path, sealed: &SealedManifest, target: &str) -> bool {
+    crate::build::manifest::published_record::load_for(&MossPaths::new(folder), Some(target))
+        .is_some_and(|record| !crate::build::manifest::change_set::classify(Some(&record), sealed).pages.is_empty())
+}
+
 /// Implementation of the deploy work. **Do not call directly** — call
 /// [`push_site_inner`], which brackets this with the `=== DEPLOY START/END ===`
 /// boundary markers; calling `_impl` directly bypasses them. The
@@ -109,13 +143,13 @@ pub async fn push_site_inner(sealed: &SealedManifest, cx: &PushContext<'_>) -> R
 async fn push_site_inner_impl(
     sealed: &SealedManifest,
     cx: &PushContext<'_>,
-) -> Result<PushResult, String> {
+) -> Result<PushResult, crate::deploy::PublishError> {
     let PushContext { folder_path, identity, site_id, sink, ports, events_lock } = *cx;
     let folder_path_str = folder_path.to_string_lossy().to_string();
 
     // Refuse before touching the network, through the door guard every
-    // config-reading door shares (`site_config::ensure_config_current`).
-    crate::build::site_config::ensure_config_current(&folder_path_str)?;
+    // publish route shares (`site_config::publish_door`).
+    crate::build::site_config::publish_door(folder_path, sealed.restricts_pages())?;
 
     // `AppState::active_environment()` is `resolve_environment(project_path)`
     // and nothing else, and this function has the folder in hand. Reading it
@@ -157,36 +191,19 @@ async fn push_site_inner_impl(
     // Ok(None) from get_live_generation (404 = old server, network error, site
     // never deployed) falls through to the normal path for back-compat.
     let probe_phase = crate::build::phase::PhaseTrace::start("live_generation");
-    if let Ok(Some(live_gen)) = client.get_live_generation(&site_id).await {
-        if live_gen == sealed.generation_id() {
-            log::info!(
-                "deploy: generation {} already live on server, skipping deploy",
-                live_gen
-            );
-            // No Complete emit: returning Ok reaches `with_publish_guard`, which
-            // emits it. The message was never read — both listeners ignore it on
-            // a terminal stage.
-            let url = view_site_url(&folder_path_str, &site_id, environment);
-            return Ok(PushResult::Success {
-                url,
-                files_uploaded: 0,
-                files_removed: 0,
-            });
-        }
+    let server_says = client.get_live_generation(&site_id).await.ok().flatten();
+    if server_says.as_deref() == Some(sealed.generation_id()) {
+        log::info!("deploy: generation {} already live on server, skipping deploy", sealed.generation_id());
+        return Ok(settle_already_live(sealed, cx, environment, server_says.as_deref()).await);
     }
     drop(probe_phase);
 
     let site_dir = MossPaths::new(folder_path).generation_dir(sealed.generation_id());
     let sizes = upload::regular_file_sizes(&site_dir, &manifest).await?;
-    let diff = super::profile::sync(folder_path, client.sync_manifest(&site_id, &manifest, &sizes, sealed.generation_id())).await?;
+    let diff = super::profile::sync(client.sync_manifest(&site_id, &manifest, &sizes, sealed.generation_id())).await?;
 
     if !diff.needs_commit() {
-        let url = view_site_url(&folder_path_str, &site_id, environment);
-        return Ok(PushResult::Success {
-            url,
-            files_uploaded: 0,
-            files_removed: 0,
-        });
+        return Ok(settle_already_live(sealed, cx, environment, server_says.as_deref()).await);
     }
 
     // The server's diff used to be pushed here as a `PublishChangeSet`, so the
@@ -339,7 +356,7 @@ async fn push_site_inner_impl(
                     return Err(format!(
                         "Path {} appeared in diff.need but not in client manifest",
                         file_path
-                    ));
+                    ).into());
                 }
             };
 
@@ -506,7 +523,7 @@ async fn push_site_inner_impl(
         sealed.generation_id(),
         manifest.len()
     );
-    let commit_result = super::profile::commit(folder_path, client.commit_sync(&site_id, &manifest, sealed.generation_id())).await?;
+    let commit_result = super::profile::commit(client.commit_sync(&site_id, &manifest, sealed.generation_id())).await?;
     let _after_publish = crate::build::phase::PhaseTrace::start("after_publish");
 
     // Record what just went live, so the NEXT publish can say what it will
@@ -744,7 +761,7 @@ pub async fn run_hosted_deploy(
     requested_site_id: Option<&str>,
     overrides: PublishOverrides,
     sink: &std::sync::Arc<dyn progress::DeploySink>,
-) -> Result<PushResult, String> {
+) -> Result<PushResult, crate::deploy::PublishError> {
     super::profile::record(folder, "seta", false, async {
     let folder_str = folder.to_string_lossy().to_string();
 
@@ -840,7 +857,7 @@ mod tests {
         });
         assert_eq!(deploy_status_label(&ok), "success");
         assert_eq!(deploy_status_label(&Ok(PushResult::NeedsSetup)), "needs_setup");
-        let err: Result<PushResult, String> = Err("boom".to_string());
+        let err: Result<PushResult, crate::deploy::PublishError> = Err("boom".to_string().into());
         assert_eq!(deploy_status_label(&err), "failed");
     }
 
@@ -913,10 +930,14 @@ mod tests {
     /// `commit_sync` while the sync response below reports nothing to
     /// upload, so no bytes for it are ever read off disk.
     fn sealed_fixture(folder: &std::path::Path) -> SealedManifest {
+        pending_fixture(folder).seal()
+    }
+
+    fn pending_fixture(folder: &std::path::Path) -> PendingManifest {
         let mut pending = PendingManifest::for_build(SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(folder));
         let sp = ServedPath::from_source("index.html").unwrap();
         pending.register(&sp, b"<html>Home</html>", HashBucket::Files);
-        pending.seal()
+        pending
     }
 
     #[tokio::test]
@@ -950,7 +971,7 @@ mod tests {
             None => std::env::remove_var("MOSS_SETA_URL"),
         }
         let error = result.expect_err("latest pending attempt must refuse before network");
-        assert!(error.contains("about.md"), "{error}");
+        assert!(error.to_string().contains("about.md"), "{error}");
         assert!(spy.events.lock().unwrap().is_empty());
     }
 
@@ -1003,6 +1024,90 @@ mod tests {
                 summary: summary.clone(),
             }));
         }
+    }
+
+    /// A canned JSON reply; the mock wants `'static` bytes.
+    fn json_reply(body: String) -> &'static [u8] {
+        let reply = format!("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+        Box::leak(reply.into_bytes().into_boxed_slice())
+    }
+
+    /// Push `sealed` against a server giving `responses`, what the ports saw.
+    async fn push_against(vault: &std::path::Path, sealed: &SealedManifest, responses: Vec<&'static [u8]>) -> Vec<SpyEvent> {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_url = std::env::var("MOSS_SETA_URL").ok();
+        let addr = mock_seta_sequence(responses).await;
+        std::env::set_var("MOSS_SETA_URL", format!("http://{addr}"));
+        let identity = Identity::generate().expect("generate identity");
+        std::fs::create_dir_all(MossPaths::new(vault).generation_dir(sealed.generation_id())).unwrap();
+        let sink = progress::silent();
+        let spy = SpyPorts::default();
+        let events_lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let cx = PushContext { folder_path: vault, identity: &identity, site_id: "site-1", sink: &sink, ports: &spy, events_lock: &events_lock };
+        let result = push_site_inner(sealed, &cx).await;
+        match prev_url {
+            Some(u) => std::env::set_var("MOSS_SETA_URL", u),
+            None => std::env::remove_var("MOSS_SETA_URL"),
+        }
+        assert!(result.is_ok(), "{result:?}");
+        let events = std::mem::take(&mut *spy.events.lock().unwrap());
+        events
+    }
+
+    fn verified_generation(events: &[SpyEvent]) -> Option<String> {
+        events.iter().find_map(|e| match e {
+            SpyEvent::Verification(call) => Some(call.generation_id.clone()),
+            _ => None,
+        })
+    }
+
+    /// Naming a channel on a live post changes no output, so the server is
+    /// already on this generation. The copy is planned anyway, and the publish
+    /// still gets a verdict.
+    #[tokio::test]
+    async fn a_generation_already_live_plans_the_copy_a_post_now_names() {
+        use crate::deploy::landed::tests::{land, seal_post_naming, syndicating_vault};
+        let vault = syndicating_vault();
+        land(vault.path(), &seal_post_naming(vault.path(), None)).await;
+        let sealed = seal_post_naming(vault.path(), Some(&["notes"]));
+
+        let live = json_reply(format!(r#"{{"generation_id":"{}"}}"#, sealed.generation_id()));
+        let events = push_against(vault.path(), &sealed, vec![live]).await;
+
+        let records = crate::syndication::record::Records::in_vault(&MossPaths::new(vault.path()));
+        assert!(records.exists("aaaa0001", "notes"), "the copy the post now names is planned");
+        assert_eq!(verified_generation(&events).as_deref(), Some(sealed.generation_id()));
+    }
+
+    /// A fresh clone of a live site has no record to compare with. Planning
+    /// there would make every post with a channel due: the whole back catalogue.
+    #[tokio::test]
+    async fn a_generation_already_live_with_no_record_plans_nothing() {
+        use crate::deploy::landed::tests::{seal_post_naming, syndicating_vault};
+        let vault = syndicating_vault();
+        let sealed = seal_post_naming(vault.path(), Some(&["notes"]));
+
+        let live = json_reply(format!(r#"{{"generation_id":"{}"}}"#, sealed.generation_id()));
+        let events = push_against(vault.path(), &sealed, vec![live]).await;
+
+        let records = crate::syndication::record::Records::in_vault(&MossPaths::new(vault.path()));
+        assert!(!records.exists("aaaa0001", "notes"));
+        assert_eq!(verified_generation(&events).as_deref(), Some(sealed.generation_id()));
+    }
+
+    /// With nothing to commit the server's own answer is what is live, and it
+    /// can differ from the sealed id; verifying the sealed id would report a
+    /// good publish as serving an older generation.
+    #[tokio::test]
+    async fn nothing_to_commit_verifies_the_generation_the_server_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let sealed = sealed_fixture(dir.path());
+        let live = json_reply(r#"{"generation_id":"server-side-id"}"#.to_string());
+        let nothing = json_reply(r#"{"need":[],"remove":[]}"#.to_string());
+
+        let events = push_against(dir.path(), &sealed, vec![live, nothing]).await;
+
+        assert_eq!(verified_generation(&events).as_deref(), Some("server-side-id"));
     }
 
     /// The row's own test: `push_site_inner` must call
@@ -1146,12 +1251,52 @@ mod tests {
             None => std::env::remove_var("MOSS_SETA_URL"),
         }
 
-        let err = result.expect_err("publish must be refused, not attempted");
+        let err = result.expect_err("publish must be refused, not attempted").to_string();
         assert!(err.contains("schema_version") && err.contains("newer"), "got: {err}");
         assert!(
             spy.events.lock().unwrap().is_empty(),
             "no deploy port should have been touched — the refusal must come before any network activity"
         );
+    }
+
+    /// A generation that restricted a page publishes only once the site names
+    /// the moss its members pages need; a config that cannot take the floor
+    /// refuses the publish before any network call.
+    #[tokio::test]
+    async fn a_members_generation_refuses_when_the_floor_cannot_be_written() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_url = std::env::var("MOSS_SETA_URL").ok();
+        let closed_addr = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap()
+        };
+        std::env::set_var("MOSS_SETA_URL", format!("http://{closed_addr}"));
+
+        let identity = Identity::generate().expect("generate identity");
+        let dir = tempfile::tempdir().unwrap();
+        let mut pending = pending_fixture(dir.path());
+        pending.mark_restricts_pages();
+        let sealed = pending.seal();
+        std::fs::create_dir_all(MossPaths::new(dir.path()).generation_dir(sealed.generation_id())).unwrap();
+        std::fs::create_dir_all(dir.path().join(".moss")).unwrap();
+        std::fs::write(dir.path().join(".moss/config.toml"), "[site\n").unwrap();
+
+        let sink = progress::silent();
+        let spy = SpyPorts::default();
+        let events_lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let cx = PushContext {
+            folder_path: dir.path(), identity: &identity, site_id: "members-floor-test",
+            sink: &sink, ports: &spy, events_lock: &events_lock,
+        };
+        let result = push_site_inner(&sealed, &cx).await;
+        match prev_url {
+            Some(u) => std::env::set_var("MOSS_SETA_URL", u),
+            None => std::env::remove_var("MOSS_SETA_URL"),
+        }
+
+        let err = result.expect_err("publish must be refused, not attempted").to_string();
+        assert!(err.contains("could not write .moss/config.toml"), "got: {err}");
+        assert!(spy.events.lock().unwrap().is_empty());
     }
 
     /// The symlink-integrity check's counterpart to `upload.rs`'s file-hash
@@ -1417,7 +1562,7 @@ mod tests {
             Some(u) => std::env::set_var("MOSS_SETA_URL", u),
             None => std::env::remove_var("MOSS_SETA_URL"),
         }
-        assert_eq!(result.err().as_deref(), Some("Failed to stat index.html"));
+        assert_eq!(result.err().map(|e| e.to_string()).as_deref(), Some("Failed to stat index.html"));
     }
 
     // ── a copy behind the live site ────────────────────────────────────────
@@ -1480,6 +1625,7 @@ mod tests {
             &progress::silent(),
         )
         .await
+        .map_err(|e| e.to_string())
     }
 
     /// Awaits `publish` against the mock at `addr`. The caller holds
@@ -1510,7 +1656,7 @@ mod tests {
         let result = with_seta_url(addr, cli_deploy(folder.path(), false)).await;
 
         let err = result.expect_err("a copy behind the live site must not publish");
-        assert!(err.contains("published from another copy"), "got: {err}");
+        assert!(err.to_string().contains("published from another copy"), "got: {err}");
         let probe = String::from_utf8_lossy(&probe.await.expect("the probe is the one request made")).to_string();
         assert!(probe.starts_with("GET /api/sites/behind-test/generation"), "got: {probe}");
     }
@@ -1797,7 +1943,7 @@ mod tests {
         .await;
 
         let err = result.expect_err("a copy behind the live site must not publish");
-        assert!(err.contains("published from another copy"), "got: {err}");
+        assert!(err.to_string().contains("published from another copy"), "got: {err}");
         let probe = String::from_utf8_lossy(&probe.await.expect("the probe is the one request made")).to_string();
         assert!(probe.starts_with("GET /api/sites/behind-test/generation"), "got: {probe}");
     }

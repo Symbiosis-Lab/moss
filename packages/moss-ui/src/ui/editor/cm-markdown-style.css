@@ -158,7 +158,7 @@
   position: absolute;
   /* Pin to the content column — same inset as `.cm-line { padding-left }`
      (defined once as --moss-editor-line-inset in editor.css). */
-  left: calc(var(--moss-editor-line-inset, 28px) - var(--lp-hang, 0px));
+  left: calc(var(--moss-line-inset-box, 28px) - var(--lp-hang, 0px));
   top: 0;
   bottom: 0;
   width: 3px;
@@ -172,8 +172,9 @@
    measured width): CodeMirror reads a line's padding-left and text-indent for
    selection rectangles but not its margin. (Not a border: Chromium snaps a
    border to whole device pixels, a fractional margin it does not.) The right margin
-   cancels the left so the line keeps its width: the inset is a percentage of it,
-   and the quote bar and the guide resolve that percentage against the line.
+   stays 0, so the text wraps where CodeMirror's selection rectangles end; the
+   line is a hang narrower, which `--moss-line-inset-box` (editor.css) offsets for
+   the pseudo-elements that resolve the inset's percentage against the line.
    A zero-width `cm-li-shim` box at the start of the item's prefix (indent +
    marker) has a negative margin of the prefix's own width, so on the first row
    the prefix sits where it always did (a continuation line's leading whitespace
@@ -188,8 +189,8 @@
 /* The mark CodeMirror nests inside the tab's box: engines differ on whether a tab glyph takes letter-spacing, so it takes none and the margin carries the width. */
 .cm-li-tab .cm-li-ind { letter-spacing: 0; }
 .cm-li-shim { display: inline-block; width: 0; margin-left: calc(-1 * min(var(--lp-pfx, var(--lp-hang)), var(--lp-hang))); }
-.moss-editor-cm .cm-line.cm-li-hang { margin-left: var(--lp-hang); margin-right: calc(-1 * var(--lp-hang)); }
-/* The margins keep the line's width, so its (empty) right padding ends one hang past the content box; clipped, it does not make the scroller scroll sideways. */
+.moss-editor-cm .cm-line.cm-li-hang { margin-left: var(--lp-hang); }
+/* The guide's 24-column box is wider than a narrow pane; clipped, it does not make the scroller scroll sideways. */
 .moss-editor-cm .cm-content { overflow-x: clip; }
 .moss-editor-cm .cm-line.cm-li-hang .cm-hang, .moss-editor-cm .cm-line.cm-li-hang .cm-hang-run { --moss-hang-lean: calc(var(--moss-quote-indent, 0px) + var(--lp-hang)); }
 
@@ -205,8 +206,8 @@
    position) and spans every wrapped row. Unset slots park off-left, clipped.
    --lp-guide-origin is where the line's text starts; the line's hanging-indent margin
    (below) moves its padding box right, so the box starts that much further left. */
-.moss-editor-cm .cm-line.cm-lp-guided { position: relative; --lp-guide-origin: var(--moss-editor-line-inset); }
-.moss-editor-cm .cm-line.cm-lp-guided.cm-lp-blockquote { --lp-guide-origin: calc(var(--moss-editor-line-inset) + var(--moss-quote-indent)); }
+.moss-editor-cm .cm-line.cm-lp-guided { position: relative; --lp-guide-origin: var(--moss-line-inset-box); }
+.moss-editor-cm .cm-line.cm-lp-guided.cm-lp-blockquote { --lp-guide-origin: calc(var(--moss-line-inset-box) + var(--moss-quote-indent)); }
 .moss-editor-cm .cm-line.cm-lp-guided::after {
   content: "                        ";
   white-space: pre;

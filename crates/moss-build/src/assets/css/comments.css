@@ -422,19 +422,6 @@ a.comment-author:hover {
   color: var(--moss-color-accent, #2d5a2d);
 }
 
-/* Link-out reply affordance for syndicated-source comments (Matters, Douban) */
-.comment-source-link {
-  font-size: 0.8125rem;
-  color: var(--moss-color-muted, #716d69);
-  text-decoration: none;
-  margin-inline-start: auto;
-  transition: color 0.15s ease;
-}
-.comment-source-link:hover {
-  color: var(--moss-color-accent, #2d5a2d);
-  text-decoration: underline;
-}
-
 /* Reply indicator */
 .comment-reply-indicator {
   display: flex;

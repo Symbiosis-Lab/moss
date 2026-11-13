@@ -15,6 +15,8 @@ use crate::plugins::types::{Capability, PluginManifest, EXECUTE_BINARY_GRANT};
 pub enum Ability {
     /// Draws a folder's pages in a style it contributes.
     DrawsPages { style: String, label: String, description: Option<String> },
+    /// Puts its own script or stylesheet on the pages that use one of its blocks.
+    AddsToPages { block: String },
     /// Sends the site somewhere: `hook` is `deploy` or `syndicate`.
     Publishes { hook: String },
     /// Opens a sign-in as soon as it is allowed.
@@ -34,6 +36,7 @@ impl Ability {
     fn identity(&self) -> (&'static str, &str) {
         match self {
             Ability::DrawsPages { style, .. } => ("draws_pages", style),
+            Ability::AddsToPages { block } => ("adds_to_pages", block),
             Ability::Publishes { hook } => ("publishes", hook),
             Ability::SignsIn { domain } => ("signs_in", domain.as_deref().unwrap_or_default()),
             Ability::RunsProgram { program } => ("runs_program", program),
@@ -52,6 +55,12 @@ pub fn abilities(manifest: &PluginManifest) -> Vec<Ability> {
             label: style.label.clone().unwrap_or_else(|| id.clone()),
             description: style.description.clone(),
         });
+    }
+    let blocks = manifest.contributes.as_ref().and_then(|c| c.blocks.as_ref());
+    for (short, block) in blocks.into_iter().flatten() {
+        if block.script.is_some() || block.stylesheet.is_some() {
+            found.push(Ability::AddsToPages { block: short.clone() });
+        }
     }
     for (capability, hook) in [(Capability::Deploy, "deploy"), (Capability::Syndicate, "syndicate")] {
         if manifest.has_capability(&capability) {
@@ -99,6 +108,15 @@ mod tests {
                 description: Some("One card per page".into()),
             }]
         );
+    }
+
+    #[test]
+    fn a_block_that_loads_code_is_an_ability_and_one_that_does_not_is_not() {
+        let manifest = parse(
+            r#"{"name":"cards","version":"0.1.0","contributes":{"blocks":{
+                "card":{"element":"demo-card","script":"view.js"},"plain":{"element":"demo-plain"}}}}"#,
+        );
+        assert_eq!(abilities(&manifest), vec![Ability::AddsToPages { block: "card".into() }]);
     }
 
     #[test]

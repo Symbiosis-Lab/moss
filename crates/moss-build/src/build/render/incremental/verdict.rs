@@ -147,10 +147,10 @@ impl RenderVerdict {
     /// documents use a private cache identity derived from their served URL;
     /// that identity is never exposed as source provenance.
     pub fn may_skip_document(&self, doc: &ParsedDocument) -> bool {
-        // A plugin draws this page's listing from its children's bodies, which
-        // the listing digests deliberately ignore, and its files are
+        // A listing drawn from its children's bodies is not covered by the
+        // listing digests, which ignore bodies, and a plugin's files are
         // registered by the pass that draws it: it is rendered every build.
-        doc.plugin_listing_style().is_none()
+        !doc.reads_child_bodies()
             && self.skip
             .contains(crate::build::facade::PageKey::for_document(doc).cache_key().as_ref())
     }

@@ -82,6 +82,8 @@ pub fn render_cover_html(
     // synthesizer call.
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     eager: bool,
+    // The `sizes=` of the grid cell the cover is drawn in; `None` in a listing.
+    grid_cell_sizes: Option<&str>,
 ) -> String {
     let alt_escaped = html_escape(alt);
     let css_class = html_escape(css_class);
@@ -98,6 +100,7 @@ pub fn render_cover_html(
                     eager,
                     style: style.as_deref(),
                     fit: attrs.fit,
+                    grid_cell_sizes,
                     ..Default::default()
                 };
                 // The synthesizer takes `&AssetSnapshot`.
@@ -254,7 +257,7 @@ mod tests {
 
     #[test]
     fn render_image() {
-        let html = render_cover_html("photo.jpg", CoverType::Image, "A photo", "cover", &empty_attrs(), false, None, false);
+        let html = render_cover_html("photo.jpg", CoverType::Image, "A photo", "cover", &empty_attrs(), false, None, false, None);
         assert_eq!(
             html,
             r#"<div class="cover"><img src="photo.jpg" alt="A photo" /></div>"#
@@ -263,7 +266,7 @@ mod tests {
 
     #[test]
     fn render_video() {
-        let html = render_cover_html("clip.mp4", CoverType::Video, "A clip", "cover", &empty_attrs(), false, None, false);
+        let html = render_cover_html("clip.mp4", CoverType::Video, "A clip", "cover", &empty_attrs(), false, None, false, None);
         assert_eq!(
             html,
             r#"<div class="cover"><video src="clip.mp4" muted loop playsinline preload="metadata"></video><img src="clip.thumb.jpg" alt="A clip" class="cover-thumb" /></div>"#
@@ -272,7 +275,7 @@ mod tests {
 
     #[test]
     fn render_iframe() {
-        let html = render_cover_html("widget.html", CoverType::Iframe, "Widget", "cover", &empty_attrs(), true, None, false);
+        let html = render_cover_html("widget.html", CoverType::Iframe, "Widget", "cover", &empty_attrs(), true, None, false, None);
         assert_eq!(
             html,
             r#"<div class="cover" style="position:relative"><iframe src="widget.html" title="Widget" loading="lazy" sandbox="allow-scripts"></iframe><div style="position:absolute;inset:0"></div></div>"#
@@ -281,7 +284,7 @@ mod tests {
 
     #[test]
     fn render_iframe_has_title_attribute() {
-        let html = render_cover_html("widget.html", CoverType::Iframe, "My Widget", "cover", &empty_attrs(), true, None, false);
+        let html = render_cover_html("widget.html", CoverType::Iframe, "My Widget", "cover", &empty_attrs(), true, None, false, None);
         assert!(
             html.contains(r#"title="My Widget""#),
             "Iframe should have title attribute for accessibility. Got: {}",
@@ -291,7 +294,7 @@ mod tests {
 
     #[test]
     fn render_iframe_escapes_title() {
-        let html = render_cover_html("widget.html", CoverType::Iframe, "A <script> & \"test\"", "cover", &empty_attrs(), true, None, false);
+        let html = render_cover_html("widget.html", CoverType::Iframe, "A <script> & \"test\"", "cover", &empty_attrs(), true, None, false, None);
         assert!(
             html.contains(r#"title="A &lt;script&gt; &amp; &quot;test&quot;""#),
             "Iframe title should be HTML-escaped. Got: {}",
@@ -301,26 +304,26 @@ mod tests {
 
     #[test]
     fn render_image_with_eager_loading() {
-        let html = render_cover_html("photo.jpg", CoverType::Image, "A photo", "cover", &empty_attrs(), false, None, false);
+        let html = render_cover_html("photo.jpg", CoverType::Image, "A photo", "cover", &empty_attrs(), false, None, false, None);
         // Default: no loading or fetchpriority attributes (placeholder.rs handles these)
         assert!(!html.contains("loading="), "Default image should not have loading attr. Got: {}", html);
     }
 
     #[test]
     fn render_escapes_html_in_url() {
-        let html = render_cover_html("x.jpg?a=1&b=2", CoverType::Image, "alt", "c", &empty_attrs(), false, None, false);
+        let html = render_cover_html("x.jpg?a=1&b=2", CoverType::Image, "alt", "c", &empty_attrs(), false, None, false, None);
         assert!(html.contains("a=1&amp;b=2"));
     }
 
     #[test]
     fn render_escapes_html_in_alt() {
-        let html = render_cover_html("x.jpg", CoverType::Image, "<script>", "c", &empty_attrs(), false, None, false);
+        let html = render_cover_html("x.jpg", CoverType::Image, "<script>", "c", &empty_attrs(), false, None, false, None);
         assert!(html.contains("&lt;script&gt;"));
     }
 
     #[test]
     fn render_escapes_quotes_in_url() {
-        let html = render_cover_html(r#"x"y.jpg"#, CoverType::Image, "alt", "c", &empty_attrs(), false, None, false);
+        let html = render_cover_html(r#"x"y.jpg"#, CoverType::Image, "alt", "c", &empty_attrs(), false, None, false, None);
         assert!(html.contains("x&quot;y.jpg"));
     }
 
@@ -363,6 +366,7 @@ mod tests {
             false,
             Some(&lookup),
             false,
+            None,
         );
         assert!(
             html.contains(r#"width="4515""#) && html.contains(r#"height="6158""#),
@@ -386,7 +390,7 @@ mod tests {
             class_names: Vec::new(),
             extra_attrs: std::collections::BTreeMap::new(),
         };
-        let html = render_cover_html("photo.jpg", CoverType::Image, "alt", "cover", &attrs, false, None, false);
+        let html = render_cover_html("photo.jpg", CoverType::Image, "alt", "cover", &attrs, false, None, false, None);
         assert!(html.contains(r#"style="object-position:left""#), "Got: {}", html);
         assert!(html.contains(r#"<img src="photo.jpg""#));
     }
@@ -401,7 +405,7 @@ mod tests {
             class_names: Vec::new(),
             extra_attrs: std::collections::BTreeMap::new(),
         };
-        let html = render_cover_html("photo.jpg", CoverType::Image, "alt", "cover", &attrs, false, None, false);
+        let html = render_cover_html("photo.jpg", CoverType::Image, "alt", "cover", &attrs, false, None, false, None);
         assert!(html.contains(r#"style="object-fit:contain""#), "Got: {}", html);
     }
 
@@ -415,13 +419,13 @@ mod tests {
             class_names: Vec::new(),
             extra_attrs: std::collections::BTreeMap::new(),
         };
-        let html = render_cover_html("photo.jpg", CoverType::Image, "alt", "cover", &attrs, false, None, false);
+        let html = render_cover_html("photo.jpg", CoverType::Image, "alt", "cover", &attrs, false, None, false, None);
         assert!(html.contains(r#"style="object-fit:contain;object-position:left""#), "Got: {}", html);
     }
 
     #[test]
     fn render_image_empty_attrs_no_style() {
-        let html = render_cover_html("photo.jpg", CoverType::Image, "alt", "cover", &empty_attrs(), false, None, false);
+        let html = render_cover_html("photo.jpg", CoverType::Image, "alt", "cover", &empty_attrs(), false, None, false, None);
         assert!(!html.contains("style="), "Empty attrs should not add style. Got: {}", html);
     }
 
@@ -435,7 +439,7 @@ mod tests {
             class_names: Vec::new(),
             extra_attrs: std::collections::BTreeMap::new(),
         };
-        let html = render_cover_html("clip.mp4", CoverType::Video, "alt", "cover", &attrs, false, None, false);
+        let html = render_cover_html("clip.mp4", CoverType::Video, "alt", "cover", &attrs, false, None, false, None);
         assert!(html.contains(r#"<video src="clip.mp4" style="object-position:top""#), "Got: {}", html);
         // Poster thumbnail should also get the same style
         assert!(html.contains(r#"class="cover-thumb" style="object-position:top""#), "Poster thumb should get style. Got: {}", html);
@@ -451,7 +455,7 @@ mod tests {
             class_names: Vec::new(),
             extra_attrs: std::collections::BTreeMap::new(),
         };
-        let html = render_cover_html("widget.html", CoverType::Iframe, "alt", "cover", &attrs, true, None, false);
+        let html = render_cover_html("widget.html", CoverType::Iframe, "alt", "cover", &attrs, true, None, false, None);
         // Iframe should NOT have object-fit/object-position
         assert!(!html.contains("object-fit"), "Iframe should ignore media attrs. Got: {}", html);
         assert!(!html.contains("object-position"), "Iframe should ignore media attrs. Got: {}", html);
@@ -461,7 +465,7 @@ mod tests {
 
     #[test]
     fn render_iframe_blocked() {
-        let html = render_cover_html("widget.html", CoverType::Iframe, "Widget", "cover", &empty_attrs(), true, None, false);
+        let html = render_cover_html("widget.html", CoverType::Iframe, "Widget", "cover", &empty_attrs(), true, None, false, None);
         assert!(
             html.contains(r#"<div style="position:absolute;inset:0"></div>"#),
             "block_interaction=true should emit overlay. Got: {}", html
@@ -470,7 +474,7 @@ mod tests {
 
     #[test]
     fn render_iframe_interactive() {
-        let html = render_cover_html("widget.html", CoverType::Iframe, "Widget", "cover", &empty_attrs(), false, None, false);
+        let html = render_cover_html("widget.html", CoverType::Iframe, "Widget", "cover", &empty_attrs(), false, None, false, None);
         assert!(
             !html.contains(r#"position:absolute"#),
             "block_interaction=false should NOT emit overlay. Got: {}", html

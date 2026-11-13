@@ -1,6 +1,7 @@
 //! `when:past` / `when:upcoming` on a folder embed, and `children_when:` on a
 //! folder's own listing, keep only the events that have (not) ended. A page
-//! with no start or date counts as past.
+//! with no start or date counts as past; an event whose `start` is empty or
+//! unreadable is in neither until it has a date.
 
 #[path = "support/site.rs"]
 mod site;
@@ -16,11 +17,13 @@ fn shows(index: &str, embed_page: &str) -> Site {
         ("shows/gone-a.md", "---\ntitle: Gone Alpha\nstart: 2001-05-05 10:00\n---\n\nBody.\n"),
         ("shows/gone-b.md", "---\ntitle: Gone Beta\nstart: 2002-05-05 10:00\n---\n\nBody.\n"),
         ("shows/note.md", "---\ntitle: Plain Note\n---\n\nBody.\n"),
+        ("shows/blank.md", "---\ntitle: Blank Start\nstart:\n---\n\nBody.\n"),
+        ("shows/odd.md", "---\ntitle: Odd Start\nstart: 20.11.2099 18:00\n---\n\nBody.\n"),
     ])
 }
 
 fn listed(html: &str) -> Vec<&'static str> {
-    ["Soon Show", "Gone Alpha", "Gone Beta", "Plain Note"]
+    ["Soon Show", "Gone Alpha", "Gone Beta", "Plain Note", "Blank Start", "Odd Start"]
         .into_iter()
         .filter(|t| html.contains(&format!(">{t}<")))
         .collect()
@@ -106,4 +109,25 @@ fn a_folders_own_upcoming_listing_reads_soonest_first() {
 fn a_folders_own_sort_wins_over_soonest_first() {
     let site = three_upcoming("---\ntitle: Shows\nsort: title\nchildren_style: grid\nchildren_when: upcoming\n---\n\n", "---\ntitle: Lab\n---\n");
     assert_eq!(order_of(&site.html("shows/index.html")), ["Alpha Show", "Bravo Show", "Charlie Show"]);
+}
+
+#[test]
+fn an_event_without_a_usable_start_is_neither_past_nor_upcoming_and_is_listed_unfiltered() {
+    assert_eq!(embed("when:past"), ["Gone Alpha", "Gone Beta", "Plain Note"]);
+    assert_eq!(embed("when:upcoming"), ["Soon Show"]);
+    assert_eq!(own_listing("past"), ["Gone Alpha", "Gone Beta", "Plain Note"]);
+    assert_eq!(embed("limit:9").len(), 6);
+}
+
+/// A page left out of both listings is named on a site with no calendar
+/// file to speak of: an unreadable `start` as a problem, an empty one, the
+/// state a template leaves, as a note that `--strict` lets through.
+#[test]
+fn the_build_names_each_event_it_left_out_for_want_of_a_date() {
+    let site = shows("---\ntitle: Shows\nchildren_when: past\n---\n", "---\ntitle: Lab\n---\n");
+    let about = |lines: &[String]| lines.iter().filter(|l| l.contains("past and upcoming listings")).cloned().collect::<Vec<_>>().join("\n");
+    let problems: Vec<String> = site.logged.iter().filter(|l| !site.notes.contains(l)).cloned().collect();
+    let (problem, note) = (about(&problems), about(&site.notes));
+    assert!(problem.contains("shows/odd.md") && problem.contains("YYYY-MM-DD HH:MM") && !problem.contains("blank.md"), "{problem}");
+    assert!(note.contains("shows/blank.md") && !note.contains("odd.md") && !note.contains("note.md"), "{note}");
 }

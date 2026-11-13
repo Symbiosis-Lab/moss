@@ -527,7 +527,7 @@ pub async fn list_project_tree_impl(project_path: &str) -> Result<Vec<ProjectFil
     // rename) — keeping plugin-facing detection consistent with the renderer.
     let marked: std::collections::HashSet<String> = files
         .iter()
-        .filter(|p| p.ends_with(".md"))
+        .filter(|p| moss_core::source_edit::policy::is_page_path(Path::new(p)))
         .filter(|p| crate::build::scan::scan::file_has_home_marker(&project.join(p)))
         .cloned()
         .collect();

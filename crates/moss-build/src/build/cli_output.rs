@@ -467,8 +467,9 @@ fn log_line_for(record: &log::Record) -> Option<(String, bool)> {
     // summary disagreed with the screen. `log_warn_problem!` has already counted
     // its own line and says so in the target suffix, which is not printed.
     let target = record.target();
-    if let Some(plain) = target.strip_suffix("#note") {
-        return Some((format!("[NOTE] {}: {}", plain, record.args()), false));
+    // A note is for the site's author, who has no use for the module that wrote it.
+    if target.ends_with("#note") {
+        return Some((format!("[NOTE] {}", record.args()), false));
     }
     let (target, counted) = match target.strip_suffix("#counted") {
         Some(plain) => (plain, true),

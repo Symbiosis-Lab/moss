@@ -1,21 +1,19 @@
-import { FileSystemAdapter, Notice, WorkspaceLeaf } from "obsidian";
+import { FileSystemAdapter, Notice, TFolder, WorkspaceLeaf } from "obsidian";
 import { shell } from "electron";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import * as fs from "node:fs";
-import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  buildArgs,
   findMossBinary,
-  MOSS_HEALTH_MARKER,
-  MOSS_HEALTH_PATH,
+  parseRootJson,
   publishInAppUrl,
-  splitFlags,
+  publishNotice,
+  siteRoot,
   type DetectEnv,
+  type SiteAddress,
 } from "./desktop/cli";
-import { agentFoldersFor, firstBuildMessage, isInICloud } from "./desktop/first-build";
-import { FirstBuildModal } from "./desktop/first-build-modal";
+import { FirstPreviewModal } from "./desktop/first-build-modal";
 import { MossPreviewView, MOSS_PREVIEW_VIEW_TYPE, PREVIEW_STOPPED } from "./desktop/preview-view";
 import { MossProcess, type SpawnFn } from "./desktop/process";
 import { MossSettingTab } from "./settings";
@@ -25,46 +23,45 @@ export class DesktopCommands {
   constructor(private plugin: MossPlugin) {}
 
   private get app() { return this.plugin.app; }
-  private get settings() { return this.plugin.settings; }
   private mossProcess = new MossProcess(spawn as unknown as SpawnFn);
   private statusEl: HTMLElement | null = null;
-  private previewUrl: string | null = null;
-  /** True while the running process is a preview server, not a one-off build. */
-  private previewing = false;
-  /** Bumped per preview run, so a stopped run's late exit cannot clear a newer one. */
-  private previewRun = 0;
+  /** The running preview, from the first click until its process ends; a callback acts only for its own session. */
+  private session: Session | null = null;
+  /** The page-only notice shows once per run of Obsidian, not on every click. */
+  private pageOnlyNoticeShown = false;
 
   load(): void {
-    this.plugin.addSettingTab(new MossSettingTab(this.app, this.plugin));
+    this.plugin.addSettingTab(new MossSettingTab(this.app, this.plugin, this));
     this.plugin.registerView(MOSS_PREVIEW_VIEW_TYPE, (leaf) => new MossPreviewView(leaf, () => this.stopPreview(false)));
-    // CLI bridge.
-    this.plugin.addCommand({
-      id: "build",
-      name: "Build site",
-      callback: () => void this.runBuild(),
-    });
-    this.plugin.addCommand({
-      id: "preview",
-      name: "Preview site",
-      callback: () => this.runPreview(),
-    });
+    this.plugin.addCommand({ id: "preview", name: "Preview this folder", callback: () => void this.runPreview() });
     this.plugin.addCommand({
       id: "stop-preview",
-      name: "Stop preview server",
-      callback: () => this.stopPreview(true),
+      name: "Stop preview",
+      checkCallback: (checking) => {
+        // Not while only the first-preview question is open: nothing runs yet.
+        if (!this.session || !this.mossProcess.running) return false;
+        if (!checking) this.stopPreview(true);
+        return true;
+      },
     });
-    this.plugin.addCommand({
-      id: "publish-in-app",
-      name: "Publish with the moss app",
-      callback: () => this.publishInApp(),
-    });
+    this.plugin.addCommand({ id: "publish-in-app", name: "Publish this folder", callback: () => void this.publishInApp() });
+    this.plugin.addRibbonIcon("globe", "Preview this folder", () => void this.runPreview());
+    this.plugin.registerEvent(this.app.workspace.on("file-menu", (menu, file) => {
+      if (!(file instanceof TFolder)) return;
+      menu.addItem((item) => item
+        .setTitle("Preview with moss")
+        .setIcon("globe")
+        .onClick(() => void this.runPreview(file.path)));
+    }));
 
     this.statusEl = this.plugin.addStatusBarItem();
-    this.setStatus("idle");
+    this.statusEl.addClass("mod-clickable");
+    this.plugin.registerDomEvent(this.statusEl, "click", () => void this.openPreviewLeaf());
+    this.setStatus(null);
   }
 
   unload(): void {
-    this.mossProcess.stop();
+    this.stopPreview(false);
   }
 
   detectEnv(): DetectEnv {
@@ -85,19 +82,12 @@ export class DesktopCommands {
   }
 
   findBinary(): string | null {
-    return findMossBinary(this.settings.binaryPath, this.detectEnv());
+    return findMossBinary(this.plugin.settings.binaryPath, this.detectEnv());
   }
 
-  private requireBinary(): string | null {
-    const binary = this.findBinary();
-    if (!binary) {
-      new Notice(
-        "moss CLI not found. Install it with `npm i -g @symbiosis-lab/moss` or Homebrew, or set the binary path in settings.",
-        8000,
-      );
-      this.setStatus("not found");
-    }
-    return binary;
+  /** The version the program reports, e.g. "moss 0.15.20", or null when it does not answer. */
+  version(binary: string): Promise<string | null> {
+    return runCli(binary, ["--version"], 5000).then((out) => out.trim().split("\n")[0] || null, () => null);
   }
 
   vaultPath(): string | null {
@@ -106,149 +96,106 @@ export class DesktopCommands {
   }
 
   /**
-   * True once the owner agrees to a first build, or at once when the vault is
-   * already a moss site. A first build edits notes (it adds `uid:` lines) and
-   * creates folders, so it is never started without saying so.
+   * The moss site that owns `target` (a vault path) or else the open note, as
+   * `moss root` finds it. When none does, a clicked folder becomes the site;
+   * otherwise the vault. Without the program the vault is all there is to say.
    */
-  private async confirmFirstBuild(vault: string): Promise<boolean> {
-    if (await this.app.vault.adapter.exists(".moss")) return true;
-    const notesGainingUid = this.app.vault.getMarkdownFiles().filter((file) => {
-      const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
-      return fm !== undefined && !("uid" in fm);
-    }).length;
-    const lines = firstBuildMessage({
-      notesGainingUid,
-      agentFolders: agentFoldersFor((p) => fs.existsSync(p), vault, os.homedir(), path.sep),
-      inICloud: isInICloud(vault),
-    });
-    return new Promise((resolve) => new FirstBuildModal(this.app, lines, resolve).open());
+  private async siteFor(binary: string | null, target?: string): Promise<{ root: string; address: SiteAddress } | null> {
+    const vault = this.vaultPath();
+    if (!vault) return null;
+    if (!binary) return { root: siteRoot(path, vault, undefined, null), address: undefined };
+    const at = path.join(vault, target ?? this.app.workspace.getActiveFile()?.path ?? "");
+    // A CLI without `moss root` fails here and reads as no site found.
+    const found = parseRootJson(await runCli(binary, ["root", at, "--json"], 5000).catch(() => ""));
+    return { root: siteRoot(path, vault, target, found.root), address: found.address };
   }
 
-  private async runBuild(): Promise<void> {
-    const binary = this.requireBinary();
-    const vault = this.vaultPath();
-    if (!binary || !vault) return;
-    if (this.mossProcess.running) {
-      new Notice("moss is already running. Stop the preview server first.");
+  /** A folder moss has not previewed gains `.moss/`; ask once before that. */
+  private async confirmFirstPreview(session: Session): Promise<boolean> {
+    if (fs.existsSync(path.join(session.root, ".moss"))) return true;
+    return new Promise((resolve) => {
+      session.modal = new FirstPreviewModal(this.app, session.folder, resolve);
+      session.modal.open();
+    });
+  }
+
+  /** `target` is the folder whose menu was used; otherwise the open note decides. */
+  private async runPreview(target?: string): Promise<void> {
+    const binary = this.findBinary();
+    if (!binary) {
+      // Without the moss program, the page render from moss core is still a preview of the open note.
+      if (target !== undefined || !this.plugin.canPreviewPage()) {
+        const folder = target ? path.basename(target) || this.app.vault.getName() : this.app.vault.getName();
+        new Notice(`Get moss at mosspub.com to preview ${folder}.`, 8000);
+        return;
+      }
+      await this.plugin.openPagePreview();
+      if (!this.pageOnlyNoticeShown) {
+        this.pageOnlyNoticeShown = true;
+        new Notice(`Showing this page only. Get moss at mosspub.com to preview all of ${this.app.vault.getName()}.`, 8000);
+      }
       return;
     }
-    if (!(await this.confirmFirstBuild(vault))) return;
-    this.setStatus("building…");
-    new Notice("moss: building site…");
-    this.mossProcess.start(binary, buildArgs(vault, { extraFlags: splitFlags(this.settings.extraFlags) }), vault, {
-      onError: (message) => {
-        new Notice(`moss build failed: ${message}`, 10000);
-        this.setStatus("error");
-      },
-      onProblems: (count) => {
-        new Notice(`moss: ${count} problem${count === 1 ? "" : "s"} reported — site still generated.`, 8000);
-      },
-      onExit: (code) => {
-        if (code === 0) {
-          new Notice("moss: site built.");
-          this.setStatus("idle");
-        } else if (code !== null) {
-          this.setStatus("error");
-        }
-      },
-    });
-  }
-
-  private async runPreview(): Promise<void> {
-    const binary = this.requireBinary();
-    const vault = this.vaultPath();
-    if (!binary || !vault) return;
-    if (this.mossProcess.running) {
-      // Already serving — just surface the pane again.
+    const site = await this.siteFor(binary, target);
+    if (!site) return;
+    if (this.session?.root === site.root) {
+      const { url } = this.session;
       const view = await this.openPreviewLeaf();
-      if (this.previewUrl) view?.setUrl(this.previewUrl);
+      if (url) view?.setUrl(url);
       return;
     }
-    if (!(await this.confirmFirstBuild(vault))) return;
-
-    const view = await this.openPreviewLeaf();
-    view?.showMessage("Building site…");
-    this.setStatus("building…");
-
-    this.previewing = true;
-    const run = ++this.previewRun;
-    let sawUrl = false;
-    this.mossProcess.start(
-      binary,
-      buildArgs(vault, { serve: true, watch: true, extraFlags: splitFlags(this.settings.extraFlags) }),
-      vault,
-      {
-        onServerReady: (addr) => {
-          sawUrl = true;
-          this.previewUrl = addr.url;
-          this.setStatus(`serving :${addr.port}`);
-          view?.setUrl(addr.url);
-        },
-        onStandby: () => {
-          new Notice("Preview is served by the moss app; this window follows it");
-        },
-        onError: (message) => {
-          new Notice(`moss preview failed: ${message}`, 10000);
-          view?.showMessage(`moss failed: ${message}`);
-          this.setStatus("error");
-        },
-        onProblems: (count) => {
-          new Notice(`moss: ${count} problem${count === 1 ? "" : "s"} reported — site still generated.`, 8000);
-        },
-        onExit: (code) => {
-          if (run !== this.previewRun) return;
-          this.previewing = false;
-          this.previewUrl = null;
-          if (code !== 0 && code !== null) this.setStatus("error");
-          else this.setStatus("idle");
-          this.openPreviewView()?.showMessage(PREVIEW_STOPPED);
-        },
+    // Another site's preview gives way.
+    this.stopPreview(false);
+    const session: Session = { root: site.root, folder: path.basename(site.root), url: null };
+    this.session = session;
+    if (!(await this.confirmFirstPreview(session))) {
+      this.endSession(session);
+      return;
+    }
+    const view = await this.openPreviewLeaf(session.folder);
+    if (this.session !== session) return;
+    view?.showMessage(`Building ${session.folder}…`);
+    this.setStatus(`Previewing ${session.folder}`);
+    this.mossProcess.start(binary, ["build", session.root, "--serve", "--watch"], session.root, {
+      onServerReady: (addr) => {
+        if (this.session !== session) return;
+        session.url = addr.url;
+        view?.setUrl(addr.url);
       },
-    );
-
-    // Backstop: the URL line has been on stderr since 0.11.x, but if parsing
-    // ever misses it, probe the configured fallback port for a real moss
-    // server before giving up.
-    window.setTimeout(() => {
-      if (sawUrl || !this.mossProcess.running) return;
-      void this.tryFallbackPort(view);
-    }, 30000);
+      onError: (message) => {
+        session.failure = `moss could not preview ${session.folder}: ${message}`;
+        view?.showMessage(session.failure);
+      },
+      onExit: () => this.endSession(session),
+    });
   }
 
-  private async tryFallbackPort(view: MossPreviewView | null): Promise<void> {
-    const port = this.settings.fallbackPort;
-    const healthy = await checkMossHealth(port);
-    if (healthy && this.mossProcess.running) {
-      const url = `http://localhost:${port}`;
-      this.previewUrl = url;
-      this.setStatus(`serving :${port}`);
-      view?.setUrl(url);
-    }
-  }
-
-  /** `announce` is false when the pane closed itself and there is nothing to say. */
+  /** `announce` is false when the pane closed itself, or another site's preview replaces this one. */
   private stopPreview(announce: boolean): void {
-    if (!this.previewing) {
-      if (announce) new Notice("moss: no preview server running.");
-      return;
-    }
+    const session = this.session;
+    if (!session) return;
     this.mossProcess.stop();
-    this.previewing = false;
-    this.previewUrl = null;
-    this.setStatus("idle");
-    this.openPreviewView()?.showMessage(PREVIEW_STOPPED);
-    if (announce) new Notice("moss: preview server stopped.");
+    this.endSession(session);
+    if (announce) new Notice(`Stopped previewing ${session.folder}.`);
   }
 
-  private publishInApp(): void {
-    const vault = this.vaultPath();
-    if (!vault) return;
-    new Notice(
-      "Opening this vault in the moss app, where you publish it. moss publishes every note in the vault except those marked draft: true.",
-      10000,
-    );
-    shell.openExternal(publishInAppUrl(vault)).catch(() => {
-      new Notice("The moss app is not installed. Get it from mosspub.com to publish this vault.", 10000);
+  /** The one place a preview ends, whether stopped, closed, cancelled or exited. */
+  private endSession(session: Session): void {
+    if (this.session !== session) return;
+    this.session = null;
+    session.modal?.close();
+    this.setStatus(null);
+    // A failure stays on screen; the exit that follows it is not news.
+    if (!session.failure) this.openPreviewView()?.showMessage(PREVIEW_STOPPED);
+  }
+
+  private async publishInApp(): Promise<void> {
+    const site = await this.siteFor(this.findBinary());
+    if (!site) return;
+    const folder = path.basename(site.root);
+    new Notice(publishNotice(folder, site.address));
+    shell.openExternal(publishInAppUrl(site.root)).catch(() => {
+      new Notice(`Get moss at mosspub.com to publish ${folder}.`, 10000);
     });
   }
 
@@ -257,39 +204,40 @@ export class DesktopCommands {
     return view instanceof MossPreviewView ? view : null;
   }
 
-  private async openPreviewLeaf(): Promise<MossPreviewView | null> {
+  /** `folder` names the pane's tab when a new preview starts. */
+  private async openPreviewLeaf(folder?: string): Promise<MossPreviewView | null> {
     const existing = this.app.workspace.getLeavesOfType(MOSS_PREVIEW_VIEW_TYPE);
     let leaf: WorkspaceLeaf | null = existing[0] ?? null;
     if (!leaf) {
       leaf = this.app.workspace.getRightLeaf(false);
       if (!leaf) return null;
-      await leaf.setViewState({ type: MOSS_PREVIEW_VIEW_TYPE, active: true });
     }
-    this.app.workspace.revealLeaf(leaf);
+    if (!existing[0] || folder) await leaf.setViewState({ type: MOSS_PREVIEW_VIEW_TYPE, active: true, state: { folder } });
+    await this.app.workspace.revealLeaf(leaf);
     const view = leaf.view;
     return view instanceof MossPreviewView ? view : null;
   }
 
-  private setStatus(text: string): void {
-    this.statusEl?.setText(`moss: ${text}`);
+  /** Nothing shows at rest; a running preview names its folder. */
+  private setStatus(text: string | null): void {
+    this.statusEl?.toggle(text !== null);
+    this.statusEl?.setText(text ?? "");
   }
 }
 
-/** GET the moss health endpoint; true only for a real moss preview server. */
-function checkMossHealth(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const req = http.get(
-      { host: "127.0.0.1", port, path: MOSS_HEALTH_PATH, timeout: 2000 },
-      (res) => {
-        let body = "";
-        res.on("data", (c) => (body += String(c)));
-        res.on("end", () => resolve(body.includes(MOSS_HEALTH_MARKER)));
-      },
-    );
-    req.on("error", () => resolve(false));
-    req.on("timeout", () => {
-      req.destroy();
-      resolve(false);
-    });
+/** A running preview; `folder` is the name every label uses. */
+interface Session {
+  root: string;
+  folder: string;
+  url: string | null;
+  /** Why the preview failed, kept on screen after the process exits. */
+  failure?: string;
+  /** The first-preview question while it is open; ending the session closes it. */
+  modal?: FirstPreviewModal;
+}
+
+function runCli(binary: string, args: string[], timeout = 0): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(binary, args, { maxBuffer: 4 * 1024 * 1024, timeout }, (err, out) => (err ? reject(err) : resolve(out)));
   });
 }

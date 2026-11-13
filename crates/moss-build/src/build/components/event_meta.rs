@@ -62,7 +62,7 @@ pub fn render(
         html.push_str(&upcoming_mark(ev, lang, now));
     }
     // A resolved place already has its own linked line under the meta line.
-    if doc.place_line.is_none() && !doc.location.is_empty() {
+    if !doc.draws_place_line() && !doc.location.is_empty() {
         html.push_str(&format!(
             r#"<span class="moss-event-place">{}</span>"#,
             html_escape(&doc.location.join(", ")),

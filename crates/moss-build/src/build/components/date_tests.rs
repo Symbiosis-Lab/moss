@@ -345,3 +345,15 @@ fn time_html_wraps_the_text_with_the_full_date_and_escapes_it() {
     assert_eq!(time_html("<b>x</b>", "2026"), r#"<time datetime="2026">&lt;b&gt;x&lt;/b&gt;</time>"#);
     assert_eq!(time_html("<b>", "not a date"), "&lt;b&gt;");
 }
+
+#[test]
+fn a_clock_time_is_read_only_when_written_without_a_zone() {
+    assert_eq!(clock_time("2026-11-06T14:32"), Some("14:32"));
+    assert_eq!(clock_time("2026-11-06 14:32:05"), Some("14:32"));
+    assert_eq!(clock_time("2026-11-06"), None);
+    assert_eq!(clock_time("2025-11-17T00:50:43.135Z"), None);
+    assert_eq!(clock_time("2026-11-06T14:32+08:00"), None);
+    assert_eq!(with_clock("2026年11月6日", "14:32", Language::ZhHans), "2026年11月6日 14:32");
+    assert_eq!(with_clock("November 6, 2026", "14:32", Language::En), "November 6, 2026, 14:32");
+}
+

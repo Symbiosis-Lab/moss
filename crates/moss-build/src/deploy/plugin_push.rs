@@ -201,15 +201,15 @@ pub async fn run_plugin_deploy_inner(
     let folder_str = cx.folder.to_string_lossy().to_string();
     let mp = MossPaths::new(cx.folder);
 
-    // The door guard every config-reading door shares
-    // (`site_config::ensure_config_current`). Here, not in `with_publish_guard`:
+    // The door guard every publish route shares
+    // (`site_config::publish_door`). Here, not in `with_publish_guard`:
     // the app's `deploy_site` wraps `deploy_site_body` (which calls straight
     // into this function) in that guard, but `moss deploy`'s plugin route
     // (`cli/deploy.rs`) calls `run_plugin_deploy` → this function directly,
     // never through `with_publish_guard` — the CLI is a one-shot process with
     // no live watcher to freeze, so it never needed that guard's single-flight
     // latch. This function is the one place both callers actually converge.
-    crate::build::site_config::ensure_config_current(&folder_str)?;
+    crate::build::site_config::publish_door(cx.folder, cx.sealed.is_some_and(|s| s.restricts_pages()))?;
 
     // Before anything else, and before any bytes move: without a sealed
     // manifest there is no generation to check `current` against, and

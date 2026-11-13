@@ -60,10 +60,45 @@ pub fn extract_main_content(html: &str) -> String {
     let Some(candidate_id) = best_candidate(&doc).map(|el| el.id()) else {
         return cleaned;
     };
-    resolve_empty_anchors(&mut doc, candidate_id);
-    ElementRef::wrap(doc.tree.get(candidate_id).unwrap())
-        .expect("candidate_id always names the element best_candidate returned")
-        .inner_html()
+    let cards = sibling_cards(&doc, candidate_id);
+    if cards.is_empty() {
+        resolve_empty_anchors(&mut doc, candidate_id);
+        return ElementRef::wrap(doc.tree.get(candidate_id).unwrap())
+            .expect("candidate_id always names the element best_candidate returned")
+            .inner_html();
+    }
+    for &id in &cards {
+        resolve_empty_anchors(&mut doc, id);
+    }
+    cards
+        .iter()
+        .map(|&id| ElementRef::wrap(doc.tree.get(id).unwrap()).expect("card is an element").html())
+        .collect()
+}
+
+/// When the chosen element is an `<article>` that has sibling `<article>`s
+/// sharing a class token with it (or, with no class, none either), it is one
+/// card of a post feed: every such card under the parent, in order. Empty
+/// when there is no such sibling, so a post beside one unrelated card, or a
+/// post whose body nests articles, is read as the single article it is.
+fn sibling_cards(doc: &Html, candidate_id: NodeId) -> Vec<NodeId> {
+    let Some(node) = doc.tree.get(candidate_id) else { return Vec::new() };
+    let Some(candidate) = ElementRef::wrap(node).filter(|e| e.value().name() == "article") else {
+        return Vec::new();
+    };
+    let Some(parent) = node.parent() else { return Vec::new() };
+    let mine: Vec<&str> = candidate.value().classes().collect();
+    let cards: Vec<NodeId> = parent
+        .children()
+        .filter_map(ElementRef::wrap)
+        .filter(|e| e.value().name() == "article")
+        .filter(|e| {
+            let mut theirs = e.value().classes().peekable();
+            if mine.is_empty() { theirs.peek().is_none() } else { theirs.any(|t| mine.contains(&t)) }
+        })
+        .map(|e| e.id())
+        .collect();
+    if cards.len() > 1 { cards } else { Vec::new() }
 }
 
 // ---------------------------------------------------------------------------
@@ -812,6 +847,57 @@ mod tests {
         let el = doc.select(&sel).next().unwrap();
         let s = score_element(&el);
         assert!(s > 20, "expected score > 20, got {}", s);
+    }
+
+    #[test]
+    fn sibling_articles_keep_every_card() {
+        let html = r#"<html><body><h1>Example collection</h1>
+            <div class="feed">
+              <article><h2><a href="https://notes.example.test/first-light/">First light</a></h2></article>
+              <article><h2><a href="https://notes.example.test/second-draft/">Second draft</a></h2></article>
+              <article><h2><a href="https://notes.example.test/third-room/">Third room</a></h2></article>
+            </div></body></html>"#;
+        let inner = extract_main_content(html);
+        let pos: Vec<_> = ["First light", "Second draft", "Third room"]
+            .iter()
+            .map(|t| inner.find(t).unwrap_or_else(|| panic!("{t} missing: {inner}")))
+            .collect();
+        assert!(pos[0] < pos[1] && pos[1] < pos[2]);
+        assert!(inner.contains("notes.example.test/third-room/"));
+    }
+
+    #[test]
+    fn sibling_articles_sharing_a_class_keep_every_card() {
+        let html = r#"<html><body><div class="feed">
+              <article class="card card-first"><h2>First light</h2></article>
+              <article class="card"><h2>Second draft</h2></article>
+              <article class="note card"><h2>Third room</h2></article>
+            </div></body></html>"#;
+        let inner = extract_main_content(html);
+        for title in ["First light", "Second draft", "Third room"] {
+            assert!(inner.contains(title), "{title} missing: {inner}");
+        }
+    }
+
+    #[test]
+    fn post_beside_one_unrelated_article_card_stays_the_post() {
+        let html = r#"<html><body><div class="wrap">
+            <article class="post"><p>The prose of this post, which is the page.</p></article>
+            <article><p>Unrelated card text.</p></article></div></body></html>"#;
+        let inner = extract_main_content(html);
+        assert!(inner.contains("The prose of this post"));
+        assert!(!inner.contains("Unrelated card"), "got: {inner}");
+    }
+
+    #[test]
+    fn single_article_with_nested_article_is_unchanged() {
+        let html = r#"<html><body><div class="wrap">
+            <article><p>Only the prose of this post.</p>
+              <div><article><p>Quoted card.</p></article><article><p>Another.</p></article></div>
+            </article><p>Outside text.</p></div></body></html>"#;
+        let inner = extract_main_content(html);
+        assert!(inner.contains("Only the prose"));
+        assert!(!inner.contains("Outside text"), "got: {inner}");
     }
 
     // ---- empty anchors -----------------------------------------------

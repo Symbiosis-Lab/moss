@@ -18,7 +18,7 @@ impl RenderHooks for Recorder {
     }
 }
 
-fn lines() -> ParseConfig {
+fn lines() -> ParseConfig<'static> {
     ParseConfig { emit_source_lines: true, ..Default::default() }
 }
 

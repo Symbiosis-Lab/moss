@@ -51,7 +51,7 @@ vi.mock('../../engine', () => ({ engine: mockCommands }));
 vi.mock('../chip-bar', () => ({ ChipBar: MockChipBar }));
 vi.mock('../cm-editor', () => ({ CmEditor: MockCmEditor }));
 vi.mock('../tree', () => ({ FileTree: MockFileTree }));
-vi.mock('../file-viewer', () => ({ showFileViewer: vi.fn(), destroyFileViewer: vi.fn() }));
+vi.mock('../file-viewer');
 
 // ---------------------------------------------------------------------------
 // DOM helper — mirrors editor.html structure (without #new-page-btn)

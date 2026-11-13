@@ -22,13 +22,20 @@ use crate::editor::resolve::takeover::{takeover_for, TakeoverKind};
 ///
 /// A URL nothing backs resolves to `source_path: None`, with the takeover the
 /// author could create to claim it; that is a normal answer, not an error.
+/// Without the build's map (none yet, during a first build, or one this moss
+/// cannot read) and with no source on disk for a page below the root, the
+/// answer is `source_known: false`: only the map tells a generated page from
+/// one whose source has a lossy slug, so "nothing backs it" is not known.
 pub fn resolve_page_source(url_path: &str, folder_path: &Path) -> Result<PageSource, String> {
     let moss_dir = folder_path.join(".moss");
-    // An unreadable map degrades to an empty one: the map is rewritten on every
-    // build, and a torn read must not skip the disk fallback below, which is
-    // what keeps the editor from offering to create a home that already exists.
+    // A missing or unreadable map degrades to an empty one, so the disk
+    // fallbacks below still run: they keep the editor from offering to create
+    // a home that already exists.
+    let mut unknown = (!crate::moss_paths::MossPaths::from_moss_dir(moss_dir.clone()).article_map().exists())
+        .then(|| "no build has finished yet".to_string());
     let map = ArticleMap::load(&moss_dir).unwrap_or_else(|e| {
         log::debug!("[resolve_page_source] article-map unreadable ({e}); using source-truth fallback");
+        unknown = Some(e);
         ArticleMap::default()
     });
     let normalized = url_path.trim_start_matches('/');
@@ -51,6 +58,7 @@ pub fn resolve_page_source(url_path: &str, folder_path: &Path) -> Result<PageSou
                 syndicate: info.syndicate.clone(),
                 takeover: None,
                 source_pending: false,
+                source_known: true,
             });
         }
     }
@@ -64,6 +72,7 @@ pub fn resolve_page_source(url_path: &str, folder_path: &Path) -> Result<PageSou
             syndicate: None,
             takeover: None,
             source_pending: false,
+            source_known: true,
         });
     }
 
@@ -76,9 +85,20 @@ pub fn resolve_page_source(url_path: &str, folder_path: &Path) -> Result<PageSou
         }
     }
 
+    // A served file that is no page (a PDF, a picture) has the file it was
+    // built from as its source: nothing generated it, and an editor showing
+    // that file is already on it.
     let source_path = url_to_source_candidates(normalized)
         .into_iter()
-        .find_map(|c| existing(&c));
+        .find_map(|c| existing(&c))
+        .map(|found| spelled_as_on_disk(folder_path, found))
+        .or_else(|| match served_asset_source(normalized, folder_path, &map) {
+            Ok(source) => source.and_then(|src| existing(&src)),
+            Err(why) => {
+                unknown.get_or_insert(why);
+                None
+            }
+        });
     // What would replace the page when nothing backs it, in the language the
     // build resolved (the root entry of `site-languages.json`); no build yet
     // means the default, never a content scan from a resolve.
@@ -99,15 +119,52 @@ pub fn resolve_page_source(url_path: &str, folder_path: &Path) -> Result<PageSou
         }
         other => other,
     };
+    let not_known = unknown.filter(|_| source_path.is_none() && !normalized.is_empty());
+    if let Some(why) = &not_known {
+        log::debug!("[resolve_page_source] whether '{url_path}' has a source is not known yet: {why}");
+    }
     Ok(PageSource {
         source_path,
         is_dir: normalized.is_empty(),
         is_article: false,
         syndicated: vec![],
         syndicate: None,
-        takeover,
+        takeover: takeover.filter(|_| not_known.is_none()),
         source_pending: false,
+        source_known: not_known.is_none(),
     })
+}
+
+/// `found` with its names spelled as the disk stores them. A candidate is
+/// spelled from the address (`events/a.md`), and a disk that ignores case
+/// finds `Events/a.md` under it; the editor and the file tree know the page
+/// only by its real path. The names are joined with `/`, as a mapped page's are.
+fn spelled_as_on_disk(folder_path: &Path, found: String) -> String {
+    let real = Path::new(&found).canonicalize().ok();
+    let root = folder_path.canonicalize().ok();
+    match (real, root) {
+        (Some(real), Some(root)) => match real.strip_prefix(&root) {
+            Ok(rel) => {
+                let names: Vec<_> = rel.iter().map(|name| name.to_string_lossy()).collect();
+                folder_path.join(names.join("/")).to_string_lossy().into_owned()
+            }
+            Err(_) => found,
+        },
+        _ => found,
+    }
+}
+
+/// The source of the non-page file served at `url`, from the last build's
+/// manifest. A page URL (the root, a folder, an `.html` file) never reads it.
+/// `Err` when there is no manifest to read, or two files share the address:
+/// which file is served there is not known, which is not the same as none.
+fn served_asset_source(url: &str, folder_path: &Path, map: &ArticleMap) -> Result<Option<String>, String> {
+    if url.is_empty() || url.ends_with('/') || url.ends_with(".html") {
+        return Ok(None);
+    }
+    let hashes = crate::ops::watch::sweep::walk::read_baseline_from_disk(folder_path)
+        .ok_or("no build manifest to read yet")?;
+    crate::editor::resolve::links::asset_source_for_url(url, &hashes, &map.dir_overrides)
 }
 
 /// One page of the served build.
@@ -222,6 +279,16 @@ mod tests {
     }
 
     #[test]
+    fn a_page_no_build_has_mapped_yet_resolves_under_its_spelling_on_disk() {
+        let dir = vault(&[], &[], &["Events/untitled.md"]);
+        let r = resolve_page_source("/events/untitled/", dir.path()).unwrap();
+        // A disk that tells `events` from `Events` finds no file; one that does not must not answer `events/`.
+        if let Some(source) = r.source_path {
+            assert_eq!(source, dir.path().join("Events/untitled.md").to_string_lossy());
+        }
+    }
+
+    #[test]
     fn a_home_registered_in_the_map_under_a_non_ascii_name_resolves() {
         let dir = vault(&[], &[("", "山水.md")], &["山水.md"]);
         let r = resolve_page_source("", dir.path()).unwrap();
@@ -239,6 +306,36 @@ mod tests {
         let r = resolve_page_source("", &root).unwrap();
         assert!(r.is_dir);
         assert!(r.source_path.unwrap().ends_with("Garden.md"));
+    }
+
+    /// The preview on a served PDF or picture is on that file, not on a page
+    /// moss generated: an editor showing the file keeps showing it.
+    #[test]
+    fn a_served_file_resolves_to_the_file_it_was_built_from() {
+        let dir = vault(&[], &[], &["index.md", "doc.pdf", "My Files/pic.png"]);
+        let stat = serde_json::json!({ "hash": "abc", "size": 1, "mtime": 1000 });
+        std::fs::write(
+            dir.path().join(".moss/build.nosync/hashes.json"),
+            serde_json::json!({
+                "files": { "index.html": "100644:a", "doc.pdf": "100644:a", "my-files/pic.png": "100644:a" },
+                "sources": { "index.md": stat, "doc.pdf": stat, "My Files/pic.png": stat },
+                "image_outputs": ["my-files/pic.webp"],
+            })
+            .to_string(),
+        )
+        .unwrap();
+        for (url, file) in [("/doc.pdf", "doc.pdf"), ("/my-files/pic.webp", "My Files/pic.png")] {
+            let r = resolve_page_source(url, dir.path()).unwrap();
+            assert!(r.source_path.as_deref().is_some_and(|p| p.ends_with(file)), "{url}: {:?}", r.source_path);
+            assert!(r.source_known && r.takeover.is_none() && !r.is_dir && !r.is_article, "{url}");
+        }
+        // A file the build does not serve is still nothing to edit.
+        let missing = resolve_page_source("/missing.pdf", dir.path()).unwrap();
+        assert!(missing.source_path.is_none() && missing.source_known);
+        // Without a manifest, which file is served there is not known yet.
+        std::fs::remove_file(dir.path().join(".moss/build.nosync/hashes.json")).unwrap();
+        let unread = resolve_page_source("/doc.pdf", dir.path()).unwrap();
+        assert!(unread.source_path.is_none() && !unread.source_known);
     }
 
     #[test]
@@ -265,9 +362,33 @@ mod tests {
     #[test]
     fn an_unreadable_map_still_finds_the_home_on_disk() {
         let dir = vault(&[], &[], &["index.md"]);
-        std::fs::write(dir.path().join(".moss/build.nosync/article-map.json"), "{ torn").unwrap();
+        std::fs::write(dir.path().join(".moss/build.nosync/article-map.json"), "{ \"articles\": 7 }").unwrap();
         let r = resolve_page_source("", dir.path()).unwrap();
         assert!(r.source_path.unwrap().ends_with("index.md"));
+    }
+
+    /// Without a map this moss can read (another version's format, an IO
+    /// error, or none yet during a first build), a page nothing on disk backs
+    /// may still have a source under a lossy slug, so it is unknown, never
+    /// "generated". What the disk alone settles still resolves: a source at
+    /// the URL, and a real folder's missing home.
+    #[test]
+    fn without_a_readable_map_a_page_without_a_source_on_disk_is_unknown() {
+        let dir = vault(&[("posts/hello-world/", "posts/Hello, World!.md")], &[], &["posts/Hello, World!.md", "notes/a.md"]);
+        assert!(resolve_page_source("posts/hello-world/", dir.path()).unwrap().source_path.is_some(), "the map knows it");
+        let generated = resolve_page_source("rss/", dir.path()).unwrap();
+        assert!(generated.source_known && generated.source_path.is_none() && generated.takeover.is_none(), "a readable map settles a generated page");
+
+        let map = dir.path().join(".moss/build.nosync/article-map.json");
+        for state in ["a map in a format this moss cannot parse", "no map yet"] {
+            if state == "no map yet" { std::fs::remove_file(&map).unwrap() } else { std::fs::write(&map, "{ \"articles\": 7 }").unwrap() }
+            assert!(!resolve_page_source("posts/hello-world/", dir.path()).unwrap().source_known, "{state}: a lossy slug the disk cannot find");
+            let rss = resolve_page_source("rss/", dir.path()).unwrap();
+            assert!(!rss.source_known && rss.takeover.is_none(), "{state}");
+            assert!(resolve_page_source("notes/a/", dir.path()).unwrap().source_path.is_some(), "{state}: a source at the URL");
+            let folder = resolve_page_source("notes/", dir.path()).unwrap();
+            assert!(folder.source_known && (folder.source_path.is_some() || folder.takeover.is_some()), "{state}: a real folder, settled by the disk");
+        }
     }
 
     /// The takeover branch: a URL no page backs, and what the editor offers.

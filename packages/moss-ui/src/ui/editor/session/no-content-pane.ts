@@ -7,8 +7,9 @@
 // interchangeable, and a download shown as a missing page is what happens when they get treated as if
 // they were. `generated` and `takeover` are claims about the SITE ("moss
 // makes this page", "this page has no file yet; here is the one that would
-// replace it"); `pending` is a claim
-// about the NETWORK, and it is the only one that resolves itself. A user shown
+// replace it"); `pending` claims only that moss has no answer yet, and its
+// `download` reason, a claim about the NETWORK, is the only one that resolves
+// itself. A user shown
 // the wrong one has no way to tell which kind of claim they are reading: they
 // were told a home page they could see in Finder did not exist.
 //
@@ -53,7 +54,7 @@ export const SOURCE_PENDING_EVENT = 'editor:source-pending';
 
 /** The payload of {@link SOURCE_PENDING_EVENT}. */
 export interface SourcePendingPayload {
-  /** Is a pending pane on screen right now? */
+  /** Is a still-downloading pane on screen right now? */
   pending: boolean;
   /** The file it is waiting for, when the editor knows it. */
   sourcePath: string | null;
@@ -100,8 +101,8 @@ export function mountNoContentPane(
     }
     case 'pending':
       mountPaneState(host, {
-        title: t('editor.pane_pending_title'),
-        description: t('editor.pane_pending_desc'),
+        title: t(surface.reason === 'download' ? 'editor.pane_pending_title' : 'editor.pane_loading_title'),
+        description: t(surface.reason === 'download' ? 'editor.pane_pending_desc' : 'editor.pane_loading_desc'),
       });
       // No CTA on purpose. The waiting screen carries none either, for the same
       // reason: there is nothing the user can do about a download in flight,

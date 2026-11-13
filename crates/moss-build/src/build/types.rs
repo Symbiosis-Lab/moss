@@ -184,6 +184,17 @@ pub struct ParsedDocument {
     /// `None` ⇒ listed. Orthogonal to `draft` (which adds `noindex` + drops
     /// the share card).
     pub listed: Option<bool>,
+    /// The page's own `search_engines:`. Read through [`Self::is_indexable`]
+    /// and [`Self::is_listable_in`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[specta(skip)]
+    pub search_engines: Option<bool>,
+    /// The folder (`a/b/`, URL space) of the nearest home above this page that
+    /// says `search_engines: false`: the page is then shown only by listings
+    /// inside that folder. Set by [`mark_hidden_folders`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[specta(skip)]
+    pub hidden_home: Option<String>,
     /// When set, this page's rendered HTML is emitted into the named slot
     /// instead of (or in addition to) being a page.
     ///
@@ -334,20 +345,15 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub place_children: Option<Vec<(String, String, usize)>>,
-    /// The automatic place line: a generated markdown row naming every
-    /// place this document declares via `location:`, linked to each
-    /// place's term page. Set by `build::terms::set_place_lines`, after
-    /// `derive_terms`, alongside `link_terms_in_bylines`. `None` when
-    /// `location:` is unset, or the site declares no place-typed kind.
+    /// The lines this page's terms are drawn as, each name a link to its
+    /// term page, set by `build::terms::set_term_lines`.
     #[serde(skip)]
     #[specta(skip)]
-    pub place_line: Option<String>,
-    /// The same resolved place names `place_line` carries, plain and
-    /// unlinked, joined the same way (", "), with no role label — for a
-    /// card's compact meta line to show next to its date. Set alongside
-    /// `place_line` by `build::terms::set_place_lines`, from the same
-    /// filtered, ordered name list, so the two never drift apart. `None`
-    /// under the same conditions as `place_line`.
+    pub term_lines: Vec<crate::build::terms::TermLine>,
+    /// The page's resolved place names, plain and unlinked, joined with ", "
+    /// and with no role label: for a card's compact meta line to show next to
+    /// its date. Set by `build::terms::set_term_lines`, whether or not the
+    /// place line is drawn. `None` when no place resolves.
     #[serde(skip)]
     #[specta(skip)]
     pub place_names: Option<String>,
@@ -445,6 +451,9 @@ pub struct ParsedDocument {
     pub children_group: Option<moss_core::Resolved<String>>,
     /// What children to include: "direct" (default), "all" descendants
     pub children_depth: Option<String>,
+    /// "here" on a folder's home keeps every page under the folder out of the
+    /// ancestors' `depth: all` listings.
+    pub children_listed: Option<String>,
     /// Where to render the children feed: "body" (default) or "sidebar".
     pub children_in: Option<String>,
     /// Cap the children feed at N items. Truncation appends "More →".
@@ -542,6 +551,13 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub body_claims_eager: bool,
+    /// The page's body or hero asks for a folder listing (`![[folder/]]`, or a
+    /// `from=` hero), known when the page is parsed. A listing that draws pages
+    /// whole shows such a page as a row: its body is a marker, or already
+    /// another listing, depending on which pages were expanded first.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub lists_folders: bool,
     /// Hero image URL — populated at hoisting time from `HeroShortcode.image`
     /// (post-resolution). `None` when the hero had no `image=` attribute
     /// (text-only overlay) or the page has no hero. Feeds the homepage-hero
@@ -649,6 +665,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub raw_frontmatter: std::collections::BTreeMap<String, serde_json::Value>,
+    /// The feed entry id the page had on the site it was imported from, so a
+    /// feed reader does not show it again as new. Set from the import ledger.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub import_feed_id: Option<String>,
     /// The site's declared fields this page's own frontmatter carries, parsed
     /// at the markdown stage. Folder `cascade:` values are not included.
     #[serde(skip)]
@@ -675,6 +696,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub title_block: Option<String>,
+    /// `chrome: none` — the page is drawn without the site's header, nav
+    /// island, footer and skip link. The page's own, never cascaded.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub bare: bool,
     /// `reader_controls: false` removes the text-size control from a dated
     /// page. Set on the page or cascaded from a folder.
     #[serde(skip)]
@@ -768,11 +794,6 @@ pub(crate) fn syndicated_urls(value: Option<&serde_json::Value>) -> Vec<String> 
 }
 
 impl ParsedDocument {
-    /// [`syndicated_urls`] of this page.
-    pub fn syndicated_urls(&self) -> Vec<String> {
-        syndicated_urls(self.raw_frontmatter.get("syndicated"))
-    }
-
     /// The text the site's own navigation shows for this page: `nav_label`
     /// when set, else the chrome `label`.
     pub fn nav_text(&self) -> &str {
@@ -858,32 +879,42 @@ impl ParsedDocument {
 
     pub fn is_draft(&self) -> bool { self.draft == Some(true) }
 
-    /// Whether this document appears on moss's auto-generated *listing*
-    /// surfaces — page lists, folder embeds, year-grouped article lists,
-    /// home/folder children, auto-index pages, RSS, llms.txt, sitemap, and the
-    /// auto sidebar/sibling listings. False when **any** exclusion fires:
-    ///
-    /// 1. `draft == Some(true)` — rendered for the preview, never published;
-    ///    (via `is_public_page`) `noindex` with no share card.
-    /// 2. `listed == Some(false)` — a finished page curated *off-feed*: hidden
-    ///    from these listing surfaces but still a public page — indexable,
-    ///    share-cardable, reachable (see `is_public_page`).
-    /// 3. `slot_only == true` — layout chrome (e.g. `footer.md`) that fills a
-    ///    layout slot rather than rendering as a page. Structurally detected by
-    ///    `crate::build::footer::is_excluded_from_pages`; see
-    ///    `ParsedDocument::slot_only`.
-    /// 4. `is_not_found_page()` — the site's `404.md`, which a host shows for
-    ///    an address that does not exist.
-    ///
-    /// All list-emitting sites call this helper so any future visibility flag
-    /// is added in one place.
+    /// Whether this document appears on the listing surfaces that serve the
+    /// whole site — the home's listings, RSS, llms.txt, the sitemap, tag
+    /// pages, recent lists, auto-index pages: [`Self::is_listable_in`] the
+    /// root. A page in a hidden folder is listed only inside that folder.
     ///
     /// **NOT** to be used for: nav/footer placement (explicit `nav:`/`footer:`,
     /// independent of this flag); page-emission gating (drafts and off-feed
     /// pages both render — emission only branches on `slot_only`); or
-    /// `noindex`/share-card gating (use `is_public_page`).
+    /// `noindex`/share-card gating (use `is_indexable` / `is_public_page`).
     pub fn is_listable(&self) -> bool {
-        self.draft != Some(true) && self.listed != Some(false) && !self.slot_only && !self.is_not_found_page()
+        self.is_listable_in("")
+    }
+
+    /// Whether a listing of the folder `folder` (`a/b/`, URL space; `""` for
+    /// the root) may show this document. False when **any** exclusion fires:
+    ///
+    /// 1. `draft == Some(true)` — rendered for the preview, never published.
+    /// 2. `listed == Some(false)` — a finished page curated *off-feed*, still
+    ///    a public page (see `is_public_page`).
+    /// 3. `search_engines == Some(false)` — a page reached only by its link.
+    /// 4. `slot_only == true` — layout chrome (e.g. `footer.md`) or a partial.
+    /// 5. `is_not_found_page()` — the site's `404.md`.
+    /// 6. The page sits in a hidden folder ([`Self::hidden_home`]) that
+    ///    `folder` is outside of.
+    ///
+    /// All list-emitting sites call this helper so any future visibility flag
+    /// is added in one place.
+    pub fn is_listable_in(&self, folder: &str) -> bool {
+        self.draft != Some(true) && self.listed != Some(false) && self.search_engines != Some(false)
+            && !self.slot_only && !self.is_not_found_page() && self.reaches(folder)
+    }
+
+    /// Whether a listing of `folder` may name this page at all: false only for
+    /// a page in a hidden folder that `folder` is outside of.
+    pub fn reaches(&self, folder: &str) -> bool {
+        self.hidden_home.as_deref().is_none_or(|home| folder.starts_with(home))
     }
 
     /// An authored `partial: true` file that is not a draft. Read from the
@@ -910,15 +941,52 @@ impl ParsedDocument {
         self.url_path == crate::build::served_path::NOT_FOUND_PAGE
     }
 
-    /// Whether this is a real reader-facing page: indexable (no `noindex`) and
-    /// eligible for an og/twitter share card + JSON-LD + QR + hover preview.
-    /// Independent of *listing* membership — a `listed: false` page is still a
-    /// public page. Only `draft` (work-in-progress), `slot_only` (layout
-    /// chrome) and the not-found page (which a crawler should never be sent
-    /// to) are excluded. Gates per-page public affordances, where
-    /// `is_listable` gates multi-page listing surfaces.
+    /// The page names a `start` that moss could not read as a date, an empty
+    /// one included: an event still waiting for its date. It is in no
+    /// calendar file and in neither the past nor the upcoming listing.
+    pub fn awaits_event_date(&self) -> bool {
+        self.event.is_none() && self.raw_frontmatter.contains_key("start")
+    }
+
+    /// Whether this is a real reader-facing page, eligible for an og/twitter
+    /// share card + JSON-LD + QR. Independent of *listing* membership — a
+    /// `listed: false` page is still a public page. Only `draft`
+    /// (work-in-progress), `slot_only` (layout chrome) and the not-found page
+    /// are excluded. Whether search engines and the site's own site-wide files
+    /// may name it is [`Self::is_indexable`].
     pub fn is_public_page(&self) -> bool {
         self.draft != Some(true) && !self.slot_only && !self.is_not_found_page()
+    }
+
+    /// A public page that does not ask to be left out of search
+    /// (`search_engines: false`, its own or its folder home's). It alone
+    /// decides the page's `noindex`, its place in the site's search, the
+    /// hover-preview file, the places map and the photography and video pages.
+    pub fn is_indexable(&self) -> bool {
+        self.is_public_page() && !self.hidden_from_search_engines()
+    }
+
+    /// `search_engines: false`, the page's own or its folder home's.
+    pub fn hidden_from_search_engines(&self) -> bool {
+        self.search_engines == Some(false) || self.hidden_home.is_some()
+    }
+}
+
+/// Sets every page's [`ParsedDocument::hidden_home`]: the folder of the
+/// nearest home above it whose own frontmatter says `search_engines: false`.
+/// Runs once every authored page has its final address, and again for the
+/// folder pages generated after. The site root is not such a home: the whole
+/// site's switch is `[site] search_engines`.
+pub(crate) fn mark_hidden_folders(docs: &mut [ParsedDocument]) {
+    let homes: Vec<String> = docs.iter()
+        .filter(|doc| doc.kind == moss_core::PageKind::Folder && doc.search_engines == Some(false))
+        .filter_map(|doc| doc.url_path.strip_suffix("/index.html").map(|dir| format!("{dir}/")))
+        .collect();
+    for doc in docs.iter_mut() {
+        doc.hidden_home = homes.iter()
+            .filter(|home| doc.url_path.strip_prefix(home.as_str()).is_some_and(|rest| rest != "index.html"))
+            .max_by_key(|home| home.len())
+            .cloned();
     }
 }
 
@@ -939,6 +1007,9 @@ pub struct PageFeatures {
     /// True if the page contains a `:::form`, nested ones included. Gates the forms
     /// stylesheet and script, and tells `commerce.json` which pages to read.
     pub forms: bool,
+    /// The scripts and stylesheets of the plugin blocks this page
+    /// places, nested ones included. Sorted, so each loads once.
+    pub block_assets: std::collections::BTreeSet<crate::plugins::contributions::blocks::BlockAsset>,
     /// True if the page contains a `:::subscribe` inline shortcode block.
     /// When any page in a build has this set, the email feature pass injects
     /// `SUBSCRIBE_JS` + `email.css` even if `[channels.email]` is not
@@ -981,6 +1052,43 @@ pub struct PageFeatures {
     /// (`moss_core::ast::has_diagram_recursive`). Gates the `diagrams`
     /// stylesheet partial via [`SiteAssets`].
     pub diagrams: bool,
+    /// True if the page draws a `style:stream` listing, which gates the
+    /// `stream` stylesheet partial.
+    pub stream: bool,
+}
+
+impl PageFeatures {
+    /// Take on what a page drawn whole inside this one needs.
+    ///
+    /// Every field is named, so a new feature has to be decided here.
+    pub fn absorb(&mut self, inlined: &PageFeatures) {
+        let PageFeatures {
+            forms,
+            block_assets,
+            inline_subscribe,
+            callouts,
+            footnotes,
+            scroll_rows,
+            marquee,
+            // The page's hero is not part of the body a listing draws.
+            hero_ends: _,
+            viewer,
+            field_places,
+            diagrams,
+            // A page drawn whole lists no folder, so it draws no stream itself.
+            stream: _,
+        } = inlined;
+        self.forms |= *forms;
+        self.block_assets.extend(block_assets.iter().cloned());
+        self.inline_subscribe |= *inline_subscribe;
+        self.callouts |= *callouts;
+        self.footnotes |= *footnotes;
+        self.scroll_rows |= *scroll_rows;
+        self.marquee |= *marquee;
+        self.viewer |= *viewer;
+        self.field_places |= *field_places;
+        self.diagrams |= *diagrams;
+    }
 }
 
 /// Which optional asset partials this build ships — the site-level union of
@@ -1050,6 +1158,8 @@ pub struct SiteAssets {
     pub field_places: bool,
     /// Some page has a mermaid diagram. Gates the `diagrams` stylesheet partial.
     pub diagrams: bool,
+    /// Some page draws a `style:stream` listing. Gates the `stream` stylesheet partial.
+    pub stream: bool,
     /// The site ships the search overlay: `[site].search`, resolved once by the config phase
     /// (`LayoutConfig::with_search`) and read from `LayoutConfig::assets` by
     /// the nav button, the search-index emitter and `search.js`'s tag alike.
@@ -1117,6 +1227,7 @@ impl SiteAssets {
             viewer: false,
             field_places: false,
             diagrams: false,
+            stream: false,
             vertical: site_typesetting == Some("vertical"),
             ..from_config
         };
@@ -1133,6 +1244,7 @@ impl SiteAssets {
             out.hero_ends |= page.features.hero_ends;
             out.viewer |= page.features.viewer;
             out.diagrams |= page.features.diagrams;
+            out.stream |= page.features.stream;
             out.country_map |= page.country_map.is_some();
             out.field_places |= page.features.field_places || crate::build::components::field_places::title_block_beside_picture(page);
         }
@@ -1361,6 +1473,30 @@ mod tests {
         );
     }
 
+    /// A page takes the nearest hidden home above it, never itself; the
+    /// site's own home hides nothing but itself.
+    #[test]
+    fn a_page_takes_the_nearest_hidden_home_above_it() {
+        let page = |url: &str, kind: moss_core::PageKind, hidden: bool| ParsedDocument {
+            url_path: url.to_string(),
+            kind,
+            search_engines: hidden.then_some(false),
+            ..Default::default()
+        };
+        use moss_core::PageKind::{Article, Folder};
+        let mut docs = vec![
+            page("index.html", Folder, true),
+            page("about/index.html", Article, false),
+            page("rooms/index.html", Folder, true),
+            page("rooms/plan/index.html", Article, false),
+            page("rooms/acme/index.html", Folder, true),
+            page("rooms/acme/brief/index.html", Article, false),
+        ];
+        mark_hidden_folders(&mut docs);
+        let homes: Vec<Option<&str>> = docs.iter().map(|d| d.hidden_home.as_deref()).collect();
+        assert_eq!(homes, [None, None, None, Some("rooms/"), Some("rooms/"), Some("rooms/acme/")]);
+    }
+
     #[test]
     fn listable_and_public_page_truth_table() {
         let mk = |draft: Option<bool>, listed: Option<bool>, slot_only: bool| {
@@ -1406,6 +1542,17 @@ mod tests {
 
         let none = SiteAssets::of(&[without], None, SiteAssets::default());
         assert!(!none.has_footnotes, "no footnote page must leave it clear");
+    }
+
+    #[test]
+    fn a_page_drawn_whole_brings_the_block_assets_it_places() {
+        use crate::plugins::contributions::blocks::BlockAsset;
+        let mut host = PageFeatures::default();
+        host.block_assets.insert(BlockAsset::Stylesheet("/_moss/plugins/a/a.css".to_string()));
+        let mut inlined = PageFeatures::default();
+        inlined.block_assets.insert(BlockAsset::Script("/_moss/plugins/b/b.js".to_string()));
+        host.absorb(&inlined);
+        assert_eq!(host.block_assets.len(), 2, "{:?}", host.block_assets);
     }
 }
 

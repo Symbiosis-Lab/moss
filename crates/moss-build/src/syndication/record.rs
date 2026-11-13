@@ -24,6 +24,8 @@ pub enum State {
     Posted,
     /// The network refused before anything was posted; tried again next run.
     Refused,
+    /// The latest published page cannot be copied; a fitting edit can resume it.
+    Unavailable,
     /// No posting API: the author was given the copy to paste.
     HandedOff,
     /// A send stopped mid-call on a network that cannot retry safely. Not
@@ -102,6 +104,12 @@ pub struct CopyRecord {
     pub uid: String,
     pub channel: String,
     pub state: State,
+    /// The submitted form survives edits and reconciliation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub form: Option<super::channel::Form>,
+    /// Attempted thread length, retained only until remote ids establish it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub part_count: Option<usize>,
     /// Where the post was when this record last changed. Informational: the
     /// uid is what follows a renamed post.
     pub source_path: String,
@@ -147,7 +155,38 @@ impl CopyRecord {
             State::Due | State::Refused | State::Sending => Some(Op::Publish),
             State::Posted if self.update_due => Some(Op::Update),
             State::HandedOff if self.draft().is_some() => Some(Op::Find),
-            State::Posted | State::HandedOff => None,
+            State::Posted | State::HandedOff | State::Unavailable => None,
+        }
+    }
+
+    /// No network copy or uncertain attempt exists, so a newer publish may replace this work.
+    pub(super) fn definite_first(&self) -> bool {
+        matches!(self.state, State::Due | State::Refused | State::Unavailable)
+            && self.remote.is_none() && self.handoff.is_none() && self.form.is_none()
+            && self.part_count.is_none() && self.hash.is_none() && self.parts.is_empty()
+    }
+
+    /// Cancel only definite work. Remote identity and uncertain side effects survive.
+    pub(super) fn make_unavailable(&mut self, reason: &str) -> bool {
+        if self.definite_first() {
+            self.state = State::Unavailable;
+        } else if self.state == State::Posted && self.update_due {
+            self.update_due = false;
+        } else { return false; }
+        self.post = None;
+        self.reason = Some(reason.to_string());
+        self.touch();
+        true
+    }
+
+    /// A definitive refusal or absent lookup leaves no submitted copy to preserve.
+    pub(super) fn discard_attempt(&mut self) {
+        if self.remote.is_none() {
+            self.form = None;
+            self.part_count = None;
+            self.hash = None;
+            self.parts.clear();
+            self.handoff = None;
         }
     }
 
@@ -167,6 +206,8 @@ impl CopyRecord {
             uid: uid.to_string(),
             channel: channel.to_string(),
             state: State::Due,
+            form: None,
+            part_count: None,
             source_path: source_path.to_string(),
             url_path: url_path.to_string(),
             site_url: None,
@@ -194,7 +235,7 @@ fn now() -> String {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PublishedPost {
     pub article: ArticleInfo,
-    /// Its own `lang:`, else its language edition's.
+    /// Its rendered language, with authored/edition fallbacks for older maps.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lang: Option<String>,
 }
@@ -202,10 +243,16 @@ pub struct PublishedPost {
 impl PublishedPost {
     /// `article` as `map`, the build it is in, publishes it.
     pub fn new(article: &ArticleInfo, map: &ArticleMap) -> Self {
-        let own = article.frontmatter.get("lang").and_then(|l| l.as_str()).map(str::to_string);
-        let edition = Some(map.editions.of(&article.url_path)).filter(|e| !e.is_empty());
-        Self { article: article.clone(), lang: own.or(edition) }
+        Self { article: article.clone(), lang: effective_language(article, Some(map), None).map(|l| l.into_owned()) }
     }
+}
+
+/// Authored language, rendered language, edition, then the site's fallback.
+pub(super) fn effective_language<'a>(article: &'a ArticleInfo, map: Option<&'a ArticleMap>, fallback: Option<&'a str>) -> Option<std::borrow::Cow<'a, str>> {
+    article.frontmatter.get("lang").and_then(|l| l.as_str()).map(std::borrow::Cow::Borrowed)
+        .or_else(|| map.and_then(|m| m.page_languages.get(&article.url_path)).map(|l| std::borrow::Cow::Borrowed(l.as_str())))
+        .or_else(|| map.map(|m| m.editions.of(&article.url_path)).filter(|l| !l.is_empty()).map(std::borrow::Cow::Owned))
+        .or_else(|| fallback.map(std::borrow::Cow::Borrowed))
 }
 
 /// Held while one run sends a site's copies; see [`Records::turn`].
@@ -303,16 +350,12 @@ impl Records {
         }
     }
 
-    /// Write `record`; a copy with no work left drops its post. Its channel
-    /// decides only which work a copy has, never whether.
+    /// Settled copies need neither a publication snapshot nor an attempted count.
     pub fn save(&self, record: &CopyRecord) -> Result<(), String> {
-        let settled;
-        let record = if record.post.is_some() && record.next_op(false).is_none() {
-            settled = CopyRecord { post: None, ..record.clone() };
-            &settled
-        } else {
-            record
-        };
+        let mut saved = record.clone();
+        if saved.next_op(false).is_none() { saved.post = None; }
+        if saved.remote.is_some() { saved.part_count = None; }
+        let record = &saved;
         let path = self.path(&record.uid, &record.channel)?;
         std::fs::create_dir_all(&self.dir).map_err(|e| format!("create {}: {e}", self.dir.display()))?;
         let json = serde_json::to_string_pretty(record).map_err(|e| e.to_string())?;

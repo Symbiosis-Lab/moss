@@ -14,11 +14,15 @@
 //! as aliases that fold into this one shape, in [`PluginManifest::parse`].
 
 pub mod abilities;
+pub mod blocks;
 pub mod derivation;
 pub mod listing_style;
 pub mod platform;
+pub mod public_data;
+pub mod site_settings;
 pub mod settings;
 pub mod stack;
+pub mod translations;
 
 pub use settings::{Field, FieldOption, FieldType, Need};
 use settings::{bound_author_text_in, CredentialNeed, title_case, validate_declared_fields};
@@ -83,6 +87,20 @@ pub struct PluginContributes {
     /// author writes in `children_style`. The plugin exports `listing`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listing_styles: Option<std::collections::BTreeMap<String, listing_style::ListingStyleContribution>>,
+
+    /// Custom elements an author places with a `:::<short>` fence, keyed by the
+    /// short name. Declarative: no plugin code runs to place one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocks: Option<std::collections::BTreeMap<String, blocks::BlockContribution>>,
+
+    /// Settings a plugin's element reads in the visitor's browser.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_data: Option<public_data::PublicDataContribution>,
+
+    /// Settings moss draws in the plugin's tab and writes into the site's own
+    /// `[services.<plugin-id>]` table.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site_settings: Option<site_settings::SiteSettingsContribution>,
 }
 
 /// Job descriptors contributed by a plugin (§8).
@@ -481,11 +499,26 @@ impl PluginManifest {
         let styles = manifest.contributes.as_ref().and_then(|c| c.listing_styles.as_ref());
         manifest.entry = moss_core::page::plugin_source::validate_page_contributions(manifest.entry.take(), styles)
             .map_err(serde_json::Error::custom)?;
-        let has_derivations =
-            manifest.contributes.as_ref().is_some_and(|c| c.derivations.as_ref().is_some_and(|d| !d.is_empty()));
-        if manifest.entry.is_none() && !has_derivations {
-            return Err(serde_json::Error::custom("manifest needs an `entry` unless it declares derivations"));
+        let declarative = manifest.contributes.as_ref().is_some_and(|c| {
+            c.derivations.as_ref().is_some_and(|d| !d.is_empty())
+                || c.blocks.as_ref().is_some_and(|b| !b.is_empty())
+                || c.public_data.is_some()
+                || c.site_settings.is_some()
+        });
+        if manifest.entry.is_none() && !declarative {
+            return Err(serde_json::Error::custom("manifest needs an `entry` unless it declares derivations, blocks, public_data or site_settings"));
         }
+        for (short, block) in manifest.contributes.iter().flat_map(|c| c.blocks.iter().flatten()) {
+            blocks::validate(&manifest.name, short, block).map_err(serde_json::Error::custom)?;
+        }
+        if let Some(data) = manifest.contributes.as_ref().and_then(|c| c.public_data.as_ref()) {
+            public_data::validate(&manifest.name, data).map_err(serde_json::Error::custom)?;
+        }
+        if let Some(site) = manifest.contributes.as_mut().and_then(|c| c.site_settings.as_mut()) {
+            site.validate().map_err(serde_json::Error::custom)?;
+            bound_author_text_in(&mut site.settings);
+        }
+        manifest.translations = translations::validated(std::mem::take(&mut manifest.translations)).map_err(serde_json::Error::custom)?;
         if let Some(derivations) = manifest.contributes.as_ref().and_then(|c| c.derivations.as_ref()) {
             for (id, derivation) in derivations {
                 derivation.validate(id).map_err(serde_json::Error::custom)?;
@@ -679,6 +712,13 @@ impl PluginManifest {
                 pattern: None,
                 pattern_message: None,
                 when: HashMap::new(),
+                fields: Vec::new(),
+                items: None,
+                optional: false,
+                key_pattern: None,
+                add_label: None,
+                scale: None,
+                unit: None,
             });
         }
         fields

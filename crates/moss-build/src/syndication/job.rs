@@ -55,7 +55,7 @@ pub struct CopyJob {
     pub idempotency_key: String,
     pub post: PostRef,
     /// The copy as moss shaped it: `form`, `parts`, and `teaser` or `article`.
-    /// Absent for a delete, whose page is gone.
+    /// Absent for a delete, or a lookup whose payload no longer fits.
     #[serde(flatten)]
     pub copy: Option<Shaped>,
     /// The copy already on the network, for an update or delete.

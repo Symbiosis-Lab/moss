@@ -388,7 +388,7 @@ struct SegmentedPage {
 
 /// One page of a tree as the indexer reads it, before segmentation.
 pub(crate) struct PageSource {
-    rel_path: String,
+    pub(crate) rel_path: String,
     /// Content key of `source` (see [`SEGMENTED`]).
     key: u128,
     source: String,
@@ -448,7 +448,7 @@ pub(crate) fn read_pages(site_dir: &Path) -> PageRead {
                 }
             };
             // A redirect stub is an old address, not a page to find.
-            if crate::build::feeds::redirects::is_redirect_stub(&source) {
+            if crate::build::feeds::redirects::is_redirect_stub(&source) || leaves_search(&source) {
                 left_out += 1;
                 return None;
             }
@@ -457,6 +457,19 @@ pub(crate) fn read_pages(site_dir: &Path) -> PageRead {
         })
         .collect();
     PageRead { pages, unreadable: skipped, left_out }
+}
+
+/// Whether a page asks to stay out of search. moss's own pages say it with
+/// `data-pagefind-ignore="all"` on the body (`ParsedDocument::is_indexable`),
+/// since their `noindex` can be the site-wide switch, which leaves the site's
+/// own search whole. A raw page says it with its own `noindex`.
+fn leaves_search(page: &str) -> bool {
+    let open_tag = |name: &str| page.split_once(name).and_then(|(_, rest)| rest.split_once('>')).map(|(attrs, _)| attrs);
+    if open_tag("<html").is_some_and(|attrs| attrs.contains("data-moss-html-version")) {
+        open_tag("<body").is_some_and(|attrs| attrs.contains(r#"data-pagefind-ignore="all""#))
+    } else {
+        crate::build::feeds::sitemap::head_declares_noindex(page.as_bytes())
+    }
 }
 
 /// What [`read_pages`] found: the pages to index and the two counts of pages it did not hand on.

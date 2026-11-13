@@ -14,6 +14,7 @@ import { createCamera, framed, parseBox, type ViewBox } from "./frame";
 import { mountHover, mountLegend } from "./hover";
 import { reducedMotion, media, WIDE } from "../media";
 import { mountSearch } from "./search";
+import { stampToday } from "./stamp";
 import { levelName } from "./shared";
 import { tintIn } from "./tint";
 import { mountZoom } from "./zoom";
@@ -29,6 +30,7 @@ const live = new Map<HTMLElement, AbortController>();
 function setup(figure: HTMLElement): void {
   if (figure.dataset.countryReady) return;
   figure.dataset.countryReady = "1";
+  stampToday(figure);
   const panel = figure.querySelector<HTMLElement>(".moss-country-panel");
   const svg = figure.querySelector("svg");
   const stage = figure.querySelector<HTMLElement>(".moss-country-stage");

@@ -90,6 +90,23 @@ fn tickets_and_online_links_each_carry_their_own_class() {
 }
 
 #[test]
+fn an_event_page_prints_its_place_only_when_no_place_line_names_it() {
+    let meta = |d: &ParsedDocument| render(d, Language::En, false, None, UpcomingLabel::Hidden, chrono::NaiveDateTime::default()).unwrap();
+    let mut d = doc("2026-11-01", None);
+    d.location = vec!["Harbor".to_string()];
+    assert!(meta(&d).contains(r#"<span class="moss-event-place">Harbor</span>"#), "{}", meta(&d));
+    d.term_lines = vec![crate::build::terms::TermLine {
+        term: "places".into(),
+        field: "location".into(),
+        label: "Location".into(),
+        separator: ": ".into(),
+        links: "[Harbor](/places/harbor/)".into(),
+        is_place: true,
+    }];
+    assert!(!meta(&d).contains("moss-event-place"), "{}", meta(&d));
+}
+
+#[test]
 fn a_page_without_an_event_renders_nothing() {
     assert!(render(&ParsedDocument::default(), Language::En, false, None, UpcomingLabel::Hidden, chrono::NaiveDateTime::default()).is_none());
 }

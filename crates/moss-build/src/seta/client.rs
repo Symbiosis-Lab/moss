@@ -897,13 +897,13 @@ impl MossSetaClient {
             .get(&url)
             .timeout(std::time::Duration::from_secs(5))
             .send()
-            .await?;
+            .await.map_err(reqwest::Error::without_url)?;
 
         if !response.status().is_success() {
             return Err(SetaError::from_failed_response(response).await);
         }
 
-        response.json().await.map_err(|e| SetaError::Parse(e.to_string()))
+        response.json().await.map_err(|e| SetaError::Parse(e.without_url().to_string()))
     }
 
     /// Ask the server which email is linked to the caller's pubkey.

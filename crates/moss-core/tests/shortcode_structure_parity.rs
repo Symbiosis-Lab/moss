@@ -60,6 +60,7 @@ fn summarize(blocks: &[Block]) -> Vec<ExpectedBlock> {
             Shortcode::Subscribe(_) => simple("subscribe"),
             Shortcode::Recent(_) => simple("recent"),
             Shortcode::Form(_) => simple("form"),
+            Shortcode::Block(_) => simple("block"),
         };
         out.push(node);
     }

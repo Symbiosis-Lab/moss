@@ -30,10 +30,10 @@
 //! ([`find_lone_wikilink_image`]) and replaces the whole paragraph with the
 //! dispatch output (so block-level HTML doesn't get `<p>`-wrapped).
 //!
-//! An embed can also sit beside other content in the same paragraph — a
-//! caption on the next line joined by a soft break, or plain prose before
-//! or after it (`Some text ![[icon.png]] more text`, or
-//! `![[clip.mp4]]\nA caption.`). That paragraph isn't the lone-embed shape,
+//! An embed can also sit beside other content in the same paragraph — plain
+//! prose before or after it (`Some text ![[icon.png]] more text`), or, without
+//! hard line breaks, a caption on the next line (`![[clip.mp4]]\nA caption.`).
+//! That paragraph isn't the lone-embed shape,
 //! but every `Inline::Image { is_wikilink: true, .. }` inside it still names
 //! a real file with a real extension, and [`dispatch_inline_wikilink_embeds`]
 //! dispatches each one through [`dispatch_embed`] — the SAME call the
@@ -189,6 +189,7 @@ fn dispatch_in_shortcode(
         Shortcode::Hero(args) => {
             dispatch_in_block_children(&mut args.overlay, snapshot, graph, source_path, result);
         }
+        Shortcode::Block(args) => dispatch_in_block_children(&mut args.body, snapshot, graph, source_path, result),
         Shortcode::Grid(args) => {
             for cell in args.cells.iter_mut() {
                 dispatch_in_block_children(cell, snapshot, graph, source_path, result);
@@ -610,6 +611,7 @@ mod tests {
             | Shortcode::Gallery(_)
             | Shortcode::Recent(_) | Shortcode::Form(_) => false,
             Shortcode::Hero(args) => args.overlay.iter().any(block_has_wikilink_image),
+            Shortcode::Block(args) => args.body.iter().any(block_has_wikilink_image),
             Shortcode::Grid(args) => args
                 .cells
                 .iter()
@@ -789,6 +791,21 @@ mod tests {
                 assert_eq!(width.as_deref(), Some("55%"));
             }
             other => panic!("expected Figure for image percent, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_wiki_image_split_out_of_a_paragraph_has_its_pipe_text_as_caption() {
+        let breaks = crate::ast::parser::ParseConfig { hard_line_breaks: true, ..Default::default() };
+        let mut doc = crate::ast::parser::parse_with_config("text\n![[pic.webp|Words]]\nmore\n", &breaks);
+        let mut b = crate::content_graph::ContentGraphBuilder::new();
+        b.add_file("pic.webp", "pic");
+        let _ = dispatch_wikilink_embeds(&mut doc, &empty_snapshot(), &b.build(), "post.md");
+        match &doc.blocks[..] {
+            [Block::Paragraph(_), Block::Figure { caption: Some(caption), .. }, Block::Paragraph(_)] => {
+                assert!(matches!(&caption[..], [Inline::Text(t)] if t == "Words"), "{caption:?}");
+            }
+            other => panic!("expected paragraph, figure, paragraph; got {other:?}"),
         }
     }
 

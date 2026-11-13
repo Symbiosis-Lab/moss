@@ -44,6 +44,40 @@ pub fn materialize_on_this_thread() -> bool {
     false
 }
 
+/// A rename that never replaces `to`: it fails with `AlreadyExists`, decided
+/// by the kernel in the same step as the move, so nothing can slip in between
+/// a check and the rename (`renamex_np(RENAME_EXCL)` on macOS,
+/// `renameat2(RENAME_NOREPLACE)` on Linux). Elsewhere, or on a filesystem
+/// that refuses the flag, it checks and then renames, which leaves a window
+/// of microseconds; on Windows a directory is never replaced either way.
+pub fn rename_exclusive(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(any(target_os = "macos", all(target_os = "linux", target_env = "gnu")))]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let c = |p: &std::path::Path| {
+            std::ffi::CString::new(p.as_os_str().as_bytes()).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))
+        };
+        let (f, t) = (c(from)?, c(to)?);
+        // SAFETY: both are NUL-terminated paths that outlive the call.
+        #[cfg(target_os = "macos")]
+        let rc = unsafe { libc::renamex_np(f.as_ptr(), t.as_ptr(), libc::RENAME_EXCL) };
+        // SAFETY: as above; AT_FDCWD resolves both relative to the cwd, as `rename` does.
+        #[cfg(target_os = "linux")]
+        let rc = unsafe { libc::renameat2(libc::AT_FDCWD, f.as_ptr(), libc::AT_FDCWD, t.as_ptr(), libc::RENAME_NOREPLACE) };
+        if rc == 0 {
+            return Ok(());
+        }
+        let err = std::io::Error::last_os_error();
+        if !matches!(err.raw_os_error(), Some(libc::ENOTSUP | libc::EINVAL | libc::ENOSYS)) {
+            return Err(err);
+        }
+    }
+    if to.symlink_metadata().is_ok() {
+        return Err(std::io::ErrorKind::AlreadyExists.into());
+    }
+    std::fs::rename(from, to)
+}
+
 /// Opt this process out of implicit dataless-file materialization,
 /// process-wide. See [`iopolicy`] for what this changes and why.
 #[cfg(target_os = "macos")]

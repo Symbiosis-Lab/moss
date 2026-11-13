@@ -9,6 +9,19 @@ use super::{AUTHOR_NS, TAGS_NS};
 /// comparing the kinds table against it.
 pub const BUILTIN_DEFAULT_FIELDS: [(&str, &str); 2] = [(AUTHOR_NS, "author"), (TAGS_NS, "tags")];
 
+/// The keys of a `[terms.<key>]` table, for `moss describe`.
+pub const KIND_KEY_RULES: [&str; 9] = [
+    "`fields`: the frontmatter name-list fields that feed the kind. `[terms.tags]` and `[terms.authors]` may leave it out and keep their built-in field.",
+    "`title`: the kind's name, text or a table of text per language.",
+    "`count`: a term card's count wording with `{n}`, text, a table per language, or false to hide it.",
+    "`type`: `\"place\"` makes a place-typed kind.",
+    "`explorer`: false turns off a place-typed kind's interactive map.",
+    "`line`: true draws the kind's names on a page as links, one line per field, false draws none. Defaults to true for a place-typed kind and false for any other.",
+    "`cards`: true shows the kind's names on listing cards.",
+    "`nav`: true adds the kind's root page to the nav bar.",
+    "`weight`: an integer placing the kind's nav entry among the pages by weight.",
+];
+
 /// One `[terms.<key>]` table, or a built-in kind no table declared, before
 /// the build checks its `fields` and resolves its `title`.
 #[derive(Debug, Clone)]
@@ -19,6 +32,9 @@ pub struct RawKind {
     /// Frontmatter field names as configured, not yet checked against the
     /// built-in schema (see [`filter_fields`]).
     pub fields: Vec<String>,
+    /// A `[terms.tags]` or `[terms.authors]` table that left out `fields`:
+    /// [`with_builtins`] gives it the built-in's field and place in the order.
+    pub keeps_builtin_field: bool,
     /// The table's `title`, a string or a table of `language tag = title`, as
     /// `(language tag, title)` pairs. Empty for the two built-ins (the build
     /// names them in the site language) and for a declared kind that didn't
@@ -38,24 +54,27 @@ pub struct RawKind {
     /// kind, the same way `type` itself is only meaningful there. `None` for
     /// the two built-ins and for a declared kind that didn't set the key.
     pub explorer: Option<bool>,
-    /// `[terms.<key>] line`, kept by the build only for the place-typed kind,
-    /// like `explorer`.
+    /// `[terms.<key>] line`. `None` when the key is absent: the build then
+    /// draws a line for the place-typed kind only.
     pub line: Option<bool>,
     /// `[terms.<key>] cards`. `None` when the key is absent and for the two built-ins.
     pub cards: Option<bool>,
 }
 
 impl RawKind {
-    /// A table with no `fields` array is skipped with that one warning: a kind
+    /// A built-in key's table that leaves out `fields` keeps the built-in field.
+    /// Any other table with no `fields` array is skipped with a warning: a kind
     /// that names no fields would derive nothing, and is more likely a typo
     /// (`field = [...]`) than an intentional no-op.
     pub(crate) fn read(key: &str, table: &BTreeMap<String, ConfigValue>, warnings: &mut Vec<String>) -> Option<Self> {
         let path = format!("[terms.{key}]");
-        let Some(fields) = table.get("fields").and_then(ConfigValue::array) else {
+        let declared = table.get("fields").and_then(ConfigValue::array);
+        let keeps_builtin_field = !table.contains_key("fields") && BUILTIN_DEFAULT_FIELDS.iter().any(|(ns, _)| *ns == key);
+        if declared.is_none() && !keeps_builtin_field {
             warnings.push(format!("{path} has no `fields` array; skipping"));
             return None;
-        };
-        let fields = fields.iter().filter_map(|value| read(Some(value), |v| v.text().cloned(),
+        }
+        let fields = declared.into_iter().flatten().filter_map(|value| read(Some(value), |v| v.text().cloned(),
             &format!("{path} fields entry"), "text", warnings)).collect();
         let titles = read(table.get("title"), ConfigValue::labels,
             &format!("{path} title"), "text or a table of text per language", warnings);
@@ -68,6 +87,7 @@ impl RawKind {
         Some(Self {
             key: key.to_string(),
             fields,
+            keeps_builtin_field,
             titles: titles.unwrap_or_default(),
             counts: counts.unwrap_or_default(),
             kind_type: read(table.get("type"), |v| v.text().cloned(), &format!("{path} type"), "text", warnings),
@@ -81,26 +101,30 @@ impl RawKind {
 /// The declared kinds, after a built-in kind for each of `authors`/`tags` that
 /// no declared table already used.
 ///
-/// A declared `[terms.authors]` or `[terms.tags]` table IS that kind: its own
-/// `fields` and `title` win outright, rather than layering on the built-in
-/// default. Two kinds sharing one key would seed the same pseudo-folder twice
+/// A declared `[terms.authors]` or `[terms.tags]` table with `fields` IS that
+/// kind: its own `fields` and `title` win outright, rather than layering on the
+/// built-in default. Two kinds sharing one key would seed the same pseudo-folder twice
 /// and double-count every member.
 pub(crate) fn with_builtins(declared: &[RawKind], disabled: &[String]) -> Vec<RawKind> {
     let mut kinds = Vec::with_capacity(declared.len() + 2);
     for (ns, field) in BUILTIN_DEFAULT_FIELDS {
-        if declared.iter().any(|kind| kind.key == ns) {
+        let table = declared.iter().find(|kind| kind.key == ns);
+        if table.is_some_and(|kind| !kind.keeps_builtin_field) {
             continue;
         }
-        kinds.push(RawKind {
+        let base = table.cloned().unwrap_or_else(|| RawKind {
             key: ns.to_string(),
-            fields: if disabled.iter().any(|d| d == field) { Vec::new() } else { vec![field.to_string()] },
+            fields: Vec::new(),
+            keeps_builtin_field: true,
             titles: Vec::new(),
             counts: Vec::new(),
             kind_type: None,
             explorer: None, line: None, cards: None,
         });
+        let fields = if disabled.iter().any(|d| d == field) { Vec::new() } else { vec![field.to_string()] };
+        kinds.push(RawKind { fields, ..base });
     }
-    kinds.extend(declared.iter().cloned());
+    kinds.extend(declared.iter().filter(|kind| !kind.keeps_builtin_field).cloned());
     kinds
 }
 

@@ -39,6 +39,11 @@ impl HostingEnvironment {
         }
     }
 
+    /// The host sites are published under, as a person reads it: `mosspub.com`.
+    pub fn host(&self) -> &'static str {
+        self.site_suffix().trim_start_matches('.')
+    }
+
     pub fn beacon_host(&self) -> &'static str {
         match self {
             Self::Production => "api.mosspub.com",
@@ -57,6 +62,17 @@ impl HostingEnvironment {
             Self::Production => "https://api.mosspub.com/comments",
             Self::Staging => "https://staging.mosspub.com/comments",
             Self::Local => "https://staging.mosspub.com/comments",
+        }
+    }
+
+    /// The address of one of moss's own hosted services, for a plugin that
+    /// names the service rather than the address. `None` where the service
+    /// does not run, so nothing is published that would point at the wrong
+    /// one: commerce runs only as its test server so far.
+    pub fn service_url(&self, service: &str) -> Option<&'static str> {
+        match (service, self) {
+            ("commerce", Self::Staging | Self::Local) => Some("https://commerce-staging.mosspub.com"),
+            _ => None,
         }
     }
 

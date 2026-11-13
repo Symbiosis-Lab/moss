@@ -1718,6 +1718,7 @@ Messages that plugins can send to moss
 | [CopyJob](interfaces/CopyJob.md) | The one copy a channel's `publish_copy`, `update_copy`, `delete_copy` or `find_copy` receives, already shaped to the limits its manifest declares under `contributes.channel.syndication`. |
 | [CopyOutcome](interfaces/CopyOutcome.md) | A copy hook's answer, in [HookResult.copy](interfaces/HookResult.md#copy): the copy's id and address; or, with `success: false`, why the network refused; or a hand-off, a copy the author posts by hand (`text` to paste at `open_url`) or a draft on the network for the author to publish (empty `text`, the draft's `id`). |
 | [CopyPart](interfaces/CopyPart.md) | One post of a copy, ready to post: plain text, with every address in it, in order, for networks that mark links up. |
+| [CopyPicture](interfaces/CopyPicture.md) | A picture for the channel to upload with a plain-text copy. |
 | [CopyRef](interfaces/CopyRef.md) | A copy's id and address on its network. |
 
 ## Keys

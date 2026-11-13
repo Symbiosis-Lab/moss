@@ -9,8 +9,10 @@ import { debug, warn } from "../log";
 import { host as uiHost } from "../host";
 import { engine } from '../engine';
 import { onMossEvent } from "../utils/moss-events";
-import { isRootUrlPath } from "../utils/url-path";
-import { eventBus, Events, type PreviewUrlChangedEvent } from '../context/event-bus';
+import { pageSource } from '../preview/page-source';
+import type { PreviewUrlChangedEvent } from '../context/event-bus';
+import { isRootUrlPath } from '../utils/url-path';
+import type { ResolvedNode } from '../editor/session/node-class';
 import { StaleSourceRefresh } from '../editor/session/stale-source-refresh';
 import { SOURCE_PENDING_EVENT, type SourcePendingPayload } from '../editor/session/no-content-pane';
 import { cloudSync } from '../preview/cloud/cloud-sync-store';
@@ -44,20 +46,24 @@ export interface EditorLinkHost {
   openContextMenu(ctx: PreviewCtxPayload): void;
 }
 
-/** What the preview last resolved its page to. */
-export interface PreviewedPage {
-  sourcePath: string | null;
-  takeover: Takeover | null;
-}
-
 export class EditorLink {
-  page: PreviewedPage = { sourcePath: null, takeover: null };
+  /** The previewed page's answer as an editor node, or null while it has none. */
+  get node(): ResolvedNode | null {
+    const page = pageSource.current;
+    return page ? pageSource.node(page) : null;
+  }
+
+  /** Asks the page's lookup again when a file it waits on finishes downloading. */
+  readonly staleSource: StaleSourceRefresh;
 
   /**
-   * Re-resolves the editor's surface when the answer it was mounted from has
-   * gone stale: the panel-open bake race, and a file still coming down from the cloud.
+   * The page whose answer the editor waits on: it has had none for it yet, or
+   * a pending one. Only then may a re-ask of the page on screen reach it.
    */
-  readonly staleSource: StaleSourceRefresh;
+  private waitingOn: string | null = null;
+  private unsubscribePage: (() => void) | null = null;
+
+  disconnect(): void { this.unsubscribePage?.(); this.unsubscribePage = null; }
 
   /** When each hold ends (`Date.now()` ms). */
   private readonly holdUntil: Record<Hold, number> = { pageSwitch: 0, fieldReveal: 0, scrollSync: 0 };
@@ -65,24 +71,25 @@ export class EditorLink {
 
   constructor(private readonly host: EditorLinkHost) {
     this.staleSource = new StaleSourceRefresh({
-      resolvePageSource: (urlPath) => engine.resolvePageSource(urlPath),
+      refreshPage: (urlPath) => pageSource.refresh(urlPath),
       liveUrlPath: () => this.liveUrlPath(),
       editorIsActive: () => host.editorIsOpen(),
-      applyNode: (node) => {
-        this.page = { sourcePath: node.sourcePath, takeover: node.takeover };
-        uiHost.bus.emit('editor:load-source', {
-          sourcePath: node.sourcePath,
-          isRoot: node.isRoot,
-          takeover: node.takeover,
-        });
-      },
-      warn: (message) => warn(message),
+      applyNode: (node) => uiHost.bus.emit('editor:load-source', node),
     });
   }
 
   /** Starts listening. Call once, where the shell wires the editor. */
   connect(): void {
-    eventBus.on<PreviewUrlChangedEvent>(Events.PREVIEW_URL_CHANGED, (data) => this.onPreviewPage(data));
+    this.unsubscribePage = pageSource.subscribe((page) => this.onPreviewPage(page));
+    // The editor asks for the page it opened on; a cold boot can miss an answer published before it listened.
+    uiHost.bus.on('editor:request-page', () => {
+      if (!this.host.editorIsOpen()) return;
+      const urlPath = this.liveUrlPath();
+      this.waitingOn = urlPath;
+      void pageSource.ensure(urlPath);
+      const page = pageSource.current;
+      if (page?.urlPath === urlPath) this.forward(page);
+    });
 
     uiHost.bus.on<{ urlPath: string; awaitingBuild?: boolean }>('editor:navigate-preview', (payload) => {
       const preview = this.host.preview();
@@ -99,7 +106,9 @@ export class EditorLink {
     // The pane's identity is the live URL when it came from resolving a page and
     // the path when the editor opened the file directly; both are passed.
     uiHost.bus.on<SourcePendingPayload>(SOURCE_PENDING_EVENT, (payload) => {
-      if (!payload?.pending) {
+      // Any other surface means the editor moved on from the page's answer.
+      if (!payload.pending || payload.sourcePath !== null) this.waitingOn = null;
+      if (!payload.pending) {
         this.staleSource.disarm();
         return;
       }
@@ -168,15 +177,19 @@ export class EditorLink {
   /** The open folder changed: a pane armed for the old folder's file must not reopen it in the new one. */
   folderChanged(): void {
     this.staleSource.disarm();
+    this.waitingOn = null;
   }
 
   /**
-   * The editor just opened on what the link last heard. A non-root page with
-   * neither a source nor a takeover is either a generated page or a resolve the
-   * open beat; re-resolving is right for both. The home resolves itself.
+   * The node to open the editor on for the previewed page, as the native open
+   * carries it, and the start of that page's lookup. A page with no answer yet
+   * opens bare; the editor then asks for the answer.
    */
-  editorOpened(urlPath: string, isRoot: boolean): void {
-    if (!isRoot && !this.page.sourcePath && !this.page.takeover) void this.staleSource.refreshStale(urlPath);
+  openNode(): { sourcePath: string | null; isRoot: boolean; takeover: Takeover | null } {
+    const urlPath = this.liveUrlPath();
+    void pageSource.ensure(urlPath);
+    const page = pageSource.current?.urlPath === urlPath && !pageSource.current.pending ? pageSource.current : null;
+    return { sourcePath: page?.sourcePath ?? null, isRoot: isRootUrlPath(urlPath), takeover: page?.takeover ?? null };
   }
 
   private hold(kind: Hold): void {
@@ -187,22 +200,18 @@ export class EditorLink {
     return Date.now() < this.holdUntil[kind];
   }
 
-  private onPreviewPage(data: PreviewUrlChangedEvent): void {
-    this.page = { sourcePath: data.sourcePath, takeover: data.takeover };
-    if (!this.host.editorIsOpen()) return;
+  private onPreviewPage(page: PreviewUrlChangedEvent): void {
+    if (!this.host.editorIsOpen() || page.urlPath !== this.liveUrlPath()) return;
     this.hold('pageSwitch');
-    // A same-URL rebuild reload carries the page still on screen, which need
-    // not be the file the editor has open; forwarding it would move the editor
-    // off a file the user just created.
-    if (data.isReload) return;
-    // A non-root (null, null) resolution is a racy echo with no editable
-    // surface; forwarding it would downgrade a live takeover for the same page.
-    // The root home is the one (null, null) with a real surface; root
-    // detection from the URL is reliable, the lossy-slug problem is subfolder-only.
-    const isRoot = isRootUrlPath(data.urlPath);
-    if (isRoot || data.sourcePath || data.takeover) {
-      uiHost.bus.emit('editor:load-source', { sourcePath: data.sourcePath, isRoot, takeover: data.takeover });
-    }
+    // The page on screen answered again: that need not be the file the editor
+    // has open (a rebuild after the user created and opened a new file).
+    if (page.isReload && this.waitingOn !== page.urlPath) return;
+    this.forward(page);
+  }
+
+  private forward(page: PreviewUrlChangedEvent): void {
+    this.waitingOn = page.pending ? page.urlPath : null;
+    uiHost.bus.emit('editor:load-source', pageSource.node(page));
   }
 
   /**

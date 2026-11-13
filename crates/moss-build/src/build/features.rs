@@ -12,7 +12,6 @@ pub mod email;
 pub mod forms;
 pub mod review;
 pub mod sync;
-pub mod syndication;
 
 /// Get the inactive tooltip text for the given language.
 pub(crate) fn inactive_label(lang: crate::i18n::Language) -> &'static str {
@@ -71,6 +70,7 @@ use crate::build::render::shows_comments;
 use crate::config::services::ServicesConfig;
 use crate::config::deployment::DomainDeploymentConfig;
 use crate::build::enhance::{EnhanceContent, EnhanceResult, ResolvedSlots};
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 
 /// Decide whether to inject the moss-hosted subscribe JS+CSS bundle.
@@ -379,8 +379,6 @@ pub fn generate_native_slots(
         // question, and the answer does not follow from the page having
         // children — so an author who turns comments on for a folder page (or
         // for the homepage, which is a folder index too) gets them.
-        // Folder pages carry no `syndicated:` link-outs, since nothing can
-        // syndicate them.
         let folder_targets: Vec<(String, ArticleInfo)> = pages
             .iter()
             .filter(|p| !p.slot_only && p.kind == moss_core::PageKind::Folder)
@@ -399,7 +397,6 @@ pub fn generate_native_slots(
                     cover: None,
                     comments: p.comments,
                     lang: None,
-                    syndicated: Vec::new(),
                 }))
             })
             .collect();
@@ -440,7 +437,6 @@ pub fn generate_native_slots(
                 uid,
                 &info.title,
                 page_lang,
-                &info.syndicated,
                 high_water_id,
             );
             per_page.insert(info.url_path.clone(), section_html);
@@ -602,6 +598,29 @@ pub fn generate_native_slots(
         }
     }
 
+    // A footer is spliced into every page, so what a slot file's blocks load
+    // goes on every page.
+    let everywhere: BTreeSet<_> = pages.iter().filter(|d| d.slot_only).flat_map(|d| d.features.block_assets.iter().cloned()).collect();
+    if !everywhere.is_empty() {
+        let html = crate::plugins::contributions::blocks::asset_tags(&everywhere);
+        let result = EnhanceResult {
+            success: true,
+            slots: HashMap::from([(Slot::HeadEnd.as_str().into(), EnhanceContent::Static { html })]),
+        };
+        slots.merge(&result, 1, "__native_plugin_blocks_site");
+    }
+    let per_page: HashMap<String, String> = pages.iter().filter(|d| !d.slot_only).filter_map(|d| {
+        let own: BTreeSet<_> = d.features.block_assets.difference(&everywhere).cloned().collect();
+        (!own.is_empty()).then(|| (d.url_path.clone(), crate::plugins::contributions::blocks::asset_tags(&own)))
+    }).collect();
+    if !per_page.is_empty() {
+        let result = EnhanceResult {
+            success: true,
+            slots: HashMap::from([(Slot::HeadEnd.as_str().into(), EnhanceContent::PerPage { pages: per_page })]),
+        };
+        slots.merge(&result, 1, "__native_plugin_blocks");
+    }
+
     // Author-customized footer slots (footer.md at site root and per language
     // tree, plus any file with `slot: footer-left` in frontmatter).
     //
@@ -648,6 +667,10 @@ pub fn generate_native_slots(
         slots.merge(&result, 6, &key);
     }
 
+    if let Some(article_end) = crate::build::footer::article_end_slot(project_path, pages, &supported_scopes, input_evidence) {
+        slots.merge(&article_end, 6, "__native_moss_article_end");
+    }
+
     slots
 }
 
@@ -662,9 +685,6 @@ pub struct ArticleInfo {
     pub cover: Option<String>,
     pub comments: Option<bool>,
     pub lang: Option<String>,
-    /// Syndicated publication URLs from frontmatter `syndicated:` field.
-    /// Used to render "Reply on X ↗" link-outs for non-Artalk source comments.
-    pub syndicated: Vec<String>,
 }
 
 #[cfg(test)]

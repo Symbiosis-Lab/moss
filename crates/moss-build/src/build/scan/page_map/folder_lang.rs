@@ -159,7 +159,10 @@ pub(super) fn resolve_folder_languages_with(
         let mut current_files: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
         current_files.sort();
 
-        let unchanged = cache.entries.get(&folder).is_some_and(|e| e.files == current_files);
+        // Access can change without a file entering or leaving the folder, so
+        // a folder holding members pages is inferred afresh and never cached.
+        let has_members = files.iter().any(|f| declarations.is_members(&f.path));
+        let unchanged = !has_members && cache.entries.get(&folder).is_some_and(|e| e.files == current_files);
 
         let lang = if unchanged {
             cache.entries[&folder].lang.as_deref().and_then(Language::from_code)
@@ -171,7 +174,7 @@ pub(super) fn resolve_folder_languages_with(
                     if is_evicted(&abs_path) {
                         return None;
                     }
-                    std::fs::read_to_string(&abs_path).ok().map(|c| detect::strip_frontmatter(&c))
+                    std::fs::read_to_string(&abs_path).ok().map(|c| detect::strip_frontmatter(&declarations.members_policy.public_source(&f.path, &c)))
                 })
                 .collect();
             let refs: Vec<&str> = bodies.iter().map(String::as_str).collect();
@@ -186,13 +189,17 @@ pub(super) fn resolve_folder_languages_with(
             // which the old `unwrap_or(En)` would have called English.
             let inferred = detect::site_language_vote(&refs);
 
-            cache.entries.insert(
-                folder.clone(),
-                FolderLangEntry {
-                    files: current_files,
-                    lang: inferred.map(|l| l.code().to_string()),
-                },
-            );
+            if has_members {
+                cache.entries.remove(&folder);
+            } else {
+                cache.entries.insert(
+                    folder.clone(),
+                    FolderLangEntry {
+                        files: current_files,
+                        lang: inferred.map(|l| l.code().to_string()),
+                    },
+                );
+            }
             inferred
         };
 

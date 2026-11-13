@@ -163,7 +163,7 @@ impl Document {
     /// are first needed.
     pub fn has_shortcode(&self, kind: super::shortcode::ShortcodeKind) -> bool {
         self.blocks.iter().any(|b| match b {
-            Block::Shortcode(sc) => sc.kind() == kind,
+            Block::Shortcode(sc) => sc.kind() == Some(kind),
             _ => false,
         })
     }

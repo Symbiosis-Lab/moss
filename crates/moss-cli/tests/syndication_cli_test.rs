@@ -160,7 +160,6 @@ fn deploy(s: &Site, extra: &[&str]) -> Output {
     let o = Command::new(MOSS)
         .args(&args)
         .env("MOSS_HOME", &s.home)
-        .env("HOME", &s.home)
         .env_remove("MOSS_ENV")
         .env_remove("MOSS_SETA_URL")
         .output()
@@ -192,6 +191,11 @@ fn a_new_post_is_copied_once_its_address_is_written_back_and_an_edit_updates_the
     let job = net.lock().unwrap().requests[0].1.clone();
     assert!(job["post"]["url"].as_str().unwrap().ends_with("/notes/first/"), "{}", job["post"]["url"]);
     assert_eq!(job["op"], "publish");
+    let canonical = job["post"]["url"].as_str().unwrap();
+    let text = job["parts"][0]["text"].as_str().unwrap();
+    assert!(text.contains(canonical), "the posted payload links to its page: {job}");
+    assert!(text.chars().count() <= 300);
+    assert!(job["parts"][0]["links"].as_array().unwrap().iter().any(|link| link == canonical));
     let page = read(&s.root, "notes/first.md");
     assert!(page.contains("syndicated:\n  - https://example.social/@a/1\n"), "{page}");
     assert!(page.ends_with("The first note, with [a link](https://example.org).\n"), "the body is untouched: {page}");
@@ -275,15 +279,32 @@ fn naming_a_channel_for_a_folder_does_not_post_its_earlier_posts() {
 }
 
 #[test]
-fn a_refused_copy_says_why_and_is_sent_again_next_run() {
+fn a_refused_copy_uses_the_edited_page_and_can_choose_a_different_form() {
     let net = Arc::new(Mutex::new(Network { refusing: true, ..Default::default() }));
     let s = site(serve(net.clone()), false, true);
+    let manifest_path = s.root.join(".moss/plugins/fixture/manifest.json");
+    let mut manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["contributes"]["channel"]["syndication"]["forms"] = serde_json::json!(["short", "long"]);
+    std::fs::write(manifest_path, manifest.to_string()).unwrap();
     let refused = deploy(&s, &[]);
     assert!(stderr(&refused).contains("not posted to fixture (content): text too long"), "{}", stderr(&refused));
+    assert_eq!(net.lock().unwrap().requests[0].1["form"], "short");
+    let records = moss_build::syndication::record::Records::in_vault(&moss_build::moss_paths::MossPaths::new(&s.root));
+    let before = records.all().pop().unwrap();
+    assert!(before.form.is_none() && before.part_count.is_none(), "a refused attempt has no posted form: {before:?}");
+    let stamped = read(&s.root, "notes/first.md");
+    assert!(stamped.contains(&before.uid), "{stamped}");
+    let edited = "The edited page is now much longer. ".repeat(25);
+    std::fs::write(s.root.join("notes/first.md"), format!("{stamped}\n{edited}\n")).unwrap();
     net.lock().unwrap().refusing = false;
     let posted = deploy(&s, &[]);
     assert!(stderr(&posted).contains("posted to fixture"), "{}", stderr(&posted));
+    let sent = net.lock().unwrap().requests.clone();
     assert_eq!(paths(&net), ["/publish", "/publish"], "a refusal is retried as a publish, with no lookup");
+    assert_eq!(sent[1].1["form"], "long");
+    assert!(sent[1].1["article"]["html"].as_str().unwrap().contains(edited.trim_end()), "{}", sent[1].1);
+    assert_eq!(sent[0].1["idempotency_key"], sent[1].1["idempotency_key"]);
+    assert_eq!(records.all()[0].uid, before.uid);
 }
 
 #[test]
@@ -303,7 +324,7 @@ fn a_dry_run_shows_each_copy_shaped_and_sends_nothing() {
 }
 
 /// A note named only by its date has no title, so its copy is its own text:
-/// one paragraph a short post, parts a thread. The build gives it a label from
+/// one paragraph or several fitting parts as a short post. The build gives it a label from
 /// its opening words, which must not make it a titled article sent as a teaser.
 #[test]
 fn a_note_named_by_its_date_goes_out_as_its_own_text() {
@@ -318,7 +339,7 @@ fn a_note_named_by_its_date_goes_out_as_its_own_text() {
         copy.unwrap_or_else(|| panic!("no copy of {name}: {report}"))["form"].clone()
     };
     assert_eq!(form("202611061432.md"), "short", "{report}");
-    assert_eq!(form("2026-11-06 1500.md"), "thread", "{report}");
+    assert_eq!(form("2026-11-06 1500.md"), "short", "{report}");
 }
 
 #[test]
@@ -331,4 +352,247 @@ fn a_copy_waits_until_its_page_answers() {
     net.lock().unwrap().pages_down = false;
     deploy(&s, &[]);
     assert_eq!(paths(&net), ["/publish"]);
+}
+
+#[test]
+fn dry_run_chooses_short_then_long_and_honors_footer_settings() {
+    let net = Arc::new(Mutex::new(Network::default()));
+    let s = site(serve(net.clone()), true, true);
+    let manifest_path = s.root.join(".moss/plugins/fixture/manifest.json");
+    let mut manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["contributes"]["channel"]["syndication"]["forms"] = serde_json::json!(["short", "long"]);
+    std::fs::write(&manifest_path, manifest.to_string()).unwrap();
+    std::fs::write(s.root.join("notes/first.md"), "---\ntitle: Titled\n---\nFits.").unwrap();
+    let preview = || -> serde_json::Value { serde_json::from_slice(&deploy(&s, &["--dry-run", "--json"]).stdout).unwrap() };
+    let first = preview();
+    assert_eq!(first["copies"][0]["form"], "short", "{first}");
+    assert!(first["copies"][0]["parts"][0]["text"].as_str().unwrap().starts_with("Titled\nFits."));
+    std::fs::write(s.root.join("notes/first.md"), format!("---\ntitle: Titled\n---\n{}", "Long sentence. ".repeat(40))).unwrap();
+    let long = preview();
+    assert_eq!(long["copies"][0]["form"], "long", "{long}");
+    assert!(long["copies"][0]["article"]["html"].as_str().unwrap().contains("Originally published on"));
+    manifest["contributes"]["channel"]["syndication"]["forms"] = serde_json::json!(["long"]);
+    std::fs::write(&manifest_path, manifest.to_string()).unwrap();
+    std::fs::write(s.root.join("notes/first.md"), "---\ntitle: Titled\n---\nFits.").unwrap();
+    let config = read(&s.root, ".moss/config.toml");
+    std::fs::write(s.root.join(".moss/config.toml"), format!("{config}\n[syndication]\nlink_back = false\n")).unwrap();
+    let long = preview();
+    assert_eq!(long["copies"][0]["form"], "long", "{long}");
+    assert!(!long["copies"][0]["article"]["html"].as_str().unwrap().contains("Originally published on"));
+    assert!(paths(&net).is_empty());
+}
+
+#[test]
+fn a_posted_short_copy_that_outgrows_its_limit_is_never_reposted_as_long() {
+    let net = Arc::new(Mutex::new(Network::default()));
+    let s = site(serve(net.clone()), true, true);
+    deploy(&s, &[]);
+    let path = s.root.join(".moss/plugins/fixture/manifest.json");
+    let mut manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    manifest["contributes"]["channel"]["syndication"]["forms"] = serde_json::json!(["short", "long"]);
+    std::fs::write(path, manifest.to_string()).unwrap();
+    let page = read(&s.root, "notes/first.md");
+    std::fs::write(s.root.join("notes/first.md"), format!("{page}\n{}", "More words. ".repeat(50))).unwrap();
+    let result = deploy(&s, &[]);
+    assert!(stderr(&result).contains("retaining the prior version"), "{}", stderr(&result));
+    assert_eq!(paths(&net), ["/publish"]);
+    deploy(&s, &[]);
+    assert_eq!(paths(&net), ["/publish"]);
+}
+
+#[test]
+fn normal_build_emits_the_formula_pictures_advertised_by_copies() {
+    let net = Arc::new(Mutex::new(Network::default()));
+    let s = site(serve(net.clone()), true, true);
+    let path = s.root.join(".moss/plugins/fixture/manifest.json");
+    let mut manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    manifest["contributes"]["channel"]["syndication"]["images"] = serde_json::json!({"max": 4, "alt": true});
+    std::fs::write(&path, manifest.to_string()).unwrap();
+    std::fs::write(s.root.join("notes/first.md"), "A formula: $x^2$.\n").unwrap();
+    let config = read(&s.root, ".moss/config.toml");
+    std::fs::write(s.root.join(".moss/config.toml"), format!("{config}\n[site]\nurl = 'https://example.org'\n")).unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&deploy(&s, &["--dry-run", "--json"]).stdout).unwrap();
+    let pictures = report["copies"][0]["pictures"].as_array().unwrap();
+    assert_eq!(pictures.len(), 1, "{report}");
+    assert_eq!(pictures[0]["alt"], "$x^2$");
+    let url = pictures[0]["url"].as_str().unwrap();
+    let relative = url.strip_prefix("https://example.org/").unwrap();
+    let mp = moss_build::moss_paths::MossPaths::new(&s.root);
+    assert!(mp.initial_serve_dir().join(relative).is_file(), "{url}");
+    manifest["contributes"]["channel"]["syndication"]["forms"] = serde_json::json!(["long"]);
+    std::fs::write(&path, manifest.to_string()).unwrap();
+    let long: serde_json::Value = serde_json::from_slice(&deploy(&s, &["--dry-run", "--json"]).stdout).unwrap();
+    let html = long["copies"][0]["article"]["html"].as_str().unwrap();
+    assert!(html.contains(url), "{html}");
+    assert!(!html.contains("<svg"));
+    std::fs::write(s.root.join(".moss/config.toml"), format!("{config}\n[site]\nurl = 'https://example.org'\nmath = false\n")).unwrap();
+    let disabled: serde_json::Value = serde_json::from_slice(&deploy(&s, &["--dry-run", "--json"]).stdout).unwrap();
+    assert_eq!(disabled["copies"][0]["pictures"], serde_json::json!([]));
+    assert!(!disabled["copies"][0]["article"]["html"].as_str().unwrap().contains("/_moss/math/"));
+    assert!(paths(&net).is_empty());
+}
+
+#[test]
+fn article_footers_use_the_rendered_home_name_and_page_language() {
+    let net = Arc::new(Mutex::new(Network::default()));
+    let s = site(serve(net.clone()), true, true);
+    let path = s.root.join(".moss/plugins/fixture/manifest.json");
+    let mut manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    manifest["contributes"]["channel"]["syndication"]["forms"] = serde_json::json!(["long"]);
+    std::fs::write(path, manifest.to_string()).unwrap();
+    std::fs::rename(s.root.join("notes/first.md"), s.root.join("notes/first.zh-hans.md")).unwrap();
+    let config = read(&s.root, ".moss/config.toml");
+    std::fs::write(s.root.join(".moss/config.toml"), format!("{config}\n[site]\nlang = 'en'\ntitle = 'A & B'\n")).unwrap();
+    for (home, localized, expected) in [("---\ntitle: A & B\n---\nHome.", None, "A &amp; B"), ("---\ntitle: A & B\n---\nHome.", Some("---\ntitle: 山居 & 文\n---\n首页。"), "山居 &amp; 文"), ("Home without an authored title.", None, "site")] {
+        std::fs::write(s.root.join("index.md"), home).unwrap();
+        let translated = s.root.join("zh-hans/index.md");
+        if let Some(text) = localized {
+            std::fs::create_dir_all(translated.parent().unwrap()).unwrap();
+            std::fs::write(&translated, text).unwrap();
+        } else if translated.exists() { std::fs::remove_file(translated).unwrap(); }
+        let result = deploy(&s, &["--dry-run", "--json"]);
+        assert!(stderr(&result).contains("title is not a setting"));
+        let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        let html = report["copies"][0]["article"]["html"].as_str().unwrap();
+        assert!(html.contains("本文首发于 <a href="), "{html}");
+        assert!(html.contains(&format!("{expected}</a>。")), "{html}");
+    }
+}
+
+#[test]
+fn a_french_article_in_a_chinese_edition_keeps_its_rendered_site_name() {
+    let net = Arc::new(Mutex::new(Network::default()));
+    let s = site(serve(net), true, true);
+    let manifest_path = s.root.join(".moss/plugins/fixture/manifest.json");
+    let mut manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["contributes"]["channel"]["syndication"]["forms"] = serde_json::json!(["long"]);
+    std::fs::write(manifest_path, manifest.to_string()).unwrap();
+    std::fs::create_dir_all(s.root.join("zh-hans")).unwrap();
+    std::fs::write(s.root.join("zh-hans/index.md"), "---\ntitle: 山居\n---\n首页。\n").unwrap();
+    std::fs::remove_file(s.root.join("notes/first.md")).unwrap();
+    std::fs::write(s.root.join("notes/first.zh-hans.md"), "---\nlang: fr\ntitle: Bonjour\n---\nUn article.\n").unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&deploy(&s, &["--dry-run", "--json"]).stdout).unwrap();
+    let html = report["copies"][0]["article"]["html"].as_str().unwrap();
+    let mp = moss_build::moss_paths::MossPaths::new(&s.root);
+    let map: moss_build::build::scan::article_map::ArticleMap = serde_json::from_slice(&std::fs::read(mp.article_map()).unwrap()).unwrap();
+    let article = map.articles.values().find(|p| p.source_path == "notes/first.zh-hans.md").unwrap();
+    assert_eq!(map.page_languages[&article.url_path], "fr");
+    assert_eq!(map.page_site_names[&article.url_path], "山居");
+    let shell = std::fs::read_to_string(mp.initial_serve_dir().join(&article.url_path).join("index.html")).unwrap();
+    let shell_name = shell.split("class=\"site-name\"").nth(1).unwrap().split("</a>").next().unwrap().rsplit('>').next().unwrap();
+    assert_eq!(shell_name, "山居", "the rendered shell uses the Chinese edition's name");
+    assert!(html.contains("Originally published on <a href="), "content language still controls the footer: {html}");
+    assert!(html.contains(&format!("{shell_name}</a>.")), "the copy must match the rendered shell: {html}");
+}
+
+#[test]
+fn human_dry_run_counts_omitted_pictures_like_json_without_sending() {
+    let net = Arc::new(Mutex::new(Network::default()));
+    let s = site(serve(net.clone()), true, true);
+    let path = s.root.join(".moss/plugins/fixture/manifest.json");
+    let mut manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    manifest["contributes"]["channel"]["syndication"]["images"] = serde_json::json!({"max": 1, "alt": true});
+    std::fs::write(path, manifest.to_string()).unwrap();
+    for name in ["one", "two", "three"] {
+        std::fs::write(s.root.join(format!("notes/{name}.svg")), "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"><rect width=\"1\" height=\"1\"/></svg>").unwrap();
+    }
+    std::fs::write(s.root.join("notes/first.md"), "Pictures.\n\n![One](one.svg)\n\n![Two](two.svg)\n\n![Three](three.svg)\n").unwrap();
+    for form in ["short", "long"] {
+        manifest["contributes"]["channel"]["syndication"]["forms"] = serde_json::json!([form]);
+        std::fs::write(s.root.join(".moss/plugins/fixture/manifest.json"), manifest.to_string()).unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&deploy(&s, &["--dry-run", "--json"]).stdout).unwrap();
+        let copy = &report["copies"][0];
+        assert_eq!(copy["included_pictures"], 1, "{report}");
+        assert_eq!(copy["omitted_pictures"], 2, "{report}");
+        let attachments = copy["pictures"].as_array().unwrap().len();
+        if form == "long" {
+            assert_eq!(attachments, 0);
+            assert_eq!(copy["article"]["html"].as_str().unwrap().matches("<img").count(), 1);
+        } else { assert_eq!(attachments, 1); }
+        let human = deploy(&s, &["--dry-run"]);
+        let text = format!("{}{}", String::from_utf8_lossy(&human.stdout), stderr(&human));
+        assert!(text.contains("pictures: 1 included, 2 omitted"), "{text}");
+    }
+    assert!(paths(&net).is_empty());
+    assert!(!s.root.join(".moss/deploy/copies").exists());
+}
+
+#[test]
+fn impossible_new_copies_are_unavailable_before_sending() {
+    let net = Arc::new(Mutex::new(Network::default()));
+    let s = site(serve(net.clone()), true, true);
+    let path = s.root.join(".moss/plugins/fixture/manifest.json");
+    let mut manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    manifest["contributes"]["channel"]["syndication"]["forms"] = serde_json::json!(["short"]);
+    manifest["contributes"]["channel"]["syndication"]["max_chars"] = serde_json::json!(10);
+    std::fs::write(path, manifest.to_string()).unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&deploy(&s, &["--dry-run", "--json"]).stdout).unwrap();
+    assert_eq!(report["copies"][0]["action"], "unavailable", "{report}");
+    assert!(report["copies"][0]["reason"].as_str().unwrap().contains("fits none"));
+    let choices = moss_build::syndication::choose::read_post(&s.root, "notes/first.md").unwrap();
+    assert!(!choices[0].on);
+    assert!(choices[0].reason.as_deref().unwrap().contains("fits none"));
+    let preview = moss_build::syndication::preview::for_post(&s.root, "notes/first.md", "https://example.org");
+    assert!(matches!(&preview[0].action, moss_build::syndication::plan::Action::Unavailable { reason } if reason.contains("fits none")));
+    let human = deploy(&s, &["--dry-run"]);
+    assert!(String::from_utf8_lossy(&human.stdout).contains("fits none"));
+    deploy(&s, &[]);
+    assert!(paths(&net).is_empty());
+    let records = moss_build::syndication::record::Records::in_vault(&moss_build::moss_paths::MossPaths::new(&s.root));
+    assert!(records.all().is_empty());
+}
+
+fn unavailable_edit_cancels_stale_work(posted: bool) {
+    let net = Arc::new(Mutex::new(Network { refusing: !posted, ..Default::default() }));
+    let s = site(serve(net.clone()), false, true);
+    let path = s.root.join(".moss/plugins/fixture/manifest.json");
+    let mut manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    manifest["contributes"]["channel"]["syndication"]["forms"] = serde_json::json!(["short"]);
+    std::fs::write(path, manifest.to_string()).unwrap();
+    // Dry runs compare the configured target with the plugin's reported method.
+    let plugin = s.root.join(".moss/plugins/localdir/main.bundle.js");
+    let js = std::fs::read_to_string(&plugin).unwrap().replace("method: \"local\"", "method: \"localdir\"");
+    std::fs::write(plugin, js).unwrap();
+    deploy(&s, &[]);
+    let records = moss_build::syndication::record::Records::in_vault(&moss_build::moss_paths::MossPaths::new(&s.root));
+    let mut before = records.all().pop().unwrap();
+    if posted {
+        let map = moss_build::build::scan::article_map::ArticleMap::load(&s.root.join(".moss")).unwrap();
+        let mut queued = map.articles[&before.url_path].clone();
+        queued.content = "Queued stale update".into();
+        before.post = Some(Box::new(moss_build::syndication::record::PublishedPost::new(&queued, &map)));
+        before.update_due = true;
+        records.save(&before).unwrap();
+    }
+    let stamped = read(&s.root, "notes/first.md");
+    std::fs::write(s.root.join("notes/first.md"), format!("{stamped}\n{}", "Impossible edit. ".repeat(80))).unwrap();
+    net.lock().unwrap().refusing = false;
+    let preview: serde_json::Value = serde_json::from_slice(&deploy(&s, &["--dry-run", "--json"]).stdout).unwrap();
+    assert_eq!(preview["copies"][0]["action"], "unavailable", "{preview}");
+    let human = deploy(&s, &["--dry-run"]);
+    assert!(String::from_utf8_lossy(&human.stdout).contains("unavailable:"));
+    deploy(&s, &[]);
+    deploy(&s, &[]);
+    assert_eq!(paths(&net), ["/publish"], "the old snapshot must not send after the impossible edit");
+    let blocked = records.all().pop().unwrap();
+    assert_eq!(blocked.next_op(false), None);
+    assert!(blocked.post.is_none());
+    assert_eq!((&blocked.remote, &blocked.hash, &blocked.form, &blocked.parts), (&before.remote, &before.hash, &before.form, &before.parts));
+    std::fs::write(s.root.join("notes/first.md"), format!("{stamped}\nFits again.\n")).unwrap();
+    deploy(&s, &[]);
+    assert_eq!(paths(&net), ["/publish", if posted { "/update" } else { "/publish" }]);
+    let sent = net.lock().unwrap().requests.clone();
+    assert_eq!(sent[0].1["idempotency_key"], sent[1].1["idempotency_key"]);
+    assert!(sent[1].1["parts"][0]["text"].as_str().unwrap().contains("Fits again."));
+    assert_eq!(records.all()[0].uid, before.uid);
+}
+
+#[test]
+fn impossible_edit_cancels_a_refused_first_copy_until_it_fits_again() {
+    unavailable_edit_cancels_stale_work(false);
+}
+
+#[test]
+fn impossible_edit_cancels_a_queued_posted_update_until_it_fits_again() {
+    unavailable_edit_cancels_stale_work(true);
 }

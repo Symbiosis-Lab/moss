@@ -45,6 +45,10 @@ pub struct BookingService {
 #[serde(deny_unknown_fields)]
 pub struct Offer {
     pub name: String,
+    /// `hourly` or `fixed`, written by a settings form; absent, the kind is
+    /// read from which keys are present, as it always was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub charge: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub per_hour: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -134,6 +138,14 @@ impl BookingService {
             let here = format!("{at} service '{id}'");
             if !id_ok(id) {
                 return Some(format!("{here}: an id is 1 to 40 lowercase letters, digits and hyphens"));
+            }
+            let hourly = s.per_hour.is_some() || s.hours.is_some();
+            match s.charge.as_deref() {
+                None => {}
+                Some("hourly") if hourly => {}
+                Some("fixed") if !hourly => {}
+                Some(kind @ ("hourly" | "fixed")) => return Some(format!("{here}: charge is \"{kind}\" but the service gives the keys of the other kind")),
+                Some(other) => return Some(format!("{here}: charge '{other}' must be \"hourly\" or \"fixed\"")),
             }
             match (s.per_hour, &s.hours, s.minutes, s.price) {
                 (Some(_), Some(h), None, None) if h.min >= 1 && h.min <= h.max => {}

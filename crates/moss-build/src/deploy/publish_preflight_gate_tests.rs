@@ -32,12 +32,12 @@ fn missing(source: &str, reference: &str) -> MissingReferenceOccurrence {
 /// mechanism vocabulary: no "unresolved reference", no "asset registry".
 #[test]
 fn the_refusal_names_the_outcome_not_the_mechanism() {
-    let one = refusal_text(1);
+    let one = refusal_text(&[missing("about.md", "hero.jpg")]);
     assert!(one.starts_with("Nothing published — 1 file is missing"), "{one}");
     assert!(one.contains("broken file"), "{one}");
     assert!(one.contains("Fix these, then publish again"), "{one}");
 
-    let many = refusal_text(4);
+    let many = refusal_text(&vec![missing("about.md", "hero.jpg"); 4]);
     assert!(many.contains("4 files are missing"), "{many}");
 
     for text in [&one, &many] {
@@ -70,6 +70,23 @@ fn a_single_missing_file_blocks_the_publish() {
     record("/one-missing", 1, vec![missing("about.md", "hero.jpg")]);
     let err = refuse_publish("/one-missing").expect_err("a missing file must stop the publish");
     assert!(err.contains("1 file is missing"), "{err}");
+}
+
+/// A count alone sends the author hunting: each missing file is named with
+/// the source file and line that asks for it, and a long list is cut.
+#[test]
+fn the_refusal_names_each_missing_file_with_its_source_line() {
+    let mut second = missing("notes/trip.md", "map.pdf");
+    second.source_span.line = 12;
+    record("/named", 1, vec![missing("about.md", "hero.jpg"), second]);
+    let err = refuse_publish("/named").expect_err("missing files must stop the publish");
+    assert!(err.contains("  `about.md` line 1 names `hero.jpg`.\n"), "{err}");
+    assert!(err.contains("  `notes/trip.md` line 12 names `map.pdf`.\n"), "{err}");
+
+    let many: Vec<_> = (0..25).map(|i| missing("about.md", &format!("{i}.jpg"))).collect();
+    let text = refusal_text(&many);
+    assert!(text.contains("`19.jpg`") && !text.contains("`20.jpg`"), "{text}");
+    assert!(text.contains("  and 5 more\n"), "{text}");
 }
 
 /// The gate is about authored files, not a particular HTML element: documents

@@ -12,9 +12,13 @@
 use minisign_verify::{Error as MinisignError, PublicKey, Signature};
 
 /// The registry's public keys, as the base64 line of a minisign public key
-/// file. Empty until the registry's keys exist, and a build that reads the
-/// registry's own hostname refuses to compile while it is (see `fetch`).
-pub const REGISTRY_KEYS: &[&str] = &[];
+/// file: the key that signs every publish, then its backup, kept offline.
+pub const REGISTRY_KEYS: &[&str] = &[
+    // DD6C6009CFC9114C
+    "RWRMEcnPCWBs3QdFaAxHTmy32CtUagIfJJ9+4pSYhfzpwCe2Y3KTbMXR",
+    // 4366D851417F5FA9
+    "RWSpX39BUdhmQ2i+GHzwcFcX/0xuASKTdkn4v5MMebOeU5eQWAT+469E",
+];
 
 /// Why a signature was not accepted. Every variant refuses the document; they
 /// differ only in what the log says.

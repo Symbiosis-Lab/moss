@@ -114,7 +114,7 @@ mod tests {
         assert_eq!(cs.widget, "select");
         assert_eq!(
             cs.enum_values,
-            Some(&["list", "summary", "lead", "grid"][..])
+            Some(&["list", "summary", "lead", "grid", "stream"][..])
         );
         assert!(!cs.skip_schema);
         assert_eq!(cs.group, "Child Styles");

@@ -1,7 +1,7 @@
 //! The pass that finishes an import once every page is on disk.
 //!
 //! Two things about a page are only knowable after the crawl, so they are
-//! decided here, over the pages the run wrote, with one read and at most one
+//! decided here, over the pages the run wrote, with a metadata pass and at most one
 //! write per page:
 //!
 //! - **Folder indexes do not list their children.** moss renders a folder's
@@ -18,9 +18,6 @@
 //!   that (a tutorial series' `Tutorial - Intro`, `Tutorial - Setup`) is
 //!   content and stays.
 //!
-//! [`settle_layout`] is the other half, run before the chrome is written: a page
-//! with nothing under its folder becomes a file, and links follow the final paths.
-//!
 //! Leaf pages with nothing to change are never rewritten, and a rerun changes
 //! nothing.
 
@@ -32,9 +29,8 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 use super::metadata::{same_name, strip_edge_name, strip_site_name, SEPARATOR};
-use super::run::ASSETS_SUBDIR;
-use super::service::escape_yaml_string;
-use super::writer::rename_for_collision;
+use moss_core::frontmatter_typed::FrontMatter;
+use crate::vault::import::page::{with_fields_absent, with_title};
 
 /// A shared site name is only trusted over at least this many pages besides
 /// the home page; one other page proves nothing.
@@ -42,24 +38,35 @@ const MIN_OTHER_PAGES: usize = 2;
 
 struct Page {
     relative: String,
-    content: String,
+    frontmatter: String,
     title: Option<String>,
 }
 
 /// Finish the pages in `written` (paths relative to `out_dir`).
-pub(crate) fn finalize_written_pages(out_dir: &Path, written: &[String]) -> Result<(), String> {
+pub(crate) fn finalize_written_pages(
+    out_dir: &Path,
+    written: &[String],
+    listings: &HashSet<String>,
+) -> Result<(), String> {
     let mut pages = Vec::with_capacity(written.len());
     for relative in written {
         // allow:raw_read the importer's own output, written moments ago in this run — not a cloud-evictable vault input
         let content = fs::read_to_string(out_dir.join(relative))
             .map_err(|e| format!("Failed to read {relative}: {e}"))?;
         let title = frontmatter_text(&content, "title");
-        pages.push(Page { relative: relative.clone(), content, title });
+        let frontmatter = moss_core::frontmatter::frontmatter_span(&content)
+            .and_then(|span| content.get(..span.body)).unwrap_or("").to_string();
+        pages.push(Page { relative: relative.clone(), frontmatter, title });
     }
     let site_name = shared_site_name(&pages);
+    let tag_pages = tags_carried(&pages);
+    let mut claimed_tags: HashSet<String> = HashSet::new();
 
     for page in &pages {
-        let mut updated = page.content.clone();
+        // allow:raw_read the importer's own output; retain only one body while finishing pages
+        let content = fs::read_to_string(out_dir.join(&page.relative))
+            .map_err(|e| format!("Failed to read {}: {e}", page.relative))?;
+        let mut updated = content.clone();
         if is_folder_index(written, &page.relative) {
             if let Some(next) = with_children_off(&updated) {
                 updated = next;
@@ -71,6 +78,17 @@ pub(crate) fn finalize_written_pages(out_dir: &Path, written: &[String]) -> Resu
                 if let Some(next) = with_title(&updated, &stripped) {
                     updated = next;
                 }
+            }
+        }
+        // A tag archive claims its tag and lets moss draw the listing.
+        if listings.contains(&page.relative) {
+            if let Some(next) = frontmatter_text(&updated, "title")
+                .filter(|title| tag_pages.carried_elsewhere(title, &page.relative))
+                // One page can hold a tag; any other listing keeps what it imported.
+                .filter(|title| claimed_tags.insert(title.trim().to_string()))
+                .and_then(|tag| as_tag_page(&updated, &tag))
+            {
+                updated = next;
             }
         }
         // After the title is final: the heading repeating it is dropped last.
@@ -90,13 +108,46 @@ pub(crate) fn finalize_written_pages(out_dir: &Path, written: &[String]) -> Resu
                 }
             }
         }
-        if updated != page.content {
+        if updated != content {
             // allow:raw_write the importer rewrites a page it wrote moments ago in this run, adding what only the finished crawl can decide
             fs::write(out_dir.join(&page.relative), updated)
                 .map_err(|e| format!("Failed to write {}: {e}", page.relative))?;
         }
     }
     Ok(())
+}
+
+/// Which pages carry each tag in `tags:`.
+struct TagsCarried(HashMap<String, HashSet<String>>);
+
+impl TagsCarried {
+    /// Whether some page other than `relative` carries `tag`.
+    fn carried_elsewhere(&self, tag: &str, relative: &str) -> bool {
+        self.0.get(tag.trim()).is_some_and(|pages| pages.iter().any(|p| p != relative))
+    }
+}
+
+fn tags_carried(pages: &[Page]) -> TagsCarried {
+    let mut by_tag: HashMap<String, HashSet<String>> = HashMap::new();
+    for page in pages {
+        let map = moss_core::frontmatter::frontmatter_map(&page.frontmatter);
+        let Some(serde_yaml::Value::Sequence(tags)) = map.get("tags") else { continue };
+        for tag in tags.iter().filter_map(moss_core::frontmatter::value_as_string) {
+            by_tag.entry(tag.trim().to_string()).or_default().insert(page.relative.clone());
+        }
+    }
+    TagsCarried(by_tag)
+}
+
+/// The page as the page of `tag`: `tag_page:` added, and the body reduced to
+/// the page's description, since moss draws the listing under it.
+fn as_tag_page(content: &str, tag: &str) -> Option<String> {
+    let claimed = with_fields_absent(content, &FrontMatter {
+        tag_page: Some(moss_core::terms::TermClaim::Name(tag.to_string())), ..Default::default()
+    })?;
+    let span = moss_core::frontmatter::frontmatter_span(&claimed)?;
+    let body = frontmatter_text(&claimed, "description").map(|d| format!("\n{d}\n")).unwrap_or_default();
+    Some(format!("{}{body}", claimed.get(..span.body)?))
 }
 
 fn frontmatter_text(content: &str, key: &str) -> Option<String> {
@@ -136,50 +187,16 @@ fn shared_site_name(pages: &[Page]) -> Option<String> {
         .filter(|p| p.relative != "index.md")
         .filter_map(|p| p.title.as_deref())
         .collect();
-    let candidates = [home.title.clone(), frontmatter_text(&home.content, "publisher")];
+    let candidates = [home.title.clone(), frontmatter_text(&home.frontmatter, "publisher")];
     candidates.into_iter().flatten().find(|name| {
         let others: Vec<&&str> = others.iter().filter(|t| !same_name(t, name)).collect();
         others.len() >= MIN_OTHER_PAGES && others.iter().all(|t| strip_edge_name(t, name).is_some())
     })
 }
 
-/// `content` with each `(key, value)` appended as a frontmatter line unless the
-/// key is already there; `value` is the YAML text as it is written (quote a
-/// string with [`escape_yaml_string`] first). `None` when there is nothing to
-/// add (no YAML frontmatter, or every key present). Spliced in as text so every
-/// other byte stays as written.
-pub(super) fn with_fields_absent(content: &str, fields: &[(&str, String)]) -> Option<String> {
-    let span = moss_core::frontmatter::frontmatter_span(content)?;
-    if span.kind != moss_core::frontmatter::FrontmatterKind::Yaml {
-        return None;
-    }
-    let present = moss_core::frontmatter::frontmatter_map(content);
-    let lines: String = fields
-        .iter()
-        .filter(|(key, _)| !present.contains_key(*key))
-        .map(|(key, value)| format!("{key}: {value}\n"))
-        .collect();
-    let at = span.fields.end;
-    (!lines.is_empty()).then(|| format!("{}{lines}{}", &content[..at], &content[at..]))
-}
-
 /// `content` with `children: false` appended as the last frontmatter line.
 fn with_children_off(content: &str) -> Option<String> {
-    with_fields_absent(content, &[("children", "false".to_string())])
-}
-
-/// `content` with its `title:` line replaced, every other byte kept.
-pub(super) fn with_title(content: &str, title: &str) -> Option<String> {
-    let span = moss_core::frontmatter::frontmatter_span(content)?;
-    let fields = &content[span.fields.clone()];
-    let line = fields.split_inclusive('\n').find(|l| l.starts_with("title:"))?;
-    let at = span.fields.start + fields.find(line)?;
-    Some(format!(
-        "{}title: \"{}\"\n{}",
-        &content[..at],
-        escape_yaml_string(title),
-        &content[at + line.len()..]
-    ))
+    with_fields_absent(content, &FrontMatter { children: Some(false), ..Default::default() })
 }
 
 static ATX_HEADING: LazyLock<Regex> = LazyLock::new(|| {
@@ -319,177 +336,6 @@ pub(super) fn without_title_heading(
     None
 }
 
-/// The `../` run in front of the media folder, as `local_map` writes it.
-static MEDIA_PREFIX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!(r"^((?:\.\./)+){}/", regex::escape(ASSETS_SUBDIR))).expect("media path regex")
-});
-
-/// Rename the leaf pages in `written` and fix the links and media paths that
-/// the rename (or the page's depth at crawl time) left wrong.
-///
-/// `other_pages` are files the crawl wrote that are not in `written` (error
-/// stubs): they count as pages under a folder but are never renamed.
-/// `written` and `written_urls` are updated to the final paths.
-pub(crate) fn settle_layout(
-    out_dir: &Path,
-    written: &mut [String],
-    written_urls: &mut HashMap<String, String>,
-    other_pages: &[String],
-) -> Result<(), String> {
-    let mut moved: HashMap<String, String> = HashMap::new();
-    for rel in written.iter() {
-        let Some(folder) = rel.strip_suffix("/index.md") else { continue };
-        let prefix = format!("{folder}/");
-        let has_pages_under = written
-            .iter()
-            .chain(other_pages)
-            .any(|other| other != rel && other.starts_with(&prefix));
-        if has_pages_under {
-            continue;
-        }
-        let target = rename_for_collision(out_dir, &format!("{folder}.md"));
-        fs::rename(out_dir.join(rel), out_dir.join(&target))
-            .map_err(|e| format!("Failed to move {rel} to {target}: {e}"))?;
-        // The folder is empty now unless something else lives in it; leave it then.
-        let _ = fs::remove_dir(out_dir.join(folder));
-        moved.insert(rel.clone(), target);
-    }
-    // Where each page was first written: the path a link written during the
-    // crawl names. Only a link to one of these is the import's to rewrite.
-    let mut crawled: HashSet<&str> = other_pages.iter().map(String::as_str).collect();
-    crawled.extend(written.iter().map(String::as_str));
-    crawled.extend(moved.keys().map(String::as_str));
-    let crawled: HashSet<String> = crawled.into_iter().map(str::to_string).collect();
-    for rel in written.iter_mut().chain(written_urls.values_mut()) {
-        if let Some(target) = moved.get(rel.as_str()) {
-            *rel = target.clone();
-        }
-    }
-
-    let moved_to: HashSet<&str> = moved.values().map(String::as_str).collect();
-    for rel in written.iter() {
-        // allow:raw_read the importer's own output, written moments ago in this run — not a cloud-evictable vault input
-        let content = fs::read_to_string(out_dir.join(rel))
-            .map_err(|e| format!("Failed to read {rel}: {e}"))?;
-        let page_moved = moved_to.contains(rel.as_str());
-        let split = moss_core::frontmatter::frontmatter_span(&content).map_or(0, |s| s.body);
-        let (head, body) = content.split_at(split);
-        let mut updated = String::with_capacity(content.len());
-        for line in head.split_inclusive('\n') {
-            match line.strip_prefix("cover:") {
-                Some(value) if page_moved => {
-                    updated.push_str("cover:");
-                    updated.push_str(&one_level_up(value).unwrap_or_else(|| value.to_string()));
-                }
-                _ => updated.push_str(line),
-            }
-        }
-        updated.push_str(&map_link_targets(body, |target| {
-            if page_moved {
-                if let Some(up) = one_level_up(target) {
-                    return Some(up);
-                }
-            }
-            let old = target.strip_prefix("./").filter(|p| p.ends_with(".md"))?;
-            if !crawled.contains(old) {
-                return None;
-            }
-            let new = moved.get(old).map_or(old, String::as_str);
-            Some(relative_path(rel, new))
-        }));
-        if updated != content {
-            // allow:raw_write the importer rewrites a page it wrote moments ago in this run, once the crawl has fixed where every page lives
-            fs::write(out_dir.join(rel), updated)
-                .map_err(|e| format!("Failed to write {rel}: {e}"))?;
-        }
-    }
-    Ok(())
-}
-
-/// Rewrite the target of every markdown link or image (`](target)`) and wiki
-/// embed (`![[target]]`) in `text` that `rewrite` answers for, leaving fenced
-/// and inline code, and everything else, as written.
-fn map_link_targets(text: &str, mut rewrite: impl FnMut(&str) -> Option<String>) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut fence: Option<char> = None;
-    for line in text.split_inclusive('\n') {
-        let trimmed = line.trim_start();
-        let marker = trimmed.chars().next().filter(|c| (*c == '`' || *c == '~') && trimmed.starts_with(&c.to_string().repeat(3)));
-        match (fence, marker) {
-            (None, Some(c)) => fence = Some(c),
-            (Some(open), Some(c)) if open == c => fence = None,
-            _ => {}
-        }
-        if fence.is_some() || marker.is_some() {
-            out.push_str(line);
-            continue;
-        }
-        let b = line.as_bytes();
-        let (mut i, mut last) = (0, 0);
-        while i < b.len() {
-            if b[i] == b'`' {
-                let n = b[i..].iter().take_while(|&&c| c == b'`').count();
-                let ticks = "`".repeat(n);
-                i += n;
-                if let Some(end) = line[i..].find(&ticks) {
-                    i += end + n;
-                }
-                continue;
-            }
-            let (open, close) = if b[i..].starts_with(b"](") {
-                (2, ")")
-            } else if b[i..].starts_with(b"![[") {
-                (3, "]]")
-            } else {
-                i += 1;
-                continue;
-            };
-            let Some(len) = line[i + open..].find(close) else {
-                i += 1;
-                continue;
-            };
-            let inner = &line[i + open..i + open + len];
-            let target = inner.split(|c: char| c.is_whitespace() || c == '|').next().unwrap_or("");
-            if let Some(new) = rewrite(target) {
-                out.push_str(&line[last..i + open]);
-                out.push_str(&new);
-                out.push_str(&inner[target.len()..]);
-                last = i + open + len;
-            }
-            i += open + len;
-        }
-        out.push_str(&line[last..]);
-    }
-    out
-}
-
-/// `target` as a path from the folder holding `from`: `./other.md` beside it,
-/// `../about.md` from one folder down.
-pub(super) fn relative_path(from: &str, target: &str) -> String {
-    let from_dirs: Vec<&str> = from.split('/').collect();
-    let from_dirs = &from_dirs[..from_dirs.len() - 1];
-    let to: Vec<&str> = target.split('/').collect();
-    let common = from_dirs.iter().zip(&to).take_while(|(a, b)| a == b).count();
-    let ups = from_dirs.len() - common;
-    let rest = to[common..].join("/");
-    if ups == 0 {
-        format!("./{rest}")
-    } else {
-        format!("{}{rest}", "../".repeat(ups))
-    }
-}
-
-/// A path into the shared media folder, as seen from a page that moved up one
-/// folder: one `../` fewer than it was written with. `None` for any other path.
-fn one_level_up(path: &str) -> Option<String> {
-    let bare = path.trim_start_matches(|c: char| c.is_whitespace() || c == '"' || c == '\'');
-    let caps = MEDIA_PREFIX.captures(bare)?;
-    let ups = caps[1].len() / 3 - 1;
-    let up = if ups == 0 { "./".to_string() } else { "../".repeat(ups) };
-    let lead = path.len() - bare.len();
-    Some(format!("{}{up}{ASSETS_SUBDIR}/{}", &path[..lead], &path[lead + caps[0].len()..]))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,7 +361,7 @@ mod tests {
 
     fn run(root: &Path, pages: &[&str]) {
         let written: Vec<String> = pages.iter().map(|s| s.to_string()).collect();
-        finalize_written_pages(root, &written).unwrap();
+        finalize_written_pages(root, &written, &HashSet::new()).unwrap();
     }
 
     fn read(root: &Path, rel: &str) -> String {
@@ -788,5 +634,52 @@ mod tests {
         }
         run(root, &["index.md", "a.md", "b.md"]);
         assert_eq!(read(root, "a.md"), "---\ntitle: \"a\"\n---\n\nText\n");
+    }
+
+    fn post(title: &str) -> String {
+        format!("---\ntitle: \"{title}\"\ntags: [\"Field Notes\", \"Slow Reading\"]\n---\n\nBody\n")
+    }
+
+    const ARCHIVE: &str = "---\ntitle: \"Field Notes\"\ndescription: \"Tuesday notes.\"\ncover: \"./assets/imported/a.jpg\"\norigin: \"https://notes.example.test/tag/tuesdays/\"\nnav: true\nweight: 3\n---\n\n[First light](/first-light/)\n\n[Second draft](/second-draft/)\n";
+
+    #[test]
+    fn a_listing_titled_like_a_carried_tag_claims_it_and_keeps_its_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        put(root, "first-light.md", &post("First light"));
+        put(root, "second-draft.md", &post("Second draft"));
+        put(root, "tag/tuesdays.md", ARCHIVE);
+        put(root, "notes.md", ARCHIVE);
+        let written: Vec<String> =
+            ["first-light.md", "second-draft.md", "tag/tuesdays.md", "notes.md"].map(String::from).to_vec();
+        let listings = HashSet::from(["tag/tuesdays.md".to_string()]);
+
+        finalize_written_pages(root, &written, &listings).unwrap();
+
+        let claimed = read(root, "tag/tuesdays.md");
+        assert!(claimed.contains("tag_page: \"Field Notes\"\n"), "{claimed}");
+        for kept in ["title: \"Field Notes\"", "description: \"Tuesday notes.\"", "cover: \"./assets/imported/a.jpg\"",
+            "origin: \"https://notes.example.test/tag/tuesdays/\"", "nav: true", "weight: 3"] {
+            assert!(claimed.contains(kept), "{kept} lost: {claimed}");
+        }
+        assert!(claimed.ends_with("---\n\nTuesday notes.\n"), "body is the description only: {claimed}");
+        assert_eq!(read(root, "notes.md"), ARCHIVE, "no listing signal: stays as written");
+        assert_eq!(read(root, "first-light.md"), post("First light"));
+    }
+
+    #[test]
+    fn only_the_first_listing_titled_like_a_tag_claims_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        put(root, "first-light.md", &post("First light"));
+        put(root, "a.md", ARCHIVE);
+        put(root, "b.md", ARCHIVE);
+        let written: Vec<String> = ["first-light.md", "a.md", "b.md"].map(String::from).to_vec();
+        let listings = HashSet::from(["a.md".to_string(), "b.md".to_string()]);
+
+        finalize_written_pages(root, &written, &listings).unwrap();
+
+        assert!(read(root, "a.md").contains("tag_page:"));
+        assert_eq!(read(root, "b.md"), ARCHIVE, "the second listing keeps its body");
     }
 }

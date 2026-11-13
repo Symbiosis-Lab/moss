@@ -117,7 +117,7 @@ fn site_arrays_cannot_set_a_positional_language() {
 #[test]
 fn a_nav_entry_needs_no_fields_so_a_built_in_can_join_the_nav() {
     let (config, warnings) = parse_config("[terms.authors]\nnav = true\nweight = 3");
-    assert_eq!(warnings, ["[terms.authors] has no `fields` array; skipping"]);
+    assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(config.terms_nav(), [("authors".into(), Some(3))]);
     assert_eq!(config.terms_kinds()[0].fields, ["author"]);
 }

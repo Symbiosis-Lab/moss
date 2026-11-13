@@ -553,6 +553,7 @@ pub fn generate_blocking_content_for_build(
     crate::build::markdown::math::set_disk_cache(crate::build::cache::TransformCache::for_site(
         &paths,
     ));
+    let members_policy = &frontmatter_scan_cache.members_policy;
     let parse_session = crate::build::parse_cache::ParseSession::begin(
         Path::new(source_path),
         &paths.cache_hash_index(),
@@ -578,7 +579,7 @@ pub fn generate_blocking_content_for_build(
             // same commit. The `[site]` flags ride as one `SiteMarkdown`, the
             // same value the call takes, so a field added to it needs no edit
             // here.
-            &crate::build::parse_cache::site_scalars(
+            &(members_policy, crate::build::parse_cache::site_scalars(
                 site_lang,
                 site_id.as_deref(),
                 seta_url_for_build.as_str(),
@@ -586,7 +587,7 @@ pub fn generate_blocking_content_for_build(
                 emit_source_lines,
                 project_structure.has_content_folders,
                 page_ground,
-            ),
+            )),
         ),
     );
 
@@ -755,7 +756,8 @@ pub fn generate_blocking_content_for_build(
                     let (stat_before_read, content) = crate::build::stat::stat_then(&source_file_path, |path| {
                         crate::build::cloud_readiness::read_page_source(path, &deferred_mutex, &input_evidence)
                     });
-                    let content = content?;
+                    let source_content = content?;
+                    let content = members_policy.public_source(&file_info.path, &source_content);
                     if super::empty_home::skip_empty_source(&content, &file_info.path) { return None; }
                     md_read_ns.fetch_add(t_read.elapsed().as_nanos() as u64, Ordering::Relaxed);
 
@@ -802,6 +804,7 @@ pub fn generate_blocking_content_for_build(
                                 crate::build::cloud_readiness::request_download_foreground(&full_path);
                             }
                             crate::build::cloud_readiness::read_page_source(&full_path, &deferred_mutex, &input_evidence)
+                                .map(|source| members_policy.public_source(path, &source).into_owned())
                         },
                         &resolve_marker_handlers,
                         asset_snapshot,
@@ -975,7 +978,7 @@ pub fn generate_blocking_content_for_build(
                     // touches the emitted HTML.
 
                     md_process_ns.fetch_add(t_process.elapsed().as_nanos() as u64, Ordering::Relaxed);
-                    Some((doc, Some((content, stat_before_read))))
+                    Some((doc, Some((source_content, stat_before_read))))
                 },
             )
             .collect();
@@ -1029,7 +1032,7 @@ pub fn generate_blocking_content_for_build(
         let doc = &mut documents[record.document_index];
         doc.missing_reference_occurrences = crate::build::types::MissingReferenceOccurrence::from_authored_source(
             &record.source_path,
-            &record.source,
+            &members_policy.public_source(&record.source_path, &record.source),
             &authored_evidence_parse_config,
             &reference_context,
         );
@@ -1047,6 +1050,7 @@ pub fn generate_blocking_content_for_build(
     // The PRE-reduce cache boundary: the passes below fold other documents'
     // state into a parsed document.
     parse_session.finish(&documents);
+    crate::build::feeds::import_addresses::apply(source_path_buf, &mut documents)?;
 
     // Which uid each page is built under: its own, the published one, or one
     // derived from its path and bytes. After the snapshot above, so a replayed
@@ -1149,6 +1153,7 @@ pub fn generate_blocking_content_for_build(
         for doc in &mut documents {
             doc.edition = editions.of(&doc.url_path);
         }
+        crate::build::types::mark_hidden_folders(&mut documents);
         log::debug!(target: "timing", "[reduce] slug_dedup ({} docs): {:?}", documents.len(), reduce_start.elapsed());
 
         if documents.iter().any(|d| d.slot_only && d.html_content.contains("moss-hero-closing")) {
@@ -1212,10 +1217,9 @@ pub fn generate_blocking_content_for_build(
         // the linked URL is part of each page's surface, so a claim
         // appearing elsewhere re-renders the bylines that point at it.
         crate::build::terms::link_terms_in_bylines(&mut documents, &term_index);
-        // The automatic place line — same neighborhood, same reasoning:
-        // before the incremental content hash is taken, so a claim moving
-        // invalidates the line's link for free.
-        crate::build::terms::set_place_lines(&mut documents, &term_index, site_lang);
+        // A page's term lines, for the same reason: a claim moving changes
+        // their links and so the page's surface.
+        crate::build::terms::set_term_lines(&mut documents, &term_index, site_lang);
         // The names a `cards = true` kind shows on listing cards: the same
         // per-page reading, before the same incremental hash.
         crate::build::terms::set_card_credits(&mut documents, &site_config.term_kinds);
@@ -1291,6 +1295,15 @@ pub fn generate_blocking_content_for_build(
             }
         }
 
+        // Inline `:::subscribe` forms get their page's language scope, judged
+        // the same way the footer form's is, now that every page has parsed,
+        // and before a stream listing copies a form into another page.
+        crate::build::features::email::stamp_inline_subscribe_scopes(
+            &mut documents,
+            site_id.as_deref(),
+            &seta_url_for_build,
+        );
+
         // Resolve folder-list embed markers (`![[/folder/|limit:N,more]]`) and settle `from=` heroes.
         // moss-core emits a `<!--MOSS_MARKER_FOLDER_LIST:…-->` marker during
         // wikilink resolution; we expand it here, AFTER
@@ -1316,14 +1329,6 @@ pub fn generate_blocking_content_for_build(
             )
         });
         log::debug!(target: "timing", "[reduce] expand_markers_in_documents: {:?}", reduce_start.elapsed());
-
-        // Inline `:::subscribe` forms get their page's language scope, judged
-        // the same way the footer form's is, now that every page has parsed.
-        crate::build::features::email::stamp_inline_subscribe_scopes(
-            &mut documents,
-            site_id.as_deref(),
-            &seta_url_for_build,
-        );
 
         log::debug!(target: "timing", "[reduce] translation_links: {:?}", reduce_start.elapsed());
         log::debug!(target: "timing", "[reduce] total (uid_dedup..translation_links): {:?}", reduce_pre_start.elapsed());
@@ -2259,7 +2264,7 @@ pub fn generate_blocking_content_for_build(
                 // the legacy meta-slot behavior.
                 None,
                 site_config.math,
-                &crate::build::folder_embed::ListingRowOptions { listing_tag: Some(folder_doc.lang_tag.as_deref().unwrap_or_else(|| folder_lang.as_bcp47_attr())), ..Default::default() },
+                &crate::build::folder_embed::ListingRowOptions { listing_tag: Some(folder_doc.lang_tag.as_deref().unwrap_or_else(|| folder_lang.as_bcp47_attr())), host_url_path: &folder_doc.url_path, ..Default::default() },
                 now,
             );
             // The generated half of the same split the claimed term page gets
@@ -2450,6 +2455,7 @@ pub fn generate_blocking_content_for_build(
     // What the settings leave out, so the publish gate reads a missing
     // llms.txt, tdmrep.json or QR code as the owner's choice.
     pending.set_withdrawn(Withdrawn::from_settings(site_config.ai, layout_config.assets.selection_tools));
+    if frontmatter_scan_cache.restricts_pages(&project_structure.markdown_files) { pending.mark_restricts_pages(); }
 
     // Calendar files for event pages and for folders of them. Written whether or
     // not the site has a deployed address, so a preview serves the links the
@@ -2503,7 +2509,12 @@ pub fn generate_blocking_content_for_build(
     // publish the templates.
     let on_moss_host = crate::build::site_config::get_domain_config(source_path).unwrap_or_default().site_id.is_some();
     if on_moss_host { crate::build::emit::welcome_email::emit(&documents, output_dir, pending)?; }
+    site_config.blocks.emit_assets(&documents, output_dir, pending)?;
+    crate::plugins::contributions::public_data::emit(&site_config.public_data, output_dir, pending)?;
     crate::build::emit::commerce::emit(&documents, site_config.forms_endpoint.as_deref(), site_config.booking.as_ref(), on_moss_host, output_dir, pending)?;
+    crate::build::emit::members::emit(&site_config.members, output_dir, pending)?;
+    let own_icon = (!favicon.used_default).then_some(crate::build::site_meta::site_identity::OwnIcon { file: &favicon_filename, raster_sizes: &favicon_raster_sizes });
+    crate::build::site_meta::site_identity::emit(&layout_config, own_icon, user_css_content.as_deref(), output_dir, pending)?;
     log::debug!(target: "timing", "[render] prelude: llms.txt: {:?}", total_start.elapsed());
     send_progress(
         progress_sender,
@@ -2599,7 +2610,7 @@ pub fn generate_blocking_content_for_build(
     // Build and save article map for syndication support
     // This creates a mapping from URL paths to article metadata
     generated_index_urls.sort(); // HashMap iteration order above; the persisted map must be stable
-    let article_map = std::sync::Arc::new(build_article_map(
+    let mut article_map = build_article_map(
         &documents,
         &project_structure.dirs,
         &dir_overrides,
@@ -2607,7 +2618,15 @@ pub fn generate_blocking_content_for_build(
         &generated_index_urls,
         &term_index,
         &editions,
-    ));
+    );
+    article_map.page_languages = documents.iter().map(|doc| {
+        let lang = doc.lang_tag.clone().unwrap_or_else(|| crate::i18n::lang_tag(&site_config.lang));
+        (crate::build::scan::article_map::to_pretty_url(&doc.url_path), lang)
+    }).collect();
+    article_map.page_site_names = documents.iter().map(|doc| {
+        (crate::build::scan::article_map::to_pretty_url(&doc.url_path), render_context.chrome.site_title(Some(doc)))
+    }).collect();
+    let article_map = std::sync::Arc::new(article_map);
     if let Err(e) = article_map.save(&moss_dir) {
         log::info!("⚠️ Failed to save article map: {}", e);
     }
@@ -2639,8 +2658,9 @@ pub fn generate_blocking_content_for_build(
 
     // Generate _previews.json for hover link previews
     // Compact JSON mapping permalink → { title, description, preview }
-    // Keyed on `is_public_page` (not `is_listable`): a `listed: false` page can
-    // be linked (footer / wikilink), so its hover preview should still resolve.
+    // Keyed on `is_indexable` (not `is_listable`): a `listed: false` page can
+    // be linked (footer / wikilink), so its hover preview should still resolve;
+    // a page reached only by its link must not be named in this site-wide file.
     // Emitted only when [site].link_preview is on — the same gate that
     // controls the <script> tag and preview.js file below, so the runtime,
     // its data file, and the tag that loads it always agree.
@@ -2649,7 +2669,7 @@ pub fn generate_blocking_content_for_build(
         let mut previews: BTreeMap<String, serde_json::Value> = BTreeMap::new();
         let mut excerpts = crate::build::feeds::previews::PreviewCache::begin(Path::new(source_path));
         for doc in &documents {
-            if !doc.is_public_page() {
+            if !doc.is_indexable() {
                 continue;
             }
             let preview_text = excerpts.excerpt(&doc.url_path, &doc.content, site_config.math, |content| {
@@ -3251,17 +3271,15 @@ pub fn generate_blocking_content_for_build(
                 if favicon_raster_sizes.contains(&size) {
                     tags.push('\n');
                     tags.push_str(&format!(
-                        r#"<link rel="icon" type="image/png" sizes="{size}x{size}" href="/assets/favicon-{size}.png">"#
+                        r#"<link rel="icon" type="image/png" sizes="{size}x{size}" href="/{}">"#,
+                        ServedPath::for_favicon_raster(size).as_str()
                     ));
                 }
             }
             Some(tags)
         };
         let apple_touch_icon: Option<String> = if favicon_raster_sizes.contains(&180) {
-            Some(
-                r#"<link rel="apple-touch-icon" sizes="180x180" href="/assets/favicon-180.png">"#
-                    .to_string(),
-            )
+            Some(format!(r#"<link rel="apple-touch-icon" sizes="180x180" href="/{}">"#, ServedPath::for_favicon_raster(180).as_str()))
         } else {
             None
         };
@@ -3368,6 +3386,7 @@ pub fn generate_blocking_content_for_build(
         notebook_files: project_structure.notebook_files.clone(),
         rung_collisions,
         carried_advisories: Vec::new(),
+        members_policy: members_policy.clone(),
     };
 
     // Math render cache build-end hook (see `parse_cache::math_cache_finish_build`'s
@@ -3411,8 +3430,6 @@ pub(super) struct ResolvedFavicon {
     pub relative_path: String,
     pub content_hash: String,
     /// True when no user favicon was found and the moss-logo default was used.
-    /// Locked in by tests so a refactor can't silently disable the fallback.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub used_default: bool,
     /// The sizes of `assets/favicon-<size>.png` written beside the favicon:
     /// every size in `SIZES` for an SVG favicon, the sizes that fit a supplied

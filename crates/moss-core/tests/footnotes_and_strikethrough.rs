@@ -291,8 +291,8 @@ fn definition_never_referenced_still_renders_its_text() {
 
 #[test]
 fn repeated_label_first_definition_wins_endnote_and_repeat_renders_in_place() {
-    // FootnoteIndex::definition is explicitly first-wins ("a repeated label
-    // is an authoring error; first wins"): the FIRST definition is hoisted
+    // The first definition of a label wins (a repeated label is an
+    // authoring error): the FIRST definition is hoisted
     // into the endnote, and the repeat renders in place in the body — wrong
     // but visible, which beats GFM's silent drop.
     let html = render("A[^1].\n\n[^1]: first\n\n[^1]: second\n");

@@ -28,6 +28,8 @@ mod roles;
 mod listing_placement;
 pub(crate) use listing_placement::insert_before_sources;
 pub use roles::{set_card_credits, term_role_heading, term_role_label};
+mod lines;
+pub use lines::{set_term_lines, TermLine};
 mod kinds;
 pub use kinds::{declared_name_list_fields, term_kinds, TermKind, BUILTIN_DEFAULT_FIELDS};
 // The editor's chip-completion readout of a finished build's kinds table —
@@ -439,6 +441,11 @@ pub fn derive_terms(documents: &mut [ParsedDocument], kinds: Vec<TermKind>) -> T
     // a city also lists on its region and country), pushing each ancestor
     // through the same steps as the immediate key.
     for doc in documents.iter_mut() {
+        // A page reached only by its link joins no term: the term's page
+        // would name the page, or the term, to the whole site.
+        if doc.hidden_from_search_engines() {
+            continue;
+        }
         let own_claim = claimed_key(doc, &kinds, &index);
         let doc_edition = doc.edition.clone();
         let doc_url = to_pretty_url(&doc.url_path);
@@ -675,7 +682,7 @@ pub fn link_terms_in_bylines(documents: &mut [ParsedDocument], index: &TermIndex
         //
         // A place-typed kind is skipped here at the source: a place name
         // (`location:`) is never credited in a byline — it gets its own
-        // automatic place line from `set_place_lines` — so it must never
+        // automatic place line from `set_term_lines` — so it must never
         // become a byline-linking candidate, and must never trip guard 6's
         // "declared but never in a byline row" warning, which fired for
         // every located page before this exclusion existed.
@@ -794,55 +801,6 @@ pub fn link_terms_in_bylines(documents: &mut [ParsedDocument], index: &TermIndex
                 );
             }
         }
-    }
-}
-
-/// The automatic place line: a generated markdown row naming every place a
-/// document declares, linked to each place's term page — the terms layer's
-/// one name-linking pass (see [`link_terms_in_bylines`]'s own doc)
-/// generalized to also decorate a generated line rather than only an
-/// authored one. Called beside `link_terms_in_bylines`, same reasoning: run
-/// before the incremental content hash is taken, so a claim moving
-/// invalidates the place line's link "for free," exactly like a
-/// byline-linked name already does.
-///
-/// `None` for every document when the site declares no place-typed kind at
-/// all, and for every document when that kind sets `line = false`. A page
-/// has no line when it leaves `location:` unset or is titled with its only
-/// place; there is no opt-out frontmatter key, because this is generated
-/// chrome with no authored form.
-///
-/// Also sets [`ParsedDocument::place_names`] from the SAME filtered, ordered
-/// name list — a card's meta line reads that field rather than re-deriving
-/// "which declared names actually resolve" a second time, which is what
-/// `place_line` itself already computes here.
-pub fn set_place_lines(documents: &mut [ParsedDocument], index: &TermIndex, lang: crate::i18n::Language) {
-    let Some(place_kind) = index.kinds.iter().find(|k| k.is_place) else { return };
-    for doc in documents.iter_mut() {
-        if doc.location.is_empty() {
-            continue;
-        }
-        let mut links: Vec<String> = Vec::new();
-        let mut names: Vec<&str> = Vec::new();
-        for name in &doc.location {
-            let name = name.trim();
-            let Some(url) = index.term_url_in("", &place_kind.key, name) else { continue };
-            names.push(name);
-            // A page titled with the place already names it; the line would only repeat the title.
-            if name.to_lowercase() != doc.title.trim().to_lowercase() {
-                links.push(format!("[{}]({})", name, url));
-            }
-        }
-        if names.is_empty() {
-            continue;
-        }
-        doc.place_line = (place_kind.line.unwrap_or(true) && !links.is_empty()).then(|| format!(
-            "{}{}{}",
-            crate::i18n::t(lang, "term_role_location"),
-            crate::i18n::t(lang, "place_line_separator"),
-            links.join(", "),
-        ));
-        doc.place_names = Some(names.join(", "));
     }
 }
 
@@ -1493,119 +1451,6 @@ mod tests {
         docs[0].jury_page = Some(TermClaim::UseTitle);
         derive_terms(&mut docs, kinds);
         assert_eq!(docs[0].place_children, None);
-    }
-
-    // ── task A7: the automatic place line ────────────────────────────────
-
-    #[test]
-    fn place_line_renders_linked_names_in_declared_order() {
-        let kinds = vec![places_kind_with_parents(&[])];
-        let mut docs = vec![doc("about/kyoto/index.html", "Kyoto"), doc("posts/a/index.html", "A")];
-        docs[0].place_page = Some(TermClaim::UseTitle);
-        docs[1].location = vec!["Kyoto".to_string()];
-        let index = derive_terms(&mut docs, kinds);
-        set_place_lines(&mut docs, &index, crate::i18n::Language::En);
-        assert_eq!(docs[1].place_line.as_deref(), Some("Location: [Kyoto](/about/kyoto/)"));
-    }
-
-    #[test]
-    fn line_false_drops_the_place_line_but_still_sets_place_names() {
-        let mut kind = places_kind_with_parents(&[]);
-        kind.line = Some(false);
-        let mut docs = vec![doc("about/kyoto/index.html", "Kyoto"), doc("posts/a/index.html", "A")];
-        docs[0].place_page = Some(TermClaim::UseTitle);
-        docs[1].location = vec!["Kyoto".to_string()];
-        let index = derive_terms(&mut docs, vec![kind]);
-        set_place_lines(&mut docs, &index, crate::i18n::Language::En);
-        assert_eq!(docs[1].place_line, None);
-        assert_eq!(docs[1].place_names.as_deref(), Some("Kyoto"));
-    }
-
-    #[test]
-    fn a_page_titled_with_its_place_gets_no_line_but_keeps_its_place_names() {
-        let kinds = vec![places_kind_with_parents(&[])];
-        let mut docs = vec![
-            doc("about/kyoto/index.html", "Kyoto"),
-            doc("about/nara/index.html", "Nara"),
-            doc("posts/a/index.html", "kyoto"),
-            doc("posts/b/index.html", "Kyoto"),
-        ];
-        docs[0].place_page = Some(TermClaim::UseTitle);
-        docs[1].place_page = Some(TermClaim::UseTitle);
-        docs[2].location = vec!["Kyoto".to_string()];
-        docs[3].location = vec!["Kyoto".to_string(), "Nara".to_string()];
-        let index = derive_terms(&mut docs, kinds);
-        set_place_lines(&mut docs, &index, crate::i18n::Language::En);
-        assert_eq!(docs[2].place_line, None);
-        assert_eq!(docs[2].place_names.as_deref(), Some("Kyoto"));
-        assert_eq!(docs[3].place_line.as_deref(), Some("Location: [Nara](/about/nara/)"));
-        assert_eq!(docs[3].place_names.as_deref(), Some("Kyoto, Nara"));
-    }
-
-    #[test]
-    fn place_line_is_absent_when_location_is_unset() {
-        let kinds = vec![places_kind_with_parents(&[])];
-        let mut docs = vec![doc("posts/a/index.html", "A")];
-        let index = derive_terms(&mut docs, kinds);
-        set_place_lines(&mut docs, &index, crate::i18n::Language::En);
-        assert_eq!(docs[0].place_line, None);
-    }
-
-    /// `place_names` is the plain, unlinked reading of the same resolved
-    /// names `place_line` carries — a card's meta line reads this field
-    /// rather than stripping markdown links back out of `place_line`.
-    #[test]
-    fn place_names_joins_resolved_display_names_the_same_way_place_line_does() {
-        let kinds = vec![places_kind_with_parents(&[])];
-        let mut docs = vec![
-            doc("about/kyoto/index.html", "Kyoto"),
-            doc("about/osaka/index.html", "Osaka"),
-            doc("posts/a/index.html", "A"),
-        ];
-        docs[0].place_page = Some(TermClaim::UseTitle);
-        docs[1].place_page = Some(TermClaim::UseTitle);
-        docs[2].location = vec!["Kyoto".to_string(), "Osaka".to_string()];
-        let index = derive_terms(&mut docs, kinds);
-        set_place_lines(&mut docs, &index, crate::i18n::Language::En);
-        assert_eq!(docs[2].place_names.as_deref(), Some("Kyoto, Osaka"));
-    }
-
-    /// A declared name with no resolvable term page (here, punctuation-only
-    /// — see `punctuation_only_names_derive_no_term`) is dropped from
-    /// `place_line` (see its own filter above) and must be dropped from
-    /// `place_names` the same way, not merely from the linked form.
-    #[test]
-    fn place_names_drops_an_unresolvable_name_the_same_way_place_line_does() {
-        let kinds = vec![places_kind_with_parents(&[])];
-        let mut docs =
-            vec![doc("about/kyoto/index.html", "Kyoto"), doc("posts/a/index.html", "A")];
-        docs[0].place_page = Some(TermClaim::UseTitle);
-        docs[1].location = vec!["Kyoto".to_string(), "！！！".to_string()];
-        let index = derive_terms(&mut docs, kinds);
-        set_place_lines(&mut docs, &index, crate::i18n::Language::En);
-        assert_eq!(docs[1].place_names.as_deref(), Some("Kyoto"));
-    }
-
-    #[test]
-    fn place_names_is_absent_when_location_is_unset() {
-        let kinds = vec![places_kind_with_parents(&[])];
-        let mut docs = vec![doc("posts/a/index.html", "A")];
-        let index = derive_terms(&mut docs, kinds);
-        set_place_lines(&mut docs, &index, crate::i18n::Language::En);
-        assert_eq!(docs[0].place_names, None);
-    }
-
-    #[test]
-    fn place_line_is_absent_when_the_site_declares_no_place_kind() {
-        // `location:` is set — the absence has to come from "no declared
-        // place kind", not merely from an empty `location:`, which
-        // `place_line_is_absent_when_location_is_unset` already covers.
-        let kinds = both_kinds();
-        let mut docs = vec![doc("posts/a/index.html", "A")];
-        docs[0].location = vec!["Kyoto".to_string()];
-        let index = derive_terms(&mut docs, kinds);
-        set_place_lines(&mut docs, &index, crate::i18n::Language::En);
-        assert_eq!(docs[0].place_line, None);
     }
 
     #[test]

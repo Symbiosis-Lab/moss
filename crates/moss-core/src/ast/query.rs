@@ -242,16 +242,17 @@ pub fn block_images(doc: &Document) -> Vec<&Url> {
     // label's first definition was NESTED inside another note (the pass-one
     // skip never descends, so the nested first was never counted and a
     // later top-level repeat passed for it).
-    let hoisted = super::footnotes::hoisted_definition_bodies(&doc.blocks);
+    let definitions = super::footnotes::Definitions::collect(&doc.blocks);
+    let hoisted = definitions.addresses();
     let mut out = Vec::new();
     collect_images_in_blocks(&doc.blocks, Notes::Hoisted, &hoisted, &mut out);
     // The endnote section follows the body, its notes in first-reference
     // index order. Within one note's body the same identity rule applies — a
     // nested HOISTED definition's content is skipped here and collected at
     // its OWN entry in this iteration, while a nested repeat renders in place.
-    let index = super::footnotes::FootnoteIndex::build(&doc.blocks);
+    let index = super::footnotes::FootnoteIndex::from_definitions(&doc.blocks, &definitions);
     for (_, label) in index.entries() {
-        if let Some(children) = super::footnotes::FootnoteIndex::definition(&doc.blocks, label) {
+        if let Some(children) = definitions.body(label) {
             collect_images_in_blocks(children, Notes::Hoisted, &hoisted, &mut out);
         }
     }
@@ -316,7 +317,7 @@ fn collect_images_in_block<'a>(
 
         // Only the doc-order-FIRST definition of a label is hoisted; a
         // REPEAT renders where it sits, so its images are body matter. Decided
-        // by the same identity `render.rs` asks (`hoisted_definition_bodies`);
+        // by the same identity `render.rs` asks (`Definitions::addresses`);
         // everything inside a HOISTED definition's subtree renders in the
         // endnote section, so the walk skips it here and `block_images`
         // visits the notes in index order afterwards.
@@ -370,6 +371,7 @@ fn collect_images_in_shortcode<'a>(
         // The hero image itself is a `Url` on the shortcode, not an
         // `Inline::Image`: the cover chain reads `hero_image_url` for it.
         Shortcode::Hero(args) => collect_images_in_blocks(&args.overlay, notes, hoisted, out),
+        Shortcode::Block(args) => collect_images_in_blocks(&args.body, notes, hoisted, out),
         Shortcode::Grid(args) => {
             for cell in &args.cells {
                 collect_images_in_blocks(cell, notes, hoisted, out);
@@ -555,6 +557,7 @@ mod tests {
                 children: vec![Inline::Text("Title".into())],
                 id: None,
                 legacy_id: None,
+                numbered_from: None,
                 contents_end: false,
                 contents_label: None,
             },
@@ -596,6 +599,7 @@ mod tests {
             children: vec![img("badge.png"), Inline::Text("Title".into())],
             id: None,
             legacy_id: None,
+            numbered_from: None,
             contents_end: false,
             contents_label: None,
         }]);

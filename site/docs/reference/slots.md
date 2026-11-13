@@ -15,7 +15,7 @@ Slots are named injection points in the HTML template where plugins can insert c
 |---|---|---|
 | `head-end` | Before </head> — for stylesheets, scripts, and meta tags. | no |
 | `after-title` | Inside <article>, after the title/date row — for article metadata (e.g. book block, review colophon). | no |
-| `before-article-end` | Inside <article>, before </article> — for article addenda. | no |
+| `before-article-end` | Inside <article>, before </article> — filled by a partial with slot: before-article-end, for the articles of its folder and the folders beneath it, and by plugins for article addenda. | yes |
 | `after-article` | Between </article> and </main> — for comments, reactions (NOT part of the article). | no |
 | `footer-left` | Inside footer, leading position — filled by footer.md or any file with slot: footer-left frontmatter. | yes |
 | `footer-end` | Inside footer, trailing position — for the auto-injected subscribe form and plugin widgets. | no |

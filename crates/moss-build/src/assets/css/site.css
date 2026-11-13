@@ -116,18 +116,25 @@
 }
 /* field-focus:start */
 /* `:focus`, not `:focus-visible`: a text field matches both whenever focused.
-   Underline fields draw their resting edge through `--moss-field-edge` so a sheet outside the layers (comments, a landing's own underline) can read the focus colour. */
-.moss-input:focus,
+   Underline fields draw their resting edge through `--moss-field-edge` so a sheet outside the layers (comments, a landing's own underline) can read the focus colour.
+   `!important` because a theme's unlayered `:focus-visible { outline }` outranks this layer and would draw a box around the underline.
+   Not on a `<select>`: WebKit paints no box-shadow on one, so its outline is its only focus mark. */
+.moss-input:where(:not(select)):focus,
 .comment-field:focus,
 .comment-form textarea:focus {
-  outline: none;
+  outline: none !important;
   --moss-field-edge: var(--moss-focus-ring);
   box-shadow: inset 0 -1px 0 0 var(--moss-field-edge);
 }
+/* Forced colors drop the shadow; a 2px ring just inside the field keeps the edge without moving anything. */
 @media (forced-colors: active) {
   .moss-input:focus,
   .comment-field:focus,
-  .comment-form textarea:focus { --moss-field-edge: Highlight; }
+  .comment-form textarea:focus {
+    --moss-field-edge: Highlight;
+    outline: 2px solid Highlight !important;
+    outline-offset: -2px !important;
+  }
 }
 /* field-focus:end */
 
@@ -144,7 +151,7 @@
   .moss-input--boxed.moss-input--boxed:focus {
     border-color: Highlight;
     outline: 1px solid Highlight !important;
-    outline-offset: -2px;
+    outline-offset: -2px !important;
   }
 }
 .moss-input:disabled {
@@ -235,6 +242,17 @@
 
 * {
   box-sizing: border-box;
+}
+
+/* Form controls, scrollbars and an SVG image's own `prefers-color-scheme`
+   rule follow the page's theme, not the OS setting. WebKit gives images the
+   OS setting regardless. */
+:root {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
 }
 
 /* Text selection - moss green tint */
@@ -598,6 +616,8 @@ article h3:not(.moss-card-title) {
   margin-block: var(--moss-read-line) calc(var(--moss-read-line) * 0.25);
 }
 
+.moss-article-end { margin-block-start: calc(var(--moss-read-line) * 1.5); }
+
 /* Two headings back to back, with no prose between them: the ladder above
  * assumes a heading is closing out a block of prose above it, which doubles
  * up awkwardly when the "prose" is really just the previous heading. The
@@ -640,18 +660,6 @@ article h4,
 article h5,
 article h6 {
   font-family: var(--moss-font-section, var(--moss-font-body));
-}
-
-/* In languages that build long compound words, a heading may break inside a
-   long word, so a phone does not leave one word or a closing mark alone on a
-   line. Headings in other languages keep whole words. Only where the engine
-   honours the length limit: without it (WebKit) every short syllable may
-   break. Zero specificity, so a theme's own heading rule decides. */
-@supports (hyphenate-limit-chars: 10 4 4) {
-  :where(h1, h2, h3, h4, h5, h6):where(:lang(de), :lang(nl), :lang(da), :lang(nb), :lang(nn), :lang(sv), :lang(fi)) {
-    hyphens: auto;
-    hyphenate-limit-chars: 10 4 4;
-  }
 }
 
 /* A number range in a heading ("1626–1705") never breaks across lines; the
@@ -981,8 +989,8 @@ main {
 /* `[site] header = "none"`: with no header band the page's first element would
    sit at the window's top edge. Give it the space the header's own top padding
    would have, below any notch. A page that opens with a hero keeps its picture
-   at the edge. */
-body:has(> .moss-nav-island[data-header="none"]):not(:has(> .moss-hero)) > main {
+   at the edge. A `chrome: none` page has no header either. */
+:is(body:has(> .moss-nav-island[data-header="none"]), body[data-chrome="none"]):not(:has(> .moss-hero)) > main {
   padding-block-start: calc(var(--moss-space-lg) + env(safe-area-inset-top, 0px));
 }
 
@@ -1298,6 +1306,12 @@ body > footer.container:has(> .moss-hero-closing) > :not(.moss-hero-closing, .mo
   margin-inline: auto;
   padding-inline: var(--moss-container-padding);
 }
+/* A picture written in footer.md fits its column, as one in an article does;
+   at no specificity, so the footer's own pictures keep their rules. */
+:where(body > footer.container) img {
+  max-inline-size: 100%;
+  block-size: auto;
+}
 /* Doubled attribute selectors: out-rank the mobile-overlay hero's own padding
    and height floor, which assume a hero that opens a page. The floor is what a
    heading, a link and a credit need on a phone (18rem); from 48rem the box
@@ -1377,22 +1391,7 @@ body > footer.container > .moss-hero-closing[data-mobile="overlay"][data-overlay
 }
 @media (width < 48rem) {
   body > footer.container > .moss-hero-closing[data-mobile="overlay"][data-overlay] > .moss-hero-content {
-    position: relative;
     padding-inline: var(--moss-words-inset);
-  }
-  /* A kept panel ends in a fade toward the picture's subject rather than a seam:
-     the panel's own background, faded out, hung below the words' box. `inherit`
-     leaves nothing to fade where the words sit in ink with no panel. */
-  body > footer.container > .moss-hero-closing[data-mobile="overlay"][data-overlay] > .moss-hero-content::after {
-    content: '';
-    position: absolute;
-    inset-inline: 0;
-    inset-block-start: 100%;
-    block-size: var(--moss-space-lg);
-    background: inherit;
-    -webkit-mask-image: linear-gradient(to bottom, #000, transparent);
-    mask-image: linear-gradient(to bottom, #000, transparent);
-    pointer-events: none;
   }
 }
 body > footer.container:has(> .moss-hero-closing) > .moss-colophon {
@@ -1450,15 +1449,16 @@ body > footer.container:has(> .moss-hero-closing) > .moss-colophon a {
 }
 /* `fade=top`: the picture rises out of the page, its top fading into the page
    colour. The mask is on the picture, not the box, since the words sit in the
-   faded part; `hero_ink` measures them over the page colour at these depths,
-   and on a phone over the box this floor gives it (or the author's cap, if taller). */
+   faded part; `hero_ink` measures them over the page colour at these depths.
+   On a phone the box is 38rem tall unless the author's cap sets it; either way
+   it grows to hold the words and the room below them. */
 body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
   -webkit-mask-image: linear-gradient(to bottom, transparent, #000 38%);
   mask-image: linear-gradient(to bottom, transparent, #000 38%);
 }
 @media (width < 48rem) {
   body > footer.container > .moss-hero-closing[data-mobile="overlay"][data-overlay][data-fade="top"] {
-    min-block-size: max(38rem, var(--moss-hero-max-height, 0px));
+    min-block-size: var(--moss-hero-max-height, 38rem);
   }
   body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
     -webkit-mask-image: linear-gradient(to bottom, transparent, #000 50%);
@@ -2347,16 +2347,16 @@ header:has(+ .moss-hero[data-header="over"]) {
 /* Nav links and the site name set their own colour from the base sheet, which
    would stay dark over the photo; they take the header's ink back.
    The phone menu's sheet is opaque and not over the photo, so its links keep
-   their own colour. The open sheet is excluded by `.mobile-open`, a closing
+   their own colour, as does a submenu panel, which has its own background. The open sheet is excluded by `.mobile-open`, a closing
    one by `inert`, which it carries through the fade after `.mobile-open` goes. */
-header:has(+ .moss-hero[data-header="over"]) :where(a, button, .site-name):not(.nav-links:is(.mobile-open, [inert]) *) {
+header:has(+ .moss-hero[data-header="over"]) :where(a, button, .site-name):not(.nav-links:is(.mobile-open, [inert]) *, .moss-nav-sub *) {
   color: inherit;
 }
 
 /* Focus rings sit on the photo, so they take the header's ink rather than the
    accent, which can fall below contrast on an image. The opened mobile sheet
-   keeps the accent ring: it is opaque, not over the photo. */
-header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.nav-links:is(.mobile-open, [inert]) *) {
+   keeps the accent ring: it is opaque, not over the photo; so does a submenu panel. */
+header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.nav-links:is(.mobile-open, [inert]) *, .moss-nav-sub *) {
   outline-color: var(--_over-ink);
 }
 
@@ -2382,6 +2382,21 @@ header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.nav-links:is(.m
 }
 :is(:root:not([data-theme="dark"]) .moss-hero[data-header-ink="dark"], :root[data-theme="dark"] .moss-hero[data-header-ink-night="dark"])::after {
   content: none;
+}
+/* With the words at the top they start below the header, which sits in the
+   wash's band (or its measured height, where the site runtime writes it). */
+.moss-hero[data-header="over"][data-align="top"] > .moss-hero-content {
+  --_top-clear: max(var(--moss-hero-wash-size), var(--moss-header-height, 0px));
+}
+@media (width >= 48rem) {
+  .moss-hero[data-header="over"][data-overlay][data-align="top"] > .moss-hero-content {
+    margin-block-start: var(--_top-clear);
+  }
+}
+@media (width < 48rem) {
+  .moss-hero[data-header="over"][data-mobile="overlay"][data-align="top"] > .moss-hero-content {
+    margin-block-start: var(--_top-clear);
+  }
 }
 
 /* nav-left: single-row flex; breadcrumb segments (below) shrink with ellipsis
@@ -2878,6 +2893,80 @@ body > header .site-name {
   font-size: clamp(0.875rem, 0.6rem + 0.5vw, 1rem);
 }
 
+/* Second level: an entry with a submenu is a link plus a disclosure button
+   (js-src/site/nav/submenu.ts unhides the button and opens the panel). The panel clamps
+   to the viewport on both edges in script, so it needs no flip rule here. */
+.moss-nav-group {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+}
+
+/* A 44px square that adds no height to the row (negative block margin) and
+   tucks its trailing edge under the next entry's own hit area. */
+.moss-nav-sub-toggle {
+  position: relative;
+  display: grid;
+  place-items: center;
+  inline-size: 2.75rem;
+  block-size: 2.75rem;
+  margin-block: -0.75rem;
+  margin-inline-end: -0.5rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--moss-header-ink, var(--moss-color-text-secondary));
+  cursor: pointer;
+}
+
+.moss-nav-sub-toggle::after {
+  content: "";
+  display: block;
+  inline-size: 0.4rem;
+  block-size: 0.4rem;
+  border: solid currentColor;
+  border-width: 0 1.5px 1.5px 0;
+  transform: translateY(-0.1rem) rotate(45deg);
+}
+
+.moss-nav-sub-toggle[aria-expanded="true"]::after {
+  transform: translateY(0.1rem) rotate(-135deg);
+}
+
+.moss-nav-sub-toggle:hover {
+  color: var(--moss-color-ui-accent);
+}
+
+.moss-nav-sub {
+  position: absolute;
+  inset-block-start: 100%;
+  inset-inline-start: 0;
+  z-index: 50;
+  box-sizing: border-box;
+  min-inline-size: 10rem;
+  max-inline-size: var(--nav-sub-max, none);
+  translate: var(--nav-sub-shift, 0) 0;
+  margin: 0.25rem 0 0;
+  padding: 0.5rem 0;
+  list-style: none;
+  border-radius: 6px;
+  background: var(--moss-menu-bg, var(--moss-header-bg, var(--moss-color-bg)));
+  box-shadow: var(--moss-elevation-2);
+}
+
+/* Beats `.main-nav a.active`'s underline and padding by coming later. */
+.main-nav .moss-nav-sub a {
+  display: block;
+  padding: 0.4rem 1rem;
+  border-block-end: none;
+}
+
+/* The links already carry their own touch padding. */
+.nav-links .moss-nav-sub a::after {
+  display: none;
+}
+
 /* The toggle cluster (search / language / theme). Its gap is the TIGHTEST of
    the three nav spacings — these are sibling controls of one kind, so they
    should read as a single object that the 32px gap in .nav-right separates
@@ -3278,42 +3367,23 @@ body > header .site-name {
   border-bottom-color: currentColor;
 }
 
-/* The automatic place line (generated from `location:`) — same font, colour
-   and link treatment as the byline just above, since it sits in the same
-   credit-line role, just machine-generated rather than authored. A separate
-   class rather than reusing `.moss-byline` because it is not one of that
-   block's rows (see `render_byline_html`, which resolves the two pieces
-   independently). */
-.moss-place-line {
+/* A page's terms drawn as links: the place line and any kind with
+   `line = true`. Same type and link treatment as the byline above it, as
+   they share its credit role; generated rather than authored, so not rows
+   of that block. */
+.moss-term-line {
   font-size: 0.82em;
   line-height: 1.75;
   font-weight: 400;
   color: var(--moss-color-text-secondary);
   margin-block: 0 var(--moss-space-md);
 }
-.moss-place-line a {
+.moss-term-line a {
   color: inherit;
   text-decoration: none;
   border-bottom: 1px solid var(--moss-border-light);
 }
-.moss-place-line a:hover {
-  border-bottom-color: currentColor;
-}
-
-/* "Also on" line: the other sites a page was published on. Same small muted
-   type as the byline, at the foot of the article. */
-.moss-syndication {
-  font-size: 0.82em;
-  line-height: 1.75;
-  color: var(--moss-color-text-secondary);
-  margin-block: var(--moss-space-md) 0;
-}
-.moss-syndication a {
-  color: inherit;
-  text-decoration: none;
-  border-bottom: 1px solid var(--moss-border-light);
-}
-.moss-syndication a:hover {
+.moss-term-line a:hover {
   border-bottom-color: currentColor;
 }
 
@@ -4150,8 +4220,9 @@ body {
      and the closing picture, the top-of-page controls covering the opening;
    - anywhere else they are fixed in the slot the bar keeps free at its end.
    Both places are worked out from the bar's and the ruler's own geometry
-   tokens (on `body`), never retyped. */
-.moss-nav-island[data-header="none"] + .nav-icons {
+   tokens (on `body`), never retyped. A `chrome: none` page has the controls
+   with no island, so only in the first place. */
+:is(.moss-nav-island[data-header="none"] + .nav-icons, body[data-chrome="none"] > .nav-icons) {
   position: absolute;
   z-index: 100;
   --_top: calc(
@@ -4168,6 +4239,10 @@ body {
   inset-block-start: var(--_top);
   inset-inline-end: var(--_end);
   margin: 0;
+  /* One property takes the controls away together with the room the title
+     keeps for them below:
+         body[data-chrome="none"] { --moss-controls-display: none; } */
+  display: var(--moss-controls-display, flex);
 }
 
 /* Their place at the top is the end of the page's first line: the article keeps
@@ -4181,20 +4256,21 @@ body {
    is more than any of them takes. Once the controls have moved to the bar or
    the list's foot the room is off screen. A vertical page takes it back in
    site/vertical.css. */
-body:has(> .moss-nav-island[data-header="none"] + .nav-icons) {
+body:has(> .nav-icons) {
   --moss-nav-island-controls-guess: 3rem;
 }
 
-body:has(> .moss-nav-island[data-header="none"] + .nav-icons > :nth-child(2)) {
+body:has(> .nav-icons > :nth-child(2)) {
   --moss-nav-island-controls-guess: 6rem;
 }
 
-body:has(> .moss-nav-island[data-header="none"] + .nav-icons > :nth-child(3)) {
+body:has(> .nav-icons > :nth-child(3)) {
   --moss-nav-island-controls-guess: 9rem;
 }
 
-body:has(> .moss-nav-island[data-header="none"] + .nav-icons) main > article:is(:has(> h1:not(.visually-hidden):first-child), :has(> :is(p, a):first-child + h1:not(.visually-hidden)))::before {
+body:has(> .nav-icons) main > article:is(:has(> h1:not(.visually-hidden):first-child), :has(> :is(p, a):first-child + h1:not(.visually-hidden)))::before {
   content: "";
+  display: var(--moss-controls-display, block);
   float: inline-end;
   inline-size: calc(
     var(--moss-nav-island-controls, var(--moss-nav-island-controls-guess)) + var(--moss-nav-island-edge)
@@ -6566,6 +6642,34 @@ article a:where(:not(.moss-btn)):focus {
   .nav-links a::after {
     inset-block: 0;
   }
+
+  /* Nothing nests without a disclosure: the toggle goes and the list shows,
+     indented under its entry. */
+  .moss-nav-group {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .moss-nav-sub-toggle {
+    display: none;
+  }
+
+  .moss-nav-sub {
+    display: block;
+    position: static;
+    min-inline-size: 0;
+    max-inline-size: none;
+    translate: none;
+    margin: 0;
+    padding: 0 0 0 1rem;
+    background: none;
+    box-shadow: none;
+  }
+
+  .main-nav .nav-links .moss-nav-sub a {
+    padding-inline: 0;
+    font-size: calc(var(--moss-menu-link-size, 1.875rem) * 0.7);
+  }
 }
 
 @media (max-width: 20rem) and (hover: hover) {
@@ -6657,7 +6761,8 @@ article a:where(:not(.moss-btn)):focus {
 
 .moss-cards[data-layout="grid"] {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(var(--moss-card-min, var(--_card-min, 280px)), 1fr));
+  /* Capped at the container, so a minimum wider than it fits rather than overflowing. */
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--moss-card-min, var(--_card-min, 280px)), 100%), 1fr));
   gap: var(--moss-space-lg);
   /* Logical: the listing's separation from the prose around it is a block-axis
      rhythm. Spelled physically it ate 128px off a vertical page's band. */
@@ -6797,11 +6902,12 @@ article a:where(:not(.moss-btn)):focus {
   overflow-wrap: anywhere;
 }
 
-/* Fall back to single column in very narrow containers (sidebar embeds etc.).
-   The @container query targets the wrapper, so the rule looks INTO the grid. */
+/* Very narrow containers (a phone, a sidebar embed) get one column, unless the
+   theme set `--moss-card-min`: then its minimum decides, capped as above. The
+   @container query targets the wrapper, so the rule looks INTO the grid. */
 @container (max-width: 320px) {
   .moss-cards[data-layout="grid"] {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: repeat(auto-fill, minmax(min(var(--moss-card-min, 100%), 100%), 1fr));
   }
 }
 
@@ -8134,6 +8240,40 @@ body > footer.container:has(> .moss-hero-closing) {
   background: var(--moss-hero-panel-bg, var(--item-hero-panel-bg, rgba(20, 16, 12, 0.82))); /* tinted panel; see color_extract::panel_background */
 }
 
+/* The panel's edge fades into the picture: a copy of the panel (`inherit`, so a
+   theme that clears or recolours it moves this too), masked to fade outward and
+   cut away under the words' box. Eased stops: a linear ramp shows a bright line
+   where it meets the panel. At a fractional edge the box and the mask meet in one
+   device pixel that can read a little off, accepted: overlapping them rings every
+   edge. The 4px border keeps the panel's paint inside the mask, whose own edge
+   leaves a faint line on a split pixel, and stays on the device grid. */
+@supports (mask-composite: exclude) {
+  .moss-hero[data-overlay] > .moss-hero-content::before {
+    --moss-feather: var(--moss-hero-panel-feather, 2.5rem);
+    --moss-feather-in: transparent, rgb(0 0 0 / 0.22) calc(var(--moss-feather) * 0.3), rgb(0 0 0 / 0.65) calc(var(--moss-feather) * 0.6), #000 var(--moss-feather);
+    --moss-feather-out: #000 calc(100% - var(--moss-feather)), rgb(0 0 0 / 0.65) calc(100% - var(--moss-feather) * 0.6), rgb(0 0 0 / 0.22) calc(100% - var(--moss-feather) * 0.3), transparent;
+    content: '';
+    position: absolute;
+    inset: calc(-1 * var(--moss-feather) - 4px);
+    padding: var(--moss-feather);
+    border: 4px solid transparent;
+    z-index: -1;
+    background: inherit;
+    background-clip: padding-box;
+    pointer-events: none;
+    mask-origin: padding-box;
+    mask-image: linear-gradient(#000 0 0), linear-gradient(to right, var(--moss-feather-in), var(--moss-feather-out)), linear-gradient(to bottom, var(--moss-feather-in), var(--moss-feather-out));
+    mask-clip: content-box, border-box, border-box;
+    mask-composite: exclude, intersect, add;
+  }
+  /* A stacked phone hero sets its words below the picture, not on it. */
+  @media (width < 48rem) {
+    .moss-hero[data-overlay]:not([data-mobile="overlay"]) > .moss-hero-content::before {
+      content: none;
+    }
+  }
+}
+
 /* Elements that carry their OWN colour from the base stylesheet have to hand
    it back: `h1,h2,…,h6 { color: var(--moss-color-text) }` and blockquote's
    secondary colour both out-specify the container and would otherwise paint
@@ -8275,7 +8415,7 @@ body > footer.container:has(> .moss-hero-closing) {
   position: absolute;
   inset-block: auto 0.5rem;
   inset-inline: auto 0.5rem;
-  z-index: 2; /* above the scrim (1) */
+  z-index: 3; /* above the scrim (1) and the words (2), which come later in the page */
   display: grid;
   place-items: center;
   inline-size: 2.75rem;
@@ -8418,7 +8558,7 @@ body > footer.container:has(> .moss-hero-closing) {
   }
 
   .moss-hero:has(.moss-hero-content) .moss-hero-content {
-    position: static;
+    position: relative; /* in flow like static, and the panel's fade hangs from it */
     inset-block-end: auto;
     inset-inline-start: auto;
     z-index: 2; /* not auto: else this flex item paints below the scrim */
@@ -8623,7 +8763,8 @@ body > footer.container:has(> .moss-hero-closing) {
   }
 
   .moss-hero[data-mobile="overlay"] .moss-hero-content {
-    position: static;
+    position: relative; /* in flow like static, and the panel's fade hangs from it */
+    inset: auto;
     background: var(--moss-hero-panel-bg, var(--item-hero-panel-bg, rgba(20, 16, 12, 0.82))); /* see "Backing panel" above */
     /* Back over the image, so back to white — and the children inherit it
        via the `:is(h1…blockquote)` rule in the base block. */
@@ -8661,6 +8802,20 @@ body > footer.container:has(> .moss-hero-closing) {
   .moss-hero[data-mobile="overlay"] .moss-hero-content p {
     font-size: var(--moss-size-sm);
   }
+}
+
+/* An image in the hero's words (a mark inside a link) is content, not the
+   picture: it keeps its inline flow and its own size. The picture rules above
+   select every `img` in the hero, at up to (0,3,1); the doubled class lifts
+   this to a tie that source order wins, so it must follow them. */
+.moss-hero.moss-hero .moss-hero-content img {
+  position: static;
+  display: inline;
+  inline-size: auto;
+  block-size: auto;
+  max-inline-size: 100%;
+  max-block-size: none;
+  z-index: auto;
 }
 
 /* Pale cover — the rules (reasoning at the scrim block, search
@@ -10005,7 +10160,7 @@ main.has-sidebar > .moss-series-nav {
 .moss-series-nav-link {
   display: flex;
   align-items: baseline;
-  gap: 0.3em;
+  gap: var(--moss-space-xs);
   width: 50%;
   font-size: var(--moss-size-sm);
   line-height: 1.4;
@@ -10019,9 +10174,12 @@ main.has-sidebar > .moss-series-nav {
   text-align: right;
 }
 
-/* Arrow stays fixed, doesn't wrap */
+/* The arrow is set as the label it marks, so its line is no taller than the
+   label's and the link's box starts where its text does. */
 .moss-series-nav-arrow {
   flex-shrink: 0;
+  font-size: var(--moss-size-xs);
+  line-height: 1.2;
 }
 
 /* Title can wrap to multiple lines */

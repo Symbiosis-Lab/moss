@@ -112,6 +112,8 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // Navigation
         "toggle_dark_mode" => ["Toggle dark mode", "Dunkelmodus umschalten", "切换深色模式", "切換深色模式"],
         "nav_menu" => ["Menu", "Menü", "菜单", "選單"],
+        // Follows the entry's label on the button that opens its submenu.
+        "nav_more" => ["more", "mehr", "更多", "更多"],
         // `[site] header = "nav"` masthead: the link list's leading item,
         // replacing the brand link that mode drops.
         "nav_home" => ["Home", "Startseite", "首页", "首頁"],
@@ -180,10 +182,12 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // The automatic place line's label-to-links separator — a
         // distinct string from any hard-coded punctuation, so a site's
         // language controls it the same way every other i18n string does.
-        "place_line_separator" => [": ", ": ", "：", "："],
+        "term_line_separator" => [": ", ": ", "：", "："],
 
         // RSS / Subscribe
         "subscribe" => ["Subscribe", "Abonnieren", "订阅", "訂閱"],
+        "members_subscribers" => ["Subscribers only.", "Nur für Abonnenten.", "仅供订阅者阅读。", "僅供訂閱者閱讀。"],
+        "members_paid" => ["Paid members only.", "Nur für zahlende Mitglieder.", "仅供付费会员阅读。", "僅供付費會員閱讀。"],
         // Request forms
         "form_send" => ["Send", "Senden", "发送", "送出"],
         "form_optional" => ["Optional", "Optional", "选填", "選填"],
@@ -259,12 +263,6 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         "comment_website" => ["Website (optional)", "Website (optional)", "网站（选填）", "網站（選填）"],
         "comment_reply" => ["Reply", "Antworten", "回复", "回覆"],
         "anonymous" => ["Anonymous", "Anonym", "匿名", "匿名"],
-        // `{}` is replaced with the source display name (e.g. Matters, 豆瓣).
-        "comment_reply_on" => ["Reply on {} ↗", "Auf {} antworten ↗", "去 {} 回复 ↗", "去 {} 回覆 ↗"],
-
-        // Label of the line listing the other sites a page was also published on.
-        "also_on" => ["Also on", "Auch auf", "也发在", "也發在"],
-
         // Defaults / fallbacks
         "untitled" => ["Untitled", "Ohne Titel", "无标题", "無標題"],
         "untitled_site" => ["Untitled Site", "Website ohne Titel", "无标题站点", "無標題網站"],

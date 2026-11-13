@@ -92,7 +92,7 @@ describe("site context through the mobile adapter", () => {
       ".moss/plugins/fallback/manifest.json": "{}",
     }));
     expect(context.lang).toBe("en");
-    expect(context.plugins).toEqual([{ name: "fallback", fields: {} }]);
+    expect(context.plugins).toEqual([{ name: "fallback", fields: {}, blocks: [] }]);
     expect(context.listing_styles).toEqual([]);
   });
   it("removes the entire nested file path and cache query from a resource URL", () => {

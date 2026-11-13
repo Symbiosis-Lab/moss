@@ -32,6 +32,9 @@ impl ColorScheme {
         }
     }
 
+    /// The inline `color-scheme` repeats what the site stylesheet derives
+    /// from `data-theme`, for the documents that do not load it: a notebook's
+    /// wrapper and an author's own HTML page.
     pub fn html_attrs(self) -> String {
         self.fixed().map(|scheme| format!(
             r#" data-moss-color-scheme="{scheme}" data-theme="{scheme}" style="color-scheme: {scheme}""#
@@ -67,7 +70,7 @@ impl ThemeColor {
     pub fn of_theme(theme_css: Option<&str>) -> Self {
         use crate::build::scan::section_text::{to_hex, BACKGROUNDS};
         let (light_bg, dark_bg) = *BACKGROUNDS;
-        let (light, dark) = crate::build::theme_lint::root_colours(theme_css, "--moss-color-bg", (light_bg, dark_bg));
+        let (light, dark) = crate::build::theme_lint::root_colours(theme_css, "--moss-color-bg");
         Self { light: to_hex(light.root.unwrap_or(light_bg)), dark: to_hex(dark.root.unwrap_or(dark_bg)) }
     }
 

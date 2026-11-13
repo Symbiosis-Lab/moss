@@ -132,7 +132,7 @@ pub(crate) enum Target {
 }
 
 impl Target {
-    fn parse(input: &str) -> Result<Self, String> {
+    pub(crate) fn parse(input: &str) -> Result<Self, String> {
         let input = input.trim();
         if let Some(rest) = input.strip_prefix("https://") {
             let clean = !rest.is_empty() && !rest.chars().any(|c| c.is_whitespace() || matches!(c, '"' | '<' | '>'));

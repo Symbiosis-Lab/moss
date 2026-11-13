@@ -64,12 +64,14 @@ GATES_BUILD=(
   grid-card-no-cover
   grid-tile-scope
   nav-mobile
+  nav-submenu
   grid-mobile-collapse
   collage
   card-cover-ratio
   card-cover-auto
   lead-listing
   listing-picture-strip
+  stream-listing
   marquee
   field-place-end
   grid-card-image-inline-size
@@ -90,6 +92,7 @@ GATES_BUILD=(
   contents-ruler
   contents-lens
   header-none
+  page-chrome-none
   header-scroll
   folded-callouts
   header-over-ink
@@ -129,6 +132,8 @@ GATES_BUILD=(
   type-defaults
   diagrams
   browser-editor
+  series-nav
+  card-min-token
 )
 
 # The rest: no config, spec, or harness in this gate's chain ever reads
@@ -142,11 +147,14 @@ GATES_NOBUILD=(
   term-index-layout
   site-elevation
   card-media-track
+  card-grid-rows
   card-cover-fit
   card-description-clamp
   img-fallback
   vertical-measure
   vertical-sizes
+  screen-page
+  color-scheme
   article-date-alignment
   footer-subscribe-alignment
   float-mobile-collapse

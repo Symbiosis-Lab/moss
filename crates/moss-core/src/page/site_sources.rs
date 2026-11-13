@@ -44,7 +44,7 @@ pub fn home_file(files: &[String]) -> Option<String> {
 /// other texts; configuration, plugin manifests and theme CSS are separate inputs.
 pub fn site_text_paths(files: &[String]) -> Vec<&str> {
     let mut root: Vec<&str> = files.iter().map(String::as_str)
-        .filter(|p| !p.contains('/') && p.to_lowercase().ends_with(".md")).collect();
+        .filter(|p| !p.contains('/') && crate::source_edit::policy::is_page_path(std::path::Path::new(p))).collect();
     root.sort();
     root
 }
@@ -62,7 +62,8 @@ fn elect_home(files: &[String], texts: &HashMap<String, String>) -> Option<Strin
 /// A valid language declared in frontmatter, retaining its case for callers
 /// that need the authored tag. The site ladder normalizes its final value.
 pub fn declared_lang_in_text(text: &str) -> Option<String> {
-    let fields = crate::frontmatter::frontmatter_map(text);
+    let public = crate::frontmatter::members::public_source(text);
+    let fields = crate::frontmatter::frontmatter_map(&public);
     let lang = fields.get("lang")?.as_str()?.trim();
     crate::home::is_known_language_code(lang).then(|| lang.to_string())
 }
@@ -119,6 +120,7 @@ pub fn site_bundle(mut sources: SiteSources) -> (SiteBundle, Vec<String>) {
     }));
     warnings.extend(styles.conflicts.iter().cloned());
     let plugins: Vec<_> = manifests.into_iter().map(|(name, manifest)| BundlePlugin {
+        blocks: manifest.contributes.blocks.into_iter().flatten().map(|(short, _)| short).collect(),
         name, fields: manifest.contributes.frontmatter.map(|f| f.fields).unwrap_or_default(),
     }).collect();
     let listing_styles = styles.ids().map(str::to_string).collect();

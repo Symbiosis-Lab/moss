@@ -42,6 +42,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) mod blob_residency;
 mod records;
+pub(crate) mod page_sources;
 mod publication;
 mod process_memo;
 pub(crate) use process_memo::{KeyedMemo, MemoFile, ProcessMemo, ROOTS};
@@ -118,6 +119,12 @@ impl ObjectStore {
     /// stat moves.
     pub(crate) fn for_video_run(mp: &crate::moss_paths::MossPaths) -> Self {
         Self::for_site(mp).remembering_verified(&mp.cache_verified_video_blobs())
+    }
+
+    /// `mp`'s store for one slot pass, so a new process checks only the page and
+    /// summary blobs whose stat moved since an earlier pass read them.
+    pub(crate) fn for_slot_pass(mp: &crate::moss_paths::MossPaths) -> Self {
+        Self::for_site(mp).remembering_verified(&mp.cache_verified_slot_blobs())
     }
 
     fn local_blob_path(&self, oid: &str) -> Option<PathBuf> {
@@ -1619,6 +1626,8 @@ pub(crate) fn gc(mp: &crate::moss_paths::MossPaths, _token: &crate::build::lifec
             source_oids.extend(receipt.images.into_values().map(|original| original.oid));
         }
     }
+    let page_sources_path = mp.cache_page_sources();
+    let page_sources = page_sources::read(&page_sources_path).map_err(|e| unreadable(&page_sources_path, e))?;
     let mut condemned_records: Vec<PathBuf> = Vec::new();
     let mut shard_dirs: Vec<PathBuf> = Vec::new();
     // transforms/ab/cd/<source_oid>.json
@@ -1648,6 +1657,14 @@ pub(crate) fn gc(mp: &crate::moss_paths::MossPaths, _token: &crate::build::lifec
                 let record = serde_json::from_str::<TransformRecord>(&data).map_err(|e| {
                     unreadable(&file_path, std::io::Error::new(std::io::ErrorKind::InvalidData, e))
                 })?;
+                // A slot record is keyed on rendered bytes no later build may produce again;
+                // once the site has moved on from them the record is dead, at any age.
+                if page_sources.as_ref().is_some_and(|live| {
+                    record.transforms.contains_key(page_sources::SLOT_INJECT_TRANSFORM) && !live.contains(&record.source_oid)
+                }) {
+                    condemned_records.push(file_path);
+                    continue;
+                }
                 // A surviving record keeps everything it names.
                 source_oids.insert(record.source_oid);
                 referenced_oids.extend(record.transforms.into_values().map(|entry| entry.oid));

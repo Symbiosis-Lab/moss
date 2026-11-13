@@ -16,6 +16,15 @@ use crate::types::content::FileInfo;
 pub struct BuildFolderIndex<'a> {
     pub docs: &'a [ParsedDocument],
     pub html_files: &'a [FileInfo],
+    /// Source folder -> the address its home's `url:` gave it.
+    pub dir_overrides: &'a std::collections::HashMap<String, String>,
+}
+
+impl BuildFolderIndex<'_> {
+    /// The address a source folder is served at.
+    fn url_slug(&self, root_rel: &str) -> String {
+        slugify_path_segments(&crate::build::scan::page_map::resolve_path_with_overrides(root_rel, self.dir_overrides))
+    }
 }
 
 impl<'a> FolderIndex for BuildFolderIndex<'a> {
@@ -27,7 +36,7 @@ impl<'a> FolderIndex for BuildFolderIndex<'a> {
             return true;
         }
         let raw_prefix = format!("{}/", root_rel);
-        let slug_prefix = format!("{}/", slugify_path_segments(root_rel));
+        let slug_prefix = format!("{}/", self.url_slug(root_rel));
         self.html_files
             .iter()
             .any(|f| f.path.starts_with(&raw_prefix))
@@ -53,7 +62,7 @@ impl<'a> FolderIndex for BuildFolderIndex<'a> {
         // place that renaming is recorded — re-deriving identity from the
         // source path there would silently stop matching an overridden
         // folder (see `reference_parity.rs`'s `build_and_editor_folder_index_agree`).
-        let target_slug = slugify_path_segments(root_rel);
+        let target_slug = self.url_slug(root_rel);
         if target_slug.is_empty() {
             return self.docs.iter().any(|d| d.kind == PageKind::Folder && is_root_source(d));
         }

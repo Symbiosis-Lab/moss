@@ -11,6 +11,7 @@ fn two_long_sections() -> Vec<Block> {
         children: vec![Inline::Text(text.into())],
         id: Some(id.into()),
         legacy_id: None,
+        numbered_from: None,
         contents_end: false,
         contents_label: None,
     };
@@ -57,6 +58,7 @@ fn renders_level_one_heading_without_permalink_anchor() {
         children: vec![Inline::Text("Title".into())],
         id: Some("title".into()),
         legacy_id: None,
+        numbered_from: None,
         contents_end: false,
         contents_label: None,
     }]);
@@ -1342,6 +1344,7 @@ fn end_to_end_parse_with_config_emits_data_source_line() {
     let tail = vec!["word"; 80].join(" ");
     let md = format!("# Title\n\nfirst paragraph\n\n## Sub\n\nsecond paragraph\n\n## A\n\n{tail}\n\n## B\n\n{tail}\n");
     let config = super::super::parser::ParseConfig {
+            blocks: None,
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 0,
@@ -1555,6 +1558,34 @@ fn grid_collage_outside_three_to_nine_is_a_plain_grid() {
         let html = render(vec![collage_grid(n)]);
         assert!(!html.contains("data-collage") && !html.contains("data-count"), "got: {html}");
     }
+}
+
+/// What an editor writes when it sets a picture's position must be what the build reads.
+#[test]
+fn a_position_an_editor_writes_crops_the_picture_and_keeps_its_address() {
+    let vectors: serde_json::Value =
+        serde_json::from_str(include_str!("../../tests/fixtures/position.vectors.json")).unwrap();
+    let mut checked = 0;
+    for r in vectors["embed_writes"].as_array().unwrap() {
+        let Some(src) = r["src"].as_str() else { continue };
+        let written = r["written"].as_str().unwrap();
+        checked += 1;
+        let mut doc = super::super::parser::parse(written);
+        crate::ast::visit_urls_mut(&mut doc, |url| {
+            if let Url::Unresolved(s) = url {
+                *url = Url::resolved(s.clone(), UrlKind::Internal);
+            }
+        });
+        let html = render_document(&doc, &DefaultHooks::new());
+        let note = &r["note"];
+        assert!(html.contains(&format!(r#"src="{src}""#)), "{note}: `{written}` must keep its address: {html}");
+        let crop = format!("object-position:{}", r["object_position"].as_str().unwrap());
+        assert!(html.contains(&crop), "{note}: `{written}` must crop to {crop}: {html}");
+        if let Some(alt) = r["alt"].as_str() {
+            assert!(html.contains(&format!(r#"alt="{alt}""#)), "{note}: `{written}` must keep its alt: {html}");
+        }
+    }
+    assert!(checked >= 3, "an empty or truncated fixture would pass vacuously");
 }
 
 #[test]

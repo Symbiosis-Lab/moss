@@ -43,6 +43,8 @@ pub mod one_shot;
 pub(crate) mod plugin_context;
 pub mod plugin_push;
 pub mod prebuilt;
+mod publish_error;
+pub use publish_error::PublishError;
 // The gate that reads the deploy target's declared `setup` block against this
 // user's settings and credential store: what is still missing, and the refusal
 // a publish gets when something is. It sits beside the other publish
@@ -178,12 +180,23 @@ pub fn view_site_url(
     site_id: &str,
     env: crate::config::environment::HostingEnvironment,
 ) -> String {
-    let custom = if env == crate::config::environment::HostingEnvironment::Production {
-        let config = crate::build::site_config::get_domain_config(folder_path).unwrap_or_default();
-        crate::config::deployment::live_custom_domain_url(&config)
+    let config = if env == crate::config::environment::HostingEnvironment::Production {
+        crate::build::site_config::get_domain_config(folder_path).unwrap_or_default()
     } else {
-        None
+        Default::default()
     };
+    view_site_url_for(&config, site_id, env)
+}
+
+/// [`view_site_url`] for a caller already holding the folder's domain config.
+pub fn view_site_url_for(
+    config: &crate::config::deployment::DomainDeploymentConfig,
+    site_id: &str,
+    env: crate::config::environment::HostingEnvironment,
+) -> String {
+    let custom = (env == crate::config::environment::HostingEnvironment::Production)
+        .then(|| crate::config::deployment::live_custom_domain_url(config))
+        .flatten();
     custom.unwrap_or_else(|| format!("https://{}{}", site_id, env.site_suffix()))
 }
 
@@ -464,7 +477,7 @@ pub fn publish_refusal(folder_path: &str) -> Option<Refusal> {
             return Some(Refusal::new(RefusalKind::UnresolvedInputs, stale_source_refusal_text(&projection.unresolved_inputs)));
         }
         if !projection.missing_references.is_empty() {
-            return Some(Refusal::new(RefusalKind::MissingReferences, refusal_text(projection.missing_references.len())));
+            return Some(Refusal::new(RefusalKind::MissingReferences, refusal_text(&projection.missing_references)));
         }
         if !projection.drafts_linked.is_empty() {
             return Some(Refusal::new(RefusalKind::DraftsLinked, drafts_linked_refusal_text(&projection.drafts_linked)));
@@ -519,16 +532,21 @@ pub fn refuse_foreign_inputs(
     }
 }
 
+/// "1 file is missing" or "3 files are missing".
+fn files_are(count: usize, state: &str) -> String {
+    if count == 1 { format!("1 file is {state}") } else { format!("{count} files are {state}") }
+}
+
 /// The refusal a user reads. Says what did not happen, not which subsystem said
-/// no.
-pub(crate) fn refusal_text(count: usize) -> String {
-    let subject = if count == 1 {
-        "1 file is missing".to_string()
-    } else {
-        format!("{count} files are missing")
-    };
+/// no, and where each missing file is named: this text is the only place a
+/// driver without a problems panel learns which line to fix.
+pub(crate) fn refusal_text(missing: &[crate::build::types::MissingReferenceOccurrence]) -> String {
+    let subject = files_are(missing.len(), "missing");
+    let lines = removal_gate::capped_lines(missing, |m| {
+        format!("`{}` line {} names `{}`.", m.source_path, m.source_span.line, m.reference)
+    });
     format!(
-        "Nothing published — {subject}. A published site can't show a broken file. \
+        "Nothing published — {subject}:\n{lines}A published site can't show a broken file. \
          Fix these, then publish again."
     )
 }
@@ -553,11 +571,7 @@ pub(crate) fn drafts_linked_refusal_text(links: &[crate::build::types::DraftLink
 /// The refusal for text a render showed as a placeholder because the file was
 /// still being read. Reads as "wait": nothing is broken.
 pub(crate) fn derivations_refusal_text(count: usize) -> String {
-    let subject = if count == 1 {
-        "1 file is still being read".to_string()
-    } else {
-        format!("{count} files are still being read")
-    };
+    let subject = files_are(count, "still being read");
     format!("Nothing published — {subject}. Publish again in a moment.")
 }
 
@@ -567,11 +581,7 @@ pub(crate) fn derivations_refusal_text(count: usize) -> String {
 /// that tells the two refusals apart, and getting it backwards would send an
 /// author hunting for a broken file that does not exist.
 pub(crate) fn in_flight_refusal_text(count: usize) -> String {
-    let subject = if count == 1 {
-        "1 file is still being prepared".to_string()
-    } else {
-        format!("{count} files are still being prepared")
-    };
+    let subject = files_are(count, "still being prepared");
     format!(
         "Nothing published — {subject}. moss is still finishing a video in the background. \
          Publish again in a moment."
@@ -827,12 +837,32 @@ pub(crate) fn sign_in_host(folder_str: &str, site_id: Option<&str>) -> String {
     }
 }
 
+/// The folder's signing identity for a publish to `site_id`, or for a first
+/// one. A folder that has a site, or was signed in, and has no usable key is
+/// refused as not signed in, never given a key the hosting service has not
+/// seen (see `IdentityService::ensure_signing_key`).
+pub fn publish_identity(
+    service: &mut crate::identity::service::IdentityService,
+    folder: &std::path::Path,
+    site_id: Option<&str>,
+) -> Result<crate::identity::Identity, PublishError> {
+    let not_signed_in = || PublishError::NotSignedIn { host: sign_in_host(&folder.to_string_lossy(), site_id) };
+    if site_id.is_some() && !crate::identity::Identity::exists(folder) {
+        return Err(not_signed_in());
+    }
+    service.ensure_signing_key().map_err(|e| match e {
+        crate::identity::keypair::IdentityError::PrivateKeyNotFound => not_signed_in(),
+        e => e.to_string().into(),
+    })?;
+    Ok(service.get_or_create().map_err(|e| e.to_string())?.clone())
+}
+
 pub async fn resolve_publish_inputs(
     folder: &std::path::Path,
     requested_site_id: Option<&str>,
     overwrite_newer: bool,
     sink: &std::sync::Arc<dyn progress::DeploySink>,
-) -> Result<Option<(String, crate::identity::Identity)>, String> {
+) -> Result<Option<(String, crate::identity::Identity)>, PublishError> {
     let _phase = crate::build::phase::PhaseTrace::start("resolve_inputs");
     let folder_str = folder.to_string_lossy().to_string();
     // NOT `unwrap_or_default()`: this read is what decides whether to register,
@@ -854,9 +884,7 @@ pub async fn resolve_publish_inputs(
             if !first_publish_is_permitted(&folder_str)? {
                 return Ok(None);
             }
-            let chosen = requested_site_id.map(str::to_string).unwrap_or_else(|| {
-                derive_site_id_from_root(&crate::vault::paths::VaultRoot::resolve(folder))
-            });
+            let chosen = first_publish_site_id(folder, requested_site_id);
             validate_site_id(&chosen)?;
             Some(chosen)
         }
@@ -875,20 +903,9 @@ pub async fn resolve_publish_inputs(
     // A first publish mints the folder's key here, before the build, so a
     // `moss deploy` refused later (a broken file, say) still leaves
     // `.moss/identity/` in a first-time vault: failing after a multi-minute
-    // build to say something knowable at t=0 is the worse trade. A folder that
-    // has a site, or was signed in, and lost its key is refused instead (see
-    // `IdentityService::ensure_signing_key`).
-    let host = sign_in_host(&folder_str, config.site_id.as_deref());
-    let not_signed_in = || crate::identity::verify_email::not_signed_in(folder, &host);
-    if config.site_id.is_some() && !crate::identity::Identity::exists(folder) {
-        return Err(not_signed_in());
-    }
+    // build to say something knowable at t=0 is the worse trade.
     let mut service = crate::identity::service::IdentityService::new(folder);
-    service.ensure_signing_key().map_err(|e| match e {
-        crate::identity::keypair::IdentityError::PrivateKeyNotFound => not_signed_in(),
-        e => e.to_string(),
-    })?;
-    let identity = service.get_or_create().map_err(|e| e.to_string())?.clone();
+    let identity = publish_identity(&mut service, folder, config.site_id.as_deref())?;
 
     let site_id = match (config.site_id, requested) {
         (Some(id), _) => id,
@@ -965,7 +982,7 @@ mod registration_gate_tests {
         let err = super::resolve_publish_inputs(&vault, None, false, &sink)
             .await
             .expect_err("a reserved name must refuse");
-        assert!(err.contains("reserved"), "{err}");
+        assert!(err.to_string().contains("reserved"), "{err}");
         assert!(
             !vault.join(".moss").join("identity").exists(),
             "the refusal must land before a signing key is minted"
@@ -998,6 +1015,12 @@ pub fn validate_site_id(site_id: &str) -> Result<(), String> {
         return Err(format!("\"{}\" is a reserved name", site_id));
     }
     Ok(())
+}
+
+/// The site a folder with no `site_id` registers on its first publish:
+/// `--site-id`, else the one derived from the folder's name.
+pub(crate) fn first_publish_site_id(folder: &std::path::Path, requested: Option<&str>) -> String {
+    requested.map(str::to_string).unwrap_or_else(|| derive_site_id_from_root(&crate::vault::paths::VaultRoot::resolve(folder)))
 }
 
 /// Derive a valid moss-host site ID from a resolved vault root.
@@ -1147,7 +1170,7 @@ pub async fn register_moss_host_site(
     folder: &std::path::Path,
     site_id: &str,
     identity: &crate::identity::Identity,
-) -> Result<String, String> {
+) -> Result<String, PublishError> {
     validate_site_id(site_id)?;
     let folder_str = folder.to_string_lossy().to_string();
 
@@ -1162,9 +1185,9 @@ pub async fn register_moss_host_site(
         Ok(r) => r,
         Err(crate::seta::client::SetaError::SiteLimitReached { limit, contact }) => {
             profile::refusal("site_limit");
-            return Err(site_limit_message(limit, contact.as_deref()));
+            return Err(site_limit_message(limit, contact.as_deref()).into());
         }
-        Err(e) => return Err(register_failure_message(folder, site_id, e)),
+        Err(e) => return Err(register_failure(folder, site_id, e)),
     };
 
     // NOT `unwrap_or_default()`: this read is followed by a write, so a
@@ -1178,26 +1201,25 @@ pub async fn register_moss_host_site(
     Ok(result.site_id)
 }
 
-/// Turn seta's registration refusals into something a person can act on.
-fn register_failure_message(folder: &std::path::Path, site_id: &str, e: crate::seta::client::SetaError) -> String {
-    if let Some(refusal) = profile::profiled_refusal(folder, &e) {
-        return refusal;
-    }
-    let msg = e.to_string();
+/// Sort seta's registration refusals into the ones a person can act on.
+fn register_failure(folder: &std::path::Path, site_id: &str, e: crate::seta::client::SetaError) -> PublishError {
+    let folder_str = folder.to_string_lossy();
     // Seta checks the key's email before its ACLs, so this is the typical
     // first publish of a new folder.
     if matches!(&e, crate::seta::client::SetaError::Api { status, message } if crate::seta::client::asks_to_verify_email(*status, message)) {
-        return crate::identity::verify_email::not_signed_in(folder, &sign_in_host(&folder.to_string_lossy(), None));
+        profile::seta_error(&e);
+        return PublishError::NotSignedIn { host: sign_in_host(&folder_str, None) };
     }
+    let msg = e.to_string();
     if msg.contains("already taken") || msg.contains("must be fresh") {
-        let env = crate::build::site_config::resolve_environment(&folder.to_string_lossy());
-        return format!(
-            "{site_id}{} is taken, or this folder can't claim it. Choose another name: moss deploy {} --site-id=<name>",
-            env.site_suffix(),
-            folder.display()
-        );
+        profile::seta_error(&e);
+        let env = crate::build::site_config::resolve_environment(&folder_str);
+        return PublishError::NameTaken { address: format!("{site_id}{}", env.site_suffix()) };
     }
-    format!("Could not register the site: {}", msg)
+    match profile::profiled_refusal(e) {
+        PublishError::Other(text) => format!("Could not register the site: {text}").into(),
+        refusal => refusal,
+    }
 }
 
 /// The "your plan's site quota is used up" message. The contact address is

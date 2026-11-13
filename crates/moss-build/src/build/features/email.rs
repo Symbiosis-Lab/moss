@@ -195,7 +195,9 @@ pub fn stamp_inline_subscribe_scopes(
                 form.args.button.as_deref(),
                 seta_base,
             );
-            if let Some(id) = &form.labelled_by {
+            if let (Some(members), Some(id)) = (form.args.members, &form.members_lead) {
+                form.html = with_members_lead(&form.html, lang, members, id);
+            } else if let Some(id) = &form.labelled_by {
                 form.html = label_subscribe_input(&form.html, id);
             }
             stamped = true;
@@ -398,6 +400,18 @@ fn subscribe_form_inner(
         envelope_svg = envelope_svg,
         check_svg = CHECK_SVG,
     )
+}
+
+/// The line above a members page's subscribe form saying who the page is for,
+/// which also names the form's email input. `id` is unique on the page.
+pub fn with_members_lead(form_html: &str, lang: Language, members: moss_core::frontmatter::members::Members, id: &str) -> String {
+    use moss_core::frontmatter::members::Members;
+    let lead = match members {
+        Members::Subscribers => "members_subscribers",
+        Members::Paid => "members_paid",
+        Members::Public => return form_html.to_string(),
+    };
+    format!("<p id=\"{}\">{}</p>\n{}", html_escape(id), crate::i18n::t(lang, lead), label_subscribe_input(form_html, id))
 }
 
 /// Name a subscribe form's email input from the element `prompt_id` (the words

@@ -1,0 +1,8 @@
+301:
+  /former/: /public/
+  "https://journal.example/old/": /members/
+  "/query/?page=1": /public/
+  "https://elsewhere.example/foreign/": /public/
+  /jump/: /members/#details
+  /pattern/*: /public/
+  /unsafe/: javascript:alert(1)

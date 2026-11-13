@@ -155,6 +155,24 @@ mod listed_partial {
     }
 
     #[test]
+    fn a_listed_partial_links_to_a_file_or_folder_on_the_site() {
+        let site = site(&[
+            ("work/brochure.pdf", "%PDF-1.4\n"),
+            ("work/brochure.md", "---\ntitle: Brochure\nweight: 4\npartial: true\nlisted: true\nexternal_url: /work/brochure.pdf\n---\n"),
+            ("work/demo/index.html", "<!doctype html><title>Demo</title><p>Hand-made.</p>\n"),
+            ("work/demo-row.md", "---\ntitle: Demo\nweight: 5\npartial: true\nlisted: true\nexternal_url: /work/demo/\n---\n"),
+        ]);
+        for page in ["index.html", "work/index.html"] {
+            let html = site.html(page);
+            let hrefs = hrefs_in(&html);
+            assert!(hrefs.contains(&"/work/brochure.pdf"), "{page}: the row links to the file: {hrefs:?}");
+            assert!(hrefs.contains(&"/work/demo/"), "{page}: the row links to the folder: {hrefs:?}");
+        }
+        assert!(site.html("llms.txt").contains("[Brochure](/work/brochure.pdf)"), "llms.txt keeps the row's address");
+        assert!(!site.output("work/brochure/index.html").exists() && !site.output("work/demo-row/index.html").exists());
+    }
+
+    #[test]
     fn a_draft_listed_partial_is_not_listed() {
         let site = site(&[("work/ember.md", "---\ntitle: Ember\npartial: true\nlisted: true\ndraft: true\n---\n")]);
         assert!(!site.html("index.html").contains("Ember"));

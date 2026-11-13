@@ -196,7 +196,6 @@ impl ConfigFile {
     /// One note per `[site]` key the build does not read: it names the key and
     /// the file, and the nearest known key when one is near. A note, not a
     /// problem, because older moss versions left keys that no code reads now.
-    /// `title` gets its own line, since the site's name is the home page's `title:`.
     pub fn unknown_site_keys(&self) -> Vec<String> {
         use crate::config::site_settings::{nearest_known_key, site_settings, UNLISTED_SITE_KEYS};
         let Some(site) = self.root.get("site").and_then(|v| v.as_table()) else {
@@ -215,6 +214,13 @@ impl ConfigFile {
                 }
             })
             .collect()
+    }
+
+    /// Per-channel link-back choice, falling back to the global default (on).
+    pub fn syndication_link_back(&self, channel: &str) -> bool {
+        self.root.get("channels").and_then(|v| v.get(channel)).and_then(|v| v.get("link_back")).and_then(Value::as_bool)
+            .or_else(|| self.root.get("syndication").and_then(|v| v.get("link_back")).and_then(Value::as_bool))
+            .unwrap_or(true)
     }
 
     /// The top-level `environment` key. Top-level rather than under `[site]`
@@ -386,12 +392,14 @@ impl ConfigFile {
                 if !moss_core::schema_fields::PLACEABLE_BUILTINS.contains(&name.as_str()) {
                     problems.push(format!(
                         "[fields.{name}] is a moss field and cannot be redeclared; of moss's fields only {} can take a place",
-                        moss_core::schema_fields::PLACEABLE_BUILTINS.join(" and ")
+                        moss_core::schema_fields::PLACEABLE_BUILTINS.join(", ")
                     ));
                     continue;
                 }
-                for key in sub.keys() {
-                    if !matches!(key.as_str(), "place" | "label") {
+                for (key, value) in sub {
+                    if !matches!(key.as_str(), "place" | "label")
+                        && !(name == "tagline" && key == "type" && value.as_str() == Some("text"))
+                    {
                         problems.push(format!(
                             "[fields.{name}] has \"{key}\"; built-in fields take only place and label"
                         ));

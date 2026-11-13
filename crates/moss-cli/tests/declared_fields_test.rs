@@ -260,6 +260,29 @@ fn a_builtin_description_placed_as_eyebrow_draws_only_the_authored_value() {
 }
 
 #[test]
+fn legacy_tagline_declaration_draws_each_articles_own_eyebrow() {
+    let config = "[fields.tagline]\ntype = \"text\"\nplace = \"eyebrow\"\n";
+    let s = site(config, &[
+        ("index.md", "---\ntitle: Home\ntagline: Notes from home\n---\nWelcome\n"),
+        ("Housing/court.md", "---\ntitle: Court\ntagline: Homes around a garden\n---\nbody\n"),
+        ("Housing/tower.md", "---\ntitle: Tower\ntagline: Rooms above the river\n---\nbody\n"),
+    ]);
+    let o = build_strict(&s);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(o.status.success(), "{err}");
+    assert!(!err.contains("[fields.tagline]"), "{err}");
+    for (path, title, tagline) in [
+        ("housing/court/index.html", "Court", "Homes around a garden"),
+        ("housing/tower/index.html", "Tower", "Rooms above the river"),
+    ] {
+        let html = built(&s, path);
+        let eyebrow = position(&html, &format!("<p class=\"moss-eyebrow\"><span data-field=\"tagline\">{tagline}</span></p>"));
+        let h1 = position(&html, &format!("<h1 class=\"moss-article-title\">{title}</h1>"));
+        assert!(eyebrow < h1, "{html}");
+    }
+}
+
+#[test]
 fn a_page_in_the_simplified_dialect_is_drawn_and_checked_like_any_other() {
     let page = "title: Court\nkind: Building\ndistrict: Eastbank\nyears: soon\n---\nbody\n";
     let s = site(PLACED, &[("Housing/court.md", page)]);
@@ -617,7 +640,7 @@ fn an_undeclared_key_in_a_cascade_still_warns_and_the_warning_names_declared_fie
 const YEAR: &str = "[fields.year]\ntype = \"number\"\nplace = \"eyebrow\"\n";
 
 #[test]
-fn a_nested_folders_cascaded_field_does_not_replace_the_outer_folders_value() {
+fn a_nested_folders_cascaded_field_replaces_the_outer_folders_value() {
     let home = "---\ntitle: Piers\ncascade:\n  credit: Harbour Trust\n---\nThe piers.\n";
     let deep = "---\ntitle: Deep\ncascade:\n  credit: Inner Trust\n---\nbody\n";
     let s = site(
@@ -627,19 +650,20 @@ fn a_nested_folders_cascaded_field_does_not_replace_the_outer_folders_value() {
     let o = build_strict(&s);
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let html = built(&s, "piers/deep/four/index.html");
-    assert!(html.contains("Harbour Trust") && !html.contains("Inner Trust"), "{html}");
+    assert!(html.contains("Inner Trust") && !html.contains("Harbour Trust"), "{html}");
 }
 
 #[test]
-fn an_outer_folders_value_that_does_not_fit_stops_a_nested_folder_from_filling_in() {
+fn a_nested_folders_value_that_fits_replaces_an_outer_value_that_does_not() {
     let home = "---\ntitle: Piers\ncascade:\n  year: soon\n---\nThe piers.\n";
     let deep = "---\ntitle: Deep\ncascade:\n  year: 1900\n---\nbody\n";
     let s = site(YEAR, &[("Piers/index.md", home), ("Piers/Deep/index.md", deep), ("Piers/Deep/four.md", "---\ntitle: Pier Four\n---\nbody\n")]);
     let o = build_lenient(&s);
     let err = String::from_utf8_lossy(&o.stderr);
-    assert!(err.contains("[Piers/Deep/four.md] frontmatter: field 'year'"), "{err}");
+    // The outer value still reaches the nested folder's own page, which sits in the outer folder.
+    assert!(err.contains("[Piers/Deep/index.md] frontmatter: field 'year'") && !err.contains("[Piers/Deep/four.md]"), "{err}");
     let html = built(&s, "piers/deep/four/index.html");
-    assert!(!html.contains("data-field=\"year\"") && !html.contains("1900"), "{html}");
+    assert!(html.contains("data-field=\"year\"") && html.contains("1900"), "{html}");
 }
 
 #[test]

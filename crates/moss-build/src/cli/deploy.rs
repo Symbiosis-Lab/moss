@@ -341,11 +341,13 @@ async fn dispatch(
     crate::identity::verify_email::retrying_after_verification(
         folder,
         flags.email.as_deref(),
+        Some(&crate::deploy::first_publish_site_id(folder, flags.site_id.as_deref())),
         crate::identity::verify_email::POLL_INTERVAL,
         crate::identity::verify_email::WAIT_LIMIT,
         || send(folder, route, host_ports, plugins, flags, sink),
     )
     .await
+    .map_err(|e| e.cli_text(folder))
     }).await
 }
 
@@ -357,7 +359,7 @@ async fn send(
     plugins: crate::build::PluginMode,
     flags: &DeployFlags,
     sink: &Arc<dyn DeploySink>,
-) -> Result<DeployReport, String> {
+) -> Result<DeployReport, crate::deploy::PublishError> {
     crate::deploy::profile::begin_attempt();
     match route {
         DeployRoute::Prebuilt { dir } => {
@@ -413,8 +415,9 @@ async fn send(
             .and_then(|published| {
                 crate::deploy::plugin_push::report_for(&published)
             })
+            .map_err(Into::into)
         }
-        DeployRoute::Direct { id } => Err(unavailable(id)),
+        DeployRoute::Direct { id } => Err(unavailable(id).into()),
     }
 }
 
@@ -993,7 +996,6 @@ mod dry_run_tests {
         let refusal = dry.refusal.as_ref().expect("a real deploy would be refused");
         assert_eq!(refusal.kind, crate::deploy::RefusalKind::NotSignedIn);
         assert_eq!(refusal.text, crate::identity::verify_email::not_signed_in(fx.dir.path(), "dry-test.example.org"));
-        assert!(crate::identity::verify_email::is_unverified_refusal(&refusal.text));
     }
 
     /// The prebuilt route asks the same question and refuses the same way.
@@ -1156,7 +1158,6 @@ mod dry_run_tests {
         let expected = format!("{name} isn't signed in to {host}. Sign it in: moss deploy {} --email <address>", fx.dir.path().display());
         let err = fx.run(false).await.expect_err("a lost key must refuse");
         assert_eq!(err, expected);
-        assert!(crate::identity::verify_email::is_unverified_refusal(&err), "--email must lift it");
         assert_eq!(crate::identity::Identity::read_pubkey(fx.dir.path()), pubkey, "the old key stays named");
         assert!(!identity.join("secret-key").exists(), "no new key may be written");
         assert!(fx.requests().is_empty(), "nothing may reach the server");
@@ -1372,6 +1373,20 @@ mod email_wiring_tests {
         *seta.account.lock().unwrap() = Some("ada@example.test");
         let _ = deploy(&folder, Some("ada@example.test")).await;
         assert_eq!(seta.count("POST /auth/request"), 1, "a linked key is never re-sent a link");
+    }
+
+    /// A new folder published to a site its account already owns: the link
+    /// names that site, so opening it signs the key in to the site and the retry
+    /// publishes, instead of being refused again with the same sign-in advice.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_first_publish_signs_in_naming_the_site_it_publishes_to() {
+        let seta = Seta::start(1, "verified").await;
+        let folder = Folder::new(&seta);
+
+        let _ = deploy(&folder, Some("ada@example.test")).await;
+
+        let target = crate::deploy::derive_site_id_from_root(&crate::vault::paths::VaultRoot::resolve(folder.dir.path()));
+        assert_eq!(seta.sign_in_bodies()[0]["site_id"], target.as_str());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

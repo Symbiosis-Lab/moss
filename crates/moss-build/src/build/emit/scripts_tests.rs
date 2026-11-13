@@ -24,6 +24,7 @@ fn all_on() -> SiteAssets {
         colophon_credit: false,
         field_places: true,
         diagrams: true,
+        stream: true,
         country_map: true,
     }
 }

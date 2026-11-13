@@ -25,6 +25,9 @@ case "$cmd" in
     echo "Press Ctrl+C to stop the server" >&2
     wait "$server"
     ;;
+  root)
+    echo '{"root":null,"address":null}'
+    ;;
   --version|-V)
     echo "moss 0.11.1-shim"
     ;;

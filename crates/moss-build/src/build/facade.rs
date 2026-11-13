@@ -206,6 +206,11 @@ fn surface_debug(doc: &ParsedDocument) -> String {
     // `hero_image_url` — the genuinely cross-page half, read by the homepage
     // — deliberately stays.
     stripped.hero_html = None;
+    // What this page loads is this page's own head, and its facade covers it.
+    // A slot page's assets go on every page, so those stay.
+    if !doc.slot_only {
+        stripped.features.block_assets = Default::default();
+    }
     // The plan a `from=` hero is drawn from carries the same rendered markup.
     stripped.hero_from = None;
     // `reading_time` is `word_count / 200` (`markdown/pipeline.rs`) — a
@@ -810,6 +815,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_page_gaining_a_block_keeps_its_surface_but_a_slot_page_does_not() {
+        use crate::plugins::contributions::blocks::BlockAsset;
+        let plain = ParsedDocument { content: "body".to_string(), ..Default::default() };
+        let mut placing = plain.clone();
+        placing.features.block_assets.insert(BlockAsset::Script("/_moss/plugins/a/v.js".to_string()));
+        assert_eq!(surface_debug(&placing), surface_debug(&plain));
+        let slot = ParsedDocument { slot_only: true, ..plain };
+        let placing_slot = ParsedDocument { slot_only: true, ..placing };
+        assert_ne!(surface_debug(&placing_slot), surface_debug(&slot));
+    }
+
+    #[test]
     fn a_changed_embedded_listing_set_leaves_the_surface_unchanged() {
         let plain = ParsedDocument { content: "body".to_string(), ..Default::default() };
         let mut embedding = plain.clone();
@@ -1069,13 +1086,7 @@ mod tests {
         // what the folder-cover column is split from, and a stale one ships a
         // page whose lede does not match its body.
         let plan = |html: &str| ParsedDocument {
-            body_plan: Some(crate::build::markdown::body_plan::BodyPlan {
-                segments: vec![crate::build::markdown::body_plan::BodySegment::Html(html.to_string())],
-                lede_segments: 1,
-                first_text_segments: 0,
-                after_first_text_segments: 0,
-                has_text: false,
-            }),
+            body_plan: Some(crate::build::markdown::body_plan::BodyPlan::opaque(html.to_string())),
             ..Default::default()
         };
         assert_ne!(

@@ -1,17 +1,18 @@
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   binaryName,
-  buildArgs,
   candidateBinaryPaths,
   findMossBinary,
   parseBuildFailure,
   parseCliError,
-  parseProblemCount,
-  parseServerEvents,
-  parseServerUrl,
+  parseServerUrls,
+  parseRootJson,
   publishInAppUrl,
-  splitFlags,
+  publishNotice,
+  siteRoot,
   type DetectEnv,
+  type ServerAddress,
 } from "../src/desktop/cli";
 
 // Verbatim stderr from `moss build /tmp/moss-smoke-vault --serve --no-plugins`
@@ -36,60 +37,43 @@ function env(overrides: Partial<DetectEnv> = {}): DetectEnv {
   };
 }
 
-describe("parseServerUrl", () => {
-  it("finds the URL and port in real CLI output", () => {
-    expect(parseServerUrl(REAL_STDERR)).toEqual({ url: "http://localhost:8080", port: 8080 });
+describe("parseServerUrls finds the URL", () => {
+  it("finds the URL in real CLI output", () => {
+    expect(firstUrl(REAL_STDERR)).toEqual({ url: "http://localhost:8080" });
   });
 
   it("handles a scanned-up port", () => {
     const out = "🌐 Preview server ready! Access at http://localhost:8083\n";
-    expect(parseServerUrl(out)).toEqual({ url: "http://localhost:8083", port: 8083 });
+    expect(firstUrl(out)).toEqual({ url: "http://localhost:8083" });
   });
 
   it("returns null before the server line has arrived", () => {
-    expect(parseServerUrl("Building website from: /x\n[ 10%] build: ...\n")).toBeNull();
+    expect(firstUrl("Building website from: /x\n[ 10%] build: ...\n")).toBeNull();
   });
 
   it("survives chunked partial lines", () => {
     const partial = "🌐 Preview server ready! Access at http://local";
-    expect(parseServerUrl(partial)).toBeNull();
+    expect(firstUrl(partial)).toBeNull();
     // A chunk boundary can also land mid-port ("…:8080" with nothing after
     // it yet is indistinguishable from "…:80801" still arriving), so
     // completion needs the line terminator too.
-    expect(parseServerUrl(partial + "host:8080")).toBeNull();
-    expect(parseServerUrl(partial + "host:8080\n")).not.toBeNull();
+    expect(firstUrl(partial + "host:8080")).toBeNull();
+    expect(firstUrl(partial + "host:8080\n")).not.toBeNull();
   });
 });
 
-describe("parseServerEvents", () => {
-  it("yields a single url event for an ordinary single-server stream", () => {
-    expect(parseServerEvents(REAL_STDERR)).toEqual([
-      { type: "url", addr: { url: "http://localhost:8080", port: 8080 } },
-    ]);
-  });
-
-  it("yields each url in order with the standby line between them", () => {
+describe("parseServerUrls", () => {
+  it("yields each url in order", () => {
     const stream =
       "🌐 Preview server ready! Access at http://localhost:8081\n" +
-      "served by desktop app (pid 4242, moss 0.12.0); standing by\n" +
       "🌐 Preview server ready! Access at http://localhost:8090\n";
-    expect(parseServerEvents(stream)).toEqual([
-      { type: "url", addr: { url: "http://localhost:8081", port: 8081 } },
-      { type: "standby" },
-      { type: "url", addr: { url: "http://localhost:8090", port: 8090 } },
-    ]);
+    expect(parseServerUrls(stream)).toEqual([{ url: "http://localhost:8081" }, { url: "http://localhost:8090" }]);
   });
 
-  it("returns nothing before any server line has arrived", () => {
-    expect(parseServerEvents("Building website from: /x\n[ 10%] build: ...\n")).toEqual([]);
-  });
-
-  it("defers a url event until a chunk boundary mid-port is resolved", () => {
+  it("defers a url until a chunk boundary mid-port is resolved", () => {
     const cut = "🌐 Preview server ready! Access at http://localhost:8";
-    expect(parseServerEvents(cut)).toEqual([]);
-    expect(parseServerEvents(cut + "080\n")).toEqual([
-      { type: "url", addr: { url: "http://localhost:8080", port: 8080 } },
-    ]);
+    expect(parseServerUrls(cut)).toEqual([]);
+    expect(parseServerUrls(cut + "080\n")).toEqual([{ url: "http://localhost:8080" }]);
   });
 });
 
@@ -106,39 +90,8 @@ describe("failure and problem parsing", () => {
     expect(parseCliError(REAL_STDERR)).toBeNull();
   });
 
-  it("reads the problem summary count with singular and plural", () => {
-    expect(parseProblemCount("moss: 1 problem reported above — the site was still generated.\n")).toBe(1);
-    expect(parseProblemCount("moss: 12 problems reported above — failing because --strict was requested.\n")).toBe(12);
-    expect(parseProblemCount(REAL_STDERR)).toBe(0);
-  });
 });
 
-describe("buildArgs", () => {
-  it("builds a plain build", () => {
-    expect(buildArgs("/v")).toEqual(["build", "/v"]);
-  });
-
-  it("builds serve+watch with extra flags", () => {
-    expect(buildArgs("/v", { serve: true, watch: true, extraFlags: ["--no-plugins"] })).toEqual([
-      "build",
-      "/v",
-      "--serve",
-      "--watch",
-      "--no-plugins",
-    ]);
-  });
-
-  it("drops empty extra flags", () => {
-    expect(buildArgs("/v", { extraFlags: ["", "--strict"] })).toEqual(["build", "/v", "--strict"]);
-  });
-});
-
-describe("splitFlags", () => {
-  it("splits on whitespace and drops empties", () => {
-    expect(splitFlags("  --no-plugins   --strict ")).toEqual(["--no-plugins", "--strict"]);
-    expect(splitFlags("")).toEqual([]);
-  });
-});
 
 describe("binary detection", () => {
   it("uses the platform binary name", () => {
@@ -160,6 +113,17 @@ describe("binary detection", () => {
     const e = env({ pathVar: "/usr/bin", platform: "darwin", fileExists: (p) => p === "/opt/homebrew/bin/moss" });
     expect(findMossBinary("", e)).toBe("/opt/homebrew/bin/moss");
     expect(candidateBinaryPaths("", e)).toContain("/home/u/.local/bin/moss");
+  });
+
+  it("finds the program inside the moss app on macOS, which a writer who has the app already has", () => {
+    const app = "/Applications/moss.app/Contents/MacOS/moss";
+    expect(findMossBinary("", env({ pathVar: "/usr/bin", platform: "darwin", fileExists: (p) => p === app }))).toBe(app);
+    expect(candidateBinaryPaths("", env({ platform: "linux" }))).not.toContain(app);
+  });
+
+  it("finds a per-user macOS install, and looks only on PATH on Windows", () => {
+    expect(candidateBinaryPaths("", env({ platform: "darwin" }))).toContain("/home/u/Applications/moss.app/Contents/MacOS/moss");
+    expect(candidateBinaryPaths("", env({ platform: "win32", pathVar: "", homeDir: "C:\\Users\\u" }))).toEqual([]);
   });
 
   it("returns null when nothing exists", () => {
@@ -184,3 +148,54 @@ describe("publishInAppUrl", () => {
     expect(publishInAppUrl("/a/b&c?d#e")).toBe("moss://deploy?path=%2Fa%2Fb%26c%3Fd%23e");
   });
 });
+
+describe("publishNotice", () => {
+  it("names the address a live site publishes to", () => {
+    expect(publishNotice("Garden", "garden.example")).toBe("Opening Garden in moss to publish to garden.example.");
+  });
+
+  it("names mosspub.com before the first publish", () => {
+    expect(publishNotice("Garden", null)).toBe("Opening Garden in moss to publish to mosspub.com.");
+  });
+
+  it("names only the folder when the CLI cannot say where it goes", () => {
+    expect(publishNotice("Garden", undefined)).toBe("Opening Garden in moss to publish.");
+  });
+});
+
+describe("parseRootJson", () => {
+  it("reads the site and its address", () => {
+    expect(parseRootJson('{"address":"garden.example","root":"/v/Garden"}')).toEqual({ root: "/v/Garden", address: "garden.example" });
+  });
+
+  it("keeps a null address apart from one an older CLI does not print", () => {
+    expect(parseRootJson('{"address":null,"root":null}')).toEqual({ root: null, address: null });
+    expect(parseRootJson('{"root":"/v/Garden"}')).toEqual({ root: "/v/Garden", address: undefined });
+  });
+
+  it("reads a failed run as no site and an unknown address", () => {
+    expect(parseRootJson("")).toEqual({ root: null, address: undefined });
+    expect(parseRootJson('{"root":3}')).toEqual({ root: null, address: undefined });
+  });
+});
+
+describe("siteRoot", () => {
+  it("prefers the site moss found", () => {
+    expect(siteRoot(path.posix, "/v", "notes", "/v/blog/")).toBe("/v/blog");
+  });
+
+  it("makes a clicked folder the site when none holds it, and the vault root's menu names the vault", () => {
+    expect(siteRoot(path.posix, "/v", "notes/drafts", null)).toBe("/v/notes/drafts");
+    expect(siteRoot(path.posix, "/v", "/", null)).toBe("/v");
+    expect(siteRoot(path.posix, "/v/", undefined, null)).toBe("/v");
+  });
+
+  it("names a Windows folder the way moss root prints it", () => {
+    expect(siteRoot(path.win32, "C:\\v", "notes/drafts", null)).toBe("C:\\v\\notes\\drafts");
+    expect(siteRoot(path.win32, "C:\\v", "/", null)).toBe("C:\\v");
+  });
+});
+
+function firstUrl(text: string): ServerAddress | null {
+  return parseServerUrls(text)[0] ?? null;
+}

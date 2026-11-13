@@ -26,6 +26,17 @@ fn do_move(root: &Path, old_rel: &str, new_rel: &str) -> RenameApplyResult {
     apply_planned_moves(root, &plan).expect("apply")
 }
 
+#[test]
+fn every_file_of_the_site_is_walked_in_name_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let names: Vec<String> = ('a'..='z').map(|c| format!("{c}.md")).collect();
+    for name in names.iter().rev() {
+        w(&root, name, "x");
+    }
+    assert_eq!(walk_all_files(&root), names);
+}
+
 #[cfg(unix)]
 #[test]
 fn plan_apply_accepts_paths_spelled_through_a_symlinked_root() {

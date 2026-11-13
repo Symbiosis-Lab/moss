@@ -1812,6 +1812,34 @@ fn maybe_inject_spa_cached_hit_matches_miss_output_byte_for_byte() {
     assert_eq!(hit_result, miss_result, "cache-hit must return the same hash as the miss that produced it");
 }
 
+/// The injected page is named only inside the record's JSON blob, which a sweep
+/// of the cache does not open.
+#[test]
+fn a_cache_sweep_keeps_the_page_a_spa_inject_record_names() {
+    use crate::build::site_meta::spa_inject::SpaDefaults;
+    let tmp = tempfile::tempdir().unwrap();
+    let (objects, transforms) = spa_test_cache(tmp.path());
+    let target = tmp.path().join("a.html");
+    std::fs::write(&target, "<html><head><title>App</title></head><body></body></html>").unwrap();
+    let defaults = SpaDefaults {
+        description: Some("A bundled SPA"),
+        canonical_url: None,
+        og_tags: None,
+        twitter_tags: None,
+        apple_touch_icon: None,
+        raster_favicons: None,
+        theme_color_light: None,
+        theme_color_dark: None,
+        color_scheme: Default::default(),
+    };
+
+    let (_, oid) = maybe_inject_spa_cached(&target, &defaults, "source", 58, &objects, &transforms).unwrap().expect("injected");
+    let paths = MossPaths::from_moss_dir(tmp.path().join(".moss"));
+    crate::build::cache::gc(&paths, &crate::build::lifecycle::gc_token_for_test()).unwrap();
+
+    assert!(objects.get_path(&oid).is_some(), "the sweep collected the page a live record names");
+}
+
 #[test]
 fn maybe_inject_spa_cached_no_op_result_is_cached_too() {
     // When every tag is already present, maybe_inject_spa returns Ok(None).

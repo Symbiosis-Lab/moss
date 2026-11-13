@@ -69,7 +69,7 @@ use std::sync::{Arc, Mutex};
 /// names. Listing them is what lets
 /// [`assert_every_stage_shipped_entry_is_classified`] fail on any OTHER entry that
 /// has no immutable source.
-const DERIVED: [&str; 5] = [
+const DERIVED: [&str; 7] = [
     // Hover-preview index: one entry per public page, from its title, description
     // and the first 300 characters of its body.
     "_moss/previews.json",
@@ -82,6 +82,9 @@ const DERIVED: [&str; 5] = [
     // One <loc> per listed page, <lastmod> from its `date`: moves on a page added,
     // removed, renamed, or re-dated — never on a body edit.
     "sitemap.xml",
+    // The site's colours and fonts, and its name and page colour: move on a theme edit.
+    "_moss/tokens.json",
+    "manifest.webmanifest",
 ];
 
 /// Whether an entry with no CAS object id is safe to ship from the stage by design.
@@ -102,8 +105,9 @@ fn ships_from_stage_by_design(key: &str) -> bool {
         .split('.')
         .any(|part| part.len() == 16 && part.bytes().all(|b| b.is_ascii_hexdigit()));
     (key.starts_with("_moss/") && content_named)
-        // Config-derived (site URL, `ai_policy`): moves only on a config edit.
+        // Config-derived (site URL, `ai_policy`, `[members]`): moves only on a config edit.
         || key == "robots.txt"
+        || key == crate::build::emit::members::MEMBERS_PATH
         || (key.starts_with("qr/") && key.ends_with(".svg"))
         // Moves only when the favicon source does.
         || key.starts_with("assets/favicon")
@@ -467,6 +471,7 @@ const EVERYTHING: Edit = Edit {
         );
         vault.write("extra.md", "---\ntitle: Extra\n---\n\nExtra page.\n");
         vault.write("assets/data.txt", "beta, quite different\n");
+        vault.write(".moss/theme/style.css", ":root { --moss-color-bg: #f4efe4; }\n:root[data-theme=\"dark\"] { --moss-color-bg: #14171c; }\n");
         // A different SIZE, not just different pixels. The image worker skips a source
         // whose (path, size, whole-second mtime) matches the previous build's
         // (`hash_index.lookup` in `media/image.rs`), so a same-size rewrite landing in
@@ -480,7 +485,7 @@ const EVERYTHING: Edit = Edit {
     },
     // A page was created, so a watcher classifies the batch `Structural`; the asset
     // and the image are not markdown either. This build renders every page.
-    trigger: || BuildTrigger::Structural(vec!["extra.md".into(), "assets/data.txt".into(), "images/pic.png".into()]),
+    trigger: || BuildTrigger::Structural(vec!["extra.md".into(), "assets/data.txt".into(), "images/pic.png".into(), ".moss/theme/style.css".into()]),
     on_stage: Some(("posts/a/index.html", "B-BODY")),
 };
 

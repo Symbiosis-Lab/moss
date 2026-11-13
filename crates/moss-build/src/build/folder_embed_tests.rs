@@ -2808,7 +2808,9 @@ fn render_place_map_embed(markdown: &str, docs: &[ParsedDocument]) -> String {
     resolve_markers_with_place_maps(
         &resolved.content_markdown, "index.md", docs, &test_project(),
         &std::collections::HashMap::new(), crate::i18n::Language::En,
-        None, None, true, Some(&maps), None, crate::build::inputs::now(),
+        None, None, true, Some(&maps),
+        &ListingHost::of(&ParsedDocument { url_path: "index.html".into(), ..Default::default() }),
+        crate::build::inputs::now(),
     )
 }
 

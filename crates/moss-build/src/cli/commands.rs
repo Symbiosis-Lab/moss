@@ -88,7 +88,7 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         CliCommandInfo {
             name: "root",
             args: "<path> --json",
-            description: "Print the moss site that owns a path as {\"root\": string|null}. Uses the canonical .moss ownership check, stops at the home directory, and does not scan or change files.",
+            description: "Print the moss site that owns a path, and the address it is live at, as {\"root\": string|null, \"address\": string|null}; address is null before a first publish and left out when it cannot be read (a settings file still in the cloud or from a newer moss). Uses the canonical .moss ownership check, stops at the home directory, and does not scan or change files.",
         },
         CliCommandInfo {
             name: "plugin",

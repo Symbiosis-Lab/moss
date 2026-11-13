@@ -354,58 +354,6 @@ fn spa_inject_params(defaults: &crate::build::site_meta::spa_inject::SpaDefaults
     })
 }
 
-/// Read a cached `spa/inject` record, verifying the inner injected-content
-/// blob (if any) still exists — `find_cached_output` only verifies the
-/// record's OWN blob, not blobs referenced from inside it.
-fn read_spa_inject_record(
-    object_store: &crate::build::cache::ObjectStore,
-    record_oid: &str,
-) -> Option<SpaInjectRecord> {
-    let blob_path = object_store.get_path(record_oid)?;
-    let raw = std::fs::read(blob_path).ok()?;
-    serde_json::from_slice(&raw).ok()
-}
-
-/// Write a `spa/inject` transform record, merging with any existing record
-/// for `source_oid` so other transforms on the same source (unlikely for
-/// HTML today, but matches the established `write_cached_meta` pattern)
-/// aren't clobbered.
-fn write_spa_inject_record(
-    object_store: &crate::build::cache::ObjectStore,
-    transform_cache: &crate::build::cache::TransformCache,
-    source_oid: &str,
-    source_size: u64,
-    params: &serde_json::Value,
-    record: &SpaInjectRecord,
-) {
-    let json_bytes = match serde_json::to_vec(record) {
-        Ok(b) => b,
-        Err(e) => {
-            log::info!("Failed to serialize spa/inject record: {}", e);
-            return;
-        }
-    };
-    let record_oid = match object_store.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request) {
-        Ok(oid) => oid,
-        Err(e) => {
-            log::info!("Failed to store spa/inject record blob: {}", e);
-            return;
-        }
-    };
-    let entry = crate::build::cache::TransformEntry {
-        validation: None,
-        oid: record_oid,
-        size: json_bytes.len() as u64,
-        params: params.clone(),
-    };
-    let merged = transform_cache.merge(source_oid, source_size, crate::build::cache::RecordMode::Request, |rec| {
-        rec.transforms.insert(SPA_INJECT_TRANSFORM.to_string(), entry);
-    });
-    if let Err(e) = merged {
-        log::info!("Failed to write spa/inject transform record: {}", e);
-    }
-}
-
 /// Cache-aware wrapper around `maybe_inject_spa`.
 ///
 /// `source_oid` is the already-verified content hash of `target`'s CURRENT
@@ -442,31 +390,26 @@ fn maybe_inject_spa_cached(
 ) -> Result<Option<(String, String)>, String> {
     let params = spa_inject_params(defaults);
 
-    if let Some(record_oid) =
-        transform_cache.find_cached_output(source_oid, SPA_INJECT_TRANSFORM, &params, crate::build::cache::RecordMode::Request)
-    {
-        if let Some(record) = read_spa_inject_record(object_store, &record_oid) {
-            match record.content_oid {
-                Some(content_oid) if object_store.get_path(&content_oid).is_some() => {
-                    object_store.link_to(&content_oid, target)?;
-                    // Constructed as both-Some or both-None (see below and the
-                    // miss arm) — a `None` here means the record was corrupted
-                    // by something other than this function, which no amount
-                    // of a silent fallback would make correct to ship under.
-                    let xxh3 = record.xxh3.expect(
-                        "SpaInjectRecord invariant: content_oid and xxh3 are both Some or both None",
-                    );
-                    return Ok(Some((xxh3, content_oid)));
-                }
-                None => return Ok(None),
-                Some(_) => {} // inner blob GC'd — fall through to a live re-run
+    if let Some(record) = transform_cache.summary::<SpaInjectRecord>(SPA_INJECT_TRANSFORM, source_oid, &params) {
+        match record.content_oid {
+            Some(content_oid) if object_store.get_path(&content_oid).is_some() => {
+                object_store.link_to(&content_oid, target)?;
+                // Constructed as both-Some or both-None (see below and the
+                // miss arm) — a `None` here means the record was corrupted
+                // by something other than this function, which no amount
+                // of a silent fallback would make correct to ship under.
+                let xxh3 = record.xxh3.expect(
+                    "SpaInjectRecord invariant: content_oid and xxh3 are both Some or both None",
+                );
+                return Ok(Some((xxh3, content_oid)));
             }
+            None => return Ok(None),
+            Some(_) => {} // inner blob GC'd — fall through to a live re-run
         }
-        // Record present but unreadable/corrupt — fall through as well.
     }
 
     let result = maybe_inject_spa(target, defaults)?;
-    let (returned, record) = match &result {
+    let (returned, record, page_size) = match &result {
         Some(new_hash) => {
             let injected_bytes = std::fs::read(target)
                 .map_err(|e| format!("read back {} after inject: {}", target.display(), e))?;
@@ -477,6 +420,7 @@ fn maybe_inject_spa_cached(
                     content_oid: Some(content_oid),
                     xxh3: Some(new_hash.clone()),
                 },
+                injected_bytes.len() as u64,
             )
         }
         None => (
@@ -485,9 +429,10 @@ fn maybe_inject_spa_cached(
                 content_oid: None,
                 xxh3: None,
             },
+            0,
         ),
     };
-    write_spa_inject_record(object_store, transform_cache, source_oid, source_size, &params, &record);
+    transform_cache.put_summary(SPA_INJECT_TRANSFORM, source_oid, source_size, &params, &record, record.content_oid.as_deref().map(|oid| (oid, page_size)));
 
     Ok(returned)
 }

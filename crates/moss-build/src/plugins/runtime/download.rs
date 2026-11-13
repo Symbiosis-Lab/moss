@@ -57,70 +57,23 @@ pub(super) async fn do_http_request(
     use base64::Engine;
     use std::time::Duration;
 
-    if url.is_empty() {
-        return Err("URL cannot be empty".to_string());
-    }
-
-    let parsed_url: url::Url = url
-        .parse()
-        .map_err(|e| format!("Invalid URL '{}': {}", url, e))?;
-
-    if parsed_url.scheme() != "http" && parsed_url.scheme() != "https" {
-        return Err(format!(
-            "Invalid URL scheme '{}': only http and https are allowed",
-            parsed_url.scheme()
-        ));
-    }
-
     let timeout_ms_val = timeout_ms.unwrap_or(30_000);
     let timeout = Duration::from_millis(timeout_ms_val);
-
-    let method_label = match method {
-        HttpMethod::Get => "GET",
-        HttpMethod::Post { .. } => "POST",
-        HttpMethod::PostBytes { .. } => "POST",
-    };
-
-    log::debug!("{}: starting {} request", tag, method_label);
-
-    let url_clone = url.clone();
     let result = tokio::task::spawn_blocking(move || {
-        let agent = crate::system::proxy::proxied_ureq_agent(&url_clone, timeout);
-
-        let mut request = match &method {
-            HttpMethod::Get => agent.get(&url_clone),
-            HttpMethod::Post { .. } => agent
-                .post(&url_clone)
-                .set("Content-Type", "application/json"),
-            HttpMethod::PostBytes { content_type, .. } => {
-                agent.post(&url_clone).set("Content-Type", content_type)
-            }
+        let (method, body, content_type) = match method {
+            HttpMethod::Get => ("GET", None, None),
+            HttpMethod::Post { body } => ("POST", Some(super::http::Body::Text(body)), Some("application/json".to_string())),
+            HttpMethod::PostBytes { body, content_type } => ("POST", Some(super::http::Body::Bytes(body)), Some(content_type)),
         };
-
-        // moss's own agent string first, so a caller header can still replace it.
-        request = request.set("User-Agent", &crate::system::user_agent());
-        let method_sets_content_type =
-            matches!(method, HttpMethod::Post { .. } | HttpMethod::PostBytes { .. });
-        if let Some(hdrs) = headers {
-            for (key, value) in hdrs {
-                // For POST variants the method already set the correct
-                // Content-Type (notably the multipart boundary for PostBytes);
-                // never let a caller header clobber it. GET has no body, so a
-                // caller Content-Type there is harmless and passed through.
-                if method_sets_content_type && key.eq_ignore_ascii_case("content-type") {
-                    continue;
-                }
-                request = request.set(&key, &value);
-            }
+        let mut headers = headers.unwrap_or_default();
+        // Generated JSON/multipart types, including boundaries, belong to the helper.
+        if let Some(content_type) = content_type {
+            headers.retain(|name, _| !name.eq_ignore_ascii_case("content-type"));
+            headers.insert("Content-Type".into(), content_type);
         }
-
-        let response = match method {
-            HttpMethod::Get => request.call(),
-            HttpMethod::Post { body } => request.send_string(&body),
-            HttpMethod::PostBytes { body, .. } => request.send_bytes(&body),
-        };
-
-        process_ureq_response(response, &url_clone, timeout_ms_val)
+        let response = super::http::request(&url, method, body, headers, timeout, Redirect::Follow)?;
+        let response = if response.status() >= 400 { Err(ureq::Error::Status(response.status(), response)) } else { Ok(response) };
+        process_ureq_response(response, &url, timeout_ms_val)
     })
     .await
     .map_err(|e| format!("Task error: {}", e))?;
@@ -455,6 +408,8 @@ pub(crate) enum FetchMethod {
     Delete,
 }
 
+pub(crate) use super::http::Redirect;
+
 /// Full HTTP result with ALL response headers (lowercased keys) for the fetch
 /// shim's case-insensitive Headers.get (X-OAuth-Scopes at auth.ts:150).
 pub(crate) struct FetchFull {
@@ -469,73 +424,34 @@ pub(crate) async fn do_http_request_full(
     method: FetchMethod,
     req_headers: Option<std::collections::HashMap<String, String>>,
     timeout_ms: Option<u64>,
+    redirect: Redirect,
 ) -> Result<FetchFull, String> {
     use std::time::Duration;
-    if url.is_empty() { return Err("URL cannot be empty".to_string()); }
-    let parsed: url::Url = url.parse().map_err(|e| format!("Invalid URL '{url}': {e}"))?;
-    if parsed.scheme() != "http" && parsed.scheme() != "https" {
-        return Err(format!("Invalid URL scheme '{}': only http/https allowed", parsed.scheme()));
-    }
     let timeout = Duration::from_millis(timeout_ms.unwrap_or(30_000));
-    let url_c = url.clone();
     tokio::task::spawn_blocking(move || {
-        let agent = crate::system::proxy::proxied_ureq_agent(&url_c, timeout);
-        let mut req = match &method {
-            FetchMethod::Get => agent.get(&url_c),
-            FetchMethod::Head => agent.head(&url_c),
-            FetchMethod::Post { .. } => agent.post(&url_c).set("Content-Type", "application/json"),
-            FetchMethod::Put { .. } => agent.put(&url_c).set("Content-Type", "application/json"),
-            FetchMethod::Delete => agent.delete(&url_c),
+        let (method, body) = match method {
+            FetchMethod::Get => ("GET", None),
+            FetchMethod::Head => ("HEAD", None),
+            FetchMethod::Delete => ("DELETE", None),
+            FetchMethod::Post { body } => ("POST", Some(super::http::Body::Text(body))),
+            FetchMethod::Put { body } => ("PUT", Some(super::http::Body::Text(body))),
         };
-        req = req.set("User-Agent", &crate::system::user_agent());
-        if let Some(h) = req_headers {
-            for (k, v) in h { req = req.set(&k, &v); }
+        let mut headers = req_headers.unwrap_or_default();
+        if body.is_some() && !headers.keys().any(|k| k.eq_ignore_ascii_case("content-type")) {
+            headers.insert("Content-Type".into(), "application/json".into());
         }
-        // A HEAD response carries no body by definition (RFC 9110 §9.3.2), yet the
-        // server still sends the entity's `Content-Length` header. Calling
-        // `read_to_end` on a HEAD reader therefore blocks/errors waiting for bytes
-        // that never arrive (Caddy/HTTP-2 keep-alive: UnexpectedEof or a full
-        // timeout), which surfaced as a false-negative `isArticleLive` HEAD check
-        // in the matters plugin — a live article (curl HEAD → 200) was skipped and
-        // never syndicated. Never read the body for HEAD; leave it empty. Compute
-        // this BEFORE the match below consumes `method` (Post/Put move `body` out).
-        let is_head = matches!(method, FetchMethod::Head);
-        let resp = match method {
-            FetchMethod::Get | FetchMethod::Head | FetchMethod::Delete => req.call(),
-            FetchMethod::Post { body } | FetchMethod::Put { body } => req.send_string(&body),
-        };
-        match resp {
-            Ok(r) => {
-                let status = r.status();
-                let ok = (200..300).contains(&status);
-                let mut headers = std::collections::HashMap::new();
-                for name in r.headers_names() {
-                    if let Some(val) = r.header(&name) {
-                        headers.insert(name.to_lowercase(), val.to_string());
-                    }
-                }
-                let mut body = Vec::new();
-                if !is_head {
-                    use std::io::Read;
-                    r.into_reader().read_to_end(&mut body).map_err(|e| format!("read body: {e}"))?;
-                }
-                Ok(FetchFull { status, ok, headers, body })
-            }
-            // ureq returns Err(Status) for non-2xx — surface it as a real response,
-            // because fetch() never rejects on 4xx/5xx (it sets .ok=false).
-            Err(ureq::Error::Status(status, r)) => {
-                let ok = false;
-                let mut headers = std::collections::HashMap::new();
-                for name in r.headers_names() {
-                    if let Some(val) = r.header(&name) { headers.insert(name.to_lowercase(), val.to_string()); }
-                }
-                use std::io::Read;
-                let mut body = Vec::new();
-                let _ = r.into_reader().read_to_end(&mut body);
-                Ok(FetchFull { status, ok, headers, body })
-            }
-            Err(e) => Err(format!("request failed: {e}")),
+        let r = super::http::request(&url, method, body, headers, timeout, redirect)?;
+        let status = r.status();
+        let ok = (200..300).contains(&status);
+        let headers = r.headers_names().into_iter().filter_map(|name| r.header(&name).map(|value| (name.to_lowercase(), value.to_string()))).collect();
+        let mut body = Vec::new();
+        if method != "HEAD" {
+            use std::io::Read;
+            let read = r.into_reader().read_to_end(&mut body);
+            // Keep HTTP errors as responses, including any body bytes read.
+            if status < 400 { read.map_err(|e| format!("read body: {e}"))?; }
         }
+        Ok(FetchFull { status, ok, headers, body })
     })
     .await
     .map_err(|e| format!("Task error: {e}"))?
@@ -546,15 +462,15 @@ mod fetch_full_tests {
     use super::*;
     #[tokio::test]
     async fn rejects_empty_and_bad_scheme() {
-        assert!(do_http_request_full("".into(), FetchMethod::Get, None, None).await.is_err());
-        assert!(do_http_request_full("ftp://x".into(), FetchMethod::Get, None, None).await.is_err());
+        assert!(do_http_request_full("".into(), FetchMethod::Get, None, None, Redirect::Follow).await.is_err());
+        assert!(do_http_request_full("ftp://x".into(), FetchMethod::Get, None, None, Redirect::Follow).await.is_err());
     }
     // A live HEAD against a stable endpoint proves HEAD + header capture (network).
     // Gate behind MOSS_NET_TESTS so CI without network still passes.
     #[tokio::test]
     async fn head_and_headers_when_net_available() {
         if std::env::var("MOSS_NET_TESTS").is_err() { return; }
-        let r = do_http_request_full("https://api.github.com".into(), FetchMethod::Head, None, Some(5000)).await.unwrap();
+        let r = do_http_request_full("https://api.github.com".into(), FetchMethod::Head, None, Some(5000), Redirect::Follow).await.unwrap();
         assert!(r.status > 0);
         assert!(r.headers.keys().all(|k| k == &k.to_lowercase()));
     }

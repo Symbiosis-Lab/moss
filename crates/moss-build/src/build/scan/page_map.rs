@@ -565,7 +565,9 @@ pub(crate) fn pages_before_dedup(
 ) -> Vec<crate::build::types::ParsedDocument> {
     let (overrides, winners) = elect_homes_with_evicted(markdown_files, root, reserved, locate, is_evicted);
     let mut scan = FrontmatterScanCache::default();
-    let scanned = frontmatter_cache::scan_frontmatter_urls_with_evicted(markdown_files, locate, &mut scan, is_evicted);
+    let homes = folder_homes(&winners, &overrides, root.name());
+    let members_config = crate::build::scan::members::config_declares_members(root.path());
+    let scanned = frontmatter_cache::scan_frontmatter_urls_with_evicted(markdown_files, &homes, locate, &mut scan, is_evicted, members_config);
     let (entries, _, _) = frontmatter_cache::assemble_page_map(markdown_files, &scanned, root.name(), &winners, &overrides);
     let mut folder_cache = FolderLangCache::load(&crate::moss_paths::MossPaths::new(root.path()).cache_folder_lang());
     let folder_langs =
@@ -590,6 +592,30 @@ pub(crate) fn pages_before_dedup(
     pages
 }
 
+/// Whether the file's name makes it its folder's home (index-named or
+/// self-named), as the page map decides it.
+fn is_home_by_name(file_path: &str, root_folder_name: &str) -> bool {
+    let stem = Path::new(file_path).file_stem().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+    let parent_name = match file_path.rsplit_once('/') {
+        Some((parent, _)) => parent.rsplit('/').next().unwrap_or(""),
+        None => root_folder_name,
+    };
+    moss_core::home::is_home_file(&stem, parent_name)
+}
+
+/// The folder homes the page map serves at `<folder>/index.html`: the
+/// election's winners that won by name or by the `home: true` marker. A
+/// folder whose winner is only its first page has no home.
+pub(crate) fn folder_homes<'a>(
+    winners: &'a std::collections::HashSet<String>,
+    overrides: &std::collections::HashMap<String, String>,
+    root_folder_name: &str,
+) -> Vec<&'a str> {
+    winners.iter().map(String::as_str)
+        .filter(|w| is_home_by_name(w, root_folder_name) || overrides.values().any(|o| o == w))
+        .collect()
+}
+
 /// Factored out so [`build_page_map_and_external_urls_cached_with_evicted`]
 /// can share it: that path gets `frontmatter_url` from a cache instead of a
 /// fresh read, but everything downstream of the extraction is identical.
@@ -600,22 +626,7 @@ pub(super) fn page_map_entry(
     home_file_winners: &std::collections::HashSet<String>,
     home_overrides: &std::collections::HashMap<String, String>,
 ) -> (String, bool, Option<(String, String)>) {
-    // Determine is_index using same logic as process_markdown_file
-    let filename_lower = Path::new(file_path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    let parent_name = if file_path.contains('/') {
-        Path::new(file_path)
-            .parent()
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-    } else {
-        root_folder_name
-    };
-    let filename_match_is_home = moss_core::home::is_home_file(&filename_lower, parent_name);
+    let filename_match_is_home = is_home_by_name(file_path, root_folder_name);
     let mut is_index = filename_match_is_home;
 
     // Demote non-winner index files (same logic as in generate_blocking_content)
@@ -850,6 +861,27 @@ pub fn nav_external_href(
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|u| is_valid_nav_target(u))
+}
+
+/// Where a listing row or card for `doc` links instead of its local address: a
+/// page-less entry's [`pageless_row_href`], else a page's [`external_url`].
+pub fn outlet_href(doc: &crate::build::types::ParsedDocument) -> Option<String> {
+    if doc.is_pageless_entry() {
+        pageless_row_href(&doc.raw_frontmatter)
+    } else {
+        external_url(&doc.raw_frontmatter)
+    }
+}
+
+/// Where a page-less listing row links: an http(s) outlet or a site path to a
+/// file or folder the site serves (a PDF, a hand-made HTML folder), the same
+/// targets a page-less nav entry takes. `None` draws the row unlinked.
+pub fn pageless_row_href(
+    raw_frontmatter: &std::collections::BTreeMap<String, serde_json::Value>,
+) -> Option<String> {
+    nav_external_href(raw_frontmatter)
+        .filter(|u| is_valid_external_url(u) || (u.starts_with('/') && !u.starts_with("//")))
+        .map(str::to_string)
 }
 
 /// Emits a `log::warn!` when `raw_url` is set but is not a value any

@@ -260,6 +260,7 @@ pub(super) fn restore(blocks: &mut [Block], embeds: &LinkedEmbeds, config: &Pars
             source_line_offset: 0,
             warning_line_offset: 0,
             math: config.math,
+            blocks: None,
             hard_line_breaks: false,
         },
     };
@@ -270,7 +271,7 @@ pub(super) fn restore(blocks: &mut [Block], embeds: &LinkedEmbeds, config: &Pars
 
 struct Restore<'a> {
     embeds: &'a LinkedEmbeds,
-    config: ParseConfig,
+    config: ParseConfig<'a>,
 }
 
 impl Restore<'_> {

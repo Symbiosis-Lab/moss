@@ -80,19 +80,25 @@ pub fn is_calendar_file(path: &str) -> bool {
 /// Something about a page's event fields the build had to drop or could not use.
 #[derive(Default)]
 struct Problems {
+    /// An empty `start:`, the usual state of an event made from a template.
+    no_start: Vec<String>,
     bad_start: Vec<String>,
     bad_end: Vec<String>,
     bad_zone: Vec<String>,
     bad_online: Vec<String>,
 }
 
-fn warn_once(what: &str, pages: &[String]) {
-    if pages.is_empty() {
-        return;
-    }
+/// The first five of `pages` and how many more there are, or `None` for none.
+fn named(pages: &[String]) -> Option<String> {
     let shown: Vec<&str> = pages.iter().take(5).map(String::as_str).collect();
     let more = pages.len().saturating_sub(shown.len());
-    log::warn!("{what}: {}{}", shown.join(", "), if more > 0 { format!(" and {more} more") } else { String::new() });
+    (!shown.is_empty()).then(|| format!("{}{}", shown.join(", "), if more > 0 { format!(" and {more} more") } else { String::new() }))
+}
+
+fn warn_once(what: &str, pages: &[String]) {
+    if let Some(pages) = named(pages) {
+        log::warn!("{what}: {pages}");
+    }
 }
 
 /// A value safe to put in a `UID`: ASCII letters, digits, `.`, `_` and `-`.
@@ -128,8 +134,9 @@ fn event_of(doc: &ParsedDocument, site_url: &SiteUrl, problems: &mut Problems) -
     }
     let page = doc.source_path.clone().unwrap_or_else(|| doc.url_path.clone());
     let Some(ev) = doc.event.as_ref() else {
-        if raw_str(doc, "start").is_some() {
-            problems.bad_start.push(page);
+        if doc.awaits_event_date() {
+            let empty = doc.raw_frontmatter.get("start").is_some_and(|v| v.is_null() || v.as_str().is_some_and(|s| s.trim().is_empty()));
+            if empty { &mut problems.no_start } else { &mut problems.bad_start }.push(page);
         }
         return None;
     };
@@ -286,7 +293,10 @@ impl CalendarPlan {
             );
         }
 
-        warn_once("Event pages whose `start:` is not a date or date and time (YYYY-MM-DD or YYYY-MM-DD HH:MM) are left out of the calendar files", &problems.bad_start);
+        if let Some(pages) = named(&problems.no_start) {
+            crate::build::cli_output::log_note!("Event pages with an empty `start:` are left out of the calendar files and of past and upcoming listings until they have a date: {pages}");
+        }
+        warn_once("Event pages whose `start:` is not a date or date and time (YYYY-MM-DD or YYYY-MM-DD HH:MM) are left out of the calendar files and of past and upcoming listings", &problems.bad_start);
         warn_once("Event pages whose `end:` is unreadable or before `start:` get no end in their calendar files", &problems.bad_end);
         warn_once("`timezone:` is not a time zone name (use Area/City), so these events' calendar times are floating", &problems.bad_zone);
         warn_once("`online:` is not an http(s) address, so it is left out of the calendar files", &problems.bad_online);

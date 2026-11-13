@@ -133,12 +133,10 @@ fn with_folder_lists<'a>(content: &str, pages_of: impl Fn(&str) -> Option<Vec<&'
         out.push_str(before);
         for page in pages_of(body).unwrap_or_default() {
             let text = page.label.replace('\\', "\\\\").replace('[', "\\[").replace(']', "\\]");
-            // A row with no page has no address: its outlet, or its words alone.
-            let url = if page.is_pageless_entry() {
-                crate::build::scan::page_map::external_url(&page.raw_frontmatter)
-            } else {
-                Some(format!("/{}", crate::build::scan::article_map::to_pretty_url(&page.url_path)))
-            };
+            // As its card links; a row with no page and no outlet is its words alone.
+            let local = (!page.is_pageless_entry())
+                .then(|| format!("/{}", crate::build::scan::article_map::to_pretty_url(&page.url_path)));
+            let url = crate::build::scan::page_map::outlet_href(page).or(local);
             match url {
                 Some(url) => out.push_str(&format!("- [{text}]({url})\n")),
                 None => out.push_str(&format!("- {text}\n")),
@@ -192,9 +190,14 @@ pub fn generate_llms_txt<'a>(
         // the cascade-source `title`. Mirrors the chrome decisions made
         // for the nav link text.
         out.push_str(&format!("## {}\n\n", doc.label));
+        // A page published elsewhere: its address there is where its words live.
+        if let Some(url) = crate::build::scan::page_map::external_url(&doc.raw_frontmatter) {
+            out.push_str(&format!("<{url}>\n\n"));
+        }
         // Strip raw HTML <style>/<script> blocks (tags + contents) before
         // trimming so leftover blank lines at the edges are removed too.
         let content = with_folder_lists(&doc.content, |body| pages_of(body, doc));
+        let content = moss_core::ast::shortcode_extract::without_block_syntax(&content);
         let stripped = strip_html_blocks(&moss_core::resolve::embeds::derived::without_derived_markup(&content));
         let body = stripped.trim();
         if !body.is_empty() {
@@ -251,6 +254,30 @@ mod tests {
         let result = generate_llms_txt(&docs, "Site", None, |_, _| None);
         assert!(result.contains("Intro.") && result.contains("Outro."));
         assert!(!result.contains("moss-derived"), "{result}");
+    }
+
+    #[test]
+    fn a_page_body_carries_its_words_without_block_syntax() {
+        let content = ":::hero {image=pic.jpg\n  align=bottom}\n# Welcome\nA sentence under it.\n:::\n\nBody.";
+        let docs = vec![create_test_document("Home", content, None, None, None)];
+        let result = generate_llms_txt(&docs, "Site", None, |_, _| None);
+        assert!(result.contains("# Welcome\nA sentence under it.\n\nBody."), "{result}");
+        assert!(!result.contains(":::") && !result.contains("align=") && !result.contains("pic.jpg"), "{result}");
+    }
+
+    #[test]
+    fn a_page_published_elsewhere_points_there() {
+        let mut stub = create_test_document("Field Archive", "", None, None, None);
+        stub.raw_frontmatter.insert("external_url".into(), "https://archive.example.org/field/".into());
+        let docs = vec![stub];
+        let result = generate_llms_txt(&docs, "Site", None, |_, _| None);
+        assert!(result.contains("## Field Archive\n\n<https://archive.example.org/field/>\n"), "{result}");
+
+        let listed = with_folder_lists(
+            &format!("{}x{}", moss_core::resolve::embed_renderer::MARKER_FOLDER_LIST, moss_core::resolve::embed_renderer::MARKER_END),
+            |_| Some(vec![&docs[0]]),
+        );
+        assert_eq!(listed, "- [Field Archive](https://archive.example.org/field/)\n");
     }
 
     #[test]

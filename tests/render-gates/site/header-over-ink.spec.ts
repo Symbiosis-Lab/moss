@@ -24,7 +24,8 @@ interface Probe {
 
 async function probes(page: Page): Promise<Probe[]> {
   await page.evaluate(() => document.fonts.ready);
-  await page.waitForFunction(() => [...document.images].every((i) => i.complete && i.naturalWidth > 0));
+  // The opening hero's picture loads eagerly; the footer's lazy ones may never load in view.
+  await page.waitForFunction(() => [...document.images].filter((i) => i.loading !== 'lazy').every((i) => i.complete && i.naturalWidth > 0));
   const items = await page.$$eval(TEXT, (els) =>
     els
       .map((el) => {
@@ -98,3 +99,26 @@ test('a dark picture keeps white header ink', async ({ page }) => {
   expect(luminanceOfCss(color)).toBeGreaterThan(0.99);
 });
 
+
+// Words at the top of a picture the header is laid over start below the header.
+for (const width of [390, 900, 1280]) {
+  test(`align=top words start below the header at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto('/top/');
+    const header = (await page.locator('body > header').boundingBox())!;
+    const words = (await page.locator('.moss-hero[data-header="over"] .moss-hero-content').boundingBox())!;
+    expect(words.y, `words at ${words.y}, header ends at ${header.y + header.height}`).toBeGreaterThanOrEqual(header.y + header.height - 0.5);
+  });
+}
+
+test('a picture in footer.md wider than a phone fits the page', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.goto('/');
+  const { page: wide, client, picture } = await page.evaluate(() => ({
+    page: document.documentElement.scrollWidth,
+    client: document.documentElement.clientWidth,
+    picture: document.querySelector('footer img[src*="mark"]')!.getBoundingClientRect().right,
+  }));
+  expect(wide).toBe(client);
+  expect(picture).toBeLessThanOrEqual(client);
+});

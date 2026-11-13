@@ -52,8 +52,26 @@ client, not a spec-complete implementation:
 - **Response surface**: `ok`, `status`, `headers.get(name)`
   (case-insensitive), `text()`, `json()`. There is **no** `arrayBuffer()`, no
   `response.body` stream, no `clone()`.
-- **Request body**: strings only. Binary bodies are not expressible.
-- **Methods**: `GET`, `HEAD`, `POST`, `PUT`.
+- **Request body**: strings for `POST` and `PUT`; other methods ignore `body`.
+  Binary bodies are not expressible.
+- **Methods**: `GET`, `HEAD`, `POST`, `PUT`, `DELETE`.
+- **Redirects**: omitted `redirect` or `redirect: "follow"` follows redirects.
+  `redirect: "error"` rejects a redirect before contacting its target;
+  `redirect: "manual"` returns the redirect response without following it.
+  On a followed 301/302/303, methods other than GET/HEAD become GET and the
+  body is discarded. A POST, PUT or DELETE receiving 307/308 is returned
+  without following, rather than replaying the request.
+- **Headers on redirects**: same-origin redirects preserve caller headers.
+  Across an origin change (scheme, host or effective port), only `Accept`,
+  `Accept-Language`, `Content-Type` and `User-Agent` caller headers survive,
+  matched case-insensitively. Other headers, including authorization, cookies
+  and custom credentials, are removed and stay removed on later hops. URL
+  credentials are used only on the initial origin; redirect locations cannot
+  introduce credentials. The transport supplies its own framing headers.
+- Follow permits four hops, matching the existing client limit: a fifth
+  300–398 response errors even without `Location`; 399 is returned. Relative
+  locations resolve against the current URL, only HTTP(S) targets are allowed,
+  and a response without `Location` is returned. One timeout covers all hops.
 - The body is fully buffered before the promise resolves; default timeout is
   30 s.
 

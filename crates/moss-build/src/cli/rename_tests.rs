@@ -98,9 +98,9 @@ fn every_refusal_of_an_unbuilt_folder_says_the_file_is_in_no_site() {
         report(RootClass::Normal, true),
     ];
     for r in &cases {
-        let rename = crate::cli::site_guard::cli_refusal_message(r, "/x", "rename");
+        let rename = crate::cli::site_guard::cli_refusal_message(r, crate::cli::site_guard::Listing::Settled, "/x", "rename");
         assert!(rename.ends_with(NOT_IN_A_SITE), "{rename}");
-        let build = crate::cli::site_guard::cli_refusal_message(r, "/x", "build");
+        let build = crate::cli::site_guard::cli_refusal_message(r, crate::cli::site_guard::Listing::Settled, "/x", "build");
         assert!(build.contains("moss build") && !build.contains(NOT_IN_A_SITE), "{build}");
     }
 }

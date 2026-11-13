@@ -614,12 +614,10 @@ fn first_paragraph_excerpt(content: &str, strip_callout_marker: bool, math: bool
     let processed =
         moss_core::ast::shortcode_extract::extract_shortcodes(&content).markdown_with_placeholders;
 
-    let mut paragraphs: Vec<String> = Vec::new();
-    let mut current_lines: Vec<&str> = Vec::new();
-    // Indices of paragraphs a heading, rule, fence or shortcode line follows.
-    // Only the read-on below consults this: a heading between two paragraphs
-    // is strong evidence the second does not continue the first.
-    let mut broken_after: HashSet<usize> = HashSet::new();
+    // Everything the excerpt must not read as prose — from the parser: a
+    // line scan cannot see block context, and both earlier line-predicate
+    // attempts here were wrong in both directions (see `non_prose_view`).
+    let view = non_prose_view(&processed, math);
 
     // Which labels the page's index owns. A `[^…]` token is rendered as a
     // superscript marker only when the index owns its label — exactly
@@ -640,27 +638,64 @@ fn first_paragraph_excerpt(content: &str, strip_callout_marker: bool, math: bool
     //
     // Parsed with the SITE's math setting for the same reason (see
     // `extract_description`): a math-blind parse moves markers.
-    let defined_footnotes: HashSet<String> = {
-        let config = moss_core::ast::ParseConfig {
-            math,
-            ..Default::default()
-        };
-        let doc = moss_core::ast::parse_with_config(&processed, &config);
-        moss_core::ast::footnotes::FootnoteIndex::build(&doc.blocks)
-            .entries()
-            .iter()
-            .map(|(_, label)| label.clone())
-            .collect()
+    //
+    // The answer only decides which reference spans are blanked, so it is
+    // needed only when a reference sits on a line the selection read: one
+    // further down cannot change a byte of the excerpt, and a page whose
+    // opening prose cites nothing is spared a second full parse.
+    let select = |indexed: &dyn Fn(&str) -> bool| {
+        select_excerpt(&view.redact(&processed, indexed), &view.skip_lines, strip_callout_marker, math)
     };
+    let (excerpt, lines_read) = select(&|_| false);
+    if view.references.iter().all(|(line, ..)| *line >= lines_read) {
+        return excerpt;
+    }
+    let defined_footnotes = indexed_footnote_labels(&processed, math);
+    select(&|label| defined_footnotes.contains(label)).0
+}
 
-    // Everything the excerpt must not read as prose — from the parser, for
-    // the same reason `defined_footnotes` above comes from the parser: a
-    // line scan cannot see block context, and both earlier line-predicate
-    // attempts here were wrong in both directions (see `non_prose_view`).
-    let NonProseView {
-        skip_lines,
-        redacted,
-    } = non_prose_view(&processed, math, &defined_footnotes);
+/// The labels the footnote index of `processed` owns, parsed with the site's math setting.
+fn indexed_footnote_labels(processed: &str, math: bool) -> HashSet<String> {
+    count_excerpt_parse();
+    let config = moss_core::ast::ParseConfig {
+        math,
+        ..Default::default()
+    };
+    let doc = moss_core::ast::parse_with_config(processed, &config);
+    moss_core::ast::footnotes::FootnoteIndex::build(&doc.blocks)
+        .entries()
+        .iter()
+        .map(|(_, label)| label.clone())
+        .collect()
+}
+
+#[cfg(test)]
+thread_local! {
+    static EXCERPT_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Ticks once per full parse the excerpt makes, so tests can pin when it is skipped.
+fn count_excerpt_parse() {
+    #[cfg(test)]
+    EXCERPT_PARSES.with(|n| n.set(n.get() + 1));
+}
+
+/// Group `redacted`'s lines into paragraphs and pick the excerpt from them,
+/// with the number of leading lines the pick read.
+fn select_excerpt(
+    redacted: &str,
+    skip_lines: &HashSet<usize>,
+    strip_callout_marker: bool,
+    math: bool,
+) -> (ExcerptText, usize) {
+    let mut paragraphs: Vec<String> = Vec::new();
+    let mut current_lines: Vec<&str> = Vec::new();
+    // Indices of paragraphs a heading, rule, fence or shortcode line follows.
+    // Only the read-on below consults this: a heading between two paragraphs
+    // is strong evidence the second does not continue the first.
+    let mut broken_after: HashSet<usize> = HashSet::new();
+    // Per paragraph, the index of the line after its last.
+    let mut paragraph_ends: Vec<usize> = Vec::new();
 
     for (index, line) in redacted.lines().enumerate() {
         if skip_lines.contains(&index) {
@@ -670,6 +705,7 @@ fn first_paragraph_excerpt(content: &str, strip_callout_marker: bool, math: bool
         if line.trim().is_empty() {
             if !current_lines.is_empty() {
                 paragraphs.push(current_lines.join(" "));
+                paragraph_ends.push(index);
                 current_lines.clear();
             }
         } else if line.starts_with('#')
@@ -737,6 +773,7 @@ fn first_paragraph_excerpt(content: &str, strip_callout_marker: bool, math: bool
     }
     if !current_lines.is_empty() {
         paragraphs.push(current_lines.join(" "));
+        paragraph_ends.push(redacted.lines().count());
     }
 
     // Take the first non-empty paragraph after stripping inline markdown. If
@@ -747,9 +784,10 @@ fn first_paragraph_excerpt(content: &str, strip_callout_marker: bool, math: bool
     // list, it does not run into it, and gluing the bullets on would publish
     // the page's navigation as its description.
     //
-    // Footnote markers are already gone: `non_prose_view` redacted their exact
-    // parser-reported spans above, so the stripper needs no label set and
-    // cannot delete a `[^…]` the page renders as prose.
+    // Footnote markers are already gone from `redacted`: the caller blanked
+    // their exact parser-reported spans (`NonProseView::redact`), so the
+    // stripper needs no label set and cannot delete a `[^…]` the page
+    // renders as prose.
     //
     // Built in lockstep with the plain `excerpt`: `excerpt_markdown` is the
     // SAME selected span with its markdown left intact (only the
@@ -759,7 +797,9 @@ fn first_paragraph_excerpt(content: &str, strip_callout_marker: bool, math: bool
     let mut excerpt = String::new();
     let mut excerpt_markdown = String::new();
     let mut lead: Option<usize> = None;
+    let mut lines_read = 0;
     for (index, paragraph) in paragraphs.iter().enumerate() {
+        lines_read = paragraph_ends[index];
         let stripped = strip_markdown_inline(paragraph);
         let stripped = stripped.trim();
         if stripped.is_empty() || is_only_links(paragraph, math) {
@@ -786,10 +826,13 @@ fn first_paragraph_excerpt(content: &str, strip_callout_marker: bool, math: bool
             }
         }
     }
-    ExcerptText {
-        plain: excerpt,
-        markdown: excerpt_markdown,
-    }
+    (
+        ExcerptText {
+            plain: excerpt,
+            markdown: excerpt_markdown,
+        },
+        lines_read,
+    )
 }
 
 /// The two forms [`first_paragraph_excerpt`] produces from the SAME selected
@@ -898,17 +941,47 @@ fn reads_as_fragment(excerpt: &str) -> bool {
 }
 
 /// The excerpt's parser-derived view of `markdown`: which source lines are
-/// not prose at all, and the text with every footnote *marker* removed.
+/// not prose at all, and where every footnote *marker* sits.
 struct NonProseView {
     /// 0-based indices of lines the excerpt must skip entirely: code blocks
     /// and the HOISTED (doc-order-first) definition of each footnote label.
     skip_lines: HashSet<usize>,
+    /// The `[^label]:` marker of each REPEAT definition: the page renders the
+    /// repeat's body in place, marker-less.
+    repeat_markers: Vec<std::ops::Range<usize>>,
+    /// Every `[^label]` reference as (line, span, label). Whether the page
+    /// shows it as a superscript number depends on the index; see
+    /// [`NonProseView::redact`].
+    references: Vec<(usize, std::ops::Range<usize>, String)>,
+}
+
+impl NonProseView {
     /// `markdown` with the spans the page never renders as prose text blanked
-    /// out: every indexed `[^label]` reference (the page renders a
-    /// superscript number) and the `[^label]:` marker of a REPEAT definition
-    /// (the page renders the repeat's body in place, marker-less). Newlines
-    /// are preserved, so line indices agree with `skip_lines`.
-    redacted: String,
+    /// out: every repeat marker, and each reference whose label `indexed`
+    /// owns. A token whose label the index does not own renders literally,
+    /// the way `render_marker` is gated. Newlines are preserved, so line
+    /// indices agree with `skip_lines`; span bounds are parser offsets, so
+    /// they land on char boundaries.
+    fn redact(&self, markdown: &str, indexed: impl Fn(&str) -> bool) -> String {
+        let references = self
+            .references
+            .iter()
+            .filter(|(_, _, label)| indexed(label))
+            .map(|(_, span, _)| span);
+        let mut cut = vec![false; markdown.len()];
+        for span in self.repeat_markers.iter().chain(references) {
+            for flag in &mut cut[span.start.min(markdown.len())..span.end.min(markdown.len())] {
+                *flag = true;
+            }
+        }
+        let mut redacted = String::with_capacity(markdown.len());
+        for (i, ch) in markdown.char_indices() {
+            if ch == '\n' || !cut[i] {
+                redacted.push(ch);
+            }
+        }
+        redacted
+    }
 }
 
 /// Build the excerpt's [`NonProseView`], asking pulldown for byte ranges
@@ -934,10 +1007,7 @@ struct NonProseView {
 /// References are redacted here — at their parser-reported spans — rather
 /// than string-matched later, so a `[^a]` inside a code span or (on a
 /// math-ON site) inside `$…$` survives exactly when the page displays it.
-///
-/// `indexed` gates reference redaction the way `render_marker` is gated:
-/// a token whose label the index does not own renders literally.
-fn non_prose_view(markdown: &str, math: bool, indexed: &HashSet<String>) -> NonProseView {
+fn non_prose_view(markdown: &str, math: bool) -> NonProseView {
     use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
     // Byte offset at which each line starts, so a range maps to line indices.
@@ -949,7 +1019,8 @@ fn non_prose_view(markdown: &str, math: bool, indexed: &HashSet<String>) -> NonP
     };
 
     let mut skip_lines = HashSet::new();
-    let mut redact_spans: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut repeat_markers: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut references = Vec::new();
     let mut seen_definitions: HashSet<String> = HashSet::new();
 
     // The SAME math the page parses with — see `extract_description`.
@@ -996,37 +1067,20 @@ fn non_prose_view(markdown: &str, math: bool, indexed: &HashSet<String>) -> NonP
                         Some((Event::End(TagEnd::FootnoteDefinition), _)) | None => range.end,
                         Some((_, child)) => child.start.clamp(range.start, range.end),
                     };
-                    redact_spans.push(range.start..content_start);
+                    repeat_markers.push(range.start..content_start);
                 }
             }
             Event::FootnoteReference(label) => {
-                if indexed.contains(label.as_ref()) {
-                    redact_spans.push(range);
-                }
+                references.push((line_of(range.start), range, label.to_string()));
             }
             _ => {}
         }
     }
 
-    // Drop the redacted bytes, keeping every newline so the line indices in
-    // `skip_lines` stay true. Span bounds are parser offsets, so they land
-    // on char boundaries.
-    let mut cut = vec![false; markdown.len()];
-    for span in redact_spans {
-        for flag in &mut cut[span.start.min(markdown.len())..span.end.min(markdown.len())] {
-            *flag = true;
-        }
-    }
-    let mut redacted = String::with_capacity(markdown.len());
-    for (i, ch) in markdown.char_indices() {
-        if ch == '\n' || !cut[i] {
-            redacted.push(ch);
-        }
-    }
-
     NonProseView {
         skip_lines,
-        redacted,
+        repeat_markers,
+        references,
     }
 }
 

@@ -11,6 +11,8 @@
 export {};
 
 import { holdPageScroll } from "./viewport";
+// Registers its listeners first, so Escape closes an open submenu before the mobile-menu handler below sees it.
+import "./nav/submenu";
 import { readStored, writeStored } from "./safe-storage";
 
 // Expose toggle functions globally for onclick handlers

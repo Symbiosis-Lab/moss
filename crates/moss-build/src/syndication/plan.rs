@@ -23,6 +23,9 @@ pub struct PlanInputs<'a> {
     /// Sources whose content changed in this publish.
     pub edited_sources: &'a HashSet<String>,
     pub channels: &'a BTreeMap<String, ChannelInfo>,
+    pub config: &'a crate::config::ConfigFile,
+    pub folder: &'a std::path::Path,
+    pub site_url: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -34,6 +37,7 @@ pub enum Action {
     Update,
     /// The post already lists a copy on this channel's host.
     Adopt { url: String },
+    Unavailable { reason: String },
     Skip { reason: String },
 }
 
@@ -68,6 +72,82 @@ impl PostPlan {
     }
 }
 
+/// What a publish makes of one channel a post's resolved list names. The
+/// channel chip reads the same verdict, so what it shows is what goes out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Verdict {
+    Due,
+    Update,
+    Adopt { url: String },
+    NotSetUp,
+    Unavailable { reason: String },
+    /// Live before only its folder named the channel.
+    LiveBeforeNamed,
+    /// A record stands and nothing is owed now; `None` when it cannot be read.
+    Settled(Option<State>),
+}
+
+impl Verdict {
+    /// The plan's entry for this verdict, when it has one.
+    fn into_action(self, channel: &str) -> Option<Action> {
+        match self {
+            Verdict::Due => Some(Action::Due),
+            Verdict::Update => Some(Action::Update),
+            Verdict::Adopt { url } => Some(Action::Adopt { url }),
+            Verdict::Unavailable { reason } => Some(Action::Unavailable { reason }),
+            Verdict::NotSetUp => Some(Action::Skip { reason: format!("no channel named {channel} is set up for this site") }),
+            Verdict::LiveBeforeNamed => Some(Action::Skip { reason: "it was live before the folder named this channel; name the channel in the page itself to post it".into() }),
+            Verdict::Settled(_) => None,
+        }
+    }
+}
+
+/// The parts of a post a verdict reads.
+pub(super) struct PostFacts<'a> {
+    /// The uid the page was built under, which keys its copies.
+    pub uid: &'a str,
+    /// The channels the page itself names.
+    pub own: &'a [String],
+    /// Its `syndicated:` addresses.
+    pub listed: &'a [String],
+    pub already_live: bool,
+}
+
+/// One channel's verdict for a post. Only meaningful for a channel the post's
+/// resolved list names.
+pub(super) fn verdict(channel: &str, info: Option<&ChannelInfo>, post: &PostFacts<'_>, records: &Records, edited: bool) -> Verdict {
+    let Some(info) = info else { return Verdict::NotSetUp };
+    let adopt = || post.listed.iter().find(|u| on_host(u, &info.domains)).map(|url| Verdict::Adopt { url: url.clone() });
+    if records.exists(post.uid, channel) {
+        return match records.get(post.uid, channel) {
+            Some(r) if r.state == State::Posted && edited => Verdict::Update,
+            Some(r) if r.definite_first() && edited => {
+                adopt().unwrap_or(Verdict::Due)
+            }
+            // A copy the author posted by hand, or found after an uncertain
+            // send, is adopted once its address is listed.
+            Some(r) if matches!(r.state, State::HandedOff | State::Unconfirmed | State::Due | State::Refused | State::Unavailable) => {
+                adopt().unwrap_or_else(|| if r.state == State::Unavailable {
+                    Verdict::Unavailable { reason: r.reason.unwrap_or_else(|| "the latest page cannot be copied".into()) }
+                } else { Verdict::Settled(Some(r.state)) })
+            }
+            other => Verdict::Settled(other.map(|r| r.state)),
+        };
+    }
+    adopt().unwrap_or(if post.already_live && !post.own.iter().any(|c| c == channel) { Verdict::LiveBeforeNamed } else { Verdict::Due })
+}
+
+/// Apply content constraints only after identity and adoption have been checked.
+pub(super) fn assess_verdict(verdict: Verdict, post: &ArticleInfo, info: &ChannelInfo, records: &Records, channel: &str, site: Option<&str>, opts: &super::shape::ShapeOptions) -> Verdict {
+    if !matches!(verdict, Verdict::Due | Verdict::Update) { return verdict; }
+    let uid = post.uid.as_deref().unwrap_or_default();
+    let record = records.get(uid, channel).unwrap_or_else(|| CopyRecord::due(uid, channel, &post.source_path, &post.url_path));
+    match super::shape::assess(post, &info.spec, site, opts, &record) {
+        Ok(_) => verdict,
+        Err(reason) => Verdict::Unavailable { reason },
+    }
+}
+
 /// Decide, reading nothing but `inputs` and the existing records.
 pub fn decide(inputs: &PlanInputs<'_>, records: &Records) -> Vec<PostPlan> {
     let was_live: HashSet<&str> = inputs
@@ -94,6 +174,7 @@ pub fn decide(inputs: &PlanInputs<'_>, records: &Records) -> Vec<PostPlan> {
             post.frontmatter.get("syndicate").and_then(|v| super::parse_choice(v).ok()).unwrap_or_default();
         let listed = crate::build::types::syndicated_urls(post.frontmatter.get("syndicated"));
         let already_live = was_live.contains(uid.as_str()) || was_live.contains(post.url_path.as_str());
+        let facts = PostFacts { uid: &uid, own: &own, listed: &listed, already_live };
 
         let mut entries = Vec::new();
         for channel in channels {
@@ -101,30 +182,14 @@ pub fn decide(inputs: &PlanInputs<'_>, records: &Records) -> Vec<PostPlan> {
             if channel == RESERVED_EMAIL {
                 continue;
             }
-            let action = if let Some(info) = inputs.channels.get(channel) {
-                if records.exists(&uid, channel) {
-                    match records.get(&uid, channel) {
-                        Some(r) if r.state == State::Posted && inputs.edited_sources.contains(&post.source_path) => Action::Update,
-                        // A copy the author posted by hand, or found after an
-                        // uncertain send, is adopted once its address is listed.
-                        Some(r) if matches!(r.state, State::HandedOff | State::Unconfirmed | State::Due | State::Refused) => {
-                            match listed.iter().find(|u| on_host(u, &info.domains)) {
-                                Some(url) => Action::Adopt { url: url.to_string() },
-                                None => continue,
-                            }
-                        }
-                        _ => continue,
-                    }
-                } else if let Some(url) = listed.iter().find(|u| on_host(u, &info.domains)) {
-                    Action::Adopt { url: url.to_string() }
-                } else if already_live && !own.contains(channel) {
-                    Action::Skip { reason: "it was live before the folder named this channel; name the channel in the page itself to post it".into() }
-                } else {
-                    Action::Due
-                }
-            } else {
-                Action::Skip { reason: format!("no channel named {channel} is set up for this site") }
-            };
+            let edited = inputs.edited_sources.contains(&post.source_path);
+            let info = inputs.channels.get(channel);
+            let mut verdict = verdict(channel, info, &facts, records, edited);
+            if let Some(info) = info {
+                let opts = super::shape::ShapeOptions::new(inputs.config, inputs.folder, inputs.articles, post, channel, None);
+                verdict = assess_verdict(verdict, post, info, records, channel, inputs.site_url, &opts);
+            }
+            let Some(action) = verdict.into_action(channel) else { continue };
             entries.push(entry(channel, action));
         }
         if !entries.is_empty() {
@@ -136,7 +201,7 @@ pub fn decide(inputs: &PlanInputs<'_>, records: &Records) -> Vec<PostPlan> {
 
 /// Whether `url` is on one of a channel's domains, which are already in
 /// [`host_of`](crate::plugins::manager::copies::host_of)'s form.
-fn on_host(url: &str, domains: &[String]) -> bool {
+pub(super) fn on_host(url: &str, domains: &[String]) -> bool {
     if !url.contains("://") {
         return false;
     }
@@ -171,20 +236,29 @@ pub fn apply(plans: Vec<PostPlan>, records: &Records, site_url: Option<&str>, pu
                     records.save(&r)
                 }
                 Action::Adopt { url } => {
-                    let mut r = CopyRecord::due(&plan.uid, &entry.channel, &entry.source_path, &entry.url_path);
+                    let mut r = records.get(&plan.uid, &entry.channel)
+                        .unwrap_or_else(|| CopyRecord::due(&plan.uid, &entry.channel, &entry.source_path, &entry.url_path));
                     r.state = State::Posted;
                     r.remote = Some(RemoteRef { id: url.clone(), url: url.clone() });
+                    r.reason = None;
+                    r.handoff = None;
+                    r.update_due = false;
                     records.save(&r)
                 }
                 Action::Update => match records.get(&plan.uid, &entry.channel) {
                     Some(mut r) => {
                         r.update_due = true;
+                        r.reason = None;
                         r.site_url = site_url.map(str::to_string).or(r.site_url);
                         r.post = post_of(&plan.uid);
                         r.touch();
                         records.save(&r)
                     }
                     None => Ok(()),
+                },
+                Action::Unavailable { reason } => match records.get(&plan.uid, &entry.channel) {
+                    Some(mut r) => if r.make_unavailable(reason) { records.save(&r) } else { Ok(()) },
+                    _ => Ok(()),
                 },
                 Action::Skip { .. } => Ok(()),
             };

@@ -235,6 +235,7 @@ const COVERED_ELSEWHERE = ['.moss-subscribe-form[data-state="success"] .moss-btn
 
 // Every focus rule on a text field, with the fields (ids in the markup above) it styles.
 const FOCUS_RULES: Record<string, string[]> = {
+  '.moss-input:where(:not(select)):focus, .comment-field:focus, .comment-form textarea:focus': ['underline', 'subscribe', 'comment-text', 'comment-field'],
   '.moss-input:focus, .comment-field:focus, .comment-form textarea:focus': ['underline', 'subscribe', 'comment-text', 'comment-field'],
   '.moss-input--boxed.moss-input--boxed:focus': ['boxed', 'country'],
   '.moss-search__panel:has(.moss-search__input:focus)': ['search'],

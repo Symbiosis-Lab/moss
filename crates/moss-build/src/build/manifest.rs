@@ -145,6 +145,8 @@ pub struct PendingManifest {
     preview_uses_places: bool,
     preview_originals: std::collections::BTreeMap<String, Option<String>>,
     withdrawn: change_set::Withdrawn,
+    /// Whether a page this build rendered is restricted to members.
+    restricts_pages: bool,
     /// Paths that the blocking phase generated. Must be a subset of
     /// `(inner.files ∪ inner.image_outputs)` at seal time (the manifest invariant).
     /// Consumed by stale-HTML cleanup (C1–C4).
@@ -356,6 +358,7 @@ impl PendingManifest {
             preview_embeds: std::collections::BTreeMap::new(),
             preview_uses_places: false,
             withdrawn: Default::default(),
+            restricts_pages: false,
             preview_originals: std::collections::BTreeMap::new(),
             blocking_keys: HashSet::new(),
             touched: HashSet::new(),
@@ -393,6 +396,11 @@ impl PendingManifest {
     ) {
         self.preview_embeds = embeds;
         self.preview_uses_places = uses_places;
+    }
+
+    /// Record that this build restricted at least one page to members.
+    pub(crate) fn mark_restricts_pages(&mut self) {
+        self.restricts_pages = true;
     }
 
     /// Record the generated files this build leaves out because a site setting says so.
@@ -959,6 +967,7 @@ impl PendingManifest {
             preview_uses_places: self.preview_uses_places,
             preview_originals: self.preview_originals,
             withdrawn: self.withdrawn,
+            restricts_pages: self.restricts_pages,
             blocking_keys: self.blocking_keys,
             generation_id,
             unverified: self.unverified,
@@ -987,6 +996,7 @@ pub struct SealedManifest {
     preview_uses_places: bool,
     preview_originals: std::collections::BTreeMap<String, Option<String>>,
     withdrawn: change_set::Withdrawn,
+    restricts_pages: bool,
     blocking_keys: HashSet<String>,
     /// Content-derived identity computed at seal time. 16 lowercase hex chars
     /// (xxh3_64 over BTreeMap-sorted `"{path}\x00{entry_value}\n"` pairs).
@@ -1027,6 +1037,11 @@ impl SealedManifest {
     /// since, or any key of a render never shown.
     pub fn landed_after_show(&self, key: &str) -> bool {
         self.late.as_ref().is_none_or(|late| late.contains(key))
+    }
+
+    /// Whether this generation restricted at least one page to members.
+    pub fn restricts_pages(&self) -> bool {
+        self.restricts_pages
     }
 
     /// The generated files this build left out because a site setting says so.

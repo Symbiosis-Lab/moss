@@ -102,6 +102,7 @@ pub(super) fn render(
     ordinal: usize,
     docs: &[ParsedDocument],
     maps: Option<&PlaceMapRenderContext>,
+    now: chrono::NaiveDateTime,
 ) -> String {
     let path = marker_decode(parsed.path);
     let from = marker_decode(parsed.from);
@@ -119,7 +120,9 @@ pub(super) fn render(
         } else {
             Place::Embedded
         };
-        return render(model, &doc.title, doc.date.as_deref(), host.map_or(doc.lang, |d| d.lang), place);
+        let build_day = now.format("%Y-%m-%d").to_string();
+        let date = model.spec.stamp_date(doc.date.as_deref(), &build_day);
+        return render(model, &doc.title, date, host.map_or(doc.lang, |d| d.lang), place);
     }
     if let Some((doc, maps)) = target.zip(maps) {
         if let Some(svg) = maps.render_article_map(&doc.location, doc.route, &doc.url_path, &from, ordinal) {

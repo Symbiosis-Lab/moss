@@ -395,6 +395,7 @@ fn get_checked(url: &str, timeout: std::time::Duration) -> Result<ureq::Response
         None,
         validate,
         |next| next,
+        |_| false,
     )
 }
 

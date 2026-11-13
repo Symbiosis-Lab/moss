@@ -327,16 +327,15 @@ impl AssetMap {
         }
     }
 
-    /// The remote → local pairs, the shape `compose_note` reads, with each
-    /// local path relative to a page `page_depth` folders below the site
-    /// root — the one place that decides how a page names an imported file.
-    pub(crate) fn local_map(&self, page_depth: usize) -> HashMap<String, String> {
-        let up = if page_depth == 0 { "./".to_string() } else { "../".repeat(page_depth) };
+    /// The remote → local pairs, the shape `compose_note` reads: the one
+    /// place that decides how a page names an imported file, `./` and the
+    /// file's path from the folder it was saved under.
+    pub(crate) fn local_map(&self) -> HashMap<String, String> {
         self.assets
             .iter()
             .filter_map(|(remote, a)| match a {
                 Asset::Local(local) => {
-                    Some((remote.clone(), format!("{up}{}", local.trim_start_matches("./"))))
+                    Some((remote.clone(), format!("./{}", local.trim_start_matches("./"))))
                 }
                 Asset::KeptRemote => None,
             })
@@ -811,12 +810,13 @@ mod tests {
     // ── AssetMap ──────────────────────────────────────────────────────
 
     #[test]
-    fn local_paths_are_relative_to_the_page_that_reads_them() {
+    fn local_paths_start_with_dot_slash() {
         let mut assets = AssetMap::default();
         assets.insert("https://example.com/a.png".into(), "./assets/imported/x.png".into());
-        let path = |depth| assets.local_map(depth)["https://example.com/a.png"].clone();
-        assert_eq!(path(0), "./assets/imported/x.png");
-        assert_eq!(path(2), "../../assets/imported/x.png");
+        assets.insert("https://example.com/b.png".into(), "assets/imported/y.png".into());
+        let map = assets.local_map();
+        assert_eq!(map["https://example.com/a.png"], "./assets/imported/x.png");
+        assert_eq!(map["https://example.com/b.png"], "./assets/imported/y.png");
     }
 
     #[test]

@@ -59,6 +59,14 @@ case "$PLATFORM" in
       "$TARGET_DIR/x86_64-apple-darwin/release-optimized/moss-cli" \
       "$TARGET_DIR/aarch64-apple-darwin/release-optimized/moss-cli"
     lipo -info "$OUT"
+    # An export table is half a megabyte per slice that nothing reads.
+    for ARCH in x86_64 arm64; do
+      LISTED=$(xcrun dyld_info -arch "$ARCH" -exports "$OUT")
+      if grep -q '^ *0x' <<<"$LISTED"; then
+        echo "$OUT ($ARCH) exports symbols; crates/moss-cli/build.rs should link it with -no_exported_symbols" >&2
+        exit 1
+      fi
+    done
     ;;
   linux-x86_64)
     OUT="moss-linux-x86_64"

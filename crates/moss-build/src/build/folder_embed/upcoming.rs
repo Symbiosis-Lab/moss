@@ -49,11 +49,12 @@ pub(crate) fn when_of(ev: &crate::build::types::EventFields, now: chrono::NaiveD
 
 /// Whether `doc` passes a `when:` filter: `past` keeps whatever is not
 /// upcoming (articles included), `upcoming` keeps only events that have not
-/// ended. No filter, or an unknown one, keeps everything.
+/// ended. An event still waiting for its date (a `start` with no usable
+/// value) is in neither. No filter, or an unknown one, keeps everything.
 pub(super) fn keeps(when: Option<&str>, doc: &ParsedDocument, now: chrono::NaiveDateTime) -> bool {
     match when {
         Some("upcoming") => is_upcoming(doc, now),
-        Some("past") => !is_upcoming(doc, now),
+        Some("past") => !is_upcoming(doc, now) && !doc.awaits_event_date(),
         _ => true,
     }
 }

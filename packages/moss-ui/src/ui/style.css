@@ -1858,6 +1858,12 @@ body.divider-dragging * {
   transform: translate(-0.5px, 0.5px);
 }
 
+/* Off reads as off at a glance: a logo keeps its colour only while the channel is on. */
+.moss-syndication-button:not(.enabled) :is(.channel-icon-glyph, .channel-icon-fallback) {
+  filter: grayscale(1);
+  opacity: 0.55;
+}
+
 .moss-syndication-button:hover {
   color: var(--moss-color-accent);
   background: var(--moss-color-surface);
@@ -2715,8 +2721,8 @@ body.own-titlebar.controls-trailing .moss-titlebar-traffic-light-space {
 }
 
 /* Login chrome.
-   Rendered into #moss-titlebar-plugin-section when the login browser-panel is
-   open (`is_login_browser=true`). ONE 48px titlebar strip, panel-side region:
+   Rendered into #moss-titlebar-plugin-section when the browser-panel shows a
+   login (`login` is set). ONE 48px titlebar strip, panel-side region:
    [back (hidden if !canGoBack)] [Matters icon + "Matters" centered] [spacer].
    Tokens only — no raw hexes. Mirrors .moss-matters-bar's flex layout. */
 .moss-login-chrome {
@@ -5894,6 +5900,29 @@ body.own-titlebar.controls-trailing .moss-titlebar-traffic-light-space {
 }
 .receipt-copies-group .receipt-detail-line1 > .receipt-copy-actions {
   margin-block-start: 0;
+}
+/* The receipt opens with focus on itself: a mouse click must not paint a ring on its first link. */
+.moss-modal:focus {
+  outline: none;
+}
+.receipt-copy-adopt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--moss-space-2xs) var(--moss-space-sm);
+  margin-block-start: var(--moss-space-2xs);
+  font-size: 0.8125rem;
+}
+.receipt-copy-adopt input {
+  flex: 1 1 100%;
+  min-inline-size: 0;
+}
+.receipt-copy-adopt-error:empty {
+  display: none;
+}
+.receipt-copy-adopt-error {
+  flex-basis: 100%;
+  color: var(--moss-error);
 }
 .fineprint,
 .surface-note {

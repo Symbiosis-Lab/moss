@@ -329,6 +329,21 @@ fn a_new_article_moves_the_root_groups_membership_as_well_as_its_folders() {
     assert_ne!(digest(&added, &root_key()).membership, before.membership);
 }
 
+/// `children_listed: here` is a fact on the folder's home document, read by the
+/// selector, so flipping it moves the digest of every group above the folder and
+/// leaves the folder's own group alone.
+#[test]
+fn children_listed_here_moves_the_groups_above_the_folder_only() {
+    let before_root = digest(&vault(), &root_key());
+    let before_own = digest(&vault(), &key("writings"));
+    let mut docs = vault();
+    docs[1].children_listed = Some("here".to_string());
+    assert_ne!(digest(&docs, &root_key()).membership, before_root.membership);
+    assert_eq!(digest(&docs, &key("writings")).membership, before_own.membership);
+    assert!(!members(&docs, "", true).iter().any(|u| u.starts_with("writings/")));
+    assert!(members(&docs, "writings", true).iter().any(|u| u == "writings/deep/nested/index.html"));
+}
+
 /// A folder card shows "N articles" and the folder's latest child date — both
 /// corpus-derived. So a file added two levels down moves the *contents* of a
 /// group whose *membership* did not move at all. Nothing in the subfolder's

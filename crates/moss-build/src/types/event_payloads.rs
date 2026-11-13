@@ -48,11 +48,18 @@ pub struct ActionPanelOpened {
     /// editor/composer=false. Drives the InsetLeft vs Tiled preview model in
     /// the frontend's ActionPanelOpened handler.
     pub is_below_titlebar: bool,
-    /// Whether the browser-panel is showing a login URL (matters.town/matters.icu
-    /// login path). When true, the shell renders the login chrome (identity +
-    /// back + close) instead of the generic plugin-title strip. Always false for
-    /// non-browser occupants (editor, composer). Design: C1–C4.
-    pub is_login_browser: bool,
+    /// The login the browser-panel shows, if any. A login renders its own
+    /// chrome (identity and actions) instead of the generic plugin-title strip.
+    /// Never set for non-browser occupants (editor, composer).
+    pub login: Option<LoginKind>,
+}
+
+/// A login the browser-panel can show; the shell draws each in its own words.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum LoginKind {
+    Matters,
+    Ghost,
 }
 
 /// One `publish-verdict` wire payload. `state` transitions are the ONLY thing

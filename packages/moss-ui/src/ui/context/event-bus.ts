@@ -138,17 +138,10 @@ export const Events = {
 
   /**
    * Emitted after the subscriber list has been mutated (add / remove /
-   * lang change / import). Lets dependent UI (e.g. the email channel button
+   * lang change / import) or pulled from the server. Lets dependent UI (e.g. the email channel button
    * tooltip) re-read the audience count without polling.
    */
   EMAIL_SUBSCRIBERS_CHANGED: "email:subscribersChanged",
-
-  /**
-   * Emitted after the email send mode has been changed via the settings UI.
-   * Lets dependent UI re-read the mode (e.g. switch between "all", "scope",
-   * "test" tooltips on the email channel button).
-   */
-  EMAIL_SEND_MODE_CHANGED: "email:sendModeChanged",
 
   /**
    * Emitted after the email api_key has been saved (or cleared) via the
@@ -227,6 +220,8 @@ export interface SyndicationStateChangedEvent {
    * email send instead of re-deriving the source from the preview URL.
    */
   articleSourcePath: string | null;
+  /** This post's chosen places, other than the site, that publishing would send to now. */
+  copiesDue?: string[];
 }
 
 export interface DeployStateChangedEvent {
@@ -244,13 +239,19 @@ export interface PreviewReadyEvent {
 }
 
 /**
- * Payload for PREVIEW_URL_CHANGED event
- * Emitted when the preview iframe navigates to a new URL
+ * Payload for PREVIEW_URL_CHANGED: the settled answer to which source backs
+ * the page the preview shows (see `preview/page-source.ts`).
  */
 export interface PreviewUrlChangedEvent {
+  /**
+   * Null when this is an answer. `lookup`: moss has none for the page yet (the
+   * lookup failed, or the build has not mapped it). `download`: its source is
+   * still coming down from the cloud.
+   */
+  pending: "lookup" | "download" | null;
   /** URL path from preview (e.g., "posts/my-article.html") */
   urlPath: string;
-  /** Absolute path to the source markdown file, or null */
+  /** Absolute path to the file behind the page (its markdown source, or the source of any other served file), or null */
   sourcePath: string | null;
   /** Whether this page is a directory listing (homepage, section index) */
   isDir: boolean;
@@ -261,16 +262,14 @@ export interface PreviewUrlChangedEvent {
   /** What would replace this page when no source backs it (a home note, a claim file), else null */
   takeover: Takeover | null;
   /**
-   * True only when this event is a same-URL RELOAD of the already-displayed
-   * page (a rebuild echo — the bridge re-reported the same URL after the site
-   * rebuilt), as opposed to a genuine navigation. The first load (previousUrl
-   * null) and any navigation to a new URL are NOT reloads.
+   * True when this answers the page already on screen again — a same-URL
+   * rebuild echo, or a fresh lookup of that page — rather than a navigation.
+   * The first load and any navigation to a new URL are NOT reloads.
    *
-   * Consumers must NOT treat a reload as "the user navigated here": in
-   * particular app.ts skips forwarding `editor:load-source` on a reload, so a
-   * home-page rebuild triggered by creating a new file cannot stomp the editor
-   * off the brand-new file it just opened. See navigation-manager.ts
-   * (handleNavigationUpdate reload branch) and the create-file stomp guard.
+   * Consumers must NOT treat a reload as "the user navigated here": the editor
+   * link forwards one to the editor only while the editor waits on this page,
+   * so a home-page rebuild triggered by creating a new file cannot stomp the
+   * editor off the brand-new file it just opened.
    */
   isReload: boolean;
 }
@@ -377,12 +376,6 @@ export interface EmailSendResultEvent {
  * Avoids shipping the whole subscriber array through the bus.
  */
 export interface EmailSubscribersChangedEvent {}
-
-/**
- * Payload for EMAIL_SEND_MODE_CHANGED event
- * Empty — listeners re-read the mode via `commands.emailGetSendMode`.
- */
-export interface EmailSendModeChangedEvent {}
 
 /**
  * Payload for PUSH_NOTICE event.

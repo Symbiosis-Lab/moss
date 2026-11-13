@@ -658,7 +658,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         widget: Widget::TextInput,
         // Frequency=3, Importance=2 → score = 100 - (3*6 + 2*4) = 100 - 26 = 74
         score: 74,
-        description: "Linkblog target: when set, internal references to this page (cards, link rewrites, canonical, sitemap) point here instead of the local URL. The page is still built locally — direct visits to its slug still work — but the canonical home is elsewhere on the web. Pattern from JSON Feed 1.1. A page that is in the nav bar links to this value there instead, and the value may also be `mailto:`, `tel:`, `#anchor` or `/path#anchor`.",
+        description: "Linkblog target: when set, internal references to this page (cards, link rewrites, canonical, sitemap) point here instead of the local URL. The page is still built locally — direct visits to its slug still work, and the page ends with a link there named by its host unless its body already links there — but the canonical home is elsewhere on the web; `llms.txt` gives that address under the page's heading. Pattern from JSON Feed 1.1. A page that is in the nav bar links to this value there instead, and the value may also be `mailto:`, `tel:`, `#anchor` or `/path#anchor`.",
         label_key: "chip.external_url.label",
         group: "This Page",
         ..FIELD_DEFAULTS
@@ -783,6 +783,16 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         ..FIELD_DEFAULTS
     },
     BuiltinField {
+        name: "members",
+        field_type: FieldType::String,
+        widget: Widget::Select,
+        enum_values: Some(&["public", "subscribers", "paid"]),
+        score: 81,
+        description: "Page access: public overrides inherited restrictions; subscribers and paid restrict the body. cascade.members applies to descendants, excluding its declaring page. Only text before <!--members-only--> is public; without the marker no body is published. Paid pages remain restricted. Invalid values fail closed.",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
         name: "draft",
         field_type: FieldType::Boolean,
         widget: Widget::Checkbox,
@@ -801,6 +811,16 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         score: 93,
         description: "When off, hidden from listings, feeds, and sitemap — but still indexed and reachable at its URL",
         label_key: "chip.listed.label",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "search_engines",
+        field_type: FieldType::Boolean,
+        widget: Widget::Checkbox,
+        score: 93,
+        description: "When off, the page asks search engines not to index it (noindex) and leaves every listing, feed, the sitemap, tag pages and the site's search, posting no copies; on a folder's home it does the same for everything in the folder, which then only the folder's own listings show. It stays published at its address, for a page reached only by its link",
+        label_key: "chip.search_engines.label",
         group: "This Page",
         ..FIELD_DEFAULTS
     },
@@ -862,7 +882,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         field_type: FieldType::Object,
         widget: Widget::CodeEditor,
         score: 95,
-        description: "Marks this page's markdown table as a country map: `by` names the column whose value colours each country (the first column names the country), `levels` lists that column's values lowest first (each a string or `{name, text}` with the advice shown when a row has no extra columns), optional `unrated` is the text shown for a country with no row, and optional `action: {label, link}` adds a link to the panel, with `{country}` in `link` replaced by the URL-encoded country name, and `search: false` turns off the search field above the map (on by default; it finds every country by name or major city). The page's `date` is the map's as-of stamp. Embed it elsewhere with `![[page|style:map]]`.",
+        description: "Marks this page's markdown table as a country map: `by` names the column whose value colours each country (the first column names the country), `levels` lists that column's values lowest first (each a string or `{name, text}` with the advice shown when a row has no extra columns), optional `unrated` is the text shown for a country with no row, and optional `action: {label, link}` adds a link to the panel, with `{country}` in `link` replaced by the URL-encoded country name, and `search: false` turns off the search field above the map (on by default; it finds every country by name or major city). The page's `date` is the map's as-of stamp; `as_of: today` shows the visitor's date instead. Embed it elsewhere with `![[page|style:map]]`.",
         label_key: "chip.country_map.label",
         group: "This Page",
         ..FIELD_DEFAULTS
@@ -919,6 +939,20 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         label_key: "chip.title_block.label",
         group: "This Page",
         applies_when: Some(&[PAGE]),
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "chrome",
+        field_type: FieldType::String,
+        widget: Widget::Select,
+        enum_values: Some(&["site", "none"]),
+        // Frequency=0, Importance=1 → score=96
+        score: 96,
+        description: "`none` draws this page without the site's header, floating nav island and footer, for a landing page that stands alone. The page keeps its title, the language, search and theme controls at its top, and the colophon. Absent or `site` keeps the site's frame.",
+        label: Some("Site frame"),
+        label_key: "chip.chrome.label",
+        group: "This Page",
+        applies_when: Some(&[PAGE, FOLDER, HOME]),
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -1102,11 +1136,11 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         name: "children_style",
         field_type: FieldType::String,
         widget: Widget::Select,
-        enum_values: Some(&["list", "summary", "lead", "grid"]),
+        enum_values: Some(&["list", "summary", "lead", "grid", "stream"]),
         default_json: None,
         // Frequency=3, Importance=3 → score=70
         score: 70,
-        description: "How child pages are rendered. When absent, moss picks from the children: `summary` if most of them have a cover or a description (or all but three do), otherwise `list` if any child has a date, otherwise `grid`. `lead` is `summary` whose first item leads (large picture beside its date, title and opening line on a wide screen, stacked on a phone) and whose other items form a register of three columns with no pictures. An installed plugin can add styles of its own (its `contributes.listing_styles`); name one by its id",
+        description: "How child pages are rendered. When absent, moss picks from the children: `summary` if most of them have a cover or a description (or all but three do), otherwise `list` if any child has a date, otherwise `grid`. `lead` is `summary` whose first item leads (large picture beside its date, title and opening line on a wide screen, stacked on a phone) and whose other items form a register of three columns with no pictures. `stream` draws each page whole, one column with a hairline between pages: its title as a heading when it has one of its own, its body, then its date as a link to the page; it suits short dated posts, a changelog or a page of quotes. An installed plugin can add styles of its own (its `contributes.listing_styles`); name one by its id",
         label: Some("Child Layout"),
         label_key: "chip.children_style.label",
         group: "Child Styles",
@@ -1138,6 +1172,19 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         label: Some("Depth"),
         label_key: "chip.children_depth.label",
         group: "Child Styles",
+        applies_when: Some(LISTS_CHILDREN),
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "children_listed",
+        field_type: FieldType::String,
+        widget: Widget::Select,
+        enum_values: Some(&["everywhere", "here"]),
+        score: 87,
+        description: "Where this folder's pages are listed. `here` keeps every page under the folder out of the listings that flatten the folders above it (the home's whole-tree listing, a parent's `children_depth: all`); the folder's own listing, feed, sitemap and search still have them, and a direct listing of the parent still shows the folder's own page. Unset or `everywhere`, they appear in those listings",
+        label: Some("Listed In"),
+        label_key: "chip.children_listed.label",
+        group: "Child Pages",
         applies_when: Some(LISTS_CHILDREN),
         ..FIELD_DEFAULTS
     },
@@ -1215,7 +1262,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         enum_values: Some(&["past", "upcoming"]),
         // Frequency=1, Importance=2 → score=86
         score: 87,
-        description: "Keep only events that have ended (\"past\") or not (\"upcoming\"); a page with no start or date is past. Applied before children_limit. Absent = no filter.",
+        description: "Keep only events that have ended (\"past\") or not (\"upcoming\"); a page with no start or date is past, and an event whose start is empty or unreadable is in neither. Applied before children_limit. Absent = no filter.",
         label: Some("When"),
         label_key: "chip.children_when.label",
         group: "Child Styles",
@@ -1381,7 +1428,7 @@ pub fn builtin_field(name: &str) -> Option<&'static BuiltinField> {
 
 /// The built-in fields a site may give a `place`: page text a reader would
 /// see. Plain-string plumbing such as `url`, `slot` or `uid` is not on it.
-pub const PLACEABLE_BUILTINS: &[&str] = &["description", "publisher"];
+pub const PLACEABLE_BUILTINS: &[&str] = &["description", "publisher", "tagline"];
 
 #[cfg(test)]
 #[path = "schema_fields_tests.rs"]

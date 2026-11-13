@@ -82,10 +82,10 @@ function applyMorph(html: string): { added: number; removed: number } {
     ignoreActiveValue: true,
     callbacks,
   });
+  const active = document.activeElement as HTMLElement | null;
   Idiomorph.morph(document.body, fragmentOf(doc.body), {
     morphStyle: "innerHTML",
-    ignoreActiveValue: true,
-    restoreFocus: true,
+    ignoreActiveValue: !!active && (active.matches("input, textarea, select") || active.isContentEditable),
     callbacks,
   });
   // NOT mirrored — the bridge and this harness call the SAME function, so the
@@ -698,5 +698,67 @@ describe("shipped morph color scheme policy", () => {
       }
       expect(replies).not.toContainEqual(expect.objectContaining({ type: "moss-morph-failed" }));
     } finally { w.close(); }
+  });
+});
+
+describe("shipped morph with focus inside the page", () => {
+  const page = (main: string) => `<html><head></head><body><header><a href="#main-content">Skip</a></header><main id="main-content" tabindex="-1">${main}</main><footer>f</footer></body></html>`;
+  const before = page(`<h2 id="intro" tabindex="-1">Intro</h2><p>one</p><p>two</p><input id="q">`);
+  const after = page(`<h2 id="intro" tabindex="-1">Intro, edited</h2><p>one</p><p>two, edited</p><p>three</p><input id="q">`);
+
+  async function morphWithFocus(focus: (d: Document) => void) {
+    const { JSDOM } = await import("jsdom");
+    const dom = new JSDOM(before, { url: "http://localhost/page/", runScripts: "outside-only", pretendToBeVisual: true });
+    const w = dom.window;
+    const replies: unknown[] = [];
+    const parent = { postMessage: (message: unknown) => replies.push(message) };
+    Object.defineProperty(w, "parent", { value: parent });
+    w.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} }) as any;
+    (w as any).ResizeObserver = class { observe() {} disconnect() {} };
+    (w as any).IntersectionObserver = class { observe() {} disconnect() {} };
+    w.HTMLCanvasElement.prototype.getContext = () => null;
+    w.document.elementFromPoint = () => null;
+    (w as any).fetch = async () => ({ ok: true, text: async () => after });
+    const scrolled = vi.fn();
+    w.scrollTo = scrolled;
+    w.Element.prototype.scrollIntoView = scrolled;
+    w.eval(readFileSync(BUNDLE_PATH, "utf8"));
+    focus(w.document);
+    w.dispatchEvent(new w.MessageEvent("message", { data: { type: "moss-morph", gen: 1 } }));
+    await vi.waitFor(() => expect(replies).toContainEqual(expect.objectContaining({ type: "moss-morph-applied", gen: 1 })));
+    return { d: w.document, scrolled, close: () => w.close() };
+  }
+
+  it.runIf(bundleExists)("applies the edit while <main tabindex=-1> holds focus, and focus stays without a scroll", async () => {
+    const { d, scrolled, close } = await morphWithFocus((d) => d.getElementById("main-content")!.focus());
+    try {
+      expect(Array.from(d.querySelectorAll("main p"), (p) => p.textContent)).toEqual(["one", "two, edited", "three"]);
+      expect(d.activeElement?.id).toBe("main-content");
+      expect(scrolled).not.toHaveBeenCalled();
+    } finally { close(); }
+  });
+
+  it.runIf(bundleExists)("a focused anchor target takes its own new text", async () => {
+    const { d, close } = await morphWithFocus((d) => d.getElementById("intro")!.focus());
+    try {
+      expect(d.getElementById("intro")!.textContent).toBe("Intro, edited");
+      expect(d.activeElement?.id).toBe("intro");
+    } finally { close(); }
+  });
+
+  it.runIf(bundleExists)("a focused input keeps its typed value, focus and caret while the text around it changes", async () => {
+    const { d, close } = await morphWithFocus((d) => {
+      const q = d.getElementById("q") as HTMLInputElement;
+      q.focus();
+      q.value = "typed";
+      q.setSelectionRange(2, 2);
+    });
+    try {
+      const q = d.getElementById("q") as HTMLInputElement;
+      expect(d.querySelector("main p:nth-of-type(2)")!.textContent).toBe("two, edited");
+      expect(d.activeElement).toBe(q);
+      expect(q.value).toBe("typed");
+      expect([q.selectionStart, q.selectionEnd]).toEqual([2, 2]);
+    } finally { close(); }
   });
 });

@@ -70,6 +70,20 @@ pub enum FieldType {
     /// every serialized config. `secret` rather than `password`, deliberately:
     /// `password` names a widget, this names custody.
     Secret,
+    /// A table of named sub-`fields`. Site settings only, like the two below:
+    /// the plugin's own `config.toml` and a blocker's form are written flat.
+    /// The names match moss-core's schema `Object` and `Array`.
+    Object,
+    /// A table of entries under ids the person names; `items` is each entry.
+    Map,
+    /// A list of scalars; `items` is each value.
+    Array,
+}
+
+impl FieldType {
+    fn is_scalar(self) -> bool {
+        matches!(self, Self::String | Self::Number | Self::Boolean)
+    }
 }
 
 /// One choice of a closed select. Per-choice `label` and `description` sit
@@ -170,6 +184,53 @@ pub struct Field {
     /// complement).
     #[serde(default, deserialize_with = "when_strings")]
     pub when: HashMap<String, String>,
+
+    /// An `object`'s members, in display order. Typed as JSON across the
+    /// bindings seam, which cannot export a type that holds itself; the form
+    /// reads them through its own structural `SettingField`.
+    #[serde(default)]
+    #[specta(type = Vec<serde_json::Value>)]
+    pub fields: Vec<Field>,
+
+    /// What one entry of a `map` or one value of an `array` is.
+    #[serde(default, deserialize_with = "keyless_item")]
+    #[specta(type = Option<serde_json::Value>)]
+    pub items: Option<Box<Field>>,
+
+    /// On an `object`: the table may be absent, and moss draws a switch that
+    /// adds it (with its members' defaults) or removes it.
+    #[serde(default)]
+    pub optional: bool,
+
+    /// On a `map`: the ids a person may give a new entry.
+    #[serde(default)]
+    pub key_pattern: Option<String>,
+
+    /// On a `map`: the words on the button that adds an entry.
+    #[serde(default)]
+    pub add_label: Option<String>,
+
+    /// On a `number`: the stored integer is the shown value times this, a
+    /// power of ten (`100` for an amount kept in cents).
+    #[serde(default)]
+    pub scale: Option<u32>,
+
+    /// On a `number`: the word drawn after the input.
+    #[serde(default)]
+    pub unit: Option<String>,
+}
+
+/// An entry of a `map` or a value of an `array` has no key of its own, so a
+/// manifest leaves `key` out of `items`.
+fn keyless_item<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Box<Field>>, D::Error> {
+    let raw: Option<serde_json::Value> = Deserialize::deserialize(d)?;
+    raw.map(|mut v| {
+        if let Some(object) = v.as_object_mut() {
+            object.entry("key").or_insert_with(|| serde_json::Value::String(String::new()));
+        }
+        serde_json::from_value(v).map(Box::new).map_err(serde::de::Error::custom)
+    })
+    .transpose()
 }
 
 /// Refuse a non-string `when` value with the reason, not a serde type dump.
@@ -234,6 +295,13 @@ impl Field {
             pattern: None,
             pattern_message: None,
             when,
+            fields: Vec::new(),
+            items: None,
+            optional: false,
+            key_pattern: None,
+            add_label: None,
+            scale: None,
+            unit: None,
         }
     }
 }
@@ -313,6 +381,13 @@ fn bound_author_text(field: &mut Field) {
             *v = bounded(v, MAX_SENTENCE);
         }
     }
+    for text in [&mut field.add_label, &mut field.unit].into_iter().flatten() {
+        *text = bounded(text, MAX_NAME);
+    }
+    field.fields.iter_mut().for_each(bound_author_text);
+    if let Some(item) = field.items.as_deref_mut() {
+        bound_author_text(item);
+    }
 }
 
 /// Every author-authored string on a setup's fields, bounded in one pass.
@@ -327,14 +402,10 @@ pub(crate) fn bound_author_text_in(fields: &mut [Field]) {
 /// unload it — and their `when` falls back to [`Field::when_matches`]'s
 /// fail-closed runtime answer.
 pub(crate) fn validate_declared_fields(fields: &[Field]) -> Result<(), String> {
-    for (index, field) in fields.iter().enumerate() {
+    for index in 0..fields.len() {
+        shared_rules(fields, index, "`settings`")?;
+        let field = &fields[index];
         let key = &field.key;
-        if fields[..index].iter().any(|earlier| earlier.key == *key) {
-            return Err(format!(
-                "field `{key}` is declared twice in `settings` — two drawn fields \
-                 would write one config key"
-            ));
-        }
         if field.field_type == FieldType::Secret && field.default.is_some() {
             return Err(format!(
                 "field `{key}`: a `secret` must not declare a `default` — a default \
@@ -347,50 +418,173 @@ pub(crate) fn validate_declared_fields(fields: &[Field]) -> Result<(), String> {
                  secret is required by definition"
             ));
         }
-        if field.required && field.default.is_some() {
+        if !matches!(field.field_type, FieldType::String | FieldType::Number | FieldType::Boolean | FieldType::Secret)
+            || field.has_site_only_modifiers()
+        {
             return Err(format!(
-                "field `{key}` declares both `required` and `default` — a defaulted \
-                 field can never be missing, so declare one or the other"
+                "field `{key}`: `object`, `map`, `array` and their modifiers are \
+                 drawn only in `site_settings`, which writes the site's own table"
             ));
-        }
-        if field.pattern.is_some() && field.pattern_message.is_none() {
-            return Err(format!(
-                "field `{key}` has a `pattern` without a `pattern_message` — a bare \
-                 regex is a hostile error message"
-            ));
-        }
-        if !field.options.is_empty() && field.field_type != FieldType::String {
-            return Err(format!(
-                "field `{key}`: `options` close the value set of a `string` field, \
-                 not a `{:?}`",
-                field.field_type
-            ));
-        }
-        for (target, want) in &field.when {
-            let Some(referenced) =
-                fields[..index].iter().find(|earlier| &earlier.key == target)
-            else {
-                return Err(format!(
-                    "field `{key}`: `when` references `{target}`, which is not declared \
-                     earlier in `settings` — a `when` may only look back, which is what \
-                     makes cycles unrepresentable"
-                ));
-            };
-            if referenced.options.is_empty() {
-                return Err(format!(
-                    "field `{key}`: `when` references `{target}`, which has no `options` \
-                     — a `when` target must be a closed select"
-                ));
-            }
-            if !referenced.options.iter().any(|o| &o.value == want) {
-                return Err(format!(
-                    "field `{key}`: `when.{target}` is `{want}`, which is not one of \
-                     `{target}`'s options"
-                ));
-            }
         }
     }
     Ok(())
+}
+
+/// The rules a field list obeys wherever it is declared: one field per key,
+/// a `pattern` that says what it wants, `options` only on a string, and a
+/// `when` that looks back, at a closed select, for one of its values.
+fn shared_rules(fields: &[Field], index: usize, list: &str) -> Result<(), String> {
+    let field = &fields[index];
+    let key = &field.key;
+    if key.is_empty() {
+        return Err(format!("a field in {list} has no `key`"));
+    }
+    if fields[..index].iter().any(|earlier| earlier.key == *key) {
+        return Err(format!(
+            "field `{key}` is declared twice in {list} — two drawn fields \
+             would write one config key"
+        ));
+    }
+    if field.required && field.default.is_some() {
+        return Err(format!(
+            "field `{key}` declares both `required` and `default` — a defaulted \
+             field can never be missing, so declare one or the other"
+        ));
+    }
+    if field.pattern.is_some() && field.pattern_message.is_none() {
+        return Err(format!(
+            "field `{key}` has a `pattern` without a `pattern_message` — a bare \
+             regex is a hostile error message"
+        ));
+    }
+    if !field.options.is_empty() && field.field_type != FieldType::String {
+        return Err(format!(
+            "field `{key}`: `options` close the value set of a `string` field, \
+             not a `{:?}`",
+            field.field_type
+        ));
+    }
+    for (target, want) in &field.when {
+        let Some(referenced) = fields[..index].iter().find(|earlier| &earlier.key == target) else {
+            return Err(format!(
+                "field `{key}`: `when` references `{target}`, which is not declared \
+                 earlier in {list} — a `when` may only look back, which is what \
+                 makes cycles unrepresentable"
+            ));
+        };
+        if referenced.options.is_empty() {
+            return Err(format!(
+                "field `{key}`: `when` references `{target}`, which has no `options` \
+                 — a `when` target must be a closed select"
+            ));
+        }
+        if !referenced.options.iter().any(|o| &o.value == want) {
+            return Err(format!(
+                "field `{key}`: `when.{target}` is `{want}`, which is not one of \
+                 `{target}`'s options"
+            ));
+        }
+    }
+    Ok(())
+}
+
+impl Field {
+    fn has_site_only_modifiers(&self) -> bool {
+        !self.fields.is_empty()
+            || self.items.is_some()
+            || self.optional
+            || self.key_pattern.is_some()
+            || self.add_label.is_some()
+            || self.scale.is_some()
+            || self.unit.is_some()
+    }
+}
+
+/// The ids a new `map` entry may take when the manifest names no pattern.
+pub const DEFAULT_KEY_PATTERN: &str = "^[a-z0-9][a-z0-9_-]{0,39}$";
+
+/// The closure over a `site_settings` list, at every level: the shared rules,
+/// then a key that is a TOML bare key and each modifier on the one type it
+/// belongs to. A `secret` is refused, since the site table syncs and is
+/// tracked, and so is `hidden`: a key the form does not draw is simply not
+/// declared, and stays as written.
+pub(crate) fn validate_site_fields(fields: &[Field]) -> Result<(), String> {
+    for index in 0..fields.len() {
+        shared_rules(fields, index, "a site settings table")?;
+        let field = &fields[index];
+        if !key_ok(&field.key) {
+            return Err(format!("site setting `{}`: a key is lowercase letters, digits and underscores, starting with a letter", field.key));
+        }
+        site_field_rules(field).map_err(|why| format!("site setting `{}`: {why}", field.key))?;
+    }
+    Ok(())
+}
+
+/// What one site field is allowed to carry, without its key: also what a
+/// `map` entry or an `array` value (`items`, which has no key) is held to.
+fn site_field_rules(field: &Field) -> Result<(), String> {
+    let kind = field.field_type;
+    if kind == FieldType::Secret {
+        return Err("a `secret` cannot live in `.moss/config.toml`, which syncs with the folder; declare it in `setup.settings`".into());
+    }
+    if field.hidden {
+        return Err("`hidden` is not for site settings: leave an undrawn key out of the manifest".into());
+    }
+    for pattern in [&field.pattern, &field.key_pattern].into_iter().flatten() {
+        if regex::Regex::new(pattern).is_err() {
+            return Err(format!("`{pattern}` is not a regular expression"));
+        }
+    }
+    if (field.scale.is_some() || field.unit.is_some()) && kind != FieldType::Number {
+        return Err("`scale` and `unit` belong to a `number`".into());
+    }
+    if field.scale.is_some_and(|s| s < 10 || !s.to_string().trim_start_matches('1').bytes().all(|b| b == b'0')) {
+        return Err("`scale` is a power of ten, such as 100".into());
+    }
+    if field.optional && kind != FieldType::Object {
+        return Err("`optional` belongs to an `object`".into());
+    }
+    if (field.key_pattern.is_some() || field.add_label.is_some()) && kind != FieldType::Map {
+        return Err("`key_pattern` and `add_label` belong to a `map`".into());
+    }
+    match kind {
+        FieldType::Object if field.fields.is_empty() => Err("an `object` lists its `fields`".into()),
+        FieldType::Object => validate_site_fields(&field.fields),
+        FieldType::Map | FieldType::Array => {
+            let Some(item) = field.items.as_deref() else {
+                return Err("a `map` or `array` says what its `items` are".into());
+            };
+            let allowed = item.field_type.is_scalar() || (kind == FieldType::Map && item.field_type == FieldType::Object);
+            if !allowed {
+                return Err("`items` of a `map` is a scalar or an `object`; of an `array`, a scalar".into());
+            }
+            site_field_rules(item)
+        }
+        _ if !field.fields.is_empty() || field.items.is_some() => {
+            Err("only an `object` has `fields`, and only a `map` or `array` has `items`".into())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Give every `map` its `key_pattern`, so the form and the writer check one rule.
+pub(crate) fn fill_site_defaults(fields: &mut [Field]) {
+    for field in fields {
+        if field.field_type == FieldType::Map && field.key_pattern.is_none() {
+            field.key_pattern = Some(DEFAULT_KEY_PATTERN.to_string());
+        }
+        fill_site_defaults(&mut field.fields);
+        if let Some(item) = field.items.as_deref_mut() {
+            fill_site_defaults(std::slice::from_mut(item));
+        }
+    }
+}
+
+fn key_ok(key: &str) -> bool {
+    let mut bytes = key.bytes();
+    key.len() <= 40
+        && bytes.next().is_some_and(|b| b.is_ascii_lowercase())
+        && bytes.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
 
 /// `snake_case` → `Title Case`, for a field the manifest gave no label.

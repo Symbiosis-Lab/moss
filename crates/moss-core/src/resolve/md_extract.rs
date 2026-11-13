@@ -44,8 +44,8 @@ pub enum RefSyntax {
     /// use names no path itself and needs no edit.
     Definition { label: String },
     /// A bare path or attribute value from a rendered `:::hero` or
-    /// `:::gallery` block. It behaves as an embed for resolution, but has no
-    /// markdown token of its own.
+    /// `:::gallery` block, or the `src` of a raw HTML media tag. It behaves as
+    /// an embed for resolution, but has no markdown token of its own.
     StructuralAsset,
 }
 

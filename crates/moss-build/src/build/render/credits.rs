@@ -1,4 +1,5 @@
-//! Credit rows: the byline at the head of a page and the colophon at its foot.
+//! Credit rows: the byline at the head of a page and the colophon at its foot,
+//! and the link out at the end of a page that lives on another site.
 //!
 //! **On every page kind.** Frontmatter that exists only to be displayed is
 //! displayed; everything else is metadata, and the body is the author's.
@@ -100,34 +101,28 @@
 //!    only, never re-spaced in the middle.
 
 use crate::build::markdown::body_plan::LocatorPlacement;
+use crate::build::terms::TermLine;
 
-/// Render the byline block for an article, or `None` when there is nothing
-/// to show — the authored `byline:` rows, the automatic place line, or both.
+/// Render the credit block under a page's title, or `None` when there is
+/// nothing to show: the authored `byline:` rows, the page's term lines, or both.
 ///
 /// `emit_source_fm` mirrors the date row: when the preview is running for the
-/// editor, the block carries `data-source-fm="byline"` (or `"location"` on
-/// the place line's own `<div>`) so a click maps back to the frontmatter
+/// editor, the block carries `data-source-fm="byline"` (or the field's name
+/// on a term line's own `<div>`) so a click maps back to the frontmatter
 /// field. Stripped from shipped HTML by `build::ship`.
-///
-/// The two pieces are resolved independently and only `None` when BOTH are —
-/// a page with `location:` set but no `byline:` (the common case) must still
-/// show its place line, which keying this function's result on `rows` alone
-/// would silently drop.
-pub fn render_byline_html(rows: &[String], emit_source_fm: bool, place_line: Option<&str>) -> Option<String> {
+pub fn render_byline_html(rows: &[String], emit_source_fm: bool, term_lines: &[TermLine]) -> Option<String> {
     let byline = render_rows("moss-byline", "moss-byline-row", "byline", rows, emit_source_fm);
-    let place = render_place_line_html(place_line, emit_source_fm);
-    match (byline, place) {
-        (None, None) => None,
-        (Some(b), None) => Some(b),
-        (None, Some(p)) => Some(p),
-        (Some(b), Some(p)) => Some(format!("{}{}", b, p)),
+    if byline.is_none() && term_lines.is_empty() {
+        return None;
     }
+    let lines: String = term_lines.iter().map(|line| render_term_line(line, emit_source_fm)).collect();
+    Some(byline.unwrap_or_default() + &lines)
 }
 
 /// Render the complete page-head credit area, including an optional place
 /// locator, for a folder index or a plain page (the two page-head emission
-/// sites; see the module docs). An article's own masthead is byline + place
-/// line only — same `render_byline_html` call this makes, minus the
+/// sites; see the module docs). An article's own masthead is byline + term
+/// lines only — same `render_byline_html` call this makes, minus the
 /// locator — because the locator's article-page position is no longer
 /// fixed right after the place line: `render/html.rs` inserts it into the
 /// body itself, via `BodyPlan::insert_locator`. The locator is drawn here
@@ -138,7 +133,7 @@ pub fn render_page_masthead(
     emit_source_lines: bool,
     placement: LocatorPlacement,
 ) -> String {
-    let mut html = render_byline_html(&doc.byline, emit_source_lines, doc.place_line.as_deref())
+    let mut html = render_byline_html(&doc.byline, emit_source_lines, &doc.term_lines)
         .unwrap_or_default();
     if placement == LocatorPlacement::Masthead {
         if let Some(locator) = render_place_locator(doc, layout) {
@@ -185,19 +180,38 @@ pub fn splice_page_masthead(
     }
 }
 
-/// The automatic place line's own block, or `None` when there is none. Not
-/// row-split like `render_rows` — the line is inherently one row, so
-/// `moss-place-line` is the only class the contract table needs.
-fn render_place_line_html(place_line: Option<&str>, emit_source_fm: bool) -> Option<String> {
-    let line = place_line?;
-    let mut out = String::from(r#"<div class="moss-place-line""#);
-    if emit_source_fm {
-        out.push_str(r#" data-source-fm="location""#);
-    }
-    out.push('>');
-    out.push_str(&render_row(line));
-    out.push_str("</div>");
-    Some(out)
+/// A link to the address a page published elsewhere lives at (`external_url:`),
+/// for the end of its body, named by that address's host as the author wrote
+/// it (so an international domain reads in its own script, not punycode);
+/// `None` when the body already links there.
+pub fn external_home_link(doc: &crate::build::types::ParsedDocument, body: &crate::build::markdown::body_plan::BodyPlan) -> Option<String> {
+    let url = crate::build::scan::page_map::external_url(&doc.raw_frontmatter)?;
+    let attr = format!(r#"href="{}""#, moss_core::media::html_escape_attr(&url));
+    let mut linked = false;
+    body.for_each_html(&mut |html| linked |= html.contains(&attr));
+    url::Url::parse(&url).ok()?.host_str()?;
+    let authority = url.split_once("://")?.1.split(['/', '?', '#']).next()?;
+    let host = authority.rsplit('@').next()?;
+    let host = host.rsplit_once(':').filter(|(_, port)| port.bytes().all(|b| b.is_ascii_digit())).map_or(host, |(h, _)| h);
+    (!linked).then(|| format!(
+        r#"<p class="moss-external-link"><a {attr}>{}<span aria-hidden="true"> ↗</span></a></p>"#,
+        crate::build::features::html_escape(host.trim_start_matches("www.")),
+    ))
+}
+
+/// One term line: the field's label, then its names as links through the one
+/// markdown path, so a link reads as it does in the body.
+fn render_term_line(line: &TermLine, emit_source_fm: bool) -> String {
+    use crate::build::features::html_escape;
+    let (term, field) = (html_escape(&line.term), html_escape(&line.field));
+    let source = if emit_source_fm { format!(r#" data-source-fm="{field}""#) } else { String::new() };
+    format!(
+        r#"<div class="{}" data-term="{term}" data-field="{field}"{source}><span class="moss-term-line-label">{}</span>{}{}</div>"#,
+        line.class(),
+        html_escape(&line.label),
+        html_escape(&line.separator),
+        render_row(&line.links),
+    )
 }
 
 /// Append the colophon to the end of a page's content — the one placement it

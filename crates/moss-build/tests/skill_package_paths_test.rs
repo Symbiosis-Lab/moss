@@ -30,14 +30,25 @@ const REPO_DIRS: &[&str] = &[
     ".githooks/",
 ];
 
-/// Is the `docs/` at `idx` a repo-relative path rather than part of a URL?
-fn is_bare_docs_path(text: &str, idx: usize) -> bool {
+/// The part of the token holding `idx` that comes before it.
+fn token_before(text: &str, idx: usize) -> &str {
     let token_start = text[..idx]
         .rfind(|c: char| c.is_whitespace() || "([`\"'<".contains(c))
         .map(|p| p + 1)
         .unwrap_or(0);
-    let token_before = &text[token_start..idx];
-    !token_before.contains(".com/") && !token_before.contains("://")
+    &text[token_start..idx]
+}
+
+/// Is the `docs/` at `idx` a repo-relative path rather than part of a URL?
+fn is_bare_docs_path(text: &str, idx: usize) -> bool {
+    let before = token_before(text, idx);
+    !before.contains(".com/") && !before.contains("://")
+}
+
+/// A token starting with `/` is a site path (`/_moss/plugins/`), served from
+/// the site rather than read from the repo.
+fn is_site_path(text: &str, idx: usize) -> bool {
+    token_before(text, idx).starts_with('/')
 }
 
 fn markdown_files(dir: &Path) -> Vec<PathBuf> {
@@ -86,7 +97,7 @@ fn shipped_skill_cites_no_repo_relative_paths() {
 
         for (lineno, line) in text.lines().enumerate() {
             for repo_dir in REPO_DIRS {
-                if line.contains(repo_dir) {
+                if line.match_indices(repo_dir).any(|(idx, _)| !is_site_path(line, idx)) {
                     bad.push(format!("  {name}:{}: {repo_dir}", lineno + 1));
                 }
             }

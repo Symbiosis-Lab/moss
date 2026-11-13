@@ -21,6 +21,7 @@ fn heading(text: &str) -> Block {
         children: vec![Inline::Text(text.to_string())],
         id: None,
         legacy_id: None,
+        numbered_from: None,
         contents_end: false,
         contents_label: None,
     }

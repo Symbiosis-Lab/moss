@@ -66,9 +66,9 @@ impl PageGround {
     /// of the token or of a property it goes through, or a value that is not a
     /// plain colour (`color-mix()`), leaves it unresolved.
     pub fn of_theme(theme_css: Option<&str>) -> Self {
-        let (light, dark) = theme_colours(theme_css, "--moss-color-bg", *BACKGROUNDS);
-        let (credit_light, credit_dark) = theme_colours(theme_css, "--moss-color-text-secondary", *CREDIT_INK);
-        let (text_light, text_dark) = theme_colours(theme_css, "--moss-color-text", *TEXT_INK);
+        let (light, dark) = theme_colours(theme_css, "--moss-color-bg");
+        let (credit_light, credit_dark) = theme_colours(theme_css, "--moss-color-text-secondary");
+        let (text_light, text_dark) = theme_colours(theme_css, "--moss-color-text");
         Self { light, dark, credit_light, credit_dark, text_light, text_dark, type_theme: TypeTheme::of_theme(theme_css), ..Self::default() }
     }
 }
@@ -77,8 +77,8 @@ impl PageGround {
 /// theme does not set it, and `None` where the build cannot read it or some
 /// pages set it differently from the root (a faded picture's maths must hold
 /// on every page).
-fn theme_colours(theme_css: Option<&str>, token: &str, default: (Rgb, Rgb)) -> (Option<Rgb>, Option<Rgb>) {
-    let (light, dark) = crate::build::theme_lint::root_colours(theme_css, token, default);
+fn theme_colours(theme_css: Option<&str>, token: &str) -> (Option<Rgb>, Option<Rgb>) {
+    let (light, dark) = crate::build::theme_lint::root_colours(theme_css, token);
     let steady = |c: crate::build::theme_lint::RootColour| c.root.filter(|_| !c.varies);
     (steady(light), steady(dark))
 }

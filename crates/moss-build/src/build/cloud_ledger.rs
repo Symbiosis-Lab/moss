@@ -172,6 +172,15 @@ impl InputEvidence {
             .collect()
     }
 
+    /// Whether this attempt found the source at a site-relative path but could not read it.
+    pub fn is_unresolved(&self, rel_path: &str) -> bool {
+        let entries = self.entries.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        matches!(
+            entries.get(&crate::build::scan::path_collision::logical_path(rel_path)),
+            Some(InputEntry { state: InputState::Pending { .. } | InputState::ReadError { .. }, .. })
+        )
+    }
+
     pub fn pending_count(&self) -> usize {
         self.snapshot().values().filter(|entry| matches!(entry.state, InputState::Pending { .. })).count()
     }

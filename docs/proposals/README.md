@@ -21,6 +21,9 @@ Each proposal is a folder here: a `README.md` with the design, and its screens b
 | [Duplicate stores in a synced folder: heal them, and stop making them](synced-store-duplicates/README.md) | Shipped |
 | [Keep what a build reads downloaded, in a cloud site folder](keep-site-downloaded/README.md) | Proposed |
 | [Comment moderation that survives a new site key](moderation-key-continuity/README.md) | In progress |
+| [Plugin listing styles in body embeds](plugin-styles-in-embeds/README.md) | Proposed |
+| [A hero that stays while the page rises over it](fixed-hero/README.md) | Proposed |
+| [A site-wide date style](site-date-style/README.md) | Proposed |
 
 ## Status
 

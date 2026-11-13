@@ -31,14 +31,18 @@
 mod maps;
 pub(crate) use maps::ListPlacement;
 pub(crate) mod hero_from;
+pub(crate) mod inline_body;
 pub(crate) mod members;
 mod calendar_tokens;
 pub mod listing_markup;
 pub(crate) mod upcoming;
+mod empty_section_note;
 mod nav_note;
 mod repeat_note;
+mod stream;
 pub(crate) use nav_note::note_home_map_of_nav_root;
-pub(crate) use repeat_note::{note_repeated_child_listing, ListedUrls};
+pub(crate) use stream::is_stream_host;
+pub(crate) use repeat_note::{note_repeated_child_listing, ListingHost};
 use maps::place_map_with_placement;
 
 use std::path::Path;
@@ -318,7 +322,7 @@ pub(crate) fn resolve_children_config(
             // contract). A single dated post gets a year heading too; a
             // dateless listing stays flat. Auto-detected `year` is still
             // suppressed under a non-Date sort axis in `effective_group_for_axis`.
-            let auto_value = if !matches!(style.value.as_str(), "summary" | "lead") && docs.iter().any(|d| d.date.is_some() || d.event.is_some()) {
+            let auto_value = if !matches!(style.value.as_str(), "summary" | "lead" | "stream") && docs.iter().any(|d| d.date.is_some() || d.event.is_some()) {
                 "year".to_string()
             } else {
                 "none".to_string()
@@ -400,7 +404,7 @@ pub(crate) fn folder_latest_date<D: std::borrow::Borrow<ParsedDocument>>(
 /// * `folder_docs` - Direct children documents to render
 /// * `all_folder_docs` - All documents in the folder (for computing child counts)
 /// * `project` - Project structure for date extraction
-/// * `style` - "list", "summary", "lead" (summary whose first item leads), or "grid" (collection cards)
+/// * `style` - "list", "summary", "lead" (summary whose first item leads), "grid" (collection cards), or "stream" (each page drawn whole)
 /// * `group` - "year" or "none"
 /// * `lang` - Language for UI strings
 /// * `skip_resort` - If true, skip the internal date-desc resort and render docs
@@ -518,6 +522,10 @@ pub(crate) fn generate_children(
     let upcoming = upcoming::urls(group, folder_docs, now);
     if group == "upcoming" {
         sorted = upcoming::order(sorted, &upcoming, skip_resort);
+    }
+
+    if style == "stream" {
+        return stream::render(&sorted, folder_docs, typesetting, rows);
     }
 
     // Grid style: render as collection cards.
@@ -705,6 +713,12 @@ pub(crate) struct ListingRowOptions<'a> {
     pub pictures: Option<usize>,
     /// The strip slides sideways in a loop (`motion:marquee`).
     pub marquee: bool,
+    /// The address of the page the listing is drawn on; `style:stream` rebases
+    /// each page's body to its directory.
+    pub host_url_path: &'a str,
+    /// The id prefixes already taken on that page, shared by every listing on
+    /// it so a page drawn whole twice keeps its ids apart.
+    pub id_scopes: Option<&'a std::cell::RefCell<inline_body::IdScopes>>,
 }
 
 /// Bucket articles by year using find-or-append: one section per year, in
@@ -786,6 +800,40 @@ fn render_minimal_year_section(
     }
 }
 
+/// Where a page's own listing goes when the body asks for it with `![[./]]`.
+pub(crate) const OWN_LISTING_PLACEHOLDER: &str = "<!--MOSS_OWN_LISTING-->";
+
+/// State the embeds of one body share while they expand, in document order.
+#[derive(Default)]
+struct EmbedRun {
+    /// Numbers each embed, so SVG identities stay unique across the page.
+    ordinal: std::cell::Cell<usize>,
+    /// The page's own listing has been given its spot.
+    own_listing_placed: std::cell::Cell<bool>,
+}
+
+/// Whether a bare embed of the page's own folder stands for the listing the
+/// renderer ends the page in: no options, the target is the host itself, and
+/// the host draws that listing. With options it stays a plain embed.
+fn is_own_listing_spot(
+    parsed: &ParsedMarker<'_>,
+    target_doc: Option<&ParsedDocument>,
+    from: &str,
+    all_docs: &[ParsedDocument],
+    place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
+) -> bool {
+    let bare = ParsedMarker { path: parsed.path, from: parsed.from, ..Default::default() } == *parsed;
+    bare && target_doc.is_some_and(|target| {
+        all_docs.iter().find(|d| d.source_path.as_deref() == Some(from)).is_some_and(|host| {
+            host.url_path == target.url_path
+                && crate::build::render::incremental::listing::draws_own_listing(
+                    host,
+                    place_maps.is_some_and(|maps| maps.is_explorer_root_for_doc(host)),
+                )
+        })
+    })
+}
+
 /// Expand every folder-list marker in the whole build, in place.
 ///
 /// The between-phases home of [`resolve_markers`]: it runs after
@@ -839,6 +887,7 @@ pub fn expand_markers_in_documents_with_place_maps(
     now: chrono::NaiveDateTime,
 ) {
     hero_from::resolve_all(documents, project, dir_overrides, math, media_lookup, now);
+    stream::absorb_listed_features(documents, project, now);
     let has_marker = |d: &ParsedDocument| [Some(d.html_content.as_str()), d.hero_html.as_deref()].into_iter().flatten().any(|h| h.contains(MARKER_FOLDER_LIST));
     if !documents.iter().any(has_marker) {
         return;
@@ -861,8 +910,8 @@ pub fn expand_markers_in_documents_with_place_maps(
         let mut plan = documents[i].body_plan.take();
         // Every marker here came from an authored `![[folder/|…]]`, never from
         // `synthesize_children_marker`. One SVG identity sequence per page.
-        let ordinal = std::cell::Cell::new(0);
-        let shown = ListedUrls::default();
+        let run = EmbedRun::default();
+        let shown = ListingHost::of(&documents[i]);
         // The markers still carry the authored options, so the page's script
         // gate is read from them before they are replaced by the listing.
         documents[i].features.marquee |= has_marquee_marker(&documents[i]);
@@ -879,17 +928,18 @@ pub fn expand_markers_in_documents_with_place_maps(
                 math,
                 true,
                 place_maps,
-                &ordinal,
-                Some(&shown),
+                &run,
+                &shown,
                 now,
             )
         };
         let links_for = calendar_tokens::links_for(calendar, &documents[i], now);
         // The hero sits before the body, so its listings come first in the page's order.
         let hero = documents[i].hero_html.as_deref().map(&expand);
+        let mut dropped = Vec::new();
         let resolved = match plan.as_mut() {
             Some(p) => {
-                p.map_html(&expand);
+                dropped = p.expand_html(&expand);
                 calendar_tokens::settle(p, &links_for);
                 p.to_html()
             }
@@ -902,7 +952,11 @@ pub fn expand_markers_in_documents_with_place_maps(
         documents[i].body_plan = plan;
         documents[i].html_content = resolved;
         documents[i].hero_html = hero;
-        documents[i].embedded_listing_urls = shown.into_inner();
+        if shown.stream.get() {
+            stream::absorb_into(documents, i, &shown.streamed.into_inner());
+        }
+        documents[i].embedded_listing_urls = shown.urls.into_inner();
+        empty_section_note::note_dropped_sections(&documents[i], &dropped);
     }
 }
 
@@ -927,9 +981,12 @@ pub(crate) fn resolve_markers(
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     math: bool,
 ) -> String {
+    // The page the markers sit on, or a stand-in at the source's address.
+    let stand_in = || ParsedDocument { url_path: from_md_path.replace(".md", ".html"), lang: site_lang, ..Default::default() };
+    let host = all_docs.iter().find(|d| d.source_path.as_deref() == Some(from_md_path)).map_or_else(|| ListingHost::of(&stand_in()), ListingHost::of);
     resolve_markers_with_place_maps(
         html, from_md_path, all_docs, project, dir_overrides, site_lang,
-        typesetting, media_lookup, math, None, None, crate::build::inputs::now(),
+        typesetting, media_lookup, math, None, &host, crate::build::inputs::now(),
     )
 }
 
@@ -945,7 +1002,7 @@ pub(crate) fn resolve_markers_with_place_maps(
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     math: bool,
     place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
-    shown: Option<&ListedUrls>,
+    host: &ListingHost,
     now: chrono::NaiveDateTime,
 ) -> String {
     resolve_markers_impl(
@@ -960,8 +1017,8 @@ pub(crate) fn resolve_markers_with_place_maps(
         math,
         false,
         place_maps,
-        &std::cell::Cell::new(0),
-        shown,
+        &EmbedRun::default(),
+        host,
         now,
     )
 }
@@ -987,8 +1044,8 @@ fn resolve_markers_impl(
     math: bool,
     is_embed: bool,
     place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
-    ordinal: &std::cell::Cell<usize>,
-    shown: Option<&ListedUrls>,
+    run: &EmbedRun,
+    host: &ListingHost,
     now: chrono::NaiveDateTime,
 ) -> String {
     if !html.contains(MARKER_FOLDER_LIST) {
@@ -1011,8 +1068,8 @@ fn resolve_markers_impl(
             break;
         };
 
-        let embed_ordinal = ordinal.get();
-        ordinal.set(embed_ordinal + 1);
+        let embed_ordinal = run.ordinal.get();
+        run.ordinal.set(embed_ordinal + 1);
         let rendered = match parse_marker_body(body) {
             Some(parsed) => {
                 warn_unknown_options(from_md_path, &parsed);
@@ -1029,8 +1086,9 @@ fn resolve_markers_impl(
                     math,
                     is_embed,
                     place_maps,
-                    shown,
+                    host,
                     now,
+                    !run.own_listing_placed.get(),
                 )
             }
             None => Err(format!("Invalid folder-embed marker: {body}")),
@@ -1044,6 +1102,7 @@ fn resolve_markers_impl(
                 format!(r#"<div class="moss-embed-missing">{}</div>"#, html_escape(&problem))
             }
         };
+        run.own_listing_placed.set(run.own_listing_placed.get() || rendered == OWN_LISTING_PLACEHOLDER);
         out.push_str(&rendered);
         remaining = rest;
     }
@@ -1223,16 +1282,32 @@ pub(crate) fn select_children_by_slug<'a>(
     } else {
         format!("{}/", folder_id_slug)
     };
+    // Folders whose home says `children_listed: here`: their pages stay out of
+    // a flattened listing of any folder above them. A listing of the folder
+    // itself, or of one inside it, is not above it.
+    let kept_here: Vec<&str> = if is_flatten {
+        all_docs
+            .iter()
+            .filter(|d| d.kind == PageKind::Folder && d.children_listed.as_deref() == Some("here"))
+            .filter_map(|d| d.url_path.strip_suffix("index.html"))
+            .filter(|prefix| !prefix.is_empty() && !folder_prefix.starts_with(prefix))
+            .collect()
+    } else {
+        Vec::new()
+    };
     let picked: Vec<&ParsedDocument> = all_docs
         .iter()
         .filter(|d| {
             if d.url_path == target_url {
                 return false;
             }
-            // Folder embeds publish a list of articles — `is_listable`
-            // covers draft/slot_only in one shot. A page-less entry is a row
-            // in its own folder only, never a term page or an `also_in` one.
-            if !d.is_listable() && !(d.is_pageless_entry() && d.url_path.starts_with(&folder_prefix)) {
+            // Folder embeds publish a list of articles — `is_listable_in`
+            // covers draft/slot_only and hidden folders in one shot. A
+            // page-less entry is a row in its own folder only, never a term
+            // page or an `also_in` one.
+            if !d.is_listable_in(&folder_prefix)
+                && !(d.is_pageless_entry() && d.url_path.starts_with(&folder_prefix) && d.reaches(&folder_prefix))
+            {
                 return false;
             }
             // scope_default_tree: a home lists its own edition only (gated by
@@ -1253,7 +1328,8 @@ pub(crate) fn select_children_by_slug<'a>(
                 return false;
             }
             // also_in: include docs that declare membership in this folder
-            let in_folder = d.url_path.starts_with(&folder_prefix)
+            let in_folder = (d.url_path.starts_with(&folder_prefix)
+                && !kept_here.iter().any(|prefix| d.url_path.starts_with(prefix)))
                 || d.also_in.as_ref().map_or(false, |folders| {
                     folders.contains(&folder_id_slug.to_string())
                 });
@@ -1360,6 +1436,7 @@ fn list_pages<'a>(
     let folder_idx = crate::build::folder_index::BuildFolderIndex {
         docs: all_docs,
         html_files: &project.html_files,
+        dir_overrides,
     };
     let no_assets = moss_core::content_graph::ContentGraph::from_paths(&[]);
     let no_urls = crate::build::folder_index::NoUrlIndex;
@@ -1381,11 +1458,10 @@ fn list_pages<'a>(
     // Compute the slugified form for URL-space lookups (target_doc match,
     // folder_prefix filter, "more" href). Keep `folder_id` for source-side
     // lookups (e.g. `project.html_files` carries raw on-disk paths).
-    let folder_id_slug = if folder_id.is_empty() {
-        String::new()
-    } else {
-        moss_core::slug::slugify_path_segments(&folder_id)
+    let url_slug = |id: &str| {
+        moss_core::slug::slugify_path_segments(&crate::build::scan::page_map::resolve_path_with_overrides(id, dir_overrides))
     };
+    let folder_id_slug = url_slug(&folder_id);
     let classified = moss_core::resolve::reference::classify_reference(parsed.path, resolve_from, true, &ctx);
     use moss_core::resolve::reference::ReferenceKind;
 
@@ -1394,9 +1470,7 @@ fn list_pages<'a>(
             // Branch 1: re-find the doc `dir_has_markdown_index` found, the
             // same way it found it (root by identity, else by `url_path` —
             // see that method's comment).
-            let target_slug = moss_core::slug::slugify_path_segments(
-                classified.target_path.as_deref().unwrap_or(&folder_id_slug),
-            );
+            let target_slug = classified.target_path.as_deref().map_or_else(|| folder_id_slug.clone(), url_slug);
             let found = if target_slug.is_empty() {
                 all_docs.iter().find(|d| d.kind == PageKind::Folder && crate::build::folder_index::is_root_source(d))
             } else {
@@ -1530,8 +1604,9 @@ fn render_one(
     math: bool,
     is_embed: bool,
     place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
-    shown: Option<&ListedUrls>,
+    host: &ListingHost,
     now: chrono::NaiveDateTime,
+    own_listing_open: bool,
 ) -> Result<String, String> {
     // Prefer the marker's `from=` (the original markdown source); the
     // page-level `from_md_path` is a safe fallback when older markers omit it.
@@ -1545,7 +1620,7 @@ fn render_one(
     }
     if parsed.style.as_deref() == Some("map") {
         if !parsed.path.ends_with('/') {
-            return Ok(maps::render(parsed, ordinal, all_docs, place_maps));
+            return Ok(maps::render(parsed, ordinal, all_docs, place_maps, now));
         }
         if let Some(html) = place_maps.and_then(|maps| maps::render_place_root(parsed, ordinal, from, all_docs, maps)) {
             return Ok(html);
@@ -1557,6 +1632,9 @@ fn render_one(
             Listed::Pages { folder_slug, target_doc, is_flatten, pages } => (folder_slug, target_doc, is_flatten, pages),
         };
 
+    if is_embed && own_listing_open && is_own_listing_spot(parsed, target_doc, from, all_docs, place_maps) {
+        return Ok(OWN_LISTING_PLACEHOLDER.to_string());
+    }
     if folder_docs.is_empty() {
         return Ok(String::new());
     }
@@ -1577,16 +1655,14 @@ fn render_one(
 
     let members::Ordered { resolved, style: style_resolved, group: effective_group, skip_resort, limited, truncated } =
         order_listed(parsed, &folder_docs, target_doc, is_flatten, math, now);
-    if let Some(shown) = shown {
-        shown.borrow_mut().extend(limited.iter().map(|d| d.url_path.clone()));
+    host.urls.borrow_mut().extend(limited.iter().map(|d| d.url_path.clone()));
+    if style_resolved.value == "stream" {
+        host.stream.set(true);
+        host.streamed.borrow_mut().extend(limited.iter().filter(|d| stream::drawn_whole(d, &host.url_path)).map(|d| d.url_path.clone()));
     }
     let children_style = style_resolved.value.clone();
 
     let all_docs_refs: Vec<&ParsedDocument> = all_docs.iter().collect();
-    let host_tag = all_docs
-        .iter()
-        .find(|d| d.source_path.as_deref() == Some(from))
-        .map(|h| h.lang_tag.clone().unwrap_or_else(|| h.lang.as_bcp47_attr().to_string()));
 
     // With a caption, the whole placement — width, float AND size — moves
     // out to the figure wrapping the listing (the width escape is a
@@ -1602,9 +1678,11 @@ fn render_one(
         placement: container_placement,
         lazy_cards: parsed.lazy_cards,
         count: parsed.count.as_ref(),
-        listing_tag: host_tag.as_deref(),
+        listing_tag: Some(&host.lang_tag),
         pictures: parsed.pictures,
         marquee: parsed.marquee,
+        host_url_path: &host.url_path,
+        id_scopes: Some(&host.id_scopes),
     };
 
     // Dispatch rendering based on style.
@@ -1653,19 +1731,20 @@ fn render_one(
         .unwrap_or_default();
     let listing = format!("{}{}", listing, place_children_html);
 
-    // Suppress the More link when the embed is on the folder's own index page
-    // (self-referential listing). A "More →" link pointing to the page the
-    // user is already reading is meaningless. Compares the note being rendered
-    // (`from`) against the resolved folder, so a self-named embed like `![[Opera/]]` from
-    // `Opera/Opera.md` counts too. `is_index_source` keeps README.md and
-    // self-named home files handled alongside index.md. The directory is
-    // slugified because `folder_id_slug` is lowercased.
-    let note_dir = std::path::Path::new(from)
-        .parent()
-        .and_then(|p| p.to_str())
-        .unwrap_or("");
-    let is_self_listing = is_index_source(from, all_docs)
-        && moss_core::slug::slugify_path_segments(note_dir) == folder_id_slug;
+    // Suppress the More link when the embed is on the folder's own home page
+    // (self-referential listing): a "More →" link to the page the reader is
+    // on is meaningless. The host page is the folder's home when its address
+    // is the folder's, which holds for a self-named embed like `![[Opera/]]`
+    // from `Opera/Opera.md` and for a folder whose home renames it with `url:`.
+    // A page not among the documents is judged by its source directory.
+    let folder_home = if folder_id_slug.is_empty() { "index.html".to_string() } else { format!("{folder_id_slug}/index.html") };
+    let is_self_listing = match all_docs.iter().find(|d| d.source_path.as_deref() == Some(from)) {
+        Some(host) => host.url_path == folder_home,
+        None => {
+            let note_dir = std::path::Path::new(from).parent().and_then(|p| p.to_str()).unwrap_or("");
+            is_index_source(from, all_docs) && moss_core::slug::slugify_path_segments(note_dir) == folder_id_slug
+        }
+    };
 
     // An explicit target — `children_more:` frontmatter or the embed's own
     // `more:<target>` param, unified into `parsed.more` — always wins, and
@@ -1799,7 +1878,13 @@ fn resolve_more_link_target<'a>(
                 .trim_end_matches("index.html")
                 .trim_end_matches('/');
             let url_leaf = d_stem.rsplit('/').next().unwrap_or(d_stem) == target_slug;
-            (file_stem || url_leaf).then_some((d, file_stem))
+            // A folder's home is also named by its source folder, which its
+            // `url:` may have renamed.
+            let source_folder = d.kind == PageKind::Folder
+                && source_of(d).is_some_and(|p| {
+                    p.rsplit('/').nth(1).is_some_and(|dir| moss_core::slug::generate_slug(dir) == target_slug)
+                });
+            (file_stem || url_leaf || source_folder).then_some((d, file_stem))
         })
         .min_by_key(|(d, file_stem)| (d.edition != edition, !file_stem))
         .map(|(d, _)| d)

@@ -15,7 +15,7 @@ import {
   NavigationHistory,
 } from "./navigation-history";
 import { IframeRPC } from "./iframe-rpc";
-import { eventBus, Events, type PreviewUrlChangedEvent } from "../context/event-bus";
+import { pageSource } from "./page-source";
 import type { PageInfo } from "@symbiosis-lab/moss-ui";
 import { UrlAutocomplete } from "./url-autocomplete";
 import { withShellMarker, stripShellMarker } from "./shell-marker";
@@ -25,7 +25,6 @@ import { setThemeOverride } from "../shared/theme";
 import { SwipeIndicator, type SwipePhasePayload } from "./swipe/swipe-indicator";
 import { host } from "../host";
 import { createGenerationToken } from "../shared/utils/generation-token";
-import { engine } from "../engine";
 import { effectiveChromeTheme } from "../utils/chrome-theme";
 
 // Swipe messages arriving within this window after a navigation echo are
@@ -69,9 +68,8 @@ const CHROME_GLYPH_SELECTOR =
  *
  * - `url`: the full URL as echoed by the bridge via moss-navigation
  *   (includes query/hash). Identity checks compare pathnames only.
- * - `sourceFile`: the absolute source-file path backing this URL.
- *   Set asynchronously by `resolvePageSource`; `null` during the
- *   window between moss-navigation arrival and that resolution.
+ * - `sourceFile`: the absolute source-file path backing this URL, read
+ *   from the page source's answer; `null` until that answer lands.
  */
 export type ActivePage = { url: string; sourceFile: string | null };
 
@@ -254,9 +252,9 @@ export class NavigationManager {
   // editor must also set this to 'editor' (via claimScrollForEditor or inline).
   private scrollIntent: 'editor' | 'user' = 'editor';
 
-  /** Canonical record of what page the preview is currently showing. */
-  private activePage: ActivePage | null = null;
-  private readonly sourceResolution = createGenerationToken();
+  /** The page the preview is currently showing; its source is the page source's answer. */
+  private activePage: { url: string } | null = null;
+  private readonly unsubscribePageSource: () => void;
   private readonly pageRequest = createGenerationToken();
   private requestedUrl: string | null = null;
   private morphSequence = 0;
@@ -264,8 +262,8 @@ export class NavigationManager {
   /** Record intent before assigning iframe.src, so late refresh work loses authority. */
   beginNavigation(url: string): void {
     this.pageRequest.bump();
-    this.sourceResolution.bump();
     this.requestedUrl = stripShellMarker(url);
+    pageSource.invalidate(extractDisplayPath(url));
     this.reportPreviewRequirement();
     this.armNavDeadline(NavigationManager.NAV_DEADLINE_MS);
   }
@@ -279,9 +277,17 @@ export class NavigationManager {
       onExpire?.();
       this.requestedUrl = null;
       this.pageRequest.bump();
+      this.followShownPage();
       info(`[NavigationManager] navigation abandoned: no page reported in within ${ms}ms`);
       this.reportPreviewRequirement();
     }, ms);
+  }
+
+  /** The page source answers for the page still on screen once a navigation is abandoned. */
+  private followShownPage(): void {
+    const shown = this.activePage ? extractDisplayPath(this.activePage.url) : null;
+    pageSource.invalidate(shown);
+    if (shown && this.folderPath) void pageSource.ensure(shown);
   }
 
   /** Tell the build which page to watch: the intended page while a navigation is pending, else the shown page. */
@@ -295,7 +301,9 @@ export class NavigationManager {
 
   /** Public read access for identity validation and testing. */
   getActivePage(): ActivePage | null {
-    return this.activePage;
+    if (!this.activePage) return null;
+    const { url } = this.activePage;
+    return { url, sourceFile: pageSource.sourceFile(extractDisplayPath(url)) };
   }
 
   // Echo-suppression token: when the editor (parent) drives a navigation by
@@ -404,6 +412,10 @@ export class NavigationManager {
 
   constructor(iframe: HTMLIFrameElement | null) {
     this.iframe = iframe;
+    // The build is asked to resolve again whenever the lookup learns a different source for the page.
+    this.unsubscribePageSource = pageSource.subscribe((page, previous) => {
+      if (this.activePage && page.sourcePath !== (previous?.sourcePath ?? null)) this.previewRequirementListener?.(page.urlPath);
+    });
 
     // The mode-dependent tooltip is written imperatively — re-render on locale
     // switch or it stays in the previous language (mixed-language chrome bug).
@@ -717,7 +729,8 @@ export class NavigationManager {
    */
   destroy(): void {
     this.pageRequest.bump();
-    this.sourceResolution.bump();
+    this.unsubscribePageSource();
+    pageSource.invalidate();
     this.swipeIndicator?.dispose();
     this.rpc?.destroy();
     this.autocomplete?.destroy();
@@ -737,7 +750,7 @@ export class NavigationManager {
     clearTimeout(this.navDeadline);
     clearTimeout(this.navigationTimeout);
     this.requestedUrl = null;
-    this.sourceResolution.bump();
+    pageSource.invalidate();
     // Create fresh history - clears all entries and _initialized flag
     this.history = createNavigationHistory();
 
@@ -783,7 +796,6 @@ export class NavigationManager {
     // A replaced document can still echo while its successor is loading.
     if (this.requestedUrl && !this.sameRoute(currentUrl, this.requestedUrl)) return;
     // Confirmed. A mismatched echo (above) changes nothing and leaves the deadline armed.
-    this.sourceResolution.bump();
     clearTimeout(this.navDeadline);
     clearTimeout(this.navigationTimeout);
     if (!this.requestedUrl && currentUrl !== this.getCurrentUrl()) this.pageRequest.bump();
@@ -791,7 +803,10 @@ export class NavigationManager {
     // If this message is the echo of a navigation we just issued, consume the
     // token. We still update display + activePage below; the isEcho flag
     // suppresses new-navigation bookkeeping further down.
-    const previousUrl = this.history.getCurrentUrl();
+    // The page shown until now. History can lag behind it: a page the editor
+    // opened is shown without being recorded.
+    const historyUrl = this.history.getCurrentUrl();
+    const previousUrl = this.activePage?.url ?? historyUrl;
     const isEcho = this.consumePendingEchoIfMatch(currentUrl);
 
     // Detect hash-fragment navigation on the same pathname: user clicked a
@@ -830,7 +845,7 @@ export class NavigationManager {
       // First navigation - set as initial state (not a "new" navigation)
       this.history._setInitialUrl(currentUrl);
       debug(`✅ [NavigationManager] Initial URL set: ${currentUrl}`);
-    } else if (currentUrl !== previousUrl) {
+    } else if (currentUrl !== previousUrl && currentUrl !== historyUrl) {
       const backUrl =
         this.history._index > 0 ? this.history._stack[this.history._index - 1] : null;
       const fwdUrl =
@@ -889,6 +904,9 @@ export class NavigationManager {
         }
       }
       this.pendingNavType = null;
+    } else if (currentUrl !== previousUrl) {
+      // Back on the page history already points at: nothing to record.
+      this.pendingNavType = null;
     } else {
       // Same URL — this is a reload (e.g., after rebuild). It is NOT a
       // navigation: mark it so downstream consumers can distinguish a rebuild
@@ -912,12 +930,9 @@ export class NavigationManager {
       }
     }
 
-    // Update canonical active page (sourceFile is resolved asynchronously
-    // by emitUrlChangedEvent via resolvePageSource; identity checks use URL).
     // currentPath derives from activePage, so this single assignment keeps the
-    // displayed path in sync.
-    const previousSource = this.activePage?.sourceFile ?? null;
-    this.activePage = { url: currentUrl, sourceFile: isReload ? previousSource : null };
+    // displayed path in sync. Identity checks use the URL.
+    this.activePage = { url: currentUrl };
     if (!isReload) this.reportPreviewRequirement();
     this.currentTitle = data.notFound ? "" : (data.title || "");
     this.updateDisplay();
@@ -942,8 +957,9 @@ export class NavigationManager {
     debug(`[NavigationManager] Button states: canGoBack=${canGoBack}, canGoForward=${canGoForward}, historyLength=${this.history.length()}, historyIndex=${this.history.getActiveIndex()}`);
     this.updateButtonStates(canGoBack, canGoForward);
 
-    // Emit PREVIEW_URL_CHANGED event for syndication UI
-    this.emitUrlChangedEvent(this.currentPath, isReload);
+    // The page source announces the page's answer (PREVIEW_URL_CHANGED).
+    if (this.folderPath) void pageSource.navigate(this.currentPath, isReload);
+    else pageSource.unavailable(this.currentPath, isReload);
 
     // Notify the rename 404-retry observer (PreviewManager). Reported for every
     // REAL bridge-echoed navigation, including echoes — the consumer filters by
@@ -989,55 +1005,6 @@ export class NavigationManager {
       this.scrollIntent = 'editor';
       this.lastEditorPosition = null;
     }
-  }
-
-  /**
-   * Emit PREVIEW_URL_CHANGED event to notify other components.
-   * Checks if the current URL is an article by calling the backend.
-   */
-  private async emitUrlChangedEvent(urlPath: string, isReload = false): Promise<void> {
-    const generation = this.sourceResolution.current();
-    // Default event when resolution fails or no folder path
-    let event: PreviewUrlChangedEvent = {
-      urlPath,
-      sourcePath: null,
-      isDir: false,
-      isArticle: false,
-      syndicated: [],
-      takeover: null,
-      isReload,
-    };
-
-    if (this.folderPath) {
-      try {
-        const result = await engine.resolvePageSource(urlPath);
-        if (this.sourceResolution.isStale(generation)) return;
-        if (result.status === "ok") {
-          event = {
-            urlPath,
-            sourcePath: result.data.source_path,
-            isDir: result.data.is_dir,
-            isArticle: result.data.is_article,
-            syndicated: result.data.syndicated ?? [],
-            takeover: result.data.takeover ?? null,
-            isReload,
-          };
-          if (this.activePage) {
-            const changedSource = this.activePage.sourceFile !== result.data.source_path;
-            this.activePage.sourceFile = result.data.source_path;
-            // The frontend's lookup learned a source for the page that it did
-            // not have, so Rust is asked to resolve again.
-            if (changedSource) this.previewRequirementListener?.(urlPath);
-          }
-        }
-      } catch (err) {
-        // If article map doesn't exist yet (first build), use defaults
-        debug(`[NavigationManager] Could not resolve page source: ${err}`);
-      }
-    }
-
-    if (this.sourceResolution.isStale(generation)) return;
-    eventBus.emit(Events.PREVIEW_URL_CHANGED, event);
   }
 
   /**
@@ -1570,7 +1537,7 @@ export class NavigationManager {
    * Called by PreviewManager when the project path changes.
    */
   setFolderPath(path: string): void {
-    if (path !== this.folderPath) this.sourceResolution.bump();
+    if (path !== this.folderPath) pageSource.invalidate();
     this.folderPath = path;
   }
 

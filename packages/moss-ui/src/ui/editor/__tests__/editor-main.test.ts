@@ -267,10 +267,7 @@ vi.mock('../cm-editor', async () => ({
   CmEditor: (await import('./disk-hash')).acceptingExternalChanges(MockCmEditor),
 }));
 
-vi.mock('../file-viewer', () => ({
-  showFileViewer: vi.fn(),
-  destroyFileViewer: vi.fn(),
-}));
+vi.mock('../file-viewer');
 
 vi.mock('../tree', () => ({
   FileTree: MockFileTree,
@@ -493,7 +490,7 @@ describe('editor-main folder surface request ownership', () => {
     (await import("../../host")).host.starterPicker = { open: async () => {}, takeRequest: async () => false };
     await bootEditorMain();
     await vi.waitFor(() => expect(listenCallbacks.has('editor:load-source')).toBe(true));
-    await vi.waitFor(() => expect(document.getElementById('moss-editor-cm')!.getAttribute('data-editor-surface')).not.toBeNull());
+    await vi.waitFor(() => expect(mockEmit).toHaveBeenCalledWith('editor:request-page', {}));
   });
 
   afterEach(() => vi.restoreAllMocks());
@@ -511,16 +508,21 @@ describe('editor-main folder surface request ownership', () => {
     await vi.waitFor(() => expect(MockCmEditor).toHaveBeenCalledTimes(2));
   });
 
+  // A home-less folder the tree names refreshes its recipe from disk first.
+  const navigateToFolder = (name: string) => document.dispatchEvent(new CustomEvent('editor:folder-navigate', {
+    detail: { folderPath: `${root}/${name}`, folderName: name },
+  }));
+
   test('a deferred folder verdict cannot tear down a newer file', async () => {
     let finish!: (value: unknown) => void;
     mockCommands.resolvePageSource.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
     const load = listenCallbacks.get('editor:load-source')!;
-    const obsolete = load({ sourcePath: null, isRoot: false, takeover: folder('A') });
+    navigateToFolder('A');
     await vi.waitFor(() => expect(finish).toBeDefined());
-    await load({ sourcePath: `${root}/current.md`, isRoot: false });
+    await load({ sourcePath: `${root}/current.md`, isRoot: false, takeover: null });
     const mounted = MockCmEditor.mock.results.at(-1)!.value;
     finish({ status: 'ok', data: { source_path: null, takeover: folder('A') } });
-    await obsolete;
+    for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
     expect(mounted.destroy).not.toHaveBeenCalled();
     expect(document.querySelectorAll('[data-folder-mode-card]')).toHaveLength(0);
     expect(location.search).toContain('current.md');
@@ -531,15 +533,14 @@ describe('editor-main folder surface request ownership', () => {
     mockCommands.resolvePageSource.mockImplementation((url: string) => url === '/A/'
       ? new Promise(resolve => { finish = resolve; })
       : Promise.resolve({ status: 'ok', data: { source_path: null, takeover: folder('B') } }));
-    const load = listenCallbacks.get('editor:load-source')!;
-    const obsolete = load({ sourcePath: null, isRoot: false, takeover: folder('A') });
+    navigateToFolder('A');
     await vi.waitFor(() => expect(finish).toBeDefined());
-    await load({ sourcePath: null, isRoot: false, takeover: folder('B') });
+    navigateToFolder('B');
     const cm = document.getElementById('moss-editor-cm')!;
+    await vi.waitFor(() => expect(cm.getAttribute('data-editor-surface-key')).toContain('/B'));
     const newerSurface = cm.getAttribute('data-editor-surface-key');
-    expect(newerSurface).toContain('/B');
     finish({ status: 'ok', data: { source_path: null, takeover: folder('A') } });
-    await obsolete;
+    for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
     expect(cm.getAttribute('data-editor-surface-key')).toBe(newerSurface);
     expect(document.querySelectorAll('[data-folder-mode-card]')).toHaveLength(4);
   });
@@ -648,6 +649,26 @@ describe('editor-main same-file guard (editor:load-source)', () => {
     // Second call: same path — should NOT call parseFrontmatter
     await loadSourceCb!({ sourcePath: filePath, isDir: false });
     expect(mockCommands.parseFrontmatter).not.toHaveBeenCalled();
+  });
+
+  test('editor:load-source keeps an open file viewer when the preview resolves to the file it shows', async () => {
+    const { showFileViewer, fileViewerIsOpen } = await import('../file-viewer');
+    vi.mocked(showFileViewer).mockClear();
+    const filePath = '/Users/test/blog/content/doc.pdf';
+
+    await bootEditorMain();
+    await vi.waitFor(() => {
+      expect(listenCallbacks.has('editor:load-source')).toBe(true);
+    });
+    const loadSourceCb = listenCallbacks.get('editor:load-source')!;
+
+    await loadSourceCb({ sourcePath: filePath, isDir: false });
+    expect(showFileViewer).toHaveBeenCalledTimes(1);
+    vi.mocked(fileViewerIsOpen).mockReturnValue(true);
+
+    // The preview followed to the PDF's own address and its answer names the PDF.
+    await loadSourceCb({ sourcePath: filePath, isDir: false });
+    expect(showFileViewer).toHaveBeenCalledTimes(1);
   });
 
   test('editor:load-source loads new file when sourcePath differs', async () => {
@@ -1684,7 +1705,9 @@ describe('editor-main URL query parameter loading', () => {
     });
     await bootEditorMain();
     const cm = document.getElementById('moss-editor-cm')!;
+    // From disk, with no shell answer: the root's home needs no build.
     await vi.waitFor(() => expect(cm.getAttribute('data-editor-surface')).toBe('takeover'));
+    expect(mockCommands.resolvePageSource).toHaveBeenCalledWith('/');
     expect(MockCmEditor).not.toHaveBeenCalled(); // did NOT open getFirstFile()
   });
 
@@ -1696,9 +1719,46 @@ describe('editor-main URL query parameter loading', () => {
       writable: true, configurable: true,
     });
     await bootEditorMain();
+    await vi.waitFor(() => expect(mockEmit).toHaveBeenCalledWith('editor:request-page', {}));
+    expect(mockCommands.resolvePageSource).not.toHaveBeenCalled();
+    await listenCallbacks.get('editor:load-source')!({ sourcePath: null, isRoot: false, takeover: folderHomeTakeover('/Users/test/blog/Notes', 'Notes'), pending: null });
     const cm = document.getElementById('moss-editor-cm')!;
     await vi.waitFor(() => expect(cm.getAttribute('data-editor-surface')).toBe('takeover'));
     expect(cm.querySelector('.moss-pane-state__title')?.textContent).toBe('Notes');
+  });
+
+  test('boot on the root whose lookup fails claims nothing about the page', async () => {
+    mockCommands.resolvePageSource.mockResolvedValue({ status: 'error', error: 'backend busy' });
+    Object.defineProperty(window, 'location', {
+      value: { ...originalLocation, search: '?is_root=1' }, writable: true, configurable: true,
+    });
+    await bootEditorMain();
+    await vi.waitFor(() => expect(mockEmit).toHaveBeenCalledWith('editor:request-page', {}));
+    expect(mockCommands.resolvePageSource).toHaveBeenCalledWith('/');
+    expect(['generated', 'takeover', 'root-empty']).not.toContain(document.getElementById('moss-editor-cm')!.getAttribute('data-editor-surface'));
+  });
+
+  test('boot on a root whose home is still coming down says it is downloading', async () => {
+    mockCommands.resolvePageSource.mockResolvedValue({ status: 'ok', data: { source_path: null, source_pending: true, is_dir: true, is_article: false, syndicated: [], takeover: null } });
+    Object.defineProperty(window, 'location', {
+      value: { ...originalLocation, search: '?is_root=1' }, writable: true, configurable: true,
+    });
+    await bootEditorMain();
+    const cm = document.getElementById('moss-editor-cm')!;
+    await vi.waitFor(() => expect(cm.getAttribute('data-editor-surface')).toBe('pending'));
+    expect(cm.querySelector('.moss-pane-state__title')?.textContent).toBe('Still downloading');
+    expect(mockEmit).toHaveBeenCalledWith('editor:source-pending', { pending: true, sourcePath: null });
+  });
+
+  test('a warm open on the root resolves its home from disk with no shell answer', async () => {
+    mockCommands.resolvePageSource.mockResolvedValue({ status: 'ok', data: { source_path: '/Users/test/blog/index.md', is_dir: true, is_article: false, syndicated: [], takeover: null } });
+    mockCommands.parseFrontmatter.mockResolvedValue({ status: 'ok', data: { frontmatter: {}, body: '# Home' } });
+    await bootEditorMain();
+    await vi.waitFor(() => expect(mockEmit).toHaveBeenCalledWith('editor:request-page', {}));
+    expect(MockCmEditor).not.toHaveBeenCalled();
+    (window as unknown as { __moss_editor_open: (n: unknown) => void }).__moss_editor_open({ sourcePath: null, isRoot: true, takeover: null });
+    await vi.waitFor(() => expect(MockCmEditor).toHaveBeenCalled());
+    expect(mockCommands.resolvePageSource).toHaveBeenCalledWith('/');
   });
 });
 
@@ -3706,7 +3766,7 @@ describe('editor-main import-refresh on FileChanged', () => {
     // resolveAndApplyRootSurface() call inside onboardingRefresh sets the takeover LAST
     // and is not later overwritten by init()'s URL-params tail.
     const cm = document.getElementById('moss-editor-cm')!;
-    await vi.waitFor(() => expect(cm.getAttribute('data-editor-surface')).not.toBeNull());
+    await vi.waitFor(() => expect(mockEmit).toHaveBeenCalledWith('editor:request-page', {}));
 
     await dispatchFileChanged(['article-one.md', 'article-two.md']);
 
@@ -3743,7 +3803,7 @@ describe('editor-main import-refresh on FileChanged', () => {
     // the FileChanged, so the getFirstFile read order above is deterministic —
     // same pattern as the empty-folder sibling test above.
     const cmBoot = document.getElementById('moss-editor-cm')!;
-    await vi.waitFor(() => expect(cmBoot.getAttribute('data-editor-surface')).not.toBeNull());
+    await vi.waitFor(() => expect(mockEmit).toHaveBeenCalledWith('editor:request-page', {}));
 
     await dispatchFileChanged(['index.md']);
 
@@ -3772,7 +3832,7 @@ describe('editor-main import-refresh on FileChanged', () => {
     const cm = document.getElementById('moss-editor-cm')!;
     // vi.waitFor retries while the callback throws — use expect() so it keeps
     // polling until init()'s URL-params tail sets data-editor-surface.
-    await vi.waitFor(() => expect(cm.getAttribute('data-editor-surface')).not.toBeNull());
+    await vi.waitFor(() => expect(mockEmit).toHaveBeenCalledWith('editor:request-page', {}));
 
     // Establish the real empty-folder onboarding surface (four cards) via the
     // boot load-source path: no source + isRoot + empty folder → root-empty.
@@ -4561,7 +4621,7 @@ describe('a failed file open is visible and never leaves the tree lying', () => 
     // Let init's tail settle so the getFirstFile read order above is
     // deterministic (same pattern as the import-refresh tests).
     const cm = document.getElementById('moss-editor-cm')!;
-    await vi.waitFor(() => expect(cm.getAttribute('data-editor-surface')).not.toBeNull());
+    await vi.waitFor(() => expect(mockEmit).toHaveBeenCalledWith('editor:request-page', {}));
     mockEmit.mockClear();
 
     await listenCallbacks.get('moss-event')!({ kind: 'FileChanged', payload: { source_creates: ['index.md'] } });
@@ -4596,7 +4656,7 @@ describe('a failed file open is visible and never leaves the tree lying', () => 
     await initEditor();
 
     // Start on the surface the bug reported: the generated pane.
-    await listenCallbacks.get('editor:load-source')!({ sourcePath: null, isRoot: false, takeover: null });
+    await listenCallbacks.get('editor:load-source')!({ sourcePath: null, isRoot: false, takeover: null, pending: null });
     const cm = document.getElementById('moss-editor-cm')!;
     expect(cm.getAttribute('data-editor-surface')).toBe('generated');
 
@@ -4770,7 +4830,7 @@ describe('a failed file open is visible and never leaves the tree lying', () => 
     // now stale, and a stale arm re-offers the OLD file on the next arrival —
     // yanking the user out of whatever they moved to. Only the editor knows the
     // pane is gone, so only the editor can say so.
-    await listenCallbacks.get('editor:load-source')!({ sourcePath: null, isRoot: false, takeover: null });
+    await listenCallbacks.get('editor:load-source')!({ sourcePath: null, isRoot: false, takeover: null, pending: null });
 
     // One channel, both directions: a separate "stop watching" event could
     // overtake an arm emitted just before it.
@@ -5278,5 +5338,169 @@ describe('the chip bar learns where the build placed the open file', () => {
     mockCommands.pageFacts.mockRejectedValue(new Error('no arm'));
     expect(await positionFor('works/poem.md')).toBeNull();
     expect(lastBar().setPageFacts).toHaveBeenLastCalledWith({ position: null, auto: {} });
+  });
+});
+
+describe('a page with no answer yet keeps the active document', () => {
+  let heading: import('../editor-heading').HeadingController;
+  const home = '/Users/test/blog/home.md';
+  beforeEach(async () => {
+    Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
+    Range.prototype.getBoundingClientRect = () => new DOMRect();
+    window.dispatchEvent(new Event('beforeunload'));
+    vi.resetModules();
+    setupEditorDOM();
+    document.body.insertAdjacentHTML('beforeend', '<div id="editor-heading" contenteditable="plaintext-only"></div>');
+    vi.clearAllMocks();
+    resetMocks();
+    mockCommands.getProjectPath.mockResolvedValue({ status: 'ok', data: '/Users/test/blog' });
+    mockCommands.parseFrontmatter.mockResolvedValue({ status: 'ok', data: { frontmatter: {}, body: 'Original body' } });
+    mockCommands.computeHeadingState.mockResolvedValue({ status: 'ok', data: { visible: true, text: 'Home title', source: 'Title' } });
+    const headings = await import('../editor-heading');
+    const wire = headings.wireEditorHeading;
+    vi.spyOn(headings, 'wireEditorHeading').mockImplementation((...args) => {
+      heading = wire(...args);
+      return heading;
+    });
+    const { CmEditor } = await vi.importActual<typeof import('../cm-editor')>('../cm-editor');
+    MockCmEditor.mockImplementation((options) => new CmEditor(options));
+    await bootEditorMain();
+    await vi.waitFor(() => expect(listenCallbacks.has('editor:load-source')).toBe(true));
+    await listenCallbacks.get('editor:load-source')!({ sourcePath: home, isRoot: true, takeover: null, pending: null });
+  });
+
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  test.each([
+    ['the shell', { sourcePath: null, isRoot: true, takeover: null, pending: 'lookup' }],
+    ['a bare native open', { sourcePath: null, isRoot: false, takeover: null }],
+  ] as const)('one from %s preserves unsaved text, the autosave and real undo history', async (via, node) => {
+    const { undo, undoDepth } = await import('@codemirror/commands');
+    const editor = MockCmEditor.mock.results.at(-1)!.value;
+    const view = editor.getView();
+    const mounted = view.dom;
+    vi.useFakeTimers();
+    mockCommands.saveEditorContent.mockClear();
+    mockCommands.parseFrontmatter.mockClear();
+    view.dispatch({ changes: { from: view.state.doc.length, insert: ' — unsaved' } });
+    const depth = undoDepth(view.state);
+    expect(depth).toBeGreaterThan(0);
+    const sourceQuery = location.search;
+    const load = listenCallbacks.get('editor:load-source')!;
+
+    if (via === 'the shell') await load(node);
+    else {
+      (window as any).__moss_editor_open(node);
+      await Promise.resolve();
+    }
+    expect(mounted.isConnected).toBe(true);
+    expect(editor.getContent()).toBe('Original body — unsaved');
+    expect(location.search).toBe(sourceQuery);
+    expect(mockCommands.saveEditorContent).not.toHaveBeenCalled();
+
+    await load({ sourcePath: home, isRoot: true, takeover: null, pending: null });
+    expect(MockCmEditor).toHaveBeenCalledTimes(1);
+    expect(mockCommands.parseFrontmatter).not.toHaveBeenCalled();
+    expect(undoDepth(view.state)).toBe(depth);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(mockCommands.saveEditorContent).toHaveBeenCalledWith(
+      home, expect.anything(), 'Original body — unsaved', expect.anything(), false,
+    );
+    expect(undo(view)).toBe(true);
+    expect(editor.getContent()).toBe('Original body');
+    await (window as any).__moss_debug.flushPendingSave();
+  });
+
+  test('it leaves a load in flight alone: that may be the user opening a file', async () => {
+    const load = listenCallbacks.get('editor:load-source')!;
+    let finish!: (value: unknown) => void;
+    mockCommands.parseFrontmatter.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    const opening = load({ sourcePath: '/Users/test/blog/other.md', isRoot: false, takeover: null, pending: null });
+    await vi.waitFor(() => expect(mockCommands.parseFrontmatter).toHaveBeenCalledWith('/Users/test/blog/other.md'));
+    await load({ sourcePath: null, isRoot: true, takeover: null, pending: 'lookup' });
+    finish({ status: 'ok', data: { frontmatter: {}, body: 'Other body' } });
+    await opening;
+    expect(MockCmEditor).toHaveBeenCalledTimes(2);
+    expect(MockCmEditor.mock.results.at(-1)!.value.getContent()).toBe('Other body');
+  });
+
+  test.each(['generated', 'takeover', 'root-empty'] as const)('it replaces a %s claim with the loading pane, until the answer lands', async (kind) => {
+    const load = listenCallbacks.get('editor:load-source')!;
+    const takeover = kind === 'generated' ? null : {
+      ...folderHomeTakeover('/Users/test/blog/old-folder', 'Old folder'),
+      folder_empty: kind === 'root-empty',
+    };
+    await load({ sourcePath: null, isRoot: false, takeover, pending: null });
+    const cm = document.getElementById('moss-editor-cm')!;
+    expect(cm.dataset.editorSurface).toBe(kind);
+
+    mockEmit.mockClear();
+    await load({ sourcePath: null, isRoot: true, takeover: null, pending: 'lookup' });
+    expect(cm.dataset.editorSurface).toBe('pending');
+    expect(cm.textContent).toContain('Loading page');
+    expect(cm.textContent).not.toContain('No page to edit');
+    expect(cm.textContent).not.toContain('Old folder');
+    expect(cm.querySelector('[data-pane-state-cta]')).toBeNull();
+    expect(cm.querySelector('[data-folder-mode-card]')).toBeNull();
+    // No bytes to wait for: the arrival retry is not armed.
+    expect(mockEmit).not.toHaveBeenCalledWith('editor:source-pending', expect.objectContaining({ pending: true }));
+    await load({ sourcePath: null, isRoot: true, takeover: null, pending: 'lookup' });
+    expect(cm.textContent).toContain('Loading page');
+    await load({ sourcePath: home, isRoot: true, takeover: null, pending: null });
+    const editor = MockCmEditor.mock.results.at(-1)!.value;
+    expect(editor.getView().dom.isConnected).toBe(true);
+    expect(cm.querySelector('[data-pane-state]')).toBeNull();
+  });
+
+  test('a page whose source is still arriving shows the download pane, never the loading one', async () => {
+    const load = listenCallbacks.get('editor:load-source')!;
+    await load({ sourcePath: null, isRoot: false, takeover: null, pending: null });
+    await load({ sourcePath: null, isRoot: true, takeover: null, pending: 'download' });
+    const cm = document.getElementById('moss-editor-cm')!;
+    expect(cm.textContent).toContain('Still downloading');
+    expect(cm.textContent).not.toContain('Loading page');
+    expect(mockEmit).toHaveBeenCalledWith('editor:source-pending', { pending: true, sourcePath: null });
+  });
+
+  test('opening a file that is still arriving replaces the open document with its download pane', async () => {
+    const editor = MockCmEditor.mock.results.at(-1)!.value;
+    mockCommands.parseFrontmatter.mockResolvedValue({ status: 'ok', data: { frontmatter: {}, body: '', has_frontmatter: false, still_arriving: true } });
+    await listenCallbacks.get('editor:load-file')!({ filePath: 'arriving.md' });
+    const cm = document.getElementById('moss-editor-cm')!;
+    await vi.waitFor(() => expect(cm.dataset.editorSurface).toBe('pending'));
+    expect(editor.getView().dom.isConnected).toBe(false);
+    expect(cm.textContent).toContain('Still downloading');
+    expect(mockEmit).toHaveBeenCalledWith('editor:source-pending', { pending: true, sourcePath: '/Users/test/blog/arriving.md' });
+  });
+
+  test('a page with no answer yet replaces another page\'s download pane and stops waiting for its file', async () => {
+    mockCommands.parseFrontmatter.mockResolvedValue({ status: 'ok', data: { frontmatter: {}, body: '', has_frontmatter: false, still_arriving: true } });
+    await listenCallbacks.get('editor:load-file')!({ filePath: 'arriving.md' });
+    const cm = document.getElementById('moss-editor-cm')!;
+    await vi.waitFor(() => expect(cm.textContent).toContain('Still downloading'));
+    mockEmit.mockClear();
+    await listenCallbacks.get('editor:load-source')!({ sourcePath: null, isRoot: false, takeover: null, pending: 'lookup' });
+    expect(cm.textContent).toContain('Loading page');
+    expect(cm.textContent).not.toContain('Still downloading');
+    expect(mockEmit).toHaveBeenCalledWith('editor:source-pending', { pending: false, sourcePath: null });
+  });
+
+  test.each(['other.md', 'other.png'])('a load superseded while it waits on the outgoing save stops before reading %s', async (target) => {
+    const { showFileViewer } = await import('../file-viewer');
+    const load = listenCallbacks.get('editor:load-source')!;
+    const view = MockCmEditor.mock.results.at(-1)!.value.getView();
+    view.dispatch({ changes: { from: view.state.doc.length, insert: ' — saved later' } });
+    let finish!: (value: unknown) => void;
+    mockCommands.saveEditorContent.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    mockCommands.parseFrontmatter.mockClear();
+    vi.mocked(showFileViewer).mockClear();
+    const superseded = load({ sourcePath: `/Users/test/blog/${target}`, isRoot: false, takeover: null, pending: null });
+    await vi.waitFor(() => expect(mockCommands.saveEditorContent).toHaveBeenCalled());
+    const newer = load({ sourcePath: '/Users/test/blog/third.md', isRoot: false, takeover: null, pending: null });
+    finish(await savedWithHash(home, {}, 'Original body — saved later'));
+    await Promise.all([superseded, newer]);
+    const asked = [...mockCommands.parseFrontmatter.mock.calls, ...vi.mocked(showFileViewer).mock.calls].flat().map(String);
+    expect(asked.some((arg) => arg.includes(target))).toBe(false);
+    expect(mockCommands.parseFrontmatter).toHaveBeenCalledWith('/Users/test/blog/third.md');
   });
 });

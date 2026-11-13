@@ -221,7 +221,7 @@ async fn a_redirect_to_loopback_is_refused() {
 
     let start = format!("{}/start", server.url());
     let agent = no_redirect_test_agent(&start);
-    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None)
+    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None)
         .expect_err("a redirect to a loopback address must be refused");
     // Not just `.expect_err(...)`: an ablated per-hop check would still
     // ATTEMPT the connection to 127.0.0.1:1 and get a real connection
@@ -243,7 +243,7 @@ async fn a_redirect_to_a_mail_address_is_refused_not_a_panic() {
 
     let start = format!("{}/start", server.url());
     let agent = no_redirect_test_agent(&start);
-    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None)
+    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None)
         .expect_err("a redirect to a mailto: address must be refused");
     let detail = refusal_detail(&err);
     assert!(detail.contains("disallowed") && detail.contains("mailto"), "{detail}");
@@ -263,7 +263,7 @@ async fn a_refusal_reason_that_is_not_ascii_is_carried_not_a_panic() {
     let agent = no_redirect_test_agent(&start);
     let err = fetch_following_redirects(&agent, &start, "test-agent", None, None, |_| {
         Err("refusé — not here".to_string())
-    })
+    }, |_| false)
     .expect_err("a refused hop must be an error");
     let detail = refusal_detail(&err);
     assert!(detail.is_ascii() && detail.contains("refus") && detail.contains("not here"), "{detail}");
@@ -281,7 +281,7 @@ async fn a_redirect_to_link_local_metadata_is_refused() {
 
     let start = format!("{}/start", server.url());
     let agent = no_redirect_test_agent(&start);
-    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None)
+    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None)
         .expect_err("a redirect to the cloud-metadata address must be refused");
     // Asserting the detail (not just "some Err") matters here: an
     // ablated check would still connect-fail refusing this unroutable
@@ -302,7 +302,7 @@ async fn a_redirect_to_ipv6_loopback_is_refused() {
 
     let start = format!("{}/start", server.url());
     let agent = no_redirect_test_agent(&start);
-    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None)
+    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None)
         .expect_err("a redirect to ::1 must be refused");
     assert!(refusal_detail(&err).contains("disallowed"), "{}", refusal_detail(&err));
 }
@@ -335,7 +335,7 @@ async fn a_legitimate_redirect_is_still_followed() {
 
     let start = format!("{}/old-path", server.url());
     let agent = no_redirect_test_agent(&start);
-    let response = fetch_following_redirects(&agent, &start, "test-agent", None, None, |_| Ok(()))
+    let response = fetch_following_redirects(&agent, &start, "test-agent", None, None, |_| Ok(()), |_| false)
         .expect("a legitimate redirect must still be followed");
     assert_eq!(response.status(), 200);
     assert_eq!(response.get_url(), format!("{}/new-path", server.url()), "fetch_page reports this");
@@ -358,7 +358,7 @@ async fn a_redirect_chain_longer_than_the_hop_cap_is_refused() {
 
     let start = format!("{}/hop0", server.url());
     let agent = no_redirect_test_agent(&start);
-    fetch_with_validated_redirects(&agent, &start, "test-agent", None, None)
+    fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None)
         .expect_err("a chain past MAX_REDIRECT_HOPS must be refused, not followed forever");
 }
 
@@ -475,7 +475,7 @@ async fn a_page_fetch_keeps_the_default_accept_header() {
         .await;
 
     let url = format!("{}/article", server.url());
-    fetch_page(&url, "test-agent")
+    fetch_page(&url, "test-agent", None)
         .await
         .expect("mock only matches Accept: */*; a page fetch must still send it");
 }
@@ -512,6 +512,7 @@ async fn a_redirect_target_on_a_ruled_host_is_rewritten_before_validation() {
             *seen_clone.lock().unwrap() = Some(u.to_string());
             Err("refused for test".to_string())
         },
+        |_| false,
     )
     .expect_err("the validator always refuses");
     assert!(refusal_detail(&err).contains("refused for test"));
@@ -546,7 +547,7 @@ async fn a_page_fetch_redirect_is_never_rewritten_even_on_a_ruled_host() {
     let err = fetch_following_redirects(&agent, &start, "test-agent", None, None, move |u: &str| {
         *seen_clone.lock().unwrap() = Some(u.to_string());
         Err("refused for test".to_string())
-    })
+    }, |_| false)
     .expect_err("the validator always refuses");
     assert!(refusal_detail(&err).contains("refused for test"));
     assert_eq!(
@@ -589,4 +590,59 @@ fn leaves_the_estimate_out_without_a_delay() {
 fn short_and_long_estimates_read_naturally() {
     assert!(progress_line(1, 4, S(10), S(30)).unwrap().ends_with("about 30 s left"));
     assert!(progress_line(1, 400, S(30), S(30)).unwrap().ends_with("about 3.3 h left"));
+}
+
+#[tokio::test]
+async fn a_link_of_the_site_that_leads_off_it_is_reported_not_requested() {
+    let mut server = mockito::Server::new_async().await;
+    let _mail = server
+        .mock("GET", "/mail")
+        .with_status(302)
+        .with_header("Location", "mailto:editor@example.test?subject=Hello there")
+        .create_async()
+        .await;
+    let _away = server
+        .mock("GET", "/away")
+        .with_status(302)
+        .with_header("Location", "https://other.example.test/form?ref=127.0.0.1")
+        .create_async()
+        .await;
+    let _scheme = server
+        .mock("GET", "/file")
+        .with_status(302)
+        .with_header("Location", "file:///etc/hosts")
+        .create_async()
+        .await;
+    let _port = server
+        .mock("GET", "/port")
+        .with_status(302)
+        .with_header("Location", "http://127.0.0.1:1/form")
+        .create_async()
+        .await;
+    let agent = no_redirect_test_agent(&server.url());
+    let scope = super::super::scope::UrlScope::new(&format!("{}/", server.url())).unwrap();
+    let destination = |path: &str| {
+        let start = format!("{}{path}", server.url());
+        fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, Some(&scope))
+            .map(|r| crate::system::redirects::redirect_target(&r))
+    };
+
+    assert_eq!(destination("/mail").unwrap().as_deref(), Some("mailto:editor@example.test?subject=Hello%20there"));
+    assert_eq!(destination("/away").unwrap().as_deref(), Some("https://other.example.test/form?ref=127.0.0.1"));
+    assert_eq!(destination("/port").unwrap().as_deref(), Some("http://127.0.0.1:1/form"), "another port is off the site");
+    let err = destination("/file").expect_err("any other scheme is still refused");
+    assert!(refusal_detail(&err).contains("disallowed"), "{}", refusal_detail(&err));
+}
+
+#[tokio::test]
+async fn a_redirect_that_returns_to_an_address_it_visited_is_a_loop() {
+    let mut server = mockito::Server::new_async().await;
+    let _a = server.mock("GET", "/a").with_status(302).with_header("Location", "/b").create_async().await;
+    let _b = server.mock("GET", "/b").with_status(302).with_header("Location", "/a").create_async().await;
+
+    let start = format!("{}/a", server.url());
+    let agent = no_redirect_test_agent(&start);
+    let err = fetch_following_redirects(&agent, &start, "test-agent", None, None, |_| Ok(()), |_| false)
+        .expect_err("a loop must be refused");
+    assert!(refusal_detail(&err).contains("itself in a loop"), "{}", refusal_detail(&err));
 }

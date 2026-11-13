@@ -911,7 +911,7 @@ pub fn detect_homepage_file_in_folder_marked(
         .collect();
     let marked: Vec<String> = files
         .iter()
-        .filter(|f| !f.path.contains('/') && f.file_type == "md")
+        .filter(|f| !f.path.contains('/') && moss_core::source_edit::policy::is_page_source(&f.file_type))
         .filter(|f| file_has_home_marker(&on_disk(root, &f.path)))
         .map(|f| f.path.clone())
         .collect();
@@ -1604,7 +1604,6 @@ pub fn scan_folder_with_dedup_emit_with_error(
         storage_folders,
     };
     crate::build::scan::path_collision::refuse_colliding_files(&structure, &spellings).map_err(ScanFailure::Message)?;
-    crate::build::template_check::warn_template_problems(Path::new(folder_path));
     Ok(structure)
 }
 

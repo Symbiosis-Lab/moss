@@ -993,6 +993,24 @@ mod tests {
     }
 
     #[test]
+    fn a_changed_block_declaration_moves_the_inputs_fingerprint() {
+        let page_map = map(&[("a.md", "a/index.html")]);
+        let manifest = crate::plugins::types::PluginManifest::parse(
+            r#"{"name":"catalog","version":"1.0.0","contributes":{"blocks":{"card":{"element":"demo-card"}}}}"#,
+        ).unwrap();
+        let plugin = crate::plugins::types::Plugin { manifest, path: "catalog".into() };
+        let fingerprint = |plugins: &[crate::plugins::types::Plugin]| {
+            let cfg = crate::build::render::config::SiteConfig {
+                blocks: std::sync::Arc::new(crate::plugins::contributions::blocks::BlockPlan::from_plugins(plugins)),
+                ..Default::default()
+            };
+            let scalars = site_scalars(crate::i18n::Language::En, None, "", cfg.markdown(), false, false, Default::default());
+            inputs_fingerprint(&["a.md".to_string()], &page_map, &HashMap::new(), &HashMap::new(), &std::collections::HashSet::new(), "site", &scalars)
+        };
+        assert_ne!(fingerprint(&[]), fingerprint(std::slice::from_ref(&plugin)));
+    }
+
+    #[test]
     fn a_site_typesetting_toggle_moves_the_inputs_fingerprint() {
         // A vertical page's body images declare a different `sizes=`, so a
         // `[site] typesetting` edit must not replay bodies parsed under the

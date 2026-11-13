@@ -961,3 +961,20 @@ fn the_not_found_page_is_never_carried_even_when_the_verdict_and_output_allow_it
     assert!(verdict.may_skip_document(&docs[2]), "the verdict alone would carry the not-found page");
     assert!(proof(&docs[2]).is_none(), "the not-found page must be rendered, not carried");
 }
+
+#[test]
+fn stream_host_rerenders_when_a_child_body_moves_below_its_excerpt() {
+    let h = Harness::new();
+    let mut host = doc("writings/index.html", PageKind::Folder, "folder body", Some("Writings"));
+    host.children_style = Some(moss_core::Resolved::frontmatter("stream".to_string()));
+    let child = doc("writings/alpha/index.html", PageKind::Article, "Alpha lede.\n\nTail.", None);
+    let initial = vec![doc("index.html", PageKind::Folder, "home", None), host.clone(), child.clone()];
+    assert_full(&h.run(&initial), FullCause::ColdCache);
+    assert!(!h.run(&initial).may_skip_document(&host), "a stream host reads bodies, so it is never carried");
+
+    let mut edited = child;
+    edited.content = "Alpha lede.\n\nA changed tail.".to_string();
+    edited.html_content = "<p>A changed tail.</p>".to_string();
+    let verdict = h.run(&[initial[0].clone(), host.clone(), edited]);
+    assert!(!verdict.may_skip_document(&host), "a body edit below the excerpt must refresh the stream");
+}

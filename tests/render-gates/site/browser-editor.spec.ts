@@ -9,18 +9,37 @@
  * script on the origin that shows it; this pins that the browser's PDF viewer
  * still draws under that policy (Chromium: its viewer frame loads; WebKit
  * draws in place and exposes no frame, so the response and the viewer's
- * element are what it can check).
+ * element are what it can check), and that the viewer stays once the preview
+ * has followed to the PDF's own address.
+ *
+ * Then the editor follows the preview back: a page opened from the file tree
+ * is shown without entering the preview's back/forward history, and a click
+ * from it to the home page must still bring the editor to the home page's file.
+ *
+ * Then an event's `start` and `end` open the browser's own date and time
+ * controls from the page properties, in the narrowest popover and in both
+ * themes: leaving a value untouched keeps the file byte for byte however it
+ * was written, and a chosen date and time reach the file in the form the
+ * build draws.
  *
  * Ports: playwright/gate-ports.ts, keys `browser-editor:ui` /
  * `browser-editor:preview`. Config: playwright/browser-editor.config.ts.
  */
-import { test, expect } from '@playwright/test';
+import { test, expect, type Frame, type Page } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gatePort } from '../../../playwright/gate-ports';
 import { MOSS_BIN } from '../../e2e/helpers/scratch-site';
+
+// Event pages, each linking to the next: the forms a person writes by hand,
+// one the build rejects, and the empty field an event template leaves.
+const EVENTS: Record<string, string> = {
+  'talk.md': '---\ntitle: Talk\nstart: 2026-12-01\nend: "2026-12-01 21:00"\n---\nA talk. [Next](walk.md)\n',
+  'walk.md': '---\ntitle: Walk\nstart: 2026-12-1\nend: 2026-12-02T10:00\n---\nA walk. [Next](fair.md)\n',
+  'fair.md': '---\ntitle: Fair\nstart:\n---\nA fair.\n',
+};
 
 const ONE_PAGE_PDF =
   '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n' +
@@ -31,12 +50,17 @@ let home = '';
 let server: ChildProcess | undefined;
 let output = '';
 
-test.beforeAll(async () => {
+// One server a test: its sign-in link opens once.
+test.beforeEach(async () => {
+  output = '';
   site = realpathSync(mkdtempSync(join(tmpdir(), 'moss-browser-editor-site-')));
   home = realpathSync(mkdtempSync(join(tmpdir(), 'moss-browser-editor-home-')));
   mkdirSync(join(home, 'moss'));
-  writeFileSync(join(site, 'index.md'), '---\ntitle: Garden\n---\nHello garden.\n\n![[doc.pdf]]\n');
+  writeFileSync(join(site, 'index.md'), '---\ntitle: Garden\n---\nHello garden.\n\n![[doc.pdf]]\n\n[Talk](talk.md)\n');
+  for (const [name, text] of Object.entries(EVENTS)) writeFileSync(join(site, name), text);
   writeFileSync(join(site, 'doc.pdf'), ONE_PAGE_PDF);
+  mkdirSync(join(site, 'events'));
+  writeFileSync(join(site, 'events', 'reading-circle.md'), '---\ntitle: Reading circle\n---\nWe read together.\n\n[Back home](/)\n');
   // MOSS_HOME and the search root keep the binary from finding, or handing
   // the folder to, an installed desktop app.
   server = spawn(MOSS_BIN, ['edit', site, '--serve', '--no-browser', '--port', String(gatePort('browser-editor:ui'))], {
@@ -52,7 +76,7 @@ test.beforeAll(async () => {
   server.stderr?.on('data', (b) => (output += b));
 });
 
-test.afterAll(async () => {
+test.afterEach(async () => {
   if (server && server.exitCode === null) {
     server.kill('SIGTERM');
     await new Promise((r) => server!.once('exit', r));
@@ -61,7 +85,8 @@ test.afterAll(async () => {
   rmSync(home, { recursive: true, force: true });
 });
 
-test('the browser editor boots, saves, and opens a sandboxed PDF in the file viewer', async ({ page, browserName }) => {
+/** Sign in, wait for the home page in the preview, and open the editor beside it. */
+async function openEditor(page: Page) {
   await expect.poll(() => output.match(/Edit at (\S+)/)?.[1], { timeout: 60_000, message: `the sign-in link; server said:\n${output}` }).toBeTruthy();
   const link = output.match(/Edit at (\S+)/)![1];
 
@@ -76,6 +101,11 @@ test('the browser editor boots, saves, and opens a sandboxed PDF in the file vie
 
   await shell.click('#moss-edit-button');
   await expect(page.locator('#moss-frames')).toHaveAttribute('data-editor', 'split', { timeout: 10_000 });
+  return { shell, editor, preview };
+}
+
+test('the browser editor boots, saves, opens a sandboxed PDF in the file viewer, and follows the preview home', async ({ page, browserName }) => {
+  const { shell, editor, preview } = await openEditor(page);
   await editor.waitForSelector('.cm-content', { timeout: 30_000 });
   await editor.click('.cm-line:has-text("Hello garden")');
   await page.keyboard.type(' Typed in a browser.');
@@ -87,17 +117,164 @@ test('the browser editor boots, saves, and opens a sandboxed PDF in the file vie
   await shell.press('dialog', 'Escape');
 
   const pdfResponse = page.waitForResponse((r) => r.url().includes('/__moss/source/doc.pdf'), { timeout: 15_000 });
+  // The preview follows to the PDF's own address, and the shell asks what backs it.
+  const backing = page.waitForResponse(
+    (r) => r.url().endsWith('/resolve_page_source') && (r.request().postData() ?? '').includes('doc.pdf'),
+    { timeout: 15_000 },
+  );
+  // Every PDF viewer the editor mounts or removes from here on, read as the test's last step.
+  await editor.evaluate(() => {
+    const seen = ((window as unknown as { pdfViewers: { mounted: number; removed: number } }).pdfViewers = { mounted: 0, removed: 0 });
+    const viewers = (nodes: NodeList): number =>
+      [...nodes].filter((n) => n instanceof Element && (n.matches('embed.moss-file-viewer__pdf') || n.querySelector('embed.moss-file-viewer__pdf'))).length;
+    new MutationObserver((records) => {
+      for (const r of records) {
+        seen.mounted += viewers(r.addedNodes);
+        seen.removed += viewers(r.removedNodes);
+      }
+    }).observe(document, { childList: true, subtree: true });
+  });
   await editor.click('.cm-media-embed-card', { modifiers: ['ControlOrMeta'] });
-  await editor.waitForSelector('embed.moss-file-viewer__pdf', { timeout: 15_000 });
+  const viewer = await editor.waitForSelector('embed.moss-file-viewer__pdf', { timeout: 15_000 });
   const pdf = await pdfResponse;
   expect(pdf.status()).toBe(200);
   expect((await pdf.allHeaders())['content-security-policy']).toMatch(/^sandbox;/);
+  // The answer is the PDF itself, so the editor stays on the viewer it opened:
+  // the same element, neither replaced by a pane nor mounted again.
+  expect((await (await backing).json()).source_path).toMatch(/doc\.pdf$/);
+  // The editor records the answer in its own address as it applies it, and a
+  // second load of a file already in its viewer would replace the viewer in
+  // the same turn: once the address is there, so is the outcome.
+  await expect.poll(() => editor.evaluate(() => location.search), { timeout: 10_000 }).toContain('doc.pdf');
+  expect(await viewer.evaluate((el) => el.isConnected), 'the viewer the click opened is still on screen').toBe(true);
   if (browserName === 'chromium') {
+    // The built page embeds the same PDF, so the preview has a viewer frame of
+    // its own; only one under the editor's embed counts.
+    const underTheEmbed = (f: Frame | null): boolean => !!f && (f.url().includes('/__moss/source/doc.pdf') || underTheEmbed(f.parentFrame()));
     await expect
-      .poll(() => page.frames().some((f) => f.url().startsWith('chrome-extension://') && f.url().endsWith('/index.html')), {
+      .poll(() => page.frames().some((f) => f.url().startsWith('chrome-extension://') && f.url().endsWith('/index.html') && underTheEmbed(f)), {
         timeout: 15_000,
-        message: 'the PDF viewer frame',
+        message: "the PDF viewer frame under the editor's embed",
       })
       .toBe(true);
   }
+  expect(
+    await editor.evaluate(() => (window as unknown as { pdfViewers: unknown }).pdfViewers),
+    'the editor mounted one PDF viewer and never took it down',
+  ).toEqual({ mounted: 1, removed: 0 });
+
+  await test.step('the editor follows the preview home from a page opened in the file tree', async () => {
+    const openFile = () => editor.evaluate(() => decodeURIComponent(location.search));
+    await editor.click('.seg.bc[data-path=""]');
+    await editor.click('.seg[data-path="events"]:not(.bc)');
+    await editor.click('.seg[data-path="events/reading-circle.md"]');
+    await expect.poll(openFile, { timeout: 15_000 }).toContain('reading-circle.md');
+    await preview.waitForFunction(() => document.body?.innerText.includes('We read together'), null, { timeout: 30_000 });
+    await preview.click('a:has-text("Back home")');
+    await preview.waitForFunction(() => document.body?.innerText.includes('Hello garden'), null, { timeout: 30_000 });
+    await expect.poll(openFile, { timeout: 15_000, message: 'the file the editor shows once the preview is home' }).toContain('index.md');
+    await expect(editor.locator('.cm-content')).toContainText('Hello garden');
+  });
+});
+
+test("an event's start and end open date and time controls that write what the build reads", async ({ page }, testInfo) => {
+  const { editor, preview } = await openEditor(page);
+  const pop = editor.locator('.pop');
+  const date = pop.locator('input[type="date"]');
+  const time = pop.locator('input[type="time"]');
+  const chip = (key: string) => editor.locator(`.chip-bar .chip[data-key="${key}"]`);
+  const shown = async () => [await date.inputValue(), await time.inputValue()];
+  const goTo = async (link: string, body: string) => {
+    await preview.click(`a:has-text("${link}")`);
+    await editor.waitForSelector(`.cm-line:has-text("${body}")`, { timeout: 30_000 });
+  };
+  const open = async (key: string) => {
+    await chip(key).click();
+    await expect(date).toBeFocused();
+    await expect(time).toHaveAttribute('aria-label', 'Time');
+  };
+  const leaves: Record<string, () => Promise<unknown>> = {
+    Enter: () => page.keyboard.press('Enter'),
+    Escape: () => page.keyboard.press('Escape'),
+    'a click outside': () => editor.click('.cm-content'),
+  };
+
+  // Every written form opens as the build reads it, and leaving it alone, by
+  // any door, leaves the file as it was.
+  const untouched = async (name: string, values: Record<string, string[]>) => {
+    for (const [key, value] of Object.entries(values)) {
+      for (const [how, leave] of Object.entries(leaves)) {
+        await open(key);
+        expect(await shown(), `${name} ${key}`).toEqual(value);
+        await leave();
+        await expect(pop, `${name} ${key} closes by ${how}`).toHaveCount(0);
+      }
+    }
+    // A save would have landed by now: the editor writes a changed field at once.
+    await page.waitForTimeout(1_000);
+    expect(readFileSync(join(site, name), 'utf8')).toBe(EVENTS[name]);
+  };
+  await goTo('Talk', 'A talk.');
+  await untouched('talk.md', { start: ['2026-12-01', ''], end: ['2026-12-01', '21:00'] });
+  await goTo('Next', 'A walk.');
+  await untouched('walk.md', { start: ['', ''], end: ['2026-12-02', '10:00'] });
+
+  // The template's empty field: a date, then a time, then the date alone again.
+  await goTo('Next', 'A fair.');
+  const fair = (start: string) => `---\ntitle: Fair\n${start}---\nA fair.\n`;
+  const file = () => readFileSync(join(site, 'fair.md'), 'utf8');
+  await open('start');
+  expect(await shown()).toEqual(['', '']);
+  await date.fill('2026-12-05');
+  await expect.poll(file, { timeout: 15_000 }).toBe(fair('start: 2026-12-05\n'));
+  await time.fill('19:30');
+  await expect.poll(file, { timeout: 15_000 }).toBe(fair('start: 2026-12-05 19:30\n'));
+  await preview.waitForSelector('time.moss-event-time[datetime="2026-12-05T19:30"]', { timeout: 30_000 });
+
+  // Both controls sit inside the popover at its narrowest, uncut, in both themes.
+  for (const theme of ['light', 'dark']) {
+    await editor.evaluate((t) => (document.documentElement.dataset.theme = t), theme);
+    const box = await pop.evaluate((el) => {
+      const inner = (e: Element) => e.getBoundingClientRect();
+      const [d, t] = [...el.querySelectorAll('input')];
+      return {
+        width: Math.round(inner(el).width),
+        inside: inner(d).left >= inner(el).left && inner(t).right <= inner(el).right && inner(d).right <= inner(t).left,
+        cut: d.scrollWidth > d.clientWidth || t.scrollWidth > t.clientWidth,
+      };
+    });
+    expect(box, theme).toEqual({ width: box.width, inside: true, cut: false });
+    expect(box.width, 'the popover stays within its width limits').toBeLessThanOrEqual(320);
+    await pop.screenshot({ path: testInfo.outputPath(`event-time-${theme}.png`) });
+  }
+  await editor.evaluate(() => delete document.documentElement.dataset.theme);
+
+  // Deleting one part of the date leaves it half-typed, which is not a
+  // cleared date: the field stays in the file.
+  await date.focus();
+  await page.keyboard.press('Backspace');
+  await page.waitForTimeout(1_000);
+  expect(file()).toBe(fair('start: 2026-12-05 19:30\n'));
+  await date.fill('2026-12-05');
+
+  await time.fill('');
+  await expect.poll(file, { timeout: 15_000 }).toBe(fair('start: 2026-12-05\n'));
+
+  // Clearing the date removes the field, and its chip goes with the popover.
+  await date.fill('');
+  await expect.poll(file, { timeout: 15_000 }).toBe(fair(''));
+  await page.keyboard.press('Escape');
+  await expect(pop).toHaveCount(0);
+  await expect(chip('start')).toHaveCount(0);
+
+  // Adding the field suggests today and writes nothing until it is accepted.
+  await editor.click('.chip-unified-btn');
+  await editor.click('.omenu .orow-add:has-text("Start")');
+  await expect(date).toBeFocused();
+  const today = await date.inputValue();
+  expect(today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  await page.waitForTimeout(1_000);
+  expect(file()).toBe(fair(''));
+  await page.keyboard.press('Enter');
+  await expect.poll(file, { timeout: 15_000 }).toBe(fair(`start: ${today}\n`));
 });

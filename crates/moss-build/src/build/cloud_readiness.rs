@@ -494,6 +494,25 @@ pub fn probe_input(path: &Path) -> std::io::Result<Found> {
     }
 }
 
+/// Rewrite a source file the author may be saving. `edit` maps its bytes to
+/// the new text, or `None` to leave it; the file is read once more just before
+/// the write, which narrows, without closing, the race with a save landing now.
+/// Returns the text written.
+pub(crate) fn rewrite_input(path: &Path, edit: impl FnOnce(&[u8]) -> Result<Option<String>, String>) -> Result<Option<String>, String> {
+    let read = || match probe_input(path) {
+        Ok(Found::Bytes(bytes)) => Ok(bytes),
+        Ok(Found::InCloud) => Err("it is still in the cloud".to_string()),
+        Err(e) => Err(e.to_string()),
+    };
+    let bytes = read()?;
+    let Some(after) = edit(&bytes)? else { return Ok(None) };
+    if read()? != bytes {
+        return Err("it changed while it was being written".into());
+    }
+    crate::infra::atomic_write::write_atomic(path, &after)?;
+    Ok(Some(after))
+}
+
 /// [`probe_input`] for the callers that want text. `Ok(None)` is `InCloud`.
 pub(crate) fn probe_input_to_string(path: &Path) -> std::io::Result<Option<String>> {
     match probe_input(path)? {
@@ -754,6 +773,19 @@ pub fn read_to_string_with_materialize_wait(
 mod tests {
     use super::*;
     use std::io;
+
+    #[test]
+    fn a_save_landing_during_a_rewrite_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.md");
+        std::fs::write(&path, "before").unwrap();
+        let rewrote = rewrite_input(&path, |_| {
+            std::fs::write(&path, "the author's save").unwrap();
+            Ok(Some("the edit".to_string()))
+        });
+        assert!(rewrote.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "the author's save");
+    }
 
     #[test]
     fn contextual_storage_failure_keeps_path_and_operation() {

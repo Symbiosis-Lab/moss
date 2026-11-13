@@ -52,6 +52,10 @@ struct NavEntry<'a> {
     url_path: &'a str,
     weight: Option<i32>,
     label: &'a str,
+    /// Read by the bar's own `nav_text`.
+    nav_label: Option<&'a str>,
+    /// A leaf turned folder gains or loses a submenu in every header.
+    kind: moss_core::PageKind,
     href: Option<&'a str>,
 }
 
@@ -79,6 +83,8 @@ pub fn nav_globals(documents: &[ParsedDocument], has_content_folders: bool) -> B
             url_path: &doc.url_path,
             weight: doc.weight,
             label: &doc.label,
+            nav_label: doc.nav_label.as_deref(),
+            kind: doc.kind,
             href: crate::build::scan::page_map::nav_external_href(&doc.raw_frontmatter),
         });
     }

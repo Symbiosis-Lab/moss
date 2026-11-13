@@ -16,7 +16,7 @@ use std::sync::LazyLock;
 use tokio::sync::Semaphore;
 
 use super::converter::{
-    extract_article_with_snapshot, linked_file_urls, rewrite_file_links, rewrite_image_links,
+    extract_article_with_snapshot, linked_file_urls, rewrite_file_links,
 };
 use super::crawl_state::CrawlState;
 use super::design::{self, norm_url, Capture, ChromeSummary, HomePage};
@@ -25,12 +25,13 @@ use super::crawler::{
     looks_like_html_page,
 };
 use super::fetch::{
-    download_asset, download_linked_file, fetch_page, linked_filename, observe_pace, Downloaded, FileProgress,
+    download_linked_file, fetch_page, linked_filename, observe_pace, Downloaded, FileProgress,
 };
 use super::scope::{is_within_scope, left_site_by_redirect, UrlScope};
-use super::service::{generate_frontmatter, render_error_markdown, rewrite_links, ScrapeConfig};
-use super::writer::{rename_for_collision, url_to_file_path};
+use super::service::{imported_frontmatter, render_error_markdown, strip_outbound_ref, ScrapeConfig};
+use super::writer::{OutputPaths, PendingPage};
 use crate::vault::import::widgets::WidgetCount;
+use crate::vault::import::page::{ImportedPage, PageStyle, media::MediaWriter};
 
 // Re-exported at this module's old path: a consumer outside this crate
 // already names `refuse_unsafe_scrape_url` here, from before the SSRF/fetch
@@ -71,8 +72,10 @@ pub fn dropped_widgets(gaps: &[PageGap]) -> usize {
 }
 
 /// Result of the scrape operation.
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
 pub struct ScrapeResult {
+    #[serde(default)]
+    pub restricted_pages: usize,
     pub success: bool,
     pub total_pages: usize,
     pub failed_pages: usize,
@@ -181,7 +184,8 @@ pub struct RateLimitedHost {
 /// What became of one URL popped from the crawl queue.
 enum PageOutcome {
     /// Composed into a note; the full markdown ready to write.
-    Written(String, WidgetCount),
+    /// The note, its widgets, and whether the page declares itself a listing.
+    Written(String, WidgetCount, bool),
     /// Fetched (or attempted) but refused with a reason — written as the
     /// error placeholder, so an in-scope link elsewhere that points at it
     /// still resolves to a real file on disk.
@@ -234,13 +238,6 @@ fn hash_body(body: &str) -> u64 {
     xxhash_rust::xxh3::xxh3_64(body.as_bytes())
 }
 
-/// The site a note's links are resolved against.
-pub(crate) struct LinkScope<'a> {
-    pub(crate) scope: &'a UrlScope,
-    /// Whether in-scope page links become links to the notes written beside it.
-    pub(crate) rewrite_pages: bool,
-}
-
 /// Compose one imported note: pick its cover, point every media reference at
 /// whatever landed in `remote_to_local`, and prepend frontmatter.
 ///
@@ -257,7 +254,7 @@ pub(crate) fn compose_note(
     remote_to_local: &HashMap<String, String>,
     cover_remote: Option<String>,
     source_url: &str,
-    links: Option<LinkScope<'_>>,
+    links: Option<&UrlScope>,
 ) -> Option<String> {
     if let Some(remote) = cover_remote {
         if let Some(local) = remote_to_local.get(&remote) {
@@ -265,15 +262,20 @@ pub(crate) fn compose_note(
         }
     }
 
-    let mut markdown = rewrite_image_links(&article.markdown, remote_to_local);
-    markdown = super::converter::rewrite_embed_links(&markdown, remote_to_local);
-    if let Some(LinkScope { scope, rewrite_pages }) = links {
+    let mut page = ImportedPage {
+        frontmatter: imported_frontmatter(&article.metadata, source_url),
+        body: article.markdown.clone(),
+    };
+    if article.members_only {
+        page.frontmatter.members = Some(moss_core::frontmatter::members::Members::Subscribers);
+        page.body.clear();
+        return Some(page.render(PageStyle::Html));
+    }
+    page.localize(remote_to_local);
+    let mut markdown = page.body;
+    if let Some(scope) = links {
         markdown = rewrite_file_links(&markdown, source_url, scope, remote_to_local);
-        // Only a recursive crawl can point an in-scope link at the sibling
-        // note it is also writing.
-        if rewrite_pages {
-            markdown = rewrite_links(&markdown, scope);
-        }
+        markdown = super::service::strip_outbound_refs(&markdown, scope);
     }
 
     if markdown.trim().is_empty() {
@@ -297,8 +299,9 @@ pub(crate) fn compose_note(
     // canonical, and the source is recorded as `origin` frontmatter
     // (provenance) rather than a linkblog banner implying the fetched page
     // is still where the content lives.
-    let frontmatter = generate_frontmatter(&article.metadata, source_url);
-    Some(format!("{}{}", frontmatter, markdown))
+    page.frontmatter.title = imported_frontmatter(&article.metadata, source_url).title;
+    page.body = markdown;
+    Some(page.render(PageStyle::Html))
 }
 
 /// Run the import described by `config`.
@@ -342,15 +345,11 @@ where
     // mutables threaded through the loop by hand — see `crawl_state` for
     // the rules each sub-record owns and why.
     let mut state = CrawlState::new(&config.start_url, &sitemap);
-    // Paths (relative to the output folder) of the pages this run wrote.
-    let mut written: Vec<String> = Vec::new();
-    // Pages that redirected off the site: the note link `rewrite_links` gave
-    // each (it could not know) → the address the author wrote.
-    let mut left_site: Vec<(String, String)> = Vec::new();
-    // Normalised page URL → the note written for it, for the chrome pass.
-    let mut written_urls: HashMap<String, String> = HashMap::new();
-    // Error stubs: not finished like a page, but still pages under their folder.
-    let mut error_stubs: Vec<String> = Vec::new();
+    let mut pending = Vec::new();
+    let mut restricted_pages = 0;
+    let mut left_site = HashMap::new();
+    // Normalised URLs of the written pages that declare themselves listings.
+    let mut listing_urls: std::collections::HashSet<String> = std::collections::HashSet::new();
     // Where the site's chrome is read from: the start page, else the first page.
     let mut home_page: Option<HomePage> = None;
 
@@ -386,7 +385,9 @@ where
         let outcome: PageOutcome = 'page: {
         let fetch_host = host_of(&url);
         state.pacer.wait(&fetch_host).await;
-        let page_result = fetch_page(&url, &config.user_agent).await;
+        // A link found on the site that leads off it is reported, not fetched.
+        let link_of_site = config.recursive && norm_url(&url) != norm_url(&config.start_url);
+        let page_result = fetch_page(&url, &config.user_agent, link_of_site.then_some(&scope)).await;
         observe_pace(&mut state.pacer, &fetch_host, &page_result);
         let (html, content_type, final_url) = match page_result {
             Ok(v) => v,
@@ -424,12 +425,11 @@ where
             }
         };
 
-        if config.recursive && left_site_by_redirect(&scope, &config.start_url, &url, &final_url) {
+        if link_of_site && left_site_by_redirect(&scope, &final_url) {
             log::warn!("import: {url} redirected off the site to {final_url}, not imported");
-            left_site.push((
-                format!("](./{})", url_to_file_path(&url, &scope)),
-                format!("]({url})"),
-            ));
+            if let Some(key) = norm_url(&url) {
+                left_site.insert(key, strip_outbound_ref(&final_url, &scope.bare_host()));
+            }
             break 'page PageOutcome::LeftSite;
         }
 
@@ -494,7 +494,7 @@ where
             Some(snapshot_url) => {
                 let snapshot_host = host_of(&snapshot_url);
                 state.pacer.wait(&snapshot_host).await;
-                let snapshot_result = fetch_page(&snapshot_url, &config.user_agent).await;
+                let snapshot_result = fetch_page(&snapshot_url, &config.user_agent, None).await;
                 observe_pace(&mut state.pacer, &snapshot_host, &snapshot_result);
                 match snapshot_result {
                     Ok((s, _, _)) => Some(s),
@@ -510,6 +510,7 @@ where
             None => None,
         };
         let mut article = extract_article_with_snapshot(&html, snapshot_html.as_deref(), &url);
+        if article.members_only { restricted_pages += 1; }
         let body_hash = hash_body(&article.markdown);
 
         // Rule 2, the fallback for a page with no canonical of its own —
@@ -541,33 +542,11 @@ where
             article.media_urls.iter().chain(&linked_files).filter(|u| !state.assets.is_settled(u)).collect();
         let mut progress = FileProgress::new(pending.len());
 
-        for media_url in &article.media_urls {
-            if state.assets.is_settled(media_url) {
-                continue;
-            }
-            // Keyed by the asset's OWN host, not the page's — a page's
-            // images routinely redirect to a separate CDN subdomain (see
-            // `fetch_following_redirects`'s doc below), which shares no
-            // rate limit with the page host and must pace independently.
-            let asset_host = host_of(media_url);
-            state.pacer.wait(&asset_host).await;
-            let download_result = download_asset(media_url, &assets_dir, &config.user_agent, Some(&url)).await;
-            observe_pace(&mut state.pacer, &asset_host, &download_result);
-            progress.finished_one(state.pacer.current_interval(&asset_host));
-            match download_result {
-                Ok(filename) => {
-                    let local_rel = format!("./{}/{}", ASSETS_SUBDIR, filename);
-                    state.assets.insert(media_url.clone(), local_rel);
-                }
-                // The reference keeps its remote URL — degraded, not broken —
-                // but never fail silently.
-                Err(e) => {
-                    log::warn!("import: asset download failed, keeping remote URL: {media_url}: {e}");
-                    state.assets.keep_remote(media_url.clone());
-                    continue;
-                }
-            }
-        }
+        let images: Vec<_> = article.media_urls.iter().map(|u| (u.clone(), u.clone())).collect();
+        MediaWriter {
+            directory: &assets_dir, prefix: "./assets/imported/",
+            user_agent: &config.user_agent, referer: Some(&url),
+        }.download(&images, &mut state.assets, Some((&mut state.pacer, &mut progress))).await;
 
         // Files the page links to (a score, a document) get the same
         // treatment as its images: downloaded once into the assets folder,
@@ -610,22 +589,21 @@ where
             }
         }
 
-        let page_depth = url_to_file_path(&url, &scope).matches('/').count();
         // Nothing extracted is a page failure, not a crawl failure: one
         // unparseable page in a hundred must not cost the other ninety-nine.
         match compose_note(
             &mut article,
-            &state.assets.local_map(page_depth),
+            &state.assets.local_map(),
             cover_remote,
             &url,
-            Some(LinkScope { scope: &scope, rewrite_pages: config.recursive }),
+            Some(&scope),
         ) {
             Some(note) => {
                 // Record this page's identity so a later duplicate of it —
                 // by canonical (rule 1) or by same-path body (rule 2) — is
                 // caught. See `Dedupe::record_written`.
                 state.dedupe.record_written(&url, canonical.as_deref(), body_hash);
-                PageOutcome::Written(note, article.widgets)
+                PageOutcome::Written(note, article.widgets, article.metadata.listing)
             }
             None => PageOutcome::Failed(
                 "no article content found (unsupported page or empty body)".to_string(),
@@ -634,22 +612,20 @@ where
         };
 
         match outcome {
-            PageOutcome::Written(note, widgets) => {
-                let relative = rename_for_collision(out_dir, &url_to_file_path(&url, &scope));
-                write_note(out_dir, &relative, &note)?;
+            PageOutcome::Written(note, widgets, listing) => {
                 if let Some(key) = norm_url(&url) {
-                    written_urls.insert(key, relative.clone());
+                    if listing {
+                        listing_urls.insert(key);
+                    }
                 }
-                written.push(relative);
+                pending.push(PendingPage::new(&url, &note, true)?);
                 state.tally.record_scraped();
                 let page = url::Url::parse(&url).map_or_else(|_| url.clone(), |u| u.path().to_string());
                 state.tally.record_widgets(&page, &widgets);
                 state.cap.record_progress(is_declared);
             }
             PageOutcome::Failed(reason) => {
-                let relative = rename_for_collision(out_dir, &url_to_file_path(&url, &scope));
-                write_note(out_dir, &relative, &render_error_markdown(&url, &reason))?;
-                error_stubs.push(relative);
+                pending.push(PendingPage::new(&url, &render_error_markdown(&url, &reason), false)?);
                 state.tally.record_failed();
                 state.cap.record_progress(is_declared);
             }
@@ -683,10 +659,12 @@ where
         }
     }
 
-    restore_left_links(out_dir, &written, &left_site)?;
-    // Which pages are folders and which are files, and the links between them,
-    // are only knowable now; the chrome below reads the final paths.
-    super::finalize::settle_layout(out_dir, &mut written, &mut written_urls, &error_stubs)?;
+    let paths = OutputPaths::reserve(out_dir, &scope, &pending)?;
+    let written = paths.write(out_dir, &pending, &left_site, config.recursive)?;
+    let written_urls: HashMap<String, String> = pending.iter().filter(|page| page.imported)
+        .filter_map(|page| Some((norm_url(&page.source)?, paths.get(&page.source)?.clone())))
+        .collect();
+    drop(pending);
 
     // The site's chrome is written first: the home note's title becomes the
     // site name, which is the name the pass below strips from every title.
@@ -694,7 +672,6 @@ where
         Some(home) => {
             let capture = Capture {
                 out_dir,
-                scope: &scope,
                 user_agent: &config.user_agent,
                 home,
                 written: &written_urls,
@@ -706,7 +683,10 @@ where
 
     // What only the finished crawl can decide: a folder written after its
     // index page, and the site name every title shares.
-    super::finalize::finalize_written_pages(out_dir, &written)?;
+    // The address table already names each listing's final path.
+    let listings: std::collections::HashSet<String> =
+        listing_urls.iter().filter_map(|u| written_urls.get(u)).cloned().collect();
+    super::finalize::finalize_written_pages(out_dir, &written, &listings)?;
 
     on_progress(ScrapeProgress {
         pages_scraped: state.tally.scraped(),
@@ -728,6 +708,7 @@ where
         .collect();
 
     Ok(ScrapeResult {
+        restricted_pages,
         success: true,
         total_pages: state.tally.scraped(),
         failed_pages: state.tally.failed(),
@@ -748,44 +729,6 @@ where
         chrome,
         error: None,
     })
-}
-
-/// Points links that `rewrite_links` aimed at a note never written (the page
-/// redirected off the site) back at the address they were written with.
-/// `left_site` holds `(](./local.md), ](original))` pairs. A fragment never
-/// reaches the local link: the rewrite keeps the path alone.
-fn restore_left_links(
-    out_dir: &Path,
-    written: &[String],
-    left_site: &[(String, String)],
-) -> Result<(), String> {
-    if left_site.is_empty() {
-        return Ok(());
-    }
-    for relative in written {
-        let path = out_dir.join(relative);
-        // allow:raw_read the importer's own output, written moments ago in this run — not a cloud-evictable vault input
-        let Ok(note) = std::fs::read_to_string(&path) else { continue };
-        let restored = left_site.iter().fold(note.clone(), |n, (local, original)| n.replace(local, original));
-        if restored != note {
-            // allow:raw_write the importer rewrites a page it wrote moments ago in this run, restoring links to pages it did not keep
-            std::fs::write(&path, restored).map_err(|e| e.to_string())?;
-        }
-    }
-    Ok(())
-}
-
-/// The one place the importer writes a note. `relative` has already been
-/// through the filename policy and the collision rename; the parent is created
-/// here rather than from a precomputed ancestor list, because `create_dir_all`
-/// on the deepest path already makes every level above it.
-pub(crate) fn write_note(output_dir: &Path, relative: &str, content: &str) -> Result<(), String> {
-    let file_path = output_dir.join(relative);
-    if let Some(dir) = file_path.parent() {
-        fs::create_dir_all(dir).map_err(|e| format!("Failed to create directory: {}", e))?;
-    }
-    // allow:raw_write the author's own source content, not `.moss/build.nosync/` output — an imported note
-    fs::write(&file_path, content).map_err(|e| format!("Failed to write file: {}", e))
 }
 
 #[cfg(test)]

@@ -376,7 +376,7 @@ pub fn quick_detect_homepage(root: &VaultRoot) -> Option<String> {
     let filenames: Vec<String> = std::fs::read_dir(root.path())
         .ok()?
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+        .filter(|e| moss_core::source_edit::policy::is_page_path(&e.path()))
         .filter(|e| !scan::classify::is_agent_config_name(&e.file_name().to_string_lossy()))
         .map(|e| e.file_name().to_string_lossy().to_string())
         .collect();
@@ -493,7 +493,7 @@ fn collect_native_slots_for_documents(
         is_moss_hosted,
     );
     let has_inline_subscribe = pages.iter().any(|p| p.features.inline_subscribe);
-    let has_footer_file = pages.iter().any(|p| p.slot_only);
+    let has_footer_file = pages.iter().any(|p| p.slot_only || p.slot.is_some());
 
     // Site fingerprint: a PII-free, one-line summary of the build-shaping state
     // that decides footer chrome + slot resolution. Emitted BEFORE the
@@ -548,7 +548,9 @@ fn collect_native_slots_for_documents(
         || is_moss_hosted
         || comments_enabled
         || crate::build::features::should_inject_subscribe_assets(&pages, email_channel_installed)
-        || has_footer_file)
+        || has_footer_file
+        || crate::build::footer::has_cached_folder_slots(folder_path)
+        || pages.iter().any(|p| !p.features.block_assets.is_empty()))
     {
         return crate::build::enhance::ResolvedSlots::empty();
     }
@@ -1059,6 +1061,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             Err(failure) => return Err(scan_failure(failure)),
         }
     }
+    crate::build::template_check::warn_template_problems(Path::new(&folder_path));
 
     // Cache domain config once — reused by native process, feature slots, and build.
     // Avoids re-reading and re-parsing .moss/state.toml on every access.
@@ -1656,7 +1659,6 @@ pub fn load_article_map_for_features(
                 .and_then(|fm| fm.get("lang"))
                 .and_then(|l| l.as_str())
                 .map(|s| s.to_string()),
-            syndicated: crate::build::types::syndicated_urls(article.get("frontmatter").and_then(|fm| fm.get("syndicated"))),
         };
 
         result.insert(uid, info);

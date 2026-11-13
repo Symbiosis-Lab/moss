@@ -184,8 +184,8 @@ fn compute_installed_hash(plugin_name: &str, plugin_dir: &Path) -> Option<String
     Some(format!("{:x}", hasher.finalize()))
 }
 
-/// SHA-256 over what the engine executes: `manifest.json` and the entry file
-/// it names, and nothing else.
+/// SHA-256 over the code a plugin runs: `manifest.json`, the entry file it
+/// names, and the scripts and stylesheets its blocks load into readers' pages.
 ///
 /// One hash for both questions the admission gate asks — is this the code
 /// moss ships, and is this the code the user allowed — so the two can never
@@ -203,8 +203,9 @@ pub fn code_hash(plugin_dir: &Path, manifest: &PluginManifest) -> Option<String>
         Some(entry) => crate::build::cloud_readiness::read_with_materialize_wait(&plugin_dir.join(entry), crate::build::cloud_readiness::INTERACTIVE_DEADLINE).ok()?,
         None => Vec::new(),
     };
-    let binaries = crate::system::derive::binary::local_binary_hashes(plugin_dir, manifest);
-    Some(hash_code(&manifest_bytes, manifest.entry.as_deref().unwrap_or(""), &entry_bytes, &binaries))
+    let mut also_hashed = crate::system::derive::binary::local_binary_hashes(plugin_dir, manifest);
+    also_hashed.extend(block_asset_entries(manifest, |path| crate::build::cloud_readiness::read_with_materialize_wait(&plugin_dir.join(path), crate::build::cloud_readiness::INTERACTIVE_DEADLINE).ok()));
+    Some(hash_code(&manifest_bytes, manifest.entry.as_deref().unwrap_or(""), &entry_bytes, &also_hashed))
 }
 
 /// [`code_hash`] of the copy this binary ships under `plugin_name`, or
@@ -217,18 +218,28 @@ pub fn bundled_code_hash(plugin_name: &str) -> Option<String> {
     let manifest_bytes = bundled_file(plugin_name, "manifest.json")?;
     let entry = manifest.entry.as_deref().unwrap_or("");
     let entry_bytes = if entry.is_empty() { &[][..] } else { bundled_file(plugin_name, entry)? };
-    Some(hash_code(manifest_bytes, entry, entry_bytes, &[]))
+    let assets = block_asset_entries(&manifest, |path| bundled_file(plugin_name, path).map(<[u8]>::to_vec));
+    Some(hash_code(manifest_bytes, entry, entry_bytes, &assets))
 }
 
-fn hash_code(manifest_bytes: &[u8], entry: &str, entry_bytes: &[u8], local_binaries: &[String]) -> String {
+/// One entry per block asset. A missing file still has an entry, so one
+/// appearing later changes the hash.
+fn block_asset_entries(manifest: &PluginManifest, read: impl Fn(&str) -> Option<Vec<u8>>) -> Vec<String> {
+    super::contributions::blocks::asset_paths(manifest).into_iter().map(|path| {
+        let digest = read(path).map_or_else(|| "missing".to_string(), |bytes| format!("{:x}", Sha256::digest(&bytes)));
+        format!("block-asset:{path}:{digest}")
+    }).collect()
+}
+
+fn hash_code(manifest_bytes: &[u8], entry: &str, entry_bytes: &[u8], also_hashed: &[String]) -> String {
     let mut hasher = Sha256::new();
     for (name, bytes) in [("manifest.json", manifest_bytes), (entry, entry_bytes)] {
         hasher.update(name.as_bytes());
         hasher.update(bytes);
     }
-    // Absent for every plugin without a local binary, so those hashes are
-    // exactly what they were.
-    for binary in local_binaries {
+    // Absent for every plugin with neither a local binary nor a block asset,
+    // so those hashes are exactly what they were. Each entry names its kind.
+    for binary in also_hashed {
         hasher.update(b"local-binary");
         hasher.update(binary.as_bytes());
     }

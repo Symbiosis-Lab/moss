@@ -105,12 +105,11 @@ hides_edit: boolean;
  */
 is_below_titlebar: boolean; 
 /**
- * Whether the browser-panel is showing a login URL (matters.town/matters.icu
- * login path). When true, the shell renders the login chrome (identity +
- * back + close) instead of the generic plugin-title strip. Always false for
- * non-browser occupants (editor, composer). Design: C1–C4.
+ * The login the browser-panel shows, if any. A login renders its own
+ * chrome (identity and actions) instead of the generic plugin-title strip.
+ * Never set for non-browser occupants (editor, composer).
  */
-is_login_browser: boolean }
+login: LoginKind | null }
 
 /**
  * What one address IS, which decides how moss offers it.
@@ -1335,6 +1334,11 @@ export type LoginFailureReason =
 "loaded_blank"
 
 /**
+ * A login the browser-panel can show; the shell draws each in its own words.
+ */
+export type LoginKind = "matters" | "ghost"
+
+/**
  * Physical-source evidence for a missing authored asset.
  */
 export type MissingReferenceOccurrence = { 
@@ -1755,7 +1759,10 @@ revision: string; html: string; title: string; diagnostics: EditorDiagnostic[] }
  */
 export type PageSource = { 
 /**
- * Absolute path to the source markdown file, if found.
+ * Absolute path to the file behind the URL, if found: a page's markdown
+ * source, or the source of any other file the build serves (a PDF, a picture).
+ * It is not always a page: a caller that needs one moss renders (the
+ * build's preview requirement takes only a page source) checks that itself.
  */
 source_path: string | null; 
 /**
@@ -1795,7 +1802,14 @@ takeover?: Takeover | null;
  * moss" — and conflating them is what told a user their home page did not
  * exist while the provider was still handing it over.
  */
-source_pending?: boolean }
+source_pending?: boolean; 
+/**
+ * False when whether this URL has a source is not known yet: the build's
+ * page map is missing or unreadable and the disk found none, and only the
+ * map tells a generated page from a source under a lossy slug. The next
+ * build settles it. `source_path: None` is a claim only while this is true.
+ */
+source_known?: boolean }
 
 export type PageSourceArgs = { urlPath: string }
 

@@ -614,6 +614,7 @@ impl Indexes {
 fn walk_all_files(canonical_root: &Path) -> Vec<String> {
     walkdir::WalkDir::new(canonical_root)
         .follow_links(false)
+        .sort_by(crate::build::scan::path_collision::nfc_name_order)
         .into_iter()
         .filter_entry(|e| crate::build::scan::classify::left_out_of_site(e).is_none())
         .filter_map(|e| e.ok())

@@ -38,7 +38,7 @@ export interface SettingFieldOption {
 
 export interface SettingField {
   key: string;
-  type: "string" | "number" | "boolean" | "secret";
+  type: "string" | "number" | "boolean" | "secret" | "object" | "map" | "array";
   label?: string;
   description?: string | null;
   /** A heading the form draws above the first field of a run sharing it. */
@@ -49,6 +49,23 @@ export interface SettingField {
   pattern?: string | null;
   pattern_message?: string | null;
   when?: { [key in string]: string };
+  /** On a `number`: the stored integer is the shown value times this. */
+  scale?: number | null;
+  /** On a `number`: the word drawn after the input. */
+  unit?: string | null;
+}
+
+/**
+ * A field of a plugin's `site_settings`: the flat vocabulary plus the nested
+ * members `site-settings-form.ts` draws. Apart from `SettingField` because the
+ * bindings seam carries `fields` and `items` as JSON.
+ */
+export interface SiteSettingField extends SettingField {
+  fields?: SiteSettingField[];
+  items?: SiteSettingField | null;
+  optional?: boolean;
+  key_pattern?: string | null;
+  add_label?: string | null;
 }
 
 export interface FieldInput {
@@ -222,11 +239,21 @@ function buildWidget(
     return { el: select, value: () => select.value, raw: () => select.value };
   }
 
+  // A scaled number shows the stored integer in its units: 12000 cents as 120.00.
+  const scale = field.type === "number" && field.scale ? field.scale : 1;
+  const decimals = Math.round(Math.log10(scale));
+  const shown =
+    initial === undefined || initial === null
+      ? ""
+      : scale > 1 && typeof initial === "number"
+        ? (initial / scale).toFixed(decimals)
+        : String(initial);
   const input = createPillInput({
     type: field.type === "secret" ? "password" : field.type === "number" ? "number" : "text",
-    value: initial === undefined || initial === null ? "" : String(initial),
+    value: shown,
     placeholder: field.placeholder ?? undefined,
   });
+  if (scale > 1) input.step = String(1 / scale);
   input.addEventListener("blur", () => options.onCommit?.());
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
@@ -238,9 +265,17 @@ function buildWidget(
     if (input.value === "") return null;
     if (field.type === "number") {
       const parsed = Number(input.value);
-      return Number.isFinite(parsed) ? parsed : null;
+      if (!Number.isFinite(parsed)) return null;
+      return scale > 1 ? Math.round(parsed * scale) : parsed;
     }
     return input.value;
   };
-  return { el: input, value, raw: () => input.value };
+  if (!field.unit) return { el: input, value, raw: () => input.value };
+  const withUnit = document.createElement("span");
+  withUnit.className = "moss-field-with-unit";
+  const unit = document.createElement("span");
+  unit.className = "moss-field-unit";
+  unit.textContent = field.unit;
+  withUnit.append(input, unit);
+  return { el: withUnit, value, raw: () => input.value };
 }

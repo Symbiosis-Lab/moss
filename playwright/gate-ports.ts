@@ -161,6 +161,11 @@ const GATE_PORT_KEYS = [
   'hero-links',
   'browser-editor:ui',
   'browser-editor:preview',
+  'stream-listing',
+  'series-nav',
+  'card-min-token',
+  'nav-submenu',
+  'page-chrome-none',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

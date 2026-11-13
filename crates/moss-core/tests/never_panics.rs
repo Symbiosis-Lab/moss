@@ -312,11 +312,6 @@ proptest! {
     fn placeholder_for_never_panics(nonce in any_str(), index in 0usize..=1024) {
         let _ = moss_core::ast::shortcode_extract::placeholder_for(&nonce, index);
     }
-
-    #[test]
-    fn parse_placeholder_never_panics(nonce in any_str(), html in any_str()) {
-        let _ = moss_core::ast::shortcode_extract::parse_placeholder(&nonce, &html);
-    }
 }
 
 // ── attrs: brace depth tracking ─────────────────────────────────────────────

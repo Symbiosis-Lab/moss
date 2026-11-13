@@ -1092,6 +1092,41 @@ fn reachable_backoff_delays_are_bounded_by_the_attempt_count() {
 }
 
 
+fn auth_status_test_client(base_url: &str) -> MossSetaClient {
+    MossSetaClient {
+        client: crate::system::proxy_reqwest::client_builder().no_proxy().build().unwrap(),
+        base_url: MossSetaClient::validate_url(base_url),
+        identity: None,
+    }
+}
+
+#[tokio::test]
+async fn check_auth_status_connection_error_omits_session() {
+    const SESSION: &str = "auth-status-connect-sentinel-6e9f231c";
+    // Reserve the port without listening so the connection fails without a port-reuse race.
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let client = auth_status_test_client(&format!("http://{}", socket.local_addr().unwrap()));
+    let error = client.check_auth_status(SESSION).await.unwrap_err();
+
+    assert!(matches!(&error, SetaError::Http(_)), "{error:?}");
+    assert!(!error.to_string().contains(SESSION), "Display contains the session: {error}");
+    assert!(!format!("{error:?}").contains(SESSION), "Debug contains the session: {error:?}");
+}
+
+#[tokio::test]
+async fn check_auth_status_json_error_omits_session() {
+    const SESSION: &str = "auth-status-json-sentinel-83b4d16a";
+    let server = StandIn::json(200, "{").await;
+    let client = auth_status_test_client(&server.url());
+    let error = client.check_auth_status(SESSION).await.unwrap_err();
+
+    assert!(matches!(&error, SetaError::Parse(_)), "{error:?}");
+    assert!(!error.to_string().contains(SESSION), "Display contains the session: {error}");
+    assert!(!format!("{error:?}").contains(SESSION), "Debug contains the session: {error:?}");
+    assert_eq!(server.requests()[0].path_and_query, format!("/auth/status/{SESSION}"));
+}
+
 #[test]
 fn transport_policy_rejects_remote_http_and_credentials() {
     for address in [

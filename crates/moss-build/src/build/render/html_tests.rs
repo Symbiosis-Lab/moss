@@ -3500,12 +3500,19 @@ mod children_field_tests {
         homepage.is_root_level = true;
 
         for (label, mut doc, is_homepage) in every_page_kind() {
-            doc.place_line = Some("Location: [Kyoto](/about/kyoto/)".to_string());
+            doc.term_lines = vec![crate::build::terms::TermLine {
+                term: "places".into(),
+                field: "location".into(),
+                label: "Location".into(),
+                separator: ": ".into(),
+                links: "[Kyoto](/about/kyoto/)".into(),
+                is_place: true,
+            }];
             let all_docs = vec![homepage.clone(), doc.clone()];
             let html = render_page(Some(&doc), &all_docs, is_homepage);
 
             assert_eq!(
-                html.matches(r#"class="moss-place-line""#).count(),
+                html.matches(r#"class="moss-term-line moss-place-line""#).count(),
                 1,
                 "{label}: place line must render exactly once. Got: {html}"
             );
@@ -7301,6 +7308,54 @@ mod og_url_tests {
         assert_eq!(SEQUENCES_ORDERED.with(|n| n.get()) - before, 1, "each page sorted its folder again");
     }
 
+    #[test]
+    fn a_series_links_its_pages_by_their_clean_addresses() {
+        use super::super::generate_html_collect_og;
+
+        let out = tempfile::tempdir().expect("tempdir");
+        let mut letters = make_doc("Letters", "letters/index.html");
+        letters.kind = PageKind::Folder;
+        letters.series = Some(crate::build::types::SeriesField::Flag(true));
+        let letter = |title: &str, slug: &str, date: &str| {
+            let mut d = make_doc(title, &format!("letters/{slug}/index.html"));
+            d.date = Some(date.to_string());
+            d
+        };
+        let second = letter("Second", "second", "2026-02-01");
+        let all_docs = vec![
+            make_doc("Home", "index.html"),
+            letters,
+            letter("Third", "third", "2026-03-01"),
+            second.clone(),
+            letter("First", "first", "2026-01-01"),
+        ];
+        let project = make_project();
+        let no_previous = std::collections::HashMap::new();
+        let filename_covers = crate::build::page::cover::FilenameCovers::default();
+        let shared = crate::build::render::build_shared::BuildShared::new(
+            crate::build::emit::scripts::ScriptAssets::resolve(),
+            &project,
+            &std::collections::HashMap::new(), crate::build::inputs::now(),
+        );
+        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
+        let html = generate_html_collect_og(
+            Some(&second), &all_docs, &project, &make_layout(), false, None, None,
+            Language::En, None, false, false, None, false, None, None,
+            &std::collections::HashMap::new(),
+            &SiteUrl::parse("https://example.com").unwrap(),
+            true, false, "favicon.svg", false, Some(out.path()), &mut og_outputs,
+            out.path(),
+            &shared,
+        )
+        .expect("render");
+
+        assert!(html.contains(r#"<a href="/letters/first/" class="moss-series-nav-link moss-series-nav-prev">"#), "{html}");
+        assert!(html.contains(r#"<a href="/letters/third/" class="moss-series-nav-link moss-series-nav-next">"#), "{html}");
+        assert!(html.contains(r#"<a href="/letters/" class="moss-series-nav-collection">"#), "{html}");
+        assert!(html.contains(r#"<link rel="prefetch" href="/letters/third/">"#), "{html}");
+        assert!(html.contains("2 of 3"), "{html}");
+    }
+
     /// A favicon raster trio an earlier default-SVG build left in the output
     /// tree is not this build's: once a vault grows its own `favicon.png`, no
     /// PNG sizes are rasterized, and pages must not link the leftovers
@@ -9526,10 +9581,42 @@ mod sequence_siblings_tests {
     }
 
     fn chain(docs: &[ParsedDocument]) -> Vec<String> {
-        sequence_siblings(docs, "guide/index.html", "guide/", &weighted())
+        chain_sorted(docs, &weighted())
+    }
+
+    fn chain_sorted(docs: &[ParsedDocument], sort: &ResolvedSort) -> Vec<String> {
+        sequence_siblings(docs, "guide/index.html", "guide/", sort)
             .iter()
             .map(|d| d.clean_stem.clone())
             .collect()
+    }
+
+    fn dated(stem: &str, date: &str) -> ParsedDocument {
+        ParsedDocument { date: Some(date.to_string()), weight: None, ..article(stem, 0) }
+    }
+
+    fn newest_first(explicit_order: Option<Vec<String>>) -> ResolvedSort {
+        ResolvedSort { axis: SortAxis::Date, explicit_order, series_default: false }
+    }
+
+    #[test]
+    fn a_newest_first_folder_is_read_forward_in_time() {
+        let docs = vec![parent(), dated("third", "2026-03-01"), dated("first", "2026-01-01"), dated("second", "2026-02-01")];
+        assert_eq!(chain_sorted(&docs, &newest_first(None)), vec!["first", "second", "third"]);
+    }
+
+    /// The tie-break is not reversed with the dates: chapters that share a date stay in order.
+    #[test]
+    fn pages_that_share_a_date_keep_their_order_in_a_forward_series() {
+        let docs = vec![parent(), dated("03-room", "2026-05-01"), dated("01-door", "2026-05-01"), dated("02-hall", "2026-05-01")];
+        assert_eq!(chain_sorted(&docs, &newest_first(None)), vec!["01-door", "02-hall", "03-room"]);
+    }
+
+    #[test]
+    fn an_explicit_order_on_the_date_axis_is_unchanged() {
+        let docs = vec![parent(), dated("old", "2026-01-01"), dated("new", "2026-03-01"), dated("mid", "2026-02-01")];
+        let sort = newest_first(Some(vec!["old".to_string()]));
+        assert_eq!(chain_sorted(&docs, &sort), vec!["old", "new", "mid"]);
     }
 
     /// Baseline: a plain folder of articles is untouched by the two

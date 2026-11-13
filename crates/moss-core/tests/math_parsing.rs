@@ -217,7 +217,7 @@ fn math_survives_inside_a_definition() {
 mod shortcode_bodies_inherit_the_callers_config {
     use moss_core::ast::parser::{parse_with_config, ParseConfig};
 
-    fn math_on() -> ParseConfig {
+    fn math_on() -> ParseConfig<'static> {
         ParseConfig { math: true, ..Default::default() }
     }
 
@@ -284,7 +284,7 @@ mod plain_text_collectors_keep_math {
     use moss_core::ast::node::{Block, Inline};
     use moss_core::ast::parser::{parse_with_config, ParseConfig};
 
-    fn math_on() -> ParseConfig {
+    fn math_on() -> ParseConfig<'static> {
         ParseConfig { math: true, ..Default::default() }
     }
 

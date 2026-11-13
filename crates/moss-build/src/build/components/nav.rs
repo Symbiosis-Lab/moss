@@ -17,6 +17,9 @@ mod island;
 /// The search / language / theme cluster, shared by the masthead and the
 /// island of a site with no header.
 mod icons;
+/// The second header level: which nav items group under a folder entry, and
+/// the markup of a group.
+mod submenu;
 /// `generate_footer`, and `strip_empty_footer`, which settles the footer it
 /// emits once slots are resolved. A child module for the same reason as the
 /// two above.
@@ -26,6 +29,26 @@ pub(crate) mod footer;
 /// sibling kept close to its one reader.
 mod header_mode;
 pub use header_mode::{HeaderMode, HeaderScroll};
+
+/// One header entry: its sort keys and its rendered link or group.
+struct NavItem<'a> {
+    weight: Option<i32>,
+    /// Plain-text chrome label, the alphabetical tiebreak.
+    label: &'a str,
+    html: String,
+}
+
+/// Header order, for both levels: weighted entries first by weight, ties and
+/// the unweighted by label. The label tiebreak keeps the order independent of
+/// filesystem walk order (macOS and Linux scan folders differently).
+fn sort_nav_items(items: &mut [NavItem<'_>]) {
+    items.sort_by(|a, b| match (a.weight, b.weight) {
+        (Some(aw), Some(bw)) => aw.cmp(&bw).then_with(|| a.label.cmp(b.label)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.label.cmp(b.label),
+    });
+}
 
 /// A single segment of a breadcrumb trail
 pub struct BreadcrumbSegment {
@@ -326,8 +349,12 @@ impl<'a> NavigationBuilder<'a> {
             })
             .collect();
 
-        let mut entries: Vec<(Option<i32>, &str, String)> = nav_documents.iter()
-            .map(|doc| {
+        // A header page inside a header folder is listed under that folder.
+        let parents = submenu::parent_indices(&nav_documents);
+        let is_parent: Vec<bool> = (0..nav_documents.len()).map(|i| parents.contains(&Some(i))).collect();
+
+        let items: Vec<NavItem> = nav_documents.iter().enumerate()
+            .map(|(i, doc)| {
                 // Nav link text: `nav_label` if the page set one, else the
                 // chrome label. Both are plain text, so escape at the write.
                 let label = crate::build::features::html_escape(doc.nav_text());
@@ -341,13 +368,14 @@ impl<'a> NavigationBuilder<'a> {
                     }
                 };
                 let is_current_page = self.current_page_url.map_or(false, |url| url == doc.url_path);
-                // The exact page is `aria-current="page"` in both modes. Only
+                // The exact page is `aria-current="page"` in both modes. The
+                // containing section (`aria-current="true"`) is also marked in
                 // `nav` header mode, which has no breadcrumb trail to say "you
-                // are somewhere under this section", also marks the containing
-                // section (`aria-current="true"`).
+                // are somewhere under this section", and on a submenu parent,
+                // whose closed list gives the reader no other cue.
                 let attrs = if is_current_page {
                     r#" class="active" aria-current="page""#
-                } else if nav_mode && is_current_nav_section(doc, self.current_page_url) {
+                } else if (nav_mode || is_parent[i]) && is_current_nav_section(doc, self.current_page_url) {
                     r#" class="active" aria-current="true""#
                 } else {
                     ""
@@ -361,9 +389,10 @@ impl<'a> NavigationBuilder<'a> {
                     ),
                     _ => String::new(),
                 };
-                (doc.weight, doc.nav_text(), format!(r#"<a href="{}"{attrs}{source}>{}</a>"#, href, label))
+                NavItem { weight: doc.weight, label: doc.nav_text(), html: format!(r#"<a href="{}"{attrs}{source}>{}</a>"#, href, label) }
             })
             .collect();
+        let mut entries = submenu::nest(items, &parents, self.current_lang);
 
         // Term kinds that asked for a place in the nav, the page's own
         // edition's. One with a `weight` is ordered among the entries by the
@@ -380,25 +409,13 @@ impl<'a> NavigationBuilder<'a> {
                 crate::build::features::html_escape(label),
             );
             match weight {
-                Some(_) => entries.push((*weight, label.as_str(), item)),
+                Some(_) => entries.push(NavItem { weight: *weight, label: label.as_str(), html: item }),
                 None => unweighted_terms.push(item),
             }
         }
 
-        entries.sort_by(|a, b| {
-            match (a.0, b.0) {
-                // Tied weights fall through to alphabetical so the order is
-                // independent of filesystem walk order. Without the tiebreaker
-                // macOS and Linux scan_folder() produce different nav orders
-                // for items with the same explicit weight.
-                (Some(aw), Some(bw)) => aw.cmp(&bw).then_with(|| a.1.cmp(b.1)),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                // Sort alphabetically by the plain-text chrome label.
-                (None, None) => a.1.cmp(b.1),
-            }
-        });
-        let mut page_items: Vec<String> = entries.into_iter().map(|(_, _, item)| item).collect();
+        sort_nav_items(&mut entries);
+        let mut page_items: Vec<String> = entries.into_iter().map(|item| item.html).collect();
         page_items.extend(unweighted_terms);
 
         // `nav` header mode always opens the link list with Home, ahead of
@@ -554,7 +571,7 @@ pub fn is_nav_bar_item_doc(
             nav: doc.nav,
             draft: doc.draft == Some(true),
             slot_only: doc.slot_only,
-            unlisted: doc.listed == Some(false),
+            unlisted: doc.listed == Some(false) || doc.search_engines == Some(false),
         },
         doc.is_root_level,
         crate::build::render::lang_roots::is_language_root(&doc.url_path),
@@ -874,3 +891,7 @@ fn trail_tail(
 #[cfg(test)]
 #[path = "nav_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "nav_submenu_tests.rs"]
+mod submenu_tests;

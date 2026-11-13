@@ -37,7 +37,7 @@ import { routeHistoryKey, computeHistoryInputs } from './history-routing';
 import { matchesKeySpec, isMacPlatform, UNDO_KEY, REDO_KEY } from "../utils/kbd-label";
 import { CmFindController } from './cm-find';
 import { isMarkdownFile, detectFileCategory } from './file-types';
-import { showFileViewer, destroyFileViewer } from './file-viewer';
+import { showFileViewer, destroyFileViewer, fileViewerIsOpen } from './file-viewer';
 import { FileTree, createOneFile } from './tree';
 import { EntryRegistry } from './entry-registry';
 import { PreviewFollower } from './preview-follower';
@@ -80,7 +80,7 @@ import { EDITOR_GOTO_LINE, EDITOR_GOTO_RULE, EDITOR_OPEN_FIELD, EDITOR_OPEN_PUBL
 import { runAction } from "../shared/ui/run-action";
 import { mountFolderMode, unmountFolderMode } from './folder-mode/folder-mode';
 import { makeCardClickHandler, dispatchCard } from './folder-mode/folder-mode-handlers';
-import { decideEditorSurface, shouldLoadContentPage, editorQueryFromNode, resolveNodeForEdit, folderHomeTakeover, TAKEOVER_KINDS, type ResolvedNode, type EditorSurface, type Takeover } from './session/node-class';
+import { decideEditorSurface, shouldLoadContentPage, editorQueryFromNode, resolveNodeForEdit, folderHomeTakeover, editorNodeFromQuery, readEditorNode, type EditorNodeWire, type EditorSurface, type Takeover } from './session/node-class';
 import { mountPaneState, unmountPaneState } from './pane-state';
 import { dismissNavSkeleton, dismissEditorSkeleton } from './editor-skeleton';
 import {
@@ -829,10 +829,9 @@ async function init(): Promise<void> {
         await fileTree?.refreshAndRender();
         if (loadGeneration.isStale(request)) return;
         if (lastSurface?.kind === 'root-empty') {
-          const folder = lastSurface.folder;
-          await applyResolvedNode({ sourcePath: null, isRoot: folder.kind === 'root-home', takeover: folder });
+          await applyFolderFromDisk(lastSurface.folder);
         } else if (lastSurface?.kind === 'takeover') {
-          await applyResolvedNode({ sourcePath: null, isRoot: lastSurface.takeover.kind === 'root-home', takeover: lastSurface.takeover });
+          await applyFolderFromDisk(lastSurface.takeover);
         } else if ((fce.source_creates?.length ?? 0) > 0) {
           await resolveAndApplyRootSurface();
         }
@@ -1099,11 +1098,7 @@ async function init(): Promise<void> {
       // folder's own page. Plain selectFolder calls do NOT dispatch this.
       document.addEventListener('editor:folder-navigate', ((e: CustomEvent<{ folderPath: string; folderName: string; justCreated?: boolean }>) => {
         const { folderPath, folderName } = e.detail;
-        void applyResolvedNode({
-          sourcePath: null,
-          isRoot: folderPath === projectRoot,
-          takeover: folderHomeTakeover(folderPath, folderName, folderPath === projectRoot),
-        });
+        void applyFolderFromDisk(folderHomeTakeover(folderPath, folderName, folderPath === projectRoot));
         // Move the preview to the folder's OWN page too. Every folder is now
         // published as an index page (empty folders included), so resolve the
         // folder's served URL and emit editor:navigate-preview through the same
@@ -1239,13 +1234,8 @@ async function init(): Promise<void> {
   // getByPath lookup hits and the dedup against currentFilePath() compares
   // in the same domain.
   pendingListeners.push(
-    uiHost.bus.on<{ sourcePath: string | null, isRoot?: boolean, takeover?: Takeover | null }>('editor:load-source', async (payload) => {
-      const { sourcePath, isRoot, takeover } = payload;
-      await applyResolvedNode({
-        sourcePath,
-        isRoot: isRoot ?? false,
-        takeover: takeover ?? null,
-      });
+    uiHost.bus.on<EditorNodeWire>('editor:load-source', async (payload) => {
+      await applyResolvedNode(payload);
     }),
   );
 
@@ -1540,8 +1530,8 @@ async function init(): Promise<void> {
   // timer work. If the eval lands BEFORE this line
   // runs, the Rust-side IIFE stashed the node on window.__moss_pending_open
   // (same document — globals survive into init); consumed at the end of init.
-  (window as unknown as { __moss_editor_open?: (node: ResolvedNode) => void })
-    .__moss_editor_open = (node: ResolvedNode) => { void openFromWarmReopen(node); };
+  (window as unknown as { __moss_editor_open?: (node: EditorNodeWire) => void })
+    .__moss_editor_open = (node: EditorNodeWire) => { void openFromWarmReopen(node); };
 
   // Wire the editor heading element. Dual-mode: commits route by
   // the HeadingSource captured from the last compute() — Title-source edits
@@ -1730,41 +1720,21 @@ async function init(): Promise<void> {
     // exact source; loadFile falls back to parseFrontmatter when it's null.
     await loadFile(initialSource, boot.data.initial_file ?? undefined);
   } else if (fileTree && projectRoot) {
-    // No explicit source: the editor mirrors the page the preview is showing.
-    // open_editor baked the resolved node into the URL (is_root / takeover);
-    // reconstruct it and route through the SAME decision the other triggers use.
-    const isRoot = params.get('is_root') === '1';
-    if (isRoot) {
-      // Boot hardening: at the root with no explicit source, do a
-      // SOURCE-TRUTH resolve of `/` rather than falling straight to
-      // the root-home takeover. If a home file exists (index.md / self-named note), OPEN
-      // it; only a folder with content-but-no-home shows the CTA, and an empty
-      // folder shows the four cards. resolveAndApplyRootSurface re-checks
-      // currentEntryId() === null itself (loadFile is its own dedup), so the
-      // guard below covers the synchronous applyEditorSurface branch only.
-      if (currentEntryId() === null) {
-        await resolveAndApplyRootSurface();
-      }
+    const { node, homeFromDisk } = readEditorNode(editorNodeFromQuery(params));
+    if (homeFromDisk) {
+      // The root's home resolves from disk even mid-build, so it needs no shell answer.
+      if (currentEntryId() === null) await resolveAndApplyRootSurface();
     } else {
-      // Subfolder: no home → the baked takeover's CTA. No getFirstFile()
-      // fallback — opening a no-home subfolder shows the CTA, never silently
-      // opens an unrelated article.
-      const node: ResolvedNode = {
-        sourcePath: null,
-        isRoot: false,
-        takeover: parseTakeoverParam(params.get('takeover')),
-      };
+      // A prewarmed webview has no page identity; it stays neutral until the
+      // shell answers the handshake below.
       const surface = decideEditorSurface(node);
-      // `init()` is fire-and-forget; an external event earlier in the await chain
-      // may have already mounted CM6 on a real file. Don't stomp it.
-      if (surface.kind !== 'content' && currentEntryId() === null) {
-        applyEditorSurface(surface);
-      }
+      if (surface.kind !== 'content' && currentEntryId() === null) applyEditorSurface(surface);
     }
   }
+  if (!initialSource) uiHost.bus.emit('editor:request-page', {});
 
   // Consume a warm-open that raced init (the eval-or-stash contract above).
-  const w2 = window as unknown as { __moss_pending_open?: ResolvedNode };
+  const w2 = window as unknown as { __moss_pending_open?: EditorNodeWire };
   if (w2.__moss_pending_open) {
     const pending = w2.__moss_pending_open;
     delete w2.__moss_pending_open;
@@ -1945,26 +1915,10 @@ async function loadContentPageDeduped(
   const sameFile = !versionsMode.isActive() && ((entryId !== null && currentEntryId() !== null)
     ? entryId === currentEntryId()
     : rel === currentFilePath());
-  if (shouldLoadContentPage(sameFile, cmEditor !== null)) {
+  if (shouldLoadContentPage(sameFile, cmEditor !== null || fileViewerIsOpen())) {
     return { path: rel, outcome: await loadFile(rel, undefined, { forceAnchor: true }) };
   }
   return null;
-}
-
-/**
- * Is the "still downloading" pane what the editor is showing right now?
- *
- * A node arriving over `editor:load-source` carries no `sourcePending` — the
- * shell does not forward it — and `resolveNodeForEdit` falls back to that node
- * when a resolve fails. Undefined reads as settled, so one failed resolve
- * turned a pending root pane into "no home page yet" and announced it settled,
- * killing the arrival retry. The
- * pane is where the last SUCCESSFUL answer is still recorded, so the fallback
- * reads it from the DOM rather than from a field nothing sets.
- */
-function pendingPaneIsUp(): boolean {
-  return document.getElementById('moss-editor-cm')
-    ?.getAttribute('data-editor-surface') === 'pending';
 }
 
 /**
@@ -1976,22 +1930,16 @@ function pendingPaneIsUp(): boolean {
  * takeover the resolver computed.
  *
  * Caller guarantees no file is currently open (so we never stomp an active
- * edit). Best-effort: a failed resolve falls back to the surface decision with
- * the cached node (root-empty or whatever takeover it carried), never throws.
+ * edit). A failed resolve retains the current surface, never throws.
  */
 async function resolveAndApplyRootSurface(folderPath = projectRoot): Promise<void> {
   const request = loadGeneration.bump();
   const url = folderPath && folderPath !== projectRoot ? await engine.resolveUrlForFolder(folderPath) : null;
   const urlPath = folderPath === projectRoot ? '/' : url?.status === 'ok' ? url.data : null;
   if (!urlPath || loadGeneration.isStale(request)) return;
-  // Shared root resolver (same one applyResolvedNode uses): resolve `/` from disk
-  // truth into a ResolvedNode; on failure it returns the bare root node, so the
-  // surface decision below falls back to root-empty / generated.
-  const node = await resolveNodeForEdit(
-    urlPath,
-    { sourcePath: null, isRoot: folderPath === projectRoot, takeover: null, sourcePending: pendingPaneIsUp() },
-    (u) => engine.resolvePageSource(u),
-  );
+  // Explicit tree/root requests resolve from disk. On failure the unresolved
+  // node retains the current surface; it cannot establish a generated page.
+  const node = await resolveNodeForEdit(urlPath, (u) => engine.resolvePageSource(u));
   if (loadGeneration.isStale(request)) return;
   const surface = decideEditorSurface(node);
   if (surface.kind === 'content') {
@@ -2112,27 +2060,46 @@ function parentDirOf(relPath: string): string {
  * `editor:load-source`, whose domain is the resolver's.
  */
 function announceSurface(surface: Exclude<EditorSurface, { kind: 'content' }>): void {
-  const payload: SourcePendingPayload = surface.kind === 'pending'
+  // A page with no answer is the shell's to settle: no bytes are awaited, so a
+  // retry armed for the page it replaces is disarmed.
+  const payload: SourcePendingPayload = surface.kind === 'pending' && surface.reason === 'download'
     ? { pending: true, sourcePath: surface.sourcePath }
     : { pending: false, sourcePath: null };
   uiHost.bus.emit(SOURCE_PENDING_EVENT, payload);
+}
+
+/**
+ * A page with no answer yet keeps a document, the boot skeleton or a waiting
+ * pane, with its unsaved text, autosave and undo; it replaces only a claim
+ * about some other page.
+ */
+function keepsCurrentSurface(surface: EditorSurface): boolean {
+  if (surface.kind !== 'pending' || surface.reason !== 'lookup') return false;
+  const shown = document.getElementById('moss-editor-cm')?.getAttribute('data-editor-surface') ?? null;
+  if (shown === null) return true;
+  // A pane waiting on a named file is replaced: its retry would load that file
+  // over whatever page the preview has moved to. One waiting on the page
+  // re-asks the live page, so it stays.
+  return shown === 'pending' && lastSurface?.kind === 'pending' && (lastSurface.reason === 'lookup' || lastSurface.sourcePath === null);
 }
 
 function applyEditorSurface(surface: Exclude<EditorSurface, { kind: 'content' }>): void {
   const cm = document.getElementById('moss-editor-cm');
   if (!cm || !projectRoot) return;
 
+  if (keepsCurrentSurface(surface)) return;
   // BEFORE the idempotency gate, deliberately. The shell needs to know what is
   // ON SCREEN, and the gate below answers a different question — whether
   // anything had to be re-mounted to put it there. A retry that lands back on
-  // the pending pane changes nothing visually and must still re-arm the shell,
-  // or the one arrival that finally delivers the file finds nobody watching and
-  // the pane would sit there with nobody watching.
+  // the downloading pane changes nothing visually and must still re-arm the
+  // shell, or the one arrival that finally delivers the file finds nobody watching.
   announceSurface(surface);
 
   // Idempotency: same surface already shown → skip teardown/remount. A
   // takeover is keyed by its recipe, so a different folder still re-renders.
-  const surfaceKey = surface.kind === 'takeover' ? JSON.stringify(surface.takeover) : surface.kind === 'root-empty' ? JSON.stringify(surface.folder) : '';
+  const surfaceKey = surface.kind === 'takeover' ? JSON.stringify(surface.takeover)
+    : surface.kind === 'root-empty' ? JSON.stringify(surface.folder)
+    : surface.kind === 'pending' ? surface.reason : '';
   if (
     cm.getAttribute('data-editor-surface') === surface.kind
     && cm.getAttribute('data-editor-surface-key') === surfaceKey
@@ -2200,11 +2167,6 @@ function showFolderMode(folder: Takeover): void {
     .catch(() => {});
 }
 
-function parseTakeoverParam(raw: string | null): Takeover | null {
-  let v: Takeover | null = null; // the takeover `open_editor` baked into the URL
-  try { v = raw ? JSON.parse(raw) : null; } catch { /* a hand-edited param reads as none */ }
-  return v && TAKEOVER_KINDS.includes(v.kind) && typeof v.display === 'string' && Array.isArray(v.files) ? v : null;
-}
 
 // The SINGLE takeover action: write the recipe's files in one call, then
 // reveal the last one across EVERY surface — the file tree (row), the
@@ -2323,41 +2285,50 @@ async function flushPendingSave(): Promise<boolean> {
 }
 
 /**
- * Route a resolved node through the single surface decision and mount it —
- * the shared body of the 'editor:load-source' listener and the
- * eval-driven open entry point (window.__moss_editor_open). Re-bakes the
- * node into the document query (history.replaceState) so an HMR full reload
- * or the navigate fallback stays consistent with the live surface.
+ * Route a node through the single surface decision and mount it — the shared
+ * body of the 'editor:load-source' listener and the eval-driven open entry
+ * point (window.__moss_editor_open). Re-bakes an answer into the document
+ * query (history.replaceState) so an HMR full reload or the navigate fallback
+ * stays consistent with the live surface.
  */
-async function applyResolvedNode(node: ResolvedNode): Promise<void> {
-  const request = node.sourcePath ? loadGeneration.current() : loadGeneration.bump();
-  // Home-less folder requests carry a real directory identity. Refresh their
-  // recipe from disk before choosing cards or a home-page offer; the build map
-  // can lag creation and deletion. The document generation owns every await.
-  if (!node.sourcePath && (node.isRoot || node.takeover?.kind === 'folder-home')) {
-    const seeded = { ...node, sourcePending: node.sourcePending ?? pendingPaneIsUp() };
-    const target = node.takeover?.files[0]?.dir;
-    const url = !node.isRoot && target ? await engine.resolveUrlForFolder(target) : null;
-    const urlPath = node.isRoot ? '/' : url?.status === 'ok' ? url.data : null;
-    if (urlPath) node = await resolveNodeForEdit(urlPath, seeded, (u) => engine.resolvePageSource(u));
-  }
+async function applyResolvedNode(wire: EditorNodeWire): Promise<void> {
+  let { node, homeFromDisk } = readEditorNode(wire);
+  // Kept means untouched, a load in flight included: it may be the user's own open.
+  if (!homeFromDisk && keepsCurrentSurface(decideEditorSurface(node))) return;
+  const request = node.sourcePath && !node.pending ? loadGeneration.current() : loadGeneration.bump();
+  if (homeFromDisk) node = await resolveNodeForEdit('/', (u) => engine.resolvePageSource(u));
   if (loadGeneration.isStale(request)) return;
-  history.replaceState(null, '', `${location.pathname}${editorQueryFromNode(node)}`);
+  const surface = decideEditorSurface(node);
+  if (!node.pending) history.replaceState(null, '', `${location.pathname}${editorQueryFromNode(node)}`);
   // NOTE: tree-collapse on warm reopen is NOT done here. applyResolvedNode is
   // the SHARED body of BOTH the 'editor:load-source' listener (fired on every
   // in-session preview navigation) AND the warm-reopen entry points. Collapsing
   // here would wrongly reset the tree mid-session on every preview navigate.
   // The collapse lives in openFromWarmReopen() (below), which wraps the two
   // warm-reopen call sites only.
-  const surface = decideEditorSurface(node);
   debug(`[editor] applyResolvedNode surface=${surface.kind}${surface.kind === 'content' ? ` sourcePath=${surface.sourcePath}` : ''}`); // empty-state surfaces look identical whether correct or a stale/failed resolve
 
   if (surface.kind === 'content') {
     await loadContentPageDeduped(surface.sourcePath);
     return;
   }
-
   applyEditorSurface(surface);
+}
+
+/**
+ * A home-less folder named by real path: its recipe is refreshed from disk
+ * before choosing cards or a home-page offer, since the build map can lag
+ * creation and deletion. A refresh that gets no answer keeps the recipe given.
+ */
+async function applyFolderFromDisk(takeover: Takeover): Promise<void> {
+  const request = loadGeneration.bump();
+  const isRoot = takeover.kind === 'root-home';
+  const dir = takeover.kind === 'folder-home' ? takeover.files[0]?.dir : undefined;
+  const url = dir ? await engine.resolveUrlForFolder(dir) : null;
+  const urlPath = isRoot ? '/' : url?.status === 'ok' ? url.data : null;
+  const fresh = urlPath ? await resolveNodeForEdit(urlPath, (u) => engine.resolvePageSource(u)) : null;
+  if (loadGeneration.isStale(request)) return;
+  await applyResolvedNode(fresh && fresh.pending !== 'lookup' ? fresh : { sourcePath: null, isRoot, takeover, pending: null });
 }
 
 /**
@@ -2375,13 +2346,17 @@ async function applyResolvedNode(node: ResolvedNode): Promise<void> {
  * in-session 'editor:load-source' listener calls applyResolvedNode directly so
  * it never collapses the tree.
  */
-async function openFromWarmReopen(node: ResolvedNode): Promise<void> {
-  if (fileTree) fileTree.collapseForReopen();
+async function openFromWarmReopen(wire: EditorNodeWire): Promise<void> {
+  const { node, homeFromDisk } = readEditorNode(wire);
+  // A bare page keeps what is open until the shell answers, tree included.
+  if ((homeFromDisk || !keepsCurrentSurface(decideEditorSurface(node))) && fileTree) fileTree.collapseForReopen();
   // Reopening on the file already loaded keeps its CM6 instance — and the
   // lead the user left it with. The panel's grow animation is about to reflow
   // it; that must not move the preview the user opened the editor from.
   followPreview();
-  await applyResolvedNode(node);
+  await applyResolvedNode(wire);
+  // The native open carries no verdict; the shell's answer arrives through the handshake.
+  if (!wire.sourcePath && !wire.takeover) uiHost.bus.emit('editor:request-page', {});
   followPreviewPosition();
 }
 
@@ -2536,6 +2511,7 @@ async function loadFileBody(
   // A document whose file left outside moss keeps its text when the author moves on.
   outsideFile.leaving();
   await flushPendingSave();
+  if (loadGeneration.isStale(thisLoad)) return 'superseded';
   parkActiveDocument();
   otherWriters.leaving();
 
@@ -2645,8 +2621,9 @@ async function loadFileBody(
   // outgoing surface rather than staying on it: a pane left standing over a
   // failed open is read as a verdict about the file just asked for, which is
   // how "This page is generated by moss" ended up over a home note the user
-  // could see in Finder. applyEditorSurface clears the tree selection too, so
-  // the two halves cannot disagree about what is open.
+  // could see in Finder. The outgoing document was saved and parked above;
+  // applyEditorSurface clears the tree selection too, so the two halves cannot
+  // disagree about what is open.
   if (parsedData.still_arriving) {
     if (loadGeneration.isStale(thisLoad)) return 'superseded';
     // Named, not merely announced: the shell's only other handle on "which
@@ -2655,6 +2632,7 @@ async function loadFileBody(
     // Absolute, to match the domain the shell pushes back in.
     applyEditorSurface({
       kind: 'pending',
+      reason: 'download',
       sourcePath: toAbsolute(filePath, projectRoot ?? ''),
     });
     return 'failed';

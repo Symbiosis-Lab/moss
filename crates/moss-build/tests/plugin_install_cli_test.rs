@@ -1,4 +1,4 @@
-//! `moss plugin install` against a local registry. One test: the app-data
+//! `moss plugin install` against a local, unsigned registry. One test: the app-data
 //! directory comes from the environment and the verdicts are process-wide, so
 //! scenarios that share them run in order rather than racing.
 
@@ -60,7 +60,7 @@ fn entry(origin: &str, id: &str) -> String {
 
 fn index(origin: &str, serial: u64, ids: &[&str]) -> Vec<u8> {
     let entries: Vec<String> = ids.iter().map(|id| entry(origin, id)).collect();
-    format!(r#"{{"schema_version":1,"serial":{serial},"entries":[{}]}}"#, entries.join(",")).into_bytes()
+    format!(r#"{{"schema_version":1,"serial":{serial},"expires":"2099-01-01T00:00:00Z","entries":[{}]}}"#, entries.join(",")).into_bytes()
 }
 
 fn site(root: &Path) -> std::path::PathBuf {
@@ -88,7 +88,7 @@ fn installing_checks_the_catalog_every_time_and_approves_in_app_data() {
     {
         let mut r = routes.lock().unwrap();
         r.insert("/index.json", index(&origin, 1, &["alpha"]));
-        r.insert("/revoked.json", br#"{"schema_version":1,"serial":1,"revocations":[]}"#.to_vec());
+        r.insert("/revoked.json", br#"{"schema_version":1,"serial":1,"expires":"2099-01-01T00:00:00Z","revocations":[]}"#.to_vec());
         r.insert("/alpha.zip", zip("alpha"));
         r.insert("/beta.zip", zip("beta"));
         r.insert("/gamma.zip", zip("gamma"));
@@ -100,7 +100,7 @@ fn installing_checks_the_catalog_every_time_and_approves_in_app_data() {
     std::fs::create_dir_all(&nested).unwrap();
     std::fs::create_dir_all(&outside).unwrap();
     for folder in [&nested, &outside, &tooling_parent] {
-        let err = install("alpha", folder, &origin).err().expect("requires the exact site root");
+        let err = install("alpha", folder, &origin, &[]).err().expect("requires the exact site root");
         assert!(err.contains("not a moss site root") && err.contains(&folder.display().to_string()), "{err}");
         assert!(!app_data.exists(), "invalid destination touched app data");
         assert!(!site.join(".moss/plugins").exists());
@@ -111,13 +111,13 @@ fn installing_checks_the_catalog_every_time_and_approves_in_app_data() {
         let alias = tmp.path().join("alias");
         std::fs::create_dir_all(&alias).unwrap();
         std::os::unix::fs::symlink(&tooling, alias.join(".moss")).unwrap();
-        let err = install("alpha", &alias, &origin).err().expect("tooling alias is not a site");
+        let err = install("alpha", &alias, &origin, &[]).err().expect("tooling alias is not a site");
         assert!(err.contains("not a moss site root") && err.contains(alias.to_str().unwrap()), "{err}");
         assert!(!app_data.exists());
     }
 
     // Online: installed, one line said, consent kept in app data and not in the site.
-    let done = install("alpha", &site, &origin).unwrap();
+    let done = install("alpha", &site, &origin, &[]).unwrap();
     assert_eq!(done.line, format!("Installed alpha 1.2.0 into {} and approved it for this user on this machine", site.display()));
     assert!(done.notice.is_none());
     assert!(site.join(".moss/plugins/alpha/main.js").exists());
@@ -128,13 +128,13 @@ fn installing_checks_the_catalog_every_time_and_approves_in_app_data() {
 
     // A plugin already in the folder, with no approval on this machine, is allowed by the command too.
     std::fs::remove_file(app_data.join("plugin-approvals.json")).unwrap();
-    install("alpha", &site, &origin).unwrap();
+    install("alpha", &site, &origin, &[]).unwrap();
     assert!(std::fs::read_to_string(app_data.join("plugin-approvals.json")).unwrap().contains("alpha"));
 
     // The catalog moved since the last look: a plugin listed only now installs,
     // so the index was fetched again rather than read from the cache.
     routes.lock().unwrap().insert("/index.json", index(&origin, 2, &["alpha", "gamma"]));
-    let done = install("gamma", &site, &origin).unwrap();
+    let done = install("gamma", &site, &origin, &[]).unwrap();
     assert!(done.notice.is_none() && site.join(".moss/plugins/gamma/main.js").exists());
 
     // Unreachable: the cached catalog serves, and the notice says so.
@@ -143,13 +143,13 @@ fn installing_checks_the_catalog_every_time_and_approves_in_app_data() {
         format!("http://127.0.0.1:{}", l.local_addr().unwrap().port())
     };
     std::fs::remove_dir_all(site.join(".moss/plugins/gamma")).unwrap();
-    let done = install("gamma", &site, &dead).unwrap();
+    let done = install("gamma", &site, &dead, &[]).unwrap();
     let notice = done.notice.expect("a stale catalog is named");
     assert!(notice.contains("cached") && notice.contains("within the last hour"), "{notice}");
 
     // Unreachable with nothing cached: fails, naming the network error.
     std::fs::remove_dir_all(app_data.join("registry")).unwrap();
-    let err = install("beta", &site, &dead).err().expect("no catalog, no install");
+    let err = install("beta", &site, &dead, &[]).err().expect("no catalog, no install");
     assert!(err.contains("none is cached") && err.contains("127.0.0.1"), "{err}");
     assert!(!site.join(".moss/plugins/beta").exists());
 
@@ -165,25 +165,25 @@ fn installing_checks_the_catalog_every_time_and_approves_in_app_data() {
     routes.lock().unwrap().insert("/index.json", index(&origin, 3, &["alpha", "gamma", "delta-preview"]));
     routes.lock().unwrap().insert("/delta-preview.zip", zip("delta-preview"));
     for id in ["delta-preview", "github"] {
-        let err = install(id, &site, &origin).err().unwrap_or_else(|| panic!("{id} installed with Preview features off"));
+        let err = install(id, &site, &origin, &[]).err().unwrap_or_else(|| panic!("{id} installed with Preview features off"));
         assert!(err.contains("Preview features") && err.contains("preview_features"), "{err}");
         assert!(!site.join(".moss/plugins").join(id).exists(), "{id}");
     }
     let config = app_data.join("app-config.json");
     for off in [r#"{"experimental":{"preview_features":false}}"#, r#"{"experimental":{"preview_features":"true"}}"#, "not json"] {
         std::fs::write(&config, off).unwrap();
-        assert!(install("delta-preview", &site, &origin).is_err(), "{off} is off");
+        assert!(install("delta-preview", &site, &origin, &[]).is_err(), "{off} is off");
     }
     std::fs::write(&config, r#"{"language":"en","experimental":{"preview_features":true}}"#).unwrap();
     for id in ["delta-preview", "github"] {
-        install(id, &site, &origin).unwrap_or_else(|e| panic!("{id}: {e}"));
+        install(id, &site, &origin, &[]).unwrap_or_else(|e| panic!("{id}: {e}"));
         assert!(site.join(".moss/plugins").join(id).join("manifest.json").exists(), "{id}");
     }
 
     // Turning the switch off again refuses no copy already in the site.
     std::fs::write(&config, r#"{"experimental":{"preview_features":false}}"#).unwrap();
     for id in ["delta-preview", "github"] {
-        install(id, &site, &origin).unwrap_or_else(|e| panic!("installed {id} refused: {e}"));
+        install(id, &site, &origin, &[]).unwrap_or_else(|e| panic!("installed {id} refused: {e}"));
     }
 }
 

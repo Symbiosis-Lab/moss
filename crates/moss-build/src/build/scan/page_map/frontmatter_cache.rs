@@ -4,6 +4,8 @@
 
 use crate::build::scan::path_collision::on_disk;
 use crate::build::stat::{recording_clock, FileStat};
+use moss_core::frontmatter::member_cascade::{declared_cascade, HomeCascade, MemberCascade};
+use moss_core::frontmatter::members::Members;
 use std::path::{Path, PathBuf};
 
 /// One file's cached frontmatter pre-scan result, plus the stat identity it
@@ -31,6 +33,12 @@ pub(super) struct FrontmatterScanEntry {
     /// Read by the page-map pass so a partial is `slot_only` there too, not
     /// only once the full parse has run.
     partial: bool,
+    /// The page's own `members:`, read fail-closed. Inherited access is not
+    /// stored: it is the policy's, derived again on every build.
+    access: Option<Members>,
+    /// What the file's `cascade:` declares for the pages beneath it, which
+    /// counts only while the file is its folder's home.
+    cascade: Option<Members>,
 }
 
 /// Bumped whenever [`FrontmatterScanEntry`] gains or loses a field. An entry
@@ -38,7 +46,7 @@ pub(super) struct FrontmatterScanEntry {
 /// a missing `lang` is indistinguishable from "this file declares none", so
 /// the folder rung would read every declaration as absent for a whole build.
 /// A mismatch discards the file, which costs one full re-scan exactly once.
-const SCHEMA: u32 = 3;
+const SCHEMA: u32 = 6;
 
 /// Persisted `.moss/build.nosync/cache/frontmatter-scan.json`: the `url:` and
 /// `external_url:` frontmatter fields `build_page_map`/`build_external_url_map`
@@ -60,6 +68,11 @@ const SCHEMA: u32 = 3;
 /// a stale URL, so the bar here is "never wrong", not "never re-parse".
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct FrontmatterScanCache {
+    /// Derived from the homes' entries on every scan, never persisted: a home
+    /// this build could not read restricts its folder instead of falling back
+    /// to what an earlier build read.
+    #[serde(skip)]
+    pub(crate) members_policy: MemberCascade,
     /// `#[serde(default)]` uses the FIELD type's default (0), not this
     /// struct's — which is what makes a legacy file readable-then-rejected
     /// rather than a parse error, while a cache built in memory carries the
@@ -71,7 +84,7 @@ pub(crate) struct FrontmatterScanCache {
 
 impl Default for FrontmatterScanCache {
     fn default() -> Self {
-        Self { schema: SCHEMA, entries: std::collections::HashMap::new() }
+        Self { members_policy: MemberCascade::default(), schema: SCHEMA, entries: std::collections::HashMap::new() }
     }
 }
 
@@ -94,7 +107,11 @@ impl FrontmatterScanCache {
         source_path: &Path,
     ) -> Self {
         let mut cache = Self::default();
-        scan_frontmatter_urls_with_evicted(files, &|p| on_disk(source_path, p), &mut cache, &|_| false);
+        let root = crate::vault::paths::VaultRoot::resolve(source_path);
+        let locate = |p: &str| on_disk(source_path, p);
+        let (overrides, winners) = super::elect_homes_with_evicted(files, &root, &Default::default(), &locate, &|_| false);
+        let members_config = crate::build::scan::members::config_declares_members(source_path);
+        scan_frontmatter_urls_with_evicted(files, &super::folder_homes(&winners, &overrides, root.name()), &locate, &mut cache, &|_| false, members_config);
         cache
     }
 
@@ -111,6 +128,25 @@ impl FrontmatterScanCache {
     /// — a language the author declared beats one guessed from bodies.
     pub(super) fn declared_lang(&self, source_path: &str) -> Option<&str> {
         self.entries.get(source_path)?.lang.as_deref()
+    }
+
+    /// Whether the page's public view is restricted: its own `members:`
+    /// wins, inherited access otherwise.
+    pub(crate) fn is_members(&self, source_path: &str) -> bool {
+        self.entries.get(source_path).and_then(|e| e.access)
+            .or_else(|| self.members_policy.inherited(source_path))
+            .is_some_and(|access| access != Members::Public)
+    }
+
+    /// Whether any of `files` declares `members:` or a `cascade:`, by what a
+    /// build read of it, this one or an earlier one.
+    pub(crate) fn declares_members(&self, files: &[crate::types::content::FileInfo]) -> bool {
+        files.iter().filter_map(|f| self.entries.get(&f.path)).any(|e| e.access.is_some() || e.cascade.is_some())
+    }
+
+    /// Whether any of `files` is restricted, by its own `members:` or by inheritance.
+    pub(crate) fn restricts_pages(&self, files: &[crate::types::content::FileInfo]) -> bool {
+        files.iter().any(|f| self.is_members(&f.path))
     }
 
     pub(super) fn is_partial(&self, source_path: &str) -> bool {
@@ -152,22 +188,28 @@ fn unquote(v: &str) -> &str {
 /// since eviction/deletion already has its own stale-cleanup pass.
 ///
 /// Each file is read from `locate(path)`, which is the path under the site
-/// folder for every build.
+/// folder for every build. `homes` are the elected folder homes, whose
+/// entries set `cache.members_policy`; `members_config` is whether the site's
+/// settings name members.
 pub(super) fn scan_frontmatter_urls_with_evicted(
     markdown_files: &[crate::types::content::FileInfo],
+    homes: &[&str],
     locate: &dyn Fn(&str) -> PathBuf,
     cache: &mut FrontmatterScanCache,
     is_evicted: &dyn Fn(&Path) -> bool,
+    members_config: bool,
 ) -> std::collections::HashMap<String, (Option<String>, Option<String>)> {
     use std::collections::HashMap;
 
     let mut out: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
+    let mut pending = std::collections::HashSet::new();
 
     for file_info in markdown_files {
         let file_path = &file_info.path;
         let source_file_path = locate(file_path);
 
         if is_evicted(&source_file_path) {
+            pending.insert(file_path.as_str());
             continue;
         }
 
@@ -193,6 +235,11 @@ pub(super) fn scan_frontmatter_urls_with_evicted(
                 continue;
             }
         };
+
+        let cascade = declared_cascade(&content);
+        // The page's own access only: inheritance needs every home's entry.
+        let content = moss_core::frontmatter::members::public_source(&content);
+        let access = moss_core::frontmatter::frontmatter_map(&content).get("members").map(Members::from_value);
 
         // ONE parser, one pass, both fields — same parse
         // `build_page_map`/`build_external_url_map` used to run separately.
@@ -251,6 +298,8 @@ pub(super) fn scan_frontmatter_urls_with_evicted(
                     external_url: external_url.clone(),
                     lang,
                     partial,
+                    access,
+                    cascade,
                 },
             );
         } else {
@@ -263,6 +312,13 @@ pub(super) fn scan_frontmatter_urls_with_evicted(
         out.insert(file_path.clone(), (frontmatter_url, external_url));
     }
 
+    // Only an entry this build read or stat-vouched speaks for a home.
+    let uses_members = members_config || cache.declares_members(markdown_files);
+    cache.members_policy = MemberCascade::from_homes(homes.iter().map(|&home| {
+        let current = out.contains_key(home).then(|| cache.entries.get(home)).flatten();
+        let unread = if pending.contains(home) { HomeCascade::Pending } else { HomeCascade::Unreadable };
+        (home, current.map_or(unread, |entry| HomeCascade::Read(entry.cascade)))
+    }), uses_members);
     out
 }
 
@@ -310,7 +366,9 @@ pub(crate) fn build_page_map_and_external_urls_cached_with_evicted(
     std::collections::HashMap<String, String>,
     std::collections::HashMap<String, String>,
 ) {
-    let scanned = scan_frontmatter_urls_with_evicted(markdown_files, &|p| on_disk(source_path, p), cache, is_evicted);
+    let homes = super::folder_homes(home_file_winners, home_overrides, root_folder_name);
+    let members_config = crate::build::scan::members::config_declares_members(source_path);
+    let scanned = scan_frontmatter_urls_with_evicted(markdown_files, &homes, &|p| on_disk(source_path, p), cache, is_evicted, members_config);
     let (entries, dir_overrides, external_url_map) =
         assemble_page_map(markdown_files, &scanned, root_folder_name, home_file_winners, home_overrides);
     let page_map = entries.into_iter().map(|(k, v, _)| (k, v)).collect();

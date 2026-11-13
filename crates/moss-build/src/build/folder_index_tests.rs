@@ -27,7 +27,7 @@ fn article_doc(source_path: &str, url_path: &str) -> ParsedDocument {
 #[test]
 fn dir_has_markdown_index_root_ignores_url_path_and_reads_kind() {
     let docs = vec![folder_doc("Garden Path.md", "garden-path/index.html")];
-    let idx = BuildFolderIndex { docs: &docs, html_files: &[] };
+    let idx = BuildFolderIndex { docs: &docs, html_files: &[], dir_overrides: &Default::default() };
     assert!(
         idx.dir_has_markdown_index(""),
         "a root PageKind::Folder doc is the root index regardless of what its url_path happens to be"
@@ -37,7 +37,7 @@ fn dir_has_markdown_index_root_ignores_url_path_and_reads_kind() {
 #[test]
 fn dir_has_markdown_index_root_rejects_a_root_article() {
     let docs = vec![article_doc("Archive.md", "archive/index.html")];
-    let idx = BuildFolderIndex { docs: &docs, html_files: &[] };
+    let idx = BuildFolderIndex { docs: &docs, html_files: &[], dir_overrides: &Default::default() };
     assert!(
         !idx.dir_has_markdown_index(""),
         "an ordinary article at the root is not the root's index just because it lives there"
@@ -50,7 +50,7 @@ fn dir_has_markdown_index_nested_folder_matches_its_own_source_dir_only() {
         folder_doc("notes/daily/daily.md", "notes/daily/index.html"),
         folder_doc("Garden Path.md", "index.html"),
     ];
-    let idx = BuildFolderIndex { docs: &docs, html_files: &[] };
+    let idx = BuildFolderIndex { docs: &docs, html_files: &[], dir_overrides: &Default::default() };
     assert!(idx.dir_has_markdown_index("notes/daily"));
     assert!(idx.dir_has_markdown_index(""));
     assert!(!idx.dir_has_markdown_index("notes"));
@@ -62,7 +62,7 @@ fn dir_has_markdown_index_nested_folder_matches_its_own_source_dir_only() {
 #[test]
 fn dir_has_markdown_index_slug_normalizes_both_sides() {
     let docs = vec![folder_doc("Notes/Daily/Daily.md", "notes/daily/index.html")];
-    let idx = BuildFolderIndex { docs: &docs, html_files: &[] };
+    let idx = BuildFolderIndex { docs: &docs, html_files: &[], dir_overrides: &Default::default() };
     assert!(idx.dir_has_markdown_index("notes/daily"));
     assert!(idx.dir_has_markdown_index("Notes/Daily"));
 }
@@ -74,7 +74,7 @@ fn dir_has_markdown_index_slug_normalizes_both_sides() {
 #[test]
 fn dir_has_markdown_index_nested_url_override_still_matches_by_url_path() {
     let docs = vec![folder_doc("評選/評選.md", "awards/index.html")];
-    let idx = BuildFolderIndex { docs: &docs, html_files: &[] };
+    let idx = BuildFolderIndex { docs: &docs, html_files: &[], dir_overrides: &Default::default() };
     assert!(idx.dir_has_markdown_index("awards"));
     assert!(!idx.dir_has_markdown_index("評選"));
 }
@@ -87,6 +87,6 @@ fn dir_has_markdown_index_finds_a_folder_whose_name_has_an_ampersand() {
         "Film & Performance/Film & Performance.md",
         "film-and-performance/index.html",
     )];
-    let idx = BuildFolderIndex { docs: &docs, html_files: &[] };
+    let idx = BuildFolderIndex { docs: &docs, html_files: &[], dir_overrides: &Default::default() };
     assert!(idx.dir_has_markdown_index("Film & Performance"));
 }

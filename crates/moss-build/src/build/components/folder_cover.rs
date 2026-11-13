@@ -57,7 +57,7 @@ pub fn render(
             // index pages — emit eager + fetchpriority="high" when the
             // synthesizer is in scope.
             let eager = media_lookup.is_some();
-            let cover_html = cover::render_cover_html(path, cover_type, &alt, "moss-collection-cover", attrs, false, media_lookup, eager);
+            let cover_html = cover::render_cover_html(path, cover_type, &alt, "moss-collection-cover", attrs, false, media_lookup, eager, None);
             // Only the media div names `cover:` — never the whole cover-row.
             // The row also holds the title and the lede, and the resolver
             // (`el.closest('[data-source-fm]')`) checks fm BEFORE

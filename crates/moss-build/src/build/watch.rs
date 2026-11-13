@@ -264,7 +264,8 @@ fn find_output_for_source(source: &str, hashes: &SiteHashes) -> Option<String> {
     if !hashes.source_to_output.is_empty() {
         return None;
     }
-    let stem = source.strip_suffix(".md")?;
+    if !moss_core::source_edit::policy::is_page_path(std::path::Path::new(source)) { return None; }
+    let (stem, _) = source.rsplit_once('.')?;
     let pretty = format!("{}/index.html", stem);
     if hashes.files.contains_key(&pretty) {
         return Some(pretty);

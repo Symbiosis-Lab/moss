@@ -18,7 +18,7 @@ fn test_render_item_english() {
         ..blank()
     };
 
-    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false, None);
     assert!(html.contains("5 articles"));
 }
 
@@ -33,7 +33,7 @@ fn test_render_item_chinese() {
         ..blank()
     };
 
-    let html = render_item_with_typesetting(&props, None, Language::ZhHans, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::ZhHans, None, None, false, false, None);
     assert!(html.contains("5 篇"));
 }
 
@@ -49,7 +49,7 @@ fn test_render_item_with_cover() {
         ..blank()
     };
 
-    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false, None);
     assert!(html.contains(r#"<img src="https://example.com/cover.jpg""#));
 }
 
@@ -64,7 +64,7 @@ fn test_render_item_escapes_html() {
         ..blank()
     };
 
-    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false, None);
     assert!(html.contains("Code &amp; Tips"));
 }
 
@@ -131,7 +131,7 @@ fn test_render_item_with_subtitle_override() {
         cover: Some("cover.jpg".to_string()),
         ..blank()
     };
-    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false, None);
     assert!(
         html.contains("2025 · 06"),
         "Should use subtitle override. Got: {}",
@@ -158,7 +158,7 @@ fn grid_card_shows_the_resolved_place_next_to_the_date() {
         when_html: None,
         ..blank()
     };
-    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false, None);
     assert!(
         html.contains(r#"<span class="moss-card-meta">1924 · Cambridge</span>"#),
         "Got: {}",
@@ -180,7 +180,7 @@ fn grid_card_never_shows_a_place_beside_a_folders_count() {
         when_html: None,
         ..blank()
     };
-    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false, None);
     assert!(
         html.contains(r#"<span class="moss-card-meta">2 articles</span>"#),
         "the count slot must be the count alone: {}",
@@ -199,7 +199,7 @@ fn test_render_item_cover_uses_img_tag() {
         cover: Some("assets/photo.jpg".to_string()),
         ..blank()
     };
-    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false, None);
     assert!(
         html.contains(r#"<img src="assets/photo.jpg""#),
         "Cover should use <img> tag. Got: {}",
@@ -222,7 +222,7 @@ fn test_render_item_no_cover_no_img() {
         child_count: Some(2),
         ..blank()
     };
-    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false, None);
     assert!(
         !html.contains("<img"),
         "No-cover card should not have <img>. Got: {}",
@@ -414,7 +414,7 @@ fn test_render_item_cover_img_has_alt() {
         cover: Some("assets/photo.jpg".to_string()),
         ..blank()
     };
-    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false, None);
     assert!(
         html.contains(r#"alt=""#),
         "Cover <img> should have alt attribute. Got: {}",
@@ -434,7 +434,7 @@ fn file_card_renders_description_under_title() {
         description: Some("A short description.".to_string()),
         ..blank()
     };
-    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false, None);
     assert!(
         html.contains(r#"<p class="moss-card-description">A short description.</p>"#),
         "file card should render a description paragraph. Got: {}",
@@ -477,7 +477,7 @@ fn folder_card_shows_its_count_and_no_description() {
         description: Some("A collection of travel stories.".to_string()),
         ..blank()
     };
-    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false, None);
     assert!(
         !html.contains("moss-card-description"),
         "a folder card is a tile with its count, not its folder note's description. Got: {}",
@@ -500,7 +500,7 @@ fn file_card_without_description_has_no_description_element() {
         date_display: Some(String::new()),
         ..blank()
     };
-    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false, None);
     assert!(
         !html.contains("moss-card-description"),
         "no description field => no description element. Got: {}",
@@ -518,7 +518,7 @@ fn file_card_blank_description_is_not_rendered() {
         description: Some("   ".to_string()),
         ..blank()
     };
-    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false, None);
     assert!(
         !html.contains("moss-card-description"),
         "whitespace-only description must not render. Got: {}",
@@ -536,7 +536,7 @@ fn file_card_escapes_description() {
         description: Some("Tips & tricks <b>".to_string()),
         ..blank()
     };
-    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false, None);
     assert!(
         html.contains("Tips &amp; tricks &lt;b&gt;"),
         "description must be HTML-escaped. Got: {}",
@@ -558,7 +558,7 @@ fn test_render_item_with_video_cover() {
         cover_type: Some(CoverType::Video),
         ..blank()
     };
-    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false, None);
     assert!(
         html.contains("<video"),
         "Video should render as <video> tag. Got: {}",
@@ -585,7 +585,7 @@ fn test_render_item_with_iframe_cover() {
         cover_type: Some(CoverType::Iframe),
         ..blank()
     };
-    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false, None);
     assert!(
         html.contains("<iframe"),
         "Should render an <iframe> tag. Got: {}",
@@ -611,7 +611,7 @@ fn test_render_item_cover_type_defaults_to_image() {
         cover_type: None, // should default to Image,
         ..blank()
     };
-    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false, None);
     assert!(
         html.contains("<img"),
         "Should default to <img> tag. Got: {}",
@@ -757,7 +757,7 @@ fn a_card_takes_its_band_color_from_the_covers_color_override() {
         cover: Some("research.jpg|color=#0a2a3f".to_string()),
         ..blank()
     };
-    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false, None);
     // The colour rides on the outer <a>, not on .moss-card-content.
     assert!(
         html.contains(r#"<a href="/research/" class="moss-card" aria-label="Research" data-cover-color style="--item-cover-color: hsla(203, 73%, 14%, 1)">"#),
@@ -765,7 +765,7 @@ fn a_card_takes_its_band_color_from_the_covers_color_override() {
     );
     // A cover with no override, no root and no cache yields no colour at all.
     let plain = ChildItemProps { cover: Some("research.jpg".to_string()), ..props };
-    let html = render_item_with_typesetting(&plain, None, Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&plain, None, Language::En, None, None, false, false, None);
     assert!(!html.contains("data-cover-color"), "got: {html}");
 }
 
@@ -782,7 +782,7 @@ fn test_render_item_pipe_encoded_cover_strips_attrs_from_src() {
         cover: Some("assets/photo.jpg|left".to_string()),
         ..blank()
     };
-    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false, None);
     assert!(
         html.contains(r#"src="assets/photo.jpg""#),
         "src should not contain pipe attrs. Got: {}",
@@ -806,7 +806,7 @@ fn test_render_item_pipe_encoded_cover_adds_style() {
         cover: Some("assets/photo.jpg|contain top".to_string()),
         ..blank()
     };
-    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false, None);
     assert!(
         html.contains(r#"style="object-fit:contain;object-position:top""#),
         "Got: {}",
@@ -825,7 +825,7 @@ fn test_render_item_cover_without_pipe_no_style() {
         cover: Some("assets/photo.jpg".to_string()),
         ..blank()
     };
-    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false, None);
     assert!(
         !html.contains("style="),
         "No pipe means no style attr. Got: {}",
@@ -844,7 +844,7 @@ fn renders_kicker_above_title() {
         kicker: Some("FOLDER".to_string()),
         ..blank()
     };
-    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false, None);
     let kicker_pos = html
         .find(r#"<span class="moss-card-kicker""#)
         .expect("kicker present");
@@ -868,7 +868,7 @@ fn formats_count_as_chinese_numeral_in_vertical_cjk() {
         ..blank()
     };
     let html =
-        render_item_with_typesetting(&props, None, Language::ZhHant, Some("vertical"), None, false, false);
+        render_item_with_typesetting(&props, None, Language::ZhHant, Some("vertical"), None, false, false, None);
     assert!(
         html.contains("十二篇"),
         "count rendered as Chinese numeral; got: {}",
@@ -890,7 +890,7 @@ fn keeps_arabic_count_in_horizontal_western() {
         child_count: Some(12),
         ..blank()
     };
-    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false, None);
     assert!(
         html.contains("12 articles") || html.contains("12 article"),
         "Arabic count in Western horizontal: {}",
@@ -908,7 +908,7 @@ fn keeps_arabic_count_in_horizontal_cjk() {
         child_count: Some(12),
         ..blank()
     };
-    let html = render_item_with_typesetting(&props, None, Language::ZhHant, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::ZhHant, None, None, false, false, None);
     assert!(
         html.contains("12 篇") || html.contains("12篇"),
         "Arabic count in horizontal CJK: {}",
@@ -930,7 +930,7 @@ fn test_card_link_is_named_by_title_and_cover_is_decorative() {
         ..blank()
     };
 
-    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false, None);
 
     // The cover sits inside the link; the link's name is the title.
     assert!(html.contains(r#"alt="""#), "cover alt should be empty: {html}");
@@ -946,7 +946,7 @@ fn test_card_without_title_keeps_a_name_on_the_cover() {
         ..blank()
     };
 
-    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false, None);
 
     assert!(!html.contains("aria-label"), "an untitled card must not get an empty label: {html}");
     assert!(html.contains(r#"alt="cover""#), "cover needs a non-empty alt: {html}");
@@ -961,7 +961,7 @@ fn event_grid_card_with_only_online_links_title_and_carries_its_online_link() {
         online: Some("https://example.test/live".to_string()),
         ..blank()
     };
-    let html = render_item_with_typesetting(&props, None, crate::i18n::Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, crate::i18n::Language::En, None, None, false, false, None);
     assert!(html.starts_with(r#"<div class="moss-card">"#), "got: {html}");
     assert_eq!(html.matches(r#"<a class="moss-card-link""#).count(), 1, "got: {html}");
     assert!(
@@ -981,7 +981,7 @@ fn event_grid_card_with_both_links_puts_tickets_before_online() {
         online: Some("https://example.test/live".to_string()),
         ..blank()
     };
-    let html = render_item_with_typesetting(&props, None, crate::i18n::Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, crate::i18n::Language::En, None, None, false, false, None);
     let tickets_at = html.find(r#"<a class="moss-event-link moss-event-tickets""#).unwrap();
     let online_at = html.find(r#"<a class="moss-event-link moss-event-online""#).unwrap();
     assert!(tickets_at < online_at, "got: {html}");
@@ -998,7 +998,7 @@ fn event_grid_card_with_tickets_links_title_and_carries_its_own_tickets_link() {
         tickets: Some("https://example.test/tickets".to_string()),
         ..blank()
     };
-    let html = render_item_with_typesetting(&props, None, crate::i18n::Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, crate::i18n::Language::En, None, None, false, false, None);
     assert!(html.starts_with(r#"<div class="moss-card">"#), "got: {html}");
     assert!(html.ends_with("</div>"), "got: {html}");
     assert_eq!(html.matches(r#"<a class="moss-card-link""#).count(), 1, "got: {html}");
@@ -1025,9 +1025,34 @@ fn event_grid_card_without_tickets_keeps_its_whole_card_anchor() {
         url: Some("spring-gala.html".to_string()),
         ..blank()
     };
-    let html = render_item_with_typesetting(&props, None, crate::i18n::Language::En, None, None, false, false);
+    let html = render_item_with_typesetting(&props, None, crate::i18n::Language::En, None, None, false, false, None);
     assert_eq!(
         html,
         r#"<a href="spring-gala.html" class="moss-card" aria-label="Spring Gala"><div class="moss-card-cover moss-card-no-cover"></div><div class="moss-card-content"><span class="moss-card-meta"></span><span class="moss-card-title">Spring Gala</span></div></a>"#
     );
+}
+
+/// A theme lays cards out by each cover's shape, so the card carries it. Only
+/// a size moss read counts: an unread picture or a video gets no property,
+/// and the theme's fallback applies.
+#[test]
+fn a_picture_cover_publishes_its_shape() {
+    use crate::build::media::dimensions::MediaDimensionLookup;
+    let meta = crate::types::content::MediaMetadata {
+        path: "prints/wave.jpg".to_string(),
+        dimensions: Some((1500, 1000)),
+        ..Default::default()
+    };
+    let flat = crate::types::content::MediaMetadata { path: "prints/flat.jpg".to_string(), dimensions: Some((0, 1000)), ..Default::default() };
+    let lookup = MediaDimensionLookup::new(&[meta, flat], &[], &std::collections::HashMap::new(), None);
+    let card = |cover: &str| {
+        let props = ChildItemProps { title: "Wave".to_string(), url: Some("wave/".to_string()), cover: Some(cover.to_string()), ..blank() };
+        render_item_with_typesetting(&props, None, Language::En, None, Some(&lookup), false, false, None)
+    };
+
+    assert!(card("prints/wave.jpg").contains("--item-cover-ratio: 1500 / 1000"), "{}", card("prints/wave.jpg"));
+    assert!(card("prints/wave.jpg|fit=contain").contains("--item-cover-ratio: 1500 / 1000"));
+    assert!(!card("prints/unread.jpg").contains("--item-cover-ratio"));
+    assert!(!card("prints/flat.jpg").contains("--item-cover-ratio"));
+    assert!(!card("prints/clip.mp4").contains("--item-cover-ratio"));
 }

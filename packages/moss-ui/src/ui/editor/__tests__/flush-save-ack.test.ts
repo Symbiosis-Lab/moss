@@ -108,10 +108,7 @@ vi.mock('../cm-editor', async () => ({
   CmEditor: (await import('./disk-hash')).acceptingExternalChanges(MockCmEditor),
 }));
 
-vi.mock('../file-viewer', () => ({
-  showFileViewer: vi.fn(),
-  destroyFileViewer: vi.fn(),
-}));
+vi.mock('../file-viewer');
 
 vi.mock('../tree', () => ({
   FileTree: MockFileTree,

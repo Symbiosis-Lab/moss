@@ -74,8 +74,15 @@ pub fn read_managed_toml_no_wait(path: &Path) -> Result<Option<String>, String> 
 /// result rather than ask again — asking again is a second read of a file that
 /// may have changed in between.
 pub fn read_project_config(project_path: &str) -> Result<ConfigFile, String> {
+    project_config_read_with(project_path, read_managed_toml)
+}
+
+/// Reads one managed `.moss/*.toml`: [`read_managed_toml`], or its no-wait twin.
+pub type TomlReader = fn(&Path) -> Result<Option<String>, String>;
+
+fn project_config_read_with(project_path: &str, read: TomlReader) -> Result<ConfigFile, String> {
     let config_path = Path::new(project_path).join(".moss").join("config.toml");
-    match read_managed_toml(&config_path)? {
+    match read(&config_path)? {
         Some(text) => ConfigFile::parse(&text),
         None => Ok(ConfigFile::empty()),
     }
@@ -185,6 +192,20 @@ pub fn ensure_config_current(project_path: &str) -> Result<(), String> {
     }
 }
 
+/// The config checks every publish route runs first: this moss is new enough
+/// for the site ([`ensure_config_current`]), and when the generation being
+/// published restricted a page, the site names the first moss with members as
+/// its floor, so a moss without them refuses to publish it rather than publish
+/// those pages whole. A floor that cannot be written refuses the publish.
+pub fn publish_door(project_path: &Path, restricts_pages: bool) -> Result<(), String> {
+    ensure_config_current(&project_path.to_string_lossy())?;
+    if restricts_pages {
+        crate::vault::config::require_members_moss(project_path)
+            .map_err(|e| format!("Not published: moss could not write .moss/config.toml. {e}"))?;
+    }
+    Ok(())
+}
+
 /// The `[services]` table of an already-read config, so a build that has parsed
 /// `.moss/config.toml` once does not read it again.
 pub(crate) fn parse_services(config: &crate::config::ConfigFile) -> Result<ServicesConfig, String> {
@@ -267,14 +288,20 @@ pub fn get_site_selection_tools(project_path: &str) -> Result<Option<bool>, Stri
 /// view carries the ACTIVE target's record; the other targets' records stay
 /// on disk untouched, which is what lets a user switch hosts freely.
 pub fn get_domain_config(project_path: &str) -> Result<DomainDeploymentConfig, String> {
-    let state = read_deployment_state(project_path)?;
+    domain_config_read_with(project_path, read_managed_toml)
+}
+
+/// [`get_domain_config`] with every file read through `read`, so a caller that
+/// must answer at once passes [`read_managed_toml_no_wait`].
+pub fn domain_config_read_with(project_path: &str, read: TomlReader) -> Result<DomainDeploymentConfig, String> {
+    let state = deployment_state_read_with(project_path, read)?;
     // ONE parse of config.toml for both authored inputs: the target selector
     // (`[hooks] deploy`) and the site's address (`[site].url`). The raw
     // key, deliberately NOT `plugins::discovery::get_hook_config`, which
     // injects the build-time `DEFAULT_DEPLOYER` fallback: an unconfigured
     // folder must read as "no selection" so the first publish opens the
     // choice, not a silent default.
-    let config = read_project_config(project_path)?;
+    let config = project_config_read_with(project_path, read)?;
     let hooks_deploy = config
         .section(&["hooks", "deploy"])
         .and_then(|v| v.as_str())
@@ -359,8 +386,15 @@ pub(crate) fn deployment_state_from_document(
 pub fn read_deployment_state(
     project_path: &str,
 ) -> Result<crate::config::deployment::DeploymentState, String> {
+    deployment_state_read_with(project_path, read_managed_toml)
+}
+
+fn deployment_state_read_with(
+    project_path: &str,
+    read: TomlReader,
+) -> Result<crate::config::deployment::DeploymentState, String> {
     let state_path = Path::new(project_path).join(".moss").join("state.toml");
-    let Some(content) = read_managed_toml(&state_path)? else {
+    let Some(content) = read(&state_path)? else {
         return Ok(Default::default());
     };
     deployment_state_from_document(&state_path, &content)
@@ -647,6 +681,18 @@ mod version_ahead_guard_tests {
         // refuse: absence is not version-ahead.
         let absent = tempfile::tempdir().unwrap();
         assert!(ensure_config_current(absent.path().to_str().unwrap()).is_ok());
+    }
+
+    /// The publish door names the members floor only for a generation that
+    /// restricted a page, and refuses when it cannot write it.
+    #[test]
+    fn publish_door_refuses_a_members_generation_whose_floor_cannot_be_written() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".moss")).unwrap();
+        std::fs::write(dir.path().join(".moss/config.toml"), "[site\n").unwrap();
+        assert!(publish_door(dir.path(), false).is_ok());
+        let err = publish_door(dir.path(), true).unwrap_err();
+        assert!(err.starts_with("Not published: moss could not write .moss/config.toml."), "got: {err}");
     }
 
     #[test]

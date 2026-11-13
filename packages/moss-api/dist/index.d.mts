@@ -26,7 +26,7 @@ interface ProjectInfo {
 interface PluginManifest {
   name: string;
   version: string;
-  /** Omit only for a plugin that declares nothing but `contributes.derivations`. */
+  /** Omit only for a plugin that declares nothing but `contributes.derivations`, `contributes.blocks` or `contributes.public_data`. */
   entry?: string;
   category: PluginCategory;
   global_name?: string;
@@ -75,6 +75,61 @@ interface DerivationContribution {
     binary: string;
     artifact: ArtifactSource[];
   };
+}
+/**
+ * `contributes.public_data`: the part of the site's settings a plugin's
+ * element reads in the browser, published at
+ * `/_moss/extensions/<plugin>.json` as `{schema, data}`.
+ *
+ * @category Plugin manifest
+ */
+interface PublicDataContribution {
+  /**
+   * Dotted paths below the plugin's own `[services.<plugin>]` table, `*`
+   * standing for any one key: `cancel.late_percent`, `services.*.name`. Each
+   * ends at a value that is not a table; nothing else is published.
+   */
+  keys: string[];
+  /** Keys the build fills with the address of one of moss's services when the table leaves them out. */
+  fill?: Record<string, {
+    service: string;
+    path: string;
+  }>;
+}
+/**
+ * `contributes.blocks[short]`: a custom element an author places with a
+ * `:::<short>` fence around ordinary markdown. No plugin code runs at build.
+ *
+ * @category Plugin manifest
+ */
+interface BlockContribution {
+  /** A valid custom element name. */
+  element: string;
+  /** Path inside the plugin's folder ending in `.js` or `.mjs`, loaded only on pages that use the block. */
+  script?: string;
+  /** Path inside the plugin's folder ending in `.css`, loaded only on pages that use the block. */
+  stylesheet?: string;
+  /** The attributes a fence may set; anything else is dropped with a warning. */
+  attributes?: BlockAttribute[];
+}
+/**
+ * One attribute a block's fence may set. Only what the fence wrote is
+ * emitted, so an attribute has no default.
+ *
+ * @category Plugin manifest
+ */
+interface BlockAttribute {
+  key: string;
+  /** Defaults to `"string"`. */
+  type?: "string" | "number" | "boolean";
+  /** A fence that leaves it out is reported. */
+  required?: boolean;
+  /** The only values a `string` attribute takes. */
+  options?: string[];
+  /** A regular expression the value must contain a match of; anchor it with `^…$` to hold the whole value. */
+  pattern?: string;
+  /** What the warning says when `pattern` does not match; optional. */
+  pattern_message?: string;
 }
 /**
  * `contributes.listing_styles[id]`: a way of listing a folder that the
@@ -574,6 +629,12 @@ interface CopyPart {
   text: string;
   links: string[];
 }
+/** A picture for the channel to upload with a plain-text copy. @category Copies */
+interface CopyPicture {
+  /** Absolute source address of the picture's bytes. */
+  url: string;
+  alt: string;
+}
 /** A copy's id and address on its network. @category Copies */
 interface CopyRef {
   id: string;
@@ -600,9 +661,15 @@ interface CopyJob {
     date?: string | null;
     tags?: string[];
   };
-  /** Absent for a delete, whose page is gone. */
+  /** Payload fields may be absent for a delete or a lookup whose copy no longer fits. */
   form?: "short" | "thread" | "long" | "teaser" | "handoff";
   parts?: CopyPart[];
+  /** Upload attachments for plain copies. Long articles own images in HTML, with no duplicate attachments. */
+  pictures?: CopyPicture[];
+  /** Included HTML image occurrences for long articles; attachment entries for other forms. */
+  included_pictures?: number;
+  /** Pictures omitted by the channel's image limit. */
+  omitted_pictures?: number;
   teaser?: {
     title: string;
     description: string;
@@ -2426,4 +2493,4 @@ declare function showToast(options: ToastOptions | string): Promise<void>;
  */
 declare function dismissToast(id: string): Promise<void>;
 //#endregion
-export { AddressKind, AdvisoryAction, AdvisoryAppOp, AdvisoryProposal, AdvisoryScope, AdvisorySeverity, ArchType, ArticleInfo, ArtifactSource, BaseContext, BrowserCloseReason, BrowserHandle, CompleteMessage, ConfigureDomainContext, Cookie, CopyJob, CopyOutcome, CopyPart, CopyRef, DeployAddress, DeployContext, DeploymentInfo, DerivationContribution, DnsRecord, DnsTarget, DownloadOptions, DownloadResult, ErrorMessage, EscapeSpec, ExecuteOptions, ExecuteResult, FetchOptions, FetchResult, FieldDeclaration, GetOptions, HookResult, HookToast, KeyAlgorithm, KeyInfo, LegacySetupVerdict, ListingContext, ListingResult, ListingStyleContribution, LogMessage, MultipartFilePart, MultipartPostOptions, MultipartTextField, OSType, PageRecord, PlatformInfo, PlatformKey, PluginCategory, PluginHook, PluginManifest, PluginMessage, PostOptions, ProcessContext, ProgressMessage, ProjectFileEntry, ProjectInfo, SetupBlocker, SetupContext, SetupField, SetupForm, SetupVerdict, SiteFileInfo, SocialArticleData, SocialComment, SocialDataFile, StartTaskOptions, SyndicateContext, TOAST_DISMISS_EVENT, TOAST_EVENT, TOAST_UPDATE_EVENT, TaskHandle, TauriCore, ToastAction, ToastOptions, ToastType, ToastVariant, TriggerContext, clearPluginCookies, closeBrowser, dismissToast, downloadAsset, emitEvent, executeBinary, fetchUrl, fileExists, getKey, getPlatformInfo, getPluginCookie, getPluginEnvVar, getSecret, getTauriCore, htmlToMarkdown, httpGet, httpPost, httpPostMultipart, listFiles, listKeys, listProjectTree, listSiteFilesWithSizes, onEvent, openBrowser, openBrowserWithHtml, openSystemBrowser, pluginFileExists, readFile, readPluginFile, readSiteFile, rejectSecret, reportError, reportProgress, returnToEditor, sendMessage, setMessageContext, setPluginCookie, setSecret, showBrowserForm, showToast, signWithKey, startTask, writeFile, writeFileBinary, writePluginFile };
+export { AddressKind, AdvisoryAction, AdvisoryAppOp, AdvisoryProposal, AdvisoryScope, AdvisorySeverity, ArchType, ArticleInfo, ArtifactSource, BaseContext, BlockAttribute, BlockContribution, BrowserCloseReason, BrowserHandle, CompleteMessage, ConfigureDomainContext, Cookie, CopyJob, CopyOutcome, CopyPart, CopyPicture, CopyRef, DeployAddress, DeployContext, DeploymentInfo, DerivationContribution, DnsRecord, DnsTarget, DownloadOptions, DownloadResult, ErrorMessage, EscapeSpec, ExecuteOptions, ExecuteResult, FetchOptions, FetchResult, FieldDeclaration, GetOptions, HookResult, HookToast, KeyAlgorithm, KeyInfo, LegacySetupVerdict, ListingContext, ListingResult, ListingStyleContribution, LogMessage, MultipartFilePart, MultipartPostOptions, MultipartTextField, OSType, PageRecord, PlatformInfo, PlatformKey, PluginCategory, PluginHook, PluginManifest, PluginMessage, PostOptions, ProcessContext, ProgressMessage, ProjectFileEntry, ProjectInfo, PublicDataContribution, SetupBlocker, SetupContext, SetupField, SetupForm, SetupVerdict, SiteFileInfo, SocialArticleData, SocialComment, SocialDataFile, StartTaskOptions, SyndicateContext, TOAST_DISMISS_EVENT, TOAST_EVENT, TOAST_UPDATE_EVENT, TaskHandle, TauriCore, ToastAction, ToastOptions, ToastType, ToastVariant, TriggerContext, clearPluginCookies, closeBrowser, dismissToast, downloadAsset, emitEvent, executeBinary, fetchUrl, fileExists, getKey, getPlatformInfo, getPluginCookie, getPluginEnvVar, getSecret, getTauriCore, htmlToMarkdown, httpGet, httpPost, httpPostMultipart, listFiles, listKeys, listProjectTree, listSiteFilesWithSizes, onEvent, openBrowser, openBrowserWithHtml, openSystemBrowser, pluginFileExists, readFile, readPluginFile, readSiteFile, rejectSecret, reportError, reportProgress, returnToEditor, sendMessage, setMessageContext, setPluginCookie, setSecret, showBrowserForm, showToast, signWithKey, startTask, writeFile, writeFileBinary, writePluginFile };

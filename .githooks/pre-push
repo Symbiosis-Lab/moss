@@ -17,5 +17,14 @@ node scripts/ratchet.mjs check || exit 1
 # The architecture diagrams name only crates, paths and items that exist. Needs
 # pele from node_modules; skipped without it.
 if [ -d node_modules/pele ]; then
-  exec node scripts/gen-architecture-diagrams.mjs --check
+  node scripts/gen-architecture-diagrams.mjs --check || exit 1
+fi
+
+# The reference pages under site/docs/ are generated from `moss describe`.
+# Checked against the CLI built in this checkout, so skipped where none is
+# built; a binary older than the tree reports stale pages that are not, and
+# the fix is to rebuild it (bash scripts/build-moss-cli.sh).
+moss_bin="${MOSS_BIN:-target/debug/moss-cli}"
+if [ -x "$moss_bin" ]; then
+  MOSS_BIN="$moss_bin" node scripts/sync-reference.mjs --check || exit 1
 fi

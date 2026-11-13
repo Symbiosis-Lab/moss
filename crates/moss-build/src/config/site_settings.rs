@@ -7,7 +7,7 @@ use moss_core::contract::describe::SiteSettingInfo;
 use crate::infra::edit_distance::levenshtein;
 
 /// Read but not listed: `heading_anchors = false` still turns the marks off,
-/// and `domain` is read as `url` in a folder written before `url` existed.
+/// `domain` is read as `url` in a folder written before `url` existed.
 pub(crate) const UNLISTED_SITE_KEYS: [&str; 2] = ["domain", "heading_anchors"];
 
 /// `[site]` table in `.moss/config.toml` — one entry per key the build reads

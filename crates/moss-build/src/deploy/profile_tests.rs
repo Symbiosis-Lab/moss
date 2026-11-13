@@ -137,7 +137,7 @@ async fn deploy_profile_refusal_records_once_without_error_text() {
     };
     // The CLI scope and the inner publish must share a single append.
     let result = record(folder, "seta", false, push::push_site_inner(&sealed, &cx)).await;
-    assert!(result.unwrap_err().contains("private-note.md"));
+    assert!(result.unwrap_err().to_string().contains("private-note.md"));
     let rows = records(folder);
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["kind"], "deploy");

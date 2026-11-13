@@ -373,6 +373,11 @@ impl ServedPath {
         Ok(ServedPath(format!("assets/favicon.{}", ext)))
     }
 
+    /// A PNG made from the site's favicon at `size` pixels.
+    pub fn for_favicon_raster(size: u32) -> Self {
+        ServedPath(format!("assets/favicon-{size}.png"))
+    }
+
     /// Sitemap. Path is fixed.
     pub fn for_sitemap() -> Self {
         ServedPath("sitemap.xml".to_string())
@@ -411,10 +416,26 @@ impl ServedPath {
         out.strip_suffix(".html").map(|stem| ServedPath(format!("{stem}.ics")))
     }
 
+    /// A script or stylesheet a plugin block loads. The manifest check keeps
+    /// `path` inside the plugin's folder.
+    pub fn for_plugin_asset(plugin: &str, path: &str) -> Self {
+        ServedPath(format!("_moss/plugins/{plugin}/{path}"))
+    }
+
+    /// The settings a plugin publishes for its elements to read.
+    pub fn for_extension_data(plugin: &str) -> Self {
+        ServedPath(format!("_moss/extensions/{plugin}.json"))
+    }
+
     /// The site's public description of its request forms, at a fixed,
     /// unhashed address so a form service can fetch it by the site's URL.
     pub fn for_commerce_json() -> Self {
         ServedPath(crate::build::emit::commerce::COMMERCE_PATH.to_string())
+    }
+
+    /// Membership admission at its stable address beside commerce settings.
+    pub fn for_members_json() -> Self {
+        ServedPath(crate::build::emit::members::MEMBERS_PATH.to_string())
     }
 
     /// The welcome email of one language tree, read by the hosting server
@@ -455,6 +476,17 @@ impl ServedPath {
     /// robots.txt. Path is fixed.
     pub fn for_robots_txt() -> Self {
         ServedPath("robots.txt".to_string())
+    }
+
+    /// The site's web app manifest. A published address: other software stores it.
+    pub fn for_web_manifest() -> Self {
+        ServedPath("manifest.webmanifest".to_string())
+    }
+
+    /// The site's resolved colour and font tokens, read by moss's own services.
+    /// Under `_moss/`, so an author's file in `assets/` never stands in for it.
+    pub fn for_site_tokens() -> Self {
+        ServedPath("_moss/tokens.json".to_string())
     }
 
     /// The TDM Reservation Protocol file. Path is fixed by the protocol.

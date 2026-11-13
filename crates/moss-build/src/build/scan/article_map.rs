@@ -126,6 +126,10 @@ pub struct ArticleMap {
     #[serde(default)]
     pub page_titles: HashMap<String, String>,
 
+    /// Rendered site names by pretty page URL, independent of content language.
+    #[serde(default)]
+    pub page_site_names: HashMap<String, String>,
+
     /// File-tree → page-tree directory rename map (e.g., `{"图片" → "image"}`).
     ///
     /// Captured here so the post-build native-slots phase — which loads this map
@@ -213,6 +217,9 @@ pub struct ArticleMap {
     /// the edition a page is in.
     #[serde(default)]
     pub editions: moss_core::home::Editions,
+    /// The language each page rendered with, including inferred and filename languages.
+    #[serde(default)]
+    pub page_languages: HashMap<String, String>,
 }
 
 impl ArticleMap {
@@ -525,6 +532,12 @@ pub fn build_article_map(
         // converts special characters (e.g. `：` → `-`, ` ` → `-`) making the
         // reconstructed path not match the actual filename on disk.
         let pretty_url = to_pretty_url(&doc.url_path);
+        if doc.hidden_from_search_engines() && doc.raw_frontmatter.contains_key("syndicate") && doc.syndicate.as_ref().is_some_and(|c| !c.is_empty()) {
+            crate::build::cli_output::log_warn_problem!(
+                "[{}] `syndicate:` names channels, but `search_engines: false` keeps a page reached only by its link from posting copies",
+                doc.source_path.as_deref().unwrap_or(&doc.url_path)
+            );
+        }
         let mut frontmatter = doc.raw_frontmatter.clone();
 
         // Resolve cover path through dir_overrides so plugins get URL-ready paths
@@ -550,7 +563,9 @@ pub fn build_article_map(
             date: doc.date.clone(),
             tags,
             uid: doc.uid.clone(),
-            syndicate: doc.syndicate.clone(),
+            // A copy posted elsewhere names the page to everyone, so a page
+            // reached only by its link posts none, whatever a folder cascades.
+            syndicate: if doc.hidden_from_search_engines() { Some(Vec::new()) } else { doc.syndicate.clone() },
             untitled: doc.untitled,
         };
         map.articles.insert(pretty_url, article_info);

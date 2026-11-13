@@ -16,12 +16,13 @@ const SECRET_MARKERS: &[&str] = &[
     "token", "secret", "password", "passwd", "api_key", "apikey", "credential", "private_key",
 ];
 
-fn is_secret_key(key: &str) -> bool {
+pub(crate) fn is_secret_key(key: &str) -> bool {
     let k = key.to_ascii_lowercase().replace('-', "_");
     SECRET_MARKERS.iter().any(|m| k.contains(m))
 }
 
-fn to_json(value: &Value) -> Json {
+/// JSON for a TOML value, secret-looking keys of nested tables left out.
+pub(crate) fn to_json(value: &Value) -> Json {
     match value {
         Value::String(s) => Json::String(s.clone()),
         Value::Integer(i) => Json::from(*i),

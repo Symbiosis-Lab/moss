@@ -421,6 +421,11 @@ fn resolve_shortcode_image_urls(
                     }
                 }
             }
+            Shortcode::Block(args) => {
+                for nested in &mut args.body {
+                    resolve_shortcode_image_urls(nested, graph, source_path, found);
+                }
+            }
             Shortcode::Subscribe(_) | Shortcode::Buttons(_) | Shortcode::Recent(_) | Shortcode::Form(_) => {}
         },
         // Container blocks: recurse so nested shortcodes (Hero inside a
@@ -839,6 +844,11 @@ where
                 }
             }
         }
+        Shortcode::Block(args) => {
+            for block in &mut args.body {
+                walk_images_in_block(block, f);
+            }
+        }
     }
 }
 
@@ -988,6 +998,11 @@ where
                 for block in cell_blocks {
                     walk_links_in_block(block, f);
                 }
+            }
+        }
+        Shortcode::Block(args) => {
+            for block in &mut args.body {
+                walk_links_in_block(block, f);
             }
         }
     }

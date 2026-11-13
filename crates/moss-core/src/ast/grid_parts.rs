@@ -14,7 +14,7 @@
 //! recognition reads exactly what emission read.
 
 use super::hooks::{collapse_tag_adjacent_newlines, escape_attr, RenderHooks};
-use super::node::{Block, Inline};
+use super::node::{lone_italic, Block, Inline};
 use super::shortcode::GridShortcode;
 use crate::inert_regions::{tag_end, VOID_ELEMENTS};
 
@@ -183,7 +183,7 @@ pub fn render_grid_parts<H: RenderHooks + ?Sized>(
     // Each cell renders into its own buffer; `Block::LinkCard` brings its own wrapping `<a>`.
     let mut cells: Vec<GridCellParts> = Vec::with_capacity(args.cells.len());
     // Scope image `sizes=` to the cell track while cells render.
-    hooks.begin_grid_cells(args.columns, args.width.as_deref());
+    hooks.begin_grid_cells(args.cell_sizes());
     for (i, cell_blocks) in args.cells.iter().enumerate() {
         let fragment = args.source.fragments.get(i);
         let mut cell_html = String::new();
@@ -419,12 +419,7 @@ pub(crate) fn quote_cell(blocks: &[Block]) -> Option<(&Block, &[Inline])> {
     let [quote @ Block::BlockQuote(_), Block::Paragraph(line)] = blocks else {
         return None;
     };
-    let blank = |i: &Inline| matches!(i, Inline::Text(s) if s.trim().is_empty());
-    let mut parts = line.iter().filter(|i| !blank(i));
-    match (parts.next(), parts.next()) {
-        (Some(Inline::Emphasis(source)), None) if !source.is_empty() => Some((quote, source)),
-        _ => None,
-    }
+    lone_italic(line).map(|source| (quote, source))
 }
 
 /// `<figure class="moss-quote">`: the quote, then its source line as the

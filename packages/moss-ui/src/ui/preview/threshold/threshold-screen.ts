@@ -227,7 +227,7 @@ function makeRootConfirmTemplate(prompt: ThresholdPrompt): string {
       )}</p>
       <div class="moss-threshold__actions">
         <button type="button" class="moss-btn moss-btn-secondary" data-threshold-back>${escapeHtml(
-          t('threshold.back'),
+          t('action.go_back'),
         )}</button>
         <button type="button" class="moss-btn moss-btn-primary" data-threshold-confirm>${escapeHtml(
           t('threshold.make_root_confirm'),

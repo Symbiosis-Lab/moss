@@ -34,7 +34,7 @@ optional domain?: string;
 optional entry?: string;
 ```
 
-Omit only for a plugin that declares nothing but `contributes.derivations`.
+Omit only for a plugin that declares nothing but `contributes.derivations`, `contributes.blocks` or `contributes.public_data`.
 
 ***
 

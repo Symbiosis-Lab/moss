@@ -99,6 +99,34 @@ fn a_build_does_not_start_while_its_sources_are_stuck_in_the_cloud() {
     assert!(err.contains("then run `moss build` again"), "{err}");
 }
 
+/// A `home: true` page still in the cloud is no home to the election, so a
+/// build that went ahead would leave out the members cascade it declares and
+/// write its folder's pages whole. `moss build` does not start until it is on
+/// disk, and exits 1 naming it when the provider stops delivering.
+#[test]
+fn a_build_does_not_start_while_a_home_the_election_cannot_see_is_in_the_cloud() {
+    let tmp = tempfile::tempdir().unwrap();
+    let site = tmp.path().join("Library/CloudStorage/GoogleDrive-a@example.com/My Drive/site");
+    std::fs::create_dir_all(site.join("letters")).unwrap();
+    std::fs::write(site.join("index.md"), "# Home").unwrap();
+    std::fs::write(site.join("letters/start.md"), "---\nhome: true\ncascade: {members: subscribers}\n---\nStart").unwrap();
+    std::fs::write(site.join("letters/first.md"), "First letter").unwrap();
+    let _in_cloud = icloud::pretend::evicted(&site.join("letters/start.md"));
+    let stuck = || {
+        let pool = Prefetcher::with_materializer(
+            3,
+            Arc::new(|_| Err(std::io::Error::from_raw_os_error(libc::ETIMEDOUT))),
+            false,
+        );
+        Wait::with(pool, icloud::is_still_in_the_cloud, Duration::from_millis(200), Duration::from_millis(10))
+    };
+
+    let err = require_sources_local(&site, &stuck, &mut |_| {}).expect_err("the build must be refused");
+
+    assert!(err.contains("not delivering 1 of 1 cloud-only files"), "{err}");
+    assert!(err.contains("start.md"), "{err}");
+}
+
 #[test]
 fn a_build_of_a_local_folder_asks_for_no_pool() {
     let tmp = tempfile::tempdir().unwrap();

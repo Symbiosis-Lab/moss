@@ -114,13 +114,13 @@ pub trait RenderHooks {
     /// Scope marker: the Grid arm of [`render_shortcode`]'s default impl
     /// calls this before rendering cell blocks (and [`end_grid_cells`]
     /// after), so an impl can scope image `sizes=` emission to the grid
-    /// CELL width instead of the content column — see
-    /// [`crate::contract::sizes::sizes_for_grid_cell`]. Calls nest for
+    /// CELL width instead of the content column: `cell_sizes` is the grid's
+    /// [`GridShortcode::cell_sizes`](super::shortcode::GridShortcode::cell_sizes). Calls nest for
     /// grids inside grid cells (inner-most wins).
     ///
     /// Default: no-op. [`DefaultHooks`] keeps a stack.
-    fn begin_grid_cells(&self, columns: u32, data_width: Option<&str>) {
-        let _ = (columns, data_width);
+    fn begin_grid_cells(&self, cell_sizes: String) {
+        let _ = cell_sizes;
     }
 
     /// Close the scope opened by [`begin_grid_cells`]. Default: no-op.
@@ -595,6 +595,7 @@ pub trait RenderHooks {
                 }
                 out.push_str("</section>");
             }
+            Shortcode::Block(args) => super::render::render_plugin_block(self, out, args),
             Shortcode::Grid(args) => {
                 // ONE grid byte shape: the flat form is the split form
                 // re-assembled. See [`RenderHooks::render_grid_parts`].
@@ -983,12 +984,8 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
         }
     }
 
-    fn begin_grid_cells(&self, columns: u32, data_width: Option<&str>) {
-        self.grid_cell_sizes
-            .borrow_mut()
-            .push(crate::contract::sizes::sizes_for_grid_cell(
-                columns, data_width,
-            ));
+    fn begin_grid_cells(&self, cell_sizes: String) {
+        self.grid_cell_sizes.borrow_mut().push(cell_sizes);
     }
 
     fn end_grid_cells(&self) {
@@ -2319,7 +2316,7 @@ mod tests {
 
         // Three columns in the content column, so each cell gets a third of
         // that band — NOT the whole column.
-        let cell_sizes = "auto, calc(min(47.25rem, 100vw) / 3)";
+        let cell_sizes = "auto, (min-width: 48rem) calc(min(47.25rem, 100vw) / 3), 100vw";
         assert!(
             in_hero.contains(&format!(r#"sizes="{cell_sizes}""#)),
             "grid cell inside a hero overlay must scope sizes= to the cell; got: {in_hero}"
@@ -2336,6 +2333,7 @@ mod tests {
         let sc = Shortcode::Subscribe(SubscribeShortcode {
             placeholder: None,
             button: None,
+            members: None,
         });
         let mut out = String::new();
         let hooks = DefaultHooks::new();
@@ -2488,7 +2486,7 @@ mod tests {
         let mut out = String::new();
         hooks.render_shortcode(&mut out, &grid, None);
         assert!(
-            out.contains(r#"sizes="auto, calc(min(1200px, 100vw) / 3)""#),
+            out.contains(r#"sizes="auto, (min-width: 48rem) calc(min(1200px, 100vw) / 3), 100vw""#),
             "a widthless figure in a 3-col page grid declares the cell track; got: {out}"
         );
 

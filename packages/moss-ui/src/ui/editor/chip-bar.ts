@@ -6,6 +6,7 @@
 import type { ContentSchema, FieldDefinition, WikilinkCompletion } from '@symbiosis-lab/moss-ui';
 import type { PageFacts } from '@symbiosis-lab/moss-ui';
 import { openOverlay, type OverlayHandle } from './overlay';
+import { buildEventTimeEditor } from './event-time-editor';
 import { attachTermSuggestions, followTermChip, refreshVaultTerms } from './chip-term-nav';
 import { fromNameList, toNameList } from "../utils/name-list";
 import { joinCtxGroups, openCtxMenu, type CtxMenuEntry } from "../shared/ui/ctx-menu";
@@ -713,7 +714,7 @@ export class ChipBar {
       `.chip[data-key="${CSS.escape(fieldName)}"]`,
     ) as HTMLElement | null;
     const def = this.schema.frontmatter.fields[fieldName] ?? null;
-    const widget = def?.widget ?? this.inferWidget(this.store.getValues()[fieldName]);
+    const widget = this.widgetFor(def, this.store.getValues()[fieldName]);
     if (!chip) {
       if (!def || widget !== 'checkbox') return;
       this.beginProvisionalAdd({ key: fieldName, def, value: undefined }, widget, seed);
@@ -1122,8 +1123,8 @@ export class ChipBar {
     c.dataset.key = key;
     if (provisional) c.classList.add('chip--provisional');
     const widget = provisional
-      ? (this.provisional?.widget ?? def?.widget ?? this.inferWidget(value))
-      : (def?.widget ?? this.inferWidget(value));
+      ? (this.provisional?.widget ?? this.widgetFor(def, value))
+      : this.widgetFor(def, value);
 
     // Boolean chip: toggle on click; a provisional ghost's first click commits its preview.
     if (widget === 'checkbox') {
@@ -1427,7 +1428,7 @@ export class ChipBar {
     if (!entry) return;
     const def = this.schema.frontmatter.fields[key] ?? null;
     const value = this.store.getValues()[key];
-    const widget = def?.widget ?? this.inferWidget(value);
+    const widget = this.widgetFor(def, value);
     // Boolean chips re-render via renderChips on toggle (no popover path).
     // Union chips go through the popover path and CAN repaint here.
     if (widget === 'checkbox') return;
@@ -1529,9 +1530,10 @@ export class ChipBar {
         // A provisional date opens with today prefilled as the picker's
         // SUGGESTION — committed on accept (change/Enter) only, never
         // written by merely opening the popover.
-        if (this.provisional?.key === key && value === undefined && widget === 'date-picker') {
-          value = this.defaultValueForWidget('date-picker', def);
-        }
+        const suggestion = this.provisional?.key === key && value === undefined
+          ? this.defaultValueForWidget('date-picker', def)
+          : undefined;
+        if (widget === 'date-picker') value ??= suggestion;
 
         if (widget === 'union') {
           this.buildUnionEditor(root, key, def, value);
@@ -1539,6 +1541,17 @@ export class ChipBar {
           this.buildTagEditor(root, key, toNameList(value), def);
         } else if (widget === 'file-picker') {
           this.buildFilePickerEditor(root, key, value, def);
+        } else if (widget === 'event-time') {
+          root.appendChild(buildEventTimeEditor({
+            stored: value,
+            suggestion,
+            label: chipLabel(key),
+            commit: (v) => {
+              this.commitField(key, v, { immediate: true });
+              this.repaintChipValue(key);
+            },
+            close: () => this.closePop(),
+          }));
         } else {
           this.buildSimpleEditor(root, key, widget, def, value);
         }
@@ -2293,7 +2306,7 @@ export class ChipBar {
           }
 
           for (const f of this.hiddenFields) {
-            const widget = f.def?.widget ?? this.inferWidget(f.value);
+            const widget = this.widgetFor(f.def, f.value);
             const row = document.createElement('div');
             row.className = 'orow';
             row.id = `omenu-row-${MENU_ROW_SEQ++}`;
@@ -2367,7 +2380,7 @@ export class ChipBar {
               listContainer.appendChild(ghdr);
 
               for (const f of filtered) {
-                const widget = f.def?.widget ?? 'text-input';
+                const widget = this.widgetFor(f.def, undefined);
                 const row = document.createElement('div');
                 row.className = 'orow orow-add';
                 row.id = `omenu-row-${MENU_ROW_SEQ++}`;
@@ -2662,7 +2675,11 @@ export class ChipBar {
 
   // ── Helpers ─────────────────────────────────────────────────────────
 
-  private inferWidget(value: unknown): string {
+  /** The editor a field opens: the schema's, else one read off the value. */
+  private widgetFor(def: FieldDefinition | null, value: unknown): string {
+    // A date with an optional time has no widget of its own in the schema.
+    if (def?.format === 'event-time') return 'event-time';
+    if (def?.widget) return def.widget;
     if (typeof value === 'boolean') return 'checkbox';
     if (typeof value === 'number') return 'number-input';
     if (Array.isArray(value)) return 'tag-input';

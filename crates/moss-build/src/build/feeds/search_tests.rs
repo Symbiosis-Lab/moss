@@ -450,3 +450,29 @@ fn pages_reach_the_index_in_composed_name_order() {
     let order: Vec<String> = pages.iter().map(|p| p.rel_path.nfc().collect()).collect();
     assert_eq!(order, ["f.html", "\u{e9}clair.html", "\u{e9}t\u{e9}.html"]);
 }
+
+/// A page that asks to stay out of search is left out of the site's own
+/// search too: a moss page by the body marker its own `noindex` comes with, a
+/// raw page by its `noindex`. A moss page whose `noindex` is the site-wide
+/// switch alone stays searchable.
+#[test]
+fn pages_that_ask_to_stay_out_of_search_are_not_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let moss = |robots: &str, body: &str| format!(
+        "<!DOCTYPE html>\n<html data-moss-html-version=\"1\" lang=\"en\">\n<head>{robots}</head>\n<body{body} data-path=\"/\"><p>text</p></body></html>"
+    );
+    let noindex = r#"<meta name="robots" content="noindex">"#;
+    let pages = [
+        ("site-switch.html", moss(noindex, "")),
+        ("by-link.html", moss(noindex, r#" data-pagefind-ignore="all""#)),
+        ("raw-hidden.html", format!("<html><head>{noindex}</head><body>raw</body></html>")),
+        ("raw.html", "<html><head></head><body>raw</body></html>".to_string()),
+    ];
+    for (name, html) in &pages {
+        std::fs::write(dir.path().join(name), html).unwrap();
+    }
+    let read = read_pages(dir.path());
+    let names: Vec<&str> = read.pages.iter().map(|p| p.rel_path.as_str()).collect();
+    assert_eq!(names, ["raw.html", "site-switch.html"]);
+    assert_eq!(read.left_out, 2);
+}

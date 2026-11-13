@@ -433,8 +433,9 @@ pub(crate) fn apply_collection_cards(plan: &mut BodyPlan, index: &BuildIndex<'_>
             !link.external()
                 && picked_card_props(&link, index).is_some_and(|p| p.cover.is_some())
         });
+        let cell_sizes = Some(grid.cell_sizes.as_str());
         for cell in &mut grid.cells {
-            if let Some((html, has_cover)) = card_markup(cell, index, &mut eager_spent, list_has_covers) {
+            if let Some((html, has_cover)) = card_markup(cell, index, &mut eager_spent, list_has_covers, cell_sizes) {
                 cell.replace(html, has_cover);
             }
         }
@@ -516,6 +517,7 @@ fn card_markup(
     index: &BuildIndex<'_>,
     eager_spent: &mut bool,
     list_has_covers: bool,
+    cell_sizes: Option<&str>,
 ) -> Option<(String, bool)> {
     let GridCell::Link(link) = classify_cell(&cell.blocks) else {
         return None;
@@ -538,6 +540,7 @@ fn card_markup(
         index.media_lookup,
         eager,
         list_has_covers,
+        cell_sizes,
     );
     Some((html, props.cover.is_some()))
 }
@@ -603,8 +606,9 @@ pub(crate) fn apply_link_previews(
     link_meta: Option<&HashMap<String, LinkMeta>>,
 ) {
     for grid in grids_mut(plan) {
+        let cell_sizes = Some(grid.cell_sizes.as_str());
         for cell in &mut grid.cells {
-            if let Some((html, has_cover)) = external_card_markup(cell, index, link_meta) {
+            if let Some((html, has_cover)) = external_card_markup(cell, index, link_meta, cell_sizes) {
                 cell.replace(html, has_cover);
             }
         }
@@ -615,6 +619,7 @@ fn external_card_markup(
     cell: &GridCellEmission,
     index: &BuildIndex<'_>,
     link_meta: Option<&HashMap<String, LinkMeta>>,
+    cell_sizes: Option<&str>,
 ) -> Option<(String, bool)> {
     let GridCell::Link(link) = classify_cell(&cell.blocks) else {
         return None;
@@ -663,9 +668,10 @@ fn external_card_markup(
                 true,
                 index.media_lookup,
                 false,
+                cell_sizes,
             )
         }
-        None => remote_cover_html(link_meta.and_then(|m| m.get(link.href)), &title).unwrap_or_else(|| {
+        None => remote_cover_html(link_meta.and_then(|m| m.get(link.href)), &title, cell_sizes).unwrap_or_else(|| {
             has_cover = false;
             r#"<div class="moss-card-cover moss-card-no-cover"></div>"#.to_string()
         }),
@@ -693,7 +699,7 @@ fn external_card_markup(
 /// build's pre-render pass (`materialize_remote_covers`) runs before ANY
 /// page renders and writes this field back to the SAME cache this reads,
 /// clearing it whenever materialization fails and no prior file survives.
-fn remote_cover_html(meta: Option<&LinkMeta>, alt: &str) -> Option<String> {
+fn remote_cover_html(meta: Option<&LinkMeta>, alt: &str, cell_sizes: Option<&str>) -> Option<String> {
     let meta = meta?;
     let served_path = meta.cover_served_path.clone()?;
     // The cache stores `ServedPath::as_str()` for filesystem joins and
@@ -727,20 +733,21 @@ fn remote_cover_html(meta: Option<&LinkMeta>, alt: &str) -> Option<String> {
         true,
         Some(&lookup),
         false,
+        cell_sizes,
     ))
 }
 
 fn grids(plan: &BodyPlan) -> impl Iterator<Item = &GridEmission> {
     plan.segments.iter().filter_map(|s| match s {
         BodySegment::Grid(g) => Some(g),
-        BodySegment::Html(_) | BodySegment::Subscribe(_) => None,
+        BodySegment::Html(_) | BodySegment::Subscribe(_) | BodySegment::Section(_) => None,
     })
 }
 
 fn grids_mut(plan: &mut BodyPlan) -> impl Iterator<Item = &mut GridEmission> {
     plan.segments.iter_mut().filter_map(|s| match s {
         BodySegment::Grid(g) => Some(g),
-        BodySegment::Html(_) | BodySegment::Subscribe(_) => None,
+        BodySegment::Html(_) | BodySegment::Subscribe(_) | BodySegment::Section(_) => None,
     })
 }
 

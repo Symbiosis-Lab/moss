@@ -992,6 +992,19 @@ pub(crate) fn run_leased(
     result
 }
 
+/// `[services.booking]` as moss reads it, or nothing when an installed booking
+/// plugin owns the table; the build then says so once.
+fn core_booking(cfg: Option<&crate::config::ConfigFile>, plugins: &[crate::plugins::types::Plugin]) -> Option<Result<crate::config::services::booking::BookingService, String>> {
+    let cfg = cfg?;
+    if !crate::plugins::contributions::public_data::owns_service_table(plugins, "booking") {
+        return crate::config::services::booking::read(cfg);
+    }
+    if cfg.section(&["services", "booking"]).is_some() {
+        log::info!("[services.booking] is read by the booking plugin; moss's own booking reader is off");
+    }
+    None
+}
+
 /// Inner build function. `root` carries the folder path AND THE folder name (resolved once
 /// at the entry point by `vault::paths`), so no consumer re-derives it. Separated so the
 /// outer fn can manage DetachedRegistry state on all exit paths (both Ok and Err).
@@ -1440,6 +1453,15 @@ fn build_inner(
     // `field_decls` below, so the listing gets its own copy.
     let listing_field_decls = field_decls.clone();
     // Read site-level config from .moss/config.toml [site] section
+    let declaring_plugins = crate::plugins::discovery::plugins_declaring_for_build(!services.is_some_and(|s| s.plugins_skipped), folder_path);
+    let (public_files, withheld) = crate::plugins::contributions::public_data::project(
+        &declaring_plugins,
+        cfg.as_ref().unwrap_or(&crate::config::ConfigFile::empty()),
+        &crate::plugins::contributions::public_data::FillContext::for_folder(folder_path),
+    );
+    for sentence in withheld {
+        crate::build::cli_output::log_warn_problem!(target: "plugin", "{sentence}");
+    }
     let site_config = crate::build::render::SiteConfig {
         lang: site_lang.clone(),
         typesetting: site_str("typesetting"),
@@ -1520,7 +1542,10 @@ fn build_inner(
         term_nav: cfg.as_ref().map(|c| c.terms_nav()).unwrap_or_default(),
         field_decls,
         forms_endpoint,
-        booking: cfg.as_ref().and_then(crate::config::services::booking::read),
+        blocks: std::sync::Arc::new(crate::plugins::contributions::blocks::BlockPlan::from_plugins(&declaring_plugins)),
+        public_data: public_files,
+        booking: core_booking(cfg.as_ref(), &declaring_plugins),
+        members: cfg.as_ref().map(crate::config::services::MembersConfig::read).transpose()?.unwrap_or_default(),
         place_maps,
         incremental,
         derivations: derived.clone(),
@@ -1595,6 +1620,7 @@ fn build_inner(
             lang: &site_lang,
             folder_name: root.name_opt(),
             now: build_now,
+            members_policy: &background_ctx.members_policy,
         },
         &stage_dir,
         &mut pending,

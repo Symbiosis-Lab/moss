@@ -173,7 +173,9 @@ fn an_ordinary_hero_keeps_its_panel_unless_it_asks_to_measure() {
     let plain = page(":::hero {image=day.png align=top}\n## Hello\n:::");
     assert!(!plain.contains("data-words"), "today's heroes are unchanged: {plain}");
     let auto = page(":::hero {image=day.png align=top panel=auto}\n## Hello\n:::");
-    assert!(auto.contains(r#"data-words="narrow:dark mid:dark wide:dark""#), "{auto}");
+    assert!(auto.contains(r#"data-words="mid:dark wide:dark""#), "a stacked phone sets the words below the picture: {auto}");
+    let over = page(":::hero {image=day.png align=top mobile=overlay panel=auto}\n## Hello\n:::");
+    assert!(over.contains(r#"data-words="narrow:dark mid:dark wide:dark""#), "{over}");
 }
 
 #[test]
@@ -207,7 +209,8 @@ fn plain_ink_on_a_closing_picture_is_noted_by_layout_and_theme() {
     std::fs::write(site.root.join("day.png"), picture(SKY, GROUND, true)).unwrap();
     std::fs::write(site.root.join("night.png"), picture([20, 28, 48], [230, 235, 240], true)).unwrap();
     let logged = site.rebuild().join("\n");
-    assert!(logged.contains("panel=none") && logged.contains("the words in the light theme") && logged.contains("needs") && logged.contains("80rem wide"), "the note names the layouts with the real ratios: {logged}");
+    let note = logged.lines().find(|l| l.contains("panel=none")).unwrap_or_default();
+    assert!(note.contains("(\"The shelf is open.") && note.contains("needs 4.5:1") && note.contains("from 80rem") && note.contains("the light theme"), "the note names the widths and the theme with the worst ratio: {logged}");
 }
 
 /// The footer of a site closing on `hero` over the quiet pair, with `theme` as

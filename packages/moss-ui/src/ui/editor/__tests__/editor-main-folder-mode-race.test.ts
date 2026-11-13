@@ -131,10 +131,7 @@ vi.mock('../cm-editor', () => ({
   CmEditor: MockCmEditor,
 }));
 
-vi.mock('../file-viewer', () => ({
-  showFileViewer: vi.fn(),
-  destroyFileViewer: vi.fn(),
-}));
+vi.mock('../file-viewer');
 
 vi.mock('../tree', () => ({
   FileTree: MockFileTree,

@@ -89,13 +89,13 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-hero-max-height",
         owner: "moss-hero",
         default: "70vb",
-        description: "Cap on hero media block size on desktop (height horizontally, width under vertical typesetting). `none` removes the crop entirely rather than raising it — the image renders at its own intrinsic size instead of a taller band; to make the band taller, give this a longer length (e.g. `120vb`) instead. Note the wrapper has its own cap — `.moss-hero { max-block-size: min(80vb, 800px) }` reads the same property, so setting it once lifts both. It is also the minimum height of a `mobile=overlay` hero on a phone, so `100svh` makes that hero fill the first screen. A hero's `max-height=` option sets it on that hero. On a closing picture it is the whole height of the picture's box from 48rem, in place of the picture's own shape, and the build measures the words' ink over the part of the picture that capped box shows; a value a theme sets itself is honoured by the stylesheet but not measured. On a phone it is a closing picture's minimum height instead (with `fade=top`, at least 38rem).",
+        description: "Cap on hero media block size on desktop (height horizontally, width under vertical typesetting). `none` removes the crop entirely rather than raising it — the image renders at its own intrinsic size instead of a taller band; to make the band taller, give this a longer length (e.g. `120vb`) instead. Note the wrapper has its own cap — `.moss-hero { max-block-size: min(80vb, 800px) }` reads the same property, so setting it once lifts both. It is also the minimum height of a `mobile=overlay` hero on a phone, so `100svh` makes that hero fill the first screen. A hero's `max-height=` option sets it on that hero. On a closing picture it is the whole height of the picture's box from 48rem, in place of the picture's own shape, and the build measures the words' ink over the part of the picture that capped box shows; a value a theme sets itself is honoured by the stylesheet but not measured. On a phone it is a closing picture's minimum height instead (with `fade=top` and no cap, 38rem); the box still grows to hold the words.",
     },
     CustomProp {
         name: "--moss-hero-content-width",
         owner: "moss-hero-content",
         default: "auto",
-        description: "Width of the words block over a hero's picture, measured as its border box (the block's padding is inside it), from tablet width up (a phone stacks or full-widths it). Unset, the block is as wide as its text, so a title over a wide poster can shrink to its longest word; give it a length or a percentage of the hero (e.g. `29%`, `24rem`) to use the poster's clear area. It also replaces the block's default cap of `max(600px, 35%)`, so a wider value is not clamped. On a closing picture this sets the block's width; a title's own measure belongs on the heading, as `max-inline-size` in `ch` on the closing heading, which moss reads.",
+        description: "Width of the words block over a hero's picture, measured as its border box (the block's padding is inside it), from tablet width up (a phone stacks or full-widths it). Unset, the block is as wide as its text, so a title over a wide poster can shrink to its longest word; give it a length or a percentage of the hero (e.g. `29%`, `24rem`) to use the poster's clear area. It also replaces the block's default cap of `max(600px, 35%)`, so a wider value is not clamped. On a closing picture this sets the block's width; a title's own measure belongs on the heading, as `max-inline-size` in `ch` on the closing heading, which moss reads. The build measures the words' ink over this width when it is set in `:root`, `.moss-hero` or `.moss-hero-content` as a length or a percentage.",
     },
     CustomProp {
         name: "--moss-hero-progress",
@@ -150,6 +150,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         owner: "moss-hero-content",
         default: "rgba(20, 16, 12, 0.82)",
         description: "Backing panel behind overlay text in both overlaid hero layouts (desktop, and mobile under `mobile=overlay`), so the text stays legible wherever a drawn line, lettering or a face in the photo falls under it. moss does not set this itself: it publishes a per-render panel colour as `--item-hero-panel-bg`, tinted from the image's own scan-cached dominant colour (`color_extract::panel_background`) and engineered so the panel's WCAG contrast against the overlay text holds even in the worst case of its own translucency — composited over pure black or pure white, which bounds every actual pixel underneath. This token, when a theme sets it (on `:root` or `.moss-hero`), takes precedence over that computed colour. The flat default here only applies when neither exists (no media manifest). A pale ('light'-toned) hero reads this against a different literal fallback, `rgba(250, 248, 244, 0.82)` — same property, the other side of the dark/light text split `--moss-hero-tone-color` makes.",
+    },
+    CustomProp {
+        name: "--moss-hero-panel-feather",
+        owner: "moss-hero-content",
+        default: "2.5rem",
+        description: "How far the overlay panel's edge fades into the picture, outside the words' box, on the sides that face the picture (the picture's own edges clip the rest). The words stay on the solid panel, so the fade costs no contrast. `0px` gives the panel a hard edge (a bare `0` is not a length in the calculation). The fade copies the panel's background, so a theme that clears the panel (`background: none` on `.moss-hero-content`) gets no fade either.",
     },
     CustomProp {
         name: "--moss-hero-credit-font",
@@ -210,6 +216,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         owner: "moss-nav-island",
         default: "block",
         description: "Forces the floating nav island off from CSS, media queries included — the page then behaves as it did before this feature shipped: the masthead scrolls away and nothing replaces it. Not the main switch: the island is opt-in and ships off, so `[site].floating_nav = true` (the Settings → Services toggle) is what turns it on in the first place, and this property is for a theme that wants it off at some widths and not others. Appearance is otherwise tuned through the island's contract-registered classes; its measure already tracks `--moss-nav-width`/`--moss-content-width`, so widening the nav widens the island with it.",
+    },
+    CustomProp {
+        name: "--moss-controls-display",
+        owner: "nav-icons",
+        default: "flex",
+        description: "`none` takes away the controls (search, language links, theme toggle) that stand loose at the top of a `chrome: none` page or a site with no header, and the room the title's first line keeps for them: `body[data-chrome=\"none\"] { --moss-controls-display: none; }`. Hiding `.nav-icons` itself leaves that room empty.",
     },
     CustomProp {
         name: "--moss-sidenote-reserve",
@@ -384,6 +396,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         owner: "moss-card-pictures",
         default: "5 / 3",
         description: "Aspect ratio every picture in a summary row's strip (`pictures:N`) is cropped to. `--moss-card-cover-fit` applies to the strip too.",
+    },
+    CustomProp {
+        name: "--moss-stream-media-max",
+        owner: "moss-stream-body",
+        default: "28rem",
+        description: "Tallest a picture or video may be inside a `style:stream` listing, so a tall photograph cannot fill the column.",
     },
     CustomProp {
         name: "--moss-marquee-speed",
@@ -804,6 +822,12 @@ pub const SCOPE_ATTRS: &[ScopeAttr] = &[
         name: "cite",
         values: &[],
         description: "The address of the record a quotation comes from, set when the blockquote's last paragraph begins with an em dash and links to an `http` or `https` address (a grid quote cell takes it from its italic source line). Only the attribute is added: the markup and the source line are as before. Style the cited ones with `blockquote[cite]`.",
+    },
+    ScopeAttr {
+        selector: "body",
+        name: "data-chrome",
+        values: &["none"],
+        description: "The page's `chrome: none`: it is drawn without the site's header, floating nav island, footer and skip link. The controls (search, language, theme) stay at the top of the page and the colophon after it; a theme that wants neither sets `--moss-controls-display: none` on `body[data-chrome=\"none\"]` and hides `body[data-chrome=\"none\"] .moss-colophon`.",
     },
     ScopeAttr {
         selector: "html",

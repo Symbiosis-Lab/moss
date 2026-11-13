@@ -111,7 +111,7 @@ fn collect_targets(project_path: &str, map: &ArticleMap, scope: EditorScope) -> 
         for (i, _) in source.match_indices('/') {
             folders.insert(source[..i].to_string());
         }
-        if rel.ends_with(".md") {
+        if moss_core::source_edit::policy::is_page_path(std::path::Path::new(rel)) {
             let (url, title) = by_source
                 .get(rel)
                 .map(|(u, t)| (u.clone(), t.to_string()))

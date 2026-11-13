@@ -21,7 +21,7 @@ moss build ~/Sites/my-site
 
 All arguments pass straight through to the moss binary; see `moss --help`.
 
-`moss preview` and `moss edit` need a window, which this binary doesn't have: they hand off to [moss desktop](https://mosspub.com) if it's installed, or print a one-line hint if it isn't. On macOS, `moss desktop install` fetches and installs it for you (see `moss desktop install --help`); it always asks before downloading and never runs unattended (no terminal attached, as in CI, is treated as declining). moss desktop isn't packaged for Linux or Windows yet, so `moss desktop install` there just prints where to get it.
+`moss edit <folder>` opens the folder in [moss desktop](https://mosspub.com) when it is installed and you run it from a terminal; otherwise it serves the editor in your browser, and `moss edit <folder> --serve` asks for the browser editor outright. `moss preview` needs a window, which this binary doesn't have: it hands off to moss desktop if it's installed, or prints a one-line hint if it isn't. On macOS, `moss desktop install` fetches and installs it for you (see `moss desktop install --help`); it always asks before downloading and never runs unattended (no terminal attached, as in CI, is treated as declining). moss desktop isn't packaged for Linux or Windows yet, so `moss desktop install` there just prints where to get it.
 
 ## Checksums
 

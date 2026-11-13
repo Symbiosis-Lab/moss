@@ -37,8 +37,8 @@ const CASCADE_KEYS: &[&str] = &[
 /// Apply frontmatter cascade: parent pages push values to descendants.
 ///
 /// Documents with a `cascade` field propagate key-value pairs to all descendant
-/// documents that don't already define those keys. Shallower cascades apply first,
-/// so a root cascade is overridden by a mid-level cascade for the same key.
+/// documents that don't already define those keys. Each arm only fills a value
+/// still unset, so the deepest cascade applies first and the nearest folder wins.
 ///
 /// This runs as a pre-processing pass after all documents are parsed and before
 /// HTML generation, modifying the `Vec<ParsedDocument>` in place.
@@ -70,8 +70,8 @@ pub(crate) fn apply_cascade(docs: &mut Vec<ParsedDocument>, fields: &[moss_core:
             })
             .collect();
 
-        // Sort by depth (shallower first — fewer '/' in prefix)
-        v.sort_by_key(|(prefix, _, _)| prefix.matches('/').count());
+        // Deepest first: the first cascade to set a value keeps it.
+        v.sort_by_key(|(prefix, _, _)| std::cmp::Reverse(prefix.matches('/').count()));
         v
     };
 
@@ -144,7 +144,7 @@ fn report_cascade_values(
     fields: &[moss_core::fields::FieldDecl],
 ) {
     let page = doc.source_path.as_deref().unwrap_or(doc.url_path.as_str());
-    for key in cascade.keys().filter(|k| !CASCADE_KEYS.contains(&k.as_str()) && cascadable_field(fields, k.as_str()).is_none()) {
+    for key in cascade.keys().filter(|k| k.as_str() != "members" && !CASCADE_KEYS.contains(&k.as_str()) && cascadable_field(fields, k.as_str()).is_none()) {
         log::warn!(
             "[{page}] cascade key \"{key}\" is not a key cascade carries ({}) or a declared field; it has no effect",
             CASCADE_KEYS.join(", ")
@@ -469,61 +469,22 @@ mod tests {
     ///
     /// root cascade: children_style = "list"
     /// docs/ cascade: children_style = "summary"
-    /// → docs/page should get "summary" (deeper wins because it applies second)
+    /// The nearer folder wins for the page; docs/ itself takes its parent's.
     #[test]
     fn test_deeper_cascade_overrides_shallower() {
         let mut root = make_doc("Home", "index.html");
-        let mut root_cascade = HashMap::new();
-        root_cascade.insert(
-            "children_style".to_string(),
-            serde_yaml::to_value("list").unwrap(),
-        );
-        root.cascade = Some(root_cascade);
+        root.cascade = Some(HashMap::from([("children_style".to_string(), serde_yaml::to_value("list").unwrap())]));
 
         let mut folder = make_doc("Docs", "docs/index.html");
-        let mut folder_cascade = HashMap::new();
-        folder_cascade.insert(
-            "children_style".to_string(),
-            serde_yaml::to_value("summary").unwrap(),
-        );
-        folder.cascade = Some(folder_cascade);
+        folder.cascade = Some(HashMap::from([("children_style".to_string(), serde_yaml::to_value("summary").unwrap())]));
 
         let child = make_doc("Page", "docs/page/index.html");
 
         let mut docs = vec![root, folder, child];
         apply_cascade(&mut docs, &[]);
 
-        // Root cascade sets children_style = "list" first,
-        // then docs/ cascade tries to set "summary" but field is already Some.
-        // Wait — shallower applies first, so "list" is set first.
-        // Then deeper cascade tries to apply "summary" but child already has Some("list").
-        // This means shallower wins, which is WRONG for the desired behavior.
-        //
-        // Actually, the correct behavior for Hugo-style cascade is:
-        // shallower applies first, deeper does NOT override because the field is
-        // already set. To get the "deeper wins" behavior, we need to apply
-        // deeper (more specific) cascades first, then shallower.
-        //
-        // BUT the task description says "shallower cascades apply first" — meaning
-        // shallower sets the default, and deeper (more specific) can't override.
-        // This is consistent: the first cascade to set a value wins.
-        //
-        // Let's reconsider: Actually, "shallower first" means root sets defaults,
-        // then the docs/ cascade can't override. The child gets "list".
-        // This is the correct behavior per the task spec.
-        assert_eq!(
-            docs[2].children_style,
-            Some(moss_core::Resolved::cascade("list".to_string())),
-            "Shallower cascade applies first; child gets 'list' from root"
-        );
-
-        // The docs/ folder index itself should get root's cascade
-        // since it's a descendant of root
-        assert_eq!(
-            docs[1].children_style,
-            Some(moss_core::Resolved::cascade("list".to_string())),
-            "Docs folder index gets 'list' from root cascade"
-        );
+        assert_eq!(docs[2].children_style, Some(moss_core::Resolved::cascade("summary".to_string())));
+        assert_eq!(docs[1].children_style, Some(moss_core::Resolved::cascade("list".to_string())));
     }
 
     /// Three-level hierarchy: root → folder → subfolder.

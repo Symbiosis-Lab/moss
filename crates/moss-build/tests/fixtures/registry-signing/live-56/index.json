@@ -1,0 +1,311 @@
+{
+  "schema_version": 1,
+  "serial": 56,
+  "expires": "2026-12-01T17:15:56Z",
+  "entries": [
+    {
+      "type": "plugin",
+      "id": "bluesky",
+      "display_name": "Bluesky",
+      "version": "0.1.1",
+      "description": "Post a copy of each new post to your Bluesky account, linked back to your site",
+      "author": "Symbiosis Lab",
+      "capabilities": [],
+      "download_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/bluesky-v0.1.1/bluesky-0.1.1.zip",
+      "sha256": "047c95f6e9fa190a839c9270986530e3645cbc30001938e36d94ce0ec53fc14a",
+      "size_bytes": 4245,
+      "min_moss_version": "0.15.19",
+      "icon_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/bluesky-v0.1.1/bluesky-0.1.1-icon.svg",
+      "preview": true
+    },
+    {
+      "type": "plugin",
+      "id": "github",
+      "display_name": "GitHub",
+      "version": "1.6.3",
+      "description": "Deploy to GitHub Pages via GitHub Actions",
+      "author": "moss team",
+      "capabilities": [],
+      "download_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/github-v1.6.3/github-1.6.3.zip",
+      "sha256": "264185995434b24afb46185a5c3d2d0e31c2750a4a9698581950fd2e80f87933",
+      "size_bytes": 21092,
+      "min_moss_version": "0.11.7",
+      "requires": [
+        "execute_binary:git",
+        "execute_binary:readlink",
+        "execute_binary:rm",
+        "execute_binary:sh",
+        "execute_binary:find"
+      ],
+      "icon_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/github-v1.6.3/github-1.6.3-icon.svg",
+      "preview": true
+    },
+    {
+      "type": "plugin",
+      "id": "ipfs",
+      "display_name": "IPFS",
+      "version": "0.1.0",
+      "description": "Publish your site to IPFS (Pinata or a local Kubo node)",
+      "author": "moss team",
+      "capabilities": [
+        "deploy"
+      ],
+      "download_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/ipfs-v0.1.0/ipfs-0.1.0.zip",
+      "sha256": "f6cc47558e7ecf5d45cbb8ab83bdf2fc56e4d079944d7e270ae3e69dc3004088",
+      "size_bytes": 20451,
+      "repository": "https://github.com/Symbiosis-Lab/moss-registry",
+      "min_moss_version": "0.7.23",
+      "requires": [
+        "execute_binary:ipfs",
+        "execute_binary:sh"
+      ],
+      "icon_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/ipfs-v0.1.0/ipfs-0.1.0-icon.svg",
+      "preview": true
+    },
+    {
+      "type": "plugin",
+      "id": "linkedin",
+      "display_name": "LinkedIn",
+      "version": "0.1.1",
+      "description": "Post a copy of each new post to your LinkedIn profile, linked back to your site",
+      "author": "Symbiosis Lab",
+      "capabilities": [],
+      "download_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/linkedin-v0.1.1/linkedin-0.1.1.zip",
+      "sha256": "5bbc8685a53dc232af0dd0d538b952df105be90e33fdff6c2fae9b6ee9d8378a",
+      "size_bytes": 3532,
+      "min_moss_version": "0.15.19",
+      "icon_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/linkedin-v0.1.1/linkedin-0.1.1-icon.svg",
+      "preview": true
+    },
+    {
+      "type": "plugin",
+      "id": "mastodon",
+      "display_name": "Mastodon",
+      "version": "0.1.1",
+      "description": "Post a copy of each new post to your Mastodon account, linked back to your site",
+      "author": "Symbiosis Lab",
+      "capabilities": [],
+      "download_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/mastodon-v0.1.1/mastodon-0.1.1.zip",
+      "sha256": "2909912c2a0cc4a11f1c71cdb03ddbc51c2576357ee7917fe72203da768b57af",
+      "size_bytes": 4549,
+      "min_moss_version": "0.15.19",
+      "icon_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/mastodon-v0.1.1/mastodon-0.1.1-icon.svg",
+      "preview": true
+    },
+    {
+      "type": "plugin",
+      "id": "matters",
+      "display_name": "Matters",
+      "version": "1.6.0",
+      "description": "Post copies of your posts to Matters.town: short posts as moments, articles as drafts you publish there",
+      "author": "moss team",
+      "capabilities": [
+        "process"
+      ],
+      "download_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/matters-v1.6.0/matters-1.6.0.zip",
+      "sha256": "eaed379403bb6424d716d511fd4f6fc5a72eb7bce5b7d31127482d0fb23a4d59",
+      "size_bytes": 35498,
+      "min_moss_version": "0.15.19",
+      "icon_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/matters-v1.6.0/matters-1.6.0-icon.svg",
+      "preview": true
+    },
+    {
+      "type": "plugin",
+      "id": "onionpress",
+      "display_name": "onionpress",
+      "version": "0.4.2",
+      "description": "Publish moss sites to a self-hosted OnionPress (.onion) receiver",
+      "author": "moss team",
+      "capabilities": [
+        "deploy"
+      ],
+      "download_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/onionpress-v0.4.2/onionpress-0.4.2.zip",
+      "sha256": "0271dbfd11c3b9959eecc96db06db3bd6986bfb9d8b92d259e88733dc99a3f48",
+      "size_bytes": 14743,
+      "requires": [
+        "execute_binary:curl",
+        "execute_binary:tar",
+        "execute_binary:rm"
+      ],
+      "icon_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/onionpress-v0.4.2/onionpress-0.4.2-icon.svg",
+      "preview": true,
+      "requires_stack": true
+    },
+    {
+      "type": "plugin",
+      "id": "pdf-ocr",
+      "display_name": "PDF OCR",
+      "version": "0.2.8",
+      "description": "Shows a folder's PDFs as pages: extracts each document's text, reading scanned pages by OCR.",
+      "author": "Symbiosis Lab",
+      "capabilities": [],
+      "download_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/pdf-ocr-v0.2.8/pdf-ocr-0.2.8.zip",
+      "sha256": "13c97726ba5700399c29c39b3509c2b69a12f7b1eb4c9449e11523381393d81e",
+      "size_bytes": 1734,
+      "repository": "https://github.com/Symbiosis-Lab/moss-registry/tree/main/plugins/pdf-ocr",
+      "min_moss_version": "0.15.11",
+      "platforms": [
+        "darwin-arm64",
+        "linux-arm64",
+        "linux-x64"
+      ],
+      "preview": true
+    },
+    {
+      "type": "plugin",
+      "id": "xcom",
+      "display_name": "X",
+      "version": "0.1.1",
+      "description": "Post a copy of each new post to your X account, linked back to your site",
+      "author": "Symbiosis Lab",
+      "capabilities": [],
+      "download_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/xcom-v0.1.1/xcom-0.1.1.zip",
+      "sha256": "850086f505587aeef8a4d22bc1e029c6371c5ae4cb1a72847d753dec9dfce93b",
+      "size_bytes": 4391,
+      "min_moss_version": "0.15.19",
+      "icon_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/xcom-v0.1.1/xcom-0.1.1-icon.svg",
+      "preview": true
+    },
+    {
+      "type": "starter",
+      "id": "essays",
+      "version": "1.1.1",
+      "display_name": "Essays",
+      "description": "An essay collection.",
+      "credit": "Filled with Virginia Woolf's essays and lectures, 1904–1929.",
+      "language": "en",
+      "order": 10,
+      "min_moss_version": "0.15.4",
+      "tour": [
+        {
+          "label": "Home",
+          "path": "/"
+        },
+        {
+          "label": "An essay with footnotes",
+          "path": "/essays/15-modern-fiction/"
+        },
+        {
+          "label": "An essay with a route map",
+          "path": "/essays/28-to-spain/"
+        },
+        {
+          "label": "A talk in chapters, with previous and next",
+          "path": "/talks/a-room-of-one-s-own/01-but-you-may-say/"
+        },
+        {
+          "label": "Every place on one map",
+          "path": "/places/"
+        }
+      ],
+      "download_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/starter-essays-v1.1.1/essays-1.1.1.zip",
+      "sha256": "8616156bed655297ce640938640b3ca022720a0ad3a813225f0305036e4ebc08",
+      "size_bytes": 395544,
+      "demo_url": "https://virginia-woolf.mosspub.com/",
+      "preview_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/starter-essays-v1.1.1/essays-1.1.1-preview.zip",
+      "preview_sha256": "4a3fed0f6c3e4d19c89de34e40a45d792744c775cca588e930ce4ca1316b8dee",
+      "preview_size_bytes": 1296901,
+      "preview_moss_version": "0.15.4",
+      "poster_light_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/starter-essays-v1.1.1/essays-1.1.1-poster-light.jpg",
+      "poster_light_sha256": "f2f18516514611463c2d3571f5549eab9dbbed0fee15819712bdf2c9e73e46ea",
+      "poster_light_size_bytes": 46552,
+      "poster_dark_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/starter-essays-v1.1.1/essays-1.1.1-poster-dark.jpg",
+      "poster_dark_sha256": "7fba83cb00b7c9c8e9e569408d6db137dfeddc7bc3ac68d31171d0a0361ca76a",
+      "poster_dark_size_bytes": 45851
+    },
+    {
+      "type": "starter",
+      "id": "organisation",
+      "version": "1.1.2",
+      "display_name": "Organisation",
+      "description": "An organisation's site.",
+      "credit": "Filled with the Chautauqua Literary and Scientific Circle's own pages, 1882–1885.",
+      "language": "en",
+      "order": 20,
+      "min_moss_version": "0.15.4",
+      "tour": [
+        {
+          "label": "Home",
+          "path": "/"
+        },
+        {
+          "label": "A course of reading, with previous and next",
+          "path": "/course-of-reading/01-october-1884/"
+        },
+        {
+          "label": "A calendar of days",
+          "path": "/calendar/"
+        },
+        {
+          "label": "A day with its own map",
+          "path": "/calendar/recognition-day-1882/"
+        },
+        {
+          "label": "Local circles across the country",
+          "path": "/places/"
+        }
+      ],
+      "download_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/starter-organisation-v1.1.2/organisation-1.1.2.zip",
+      "sha256": "5cbead0a99e9bc11864de5ea24f630a89ee5ea725e0500121571481c37f5bb46",
+      "size_bytes": 3393740,
+      "demo_url": "https://chautauqua-circle.mosspub.com/",
+      "preview_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/starter-organisation-v1.1.2/organisation-1.1.2-preview.zip",
+      "preview_sha256": "fc585e5798480c43ddd7963551de92227c878e91516daa8cd65ce25d9adf056f",
+      "preview_size_bytes": 5416827,
+      "preview_moss_version": "0.15.4",
+      "poster_light_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/starter-organisation-v1.1.2/organisation-1.1.2-poster-light.jpg",
+      "poster_light_sha256": "3a7dc79c1ccbdb086c6693c73a95190b35f4adb9591cd4bf05ed8b8e2a05d465",
+      "poster_light_size_bytes": 323968,
+      "poster_dark_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/starter-organisation-v1.1.2/organisation-1.1.2-poster-dark.jpg",
+      "poster_dark_sha256": "94f68eb9424abb4fbcfb8593e3b10a3319052127155f69edd92991ed11128a56",
+      "poster_dark_size_bytes": 329917
+    },
+    {
+      "type": "starter",
+      "id": "vertical",
+      "version": "1.1.2",
+      "display_name": "Vertical",
+      "description": "A vertical Chinese site.",
+      "credit": "Filled with the works and words of 八大山人 (Zhu Da, 1626–1705).",
+      "language": "zh-Hant",
+      "order": 30,
+      "min_moss_version": "0.15.4",
+      "tour": [
+        {
+          "label": "Home",
+          "path": "/"
+        },
+        {
+          "label": "Paintings",
+          "path": "/%E7%95%AB/"
+        },
+        {
+          "label": "A painting",
+          "path": "/%E7%95%AB/%E9%9B%99%E9%B7%B9%E5%9C%96/"
+        },
+        {
+          "label": "A letter in a series, with previous and next",
+          "path": "/%E6%96%87/%E8%87%B4%E6%96%B9%E5%A3%AB%E7%90%AF%E5%8D%81%E4%B8%89%E6%9C%AD/%E5%B0%88%E4%BD%BF%E4%BF%83%E9%A7%95/"
+        },
+        {
+          "label": "Chronology",
+          "path": "/%E5%B9%B4%E8%A1%A8/"
+        }
+      ],
+      "download_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/starter-vertical-v1.1.2/vertical-1.1.2.zip",
+      "sha256": "07c913edba45dcc11de89f5648326016e9a9297d36f8691419762271b80761ec",
+      "size_bytes": 5122693,
+      "demo_url": "https://zhudasnotebook.com/",
+      "preview_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/starter-vertical-v1.1.2/vertical-1.1.2-preview.zip",
+      "preview_sha256": "2b0a4fad8a926b37b19d688ad92e155d11dc99c53643b7ce861555317ce32e2c",
+      "preview_size_bytes": 7618097,
+      "preview_moss_version": "0.15.4",
+      "poster_light_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/starter-vertical-v1.1.2/vertical-1.1.2-poster-light.jpg",
+      "poster_light_sha256": "58901df96b4d186a892663915ff9c4ab37c073bb9773c202357206cc80017d84",
+      "poster_light_size_bytes": 100767,
+      "poster_dark_url": "https://github.com/Symbiosis-Lab/moss-registry/releases/download/starter-vertical-v1.1.2/vertical-1.1.2-poster-dark.jpg",
+      "poster_dark_sha256": "ba92390caae077d7e1686e73f0030b72140c4a0964eddef09c15bad13ed85496",
+      "poster_dark_size_bytes": 103706
+    }
+  ]
+}

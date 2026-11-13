@@ -68,6 +68,39 @@ fn place_is_a_place_field_unless_another_kind_lists_location() {
 }
 
 #[test]
+fn a_built_in_table_without_fields_keeps_its_built_in_field() {
+    let (config, warnings) = crate::page::site_config::parse_config("[terms.tags]\nline = true\n");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let kinds = config.terms_kinds();
+    let tags = kinds.iter().find(|k| k.key == TAGS_NS).expect("tags kind present");
+    assert_eq!(tags.fields, ["tags"]);
+    assert_eq!(tags.line, Some(true));
+}
+
+#[test]
+fn a_table_without_fields_does_not_turn_a_disabled_built_in_back_on() {
+    let cfg = parse("[terms]\nauthor = false\n[terms.authors]\nnav = true\n");
+    let authors = cfg.iter().find(|k| k.key == AUTHOR_NS).expect("authors kind present");
+    assert!(authors.fields.is_empty(), "{:?}", authors.fields);
+}
+
+#[test]
+fn a_built_in_table_whose_fields_is_not_a_list_warns_and_is_skipped() {
+    let (config, warnings) = crate::page::site_config::parse_config("[terms.tags]\nfields = \"topic\"\nline = true\n");
+    assert_eq!(warnings, ["[terms.tags] has no `fields` array; skipping"]);
+    let kinds = config.terms_kinds();
+    let tags = kinds.iter().find(|k| k.key == TAGS_NS).expect("tags kind present");
+    assert_eq!((tags.fields.as_slice(), tags.line), (["tags".to_string()].as_slice(), None));
+}
+
+#[test]
+fn a_declared_kind_without_fields_is_still_skipped() {
+    let (config, warnings) = crate::page::site_config::parse_config("[terms.people]\nline = true\n");
+    assert_eq!(warnings, ["[terms.people] has no `fields` array; skipping"]);
+    assert!(config.terms_kinds().iter().all(|k| k.key != "people"));
+}
+
+#[test]
 fn config_shapes_preserve_term_values() {
     for text in [
         "terms.people = { fields = ['editor'], title = { en = 'People', de = 'Leute' }, count = false, cards = true }",

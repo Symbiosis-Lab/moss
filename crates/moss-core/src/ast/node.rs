@@ -188,6 +188,16 @@ pub enum Fold {
     Closed,
 }
 
+/// The id a heading's id was numbered apart from, and its place among the
+/// headings of that id in the order the page renders them (the first, which
+/// keeps the bare id, is place 0).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct HeadingNumber {
+    pub from: String,
+    pub place: usize,
+}
+
 /// A block-level AST node.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -206,6 +216,10 @@ pub enum Block {
         /// `{#id}` it is that id's slugged spelling, which `[[Page#id]]` emits.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         legacy_id: Option<String>,
+        /// Set when the parser added a `-N` to tell this id from an earlier
+        /// heading's: `posts` and 1 for `posts-1`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        numbered_from: Option<HeadingNumber>,
         /// The heading was written `## Title {contents=end}`: it opens the part
         /// of the page after the main sections.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -523,6 +537,7 @@ mod tests {
             children: vec![text("Hello")],
             id: Some("hello".to_string()),
             legacy_id: None,
+            numbered_from: None,
             contents_end: false,
             contents_label: None,
         };
@@ -773,6 +788,7 @@ mod tests {
             children: vec![Inline::Text("Setup".to_string())],
             id: Some("setup".to_string()),
             legacy_id: None,
+            numbered_from: None,
             contents_end: false,
             contents_label: None,
         };
@@ -905,6 +921,27 @@ mod tests {
             _ => panic!("expected Link"),
         }
     }
+}
+
+/// Whether an inline is only spaces: a soft break or the gap between words.
+pub(crate) fn is_blank(inline: &Inline) -> bool {
+    matches!(inline, Inline::Text(s) if s.trim().is_empty())
+}
+
+/// The words of a line that is one italic span and nothing else.
+pub(crate) fn lone_italic(line: &[Inline]) -> Option<&[Inline]> {
+    let mut shown = line.iter().filter(|i| !is_blank(i));
+    match (shown.next(), shown.next()) {
+        (Some(Inline::Emphasis(words)), None) if !words.is_empty() => Some(words),
+        _ => None,
+    }
+}
+
+/// The picture a link wraps, when the link holds nothing else.
+pub(crate) fn linked_image(children: &[Inline]) -> Option<&Inline> {
+    let mut shown = children.iter().filter(|c| !is_blank(c));
+    let image = shown.next().filter(|i| matches!(i, Inline::Image { .. }))?;
+    shown.next().is_none().then_some(image)
 }
 
 /// Whether a paragraph's inlines are nothing but links, with only spaces or

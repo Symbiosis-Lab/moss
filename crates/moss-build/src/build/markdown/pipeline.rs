@@ -355,7 +355,7 @@ struct DeclaredFields {
 /// fingerprint too, so a field added here invalidates cached bodies without a
 /// second edit there. Every field is
 /// resolved on `SiteConfig` — see `SiteConfig::markdown`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub struct SiteMarkdown<'a> {
     /// `[site].implicit_figure`: an image alone in a paragraph with alt text
     /// renders as a captioned `<figure>`.
@@ -382,6 +382,8 @@ pub struct SiteMarkdown<'a> {
     /// `[services.forms] endpoint`, which request forms post to. `None` leaves
     /// them pending. Part of the parse cache fingerprint.
     pub forms_endpoint: Option<&'a str>,
+    /// Blocks the installed plugins declare.
+    pub blocks: Option<&'a crate::plugins::contributions::blocks::BlockPlan>,
 }
 
 /// Math, hard line breaks and heading anchors on — their absent-key answers
@@ -399,6 +401,7 @@ impl Default for SiteMarkdown<'_> {
             fields: &[],
             lang: "en",
             forms_endpoint: None,
+            blocks: None,
         }
     }
 }
@@ -455,6 +458,9 @@ impl Default for PageContext<'_> {
 }
 
 /// Processes a markdown file with frontmatter into a ParsedDocument.
+///
+/// `content` and `page.authored_source` are the page's public view
+/// (`MemberCascade::public_source`); this function never restricts them.
 ///
 /// `site_lang` is the site's default language, used as the final fallback
 /// when a document has no `lang:` frontmatter, no filename suffix, no
@@ -813,6 +819,8 @@ pub fn process_markdown_file(
     // root-absolute. Asset links already do (`pinned_url`), hence only one branch.
     let injects_into_every_page =
         crate::build::footer::targets_a_slot(file_path, frontmatter.slot.as_deref());
+    let fills_footer = injects_into_every_page
+        && frontmatter.slot.as_deref() != Some(crate::build::slots::Slot::BeforeArticleEnd.as_str());
 
     let resolve_link = |href: &str| -> String {
         // By the time hrefs reach this closure, `moss-core`'s resolve pipeline
@@ -947,6 +955,9 @@ pub fn process_markdown_file(
         ) == Some("vertical"),
         leading_image: std::cell::Cell::new(None),
         diagrams: super::diagram::PageDiagrams::new(file_path, doc_lang, Some(&note_links)),
+        page: file_path,
+        members_leads: std::cell::Cell::new(0),
+        members_lead: std::cell::Cell::new(None),
     };
 
     // 0. Parse markdown into the typed AST. Sees `:::shortcode` blocks
@@ -1030,18 +1041,24 @@ pub fn process_markdown_file(
         warning_line_offset: raw_body_offset,
         math: site.math,
         hard_line_breaks: site.hard_line_breaks,
+        blocks: site.blocks.map(|plan| &plan.names),
     };
     let mut doc = moss_core::ast::parse_with_config(&markdown_content, &parse_config);
+    let (block_assets, placement_problems) = site.blocks.map(|plan| plan.place(&mut doc)).unwrap_or_default();
     // Mirrors the `frontmatter:` warning line above: a misspelled shortcode
     // used to leave no trace but a `moss-unknown-shortcode` div in the output.
     // A page whose embeds were expanded into `content` would repeat each
     // embedded file's findings under its own name, so read them from the
     // page as authored; the embedded file reports its own.
-    let authored_doc = page.authored_source.filter(|a| *a != content).map(|a| {
+    let mut authored_doc = page.authored_source.filter(|a| *a != content).map(|a| {
         moss_core::ast::parse_with_config(&parse_ready_body(a), &parse_config)
     });
+    let placement_problems = match (site.blocks, authored_doc.as_mut()) {
+        (Some(plan), Some(authored)) => plan.place(authored).1,
+        _ => placement_problems,
+    };
     let findings = authored_doc.as_ref().unwrap_or(&doc);
-    for w in &findings.warnings {
+    for w in findings.warnings.iter().chain(&placement_problems) {
         crate::build::cli_output::cli_warn!("[{}] {}", file_path, w);
     }
     // Advisories are plain log lines, not problems: the page builds the same
@@ -1078,7 +1095,7 @@ pub fn process_markdown_file(
     let outgoing_links = resolution.outgoing;
 
     // A footer that ends in a hero closes the page with it.
-    let closes_page = injects_into_every_page && crate::build::footer::ends_in_hero(&doc);
+    let closes_page = fills_footer && crate::build::footer::ends_in_hero(&doc);
     super::hero_ink::note_forced_ink(&doc, media_lookup, file_path, closes_page);
     super::hero_ink::warn_closing_options(&doc, closes_page, file_path, &media_lookup.map(|l| l.page_ground().type_theme).unwrap_or_default());
     super::body_plan::warn_uncountable_cards(&doc, file_path);
@@ -1149,13 +1166,15 @@ pub fn process_markdown_file(
         crate::build::cli_output::log_note!("Image: {warning} — on '{file_path}'");
     }
 
-    // 5b. A footer (a slot document that is never emitted as a page) is injected
-    //    beside every page's own headings: its headings carry no id, and each
-    //    one starts a column. A `partial: true` file is a slot document too,
-    //    but only one that targets a slot is a footer.
+    // 5b. A slot document that is never emitted as a page is injected beside
+    //    other pages' own headings, so its headings carry no id. In a footer
+    //    each one also starts a column. A `partial: true` file is a slot
+    //    document too, but only one that targets a slot is injected.
     if is_slot_only && injects_into_every_page {
         moss_core::ast::clear_heading_ids(&mut doc);
-        crate::build::footer::section_footer_blocks(&mut doc, closes_page);
+        if fills_footer {
+            crate::build::footer::section_footer_blocks(&mut doc, closes_page);
+        }
     }
 
     // 5c. Which text names each `:::subscribe` input, once the footer's blocks are final.
@@ -1311,7 +1330,7 @@ pub fn process_markdown_file(
     // `url_path`, computed a few lines below.
     let is_nav_page = crate::build::components::nav::is_nav_bar_item(
         crate::build::components::nav::NavFacts { nav: frontmatter.nav, draft: frontmatter.draft == Some(true),
-            slot_only: is_slot_only, unlisted: frontmatter.listed == Some(false) },
+            slot_only: is_slot_only, unlisted: frontmatter.listed == Some(false) || frontmatter.search_engines == Some(false) },
         is_root_level,
         is_index_file && is_root_level,
         &clean_stem,
@@ -1475,6 +1494,7 @@ pub fn process_markdown_file(
     let children_in = frontmatter.children_in;
     let children_limit = frontmatter.children_limit;
     let children_more = frontmatter.children_more;
+    let children_listed = frontmatter.children_listed;
     let children_covers = frontmatter.children_covers;
     let children_when = frontmatter.children_when;
     let children_pictures = frontmatter.children_pictures.and_then(|n| {
@@ -1545,6 +1565,8 @@ pub fn process_markdown_file(
     // The plan, flattened. Consumers that only want bytes read this; the render
     // phase reads `body_plan` when it needs to know what the bytes are made of.
     let html_content = body_plan.to_html();
+    let mut lists_folders = false;
+    body_plan.for_each_html(&mut |html| lists_folders |= super::body_plan::is_folder_embed(html));
 
     // Apply the same adjustment to hero HTML (hero images also need "../" for pretty URLs)
     let hero_html = if !is_index_file {
@@ -1559,12 +1581,15 @@ pub fn process_markdown_file(
         fallback_overlay_text: hero_overlay_text.clone(),
     });
 
+    let lists_folders = lists_folders || hero_from.is_some() || hero_html.as_deref().is_some_and(super::body_plan::is_folder_embed);
+
     Ok(ParsedDocument {
         declared,
         declared_written,
         field_errors,
         placed_fields,
         title_block: frontmatter.title_block,
+        bare: frontmatter.chrome.as_deref() == Some("none"),
         reader_controls: frontmatter.reader_controls,
         card_extras: None,
         label,
@@ -1595,6 +1620,8 @@ pub fn process_markdown_file(
         is_home_override: is_index_by_home_override,
         draft,
         listed,
+        search_engines: frontmatter.search_engines,
+        hidden_home: None,
         description,
         // Byline rows are already normalized (one row per line, trimmed,
         // blanks dropped) by the field's deserializer, which shares
@@ -1617,7 +1644,7 @@ pub fn process_markdown_file(
         term_listing: None,
         term_sections: None,
         place_children: None,
-        place_line: None,
+        term_lines: Vec::new(),
         place_names: None,
         is_place_namespace_root: false,
         explorer_places_hash: None,
@@ -1637,6 +1664,7 @@ pub fn process_markdown_file(
         children_in,
         children_limit,
         children_more,
+        children_listed,
         children_covers,
         children_when,
         children_pictures,
@@ -1658,6 +1686,7 @@ pub fn process_markdown_file(
         hero_html,
         hero_from,
         body_claims_eager,
+        lists_folders,
         hero_image_url,
         body_cover_path,
         body_cover_candidates,
@@ -1667,6 +1696,7 @@ pub fn process_markdown_file(
         features: crate::build::types::PageFeatures {
             inline_subscribe: has_inline_subscribe,
             forms: has_forms,
+            block_assets,
             callouts: has_callout,
             footnotes: has_footnotes,
             scroll_rows: has_scroll_row,
@@ -1675,6 +1705,7 @@ pub fn process_markdown_file(
             viewer: has_viewer,
             field_places: has_field_places,
             diagrams: moss_core::ast::has_diagram_recursive(&doc),
+            stream: false,
         },
         slot: frontmatter.slot.clone(),
         // Reserved-name convention: `footer.md` at the project root parses
@@ -1700,6 +1731,7 @@ pub fn process_markdown_file(
         syndicate,
         untitled,
         raw_frontmatter,
+        import_feed_id: None,
         sort: frontmatter.sort.clone(),
         direct_children_sort: None,
         body_plan: Some(body_plan),
@@ -2075,6 +2107,9 @@ fn render_markdown_to_html_with_config(
         vertical: false,
         leading_image: std::cell::Cell::new(None),
         diagrams: super::diagram::PageDiagrams::new("", crate::i18n::Language::En, None),
+        page: "",
+        members_leads: std::cell::Cell::new(0),
+        members_lead: std::cell::Cell::new(None),
     };
 
     moss_core::ast::render_document(&doc, &pipeline_hooks)
@@ -2152,6 +2187,12 @@ struct PipelineHooks<'a> {
     /// fragment paths.
     leading_image: std::cell::Cell<Option<usize>>,
     diagrams: super::diagram::PageDiagrams<'a>,
+    /// The page's source path and how many members notices it has drawn,
+    /// which keep each notice's id unique where listings show many pages.
+    page: &'a str,
+    members_leads: std::cell::Cell<usize>,
+    /// The id of the notice the last subscribe form drew, for the segmented render.
+    members_lead: std::cell::Cell<Option<String>>,
 }
 
 impl<'a> PipelineHooks<'a> {
@@ -2162,14 +2203,27 @@ impl<'a> PipelineHooks<'a> {
     /// keeps the root audience. Unpublished sites (empty site_id) render the
     /// pending form, consistent with the auto-injected footer form.
     fn render_subscribe_form(&self, args: &moss_core::ast::SubscribeShortcode) -> String {
-        crate::build::features::email::render_hosted_subscribe_form(
+        use moss_core::frontmatter::members::Members;
+        let form = crate::build::features::email::render_hosted_subscribe_form(
             Some(self.site_id).filter(|s| !s.is_empty()),
             self.lang,
             "",
             args.placeholder.as_deref(),
             args.button.as_deref(),
             self.seta_base,
-        )
+        );
+        let Some(members) = args.members.filter(|m| *m != Members::Public) else {
+            self.members_lead.set(None);
+            return form;
+        };
+        // A stream listing shows many pages' notices on one page.
+        use sha2::Digest;
+        let page = sha2::Sha256::digest(self.page.as_bytes());
+        let n = self.members_leads.replace(self.members_leads.get() + 1);
+        let id = format!("moss-members-lead-{:02x}{:02x}{:02x}{:02x}-{n}", page[0], page[1], page[2], page[3]);
+        let html = crate::build::features::email::with_members_lead(&form, self.lang, members, &id);
+        self.members_lead.set(Some(id));
+        html
     }
 
     fn render_request_form(&self, form: &moss_core::ast::FormShortcode) -> String {
@@ -2187,6 +2241,12 @@ impl<'a> PipelineHooks<'a> {
         .with_gallery_link_template(crate::i18n::t(self.lang, "gallery_open_image"))
     }
 
+}
+
+impl super::body_plan::SegmentHooks for PipelineHooks<'_> {
+    fn take_members_lead(&self) -> Option<String> {
+        self.members_lead.take()
+    }
 }
 
 impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
@@ -2318,6 +2378,7 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
             moss_core::ast::Shortcode::Form(args) => {
                 out.push_str(&self.render_request_form(args));
             }
+            moss_core::ast::Shortcode::Block(args) => moss_core::ast::render_plugin_block(self, out, args),
             moss_core::ast::Shortcode::Grid(args) => {
                 // moss-core's own Grid arm, verbatim: the asset binding lives
                 // in `render_grid_parts` above, so the flat and segmented

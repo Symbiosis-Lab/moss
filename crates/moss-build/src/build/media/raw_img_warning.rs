@@ -11,8 +11,8 @@
 //!
 //! # Behavior
 //!
-//! [`detect_raw_media`] is a pure scan over markdown source that returns one
-//! [`RawMediaWarning`] per `<img>`/`<video>`/`<audio>` tag-start. Detection is
+//! [`raw_media_tags`] is a pure scan over markdown source that returns one
+//! tag per `<img>`/`<video>`/`<audio>` tag-start. Detection is
 //! case-insensitive on tag name; attributes are not inspected. Markdown image
 //! syntax (`![alt](src)`) and Obsidian-style embeds (`![[file]]`) never match,
 //! and neither does a tag inside code or an HTML comment, where it is text.
@@ -25,59 +25,8 @@
 //! Fire-and-forget: the scanner only logs; it never affects the build output.
 
 use std::path::Path;
-use std::sync::OnceLock;
 
-use regex::Regex;
-
-/// One occurrence of an author-typed raw `<img>`, `<video>` or `<audio>` tag.
-///
-/// Returned by [`detect_raw_media`] so callers (and tests) can reason about
-/// detections without coupling to the logging side effect.
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct RawMediaWarning {
-    /// Lowercase tag name: `"img"`, `"video"` or `"audio"`.
-    pub tag: String,
-    /// Byte offset of the `<` character in the source markdown.
-    pub byte_offset: usize,
-}
-
-/// Compiled once per process; cheap to reuse across every page in a build.
-fn raw_media_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        // Match `<img`, `<video` or `<audio` followed by whitespace, `>`, or
-        // `/` (self-closing). The trailing class anchors the boundary so we
-        // never match `<imgur>` or `<videos>` style identifiers as raw media
-        // tags.
-        //
-        // `audio` is here because `![[track.mp3]]` synthesizes a player
-        // (`SynthKind::Audio`), so a hand-typed `<audio>` bypasses moss for
-        // the same reason the other two do. It was omitted until 2026-08-06
-        // while the shipped authoring guidance already promised the warning
-        // for all three — the doc was right about the intent and the scanner
-        // was the one out of step.
-        Regex::new(r"(?i)<(img|video|audio)([\s/>])").expect("static raw-media regex compiles")
-    })
-}
-
-/// Scan markdown source for raw `<img>` / `<video>` / `<audio>` tag-starts. Pure: no I/O,
-/// no logging. Returns an empty vec when the markdown only uses
-/// `![alt](src)` / `![[file]]` syntax.
-pub fn detect_raw_media(markdown: &str) -> Vec<RawMediaWarning> {
-    // A tag shown as code or inside a comment is text, not media. The mask keeps every offset.
-    let live = moss_core::inert_regions::mask_inert(markdown);
-    raw_media_regex()
-        .captures_iter(&live)
-        .filter_map(|cap| {
-            let whole = cap.get(0)?;
-            let tag = cap.get(1)?;
-            Some(RawMediaWarning {
-                tag: tag.as_str().to_ascii_lowercase(),
-                byte_offset: whole.start(),
-            })
-        })
-        .collect()
-}
+use moss_core::resolve::authored_assets::raw_media_tags;
 
 /// Detect raw `<img>` / `<video>` tags in markdown source and emit one
 /// build-time `log::warn!` per occurrence. The warning names the page and
@@ -86,7 +35,7 @@ pub fn detect_raw_media(markdown: &str) -> Vec<RawMediaWarning> {
 ///
 /// Fire-and-forget; never blocks or alters the build output.
 pub fn scan_for_raw_media_warnings(markdown: &str, page_path: &Path) {
-    for w in detect_raw_media(markdown) {
+    for w in raw_media_tags(markdown) {
         log::warn!(
             "Page {}: raw <{}> tag at byte {} - moss won't enhance this (no LQIP/dims/lazy-load). \
              Use ![alt](src) or ![[file]] for moss-managed assets.",
@@ -101,105 +50,6 @@ pub fn scan_for_raw_media_warnings(markdown: &str, page_path: &Path) {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-
-    #[test]
-    fn media_tags_shown_as_code_are_not_raw_media() {
-        let md = "A live one: <img src=\"live.jpg\">\n\n\
-                  ```html\n<img src=\"fenced.jpg\">\n```\n\n\
-                  ~~~\n<video src=\"tilde.mp4\">\n~~~\n\n\
-                  Inline: `<audio src=\"inline.mp3\">`.\n\n\
-                  <!-- <img src=\"commented.jpg\"> -->\n\n\
-                  \x20   <img src=\"indented.jpg\">\n";
-        let hits = detect_raw_media(md);
-        assert_eq!(hits.len(), 1, "only the live tag is raw media: {hits:?}");
-        assert_eq!(hits[0].byte_offset, "A live one: ".len());
-    }
-
-    #[test]
-    fn media_tag_in_a_raw_html_block_is_still_raw_media() {
-        let hits = detect_raw_media("<div>\n<img src=\"block.jpg\">\n</div>\n");
-        assert_eq!(hits.len(), 1, "an HTML block is live markup, not code: {hits:?}");
-    }
-
-    #[test]
-    fn detects_raw_img_tag() {
-        let md = "some text <img src=\"x.jpg\"> more text";
-        let hits = detect_raw_media(md);
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].tag, "img");
-        assert_eq!(hits[0].byte_offset, "some text ".len());
-    }
-
-    #[test]
-    fn detects_video_tag() {
-        let md = "<video src=\"x.mp4\">";
-        let hits = detect_raw_media(md);
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].tag, "video");
-        assert_eq!(hits[0].byte_offset, 0);
-    }
-
-    /// `![[track.mp3]]` synthesizes an audio player, so a hand-typed
-    /// `<audio>` loses that enhancement exactly as a raw `<img>` loses LQIP.
-    /// The shipped authoring guidance promised a warning for all three tags
-    /// while the scanner matched only two, so a raw `<audio>` was the one
-    /// case where the documented safety net did not exist.
-    #[test]
-    fn detects_audio_tag() {
-        let md = "<audio src=\"x.mp3\" controls></audio>";
-        let hits = detect_raw_media(md);
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].tag, "audio");
-        assert_eq!(hits[0].byte_offset, 0);
-    }
-
-    #[test]
-    fn no_detection_for_markdown_image() {
-        let md = "![alt](photo.jpg) plain markdown\n![[file.png]] embed";
-        assert!(detect_raw_media(md).is_empty());
-    }
-
-    #[test]
-    fn detects_uppercase_tag() {
-        let md = "<IMG src=\"x.jpg\">";
-        let hits = detect_raw_media(md);
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].tag, "img");
-    }
-
-    #[test]
-    fn detects_self_closing_img() {
-        let md = "<img/>";
-        let hits = detect_raw_media(md);
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].tag, "img");
-    }
-
-    #[test]
-    fn detects_multiple_tags_in_one_page() {
-        let md = "<img src=\"a.jpg\"> middle <video src=\"b.mp4\"></video> <img>";
-        let hits = detect_raw_media(md);
-        assert_eq!(hits.len(), 3);
-        assert_eq!(hits[0].tag, "img");
-        assert_eq!(hits[1].tag, "video");
-        assert_eq!(hits[2].tag, "img");
-    }
-
-    #[test]
-    fn does_not_match_similar_identifiers() {
-        // `<imgur>`, `<videos>` and `<audiobook>` are not raw media tags -
-        // the boundary class (`\s`, `>`, `/`) prevents the false match.
-        let md = "<imgur>foo</imgur> <videos>bar</videos> <audiobook>baz</audiobook>";
-        assert!(detect_raw_media(md).is_empty());
-    }
-
-    #[test]
-    fn detects_tag_with_no_attributes() {
-        let md = "<img>";
-        let hits = detect_raw_media(md);
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].tag, "img");
-    }
 
     #[test]
     fn scan_does_not_panic_on_empty_input() {

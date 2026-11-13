@@ -37,38 +37,27 @@ describe("MossProcess", () => {
     child.stderr.emit("data", "host:8082\n");
     child.stderr.emit("data", "more output mentioning Access at http://localhost:8082\n");
     expect(onServerReady).toHaveBeenCalledTimes(1);
-    expect(onServerReady).toHaveBeenCalledWith({ url: "http://localhost:8082", port: 8082 });
+    expect(onServerReady).toHaveBeenCalledWith({ url: "http://localhost:8082" });
   });
 
-  it("follows a second Access at line and announces standby once in between", () => {
+  it("follows a second Access at line, and a re-scan of the same buffer repeats nothing", () => {
     const { proc, child } = makeProcess();
     const onServerReady = vi.fn();
-    const onStandby = vi.fn();
-    proc.start("/bin/moss", [], "/v", { onServerReady, onStandby });
+    proc.start("/bin/moss", [], "/v", { onServerReady });
     child.stderr.emit("data", "🌐 Preview server ready! Access at http://localhost:8081\n");
-    expect(onServerReady).toHaveBeenCalledTimes(1);
-    expect(onServerReady).toHaveBeenNthCalledWith(1, { url: "http://localhost:8081", port: 8081 });
-    expect(onStandby).not.toHaveBeenCalled();
-
-    child.stderr.emit("data", "served by desktop app (pid 4242, moss 0.12.0); standing by\n");
-    expect(onStandby).toHaveBeenCalledTimes(1);
-    // Re-scanning the same accumulated buffer must not repeat the Notice.
     child.stderr.emit("data", "Press Ctrl+C to stop the server\n");
-    expect(onStandby).toHaveBeenCalledTimes(1);
-
+    expect(onServerReady).toHaveBeenCalledTimes(1);
+    expect(onServerReady).toHaveBeenNthCalledWith(1, { url: "http://localhost:8081" });
     child.stderr.emit("data", "🌐 Preview server ready! Access at http://localhost:8090\n");
     expect(onServerReady).toHaveBeenCalledTimes(2);
-    expect(onServerReady).toHaveBeenNthCalledWith(2, { url: "http://localhost:8090", port: 8090 });
+    expect(onServerReady).toHaveBeenNthCalledWith(2, { url: "http://localhost:8090" });
   });
 
-  it("reports Build failed and problem summaries", () => {
+  it("reports Build failed", () => {
     const { proc, child } = makeProcess();
     const onError = vi.fn();
-    const onProblems = vi.fn();
-    proc.start("/bin/moss", [], "/v", { onError, onProblems });
-    child.stderr.emit("data", "moss: 3 problems reported above — the site was still generated.\n");
+    proc.start("/bin/moss", [], "/v", { onError });
     child.stderr.emit("data", "Build failed: something broke\n");
-    expect(onProblems).toHaveBeenCalledWith(3);
     expect(onError).toHaveBeenCalledWith("something broke");
   });
 
@@ -105,6 +94,29 @@ describe("MossProcess", () => {
     } as typeof child.kill;
     proc.stop();
     expect(onExit).toHaveBeenCalledWith(null);
+  });
+
+  it("a stopped child's late exit and output leave the next run alone", () => {
+    const first = new FakeChild();
+    first.kill = function (this: FakeChild, signal: string) {
+      this.killed = signal;
+      return true;
+    } as typeof first.kill;
+    const second = new FakeChild();
+    const spawn = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const proc = new MossProcess(spawn as unknown as SpawnFn);
+    const firstExit = vi.fn();
+    const onServerReady = vi.fn();
+    proc.start("/bin/moss", [], "/a", { onExit: firstExit });
+    proc.stop();
+    proc.start("/bin/moss", [], "/b", { onServerReady });
+    first.stderr.emit("data", "🌐 Preview server ready! Access at http://localhost:8081\n");
+    first.emit("exit", 143);
+    expect(firstExit).toHaveBeenCalledWith(null);
+    expect(onServerReady).not.toHaveBeenCalled();
+    expect(proc.running).toBe(true);
+    proc.stop();
+    expect(second.killed).toBe("SIGTERM");
   });
 
   it("refuses a second start while running", () => {

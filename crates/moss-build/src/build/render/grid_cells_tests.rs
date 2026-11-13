@@ -402,6 +402,27 @@ fn a_hero_keeps_the_pages_one_eager_image_from_its_grid_cards() {
     assert!(with_hero.contains("moss-card") && !with_hero.contains(r#"loading="eager""#), "{with_hero}");
 }
 
+/// A card's cover fills its cell, so it declares the grid's cell like a
+/// picture written in one, not the listing card's fixed guess. A collage
+/// declares its lead tile, half its band, whatever its count, ratio or mid.
+#[test]
+fn a_card_cover_in_a_grid_declares_the_grids_cell() {
+    let card = make_doc("Ink Study", "works/ink-study/index.html", Some("ink.jpg"));
+    let overrides = HashMap::new();
+    let ink = crate::types::content::MediaMetadata { path: "ink.jpg".to_string(), dimensions: Some((2400, 1600)), ..Default::default() };
+    let lookup = crate::build::media::dimensions::MediaDimensionLookup::new(&[ink], &[], &overrides, None);
+    let render = |md: &str| {
+        let home = ParsedDocument { body_plan: Some(plan_of(md)), body_claims_eager: true, ..make_doc("Home", "index.html", None) };
+        let docs = vec![home.clone(), card.clone()];
+        resolve_page_body(&home, &docs, None, &overrides, "", &lookup, None, crate::build::inputs::now()).to_html()
+    };
+    let grid = render(":::grid 2 5:7 {screen}\n[Ink Study](works/ink-study/)\n+++\nWords.\n:::\n");
+    assert!(grid.contains(r#"sizes="auto, (min-width: 48rem) calc(100vw * 7 / 12), 100vw""#), "{grid}");
+    assert!(!grid.contains("24rem"), "{grid}");
+    let collage = render(":::grid 3 1:2:1 {collage mid=2}\n[Ink Study](works/ink-study/)\n+++\n[Ink Study](works/ink-study/)\n+++\n[Ink Study](works/ink-study/)\n:::\n");
+    assert!(collage.contains(r#"sizes="auto, (min-width: 48rem) calc(min(47.25rem, 100vw) / 2), 100vw""#), "{collage}");
+}
+
 #[test]
 fn only_the_first_covered_card_on_the_page_is_eager_however_many_grids() {
     let docs = vec![
@@ -443,7 +464,7 @@ fn collection_cells_render_through_the_grid_card_emitter() {
         // other cell, coverless) must render through the quote-slot branch,
         // not the bare `.moss-card-no-cover` placeholder — see
         // `render_item`'s `list_has_covers` doc.
-        let expected = render_item_with_typesetting(&props, None, Language::En, None, None, eager, true);
+        let expected = render_item_with_typesetting(&props, None, Language::En, None, None, eager, true, None);
         // The first card with a cover carries the LCP hint; only one does here.
         eager = false;
         assert!(

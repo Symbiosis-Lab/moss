@@ -52,25 +52,48 @@ pub struct NestedRootInfo {
     pub data_in: Option<String>,
 }
 
+/// What a copy of `.moss` shows about itself, read without downloading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopyEvidence {
+    /// A set-aside with a record of a publish.
+    Published,
+    /// A set-aside in which every record of a publish is provably absent.
+    Unpublished,
+    /// A sync client's copy whose listing is on this computer: nothing more
+    /// is needed to know it is the folder's site data.
+    Listed,
+    /// Something it needs is still in the cloud: waiting can answer.
+    Arriving,
+    /// Here, but it cannot be read: waiting cannot change that.
+    Unreadable,
+}
+
 /// A `.moss/` under another name (see [`is_moss_copy`]) and what its own
 /// state says.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MossCopy {
     pub name: String,
-    /// Read only for a set-aside (`.moss.removed-*`): `Some(false)` when its
-    /// state is readable and records no publish; `None` when it could not be
-    /// read or is not there, or for any other copy.
-    pub published: Option<bool>,
+    pub evidence: CopyEvidence,
 }
 
 impl MossCopy {
+    /// Did moss set this aside (`.moss.removed-<date>`), rather than a sync
+    /// client copy it?
+    pub fn is_set_aside(&self) -> bool {
+        is_set_aside_name(&self.name)
+    }
+
     /// Is this the folder's site data, to be put back rather than replaced?
     /// A conflict copy always is. A set-aside is unless it provably records
     /// no publish: a folder set aside on purpose while unpublished stays so.
     /// The walk asks too, since a folder holding site data is a boundary.
     pub fn is_site_data(&self) -> bool {
-        !(self.name.starts_with(".moss.removed-") && self.published == Some(false))
+        !(self.is_set_aside() && self.evidence == CopyEvidence::Unpublished)
     }
+}
+
+fn is_set_aside_name(name: &str) -> bool {
+    name.strip_prefix(".moss.removed-").is_some_and(|stamp| !stamp.is_empty() && !stamp.contains(['/', '\\']))
 }
 
 /// The detector's whole answer, handed to the app-side decision layer.
@@ -322,6 +345,11 @@ pub fn scan_below(root: &Path, home: Option<&Path>, limits: &ScanLimits) -> Nest
         }
         if depth == 0 {
             if !root_owned {
+                if !copies.is_empty() {
+                    let set_aside = copies.iter().filter(|c| c.is_set_aside()).count();
+                    let published = copies.iter().filter(|c| c.evidence == CopyEvidence::Published).count();
+                    log::info!("[nested_roots] {} copies of .moss: {} from a sync client, {set_aside} set aside ({published} published)", copies.len(), copies.len() - set_aside);
+                }
                 moss_copies = copies;
             }
         } else if let Some(copy) = copies.iter().find(|c| !root_owned && c.is_site_data()) {
@@ -355,8 +383,7 @@ pub fn scan_below(root: &Path, home: Option<&Path>, limits: &ScanLimits) -> Nest
 /// never walked: a copy holds a build cache of thousands of folders, enough to
 /// exhaust the scan on its own.
 pub fn is_moss_copy(name: &str) -> bool {
-    is_sync_copy_of(name, ".moss")
-        || name.strip_prefix(".moss.removed-").is_some_and(|stamp| !stamp.is_empty() && !stamp.contains(['/', '\\']))
+    is_sync_copy_of(name, ".moss") || is_set_aside_name(name)
 }
 
 /// A sync client's copy of the entry `base`: `base 2` (Google Drive, iCloud),
@@ -377,16 +404,137 @@ pub fn is_sync_copy_of(name: &str, base: &str) -> bool {
         || (rest.len() > 2 && rest.starts_with('(') && rest.ends_with(')'))
 }
 
-/// What a copy's own state says. Only a set-aside's state is read; one that
-/// cannot be read, or is not there, is `None`, never "unpublished": inside a
-/// cloud folder that has not been listed, a file reads as absent.
+/// What a copy says about itself, read without downloading. A directory the
+/// cloud has not listed onto this computer is unknown, never empty: inside it,
+/// a file reads as absent.
 fn moss_copy(path: &Path, name: &str) -> MossCopy {
-    let published = if name.starts_with(".moss.removed-") {
-        publish_state(&path.join("state.toml"), None).0
-    } else {
-        None
+    let evidence = match local_listing(path) {
+        Err(evidence) => evidence,
+        Ok(names) if is_set_aside_name(name) => records_publish(path, &names),
+        Ok(_) => CopyEvidence::Listed,
     };
-    MossCopy { name: name.to_string(), published }
+    MossCopy { name: name.to_string(), evidence }
+}
+
+/// Why something a copy holds could not be read.
+fn failed_read(error: &std::io::Error) -> CopyEvidence {
+    if crate::build::icloud::is_dataless_unavailable(error) { CopyEvidence::Arriving } else { CopyEvidence::Unreadable }
+}
+
+/// The names in `dir`, when its listing is on this computer and reads whole.
+fn local_listing(dir: &Path) -> Result<Vec<std::ffi::OsString>, CopyEvidence> {
+    if crate::build::icloud::is_dataless_dir(dir) {
+        return Err(CopyEvidence::Arriving);
+    }
+    std::fs::read_dir(dir)
+        .and_then(|entries| entries.map(|entry| entry.map(|e| e.file_name())).collect())
+        .map_err(|e| failed_read(&e))
+}
+
+/// Folders in a `.moss` whose contents record a publish.
+pub(crate) const PUBLISH_TRAILS: [&[&str]; 3] = [&["deploy", "records"], &["history", "publishes"], &["keys"]];
+
+/// An arrival could still prove a publish, so it outranks a file that is
+/// here and cannot be read.
+fn note(answer: &mut CopyEvidence, found: CopyEvidence) {
+    if *answer != CopyEvidence::Arriving {
+        *answer = found;
+    }
+}
+
+/// Does a set-aside record a published site? Every place a publish leaves a
+/// trace is asked: the state's site id or publish evidence, a publish record,
+/// a history entry, an address key, a signed-in email. Any trace answers
+/// `Published`; `Unpublished` needs each to be provably absent.
+fn records_publish(dir: &Path, names: &[std::ffi::OsString]) -> CopyEvidence {
+    let has = |names: &[std::ffi::OsString], name: &str| names.iter().any(|n| n == name);
+    let mut answer = CopyEvidence::Unpublished;
+    if has(names, "state.toml") {
+        match state_evidence(&dir.join("state.toml")) {
+            CopyEvidence::Published => return CopyEvidence::Published,
+            CopyEvidence::Unpublished => {}
+            found => note(&mut answer, found),
+        }
+    }
+    for trail in PUBLISH_TRAILS {
+        let mut here = dir.to_path_buf();
+        let mut listed = names.to_vec();
+        let mut found = true;
+        for part in trail {
+            if !has(&listed, part) {
+                found = false;
+                break;
+            }
+            here.push(part);
+            match local_listing(&here) {
+                Ok(next) => listed = next,
+                Err(evidence) => {
+                    note(&mut answer, evidence);
+                    found = false;
+                    break;
+                }
+            }
+        }
+        if found && !listed.is_empty() {
+            return CopyEvidence::Published;
+        }
+    }
+    if has(names, "identity") {
+        let identity = dir.join("identity");
+        match local_listing(&identity) {
+            Ok(inner) if has(&inner, "public.json") => match email_evidence(&identity.join("public.json")) {
+                CopyEvidence::Published => return CopyEvidence::Published,
+                CopyEvidence::Unpublished => {}
+                found => note(&mut answer, found),
+            },
+            Ok(_) => {}
+            Err(evidence) => note(&mut answer, evidence),
+        }
+    }
+    answer
+}
+
+/// The bytes of a file a copy holds, or why there are none. Classified from
+/// the one probe: a file that lands a moment later must not read as broken.
+fn local_file(path: &Path) -> Result<Option<Vec<u8>>, CopyEvidence> {
+    use crate::build::cloud_readiness::{probe_input, Found};
+    match probe_input(path) {
+        Ok(Found::Bytes(bytes)) => Ok(Some(bytes)),
+        Ok(Found::InCloud) => Err(CopyEvidence::Arriving),
+        Err(e) if crate::build::icloud::is_definitely_absent(path, &e) => Ok(None),
+        Err(e) => Err(failed_read(&e)),
+    }
+}
+
+fn state_evidence(state: &Path) -> CopyEvidence {
+    let text = match local_file(state) {
+        Ok(None) => return CopyEvidence::Unpublished,
+        Ok(Some(bytes)) => match String::from_utf8(bytes) {
+            Ok(text) => text,
+            Err(_) => return CopyEvidence::Unreadable,
+        },
+        Err(evidence) => return evidence,
+    };
+    match crate::build::site_config::deployment_state_from_document(state, &text) {
+        Ok(s) if s.site_id.is_some() || s.records_publish_evidence() => CopyEvidence::Published,
+        Ok(_) => CopyEvidence::Unpublished,
+        Err(_) => CopyEvidence::Unreadable,
+    }
+}
+
+/// A signed-in email is a publish trace. A file that does not parse says
+/// nothing either way, which is not the same as saying no.
+fn email_evidence(public: &Path) -> CopyEvidence {
+    let bytes = match local_file(public) {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => return CopyEvidence::Unpublished,
+        Err(evidence) => return evidence,
+    };
+    match serde_json::from_slice::<serde_json::Value>(&bytes) {
+        Ok(value) if value.get("email").and_then(|e| e.as_str()).is_some_and(|e| !e.is_empty()) => CopyEvidence::Published,
+        Ok(_) => CopyEvidence::Unpublished,
+        Err(_) => CopyEvidence::Unreadable,
+    }
 }
 
 /// Label one found candidate. Fenced like the detector's only other read,
@@ -397,7 +545,11 @@ fn moss_copy(path: &Path, name: &str) -> MossCopy {
 fn nested_root_info(dir: &Path, root: &Path, data_in: Option<&MossCopy>) -> NestedRootInfo {
     let rel = dir.strip_prefix(root).unwrap_or(dir);
     let (published, site_id) = match data_in {
-        Some(copy) => (copy.published, None),
+        Some(copy) => match copy.evidence {
+            CopyEvidence::Published => (Some(true), None),
+            CopyEvidence::Unpublished => (Some(false), None),
+            _ => (None, None),
+        },
         None => read_publish_state(dir),
     };
     NestedRootInfo {

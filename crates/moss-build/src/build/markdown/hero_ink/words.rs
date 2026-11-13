@@ -24,6 +24,8 @@ pub struct Words {
     pub(super) links: f32,
     pub(super) link_count: u32,
     pub(super) credit: f32,
+    /// A block the model does not set (a second heading, a list, a quote, a picture), so where the words end is not known.
+    pub(super) unmodelled: bool,
 }
 
 impl Words {
@@ -38,6 +40,8 @@ impl Words {
                 md::Block::Heading { children, .. } => {
                     if words.heading == 0.0 {
                         words.heading = em(&inlines_to_plain_text(children));
+                    } else {
+                        words.unmodelled = true;
                     }
                 }
                 md::Block::Paragraph(inlines) if is_link_row(inlines) => {
@@ -53,7 +57,7 @@ impl Words {
                         words.link_count += 1;
                     }
                 }
-                _ => {}
+                _ => words.unmodelled = true,
             }
         }
         words
@@ -91,6 +95,32 @@ impl Cap {
 /// What a `ch` is in ems at the least and at the most, whatever the face.
 const CH_NARROW: f32 = 0.5;
 const CH_WIDE: f32 = 0.6;
+
+/// A theme's `--moss-hero-content-width`: a length in the grammar `max-height=`
+/// takes, or a percentage of the hero, which spans the window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum BoxWidth {
+    Length(moss_core::media::MaxHeight),
+    Share(f32),
+}
+
+impl BoxWidth {
+    fn parse(value: &str) -> Option<Self> {
+        let value = value.trim().trim_end_matches("!important").trim();
+        match value.strip_suffix('%').map(|n| n.trim().parse::<f32>()) {
+            Some(Ok(n)) if n.is_finite() && n > 0.0 && n <= 100.0 => Some(BoxWidth::Share(n / 100.0)),
+            Some(_) => None,
+            None => moss_core::media::MaxHeight::parse(value).map(BoxWidth::Length),
+        }
+    }
+
+    fn px(self, width: f32) -> f32 {
+        match self {
+            BoxWidth::Length(m) => m.px(width),
+            BoxWidth::Share(f) => f * width,
+        }
+    }
+}
 
 /// A theme's `line-height` on the heading: a unitless factor of its size, or a
 /// length in the grammar `max-height=` takes.
@@ -137,6 +167,8 @@ pub struct TypeTheme {
     /// lines, so it caps the measure the heading is modelled in.
     pub(super) heading_cap: Option<Cap>,
     pub(super) heading_line: Option<Leading>,
+    /// `--moss-hero-content-width` in `:root`, or alone on `.moss-hero` or `.moss-hero-content`.
+    pub(super) content_width: Option<BoxWidth>,
     /// `--moss-hero-link-size` and `--moss-hero-link-padding` (block, inline, in em).
     pub(super) link_size: Option<moss_core::media::MaxHeight>,
     pub(super) link_pad: Option<(f32, f32)>,
@@ -147,7 +179,21 @@ pub struct TypeTheme {
     pub(super) space_md: Option<f32>,
     pub(super) size_sm: Option<f32>,
     pub(super) size_lg: Option<f32>,
+    /// What a closing picture's words read: the five above as every rule that reaches them
+    /// sets them, the footer's own structure included. The five above hold only rules that
+    /// name the hero or `:root`, which an ordinary hero's words answer to as well.
+    pub(super) closing: ClosingSizes,
     pub resized: bool,
+}
+
+/// The heading and text sizes of a closing picture's words (see [`TypeTheme::closing`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct ClosingSizes {
+    heading_size: Option<moss_core::media::MaxHeight>,
+    text_size: Option<moss_core::media::MaxHeight>,
+    heading_weight: Option<u16>,
+    heading_cap: Option<Cap>,
+    heading_line: Option<Leading>,
 }
 
 /// Tokens that move the words' size or column and that the model does not read
@@ -189,6 +235,12 @@ fn weight_of(value: &str) -> Option<u16> {
 }
 
 impl TypeTheme {
+    /// The theme as a closing picture's words see it.
+    fn for_closing(&self) -> Self {
+        let c = self.closing;
+        Self { heading_size: c.heading_size.or(self.heading_size), text_size: c.text_size.or(self.text_size), heading_weight: c.heading_weight.or(self.heading_weight), heading_cap: c.heading_cap.or(self.heading_cap), heading_line: c.heading_line.or(self.heading_line), ..*self }
+    }
+
     pub fn of_theme(theme_css: Option<&str>) -> Self {
         Self::read(theme_css, |_, _| {})
     }
@@ -206,13 +258,17 @@ impl TypeTheme {
         let mut theme = Self::default();
         for rule in crate::build::theme_lint::style_rules(theme_css.unwrap_or_default()) {
             let Some((_, body)) = rule.rule.split_once('{') else { continue };
-            let root = rule.conditions.is_empty() && rule.prelude.split_whitespace().collect::<String>() == ":root";
+            let prelude = rule.prelude.split_whitespace().collect::<String>();
+            let root = rule.conditions.is_empty() && prelude == ":root";
+            let every_hero = root || (rule.conditions.is_empty() && matches!(prelude.as_str(), ".moss-hero" | ".moss-hero-content"));
             let words = |tags: &[&str]| rule.prelude.split(|c: char| !c.is_ascii_alphanumeric()).any(|t| tags.contains(&t));
             // A rule reaches the closing words by naming the hero, or by the footer's own
             // structure: a heading, paragraph or link under the page's footer.
-            let reaches = rule.prelude.contains("moss-hero") || (rule.prelude.contains("footer") && words(&["h1", "h2", "h3", "h4", "h5", "h6", "p", "a"]));
+            let reaches = rule.prelude.split(',').any(reaches_closing_words);
             // Inside a media query or another condition, the value holds only at some widths: it is not read.
             let hero = reaches && rule.conditions.is_empty();
+            // Only a selector that names the hero reaches an ordinary hero's words as well as the closing ones.
+            let names_hero = hero && rule.prelude.split(',').any(|s| reaches_closing_words(s) && s.contains("moss-hero"));
             let heading_only = hero && words(&["h1", "h2", "h3", "h4", "h5", "h6"]) && !words(&["p", "a"]);
             for decl in body.trim_end_matches('}').split(';') {
                 let Some((prop, value)) = decl.split_once(':') else { continue };
@@ -224,18 +280,44 @@ impl TypeTheme {
                     "--moss-space-md" => when(root, || plain_px(value).map(|px| theme.space_md = Some(px))),
                     "--moss-size-sm" => when(root, || plain_px(value).map(|px| theme.size_sm = Some(px))),
                     "--moss-size-lg" => when(root, || plain_px(value).map(|px| theme.size_lg = Some(px))),
-                    "--moss-hero-title-size" => when(root, || moss_core::media::MaxHeight::parse(value.trim().trim_end_matches("!important")).map(|m| theme.heading_size = Some(m))),
+                    "--moss-hero-title-size" => when(root, || moss_core::media::MaxHeight::parse(value.trim().trim_end_matches("!important")).map(|m| (theme.heading_size, theme.closing.heading_size) = (Some(m), Some(m)))),
                     "--moss-hero-link-size" => when(root, || moss_core::media::MaxHeight::parse(value.trim().trim_end_matches("!important")).map(|m| theme.link_size = Some(m))),
                     "--moss-hero-link-padding" => when(root, || em_pair(value).map(|p| theme.link_pad = Some(p))),
                     "--moss-hero-credit-size" => when(root, || moss_core::media::Length::parse(value.trim().trim_end_matches("!important")).map(|l| theme.credit_size = Some(l))),
+                    "--moss-hero-content-width" if every_hero => Some(BoxWidth::parse(value).map(|w| theme.content_width = Some(w))),
                     "--moss-hero-words-gap" => when(root, || moss_core::media::Length::parse(value.trim().trim_end_matches("!important")).map(|l| theme.words_gap = Some(l))),
                     "font-size" if hero && words(&["h1", "h2", "h3", "h4", "h5", "h6"]) => {
-                        Some(moss_core::media::MaxHeight::parse(value.trim().trim_end_matches("!important")).map(|m| theme.heading_size = Some(m)))
+                        Some(moss_core::media::MaxHeight::parse(value.trim().trim_end_matches("!important")).map(|m| {
+                            theme.closing.heading_size = Some(m);
+                            if names_hero {
+                                theme.heading_size = Some(m);
+                            }
+                        }))
                     }
-                    "font-size" if hero && words(&["p", "a"]) => Some(moss_core::media::MaxHeight::parse(value.trim().trim_end_matches("!important")).map(|m| theme.text_size = Some(m))),
-                    "font-weight" if hero && words(&["h1", "h2", "h3", "h4", "h5", "h6"]) => Some(weight_of(value).filter(|w| *w >= 400).map(|w| theme.heading_weight = Some(w))),
-                    "max-inline-size" | "max-width" if heading_only => Some(Cap::parse(value).map(|c| theme.heading_cap = Some(c))),
-                    "line-height" if heading_only => Some(Leading::parse(value).map(|l| theme.heading_line = Some(l))),
+                    "font-size" if hero && words(&["p", "a"]) => Some(moss_core::media::MaxHeight::parse(value.trim().trim_end_matches("!important")).map(|m| {
+                        theme.closing.text_size = Some(m);
+                        if names_hero {
+                            theme.text_size = Some(m);
+                        }
+                    })),
+                    "font-weight" if hero && words(&["h1", "h2", "h3", "h4", "h5", "h6"]) => Some(weight_of(value).filter(|w| *w >= 400).map(|w| {
+                        theme.closing.heading_weight = Some(w);
+                        if names_hero {
+                            theme.heading_weight = Some(w);
+                        }
+                    })),
+                    "max-inline-size" | "max-width" if heading_only => Some(Cap::parse(value).map(|c| {
+                        theme.closing.heading_cap = Some(c);
+                        if names_hero {
+                            theme.heading_cap = Some(c);
+                        }
+                    })),
+                    "line-height" if heading_only => Some(Leading::parse(value).map(|l| {
+                        theme.closing.heading_line = Some(l);
+                        if names_hero {
+                            theme.heading_line = Some(l);
+                        }
+                    })),
                     _ => None,
                 };
                 let moves = match read {
@@ -253,6 +335,25 @@ impl TypeTheme {
         }
         theme
     }
+}
+
+/// Whether one selector can move a closing picture's words: it names the hero, or a heading,
+/// paragraph or link under a footer. Not one that sizes the picture itself, and not one that
+/// excludes the closing hero (`:not(.moss-hero-closing)`, or a hero that is a direct child of
+/// `body`, where the closing picture, inside the footer, is not).
+fn reaches_closing_words(selector: &str) -> bool {
+    let spaced = selector.replace('>', " > ");
+    let compounds: Vec<&str> = spaced.split_whitespace().collect();
+    let Some(subject) = compounds.last() else { return false };
+    let tag = |c: &str| c.split(['.', '#', ':', '[']).next().unwrap_or_default().to_ascii_lowercase();
+    if ["img", "video", "picture", "source", "svg"].contains(&tag(subject).as_str()) {
+        return false;
+    }
+    let names_hero = selector.contains("moss-hero");
+    let heading_in_footer = selector.contains("footer") && selector.split(|c: char| !c.is_ascii_alphanumeric()).any(|t| ["h1", "h2", "h3", "h4", "h5", "h6", "p", "a"].contains(&t));
+    let excluded = selector.contains(":not(.moss-hero-closing)")
+        || compounds.windows(3).any(|w| tag(w[0]) == "body" && w[1] == ">" && w[2].contains("moss-hero") && !w[2].contains("moss-hero-closing"));
+    (names_hero || heading_in_footer) && !excluded
 }
 
 /// A token's value in px from tokens.json, at the 16px root.
@@ -305,6 +406,9 @@ pub(super) struct Type {
     heading_measure: (f32, f32),
     /// The words box's own width, padding included.
     pub(super) box_px: f32,
+    /// Space above the lead heading inside the box: an ordinary hero's `h1` keeps
+    /// the page's `h1` top margin (`--moss-space-2xl`) from 48rem.
+    lead_margin: f32,
 }
 
 /// The default heading weight (`--moss-hero` headings).
@@ -313,6 +417,9 @@ const HEADING_WEIGHT: u16 = 480;
 /// A closing picture's lead heading's line height, as a factor of its size
 /// (`line-height: 1.08` in site.css).
 const HEADING_LEADING: f32 = 1.08;
+
+/// An ordinary hero's heading's line height, as a factor of its size.
+const ORDINARY_LEADING: f32 = 1.2;
 
 /// Where a closing picture's words start below its top edge: `clamp(8px, 2vw, 24px)`.
 fn words_top(width: f32) -> f32 {
@@ -329,6 +436,15 @@ pub(super) struct Block {
     pub(super) link: bool,
 }
 
+/// Windows narrower than this (48rem) are a phone in site.css.
+const PHONE_BELOW_PX: f32 = 768.0;
+
+/// A words box's width from a window of `width` on a desktop: the theme's
+/// `--moss-hero-content-width`, or `max(600px, 35%)` held to `room`.
+fn box_width(width: f32, theme: &TypeTheme, room: f32) -> f32 {
+    theme.content_width.map_or_else(|| (0.35 * width).max(600.0).min(room), |w| w.px(width))
+}
+
 /// The reading size on a phone: site.css's `--moss-reading-size-base` under 48rem.
 const PHONE_READING_PX: f32 = 17.0;
 
@@ -337,6 +453,10 @@ const LINK_PAD_EM: (f32, f32) = (0.5, 1.2);
 
 impl Type {
     pub(super) fn at(width: f32, theme: &TypeTheme, column: Column, lane: bool) -> Self {
+        Self::themed(width, &theme.for_closing(), column, lane)
+    }
+
+    fn themed(width: f32, theme: &TypeTheme, column: Column, lane: bool) -> Self {
         let mut t = Self::scale(width, theme, column, lane);
         if let Some(m) = theme.heading_size {
             t.font = m.px(width);
@@ -361,7 +481,7 @@ impl Type {
 
     /// The stylesheet's own scale, before a theme's sizes.
     fn scale(width: f32, theme: &TypeTheme, column: Column, lane: bool) -> Self {
-        let phone = width < 768.0;
+        let phone = width < PHONE_BELOW_PX;
         let reading = theme.reading_base.unwrap_or_else(|| if phone { PHONE_READING_PX } else { token_px("moss-reading-size-base") });
         let space_md = theme.space_md.unwrap_or_else(|| token_px("moss-space-md"));
         let cp = theme.container_pad.unwrap_or(if phone { space_md } else { (0.05 * width).clamp(16.0, 32.0) });
@@ -377,12 +497,42 @@ impl Type {
         if phone {
             let text = theme.size_sm.unwrap_or_else(|| token_px("moss-size-sm"));
             let measure = width - 2.0 * inset;
-            return Type { inset, pad: 0.05 * width, top: words_top(width), font: 22.4, line: HEADING_LEADING * 22.4, weight: HEADING_WEIGHT, text_font: text, text_line: 1.5 * text, link_font: text, link_pad: LINK_PAD_EM, gap: theme.words_gap.map_or_else(|| token_px("moss-space-sm"), |l| l.px(width)), credit_font: theme.credit_size.map_or(CREDIT_FONT_PX, |l| l.px(width)), measure, heading_measure: (measure, measure), box_px: width };
+            return Type { inset, pad: 0.05 * width, top: words_top(width), font: 22.4, line: HEADING_LEADING * 22.4, weight: HEADING_WEIGHT, text_font: text, text_line: 1.5 * text, link_font: text, link_pad: LINK_PAD_EM, gap: theme.words_gap.map_or_else(|| token_px("moss-space-sm"), |l| l.px(width)), credit_font: theme.credit_size.map_or(CREDIT_FONT_PX, |l| l.px(width)), measure, heading_measure: (measure, measure), box_px: width, lead_margin: 0.0 };
         }
         let (pad, font, text) = if width < 1024.0 { (space_md, 28.0, reading) } else { (0.05 * width, 40.0, theme.size_lg.unwrap_or_else(|| token_px("moss-size-lg"))) };
-        let box_px = (0.35 * width).max(600.0).min(column_px - 2.0 * cp + 2.0 * pad);
+        let box_px = box_width(width, theme, column_px - 2.0 * cp + 2.0 * pad);
         let measure = box_px - 2.0 * pad;
-        Type { inset, pad, top: words_top(width), font, line: HEADING_LEADING * font, weight: HEADING_WEIGHT, text_font: text, text_line: 1.5 * text, link_font: text, link_pad: LINK_PAD_EM, gap: theme.words_gap.map_or_else(|| token_px("moss-space-sm"), |l| l.px(width)), credit_font: theme.credit_size.map_or(CREDIT_FONT_PX, |l| l.px(width)), measure, heading_measure: (measure, measure), box_px }
+        Type { inset, pad, top: words_top(width), font, line: HEADING_LEADING * font, weight: HEADING_WEIGHT, text_font: text, text_line: 1.5 * text, link_font: text, link_pad: LINK_PAD_EM, gap: theme.words_gap.map_or_else(|| token_px("moss-space-sm"), |l| l.px(width)), credit_font: theme.credit_size.map_or(CREDIT_FONT_PX, |l| l.px(width)), measure, heading_measure: (measure, measure), box_px, lead_margin: 0.0 }
+    }
+
+    /// An ordinary hero's words box, from site.css's hero rules: it starts at
+    /// the picture's edge with the glyphs inside its padding, the heading sets
+    /// at 1.2, and from 48rem it is `--moss-hero-content-width` wide, or as
+    /// wide as its text up to `max(600px, 35%)`; on a phone it spans the width.
+    /// A theme's cap on the heading's measure is the closing heading's, not this one's.
+    pub(super) fn ordinary(width: f32, theme: &TypeTheme) -> Self {
+        let mut t = Self::themed(width, theme, Column::Default, false);
+        (t.inset, t.top) = (t.pad, t.pad);
+        if theme.heading_line.is_none() {
+            t.line = ORDINARY_LEADING * t.font;
+        }
+        t.box_px = if width < PHONE_BELOW_PX { width } else { box_width(width, theme, f32::INFINITY) };
+        t.measure = t.box_px - 2.0 * t.pad;
+        t.heading_measure = (t.measure, t.measure);
+        if width >= PHONE_BELOW_PX {
+            t.lead_margin = token_px("moss-space-2xl");
+        }
+        t
+    }
+
+    /// How wide and how tall the words box is at the most, padding included:
+    /// as wide as its longest line unless the theme sets its width.
+    pub(super) fn extent(&self, words: &Words, theme: &TypeTheme) -> (f32, f32) {
+        let blocks = self.blocks(words);
+        let across = blocks.iter().map(|b| b.across).fold(0.0, f32::max) + 2.0 * self.pad;
+        let wide = if theme.content_width.is_some() { self.box_px } else { across.min(self.box_px) };
+        let above = if words.heading > 0.0 { self.lead_margin } else { 0.0 };
+        (wide, blocks.last().map_or(0.0, |b| b.rows.1) + self.pad + above)
     }
 
     /// The most and the fewest lines `ems` of text at `font` px set in the

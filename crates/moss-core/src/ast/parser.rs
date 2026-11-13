@@ -26,9 +26,9 @@ use super::document::{BlockMeta, Document};
 use super::footnotes::FootnoteIndex;
 use super::math_text::{math_inline, math_source};
 use super::nesting::{cap_nesting, MAX_BLOCK_NESTING};
-use super::node::{Block, CalloutKind, ColumnAlignment, Fold, Inline};
+use super::node::{Block, CalloutKind, ColumnAlignment, Fold, HeadingNumber, Inline};
 use super::shortcode::Shortcode;
-use super::shortcode_extract::{extract_shortcodes_with_config, parse_placeholder, ExtractedShortcode};
+use super::shortcode_extract::{extract_shortcodes_with_config, ExtractedShortcode};
 use super::url::Url;
 use crate::heading::anchor::{legacy_heading_anchor, obsidian_heading_anchor};
 
@@ -45,7 +45,7 @@ use crate::heading::anchor::{legacy_heading_anchor, obsidian_heading_anchor};
 /// bare `<img>` (none today, but the flag exists for symmetry with the
 /// legacy `transform_events` API and the production `site_config` field).
 #[derive(Debug, Clone, Copy)]
-pub struct ParseConfig {
+pub struct ParseConfig<'a> {
     /// When true, populates [`BlockMeta::source_line`] for top-level
     /// blocks. The renderer emits `data-source-line="N"` on the opening
     /// tag for any block whose meta carries `Some(N)`.
@@ -116,9 +116,13 @@ pub struct ParseConfig {
     /// every committed fixture keeps today's behavior until a site opts in.
     /// Production wires it from `site_config.hard_line_breaks`.
     pub hard_line_breaks: bool,
+
+    /// Fence names the installed plugins own. `None` means every such fence
+    /// is an unknown one.
+    pub blocks: Option<&'a crate::page::block_names::BlockNames>,
 }
 
-impl Default for ParseConfig {
+impl Default for ParseConfig<'_> {
     fn default() -> Self {
         Self {
             emit_source_lines: false,
@@ -135,6 +139,7 @@ impl Default for ParseConfig {
             // Off by default so in-crate callers and committed fixtures keep
             // CommonMark's "newline is a space". Production opts in.
             hard_line_breaks: false,
+            blocks: None,
         }
     }
 }
@@ -328,7 +333,7 @@ fn parse_document(markdown: &str, config: &ParseConfig, heading_ids: HeadingIds)
 
     // Put the lifted things back: placeholders become typed Shortcodes, `![[…]]`
     // sentinels their `Inline::Image`. Both BEFORE `assign_heading_id_suffixes`.
-    substitute_shortcode_placeholders(&mut blocks, &extraction.nonce, &extraction.extracted);
+    substitute_shortcode_placeholders(&mut blocks, &mut block_meta, &extraction.nonce, &extraction.extracted);
     super::linked_embed::restore(&mut blocks, &linked_embeds, config);
     // After the restore, so `[![[x.jpg]]](url)` and `[![x](x.jpg)](url)` reach
     // it as the same `Link(Image)` shape.
@@ -423,6 +428,11 @@ fn parse_document(markdown: &str, config: &ParseConfig, heading_ids: HeadingIds)
     if config.hard_line_breaks {
         super::line_breaks::apply(&mut doc);
     }
+    // `HeadingIds::Number` marks the top-level parse: a grid cell or fragment
+    // is laid out by its host.
+    if heading_ids == HeadingIds::Number {
+        super::picture_row::split_lines(&mut doc, &|run| captioned_figure(run, &line_ctx, config.implicit_figure));
+    }
 
     doc
 }
@@ -451,17 +461,28 @@ fn promote_linked_figures(blocks: &mut [Block], line_ctx: &LineCtx<'_>) {
     }
 }
 
+/// What one picture and the italic line under it make when a line break split
+/// them out of a paragraph: the figure a blank line above would have given,
+/// undone under `implicit_figure: false` as that one was.
+fn captioned_figure(run: &[Inline], line_ctx: &LineCtx<'_>, implicit_figure: bool) -> Option<Block> {
+    let mut figure = if run.iter().any(|i| matches!(i, Inline::Link { .. })) {
+        linked_figure(run, line_ctx)?
+    } else {
+        let em = italic_caption_index(run)?;
+        try_promote_image_only(run.to_vec(), &[], 0, line_ctx, Caption::Italic(em)).ok()?
+    };
+    if !implicit_figure {
+        unwrap_implicit_figure(&mut figure);
+    }
+    Some(figure)
+}
+
 /// The figure a linked picture with a caption line makes, by the same rule an
 /// unlinked one promotes by.
 fn linked_figure(inlines: &[Inline], line_ctx: &LineCtx<'_>) -> Option<Block> {
-    let blank = |i: &Inline| matches!(i, Inline::Text(s) if s.trim().is_empty());
     let at = inlines.iter().position(|i| matches!(i, Inline::Link { .. }))?;
     let Inline::Link { url, children, .. } = &inlines[at] else { return None };
-    let mut images = children.iter().filter(|c| !blank(c));
-    let image = images.next().filter(|i| matches!(i, Inline::Image { .. }))?;
-    if images.next().is_some() {
-        return None;
-    }
+    let image = super::node::linked_image(children)?;
     let mut unlinked = inlines.to_vec();
     unlinked[at] = image.clone();
     let em = italic_caption_index(&unlinked)?;
@@ -553,6 +574,11 @@ pub(crate) fn unwrap_implicit_figure(block: &mut Block) {
             }
             Shortcode::Hero(args) => {
                 for child in args.overlay.iter_mut() {
+                    unwrap_implicit_figure(child);
+                }
+            }
+            Shortcode::Block(args) => {
+                for child in args.body.iter_mut() {
                     unwrap_implicit_figure(child);
                 }
             }
@@ -707,26 +733,56 @@ impl LineLookup {
     }
 }
 
-/// Walk top-level blocks; replace any `Block::Other` whose payload is a
-/// `<!--MOSS_SC_{nonce}_{index}-->` sentinel with the corresponding typed
-/// [`Block::Shortcode`].
+/// Walk top-level blocks; replace every `<!--MOSS_SC_{nonce}_{index}-->`
+/// sentinel in a `Block::Other` with the corresponding typed
+/// [`Block::Shortcode`]. A sentinel written between the lines of a raw HTML
+/// block (`<div>`, the shortcode, `</div>`, no blank lines) shares its block
+/// with that HTML, so the block is split around it. The first piece keeps the
+/// block's metadata; `block_meta` stays one entry per block.
 fn substitute_shortcode_placeholders(
     blocks: &mut Vec<Block>,
+    block_meta: &mut Vec<BlockMeta>,
     nonce: &str,
     extracted: &[ExtractedShortcode],
 ) {
-    for block in blocks.iter_mut() {
-        if let Block::Other(html) = block {
-            if let Some(index) = parse_placeholder(nonce, html) {
-                if let Some(entry) = extracted.iter().find(|e| e.index == index) {
-                    *block = Block::Shortcode(entry.shortcode.clone());
-                }
+    let open = format!("<!--MOSS_SC_{nonce}_");
+    let mut out = Vec::with_capacity(blocks.len());
+    let mut out_meta = Vec::with_capacity(blocks.len());
+    for (block, meta) in blocks.drain(..).zip(block_meta.drain(..)) {
+        out_meta.push(meta);
+        let Block::Other(html) = &block else {
+            out.push(block);
+            continue;
+        };
+        let mut rest = html.as_str();
+        let mut pieces = Vec::new();
+        while let Some((before, tail)) = rest.split_once(&open) {
+            let shortcode = tail.split_once("-->").and_then(|(index, after)| {
+                let index = index.parse::<usize>().ok()?;
+                let entry = extracted.iter().find(|e| e.index == index)?;
+                Some((entry.shortcode.clone(), after))
+            });
+            let Some((shortcode, after)) = shortcode else { break };
+            if !before.trim().is_empty() {
+                pieces.push(Block::Other(before.to_string()));
             }
+            pieces.push(Block::Shortcode(shortcode));
+            rest = after;
         }
+        if pieces.is_empty() {
+            out.push(block);
+            continue;
+        }
+        if !rest.trim().is_empty() {
+            pieces.push(Block::Other(rest.to_string()));
+        }
+        out_meta.extend(std::iter::repeat_n(BlockMeta::default(), pieces.len() - 1));
+        out.extend(pieces);
         // Future: descend into BlockQuote / List items / Callouts when
-        // shortcodes inside those constructs are modeled. Phase B Tasks
-        // 7-10 only need top-level shortcodes.
+        // shortcodes inside those constructs are modeled.
     }
+    *blocks = out;
+    *block_meta = out_meta;
 }
 
 /// Parse one block-level construct starting at `events[start]`. Returns
@@ -828,6 +884,7 @@ fn parse_block_with_tag(
                     children,
                     id: Some(id),
                     legacy_id,
+                    numbered_from: None,
                     contents_end,
                     contents_label,
                 }),
@@ -2169,7 +2226,9 @@ fn assign_heading_id_suffixes(blocks: &mut [Block]) {
     for slot in slots.iter_mut() {
         let mut old = slot.legacy_id.take().or_else(|| slot.id.clone());
         disambiguate_heading_id(&mut old, &mut legacy_counts);
-        disambiguate_heading_id(slot.id, &mut id_counts);
+        let base = slot.id.clone();
+        let place = disambiguate_heading_id(slot.id, &mut id_counts);
+        *slot.numbered_from = base.zip(place).map(|(from, place)| HeadingNumber { from, place });
         *slot.legacy_id = old.filter(|o| Some(o) != slot.id.as_ref());
     }
     // An alias that is another heading's id would duplicate it: that id
@@ -2189,26 +2248,22 @@ pub fn clear_heading_ids(doc: &mut Document) {
     for slot in heading_id_slots(&mut doc.blocks) {
         *slot.id = None;
         *slot.legacy_id = None;
+        *slot.numbered_from = None;
     }
 }
 
 /// Every heading's id slot, in the order the headings appear on the rendered
 /// page: the body first, then each hoisted endnote in endnote order.
 fn heading_id_slots(blocks: &mut [Block]) -> Vec<HeadingSlot<'_>> {
-    // Built BEFORE the mutable walk: `entries()` is the order
-    // `render_section` emits the `<li id="fn-N">`s, and it needs a shared
-    // borrow of the same tree.
-    let note_order: Vec<String> = FootnoteIndex::build(blocks)
-        .entries()
-        .iter()
-        .map(|(_, label)| label.clone())
-        .collect();
+    // Built BEFORE the mutable walk, which it cannot borrow alongside: a
+    // note's number is the order `render_section` emits the `<li id="fn-N">`s.
+    let index = FootnoteIndex::build(blocks);
 
     let mut body: Vec<HeadingSlot<'_>> = Vec::new();
     let mut notes: Vec<(String, Vec<HeadingSlot<'_>>)> = Vec::new();
     let mut hoisted: HashSet<String> = HashSet::new();
     let scope = HoistScope {
-        document_notes: &note_order,
+        document_notes: &index,
         in_shortcode: false,
     };
     collect_heading_id_slots(blocks, &mut body, &mut hoisted, &mut notes, scope);
@@ -2216,12 +2271,7 @@ fn heading_id_slots(blocks: &mut [Block]) -> Vec<HeadingSlot<'_>> {
     // Stable sort into endnote order. A label the index doesn't own is
     // impossible today (every defined label is numbered); if one ever
     // appears it keeps its document position, at the end.
-    notes.sort_by_key(|(label, _)| {
-        note_order
-            .iter()
-            .position(|l| l == label)
-            .unwrap_or(usize::MAX)
-    });
+    notes.sort_by_key(|(label, _)| index.number(label).unwrap_or(usize::MAX));
     body.extend(notes.into_iter().flat_map(|(_, slots)| slots));
     body
 }
@@ -2230,17 +2280,18 @@ fn heading_id_slots(blocks: &mut [Block]) -> Vec<HeadingSlot<'_>> {
 struct HeadingSlot<'a> {
     id: &'a mut Option<String>,
     legacy_id: &'a mut Option<String>,
+    numbered_from: &'a mut Option<HeadingNumber>,
 }
 
-/// Apply the `-N` suffix rule to one heading id slot.
-fn disambiguate_heading_id(id: &mut Option<String>, id_counts: &mut HashMap<String, usize>) {
-    let Some(slug) = id else { return };
+/// Apply the `-N` suffix rule to one heading id slot; the N it added, if any.
+fn disambiguate_heading_id(id: &mut Option<String>, id_counts: &mut HashMap<String, usize>) -> Option<usize> {
+    let slug = id.clone()?;
     let count = *id_counts.entry(slug.clone()).or_insert(0);
     id_counts.insert(slug.clone(), count + 1);
-    if count > 0 {
-        let suffixed = format!("{slug}-{count}");
-        *id = Some(suffixed);
-    }
+    (count > 0).then(|| {
+        *id = Some(format!("{slug}-{count}"));
+        count
+    })
 }
 
 /// Collect a mutable handle to every heading id in the tree, bucketed by
@@ -2249,8 +2300,8 @@ fn disambiguate_heading_id(id: &mut Option<String>, id_counts: &mut HashMap<Stri
 /// `render_section` emits them.
 ///
 /// `hoisted` records which labels have had their first definition seen, in
-/// document order — the same rule [`super::footnotes::FootnoteIndex::definition`]
-/// uses to pick the definition whose body the endnote renders. A REPEAT
+/// document order — the same rule [`super::footnotes::Definitions`] uses to
+/// pick the definition whose body the endnote renders. A REPEAT
 /// definition of a label is not hoisted (it renders in place), so its
 /// headings stay in the surrounding bucket.
 /// Where the walk currently is, for deciding whether a footnote definition
@@ -2264,15 +2315,15 @@ fn disambiguate_heading_id(id: &mut Option<String>, id_counts: &mut HashMap<Stri
 ///    answers from a map built only from the index's entries, and that index
 ///    is exactly `document_notes`. A repeat definition of an already-defined
 ///    label is left in place by the renderer.
-/// 2. The walk is inside a shortcode body. `footnotes::collect_definitions`
+/// 2. The walk is inside a shortcode body. `footnotes::Definitions`
 ///    stops at shortcode bodies, so a `[^x]: …` written inside a `:::grid`
 ///    cell is never collected, never numbered, and never hoisted — it renders
 ///    in the cell. Bucketing it as an endnote would number a grid heading
 ///    after the body even though it renders before it.
 #[derive(Clone, Copy)]
 struct HoistScope<'a> {
-    /// Labels the document's `FootnoteIndex` owns, in endnote order.
-    document_notes: &'a [String],
+    /// The document's footnotes; a label it does not number is never hoisted.
+    document_notes: &'a FootnoteIndex,
     /// Whether the walk is inside a `:::grid` cell or `:::hero` overlay.
     in_shortcode: bool,
 }
@@ -2285,7 +2336,7 @@ impl HoistScope<'_> {
         if self.in_shortcode {
             return false;
         }
-        if !self.document_notes.iter().any(|l| l == label) {
+        if self.document_notes.number(label).is_none() {
             return false;
         }
         hoisted.insert(label.to_string())
@@ -2309,7 +2360,7 @@ fn collect_heading_id_slots<'a>(
 ) {
     for block in blocks.iter_mut() {
         match block {
-            Block::Heading { id, legacy_id, .. } => sink.push(HeadingSlot { id, legacy_id }),
+            Block::Heading { id, legacy_id, numbered_from, .. } => sink.push(HeadingSlot { id, legacy_id, numbered_from }),
             Block::FootnoteDefinition { label, children } => {
                 let label = label.clone();
                 // A definition is bucketed as an endnote only when the
@@ -2358,6 +2409,9 @@ fn collect_heading_id_slots<'a>(
                     for cell in args.cells.iter_mut() {
                         collect_heading_id_slots(cell, sink, hoisted, notes, scope.inside_shortcode());
                     }
+                }
+                Shortcode::Block(args) => {
+                    collect_heading_id_slots(&mut args.body, sink, hoisted, notes, scope.inside_shortcode());
                 }
                 Shortcode::Hero(args) => {
                     collect_heading_id_slots(&mut args.overlay, sink, hoisted, notes, scope.inside_shortcode());

@@ -2613,3 +2613,66 @@ fn an_article_lists_its_citations_and_a_page_without_any_has_no_key() {
     );
     assert!(ld(&[]).get("citation").is_none());
 }
+
+/// Pages for the footnote gate: a lead that cites nothing with notes further
+/// down, a lead that cites, a lead that is only a marker, an undefined
+/// bracket token, notes in a list and a quote, a definition before its
+/// reference, a repeated label, and no footnotes at all.
+const FOOTNOTE_GATE_PAGES: [&str; 8] = [
+    "An opening line with no notes.\n\n## Part\n\nLater prose[^a] cites it.\n\n[^a]: the note\n",
+    "The claim[^1] holds under load.\n\n[^1]: the aside\n",
+    "[^a]\n\nThe prose after a bare marker.\n\n[^a]: the note\n",
+    "Use [^0-9] to strip digits, then[^b] stop.\n\n[^b]: the note\n",
+    "- A listed point[^l] here.\n\n  [^l]: in the list\n\n> A quote[^q].\n>\n> [^q]: in the quote\n",
+    "[^early]: defined first\n\nThe text that cites it[^early] comes after.\n",
+    "Twice defined[^a] once cited.\n\n[^a]: first\n\n[^a]: second\n",
+    "Plain prose with nothing to note.\n\nMore of it.\n",
+];
+
+fn excerpt_parses_during(f: impl FnOnce()) -> usize {
+    super::EXCERPT_PARSES.with(|n| n.set(0));
+    f();
+    super::EXCERPT_PARSES.with(|n| n.get())
+}
+
+/// Skipping the footnote parse must never change the excerpt: each page
+/// gives the same text as a selection that always asks the parser.
+#[test]
+fn the_footnote_gate_gives_the_excerpt_an_index_parse_would() {
+    for page in FOOTNOTE_GATE_PAGES {
+        for strip_callout_marker in [true, false] {
+            let content = moss_core::resolve::embeds::derived::without_derived_markup(page);
+            let processed = moss_core::ast::shortcode_extract::extract_shortcodes(&content)
+                .markdown_with_placeholders;
+            let view = super::non_prose_view(&processed, true);
+            let indexed = super::indexed_footnote_labels(&processed, true);
+            let (always_parsed, _) = super::select_excerpt(
+                &view.redact(&processed, |label| indexed.contains(label)),
+                &view.skip_lines,
+                strip_callout_marker,
+                true,
+            );
+            let gated = super::first_paragraph_excerpt(page, strip_callout_marker, true);
+            assert_eq!(
+                (gated.plain.as_str(), gated.markdown.as_str()),
+                (always_parsed.plain.as_str(), always_parsed.markdown.as_str()),
+                "{page:?}"
+            );
+        }
+    }
+    assert_eq!(extract_description(FOOTNOTE_GATE_PAGES[1], true), "The claim holds under load.");
+    assert_eq!(extract_description(FOOTNOTE_GATE_PAGES[2], true), "The prose after a bare marker.");
+}
+
+/// The page is parsed a second time only when a footnote marker sits in the
+/// prose the excerpt reads.
+#[test]
+fn the_excerpt_parses_the_page_again_only_when_its_lead_cites_a_note() {
+    let parses: Vec<usize> = FOOTNOTE_GATE_PAGES
+        .iter()
+        .map(|page| excerpt_parses_during(|| {
+            extract_description(page, true);
+        }))
+        .collect();
+    assert_eq!(parses, [0, 1, 1, 1, 1, 1, 1, 0]);
+}

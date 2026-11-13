@@ -788,6 +788,13 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
 }
 .moss-editor-cm .cm-content { padding: 20px 0 60px; cursor: text; }
 .moss-editor-cm .cm-line { padding-left: var(--moss-editor-line-inset); padding-right: var(--moss-editor-line-inset); }
+/* The inset for a pseudo-element positioned against the line: its `100%` is the line's width, a hang less than the padding's (`.cm-li-hang` has margin-left only), so it adds the hang back. */
+.moss-editor-cm .cm-line {
+  --moss-line-inset-box: max(
+    calc(var(--moss-editor-spine) + var(--moss-editor-hang-gutter)),
+    calc((100% + var(--lp-hang, 0px) - var(--moss-editor-measure)) / 2)
+  );
+}
 .moss-editor-cm .cm-focused { outline: none; }
 /* Empty-document ghost line (@codemirror/view placeholder()) — override CM6's
  * hard-coded #888 with the theme's muted color; vanishes on first input. */
@@ -1117,12 +1124,15 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
 
 .rename-input { flex: 1; min-width: 0; height: 20px; padding: 0 4px; font-size: 12px; font-family: inherit; color: var(--moss-color-text); background: var(--moss-color-bg); border: 1px solid var(--moss-color-accent); border-radius: 3px; outline: none; }
 
-/* ── Date input webkit styling ───────────────────────────────────────── */
+/* ── Date and time inputs ────────────────────────────────────────────── */
 
-.pop-input[type="date"] { font-family: inherit; color: var(--moss-color-text); }
-.pop-input[type="date"]::-webkit-calendar-picker-indicator { cursor: pointer; opacity: .5; border-radius: 2px; padding: 2px; }
-.pop-input[type="date"]::-webkit-calendar-picker-indicator:hover { opacity: .8; background: var(--moss-hover-overlay); }
-.pop-input[type="date"]::-webkit-inner-spin-button { display: none; }
+.pop-input:is([type="date"], [type="time"])::-webkit-calendar-picker-indicator { cursor: pointer; opacity: .5; border-radius: 2px; padding: 2px; }
+.pop-input:is([type="date"], [type="time"])::-webkit-calendar-picker-indicator:hover { opacity: .8; background: var(--moss-hover-overlay); }
+.pop-input:is([type="date"], [type="time"])::-webkit-inner-spin-button { display: none; }
+/* An event's date takes the row; its optional time keeps its own width. */
+.pop-event-time { display: flex; gap: 6px; }
+.pop-event-time [type="date"] { flex: 1; width: auto; }
+.pop-event-time [type="time"] { flex: none; width: auto; }
 
 /* ── Link resolution decorations ─────────────────────────────────────── */
 
@@ -1414,8 +1424,8 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
 .moss-editor-cm .cm-line.cm-callout-block::before {
   content: "";
   position: absolute;
-  left: calc(var(--moss-editor-line-inset, 28px) - var(--lp-hang, 0px));
-  right: var(--moss-editor-line-inset, 28px);
+  left: calc(var(--moss-line-inset-box, 28px) - var(--lp-hang, 0px));
+  right: var(--moss-line-inset-box, 28px);
   top: 0;
   bottom: 0;
   border-left: 3px solid var(--cm-callout-bar-color, var(--moss-border-medium));
@@ -1472,7 +1482,7 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
 
 /* ── Dark mode ───────────────────────────────────────────────────────── */
 
-[data-theme="dark"] .pop-input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(.8); }
+[data-theme="dark"] .pop-input:is([type="date"], [type="time"])::-webkit-calendar-picker-indicator { filter: invert(.8); }
 [data-theme="dark"] .moss-editor-cm .cm-line.cm-callout-block::before { background: rgba(120, 120, 138, 0.06); }
 [data-theme="dark"] .cm-criticmarkup-addition { background: rgba(16, 185, 129, 0.22); }
 [data-theme="dark"] .cm-criticmarkup-deletion { background: rgba(239, 68, 68, 0.22); }

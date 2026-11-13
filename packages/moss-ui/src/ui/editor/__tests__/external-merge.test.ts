@@ -82,6 +82,14 @@ describe('mergeExternal', () => {
     const merge = (base: Record<string, unknown>, disk: Record<string, unknown>, buffer: Record<string, unknown>) =>
       mergeExternal(doc('x\n', base), doc('x\n', disk), doc('x\n', buffer));
 
+    test('a channel chosen on the pill while the person is typing keeps the key and the words', () => {
+      const buffer = BASE.replace('Second paragraph.', 'Second paragraph, still typing.');
+      const merge = mergeExternal(doc(BASE, { title: 'A' }), doc(BASE, { title: 'A', syndicate: false }), doc(buffer, { title: 'A' }));
+      expect(isClean(merge)).toBe(true);
+      expect(apply(merge, buffer)).toBe(buffer);
+      expect(merge.frontmatter).toEqual({ title: 'A', syndicate: false });
+    });
+
     test('a key changed on one side takes that side, and a key the build stamped is added', () => {
       const m = merge({ title: 'A', tags: ['x'] }, { title: 'A', tags: ['x', 'y'], uid: '1a2b' }, { title: 'B', tags: ['x'] });
       expect(m).toMatchObject({ keys: [], frontmatter: { title: 'B', tags: ['x', 'y'], uid: '1a2b' } });

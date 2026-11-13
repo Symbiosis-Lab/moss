@@ -181,6 +181,12 @@ fn hidden_reasons(
     if doc.listed == Some(false) {
         reasons.push("unlisted".to_string());
     }
+    if doc.search_engines == Some(false) {
+        reasons.push("search-engines".to_string());
+    }
+    if doc.hidden_home.is_some() {
+        reasons.push("hidden-folder".to_string());
+    }
     if !doc.slot_only
         && crate::build::components::nav::is_listing_nav_item(doc, has_content_folders)
     {

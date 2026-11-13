@@ -661,7 +661,7 @@ fn an_event_card_keeps_its_meta_line_and_takes_the_byline_only_as_description() 
 }
 
 /// `props_for_document` reads the page's resolved place straight off
-/// `ParsedDocument::place_names` — the same field `build::terms::set_place_lines`
+/// `ParsedDocument::place_names` — the same field `build::terms::set_term_lines`
 /// fills — rather than re-deriving it.
 #[test]
 fn props_for_document_carries_the_resolved_place() {
@@ -797,7 +797,7 @@ fn every_card_style_names_the_file_it_stands_for() {
     assert!(row.starts_with(&format!(r#"<div class="moss-card" {attr}>"#)), "{row}");
     let summary = child_summary::render_with_sort(&p, Language::En, None, None, moss_core::sort::SortAxis::Date);
     assert!(summary.contains(&format!(r#"class="moss-card" {attr}>"#)), "{summary}");
-    let grid = grid_card::render_item_with_typesetting(&p, None, Language::En, None, None, false, false);
+    let grid = grid_card::render_item_with_typesetting(&p, None, Language::En, None, None, false, false, None);
     assert!(grid.starts_with("<a ") && grid.contains(&format!(r#" {attr}>"#)), "{grid}");
     let year_row = render(
         &ArticleListItemProps {

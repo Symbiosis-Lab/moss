@@ -299,6 +299,9 @@ jobs:
           cargo build --release -p moss-cli
           test -f ./target/release/moss-cli || { echo "::error::moss-cli not found after build"; exit 1; }
 
+      - name: Reference pages match `moss describe`
+        run: MOSS_BIN=./target/release/moss-cli node scripts/sync-reference.mjs --check
+
       - uses: actions/upload-artifact@v7
         with:
           name: moss-cli-linux-release

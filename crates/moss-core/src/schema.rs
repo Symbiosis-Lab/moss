@@ -444,7 +444,10 @@ mod tests {
         // (`inferred` is internal: skip_schema, so absent from `fields`.)
         // (`color` added 2026-10 — a folder home's section accent.)
         // (`partial` added 2026-10 — a transclusion source that is never built.)
-        assert_eq!(schema.frontmatter.fields.len(), 71);
+        // (`search_engines` — a page's own noindex.)
+        // (`chrome` — a page without the site's frame.)
+        // (`members` — who may read a page's body.)
+        assert_eq!(schema.frontmatter.fields.len(), 75);
     }
 
     #[test]

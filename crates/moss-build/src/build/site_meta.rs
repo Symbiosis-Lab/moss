@@ -4,4 +4,5 @@
 
 pub mod favicon;
 pub mod mount;
+pub mod site_identity;
 pub mod spa_inject;

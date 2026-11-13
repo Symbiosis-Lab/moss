@@ -48,7 +48,7 @@ pub(crate) fn count_listable_articles<D: std::borrow::Borrow<ParsedDocument>>(
             d.url_path != self_url
                 && d.url_path.starts_with(prefix)
                 && d.kind == moss_core::PageKind::Article
-                && d.is_listable()
+                && d.is_listable_in(prefix)
         })
         .count()
 }

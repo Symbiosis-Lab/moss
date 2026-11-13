@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
+use crate::build::folder_embed::inline_body::{dir_segments, listed_body, relative};
 use crate::build::enhance::{EnhanceContent, EnhanceResult, ResolvedSlots};
 use crate::build::manifest::{HashBucket, PendingManifest};
 use crate::build::served_path::ServedPath;
@@ -81,6 +82,12 @@ pub(crate) struct ListingFill {
 }
 
 impl ParsedDocument {
+    /// Whether this page's listing is drawn from its children's bodies, which
+    /// the listing digests deliberately ignore: a plugin style or `stream`.
+    pub(crate) fn reads_child_bodies(&self) -> bool {
+        self.plugin_listing_style().is_some() || crate::build::folder_embed::is_stream_host(self)
+    }
+
     /// The plugin-style id this folder home page asks for, when it draws a
     /// listing and names a style other than moss's own.
     pub(crate) fn plugin_listing_style(&self) -> Option<&str> {
@@ -137,75 +144,23 @@ fn with_content_width(html: String, width: &str) -> String {
     format!("{} data-content-width=\"{}\"{}", &html[..insert], width, &html[insert..])
 }
 
-/// Directory of a served page, as segments: `board/sub/index.html` is
-/// `["board", "sub"]`.
-fn dir_segments(url_path: &str) -> Vec<String> {
-    let dir = url_path.rsplit_once('/').map_or("", |(dir, _)| dir);
-    dir.split('/').filter(|s| !s.is_empty()).map(str::to_string).collect()
-}
-
-/// The path from directory `from` to `to_segments`, `../` as needed.
-fn relative(from: &[String], to: &[String]) -> String {
-    let common = from.iter().zip(to).take_while(|(a, b)| a == b).count();
-    let mut parts: Vec<&str> = vec![".."; from.len() - common];
-    parts.extend(to[common..].iter().map(String::as_str));
-    parts.join("/")
-}
-
-/// Rewrite the relative references in a page body so they resolve from
-/// `to_dir` instead of from the page `page_url_path`.
-fn rebase_html(html: &str, page_url_path: &str, to_dir: &[String]) -> String {
-    static ATTR: std::sync::LazyLock<regex::Regex> =
-        std::sync::LazyLock::new(|| regex::Regex::new(r#"((?:src|srcset|poster|href)=")([^"]*)""#).unwrap());
-    let page_dir = dir_segments(page_url_path);
-    let rebase_one = |url: &str| -> String {
-        let skip = url.is_empty()
-            || url.starts_with('/')
-            || url.starts_with('#')
-            || url.contains("://")
-            || url.split(':').next().is_some_and(|scheme| url.contains(':') && scheme.chars().all(|c| c.is_ascii_alphabetic()));
-        if skip {
-            return url.to_string();
-        }
-        let (path, suffix) = match url.find(['?', '#']) {
-            Some(i) => url.split_at(i),
-            None => (url, ""),
-        };
-        let mut segments = page_dir.clone();
-        for part in path.split('/') {
-            match part {
-                "" | "." => {}
-                ".." => {
-                    segments.pop();
-                }
-                other => segments.push(other.to_string()),
-            }
-        }
-        let mut rebased = relative(to_dir, &segments);
-        if path.ends_with('/') && !rebased.is_empty() {
-            rebased.push('/');
-        }
-        if rebased.is_empty() {
-            rebased.push_str("./");
-        }
-        format!("{rebased}{suffix}")
-    };
-    ATTR.replace_all(html, |caps: &regex::Captures| {
-        let value = if caps[1].starts_with("srcset") {
-            caps[2]
-                .split(", ")
-                .map(|candidate| match candidate.split_once(' ') {
-                    Some((url, descriptor)) => format!("{} {descriptor}", rebase_one(url)),
-                    None => rebase_one(candidate),
-                })
-                .collect::<Vec<_>>()
-                .join(", ")
-        } else {
-            rebase_one(&caps[2])
-        };
-        format!("{}{}\"", &caps[1], value)
-    })
-    .into_owned()
+/// The folders under `listing_dir` a plugin's listing on `page` is handed:
+/// those moss's own listing of that folder may show. The root's address prefix
+/// is empty, so without the edition check a root listing would take in every
+/// edition's folders as well.
+fn listing_folders<'a>(page: &ParsedDocument, documents: &'a [ParsedDocument], listing_dir: &[String]) -> Vec<&'a ParsedDocument> {
+    let folder: String = listing_dir.iter().map(|segment| format!("{segment}/")).collect();
+    documents
+        .iter()
+        .filter(|d| {
+            d.kind == moss_core::PageKind::Folder
+                && d.source_path.is_some()
+                && d.url_path != page.url_path
+                && d.is_listable_in(&folder)
+                && dir_segments(&d.url_path).starts_with(listing_dir)
+                && d.edition == page.edition
+        })
+        .collect()
 }
 
 fn lang_tag(doc: &ParsedDocument) -> String {
@@ -223,15 +178,6 @@ fn resolved_frontmatter(doc: &ParsedDocument) -> BTreeMap<String, serde_json::Va
     }
     frontmatter.insert("title".to_string(), serde_json::Value::String(doc.title.clone()));
     frontmatter
-}
-
-/// The body without the heading moss draws from the page's title: the record
-/// carries the title as a field, and a plugin that lists the page draws its own.
-fn without_title(html: &str) -> String {
-    static HEADING: std::sync::LazyLock<regex::Regex> =
-        std::sync::LazyLock::new(|| regex::Regex::new(r#"(?s)<h1 class="moss-article-title"[^>]*>.*?</h1>\n?"#).unwrap());
-    // The editor's source-line markers are not part of a published page either.
-    crate::build::ship::strip_source_annotations(&HEADING.replacen(html, 1, "")).into_owned()
 }
 
 /// A page's directory address ("a/b/") as seen from the listing directory.
@@ -288,7 +234,7 @@ fn record(doc: &ParsedDocument, listing_dir: &[String], with_body: bool) -> Page
         frontmatter,
         fields: doc.declared.iter().filter_map(|(name, value)| Some((name.clone(), serde_json::to_value(value).ok()?))).collect(),
         field_errors: doc.field_errors.clone(),
-        html: if with_body { rebase_html(&without_title(&doc.html_content), &doc.url_path, listing_dir) } else { String::new() },
+        html: if with_body { listed_body(doc, listing_dir) } else { String::new() },
         folder,
     }
 }
@@ -397,19 +343,7 @@ pub(crate) fn apply(
         let dir = own_dir(page).unwrap_or_default();
         let listing_dir: Vec<String> = dir.split('/').filter(|s| !s.is_empty()).map(str::to_string).collect();
         let children = listing_members(page, documents, project, now);
-        // The root's address prefix is empty, so without the edition check a
-        // root listing would take in every edition's folders as well.
-        let folders: Vec<&ParsedDocument> = documents
-            .iter()
-            .filter(|d| {
-                d.kind == moss_core::PageKind::Folder
-                    && d.source_path.is_some()
-                    && d.url_path != page.url_path
-                    && d.is_public_page()
-                    && dir_segments(&d.url_path).starts_with(&listing_dir)
-                    && d.edition == page.edition
-            })
-            .collect();
+        let folders = listing_folders(page, documents, &listing_dir);
         let ctx = ListingContext {
             model: LISTING_MODEL,
             style: style.to_string(),
@@ -524,13 +458,28 @@ mod tests {
         path.split('/').filter(|s| !s.is_empty()).map(str::to_string).collect()
     }
 
+    /// A plugin is handed the folders moss's own listing would show: not a
+    /// hidden folder from a listing outside it, but the folders inside it from
+    /// its own home.
     #[test]
-    fn a_body_is_rebased_from_its_page_to_the_listing() {
-        let html = r##"<img src="../pic.jpg"> <a href="../../beta/#x">b</a> <a href="/abs/">a</a> <a href="https://e.com/">e</a> <a href="#top">t</a>"##;
-        let out = rebase_html(html, "board/sub/alpha/index.html", &segs("board"));
-        assert!(out.contains(r#"src="sub/pic.jpg""#), "{out}");
-        assert!(out.contains(r#"href="beta/#x""#), "{out}");
-        assert!(out.contains(r#"href="/abs/""#) && out.contains(r#"href="https://e.com/""#) && out.contains(r##"href="#top""##), "{out}");
+    fn a_plugin_listing_gets_no_hidden_folder_from_outside_it() {
+        let folder = |url: &str| ParsedDocument {
+            url_path: url.to_string(),
+            source_path: Some(url.replace(".html", ".md")),
+            kind: moss_core::PageKind::Folder,
+            ..Default::default()
+        };
+        let root = folder("index.html");
+        let mut acme = folder("acme/index.html");
+        acme.search_engines = Some(false);
+        let mut second = folder("acme/second/index.html");
+        second.hidden_home = Some("acme/".to_string());
+        let docs = vec![root.clone(), folder("open/index.html"), acme.clone(), second];
+        let urls = |page: &ParsedDocument, dir: &str| -> Vec<String> {
+            listing_folders(page, &docs, &segs(dir)).iter().map(|d| d.url_path.clone()).collect()
+        };
+        assert_eq!(urls(&root, ""), ["open/index.html"]);
+        assert_eq!(urls(&acme, "acme"), ["acme/second/index.html"]);
     }
 
     #[test]

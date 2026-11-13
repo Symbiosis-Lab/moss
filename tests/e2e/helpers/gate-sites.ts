@@ -810,6 +810,46 @@ link_preview = false
   },
 };
 
+// ── `chrome: none`: one page without the site's frame ───────────────────────
+// A landing page whose title is long enough to reach the controls, beside an
+// ordinary page. Served by playwright/page-chrome-none.config.ts.
+export const PAGE_CHROME_NONE_GATE: ScratchSiteSpec = {
+  name: "page-chrome-none-gate",
+  files: {
+    "index.md": `---
+title: Harbour
+uid: "pcn00001"
+---
+
+Home text.
+`,
+    "landing.md": `---
+title: An open day at the harbour for everyone who lives along the estuary
+uid: "pcn00002"
+chrome: none
+---
+
+Come along on Saturday.
+`,
+    "about.md": `---
+title: About
+uid: "pcn00003"
+nav: true
+---
+
+Who we are.
+`,
+    "footer.md": "Write to us.\n",
+    ".moss/config.toml": `schema_version = 5
+
+[site]
+lang = "en"
+link_preview = false
+`,
+    ".moss/theme/style.css": null,
+  },
+};
+
 // ── A grid-card image fills the card's inline size ───────────────────────────
 // An internal whole-cell image link renders as `a.moss-grid-card[data-kind=
 // "link"]` wrapping a `<figure class="moss-image">`; nothing stretches that
@@ -1055,10 +1095,14 @@ const VERTICAL_BODY = Array.from({ length: 12 }, () =>
 const HERO_LINK_WORDS = `[A text link](/notes/) runs on into the rest of a sentence.
 
 [Plan a visit](/visit/)`;
+// The closing picture's last line is a small logo inside a link: an image in
+// the words, which must stay inline text-sized, not become the picture.
+const HERO_MARK_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 64 64"><circle cx="32" cy="32" r="30" fill="#c33"/></svg>`;
 export const HERO_LINKS_GATE: ScratchSiteSpec = {
   name: "hero-links-gate",
   files: {
     "cover.svg": HERO_PORTRAIT_SVG,
+    "mark.svg": HERO_MARK_SVG,
     "index.md": `---
 title: Hero links
 uid: "hlg00101"
@@ -1074,6 +1118,8 @@ Body text.
 `,
     "footer.md": `:::hero {image=cover.svg align=top}
 ${HERO_LINK_WORDS}
+
+[![Example mark](mark.svg) Example mark](https://example.org)
 :::
 `,
   },
@@ -1628,6 +1674,94 @@ nav: true
 `,
     ".moss/config.toml": CONFIG_TOML,
     // No user theme: this gate is about moss's own defaults.
+    ".moss/theme/style.css": null,
+  },
+};
+
+// ── Header submenu ──
+// `Services` is the last header entry, so its toggle sits at the end edge of
+// the row, where an open panel is most likely to overflow. Its label is CJK
+// and its first child's label is long, so the panel is wide at a 321px
+// viewport. `Harbour` is a header folder whose child is not in the header:
+// it gets a plain link and no toggle.
+export const NAV_SUBMENU_GATE: ScratchSiteSpec = {
+  name: "nav-submenu-gate",
+  files: {
+    "index.md": `---
+title: Harbour Watch
+uid: "nsg00101"
+---
+
+# Harbour Watch
+`,
+    "poster.png": POSTER_PNG,
+    "cover.md": `---
+title: Cover
+uid: "nsg00108"
+listed: false
+---
+
+:::hero {header=over}
+![](/poster.png)
+
+Cover words
+:::
+
+Body text.
+`,
+    "About.md": `---
+title: About
+uid: "nsg00102"
+nav: true
+weight: 1
+---
+
+# About
+`,
+    "Harbour/index.md": `---
+title: Harbour
+uid: "nsg00103"
+nav: true
+weight: 2
+---
+
+# Harbour
+`,
+    "Harbour/Tides.md": `---
+title: Tides
+uid: "nsg00104"
+---
+
+# Tides
+`,
+    "Services/index.md": `---
+title: 社區保護
+uid: "nsg00105"
+nav: true
+weight: 3
+---
+
+# 社區保護
+`,
+    "Services/Patrol.md": `---
+title: Evening patrol rounds and incident reports
+uid: "nsg00106"
+nav: true
+weight: 1
+---
+
+# Patrol
+`,
+    "Services/Gate.md": `---
+title: Gate
+uid: "nsg00107"
+nav: true
+weight: 2
+---
+
+# Gate
+`,
+    ".moss/config.toml": CONFIG_TOML,
     ".moss/theme/style.css": null,
   },
 };
@@ -4531,6 +4665,34 @@ Body.
 const LEAD_TILE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="600" height="400" fill="#4a7"/></svg>
 `;
 
+// Short posts drawn whole by `style:stream`, on a home (one post, then the More
+// link) and on their folder's own page. Served by playwright/stream-listing.config.ts.
+export const STREAM_LISTING_GATE: ScratchSiteSpec = {
+  name: "stream-listing-gate",
+  files: {
+    "index.md": `---
+title: Stream Listing
+uid: "strm0001"
+children: false
+---
+
+## Notes
+
+![[notes/|style:stream,limit:1]]
+`,
+    "notes/index.md": `---
+title: Notes
+uid: "strm0010"
+children_style: stream
+content_width: wide
+---
+`,
+    "notes/2026-01-02 0910.md": "A first short post, a sentence or two long.\n",
+    "notes/2026-01-03 1200.md": "A second short post.\n\nWith a second paragraph.\n",
+    "notes/2026-01-04 0800.md": "The newest short post.\n",
+  },
+};
+
 // A folder drawn with `children_style: lead`: a first item with a picture and
 // three more. Served by playwright/lead-listing.config.ts.
 export const LEAD_LISTING_GATE: ScratchSiteSpec = {
@@ -4769,6 +4931,19 @@ country_map:
 | Russia | Elevated | |
 | Singapore | Low | |
 `,
+    "living.md": `---
+title: Open now
+date: 2026-11-03
+country_map:
+  by: Level
+  levels: [Closed, Open]
+  as_of: today
+---
+| Country | Level |
+|---|---|
+| Japan | Open |
+| Chile | Closed |
+`,
     ".moss/config.toml": `schema_version = 6
 
 [site]
@@ -4819,5 +4994,107 @@ children: false
     "work/alpha.md": STRIP_PROJECT("Alpha Ventures"),
     "work/beta.md": STRIP_PROJECT("Beta Ventures"),
     "work/gamma.md": STRIP_PROJECT("Gamma Ventures"),
+  },
+};
+
+/** An ordered series of three pages, the middle one with a title long enough
+ * to wrap in a phone's half-width link. */
+export const SERIES_NAV_GATE: ScratchSiteSpec = {
+  name: "series-nav-gate",
+  files: {
+    "index.md": `---
+title: Field Course
+uid: "srn00101"
+---
+
+# Field Course
+`,
+    "course/index.md": `---
+title: Course
+uid: "srn00102"
+series: true
+sort: weight
+---
+`,
+    "course/one.md": `---
+title: Reading the ground
+uid: "srn00103"
+weight: 1
+---
+
+The first lesson.
+`,
+    "course/two.md": `---
+title: Measuring a slope by eye, with a pole and a length of string
+uid: "srn00104"
+weight: 2
+---
+
+The second lesson.
+`,
+    "course/three.md": `---
+title: Mapping
+uid: "srn00105"
+weight: 3
+---
+
+The third lesson.
+`,
+    ".moss/config.toml": `schema_version = 5
+
+[site]
+lang = "en"
+`,
+  },
+};
+
+const CARD_MIN_ENTRY = (title: string, uid: string, weight: number, description = "") => `---
+title: ${title}
+uid: "${uid}"
+weight: ${weight}
+${description ? `description: ${description}\n` : ""}---
+
+${title}.
+`;
+
+/** A theme that asks for small cards (\`--moss-card-min\`), over a grid
+ * listing with descriptions and a bare-label roster (the index state). */
+export const CARD_MIN_TOKEN_GATE: ScratchSiteSpec = {
+  name: "card-min-token-gate",
+  files: {
+    "index.md": `---
+title: Shelves
+uid: "cmt00101"
+---
+
+# Shelves
+
+## Shelf
+
+![[shelf/|style:grid,sort:weight]]
+
+## Roster
+
+![[roster/|style:grid,sort:weight]]
+`,
+    "shelf/index.md": `---\ntitle: Shelf\nuid: "cmt00102"\n---\n`,
+    "shelf/a.md": CARD_MIN_ENTRY("Alder", "cmt00103", 1, "A short note."),
+    "shelf/b.md": CARD_MIN_ENTRY("Birch", "cmt00104", 2, "A short note."),
+    "shelf/c.md": CARD_MIN_ENTRY("Cedar", "cmt00105", 3, "A short note."),
+    "shelf/d.md": CARD_MIN_ENTRY("Damson", "cmt00106", 4, "A short note."),
+    "roster/index.md": `---\ntitle: Roster\nuid: "cmt00107"\n---\n`,
+    "roster/a.md": CARD_MIN_ENTRY("Ash", "cmt00108", 1),
+    "roster/b.md": CARD_MIN_ENTRY("Beech", "cmt00109", 2),
+    "roster/c.md": CARD_MIN_ENTRY("Cherry", "cmt00110", 3),
+    "roster/d.md": CARD_MIN_ENTRY("Dogwood", "cmt00111", 4),
+    ".moss/theme/style.css": `:root {
+  --moss-card-min: 7rem;
+}
+`,
+    ".moss/config.toml": `schema_version = 5
+
+[site]
+lang = "en"
+`,
   },
 };

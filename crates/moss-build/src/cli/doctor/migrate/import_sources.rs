@@ -1,7 +1,7 @@
 //! An import's source address moved out of `syndicated:` into `origin:`.
 //!
 //! `moss import` once recorded the page it imported from in `syndicated:`,
-//! which says the page also lives there, so the page marks that address as
+//! which says the page also lives there, so moss treats that address as
 //! a copy. Nothing in a page tells a source from a copy, so the
 //! author lists the source addresses and only those move. An address moss
 //! itself posted a copy to never moves, and a page already naming a

@@ -248,7 +248,7 @@ pub struct FrontMatter {
         serialize_with = "serialize_term_claim"
     )]
     pub place_page: Option<crate::terms::TermClaim>,
-    /// The country-map settings (`by`, `levels`, `unrated`, `action`, `search`), carried
+    /// The country-map settings (`by`, `levels`, `unrated`, `action`, `search`, `as_of`), carried
     /// as written: moss-build reads them, so a malformed block is a build
     /// problem naming the page instead of a frontmatter parse failure.
     pub country_map: Option<Value>,
@@ -350,6 +350,9 @@ pub struct FrontMatter {
     /// regardless of filename. Written by moss on homes it creates; survives rename.
     #[serde(default, deserialize_with = "deserialize_bool_lenient")]
     pub home: Option<bool>,
+    /// Restrict this page to members. Invalid values fail closed as subscribers.
+    #[serde(default, deserialize_with = "crate::frontmatter::members::deserialize_members")]
+    pub members: Option<crate::frontmatter::members::Members>,
     /// Draft: built so the preview can show it, but never published, and
     /// hidden from all listings, feeds, sitemap, and navigation (and marked
     /// `noindex`).
@@ -364,6 +367,11 @@ pub struct FrontMatter {
     /// are independent of this flag.
     #[serde(default, deserialize_with = "deserialize_bool_lenient")]
     pub listed: Option<bool>,
+    /// `false` asks search engines not to index the page (`noindex`) and keeps
+    /// it off every surface that names pages to the whole site; on a folder's
+    /// home it covers everything in the folder.
+    #[serde(default, deserialize_with = "deserialize_bool_lenient")]
+    pub search_engines: Option<bool>,
     /// Partial: the page exists only to be transcluded into other pages
     /// (`![[name]]`). It resolves like any page but is never built, listed,
     /// or given a URL, so it is absent from nav, sitemap, feeds, search and
@@ -399,6 +407,9 @@ pub struct FrontMatter {
     pub children_group: Option<String>,
     /// What children to include: "direct" (default), "all" descendants
     pub children_depth: Option<String>,
+    /// "here" keeps the pages under this folder out of every ancestor's
+    /// `depth: all` listing; "everywhere" (or absent) lists them as usual.
+    pub children_listed: Option<String>,
     /// Where to render the children feed: "body" (default) or "sidebar".
     /// Resolved at consumer; absent means body.
     pub children_in: Option<String>,
@@ -477,6 +488,8 @@ pub struct FrontMatter {
     pub content_width: Option<String>,
     /// Where the title block goes: "after-picture" puts it under the body's leading picture, "beside-picture" next to it
     pub title_block: Option<String>,
+    /// `none` draws the page without the site's header, nav island and footer
+    pub chrome: Option<String>,
     /// `false` removes the reader's text-size control from a dated page; unset or `true` keeps it
     #[serde(default, deserialize_with = "deserialize_bool_lenient")]
     pub reader_controls: Option<bool>,
@@ -853,7 +866,7 @@ pub fn frontmatter_ref_to_stem(s: &str) -> String {
 
     // If the result looks like a file path (has / or .md extension),
     // extract the meaningful name.
-    if cleaned.contains('/') || cleaned.ends_with(".md") {
+    if cleaned.contains('/') || crate::source_edit::policy::is_page_path(std::path::Path::new(cleaned)) {
         #[allow(clippy::unwrap_used)] // rsplit always has at least one element
         let filename = cleaned.rsplit('/').next().unwrap_or(cleaned);
         #[allow(clippy::string_slice)] // byte index from rfind is char-aligned (ASCII dot)
@@ -970,8 +983,8 @@ pub(crate) fn is_frontmatter_field_line(trimmed: &str) -> bool {
 /// Keys that may be written bare, as `nav` rather than `nav: true`. Must stay in
 /// step with the bare-flag arm of [`parse_simplified_frontmatter`];
 /// `every_bare_flag_is_recognised_by_the_parser` fails if it drifts.
-pub(crate) const SIMPLIFIED_BARE_FLAGS: [&str; 9] = [
-    "nav", "home", "draft", "listed", "partial", "breadcrumb", "footer", "comments", "children",
+pub(crate) const SIMPLIFIED_BARE_FLAGS: [&str; 10] = [
+    "nav", "home", "draft", "listed", "partial", "breadcrumb", "footer", "comments", "children", "members",
 ];
 
 /// The field names a simplified frontmatter block declares, in source order.
@@ -1040,6 +1053,10 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
             let value = trimmed[colon_pos + 1..].trim();
 
             match key {
+                "members" => {
+                    let value = serde_yaml::from_str(value).unwrap_or(serde_yaml::Value::Null);
+                    frontmatter.members = Some(crate::frontmatter::members::Members::from_value(&value));
+                }
                 "title" => frontmatter.title = Some(value.to_string()),
                 "date" => frontmatter.date = Some(value.to_string()),
                 "start" => frontmatter.start = Some(value.to_string()),
@@ -1071,6 +1088,13 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                 "children_style" => frontmatter.children_style = Some(value.to_string()),
                 "children_group" => frontmatter.children_group = Some(value.to_string()),
                 "children_depth" => frontmatter.children_depth = Some(value.to_string()),
+                "children_listed" => match value {
+                    "here" | "everywhere" => frontmatter.children_listed = Some(value.to_string()),
+                    _ => eprintln!(
+                        "Warning: children_listed: \"{}\" is not valid. Use \"here\" or \"everywhere\".",
+                        value
+                    ),
+                },
                 "children_in" => match value {
                     "body" | "sidebar" => frontmatter.children_in = Some(value.to_string()),
                     _ => eprintln!(
@@ -1163,7 +1187,7 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                         }
                     };
                 }
-                "nav" | "home" | "draft" | "listed" | "partial" | "footer" | "comments" => {
+                "nav" | "home" | "draft" | "listed" | "search_engines" | "partial" | "footer" | "comments" => {
                     let unquoted = value.trim_matches(|c| c == '\'' || c == '"');
                     // Anything other than "true"/"false" is a likely typo (e.g.
                     // "yes", "Ture"); warn rather than silently defaulting to
@@ -1185,6 +1209,7 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                         "home" => frontmatter.home = flag,
                         "draft" => frontmatter.draft = flag,
                         "listed" => frontmatter.listed = flag,
+                        "search_engines" => frontmatter.search_engines = flag,
                         "partial" => frontmatter.partial = flag,
                         "footer" => frontmatter.footer = flag,
                         "comments" => frontmatter.comments = flag,
@@ -1210,6 +1235,7 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
         } else {
             // Boolean flag (just the word)
             match trimmed {
+                "members" => frontmatter.members = Some(crate::frontmatter::members::Members::Subscribers),
                 "nav" => frontmatter.nav = Some(true),
                 "home" => frontmatter.home = Some(true),
                 "draft" => frontmatter.draft = Some(true),
@@ -2049,7 +2075,7 @@ mod url_path_tests {
             let (fm, _) = parse_simplified_frontmatter(&content);
             let set = format!("{fm:?}");
             assert!(
-                set.contains("Some(true)") || set.contains("Some(On)"),
+                set.contains("Some(true)") || set.contains("Some(On)") || set.contains("Some(Subscribers)"),
                 "`{flag}` is detected but the parser sets no field from it"
             );
         }

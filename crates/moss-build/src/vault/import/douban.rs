@@ -15,17 +15,18 @@
 //! A page with images becomes a bundle (`<kind>/<id>/index.md` beside its
 //! images). Tables not listed above are counted and ignored.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::Path;
 
 use serde_json::Value;
 
-use super::scrape::converter::extract_image_urls_in_markdown;
-use super::scrape::fetch::{download_asset, strip_query};
-use super::scrape::run::{write_note, ScrapeResult};
-use super::scrape::service::{default_user_agent, escape_yaml_string, push_string_list};
-use super::scrape::writer::{rename_for_collision, sanitize_filename};
+use super::scrape::fetch::strip_query;
+use super::scrape::run::ScrapeResult;
+use super::scrape::service::default_user_agent;
+use super::page::{ImportedPage, PageStyle, media::write_bundle_page};
+use moss_core::frontmatter_typed::FrontMatter;
+use super::scrape::writer::sanitize_filename;
 
 /// Query parameters Douban appends to links to track where a click came from.
 const TRACKING_PARAMS: &[&str] = &["_spm_id", "_i"];
@@ -100,37 +101,13 @@ impl TofuReport {
     }
 }
 
-/// A frontmatter value.
-enum Field {
-    Str(String),
-    Int(i64),
-    List(Vec<String>),
-}
-
-/// One page, before its images are fetched.
-struct Page {
+/// Source-specific routing and diagnostics around the shared page.
+struct BackupItem {
     folder: String,
     slug: String,
-    fields: Vec<(&'static str, Field)>,
-    body: String,
-    /// The item's own address, which images are fetched on behalf of.
-    page_url: Option<String>,
+    page: ImportedPage,
     partial: bool,
     html_failed: bool,
-}
-
-impl Page {
-    /// Each image reference as written, and the absolute URL to fetch it from.
-    fn images(&self) -> Vec<(String, String)> {
-        extract_image_urls_in_markdown(&self.body)
-            .into_iter()
-            .filter_map(|raw| match raw.strip_prefix("//") {
-                Some(rest) => Some((raw.clone(), format!("https://{rest}"))),
-                None if raw.starts_with("http") => Some((raw.clone(), raw)),
-                None => None,
-            })
-            .collect()
-    }
 }
 
 pub(crate) async fn import_tofu_backup(
@@ -169,73 +146,31 @@ pub(crate) async fn import_tofu_backup(
     }
 
     let user_agent = default_user_agent();
-    for page in &mut pages {
-        let images = page.images();
-        let bundle = !images.is_empty();
-        let mut dir = if bundle {
-            format!("{}/{}", page.folder, page.slug)
-        } else {
-            page.folder.clone()
-        };
-        if bundle {
-            // A second page with the same id must not write into the first's folder.
-            let base = dir.clone();
-            let mut n = 2;
-            while output_dir.join(&dir).exists() {
-                dir = format!("{base} {n}");
-                n += 1;
-            }
-        }
-        let mut local: HashMap<String, String> = HashMap::new();
-        if bundle {
-            std::fs::create_dir_all(output_dir.join(&dir))
-                .map_err(|e| format!("Failed to create directory: {e}"))?;
-        }
-        for (raw, url) in images {
-            match download_asset(
-                &url,
-                &output_dir.join(&dir),
-                &user_agent,
-                page.page_url.as_deref(),
-            )
-            .await
-            {
-                Ok(file) => {
-                    report.media_downloaded += 1;
-                    local.insert(raw, format!("./{file}"));
-                }
-                Err(e) => {
-                    report.media_failed += 1;
-                    log::warn!("import: image download failed, keeping remote URL: {url}: {e}");
-                }
-            }
-        }
-        page.body = super::scrape::converter::rewrite_image_links(&page.body, &local);
-        let rel = if bundle {
-            format!("{dir}/index.md")
-        } else {
-            format!("{}/{}.md", page.folder, page.slug)
-        };
-        let rel = rename_for_collision(output_dir, &rel);
-        write_note(output_dir, &rel, &render(&page.fields, &page.body))?;
-        *report.pages.entry(page.folder.clone()).or_default() += 1;
-        report.partial += usize::from(page.partial);
+    for item in &mut pages {
+        let written = write_bundle_page(&mut item.page, output_dir, &item.folder, &item.slug, &user_agent).await?;
+        *report.pages.entry(item.folder.clone()).or_default() += written.pages_written;
+        report.media_downloaded += written.media_downloaded;
+        report.media_failed += written.media_failed;
+        report.partial += usize::from(item.partial);
     }
 
     for folder in report.pages.keys() {
         let rel = format!("{folder}/index.md");
         if !output_dir.join(&rel).exists() {
-            let fields = [
-                ("title", Field::Str(collection_title(folder))),
-                ("children_group", Field::Str("year".into())),
-            ];
-            write_note(output_dir, &rel, &render(&fields, ""))?;
+            ImportedPage {
+                frontmatter: FrontMatter {
+                    title: Some(collection_title(folder)), children_group: Some("year".into()),
+                    ..Default::default()
+                },
+                body: String::new(),
+            }.write(output_dir, &rel, PageStyle::Backup)?;
         }
     }
 
     let total = report.pages.values().sum();
     Ok((
         ScrapeResult {
+        restricted_pages: 0,
             success: true,
             total_pages: total,
             failed_pages: 0,
@@ -285,7 +220,7 @@ fn read_json(archive: &mut Archive, name: &str) -> Result<Value, String> {
 }
 
 enum Row {
-    Page(Page),
+    Page(BackupItem),
     Skipped,
     Unknown,
 }
@@ -350,35 +285,16 @@ fn date_of(v: &Value) -> Option<String> {
     }
 }
 
-fn stars(v: &Value) -> Option<i64> {
+fn stars(v: &Value) -> Option<u8> {
     v["value"]
         .as_f64()
-        .map(|n| n.round() as i64)
+        .map(|n| n.round() as u8)
         .filter(|n| (1..=5).contains(n))
 }
 
-fn push<T>(
-    fields: &mut Vec<(&'static str, Field)>,
-    key: &'static str,
-    v: Option<T>,
-    make: impl FnOnce(T) -> Field,
-) {
-    if let Some(v) = v {
-        fields.push((key, make(v)));
-    }
-}
-
 /// The fields every item with its own address shares.
-fn common(
-    obj: &Value,
-    title: Option<String>,
-    origin: Option<String>,
-) -> Vec<(&'static str, Field)> {
-    let mut fields = Vec::new();
-    push(&mut fields, "title", title, Field::Str);
-    push(&mut fields, "date", date_of(&obj["create_time"]), Field::Str);
-    push(&mut fields, "origin", origin, Field::Str);
-    fields
+fn common(obj: &Value, title: Option<String>, origin: Option<String>) -> FrontMatter {
+    FrontMatter { title, date: date_of(&obj["create_time"]), origin, ..Default::default() }
 }
 
 /// A note or review body: the HTML through the importer's htmd path, else the
@@ -399,36 +315,32 @@ fn article_body(item: &Value) -> Option<(String, bool, bool)> {
     text(&item["abstract"]).map(|a| (a, true, html_failed))
 }
 
-fn note_page(row: &Value) -> Option<Page> {
+fn note_page(row: &Value) -> Option<BackupItem> {
     let id = slug(&row["id"])?;
     let note = &row["note"];
     let (body, partial, html_failed) = article_body(note)?;
     let origin = link(&note["url"]);
-    Some(Page {
+    Some(BackupItem {
         folder: "note".into(),
         slug: id,
-        fields: common(note, text(&note["title"]), origin.clone()),
-        body,
-        page_url: origin,
+        page: ImportedPage { frontmatter: common(note, text(&note["title"]), origin), body },
         partial,
         html_failed,
     })
 }
 
-fn review_page(row: &Value) -> Option<Page> {
+fn review_page(row: &Value) -> Option<BackupItem> {
     let id = slug(&row["id"])?;
     let review = &row["review"];
     let (body, partial, html_failed) = article_body(review)?;
     let origin = link(&review["url"]);
     let mut fields = common(review, text(&review["title"]), origin.clone());
-    push(&mut fields, "review_of", link(&review["subject"]["url"]), Field::Str);
-    push(&mut fields, "rating", stars(&review["rating"]), Field::Int);
-    Some(Page {
+    fields.review_of = link(&review["subject"]["url"]);
+    fields.rating = stars(&review["rating"]);
+    Some(BackupItem {
         folder: "review".into(),
         slug: id,
-        fields,
-        body,
-        page_url: origin,
+        page: ImportedPage { frontmatter: fields, body },
         partial,
         html_failed,
     })
@@ -449,37 +361,37 @@ fn mark_tag(kind: &str, status: &str) -> Option<String> {
     Some(words[at].to_string())
 }
 
-fn interest_page(row: &Value) -> Option<Page> {
+fn interest_page(row: &Value) -> Option<BackupItem> {
     let interest = &row["interest"];
     let subject = &interest["subject"];
     let kind = text(&row["type"]).or_else(|| text(&subject["type"]))?;
     let slug = slug(&subject["id"]).or_else(|| slug(&row["subject"]))?;
     // A mark has no address of its own, so there is no `origin` and no Referer.
     let mut fields = common(interest, text(&subject["title"]), None);
-    push(&mut fields, "review_of", link(&subject["url"]), Field::Str);
-    push(&mut fields, "rating", stars(&interest["rating"]), Field::Int);
+    fields.review_of = link(&subject["url"]);
+    fields.rating = stars(&interest["rating"]);
     let progress = text(&row["status"]).or_else(|| text(&interest["status"]));
     let tags: Vec<String> = progress
         .and_then(|st| mark_tag(&kind, &st))
         .into_iter()
         .chain(interest["tags"].as_array().into_iter().flatten().filter_map(text))
         .collect();
-    push(&mut fields, "tags", (!tags.is_empty()).then_some(tags), Field::List);
+    fields.tags = (!tags.is_empty()).then_some(tags);
     let folder = Some(sanitize_filename(&kind))
         .filter(|f| !f.is_empty())
         .unwrap_or_else(|| "other".into());
-    Some(Page {
+    Some(BackupItem {
         folder,
         slug,
-        fields,
-        body: text(&interest["comment"]).unwrap_or_default(),
-        page_url: None,
+        page: ImportedPage {
+            frontmatter: fields, body: text(&interest["comment"]).unwrap_or_default(),
+        },
         partial: false,
         html_failed: false,
     })
 }
 
-fn status_page(row: &Value) -> Option<Page> {
+fn status_page(row: &Value) -> Option<BackupItem> {
     let status = &row["status"];
     let id = slug(&status["id"]).or_else(|| slug(&row["id"]))?;
     let own_text = linkify(status["text"].as_str().unwrap_or(""), &status["entities"]);
@@ -521,12 +433,10 @@ fn status_page(row: &Value) -> Option<Page> {
 
     // `url` is the permanent address; `sharing_url` is an app dispatch link.
     let origin = text(&status["url"]).map(|u| strip_query(&u));
-    Some(Page {
+    Some(BackupItem {
         folder: "status".into(),
         slug: id,
-        fields: common(status, None, origin.clone()),
-        body: parts.join("\n\n"),
-        page_url: origin,
+        page: ImportedPage { frontmatter: common(status, None, origin), body: parts.join("\n\n") },
         partial: false,
         html_failed: false,
     })
@@ -627,25 +537,6 @@ fn collection_title(folder: &str) -> String {
                 .map_or_else(String::new, |c| c.to_uppercase().chain(cs).collect())
         }
     }
-}
-
-/// Written by hand, not through `moss_core::frontmatter::serialize`: that walks a
-/// `HashMap`, so its key order changes between runs.
-fn render(fields: &[(&str, Field)], body: &str) -> String {
-    let mut out = String::from("---\n");
-    for (key, value) in fields {
-        match value {
-            Field::Str(s) => {
-                out.push_str(&format!("{key}: \"{}\"\n", escape_yaml_string(s.trim())))
-            }
-            Field::Int(n) => out.push_str(&format!("{key}: {n}\n")),
-            Field::List(items) => push_string_list(&mut out, key, items),
-        }
-    }
-    out.push_str("---\n\n");
-    out.push_str(body.trim());
-    out.push('\n');
-    out
 }
 
 #[cfg(test)]

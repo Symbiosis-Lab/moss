@@ -790,7 +790,20 @@ mod tests {
         adapter.dispatch_hook(inv("p", "process", serde_json::json!({})), sink).await.unwrap();
         let (success, error) = wait_complete(&mut rx).await;
         assert!(!success);
-        assert!(error.unwrap().contains("hook process error"), "engine error text must surface");
+        assert_eq!(error.as_deref(), Some("hook process error: Error: hook exploded"), "the throw's own words, never the engine's Debug form");
+        adapter.teardown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_synchronous_throw_reads_as_its_words() {
+        let bundle = r#""use strict"; var P = (() => ({
+            process(ctx) { throw new TypeError("not a site"); }
+        }))();"#;
+        let adapter = QuickJsEngineAdapter::new_for_test(bundle, "P");
+        let (sink, mut rx) = channel_sink();
+        adapter.dispatch_hook(inv("p", "process", serde_json::json!({})), sink).await.unwrap();
+        let (_, error) = wait_complete(&mut rx).await;
+        assert_eq!(error.as_deref(), Some("hook process error: TypeError: not a site"));
         adapter.teardown().await;
     }
 

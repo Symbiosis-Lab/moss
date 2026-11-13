@@ -765,7 +765,7 @@ fn sizes_for<'s>(
         ImageContext::MarkdownInline => options.data_width,
         ImageContext::Hero { plate: true } => return Cow::Borrowed(ctx_sizes::SIZES_HERO_PLATE),
         ImageContext::Hero { plate: false } => return Cow::Borrowed(ctx_sizes::SIZES_FULL_BLEED),
-        ImageContext::FolderCardCover => return Cow::Borrowed(ctx_sizes::SIZES_CARD),
+        ImageContext::FolderCardCover => return Cow::Borrowed(options.grid_cell_sizes.unwrap_or(ctx_sizes::SIZES_CARD)),
         ImageContext::GalleryThumb { columns } => return Cow::Borrowed(ctx_sizes::sizes_for_gallery(*columns)),
         _ => return Cow::Borrowed(ctx_sizes::SIZES_BODY),
     };
@@ -797,7 +797,7 @@ fn sizes_for<'s>(
 ///
 /// Returns `None` when none of the variants is in the snapshot. The caller
 /// supplies the fallback (800×600 for dims, no style for LQIP / color).
-pub(crate) fn lookup_dims(assets: &AssetSnapshot, src: &str) -> Option<(u32, u32)> {
+pub fn lookup_dims(assets: &AssetSnapshot, src: &str) -> Option<(u32, u32)> {
     probe_paths(src, |p| assets.dims(&p))
 }
 

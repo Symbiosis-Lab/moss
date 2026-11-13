@@ -642,7 +642,7 @@ async fn engine_loop(
                         if let Err(e) = self::loader::load_bundle(&ctx, &bundle, &global_name) {
                             if matches!(e, rquickjs::Error::Exception) {
                                 let caught = ctx.catch();
-                                return Err(format!("{caught:?}"));
+                                return Err(thrown_text(&caught));
                             }
                             return Err(format!("{e}"));
                         }
@@ -851,7 +851,7 @@ async fn run_hook(
                     // (engine-kill-respawn probe Facts §1).
                     if matches!(e, rquickjs::Error::Exception) {
                         let caught = ctx.catch();
-                        return Err(format!("{caught:?}"));
+                        return Err(thrown_text(&caught));
                     }
                     return Err(format!("{e}"));
                 }
@@ -868,7 +868,7 @@ async fn run_hook(
                     // message; same pattern used at bundle eval time, engine.rs:351-358).
                     if matches!(e, rquickjs::Error::Exception) {
                         let caught = ctx.catch();
-                        return Err(format!("{caught:?}"));
+                        return Err(thrown_text(&caught));
                     }
                     return Err(format!("{e}"));
                 }
@@ -885,6 +885,16 @@ async fn run_hook(
     .await
     .map_err(|e| format!("hook {hook_for_err} error: {e}"))
     .and_then(|inner| inner.map_err(|e| format!("hook {hook_for_err} error: {e}")))
+}
+
+/// What a thrown value says, as a browser prints it (`String(e)`, so an
+/// Error reads `TypeError: …`). Never the engine's Debug form: this text
+/// reaches people.
+fn thrown_text(caught: &Value) -> String {
+    match caught.get::<rquickjs::Coerced<String>>() {
+        Ok(rquickjs::Coerced(text)) => text,
+        Err(_) => "the plugin threw a value that cannot be printed".to_string(),
+    }
 }
 
 /// Per-plugin teardown, ordered so the runtime is freed cleanly (no quickjs-ng

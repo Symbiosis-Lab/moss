@@ -220,6 +220,7 @@ impl DryRun {
         for c in &self.copies {
             let what = match (&c.action, &c.error, c.form) {
                 (_, Some(e), _) => format!("not postable: {e}"),
+                (crate::syndication::plan::Action::Unavailable { reason }, ..) => format!("unavailable: {reason}"),
                 (crate::syndication::plan::Action::Skip { reason }, ..) => format!("not posted: {reason}"),
                 (crate::syndication::plan::Action::Adopt { url }, ..) => format!("already there: {url}"),
                 (action, None, form) => {
@@ -228,7 +229,13 @@ impl DryRun {
                         Some(max) => format!("{}/{max}", p.chars),
                         None => p.chars.to_string(),
                     }).collect();
-                    format!("{verb} as {} ({} characters)", form.map(|f| format!("{f:?}").to_lowercase()).unwrap_or_default(), sizes.join(", "))
+                    let pictures = if c.included_pictures == 0 && c.omitted_pictures == 0 {
+                        String::new()
+                    } else {
+                        format!("; pictures: {} included, {} omitted", c.included_pictures, c.omitted_pictures)
+                    };
+                    let pending = if c.pending_site_url { "; provisional until the site's publish address is known" } else { "" };
+                    format!("{verb} as {} ({} characters){pictures}{pending}", form.map(|f| format!("{f:?}").to_lowercase()).unwrap_or_default(), sizes.join(", "))
                 }
             };
             out.push_str(&format!("Copy to {}: {} — {what}\n", c.channel, c.source_path));

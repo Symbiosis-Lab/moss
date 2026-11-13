@@ -6,12 +6,13 @@
 //! [`super::fetch`].
 
 use std::collections::HashMap;
-use std::fs;
 use std::path::Path;
 
 use super::converter::extract_article;
-use super::fetch::{content_type_to_extension, hash_url, strip_query};
-use super::run::{compose_note, write_note, PageGap, ScrapeResult, ASSETS_SUBDIR};
+use super::fetch::strip_query;
+use crate::vault::import::page::media::MediaWriter;
+use super::run::{compose_note, PageGap, ScrapeResult, ASSETS_SUBDIR};
+use crate::vault::import::page::write_note;
 use super::writer::{rename_for_collision, sanitize_filename};
 
 /// Import a local file (MHTML web-archive or plain `.html`) into `output_dir`.
@@ -80,8 +81,6 @@ pub(crate) async fn import_local_file(path: &Path, output_dir: &Path) -> Result<
     let mut article = extract_article(&html, base_for_urls);
 
     let assets_dir = output_dir.join(ASSETS_SUBDIR);
-    fs::create_dir_all(&assets_dir)
-        .map_err(|e| format!("Failed to create assets directory: {}", e))?;
 
     // Cover: og:image, else the first in-body image (same policy as the URL
     // path — `compose_note` below owns the rest of the shared tail).
@@ -95,24 +94,9 @@ pub(crate) async fn import_local_file(path: &Path, output_dir: &Path) -> Result<
 
     // Write embedded assets (MHTML) to disk; remote images in a plain .html
     // import are left as absolute URLs (the local path never hits the network).
-    let mut remote_to_local: HashMap<String, String> = HashMap::new();
-    for media_url in &article.media_urls {
-        if remote_to_local.contains_key(media_url) {
-            continue;
-        }
-        if let Some(res) = embedded.get(media_url) {
-            let hash = hash_url(media_url);
-            let extension = content_type_to_extension(&res.content_type);
-            let filename = format!("{}.{}", hash, extension);
-            // allow:raw_write the author's own source content, not `.moss/build.nosync/` output — an imported media file under `assets/imported/`
-            fs::write(assets_dir.join(&filename), &res.bytes)
-                .map_err(|e| format!("Failed to write asset: {}", e))?;
-            remote_to_local.insert(
-                media_url.clone(),
-                format!("./{}/{}", ASSETS_SUBDIR, filename),
-            );
-        }
-    }
+    let remote_to_local = MediaWriter {
+        directory: &assets_dir, prefix: "./assets/imported/", user_agent: "", referer: None,
+    }.embedded(&article.media_urls, &embedded)?;
 
     // One file in, one file out: an empty body fails loudly here rather than
     // writing an empty note and reporting success.
@@ -146,6 +130,7 @@ pub(crate) async fn import_local_file(path: &Path, output_dir: &Path) -> Result<
     write_note(output_dir, &relative, &full_content)?;
 
     Ok(ScrapeResult {
+        restricted_pages: usize::from(article.members_only),
         success: true,
         total_pages: 1,
         failed_pages: 0,

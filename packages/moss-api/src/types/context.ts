@@ -200,6 +200,13 @@ export interface CopyPart {
   links: string[];
 }
 
+/** A picture for the channel to upload with a plain-text copy. @category Copies */
+export interface CopyPicture {
+  /** Absolute source address of the picture's bytes. */
+  url: string;
+  alt: string;
+}
+
 /** A copy's id and address on its network. @category Copies */
 export interface CopyRef {
   id: string;
@@ -220,9 +227,16 @@ export interface CopyJob {
   idempotency_key: string;
   /** The original the copy points back to; `url` is absolute, `title` empty for an untitled post. */
   post: { url: string; source_path: string; title: string; lang?: string | null; date?: string | null; tags?: string[] };
-  /** Absent for a delete, whose page is gone. */
+  /** Payload fields may be absent for a delete or a lookup whose copy no longer fits. */
   form?: "short" | "thread" | "long" | "teaser" | "handoff";
   parts?: CopyPart[];
+  /** Upload attachments for plain copies. Long articles own images in HTML, with no duplicate attachments. */
+  pictures?: CopyPicture[];
+  /** Included HTML image occurrences for long articles; attachment entries for other forms. */
+  included_pictures?: number;
+  /** Pictures omitted by the channel's image limit. */
+  omitted_pictures?: number;
+
   teaser?: { title: string; description: string; url: string; cover?: string | null } | null;
   article?: { title: string; html: string; description?: string | null; cover?: string | null } | null;
   /** The copy already on the network (for an update, delete or lookup), or the draft a hand-off left there. */

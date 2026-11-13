@@ -2,27 +2,22 @@
 
 **Status:** In progress.
 
-A site is the original, and the networks hold copies (the IndieWeb calls this POSSE: publish on your own site, syndicate elsewhere). An author writes a post once, in a folder of markdown, and moss posts a copy to each network the folder names after the post goes live, then writes each copy's address back into the post. Every network plugs in through one contract, so a new network is one plugin and no new machinery, and moss, not each plugin, owns the parts that must be right every time: which posts go where, never posting twice, and recording where each copy lives.
+A site is the original, and the networks hold copies (the IndieWeb calls this POSSE: publish on your own site, syndicate elsewhere). An author writes a page once, in a folder of markdown, and moss posts a copy to each network the author has chosen for it after the page goes live, then writes each copy's address back into the page. Every network plugs in through one contract, so a new network is one plugin and no new machinery, and moss, not each plugin, owns the parts that must be right every time: which posts go where, never posting twice, and recording where each copy lives.
 
 ## The author's side
 
-A folder note says once where its posts go, with the `cascade:` every moss folder already has:
+The author decides as little as possible. There is no kind of page to pick: no "post" and no "article". Any page can go to any network, and each network takes the page in the best form it has (see What moss shapes). The author's only choice is which networks a page goes to, and moss remembers the last choice so a new page starts with it.
 
-```markdown
----
-title: Notes
-url: notes
-cascade:
-  syndicate: [bluesky, mastodon]
----
-```
-
-- `syndicate:` names channels, the ids under `[channels.<id>]` in `.moss/config.toml`. One post opts out with `syndicate: false` or names its own list; leaving a channel out of a post's own list is how a post skips that channel, and adding it back undoes the skip. `email` in the list names the site's newsletter, which the app sends; it is not a channel and moss posts nothing for it.
-- After a copy is posted, moss adds its address to the post's `syndicated:` list, the field moss already reads to label comment links. Only the `syndicated:` line changes; the rest of the file stays as written. A file whose frontmatter moss cannot edit in place (the simplified `key: value` dialect, a duplicated key) keeps its bytes, and moss reports that the address was recorded only in its own record.
-- A post goes out when it first goes live. Naming a channel for a folder does not post the folder's earlier posts: a post that was already live (on any publish target) before the channel was named for it goes out only if its own file names the channel.
+- **Connect a channel once.** Connecting a channel adds it to the site's current choice; removing it takes it out.
+- **A new page starts with the last choice.** The site's current choice is `[syndication] channels` in `.moss/config.toml`, a list of channel ids. When the author turns a channel on or off for a page (the app's channel buttons, or a page's own `syndicate:` written by hand), that page keeps its own list and the site's choice becomes that list, so the next new page starts the same way. Only such an explicit choice, or connecting or removing a channel, changes it; publishing does not, and neither does a copy of the file arriving from another computer through a sync client. A page's own list is kept as written even when it equals the site's choice, so a later change to the site's choice never alters a page the author set by hand. A page with no list of its own follows the site's current choice until it first goes live; from then on its copies are fixed by their records.
+- **A page or a folder can still say its own.** A page's `syndicate:` (a list, or `false` for no copies) wins over everything. A folder can set one for every page in it with the `cascade:` every moss folder already has; its main use is `syndicate: false` on a folder that must never be copied, such as review pages sent to one person. The order is: the page's own `syndicate:`, then the nearest folder's, then the site's current choice.
+- `syndicate:` entries name channels by id (`[channels.<id>]` in `.moss/config.toml`) or by the name the network goes by, ignoring case, so `x` and `xcom` name the same channel. An exact id is matched first, then a name only one channel goes by; a name two channels share is refused with a message naming both. Each entry is turned into its channel id, and duplicates dropped, before anything else reads the list, so records and idempotency keys only ever see ids. `email` in the list names the site's newsletter, which the app sends; it is not a channel and moss posts nothing for it.
+- **Where a page lives decides how the site shows it, never where its copies go.** A folder of short notes can be drawn as a stream of whole posts, and a file named only by its date has no heading; that is layout. A template for a new note (`moss new notes/ --template note`) writes a file named by the date and time into that folder, so the author never names one by hand.
+- After a copy is posted, moss adds its address to the post's `syndicated:` list, the field moss reads to avoid posting duplicate copies. Only the `syndicated:` line changes; the rest of the file stays as written. A file whose frontmatter moss cannot edit in place (the simplified `key: value` dialect, a duplicated key) keeps its bytes, and moss reports that the address was recorded only in its own record.
+- A page goes out when it first goes live. Connecting a channel, or adding it to the site's choice or a folder's, does not post earlier pages: a page that was already live (on any publish target) before the channel was chosen for it goes out only if its own file names the channel.
 - Credentials never enter the folder. They live in moss's secret store, outside the site, entered in the app's own credential prompt or, headless, with `moss plugin secret set <plugin> <key>`, which reads the value from standard input.
 
-This changes one thing for an app user: today a copy goes out only for the page being previewed, when Publish is clicked; with this design every post a folder names a channel for goes out when it first goes live. The app's per-post toggle becomes a write of `syndicate:` into that post.
+This changes two things from the earlier version of this design. A page with no `syndicate:` of its own and none from a folder used to get no copies; it now gets the site's current choice, so the networks a person has connected are used without any folder setup. And whether a page is a short post or an article is no longer read from whether it has a title: the network adapts to the page's content.
 
 ## When it runs
 
@@ -84,7 +79,7 @@ The plugin turns the job into its network's request (Bluesky's facets, Mastodon'
 
 A network with no posting API declares the `handoff` form. Its `publish_copy` returns the shaped copy and the page where the author pastes it; moss prints it after the publish (the app shows it with a Copy button), records the copy as *handed off*, and adopts the copy when the author adds its address to `syndicated:`. Substack is this case: it has no API for posts or Notes, so its channel hands off a teaser and link.
 
-A network where the author finishes an article in its own editor hands off a draft instead: `publish_copy` puts the article into a draft there, opens it for the author where the host can show a page (the app can; a terminal cannot), and returns the published copy if the author publishes it then. Otherwise it returns a hand-off with an empty `text`, the draft's page as `open_url` and the draft's `id`. Each later send asks the channel's `find_copy`, with that `id` as `previous.id`, whether the draft has been published: it answers with the published copy, which moss records as posted and writes back; with the same hand-off while the draft still waits, which moss neither sends again nor reports again; or with no copy, when the author has deleted the draft, which moss sends again. Copies go out one at a time, so while the author writes in the network's editor, the copies after it wait. Matters' articles are this case.
+A network that has a publishing API publishes through it, even where its own site offers an editor: the author is not sent to finish a copy elsewhere. Matters' articles were once put into a draft for the author to publish in Matters' editor; they now publish directly, like every other copy. A published Matters article is archived permanently and can be revised only a few times, so its button and preview say so, and the receipt says when a page's edits can no longer reach its Matters copy. The draft hand-off, and the waiting state a hand-off with a draft id kept, are removed.
 
 ## Never twice
 
@@ -112,13 +107,42 @@ The hash only spares work: an unchanged copy is not sent again. It never causes 
 
 ## What moss shapes
 
-- A post with no title (its file is named by its date) is a `short` copy when its text fits, a `thread` when it is written in parts (a line holding only `---` between blank lines) and the channel takes threads, and otherwise a `teaser`.
-- A post with a title is a `long` copy where the channel declares `long`, and a `teaser` everywhere else.
-- Text is the post's markdown as plain text: emphasis dropped, links kept as their address, pictures moved out of the text into the copy's pictures with their alt text. The first link is the copy's link card where the network makes one.
+moss picks each copy's form from the page's content and what the channel declares, the same way for every page, so the author never says what kind of page it is. In order, the first that the channel takes and the page fits:
+
+1. `short`: the whole page as one post, when it fits the network's limit. A page with a title of its own starts with the title on its own line; a file named only by its date has none.
+2. `thread`: the page in parts, each a reply to the one before, when the page is written in parts (a thematic break, a line holding only `---` between blank lines, outside code blocks) and every part fits.
+3. `long`: the whole page as an article, where the network has an article format. A page with no title of its own takes the label moss already gives it from its opening words.
+4. `teaser`: the page's `description:`, or its opening cut at a sentence end that fits (or at a word where no sentence end does), with a link card to the page.
+
+A page that fits none of the forms a channel takes is not copied there. The host asks the planner before Publish, so the app shows that channel greyed out on the page, with the reason. A picture is never such a reason: a network that takes pictures gets them, up to its limit and with their alt text, and one that does not gets the text and the link. Lengths are measured with the title and the link back included.
+
+A copy keeps the form it was first posted in. When an edited page no longer fits that form (a post that grew past the limit, a thread whose number of parts changed), moss does not post a new copy in another form; it updates what the network lets it update and the receipt names the copies that keep their earlier version. Pages already copied under the earlier rule, which read the form from whether a page had a title, therefore keep their copies as they are.
+
+## Sending without a screen per network
+
+The author sees no screen for any network except the newsletter. Copies go out on their own after the site is live, so moss owes the author that nothing about them is a surprise:
+
+- **Before Publish**, each channel button on the page says what that network will get: the account, the form (one post, a thread, an article, a teaser) and anything left out (pictures it cannot carry, text cut with a link to the page). A channel that cannot take the page is greyed out, with the reason.
+- **Preview copies** shows each copy read-only, built from exactly what will be sent; a change to the page or to a channel's settings rebuilds it.
+- **Every cut links back** to the page, and every loss of pictures or formatting is named in the preview and on the button.
+- **The receipt names each copy's outcome**, including a send whose answer was lost, which is looked up, never blindly sent again.
+- **Edits are carried** where the network allows and the receipt names where it does not; **removing copies** of a deleted page is offered once, without promising a network erases them.
+
+The newsletter keeps its own confirmed step (audience, rendered email, a test send), because a delivered email cannot be taken back and reads differently from the page. A network whose publication cannot be undone in the same way gets the same treatment only when its button and preview cannot make the consequence plain.
+
+- Text is the page's markdown as plain text: emphasis dropped, links kept as their address, pictures moved out of the text into the copy's pictures with their alt text. The first link is the copy's link card where the network makes one.
+
+**As close to the page as each network allows.** What a network supports is kept (paragraphs, headings, lists, quotes, code, links); what it cannot show is converted, never silently dropped:
+
+- Math becomes a picture of the typeset formula, with its TeX source as the alt text, made by the same renderer that already turns math into pictures for the newsletter. In a plain-text post the formula's picture joins the copy's pictures and its source stays in the text.
+- Pictures are uploaded to the network, never linked to the site, with their alt text. Plain-text copies supply upload attachments in `pictures`; long articles supply images in their HTML, which the plugin imports once, with no duplicate attachments. A copy is not sent while any of its pictures failed to upload: the send is refused with the cause and tried again on the next run, so no copy ever goes out with a broken picture. This matters most where publication cannot be undone, as on Matters.
+- A network that takes fewer pictures than the page has gets the first ones, and the button and the preview say how many were left out.
+
+**A link to the original.** Every copy ends with a link to its page: short posts and each thread's last part carry the address in their text, articles end with a line linking to the page. It is a setting, `link_back`, on by default for every channel: `[syndication] link_back = false` in `.moss/config.toml` turns it off for all, `link_back = false` under `[channels.<id>]` for one network. A teaser always carries its link, since the link is what a teaser is for. The line names where the page was first published, with the site's name linking to the page itself, never the home page: "Originally published on Example Site." under an article; in Chinese "本文首发于 Example Site。". Short posts and the final thread part end with the bare page address. On a network that charges more for a post containing a link (X does), the setting's cost is shown beside it. The link is counted before checking the network's length limit; a copy that does not fit becomes the next form in the order above, or is not sent. The page adds no links to its copies, visible or hidden, and no comment reply links to them. The `syndicated:` field and `.moss/deploy/copies/` records still track copies for deduplication, editing and deletion.
 
 ## What it retires
 
-The earlier path posted through one plugin hook, `syndicate`, that received every article and decided everything itself, including writing `syndicated:` back by re-serializing the author's frontmatter. Its last user, the Matters plugin, now posts through the copy hooks: short posts as Matters moments, articles as drafts the author publishes in Matters' editor. The `syndicate` hook and its context are removed once the app no longer calls them, together with the app's post-publish syndication call and its before-and-after count.
+The earlier path posted through one plugin hook, `syndicate`, that received every article and decided everything itself, including writing `syndicated:` back by re-serializing the author's frontmatter. Its last user, the Matters plugin, now posts through the copy hooks: short posts as Matters moments, articles published through Matters' API. The `syndicate` hook and its context are removed once the app no longer calls them, together with the app's post-publish syndication call and its before-and-after count.
 
 ## What lives where
 
@@ -131,5 +155,7 @@ The earlier path posted through one plugin hook, `syndicate`, that received ever
 
 1. The contract: records, planner, write-back, the exports, plan at landing and send after, the dry run, `moss plugin secret set`. Tested with a fixture channel.
 2. Bluesky, then Mastodon, through the author's existing accounts; then short posts on Matters; then LinkedIn and X.
-3. Pictures, which need plugins to send a raw binary request body (today a plugin can send JSON or a multipart form, and Bluesky and LinkedIn take neither for an upload).
-4. Replies coming home into the store moss's comments already read.
+3. Form read from content, the site's last choice, channel names, forms kept on update, and the `link_back` setting.
+4. Pictures and math pictures in every copy, which need plugins to send a raw binary request body (today a plugin can send JSON or a multipart form, and Bluesky and LinkedIn take neither for an upload); Matters articles published directly once their pictures upload reliably.
+5. Each channel button saying what its network will get, and greyed out with the reason when it cannot take the page.
+6. Replies coming home into the store moss's comments already read.

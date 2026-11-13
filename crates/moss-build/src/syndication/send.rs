@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use super::job::{CopyJob, Op, PostRef, Previous};
 use super::record::{Cause, CopyOutcome, CopyRecord, PublishedPost, Records, State};
-use super::shape::{idempotency_key, page_url, shape};
+use super::shape::{idempotency_key, page_url, shape_record, ShapeOptions};
 use crate::build::scan::article_map::{ArticleInfo, ArticleMap};
 use crate::build::scan::path_collision::{logical_path, on_disk};
 use crate::plugins::manager::copies::{CopyCall, CopyChannel};
@@ -37,11 +37,28 @@ pub enum Outcome {
     Refused { cause: Cause, reason: String },
     /// Whether a copy exists is unknown; not retried until the author says so.
     Unconfirmed { reason: String },
-    /// Left due: over this run's limit, or its page is not in this publish.
-    Held { reason: String },
+    /// Left due and sent by a later run. `why` is what a person is told;
+    /// `reason` is the detail, for the log and the command line.
+    Held { why: HeldWhy, reason: String },
     Deleted,
     /// The network cannot remove a copy; it stays where it is.
     CannotDelete,
+}
+
+/// Why a copy was left for a later run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum HeldWhy {
+    /// Its page is not in this publish.
+    NotPublished,
+    /// Over this run's limit of new copies on the channel.
+    OverLimit,
+    PageNotAnswering,
+    /// Its record could not be written, so nothing was sent.
+    NotRecorded,
+    /// The channel's plugin failed before answering; the same key makes a
+    /// second try safe.
+    Failed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
@@ -145,7 +162,10 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
         let rank = post.and_then(|p| p.syndicate.as_ref()).and_then(|c| c.iter().position(|c| *c == r.channel));
         (r.url_path.clone(), rank.unwrap_or(usize::MAX), r.channel.clone())
     });
-    let site_lang = crate::build::site_config::get_site_lang(&folder.to_string_lossy()).ok().flatten();
+    let config = match crate::build::site_config::read_project_config(&folder.to_string_lossy()) {
+        Ok(config) => config,
+        Err(e) => { log::warn!(target: "syndication", "copies not sent: {e}"); return Vec::new(); }
+    };
     let mut sent_per_channel: BTreeMap<String, usize> = BTreeMap::new();
     let mut out = Vec::new();
     let mut push = |s: Sent| {
@@ -173,15 +193,15 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
                 continue;
             }
             if op == Op::Publish {
-                push(sent(&record, Outcome::Held { reason: "its page is not in this publish".into() }));
+                push(sent(&record, Outcome::Held { why: HeldWhy::NotPublished, reason: "its page is not in this publish".into() }));
             }
             continue;
         };
         let post = &published.article;
-        let lang = published.lang.clone().or_else(|| site_lang.clone());
+        let shape = ShapeOptions::new(&config, folder, articles, post, &record.channel, published.lang.as_deref());
         // An uncertain copy is looked up before anything is sent again.
         let op = if op == Op::Find {
-            match reconcile(manager, &record, channel, post, lang.clone(), opts).await {
+            match reconcile(manager, &record, channel, post, &shape, opts).await {
                 Found::Copy(outcome) => {
                     push(adopt(folder, &records, record, outcome));
                     continue;
@@ -197,7 +217,11 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
                     }
                     continue;
                 }
-                Found::Absent => Op::Publish,
+                Found::Absent => {
+                    record.discard_attempt();
+                    record.state = State::Due;
+                    Op::Publish
+                }
                 Found::Unknown(_) if opts.retry.contains(&record.channel) => Op::Publish,
                 Found::Unknown(why) => {
                     if record.state == State::Sending {
@@ -214,7 +238,7 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
         if op == Op::Publish {
             let n = sent_per_channel.entry(record.channel.clone()).or_default();
             if *n >= opts.cap {
-                push(sent(&record, Outcome::Held { reason: format!("over this run's limit of {} new copies on {}", opts.cap, record.channel) }));
+                push(sent(&record, Outcome::Held { why: HeldWhy::OverLimit, reason: format!("over this run's limit of {} new copies on {}", opts.cap, record.channel) }));
                 continue;
             }
             *n += 1;
@@ -222,12 +246,12 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
                 let page = page_url(record.site(opts.site_url), &post.url_path);
                 if !answers(&page).await {
                     *n -= 1;
-                    push(sent(&record, Outcome::Held { reason: format!("its page does not answer yet at {page}") }));
+                    push(sent(&record, Outcome::Held { why: HeldWhy::PageNotAnswering, reason: format!("its page does not answer yet at {page}") }));
                     continue;
                 }
             }
         }
-        if let Some(s) = send_one(folder, manager, &records, record, channel, post, lang, op, opts).await {
+        if let Some(s) = send_one(folder, manager, &records, record, channel, post, &shape, op, opts).await {
             push(s);
         }
     }
@@ -258,14 +282,20 @@ async fn send_one(
     mut record: CopyRecord,
     channel: &CopyChannel,
     post: &ArticleInfo,
-    lang: Option<String>,
+    shape: &ShapeOptions,
     op: Op,
     opts: &SendOptions<'_>,
 ) -> Option<Sent> {
+    if record.remote.is_some() && record.form.is_none() {
+        return Some(sent(&record, Outcome::Refused { cause: Cause::Content, reason: "retaining the prior version: its original form was not recorded".into() }));
+    }
     record.source_path.clone_from(&post.source_path);
     record.url_path.clone_from(&post.url_path);
+    let had_uncertain_attempt = record.handoff.is_some()
+        || matches!(record.state, State::Sending | State::Unconfirmed)
+        || (record.state == State::Due && record.form.is_some());
 
-    let (job, hash) = match build_job(&record, channel, post, lang, op, record.site(opts.site_url)) {
+    let (job, hash) = match build_job(&record, channel, post, shape, op, record.site(opts.site_url)) {
         Ok(j) => j,
         Err(reason) => return Some(settle(records, record, Outcome::Refused { cause: Cause::Content, reason })),
     };
@@ -278,12 +308,16 @@ async fn send_one(
         return Some(sent(&record, Outcome::Unchanged));
     }
 
+    if let Some(copy) = &job.copy {
+        record.form = Some(copy.form);
+        record.part_count = (record.remote.is_none() && copy.form == super::channel::Form::Thread).then_some(copy.parts.len());
+    }
     (opts.emit)(&sent(&record, Outcome::Sending));
     if op == Op::Publish {
         record.state = State::Sending;
         record.touch();
         if let Err(e) = records.save(&record) {
-            return Some(sent(&record, Outcome::Held { reason: format!("its record could not be written, so nothing was sent ({e})") }));
+            return Some(sent(&record, Outcome::Held { why: HeldWhy::NotRecorded, reason: format!("its record could not be written, so nothing was sent ({e})") }));
         }
     }
 
@@ -296,7 +330,7 @@ async fn send_one(
         record.touch();
         let _ = records.save(&record);
         if channel.spec.idempotent {
-            sent(&record, Outcome::Held { reason: format!("{reason}; sent again next run with the same key") })
+            sent(&record, Outcome::Held { why: HeldWhy::Failed, reason: format!("{reason}; sent again next run with the same key") })
         } else {
             sent(&record, Outcome::Unconfirmed { reason })
         }
@@ -310,10 +344,15 @@ async fn send_one(
                 .and_then(|r| r.message)
                 .or(result.message)
                 .unwrap_or_else(|| "the network refused the copy".into());
-            if op != Op::Update {
-                record.state = State::Refused;
+            if op != Op::Update && had_uncertain_attempt {
+                unknown(record, reason)
+            } else {
+                if op != Op::Update {
+                    record.state = State::Refused;
+                    record.discard_attempt();
+                }
+                settle(records, record, Outcome::Refused { cause, reason })
             }
-            settle(records, record, Outcome::Refused { cause, reason })
         }
         CopyCall::Answered(result) => match result.copy {
             Some(CopyOutcome { handoff: Some(handoff), .. }) => {
@@ -326,7 +365,9 @@ async fn send_one(
             Some(CopyOutcome { id: Some(id), url: Some(url), parts, .. }) => {
                 record.state = State::Posted;
                 record.remote = Some(super::record::RemoteRef { id, url: url.clone() });
-                record.parts = parts;
+                if op != Op::Update || !parts.is_empty() {
+                    record.parts = parts;
+                }
                 record.hash = Some(hash);
                 record.update_due = false;
                 record.reason = None;
@@ -343,8 +384,10 @@ async fn send_one(
             record.update_due = false;
             settle(records, record, Outcome::CannotEdit)
         }
+        CopyCall::NoExport if had_uncertain_attempt => unknown(record, "the channel exports no publish_copy".into()),
         CopyCall::NoExport => {
             record.state = State::Refused;
+            record.discard_attempt();
             settle(records, record, Outcome::Refused { cause: Cause::Unknown, reason: "the channel exports no publish_copy".into() })
         }
         CopyCall::Unknown(reason) => unknown(record, reason),
@@ -411,8 +454,8 @@ enum Found {
 }
 
 /// Ask the channel's `find_copy` whether the copy of an uncertain send exists.
-async fn reconcile(manager: &PluginManager, record: &CopyRecord, channel: &CopyChannel, post: &ArticleInfo, lang: Option<String>, opts: &SendOptions<'_>) -> Found {
-    let (job, _) = match build_job(record, channel, post, lang, Op::Find, record.site(opts.site_url)) {
+async fn reconcile(manager: &PluginManager, record: &CopyRecord, channel: &CopyChannel, post: &ArticleInfo, shape: &ShapeOptions, opts: &SendOptions<'_>) -> Found {
+    let (job, _) = match build_job(record, channel, post, shape, Op::Find, record.site(opts.site_url)) {
         Ok(j) => j,
         Err(e) => return Found::Unknown(e),
     };
@@ -428,17 +471,18 @@ async fn reconcile(manager: &PluginManager, record: &CopyRecord, channel: &CopyC
     }
 }
 
-/// Record a copy the network turned out to hold.
-fn adopt(folder: &Path, records: &Records, mut record: CopyRecord, outcome: CopyOutcome) -> Sent {
+/// Record a copy the network holds. The caller holds the folder's send turn.
+pub(super) fn adopt(folder: &Path, records: &Records, mut record: CopyRecord, outcome: CopyOutcome) -> Sent {
     let url = outcome.url.unwrap_or_default();
     record.state = State::Posted;
     record.remote = Some(super::record::RemoteRef { id: outcome.id.unwrap_or_default(), url: url.clone() });
-    record.parts = outcome.parts;
+    if !outcome.parts.is_empty() {
+        record.parts = outcome.parts;
+    }
     record.reason = None;
     record.handoff = None;
-    let write_back = write_back(folder, &record.source_path, &url).err();
-    let mut s = settle(records, record, Outcome::Posted { url });
-    s.write_back = write_back;
+    let mut s = settle(records, record, Outcome::Posted { url: url.clone() });
+    s.write_back = write_back(folder, &s.source_path, &url).err();
     s
 }
 
@@ -451,9 +495,15 @@ fn mark_unconfirmed(records: &Records, record: &mut CopyRecord, reason: &str) {
 
 
 /// The job for one copy, and the hash of the copy it carries.
-fn build_job(record: &CopyRecord, channel: &CopyChannel, post: &ArticleInfo, lang: Option<String>, op: Op, site_url: &str) -> Result<(CopyJob, String), String> {
-    let copy = shape(post, &channel.spec, site_url)?;
-    let hash = copy.hash();
+fn build_job(record: &CopyRecord, channel: &CopyChannel, post: &ArticleInfo, options: &ShapeOptions, op: Op, site_url: &str) -> Result<(CopyJob, String), String> {
+    let copy = match shape_record(post, &channel.spec, site_url, options, record) {
+        Ok(copy) => Some(copy),
+        // A lookup needs the stable identity even when changed limits prevent
+        // this payload from being sent again.
+        Err(_) if op == Op::Find => None,
+        Err(e) => return Err(e),
+    };
+    let hash = copy.as_ref().map(|c| c.hash()).unwrap_or_default();
     let job = CopyJob {
         op,
         channel: record.channel.clone(),
@@ -462,11 +512,11 @@ fn build_job(record: &CopyRecord, channel: &CopyChannel, post: &ArticleInfo, lan
             url: page_url(site_url, &post.url_path),
             source_path: post.source_path.clone(),
             title: post.title.clone(),
-            lang,
+            lang: options.lang.clone(),
             date: post.date.clone(),
             tags: post.tags.clone(),
         },
-        copy: Some(copy),
+        copy,
         previous: record.remote.clone().or_else(|| record.draft()).map(|copy| Previous { copy, parts: record.parts.clone() }),
         config: HashMap::new(),
     };
@@ -490,23 +540,21 @@ fn sent(record: &CopyRecord, outcome: Outcome) -> Sent {
 }
 
 /// Add `url` to the page's `syndicated:` list, changing only that field.
-fn write_back(folder: &Path, source_path: &str, url: &str) -> Result<(), String> {
-    let path = on_disk(folder, source_path);
-    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let mut list: Vec<serde_yaml::Value> = match moss_core::frontmatter::parse(&content).frontmatter.get("syndicated") {
-        Some(serde_yaml::Value::Sequence(items)) => items.clone(),
-        Some(serde_yaml::Value::String(one)) => vec![serde_yaml::Value::String(one.clone())],
-        _ => Vec::new(),
-    };
-    if list.iter().any(|v| v.as_str() == Some(url)) {
-        return Ok(());
-    }
-    list.push(serde_yaml::Value::String(url.to_string()));
-    let edited = moss_core::frontmatter::edit_fields(
-        &content,
-        &[moss_core::frontmatter::FieldEdit::Set { key: "syndicated".into(), value: serde_yaml::Value::Sequence(list) }],
-    )?;
-    crate::infra::atomic_write::write_atomic(&path, &edited)
+pub(super) fn write_back(folder: &Path, source_path: &str, url: &str) -> Result<(), String> {
+    crate::build::cloud_readiness::rewrite_input(&on_disk(folder, source_path), |bytes| {
+        let content = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
+        let mut list: Vec<serde_yaml::Value> = match moss_core::frontmatter::parse(content).frontmatter.get("syndicated") {
+            Some(serde_yaml::Value::Sequence(items)) => items.clone(),
+            Some(serde_yaml::Value::String(one)) => vec![serde_yaml::Value::String(one.clone())],
+            _ => Vec::new(),
+        };
+        if list.iter().any(|v| v.as_str() == Some(url)) {
+            return Ok(None);
+        }
+        list.push(serde_yaml::Value::String(url.to_string()));
+        moss_core::frontmatter::edit_fields(content, &[moss_core::frontmatter::FieldEdit::Set { key: "syndicated".into(), value: serde_yaml::Value::Sequence(list) }]).map(Some)
+    })
+    .map(drop)
 }
 
 /// One line per copy for a terminal.
@@ -532,7 +580,7 @@ pub fn render(sent: &[Sent]) -> String {
                 "unconfirmed on {}: {reason}. If the copy is there, add its address to syndicated: (for a thread, the first post's: moss tracks only that one). If it is not, run moss deploy --retry-copies={}; any part of a thread that did get through is posted a second time",
                 s.channel, s.channel
             ),
-            Outcome::Held { reason } => format!("held for {}: {reason}", s.channel),
+            Outcome::Held { reason, .. } => format!("held for {}: {reason}", s.channel),
             Outcome::Deleted => format!("deleted from {}", s.channel),
             Outcome::CannotDelete => format!("{} cannot remove a copy; it stays", s.channel),
         };
@@ -547,6 +595,144 @@ pub fn render(sent: &[Sent]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn planning_preview_and_send_share_emitted_formula_assets() {
+        use super::super::{plan, preview, shape};
+        use crate::build::emit::math_png::{email_math_img, emit_math_pngs};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let site = "https://example.org";
+        let expected_url = page_url(site, email_math_img("x", false).unwrap().served_path().as_str());
+        let js = format!(r#"{{ publish_copy: async function(job) {{
+            if (job.pictures.length !== 1 || job.pictures[0].url !== {} ||
+                job.pictures[0].alt !== '$x$' || job.included_pictures !== 1 || job.post.lang !== 'zh-Hans')
+                throw new Error('formula or saved language differs from preview');
+            return {{ success: true, copy: {{ id: 'formula', url: 'https://example.social/formula' }} }};
+        }} }}"#, serde_json::to_string(&expected_url).unwrap());
+        super::super::test_channel(root, "one", &js);
+        let manifest_path = root.join(".moss/plugins/one/manifest.json");
+        let mut manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        manifest["contributes"]["channel"]["syndication"]["images"] = serde_json::json!({"max": 4, "alt": true});
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let mp = crate::moss_paths::MossPaths::new(root);
+        let doc = crate::build::types::ParsedDocument { content: "$x$".into(), ..Default::default() };
+        emit_math_pngs(&[doc], true, &mp.initial_serve_dir(), &mut crate::build::manifest::PendingManifest::new(Default::default())).unwrap();
+        std::fs::write(root.join("page.md"), "---\nuid: aa11aa11\nsyndicate: one\n---\n$x$\n").unwrap();
+        let post: ArticleInfo = serde_json::from_value(serde_json::json!({
+            "source_path": "page.md", "title": "", "content": "$x$", "url_path": "page/", "uid": "aa11aa11", "syndicate": ["one"],
+            "html_content": crate::build::markdown::math::render_math("x", false).unwrap()
+        })).unwrap();
+        let mut map = ArticleMap::default();
+        map.articles.insert(post.url_path.clone(), post.clone());
+        map.page_languages.insert(post.url_path.clone(), "zh-Hans".into());
+        map.page_site_names.insert(post.url_path.clone(), "山居".into());
+        std::fs::create_dir_all(mp.article_map().parent().unwrap()).unwrap();
+        std::fs::write(mp.article_map(), serde_json::to_vec(&map).unwrap()).unwrap();
+        let config = crate::build::site_config::read_project_config(&root.to_string_lossy()).unwrap();
+        let channels = super::super::landing::channels(root);
+        let records = Records::in_vault(&mp);
+        let plans = plan::decide(&plan::PlanInputs {
+            folder: root, articles: &map, previously_live: None, edited_sources: &Default::default(),
+            channels: &channels, config: &config, site_url: Some(site),
+        }, &records);
+        assert_eq!(plans[0].entries[0].action, plan::Action::Due);
+        let options = ShapeOptions::new(&config, root, &map, &post, "one", None);
+        assert_eq!(options.site_name.as_deref(), Some("山居"));
+        let planned = shape::assess(&post, &channels["one"].spec, Some(site), &options, &CopyRecord::due("aa11aa11", "one", "page.md", "page/")).unwrap();
+        assert_eq!(planned.pictures.len(), 1);
+        assert_eq!(planned.pictures[0].url, expected_url);
+        let previews = preview::for_post(root, "page.md", site);
+        assert_eq!(previews[0].pictures, planned.pictures);
+        assert_eq!(previews[0].included_pictures, 1);
+        plan::apply(plans, &records, Some(site), Some(&map), &Default::default());
+        // A subsequent build's language cannot change the saved publication.
+        map.page_languages.insert(post.url_path.clone(), "en".into());
+        let manager = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()).get_or_create(&root.to_string_lossy()).unwrap();
+        let emit = |_: &Sent| {};
+        let opts = SendOptions { site_url: site, retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
+        let sent = send_due(root, &manager, &map, &opts).await;
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].outcome, Outcome::Posted { url: "https://example.social/formula".into() });
+    }
+
+    #[tokio::test]
+    async fn only_definitively_failed_first_publications_discard_their_form() {
+        use super::super::channel::{ChannelSpec, Form};
+        struct Case { name: &'static str, js: &'static str, op: Op, uncertain: bool, state: State, form: Option<Form> }
+        for Case { name, js, op, uncertain, state: expected_state, form: expected_form } in [
+            Case { name: "missing export", js: "{}", op: Op::Publish, uncertain: false, state: State::Refused, form: None },
+            Case { name: "first refusal", js: "{ publish_copy: async function () { return { success: false }; } }", op: Op::Publish, uncertain: false, state: State::Refused, form: None },
+            Case { name: "lost answer", js: "{ publish_copy: async function () { throw new Error('lost answer'); } }", op: Op::Publish, uncertain: false, state: State::Unconfirmed, form: Some(Form::Short) },
+            Case { name: "update refusal", js: "{ update_copy: async function () { return { success: false }; } }", op: Op::Update, uncertain: false, state: State::Posted, form: Some(Form::Short) },
+            Case { name: "uncertain missing export", js: "{}", op: Op::Publish, uncertain: true, state: State::Unconfirmed, form: Some(Form::Short) },
+            Case { name: "uncertain refusal", js: "{ publish_copy: async function () { return { success: false }; } }", op: Op::Publish, uncertain: true, state: State::Unconfirmed, form: Some(Form::Short) },
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path();
+            super::super::test_channel(root, "one", js);
+            let manager = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()).get_or_create(&root.to_string_lossy()).unwrap();
+            let records = Records::in_vault(&crate::moss_paths::MossPaths::new(root));
+            let mut record = CopyRecord::due("u", "one", "page.md", "page/");
+            if uncertain {
+                record.state = State::Unconfirmed;
+                record.form = Some(Form::Short);
+                record.part_count = Some(1);
+            }
+            if op == Op::Update {
+                record.state = State::Posted;
+                record.form = Some(Form::Short);
+                record.part_count = Some(1);
+                record.remote = Some(super::super::record::RemoteRef { id: "1".into(), url: "https://example.social/1".into() });
+                record.update_due = true;
+            }
+            let channel = CopyChannel { spec: ChannelSpec { forms: vec![Form::Short], max_chars: Some(300), ..Default::default() }, domains: Vec::new() };
+            let post: ArticleInfo = serde_json::from_value(serde_json::json!({"source_path": "page.md", "title": "", "content": "Hello.", "url_path": "page/"})).unwrap();
+            let emit = |_: &Sent| {};
+            let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
+            send_one(root, &manager, &records, record, &channel, &post, &ShapeOptions::default(), op, &opts).await.unwrap();
+            let saved = records.get("u", "one").unwrap();
+            assert_eq!(saved.state, expected_state, "{name}");
+            assert_eq!(saved.form, expected_form, "{name}");
+            assert_eq!(saved.part_count, None, "short copies need no attempted thread count: {name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn old_posted_copies_are_frozen_without_mutating_the_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        super::super::test_channel(root, "one", "{ update_copy: async function () { throw new Error('must not send'); } }");
+        let manager = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()).get_or_create(&root.to_string_lossy()).unwrap();
+        let records = Records::in_vault(&crate::moss_paths::MossPaths::new(root));
+        let mut record = CopyRecord::due("u", "one", "page.md", "page/");
+        record.state = State::Posted;
+        record.remote = Some(super::super::record::RemoteRef { id: "1".into(), url: "https://example.social/1".into() });
+        record.update_due = true;
+        records.save(&record).unwrap();
+        let before = records.get("u", "one").unwrap();
+        let post: ArticleInfo = serde_json::from_value(serde_json::json!({"source_path": "edited.md", "title": "New", "content": "Edited", "url_path": "edited/"})).unwrap();
+        let channel = CopyChannel { spec: super::super::channel::ChannelSpec { forms: vec![super::super::channel::Form::Long], ..Default::default() }, domains: Vec::new() };
+        let emit = |_: &Sent| panic!("a frozen copy cannot send");
+        let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
+        let result = send_one(root, &manager, &records, record, &channel, &post, &ShapeOptions::default(), Op::Update, &opts).await.unwrap();
+        assert!(matches!(result.outcome, Outcome::Refused { reason, .. } if reason.contains("retaining the prior version")));
+        assert_eq!(records.get("u", "one").unwrap(), before);
+    }
+
+    #[test]
+    fn lookup_keeps_the_identity_when_the_original_form_no_longer_fits() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut record = CopyRecord::due("u", "one", "page.md", "page/");
+        record.form = Some(super::super::channel::Form::Short);
+        record.part_count = Some(1);
+        let channel = CopyChannel { spec: super::super::channel::ChannelSpec { forms: vec![super::super::channel::Form::Short], max_chars: Some(1), ..Default::default() }, domains: Vec::new() };
+        let post: ArticleInfo = serde_json::from_value(serde_json::json!({ "source_path": "page.md", "title": "", "content": "Longer than allowed", "url_path": "page/", "date": null })).unwrap();
+        let (job, _) = build_job(&record, &channel, &post, &ShapeOptions::default(), Op::Find, "https://example.org").unwrap();
+        assert_eq!(job.idempotency_key, idempotency_key("u", "one"));
+        assert!(job.copy.is_none());
+        assert!(build_job(&record, &channel, &post, &ShapeOptions::default(), Op::Publish, "https://example.org").is_err());
+    }
 
     #[test]
     fn an_unconfirmed_copy_names_what_each_recovery_costs_a_thread() {
@@ -742,10 +928,41 @@ mod tests {
 
         let rest = send_due(root, &manager, &articles, &opts(None, None, 1)).await;
         let got = outcomes(&rest);
-        let held = |s: &&(String, String, Outcome)| matches!(&s.2, Outcome::Held { reason } if reason.contains("limit of 1"));
+        let held = |s: &&(String, String, Outcome)| matches!(&s.2, Outcome::Held { why: HeldWhy::OverLimit, .. });
         assert_eq!(got.iter().filter(|s| matches!(s.2, Outcome::Posted { .. })).count(), 2, "one new copy per channel: {got:?}");
         assert_eq!(got.iter().filter(held).count(), 3, "{got:?}");
         assert_eq!(records.get("aaaa0001", "two").unwrap().remote.unwrap().id, "https://publish.example.net/notes/a/");
+    }
+
+    /// A plugin that throws is held for the next run, which its key makes
+    /// safe, and says so as a kind a person can be told, with the throw's own
+    /// words as the detail.
+    #[tokio::test]
+    async fn a_channel_whose_plugin_throws_is_held_as_failed_with_its_words() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        super::super::test_channel(root, "keyed", "{ publish_copy: async function () { throw new TypeError('no route'); } }");
+        let manifest = root.join(".moss/plugins/keyed/manifest.json");
+        let mut m: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&manifest).unwrap()).unwrap();
+        m["contributes"]["channel"]["syndication"]["idempotent"] = true.into();
+        std::fs::write(&manifest, m.to_string()).unwrap();
+        std::fs::create_dir_all(root.join("notes")).unwrap();
+        std::fs::write(root.join("notes/a.md"), "Hello.\n").unwrap();
+        Records::in_vault(&crate::moss_paths::MossPaths::new(root)).save(&CopyRecord::due("aaaa0001", "keyed", "notes/a.md", "notes/a/")).unwrap();
+        let post: ArticleInfo = serde_json::from_value(serde_json::json!({
+            "source_path": "notes/a.md", "title": "", "content": "Hello.\n", "url_path": "notes/a/", "date": null,
+            "uid": "aaaa0001", "syndicate": ["keyed"]
+        }))
+        .unwrap();
+        let mut articles = ArticleMap::default();
+        articles.articles.insert(post.url_path.clone(), post);
+        let manager = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()).get_or_create(&root.to_string_lossy()).unwrap();
+        let emit = |_: &Sent| {};
+        let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
+        let sent = send_due(root, &manager, &articles, &opts).await;
+        let Some(Outcome::Held { why, reason }) = sent.last().map(|s| s.outcome.clone()) else { panic!("{sent:?}") };
+        assert_eq!(why, HeldWhy::Failed);
+        assert!(reason.contains("TypeError: no route") && !reason.contains("Exception"), "{reason}");
     }
 
     /// The author's latest word decides: a channel the post's `syndicate:` no
@@ -873,6 +1090,8 @@ mod tests {
         let mut r = CopyRecord::due("aaaa0001", "drafts", "essays/a.md", "essays/a/");
         r.state = State::HandedOff;
         r.handoff = Some(handoff);
+        r.form = Some(super::super::channel::Form::Long);
+        r.part_count = Some(0);
         records.save(&r).unwrap();
         let post: ArticleInfo = serde_json::from_value(serde_json::json!({
             "source_path": "essays/a.md", "title": "A", "content": "Body.\n", "url_path": "essays/a/", "date": null,
@@ -892,7 +1111,9 @@ mod tests {
         };
 
         assert!(send("waiting").await.is_empty(), "an unpublished draft waits quietly");
-        assert_eq!(records.get("aaaa0001", "drafts").unwrap().state, State::HandedOff);
+        let waiting = records.get("aaaa0001", "drafts").unwrap();
+        assert_eq!(waiting.state, State::HandedOff);
+        assert_eq!(waiting.form, Some(super::super::channel::Form::Long));
 
         assert_eq!(send("published").await, [Outcome::Posted { url: "https://articles.example.net/a-1".into() }]);
         assert!(std::fs::read_to_string(root.join("essays/a.md")).unwrap().contains("https://articles.example.net/a-1"));

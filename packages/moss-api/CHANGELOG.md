@@ -13,6 +13,19 @@ release heading.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-11-12
+
+### Added
+
+- `PublicDataContribution`: what a plugin's `contributes.public_data` declares. `keys` lists dotted paths below the plugin's own `[services.<plugin>]` table (`*` stands for any one key), and moss publishes those values at `/_moss/extensions/<plugin>.json` as `{schema, data}` for the plugin's element to read in the browser; `fill` names keys the build fills with the address of one of moss's services when the table leaves them out.
+- `BlockContribution` and `BlockAttribute`: what `contributes.blocks[short]` declares. A block is a custom element an author places with a `:::<short>` fence around ordinary markdown; `script` and `stylesheet` load only on pages that use it, and `attributes` lists what a fence may set (type, `required`, `options`, `pattern` and `pattern_message`). No plugin code runs at build.
+- `CopyPicture`, and on `CopyJob`: `pictures` (the pictures a channel uploads with a plain-text copy, each with its `url` and `alt`), `included_pictures` and `omitted_pictures` (how many a copy carries and how many the channel's limit left out).
+
+### Changed
+
+- A plugin may omit its entry file when it declares nothing but `contributes.derivations`, `contributes.blocks` or `contributes.public_data`.
+- A copy job's payload fields may be absent for a lookup whose copy no longer fits, as well as for a delete.
+
 ## [0.17.0] - 2026-11-08
 
 ### Added

@@ -8,6 +8,7 @@
 
 pub mod beacon;
 pub mod commerce;
+pub mod members;
 pub mod inventory;
 pub mod listing_style;
 pub mod math_png;

@@ -17,11 +17,13 @@ use super::node::{Block, Inline};
 use super::shortcode::{Shortcode, ShortcodeKind};
 use super::url::Url;
 
-/// One mutable walk over the typed tree: every URL, and every piece of raw
-/// HTML a block or an inline carries (a folder embed's marker is one of them).
+/// One mutable walk over the typed tree: every URL, every piece of raw HTML
+/// a block or an inline carries (a folder embed's marker is one of them), and
+/// every plugin block.
 trait MutVisitor {
     fn url(&mut self, url: &mut Url);
     fn raw_html(&mut self, html: &mut String);
+    fn plugin_block(&mut self, _block: &mut super::shortcode::BlockShortcode) {}
 }
 
 /// Visits URLs only.
@@ -32,6 +34,26 @@ impl<F: FnMut(&mut Url)> MutVisitor for UrlVisitor<F> {
         (self.0)(url);
     }
     fn raw_html(&mut self, _html: &mut String) {}
+}
+
+/// Visits plugin blocks only.
+struct PluginBlockVisitor<F>(F);
+
+impl<F: FnMut(&mut super::shortcode::BlockShortcode)> MutVisitor for PluginBlockVisitor<F> {
+    fn url(&mut self, _url: &mut Url) {}
+    fn raw_html(&mut self, _html: &mut String) {}
+    fn plugin_block(&mut self, block: &mut super::shortcode::BlockShortcode) {
+        (self.0)(block);
+    }
+}
+
+/// Visit every plugin block, nested ones included, so a host that knows the
+/// installed plugins can fill in what the parser cannot.
+pub fn visit_plugin_blocks_mut(doc: &mut Document, f: impl FnMut(&mut super::shortcode::BlockShortcode)) {
+    let mut visitor = PluginBlockVisitor(f);
+    for block in &mut doc.blocks {
+        visit_urls_in_block(block, &mut visitor);
+    }
 }
 
 /// Visits raw HTML only.
@@ -210,6 +232,12 @@ where
                 }
             }
         }
+        Shortcode::Block(args) => {
+            v.plugin_block(args);
+            for block in &mut args.body {
+                visit_urls_in_block(block, v);
+            }
+        }
         Shortcode::Recent(_) | Shortcode::Form(_) => {} // No URLs.
     }
 }
@@ -290,6 +318,7 @@ pub fn for_each_child_sequence(block: &Block, mut f: impl FnMut(&[Block]) -> boo
         Block::List { items, .. } => items.iter().all(|item| f(item)),
         Block::Shortcode(Shortcode::Grid(args)) => args.cells.iter().all(|cell| f(cell)),
         Block::Shortcode(Shortcode::Hero(args)) => f(&args.overlay),
+        Block::Shortcode(Shortcode::Block(args)) => f(&args.body),
         Block::Shortcode(
             Shortcode::Subscribe(_) | Shortcode::Buttons(_) | Shortcode::Gallery(_) | Shortcode::Recent(_) | Shortcode::Form(_),
         ) => true,
@@ -329,7 +358,7 @@ fn any_block(doc: &Document, pred: impl Fn(&Block) -> bool) -> bool {
 /// Replaces the `project_has_inline_subscribe` filesystem scan once
 /// shortcodes migrate to typed AST in Phase B.
 pub fn has_shortcode_recursive(doc: &Document, kind: ShortcodeKind) -> bool {
-    any_block(doc, |block| matches!(block, Block::Shortcode(sc) if sc.kind() == kind))
+    any_block(doc, |block| matches!(block, Block::Shortcode(sc) if sc.kind() == Some(kind)))
 }
 
 /// Every `:::form` in the document, nested ones included, in source order.
@@ -644,6 +673,7 @@ mod tests {
             }],
             id: None,
             legacy_id: None,
+            numbered_from: None,
             contents_end: false,
             contents_label: None,
         }]);

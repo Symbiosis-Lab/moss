@@ -7,9 +7,11 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use crate::vault::import::scrape::import_local::import_local_file;
-use crate::vault::import::scrape::run::{dropped_widgets, scrape_to_folder, PageGap, ScrapeProgress, ScrapeResult};
-use crate::vault::import::scrape::service::{ScrapeConfig, DEFAULT_MAX_PAGES};
+use crate::vault::import::{import_source, ImportOptions};
+use crate::vault::import::scrape::run::{dropped_widgets, PageGap, ScrapeProgress, ScrapeResult};
+use crate::vault::import::scrape::service::DEFAULT_MAX_PAGES;
+#[cfg(test)]
+use crate::vault::import::source::is_remote_url;
 use crate::vault::import::widgets::grouped_kinds;
 
 /// Top-level dispatcher for `moss import …`. Returns a process exit code.
@@ -63,25 +65,16 @@ pub fn run(args: &[String]) -> i32 {
 
     for url in &urls {
         eprintln!("→ {}", redact_query(url));
-        // `file://` is accepted and stripped to a filesystem path.
-        let local = Path::new(url.strip_prefix("file://").unwrap_or(url));
-        let result = if is_remote_url(url) {
-            let mut config = ScrapeConfig::new(url.clone(), folder.clone());
-            config.recursive = parsed.recursive;
-            runtime.block_on(scrape_to_folder(config, print_progress))
-        } else if crate::vault::import::douban::is_tofu_backup(local) {
-            runtime
-                .block_on(crate::vault::import::douban::import_tofu_backup(local, &folder))
-                .map(|(res, report)| {
-                    for line in report.lines() {
-                        eprintln!("  ↳ {line}");
-                    }
-                    res
-                })
-        } else {
-            // Local file (MHTML web-archive or plain .html).
-            runtime.block_on(import_local_file(local, &folder))
-        };
+        let result = runtime.block_on(import_source(url, &folder, ImportOptions {
+            recursive: parsed.recursive,
+            private_members_dir: parsed.members_dir.as_ref().map(PathBuf::from),
+        }, print_progress)).map(|result| {
+            for line in result.report { eprintln!("  ↳ {line}"); }
+            if let Some(handoff) = result.subscribers {
+                for path in handoff.files { eprintln!("  ↳ Reader list retained privately: {}", path.display()); }
+            }
+            result.scrape
+        });
 
         match result {
             Ok(res) => {
@@ -334,6 +327,7 @@ struct ParsedArgs {
     url: Option<String>,
     folder: Option<String>,
     list_file: Option<String>,
+    members_dir: Option<String>,
     recursive: bool,
 }
 
@@ -345,6 +339,10 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
     while i < args.len() {
         let a = &args[i];
         match a.as_str() {
+            "--members-dir" => {
+                i += 1;
+                out.members_dir = Some(args.get(i).ok_or("--members-dir requires a private directory")?.clone());
+            }
             "--list" => {
                 i += 1;
                 if i >= args.len() {
@@ -473,14 +471,6 @@ fn redact_query(url: &str) -> String {
     format!("{} (query redacted)", s.trim_end_matches('?'))
 }
 
-/// Whether an import argument is a remote URL (fetched over HTTP) rather than a
-/// local file path. Anything that isn't `http(s)://` is treated as a local file
-/// (MHTML web-archive or `.html`).
-fn is_remote_url(arg: &str) -> bool {
-    let lower = arg.trim().to_ascii_lowercase();
-    lower.starts_with("http://") || lower.starts_with("https://")
-}
-
 fn print_usage() {
     eprintln!("Usage: moss import <url|file> [<folder>] [-r|--recursive]");
     eprintln!("       moss import --list <file> [<folder>] [-r|--recursive]");
@@ -490,6 +480,8 @@ fn print_usage() {
     eprintln!("Imports your own content — published on the web or saved as a file —");
     eprintln!("as markdown into <folder> (default: current directory).");
     eprintln!();
+    eprintln!("Ghost export folders and All data zips bring posts, tags and restricted text.");
+    eprintln!("Reader lists stay in private app data; --members-dir selects a private directory.");
     eprintln!("A URL (http/https) is fetched and distilled with a defuddle-based");
     eprintln!("extractor; metadata is read from schema.org, OpenGraph, and <html lang>.");
     eprintln!("A local .mhtml/.mht web-archive (\"Save Page As\") or .html file is parsed");
@@ -617,6 +609,7 @@ mod tests {
             url: None,
             folder: None,
             list_file: Some(p.to_string_lossy().to_string()),
+            members_dir: None,
             recursive: false,
         };
         let urls = collect_urls(&parsed).unwrap();

@@ -28,11 +28,15 @@ pub(crate) struct Spec {
     pub action: Option<Action>,
     /// The search field above the map; on unless the author sets `search: false`.
     pub search: bool,
+    /// `as_of: today`: the site script rewrites the stamp to the visitor's date;
+    /// the built stamp stays for a reader without script.
+    #[serde(default)]
+    pub as_of_today: bool,
 }
 
 impl Default for Spec {
     fn default() -> Self {
-        Spec { by: String::new(), levels: Vec::new(), unrated: None, action: None, search: true }
+        Spec { by: String::new(), levels: Vec::new(), unrated: None, action: None, search: true, as_of_today: false }
     }
 }
 
@@ -81,7 +85,20 @@ pub(crate) fn parse(value: &Value) -> Result<Spec, String> {
         Some(Value::Bool(on)) => *on,
         Some(_) => return Err("country_map's `search` is true or false".into()),
     };
-    Ok(Spec { by, levels, unrated: get("unrated").and_then(text_of).filter(|s| !s.is_empty()), action, search })
+    let as_of_today = match get("as_of") {
+        None | Some(Value::Null) => false,
+        Some(Value::String(s)) if s.trim() == "today" => true,
+        Some(_) => return Err("country_map's `as_of` is `today`; leave it out to stamp the page's `date:`".into()),
+    };
+    Ok(Spec { by, levels, unrated: get("unrated").and_then(text_of).filter(|s| !s.is_empty()), action, search, as_of_today })
+}
+
+impl Spec {
+    /// The day the built stamp shows: the page's `date:`, or under `as_of: today`
+    /// with no `date:`, the build day, so a reader without script still sees one.
+    pub(crate) fn stamp_date<'a>(&self, page_date: Option<&'a str>, build_day: &'a str) -> Option<&'a str> {
+        page_date.or(self.as_of_today.then_some(build_day))
+    }
 }
 
 #[cfg(test)]
@@ -111,6 +128,23 @@ mod tests {
         assert!(parse_yaml("by: x\nlevels: [a]\nsearch: true").unwrap().search);
         assert!(!parse_yaml("by: x\nlevels: [a]\nsearch: false").unwrap().search);
         assert!(parse_yaml("by: x\nlevels: [a]\nsearch: maybe").unwrap_err().contains("`search`"));
+    }
+
+    #[test]
+    fn as_of_today_is_the_only_value_besides_leaving_it_out() {
+        assert!(!parse_yaml("by: x\nlevels: [a]").unwrap().as_of_today);
+        assert!(parse_yaml("by: x\nlevels: [a]\nas_of: today").unwrap().as_of_today);
+        assert!(parse_yaml("by: x\nlevels: [a]\nas_of: 2026-11-03").unwrap_err().contains("`as_of`"));
+    }
+
+    #[test]
+    fn the_built_stamp_falls_back_to_the_build_day_only_under_as_of_today() {
+        let plain = parse_yaml("by: x\nlevels: [a]").unwrap();
+        let today = parse_yaml("by: x\nlevels: [a]\nas_of: today").unwrap();
+        assert_eq!(plain.stamp_date(Some("2026-11-03"), "2026-12-01"), Some("2026-11-03"));
+        assert_eq!(plain.stamp_date(None, "2026-12-01"), None);
+        assert_eq!(today.stamp_date(Some("2026-11-03"), "2026-12-01"), Some("2026-11-03"));
+        assert_eq!(today.stamp_date(None, "2026-12-01"), Some("2026-12-01"));
     }
 
     #[test]

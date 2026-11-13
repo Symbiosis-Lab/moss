@@ -4,7 +4,7 @@
 // reads as text, and keeps the honeypot out of sight and out of the tab order.
 import { test, expect, type Page } from '@playwright/test';
 import { gatePort } from '../../../playwright/gate-ports';
-import { expectFocusOnOwnEdge } from './field-focus-edge';
+import { expectFocusOnOwnEdge, expectNothingPaintedOutside } from './field-focus-edge';
 
 const url = `http://localhost:${gatePort('request-form')}/`;
 
@@ -67,12 +67,15 @@ for (const scheme of ['light', 'dark'] as const) {
         const seen: string[] = [];
         for (let i = 0; i < 30; i++) {
           await page.keyboard.press('Tab');
-          const s = await page.evaluate(() => {
+          const read = () => page.evaluate(() => {
             const el = document.activeElement as HTMLElement;
             const cs = getComputedStyle(el);
             // A date field's calendar button takes focus inside the field and draws its own ring.
-            return { name: (el as HTMLInputElement).name || el.tagName, inForm: !!el.closest('.moss-form'), visible: el.matches(':focus-visible'), ring: (cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) >= 2) || (el.classList.contains('moss-input--boxed') && cs.boxShadow !== 'none') };
+            return { name: (el as HTMLInputElement).name || el.tagName, inForm: !!el.closest('.moss-form'), visible: el.matches(':focus-visible'), ring: (cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) >= 2) || (el.classList.contains('moss-input') && cs.boxShadow !== 'none') };
           });
+          // A field's edge transitions in; WebKit reports none for the frame it starts.
+          let s = await read();
+          if (s.visible && !s.ring) { await page.waitForTimeout(350); s = await read(); }
           if (!s.inForm) continue;
           seen.push(s.name);
           if (s.visible) expect(s.ring, `${s.name} shows a focus ring`).toBe(true);
@@ -87,6 +90,32 @@ for (const scheme of ['light', 'dark'] as const) {
       test('a click into the text area shows focus on its own edge, under a theme focus ring', async ({ page }) => {
         await page.goto(url, { waitUntil: 'load' });
         await expectFocusOnOwnEdge(page, page.locator('.moss-form textarea'), 'text area');
+      });
+
+      test('a click into an underline field lights its underline and draws no box, under a theme focus ring', async ({ page }) => {
+        await page.goto(url, { waitUntil: 'load' });
+        const field = page.locator('.moss-form input.moss-input:not(.moss-input--boxed)').first();
+        await field.click();
+        expect(await field.evaluate((el) => getComputedStyle(el).outlineStyle), 'no outline, whatever the theme says').toBe('none');
+        expect(await field.evaluate((el) => getComputedStyle(el).boxShadow), 'the underline takes the accent').toContain('inset');
+        await expectNothingPaintedOutside(page, field, 'underline field');
+      });
+
+      test('under forced colors a focused field keeps its edge inside itself, under a theme focus ring', async ({ page, browserName }) => {
+        test.skip(browserName !== 'chromium', 'forced-colors emulation is Chromium only');
+        await page.emulateMedia({ forcedColors: 'active' });
+        await page.goto(url, { waitUntil: 'load' });
+        for (const [what, field, width] of [
+          ['underline field', page.locator('.moss-form input.moss-input:not(.moss-input--boxed)').first(), '2px'],
+          ['text area', page.locator('.moss-form textarea'), '1px'],
+        ] as const) {
+          await field.scrollIntoViewIfNeeded();
+          const before = await field.boundingBox();
+          await field.click();
+          const s = await field.evaluate((el) => { const cs = getComputedStyle(el); return { style: cs.outlineStyle, width: cs.outlineWidth, offset: cs.outlineOffset }; });
+          expect(s, `${what}: a ring drawn inside the field`).toEqual({ style: 'solid', width, offset: '-2px' });
+          expect(await field.boundingBox(), `${what}: focus moves nothing`).toEqual(before);
+        }
       });
 
       test('a refused field is marked and its message reads as text', async ({ page }) => {

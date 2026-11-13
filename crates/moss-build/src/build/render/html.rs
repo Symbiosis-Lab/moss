@@ -3,6 +3,7 @@
 //! The `generate_html` function converts a `ParsedDocument` (plus site context)
 //! into a complete HTML page using the template system.
 
+use crate::build::render::incremental::listing::draws_own_listing;
 use crate::build::types::ParsedDocument;
 #[cfg(test)]
 use crate::types::content::ProjectStructure;
@@ -245,6 +246,26 @@ fn annotate_children_listing(listing: String, emit_source_lines: bool) -> String
         r#"<div class="moss-cards-container" data-source-fm="children">"#,
         1,
     )
+}
+
+/// The folder a page's own listing shows and whether it names an edition home
+/// (the listing then takes that home's filters), or `None` when the page ends
+/// in no listing. A home (the root's or a language's) lists its tree; any
+/// other page a claimed term, else its own folder when it is a folder index,
+/// else the folder its `children_source` names. `children_source` redirects a
+/// home too. The renderer and whatever must agree with it ask here.
+pub(crate) fn own_listing_target(doc: &ParsedDocument, all_docs: &[ParsedDocument]) -> Option<(String, bool)> {
+    let source = doc.children_source.as_deref().map(|r| resolve_children_source_folder_path(r, all_docs));
+    if crate::build::render::lang_roots::is_language_root(&doc.url_path) {
+        return Some(source.unwrap_or_else(|| (crate::build::folder_embed::home_defaults(doc).tree.to_string(), false)));
+    }
+    let names_scoped_home = source.as_ref().is_some_and(|t| t.1);
+    let folder = match doc.term_listing.as_deref() {
+        Some(term) => term.to_string(),
+        None if doc.kind == PageKind::Folder && doc.url_path.ends_with("/index.html") => doc.url_path.trim_end_matches("/index.html").to_string(),
+        None => source?.0,
+    };
+    Some((folder, names_scoped_home))
 }
 
 /// Resolves `children_source:`'s wikilink target to a folder's site path (no
@@ -560,6 +581,7 @@ impl<'a> PageFacts<'a> {
         if !eyebrow.is_empty() {
             plan.prepend_html(eyebrow.to_string());
         }
+        plan.append_html(credits::external_home_link(doc, &plan).unwrap_or_default());
         plan
     }
 
@@ -579,7 +601,7 @@ impl<'a> PageFacts<'a> {
             from_md_path,
             names_scoped_home,
         );
-        let listed = crate::build::folder_embed::ListedUrls::default();
+        let listed = crate::build::folder_embed::ListingHost::of(doc);
         let resolved_html = crate::build::folder_embed::resolve_markers_with_place_maps(
             &marker,
             from_md_path,
@@ -591,7 +613,7 @@ impl<'a> PageFacts<'a> {
             Some(&context.shared.media_lookup),
             context.chrome.layout.assets.math,
             None,
-            Some(&listed),
+            &listed,
             context.shared.now,
         );
         crate::build::folder_embed::note_repeated_child_listing(doc, &listed);
@@ -601,25 +623,23 @@ impl<'a> PageFacts<'a> {
         )
     }
 
+    /// Splices the page's own listing where its body put `![[./]]`; with no
+    /// such spot, hands it back to be appended.
+    fn place_listing(content: &mut String, listing: String) -> Option<String> {
+        let Some(at) = content.find(crate::build::folder_embed::OWN_LISTING_PLACEHOLDER) else { return Some(listing) };
+        content.replace_range(at..at + crate::build::folder_embed::OWN_LISTING_PLACEHOLDER.len(), &listing);
+        None
+    }
+
     /// A folder index, a page that won a term claim (`author_page:` /
     /// `tag_page:`, at any path) or a page hosting another folder's
     /// `children_source` ends in that listing; a term page and a place
     /// namespace root also get their map.
     fn host_listing(&self, context: &RenderCtx<'_, '_>, doc: &ParsedDocument, content: String, is_folder_index: bool) -> String {
-        let term_listing = doc.term_listing.as_deref();
-        let children_source_target = doc.children_source.as_deref()
-            .map(|r| resolve_children_source_folder_path(r, context.chrome.documents));
-        if !(is_folder_index || term_listing.is_some() || children_source_target.is_some()) {
+        let Some((folder_path, names_scoped_home)) = own_listing_target(doc, context.chrome.documents) else {
             return content;
-        }
-        let names_scoped_home = children_source_target.as_ref().is_some_and(|t| t.1);
-        let folder_path = term_listing.map(str::to_string).unwrap_or_else(|| {
-            if is_folder_index {
-                doc.url_path.trim_end_matches("/index.html").trim_end_matches("index.html").trim_end_matches('/').to_string()
-            } else {
-                children_source_target.map(|t| t.0).unwrap_or_default()
-            }
-        });
+        };
+        let term_listing = doc.term_listing.as_deref();
         // A `children_source` host needs its real source path, so the
         // listing's self-exclusion can match it.
         let from_md_path = if term_listing.is_some() || is_folder_index {
@@ -629,11 +649,11 @@ impl<'a> PageFacts<'a> {
         };
 
         // An explorer root hosts no listing: the map is the page.
-        let show_folder_children = !self.children_in_sidebar && doc.children.unwrap_or(true) && !self.is_explorer_root;
-        // Where the page's own body ends: a claimed term page's map and
-        // listing are placed relative to it (see `insert_before_sources`).
-        let body_end = content.len();
         let mut content = content;
+        let listing = draws_own_listing(doc, self.is_explorer_root)
+            .then(|| self.children_listing(context, doc, &folder_path, &from_md_path, names_scoped_home))
+            .and_then(|listing| Self::place_listing(&mut content, listing));
+        let body_end = content.len();
         // A claimed sub-term and a real place-namespace-root folder index get
         // the same map, under the page-level `map: false` opt-out.
         let root_map_key = doc.is_place_namespace_root.then(|| folder_path.as_str());
@@ -657,10 +677,12 @@ impl<'a> PageFacts<'a> {
                 content.push_str(&map);
             }
         }
-        if show_folder_children {
-            content.push_str(&self.children_listing(context, doc, &folder_path, &from_md_path, names_scoped_home));
+        if let Some(listing) = listing {
+            content.push_str(&listing);
         }
         if term_listing.is_some() && !self.is_explorer_root {
+            // A claimed term page's map and listing are placed relative to
+            // where its own body ends (see `insert_before_sources`).
             let hosted = content.split_off(body_end);
             content = crate::build::terms::insert_before_sources(&content, &hosted, doc.lang);
         }
@@ -722,10 +744,11 @@ fn series_nav_html<'d>(context: &RenderCtx<'_, 'd>, d: &ParsedDocument, typesett
     // By url_path: every folder index's clean_stem is "index".
     let pos = siblings.iter().position(|pd| pd.url_path == d.url_path)?;
     // Labels are chrome: plain text.
-    let neighbour = |i: usize| (siblings[i].label.clone(), path_resolver.resolve_url(&siblings[i].url_path));
+    let clean_url = |path: &str| path_resolver.resolve_url(&crate::build::scan::article_map::to_pretty_url(path));
+    let neighbour = |i: usize| (siblings[i].label.clone(), clean_url(&siblings[i].url_path));
     let prev = (pos > 0).then(|| neighbour(pos - 1));
     let next = (pos + 1 < siblings.len()).then(|| neighbour(pos + 1));
-    let resolved_parent = path_resolver.resolve_url(&parent_index);
+    let resolved_parent = clean_url(&parent_index);
     let html = components::series_nav::render(
         &parent_doc.label,
         &resolved_parent,
@@ -792,25 +815,21 @@ pub(super) fn render_page<'d>(
                 if outcome == TitleOutcome::None {
                     content
                 } else {
-                    let headerless = layout_config.header == crate::build::components::nav::HeaderMode::None;
+                    let headerless = doc.bare || layout_config.header == crate::build::components::nav::HeaderMode::None;
                     let h1 = crate::build::components::folder_title::render(&doc.label, emit_source_lines, !(headerless && outcome == TitleOutcome::Visible));
                     format!("{h1}\n{content}")
                 }
             };
 
-            // A home lists its own tree: "" for the root home, `en` for
-            // `en/index.html`. `children_source` redirects it elsewhere.
             let own_tree = crate::build::folder_embed::home_defaults(doc).tree;
-            let (target_folder_path, names_scoped_home) = doc.children_source.as_deref()
-                .map(|r| resolve_children_source_folder_path(r, all_docs))
-                .unwrap_or_else(|| (own_tree.to_string(), false));
+            let (target_folder_path, names_scoped_home) = own_listing_target(doc, all_docs).unwrap_or_default();
             let from_md_path = if own_tree.is_empty() { "index.md".to_string() } else { format!("{own_tree}/index.md") };
 
-            let content = if !facts.children_in_sidebar && doc.children.unwrap_or(true) {
-                content + &facts.children_listing(context, doc, &target_folder_path, &from_md_path, names_scoped_home)
-            } else {
-                content
-            };
+            let mut content = content;
+            let listing = draws_own_listing(doc, facts.is_explorer_root)
+                .then(|| facts.children_listing(context, doc, &target_folder_path, &from_md_path, names_scoped_home))
+                .and_then(|listing| PageFacts::place_listing(&mut content, listing));
+            content.extend(listing);
             // Colophon at the very foot, after the children listing.
             let content = if is_article_page { content } else { with_colophon(content, doc, emit_source_lines) };
 
@@ -1094,7 +1113,7 @@ pub(super) fn render_page<'d>(
                 .filter(|d| {
                     d.url_path.starts_with(&target_prefix)
                         && d.url_path != target_doc.url_path
-                        && d.is_listable()
+                        && d.is_listable_in(&target_prefix)
                         && (d.date.is_some() || d.event.is_some())
                 })
                 // Sidebar always shows direct children only, regardless of children_depth.
@@ -1266,7 +1285,7 @@ pub(super) fn render_page<'d>(
         // the body, before its first text block.
         if let Some(d) = doc {
             if let Some(masthead) =
-                credits::render_byline_html(&d.byline, emit_source_lines, d.place_line.as_deref())
+                credits::render_byline_html(&d.byline, emit_source_lines, &d.term_lines)
             {
                 after_title_block.push_str(&masthead);
             }
@@ -1274,19 +1293,9 @@ pub(super) fn render_page<'d>(
         after_title_block.push_str("<!-- slot:after-title -->");
         after_title_block.push_str(&facts.fields.after_masthead());
         let spliced = splice_after_title_block(&homepage_content, &after_title_block);
-        // Colophon rows close the article body, after the prose and any
-        // footnote section, inside `<article>`; a page's syndication line
-        // follows them.
+        // Colophon rows close the article body after the prose and footnotes.
         match doc {
-            Some(d) => {
-                let mut html = with_colophon(spliced, d, emit_source_lines);
-                if d.kind != moss_core::PageKind::Folder {
-                    if let Some(line) = crate::build::features::syndication::render_syndication_line(&d.syndicated_urls(), d.lang) {
-                        html.push_str(&line);
-                    }
-                }
-                html
-            }
+            Some(d) => with_colophon(spliced, d, emit_source_lines),
             None => spliced,
         }
     } else {
@@ -1567,10 +1576,12 @@ pub(super) fn render_page<'d>(
 ///    is the whole-chain half of the opt-out; the page's own nav is separately
 ///    suppressed by `nav_enabled` at the call site.
 ///
-/// Every page that sets neither answers exactly as `is_listable` does.
+/// Every page that sets neither answers exactly as `is_listable_in` its own
+/// folder does: a chain runs among siblings, so a hidden folder holding the
+/// page holds the whole chain, and the page's own address lies inside it.
 pub(crate) fn is_sequence_step(pd: &ParsedDocument) -> bool {
     use moss_core::sort::SortableDoc;
-    pd.is_listable()
+    pd.is_listable_in(&pd.url_path)
         && (!pd.is_folder_index() || ShellRegistry::is_article_layout(pd))
         && !matches!(&pd.series, Some(crate::build::types::SeriesField::Flag(false)))
 }
@@ -1613,7 +1624,10 @@ fn sequence_siblings<'a>(
         })
         .filter(|pd| is_direct_child(&pd.url_path, parent_prefix))
         .collect();
-    moss_core::sort::sort_by_resolved(&siblings, resolved)
+    // However a folder lists its pages, a series is read forward in time: next is the newer page.
+    let forward = (resolved.axis == moss_core::sort::SortAxis::Date && resolved.explicit_order.is_none())
+        .then(|| moss_core::sort::ResolvedSort { axis: moss_core::sort::SortAxis::DateAsc, ..resolved.clone() });
+    moss_core::sort::sort_by_resolved(&siblings, forward.as_ref().unwrap_or(resolved))
 }
 
 /// Is `url_path` a direct child of `prefix` — one segment below it, tolerating
