@@ -48,6 +48,7 @@ All notable changes to moss will be documented here.
 ### Fixed
 
 - In the editor, the `members` and `search_engines` fields show a hint like every other field; they had none.
+- An event's `start` and `end` in the editor's page properties open a date picker with an optional time beside it, instead of a plain text box. A date alone stays a date; adding a time writes `YYYY-MM-DD HH:MM`, and a value that was not changed is left as it is in the file.
 - A PDF, picture or other file opened in the editor stays in its viewer. The preview follows to the file's own address, and the editor took that address for a page moss generated and replaced the viewer with "No page to edit".
 - A picture declares the width it is drawn at in three more places, so a browser that cannot measure it first (Safari, and every browser for the page's first picture) no longer enlarges a file that is too small: in the column of a `content_width: wide`, `full` or `screen` page; in a grid with a ratio (`:::grid 2 5:7`) or `mid=N`, where it declares the grid's widest cell; and as the cover of a page's card in a `:::grid` cell, which declared a listing card's width however wide the cell was. A collage's pictures declare half the collage's width, which is its lead tile's.
 - After a click on the page in the preview, a saved edit shows in it. Clicking text focused the page's main area, and the preview then kept the old text there until it was reloaded.
