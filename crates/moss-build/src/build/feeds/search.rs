@@ -425,7 +425,10 @@ pub(crate) struct PageSource {
 pub(crate) fn read_pages(site_dir: &Path) -> PageRead {
     let mut skipped = 0;
     let mut left_out = 0;
-    let walk = walkdir::WalkDir::new(site_dir).sort_by(crate::build::scan::path_collision::nfc_name_order).into_iter().filter_map(Result::ok);
+    // The members-only versions are not pages a search may quote.
+    let gated = site_dir.join(crate::build::served_path::GATED_PREFIX);
+    let walk = walkdir::WalkDir::new(site_dir).sort_by(crate::build::scan::path_collision::nfc_name_order).into_iter()
+        .filter_entry(|e| e.path() != gated).filter_map(Result::ok);
     let pages = walk
         .filter(|e| e.file_type().is_file() && e.path().extension().and_then(|x| x.to_str()) == Some("html"))
         .filter_map(|entry| {

@@ -482,6 +482,12 @@ pub enum SetaError {
     /// help; the app has to be updated first.
     #[error("{}", update_required_text(message, min_version))]
     UpdateRequired { min_version: Option<String>, message: String },
+
+    /// The server does not serve this publish's members-only files:
+    /// `422 {code:'gated_not_enforceable', error}`. Display is the server's
+    /// sentence.
+    #[error("{message}")]
+    GatedNotEnforceable { message: String },
 }
 
 /// The server's sentence, then the oldest moss it accepts when it names one.

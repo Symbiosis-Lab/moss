@@ -53,6 +53,8 @@ pub async fn publish(
     sink: &Arc<dyn DeploySink>,
     allow_mass_removal: bool,
 ) -> Result<Published, String> {
+    // A plain file host serves every file it holds to everyone.
+    let files = &crate::build::emit::members::public_files(files);
     if let Some(bad) = files.keys().find(|p| !plan::is_safe_path(p)) {
         return Err(format!("the site has a file moss cannot publish here: {bad:?}"));
     }

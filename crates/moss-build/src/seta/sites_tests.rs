@@ -538,3 +538,24 @@ async fn the_name_check_reports_a_server_failure_instead_of_taken() {
     let result = available(&server).await;
     assert!(matches!(result, Err(crate::seta::client::SetaError::Api { status: 500, .. })), "{result:?}");
 }
+
+#[test]
+fn sync_and_commit_bodies_name_each_gated_file_with_its_access_and_fallback() {
+    let manifest: std::collections::HashMap<String, String> = [
+        "index.html", "post/index.html", "_gated/post/index.html", "_gated/map/rows.json",
+    ].into_iter().map(|p| (p.to_string(), "100644:0123456789abcdef".to_string())).collect();
+    let gated = serde_json::json!({
+        "_gated/post/index.html": { "access": "subscribers", "fallback": "projection" },
+        "_gated/map/rows.json": { "access": "subscribers", "fallback": "unauthorized" },
+    });
+    let sync = sync_body(&manifest, &Default::default());
+    assert_eq!(sync["gated"], gated);
+    assert_eq!(sync["files"].as_object().unwrap().len(), 4);
+    let commit = commit_body(&manifest, "abc123def456abcd");
+    assert_eq!(commit["gated"], gated);
+    assert_eq!(commit["generation_id"], "abc123def456abcd");
+
+    let public = crate::build::emit::members::public_files(&manifest);
+    assert!(sync_body(&public, &Default::default()).get("gated").is_none());
+    assert!(commit_body(&public, "abc123def456abcd").get("gated").is_none());
+}

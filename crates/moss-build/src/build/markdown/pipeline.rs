@@ -1589,6 +1589,7 @@ pub fn process_markdown_file(
         field_errors,
         placed_fields,
         title_block: frontmatter.title_block,
+        members_full: None,
         bare: frontmatter.chrome.as_deref() == Some("none"),
         reader_controls: frontmatter.reader_controls,
         card_extras: None,

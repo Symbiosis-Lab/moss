@@ -77,7 +77,7 @@ pub(crate) struct Rendered {
 /// name order. A map layer's source folder is out of the scanned structure but
 /// is source a rebuilt folder needs, so all its files join the copy here, scans
 /// included: the published site carries a scan only as warped tiles.
-fn source_files(structure: &ProjectStructure) -> Vec<String> {
+fn source_files(structure: &ProjectStructure, members_policy: &moss_core::frontmatter::member_cascade::MemberCascade) -> Vec<String> {
     let root = Path::new(&structure.root_path);
     let layer_files = crate::config::map_layers::declared_sources(root).into_iter().flat_map(|source| {
         walkdir::WalkDir::new(on_disk(root, &source))
@@ -95,6 +95,7 @@ fn source_files(structure: &ProjectStructure) -> Vec<String> {
         .map(|file| file.path.clone())
         .chain(layer_files)
         .filter(|path| !path.split('/').any(|segment| segment == "_moss" || segment == "node_modules"))
+        .filter(|path| crate::build::scan::members::file_access(members_policy, path).is_none())
         .collect();
     files.sort_unstable_by(|a, b| crate::build::scan::path_collision::nfc_order(a, b));
     files.dedup();
@@ -167,7 +168,7 @@ fn emit_source_copy(inputs: EditionInputs<'_>, stage_dir: &Path, pending: &mut P
     let root = Path::new(&inputs.structure.root_path);
     let mut inventory = String::new();
     let mut copied = Vec::new();
-    for rel in source_files(inputs.structure) {
+    for rel in source_files(inputs.structure, inputs.members_policy) {
         // A file the sync client has not materialised yet is left out of this
         // edition rather than failing the build.
         let Ok(bytes) = std::fs::read(on_disk(root, &rel)) else { continue };

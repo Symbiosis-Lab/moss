@@ -93,6 +93,7 @@ pub(super) fn parse_coded_refusal(status: u16, body: &str) -> Option<SetaError> 
             message: text("error")?,
         }),
         (409, "deploy_superseded") => Some(SetaError::DeploySuperseded { message: text("error")? }),
+        (422, "gated_not_enforceable") => Some(SetaError::GatedNotEnforceable { message: text("error")? }),
         (403, "folder_not_signed_in") => Some(SetaError::NotSignedIn { site: text("site")? }),
         (409, "key_has_other_site") => Some(SetaError::KeyHasOtherSite { site: text("site")? }),
         (410, "update_required") => Some(SetaError::UpdateRequired { min_version: text("min_version"), message: text("message")? }),

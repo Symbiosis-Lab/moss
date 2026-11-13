@@ -607,3 +607,16 @@ fn a_prebuilt_manifest_lists_files_under_well_known() {
     let manifest = build_manifest_from_dir(tmp.path()).expect("build_manifest_from_dir");
     assert!(manifest.contains_key(".well-known/atproto-did"), "{:?}", manifest.keys().collect::<Vec<_>>());
 }
+
+#[test]
+fn a_prebuilt_folder_sends_nothing_under_the_members_only_prefix() {
+    let tmp = tempfile::tempdir().unwrap();
+    for (path, body) in [("index.html", "home"), ("post/index.html", "public"), ("_gated/post/index.html", "members")] {
+        let full = tmp.path().join(path);
+        std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+        std::fs::write(full, body).unwrap();
+    }
+    let mut paths: Vec<_> = build_manifest_from_dir(tmp.path()).unwrap().into_keys().collect();
+    paths.sort();
+    assert_eq!(paths, ["index.html", "post/index.html"]);
+}

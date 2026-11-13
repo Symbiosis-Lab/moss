@@ -105,7 +105,7 @@ fn the_source_copy_lists_files_in_composed_name_order() {
         markdown_files: vec![page("e\u{301}clair.md"), page("f.md")],
         ..Default::default()
     };
-    assert_eq!(source_files(&structure), ["f.md", "e\u{301}clair.md"]);
+    assert_eq!(source_files(&structure, &Default::default()), ["f.md", "e\u{301}clair.md"]);
 }
 
 /// A map layer's plates are listed in composed name order.
@@ -135,5 +135,5 @@ fn a_decomposed_map_layer_joins_the_source_copy_composed() {
     std::fs::create_dir_all(root.path().join("cafe\u{301}")).unwrap();
     std::fs::write(root.path().join("cafe\u{301}/cre\u{300}me.region.json"), "{}").unwrap();
     let structure = ProjectStructure { root_path: root.path().to_string_lossy().into_owned(), ..Default::default() };
-    assert_eq!(source_files(&structure), ["caf\u{e9}/cr\u{e8}me.region.json"]);
+    assert_eq!(source_files(&structure, &Default::default()), ["caf\u{e9}/cr\u{e8}me.region.json"]);
 }

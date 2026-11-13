@@ -2258,7 +2258,12 @@ export type RemovalReason =
  * still exists whose address changed, a file whose bytes moved to
  * another address, or a record too old to say.
  */
-"unexplained"
+"unexplained" | 
+/**
+ * The last publish served the address to members only and this build
+ * serves it to everyone.
+ */
+"opened"
 
 /**
  * A public address the last publish served that this build will not.

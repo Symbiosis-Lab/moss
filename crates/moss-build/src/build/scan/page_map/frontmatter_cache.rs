@@ -317,6 +317,17 @@ pub(super) fn scan_frontmatter_urls_with_evicted(
         let unread = if pending.contains(home) { HomeCascade::Pending } else { HomeCascade::Unreadable };
         (home, current.map_or(unread, |entry| HomeCascade::Read(entry.cascade)))
     }), uses_members);
+    for file in markdown_files {
+        let misplaced = out.contains_key(&file.path) && !homes.contains(&file.path.as_str())
+            && cache.entries.get(&file.path).is_some_and(|entry| entry.cascade.is_some() && entry.access.is_none());
+        if misplaced {
+            crate::build::cli_output::log_warn_problem!(
+                "[{}] `cascade:` names `members`, but this page is not its folder's home (`index.md`, a page named like \
+                 its folder, or `home: true`), so it has no effect: nothing beneath it is for members only.",
+                file.path
+            );
+        }
+    }
     out
 }
 

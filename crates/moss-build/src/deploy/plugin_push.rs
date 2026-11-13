@@ -278,8 +278,7 @@ pub async fn run_plugin_deploy_inner(
     // moss window left open would bounce the stack mid-upload. The lease is a
     // file now, so this one line covers the route that could not reach it.
     onionpress_publish_lease(&folder_str);
-    let mut site_files: Vec<String> = sealed.files().keys().cloned().collect();
-    site_files.sort();
+    let site_files = plugin_site_files(sealed);
     let folder = cx.folder.to_path_buf();
     let generation = generation.to_string();
     // The copy may wait behind another publish while builds run: pinned, the
@@ -419,6 +418,14 @@ async fn record_landing(
     // port's implementation also carries the app-only advisory for a
     // configured domain left without DNS management. A no-op headless.
     cx.ports.ensure_domain_ready(folder_str).await;
+}
+
+/// The files a deploy plugin is handed. Its host serves every file it is
+/// given to everyone, so no members-only version is among them.
+pub(crate) fn plugin_site_files(sealed: &crate::build::manifest::SealedManifest) -> Vec<String> {
+    let mut site_files: Vec<String> = crate::build::emit::members::public_files(&sealed.files()).into_keys().collect();
+    site_files.sort();
+    site_files
 }
 
 #[cfg(test)]

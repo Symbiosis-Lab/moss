@@ -100,7 +100,7 @@ pub fn apply_to_stage_and_manifest(
     for receipt in pass.receipts {
         // A stage path no page of this build could have (`_moss/...` bundles the
         // search lane laid down last time) is simply not one.
-        let Ok(sp) = crate::build::served_path::ServedPath::from_source(&receipt.page_path) else {
+        let Ok(sp) = crate::build::served_path::ServedPath::from_output(&receipt.page_path) else {
             continue;
         };
         pending.attach_final_bytes(&sp, &receipt.manifest_hash, receipt.content_oid);

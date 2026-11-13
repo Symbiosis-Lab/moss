@@ -42,7 +42,7 @@ use std::collections::HashMap;
 
 use super::SealedManifest;
 use crate::build::manifest::is_page_source_key;
-use crate::build::served_path::{is_public_address, ServedPath};
+use crate::build::served_path::{is_public_address, ServedPath, GATED_PREFIX};
 
 /// What was live on the site as of the last successful publish.
 ///
@@ -293,6 +293,16 @@ pub enum RemovalReason {
     /// still exists whose address changed, a file whose bytes moved to
     /// another address, or a record too old to say.
     Unexplained,
+    /// The last publish served the address to members only and this build
+    /// serves it to everyone.
+    Opened,
+}
+
+impl RemovalReason {
+    /// Whether a publish is refused until the author accepts this change.
+    pub fn refuses(self) -> bool {
+        matches!(self, Self::Unexplained | Self::Opened)
+    }
 }
 
 /// A site setting that stops a generated file on purpose.
@@ -379,6 +389,8 @@ pub enum RemovalCause {
     Moved { to: String },
     /// The source file is still in the folder but is no longer published.
     StillInFolder { source: String },
+    /// The address was for members only and would be open to everyone.
+    Opened,
 }
 
 /// A removal that would refuse a publish: unexplained and not accepted.
@@ -395,6 +407,9 @@ pub struct PendingRemoval {
 impl RemovedAddress {
     /// The one place a removal is classified into a [`RemovalCause`].
     pub fn cause(&self) -> RemovalCause {
+        if self.reason == RemovalReason::Opened {
+            return RemovalCause::Opened;
+        }
         match (&self.moved_to, &self.source) {
             (Some(to), _) => RemovalCause::Moved { to: crate::build::served_path::served_address(to) },
             (None, Some(source)) => RemovalCause::StillInFolder { source: source.clone() },
@@ -419,7 +434,7 @@ pub fn pending_removals(
 ) -> Vec<PendingRemoval> {
     removed
         .iter()
-        .filter(|r| r.reason == RemovalReason::Unexplained)
+        .filter(|r| r.reason.refuses())
         .filter(|r| !accepted.is_some_and(|set| set.contains(&r.path)))
         .map(RemovedAddress::pending)
         .collect()
@@ -780,6 +795,8 @@ pub fn removed_addresses(
     let mut removed: Vec<RemovedAddress> = vanished_outputs(baseline, current)
         .into_iter()
         .filter(|(out, _)| is_public_address(out) && !is_ladder_of_published_video(out, &files) && !composes_to_served(out, &files))
+        // An address that became members-only still answers, for members.
+        .filter(|(out, _)| !files.contains_key(&format!("{GATED_PREFIX}{out}")))
         .map(|(out, is_page)| {
             let recorded = if is_page { page_sources.get(out) } else { asset_sources.as_ref().and_then(|m| m.get(out)) };
             let renamed = recorded.and_then(|srcs| {
@@ -817,8 +834,22 @@ pub fn removed_addresses(
             (r.reason, r.source) = (*reason, source.clone());
         }
     }
+    removed.extend(opened_addresses(&baseline.files, &files).into_iter().map(|path| RemovedAddress {
+        path, reason: RemovalReason::Opened, moved_to: None, source: None, withdrawn_by: None,
+    }));
     removed.sort_by(|a, b| a.path.cmp(&b.path));
     removed
+}
+
+/// The addresses `previous` held a members-only version of that `current`
+/// serves with none: what was for members would be open to everyone.
+pub fn opened_addresses(previous: &HashMap<String, String>, current: &HashMap<String, String>) -> Vec<String> {
+    previous.keys()
+        .filter(|gated| !current.contains_key(*gated))
+        .filter_map(|gated| gated.strip_prefix(GATED_PREFIX))
+        .filter(|address| current.contains_key(*address))
+        .map(str::to_string)
+        .collect()
 }
 
 /// Public output paths the baseline served that a tree with these `files`
@@ -828,6 +859,7 @@ pub fn removed_public_paths(baseline: &PublishedSnapshot, files: &HashMap<String
     let mut gone: Vec<String> = vanished_keys(&baseline.files, files)
         .filter(|out| is_public_address(out) && !is_ladder_of_published_video(out, files))
         .map(str::to_string)
+        .chain(opened_addresses(&baseline.files, files))
         .collect();
     gone.sort();
     gone

@@ -145,7 +145,7 @@ impl FolderRemovals {
         self.removed
             .iter()
             .flatten()
-            .filter(|r| r.reason == RemovalReason::Unexplained)
+            .filter(|r| r.reason.refuses())
             .map(|r| r.path.as_str())
     }
 }

@@ -57,7 +57,7 @@ pub fn is_not_found_address(rel: &str) -> bool {
 /// `.moss-*` sidecar files, which nothing links to?
 pub fn is_public_address(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
-    !path.starts_with("_moss/") && !name.starts_with(".moss-")
+    !path.starts_with("_moss/") && !path.starts_with(GATED_PREFIX) && !name.starts_with(".moss-")
 }
 
 /// The URL an output path is served at. Only an `index.html` is served at its
@@ -176,6 +176,17 @@ const SEARCH_MOUNT: &str = "_moss/pagefind";
 /// Where the published copy of the site's source lives.
 pub const SOURCE_COPY_MOUNT: &str = "_moss/source";
 
+/// The reserved prefix that holds the members-only version of each gated
+/// address. A host serves a file under it at the address without the prefix,
+/// to members only, and never at its own path.
+pub const GATED_PREFIX: &str = "_gated/";
+
+/// Whether a path segment is the reserved members-only name. No file of the
+/// site may sit under it at any depth, in any letter case: a host refuses it.
+pub fn is_gated_segment(segment: &str) -> bool {
+    segment.eq_ignore_ascii_case("_gated")
+}
+
 impl ServedPath {
     /// Normalize a source-derived path. Composes it (NFC), slugs directory
     /// segments and keeps the basename's letters and case. Idempotent —
@@ -210,7 +221,7 @@ impl ServedPath {
     /// this validator by constructing their inner String directly.
     fn validate_source(s: &str) -> Result<(), ServedPathError> {
         let trimmed = Self::normalize_relative(s)?;
-        if trimmed.split('/').any(|seg| seg == ".moss" || seg == "_moss") {
+        if trimmed.split('/').any(|seg| seg == ".moss" || seg == "_moss" || is_gated_segment(seg)) {
             return Err(ServedPathError::ReservedMossPrefix);
         }
         Ok(())
@@ -681,6 +692,21 @@ impl ServedPath {
     /// `window.mossTheme.base` global. Example: "/_moss/theme/".
     pub fn theme_mount_url() -> &'static str {
         "/_moss/theme/"
+    }
+
+    /// Where the members-only version of this address is written: the one
+    /// function that names it, for a page's version and a folder file's alike.
+    pub fn gated(&self) -> Self {
+        ServedPath(format!("{GATED_PREFIX}{}", self.0))
+    }
+
+    /// A path the build wrote into the output: a source path, or the gated
+    /// version of one, which [`from_source`][Self::from_source] refuses.
+    pub(crate) fn from_output(s: &str) -> Result<Self, ServedPathError> {
+        match s.strip_prefix(GATED_PREFIX) {
+            Some(address) => Self::from_source(address).map(|p| p.gated()),
+            None => Self::from_source(s),
+        }
     }
 
     /// Borrow as `&str` for filesystem joins, manifest keys, log messages.

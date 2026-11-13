@@ -1103,6 +1103,14 @@ fn copy_asset_entry(
     let prev_sources = &ctx.previous_hashes.sources;
     let markdown_exts = moss_core::page_kind::PAGE_EXTENSIONS;
     let video_exts = ["mov", "mp4", "webm", "avi", "mkv", "m4v"];
+    // A file beneath a members cascade is published only as its gated copy.
+    // A link there is not published: its target would be served to everyone.
+    let access = file_path.strip_prefix(source_root).ok()
+        .and_then(|rel| crate::build::scan::members::file_access(&ctx.members_policy, &logical_path(rel)));
+    if access.is_some() && file_type.is_symlink() {
+        run.stats.skipped_symlinks += 1;
+        return;
+    }
     // Symlink branch: preserve the symlink in the output instead of
     // copying bytes. Must run before the `is_file()` filter — symlinks
     // (whether to dirs or files) report `is_file() == false` under the
@@ -1129,7 +1137,7 @@ fn copy_asset_entry(
     // Note: `ship_phase` (staging→site) sees the output as a real symlink and
     // handles it via its own symlink branch — no alias branch needed there.
     #[cfg(target_os = "macos")]
-    if file_type.is_file() {
+    if file_type.is_file() && access.is_none() {
         use crate::build::media::symlink::handle_alias_entry;
         if let Some(outcome) = handle_alias_entry(
             file_path,
@@ -1233,7 +1241,25 @@ fn copy_asset_entry(
 
     // Map asset path through dir_overrides so assets land at their
     // page-tree path (e.g., "交互/sketch.html" → "interactive/sketch.html")
-    let mapped_path = resolve_path_with_overrides(&relative_path, &ctx.dir_overrides);
+    // `address` is where a reader asks for the file; `mapped_path` is where
+    // it is written, which for a gated file is under the gated prefix.
+    let address = resolve_path_with_overrides(&relative_path, &ctx.dir_overrides);
+    let out_path = crate::build::served_path::ServedPath::from_source(&address);
+    // No host can check a paid reader yet, so a paid file is not published.
+    let out_path = match access {
+        Some(moss_core::frontmatter::members::Members::Paid) => return,
+        Some(_) => out_path.map(|address| address.gated()),
+        None => out_path,
+    };
+    let mapped_path = match (&out_path, access) {
+        (Ok(path), Some(_)) => path.as_str().to_string(),
+        (Err(e), Some(_)) => {
+            log::warn!("[background-assets] Skipping file with invalid path '{}': {}", address, e);
+            run.stats.skipped += 1;
+            return;
+        }
+        (_, None) => address.clone(),
+    };
 
     // Claim before any deferred read: cloud-only sources still exist.
     run.live_asset_keys.insert(mapped_path.clone());
@@ -1281,43 +1307,22 @@ fn copy_asset_entry(
             // slash, output-relative (e.g. "audio/talk.mp3", "docs/paper.pdf").
             if let Some(ref registry) = asset_registry {
                 if !is_image_extension(&ext) && !video_exts.contains(&ext.as_str()) {
-                    registry.set_ready(mapped_path.clone());
+                    registry.set_ready(address.clone());
                 }
             }
 
             // Inject defaults only into bundled SPA indexes outside passthrough
             // roots, preserving author metadata. Track the post-injection CAS
             // object so deployment reads the same bytes as staging.
-            let mut spa_post_oid: Option<String> = None;
-            if !configured_passthrough
-                && matches!(ext.as_str(), "html" | "htm")
-                && is_bundled_spa_index_path(&mapped_path)
-            {
-                if let Some(ref defaults) = ctx.spa_defaults {
-                    let canonical_url_for_folder = derive_canonical_url(defaults, &mapped_path);
-                    let borrowed = defaults.as_borrowed(canonical_url_for_folder.as_deref());
-                    match maybe_inject_spa_cached(
-                        &target,
-                        &borrowed,
-                        &oid,
-                        src_stat.size,
-                        object_store,
-                        transforms,
-                    ) {
-                        Ok(Some((_, new_oid))) => {
-                            spa_post_oid = Some(new_oid);
-                        }
-                        Ok(None) => {} // no-op (nothing to inject)
-                        Err(e) => {
-                            // Fail open — leave the file alone, don't break the build.
-                            log::info!(
-                                "[background-assets] SPA inject failed for {}: {}",
-                                mapped_path, e
-                            );
-                        }
-                    }
-                }
-            }
+            let wants_spa = !configured_passthrough && matches!(ext.as_str(), "html" | "htm") && is_bundled_spa_index_path(&address);
+            let spa_post_oid = ctx.spa_defaults.as_ref().filter(|_| wants_spa).and_then(|defaults| {
+                let canonical_url_for_folder = derive_canonical_url(defaults, &address);
+                let borrowed = defaults.as_borrowed(canonical_url_for_folder.as_deref());
+                // Fail open: a failed injection leaves the file alone.
+                maybe_inject_spa_cached(&target, &borrowed, &oid, src_stat.size, object_store, transforms)
+                    .unwrap_or_else(|e| { log::info!("[background-assets] SPA inject failed for {}: {}", mapped_path, e); None })
+                    .map(|(_, new_oid)| new_oid)
+            });
 
             // Record the source-metadata entry (keyed by source-relative
             // path, not output path) so the next build's check_source_cache
@@ -1327,7 +1332,7 @@ fn copy_asset_entry(
                 relative_path.clone(),
                 crate::build::types::SourceMetadata::from_stat(oid.clone(), src_stat),
             );
-            match crate::build::served_path::ServedPath::from_source(&mapped_path) {
+            match out_path {
                 Ok(out_path) => {
                     // The CAS object actually backing `target`'s bytes: the
                     // post-injection object when SPA injection changed

@@ -64,6 +64,10 @@ pub fn build_manifest_from_dir(dir: &Path) -> Result<HashMap<String, String>, St
         // Forward-slash-only on the wire; Windows-style backslashes break
         // server-side path joins.
         let rel_str = rel.to_string_lossy().replace('\\', "/");
+        // A folder another tool built names no reader, so nothing in it is sent as members-only.
+        if crate::build::emit::members::gated_address(&rel_str).is_some() {
+            continue;
+        }
         // The same streaming xxh3_64 the normal build seals into its manifest,
         // so a prebuilt deploy and a normal publish of identical bytes agree
         // on every entry and on the generation id; the server compares entries

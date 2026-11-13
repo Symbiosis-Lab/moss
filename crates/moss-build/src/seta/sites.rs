@@ -49,6 +49,10 @@ pub struct SyncManifestResponse {
     /// as 0.
     #[serde(default)]
     pub internal_remove: Option<u64>,
+    /// `true` when the server will serve the manifest's `gated` files to
+    /// members only. A server that does not say so is sent no gated file.
+    #[serde(default)]
+    pub gated: Option<bool>,
 }
 
 impl SyncManifestResponse {
@@ -58,6 +62,34 @@ impl SyncManifestResponse {
     pub fn needs_commit(&self) -> bool {
         !self.need.is_empty() || !self.remove.is_empty() || self.internal_remove.unwrap_or(0) > 0
     }
+}
+
+/// The body of POST /api/sites/{id}/sync. A manifest with members-only files
+/// names each one under `gated`, by its path in `files`, with who may read it
+/// and what the address answers for anyone else:
+///
+///   "gated": { "_gated/post/index.html": { "access": "subscribers", "fallback": "projection" },
+///              "_gated/map/rows.json":   { "access": "subscribers", "fallback": "unauthorized" } }
+///
+/// A manifest without one sends no `gated` key.
+pub(crate) fn sync_body(
+    manifest: &std::collections::HashMap<String, String>,
+    sizes: &std::collections::HashMap<String, u64>,
+) -> serde_json::Value {
+    with_gated(serde_json::json!({ "files": manifest, "sizes": sizes }), manifest)
+}
+
+/// The body of POST /api/sites/{id}/commit, with the same `gated` key as the sync.
+pub(crate) fn commit_body(manifest: &std::collections::HashMap<String, String>, generation_id: &str) -> serde_json::Value {
+    with_gated(serde_json::json!({ "manifest": manifest, "generation_id": generation_id }), manifest)
+}
+
+fn with_gated(mut body: serde_json::Value, manifest: &std::collections::HashMap<String, String>) -> serde_json::Value {
+    let gated = crate::build::emit::members::gated_entries(manifest);
+    if !gated.is_empty() {
+        body["gated"] = serde_json::json!(gated);
+    }
+    body
 }
 
 /// Response from POST /api/sites/{id}/commit (finalize sync).
@@ -233,8 +265,7 @@ impl MossSetaClient {
         // re-sends the identical buffer instead of re-encoding a 10k-entry map,
         // and the exact body length is what sets the deadline below.
         let body = Bytes::from(
-            serde_json::to_vec(&serde_json::json!({ "files": manifest, "sizes": sizes }))
-                .map_err(|e| SetaError::Parse(e.to_string()))?,
+            serde_json::to_vec(&sync_body(manifest, sizes)).map_err(|e| SetaError::Parse(e.to_string()))?,
         );
         // The deadline scales with the body (I1). A flat 150 s here was a
         // deadline on the SITE'S SIZE: a 10k-file manifest cannot be POSTed in
@@ -433,11 +464,7 @@ impl MossSetaClient {
         // Same shape as sync_manifest: serialize once, and let the deadline
         // scale with the body rather than with nothing (I1).
         let body = Bytes::from(
-            serde_json::to_vec(&serde_json::json!({
-                "manifest": manifest,
-                "generation_id": generation_id,
-            }))
-            .map_err(|e| SetaError::Parse(e.to_string()))?,
+            serde_json::to_vec(&commit_body(manifest, generation_id)).map_err(|e| SetaError::Parse(e.to_string()))?,
         );
         let timeout = manifest_request_timeout(body.len() as u64);
 

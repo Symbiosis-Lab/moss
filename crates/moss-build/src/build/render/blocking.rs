@@ -761,6 +761,9 @@ pub fn generate_blocking_content_for_build(
                     if super::empty_home::skip_empty_source(&content, &file_info.path) { return None; }
                     md_read_ns.fetch_add(t_read.elapsed().as_nanos() as u64, Ordering::Relaxed);
 
+                    // Runs once for the page, and once more over the whole source
+                    // of a members page whose gated version a host can serve.
+                    let parse = |content: &str| -> Option<ParsedDocument> {
                     // RESOLVE phase: transform Obsidian syntax (wikilinks, embeds,
                     // callouts, block refs) into standard markdown before HTML
                     // conversion.  This is transparent for non-Obsidian content.
@@ -978,6 +981,12 @@ pub fn generate_blocking_content_for_build(
                     // touches the emitted HTML.
 
                     md_process_ns.fetch_add(t_process.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                    Some(doc)
+                    };
+                    let mut doc = parse(&content)?;
+                    if crate::build::scan::members::has_gated_version(&content, &source_content) {
+                        doc.members_full = parse(&source_content).map(Box::new);
+                    }
                     Some((doc, Some((source_content, stat_before_read))))
                 },
             )
@@ -1028,19 +1037,23 @@ pub fn generate_blocking_content_for_build(
         folders: &folder_index,
         urls: &url_index,
     };
+    let mut gated_embeds = Vec::new();
     for record in &source_records {
         let doc = &mut documents[record.document_index];
+        let public_source = members_policy.public_source(&record.source_path, &record.source);
         doc.missing_reference_occurrences = crate::build::types::MissingReferenceOccurrence::from_authored_source(
             &record.source_path,
-            &members_policy.public_source(&record.source_path, &record.source),
+            &public_source,
             &authored_evidence_parse_config,
             &reference_context,
         );
+        gated_embeds.extend(crate::build::scan::members::gated_embeds(members_policy, &record.source_path, &public_source, doc.members_full.is_some().then_some(record.source.as_str()), &authored_evidence_parse_config, &content_graph));
         parse_session.note_source_bytes(&record.source_path, record.source.as_bytes(), record.stat());
         parse_session.verify_shadow(&record.source_path, doc);
         page_source_hashes.insert(record.source_path.clone(), record.source_metadata());
     }
     page_source_hashes.extend(parse_session.replayed_sources());
+    crate::build::scan::members::refuse_gated_embeds(&gated_embeds)?;
     if let Some(event) = crate::build::progress::make_empty_folder_advisory(&project_structure.empty_folders) {
         reporter.report(&event);
     }
@@ -2585,6 +2598,11 @@ pub fn generate_blocking_content_for_build(
     // noindex subscribe pages in between. `pending.files()` would also hand
     // back the previous build's pages until seal, a deleted source's among them.
     let mut sitemap_pages: std::collections::BTreeSet<String> = pending.pages_registered().cloned().collect();
+    // After the sitemap's pages are taken: a gated version is not a page of
+    // its own. Every build, since a carried page's gated version is not carried.
+    for (path, html) in super::page_chrome::render_gated_pages(&render_context, &documents, &sitemap_pages)? {
+        pending.register_unwritten_page(&path, html);
+    }
 
     // All asset copying (images, other files, static dirs, colocated assets) is
     // deferred to the background phase. The guiding principle: "every source file

@@ -232,3 +232,20 @@ async fn a_members_generation_refuses_when_the_floor_cannot_be_written() {
     .expect_err("a floor that cannot be written must refuse");
     assert!(err.contains("could not write .moss/config.toml"), "got: {err}");
 }
+
+#[test]
+fn a_deploy_plugin_is_handed_no_members_only_file() {
+    use crate::build::{manifest::HashBucket, served_path::ServedPath};
+    let mut pending = crate::build::manifest::PendingManifest::new(Default::default());
+    let out = tempfile::tempdir().unwrap();
+    let mut ctx = crate::build::context::BuildContext::for_render(out.path(), &mut pending);
+    for path in ["index.html", "post/index.html"] {
+        ctx.emit(&ServedPath::from_source(path).unwrap(), b"public", HashBucket::Files).unwrap();
+    }
+    for address in ["post/index.html", "map/rows.csv"] {
+        ctx.emit(&ServedPath::from_source(address).unwrap().gated(), b"members", HashBucket::Files).unwrap();
+    }
+    let sealed = pending.seal();
+    assert_eq!(sealed.files().len(), 4);
+    assert_eq!(plugin_site_files(&sealed), ["index.html", "post/index.html"]);
+}

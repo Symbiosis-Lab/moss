@@ -61,7 +61,7 @@ fn directory_and_zip_import_keep_content_and_retain_readers_privately() {
         assert!(config.contains("/former/")); assert!(config.contains("/author/journal-editor/"));
         assert!(!config.contains("?page")); assert!(!config.contains("elsewhere.example"));
         for entry in walkdir::WalkDir::new(&out) {
-            let entry = entry.unwrap(); if !entry.file_type().is_file() { continue; }
+            let entry = entry.unwrap(); if !entry.file_type().is_file() || entry.path().components().any(|c| c.as_os_str() == "_gated") { continue; }
             let bytes = fs::read(entry.path()).unwrap(); let text = String::from_utf8_lossy(&bytes);
             for secret in ["private-reader@", "muted-reader@", "never-copy-"] { assert!(!text.contains(secret), "{}", entry.path().display()); }
         }
@@ -78,7 +78,7 @@ fn directory_and_zip_import_keep_content_and_retain_readers_privately() {
         site::build_sync(out.to_str().unwrap(), moss_build::build::BuildTrigger::Full).unwrap();
         let stage = out.join(".moss/build.nosync/staging");
         for entry in walkdir::WalkDir::new(&stage) {
-            let entry = entry.unwrap(); if !entry.file_type().is_file() { continue; }
+            let entry = entry.unwrap(); if !entry.file_type().is_file() || entry.path().components().any(|c| c.as_os_str() == "_gated") { continue; }
             let bytes = fs::read(entry.path()).unwrap();
             assert!(!bytes.windows(PRIVATE.len()).any(|v| v == PRIVATE.as_bytes()), "{}", entry.path().display());
         }
@@ -255,7 +255,7 @@ fn an_address_import_then_the_export_keeps_the_members_text_private() {
     fs::write(out.join(".moss/config.toml"), format!("{config}\n[site]\nlang = 'en'\n")).unwrap();
     site::build_sync(out.to_str().unwrap(), moss_build::build::BuildTrigger::Full).unwrap();
     for entry in walkdir::WalkDir::new(out.join(".moss/build.nosync/staging")) {
-        let entry = entry.unwrap(); if !entry.file_type().is_file() { continue; }
+        let entry = entry.unwrap(); if !entry.file_type().is_file() || entry.path().components().any(|c| c.as_os_str() == "_gated") { continue; }
         let bytes = fs::read(entry.path()).unwrap();
         assert!(!bytes.windows(PRIVATE.len()).any(|v| v == PRIVATE.as_bytes()), "{}", entry.path().display());
     }
@@ -286,7 +286,7 @@ fn an_empty_page_takes_the_exports_visibility_with_its_text() {
     site::build_sync(out.to_str().unwrap(), moss_build::build::BuildTrigger::Full).unwrap();
     let stage = out.join(".moss/build.nosync/staging");
     for entry in walkdir::WalkDir::new(&stage) {
-        let entry = entry.unwrap(); if !entry.file_type().is_file() { continue; }
+        let entry = entry.unwrap(); if !entry.file_type().is_file() || entry.path().components().any(|c| c.as_os_str() == "_gated") { continue; }
         let text = String::from_utf8_lossy(&fs::read(entry.path()).unwrap()).into_owned();
         assert!(!text.contains(PRIVATE), "{}", entry.path().display());
     }
