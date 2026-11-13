@@ -393,18 +393,72 @@ fn a_data_file_under_a_members_cascade_is_published_only_under_the_gated_prefix(
 
 #[test]
 fn the_manifest_records_the_bytes_written_for_each_gated_file() {
-    let site = site::Site::new(MAP_SITE);
-    let manifest = manifest_of(&site);
+    let mut files = MAP_SITE.to_vec();
+    files.push(("about.md", "---\ntitle: About\n---\nWho we are.\n"));
+    let site = site::Site::new(&files);
+    assert_gated_manifest_matches_generation(&site, "cold");
+    // A carried page is not rendered, so its gated version must be rendered on
+    // its own. The first unobserved build after a full one renders in full;
+    // the second proves from its seal and carries.
+    unobserved_build(&site);
+    assert!(unobserved_build(&site) > 0, "the unchanged build carried no page");
+    assert_gated_manifest_matches_generation(&site, "unchanged");
+    site.write("about.md", "---\ntitle: About\n---\nWho we are, and since when.\n");
+    assert!(unobserved_build(&site) > 0, "the edited build carried no page");
+    assert_gated_manifest_matches_generation(&site, "public edit");
+}
+
+const TIDE: &str = "tide-private-sentinel-430918";
+
+/// A cascade added to or removed from a warm site moves a page it never
+/// touched into or out of `_gated/`, and the manifest follows.
+#[test]
+fn a_cascade_toggled_on_a_warm_site_moves_its_pages_into_and_out_of_gated() {
+    let tide = format!("---\ntitle: Tide\ndate: 2026-01-06\n---\nTables for the week.\n<!--members-only-->\n{TIDE}\n");
+    let mut files = MAP_SITE.to_vec();
+    files.push(("notes/index.md", "---\ntitle: Notes\n---\nNotes.\n"));
+    files.push(("notes/tide.md", &tide));
+    let site = site::Site::new(&files);
+    unobserved_build(&site);
+    assert!(unobserved_build(&site) > 0, "the site is warm");
+    assert!(site.html("notes/tide/index.html").contains(TIDE), "a public page shows its whole body");
+
+    site.write("notes/index.md", "---\ntitle: Notes\ncascade: { members: subscribers }\n---\nNotes.\n");
+    assert_eq!(unobserved_build(&site), 0, "a cascade edit renders every page; if it now carries pages, prove here that a carried page's public version loses its members-only text and its _gated/ entry is written");
+    assert!(!site.html("notes/tide/index.html").contains(TIDE), "the cascaded page's public version holds its members-only text");
+    assert!(site.html("_gated/notes/tide/index.html").contains(TIDE), "the gated version holds the whole body");
+    assert!(manifest_of(&site).contains_key("_gated/notes/tide/index.html"), "the gated page is in the manifest");
+    assert_gated_manifest_matches_generation(&site, "cascade added");
+
+    site.write("notes/index.md", "---\ntitle: Notes\n---\nNotes.\n");
+    assert_eq!(unobserved_build(&site), 0, "a cascade edit renders every page; if it now carries pages, prove here that a carried page's _gated/ entry is removed and its public version is whole again");
+    assert!(!manifest_of(&site).contains_key("_gated/notes/tide/index.html"), "the gated entry outlived its cascade");
+    assert!(!site.output("_gated/notes/tide/index.html").exists(), "the gated file outlived its cascade");
+    assert!(site.html("notes/tide/index.html").contains(TIDE), "the page is public again");
+    assert_gated_manifest_matches_generation(&site, "cascade removed");
+}
+
+/// Build as `moss build` does, proving from the last seal; returns how many
+/// pages it carried.
+fn unobserved_build(site: &site::Site) -> u64 {
+    site::build_sync(&site.root.to_string_lossy(), BuildTrigger::Unobserved).unwrap();
+    let profile = fs::read_to_string(site.root.join(".moss/build.nosync/profile.jsonl")).unwrap();
+    let record: serde_json::Value = serde_json::from_str(profile.lines().last().unwrap()).unwrap();
+    record["counts"]["pages_carried"].as_u64().unwrap()
+}
+
+fn assert_gated_manifest_matches_generation(site: &site::Site, build_kind: &str) {
+    let manifest = manifest_of(site);
     // The bytes a deploy uploads: the sealed generation, not the preview stage.
     let build = site.root.join(".moss/build.nosync");
     let generation = build.join("generations").join(fs::read_to_string(build.join("current.generation")).unwrap().trim());
     let gated: Vec<_> = manifest.iter().filter(|(path, _)| path.starts_with("_gated/")).collect();
     for name in ["_gated/maps/incidents/report/index.html", "_gated/maps/incidents/by-region.json"] {
-        assert!(gated.iter().any(|(path, _)| *path == name), "{name} is in the manifest");
+        assert!(gated.iter().any(|(path, _)| *path == name), "{build_kind} build: {name} is in the manifest");
     }
     for (path, entry) in gated {
         let written = moss_build::build::assets::paths::compute_binary_hash(&fs::read(generation.join(path)).unwrap());
-        assert_eq!(entry.rsplit(':').next(), Some(written.as_str()), "{path}: the manifest names other bytes than the file holds");
+        assert_eq!(entry.rsplit(':').next(), Some(written.as_str()), "{build_kind} build: {path}: the manifest names other bytes than the file holds");
     }
 }
 
