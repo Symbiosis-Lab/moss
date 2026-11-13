@@ -1124,12 +1124,15 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
 
 .rename-input { flex: 1; min-width: 0; height: 20px; padding: 0 4px; font-size: 12px; font-family: inherit; color: var(--moss-color-text); background: var(--moss-color-bg); border: 1px solid var(--moss-color-accent); border-radius: 3px; outline: none; }
 
-/* ── Date input webkit styling ───────────────────────────────────────── */
+/* ── Date and time inputs ────────────────────────────────────────────── */
 
-.pop-input[type="date"] { font-family: inherit; color: var(--moss-color-text); }
-.pop-input[type="date"]::-webkit-calendar-picker-indicator { cursor: pointer; opacity: .5; border-radius: 2px; padding: 2px; }
-.pop-input[type="date"]::-webkit-calendar-picker-indicator:hover { opacity: .8; background: var(--moss-hover-overlay); }
-.pop-input[type="date"]::-webkit-inner-spin-button { display: none; }
+.pop-input:is([type="date"], [type="time"])::-webkit-calendar-picker-indicator { cursor: pointer; opacity: .5; border-radius: 2px; padding: 2px; }
+.pop-input:is([type="date"], [type="time"])::-webkit-calendar-picker-indicator:hover { opacity: .8; background: var(--moss-hover-overlay); }
+.pop-input:is([type="date"], [type="time"])::-webkit-inner-spin-button { display: none; }
+/* An event's date takes the row; its optional time keeps its own width. */
+.pop-event-time { display: flex; gap: 6px; }
+.pop-event-time [type="date"] { flex: 1; width: auto; }
+.pop-event-time [type="time"] { flex: none; width: auto; }
 
 /* ── Link resolution decorations ─────────────────────────────────────── */
 
@@ -1476,7 +1479,7 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
 
 /* ── Dark mode ───────────────────────────────────────────────────────── */
 
-[data-theme="dark"] .pop-input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(.8); }
+[data-theme="dark"] .pop-input:is([type="date"], [type="time"])::-webkit-calendar-picker-indicator { filter: invert(.8); }
 [data-theme="dark"] .moss-editor-cm .cm-line.cm-callout-block::before { background: rgba(120, 120, 138, 0.06); }
 [data-theme="dark"] .cm-criticmarkup-addition { background: rgba(16, 185, 129, 0.22); }
 [data-theme="dark"] .cm-criticmarkup-deletion { background: rgba(239, 68, 68, 0.22); }

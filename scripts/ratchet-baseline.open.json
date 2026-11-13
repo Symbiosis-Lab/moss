@@ -81,7 +81,7 @@
         "crates/moss-build/src/build/place_map": 16,
         "packages/moss-ui/src/ui/shared/ui": 19,
         "packages/moss-ui/src/ui": 20,
-        "packages/moss-ui/src/ui/editor": 93,
+        "packages/moss-ui/src/ui/editor": 94,
         "packages/moss-ui/src/ui/editor/tree": 17,
         "packages/moss-ui/src/ui/preview": 29,
         "crates/moss-build/src/vault/import": 23,

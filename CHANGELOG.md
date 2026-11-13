@@ -49,6 +49,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- An event's `start` and `end` in the editor's page properties open a date picker with an optional time beside it, instead of a plain text box. A date alone stays a date; adding a time writes `YYYY-MM-DD HH:MM`, and a value that was not changed is left as it is in the file.
 - Importing a site again into the same folder no longer writes a `name 2.md` beside each page: a page whose `origin:` names the same address keeps its file and its text and gains only the descriptive fields it lacks (never `draft`, `members`, `nav` or `weight`, so a field you removed stays removed), and a failed fetch's stub is replaced once the page imports.
 - The email a publish opens for a post's subscribers starts from the post as that publish put it on the site, so an edit made while the site uploaded waits for the next publish instead of reaching subscribers.
 - A PDF, picture or other file opened in the editor stays in its viewer. The preview follows to the file's own address, and the editor took that address for a page moss generated and replaced the viewer with "No page to edit".
