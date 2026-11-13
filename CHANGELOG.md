@@ -4,6 +4,8 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
+## [0.15.24] - 2026-11-13
+
 ### New
 
 - A `members: subscribers` page is now also built whole, under `_gated/` at the same path, and the publish lists it with its public version as the fallback: a host that checks membership serves the whole page at the page's own address to subscribers and the public version to everyone else. moss's hosting is sent these files only when it says it enforces the gate; every other host gets the public versions, and the publish says so. A page or file that was for members at the last publish and would now be open to everyone refuses the publish until you accept it (`moss deploy --accept-removals`).

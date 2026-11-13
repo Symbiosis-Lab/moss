@@ -7,9 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-11-13
+
 ### Added
 
 - `contract::custom_props` lists `--moss-font-body-han` and `--moss-font-heading-han`, the Han-first stacks the build's site stylesheet sets on every page and swaps into `--moss-font-body` and `--moss-font-heading` on a Chinese, Japanese or Korean page, so a theme can put its own face in front of them and `moss describe` names them.
+- `contract::components` lists `moss-footnote-slot`, the zero-height placeholder the sidenotes script puts just before the endnote section.
+
+### Changed
+
+- **BREAKING:** `ReferenceVerdict` gains `anchored_from: Option<String>`; a struct literal must name it. An embed in a folder note that names its own folder (`![[Opera/]]` in `work/Opera/Opera.md`) and finds nothing beside the note is classified again from the note's parent folder, where only a folder is accepted; `anchored_from` is that second place, set whether or not a folder was found there.
 
 ## [0.24.0] - 2026-11-12
 
