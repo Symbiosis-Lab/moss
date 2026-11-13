@@ -98,6 +98,31 @@ pub(crate) fn read_articles(generations: &Path, generation: &str) -> Option<crat
     serde_json::from_slice(&bytes).ok()
 }
 
+/// The page at `source_path` as the site's last publish built it: the text on
+/// the site, whatever the folder says now, so a step that follows the upload
+/// (a newsletter) sends what the site published even when the page was edited
+/// while it uploaded. `None` before the site's first publish, for a page that
+/// publish withheld as a draft or did not have, or when its map was never kept.
+pub fn published_article(folder: &Path, source_path: &str) -> Option<crate::build::scan::article_map::ArticleInfo> {
+    let generation = crate::build::site_config::get_domain_config(&folder.to_string_lossy()).ok()?.last_deployed_generation_id?;
+    let generations = crate::moss_paths::MossPaths::new(folder).generations_dir();
+    let source = crate::build::scan::path_collision::logical_path(source_path);
+    let article = read_articles(&generations, &generation)?.articles.into_values().find(|a| a.source_path == source)?;
+    let withheld = read_withheld(&generations, &generation);
+    (!withheld.iter().any(|out| crate::build::scan::article_map::to_pretty_url(out) == article.url_path)).then_some(article)
+}
+
+/// Keeps `map` beside `generation` as the article map its render built, so a
+/// test outside this crate can stand up a landed publish without the file's name.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn keep_articles_for_tests(folder: &Path, generation: &str, map: &crate::build::scan::article_map::ArticleMap) -> std::io::Result<()> {
+    let generations = crate::moss_paths::MossPaths::new(folder).generations_dir();
+    // allow:raw_write a test fixture; no production build compiles it
+    std::fs::create_dir_all(&generations)?;
+    // allow:raw_write a test fixture; no production build compiles it
+    std::fs::write(articles_path(&generations, generation), serde_json::to_vec(map).map_err(std::io::Error::other)?)
+}
+
 /// The paths of `generation` that must not leave the machine; empty when the
 /// generation has no receipt (it holds no drafts).
 pub(crate) fn read_withheld(generations: &Path, generation: &str) -> BTreeSet<String> {
@@ -112,4 +137,36 @@ pub(crate) fn withheld_in_current(mp: &crate::moss_paths::MossPaths) -> BTreeSet
     mp.current_generation_id()
         .map(|generation| read_withheld(&mp.generations_dir(), &generation))
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::build::scan::article_map::ArticleMap;
+
+    #[test]
+    fn a_page_is_read_as_the_last_publish_built_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().to_string_lossy().to_string();
+        let generations = crate::moss_paths::MossPaths::new(dir.path()).generations_dir();
+        assert!(published_article(dir.path(), "notes/caf\u{e9}.md").is_none(), "nothing has been published");
+
+        std::fs::create_dir_all(&generations).unwrap();
+        let page = |source: &str, url: &str| -> crate::build::scan::article_map::ArticleInfo {
+            serde_json::from_value(serde_json::json!({ "source_path": source, "title": "", "content": "As published.", "url_path": url, "date": null })).unwrap()
+        };
+        let mut map = ArticleMap::default();
+        for a in [page("notes/caf\u{e9}.md", "notes/cafe/"), page("notes/draft.md", "notes/draft/")] {
+            map.articles.insert(a.url_path.clone(), a);
+        }
+        keep_articles_for_tests(dir.path(), "g1", &map).unwrap();
+        std::fs::write(receipt_path(&generations, "g1"), r#"["notes/draft/index.html"]"#).unwrap();
+        let config = crate::config::deployment::DomainDeploymentConfig { site_id: Some("example".into()), last_deployed_generation_id: Some("g1".into()), ..Default::default() };
+        crate::vault::deployment_state::save_domain_config(&folder, &config).unwrap();
+
+        let decomposed = "notes/cafe\u{301}.md";
+        assert_eq!(published_article(dir.path(), decomposed).map(|a| a.content).as_deref(), Some("As published."));
+        assert!(published_article(dir.path(), "notes/draft.md").is_none(), "a draft the publish withheld");
+        assert!(published_article(dir.path(), "notes/other.md").is_none());
+    }
 }
