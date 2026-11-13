@@ -14,10 +14,10 @@ use moss_build::build::BuildTrigger;
 static SERIAL: Mutex<()> = Mutex::new(());
 
 fn build(root: &Path, trigger: BuildTrigger) -> serde_json::Value {
-    build_with(root, trigger, moss_build::build::PluginMode::Skip)
+    build_with(root, trigger, moss_build::build::PluginMode::Skip, None)
 }
 
-fn build_with(root: &Path, trigger: BuildTrigger, plugins: moss_build::build::PluginMode) -> serde_json::Value {
+fn build_with(root: &Path, trigger: BuildTrigger, plugins: moss_build::build::PluginMode, site_url: Option<&str>) -> serde_json::Value {
     use moss_build::build::{run_pipeline, PipelineConfig};
     use moss_build::cli::host::cli_host_ports;
     use moss_build::vault_root::VaultRoot;
@@ -32,7 +32,7 @@ fn build_with(root: &Path, trigger: BuildTrigger, plugins: moss_build::build::Pl
         host: cli_host_ports(&folder),
         trigger,
         exits_after_build: true,
-        site_url_override: None,
+        site_url_override: site_url.map(str::to_string),
         server_port: None,
         admission_epoch: None,
         live_port: None,
@@ -213,7 +213,9 @@ fn a_build_that_carries_from_no_record_leaves_the_next_one_unproved() {
 
 /// A process hook that writes its own state under `.moss/plugins/<name>/` on
 /// every build moves a measured `.moss/` input after the build measured it, so
-/// the next build cannot prove anything and renders every page.
+/// the next build cannot prove anything and renders every page. The same holds
+/// for anything a build fetches and renders in one go: its record is the
+/// state before the write.
 #[test]
 fn a_process_hook_that_rewrites_its_state_every_build_keeps_the_build_full() {
     use moss_build::build::PluginMode;
@@ -224,13 +226,60 @@ fn a_process_hook_that_rewrites_its_state_every_build_keeps_the_build_full() {
         let fixture = format!("{}/tests/fixtures/plugins/stamp-writer/{file}", env!("CARGO_MANIFEST_DIR"));
         site.write(&format!(".moss/plugins/stamp-writer/{file}"), &fs::read_to_string(fixture).unwrap());
     }
-    build_with(site.root(), BuildTrigger::Unobserved, PluginMode::Blocking);
+    build_with(site.root(), BuildTrigger::Unobserved, PluginMode::Blocking, None);
     let first = fs::read_to_string(site.root().join(STATE)).expect("the hook ran");
-    let record = build_with(site.root(), BuildTrigger::Unobserved, PluginMode::Blocking);
+    assert!(recorded_moss_input(&site, STATE).is_none(), "the first build measured before its hook wrote");
+    let record = build_with(site.root(), BuildTrigger::Unobserved, PluginMode::Blocking, None);
     let second = fs::read_to_string(site.root().join(STATE)).unwrap();
     assert_ne!(first, second, "the hook writes new bytes every build");
     let recorded = recorded_moss_input(&site, STATE);
     assert!(recorded.is_some(), "the state file is a recorded input");
+    assert_eq!(count(&record, "proved_from_seal"), 0, "{record}");
+    assert!(rendered_everything(&record), "{record}");
+}
+
+/// The address `--site-url` gives is in every page, so a build given another
+/// one, or none, renders every page again.
+#[test]
+fn another_site_url_option_keeps_the_build_full() {
+    use moss_build::build::PluginMode::Skip;
+    const A: &str = "https://a.example.net";
+    const B: &str = "https://b.example.net";
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let control = Site::new();
+    build_with(control.root(), BuildTrigger::Unobserved, Skip, Some(A));
+    let record = build_with(control.root(), BuildTrigger::Unobserved, Skip, Some(A));
+    assert_eq!(count(&record, "proved_from_seal"), 1, "control: {record}");
+
+    for next in [Some(B), None] {
+        let site = Site::new();
+        build_with(site.root(), BuildTrigger::Unobserved, Skip, Some(A));
+        let record = build_with(site.root(), BuildTrigger::Unobserved, Skip, next);
+        assert_eq!(count(&record, "proved_from_seal"), 0, "{next:?}: {record}");
+        assert!(rendered_everything(&record), "{next:?}: {record}");
+        let pages = published(site.root());
+        let stale: Vec<_> = pages.iter().filter(|(_, html)| String::from_utf8_lossy(html).contains(A)).map(|(path, _)| path).collect();
+        assert!(stale.is_empty(), "{next:?}: pages still carry {A}: {stale:?}");
+        if let Some(b) = next {
+            assert!(pages.values().any(|html| String::from_utf8_lossy(html).contains(b)), "no page carries {b}");
+        }
+    }
+}
+
+/// Whether plugins run decides what their blocks, slots and derived embeds put
+/// in a page, so a build after a `--no-plugins` one renders every page again.
+#[test]
+fn turning_plugins_on_keeps_the_build_full() {
+    use moss_build::build::PluginMode::{Blocking, Skip};
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let control = Site::new();
+    build_with(control.root(), BuildTrigger::Unobserved, Blocking, None);
+    let record = build_with(control.root(), BuildTrigger::Unobserved, Blocking, None);
+    assert_eq!(count(&record, "proved_from_seal"), 1, "control: {record}");
+
+    let site = Site::new();
+    build_with(site.root(), BuildTrigger::Unobserved, Skip, None);
+    let record = build_with(site.root(), BuildTrigger::Unobserved, Blocking, None);
     assert_eq!(count(&record, "proved_from_seal"), 0, "{record}");
     assert!(rendered_everything(&record), "{record}");
 }

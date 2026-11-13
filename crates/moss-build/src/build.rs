@@ -779,7 +779,8 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // Before anything below reads `.moss/`. A later write there (a
     // migration of the build tree, a process hook) moves the next build's
     // record, which costs that build one full render, never a stale page.
-    let last_seal = std::sync::Arc::new(incremental_gates::LastSeal::read(config.source()));
+    let options = crate::build::inputs::options(config.site_url_override.as_deref(), matches!(pass.plugins, PluginMode::Skip));
+    let last_seal = std::sync::Arc::new(incremental_gates::LastSeal::read(config.source(), options));
 
     // Derive the .moss dir — always present, used as the preview-server dedup key.
     let moss_dir_path = config.source().join(".moss");

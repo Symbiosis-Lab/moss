@@ -124,7 +124,7 @@ fn a_manifest_proof_opens_both_gates_even_when_nothing_changed() {
 #[test]
 fn an_unobserved_build_with_no_seal_renders_everything() {
     let dir = tempfile::tempdir().unwrap();
-    let seal = LastSeal::read(dir.path());
+    let seal = LastSeal::read(dir.path(), Default::default());
     assert_eq!(ChangeProof::for_build(&BuildTrigger::Unobserved, dir.path(), "b", &seal), ChangeProof::None);
 }
 

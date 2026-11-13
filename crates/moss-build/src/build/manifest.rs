@@ -651,16 +651,21 @@ impl PendingManifest {
         Some(())
     }
 
-    /// Record the `.moss/` inputs measured before this build read any of them.
-    /// [`seal`][PendingManifest::seal] adds the environment this process read
-    /// over `carried_env`, the record of the pages this build carried. `None`
-    /// leaves the manifest proving nothing.
+    /// Record the `.moss/` inputs measured before this build read any of them,
+    /// with this build's options over `carried_env`, the record of the pages
+    /// this build carried; [`seal`][PendingManifest::seal] adds the
+    /// environment this process read. `None` leaves the manifest proving
+    /// nothing.
     pub(crate) fn set_build_inputs(
         &mut self,
         inputs: Option<crate::build::inputs::BuildInputs>,
         carried_env: Option<std::collections::BTreeMap<String, String>>,
     ) {
-        self.inner.build_inputs = inputs.map(|inputs| crate::build::inputs::BuildInputs { env: carried_env.unwrap_or_default(), ..inputs });
+        self.inner.build_inputs = inputs.map(|mut inputs| {
+            let options = std::mem::take(&mut inputs.env);
+            inputs.env = carried_env.unwrap_or_default().into_iter().chain(options).collect();
+            inputs
+        });
     }
 
     /// Set the plugin and builder fingerprints on the pending manifest. These

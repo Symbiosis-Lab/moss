@@ -5,7 +5,8 @@
 //! the same bytes.
 //!
 //! Also the record of what else a build read, [`BuildInputs`]: the `.moss/`
-//! files, the fetched link cards and the environment variables. A build that
+//! files, the fetched link cards, the environment variables and the build's
+//! own options that reach a page. A build that
 //! saw no file events compares them with the last seal to prove nothing
 //! outside the page tree moved.
 
@@ -23,8 +24,9 @@ pub struct BuildInputs {
     /// link cards an older moss kept, keyed `link-meta/<file>`; stat'd before the build
     /// read any of them.
     pub moss: BTreeMap<String, SourceMetadata>,
-    /// Each environment variable read through [`env`], with a hash of its
-    /// value, or `-` when it was unset.
+    /// Each environment variable read through [`env`], and each of the
+    /// build's own [`options`], with a hash of its value, or `-` when it was
+    /// unset.
     pub env: BTreeMap<String, String>,
     /// When `moss` was measured: a file written in that same moment is hashed
     /// rather than trusted by its stat.
@@ -42,14 +44,40 @@ pub struct Measured {
     pub holds: bool,
 }
 
-/// Measure the `.moss/` inputs once, before anything in the build reads them.
+/// Measure the `.moss/` inputs once, before anything in the build reads them,
+/// and compare the environment and this build's `options` with `previous`.
 /// `previous` lends its hash to a file its stat still vouches for, so an
 /// unchanged file is not reread.
-pub(crate) fn measure(folder: &Path, previous: Option<&BuildInputs>) -> Measured {
+pub(crate) fn measure(folder: &Path, previous: Option<&BuildInputs>, options: BTreeMap<String, String>) -> Measured {
     let taken_at = crate::build::stat::recording_clock();
     let Some((moss, unchanged)) = moss_files(folder, previous) else { return Measured::default() };
-    let env_holds = previous.is_some_and(|p| p.env.iter().all(|(name, seen)| value_hash(std::env::var(name).ok().as_deref()) == *seen));
-    Measured { holds: unchanged && env_holds, record: Some(BuildInputs { moss, env: BTreeMap::new(), taken_at }) }
+    let now = |name: &str| if is_option(name) {
+        options.get(name).cloned().unwrap_or_else(|| value_hash(None))
+    } else {
+        value_hash(std::env::var(name).ok().as_deref())
+    };
+    let env_holds = previous.is_some_and(|p| p.env.iter().all(|(name, seen)| now(name) == *seen));
+    Measured { holds: unchanged && env_holds, record: Some(BuildInputs { moss, env: options, taken_at }) }
+}
+
+/// The build's own options that reach a page, hashed like a variable: the
+/// site address given on the command line, and whether plugins run. They are
+/// kept in [`BuildInputs::env`] under names with a `=` after the first
+/// character, which no environment variable's name can hold, since the first
+/// such `=` ends the name on every platform.
+///
+/// Plugins are recorded as on or off only: the blocking, non-blocking and
+/// slots-only modes differ in when hooks run, and what a hook writes is on
+/// disk, where the `.moss/` measurement compares it.
+pub(crate) fn options(site_url_override: Option<&str>, plugins_skipped: bool) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("moss=site_url".to_string(), value_hash(site_url_override)),
+        ("moss=plugins".to_string(), value_hash(Some(if plugins_skipped { "off" } else { "on" }))),
+    ])
+}
+
+fn is_option(name: &str) -> bool {
+    name.contains('=')
 }
 
 /// The files of [`BuildInputs::moss`], and whether every one matches
@@ -117,7 +145,9 @@ fn is_card_name(name: &str) -> bool {
     name.strip_suffix(".json").is_some_and(|stem| stem.len() == 64 && stem.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
-/// The environment variables builds have read, and what each held.
+/// The environment variables builds have read, and what each held. It is one
+/// per process, so with two folders open one folder's reads enter the other's
+/// seal too, which only costs that folder a full render.
 static ENV_READ: Mutex<BTreeMap<&'static str, Option<String>>> = Mutex::new(BTreeMap::new());
 
 /// Read an environment variable that can change what a build writes. Every

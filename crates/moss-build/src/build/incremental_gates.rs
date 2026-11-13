@@ -51,6 +51,11 @@ impl IncrementalGates {
 /// its record. Taken once, at the entry point, before anything in the build
 /// reads `.moss/`: the proof compares the measurement and the manifest
 /// records it, so a file edited during the build moves the next record.
+///
+/// Some inputs are fetched or written and then rendered in the same build:
+/// link cards a build fetches before rendering, the comments an exiting build
+/// refreshes before its slots, and whatever a blocking process hook writes.
+/// Each lands after this measurement, so the next build renders in full once.
 #[derive(Debug, Default)]
 pub struct LastSeal {
     manifest: Option<crate::types::content::SiteHashes>,
@@ -58,10 +63,11 @@ pub struct LastSeal {
 }
 
 impl LastSeal {
-    pub fn read(folder: &Path) -> Self {
+    /// `options` are the build's own, from `inputs::options`.
+    pub fn read(folder: &Path, options: std::collections::BTreeMap<String, String>) -> Self {
         let _trace = crate::build::phase::PhaseTrace::start("seal_read");
         let manifest = crate::ops::watch::sweep::walk::read_baseline_from_disk(folder);
-        let moss = crate::build::inputs::measure(folder, manifest.as_ref().and_then(|m| m.build_inputs.as_ref()));
+        let moss = crate::build::inputs::measure(folder, manifest.as_ref().and_then(|m| m.build_inputs.as_ref()), options);
         Self { manifest, moss }
     }
 
