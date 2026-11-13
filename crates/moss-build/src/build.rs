@@ -851,7 +851,8 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // Points the cell here only if it names nothing or another folder: every
     // later move belongs to `lifecycle`, which never steps the preview back to
     // a generation older than the render on screen.
-    crate::build::lifecycle::adopt_server(&lifecycle_paths, &standalone_state.current_dir);
+    // `cache_lease` above already holds this folder's record.
+    let _ = crate::build::lifecycle::adopt_server(&lifecycle_paths, &standalone_state.current_dir);
 
     // Start preview server FIRST — before scan, before anything. The shared Arc
     // already rests on initial_serve_dir (the frozen `current` generation when the

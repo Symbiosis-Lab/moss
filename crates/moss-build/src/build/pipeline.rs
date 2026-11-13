@@ -1150,9 +1150,7 @@ fn build_inner(
     // whether this build may unlink from it. Both are `lifecycle`'s to decide:
     // it parks the preview on `current` only when that is no step back from
     // the render on screen, and a permit is the only licence to unlink below.
-    if let Some(state) = site_dir_state {
-        crate::build::lifecycle::adopt_server(&paths, &state.current_dir);
-    }
+    let served_record = site_dir_state.map(|state| crate::build::lifecycle::adopt_server(&paths, &state.current_dir));
     let sweep_permit = crate::build::lifecycle::park_for_rebuild(
         &paths,
         cache_lease.is_some(),
@@ -1814,6 +1812,7 @@ fn build_inner(
     // Step 5: show this render, unless this build could not read its own
     // sources: showing it is the moment the user sees this build's output.
     let (seq, announce) = crate::build::lifecycle::show_render(&paths, publishable);
+    drop(served_record);
     let render_seq = Some(seq);
     // A shown render tells the preview at once what it now serves; what the
     // background writes later is the seal tail's to announce.

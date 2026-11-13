@@ -619,7 +619,7 @@ async fn the_seal_tail_leaves_the_served_staging_tree_alone() {
     let _record = lifecycle::lock_for(&mp);
     std::fs::create_dir_all(mp.generation_dir("g1")).unwrap();
     let site_dir_cell = Arc::new(std::sync::RwLock::new(std::path::PathBuf::new()));
-    lifecycle::adopt_server(&mp, &site_dir_cell);
+    let _ = lifecycle::adopt_server(&mp, &site_dir_cell);
     let (shown, _) = lifecycle::show_render(&mp, true);
     assert!(lifecycle::promote(&mp, crate::build::ship::next_promotion_epoch(), Some(shown), "g1", true).unwrap());
     let (port2, _, shutdown_tx2) = start_server(ServeConfig {
@@ -685,7 +685,7 @@ async fn a_rebuild_never_parks_the_preview_on_a_generation_older_than_the_render
 
     // Render 1 is shown and promoted as g1, which has no `fresh/`.
     let cell = Arc::new(std::sync::RwLock::new(std::path::PathBuf::new()));
-    lifecycle::adopt_server(&mp, &cell);
+    let _ = lifecycle::adopt_server(&mp, &cell);
     let (r1, _) = lifecycle::show_render(&mp, true);
     assert!(lifecycle::promote(&mp, next_promotion_epoch(), Some(r1), "g1", true).unwrap());
 

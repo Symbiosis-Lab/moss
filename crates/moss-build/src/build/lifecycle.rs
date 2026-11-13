@@ -186,7 +186,12 @@ fn read(cell: &ServedCell) -> PathBuf {
 /// That is a folder switch or a cold start. A cell already on this folder's
 /// build tree is left alone, so the second of two builds started a second
 /// apart does not pull the preview back off the first one's render.
-pub(crate) fn adopt_server(mp: &MossPaths, cell: &ServedCell) {
+///
+/// Returns the record holding the cell. A caller that will show a render
+/// keeps it until [`show_render`] returns: otherwise another folder's first
+/// lookup can evict the record, and the render finds no cell to point.
+#[must_use = "keep the record until the render is shown, or another folder's first lookup can evict it in between"]
+pub(crate) fn adopt_server(mp: &MossPaths, cell: &ServedCell) -> Arc<LifecycleCell> {
     let target = mp.initial_serve_dir();
     let build_dir = mp.build_dir();
     root_identity::log_build_root(&mp.root().join("build.nosync"), "serve", None);
@@ -199,6 +204,8 @@ pub(crate) fn adopt_server(mp: &MossPaths, cell: &ServedCell) {
         st.shown_render = None;
         log::info!("serve: adopted the preview for {} on {}", mp.project_root().display(), target.display());
     }
+    drop(st);
+    record
 }
 
 /// Proof that nothing reads the staged tree this build is about to unlink from,
