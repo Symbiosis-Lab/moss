@@ -218,6 +218,70 @@ describe('EditorLink', () => {
   });
 });
 
+describe('a page gesture while the editor shows another file', () => {
+  const paragraph = { kind: 'body-line', line: 5 };
+  const gesture = (interaction: string) => post({ type: 'moss-source-target', target: paragraph, interaction });
+  const revealed = () => emitted.filter(([name]) => name === 'editor:reveal-line');
+
+  async function onPageA() {
+    const made = link();
+    vi.mocked(engine.resolvePageSource).mockResolvedValueOnce(answer({ source_path: '/site/a.md', is_article: true }));
+    await pageSource.navigate('/a/', false);
+    // Past the settle after a page switch.
+    const now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now + 1000);
+    return made;
+  }
+
+  test('a click reveals nothing there, and a double click opens the page at the place', async () => {
+    const { host: h } = await onPageA();
+    host.bus.emit('editor:file-ready', { path: 'footer.md' });
+    gesture('click');
+    expect(revealed()).toEqual([]);
+    gesture('dblclick');
+    expect(h.openTarget).toHaveBeenCalledWith({ ...paragraph, path: 'a.md' });
+
+    host.bus.emit('editor:file-ready', { path: 'a.md' });
+    gesture('click');
+    expect(revealed()).toEqual([['editor:reveal-line', { startLine: 5, endLine: 5 }]]);
+    gesture('dblclick');
+    expect(h.openTarget).toHaveBeenLastCalledWith(paragraph);
+  });
+
+  test('a menu row for the page names its file, and "edit this page" becomes that page', async () => {
+    const { l } = await onPageA();
+    expect(l.located(paragraph)).toEqual(paragraph);
+    expect(l.located(null)).toBeNull();
+    host.bus.emit('editor:file-ready', { path: 'footer.md' });
+    expect(l.located(paragraph)).toEqual({ ...paragraph, path: 'a.md' });
+    expect(l.located(null)).toEqual({ kind: 'page', path: 'a.md' });
+    expect(l.located({ kind: 'page', path: 'b.md' })).toEqual({ kind: 'page', path: 'b.md' });
+    // Template chrome has no source in any file.
+    expect(l.located({ kind: 'none' })).toEqual({ kind: 'none' });
+  });
+
+  test('the same file under another Unicode spelling, or a folder just switched to, is not another file', async () => {
+    const made = link();
+    vi.mocked(engine.resolvePageSource).mockResolvedValueOnce(answer({ source_path: '/site/B\u00fcndnis.md', is_article: true }));
+    await pageSource.navigate('/a/', false);
+    host.bus.emit('editor:file-ready', { path: 'Bu\u0308ndnis.md' });
+    expect(made.l.located(paragraph)).toEqual(paragraph);
+    host.bus.emit('editor:file-ready', { path: 'footer.md' });
+    made.l.folderChanged();
+    expect(made.l.located(paragraph)).toEqual(paragraph);
+  });
+
+  test('a closed editor is on no file: the page opens as it always did', async () => {
+    let open = true;
+    const made = link({ editorIsOpen: () => open });
+    vi.mocked(engine.resolvePageSource).mockResolvedValueOnce(answer({ source_path: '/site/a.md', is_article: true }));
+    await pageSource.navigate('/a/', false);
+    host.bus.emit('editor:file-ready', { path: 'footer.md' });
+    open = false;
+    expect(made.l.located(null)).toBeNull();
+  });
+});
+
 describe('inPageBus', () => {
   test('a message reaches every listener on the same page until it unsubscribes', () => {
     const bus = inPageBus();

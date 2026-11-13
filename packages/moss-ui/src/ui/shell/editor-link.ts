@@ -13,6 +13,7 @@ import { pageSource } from '../preview/page-source';
 import type { PreviewUrlChangedEvent } from '../context/event-bus';
 import { isRootUrlPath } from '../utils/url-path';
 import type { ResolvedNode } from '../editor/session/node-class';
+import { normalizePath, toRelative } from '../editor/path-domain';
 import { StaleSourceRefresh } from '../editor/session/stale-source-refresh';
 import { SOURCE_PENDING_EVENT, type SourcePendingPayload } from '../editor/session/no-content-pane';
 import { cloudSync } from '../preview/cloud/cloud-sync-store';
@@ -61,6 +62,8 @@ export class EditorLink {
    * a pending one. Only then may a re-ask of the page on screen reach it.
    */
   private waitingOn: string | null = null;
+  /** The file the editor last loaded, relative to the folder; null until it says. */
+  private editorFile: string | null = null;
   private unsubscribePage: (() => void) | null = null;
 
   disconnect(): void { this.unsubscribePage?.(); this.unsubscribePage = null; }
@@ -90,6 +93,8 @@ export class EditorLink {
       const page = pageSource.current;
       if (page?.urlPath === urlPath) this.forward(page);
     });
+
+    uiHost.bus.on<{ path: string }>('editor:file-ready', (payload) => { this.editorFile = payload.path; });
 
     uiHost.bus.on<{ urlPath: string; awaitingBuild?: boolean }>('editor:navigate-preview', (payload) => {
       const preview = this.host.preview();
@@ -178,6 +183,7 @@ export class EditorLink {
   folderChanged(): void {
     this.staleSource.disarm();
     this.waitingOn = null;
+    this.editorFile = null;
   }
 
   /**
@@ -190,6 +196,19 @@ export class EditorLink {
     void pageSource.ensure(urlPath);
     const page = pageSource.current?.urlPath === urlPath && !pageSource.current.pending ? pageSource.current : null;
     return { sourcePath: page?.sourcePath ?? null, isRoot: isRootUrlPath(urlPath), takeover: page?.takeover ?? null };
+  }
+
+  /**
+   * A target with no `path` is a place in the previewed page, and `null` is the
+   * page itself. While the open editor shows another file, name the page's
+   * file, so the target opens it instead of landing in the file on screen.
+   */
+  located(target: PreviewSourceTarget | null): PreviewSourceTarget | null {
+    const page = this.node?.sourcePath;
+    if (target?.path || target?.kind === 'none' || !page || this.editorFile === null || !this.host.editorIsOpen()) return target;
+    const path = toRelative(page, this.host.folderPath() ?? '');
+    if (normalizePath(path) === normalizePath(this.editorFile)) return target;
+    return { ...(target ?? { kind: 'page' }), path };
   }
 
   private hold(kind: Hold): void {
@@ -292,7 +311,8 @@ export class EditorLink {
    */
   private onSourceTarget(data: { target?: PreviewSourceTarget; interaction?: string }): void {
     if (this.held('pageSwitch')) return;
-    const { target, interaction } = data;
+    const interaction = data.interaction;
+    const target = this.located(data.target ?? null);
     if (!target) return;
     // A target in another file: only a double click commits to it.
     if (typeof target.path === 'string') {

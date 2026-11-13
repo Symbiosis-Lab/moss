@@ -19,6 +19,9 @@ All notable changes to moss will be documented here.
 - Importing a site again into the same folder no longer writes a `name 2.md` beside each page: a page whose `origin:` names the same address keeps its file and its text and gains only the descriptive fields it lacks (never `draft`, `members`, `nav` or `weight`, so a field you removed stays removed), and a failed fetch's stub is replaced once the page imports.
 - The email a publish opens for a post's subscribers starts from the post as that publish put it on the site, so an edit made while the site uploaded waits for the next publish instead of reaching subscribers.
 - A page from `moss build --serve --watch` that is open in an ordinary browser tab reloads when the site is rebuilt. Only the preview inside moss was refreshed before, so the tab kept the old text until it was reloaded by hand. In such a tab the reload key, the menu on a right click, every link and a click on a picture work as on the published page. Tabs opened on this computer share one connection to the preview server, so any number can be open at once.
+- A click, a double click or a right-click row in the preview reaches the page's own file when the editor shows another one (the footer, the stylesheet, a page the preview has left): a double click or a menu row opens the page at that place, and a single click no longer highlights unrelated lines in the other file.
+- Inside a grid column or a hero, a click in the preview highlights the paragraph clicked and a double click puts the caret on it; both took the whole column or hero, so the caret landed on its first line.
+- Right-clicking inside a grid column lists "Grid settings" once; the column was listed under the same name.
 
 ## [0.15.23] - 2026-11-12
 

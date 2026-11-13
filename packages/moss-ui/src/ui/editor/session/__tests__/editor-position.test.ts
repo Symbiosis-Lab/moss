@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 import { host } from "../../../host";
-import { sourceTargetPosition, deliverEditorPosition } from '../editor-position';
+import { sourceTargetPosition, deliverEditorPosition, EditorHandshake } from '../editor-position';
 
 const emit = vi.fn();
 host.bus = { ...host.bus, emit };
@@ -34,5 +34,16 @@ describe('deliverEditorPosition', () => {
   it('omits the seed key when the position has none', () => {
     deliverEditorPosition({ kind: 'field', field: 'title' });
     expect(emit.mock.calls[0][1]).toStrictEqual({ field: 'title' });
+  });
+});
+
+describe('EditorHandshake', () => {
+  beforeEach(() => emit.mockClear());
+
+  it('delivers when the editor reports the awaited file under another Unicode spelling', () => {
+    const handshake = new EditorHandshake((path) => path);
+    handshake.expect('B\u00fcndnis.md', { kind: 'line', line: 4 });
+    handshake.ready('Bu\u0308ndnis.md');
+    expect(emit).toHaveBeenCalledWith('editor:goto-line', { line: 4 });
   });
 });
