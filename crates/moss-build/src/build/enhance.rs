@@ -527,6 +527,7 @@ pub(crate) fn inject_slots_into_directory_cached(
     // nothing changed); the rest, inject and write, scales with the DELTA.
     let mut walk_ms = std::time::Duration::ZERO;
     let t_pass = std::time::Instant::now();
+    let _phase = crate::build::phase::PhaseTrace::start("slot_injection");
     let memo_key = format!("{slots_hash}:{}", crate::build::ship::shipped_key(mount));
     let remembered = SLOT_MEMO.take(dir).filter(|memo| memo.key == memo_key).map(|memo| memo.pages).unwrap_or_default();
     let mut kept = std::collections::HashMap::new();

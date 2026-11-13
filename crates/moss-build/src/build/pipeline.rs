@@ -1292,7 +1292,7 @@ fn build_inner(
     // feeds every `[site]` field below — this span used to be a dozen
     // independent parses of the same file. Still timed so it can be weighed
     // against the lock wait.
-    let t_config = std::time::Instant::now();
+    let config_phase = crate::build::phase::PhaseTrace::start("config_reads");
     let config_path = paths.config();
     input_evidence.require(&config_path, super::cloud_ledger::InputRole::SharedConfig);
     let cfg = match crate::build::site_config::read_managed_toml_no_wait(&config_path) {
@@ -1551,7 +1551,7 @@ fn build_inner(
         derivations: derived.clone(),
         plugins_skipped: services.is_some_and(|s| s.plugins_skipped),
     };
-    log::debug!(target: "timing", "[build] staging: config_reads (1 parse) took {:?}", t_config.elapsed());
+    drop(config_phase);
     // Construct PendingManifest seeded with previous_hashes (carry-forward).
     // Passed to generate_blocking_content so Pattern A emits register via ctx.emit.
     // After the call, pending holds the accumulated site_hashes + blocking_keys;

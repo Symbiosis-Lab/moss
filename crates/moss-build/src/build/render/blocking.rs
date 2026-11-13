@@ -1332,6 +1332,7 @@ pub fn generate_blocking_content_for_build(
 
         log::debug!(target: "timing", "[reduce] translation_links: {:?}", reduce_start.elapsed());
         log::debug!(target: "timing", "[reduce] total (uid_dedup..translation_links): {:?}", reduce_pre_start.elapsed());
+        drop(PhaseTrace::since("reduce", reduce_pre_start));
 
         // Create layout configuration.
         // Site name is one STRUCTURAL decision — `moss_core::home::site_name`
@@ -2347,11 +2348,6 @@ pub fn generate_blocking_content_for_build(
             target: "incremental",
             "{auto_index_count} generated folder indexes rendered, {auto_index_carried} carried",
         );
-        // All vault SHAPE, so measure before optimizing: each index costs in
-        // proportion to the children it lists. One flat `posts/` folder of 225
-        // children is 259ms of a 388ms call; a real 223-page site with a deep
-        // tree is 0.4ms. Medians of 7 rebuilds.
-        log::debug!(target: "timing", "[render] auto folder indexes rendered: {:?}", total_start.elapsed());
     }
 
     // Site 6 (Pattern A): emit _moss/style.<hash>.css (content-hashed filename).
@@ -2396,13 +2392,10 @@ pub fn generate_blocking_content_for_build(
     // emit that used to sit here wrote the same bytes to the same path a second
     // time.
 
-    // Prelude instrumentation: everything from here to `[render]
-    // total` runs unconditionally on the DOCUMENT COUNT, not on what changed —
-    // so on a single-page edit it is pure prelude. These checkpoints (added
-    // while investigating why that prelude did not shrink) are cumulative
-    // from `total_start`, matching the style of every other `timing` line
-    // in this function.
-    log::debug!(target: "timing", "[render] prelude: css+js emitted: {:?}", total_start.elapsed());
+    // Everything from here to `[render] total` scales with the document
+    // count, not with what changed: on a one-page edit it is all overhead.
+    // The `timing` checkpoints below are cumulative from `total_start`.
+    let site_files_phase = PhaseTrace::start("render_site_files");
 
     // Generate RSS feed and sitemap (only if a real https URL was resolved)
     if has_rss {
@@ -2515,7 +2508,7 @@ pub fn generate_blocking_content_for_build(
     crate::build::emit::members::emit(&site_config.members, output_dir, pending)?;
     let own_icon = (!favicon.used_default).then_some(crate::build::site_meta::site_identity::OwnIcon { file: &favicon_filename, raster_sizes: &favicon_raster_sizes });
     crate::build::site_meta::site_identity::emit(&layout_config, own_icon, user_css_content.as_deref(), output_dir, pending)?;
-    log::debug!(target: "timing", "[render] prelude: llms.txt: {:?}", total_start.elapsed());
+    drop(site_files_phase);
     send_progress(
         progress_sender,
         "generating",
@@ -2583,7 +2576,6 @@ pub fn generate_blocking_content_for_build(
         }
         page_count += 1;
     }
-    log::debug!(target: "timing", "[render] prelude: homepage: {:?}", total_start.elapsed());
 
     // What sitemap.xml lists: every page a reader is meant to land on. That is
     // every page registered by now, the home page included; then the media
@@ -3163,6 +3155,8 @@ pub fn generate_blocking_content_for_build(
         .unwrap_or_else(|| crate::i18n::t(site_lang, "untitled_site").to_string());
 
     log::debug!(target: "timing", "[render] total: {:?}", total_start.elapsed());
+    // The background lane's work list and the math cache's sweep.
+    let _phase_handoff = PhaseTrace::start("render_handoff");
 
     // Build site-level meta defaults for bundled-SPA `<head>` injection
     // (link-preview defaults). The injector preserves anything

@@ -135,8 +135,14 @@ const PHASE_BUDGETS_MS: &[(&str, u64)] = &[
     // still contain theirs, so subtract `lock_wait` to read their work. The
     // lock itself costs well under a millisecond, so the budget is a tripwire.
     ("lock_wait", 200),
-    // Native + plugin slot collection/injection before finalization.
+    // Native + plugin slot collection before finalization.
     ("slot_resolution", 10_000),
+    // Filling the collected slots into every staged page.
+    ("slot_injection", 10_000),
+    ("config_reads", 2_000),
+    ("reduce", 5_000),
+    ("render_site_files", 5_000),
+    ("render_handoff", 5_000),
     // Loop A: parse + resolve every markdown file (blocking.rs). Dominant
     // render-phase cost on image/link-heavy vaults — measured ~16-18s on a
     // 216-page reference vault; budget set loosely above
@@ -772,7 +778,7 @@ mod tests {
             assert_eq!(record["outcome"], "ok");
             let phases = record["phases"].as_array().unwrap();
             // The fixture has no search index, so search_index and its counts are covered by the serializer test.
-            for name in ["media_prelude", "background_asset_copy", "seal_persist", "seal_promote"] {
+            for name in ["config_reads", "reduce", "render_site_files", "render_handoff", "slot_injection", "media_prelude", "background_asset_copy", "seal_persist", "seal_promote"] {
                 assert!(phases.iter().any(|p| p["name"] == name), "missing {name}: {record}");
             }
             assert!(phases.iter().all(|p| p["pass"].as_u64().unwrap() >= 1));
