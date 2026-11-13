@@ -713,22 +713,20 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
 
 /* File-picker (cover) live search dropdown — sits in-flow below the input,
    inside the already-positioned .pop (no separate fixed-position layer). */
-.pop-file-picker-list { margin-top: 6px; max-height: 180px; overflow-y: auto; overflow-x: hidden; border: 1px solid var(--moss-border-light); border-radius: 6px; scrollbar-width: thin; }
-.pop-file-picker-list:empty { display: none; border: none; }
-.pop-file-picker-item { display: flex; align-items: baseline; gap: 8px; padding: 6px 8px; cursor: pointer; font-size: 12px; }
-.pop-file-picker-item:hover, .pop-file-picker-item.is-highlighted { background: var(--moss-hover-overlay); }
+.pop-file-picker-list { margin-top: 6px; max-height: 180px; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; }
+.pop-file-picker-list:empty { display: none; }
+.pop-file-picker-item { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
 .pop-file-picker-label { color: var(--moss-color-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
 .pop-file-picker-detail { color: var(--moss-color-muted); font-size: 11px; flex-shrink: 0; }
-.pop-file-picker-empty { padding: 6px 8px; font-size: 12px; color: var(--moss-color-muted); }
+.pop-file-picker-empty { padding: var(--moss-menu-row-padding); font-size: 12px; color: var(--moss-color-muted); }
 
 /* ── Unified dropdown ────────────────────────────────────────────────── */
 
-.omenu { position: fixed; z-index: var(--z-overlay); background: var(--moss-color-bg); border-radius: 10px; padding: 6px; box-shadow: var(--moss-elevation-2); border: 1px solid var(--moss-border-light); min-width: 260px; max-width: 380px; max-height: 380px; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; }
-.omenu-search { width: 100%; border: 1px solid var(--moss-border-light); border-radius: 6px; padding: 6px 10px; font-size: 13px; color: var(--moss-color-text); outline: none; background: var(--moss-color-bg); font-family: inherit; margin-bottom: 4px; box-sizing: border-box; }
+.omenu { position: fixed; z-index: var(--z-overlay); min-width: 260px; max-width: 380px; max-height: 380px; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; }
+.omenu-search { width: 100%; border: 1px solid var(--moss-border-light); border-radius: var(--moss-menu-row-radius); padding: var(--moss-menu-row-padding); font-size: 13px; color: var(--moss-color-text); outline: none; background: transparent; font-family: inherit; margin-bottom: 4px; box-sizing: border-box; }
 .omenu-search:focus { border-color: var(--moss-color-accent); }
-.omenu-group { font-size: 10px; font-weight: 600; color: var(--moss-color-muted); text-transform: uppercase; letter-spacing: 0.5px; padding: 8px 10px 4px; }
-.orow { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 6px; cursor: pointer; font-size: 14px; transition: background .1s; }
-.orow:hover { background: var(--moss-hover-overlay); }
+.omenu-group { font-size: 10px; font-weight: 600; color: var(--moss-color-muted); text-transform: uppercase; letter-spacing: 0.5px; padding: 8px var(--moss-menu-row-pad-inline) 4px; }
+.orow { display: flex; align-items: center; gap: 8px; font-size: 14px; transition: background .1s; }
 /* Keyboard focus stays in the search box (aria-activedescendant model), so
    the row Enter would activate is marked by a class, not :focus. Accent-tinted
    rather than the plain hover wash so the two are told apart when the pointer
@@ -813,20 +811,6 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
    invisible on the dark editor. */
 [data-theme="dark"] .moss-editor-cm .cm-cursor, [data-theme="dark"] .moss-editor-cm .cm-cursor-primary { border-left-color: var(--moss-color-text); }
 [data-theme="dark"] .moss-editor-cm .cm-selectionBackground, [data-theme="dark"] .moss-editor-cm .cm-focused .cm-selectionBackground { background-color: rgba(90, 143, 160, 0.20) !important; }
-
-/* ── Dropdown (completion) ───────────────────────────────────────────── */
-
-.dropdown { position: fixed; z-index: var(--z-overlay); background: var(--moss-color-bg); border-radius: 8px; padding: 4px; box-shadow: var(--moss-elevation-2); min-width: 260px; max-width: 340px; max-height: 300px; overflow-y: auto; display: none; scrollbar-width: thin; }
-.dropdown.vis { display: block; }
-.dd-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 4px; cursor: pointer; transition: background .08s; }
-.dd-row:hover { background: var(--moss-hover-overlay); }
-.dd-row.sel { background: var(--moss-color-accent-quiet); }
-.dd-icon { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; background: var(--moss-color-surface); border-radius: 4px; font-size: 13px; color: var(--moss-color-muted); flex-shrink: 0; }
-.dd-text { flex: 1; min-width: 0; }
-.dd-name { font-size: 13px; font-weight: 500; color: var(--moss-color-text); }
-.dd-desc { font-size: 11px; color: var(--moss-color-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.dd-syn { font-size: 10px; color: var(--moss-border-medium); font-family: ui-monospace, monospace; flex-shrink: 0; }
-.dd-sec { font-size: 10px; color: var(--moss-color-muted); padding: 6px 10px 2px; text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
 
 /* ── Insert bar — persistent context-adaptive bottom toolbar ─────────── */
 /* Presence = focus, contents = caret context; stillness over motion. */
@@ -1101,23 +1085,7 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
 .create-status b { color: var(--moss-color-text); font-weight: 500; }
 .create-status .create-status-fname { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; background: var(--moss-hover-overlay); border-radius: 4px; padding: 1px 6px; color: var(--moss-color-text); }
 .create-status .moss-link { font-size: 12px; }
-.ctx-shortcut { margin-left: auto; font-size: 10px; color: var(--moss-color-muted); }
 
-/* ── File search dropdown ────────────────────────────────────────────── */
-
-.fsearch { min-width: 280px; max-width: 360px; }
-.fsearch-input { width: 100%; border: 1px solid var(--moss-border-light); border-radius: 4px; padding: 5px 8px 5px 28px; font-size: 12px; color: var(--moss-color-text); outline: none; background: var(--moss-color-bg); font-family: inherit; }
-.fsearch-input:focus { border-color: var(--moss-color-accent); }
-.fsearch-results { max-height: 200px; overflow-y: auto; margin-top: 6px; scrollbar-width: thin; }
-.fsearch-row { padding: 6px 8px; border-radius: 4px; cursor: pointer; transition: background .08s; }
-/* Keyboard selection accent-tinted, pointer hover washed — same split as
-   .orow/.orow-active, so the two are told apart when they land on different rows. */
-.fsearch-row:hover { background: var(--moss-hover-overlay); }
-.fsearch-row.selected { background: var(--moss-color-accent-quiet); }
-.fsearch-name { font-size: 12px; font-weight: 500; color: var(--moss-color-text); }
-.fsearch-path { font-size: 10px; color: var(--moss-color-muted); margin-top: 1px; }
-.fsearch-hl { color: var(--moss-color-text); font-weight: 600; }
-.fsearch-empty { padding: 8px; font-size: 11px; color: var(--moss-color-muted); text-align: center; }
 
 
 /* ── Inline rename ───────────────────────────────────────────────────── */
@@ -1745,15 +1713,8 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
 /* position:fixed — editor container has overflow:auto which clips absolute */
 .cm-slash-menu {
   position: fixed;
-  z-index: var(--z-overlay); /* the .omenu/.pop/.dropdown menu tier */
-  background: var(--moss-color-surface);
-  border: 1px solid var(--moss-border-medium);
-  /* Match moss's rounded surfaces (pills/chips) rather than the sharper 8px
-     used by the older .pop/.dropdown menus. Token defined in styles/shared/tokens.css. */
-  border-radius: var(--moss-pill-radius);
-  box-shadow: var(--moss-elevation-2);
+  z-index: var(--z-overlay); /* the .omenu/.pop menu tier */
   min-width: 260px; max-width: 360px;
-  padding: 4px 0;
   /* Scroll long lists in place. max-height is set precisely in JS from the
      space available inside the editor viewport (cm-slash-menu.ts scheduleMeasure);
      this 60vh is only a pre-measure fallback so an over-tall list never flashes
@@ -1762,14 +1723,9 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
-  scrollbar-width: thin; /* subtle scrollbar, matching .omenu/.dropdown */
+  scrollbar-width: thin; /* subtle scrollbar, matching .omenu */
 }
-.cm-slash-menu-item {
-  display: flex; flex-direction: column;
-  padding: 6px 12px; cursor: pointer; gap: 2px;
-}
-.cm-slash-menu-item:hover,
-.cm-slash-menu-item-selected { background: var(--moss-hover-overlay); }
+.cm-slash-menu-item { display: flex; flex-direction: column; gap: 2px; }
 .cm-slash-menu-item-label { font-size: 13px; font-weight: 500; color: var(--moss-color-text); }
 .cm-slash-menu-item-detail { font-size: 11px; color: var(--moss-color-text-secondary); }
 

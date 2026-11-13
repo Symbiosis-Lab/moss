@@ -224,7 +224,7 @@ class SlashMenuPlugin {
         this.dom.style.left = `${Math.max(MARGIN, Math.min(coords.left, vw - menuW - MARGIN))}px`;
         // Keep the arrow-highlighted item visible as the user navigates a list
         // that overflows the capped height.
-        this.dom.querySelector<HTMLElement>('.cm-slash-menu-item-selected')
+        this.dom.querySelector<HTMLElement>('.is-active')
           ?.scrollIntoView({ block: 'nearest' });
       },
     });
@@ -238,7 +238,7 @@ class SlashMenuPlugin {
 
     if (!this.dom) {
       this.dom = document.createElement('div');
-      this.dom.className = 'cm-slash-menu';
+      this.dom.className = 'cm-slash-menu moss-menu';
       document.body.appendChild(this.dom); // body for fixed positioning
       // `--z-overlay` — above a `--z-popup` tooltip. Opening on a keystroke is
       // no protection: nothing dismisses a tooltip on a keypress but Escape,
@@ -251,8 +251,8 @@ class SlashMenuPlugin {
     this.dom.innerHTML = '';
     items.forEach((item, i) => {
       const el = document.createElement('div');
-      el.className = 'cm-slash-menu-item' +
-        (i === state.selectedIndex ? ' cm-slash-menu-item-selected' : '');
+      el.className = 'cm-slash-menu-item moss-menu-row' +
+        (i === state.selectedIndex ? ' is-active' : '');
 
       const label = document.createElement('span');
       label.className = 'cm-slash-menu-item-label';

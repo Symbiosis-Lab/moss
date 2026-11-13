@@ -43,9 +43,8 @@ export function openInputPopover(opts: InputPopoverOptions): InputPopoverHandle 
   active?.close();
 
   const overlay = document.createElement('div');
-  overlay.className = 'ctx-menu input-popover';
+  overlay.className = 'ctx-menu moss-menu input-popover';
   overlay.style.width = '260px';
-  overlay.style.padding = '8px';
 
   const label = document.createElement('div');
   label.style.cssText = 'font-size:11px;color:var(--moss-color-muted);margin-bottom:6px;padding:0 2px';

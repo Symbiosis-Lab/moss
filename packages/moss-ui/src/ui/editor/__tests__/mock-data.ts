@@ -256,6 +256,15 @@ export const mockCommands = {
       data: { insert, label: insert, detail: null, kind: 'page' } satisfies WikilinkCompletion,
     };
   },
+  // Link completion: a page, a file and a folder, whatever was typed.
+  wikilinkCompletions: async () => ({
+    status: 'ok' as const,
+    data: [
+      { insert: 'notes', label: 'notes', detail: 'Notes', kind: 'page' },
+      { insert: 'cover.jpg', label: 'cover.jpg', detail: null, kind: 'asset' },
+      { insert: 'essays/', label: 'essays/', detail: null, kind: 'folder' },
+    ] satisfies WikilinkCompletion[],
+  }),
   // Reference resolution — used by the image-repaint visual spec. An embed
   // target with an image extension resolves to an Image envelope (so the
   // live-preview renders an <img>); an audio extension resolves to an Audio

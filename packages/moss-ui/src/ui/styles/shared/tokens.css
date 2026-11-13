@@ -103,9 +103,22 @@
      because a rule or a card edge conveys nothing on its own. */
   --moss-border-strong: #8e8b85;
   /* App-only, not in tokens.json. Consumers are container corners, not buttons: the toast
-     card, the progress panel, the dropdown menu — see --moss-radius-capsule
+     card, the progress panel — see --moss-radius-capsule
      below for the button shape. */
   --moss-border-radius: 8px;
+  /* The menu surface: every menu, dropdown and suggestion list. A menu wears
+     the corner of the pill it opens from, and a row is concentric with it. */
+  --moss-menu-radius: var(--moss-pill-radius);
+  /* Paper on paper, where the shadow separates it. On the dark ground a
+     shadow cannot, so the dark block raises the surface instead. */
+  --moss-menu-bg: var(--moss-color-bg);
+  --moss-menu-shadow: var(--moss-elevation-2);
+  --moss-menu-hover: var(--moss-hover-overlay);
+  --moss-menu-inset: 6px;
+  --moss-menu-row-radius: calc(var(--moss-menu-radius) - var(--moss-menu-inset));
+  --moss-menu-row-pad-block: 6px;
+  --moss-menu-row-pad-inline: 12px;
+  --moss-menu-row-padding: var(--moss-menu-row-pad-block) var(--moss-menu-row-pad-inline);
 
   /* Transitions */
   --moss-transition-fast: 150ms ease;  /* hover/focus state changes */
@@ -365,7 +378,7 @@
      Why the two middle steps exist:
      - `--z-preview-chrome` names the tier the zoom badge and swipe indicator
        already occupied at 40: over the titlebar, under any modal.
-     - `--z-overlay` names the editor's menu tier (.pop/.omenu/.dropdown/
+     - `--z-overlay` names the editor's menu tier (.pop/.omenu/
        .cm-slash-menu/.cm-comment-popover/the composer recap), which sat at a
        hard-coded 200 — tied with toasts, so a notification could lose to a
        dropdown. 150 keeps the menus' order among themselves and restores
@@ -451,6 +464,7 @@ body.fullscreen-mode {
   --moss-color-text: #c8c3bc;
   --moss-color-muted: #8a8580;
   --moss-color-surface: #242018;
+  --moss-menu-bg: var(--moss-color-surface);
 
   --moss-color-text-secondary: #a8a39c;
   --moss-color-accent-hover: #5a8c5a;

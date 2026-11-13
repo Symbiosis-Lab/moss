@@ -2934,29 +2934,17 @@ body.own-titlebar.controls-trailing .moss-titlebar-traffic-light-space {
   margin-top: 4px;
   max-height: 300px;
   overflow-y: auto;
-  background: var(--moss-chrome-panel-bg);
-  border: 1px solid var(--moss-chrome-panel-border);
-  border-radius: 8px;
-  box-shadow: var(--moss-chrome-elevation-2);
+  --moss-menu-bg: var(--moss-chrome-panel-bg);
+  --moss-menu-shadow: var(--moss-chrome-elevation-2);
+  --moss-menu-hover: var(--moss-chrome-panel-hover);
   z-index: var(--z-popup); /* popup layer, inside the pill's stacking context */
 }
 
 .moss-url-autocomplete-item {
   display: flex;
   flex-direction: column;
-  padding: 8px 12px;
-  cursor: pointer;
-  border-bottom: 1px solid var(--moss-chrome-panel-border);
 }
 
-.moss-url-autocomplete-item:last-child {
-  border-bottom: none;
-}
-
-.moss-url-autocomplete-item:hover,
-.moss-url-autocomplete-item--highlighted {
-  background: var(--moss-chrome-panel-hover);
-}
 
 .moss-url-autocomplete-title {
   font-size: 13px;
@@ -3108,34 +3096,6 @@ body.own-titlebar.controls-trailing .moss-titlebar-traffic-light-space {
 .moss-api-key-feedback.fade-out {
   opacity: 0;
 }
-
-/* Select Dropdown */
-.moss-settings-select {
-  width: 100%;
-  padding: 10px 12px;
-  font-size: 14px;
-  color: var(--moss-color-text);
-  background: var(--moss-color-bg);
-  border: 1px solid var(--moss-border-medium);
-  border-radius: 6px;
-  cursor: pointer;
-  appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235d5853' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 12px center;
-  padding-right: 40px;
-}
-
-[data-theme="dark"] .moss-settings-select {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23b8b5b0' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
-}
-
-.moss-settings-select:focus {
-  outline: none;
-  border-color: var(--moss-color-accent);
-  box-shadow: 0 0 0 3px var(--moss-accent-light);
-}
-
 
 /* Details element for collapsible sections */
 .moss-settings-details {

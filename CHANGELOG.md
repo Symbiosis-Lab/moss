@@ -14,6 +14,7 @@ All notable changes to moss will be documented here.
 - In the editor, a hover card opens only when it has something the line does not show: resting on an external link opens nothing (⌘K still offers the address, Open and Unlink), a page link's card opens only when that page has a description, and the "⌘-click to open" line is gone. In the dark theme the cards are dark again; they had turned pale under light text.
 - The warning about a theme colour set without a dark value is no longer shown on a site whose `color_scheme` is fixed to light or dark, which never shows the other side.
 - `moss deploy` says to update moss when the server no longer accepts this version, instead of a bare API error.
+- Every menu in the app and the editor has one shape: the right-click menus, the Host and domain pickers, the slash menu, the field menu behind the chip bar's +, link and file completion and the address bar's suggestions are a rounded box with rounded rows. Each had corners, padding and a border of its own, and completion was a square grey list.
 
 ### Fixed
 
