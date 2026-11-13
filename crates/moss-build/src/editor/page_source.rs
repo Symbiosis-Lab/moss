@@ -3,17 +3,18 @@
 //!
 //! The editor asks this when a site's root is opened, and again whenever the
 //! preview navigates. It tries the build's article map first (the fast path,
-//! which knows lossy slugs: a source named `Hello, World!.md` is served at
-//! `hello-world/`), then reads the disk, because the map is rewritten on every
-//! build and lags a file the author just wrote. Everything here is Tauri-free;
+//! which knows where the build really served each source), then lists the
+//! disk for the file expected at the address (`Hello, World!.md` at
+//! `hello-world/`), because the map is rewritten on every build and lags a
+//! file the author just wrote. Everything here is Tauri-free;
 //! the desktop command and the HTTP carrier both call [`resolve_page_source`].
 
 use std::path::Path;
 
 use crate::build::scan::article_map::ArticleMap;
-use crate::editor::resolve::links::{url_to_source_candidates, PageSource};
+use crate::editor::resolve::links::{expected_url, PageSource};
 use crate::editor::resolve::page_source::{
-    detect_root_home_source, folder_page_source, root_page_source,
+    detect_home_source, detect_root_home_source, folder_page_source, root_page_source, HomeVerdict,
 };
 use crate::editor::resolve::takeover::{takeover_for, TakeoverKind};
 
@@ -88,17 +89,14 @@ pub fn resolve_page_source(url_path: &str, folder_path: &Path) -> Result<PageSou
     // A served file that is no page (a PDF, a picture) has the file it was
     // built from as its source: nothing generated it, and an editor showing
     // that file is already on it.
-    let source_path = url_to_source_candidates(normalized)
-        .into_iter()
-        .find_map(|c| existing(&c))
-        .map(|found| spelled_as_on_disk(folder_path, found))
-        .or_else(|| match served_asset_source(normalized, folder_path, &map) {
-            Ok(source) => source.and_then(|src| existing(&src)),
-            Err(why) => {
-                unknown.get_or_insert(why);
-                None
-            }
-        });
+    let mut settled = |found: Result<Option<String>, String>| {
+        found.unwrap_or_else(|why| {
+            unknown.get_or_insert(why);
+            None
+        })
+    };
+    let source_path = settled(page_on_disk(normalized, folder_path, root.name(), &map.dir_overrides))
+        .or_else(|| settled(served_asset_source(normalized, folder_path, &map)).and_then(|src| existing(&src)));
     // What would replace the page when nothing backs it, in the language the
     // build resolved (the root entry of `site-languages.json`); no build yet
     // means the default, never a content scan from a resolve.
@@ -135,23 +133,72 @@ pub fn resolve_page_source(url_path: &str, folder_path: &Path) -> Result<PageSou
     })
 }
 
-/// `found` with its names spelled as the disk stores them. A candidate is
-/// spelled from the address (`events/a.md`), and a disk that ignores case
-/// finds `Events/a.md` under it; the editor and the file tree know the page
-/// only by its real path. The names are joined with `/`, as a mapped page's are.
-fn spelled_as_on_disk(folder_path: &Path, found: String) -> String {
-    let real = Path::new(&found).canonicalize().ok();
-    let root = folder_path.canonicalize().ok();
-    match (real, root) {
-        (Some(real), Some(root)) => match real.strip_prefix(&root) {
-            Ok(rel) => {
-                let names: Vec<_> = rel.iter().map(|name| name.to_string_lossy()).collect();
-                folder_path.join(names.join("/")).to_string_lossy().into_owned()
-            }
-            Err(_) => found,
-        },
-        _ => found,
+/// The page file a build would serve at `url`, found by listing the folders
+/// the address passes through and comparing each entry's expected address,
+/// the same one a new page is opened at. For a folder's own address it is the
+/// home the election names, when that is one of the folder's home-named
+/// files; any other verdict is left to the folder takeover. The path is the
+/// listing's names joined with `/`, as a mapped page's is. Entries the site
+/// walk leaves out are passed over. `Err` when a folder on the way cannot be
+/// listed: what it holds is not known, which is not the same as nothing.
+fn page_on_disk(
+    url: &str,
+    folder_path: &Path,
+    root_name: &str,
+    dir_overrides: &std::collections::HashMap<String, String>,
+) -> Result<Option<String>, String> {
+    use crate::build::scan::path_collision::{logical_path, nfc_order};
+    let asked = url.trim_end_matches('/').trim_end_matches(".html").trim_end_matches("/index");
+    // The root's home is elected before this is asked.
+    if asked.is_empty() || asked == "index" {
+        return Ok(None);
     }
+    let served_at = |rel: &str| expected_url(rel, root_name, dir_overrides).map(|at| at.trim_matches('/').to_string());
+    let layer_sources = crate::config::map_layers::declared_sources(folder_path);
+    // Depth first in name order, so two names served at one address always give the same answer.
+    let mut folders = vec![String::new()];
+    while let Some(folder) = folders.pop() {
+        let dir = folder_path.join(&folder);
+        let mut names: Vec<String> = std::fs::read_dir(&dir)
+            .and_then(|entries| entries.map(|e| e.map(|e| e.file_name().to_string_lossy().into_owned())).collect())
+            .map_err(|e| format!("'{}' could not be listed: {e}", dir.display()))?;
+        names.sort_by(|a, b| nfc_order(a, b));
+        let depth = folder.split('/').filter(|name| !name.is_empty()).count() + 1;
+        let mut inside = Vec::new();
+        let mut at_the_address = None;
+        for name in names {
+            let rel = if folder.is_empty() { name.clone() } else { format!("{folder}/{name}") };
+            let path = dir.join(&name);
+            let is_dir = path.is_dir();
+            if crate::build::scan::classify::left_out(&path, is_dir, depth).is_some() || (is_dir && layer_sources.contains(&logical_path(&rel))) {
+                continue;
+            }
+            if !is_dir {
+                if moss_core::source_edit::policy::is_page_path(Path::new(&name)) && served_at(&rel).as_deref() == Some(asked) {
+                    return Ok(Some(folder_path.join(rel).to_string_lossy().into_owned()));
+                }
+                continue;
+            }
+            // A folder is served where its home is.
+            match served_at(&format!("{rel}/index.md")).as_deref().and_then(|at| asked.strip_prefix(at)) {
+                Some("") => at_the_address = at_the_address.or(Some(rel)),
+                Some(rest) if rest.starts_with('/') => inside.push(rel),
+                _ => {}
+            }
+        }
+        // A page beside a folder of the same address comes first.
+        if let Some(rel) = at_the_address {
+            let name = rel.rsplit('/').next().unwrap_or(&rel);
+            return Ok(match detect_home_source(&folder_path.join(&rel), name, false) {
+                HomeVerdict::File(home) if served_at(&format!("{rel}/{home}")).as_deref() == Some(asked) => {
+                    Some(folder_path.join(format!("{rel}/{home}")).to_string_lossy().into_owned())
+                }
+                _ => None,
+            });
+        }
+        folders.extend(inside.into_iter().rev());
+    }
+    Ok(None)
 }
 
 /// The source of the non-page file served at `url`, from the last build's
@@ -278,14 +325,82 @@ mod tests {
         }
     }
 
+    /// The address spells neither name as the disk does: `Events` is served
+    /// lowercase and `untitled 2` with a hyphen.
     #[test]
     fn a_page_no_build_has_mapped_yet_resolves_under_its_spelling_on_disk() {
-        let dir = vault(&[], &[], &["Events/untitled.md"]);
-        let r = resolve_page_source("/events/untitled/", dir.path()).unwrap();
-        // A disk that tells `events` from `Events` finds no file; one that does not must not answer `events/`.
-        if let Some(source) = r.source_path {
-            assert_eq!(source, dir.path().join("Events/untitled.md").to_string_lossy());
+        let dir = vault(&[], &[], &["Events/untitled.md", "Events/untitled 2.md", "Events/2026/Open Day.md"]);
+        for (url, file) in [
+            ("/events/untitled/", "Events/untitled.md"),
+            ("/events/untitled-2/", "Events/untitled 2.md"),
+            ("events/2026/open-day.html", "Events/2026/Open Day.md"),
+            ("events/2026/open-day/index.html", "Events/2026/Open Day.md"),
+        ] {
+            let r = resolve_page_source(url, dir.path()).unwrap();
+            assert_eq!(r.source_path, Some(dir.path().join(file).to_string_lossy().into_owned()), "{url}");
         }
+    }
+
+    #[test]
+    fn an_unmapped_folder_address_resolves_to_the_home_inside_it() {
+        let dir = vault(&[], &[], &["My Notes/index.md", "My Notes/other.md", "Field Work/Field Work.md"]);
+        for (url, file) in [("/my-notes/", "My Notes/index.md"), ("field-work/index.html", "Field Work/Field Work.md")] {
+            let r = resolve_page_source(url, dir.path()).unwrap();
+            assert_eq!(r.source_path, Some(dir.path().join(file).to_string_lossy().into_owned()), "{url}");
+        }
+    }
+
+    /// Every home candidate is expected at its folder's address; which one
+    /// is the home is the build's election, not the first name listed.
+    #[test]
+    fn an_unmapped_folder_address_resolves_to_the_home_the_build_elects() {
+        let homes: Vec<_> = ["index.en.md", "README.md", "docs.md"]
+            .into_iter()
+            .map(|beside| {
+                let dir = vault(&[], &[], &["docs/index.md", &format!("docs/{beside}")]);
+                let r = resolve_page_source("/docs/", dir.path()).unwrap();
+                let home = r.source_path.map(|p| p.strip_prefix(&*dir.path().to_string_lossy()).unwrap().to_string());
+                (beside, home)
+            })
+            .collect();
+        let index = || Some("/docs/index.md".to_string());
+        assert_eq!(homes, [("index.en.md", index()), ("README.md", index()), ("docs.md", index())]);
+    }
+
+    #[test]
+    fn a_page_in_a_map_layers_source_folder_backs_no_address() {
+        let dir = vault(&[], &[], &["maps/atlas/notes.md"]);
+        std::fs::write(dir.path().join(".moss/config.toml"), "[map.layers.atlas]\nkind = \"streets\"\nsource = \"maps/atlas\"\n").unwrap();
+        assert_eq!(resolve_page_source("/maps/atlas/notes/", dir.path()).unwrap().source_path, None);
+    }
+
+    #[test]
+    fn what_the_site_walk_leaves_out_backs_no_address() {
+        let dir = vault(&[], &[], &[".moss/x.md", "node_modules/x.md", ".drafts/x.md", "AGENTS.md", "posts/.draft.md", "other/.moss/config.toml", "other/x.md"]);
+        for url in ["/moss/x/", "/node_modules/x/", "/drafts/x/", "/agents/", "/posts/draft/", "/other/x/"] {
+            assert_eq!(resolve_page_source(url, dir.path()).unwrap().source_path, None, "{url}");
+        }
+    }
+
+    #[test]
+    fn two_names_served_at_one_address_resolve_to_the_first_in_name_order() {
+        let dir = vault(&[], &[], &["a-b.md", "a b.md"]);
+        let r = resolve_page_source("/a-b/", dir.path()).unwrap();
+        assert_eq!(r.source_path, Some(dir.path().join("a b.md").to_string_lossy().into_owned()));
+    }
+
+    /// A folder that cannot be listed may hold the page: no offer to create it.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_that_cannot_be_listed_leaves_the_source_unknown() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = vault(&[], &[], &["events/a.md"]);
+        let events = dir.path().join("events");
+        std::fs::set_permissions(&events, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let r = resolve_page_source("/events/b/", dir.path());
+        std::fs::set_permissions(&events, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let r = r.unwrap();
+        assert!(r.source_path.is_none() && !r.source_known && r.takeover.is_none());
     }
 
     #[test]
@@ -346,7 +461,7 @@ mod tests {
     }
 
     #[test]
-    fn a_file_missing_from_the_map_is_found_by_url_candidates() {
+    fn a_file_missing_from_the_map_is_found_on_disk() {
         let dir = vault(&[], &[], &["about.md"]);
         let r = resolve_page_source("about", dir.path()).unwrap();
         assert!(!r.is_article && !r.is_dir && r.source_path.is_some());
@@ -369,9 +484,9 @@ mod tests {
 
     /// Without a map this moss can read (another version's format, an IO
     /// error, or none yet during a first build), a page nothing on disk backs
-    /// may still have a source under a lossy slug, so it is unknown, never
-    /// "generated". What the disk alone settles still resolves: a source at
-    /// the URL, and a real folder's missing home.
+    /// may still have a source the build served elsewhere than expected, so
+    /// it is unknown, never "generated". What the disk alone settles still
+    /// resolves: a source at its expected address, and a real folder's missing home.
     #[test]
     fn without_a_readable_map_a_page_without_a_source_on_disk_is_unknown() {
         let dir = vault(&[("posts/hello-world/", "posts/Hello, World!.md")], &[], &["posts/Hello, World!.md", "notes/a.md"]);
@@ -382,7 +497,7 @@ mod tests {
         let map = dir.path().join(".moss/build.nosync/article-map.json");
         for state in ["a map in a format this moss cannot parse", "no map yet"] {
             if state == "no map yet" { std::fs::remove_file(&map).unwrap() } else { std::fs::write(&map, "{ \"articles\": 7 }").unwrap() }
-            assert!(!resolve_page_source("posts/hello-world/", dir.path()).unwrap().source_known, "{state}: a lossy slug the disk cannot find");
+            assert!(resolve_page_source("posts/hello-world/", dir.path()).unwrap().source_path.is_some(), "{state}: a lossy slug, found by its expected address");
             let rss = resolve_page_source("rss/", dir.path()).unwrap();
             assert!(!rss.source_known && rss.takeover.is_none(), "{state}");
             assert!(resolve_page_source("notes/a/", dir.path()).unwrap().source_path.is_some(), "{state}: a source at the URL");

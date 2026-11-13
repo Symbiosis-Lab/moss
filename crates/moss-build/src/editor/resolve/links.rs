@@ -259,6 +259,22 @@ pub fn resolve_expected_url_for_file(
     rel_path: &str,
     folder_path: &std::path::Path,
 ) -> Option<String> {
+    // Honor the last build's dir_overrides (CJK folder renames); an
+    // absent/unreadable map degrades to no overrides (ASCII folders still slug
+    // correctly).
+    let dir_overrides = ArticleMap::load(&folder_path.join(".moss"))
+        .map(|m| m.dir_overrides)
+        .unwrap_or_default();
+    expected_url(rel_path, crate::vault_root::VaultRoot::resolve(folder_path).name(), &dir_overrides)
+}
+
+/// [`resolve_expected_url_for_file`] with the site's name and folder renames
+/// already in hand, for a caller that asks about many files.
+pub(crate) fn expected_url(
+    rel_path: &str,
+    root_name: &str,
+    dir_overrides: &std::collections::HashMap<String, String>,
+) -> Option<String> {
     use crate::build::scan::article_map::to_pretty_url;
 
     // Normalize separators + trim slashes so `posts/hello.md` and the Windows
@@ -296,9 +312,8 @@ pub fn resolve_expected_url_for_file(
     // A home file (index stem, lang-suffixed index, or self-named folder note)
     // is served AT its containing folder's URL — collapse it to the parent dir
     // so it doesn't gain a spurious nested `<folder>/<stem>/` path.
-    let root = crate::vault_root::VaultRoot::resolve(folder_path);
     let parent_name = if parent_dir.is_empty() {
-        root.name()
+        root_name
     } else {
         parent_dir.rsplit('/').next().unwrap_or("")
     };
@@ -307,14 +322,6 @@ pub fn resolve_expected_url_for_file(
     } else {
         stem_path
     };
-
-    // Honor the last build's dir_overrides (CJK folder renames); an
-    // absent/unreadable map degrades to no overrides (ASCII folders still slug
-    // correctly).
-    let moss_dir = folder_path.join(".moss");
-    let dir_overrides = ArticleMap::load(&moss_dir)
-        .map(|m| m.dir_overrides)
-        .unwrap_or_default();
 
     // Append `/index.html` so EVERY path segment (the file stem included) is
     // treated as an intermediate directory and slugified — same trick
@@ -326,35 +333,10 @@ pub fn resolve_expected_url_for_file(
     };
     let mapped = moss_core::resolve::output_url::resolve_path_with_overrides(
         &with_index,
-        &dir_overrides,
+        dir_overrides,
     );
     let pretty = to_pretty_url(&mapped);
     Some(format!("/{}", pretty))
-}
-
-/// Generate candidate source file paths from a URL path.
-///
-/// Fallback heuristic for pages not found in the article map.
-/// The article map is the primary resolution path — this only runs
-/// for pages compiled before the map included all pages.
-pub fn url_to_source_candidates(url_path: &str) -> Vec<String> {
-    let mut candidates = Vec::new();
-    let clean = url_path
-        .trim_end_matches('/')
-        .trim_end_matches(".html")
-        .trim_end_matches("/index");
-
-    if !clean.is_empty() {
-        // "posts/article" -> "posts/article.md"
-        candidates.push(format!("{}.md", clean));
-        // "posts/article" -> "posts/article/index.md"
-        candidates.push(format!("{}/index.md", clean));
-    } else {
-        // Root -> "index.md"
-        candidates.push("index.md".to_string());
-    }
-
-    candidates
 }
 
 // ── Asset URL resolver (extracted for testability) ────────────────────────────

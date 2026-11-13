@@ -31,6 +31,7 @@ All notable changes to moss will be documented here.
 - Editing a page in the preview no longer strips the margin notes, the selection popover, the mobile selection bar or the link-preview card: they stay after each edit, and a footnote reference still shows its margin note instead of jumping to the end-of-page list. Before, they were gone until a full reload.
 - Checking a site name reports a failed check as a failure, where it used to say the name was taken.
 - The editor no longer marks a folder embed as a missing file when a folder's own page lists its folder by name (`events/events.md` writing `![[events/]]`). The build already read it as that folder's listing. Renaming the folder now renames it in that embed too (`![[dates/]]`), where it used to leave the old name.
+- A new page whose file name is not spelled like its address, such as `untitled 2.md`, made while `untitled.md` is still there, opens in the editor. It showed "No page to edit" and stayed that way.
 
 ## [0.15.23] - 2026-11-12
 
