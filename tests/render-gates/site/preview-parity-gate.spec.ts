@@ -214,10 +214,13 @@ async function scrollDance(page: Page): Promise<void> {
 const NEUTRALIZE_SCROLLBAR_CSS =
   "html{scrollbar-width:none}html::-webkit-scrollbar,body::-webkit-scrollbar{display:none;width:0;height:0}";
 
-/** Navigate, then wait past both `networkidle` and every image's decode.
+/** Navigate, then wait for the page's load, its fonts and every image's decode.
+ *
+ * Not `networkidle`: in a plain tab the preview server's page holds its
+ * live-reload stream open, so the network never goes idle.
  *
  * A `loading="lazy"` image far down a page this long never starts fetching
- * at `networkidle` on its own, and calling `decode()` alone does not force
+ * at `load` on its own, and calling `decode()` alone does not force
  * it either — confirmed by running this fixture directly: the first few
  * images (already near the initial viewport) decoded in 0ms, everything
  * past them timed out at 3s. Flipping `loading` to `"eager"` first is what
@@ -225,9 +228,10 @@ const NEUTRALIZE_SCROLLBAR_CSS =
  * bytes are in. This is a page-load concern, separate from the scroll
  * dance below — every image is fully decoded before either measurement. */
 async function gotoReady(page: Page, base: string, path: string): Promise<void> {
-  await page.goto(`${base}${path}`, { waitUntil: "networkidle" });
+  await page.goto(`${base}${path}`, { waitUntil: "load" });
   await page.addStyleTag({ content: NEUTRALIZE_SCROLLBAR_CSS });
   await page.evaluate(async () => {
+    await document.fonts.ready;
     const imgs = Array.from(document.images);
     imgs.forEach((img) => {
       img.loading = "eager";

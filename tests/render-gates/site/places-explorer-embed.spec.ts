@@ -10,7 +10,8 @@
  * Run via:
  *   npx playwright test -c playwright/places-explorer-embed.config.ts
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Frame, type Page } from "@playwright/test";
+import { gotoFramed } from "../../support/framed-page";
 
 const POSTER = "[data-moss-place-embed]";
 const IFRAME = "iframe.moss-places-embed-frame";
@@ -18,7 +19,7 @@ const SETTLED = "iframe.moss-places-embed-frame.moss-places-embed-frame--settled
 const PREVIEW_BRIDGE = new URL("../../../crates/moss-build/src/ops/serve/js/iframe-bridge.js", import.meta.url).pathname;
 
 /** Waits for the iframe to become the host's visible map after READY. */
-async function waitForSettled(page: Page): Promise<void> {
+async function waitForSettled(page: Page | Frame): Promise<void> {
   await expect(page.locator(SETTLED)).toHaveCount(1, { timeout: 10000 });
 }
 
@@ -82,25 +83,25 @@ async function holdWorldRasterDecode(page: Page): Promise<void> {
   await holdMapRasterDecode(page);
 }
 
-async function worldRasterAudit(page: Page) {
+async function worldRasterAudit(page: Page | Frame) {
   return page.frameLocator(IFRAME).locator(".moss-places-viewport").evaluate(() =>
     (window as unknown as { __mapRasterAudit: { worldDecodeCount: number; tileDecodeCount: number; released: boolean } }).__mapRasterAudit,
   );
 }
 
-async function releaseWorldRaster(page: Page): Promise<void> {
+async function releaseWorldRaster(page: Page | Frame): Promise<void> {
   await page.frameLocator(IFRAME).locator(".moss-places-viewport").evaluate(() =>
     (window as unknown as { __releaseWorldRaster: () => void }).__releaseWorldRaster(),
   );
 }
 
-async function releaseTileRaster(page: Page): Promise<void> {
+async function releaseTileRaster(page: Page | Frame): Promise<void> {
   await page.frameLocator(IFRAME).locator(".moss-places-viewport").evaluate(() =>
     (window as unknown as { __releaseTileRaster: () => void }).__releaseTileRaster(),
   );
 }
 
-async function regionalCanvasCoverage(page: Page) {
+async function regionalCanvasCoverage(page: Page | Frame) {
   return page.frameLocator(IFRAME).locator(".moss-places-viewport").evaluate((viewport) => {
     const bounds = viewport.getBoundingClientRect();
     const canvases = [...document.querySelectorAll<HTMLCanvasElement>(".moss-places-tile > canvas")].filter((canvas) => {
@@ -1314,48 +1315,50 @@ test("a second located-article page in the same context does not re-fetch the wo
 
 test("the real preview bridge rehydrates an article embed after a morph and cancels the old READY deadline", async ({ page }) => {
   await holdMapRasterDecode(page, true);
-  await page.goto("tile-boundary-story/", { waitUntil: "domcontentloaded" });
-  await expect(page.locator(IFRAME)).toHaveCount(1);
+  // The bridge added below works only in a framed page.
+  const site = await gotoFramed(page, "tile-boundary-story/", "domcontentloaded");
+  await expect(site.locator(IFRAME)).toHaveCount(1);
   // The host's 8s READY deadline starts when it creates this first iframe;
   // capture its conservative deadline before raster setup/audits take time.
   const oldDeadline = Date.now() + 8000;
-  await expect(page.locator(POSTER)).toHaveAttribute("data-moss-place-embed-state", "loading");
-  await expect.poll(async () => (await worldRasterAudit(page)).worldDecodeCount, { timeout: 5000 }).toBeGreaterThan(0);
-  await expect.poll(async () => (await worldRasterAudit(page)).tileDecodeCount, { timeout: 5000 }).toBeGreaterThan(0);
-  await expect(page.locator(POSTER)).not.toHaveAttribute("data-moss-place-embed-ready", "ready");
-  await expect(page.locator(SETTLED)).toHaveCount(0);
+  await expect(site.locator(POSTER)).toHaveAttribute("data-moss-place-embed-state", "loading");
+  await expect.poll(async () => (await worldRasterAudit(site)).worldDecodeCount, { timeout: 5000 }).toBeGreaterThan(0);
+  await expect.poll(async () => (await worldRasterAudit(site)).tileDecodeCount, { timeout: 5000 }).toBeGreaterThan(0);
+  await expect(site.locator(POSTER)).not.toHaveAttribute("data-moss-place-embed-ready", "ready");
+  await expect(site.locator(SETTLED)).toHaveCount(0);
   // Leave a clear gap between the original deadline and the replacement's
   // own deadline, while both actual raster dependencies remain held.
   await page.waitForTimeout(2000);
-  await page.addScriptTag({ path: PREVIEW_BRIDGE });
+  await site.addScriptTag({ path: PREVIEW_BRIDGE });
 
-  const oldIframe = await page.locator(IFRAME).elementHandle();
+  const oldIframe = await site.locator(IFRAME).elementHandle();
   if (!oldIframe) throw new Error("initial article map iframe was not created");
   const oldScope = await oldIframe.evaluate((iframe) => new URL((iframe as HTMLIFrameElement).src).searchParams.get("article"));
   expect(oldScope).toBeTruthy();
-  const oldHostBox = await page.locator(POSTER).boundingBox();
+  const oldHostBox = await site.locator(POSTER).boundingBox();
   const morph = await page.evaluate(() =>
     new Promise<{ patched: boolean; applied: boolean; initCount: number }>((resolve, reject) => {
+      const guest = document.querySelector("iframe")!.contentWindow!;
       let patched = false;
       let applied = false;
       const timeout = window.setTimeout(() => reject(new Error("preview bridge morph did not complete")), 10000);
       const finish = (): void => {
         if (!patched || !applied) return;
         window.clearTimeout(timeout);
-        resolve({ patched, applied, initCount: (window as unknown as { __bridgeInitCount: number }).__bridgeInitCount });
+        resolve({ patched, applied, initCount: (guest as unknown as { __bridgeInitCount: number }).__bridgeInitCount });
       };
-      document.addEventListener("moss-morph-patched", () => { patched = true; finish(); }, { once: true });
+      guest.document.addEventListener("moss-morph-patched", () => { patched = true; finish(); }, { once: true });
       window.addEventListener("message", (event) => {
         if (event.data?.type !== "moss-morph-applied" || event.data?.gen !== 8417) return;
         applied = true;
         finish();
       });
-      window.postMessage({ type: "moss-morph", gen: 8417 }, "*");
+      guest.postMessage({ type: "moss-morph", gen: 8417 }, "*");
     }),
   );
   expect(morph).toEqual({ patched: true, applied: true, initCount: 1 });
 
-  const nextIframe = await page.locator(IFRAME).elementHandle();
+  const nextIframe = await site.locator(IFRAME).elementHandle();
   if (!nextIframe) throw new Error("article map iframe was not re-created after morph");
   // Keep the old-deadline assertion strictly before the replacement attempt's
   // own timeout, so a locator poll cannot cross the new deadline.
@@ -1363,25 +1366,25 @@ test("the real preview bridge rehydrates an article embed after a morph and canc
   expect(oldDeadline + 100).toBeLessThan(newDeadline);
   expect(await oldIframe.evaluate((iframe) => iframe.isConnected)).toBe(false);
   expect(await nextIframe.evaluate((iframe) => new URL((iframe as HTMLIFrameElement).src).searchParams.get("article"))).toBe(oldScope);
-  expect(await page.locator(POSTER).boundingBox()).toEqual(oldHostBox);
-  await expect(page.locator(POSTER)).toHaveAttribute("data-moss-place-embed-state", "loading");
-  await expect.poll(async () => (await worldRasterAudit(page)).worldDecodeCount, { timeout: 5000 }).toBeGreaterThan(0);
-  await expect.poll(async () => (await worldRasterAudit(page)).tileDecodeCount, { timeout: 5000 }).toBeGreaterThan(0);
-  await expect(page.locator(POSTER)).not.toHaveAttribute("data-moss-place-embed-ready", "ready");
+  expect(await site.locator(POSTER).boundingBox()).toEqual(oldHostBox);
+  await expect(site.locator(POSTER)).toHaveAttribute("data-moss-place-embed-state", "loading");
+  await expect.poll(async () => (await worldRasterAudit(site)).worldDecodeCount, { timeout: 5000 }).toBeGreaterThan(0);
+  await expect.poll(async () => (await worldRasterAudit(site)).tileDecodeCount, { timeout: 5000 }).toBeGreaterThan(0);
+  await expect(site.locator(POSTER)).not.toHaveAttribute("data-moss-place-embed-ready", "ready");
 
   const timeUntilOldDeadline = oldDeadline - Date.now() + 100;
   if (timeUntilOldDeadline > 0) await page.waitForTimeout(timeUntilOldDeadline);
-  expect(await page.locator(IFRAME).count()).toBe(1);
-  expect(await page.locator(SETTLED).count()).toBe(0);
-  expect(await page.locator(POSTER).getAttribute("data-moss-place-embed-state")).toBe("loading");
+  expect(await site.locator(IFRAME).count()).toBe(1);
+  expect(await site.locator(SETTLED).count()).toBe(0);
+  expect(await site.locator(POSTER).getAttribute("data-moss-place-embed-state")).toBe("loading");
 
-  await releaseTileRaster(page);
-  await releaseWorldRaster(page);
-  await waitForSettled(page);
+  await releaseTileRaster(site);
+  await releaseWorldRaster(site);
+  await waitForSettled(site);
   await expect(
-    page.frameLocator(IFRAME).locator('.moss-places-tiles[data-moss-places-tiles-state="idle"]'),
+    site.frameLocator(IFRAME).locator('.moss-places-tiles[data-moss-places-tiles-state="idle"]'),
   ).toHaveCount(1, { timeout: 15000 });
-  const afterMorph = await regionalCanvasCoverage(page);
+  const afterMorph = await regionalCanvasCoverage(site);
   expect(afterMorph.visibleCanvasCount).toBeGreaterThan(0);
   expect(afterMorph.complete).toBe(true); // the fixture's two visible regional tiles fully cover the viewport
   expect(afterMorph.backingAtDpr).toBe(true);

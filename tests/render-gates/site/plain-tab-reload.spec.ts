@@ -14,6 +14,7 @@ import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { gatePort } from "../../../playwright/gate-ports";
 import { scratchSiteDir } from "../../e2e/helpers/scratch-site";
+import { gotoFramed } from "../../support/framed-page";
 import { PLAIN_TAB_RELOAD } from "../../e2e/helpers/gate-sites";
 
 const BASE = `http://localhost:${gatePort("plain-tab-reload")}/`;
@@ -132,15 +133,7 @@ test("a framed page opens no stream and hands its gestures to its parent", async
   page.on("request", (r) => {
     if (r.url().endsWith("/__moss/reload")) streams.push(r.frame() === page.mainFrame() ? "parent" : "frame");
   });
-  // A parent on the same origin with no bridge of its own: the health answer is not HTML.
-  await page.goto(`${BASE}__moss_health/`);
-  await page.evaluate((src) => {
-    const frame = document.createElement("iframe");
-    frame.src = src;
-    document.body.append(frame);
-  }, BASE);
-  await page.frameLocator("iframe").locator("[data-viewer]").waitFor();
-  const frame = page.frames().find((f) => f !== page.mainFrame())!;
+  const frame = await gotoFramed(page, BASE);
   // Inside moss a click on a picture is the editor's, so the page's viewer stays shut.
   await frame.click("[data-viewer]");
   await expect(frame.locator("#lightbox")).not.toBeVisible();

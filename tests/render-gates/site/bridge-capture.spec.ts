@@ -1,10 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
+import { gotoFramed } from '../../support/framed-page';
 
 // The preview bridge answers `moss-capture-request` with a bitmap of its own
 // page. The fixture is a flex-column body with a clipped, full-bleed hero (the
 // layout a fixed-height body collapses), a data-url @font-face heading and
-// two images. In a top-level page window.parent is the window itself, so the
-// test plays the host by posting to its own window.
+// two images. The page is framed, as in moss's preview, and the test plays the
+// host from the parent window.
 
 // A pixel comparison needs one device pixel per CSS pixel (the engine device
 // presets set their own size and density, Desktop Safari at 2x).
@@ -35,15 +36,17 @@ async function load(page: Page, fixture = FIXTURE) {
     (window as any).__messages = [];
     window.addEventListener('message', (e) => (window as any).__messages.push(e.data));
   });
-  await page.goto(fixture);
-  await page.evaluate(() => document.fonts.ready);
-  await expect.poll(() => page.evaluate(() => [...document.images].every((i) => i.complete))).toBe(true);
+  const frame = await gotoFramed(page, fixture);
+  await frame.evaluate(() => document.fonts.ready);
+  await expect.poll(() => frame.evaluate(() => [...document.images].every((i) => i.complete))).toBe(true);
+  return frame;
 }
 
 /** Ask the page for a bitmap and compare it to what the browser really painted. */
 async function captureAndCompare(page: Page): Promise<Capture> {
   const shot = (await page.screenshot()).toString('base64');
   return page.evaluate(async (shotB64) => {
+    const guest = document.querySelector('iframe')!.contentWindow!;
     const response: any = await new Promise((ok) => {
       window.addEventListener('message', function on(e) {
         if (e.data?.type === 'moss-capture-response') {
@@ -51,7 +54,7 @@ async function captureAndCompare(page: Page): Promise<Capture> {
           ok(e.data);
         }
       });
-      window.postMessage({ type: 'moss-capture-request', id: 1 }, '*');
+      guest.postMessage({ type: 'moss-capture-request', id: 1 }, '*');
     });
     if (!response.ok) throw new Error(response.error);
     const { width: w, height: h } = response;
@@ -71,7 +74,7 @@ async function captureAndCompare(page: Page): Promise<Capture> {
     let sum = 0;
     for (let i = 0; i < A.length; i += 4) sum += (Math.abs(A[i] - B[i]) + Math.abs(A[i + 1] - B[i + 1]) + Math.abs(A[i + 2] - B[i + 2])) / 3;
     // Ink box: pixels in the heading's live rect that differ from the rect's corner.
-    const hr = document.querySelector('h1')?.getBoundingClientRect();
+    const hr = guest.document.querySelector('h1')?.getBoundingClientRect();
     const ink = (data: Uint8ClampedArray): Box | null => {
       if (!hr) return null;
       const x0 = Math.max(0, Math.floor(hr.x)), y0 = Math.max(0, Math.floor(hr.y));
@@ -87,7 +90,7 @@ async function captureAndCompare(page: Page): Promise<Capture> {
       return maxx < 0 ? null : { x: minx, y: miny, w: maxx - minx + 1, h: maxy - miny + 1 };
     };
     // A pixel in the hero's top-left corner, where only its background shows.
-    const hero = document.querySelector('.hero')?.getBoundingClientRect();
+    const hero = guest.document.querySelector('.hero')?.getBoundingClientRect();
     const hp = (data: Uint8ClampedArray) => {
       if (!hero) return null;
       const x = Math.floor(Math.max(0, hero.x)) + 2, y = Math.max(0, Math.floor(hero.y)) + 2, p = (y * w + x) * 4;
@@ -105,8 +108,8 @@ test('the bridge advertises that it can capture', async ({ page }) => {
 
 for (const scrollTop of [0, 300]) {
   test(`a capture at scroll ${scrollTop} matches the live render`, async ({ page }) => {
-    await load(page);
-    if (scrollTop) await page.evaluate((y) => window.scrollTo(0, y), scrollTop);
+    const frame = await load(page);
+    if (scrollTop) await frame.evaluate((y) => window.scrollTo(0, y), scrollTop);
     const c = await captureAndCompare(page);
 
     expect([c.width, c.height]).toEqual([800, 600]);
