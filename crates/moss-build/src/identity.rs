@@ -4,6 +4,7 @@
 //! wire format, and it moved to `seta::signing` in this crate.
 pub mod keypair;
 pub mod keystore;
+pub mod machine;
 pub mod secrets;
 pub mod service;
 pub mod verify_email;

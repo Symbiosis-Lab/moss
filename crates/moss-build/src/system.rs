@@ -87,7 +87,9 @@ pub const DEVICE_KINDS: &[&str] = &[
 /// system with no entry there.
 pub fn device_kind() -> Option<&'static str> {
     if cfg!(target_os = "macos") {
-        Some(mac_kind(&mac_model().unwrap_or_default()))
+        // Asked of the system once: every signed request names the kind.
+        static KIND: OnceLock<&'static str> = OnceLock::new();
+        Some(*KIND.get_or_init(|| mac_kind(&mac_model().unwrap_or_default())))
     } else if cfg!(windows) {
         Some("a Windows PC")
     } else if cfg!(target_os = "linux") {

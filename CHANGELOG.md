@@ -4,6 +4,10 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- When moss signs in or publishes, it tells the hosting service which computer it is running on: a random key kept in moss's local app data on that computer, different for each folder, with the kind of computer (MacBook Pro, a Windows PC). Nothing is refused or asked because of it, and a CI run sends none. The privacy page says what is kept.
+
 ## [0.15.27] - 2026-11-19
 
 ### Fixed

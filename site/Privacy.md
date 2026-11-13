@@ -33,6 +33,8 @@ If you publish to moss's servers, we use your email address and a public key mos
 
 When you ask for a sign-in link, moss tells our server which app asked (the moss app or the moss command line, its version and your operating system) and what kind of device it runs on, such as a Mac Studio or a Windows PC, so the page the sign-in link opens can show where the request came from. It never sends your computer's name, which often includes its owner's name. We keep these details with your sign-in records for 180 days.
 
+When moss signs in or publishes, it also tells our server which of your computers it is running on: a random key made on that computer, different for each folder, with the kind of computer. The key identifies no hardware and is not shared between folders. We keep it, with when that computer first used the folder, when you confirmed it by email, and the day it last used the folder with moss, for as long as the folder stays signed in, so that a copy of your folder on a computer you do not know can be told apart from your own.
+
 ## Payments
 
 Payments (hosting plans and domain purchases) are handled by Stripe, a payment processor in the US. Stripe holds your card details; we never see your card number. We keep only your Stripe customer ID and your email to manage your subscription, and Stripe sends your receipt.

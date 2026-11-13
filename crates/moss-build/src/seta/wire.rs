@@ -162,6 +162,9 @@ pub(super) fn auth_request_body(
     if let Some(name) = &folder.name {
         body["folder_name"] = name.as_str().into();
     }
+    if let Some(machine) = crate::identity::machine::MachineKey::for_folder(pubkey) {
+        body["machine"] = machine.claim(&crate::identity::machine::sign_in_message(session_id, pubkey, email));
+    }
     body
 }
 
