@@ -557,12 +557,18 @@ fn a_set_aside_is_unpublished_only_when_every_publish_trace_is_absent() {
     fs::create_dir_all(copy.join("deploy/records")).unwrap();
     assert_eq!(find_nested_roots(tmp.path(), None, &limits()).moss_copies[0].evidence, CopyEvidence::Unpublished, "no email, no records");
 
-    let _in_cloud = crate::build::icloud::pretend::evicted(&copy.join("deploy"));
-    let report = find_nested_roots(tmp.path(), None, &limits());
-    assert_eq!(report.moss_copies[0].evidence, CopyEvidence::Arriving, "a folder not listed here is unknown");
-    assert!(report.moss_copies[0].is_site_data());
+    // Only macOS has folders whose listing is still in the cloud.
+    #[cfg(target_os = "macos")]
+    {
+        let _in_cloud = crate::build::icloud::pretend::evicted(&copy.join("deploy"));
+        let report = find_nested_roots(tmp.path(), None, &limits());
+        assert_eq!(report.moss_copies[0].evidence, CopyEvidence::Arriving, "a folder not listed here is unknown");
+        assert!(report.moss_copies[0].is_site_data());
+    }
 }
 
+// Only macOS has folders whose listing is still in the cloud.
+#[cfg(target_os = "macos")]
 #[test]
 fn a_copy_the_cloud_has_not_listed_is_arriving() {
     let tmp = tempfile::tempdir().unwrap();

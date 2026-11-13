@@ -8,7 +8,7 @@ license = "MIT"
 rust-version = "1.89"
 
 [workspace.dependencies]
-moss-core = { path = "crates/moss-core", version = "0.23.1" }
+moss-core = { path = "crates/moss-core", version = "0.24.0" }
 
 [workspace.lints.clippy]
 disallowed_methods = "warn"

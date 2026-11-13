@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `contract::custom_props` lists `--moss-font-body-han` and `--moss-font-heading-han`, the Han-first stacks the build's site stylesheet sets on every page and swaps into `--moss-font-body` and `--moss-font-heading` on a Chinese, Japanese or Korean page, so a theme can put its own face in front of them and `moss describe` names them.
+
+## [0.24.0] - 2026-11-12
+
 ### Changed
 
 - **BREAKING:** `SubscribeShortcode` gains `members: Option<Members>`, set by `:::subscribe {members="subscribers"}` (or `"paid"`); a struct literal must name it or use `..Default::default()`.
@@ -20,7 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `frontmatter::members` (`Members`, `public_source`) and `frontmatter::member_cascade` (`MemberCascade::from_homes`, `inherited`, `public_source`): who may read a page's body, from its own `members:` or a folder home's `cascade: {members: …}`, and the page's source with a restricted body replaced; anything uncertain counts as restricted.
-- `contract::custom_props` lists `--moss-font-body-han` and `--moss-font-heading-han`, the Han-first stacks the build's site stylesheet sets on every page and swaps into `--moss-font-body` and `--moss-font-heading` on a Chinese, Japanese or Korean page, so a theme can put its own face in front of them and `moss describe` names them.
 - `FieldEdit::SetChild` sets or removes one key inside a frontmatter mapping such as `cascade:`, leaving the mapping's other lines and comments as written.
 - `Shortcode::Block` and `page::block_names`: a `:::name` fence a plugin declares parses to a block whose body stays ordinary markdown.
 

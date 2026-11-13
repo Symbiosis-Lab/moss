@@ -7,11 +7,27 @@ All notable changes to moss will be documented here.
 ### New
 
 - `moss import` reads a WordPress export (Tools → Export → All content): `moss import <export.xml> <folder>`, or `moss import <address> <folder> --export <export.xml>`. moss crawls the site first, so published pages keep the body visitors see, page-builder pages included, then adds from the export what the public site does not show: drafts, private pages, custom post types, dates, categories and tags, the menu, the media library and old addresses as redirects. A page the crawl could not see is written from the export. Authors are written by display name, never by login or email address; comments are counted, not imported. Exports over 128 MB are refused.
+- A `--recursive` import carries the site's look as moss design tokens in `.moss/theme/style.css`: its fonts, with their files copied into the folder, its text, background, accent, link and muted colours in light and dark, and its base text size, line height and heading weight, each only where it differs from moss's own and only when the folder's stylesheet sets none of its own. A site with no dark scheme is set to light. What no token can say is listed as `design not carried:`.
+
+### Changed
+
+- In the editor, a hover card opens only when it has something the line does not show: resting on an external link opens nothing (⌘K still offers the address, Open and Unlink), a page link's card opens only when that page has a description, and the "⌘-click to open" line is gone. In the dark theme the cards are dark again; they had turned pale under light text.
+- The warning about a theme colour set without a dark value is no longer shown on a site whose `color_scheme` is fixed to light or dark, which never shows the other side.
+
+### Fixed
+
+- Importing a site again into the same folder no longer writes a `name 2.md` beside each page: a page whose `origin:` names the same address keeps its file and its text and gains only the descriptive fields it lacks (never `draft`, `members`, `nav` or `weight`, so a field you removed stays removed), and a failed fetch's stub is replaced once the page imports.
+- The email a publish opens for a post's subscribers starts from the post as that publish put it on the site, so an edit made while the site uploaded waits for the next publish instead of reaching subscribers.
+- A page from `moss build --serve --watch` that is open in an ordinary browser tab reloads when the site is rebuilt. Only the preview inside moss was refreshed before, so the tab kept the old text until it was reloaded by hand. In such a tab the reload key, the menu on a right click, every link and a click on a picture work as on the published page. Tabs opened on this computer share one connection to the preview server, so any number can be open at once.
+
+## [0.15.23] - 2026-11-12
+
+### New
+
 - `moss import` brings in a Ghost site from its own export (the `.zip` or `export.json` Ghost downloads from its settings): every post and page with its full text, drafts included, tags, authors and the addresses Ghost served them at, with members-only and paid posts kept as such. The member list never enters the folder; it is kept in a private directory outside it, for the step that moves readers.
 - `members: subscribers` (or `paid`) on a page keeps its body out of everything the site publishes (the page itself, listings, feeds, search, the sitemap, share cards, email and the archive) and shows a subscribe notice in its place, in the site's language. `cascade: {members: subscribers}` on a folder's page applies it to the folder's pages, and a page's own `members:` wins (`public` opens one page). A declaration moss cannot read with certainty, or a folder page it has not read, counts as members-only.
 - A folder that `moss import` writes members-only pages into gets `min_moss_version = "0.15.23"` in `.moss/config.toml`, so an older moss that does not know `members:` refuses to publish it instead of publishing those pages whole.
 - Publishing a site with members-only pages from any of moss's publish routes sets the folder's minimum moss version, and refuses to publish if it cannot be written, so an older moss cannot publish those pages whole.
-- A `--recursive` import carries the site's look as moss design tokens in `.moss/theme/style.css`: its fonts, with their files copied into the folder, its text, background, accent, link and muted colours in light and dark, and its base text size, line height and heading weight, each only where it differs from moss's own and only when the folder's stylesheet sets none of its own. A site with no dark scheme is set to light. What no token can say is listed as `design not carried:`.
 - A card with a picture cover carries the picture's width over its height as `--item-cover-ratio` in its `style`, so a theme can lay cards out by each cover's shape (a row of covers at one height, say) without script.
 - `chrome: none` in a page's frontmatter draws that page without the site's header, floating nav island, footer and skip link, for a landing page that stands alone. The page keeps its title, the search, language and theme controls at its top, and the colophon; `<body>` carries `data-chrome="none"`, and a theme takes the controls away there with `--moss-controls-display: none`.
 - A plugin named `booking` that declares `public_data` owns `[services.booking]`: moss's own booking reader switches off for that table, so the plugin's own keys draw no warning and moss writes no `booking` object into `/_moss/commerce.json`. The build prints one line saying so.
@@ -27,9 +43,7 @@ All notable changes to moss will be documented here.
 
 ### Changed
 
-- In the editor, a hover card opens only when it has something the line does not show: resting on an external link opens nothing (⌘K still offers the address, Open and Unlink), a page link's card opens only when that page has a description, and the "⌘-click to open" line is gone. In the dark theme the cards are dark again; they had turned pale under light text.
 - The macOS `moss` download is 1.1 MB smaller.
-- The warning about a theme colour set without a dark value is no longer shown on a site whose `color_scheme` is fixed to light or dark, which never shows the other side.
 - A page with `nav: true` inside a folder whose home page is also in the nav bar is now listed in a submenu under that folder's entry, instead of as its own link in the bar. The entry stays a link with a button beside it that opens the list (keyboard and touch work, Escape closes); deeper pages join the same list. A page whose folder is not in the nav bar stays a top-level link, and a site with no such pages is unchanged.
 - A `[NOTE]` line no longer names the moss module that wrote it, and the note for a `panel=none` hero is one line per hero: the worst ratio its words (and its credit) reach with what they need, the widths and the themes, then what to do.
 - Update moss on every device that deploys the site. Copies blocked by an unsuitable edit now have an `unavailable` record state; older moss versions cannot read those records and leave that work unsent. Added fields on other copy records do not make them incompatible.
@@ -49,13 +63,11 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- In the editor, the `members` and `search_engines` fields show a hint like every other field; they had none.
 - An event's `start` and `end` in the editor's page properties open a date picker with an optional time beside it, instead of a plain text box. A date alone stays a date; adding a time writes `YYYY-MM-DD HH:MM`, and a value that was not changed is left as it is in the file.
-- Importing a site again into the same folder no longer writes a `name 2.md` beside each page: a page whose `origin:` names the same address keeps its file and its text and gains only the descriptive fields it lacks (never `draft`, `members`, `nav` or `weight`, so a field you removed stays removed), and a failed fetch's stub is replaced once the page imports.
-- The email a publish opens for a post's subscribers starts from the post as that publish put it on the site, so an edit made while the site uploaded waits for the next publish instead of reaching subscribers.
 - A PDF, picture or other file opened in the editor stays in its viewer. The preview follows to the file's own address, and the editor took that address for a page moss generated and replaced the viewer with "No page to edit".
 - A picture declares the width it is drawn at in three more places, so a browser that cannot measure it first (Safari, and every browser for the page's first picture) no longer enlarges a file that is too small: in the column of a `content_width: wide`, `full` or `screen` page; in a grid with a ratio (`:::grid 2 5:7`) or `mid=N`, where it declares the grid's widest cell; and as the cover of a page's card in a `:::grid` cell, which declared a listing card's width however wide the cell was. A collage's pictures declare half the collage's width, which is its lead tile's.
 - After a click on the page in the preview, a saved edit shows in it. Clicking text focused the page's main area, and the preview then kept the old text there until it was reloaded.
-- A page from `moss build --serve --watch` that is open in an ordinary browser tab reloads when the site is rebuilt. Only the preview inside moss was refreshed before, so the tab kept the old text until it was reloaded by hand. In such a tab the reload key, the menu on a right click, every link and a click on a picture work as on the published page. Tabs opened on this computer share one connection to the preview server, so any number can be open at once.
 - The create menu lists a template that a sync client had left in the cloud. In the app the file could not be read, so the menu showed no template at all and said nothing.
 - An event page whose `start` is still empty, or written in a form moss cannot read, is no longer listed under `when:past` (or `children_when: past`). A new event made from a template showed up among the past events until its date was typed. It is in neither the past nor the upcoming listing until it has a date; a listing with no `when` shows it as before, and a page with no `start` at all still counts as past. The build names each page it leaves out: an empty `start` as a note, one it cannot read as a problem.
 - A shortcode written between the lines of a raw HTML block with no blank lines around it (`<div>`, `:::grid`, its cells, `:::`, `</div>`) is rendered in place. The page used to show an empty comment where it stood.
