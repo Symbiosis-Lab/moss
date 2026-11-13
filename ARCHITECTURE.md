@@ -121,6 +121,8 @@ Each crate's production dependencies (`[dependencies]` and `[target.*.dependenci
 
 Byte-index slices of a `&str` (`&s[..n]`) panic when `n` falls inside a multi-byte character, so moss-core denies `clippy::string_slice` in production code. moss-build and moss-cli do not, and a count per crate (`string_slices_per_crate`) lets existing slices be fixed one at a time while no new one lands: `node scripts/ratchet.mjs slices` measures it with a clippy build (so `check` only validates the row's shape), `--tighten` lowers it, and `--accept "<reason>"` raises it.
 
+A corner or a shadow in the shared UI is a token, so the surfaces that share one stay alike when it changes. `raw_radius_shadow_ui` counts the `border-radius` and `box-shadow` declarations under `packages/moss-ui/src/ui` whose value reads no custom property (square corners and a circle's `50%` aside); the count can only shrink, and the pre-commit hook runs `check`, so a new literal is refused at the commit that adds it.
+
 ## Where new code goes
 
 New code lands in the module that already owns the concern it touches. A relocation — moving existing code to a different module — is never scheduled for its own sake; it happens only alongside a change that already has a reason to touch that code.

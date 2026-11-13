@@ -167,6 +167,12 @@
         "moss-build": 242,
         "moss-cli": 0
       }
+    },
+    "raw_radius_shadow_ui": {
+      "letter": "i",
+      "disposition": "permanent",
+      "armed": true,
+      "value": 107
     }
   }
 }

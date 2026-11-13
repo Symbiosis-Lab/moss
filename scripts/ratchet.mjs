@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// ratchet.mjs — shrink-only architecture ratchet for this repo. Six rows:
+// ratchet.mjs — shrink-only architecture ratchet for this repo. Seven rows:
 //
 //   (a) prod_lines_per_file — files over 800 code lines (not blank, not
 //                             comment-only; Rust counted #[cfg(test)]-aware)
@@ -30,6 +30,12 @@
 //                             production code, keyed by crate. Measured by a
 //                             clippy build, so `check` only validates the
 //                             row's shape; `slices` measures it.
+//   (i) raw_radius_shadow_ui — `border-radius` and `box-shadow` declarations
+//                             in packages/moss-ui/src/ui/**/*.css whose value
+//                             reads no custom property (`0` and the circle's
+//                             `50%` aside). A corner or a shadow
+//                             written as a number drifts from the tokens the
+//                             other surfaces share; a new one is refused.
 //
 // Roots: this repo's own `crates/*/src` and `packages/*/src` (rows a/b);
 // mirror_markers never scanned packages.
@@ -537,6 +543,21 @@ function countAcross(root, files, regexes, transform) {
   return { total, detail };
 }
 
+/** Declarations of `border-radius` or `box-shadow` that paint something and
+ *  read no custom property. A token's own definition (`--x-radius: 8px`) is
+ *  not a use. */
+function rawRadiusShadowCount(text) {
+  let n = 0;
+  for (const m of text.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/(?<![\w-])(?:border-radius|box-shadow)\s*:\s*([^;}]+)/g)) {
+    const value = m[1].replace(/!important/, '').trim();
+    if (value.includes('var(') || /^(none|unset|initial|inherit|revert)$/.test(value)) continue;
+    // Square corners, and a circle: neither is a length a token would hold.
+    if (value === '50%' || value.split(/\s+/).every((p) => /^0(px|%|em|rem)?$/.test(p))) continue;
+    n++;
+  }
+  return n;
+}
+
 // Rust prod roots: each crates/<name>/src (open/ prefix already dropped —
 // this repo IS the open half).
 function rustProdRoots(root) {
@@ -645,6 +666,13 @@ const collectors = {
     return { kind: 'scalar', ...countAcross(root, files, [/keep in sync|must match|mirror of/gi]) };
   },
 
+  // (i) literal corners and shadows in the shared UI's stylesheets
+  raw_radius_shadow_ui(root) {
+    const dir = path.join(root, 'packages', 'moss-ui', 'src', 'ui');
+    const files = isDir(dir) ? walkFiles(dir).filter((f) => f.endsWith('.css')) : [];
+    return { kind: 'scalar', ...countAcross(root, files, rawRadiusShadowCount) };
+  },
+
   // (f) distinct production dependencies per crate → map {Cargo.toml: count}.
   // A tree without a root Cargo.toml has no crates to count.
   direct_deps_per_crate(root) {
@@ -681,6 +709,7 @@ const ROWS = {
   direct_deps_per_crate: { letter: 'f', disposition: 'permanent' },
   lines_per_function: { letter: 'g', disposition: 'permanent' },
   string_slices_per_crate: { letter: 'h', disposition: 'permanent' },
+  raw_radius_shadow_ui: { letter: 'i', disposition: 'permanent' },
 };
 
 export function collectCurrent(root, baseline) {

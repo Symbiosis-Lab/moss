@@ -16,5 +16,7 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 
 node scripts/check-dist-freshness.mjs || exit 1
+# The size and style budgets, at the commit that would break one.
+node scripts/ratchet.mjs check >/dev/null || { node scripts/ratchet.mjs check | grep -A20 "^RED"; exit 1; }
 node scripts/check-public-comments.mjs || exit 1
 exec node scripts/check-site-watercolor-freshness.mjs
