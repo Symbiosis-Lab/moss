@@ -1,7 +1,8 @@
 /**
  * Where an image is cropped to: the position word in an embed's pipe options
- * (`![[a.jpg|cover top-left]]`, `![[a.jpg|focus:20%,62%]]`), in a markdown
- * image's `(path|options)`, or in a hero's `image="path|options"` attribute.
+ * (`![[a.jpg|cover top-left]]`, `![[a.jpg|focus:20%,62%]]`), after the pipe in a
+ * markdown image's brackets (`![a view|focus:20%,62%](a.jpg)`), or in a hero's
+ * `image="path|options"` attribute.
  *
  * Reading and writing follow moss-core's `parse_media_attrs`: a position is one
  * of nine names (also `topleft` and the two-word `top left`) or `focus:X%,Y%`
@@ -131,14 +132,25 @@ export function segmentsWithPosition(segments: readonly string[], word: string):
   return out;
 }
 
-// ── An embed: `![[path|opts]]` or `![alt](path|opts)` ────────────────
+// ── An embed: `![[path|opts]]` or `![alt|opts](path)` ────────────────
 
 const WIKILINK_EMBED = /^(!\[\[[^\]|]*)((?:\|[^\]]*)?)(\]\])$/;
-const MARKDOWN_EMBED = /^(!\[[^\]]*\]\([^)|]*)((?:\|[^)]*)?)(\))$/;
+const MARKDOWN_EMBED = /^(!\[[^\]|]*)((?:\|[^\]]*)?)(\]\([^)]*\))$/;
+/** Frame options after a pipe in a markdown image's address, where the build reads them as part of the file name. */
+const ADDRESS_OPTIONS = /^(\]\([^)|]*)\|([^)]*)\)$/;
 
 function splitEmbed(md: string): { head: string; segments: string[]; tail: string } | null {
-  const m = WIKILINK_EMBED.exec(md) ?? MARKDOWN_EMBED.exec(md);
-  return m ? { head: m[1], segments: m[2].slice(1).split('|').filter((s) => s.trim()), tail: m[3] } : null;
+  const wikilink = WIKILINK_EMBED.exec(md);
+  const m = wikilink ?? MARKDOWN_EMBED.exec(md);
+  if (!m) return null;
+  let tail = m[3];
+  if (!wikilink) {
+    const stray = ADDRESS_OPTIONS.exec(tail);
+    if (stray && stray[2].split('|').every((s) => !s.trim() || frameTokens(s))) tail = `${stray[1]})`;
+    // Brackets that end in a pipe give the picture alt text and no caption.
+    if (/\|\s*$/.test(m[2])) tail = `|${tail}`;
+  }
+  return { head: m[1], segments: m[2].slice(1).split('|').filter((s) => s.trim()), tail };
 }
 
 export function embedPosition(md: string): Point | null {

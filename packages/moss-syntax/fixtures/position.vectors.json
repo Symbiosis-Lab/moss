@@ -6,6 +6,7 @@
     "to give `position` for every `position_words` input, and `parse_media_attrs` to give",
     "`fit`/`position`/`align` for every `frame_segments` input.",
     "A position is a name, `{\"focus\": [x, y]}` (integers 0-100), or null for not-a-position.",
+    "`embed_writes`: an editor that sets a picture's position writes `written` for `embed`. Where a row has `src` and `object_position`, the build must give the written picture that address and that crop, and the `alt` text when the row names one.",
     "A mirror of this grammar elsewhere loads this file and requires the same answers.",
     "This file is the gate: when the grammar changes, add or change a vector."
   ],
@@ -424,6 +425,66 @@
       "position": null,
       "align": null,
       "note": "an unknown word sets nothing"
+    }
+  ],
+  "embed_writes": [
+    {
+      "embed": "![[photo.jpg]]",
+      "word": "focus:20%,62%",
+      "written": "![[photo.jpg|focus:20%,62%]]",
+      "note": "a wikilink embed with no pipe gains one"
+    },
+    {
+      "embed": "![[photo.jpg|cover top]]",
+      "word": "bottom-right",
+      "written": "![[photo.jpg|cover bottom-right]]",
+      "note": "a wikilink embed keeps its other options"
+    },
+    {
+      "embed": "![[photo.jpg|focus:1%,2%|50%]]",
+      "word": "center",
+      "written": "![[photo.jpg|center|50%]]",
+      "note": "a wikilink embed keeps its width"
+    },
+    {
+      "embed": "![a view](photo.jpg)",
+      "word": "focus:20%,62%",
+      "written": "![a view|focus:20%,62%](photo.jpg)",
+      "src": "photo.jpg",
+      "object_position": "20% 62%",
+      "note": "a markdown image takes its position after a pipe in its brackets"
+    },
+    {
+      "embed": "![a view|](photo.jpg)",
+      "word": "top",
+      "written": "![a view|top|](photo.jpg)",
+      "src": "photo.jpg",
+      "object_position": "top",
+      "note": "a markdown image whose brackets end in a pipe (words for a screen reader, no caption) keeps the ending pipe",
+      "alt": "a view"
+    },
+    {
+      "embed": "![a view|cover top](photo.jpg)",
+      "word": "left",
+      "written": "![a view|cover left](photo.jpg)",
+      "src": "photo.jpg",
+      "object_position": "left",
+      "note": "a markdown image keeps its other options"
+    },
+    {
+      "embed": "![a view|](photo.jpg|focus:69%,78%)",
+      "word": "focus:30%,40%",
+      "written": "![a view|focus:30%,40%|](photo.jpg)",
+      "src": "photo.jpg",
+      "object_position": "30% 40%",
+      "note": "options left in a markdown image's address are removed from it",
+      "alt": "a view"
+    },
+    {
+      "embed": "![a view](photo.jpg|a caption)",
+      "word": "top",
+      "written": "![a view|top](photo.jpg|a caption)",
+      "note": "other text after a pipe in the address is left alone"
     }
   ]
 }
