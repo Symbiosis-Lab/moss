@@ -201,7 +201,7 @@ pub fn publish_door(project_path: &Path, restricts_pages: bool) -> Result<(), St
     ensure_config_current(&project_path.to_string_lossy())?;
     if restricts_pages {
         crate::vault::config::require_members_moss(project_path)
-            .map_err(|e| format!("Not published: moss could not write .moss/config.toml. {e}"))?;
+            .map_err(|e| format!("moss could not write .moss/config.toml. {e}"))?;
     }
     Ok(())
 }
@@ -692,7 +692,7 @@ mod version_ahead_guard_tests {
         std::fs::write(dir.path().join(".moss/config.toml"), "[site\n").unwrap();
         assert!(publish_door(dir.path(), false).is_ok());
         let err = publish_door(dir.path(), true).unwrap_err();
-        assert!(err.starts_with("Not published: moss could not write .moss/config.toml."), "got: {err}");
+        assert!(err.starts_with("moss could not write .moss/config.toml."), "got: {err}");
     }
 
     #[test]

@@ -3,8 +3,50 @@
 use std::collections::HashSet;
 use std::path::Path;
 use moss_core::frontmatter::member_cascade::{declared_cascade, HomeCascade, MemberCascade};
-use crate::build::scan::{page_map, path_collision::on_disk};
+use moss_core::frontmatter::members::{public_source, Members};
+use crate::build::scan::{classify, page_map, path_collision::{logical_path, nfc_name_order, on_disk}};
 use crate::types::content::FileInfo;
+
+/// The page's own `members:`, read from its public view, where a declaration
+/// that cannot be read with certainty already reads as restricted.
+pub(crate) fn own_access(public_view: &str) -> Option<Members> {
+    moss_core::frontmatter::frontmatter_map(public_view).get("members").map(Members::from_value)
+}
+
+/// The build's verdict for one page: its own access wins, inherited access
+/// otherwise, and only `public` (or no declaration) leaves the body whole.
+pub(crate) fn restricted(own: Option<Members>, inherited: impl FnOnce() -> Option<Members>) -> bool {
+    own.or_else(inherited).is_some_and(|access| access != Members::Public)
+}
+
+/// Whether the body of the page at `rel_path`, under the site folder `root`,
+/// is members-only by the rule a build of the folder applies. A page that is
+/// in the cloud or cannot be read counts as restricted.
+pub fn page_restricted(root: &Path, rel_path: &str) -> bool {
+    let rel = logical_path(rel_path.trim_start_matches("./"));
+    let path = on_disk(root, &rel);
+    if crate::build::icloud::is_evicted(&path) { return true; }
+    let Ok(content) = std::fs::read_to_string(path) else { return true };
+    restricted(own_access(&public_source(&content)), || {
+        let root = crate::vault::paths::VaultRoot::resolve(root);
+        load(&site_pages(root.path()), &root, &crate::build::icloud::is_evicted).inherited(&rel)
+    })
+}
+
+/// The pages a build of `root` scans, in its walk's order.
+fn site_pages(root: &Path) -> Vec<FileInfo> {
+    let layer_sources = crate::config::map_layers::declared_sources(root);
+    walkdir::WalkDir::new(root).sort_by(nfc_name_order).into_iter()
+        .filter_entry(|e| classify::left_out_with_layer_sources(e, root, &layer_sources).is_none())
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file() && classify::is_page_path(e.path()))
+        .map(|e| {
+            let path = logical_path(e.path().strip_prefix(root).unwrap_or(e.path()));
+            let file_type = e.path().extension().map_or(String::new(), |ext| ext.to_string_lossy().to_lowercase());
+            FileInfo { path, file_type, size: 0, modified: None }
+        })
+        .collect()
+}
 
 /// Whether the site's settings name members (`[members]` in `.moss/config.toml`).
 /// Settings that cannot be read count as naming them.
@@ -66,5 +108,48 @@ mod tests {
         std::fs::create_dir(site.path().join(".moss")).unwrap();
         std::fs::write(site.path().join(".moss/config.toml"), "[members]\n").unwrap();
         assert_eq!(load(&files, &root, &unread).inherited("notes/article.md"), Some(Members::Subscribers));
+    }
+
+    fn site(pages: &[(&str, &[u8])]) -> tempfile::TempDir {
+        let site = tempfile::tempdir().unwrap();
+        for (path, bytes) in pages {
+            let path = site.path().join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, bytes).unwrap();
+        }
+        site
+    }
+
+    #[test]
+    fn a_page_declaring_members_is_restricted() {
+        let site = site(&[("index.md", b"Home"), ("post.md", b"---\nmembers: paid\n---\nBody")]);
+        assert!(page_restricted(site.path(), "post.md"));
+    }
+
+    #[test]
+    fn a_page_under_a_folder_cascade_is_restricted() {
+        let site = site(&[("notes/index.md", b"---\ncascade: {members: paid}\n---\nNotes"), ("notes/article.md", b"Article")]);
+        assert!(page_restricted(site.path(), "notes/article.md"));
+        assert!(page_restricted(site.path(), "./notes/article.md"), "a path spelled from the folder still meets the cascade");
+        assert!(!page_restricted(site.path(), "notes/index.md"), "a home's cascade covers its folder, not itself");
+    }
+
+    #[test]
+    fn a_public_page_and_a_public_override_are_not_restricted() {
+        let site = site(&[
+            ("index.md", b"Home"),
+            ("post.md", b"Post"),
+            ("notes/index.md", b"---\ncascade: {members: subscribers}\n---\nNotes"),
+            ("notes/open.md", b"---\nmembers: public\n---\nOpen"),
+        ]);
+        assert!(!page_restricted(site.path(), "post.md"));
+        assert!(!page_restricted(site.path(), "notes/open.md"));
+    }
+
+    #[test]
+    fn a_page_that_cannot_be_read_is_restricted() {
+        let site = site(&[("index.md", b"Home"), ("post.md", &[0xff, 0xfe])]);
+        assert!(page_restricted(site.path(), "post.md"));
+        assert!(page_restricted(site.path(), "missing.md"));
     }
 }

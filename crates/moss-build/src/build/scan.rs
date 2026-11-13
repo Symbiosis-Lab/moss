@@ -6,6 +6,7 @@
 
 pub mod article_map;
 pub(crate) mod members;
+pub use members::page_restricted;
 pub(crate) mod cascade;
 pub(crate) mod path_collision;
 // `classify` stays crate-private; the one symbol an integration test needs
