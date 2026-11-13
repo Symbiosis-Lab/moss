@@ -55,7 +55,9 @@ fn read_doc(path: &Path) -> Result<(Frontmatter, String), String> {
 
 /// A template file's frontmatter, body and the text as written.
 fn read_doc_text(path: &Path) -> Result<(Frontmatter, String, String), String> {
-    let raw = std::fs::read_to_string(path)
+    // A sync client can leave a template in the cloud: nothing reads it between
+    // the day it was written and the day a page is made from it.
+    let raw = crate::build::cloud_readiness::read_to_string_with_materialize_wait(path, crate::build::cloud_readiness::INTERACTIVE_DEADLINE)
         .map_err(|e| format!("Failed to read template '{}': {e}", path.display()))?;
     let doc = frontmatter::parse(&raw);
     if let Some(err) = doc.frontmatter_error {
