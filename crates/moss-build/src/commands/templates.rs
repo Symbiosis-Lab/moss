@@ -124,7 +124,12 @@ fn create_template_in(
 }
 
 fn list_templates_in(project_root: &Path) -> Result<Vec<TemplateMeta>, String> {
-    Ok(store::list_templates(project_root)?.templates.iter().map(meta_from_template).collect())
+    let listing = store::list_templates(project_root)?;
+    // The menu has no row for a file it could not list; the log says why.
+    for problem in &listing.problems {
+        log::warn!("[templates] {problem}");
+    }
+    Ok(listing.templates.iter().map(meta_from_template).collect())
 }
 
 fn rename_template_in(project_root: &Path, id: &str, new_name: &str) -> Result<(), String> {
