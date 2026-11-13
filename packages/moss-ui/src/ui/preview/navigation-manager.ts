@@ -803,7 +803,10 @@ export class NavigationManager {
     // If this message is the echo of a navigation we just issued, consume the
     // token. We still update display + activePage below; the isEcho flag
     // suppresses new-navigation bookkeeping further down.
-    const previousUrl = this.history.getCurrentUrl();
+    // The page shown until now. History can lag behind it: a page the editor
+    // opened is shown without being recorded.
+    const historyUrl = this.history.getCurrentUrl();
+    const previousUrl = this.activePage?.url ?? historyUrl;
     const isEcho = this.consumePendingEchoIfMatch(currentUrl);
 
     // Detect hash-fragment navigation on the same pathname: user clicked a
@@ -842,7 +845,7 @@ export class NavigationManager {
       // First navigation - set as initial state (not a "new" navigation)
       this.history._setInitialUrl(currentUrl);
       debug(`✅ [NavigationManager] Initial URL set: ${currentUrl}`);
-    } else if (currentUrl !== previousUrl) {
+    } else if (currentUrl !== previousUrl && currentUrl !== historyUrl) {
       const backUrl =
         this.history._index > 0 ? this.history._stack[this.history._index - 1] : null;
       const fwdUrl =
@@ -900,6 +903,9 @@ export class NavigationManager {
           debug(`✅ [NavigationManager] Echo ack for editor-driven nav: ${currentUrl}`);
         }
       }
+      this.pendingNavType = null;
+    } else if (currentUrl !== previousUrl) {
+      // Back on the page history already points at: nothing to record.
       this.pendingNavType = null;
     } else {
       // Same URL — this is a reload (e.g., after rebuild). It is NOT a

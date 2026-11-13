@@ -1397,6 +1397,33 @@ describe("PREVIEW_URL_CHANGED isReload flag", () => {
     navManager.handleNavigationUpdate({ url: "http://localhost:8080/", title: "Home" });
     expect(lastUrlChangedEvent()?.isReload).toBe(true);
   });
+
+  test("leaving a page the editor opened for the page history still points at is a navigation", () => {
+    const home = "http://localhost:8080/";
+    const event = "http://localhost:8080/events/reading-circle/";
+    // @ts-ignore — calling private for testing
+    navManager.handleNavigationUpdate({ url: home, title: "Home" });
+    // The editor opens the event: an echo, which history does not record.
+    navManager.markEditorNavigation(event);
+    // @ts-ignore — calling private for testing
+    navManager.handleNavigationUpdate({ url: event, title: "Reading circle", navType: "navigate" });
+    // The author clicks the home link in the preview.
+    // @ts-ignore — calling private for testing
+    navManager.handleNavigationUpdate({ url: home, title: "Home", navType: "navigate" });
+    expect(lastUrlChangedEvent()?.isReload).toBe(false);
+  });
+
+  test("a rebuild of a page the editor opened is still a reload", () => {
+    const event = "http://localhost:8080/events/reading-circle/";
+    // @ts-ignore — calling private for testing
+    navManager.handleNavigationUpdate({ url: "http://localhost:8080/", title: "Home" });
+    navManager.markEditorNavigation(event);
+    // @ts-ignore — calling private for testing
+    navManager.handleNavigationUpdate({ url: event, title: "Reading circle", navType: "navigate" });
+    // @ts-ignore — calling private for testing
+    navManager.handleNavigationUpdate({ url: event, title: "Reading circle", navType: "reload" });
+    expect(lastUrlChangedEvent()?.isReload).toBe(true);
+  });
 });
 
 /**
