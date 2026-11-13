@@ -22,6 +22,7 @@ All notable changes to moss will be documented here.
 - A click, a double click or a right-click row in the preview reaches the page's own file when the editor shows another one (the footer, the stylesheet, a page the preview has left): a double click or a menu row opens the page at that place, and a single click no longer highlights unrelated lines in the other file.
 - Inside a grid column or a hero, a click in the preview highlights the paragraph clicked and a double click puts the caret on it; both took the whole column or hero, so the caret landed on its first line.
 - Right-clicking inside a grid column lists "Grid settings" once; the column was listed under the same name.
+- An import drops a page builder's spacer paragraphs and writes a looping strip's repeated pictures once; an alt that is the picture's own file name (`DSC_0042`) is no longer shown as a caption; and a page that opens with its own title as a heading takes it instead of a composite search-engine title.
 
 ## [0.15.23] - 2026-11-12
 

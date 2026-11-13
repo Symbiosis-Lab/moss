@@ -534,3 +534,18 @@ fn a_heading_with_line_breaks_stays_one_heading_at_every_level() {
     assert!(md.contains("\n## Step 1.<br>Find the room\n\nBody."), "{md}");
     assert!(md.contains("#### A<br>B<br>C"), "{md}");
 }
+
+/// A page builder's residue, through the crawl's own extraction: spacer
+/// paragraphs, a looping strip that repeats its pictures, and pictures whose
+/// alt is their file name.
+#[test]
+fn a_page_builders_spacers_marquee_copies_and_file_name_alts_are_tidied() {
+    let main = r#"<p>&nbsp;</p><p>&nbsp;</p><p>&#8203;</p>
+<div class="marquee"><img src="/u/kiln-1024x683.jpg" alt="kiln-1024x683"><img src="/u/glaze_02.jpg" alt="glaze_02"><img src="/u/kiln-1024x683.jpg" alt="kiln-1024x683"><img src="/u/glaze_02.jpg" alt="glaze_02"><img src="/u/kiln-1024x683.jpg" alt="kiln-1024x683"><img src="/u/glaze_02.jpg" alt="glaze_02"></div>
+<p>&nbsp;</p><p><br></p>"#;
+    let md = extract_article(&page("", main), PAGE).markdown;
+    assert!(!md.contains("\n\n\n") && !md.contains('\u{a0}') && !md.contains('\u{200b}'), "{md:?}");
+    assert_eq!(md.matches("kiln").count(), 1, "{md}");
+    assert_eq!(md.matches("glaze_02").count(), 1, "{md}");
+    assert!(md.contains("![](https://site.example/u/kiln-1024x683.jpg)"), "{md}");
+}
