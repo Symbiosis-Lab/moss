@@ -168,3 +168,16 @@ fn an_opaque_colour_is_read_in_any_notation_and_a_translucent_one_is_not() {
         assert_eq!(opaque_hex(translucent), None, "{translucent}");
     }
 }
+
+#[test]
+fn a_theme_font_by_language_is_published_for_that_language_only() {
+    let css = ":root { --moss-font-body: 'Field Sans', sans-serif; }\n\
+               html:is([lang|=\"zh\"], [lang|=\"ja\"], [lang|=\"ko\"]) { --moss-font-body: 'Field Sans', var(--moss-font-body-han); }\n\
+               html:lang(ja) { --moss-font-heading: Georgia, serif; }";
+    let body = |lang: &str| tokens(&registry(), Some(css), lang, ColorScheme::Auto)["typography"]["moss-font-body"]["$value"].as_str().map(str::to_string);
+    let heading = |lang: &str| tokens(&registry(), Some(css), lang, ColorScheme::Auto)["typography"]["moss-font-heading"]["$value"].as_str().map(str::to_string);
+    assert_eq!(body("en").as_deref(), Some("'Field Sans', sans-serif"));
+    assert_eq!(body("zh-Hant"), None, "the page draws the Han stack behind the theme's face, which the build cannot reduce to one value; not the :root stack");
+    assert_eq!(heading("ja").as_deref(), Some("Georgia, serif"));
+    assert_ne!(heading("en").as_deref(), Some("Georgia, serif"));
+}

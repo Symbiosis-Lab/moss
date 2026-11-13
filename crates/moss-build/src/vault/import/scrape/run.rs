@@ -19,7 +19,7 @@ use super::converter::{
     extract_article_with_snapshot, linked_file_urls, rewrite_file_links,
 };
 use super::crawl_state::CrawlState;
-use super::design::{self, norm_url, Capture, ChromeSummary, HomePage};
+use super::design::{self, has_text_link, norm_url, Capture, ChromeSummary, HomePage};
 use super::crawler::{
     extract_canonical_url, extract_links, host_of, is_non_page_file_url,
     looks_like_html_page,
@@ -352,6 +352,7 @@ where
     let mut listing_urls: std::collections::HashSet<String> = std::collections::HashSet::new();
     // Where the site's chrome is read from: the start page, else the first page.
     let mut home_page: Option<HomePage> = None;
+    let mut post_html: Option<String> = None;
 
     while let Some(url) = state.frontier.pop() {
         if state.frontier.is_visited(&url) {
@@ -447,6 +448,8 @@ where
             let is_start = norm_url(&url) == norm_url(&config.start_url);
             if home_page.as_ref().is_none_or(|h| is_start && !h.is_start) {
                 home_page = Some(HomePage { url: url.clone(), html: html.clone(), is_start });
+            } else if post_html.is_none() && has_text_link(&html) {
+                post_html = Some(html.clone());
             }
         }
 
@@ -674,6 +677,7 @@ where
                 out_dir,
                 user_agent: &config.user_agent,
                 home,
+                post: post_html.as_deref(),
                 written: &written_urls,
             };
             design::capture_site_chrome(&capture, &mut state.pacer).await?

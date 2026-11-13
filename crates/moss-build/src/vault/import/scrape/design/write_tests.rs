@@ -43,7 +43,7 @@ fn folder() -> (tempfile::TempDir, HashMap<String, String>) {
 
 async fn run(root: &Path, written: &HashMap<String, String>, facts: &Facts) -> ChromeSummary {
     let home = HomePage { url: BASE.to_string(), html: String::new(), is_start: true };
-    let capture = Capture { out_dir: root, user_agent: "test", home: &home, written };
+    let capture = Capture { out_dir: root, user_agent: "test", home: &home, post: None, written };
     apply(&capture, facts, &mut HostPacer::default()).await.unwrap()
 }
 

@@ -137,6 +137,9 @@ pub fn run(args: &[String]) -> i32 {
                 if let Some(line) = res.chrome.line() {
                     eprintln!("  ↳ {line}");
                 }
+                for residual in &res.chrome.residuals {
+                    eprintln!("  ↳ design not carried: {residual}");
+                }
                 // Silent when the site declared no sitemap at all — the
                 // ordinary case, and the one this line must not clutter.
                 if res.sitemap_urls > 0 {

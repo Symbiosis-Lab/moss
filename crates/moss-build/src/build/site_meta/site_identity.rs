@@ -101,22 +101,7 @@ pub fn tokens(registry: &moss_core::contract::tokens::Tokens, theme_css: Option<
 
 /// A plain opaque colour as `#rrggbb`; `None` for anything translucent or unreadable.
 fn opaque_hex(value: &str) -> Option<String> {
-    use cssparser::{Color, Parser, ParserInput};
-    let mut input = ParserInput::new(value.trim());
-    let mut parser = Parser::new(&mut input);
-    let colour = Color::parse(&mut parser).ok()?;
-    parser.expect_exhausted().ok()?;
-    let opaque = |alpha: Option<f32>| alpha.unwrap_or(1.0) >= 1.0;
-    let rgb = match colour {
-        Color::Rgba(c) if opaque(c.alpha) => (c.red?, c.green?, c.blue?),
-        Color::Hsl(c) if opaque(c.alpha) => {
-            let (r, g, b) = cssparser::hsl_to_rgb(c.hue?.rem_euclid(360.0) / 360.0, c.saturation?, c.lightness?);
-            let byte = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
-            (byte(r), byte(g), byte(b))
-        }
-        _ => return None,
-    };
-    Some(crate::build::scan::section_text::to_hex(rgb))
+    crate::build::components::color_extract::colour(value).filter(|c| c.alpha >= 1.0).map(|c| c.to_string())
 }
 
 /// Write both files.

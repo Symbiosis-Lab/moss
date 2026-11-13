@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="{{lang}}">
+<head>
+    <title>{{title}}</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="preload" as="font" type="font/woff2" href="/assets/fonts/inter-roman.woff2" crossorigin="anonymous">
+    <style>
+        @font-face {
+            font-family: "Inter";
+            font-style: normal;
+            font-weight: 100 900;
+            font-display: optional;
+            src: url(/assets/fonts/inter-roman-latin.woff2) format("woff2");
+            unicode-range: U+0000-00FF, U+0131, U+0152-0153;
+        }
+    </style>
+    {{serif_fonts}}
+    <link rel="stylesheet" type="text/css" href="/assets/built/screen.css">
+    <style>
+        :root {
+            --background-color: #ffffff
+        }
+        @media (scripting: none) {
+            :root {
+                --background-color: #fff;
+            }
+        }
+    </style>
+    <meta property="og:site_name" content="Field Notes Weekly">
+    <style>:root {--ghost-accent-color: #ff1a75;}</style>
+    <meta property="article:published_time" content="{{date}}T08:00:00.000Z">
+</head>
+<body class="post-template has-{{title_font}}-title has-sans-body">
+<div class="gh-viewport">
+    <header id="gh-navigation" class="gh-navigation is-middle-logo gh-outer">
+        <div class="gh-navigation-inner gh-inner">
+            <div class="gh-navigation-brand">
+                <a class="gh-navigation-logo is-title" href="/">Field Notes Weekly</a>
+            </div>
+            <nav class="gh-navigation-menu">
+                <ul class="nav">
+                    <li class="nav-home nav-current"><a href="/">Home</a></li>
+                    <li class="nav-about"><a href="/about/">About</a></li>
+                </ul>
+            </nav>
+        </div>
+    </header>
+    <main class="gh-main">
+        <article class="gh-article post">
+            <header class="gh-article-header gh-canvas">
+                <h1 class="gh-article-title is-title">{{title}}</h1>
+                <div class="gh-meta-share"><div class="gh-article-meta"><div class="gh-article-meta-wrapper">
+                    <div class="gh-article-meta-content"><time class="gh-article-meta-date" datetime="{{date}}">{{date}}</time></div>
+                </div></div></div>
+            </header>
+            <section class="gh-content gh-canvas is-body">
+                <p>{{text}}</p>
+                <h2 id="notes">Notes</h2>
+                <p>{{text}} <a href="/first-light/">Read the first walk.</a></p>
+            </section>
+        </article>
+    </main>
+    <footer class="gh-footer gh-outer">
+        <div class="gh-footer-inner gh-inner">
+            <div class="gh-footer-copyright">Field Notes Weekly &copy; 2026</div>
+        </div>
+    </footer>
+</div>
+</body>
+</html>

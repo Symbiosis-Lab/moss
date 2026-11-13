@@ -160,6 +160,9 @@ pub fn refuse_unsafe_scrape_url(url_str: &str) -> Result<(), String> {
 /// `mailto:`/`tel:` address is not requested but handed back as the 3xx
 /// response, so the caller sees where the link leads; every other target is
 /// still validated and followed, and a non-http(s) target still refused.
+///
+/// `refused` is set when the address policy refuses `start_url` or a redirect
+/// target, which the caller cannot tell from the refusal's 400 status alone.
 fn fetch_with_validated_redirects(
     agent: &ureq::Agent,
     start_url: &str,
@@ -167,8 +170,10 @@ fn fetch_with_validated_redirects(
     accept: Option<&str>,
     referer: Option<&str>,
     scope: Option<&UrlScope>,
+    refused: &std::cell::Cell<bool>,
 ) -> Result<ureq::Response, ureq::Error> {
-    fetch_following_redirects(agent, start_url, user_agent, accept, referer, import_policy, |next| {
+    let policy = |url: &str| import_policy(url).inspect_err(|_| refused.set(true));
+    fetch_following_redirects(agent, start_url, user_agent, accept, referer, policy, |next| {
         scope.is_some_and(|scope| leaves_site(scope, next))
     })
 }
@@ -293,12 +298,19 @@ fn fetch_following_redirects(
 #[derive(Debug, Clone)]
 pub(crate) struct FetchError {
     status: Option<u16>,
+    refused: bool,
     message: String,
 }
 
 impl FetchError {
     fn message(message: String) -> Self {
-        Self { status: None, message }
+        Self { status: None, refused: false, message }
+    }
+
+    /// Whether the address policy refused the URL or a redirect target, so
+    /// nothing was requested there.
+    pub(crate) fn is_refused(&self) -> bool {
+        self.refused
     }
 }
 
@@ -360,10 +372,11 @@ fn call_with_retry_n(
         // (see `fetch_with_validated_redirects`) rather than trusting
         // ureq's own follower, which never re-checks a Location header.
         let agent = crate::system::proxy::proxied_ureq_agent_no_redirects(url, timeout);
-        match fetch_with_validated_redirects(&agent, url, user_agent, accept, referer, scope) {
+        let refused = std::cell::Cell::new(false);
+        match fetch_with_validated_redirects(&agent, url, user_agent, accept, referer, scope, &refused) {
             Ok(resp) => return Ok(resp),
             Err(ureq::Error::Status(code, resp)) => {
-                let err = FetchError { status: Some(code), message: format!("{} {}", code, resp.status_text()) };
+                let err = FetchError { status: Some(code), refused: refused.get(), message: format!("{} {}", code, resp.status_text()) };
                 if !should_retry_status(Some(code)) {
                     return Err(err);
                 }
@@ -465,7 +478,7 @@ const MAX_RAW_FETCH_BYTES: usize = 10 * 1024 * 1024;
 /// text conversion happens. See [`fetch_raw`] for why a single attempt, no
 /// content-type gate, and the same SSRF-revalidating fetch a page fetch
 /// itself uses.
-pub(crate) async fn fetch_raw_bytes(url: &str, user_agent: &str) -> Result<Vec<u8>, String> {
+pub(crate) async fn fetch_raw_bytes(url: &str, user_agent: &str) -> Result<Vec<u8>, FetchError> {
     let url = url.to_string();
     let user_agent = user_agent.to_string();
     tokio::task::spawn_blocking(move || {
@@ -483,16 +496,16 @@ pub(crate) async fn fetch_raw_bytes(url: &str, user_agent: &str) -> Result<Vec<u
             .into_reader()
             .take((MAX_RAW_FETCH_BYTES + 1) as u64)
             .read_to_end(&mut buf)
-            .map_err(|e| format!("Failed to read response: {}", e))?;
+            .map_err(|e| FetchError::message(format!("Failed to read response: {}", e)))?;
         if buf.len() > MAX_RAW_FETCH_BYTES {
-            return Err(format!(
+            return Err(FetchError::message(format!(
                 "response body exceeds {MAX_RAW_FETCH_BYTES} bytes"
-            ));
+            )));
         }
         Ok(buf)
     })
     .await
-    .map_err(|e| format!("Task error: {}", e))?
+    .map_err(|e| FetchError::message(format!("Task error: {}", e)))?
 }
 
 /// A URL's raw body with no content-type gate, decoded as UTF-8 (lossily —
@@ -507,7 +520,7 @@ pub(crate) async fn fetch_raw_bytes(url: &str, user_agent: &str) -> Result<Vec<u
 /// sitemap at all, so a 404 here is the ordinary, expected case, not a
 /// transient failure worth waiting out before falling through to a
 /// link-only crawl.
-pub(crate) async fn fetch_raw(url: &str, user_agent: &str) -> Result<String, String> {
+pub(crate) async fn fetch_raw(url: &str, user_agent: &str) -> Result<String, FetchError> {
     let bytes = fetch_raw_bytes(url, user_agent).await?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }

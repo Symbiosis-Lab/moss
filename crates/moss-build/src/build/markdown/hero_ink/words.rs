@@ -5,6 +5,7 @@
 //! hero rules where one does not (`site_css_sets_the_type_the_words_are_modelled_in`
 //! and the `closing-picture` render gate hold the model to the stylesheet).
 
+use crate::build::theme_lint::{plain_px, weight_of};
 use moss_core::ast::{self as md, inlines_to_plain_text, is_link_row, Inline, Shortcode};
 
 /// A text's width in ems: a letter is half an em and a CJK character a whole
@@ -206,15 +207,6 @@ fn when(root: bool, read: impl FnOnce() -> Option<()>) -> Option<Option<()>> {
     Some(if root { read() } else { None })
 }
 
-/// `1.5rem` or `24px` as px at the 16px root.
-fn plain_px(value: &str) -> Option<f32> {
-    let value = value.trim().trim_end_matches("!important").trim();
-    match value.strip_suffix("rem") {
-        Some(n) => n.trim().parse::<f32>().ok().map(|n| n * 16.0),
-        None => value.strip_suffix("px")?.trim().parse().ok(),
-    }
-}
-
 /// `0.5em` or `0.5em 1.2em` as (block, inline) in em.
 fn em_pair(value: &str) -> Option<(f32, f32)> {
     let em = |v: &str| v.strip_suffix("em")?.trim().parse::<f32>().ok();
@@ -222,16 +214,6 @@ fn em_pair(value: &str) -> Option<(f32, f32)> {
     let mut parts = value.split_whitespace();
     let (block, inline) = (em(parts.next()?)?, parts.next().map_or(Some(None), |v| em(v).map(Some))?);
     parts.next().is_none().then_some((block, inline.unwrap_or(block)))
-}
-
-/// The weight a `font-weight` value names, `None` for one the build cannot read.
-fn weight_of(value: &str) -> Option<u16> {
-    match value.trim().trim_end_matches("!important").trim() {
-        "normal" => Some(400),
-        "bold" => Some(700),
-        "lighter" | "light" | "thin" => Some(300),
-        n => n.parse().ok(),
-    }
 }
 
 impl TypeTheme {
@@ -257,7 +239,6 @@ impl TypeTheme {
     fn read(theme_css: Option<&str>, mut on_first_unread: impl FnMut(&str, &str)) -> Self {
         let mut theme = Self::default();
         for rule in crate::build::theme_lint::style_rules(theme_css.unwrap_or_default()) {
-            let Some((_, body)) = rule.rule.split_once('{') else { continue };
             let prelude = rule.prelude.split_whitespace().collect::<String>();
             let root = rule.conditions.is_empty() && prelude == ":root";
             let every_hero = root || (rule.conditions.is_empty() && matches!(prelude.as_str(), ".moss-hero" | ".moss-hero-content"));
@@ -270,9 +251,8 @@ impl TypeTheme {
             // Only a selector that names the hero reaches an ordinary hero's words as well as the closing ones.
             let names_hero = hero && rule.prelude.split(',').any(|s| reaches_closing_words(s) && s.contains("moss-hero"));
             let heading_only = hero && words(&["h1", "h2", "h3", "h4", "h5", "h6"]) && !words(&["p", "a"]);
-            for decl in body.trim_end_matches('}').split(';') {
-                let Some((prop, value)) = decl.split_once(':') else { continue };
-                let prop = prop.trim();
+            for (prop, value) in rule.declarations() {
+                let (prop, value) = (prop.as_str(), value.as_str());
                 // `Some` is a property the model knows: `Some(None)` is one it could not read here.
                 let read: Option<Option<()>> = match prop {
                     "--moss-reading-size-base" => when(root, || plain_px(value).map(|px| theme.reading_base = Some(px))),

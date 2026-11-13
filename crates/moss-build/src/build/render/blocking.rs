@@ -1523,7 +1523,7 @@ pub fn generate_blocking_content_for_build(
     let user_css_version = user_css_content.as_ref().zip(theme_css.as_ref()).map(|(content, themed)| {
         // Warn when theme references pre-v1 (Retired) class
         // vocabulary. Non-fatal; one warning per retired class found.
-        for warning in crate::build::theme_lint::lint_theme_css(content) {
+        for warning in crate::build::theme_lint::lint_theme_css(content, site_config.color_scheme) {
             log_warn_problem!("{}", warning);
         }
         compute_content_hash(&themed.css)

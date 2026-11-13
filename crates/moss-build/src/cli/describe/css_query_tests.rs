@@ -15,6 +15,14 @@ fn mentions_requires_a_token_boundary() {
 }
 
 #[test]
+fn a_font_face_rule_is_printed_for_its_at_keyword_and_its_properties() {
+    let css = "@font-face { font-family: Field; src: url(field.woff2); }\n.a { color: red; }\n";
+    let by_keyword: Vec<_> = style_rules(css).into_iter().filter(|r| rule_mentions(r, "@font-face")).collect();
+    assert_eq!(by_keyword.len(), 1);
+    assert!(by_keyword[0].rule.contains("field.woff2"));
+}
+
+#[test]
 fn scan_reports_the_enclosing_media_query() {
     let css = "\
 .a { color: red; }

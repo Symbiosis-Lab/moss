@@ -72,7 +72,7 @@ fn parse_retry_after_rejects_a_past_http_date() {
 fn observe_pace_passes_the_typed_status_through_to_the_pacer() {
     let mut pacer = HostPacer::default();
     let err: Result<(), FetchError> =
-        Err(FetchError { status: Some(429), message: "429 Too Many Requests".to_string() });
+        Err(FetchError { status: Some(429), refused: false, message: "429 Too Many Requests".to_string() });
     observe_pace(&mut pacer, "example.test", &err);
     assert!(pacer.current_interval("example.test") > std::time::Duration::ZERO);
 }
@@ -88,6 +88,7 @@ fn observe_pace_matches_by_typed_status_not_message_wording() {
     let mut pacer = HostPacer::default();
     let err: Result<(), FetchError> = Err(FetchError {
         status: Some(429),
+        refused: false,
         message: "fetch failed, server said: too many requests".to_string(),
     });
     observe_pace(&mut pacer, "example.test", &err);
@@ -224,8 +225,10 @@ async fn a_redirect_to_loopback_is_refused() {
 
     let start = format!("{}/start", server.url());
     let agent = no_redirect_test_agent(&start);
-    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None)
+    let refused = std::cell::Cell::new(false);
+    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None, &refused)
         .expect_err("a redirect to a loopback address must be refused");
+    assert!(refused.get(), "a refused hop is marked as the address policy's");
     // Not just `.expect_err(...)`: an ablated per-hop check would still
     // ATTEMPT the connection to 127.0.0.1:1 and get a real connection
     // error back (nothing listens there in the sandbox) — an `Err` for
@@ -246,7 +249,7 @@ async fn a_redirect_to_a_mail_address_is_refused_not_a_panic() {
 
     let start = format!("{}/start", server.url());
     let agent = no_redirect_test_agent(&start);
-    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None)
+    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None, &Default::default())
         .expect_err("a redirect to a mailto: address must be refused");
     let detail = refusal_detail(&err);
     assert!(detail.contains("redirected to a disallowed") && detail.contains("mailto"), "{detail}");
@@ -284,7 +287,7 @@ async fn a_redirect_to_link_local_metadata_is_refused() {
 
     let start = format!("{}/start", server.url());
     let agent = no_redirect_test_agent(&start);
-    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None)
+    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None, &Default::default())
         .expect_err("a redirect to the cloud-metadata address must be refused");
     // Asserting the detail (not just "some Err") matters here: an
     // ablated check would still connect-fail refusing this unroutable
@@ -305,7 +308,7 @@ async fn a_redirect_to_ipv6_loopback_is_refused() {
 
     let start = format!("{}/start", server.url());
     let agent = no_redirect_test_agent(&start);
-    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None)
+    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None, &Default::default())
         .expect_err("a redirect to ::1 must be refused");
     assert!(refusal_detail(&err).contains("redirected to a disallowed"), "{}", refusal_detail(&err));
 }
@@ -361,8 +364,10 @@ async fn a_redirect_chain_longer_than_the_hop_cap_is_refused() {
 
     let start = format!("{}/hop0", server.url());
     let agent = no_redirect_test_agent(&start);
-    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None)
+    let refused = std::cell::Cell::new(false);
+    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None, &refused)
         .expect_err("a chain past MAX_REDIRECT_HOPS must be refused, not followed forever");
+    assert!(!refused.get(), "a long chain is no address refusal");
     assert!(refusal_detail(&err).contains("too many redirects"), "{}", refusal_detail(&err));
 }
 
@@ -407,9 +412,8 @@ async fn a_media_download_on_loopback_or_link_local_is_refused_unrequested() {
     for base in [loopback.as_str(), LINK_LOCAL] {
         let err = download_asset(&format!("{base}/a.png"), tmp.path(), "test-agent", Some("https://pages.example.test/"))
             .await
-            .expect_err(base)
-            .to_string();
-        assert!(refused_before_any_request(&err), "{err}");
+            .expect_err(base);
+        assert!(err.is_refused() && refused_before_any_request(&err.to_string()), "{err}");
     }
     assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
@@ -420,8 +424,8 @@ async fn a_linked_file_on_loopback_or_link_local_is_refused_unrequested() {
     let tmp = tempfile::tempdir().unwrap();
     for base in [loopback.as_str(), LINK_LOCAL] {
         let result = download_linked_file(&format!("{base}/f.pdf"), tmp.path(), "test-agent", None, 8, "f.pdf".into()).await;
-        let err = result.err().expect(base).to_string();
-        assert!(refused_before_any_request(&err), "{err}");
+        let err = result.err().expect(base);
+        assert!(err.is_refused() && refused_before_any_request(&err.to_string()), "{err}");
     }
     assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
     assert!(!tmp.path().join("f.pdf").exists());
@@ -432,7 +436,7 @@ async fn a_raw_fetch_on_loopback_or_link_local_is_refused_unrequested() {
     let (loopback, hits) = unregistered_loopback_server();
     for base in [loopback.as_str(), LINK_LOCAL] {
         let err = fetch_raw_bytes(&format!("{base}/sitemap.xml"), "test-agent").await.expect_err(base);
-        assert!(refused_before_any_request(&err), "{err}");
+        assert!(err.is_refused() && refused_before_any_request(&err.to_string()), "{err}");
     }
     assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
@@ -704,7 +708,7 @@ async fn a_link_of_the_site_that_leads_off_it_is_reported_not_requested() {
     let scope = super::super::scope::UrlScope::new(&format!("{}/", server.url())).unwrap();
     let destination = |path: &str| {
         let start = format!("{}{path}", server.url());
-        fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, Some(&scope))
+        fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, Some(&scope), &Default::default())
             .map(|r| crate::system::redirects::redirect_target(&r))
     };
 
