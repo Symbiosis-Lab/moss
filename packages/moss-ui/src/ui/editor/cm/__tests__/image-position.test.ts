@@ -10,6 +10,7 @@ type Expected = string | { focus: [number, number] } | null;
 interface Vectors {
   position_words: { input: string; position: Expected; note: string }[];
   frame_segments: { input: string; fit: string | null; position: Expected; align: string | null; note: string }[];
+  embed_writes: { embed: string; word: string; written: string; note: string }[];
 }
 
 // moss's own answers (crates/moss-core/tests/position_vectors.rs checks the parser against this file).
@@ -105,9 +106,12 @@ describe('embeds', () => {
     expect(embedWithPosition('![[photo.jpg|cover top]]', 'bottom-right')).toBe('![[photo.jpg|cover bottom-right]]');
     expect(embedWithPosition('![[photo.jpg|focus:1%,2%|50%]]', 'center')).toBe('![[photo.jpg|center|50%]]');
   });
-  test('a markdown image carries its options in the url', () => {
-    expect(embedWithPosition('![a view](photo.jpg)', 'top')).toBe('![a view](photo.jpg|top)');
-    expect(embedWithPosition('![a view](photo.jpg|cover top)', 'left')).toBe('![a view](photo.jpg|cover left)');
+  test.each(vectors.embed_writes)('$note', (v) => {
+    expect(embedWithPosition(v.embed, v.word)).toBe(v.written);
+  });
+  test('a markdown image reads its position from its brackets', () => {
+    expect(embedPosition('![a view|cover top](photo.jpg)')).toEqual({ x: 50, y: 0 });
+    expect(embedPosition('![top](photo.jpg)')).toBeNull();
   });
   test('text that is not an embed is returned as it was', () => {
     expect(embedWithPosition('plain', 'top')).toBe('plain');
