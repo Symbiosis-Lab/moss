@@ -14,7 +14,11 @@ use moss_build::build::BuildTrigger;
 static SERIAL: Mutex<()> = Mutex::new(());
 
 fn build(root: &Path, trigger: BuildTrigger) -> serde_json::Value {
-    use moss_build::build::{run_pipeline, PipelineConfig, PluginMode};
+    build_with(root, trigger, moss_build::build::PluginMode::Skip)
+}
+
+fn build_with(root: &Path, trigger: BuildTrigger, plugins: moss_build::build::PluginMode) -> serde_json::Value {
+    use moss_build::build::{run_pipeline, PipelineConfig};
     use moss_build::cli::host::cli_host_ports;
     use moss_build::vault_root::VaultRoot;
     let folder = root.to_string_lossy().into_owned();
@@ -22,7 +26,7 @@ fn build(root: &Path, trigger: BuildTrigger) -> serde_json::Value {
     rt.block_on(run_pipeline(PipelineConfig {
         root: VaultRoot::resolve(root),
         progress: moss_build::build::stdout_sink(),
-        plugins: PluginMode::Skip,
+        plugins,
         watch: false,
         start_server: false,
         host: cli_host_ports(&folder),
@@ -205,6 +209,36 @@ fn a_build_that_carries_from_no_record_leaves_the_next_one_unproved() {
     assert!(count(&carried, "pages_carried") > 0, "{carried}");
     let record = build(site.root(), BuildTrigger::Unobserved);
     assert_eq!(count(&record, "proved_from_seal"), 0, "{record}");
+}
+
+/// A process hook that writes its own state under `.moss/plugins/<name>/` on
+/// every build moves a measured `.moss/` input after the build measured it, so
+/// the next build cannot prove anything and renders every page.
+#[test]
+fn a_process_hook_that_rewrites_its_state_every_build_keeps_the_build_full() {
+    use moss_build::build::PluginMode;
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    const STATE: &str = ".moss/plugins/stamp-writer/state.json";
+    let site = Site::new();
+    for file in ["manifest.json", "main.bundle.js"] {
+        let fixture = format!("{}/tests/fixtures/plugins/stamp-writer/{file}", env!("CARGO_MANIFEST_DIR"));
+        site.write(&format!(".moss/plugins/stamp-writer/{file}"), &fs::read_to_string(fixture).unwrap());
+    }
+    build_with(site.root(), BuildTrigger::Unobserved, PluginMode::Blocking);
+    let first = fs::read_to_string(site.root().join(STATE)).expect("the hook ran");
+    let record = build_with(site.root(), BuildTrigger::Unobserved, PluginMode::Blocking);
+    let second = fs::read_to_string(site.root().join(STATE)).unwrap();
+    assert_ne!(first, second, "the hook writes new bytes every build");
+    let recorded = recorded_moss_input(&site, STATE);
+    assert!(recorded.is_some(), "the state file is a recorded input");
+    assert_eq!(count(&record, "proved_from_seal"), 0, "{record}");
+    assert!(rendered_everything(&record), "{record}");
+}
+
+fn recorded_moss_input(site: &Site, rel: &str) -> Option<serde_json::Value> {
+    let manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(site.root().join(".moss/build.nosync/hashes.json")).unwrap()).unwrap();
+    manifest["build_inputs"]["moss"].get(rel).cloned()
 }
 
 fn sha256_hex(text: &str) -> String {
