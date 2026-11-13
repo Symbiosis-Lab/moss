@@ -56,7 +56,7 @@ fn a_lone_request_keeps_its_rename_pairs_and_trigger() {
 fn merging_preserves_the_narrowest_honest_trigger() {
     let paths = |t: &BuildTrigger| match t {
         BuildTrigger::ContentOnly(p) | BuildTrigger::Structural(p) => p.clone(),
-        BuildTrigger::Full => vec![],
+        BuildTrigger::Full | BuildTrigger::Unobserved => vec![],
     };
 
     // Two content-only batches union their paths and STAY content-only: the

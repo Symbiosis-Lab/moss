@@ -464,11 +464,6 @@ pub struct FacadeCache {
     /// a change to `minify_css`, or simply a newer moss binary, and every one
     /// of those has the same carried-forward-URL exposure. Hash the fact.
     ///
-    /// Until now the only thing covering that residue was that the first
-    /// build of a process is always `BuildTrigger::Full`, so a binary upgrade
-    /// happened to full-render. That is incidental, undocumented as
-    /// load-bearing, and exactly the implicit coupling this field removes.
-    ///
     /// `serde(default)` so a cache written before this field existed loads as
     /// `""`, mismatches any real version, and forces exactly one full render.
     /// Fail-safe in the correct direction.

@@ -382,16 +382,21 @@ fn digests_are_stable_across_two_identical_builds() {
 
 // ---- FM-4: the globals bypass -------------------------------------------
 
+fn day() -> chrono::NaiveDate {
+    chrono::NaiveDate::from_ymd_opt(2026, 3, 14).unwrap()
+}
+
 #[test]
 fn the_two_project_flags_that_feed_the_selector_are_listing_globals() {
     let empty = std::collections::HashMap::new();
-    let base = listing_globals(&project(), &empty, crate::i18n::Language::En, None, false);
+    let base = listing_globals(&project(), &empty, crate::i18n::Language::En, None, false, day());
     let langs = listing_globals(
         &ProjectStructure { has_language_trees: true, ..project() },
         &empty,
         crate::i18n::Language::En,
         None,
         false,
+        day(),
     );
     let folders = listing_globals(
         &ProjectStructure { has_content_folders: false, ..project() },
@@ -399,6 +404,7 @@ fn the_two_project_flags_that_feed_the_selector_are_listing_globals() {
         crate::i18n::Language::En,
         None,
         false,
+        day(),
     );
     assert_ne!(base, langs, "has_language_trees changes membership with no document changing");
     assert_ne!(base, folders, "has_content_folders feeds the exclude_nav filter");

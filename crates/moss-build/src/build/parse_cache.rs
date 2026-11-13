@@ -74,7 +74,7 @@
 //!
 //! Asset-derived inputs are covered by a coarser rule instead: the cache is
 //! gated on `SiteConfig::incremental.parse_cache`, resolved by
-//! `PipelineConfig::allows_parse_cache_reuse`, which requires every changed
+//! `ChangeProof::allows_parse_cache_reuse`, which requires every changed
 //! path in the batch to be markdown OR on a **parse-irrelevant allowlist**
 //! (`css`, `js`, `mjs`, and web-font extensions — see
 //! `PARSE_IRRELEVANT_EXTENSIONS` in `build.rs`). An image edit therefore still
@@ -95,9 +95,8 @@
 //!
 //! # Kill switch
 //!
-//! `MOSS_NO_INCREMENTAL` — the same one the render skip uses. It is read in BOTH
-//! `PipelineConfig::allows_incremental_skip` and
-//! `PipelineConfig::allows_parse_cache_reuse` and delivered here as
+//! `MOSS_NO_INCREMENTAL` — the same one the render skip uses. It is read once,
+//! in `ChangeProof::for_build`, which answers both gates, and delivered here as
 //! `SiteConfig::incremental.parse_cache`. There is deliberately no second flag:
 //! the two gates differ only in which changed paths they tolerate, and the kill
 //! switch turns both off at once, so anyone bisecting "the incremental build

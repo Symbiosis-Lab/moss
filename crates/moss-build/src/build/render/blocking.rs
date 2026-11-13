@@ -537,7 +537,7 @@ pub fn generate_blocking_content_for_build(
     // design), but the parse cache tolerates a batch containing stylesheets,
     // scripts and fonts, which cannot change any page's parse. Images and
     // `config.toml` still disable it. See `build/parse_cache.rs` and
-    // `PipelineConfig::allows_parse_cache_reuse`.
+    // `ChangeProof::allows_parse_cache_reuse`.
     //
     // The fingerprint covers Loop A's inputs that are not any page's own bytes
     // — most importantly `page_map`, which pre-scans every file's frontmatter,
@@ -1699,6 +1699,7 @@ pub fn generate_blocking_content_for_build(
             typesetting: layout_config.typesetting.as_deref(),
             math: site_config.math,
             term_nav: &layout_config.term_nav,
+            build_day: now.date(),
             render_id: pending.render_id(),
             sealed_render_id: previous_hashes.render_id.as_deref(),
         },

@@ -349,7 +349,7 @@ pub fn get_seta_url() -> String {
 }
 
 fn runtime_seta_url() -> Option<String> {
-    let url = std::env::var(SETA_URL_ENV_VAR).ok()?;
+    let url = crate::build::inputs::env(SETA_URL_ENV_VAR)?;
     if is_safe_base_url(&url) {
         Some(url)
     } else {

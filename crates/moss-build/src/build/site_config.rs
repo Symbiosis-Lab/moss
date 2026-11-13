@@ -424,13 +424,13 @@ pub fn site_id_for_folder(folder: &Path) -> Result<String, String> {
 /// 3. `.moss/config.toml` top-level `environment` field.
 /// 4. Default: Production.
 pub fn resolve_environment(project_path: &str) -> HostingEnvironment {
-    if let Ok(name) = std::env::var("MOSS_ENV") {
+    if let Some(name) = crate::build::inputs::env("MOSS_ENV") {
         if let Some(env) = parse_env_name(name.trim()) {
             return env;
         }
         log::info!("MOSS_ENV='{}' is not one of staging|local|production; ignoring", name);
     }
-    if let Ok(url) = std::env::var("MOSS_SETA_URL") {
+    if let Some(url) = crate::build::inputs::env("MOSS_SETA_URL") {
         // A raw URL carries no environment name. A localhost URL is the local-dev
         // backend, so label it Local; a staging URL is Staging; any other URL is
         // Production (the client uses the raw URL directly via get_seta_url()/

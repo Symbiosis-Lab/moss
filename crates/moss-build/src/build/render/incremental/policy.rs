@@ -19,10 +19,10 @@ pub struct IncrementalPolicy {
     /// May a page whose fingerprints did not move be carried forward instead
     /// of re-rendered?
     ///
-    /// Resolved upstream by `PipelineConfig::allows_incremental_skip`
-    /// (`build.rs`), which is false for every entry point except a
-    /// markdown-only watch rebuild and which already folds in the
-    /// `MOSS_NO_INCREMENTAL` kill switch. This is the total off switch for
+    /// Resolved upstream by `ChangeProof::allows_incremental_skip`
+    /// (`incremental_gates.rs`), which is true only for a markdown-only watch
+    /// rebuild or a build the last seal proves touched only markdown, and
+    /// which already folds in the `MOSS_NO_INCREMENTAL` kill switch. This is the total off switch for
     /// the render skip *and* for the listing groups: with it false,
     /// the verdict is `Full(SkipDisabled)` and nothing below runs.
     pub skip_unchanged_renders: bool,
@@ -32,7 +32,7 @@ impl IncrementalPolicy {
     /// Resolve the policy beside `SiteConfig`, from `SiteConfig`.
     ///
     /// Deliberately NOT read from `PipelineConfig` directly: `SiteConfig`
-    /// already carries `allows_incremental_skip()`'s output as
+    /// already carries `ChangeProof::allows_incremental_skip`'s output as
     /// `incremental.render_skip`, and reading it here keeps the seam inside
     /// `build/render/` instead of adding a second parameter to every layer
     /// between `pipeline::build_inner` and `generate_blocking_content`.

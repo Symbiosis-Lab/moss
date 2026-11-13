@@ -127,7 +127,7 @@
         "crates/moss-build/src/build/media/video.rs::run_video_conversion": 350,
         "crates/moss-build/src/build/parse_cache.rs::begin": 250,
         "crates/moss-build/src/build/pipeline.rs::run_notebook_processing": 350,
-        "crates/moss-build/src/build/pipeline.rs::build_inner": 650,
+        "crates/moss-build/src/build/pipeline.rs::build_inner": 700,
         "crates/moss-build/src/build/render/blocking.rs::generate_blocking_content_for_build": 1800,
         "crates/moss-build/src/build/render/html.rs::render_page": 550,
         "crates/moss-build/src/build/render/incremental/verdict.rs::compute": 250,
@@ -173,6 +173,12 @@
       "disposition": "permanent",
       "armed": true,
       "value": 107
+    },
+    "raw_env_reads": {
+      "letter": "j",
+      "disposition": "permanent",
+      "armed": true,
+      "value": 27
     }
   }
 }

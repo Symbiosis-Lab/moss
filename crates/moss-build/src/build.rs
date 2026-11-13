@@ -218,9 +218,25 @@ pub enum BuildTrigger {
     /// Every changed path in the batch is a plain content edit to an
     /// existing file — no create/remove/rename anywhere in the batch.
     ContentOnly(Vec<PathBuf>),
+    /// The caller watched nothing: a one-shot build, or a watch session's
+    /// first. The gates may prove from the last sealed manifest what changed
+    /// since (`incremental_gates::ChangeProof`), and render everything when
+    /// they cannot. Opt-in: `Full` stays the answer for a caller that needs
+    /// every page rendered, such as a publish.
+    Unobserved,
 }
 
 impl BuildTrigger {
+    /// A rebuild for paths the watcher saw, rather than a build that stands
+    /// alone or starts a session. Every variant is named, so a new one has to
+    /// choose.
+    pub fn is_watch_batch(&self) -> bool {
+        match self {
+            BuildTrigger::ContentOnly(_) | BuildTrigger::Structural(_) => true,
+            BuildTrigger::Full | BuildTrigger::Unobserved => false,
+        }
+    }
+
     /// Coalesce two triggers whose batches are being merged into one build.
     ///
     /// Safe rather than a guess because the gates that read this
@@ -231,14 +247,12 @@ impl BuildTrigger {
     /// have failed its own. Everything else over-approximates, as
     /// `classify_trigger` does — `Structural` wins over `ContentOnly`, and
     /// `Full`, which carries no paths and so no evidence, absorbs both.
-    ///
-    /// Before this, `watch::worker::merge_requests` returned `Full`
-    /// unconditionally, so every save landing while a build was in flight lost
-    /// its classification — self-reinforcing, because the resulting full build
-    /// (8-18s on a large vault against ~1.5s) all but guarantees the next
-    /// keystroke also arrives mid-build.
+    /// `Unobserved` absorbs an event batch, because the proof it asks for
+    /// compares the whole disk with the last seal and so sees those paths too;
+    /// it may absorb only triggers caused by a disk change, so every variant
+    /// is named below and a new one has to choose.
     pub fn merge(self, other: BuildTrigger) -> BuildTrigger {
-        use BuildTrigger::{ContentOnly, Full, Structural};
+        use BuildTrigger::{ContentOnly, Full, Structural, Unobserved};
         fn union(mut a: Vec<PathBuf>, b: Vec<PathBuf>) -> Vec<PathBuf> {
             for p in b {
                 if !a.contains(&p) {
@@ -249,6 +263,8 @@ impl BuildTrigger {
         }
         match (self, other) {
             (Full, _) | (_, Full) => Full,
+            (Unobserved, Unobserved | ContentOnly(_) | Structural(_))
+            | (ContentOnly(_) | Structural(_), Unobserved) => Unobserved,
             (Structural(a), Structural(b))
             | (Structural(a), ContentOnly(b))
             | (ContentOnly(a), Structural(b)) => Structural(union(a, b)),
@@ -292,8 +308,8 @@ pub struct PipelineConfig {
     pub start_server: bool,
     /// What the host provides to this build — see [`HostPorts`].
     pub host: HostPorts,
-    /// What triggered this build (watch mode) — see `BuildTrigger`.
-    /// Read by `allows_incremental_skip`.
+    /// What triggered this build — see `BuildTrigger`. Read by
+    /// `incremental_gates::ChangeProof::for_build`.
     pub trigger: BuildTrigger,
     /// True when this build is invoked from a process that will exit shortly
     /// after `run_pipeline` returns (CLI subcommands, snapshot tests). Such
@@ -760,6 +776,10 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // a precondition the entry point satisfies, and it closes that ordering
     // hole on the way.
     config.host.store.run_vault_migrations(&config.root);
+    // Before anything below reads `.moss/`. A later write there (a
+    // migration of the build tree, a process hook) moves the next build's
+    // record, which costs that build one full render, never a stale page.
+    let last_seal = std::sync::Arc::new(incremental_gates::LastSeal::read(config.source()));
 
     // Derive the .moss dir — always present, used as the preview-server dedup key.
     let moss_dir_path = config.source().join(".moss");
@@ -804,7 +824,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     crate::infra::moss_paths::retire_legacy_roots(&lifecycle_paths);
 
     // Keep this project's coding-agent guidance current — see `SYNC_TRIGGERS`.
-    let full_build = matches!(config.trigger, BuildTrigger::Full);
+    let full_build = !config.trigger.is_watch_batch();
     if !pass.repeat {
         crate::cli::agents::sync::sync_after_build(config.source(), full_build);
         if full_build { crate::platform::folder_icon::mark_moss_folder(config.source()) }
@@ -1207,10 +1227,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             let reporter_owned = tier1_reporter(&config.progress);
             let ps = project_structure.clone();
             let site_url_override = config.site_url_override.clone();
-            let incremental = crate::build::render::IncrementalGates {
-                render_skip: config.allows_incremental_skip(),
-                parse_cache: config.allows_parse_cache_reuse(),
-            };
+            let (trigger, builder, last_seal) = (config.trigger.clone(), cache_keys.builder.clone(), last_seal.clone());
             let search_freshness = search_lane::Freshness::of(config.exits_after_build);
             let slot_resolver = make_slot_resolver(folder_path.clone(), cached_domain_config.clone(), ps.clone());
             let cache_keys_owned = cache_keys.clone();
@@ -1226,7 +1243,8 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             async move {
                 tokio::task::spawn_blocking(move || {
                     let _blocking_scope = crate::build::phase::enter_blocking_scope(phase_collector_for_blocking);
-                    pipeline::run_leased(&root_owned, Some(&state_owned), reporter_owned.as_deref(), &port_owned, Some(&services), Some(slot_resolver), &ps, site_url_override, incremental, search_freshness, &cache_keys_owned, derived_owned, Some(lease), refresh)
+                    let incremental = crate::build::render::IncrementalGates::for_build(&trigger, root_owned.path(), &builder, &last_seal);
+                    pipeline::run_leased(&root_owned, Some(&state_owned), reporter_owned.as_deref(), &port_owned, Some(&services), Some(slot_resolver), &ps, site_url_override, incremental, search_freshness, &cache_keys_owned, derived_owned, Some(lease), refresh, Some(last_seal.clone()))
                 }).await.map_err(|e| BuildStopped::from(format!("Build task panicked: {}", e)))?
             }
         };

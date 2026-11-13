@@ -135,6 +135,13 @@ const PHASE_BUDGETS_MS: &[(&str, u64)] = &[
     // still contain theirs, so subtract `lock_wait` to read their work. The
     // lock itself costs well under a millisecond, so the budget is a tripwire.
     ("lock_wait", 200),
+    // A build with no events walking the folder against the last seal
+    // (`incremental_gates::ChangeProof`): one stat per file, plus a hash for
+    // each file whose stat cannot vouch for it.
+    ("change_proof", 2_000),
+    // Reading the last sealed manifest and measuring `.moss/` against its
+    // record, once per build at the entry point.
+    ("seal_read", 1_000),
     // Native + plugin slot collection before finalization.
     ("slot_resolution", 10_000),
     // Filling the collected slots into every staged page.
@@ -391,6 +398,7 @@ pub fn format_build_summary(
     // path the OS reported twice counts twice, so it is a size hint.
     let trigger = match trigger {
         BuildTrigger::Full => "trigger=full".to_string(),
+        BuildTrigger::Unobserved => "trigger=unobserved".to_string(),
         BuildTrigger::Structural(paths) => format!("trigger=structural changed={}", paths.len()),
         BuildTrigger::ContentOnly(paths) => format!("trigger=content changed={}", paths.len()),
     };
@@ -439,6 +447,7 @@ const BUILD_COUNTS: &[&str] = &[
     "background_assets_linked", "background_assets_stat_only", "sized_raster_blob_checks",
     "images_unchanged", "images_dispatched", "image_variants_stat_only", "image_variants_blob_checks",
     "image_transform_records_loaded", "files_sealed", "hash_index_hits_process", "hash_index_rehashed_process",
+    "proved_from_seal",
 ];
 /// The video counts, which also make up a detached encode's own record.
 const VIDEO_COUNTS: &[&str] = &["videos_cache_hit", "video_blobs_validated", "videos_converted", "videos_detached"];
@@ -479,6 +488,7 @@ fn build_record(t: &BuildTelemetry, total: Duration, outcome: &str, trigger: &cr
     use crate::build::BuildTrigger;
     let (kind, changed) = match trigger {
         BuildTrigger::Full => ("full", 0),
+        BuildTrigger::Unobserved => ("unobserved", 0),
         BuildTrigger::Structural(paths) => ("structural", paths.len()),
         BuildTrigger::ContentOnly(paths) => ("content", paths.len()),
     };

@@ -375,7 +375,9 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
             watch: run.flags.watch,
             start_server: run.flags.serve,
             host,
-            trigger: BuildTrigger::Full,
+            // Nothing was watched before this build: the gates prove from the
+            // last seal what changed, and render everything when they cannot.
+            trigger: BuildTrigger::Unobserved,
             // A serving process stays alive (it parks on ctrl-C below), so
             // only the plain build seals inline / prewarms synchronously.
             exits_after_build: !run.flags.serve,

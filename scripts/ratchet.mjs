@@ -36,6 +36,13 @@
 //                             `50%` aside). A corner or a shadow
 //                             written as a number drifts from the tokens the
 //                             other surfaces share; a new one is refused.
+//   (j) raw_env_reads       — `env::var(` / `env::var_os(` calls in
+//                             moss-build's production Rust outside
+//                             `build/inputs.rs`. A variable that can change
+//                             what a build writes is read through that
+//                             module's `env`, which records it in the sealed
+//                             manifest, so a later build that saw no events
+//                             notices when it changes.
 //
 // Roots: this repo's own `crates/*/src` and `packages/*/src` (rows a/b);
 // mirror_markers never scanned packages.
@@ -672,6 +679,21 @@ const collectors = {
     const files = isDir(dir) ? walkFiles(dir).filter((f) => f.endsWith('.css')) : [];
     return { kind: 'scalar', ...countAcross(root, files, rawRadiusShadowCount) };
   },
+  // (j) raw environment reads in moss-build's production Rust, test modules
+  // and comments left out, the recording accessor's own module excepted.
+  raw_env_reads(root) {
+    const dir = path.join(root, 'crates', 'moss-build', 'src');
+    const accessor = path.join(dir, 'build', 'inputs.rs');
+    const files = isDir(dir)
+      ? walkFiles(dir).filter((f) => f.endsWith('.rs') && !isRustTestSibling(f) && f !== accessor)
+      : [];
+    const prodCode = (text) => {
+      const lines = stripNonCode(text, true).split('\n');
+      for (const [from, to] of rustCfgTestRanges(lines)) for (let k = from; k <= to; k++) lines[k] = '';
+      return lines.join('\n');
+    };
+    return { kind: 'scalar', ...countAcross(root, files, [/\benv::var(?:_os)?\s*\(/g], prodCode) };
+  },
 
   // (f) distinct production dependencies per crate → map {Cargo.toml: count}.
   // A tree without a root Cargo.toml has no crates to count.
@@ -710,6 +732,7 @@ const ROWS = {
   lines_per_function: { letter: 'g', disposition: 'permanent' },
   string_slices_per_crate: { letter: 'h', disposition: 'permanent' },
   raw_radius_shadow_ui: { letter: 'i', disposition: 'permanent' },
+  raw_env_reads: { letter: 'j', disposition: 'permanent' },
 };
 
 export function collectCurrent(root, baseline) {

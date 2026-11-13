@@ -3,11 +3,151 @@
 //! decision and edition date reads. Each is read once per build and handed
 //! down, so two machines that build the same source on the same day publish
 //! the same bytes.
+//!
+//! Also the record of what else a build read, [`BuildInputs`]: the `.moss/`
+//! files, the fetched link cards and the environment variables. A build that
+//! saw no file events compares them with the last seal to prove nothing
+//! outside the page tree moved.
 
-use crate::build::types::ParsedDocument;
+use std::collections::BTreeMap;
+use std::path::Path;
+use std::sync::Mutex;
+
+use crate::build::types::{ParsedDocument, SourceMetadata};
+
+/// What a sealed build read besides its source tree.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct BuildInputs {
+    /// Every `.moss/` file the path registry marks materialized (the bytes
+    /// moss must read and cannot regenerate), keyed like `sources`, and the
+    /// link cards an older moss kept, keyed `link-meta/<file>`; stat'd before the build
+    /// read any of them.
+    pub moss: BTreeMap<String, SourceMetadata>,
+    /// Each environment variable read through [`env`], with a hash of its
+    /// value, or `-` when it was unset.
+    pub env: BTreeMap<String, String>,
+    /// When `moss` was measured: a file written in that same moment is hashed
+    /// rather than trusted by its stat.
+    #[serde(default)]
+    pub taken_at: Option<u64>,
+}
+
+/// This build's `.moss/` measurement, and whether it and the environment
+/// still hold what the last sealed record saw.
+#[derive(Debug, Clone, Default)]
+pub struct Measured {
+    /// `None` when a file is in the cloud or cannot be read: such a build
+    /// records nothing, and the next one proves nothing.
+    pub record: Option<BuildInputs>,
+    pub holds: bool,
+}
+
+/// Measure the `.moss/` inputs once, before anything in the build reads them.
+/// `previous` lends its hash to a file its stat still vouches for, so an
+/// unchanged file is not reread.
+pub(crate) fn measure(folder: &Path, previous: Option<&BuildInputs>) -> Measured {
+    let taken_at = crate::build::stat::recording_clock();
+    let Some((moss, unchanged)) = moss_files(folder, previous) else { return Measured::default() };
+    let env_holds = previous.is_some_and(|p| p.env.iter().all(|(name, seen)| value_hash(std::env::var(name).ok().as_deref()) == *seen));
+    Measured { holds: unchanged && env_holds, record: Some(BuildInputs { moss, env: BTreeMap::new(), taken_at }) }
+}
+
+/// The files of [`BuildInputs::moss`], and whether every one matches
+/// `previous` with none added or gone.
+fn moss_files(folder: &Path, previous: Option<&BuildInputs>) -> Option<(BTreeMap<String, SourceMetadata>, bool)> {
+    use crate::build::watch::{source_metadata_verdict, SourceVerdict};
+    let moss = folder.join(".moss");
+    // Cards an older moss kept under `build.nosync` sit outside the
+    // materialized rows, and a build still moves one into the site folder
+    // when it reaches its link, so deleting them, or one arriving, moves the
+    // record too. Cards in the site folder are a materialized row.
+    let link_meta = crate::moss_paths::MossPaths::new(folder).cache_link_meta();
+    let materialized = walkdir::WalkDir::new(&moss).sort_by_file_name().into_iter().filter_entry(|e| {
+        let rel = e.path().strip_prefix(folder).map(|r| moss_core::slug::normalize_separators(&r.to_string_lossy())).unwrap_or_default();
+        !e.file_type().is_dir() || crate::ops::watch::sweep::walk::should_descend(&rel, &e.file_name().to_string_lossy())
+    });
+    let cards = walkdir::WalkDir::new(&link_meta).max_depth(1).sort_by_file_name().into_iter();
+    let mut files = BTreeMap::new();
+    let mut unchanged = true;
+    for entry in materialized.chain(cards) {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) if e.depth() == 0 && e.io_error().is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound) => continue,
+            Err(_) => return None,
+        };
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        // Cards are keyed under their own directory, which `MossPaths` may
+        // resolve to another spelling of the folder (a symlinked temp root).
+        let (rel, measured) = match entry.path().strip_prefix(&link_meta) {
+            // A card (`<sha256 of the URL>.json`), never what a build writes
+            // beside them: the prewarm list, derived covers.
+            Ok(card) => (format!("link-meta/{}", card.to_string_lossy()), is_card_name(&entry.file_name().to_string_lossy())),
+            Err(_) => {
+                let rel = moss_core::slug::normalize_separators(&entry.path().strip_prefix(folder).ok()?.to_string_lossy());
+                let measured = crate::moss_paths::is_materialized_rel(&rel);
+                (rel, measured)
+            }
+        };
+        if !measured {
+            continue;
+        }
+        if crate::build::icloud::icloud_stub_target(entry.path()).is_some() || crate::build::icloud::is_evicted(entry.path()) {
+            return None;
+        }
+        let md = entry.metadata().ok()?;
+        let known = previous.and_then(|p| p.moss.get(&rel).map(|meta| (meta, p.taken_at)));
+        let record = match known.map(|(meta, at)| (meta, source_metadata_verdict(meta, &md, entry.path(), at))) {
+            Some((meta, SourceVerdict::Unchanged { refreshed })) => refreshed.unwrap_or_else(|| meta.clone()),
+            Some((_, SourceVerdict::Unknown)) => return None,
+            Some((_, SourceVerdict::Changed)) | None => {
+                unchanged = false;
+                let stat = crate::build::stat::FileStat::of(&md);
+                SourceMetadata::from_stat(crate::build::cache::ObjectStore::hash_file(entry.path()).ok()?, stat)
+            }
+        };
+        files.insert(rel, record);
+    }
+    unchanged &= previous.is_some_and(|p| p.moss.len() == files.len());
+    Some((files, unchanged))
+}
+
+fn is_card_name(name: &str) -> bool {
+    name.strip_suffix(".json").is_some_and(|stem| stem.len() == 64 && stem.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+/// The environment variables builds have read, and what each held.
+static ENV_READ: Mutex<BTreeMap<&'static str, Option<String>>> = Mutex::new(BTreeMap::new());
+
+/// Read an environment variable that can change what a build writes. Every
+/// such read goes through here, so the sealed manifest records it and a later
+/// build sees it change.
+pub(crate) fn env(name: &'static str) -> Option<String> {
+    let value = std::env::var(name).ok();
+    ENV_READ.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(name, value.clone());
+    value
+}
+
+/// Every variable [`env`] has returned in this process, hashed.
+pub(crate) fn env_read() -> BTreeMap<String, String> {
+    ENV_READ.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .map(|(name, value)| ((*name).to_string(), value_hash(value.as_deref())))
+        .collect()
+}
+
+fn value_hash(value: Option<&str>) -> String {
+    use sha2::{Digest, Sha256};
+    value.map_or_else(|| "-".to_string(), |v| format!("{:x}", Sha256::digest(v.as_bytes())))
+}
 
 /// The moment a build is as of: `SOURCE_DATE_EPOCH` (seconds since 1970, the
 /// reproducible-builds convention) when set, otherwise the clock.
+///
+/// Read raw, not through [`env`]: what reaches a page is the build day, which
+/// the render verdict compares itself, so a new epoch on the same day proves
+/// nothing moved.
 pub(crate) fn build_instant() -> jiff::Timestamp {
     instant_from(std::env::var("SOURCE_DATE_EPOCH").ok().as_deref())
 }
