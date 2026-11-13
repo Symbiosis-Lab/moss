@@ -1,8 +1,9 @@
 // cm-reference-card.ts — the reference card: the ONE place any reference
-// (link, wikilink, image/media embed, footnote, external URL,
-// unresolved/moved/ambiguous) shows its details. Hover over a link's URL, a
-// wikilink's page or an embed's path (its destination only, see `hitSiteAt`) opens it read-only after
-// a short dwell; ⌘K opens it editable, with fields and actions.
+// (link, wikilink, image/media embed, footnote, unresolved/moved/ambiguous)
+// shows its details. Hover over a link's URL, a wikilink's page or an embed's
+// path (its destination only, see `hitSiteAt`) opens it read-only after a short
+// dwell, and only when it has something the line does not already show;
+// ⌘K opens it editable, with fields and actions.
 
 import { EditorView, ViewPlugin, keymap, showTooltip, type Tooltip } from '@codemirror/view';
 import { EditorState, Extension, Facet, StateEffect, StateField } from '@codemirror/state';
@@ -16,7 +17,6 @@ import type { ApplyEmbedWidthFn } from './embed-width';
 import { pickAssetRef } from './asset-picker/browse-button';
 import { t } from "../i18n/index";
 import { armOutsideDismiss } from "../shared/ui/dismiss-outside";
-import { isMacPlatform } from "../utils/kbd-label";
 
 /** Structural subset of the (text, is_embed) cache every synchronous
  *  provider reads — matching `AssetHoverOptions.resolvedCache`'s shape.
@@ -33,7 +33,16 @@ type ResolvedCache = {
 
 export interface CardAction { label: string; run: (view: EditorView) => void; }
 export interface CardField { label: string; value: string; commit: (view: EditorView, value: string) => void; }
-export interface CardSpec { title: string; body: HTMLElement; hint?: string; actions?: CardAction[]; fields?: CardField[]; }
+export interface CardSpec {
+  /** Heads the ⌘K card. A hover card leaves it out: it is the text under the pointer. */
+  title: string;
+  /** What the hover card shows. Empty means the card has nothing to add, and hover opens none. */
+  body: HTMLElement;
+  /** Settles once a body that is filled later has its content. */
+  pending?: Promise<unknown>;
+  actions?: CardAction[];
+  fields?: CardField[];
+}
 export type CardProvider = (state: EditorState, pos: number) => CardSpec | null;
 export const cardProviders = Facet.define<CardProvider>();
 /** Runs after the providers, in facet order, on whatever they produced (or
@@ -92,9 +101,11 @@ const pointerOverCard = new WeakMap<EditorView, boolean>();
 function buildCardDom(card: OpenCard, view: EditorView): HTMLElement {
   const dom = document.createElement('div');
   dom.className = 'cm-reference-card' + (card.editable ? ' cm-reference-card--editable' : '');
-  const title = dom.appendChild(document.createElement('div'));
-  title.className = 'cm-reference-card-title';
-  title.textContent = card.spec.title;
+  if (card.editable) {
+    const title = dom.appendChild(document.createElement('div'));
+    title.className = 'cm-reference-card-title';
+    title.textContent = card.spec.title;
+  }
   dom.appendChild(card.spec.body);
   // "A hover card is read-only; a click-opened card may host controls"
   // (spec, Architecture principles) is a RENDERING rule, not a
@@ -125,10 +136,6 @@ function buildCardDom(card: OpenCard, view: EditorView): HTMLElement {
         btn.addEventListener('click', () => action.run(view));
       }
     }
-  } else {
-    const hint = dom.appendChild(document.createElement('div'));
-    hint.className = 'cm-reference-card-hint';
-    hint.textContent = card.spec.hint ?? t('editmisc.card_open_hint', { mod: isMacPlatform() ? '⌘' : 'Ctrl' });
   }
   dom.addEventListener('mouseenter', () => pointerOverCard.set(view, true));
   dom.addEventListener('mouseleave', () => pointerOverCard.set(view, false));
@@ -202,16 +209,10 @@ function referenceAt(state: EditorState, pos: number, onBlock: boolean): { from:
   return note ? { ...note, probe: pos } : null;
 }
 
-function tryOpen(view: EditorView, pos: number, onBlock = false): void {
-  const ref = referenceAt(view.state, pos, onBlock);
-  if (!ref) return;
-  const spec = cardSpecAt(view.state, ref.probe);
-  if (!spec) return;
-  view.dispatch({ effects: setCard.of({ pos: ref.probe, from: ref.from, to: ref.to, spec, editable: false }) });
-}
-
 const dwellPlugin = ViewPlugin.fromClass(class {
   private timer: ReturnType<typeof setTimeout> | null = null;
+  /** Start of the reference whose card is waiting for its body. */
+  private waiting: number | null = null;
   constructor(private view: EditorView) {
     view.dom.addEventListener('mousemove', this.onMove);
     view.dom.addEventListener('mouseleave', this.onLeave);
@@ -223,8 +224,10 @@ const dwellPlugin = ViewPlugin.fromClass(class {
     const onBlock = !!row && this.view.dom.contains(row);
     const pos = onBlock ? this.view.posAtDOM(row!) : charAtPointer(this.view, event.clientX, event.clientY);
     const card = this.view.state.field(cardField, false) ?? null;
-    // Persistence: stay open while the pointer is on the reference that opened it.
-    if (card && !card.editable && pos !== null && referenceAt(this.view.state, pos, onBlock)?.from === card.from) return;
+    // Persistence: stay open (or keep waiting) while the pointer is on the same reference.
+    const held = card && !card.editable ? card.from : this.waiting;
+    if (held !== null && pos !== null && referenceAt(this.view.state, pos, onBlock)?.from === held) return;
+    this.waiting = null;
     if (this.timer) clearTimeout(this.timer);
     // Left the construct: close a read-only card unless the pointer landed on
     // the card itself (it sits ABOVE the construct, so the pointer crosses a
@@ -233,13 +236,36 @@ const dwellPlugin = ViewPlugin.fromClass(class {
       this.view.dispatch({ effects: setCard.of(null) });
     }
     // Off the text (the margin, a gap): nothing to open.
-    if (pos !== null) this.timer = setTimeout(() => tryOpen(this.view, pos, onBlock), DWELL_MS);
+    if (pos !== null) this.timer = setTimeout(() => this.open(pos, onBlock), DWELL_MS);
   };
+  /** Open the card for the reference at `pos`, once its body holds something:
+   *  a card that would only repeat the line is never drawn. */
+  private open(pos: number, onBlock: boolean): void {
+    const { state } = this.view;
+    const ref = referenceAt(state, pos, onBlock);
+    const spec = ref && cardSpecAt(state, ref.probe);
+    if (!ref || !spec) return;
+    const show = () => {
+      if (!spec.body.hasChildNodes()) return;
+      this.view.dispatch({ effects: setCard.of({ pos: ref.probe, from: ref.from, to: ref.to, spec, editable: false }) });
+    };
+    if (spec.body.hasChildNodes() || !spec.pending) return show();
+    this.waiting = ref.from;
+    // A failed lookup leaves the body empty, so it settles the same way and shows nothing.
+    const settle = () => {
+      if (this.waiting !== ref.from || this.view.state.doc !== state.doc) return;
+      this.waiting = null;
+      show();
+    };
+    spec.pending.then(settle, settle);
+  }
   private onLeave = () => {
     if (this.timer) clearTimeout(this.timer);
+    this.waiting = null;
   };
   destroy() {
     if (this.timer) clearTimeout(this.timer);
+    this.waiting = null;
     this.view.dom.removeEventListener('mousemove', this.onMove);
     this.view.dom.removeEventListener('mouseleave', this.onLeave);
   }
@@ -271,11 +297,10 @@ export function referenceCardExtension(): Extension {
 
 /** Shared URL field + Open/Unlink, attached identically whether the link
  *  currently resolves, is external, or is broken — editing the URL and
- *  unlinking must work regardless; only the read-only BODY differs by
- *  resolved kind (built separately by each of the three providers: page
- *  link, external, diagnostic). Wrapped around those three providers in
- *  `cm-editor.ts`, not called directly here — the wrap needs the
- *  SAME `resolvedCache` each provider already closes over. */
+ *  unlinking must work regardless; only the read-only BODY differs (a page
+ *  link's has the page's description, any other link's is empty). Wrapped
+ *  around the link providers in `cm-editor.ts`, not called directly here —
+ *  the wrap needs the SAME `resolvedCache` each provider already closes over. */
 export function withLinkControls(
   spec: CardSpec,
   state: EditorState,
@@ -339,7 +364,6 @@ export function currentArticleCardProvider(current: () => CurrentArticleCardData
     return {
       title: article.title || t('reference.current_article'),
       body,
-      hint: t(article.locations.length ? 'reference.show_locations_hint' : 'reference.show_map_details_hint', { mod: isMacPlatform() ? '⌘' : 'Ctrl' }),
       actions: article.locations.length ? [{ label: t('reference.show_locations'), run: (view) => { closeCard(view); article.revealLocations(); } }] : [],
     };
   };
@@ -453,27 +477,14 @@ export const footnoteCardProvider: CardProvider = (state, pos) => {
   return { title: `[^${text}]`, body };
 };
 
-// ── External URL, and any other link ─────────────────────────────────────
-// Synchronous, reading straight from the resolved cache with no backend round
-// trip — matching the asset provider's target-lookup shape. A link's or an
-// image's problem is not a provider: `problemCardAugmenter` (cm-problems.ts)
-// adds it to whichever card claims the position.
+// ── Any other link ───────────────────────────────────────────────────────
+// A link's or an image's problem is not a provider: `problemCardAugmenter`
+// (cm-problems.ts) adds it to whichever card claims the position.
 
-export function externalCardProvider(resolvedCache: ResolvedCache): CardProvider {
-  return (state, pos) => {
-    const link = referenceSiteAt(state, pos);
-    if (!link) return null;
-    const env = resolvedCache.get(link.target, false);
-    if (env?.kind.kind !== 'external') return null;
-    const body = document.createElement('div');
-    body.textContent = (env as unknown as { kind: { data: { url: string } } }).kind.data.url;
-    return { title: t('editmisc.external_link'), body };
-  };
-}
-
-/** The last resort for a link no other provider claims, such as one to a page
- *  that does not exist: a card titled with the address, so the link controls
- *  and any problem's sentence have somewhere to go. */
+/** The last resort for a link no other provider claims (an external URL, a
+ *  page that does not exist): a card titled with the address, so the link
+ *  controls and any problem's sentence have somewhere to go. Its body is
+ *  empty, so hover alone opens nothing. */
 export const linkCardProvider: CardProvider = (state, pos) => {
   const link = referenceSiteAt(state, pos);
   return link ? { title: link.target, body: document.createElement('div') } : null;
@@ -484,8 +495,8 @@ export const linkCardProvider: CardProvider = (state, pos) => {
 // computation, description via the build's excerpt logic) — it depends on
 // the `editor_reference_card` command. `CardProvider` is synchronous,
 // so this provider returns a `CardSpec` immediately with a body that starts
-// empty and fills in once the async call resolves — the same lazily-filled-
-// panel shape `asset-preview.ts`'s `assetCompletionInfo` already uses.
+// empty and fills in once the async call resolves (`pending`); hover waits
+// for it, and a page with no description opens no card.
 //
 // The provider is wrapped in `withLinkControls` like the other two link-kind
 // providers, and cm-editor.ts registers it, passing `engine.editorReferenceCard` as `call`.
@@ -513,7 +524,7 @@ export function pageLinkCardProvider(
     const env = resolvedCache.get(link.target, false);
     if (!env || !['link', 'moved', 'anchor'].includes(env.kind.kind)) return null;
     const body = document.createElement('div');
-    call(opts.fromFile(), link.target).then((res) => {
+    const pending = call(opts.fromFile(), link.target).then((res) => {
       if (res.status !== 'ok' || !res.data) return;
       const { description, generated, heading } = res.data;
       // `env.anchor` (already in hand, no RPC needed) decides which half of
@@ -528,6 +539,6 @@ export function pageLinkCardProvider(
         if (generated) body.append(' · ', t('completion.generated'));
       }
     });
-    return { title: link.target, body };
+    return { title: link.target, body, pending };
   };
 }

@@ -27,6 +27,7 @@ All notable changes to moss will be documented here.
 
 ### Changed
 
+- In the editor, a hover card opens only when it has something the line does not show: resting on an external link opens nothing (⌘K still offers the address, Open and Unlink), a page link's card opens only when that page has a description, and the "⌘-click to open" line is gone. In the dark theme the cards are dark again; they had turned pale under light text.
 - The macOS `moss` download is 1.1 MB smaller.
 - The warning about a theme colour set without a dark value is no longer shown on a site whose `color_scheme` is fixed to light or dark, which never shows the other side.
 - A page with `nav: true` inside a folder whose home page is also in the nav bar is now listed in a submenu under that folder's entry, instead of as its own link in the bar. The entry stays a link with a button beside it that opens the list (keyboard and touch work, Escape closes); deeper pages join the same list. A page whose folder is not in the nav bar stays a top-level link, and a site with no such pages is unchanged.

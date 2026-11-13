@@ -1302,8 +1302,10 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
 /* Container 3 — the reference card (hover and click-opened). Same chrome as
    .cm-asset-hover; a fields/actions footer (`--editable` only — "a hover card
    is read-only; a click-opened card may host controls")
-   is added in the editable card renderer. */
-.cm-reference-card {
+   is added in the editable card renderer. The `.cm-tooltip` half outranks the
+   editor library's own light tooltip chrome, which otherwise paints the card
+   pale under light text in the dark theme. */
+.cm-tooltip.cm-reference-card {
   background: var(--moss-color-bg);
   border: 1px solid var(--moss-border-light);
   border-radius: 6px;
@@ -1316,11 +1318,6 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
 .cm-reference-card-title {
   font-weight: 600;
   margin-bottom: var(--moss-space-2xs, 4px);
-}
-.cm-reference-card-hint {
-  font-size: 11px;
-  color: var(--moss-color-muted);
-  margin-top: var(--moss-space-2xs, 4px);
 }
 .cm-reference-card-field {
   display: block;

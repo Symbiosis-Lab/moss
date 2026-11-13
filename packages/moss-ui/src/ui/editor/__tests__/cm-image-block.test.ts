@@ -164,12 +164,11 @@ describe('linked image block', () => {
     return w.toDOM().querySelector('.cm-lp-image-block') as HTMLElement;
   }
 
-  test('carries the link affordance classes and a portal tooltip', () => {
+  test('carries the link affordance classes, and no tooltip repeating the address on its source line', () => {
     const block = linked('/awards/');
     expect(block.classList.contains('cm-lp-image-block--linked')).toBe(true);
     expect(block.classList.contains('cm-link-clickable')).toBe(true);
-    // Portal tooltip, never the native `title=` bubble (UI convention).
-    expect(block.getAttribute('data-tooltip')).toBe('/awards/');
+    expect(block.getAttribute('data-tooltip')).toBeNull();
     expect(block.getAttribute('title')).toBeNull();
   });
 

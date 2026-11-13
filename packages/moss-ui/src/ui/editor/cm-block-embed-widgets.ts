@@ -164,7 +164,6 @@ export class ImageBlockWidget extends WidgetType {
     if (this.link) {
       const href = this.link.href;
       wrapper.classList.add('cm-lp-image-block--linked', 'cm-link-clickable');
-      wrapper.setAttribute('data-tooltip', href);
       wrapper.addEventListener('click', (e: MouseEvent) => {
         if (!isFollowChord(e)) return;
         e.preventDefault();

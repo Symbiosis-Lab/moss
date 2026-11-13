@@ -472,6 +472,19 @@ describe('following an embed', () => {
     expect(dispatched[0].detail.filePath).toBe('/project/獎項/獎項.md');
   });
 
+  test('Mod-Enter on an external link opens it: the keyboard path to what ⌘-click does', () => {
+    const doc = 'See [the events](https://example.com/events) soon.\n';
+    store.set('https://example.com/events false', {
+      kind: { kind: 'external', data: { url: 'https://example.com/events' } },
+    } as never);
+    openUrlSpy.mockClear();
+    createView(doc, doc.indexOf('example.com') + 3);
+
+    pressModEnter();
+
+    expect(openUrlSpy).toHaveBeenCalledWith('https://example.com/events');
+  });
+
   test('Mod-Enter on an asset embed opens the asset file', () => {
     const doc = 'see ![[docs/paper.pdf]]\n';
     store.set('docs/paper.pdf true', embedEnvelope('docs/paper.pdf', {
