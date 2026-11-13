@@ -12,6 +12,10 @@
  * element are what it can check), and that the viewer stays once the preview
  * has followed to the PDF's own address.
  *
+ * Then the editor follows the preview back: a page opened from the file tree
+ * is shown without entering the preview's back/forward history, and a click
+ * from it to the home page must still bring the editor to the home page's file.
+ *
  * Ports: playwright/gate-ports.ts, keys `browser-editor:ui` /
  * `browser-editor:preview`. Config: playwright/browser-editor.config.ts.
  */
@@ -38,6 +42,8 @@ test.beforeAll(async () => {
   mkdirSync(join(home, 'moss'));
   writeFileSync(join(site, 'index.md'), '---\ntitle: Garden\n---\nHello garden.\n\n![[doc.pdf]]\n');
   writeFileSync(join(site, 'doc.pdf'), ONE_PAGE_PDF);
+  mkdirSync(join(site, 'events'));
+  writeFileSync(join(site, 'events', 'reading-circle.md'), '---\ntitle: Reading circle\n---\nWe read together.\n\n[Back home](/)\n');
   // MOSS_HOME and the search root keep the binary from finding, or handing
   // the folder to, an installed desktop app.
   server = spawn(MOSS_BIN, ['edit', site, '--serve', '--no-browser', '--port', String(gatePort('browser-editor:ui'))], {
@@ -62,7 +68,7 @@ test.afterAll(async () => {
   rmSync(home, { recursive: true, force: true });
 });
 
-test('the browser editor boots, saves, and opens a sandboxed PDF in the file viewer', async ({ page, browserName }) => {
+test('the browser editor boots, saves, opens a sandboxed PDF in the file viewer, and follows the preview home', async ({ page, browserName }) => {
   await expect.poll(() => output.match(/Edit at (\S+)/)?.[1], { timeout: 60_000, message: `the sign-in link; server said:\n${output}` }).toBeTruthy();
   const link = output.match(/Edit at (\S+)/)![1];
 
@@ -133,4 +139,17 @@ test('the browser editor boots, saves, and opens a sandboxed PDF in the file vie
     await editor.evaluate(() => (window as unknown as { pdfViewers: unknown }).pdfViewers),
     'the editor mounted one PDF viewer and never took it down',
   ).toEqual({ mounted: 1, removed: 0 });
+
+  await test.step('the editor follows the preview home from a page opened in the file tree', async () => {
+    const openFile = () => editor.evaluate(() => decodeURIComponent(location.search));
+    await editor.click('.seg.bc[data-path=""]');
+    await editor.click('.seg[data-path="events"]:not(.bc)');
+    await editor.click('.seg[data-path="events/reading-circle.md"]');
+    await expect.poll(openFile, { timeout: 15_000 }).toContain('reading-circle.md');
+    await preview.waitForFunction(() => document.body?.innerText.includes('We read together'), null, { timeout: 30_000 });
+    await preview.click('a:has-text("Back home")');
+    await preview.waitForFunction(() => document.body?.innerText.includes('Hello garden'), null, { timeout: 30_000 });
+    await expect.poll(openFile, { timeout: 15_000, message: 'the file the editor shows once the preview is home' }).toContain('index.md');
+    await expect(editor.locator('.cm-content')).toContainText('Hello garden');
+  });
 });

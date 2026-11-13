@@ -79,6 +79,7 @@ All notable changes to moss will be documented here.
 - For plugin authors: `contributes.site_settings` draws a plugin's settings in its tab and writes each change into the site's own `[services.<plugin>]` table, refusing any key the manifest does not draw, at any depth, and keeping the file's comments and order, so the same keys stay editable by hand. Settings can be nested (`object`, `map`, `array`), a number can be shown in larger units (`scale`, `unit`), `actions` add a button that makes a signed call to one of moss's services, and top-level `translations` show the manifest's words in the reader's language. `public_data.fill` publishes the address of a moss service for the site when the table leaves that key out.
 - A booking offer's service may say `charge = "hourly"` or `"fixed"`; without it the kind is still read from the keys present.
 - Dragging the focus point of a markdown image (`![a view](photo.jpg)`) in the editor writes the position where the build reads it, after a pipe in the brackets: `![a view|focus:20%,62%](photo.jpg)`. It was written into the address, `(photo.jpg|focus:20%,62%)`, which names no file, so the picture stopped loading on the page and stayed broken until the line was corrected by hand. Dragging the dot again on a line left that way repairs it.
+- In the editor, opening a page from the file tree and then clicking through to the home page in the preview brings the editor to the home page's file. The editor used to keep the other file open while the preview showed the home page.
 
 ## [0.15.22] - 2026-11-11
 
