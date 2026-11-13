@@ -26,6 +26,11 @@
  * was written, and a chosen date and time reach the file in the form the
  * build draws.
  *
+ * Then two new pages in a row in one folder, `Workshops`: the second is
+ * `untitled 2.md`, its address (`workshops/untitled-2/`) spells neither name,
+ * and no build has mapped it, so the editor opens it only if the address is
+ * matched back to the file.
+ *
  * Then a folder's own page that lists its folder by name carries no
  * missing-file mark, while an embed of a folder that does not exist does.
  *
@@ -63,12 +68,14 @@ test.beforeEach(async () => {
   site = realpathSync(mkdtempSync(join(tmpdir(), 'moss-browser-editor-site-')));
   home = realpathSync(mkdtempSync(join(tmpdir(), 'moss-browser-editor-home-')));
   mkdirSync(join(home, 'moss'));
-  writeFileSync(join(site, 'index.md'), '---\ntitle: Garden\n---\nHello garden.\n\n![[doc.pdf]]\n\n[Talk](talk.md)\n\n' +
+  writeFileSync(join(site, 'index.md'), '---\ntitle: Garden\n---\nHello garden.\n\n![[doc.pdf]]\n\n[Talk](talk.md)\n\n[To the workshops](/workshops/)\n\n' +
     ':::grid 2\nBeds are dug in March.\n\nSeeds go in by April.\n+++\nWater comes from the well.\n\nThe well is closed in winter.\n:::\n');
   for (const [name, text] of Object.entries(EVENTS)) writeFileSync(join(site, name), text);
   writeFileSync(join(site, 'doc.pdf'), ONE_PAGE_PDF);
   writeFileSync(join(site, 'footer.md'), 'Tended by hand.\n');
   mkdirSync(join(site, 'events'));
+  mkdirSync(join(site, 'Workshops'));
+  writeFileSync(join(site, 'Workshops', 'index.md'), '---\ntitle: Workshops\n---\nAll workshops.\n');
   writeFileSync(join(site, 'events', 'reading-circle.md'), '---\ntitle: Reading circle\n---\nWe read together.\n\n[Back home](/)\n');
   mkdirSync(join(site, 'meetings'));
   writeFileSync(join(site, 'meetings', 'meetings.md'), '---\ntitle: Meetings\n---\nOurs:\n\n![[meetings/|style:summary]]\n\nGone:\n\n![[nowhere/|style:summary]]\n');
@@ -222,6 +229,29 @@ test('the browser editor boots, saves, opens a sandboxed PDF in the file viewer,
     await page.waitForTimeout(500); // page clicks wait while the editor settles on the file the last step loaded
     await secondLine.dblclick();
     await expect.poll(caretLine, { timeout: 15_000, message: "the line the caret is on in the grid's second column" }).toContain('The well is closed in winter');
+  });
+
+  await test.step('a second new page in a folder opens in the editor', async () => {
+    const openFile = () => editor.evaluate(() => decodeURIComponent(location.search));
+    // Reached as a visitor would: the editor follows the preview into the folder.
+    await preview.click('a:has-text("To the workshops")');
+    await expect.poll(openFile, { timeout: 15_000 }).toContain('Workshops/index.md');
+    await editor.hover('#editor-create-btn');
+    await expect(editor.locator('#editor-create-btn')).toHaveAttribute('data-tooltip', /Workshops/);
+    await editor.click('#editor-create-btn');
+    await expect.poll(openFile, { timeout: 15_000 }).toContain('Workshops/untitled.md');
+    // The preview follows to the new page's address and the shell asks what backs it.
+    const backing = page.waitForResponse(
+      (r) => r.url().endsWith('/resolve_page_source') && (r.request().postData() ?? '').includes('workshops/untitled-2'),
+      { timeout: 30_000 },
+    );
+    await editor.click('#editor-create-btn');
+    await expect.poll(openFile, { timeout: 15_000 }).toContain('Workshops/untitled 2.md');
+    expect((await (await backing).json()).source_path, 'the file behind the new address').toMatch(/Workshops\/untitled 2\.md$/);
+    await expect(editor.locator('body')).not.toContainText('No page to edit');
+    await editor.click('.cm-content');
+    await page.keyboard.type('Second new page.');
+    await expect.poll(() => readFileSync(join(site, 'Workshops', 'untitled 2.md'), 'utf8'), { timeout: 15_000 }).toContain('Second new page.');
   });
 });
 
