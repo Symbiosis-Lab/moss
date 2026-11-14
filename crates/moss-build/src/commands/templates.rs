@@ -501,6 +501,26 @@ mod tests {
         assert!(!root.join("Mei Lin.md").exists());
     }
 
+    /// A folder's home file is `index.md` as much as the page named after the
+    /// folder: its version needs the folder made in the other language.
+    #[test]
+    fn an_index_file_is_a_home_file_whose_folder_may_be_missing() {
+        let vault = vault();
+        let root = vault.path();
+        write(root, ".moss/config.toml", "[site]\nlang = \"en\"\n");
+        write(root, "zh-hans/index.md", "---\ntitle: 首页\n---\n你好\n");
+        write(root, "work/index.md", "---\ntitle: Work\n---\nHi\n");
+        write(root, "work/work.md", "---\ntitle: Work\n---\nHi\n");
+        write(root, "work/x.md", "---\ntitle: X\n---\nHi\n");
+        let folder_missing = |rel: &str| crate::cli::new::translation_slots(root, rel).unwrap()[0].folder_missing;
+
+        assert!(folder_missing("work/index.md"));
+        assert!(folder_missing("work/work.md"));
+        assert!(!folder_missing("work/x.md"));
+        fs::create_dir_all(root.join("zh-hans/work")).unwrap();
+        assert!(!folder_missing("work/index.md"));
+    }
+
     #[test]
     fn site_languages_reports_the_default_and_the_trees() {
         let vault = vault();
