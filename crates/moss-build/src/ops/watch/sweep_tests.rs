@@ -1087,6 +1087,59 @@ async fn a_sweep_straight_after_a_build_finds_no_drift() {
     );
 }
 
+/// A page recreated and rebuilt within one wall-clock second of the build that
+/// deleted it, then deleted again, must be reported. The manifest clock is
+/// whole seconds, so the two builds share it; judged by the clock alone the
+/// sweep kept the older build's manifest as its baseline, which never held the
+/// page, and so the second delete read as no change at all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_delete_after_a_same_second_rebuild_is_reported() {
+    let tmp = tempfile::Builder::new().prefix("moss-sweep-test-").tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
+    let folder_path = dir.to_str().unwrap();
+    std::fs::write(dir.join("index.md"), "# Home\n").unwrap();
+    build_once(folder_path).await;
+    let without = read_baseline_from_disk(&dir).expect("first build seals");
+
+    std::fs::write(dir.join("page.md"), "# Page\n").unwrap();
+    let caught = run_pass(&dir, Some(without.clone()), None, None, true).await;
+    let report = caught.drift.expect("premise: a baseline to judge against");
+    assert!(report.drifted.contains_key("page.md"), "premise: the new page is caught");
+    let dispatched: std::collections::BTreeMap<_, _> =
+        report.drifted.iter().map(|(rel, d)| (rel.clone(), d.stamp)).collect();
+
+    // The dispatched rebuild, started in the same second as the first.
+    build_once(folder_path).await;
+    let mut with = read_baseline_from_disk(&dir).expect("second build seals");
+    assert!(with.sources.contains_key("page.md"));
+    assert!(with.render_id.is_some() && with.render_id != without.render_id, "each build names its render");
+    with.captured_at = without.captured_at;
+    std::fs::write(crate::moss_paths::MossPaths::new(&dir).hashes(), serde_json::to_string(&with).unwrap()).unwrap();
+
+    let after = run_pass(&dir, Some(with.clone()), caught.baseline, None, true).await;
+    assert!(after.drift.as_ref().is_some_and(|r| r.is_quiet()), "the rebuild cleared the page: {:?}", after.drift);
+
+    std::fs::remove_file(dir.join("page.md")).unwrap();
+    let deleted = run_pass(&dir, Some(with), after.baseline, None, true).await;
+    let report = deleted.drift.expect("a baseline to judge against");
+    assert_eq!(undispatched_paths(&report.drifted, &dispatched), vec!["page.md".to_string()]);
+}
+
+/// The stash a build leaves and the manifest it seals name the same render,
+/// so a sweep pass with nothing new keeps its cache instead of rereading.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_build_stashes_and_seals_the_same_render() {
+    let tmp = tempfile::Builder::new().prefix("moss-sweep-test-").tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
+    let folder_path = dir.to_str().unwrap();
+    std::fs::write(dir.join("index.md"), "# Home\n").unwrap();
+    build_once(folder_path).await;
+    let stash = stashed_baseline(folder_path).expect("a finished build stashes its hashes");
+    let sealed = read_baseline_from_disk(&dir).expect("a finished build seals");
+    assert!(stash.render_id.is_some());
+    assert_eq!(stash.render_id, sealed.render_id);
+}
+
 /// A rebuild dispatched for a genuine edit must not be
 /// permanently sticky-suppressed just because a structural sibling is in the
 /// cloud. The incomplete attempt keeps the visible baseline unchanged, so the

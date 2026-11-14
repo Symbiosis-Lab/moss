@@ -44,9 +44,10 @@ use super::{source_metadata_verdict, SourceVerdict};
 /// main phase — current, but naming no asset the deferred phase has not
 /// folded in yet) and the `sealed` manifest on disk (complete, but written
 /// only when the seal tail lands, which can be a whole build later since the
-/// tail queues behind the next build's stage-write span). Both carry the one
-/// `captured_at` minted for their build (`PendingManifest::new`), so equal
-/// clocks mean the same build, not the same second by luck.
+/// tail queues behind the next build's stage-write span). Both carry the
+/// `captured_at` and `render_id` minted for their build
+/// (`PendingManifest::new`). The clock orders builds; it is whole seconds, so
+/// only the render id together with it says two stores are the same build.
 ///
 /// Neither store alone is a baseline, and neither is a key set from the
 /// older one with values from the newer: a page created since that seal is
@@ -71,8 +72,9 @@ pub fn select_baseline(
     cache: Option<SiteHashes>,
     sealed: impl FnOnce() -> Option<SiteHashes>,
 ) -> Option<SiteHashes> {
+    let same_build = |a: &SiteHashes, b: &SiteHashes| a.captured_at == b.captured_at && a.render_id == b.render_id;
     if let (Some(s), Some(c)) = (stash, cache.as_ref()) {
-        if s.captured_at == c.captured_at {
+        if same_build(s, c) {
             return cache;
         }
     }
@@ -85,7 +87,7 @@ pub fn select_baseline(
         return None;
     }
     match cache {
-        Some(c) if c.captured_at == sealed.captured_at => Some(c),
+        Some(c) if same_build(&c, &sealed) => Some(c),
         _ => Some(sealed),
     }
 }
