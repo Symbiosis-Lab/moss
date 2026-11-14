@@ -137,6 +137,7 @@ struct TestHost {
     announced: std::sync::Mutex<Vec<(String, String)>>,
     withdrawn: std::sync::Mutex<Vec<(String, String)>>,
     moved: std::sync::Mutex<Vec<(String, String)>>,
+    created: std::sync::Mutex<Vec<String>>,
     saved: std::sync::Mutex<Vec<String>>,
     refuses_moss_dir: bool,
 }
@@ -160,6 +161,7 @@ impl TestHost {
             announced: Default::default(),
             withdrawn: Default::default(),
             moved: Default::default(),
+            created: Default::default(),
             saved: Default::default(),
             refuses_moss_dir: false,
         }
@@ -196,9 +198,11 @@ impl CommandHost for TestHost {
     fn withdraw_moves(&self, pairs: &[(String, String)]) {
         self.withdrawn.lock().unwrap().extend_from_slice(pairs);
     }
-    fn moved(&self, pairs: &[(String, String)]) {
-        assert!(!pairs.is_empty(), "a move of no page asks for no rebuild");
-        self.moved.lock().unwrap().extend_from_slice(pairs);
+    fn changed(&self, change: super::Change<'_>) {
+        match change {
+            super::Change::Moved(pairs) => self.moved.lock().unwrap().extend_from_slice(pairs),
+            super::Change::Created(paths) => self.created.lock().unwrap().extend_from_slice(paths),
+        }
     }
     fn served_dir(&self) -> PathBuf {
         self.root().join(".moss")
@@ -361,6 +365,7 @@ async fn a_page_saved_as_a_template_makes_a_new_page_through_the_table() {
     assert_eq!(listed[0]["name"], json!("Post"));
     let made: String = ok(dispatch(&host, "instantiate_template", json!({ "id": id, "targetDir": ".", "name": "c.md" })).await).await;
     assert!(Path::new(&made).ends_with("c.md") && Path::new(&made).exists(), "{made}");
+    assert_eq!(*host.created.lock().unwrap(), vec![made.clone()], "the host hears the page was made");
     ok::<Value>(dispatch(&host, "delete_template", json!({ "id": id })).await).await;
     let listed: Vec<Value> = ok(dispatch(&host, "list_templates", json!({})).await).await;
     assert!(listed.is_empty());
@@ -500,6 +505,29 @@ async fn a_site_rename_rewrites_links_and_announces_the_move() {
     assert!(std::fs::read_to_string(root.join("b.md")).unwrap().contains("c.md"));
     assert_eq!(*host.announced.lock().unwrap(), vec![("a.md".to_string(), "c.md".to_string())]);
     assert_eq!(*host.moved.lock().unwrap(), *host.announced.lock().unwrap(), "the host hears the move was made");
+}
+
+#[tokio::test]
+async fn a_new_page_and_a_copy_are_handed_to_the_host_and_a_refused_one_is_not() {
+    let (_d, root) = pages();
+    let (host, new_page) = (TestHost::site(&root), |name: &str| json!({ "files": [{ "dir": root.to_string_lossy(), "name": name, "frontmatter": {} }] }));
+    let made: Vec<String> = ok(write::dispatch(&host, "create_files", new_page("untitled")).await).await;
+    let copy: String = ok(write::dispatch(&host, "duplicate_entry", json!({ "path": "a.md" })).await).await;
+    assert!(matches!(write::dispatch(&host, "create_files", new_page("a.md")).await, Some(Err(_))), "a.md exists");
+    assert_eq!(*host.created.lock().unwrap(), vec![made[0].clone(), copy]);
+}
+
+#[tokio::test]
+async fn a_translation_made_is_handed_to_the_host() {
+    let (_d, root) = pages();
+    // allow:raw_write test fixture pages in a temp folder
+    std::fs::write(root.join(".moss/config.toml"), "[site]\nlang = \"en\"\n").unwrap();
+    std::fs::create_dir(root.join("zh-hans")).unwrap();
+    // allow:raw_write test fixture pages in a temp folder
+    std::fs::write(root.join("zh-hans/index.md"), "---\ntitle: 首页\n---\n").unwrap();
+    let host = TestHost::site(&root);
+    let made: String = ok(write::dispatch(&host, "create_translation", json!({ "sourceAbs": "a.md", "lang": "zh-hans" })).await).await;
+    assert_eq!(*host.created.lock().unwrap(), vec![made]);
 }
 
 #[tokio::test]

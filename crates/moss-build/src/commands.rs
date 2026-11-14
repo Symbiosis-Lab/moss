@@ -65,12 +65,14 @@ pub trait CommandHost: Send + Sync {
     /// Moves announced by [`Self::announce_moves`] that did not happen.
     fn withdraw_moves(&self, _pairs: &[(String, String)]) {}
 
-    /// The announced moves are on disk. The host asks the folder's rebuild
-    /// worker for the build the watcher's rename event would ask for
-    /// (`ops::watch::hand_off_moves` does exactly that), never builds inline,
-    /// and does nothing when no worker runs. Required, so a host with its own
-    /// rebuild bookkeeping cannot skip it by accident.
-    fn moved(&self, pairs: &[(String, String)]);
+    /// A command changed the folder's files. The host asks the folder's
+    /// rebuild worker for the build the watcher's event would ask for
+    /// (`ops::watch::hand_off` does exactly that), never builds inline, and
+    /// does nothing when no worker runs. A change of no file (a renamed
+    /// picture) is told too; `ops::watch::request_for` answers none for it.
+    /// Required, so a host with its own rebuild bookkeeping cannot skip it by
+    /// accident.
+    fn changed(&self, change: Change<'_>);
 
     /// The schema the editor checks frontmatter against. A host with a live
     /// plugin runtime answers from it; the default reads a site's installed
@@ -197,9 +199,27 @@ fn site_relative<'h>(host: &'h dyn CommandHost, path: &VaultPath) -> Result<(&'h
     Ok((root, logical_path(rel)))
 }
 
+/// A change to the folder's files that a command made itself.
+#[derive(Debug, Clone, Copy)]
+pub enum Change<'a> {
+    /// Page moves, root-relative, announced with [`CommandHost::announce_moves`].
+    Moved(&'a [(String, String)]),
+    /// New files, absolute.
+    Created(&'a [String]),
+}
+
+impl Change<'_> {
+    /// The change in a log line's words.
+    pub fn what(&self) -> &'static str {
+        match self {
+            Change::Moved(_) => "move",
+            Change::Created(_) => "new file",
+        }
+    }
+}
+
 /// Run `apply` with its page moves announced to the host first, withdrawn if
-/// it fails, and handed to the host's rebuild once they are made. A move of
-/// no page (a picture, a folder of files) hands over nothing.
+/// it fails, and told to the host once they are made.
 fn with_moves_announced<T>(
     host: &dyn CommandHost,
     pairs: &[(String, String)],
@@ -208,8 +228,7 @@ fn with_moves_announced<T>(
     host.announce_moves(pairs);
     let out = apply();
     match out {
-        Ok(_) if pairs.is_empty() => {}
-        Ok(_) => host.moved(pairs),
+        Ok(_) => host.changed(Change::Moved(pairs)),
         Err(_) => host.withdraw_moves(pairs),
     }
     out

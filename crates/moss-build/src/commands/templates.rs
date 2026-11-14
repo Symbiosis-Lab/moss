@@ -293,7 +293,9 @@ pub struct InstantiateTemplateArgs {
 
 /// Make a new page or folder from a saved template. Answers the new page's path.
 pub async fn instantiate_template(host: &dyn CommandHost, a: InstantiateTemplateArgs) -> Result<String, String> {
-    instantiate_template_in(site_root(host)?, &a.id, &lossy(&resolve(host, &a.target_dir)?), &a.name)
+    let made = instantiate_template_in(site_root(host)?, &a.id, &lossy(&resolve(host, &a.target_dir)?), &a.name)?;
+    host.changed(super::Change::Created(std::slice::from_ref(&made)));
+    Ok(made)
 }
 
 #[derive(serde::Deserialize, specta::Type)]
@@ -306,7 +308,9 @@ pub struct CreateTranslationArgs {
 /// Make the page's version in `lang` at the mirrored path, linked to the
 /// original with `translationKey`. Answers the new page's absolute path.
 pub async fn create_translation(host: &dyn CommandHost, a: CreateTranslationArgs) -> Result<String, String> {
-    create_translation_in(site_root(host)?, &lossy(&resolve(host, &a.source_abs)?), &a.lang)
+    let made = create_translation_in(site_root(host)?, &lossy(&resolve(host, &a.source_abs)?), &a.lang)?;
+    host.changed(super::Change::Created(std::slice::from_ref(&made)));
+    Ok(made)
 }
 
 #[derive(serde::Deserialize, specta::Type)]

@@ -3,7 +3,7 @@
 use serde_json::Value;
 
 use super::rename_undo::RenameRefsSummary;
-use super::{resolve, lossy, site_root, with_moves_announced, CommandHost, VaultPath};
+use super::{resolve, lossy, site_root, with_moves_announced, Change, CommandHost, VaultPath};
 use crate::editor::rename_plan::UndoResult;
 
 fn resolve_all(host: &dyn CommandHost, paths: &[VaultPath]) -> Result<Vec<String>, String> {
@@ -17,7 +17,9 @@ pub struct CreateFilesArgs {
 
 /// All files or none; returns their absolute paths in order.
 pub async fn create_files(host: &dyn CommandHost, a: CreateFilesArgs) -> Result<Vec<String>, String> {
-    crate::vault::fs::create_files_inner(host.root(), &a.files)
+    let made = crate::vault::fs::create_files_inner(host.root(), &a.files)?;
+    host.changed(Change::Created(&made));
+    Ok(made)
 }
 
 #[derive(serde::Deserialize, specta::Type)]
@@ -97,7 +99,9 @@ pub async fn duplicate_entry(host: &dyn CommandHost, a: PathArgs) -> Result<Stri
         copy_file_into_vault(&src, &dest, INTERACTIVE_DEADLINE)
             .map_err(|e| format!("Failed to duplicate '{}': {}", src.display(), e))?;
     }
-    Ok(lossy(&dest))
+    let made = lossy(&dest);
+    host.changed(Change::Created(std::slice::from_ref(&made)));
+    Ok(made)
 }
 
 /// Strips every reference to `paths` from the folder's pages (a loose

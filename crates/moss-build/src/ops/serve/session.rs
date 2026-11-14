@@ -97,8 +97,8 @@ impl CommandHost for Session {
         super::events::publish(event);
     }
 
-    fn moved(&self, pairs: &[(String, String)]) {
-        crate::ops::watch::hand_off_moves(self.root(), pairs);
+    fn changed(&self, change: crate::commands::Change<'_>) {
+        crate::ops::watch::hand_off(self.root(), change);
     }
 }
 

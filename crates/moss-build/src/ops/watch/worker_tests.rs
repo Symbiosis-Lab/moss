@@ -129,6 +129,22 @@ fn enqueue_onto_an_occupied_slot_merges() {
     assert_eq!(handle.take(), None, "merge must not leave a second request");
 }
 
+/// A page made in the editor and saved a moment later: the save's request is
+/// content-only and waits on the hash check, and it must not narrow the
+/// create's.
+#[test]
+fn a_create_merged_with_a_gated_save_stays_structural_and_unconditional() {
+    let page = "/site/untitled.md";
+    let save = RebuildRequest { trigger: BuildTrigger::ContentOnly(vec![page.into()]), ..gated(&[page]) };
+    let made = [page.to_string()];
+    let create = || super::super::request_for(std::path::Path::new("/site"), crate::commands::Change::Created(&made)).unwrap();
+    for (first, second) in [(create(), save.clone()), (save, create())] {
+        let merged = merge_requests(first, second);
+        assert!(matches!(merged.trigger, BuildTrigger::Structural(_)), "got {:?}", merged.trigger);
+        assert_eq!(merged.gate_paths, None);
+    }
+}
+
 #[test]
 fn restore_preserves_a_deferred_request_and_merges_late_arrivals() {
     let handle = WorkerHandle::new();
@@ -810,4 +826,12 @@ fn merged_rename_pairs_chain_instead_of_piling_up() {
 
     let unrelated = merge_requests(with_pairs(&[("a", "b")]), with_pairs(&[("c", "d")]));
     assert_eq!(pairs(&unrelated), vec![p("a", "b"), p("c", "d")]);
+}
+
+/// A renamed picture, or a create that made nothing.
+#[test]
+fn a_change_of_no_file_asks_for_no_rebuild() {
+    use crate::commands::Change;
+    assert!(super::super::request_for(std::path::Path::new("/site"), Change::Moved(&[])).is_none());
+    assert!(super::super::request_for(std::path::Path::new("/site"), Change::Created(&[])).is_none());
 }

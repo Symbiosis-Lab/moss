@@ -689,27 +689,31 @@ async fn handle_debounced_batch(
     .await;
 }
 
-/// The rebuild that page moves moss made ask for: what the watcher's rename
-/// event asks, with the pairs the preview follows a renamed page by. `pairs`
-/// are root-relative.
-pub fn move_request(root: &Path, pairs: &[(String, String)]) -> worker::RebuildRequest {
-    let paths = pairs.iter().flat_map(|(from, to)| [root.join(from), root.join(to)]).collect();
-    worker::RebuildRequest { rename_pairs: pairs.to_vec(), trigger: crate::build::BuildTrigger::Structural(paths), gate_paths: None }
+/// The rebuild a change moss made asks for: what the watcher's event for it
+/// asks, and for a move the pairs the preview follows a renamed page by.
+/// `folder` is the built folder. A change of no file asks for none.
+pub fn request_for(folder: &Path, change: crate::commands::Change<'_>) -> Option<worker::RebuildRequest> {
+    use crate::commands::Change;
+    let (rename_pairs, paths): (Vec<_>, Vec<_>) = match change {
+        Change::Moved(pairs) => (pairs.to_vec(), pairs.iter().flat_map(|(from, to)| [folder.join(from), folder.join(to)]).collect()),
+        Change::Created(paths) => (Vec::new(), paths.iter().map(std::path::PathBuf::from).collect()),
+    };
+    (!paths.is_empty()).then(|| worker::RebuildRequest { rename_pairs, trigger: crate::build::BuildTrigger::Structural(paths), gate_paths: None })
 }
 
-/// Hand moves moss made to the folder's rebuild worker, so their build does
-/// not wait for the OS to report them. Without a running worker nothing
-/// happens: the watcher's own event is the fallback, and a move never builds
-/// inline. The worker is looked up by the key the headless watch registers it
-/// under.
-pub fn hand_off_moves(root: &Path, pairs: &[(String, String)]) {
+/// Hand a change moss made to the folder's rebuild worker, so its build does
+/// not wait for the OS to report it. Without a running worker nothing
+/// happens: the watcher's own event is the fallback, and the change never
+/// builds inline. The worker is looked up by the key the headless watch
+/// registers it under.
+pub fn hand_off(root: &Path, change: crate::commands::Change<'_>) {
     if !worker::worker_enabled() {
         return;
     }
     let folder = headless::absolute_watch_root(&root.to_string_lossy());
-    let Some(handle) = worker::get(&folder) else { return };
-    log::info!(target: "moss::build::watch", "Rebuild asked by move: {} pair(s)", pairs.len());
-    handle.enqueue(move_request(Path::new(&folder), pairs));
+    let (Some(handle), Some(request)) = (worker::get(&folder), request_for(Path::new(&folder), change)) else { return };
+    log::info!(target: "moss::build::watch", "Rebuild asked by {}", change.what());
+    handle.enqueue(request);
 }
 
 #[cfg(test)]
