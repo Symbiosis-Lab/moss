@@ -30,6 +30,9 @@ pub mod versions;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+#[path = "commands/save_tests.rs"]
+mod save_tests;
 
 /// What a command needs from whoever runs it.
 pub trait CommandHost: Send + Sync {

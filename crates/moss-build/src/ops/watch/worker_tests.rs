@@ -248,76 +248,182 @@ async fn a_request_arriving_mid_build_is_built_next() {
         .unwrap();
 }
 
-/// A save the running build has already read, followed by an event that
-/// changes no bytes (a sync client's rename-then-touch), is built once: the
-/// follow-up is gated at admission against the stash that build recorded from
-/// the bytes it read. A save landing after the read is built again.
-async fn builds_for_a_follow_up_during_the_build(follow_up: &'static [u8]) -> usize {
+// ── A save's own request beside the watcher's ───────────────────────────────
+
+#[derive(Clone, Copy)]
+enum Ask {
+    Save,
+    Event(notify::EventKind),
+    Full,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum When {
+    InTheSlot,
+    DuringTheFirstBuild,
+    AfterTheFirstBuild,
+}
+
+async fn request_for(ask: Ask, root: &std::path::Path, page: &std::path::Path) -> RebuildRequest {
+    match ask {
+        Ask::Save => crate::ops::watch::request_for(root, crate::commands::Change::Wrote(page)).expect("a save of a page asks for a rebuild"),
+        Ask::Event(kind) => {
+            let held = std::sync::Arc::new(std::sync::Mutex::new(None));
+            let h = held.clone();
+            let dispatch: crate::ops::watch::RebuildDispatch = std::sync::Arc::new(move |req| {
+                *h.lock().unwrap() = Some(req);
+                Box::pin(async {})
+            });
+            let emit: crate::ops::watch::EventRelay = std::sync::Arc::new(|_| {});
+            let mut event = notify::Event::new(kind);
+            event.paths = vec![page.to_path_buf()];
+            let batch = vec![notify_debouncer_full::DebouncedEvent::new(event, std::time::Instant::now())];
+            crate::ops::watch::handle_debounced_batch(batch, root.to_str().unwrap(), &emit, &dispatch).await;
+            let request = held.lock().unwrap().take();
+            request.expect("the watcher asks for a rebuild")
+        }
+        Ask::Full => RebuildRequest::full(),
+    }
+}
+
+/// The builds two requests for one page give, and the bytes the last build
+/// read. The page holds "saved" and the stash says so. It is saved again as
+/// "saved again" before `first` is enqueued, or written with `in_first` inside
+/// the first build after it read the page; `second` arrives `when`. The build
+/// stashes the hash of the bytes it read, as a real one does.
+async fn two_asks(first: Ask, second: Ask, when: When, in_first: Option<&'static [u8]>) -> (usize, Vec<u8>) {
     use sha2::{Digest, Sha256};
+    fn stash(folder: &str, stat: crate::build::stat::FileStat, bytes: &[u8]) {
+        let mut hashes = crate::types::content::SiteHashes::new();
+        hashes.sources.insert("P.md".into(), crate::build::types::SourceMetadata::from_stat(format!("{:x}", Sha256::digest(bytes)), stat));
+        crate::system::build_records::records().record_content_hashes(folder, hashes);
+    }
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     let folder = root.to_str().unwrap().to_string();
     let page = root.join("P.md");
     std::fs::write(&page, b"saved").unwrap();
+    stash(&folder, crate::build::stat::FileStat::of(&std::fs::metadata(&page).unwrap()), b"saved");
+    if in_first.is_none() {
+        std::fs::write(&page, b"saved again").unwrap();
+    }
 
     let handle = std::sync::Arc::new(WorkerHandle::new());
     let attempts = std::sync::Arc::new(AtomicUsize::new(0));
     let builds = std::sync::Arc::new(AtomicUsize::new(0));
+    let served = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pause = when == When::DuringTheFirstBuild || in_first.is_some();
     let (read_tx, read_rx) = tokio::sync::oneshot::channel::<()>();
     let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
-    let mut read = Some(read_tx);
-    let mut release = Some(release_rx);
-    let (a, b, f, p) = (attempts.clone(), builds.clone(), folder.clone(), page.clone());
-    let worker = tokio::spawn(run_worker_loop(handle.clone(), move |req| {
-        let (a, b, f, p) = (a.clone(), b.clone(), f.clone(), p.clone());
+    let (mut read, mut release) = (pause.then_some(read_tx), pause.then_some(release_rx));
+    let (a, b, s, f, p) = (attempts.clone(), builds.clone(), served.clone(), folder.clone(), page.clone());
+    let attempt = move |req: RebuildRequest| {
+        let (a, b, s, f, p) = (a.clone(), b.clone(), s.clone(), f.clone(), p.clone());
         let (read, release) = (read.take(), release.take());
         async move {
             if req.gate_admits(&f, "test").await {
                 b.fetch_add(1, Ordering::SeqCst);
-                // The render reads the page, the save may land, then the build
-                // stashes the hash of what it read.
                 let stat = crate::build::stat::FileStat::of(&std::fs::metadata(&p).unwrap());
                 let bytes = std::fs::read(&p).unwrap();
                 if let (Some(tx), Some(rx)) = (read, release) {
                     tx.send(()).ok();
                     rx.await.ok();
                 }
-                let mut stash = crate::types::content::SiteHashes::new();
-                stash.sources.insert("P.md".into(), crate::build::types::SourceMetadata::from_stat(format!("{:x}", Sha256::digest(&bytes)), stat));
-                crate::system::build_records::records().record_content_hashes(&f, stash);
+                stash(&f, stat, &bytes);
+                *s.lock().unwrap() = bytes;
             }
             a.fetch_add(1, Ordering::SeqCst);
             AttemptOutcome::Completed
         }
-    }));
-
-    handle.enqueue(content_only("P.md"));
-    read_rx.await.expect("the first build reads the page");
-    std::fs::write(&page, follow_up).unwrap();
-    handle.enqueue(gated(&[page.to_str().unwrap()]));
-    release_tx.send(()).ok();
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while attempts.load(Ordering::SeqCst) < 2 {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    let attempted = |n: usize| {
+        let attempts = attempts.clone();
+        async move {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while attempts.load(Ordering::SeqCst) < n {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("every request is admitted or gated");
         }
-    })
-    .await
-    .expect("the follow-up is admitted or gated");
+    };
+
+    handle.enqueue(request_for(first, &root, &page).await);
+    if when == When::InTheSlot {
+        handle.enqueue(request_for(second, &root, &page).await);
+    }
+    let worker = tokio::spawn(run_worker_loop(handle.clone(), attempt));
+    if pause {
+        read_rx.await.expect("the first build reads the page");
+        if let Some(bytes) = in_first {
+            std::fs::write(&page, bytes).unwrap();
+        }
+    }
+    if when == When::DuringTheFirstBuild {
+        handle.enqueue(request_for(second, &root, &page).await);
+    }
+    release_tx.send(()).ok();
+    if when == When::AfterTheFirstBuild {
+        attempted(1).await;
+        handle.enqueue(request_for(second, &root, &page).await);
+    }
+    attempted(if when == When::InTheSlot { 1 } else { 2 }).await;
 
     handle.request_shutdown();
     tokio::time::timeout(Duration::from_secs(5), worker).await.expect("worker exits").unwrap();
     crate::system::build_records::records().forget_content_hashes(&folder);
-    builds.load(Ordering::SeqCst)
+    let served = served.lock().unwrap().clone();
+    (builds.load(Ordering::SeqCst), served)
 }
 
+const MODIFY: notify::EventKind = notify::EventKind::Modify(notify::event::ModifyKind::Data(notify::event::DataChange::Content));
+
+/// The watcher's event for a save moss made, before, during or after the
+/// save's own build, gives one build; so does the save's request arriving
+/// during or after a build the watcher's event started. Each is gated against
+/// the stash the first build recorded.
+#[tokio::test]
+async fn a_save_and_its_watcher_event_build_once_in_any_order() {
+    for (first, second, when) in [
+        (Ask::Save, Ask::Event(MODIFY), When::InTheSlot),
+        (Ask::Save, Ask::Event(MODIFY), When::DuringTheFirstBuild),
+        (Ask::Save, Ask::Event(MODIFY), When::AfterTheFirstBuild),
+        (Ask::Event(MODIFY), Ask::Save, When::DuringTheFirstBuild),
+        (Ask::Event(MODIFY), Ask::Save, When::AfterTheFirstBuild),
+    ] {
+        let label = format!("{} first, the other {}", if matches!(first, Ask::Save) { "save" } else { "event" }, ["in the slot", "during", "after"][when as usize]);
+        assert_eq!(two_asks(first, second, when, None).await, (1, b"saved again".to_vec()), "{label}");
+    }
+}
+
+/// The boundary: a watcher event that arrives as a create is never
+/// hash-gated, so it builds the saved page a second time. macOS can report a
+/// path's earlier create on a later write to it.
+#[tokio::test]
+async fn a_create_event_after_a_saves_build_builds_again() {
+    let create = notify::EventKind::Create(notify::event::CreateKind::File);
+    assert_eq!(two_asks(Ask::Save, Ask::Event(create), When::AfterTheFirstBuild, None).await, (2, b"saved again".to_vec()));
+}
+
+/// A save landing during a full build, after it read the page, gets one more
+/// build, which reads the saved text.
+#[tokio::test]
+async fn a_save_during_a_full_build_is_built_next() {
+    assert_eq!(two_asks(Ask::Full, Ask::Save, When::DuringTheFirstBuild, Some(b"saved again")).await, (2, b"saved again".to_vec()));
+}
+
+/// An event during a build the build has already read, that changes no bytes
+/// (a sync client's rename-then-touch), builds nothing more.
 #[tokio::test]
 async fn an_event_during_the_build_that_changes_no_bytes_builds_nothing_more() {
-    assert_eq!(builds_for_a_follow_up_during_the_build(b"saved").await, 1);
+    assert_eq!(two_asks(Ask::Full, Ask::Event(MODIFY), When::DuringTheFirstBuild, Some(b"saved")).await, (1, b"saved".to_vec()));
 }
 
+/// A write landing after the build read the page is built next.
 #[tokio::test]
 async fn a_save_landing_after_the_build_read_the_page_is_built_next() {
-    assert_eq!(builds_for_a_follow_up_during_the_build(b"saved again").await, 2);
+    assert_eq!(two_asks(Ask::Full, Ask::Event(MODIFY), When::DuringTheFirstBuild, Some(b"saved again")).await, (2, b"saved again".to_vec()));
 }
 
 // ── Freeze at admission ─────────────────────────────────────────────────────
@@ -834,4 +940,34 @@ fn a_change_of_no_file_asks_for_no_rebuild() {
     use crate::commands::Change;
     assert!(super::super::request_for(std::path::Path::new("/site"), Change::Moved(&[])).is_none());
     assert!(super::super::request_for(std::path::Path::new("/site"), Change::Created(&[])).is_none());
+}
+
+/// A page made outside moss and saved in the editor before the watcher's create
+/// arrives. Telling it from a known page would clone the build's whole record
+/// on every save, so the save asks for a gated content-only build like any
+/// other; the gate builds it, since the record has no entry for the page, and
+/// the render verdict renders in full for a page it has not seen.
+#[test]
+fn a_save_of_a_page_the_records_do_not_know_is_content_only_and_gets_past_the_gate() {
+    let dir = tempfile::tempdir().unwrap();
+    let page = dir.path().join("made-elsewhere.md");
+    std::fs::write(&page, b"Text.\n").unwrap();
+    let request = super::super::request_for(dir.path(), crate::commands::Change::Wrote(&page)).unwrap();
+    assert_eq!(request.trigger, BuildTrigger::ContentOnly(vec![page.clone()]));
+    assert_eq!(request.gate_paths, Some(vec![page.clone()]));
+    let known = crate::types::content::SiteHashes::new();
+    assert!(crate::build::watch::should_rebuild_for_paths(&dir.path().to_string_lossy(), &[page], Some(&known)));
+}
+
+/// What a save of each kind of file asks for: a page waits on the hash check,
+/// any other watched file builds unconditionally, and moss's own output asks
+/// for nothing, as the watcher's event for the same write would.
+#[test]
+fn a_save_asks_what_the_watchers_event_for_it_would() {
+    let dir = tempfile::tempdir().unwrap();
+    let ask = |name: &str| super::super::request_for(dir.path(), crate::commands::Change::Wrote(&dir.path().join(name)));
+    assert!(ask("page.md").unwrap().gate_paths.is_some());
+    let style = ask("style.css").unwrap();
+    assert_eq!((style.trigger, style.gate_paths), (BuildTrigger::ContentOnly(vec![dir.path().join("style.css")]), None));
+    assert!(ask(".moss/build.nosync/site/index.html").is_none());
 }

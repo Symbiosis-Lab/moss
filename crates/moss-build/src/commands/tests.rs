@@ -202,7 +202,7 @@ impl CommandHost for TestHost {
         match change {
             super::Change::Moved(pairs) => self.moved.lock().unwrap().extend_from_slice(pairs),
             super::Change::Created(paths) => self.created.lock().unwrap().extend_from_slice(paths),
-            super::Change::Wrote(_) => crate::ops::watch::hand_off(self.root(), change),
+            super::Change::Wrote(_) => {}
         }
     }
     fn served_dir(&self) -> PathBuf {
@@ -220,7 +220,7 @@ impl CommandHost for TestHost {
 }
 
 /// A folder of pages: `a.md`, and `b.md` linking to it.
-fn pages() -> (tempfile::TempDir, PathBuf) {
+pub(super) fn pages() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     std::fs::create_dir(root.join(".moss")).unwrap();
@@ -231,7 +231,7 @@ fn pages() -> (tempfile::TempDir, PathBuf) {
     (dir, root)
 }
 
-async fn ok<T: serde::de::DeserializeOwned>(out: Option<CommandResult>) -> T {
+pub(super) async fn ok<T: serde::de::DeserializeOwned>(out: Option<CommandResult>) -> T {
     match out {
         Some(Ok(v)) => serde_json::from_value(v).unwrap(),
         other => panic!("expected an answer, got {other:?}"),
@@ -273,6 +273,7 @@ async fn one_dispatch_reaches_every_tier_and_a_save_goes_through_the_host() {
     assert_eq!(*host.saved.lock().unwrap(), vec![root.join("a.md").to_string_lossy().into_owned()]);
     assert!(dispatch(&host, "no_such_command", json!({})).await.is_none());
 }
+
 
 #[tokio::test]
 async fn a_loose_document_boots_with_its_folder_as_editor_root_and_no_project() {
