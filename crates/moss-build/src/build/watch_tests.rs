@@ -1493,27 +1493,6 @@ fn pump_gate_does_not_hash_gate_background_passthrough_sources() {
     }
 }
 
-#[test]
-fn pump_gate_proceeds_when_kill_switch_set() {
-    let _guard = crate::ENV_TEST_MUTEX
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    std::env::set_var("MOSS_WATCH_NO_GATE", "1");
-    let dir = tempfile::tempdir().unwrap();
-    let folder = dir.path();
-    let verdict = pump_gate(
-        EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Content)),
-        folder.to_str().unwrap(),
-        &[folder.join("a.md")],
-    );
-    std::env::remove_var("MOSS_WATCH_NO_GATE");
-    assert_eq!(
-        verdict,
-        PumpGate::Proceed,
-        "with the gate disabled nothing may defer (a deferred check could still suppress)"
-    );
-}
-
 /// A root agent-instruction file is excluded from watch triggers regardless
 /// of who wrote it — the author's own edit to it must not rebuild the site
 /// any more than moss's own guidance sync would, were it still writing here.

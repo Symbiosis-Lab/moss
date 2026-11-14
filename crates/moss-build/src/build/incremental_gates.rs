@@ -120,7 +120,7 @@ impl ChangeProof {
     /// 1. `MOSS_NO_INCREMENTAL` unset ([`ChangeProof::for_build`] answers
     ///    `None` under it). The kill switch ships with the first skip, not
     ///    after it — it is the bisect tool for the first stale-page report.
-    ///    Any value counts, matching `MOSS_WATCH_NO_GATE`.
+    ///    Any value counts.
     /// 2. The batch is content-only. Deploy and the other entry points that
     ///    pass `Full` render everything. A `Structural` batch
     ///    (create/remove/rename) is deliberately treated like `Full`: it moves

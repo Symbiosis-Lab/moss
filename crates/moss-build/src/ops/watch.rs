@@ -678,8 +678,8 @@ pub fn request_for(folder: &Path, change: crate::commands::Change<'_>) -> Option
 /// writes: content-only, since a write changes no file's existence and
 /// Structural would close the render skip for every save. Pages wait on the
 /// hash check, so a write the last build already read builds nothing; any
-/// other file (or MOSS_WATCH_NO_GATE) builds unconditionally. `None` when the
-/// watcher would drop the writes.
+/// other file builds unconditionally. `None` when the watcher would drop the
+/// writes.
 pub(crate) fn request_for_writes(folder: &Path, paths: Vec<std::path::PathBuf>) -> Option<worker::RebuildRequest> {
     use notify::event::{DataChange, ModifyKind};
     let gate_paths = match event_gate(folder, notify::EventKind::Modify(ModifyKind::Data(DataChange::Content)), &paths) {

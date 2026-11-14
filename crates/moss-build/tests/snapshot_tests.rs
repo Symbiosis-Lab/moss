@@ -38,15 +38,6 @@
 //! email CSS to the output — no build path performs network fetches
 //! (`fetch_buttondown_username` has no production caller), so snapshot
 //! tests stay deterministic and offline.
-//!
-//! One process-global env var is still read during some code paths:
-//!
-//! - `MOSS_WATCH_NO_GATE` — read by `build::watch::evaluate_gate` (only
-//!   reached from the file-watcher path, never from `build_sync`). Tests
-//!   that mutate this var hold `KILL_SWITCH_ENV_LOCK` (private to
-//!   `build::watch` tests) for the full set→call→unset sequence.
-//!
-//! No current snapshot fixture exercises it.
 
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -987,8 +987,8 @@ pub enum PumpGate {
     /// whole per-event verdict (`ops::watch::event_gate`) also answers it for
     /// an event its filters drop.
     Suppress,
-    /// Rebuild unconditionally — the kill-switch is set, or the event kind is
-    /// one the hash gate can never vouch for (`Create`/`Remove`).
+    /// Rebuild unconditionally — the event kind is one the hash gate can
+    /// never vouch for (`Create`/`Remove`), or a file it does not gate.
     Proceed,
     /// Gate-eligible `Modify`: enqueue, and let the worker run the
     /// stat+SHA-256 check (`should_rebuild_for_paths`) at admission.
@@ -1002,15 +1002,11 @@ pub enum PumpGate {
 /// (`is_root_agent_config` canonicalizes, but only after a pure file-NAME
 /// match, so the common event costs the pump nothing.)
 pub fn pump_gate(kind: notify::EventKind, folder_path: &str, paths: &[PathBuf]) -> PumpGate {
-    // Precedes even the kill-switch — see `classify::is_root_agent_config`.
+    // See `classify::is_root_agent_config`.
     let root = Path::new(folder_path);
     use crate::build::scan::classify::is_root_agent_config;
     if !paths.is_empty() && paths.iter().all(|p| is_root_agent_config(root, p)) {
         return PumpGate::Suppress;
-    }
-    // Kill-switch: any set value disables the gate entirely.
-    if std::env::var("MOSS_WATCH_NO_GATE").is_ok() {
-        return PumpGate::Proceed;
     }
     if !should_gate_modify_event(kind) {
         return PumpGate::Proceed;

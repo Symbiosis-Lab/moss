@@ -50,10 +50,8 @@ pub fn left_out(path: &Path, is_dir: bool, depth: usize) -> Option<LeftOut> {
 /// without this its own write would rebuild the whole site — during a build, in
 /// the two watch paths that classify as `BuildTrigger::Full`.
 ///
-/// `watch::evaluate_gate` consults this ahead of `MOSS_WATCH_NO_GATE`. That
-/// switch exists to bisect stale-content reports against the content-hash gate;
-/// this suppression is categorical, and re-enabling it would only restore the
-/// self-triggered rebuild.
+/// `watch::pump_gate` asks this before anything else: the suppression is
+/// categorical, and lifting it would only restore the self-triggered rebuild.
 ///
 /// Both sides are canonicalized because the watcher reports canonical paths on
 /// macOS (`/private/var`) while the caller may hold the symlinked spelling.
