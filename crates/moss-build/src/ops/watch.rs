@@ -30,8 +30,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use notify::Watcher;
-use notify_debouncer_full::{new_debouncer, DebouncedEvent};
+use notify_debouncer_full::DebouncedEvent;
 
 use crate::build::ports::spawner::Spawner;
 use crate::build::watch::scope;
@@ -44,6 +43,8 @@ use crate::types::events::MossEvent;
 
 pub mod cadence;
 pub mod derive_folders;
+#[cfg(target_os = "macos")]
+mod fsevent;
 pub mod headless;
 pub mod reconcile;
 pub mod supervision;
@@ -293,9 +294,8 @@ pub async fn start(config: WatchConfig) {
                 notify_debouncer_full::DebounceEventResult,
             >();
 
-            let mut debouncer = match new_debouncer(
+            let mut debouncer = match reconcile::new_debouncer(
                 std::time::Duration::from_millis(DEBOUNCE_MS),
-                None, // tick_rate = timeout/4
                 move |result| {
                     let _ = tx.send(result);
                 },
@@ -336,21 +336,8 @@ pub async fn start(config: WatchConfig) {
             // content it must never see.
             let root = Path::new(&folder_path);
             let mut watched: Vec<scope::WatchTarget> = Vec::new();
-            let initial_targets = match scope::watch_targets_with_error(root) {
-                Ok(targets) => targets,
-                Err(error) => {
-                    log::warn!("⚠️ Cannot enumerate watcher targets in '{}': {} — retrying", root.display(), error);
-                    Vec::new()
-                }
-            };
-            for (path, mode) in initial_targets {
-                if let Err(e) = debouncer.watcher().watch(&path, mode) {
-                    // One unreadable subdirectory must not cost the whole watcher.
-                    log::warn!("⚠️ Not watching '{}': {}", path.display(), e);
-                    continue;
-                }
-                debouncer.cache().add_root(&path, mode);
-                watched.push((path, mode));
+            if let Err(error) = reconcile::targets(&mut debouncer, root, &mut watched) {
+                log::warn!("⚠️ Cannot enumerate watcher targets in '{}': {} — retrying", root.display(), error);
             }
             // An empty set is survivable, not fatal: the reconciler below picks up
             // the first content that appears. Returning here would kill the watcher
@@ -374,14 +361,8 @@ pub async fn start(config: WatchConfig) {
             // Because the root is not watched recursively, a NEW top-level entry
             // is not covered by any existing subscription. Reconcile the set on a
             // low-frequency tick: one `read_dir` over ~10 entries, which also
-            // unsubscribes entries that were removed. The first pass runs
-            // unconditionally, same as the old fixed-interval timer's
-            // immediate-first-tick behavior — a folder opened while the app is
-            // already `Background` still gets its first reconcile promptly,
-            // rather than waiting out a 30s Background interval before it ever
-            // sees content that appeared after the watcher's initial scan.
+            // unsubscribes entries that were removed.
             let mut ticker = cadence::CadenceTicker::new(cadence.clone());
-            let _ = reconcile::targets(&mut debouncer, root, &mut watched);
 
             // Process debounced batches until shutdown, recreate, or channel death
             let end = loop {

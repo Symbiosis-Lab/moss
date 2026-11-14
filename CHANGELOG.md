@@ -6,6 +6,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- On macOS a folder with many files at its top level is watched as soon as it opens. With 300 files it took a minute or more, and changes made meanwhile waited for the 20-second check of the folder.
 - A page renamed while it is open in the preview is shown at its own address. The preview sometimes opened it at `…/index.html`, and Copy page address copied that.
 - `moss doctor --surface` counts a class written on a grid, gallery, hero or buttons fence (`:::grid 2 {.tall}`) as used in pages. It called such a class "used nowhere".
 - Publishing after a build that failed is refused: "Nothing published — the last build failed. Change a page to build again, then publish." When a build failed, its background work failed, or its output could not be written or read back, a publish used to send the site as the build before it left it, without the latest edits and without saying so. A build stopped on a file still downloading from the cloud is refused the same way until the file arrives. `moss deploy --dry-run --json` reports it as `build_unfinished`.

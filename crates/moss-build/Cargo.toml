@@ -182,6 +182,11 @@ block2 = "0.6"
 # symlink — inside `handle_alias_entry`, which is macOS-only (the other arm is a
 # detect-and-skip stub). Moved here from the desktop app, which no longer uses it.
 pathdiff = "0.2"
+# `ops::watch::fsevent`, moss's copy of notify's FSEvents watcher, names all
+# three. notify already depends on them at these versions.
+fsevent-sys = "4"
+crossbeam-channel = "0.5"
+bitflags = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
