@@ -1151,6 +1151,8 @@ pub fn generate_blocking_content_for_build(
     // casing ("Writings") even though the URL slug is lowercased ("writings").
     let folder_display = folder_display_leaves(&project_structure.dirs, &dir_overrides);
     let editions: moss_core::home::Editions;
+    // Out here because the pipeline writes it after this function returns.
+    let places_data;
     let (layout_config, site_url, has_rss, show_rss_in_footer, term_index, calendar, now) = {
         // Profile the whole-corpus Reduce chain. Each pass
         // below folds OTHER pages' state into `documents`, so (unlike Loop A)
@@ -1246,18 +1248,8 @@ pub fn generate_blocking_content_for_build(
         crate::build::place_map::country_map::warn_problems(&documents);
         log::debug!(target: "timing", "[reduce] derive_terms: {:?}", reduce_start.elapsed());
 
-        // Places-explorer handshake, part 1: `places.<hash>.json`'s hash,
-        // computed now while `documents` already carries this pass's
-        // finished output — no field `place_map::places_data::emit_places_data`
-        // reads moves again below. The SAME document set `places_data::emit`
-        // (pipeline.rs, after this function returns) serializes, so the URL
-        // `render_term_map` bakes into a namespace root's figure can never
-        // name a file this build doesn't also write.
-        if let Some(ctx) = site_config.place_maps.take() {
-            let json = crate::build::place_map::places_data::emit_places_data(&documents, &ctx, site_config.math, &dir_overrides);
-            let hash = compute_content_hash(&json);
-            site_config.place_maps = Some(ctx.with_explorer_places_hash(hash).with_term_pages(&term_index));
-        }
+        // Now, while `documents` carries this pass's finished output.
+        places_data = crate::build::place_map::places_data::handshake(&mut site_config.place_maps, &documents, site_config.math, &dir_overrides, &term_index);
 
         // The canonical site URL and the calendar plan are decided before the
         // embeds, so an embedded listing can carry its folder's calendar links.
@@ -3419,6 +3411,7 @@ pub fn generate_blocking_content_for_build(
             missing_references,
             term_index,
             now,
+            places_data,
         },
         background_ctx,
         // Surface the parsed page slice to the caller so

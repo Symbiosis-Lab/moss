@@ -138,6 +138,7 @@ fn empty_site_result() -> crate::types::content::SiteResult {
         missing_references: Vec::new(),
         term_index: Default::default(),
         now: Default::default(),
+        places_data: None,
     }
 }
 

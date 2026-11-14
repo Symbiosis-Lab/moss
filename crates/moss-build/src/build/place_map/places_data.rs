@@ -464,31 +464,34 @@ pub fn emit_places_data(
     serde_json::to_string(&data).unwrap_or_else(|_| r#"{"works":[],"places":[]}"#.to_string())
 }
 
-/// Emit `places.<hash>.json` into the build, content-hashed over exactly
-/// what [`emit_places_data`] returns: the gazetteer plus every located
-/// page's resolved places and card fields. An unrelated page — one with
-/// no resolved place, never part of the emitted JSON at all — cannot move
-/// the hash. `feature_styles::emit`'s `wrapped()` hash earns the same
-/// property the same way: by hashing an output that is already a pure
-/// function of what belongs in it, rather than by a second, narrower
-/// fingerprint function.
-///
-/// The caller gates this on already knowing the site declares a
-/// place-typed kind — `pipeline.rs` only calls it when `context` is
-/// `Some`, which `place_maps`'s own construction already requires one for.
-/// `dir_overrides` is `BackgroundContext::dir_overrides`, already resolved
-/// by the time this runs — the same directory-slug table a card cover
-/// (`resolve_cover`) needs to point at a `url:`-renamed folder's actual
-/// served path instead of its pre-rename one.
-pub fn emit(
+/// The places explorer's handshake: computes `places.<hash>.json` from the
+/// finished documents, puts its hash and the term pages on `place_maps`, and
+/// returns the bytes for [`emit`] to write after the render, so the URL a
+/// namespace root's figure bakes in always names a file the build writes.
+/// `None` without a place-typed term kind.
+pub(crate) fn handshake(
+    place_maps: &mut Option<PlaceMapRenderContext>,
     documents: &[ParsedDocument],
-    context: &PlaceMapRenderContext,
     math: bool,
+    dir_overrides: &HashMap<String, String>,
+    terms: &crate::build::terms::TermIndex,
+) -> Option<String> {
+    let ctx = place_maps.take()?;
+    let json = emit_places_data(documents, &ctx, math, dir_overrides);
+    *place_maps = Some(ctx.with_explorer_places_hash(compute_content_hash(&json)).with_term_pages(terms));
+    Some(json)
+}
+
+/// Emit `places.<hash>.json` into the build, content-hashed over exactly
+/// what [`emit_places_data`] returned for the render: the gazetteer plus
+/// every located page's resolved places and card fields. An unrelated page
+/// — one with no resolved place, never part of the emitted JSON at all —
+/// cannot move the hash.
+pub fn emit(
+    json: &str,
     output_dir: &Path,
     pending: &mut PendingManifest,
-    dir_overrides: &HashMap<String, String>,
 ) -> std::io::Result<()> {
-    let json = emit_places_data(documents, context, math, dir_overrides);
     let hash = compute_content_hash(&json);
     BuildContext::for_render(output_dir, pending).emit(
         &ServedPath::for_places_data_hashed(&hash),

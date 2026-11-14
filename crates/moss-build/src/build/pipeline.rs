@@ -1431,21 +1431,12 @@ fn build_inner(
                 }
             }
         });
-    // Cloned before `place_maps` moves into `site_config.place_maps` below
-    // — the places-explorer data emitter needs it after the blocking render
-    // returns `documents`, by which point `site_config` is long consumed.
-    // `PlaceMapRenderContext` derives `Clone` and bundles exactly what that
-    // emitter needs (gazetteer, namespace, cycle-repaired parents, the map
-    // pack) behind its own accessors, so this one clone replaces the old
-    // three hand-captured copies plus the emit site's own second
-    // `embedded()` decode.
-    let place_maps_for_places_data = place_maps.clone();
+    // Cloned before `place_maps` moves into `site_config.place_maps` below:
+    // the place-map passes after the blocking render need it, by which point
+    // `site_config` is long consumed.
+    let place_maps_after_render = place_maps.clone();
     let place_kinds: Vec<crate::build::terms::TermKind> = kinds.iter().filter(|k| k.is_place).cloned().collect();
-    // Default-on by key absence, same story as `site_config.math` below is
-    // built from (see that field's own comment) — computed once here so
-    // both the page-rendering config and the places-explorer data emitter,
-    // which needs it again after `site_config` is consumed, read the same
-    // value.
+    // Default-on by key absence; see `site_config.math` below.
     let math = site_bool("math").unwrap_or(true);
     let colophon = site_bool("colophon").unwrap_or(true);
     // The listing styles read every declaration, and `site_config` takes
@@ -1480,9 +1471,7 @@ fn build_inner(
         // `[site].math`, so there is no legacy value to preserve and no
         // migration involved — absence simply means "the author never
         // said", and the answer to that is yes. Explicit
-        // `[site].math = false` is the only way to turn it off. Computed
-        // once, above, since the places-explorer data emitter reads the
-        // same value again after `site_config` is consumed.
+        // `[site].math = false` is the only way to turn it off.
         math,
         // Default-on by key absence, same story as `math`: nothing has ever
         // written `[site].hard_line_breaks`, so absence means "the author
@@ -1582,23 +1571,11 @@ fn build_inner(
     let build_now = site_result.now;
     log::debug!(target: "timing", "[build] staging: generate_blocking_content: {:?}", build_start.elapsed());
 
-    // Places-explorer data file (`_moss/places.<hash>.json`), gated on the
-    // site declaring a place-typed term kind at all — `place_maps_for_places_data`
-    // is `None` exactly when `place_maps` itself is (no place-typed kind, or
-    // the bundled map pack failed to decode; that failure already logged a
-    // warning when `place_maps` was built). `documents` here already carries
-    // `derive_terms`'s finished location-inheritance pass (a work's
-    // companions have theirs filled in) — the same document set every render
-    // above just used.
-    if let Some(context) = place_maps_for_places_data.as_ref() {
-        if let Err(e) = crate::build::place_map::places_data::emit(
-            &documents,
-            context,
-            math,
-            &stage_dir,
-            &mut pending,
-            &background_ctx.dir_overrides,
-        ) {
+    // Places-explorer data file (`_moss/places.<hash>.json`): the bytes the
+    // render computed for the hash its pages name; `None` without a
+    // place-typed term kind.
+    if let Some(json) = site_result.places_data.take() {
+        if let Err(e) = crate::build::place_map::places_data::emit(&json, &stage_dir, &mut pending) {
             log::info!("Failed to emit places-explorer data: {e}");
         }
     }
@@ -1756,7 +1733,7 @@ fn build_inner(
     let preview_embeds = documents.iter().filter_map(|doc| doc.source_path.as_ref())
         .map(|source| (source.clone(), embed_graph.embed_closure(source).into_iter().collect()))
         .collect();
-    pending.set_preview_dependencies(preview_embeds, place_maps_for_places_data.is_some());
+    pending.set_preview_dependencies(preview_embeds, place_maps_after_render.is_some());
     // Navigation may change while this render runs; only the current request
     // may decide which generation becomes visible.
     let current_request = services
@@ -1888,11 +1865,10 @@ fn build_inner(
     log::debug!(target: "search", "search bundle: {:?}", adoption);
 
     // Places explorer world/tile base-map SVGs; see that module's doc for
-    // the gate and the cache. `place_maps_for_places_data` already carries
-    // the gazetteer (see its own comment above), so there is no second
-    // `load_gazetteer` call here.
+    // the gate and the cache. The context carries the gazetteer, so there is
+    // no second `load_gazetteer` call here.
     crate::build::emit::place_map_assets::emit_if_place_typed(
-        place_maps_for_places_data.as_ref(),
+        place_maps_after_render.as_ref(),
         &paths,
         &stage_dir,
         &mut pending,
@@ -1900,9 +1876,9 @@ fn build_inner(
     crate::build::emit::place_map_assets::emit_country_notice(&documents, &stage_dir, &mut pending);
     crate::build::emit::place_map_assets::emit_country_search(&documents, &stage_dir, &mut pending);
     // `layers.json` beside them; nothing is written without `[map.layers]`.
-    let used_places = place_maps_for_places_data.as_ref().map_or_else(Vec::new, |maps| crate::build::terms::places::used_places(&documents, &place_kinds, maps.gazetteer()));
+    let used_places = place_maps_after_render.as_ref().map_or_else(Vec::new, |maps| crate::build::terms::places::used_places(&documents, &place_kinds, maps.gazetteer()));
     crate::build::emit::place_map_layers::emit_if_place_typed(
-        place_maps_for_places_data.as_ref(),
+        place_maps_after_render.as_ref(),
         &used_places,
         &stage_dir,
         &mut pending,
@@ -1911,7 +1887,7 @@ fn build_inner(
     // above just wrote the world/tile SVGs into — see that module's doc for
     // the gate. Data only: nothing yet reads this to draw a label.
     crate::build::emit::place_map_labels::emit_if_place_typed(
-        place_maps_for_places_data.as_ref(),
+        place_maps_after_render.as_ref(),
         &site_lang,
         &documents,
         &stage_dir,

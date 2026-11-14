@@ -389,6 +389,11 @@ pub struct SiteResult {
     #[serde(skip)]
     #[specta(skip)]
     pub now: chrono::NaiveDateTime,
+    /// The places explorer's data file, whose hash the pages already name;
+    /// `None` on a site with no place-typed term kind.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub places_data: Option<String>,
 }
 
 /// Hash map of generated site files for change detection.
