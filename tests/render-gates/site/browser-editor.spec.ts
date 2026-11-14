@@ -65,6 +65,10 @@ const ONE_PAGE_PDF =
   '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n' +
   '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n';
 
+const CASE_PAGE = '---\ntitle: Case\n---\nA case.\n\n' +
+  [1, 2, 3, 4, 5, 6].map((n) => `![[slide-0${n}.jpg|800x450]]\n\n`).join('') + '![[chart.jpg]]\n\n![](here.png)\n\nThe end.\n';
+const ONE_PIXEL_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+
 let site = '';
 let home = '';
 let server: ChildProcess | undefined;
@@ -76,7 +80,7 @@ test.beforeEach(async () => {
   site = realpathSync(mkdtempSync(join(tmpdir(), 'moss-browser-editor-site-')));
   home = realpathSync(mkdtempSync(join(tmpdir(), 'moss-browser-editor-home-')));
   mkdirSync(join(home, 'moss'));
-  writeFileSync(join(site, 'index.md'), '---\ntitle: Garden\n---\nHello garden.\n\n![[doc.pdf]]\n\n[Talk](talk.md)\n\n[To the workshops](/workshops/)\n\n[About](about.md)\n\n[To the Chinese pages](/zh-hans/)\n\n' +
+  writeFileSync(join(site, 'index.md'), '---\ntitle: Garden\n---\nHello garden.\n\n![[doc.pdf]]\n\n[Talk](talk.md)\n\n[To the workshops](/workshops/)\n\n[To the case](en/writing/case.md)\n\n[About](about.md)\n\n[To the Chinese pages](/zh-hans/)\n\n' +
     ':::grid 2\nBeds are dug in March.\n\nSeeds go in by April.\n+++\nWater comes from the well.\n\nThe well is closed in winter.\n:::\n');
   for (const [name, text] of Object.entries(EVENTS)) writeFileSync(join(site, name), text);
   writeFileSync(join(site, 'doc.pdf'), ONE_PAGE_PDF);
@@ -88,6 +92,14 @@ test.beforeEach(async () => {
   mkdirSync(join(site, 'meetings'));
   writeFileSync(join(site, 'meetings', 'meetings.md'), '---\ntitle: Meetings\n---\nOurs:\n\n![[meetings/|style:summary]]\n\nGone:\n\n![[nowhere/|style:summary]]\n');
   writeFileSync(join(site, 'meetings', 'first.md'), '---\ntitle: First\n---\nThe first meeting.\n');
+  // A page two folders down, seven of whose pictures are not in the folder,
+  // and a second page with two.
+  mkdirSync(join(site, 'en', 'writing'), { recursive: true });
+  mkdirSync(join(site, 'drafts'));
+  writeFileSync(join(site, 'en', 'writing', 'case.md'), CASE_PAGE);
+  writeFileSync(join(site, 'en', 'writing', 'here.png'), ONE_PIXEL_PNG);
+  writeFileSync(join(site, 'en', 'writing', 'other.md'), '---\ntitle: Other\n---\nNothing missing.\n');
+  writeFileSync(join(site, 'drafts', 'd.md'), '---\ntitle: D\n---\n![](gone-a.png)\n\n![](pics/gone-b.png)\n');
   mkdirSync(join(site, 'zh-hans'));
   writeFileSync(join(site, 'zh-hans', 'index.md'), '---\ntitle: 花园\n---\n你好，花园。\n');
   writeFileSync(join(site, 'about.md'), '---\ntitle: About\ntranslationKey: about\n---\nAbout the garden. [Talk](talk.md)\n');
@@ -390,6 +402,143 @@ test("a folder's own page listing its folder by name is not marked missing", asy
   // The missing folder's mark shows the resolver has answered for this page.
   await expect(marked('nowhere')).not.toHaveCount(0, { timeout: 30_000 });
   await expect(marked('meetings')).toHaveCount(0);
+});
+
+/** Follow the home page's link to the page two folders down, so the breadcrumb
+ *  re-seats on it, and wait for the build's count to reach its row. */
+async function openCasePage(page: Page) {
+  const frames = await openEditor(page);
+  const { editor, preview } = frames;
+  await editor.waitForSelector('.cm-content', { timeout: 30_000 });
+  await preview.click('a:has-text("To the case")');
+  await expect(editor.locator('.seg.bc-current .tree-preflight-count')).toHaveText('7', { timeout: 30_000 });
+  return frames;
+}
+
+/** A picture of the editor in each colour scheme, kept when `GATE_SHOTS` names a folder. */
+async function shots(page: Page, name: string, browserName: string) {
+  const dir = process.env.GATE_SHOTS;
+  if (!dir) return;
+  for (const scheme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme: scheme });
+    await page.locator('#moss-editor-frame').screenshot({ path: join(dir, `${name}-${browserName}-${scheme}.png`) });
+  }
+  await page.emulateMedia({ colorScheme: 'light' });
+}
+
+test("a page's problem count shows once, and steps through its problems", async ({ page, browserName }) => {
+  const { editor } = await openCasePage(page);
+  const count = (path: string) => editor.locator(`.seg[data-path="${path}"] .tree-preflight-count`);
+  const colour = (selector: string) => editor.locator(selector).first().evaluate((el) => getComputedStyle(el).color);
+
+  // The breadcrumb: the page's number, and no number on any folder above it;
+  // each folder's chevron wears the number's colour instead.
+  for (const folder of ['', 'en', 'en/writing']) {
+    await expect(editor.locator(`.seg.bc[data-path="${folder}"]`)).toHaveCount(1);
+    await expect(count(folder)).toHaveCount(0);
+    expect(await colour(`.seg.bc[data-path="${folder}"] > .chev`)).toBe(await colour('.seg.bc-current .tree-preflight-count'));
+  }
+  await shots(page, 'count-breadcrumb', browserName);
+
+  // The number is a button: a click, then the keyboard, each go one problem on.
+  const caretLine = () => editor.evaluate(() => {
+    const node = getSelection()?.anchorNode;
+    return (node instanceof Element ? node : node?.parentElement)?.closest('.cm-line')?.textContent ?? '';
+  });
+  const button = editor.locator('.seg.bc-current button.tree-preflight-count');
+  await expect(button).toHaveAccessibleName('7 unresolved references. Go to the next');
+  expect(await button.evaluate((el) => getComputedStyle(el).cursor)).toBe('pointer');
+  await button.click();
+  await expect.poll(caretLine).toContain('slide-01.jpg');
+  // A key that is not a modifier: WebKit shows the focus ring only after one.
+  await page.keyboard.press('ArrowRight');
+  await button.focus();
+  expect(await button.evaluate((el) => getComputedStyle(el).outlineStyle)).not.toBe('none');
+  await page.keyboard.press('Enter');
+  await expect.poll(caretLine).toContain('slide-02.jpg');
+
+  // The tree: a closed folder carries its total, an open one leaves it to its rows.
+  await editor.click('.seg.bc[data-path=""]');
+  await expect(count('drafts')).toHaveText('2');
+  await editor.locator('.seg[data-path="drafts"]').scrollIntoViewIfNeeded();
+  await shots(page, 'count-tree-closed', browserName);
+  await editor.click('.seg[data-path="drafts"] > .chev');
+  await expect(count('drafts/d.md')).toHaveText('2');
+  await expect(count('drafts')).toHaveCount(0);
+  await shots(page, 'count-tree-open', browserName);
+});
+
+test('a missing picture says what was looked for, and its card offers the ways out', async ({ page, browserName }) => {
+  const { editor } = await openCasePage(page);
+  const file = () => readFileSync(join(site, 'en', 'writing', 'case.md'), 'utf8');
+  const card = editor.locator('.cm-reference-card');
+  const actions = () => card.locator('.cm-reference-card-actions button').allTextContents();
+  const mark = (name: string) => editor.locator(`.cm-problem--blocks:has-text("${name}")`);
+
+  // Resting on the path: the reason, and nothing to press.
+  await mark('slide-03.jpg').hover();
+  await expect(card).toHaveText("No file named slide-03.jpg in your folder. The site can't be published without it.", { timeout: 10_000 });
+  await expect(card.locator('button, input')).toHaveCount(0);
+  await shots(page, 'missing-hover', browserName);
+  await page.mouse.move(0, 0);
+
+  // The card opened from the keyboard: choose a file or remove, and no widths.
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
+  await mark('slide-01.jpg').click();
+  await page.keyboard.press(`${mod}+k`);
+  await expect(card).toHaveClass(/cm-reference-card--editable/);
+  expect(await actions()).toEqual(['Choose a file…', 'Remove']);
+  // No preview frame for a file that is not there.
+  await expect(card.locator('.cm-asset-hover')).toBeHidden();
+  await shots(page, 'missing-card', browserName);
+  // The buttons' words can be read on a dark card.
+  await page.emulateMedia({ colorScheme: 'dark' });
+  const contrast = await card.locator('.cm-reference-card-actions button').first().evaluate((el) => {
+    const luminance = (rgb: string): number => {
+      const [r, g, b] = rgb.match(/[\d.]+/g)!.slice(0, 3).map((v) => {
+        const c = Number(v) / 255;
+        return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    let backdrop = 'rgb(255, 255, 255)';
+    for (let e: HTMLElement | null = el as HTMLElement; e; e = e.parentElement) {
+      // The scheme has just changed: read where each colour is going, not where it is.
+      e.style.transition = 'none';
+      const bg = getComputedStyle(e).backgroundColor;
+      if (bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') { backdrop = bg; break; }
+    }
+    const [hi, lo] = [luminance(getComputedStyle(el).color), luminance(backdrop)].sort((a, b) => b - a);
+    return (hi + 0.05) / (lo + 0.05);
+  });
+  expect(contrast, 'a card button is too faint to read in dark').toBeGreaterThanOrEqual(4.5);
+  await page.emulateMedia({ colorScheme: 'light' });
+
+  // Remove takes the line; one undo brings it back.
+  await card.locator('button:has-text("Remove")').click();
+  await expect.poll(file, { timeout: 15_000 }).not.toContain('slide-01.jpg');
+  await editor.locator('.cm-content').focus();
+  await page.keyboard.press(`${mod}+z`);
+  await expect.poll(file, { timeout: 15_000 }).toBe(CASE_PAGE);
+
+  // A click on the path starts the hover timer; the card opened right after
+  // it keeps its buttons once that timer has run out. (This host cannot write
+  // a reference form, so it offers no "Use <file>" row.)
+  await mark('chart.jpg').click();
+  await page.keyboard.press(`${mod}+k`);
+  await page.waitForTimeout(400);
+  await expect(card).toHaveClass(/cm-reference-card--editable/);
+  expect(await actions()).toEqual(['Choose a file…', 'Remove']);
+  await page.keyboard.press('Escape');
+
+  // A picture that is there keeps its widths, and the row stays inside the card.
+  await editor.locator('.cm-line', { hasText: 'here.png' }).click({ position: { x: 60, y: 10 } });
+  await page.keyboard.press(`${mod}+k`);
+  await expect(card).toHaveClass(/cm-reference-card--editable/);
+  expect(await actions()).toEqual(['Replace…', '25%', '50%', '75%', '100%', 'Reset']);
+  const row = await card.locator('.cm-reference-card-actions').evaluate((r) => ({ wide: r.scrollWidth, room: r.clientWidth }));
+  expect(row.wide, 'the buttons run past the card').toBeLessThanOrEqual(row.room);
+  await shots(page, 'found-picture-card', browserName);
 });
 
 test('a new page in a language folder shows in the preview before it has text, and is an ordinary page after one word', async ({ page }, testInfo) => {

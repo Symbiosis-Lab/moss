@@ -639,18 +639,26 @@ fn dispatch_embed_form(
             }
         }
         ResolvedRef::Unresolved => {
+            let kind = crate::resolve::ext_kind::missing_reference_kind(path_extension(split.file).as_deref());
             diagnostics.push(Diagnostic {
                 message: format!("Unresolved embed: ![[{}]]", split.file),
                 source_path: from_path.to_string(),
                 reference: split.file.to_string(),
-                kind: crate::resolve::ext_kind::missing_reference_kind(path_extension(split.file).as_deref()),
+                kind,
             });
 
             WikilinkEmit {
-                output: EmitKind::Inline(format!(
-                    "[{}](moss-unresolved:{})",
-                    split.file, split.file
-                )),
+                // Media that would have been drawn in place says it is
+                // missing in place; a page not written yet stays a link. A
+                // block, so an embed within a line of text is left for the
+                // URL pass, which boxes it inline.
+                output: if kind == crate::resolve::DiagnosticKind::MissingAsset {
+                    EmitKind::Block(Box::new(crate::ast::node::Block::Other(
+                        crate::resolve::embeds::missing_file_box("div", split.file),
+                    )))
+                } else {
+                    EmitKind::Inline(format!("[{}](moss-unresolved:{})", split.file, split.file))
+                },
                 outgoing_link: Some(OutgoingLink {
                     target_path: split.file.to_string(),
                     display_text: split.file.to_string(),

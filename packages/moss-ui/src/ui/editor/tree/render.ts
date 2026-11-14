@@ -126,6 +126,22 @@ export function fillSeg(el: HTMLElement, name: string, isFolder: boolean, classe
   return el;
 }
 
+/** A row's problem count. On the open page it is a button to the next problem. */
+function preflightBadge(count: number, steps: boolean): HTMLElement {
+  const one = count === 1;
+  const badge = document.createElement(steps ? 'button' : 'span');
+  badge.className = 'tree-preflight-count';
+  badge.textContent = String(count);
+  if (steps) {
+    (badge as HTMLButtonElement).type = 'button';
+    badge.dataset.preflightNext = '';
+    badge.setAttribute('aria-label', t(one ? 'tree.preflight_next_one' : 'tree.preflight_next_many', { count }));
+  } else {
+    badge.setAttribute('aria-label', t(one ? 'tree.preflight_count_one' : 'tree.preflight_count_many', { count }));
+  }
+  return badge;
+}
+
 /** i18n keys for a state row — see tree/spine-projection.ts's `StateRowKind`/
  *  `ForestRow.kind` and the mkStateRow doc below. Resolved via t() at render
  *  time (not module load) so the existing onLocaleChange → render() re-render
@@ -1203,12 +1219,12 @@ export class TreeRender {
     el.dataset.path = path;
     const count = this.host.preflightEvidence.count(path);
     if (count > 0) {
+      // A folder shows the number only while closed, when no row beneath it does.
       el.dataset.preflightCount = String(count);
-      const badge = document.createElement('span');
-      badge.className = 'tree-preflight-count';
-      badge.textContent = String(count);
-      badge.setAttribute('aria-label', t(count === 1 ? 'tree.preflight_count_one' : 'tree.preflight_count_many', { count }));
-      el.appendChild(badge);
+      const current = classes.includes('bc-current');
+      if (!isFolder || !(classes.includes('open') || classes.includes('bc'))) {
+        el.appendChild(preflightBadge(count, !isFolder && current));
+      }
     }
     return el;
   }

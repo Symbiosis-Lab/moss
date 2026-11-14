@@ -1432,7 +1432,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "1",
-        description: "Fallback rendered when a folder-list embed (`![[journal/]]`) targets a folder that does not exist or cannot be resolved. Distinct from `.moss-embed-error` (file/wikilink resolution failure) — this one is specifically the folder-listing path.",
+        description: "What stands where a page names something that is not in the folder: a folder listing (`![[journal/]]`), a transcluded page, or a picture or other media file (`Picture not found: slide.jpg`). A `div` as a block of its own, a `span` within a line of text. A missing picture or media file is seen in the preview only, since a site with one is not published.",
     },
     // -------------------------------------------------------------------
     // Hero, image, visual primitives.

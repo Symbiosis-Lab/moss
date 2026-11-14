@@ -4232,6 +4232,8 @@ fn parse_page_with_graph(
 ) -> crate::build::types::ParsedDocument {
     let mut b = moss_core::content_graph::ContentGraphBuilder::new();
     b.add_file("journal/a.md", "a");
+    // The picture the pages below open with: a file not in the folder is drawn as a box, not an image.
+    b.add_file("harbour.jpg", "harbour");
     let graph = b.build();
     // Production resolves folder embeds into markers before parsing the page.
     let handlers = crate::build::embed_handlers::builtin_marker_handlers(

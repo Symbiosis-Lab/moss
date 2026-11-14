@@ -21,6 +21,7 @@
 //! consumer, so that divergence is non-breaking (see
 //! `link_wrapping_image_target_path`).
 
+
 use super::document::Document;
 use super::node::{Block, Inline};
 use super::shortcode::Shortcode;
@@ -28,7 +29,8 @@ use super::url::{ResolvedUrl, Url, UrlKind};
 use super::visit::visit_urls_mut;
 use crate::content_graph::ContentGraph;
 use crate::resolve::asset_class::{resolve_file_target, AssetResolution};
-use crate::resolve::fuzzy_path::{resolve_reference, ResolvedRef};
+use crate::resolve::embeds::missing_file_box;
+use crate::resolve::fuzzy_path::{resolve_reference, split_url_path, ResolvedRef};
 use crate::resolve::{Diagnostic, DiagnosticKind, LinkType, OutgoingLink};
 
 /// Classify a URL, delegating site paths to the host's URL mapping.
@@ -230,11 +232,13 @@ fn resolve_image_urls(
     found: &mut UrlResolution,
 ) {
     walk_inline_images_mut(doc, &mut |inline| {
-        let (src, alt) = match inline {
-            Inline::Image { src, alt, .. } => (src, alt.clone()),
-            _ => return,
-        };
-        resolve_asset_url(src, &alt, graph, source_path, found);
+        let Inline::Image { src, alt, .. } = inline else { return None };
+        let alt = alt.clone();
+        let missing = resolve_asset_url(src, &alt, graph, source_path, found);
+        match src {
+            Url::Resolved(r) if missing => Some(r.href.clone()),
+            _ => None,
+        }
     });
     // Hero/Gallery shortcodes carry image URLs as typed fields on the
     // shortcode args (not as `Inline::Image`). Walk those structural
@@ -263,7 +267,8 @@ fn resolve_image_urls(
 ///   [`resolve_file_target`] (the one resolver, [`ContentGraph::resolve_path`]). On `Resolved` / `Ambiguous`:
 ///   emit the target's pinned URL and push an OutgoingLink. On `NotFound`: keep
 ///   the author's bytes and record a diagnostic — the build never hard-fails on
-///   an unresolved asset ref, and never invents a path either.
+///   an unresolved asset ref, and never invents a path either. Returns `true`
+///   in that one case.
 ///
 /// Every resolved href is [`ContentGraph::pinned_url`], so the referencing
 /// page's depth and the target folder's case are structurally out of the answer
@@ -276,17 +281,17 @@ fn resolve_asset_url(
     graph: &ContentGraph,
     source_path: &str,
     found: &mut UrlResolution,
-) {
+) -> bool {
     let raw = match url {
         Url::Unresolved(s) => s.clone(),
-        Url::Resolved(_) => return,
+        Url::Resolved(_) => return false,
     };
 
     // Pipe-bearing URLs pass through unchanged: authors use `![[file.jpg|attrs]]` for typed params; pipe in standard
     // markdown URL is literal and intentionally 404s.
     if raw.contains('|') {
         *url = Url::Resolved(ResolvedUrl::new(raw, UrlKind::Asset));
-        return;
+        return false;
     }
 
     // External, anchor, and data URLs are not asset filesystem references.
@@ -300,7 +305,7 @@ fn resolve_asset_url(
         || raw.starts_with("mailto:")
     {
         *url = Url::Resolved(ResolvedUrl::new(raw, UrlKind::Asset));
-        return;
+        return false;
     }
 
     // Route ALL remaining refs (bare filenames, separator paths, absolute
@@ -316,12 +321,17 @@ fn resolve_asset_url(
     // hover tooltip. The build's job here is only to emit a correct URL; a
     // build-time console warning is a deferred follow-up (would require
     // surfacing provenance to moss-build's build layer).
-    match resolve_file_target(&raw, source_path, graph) {
+    // A `?query` or `#fragment` is not part of the file's name: the file is
+    // looked up without it and the emitted URL keeps it.
+    let (path, suffix) = split_url_path(&raw);
+    match resolve_file_target(path, source_path, graph) {
         AssetResolution::Resolved { root_rel, provenance: _ } => {
-            pin_asset_url(url, root_rel, alt, graph, found);
+            pin_asset_url(url, root_rel, suffix, alt, graph, found);
+            false
         }
         AssetResolution::Ambiguous { chosen, candidates: _ } => {
-            pin_asset_url(url, chosen, alt, graph, found);
+            pin_asset_url(url, chosen, suffix, alt, graph, found);
+            false
         }
         AssetResolution::NotFound => {
             // Keep the author's bytes (an unresolved asset ref never fails the
@@ -351,6 +361,7 @@ fn resolve_asset_url(
                 kind: DiagnosticKind::MissingAsset,
             });
             *url = Url::Resolved(ResolvedUrl::new(raw, UrlKind::Asset));
+            true
         }
     }
 }
@@ -361,11 +372,12 @@ fn resolve_asset_url(
 fn pin_asset_url(
     url: &mut Url,
     root_rel: String,
+    suffix: &str,
     alt: &str,
     graph: &ContentGraph,
     found: &mut UrlResolution,
 ) {
-    let pinned = graph.pinned_url(&root_rel);
+    let pinned = graph.pinned_url(&root_rel) + suffix;
     found.outgoing.push(OutgoingLink {
         target_path: root_rel,
         display_text: alt.to_string(),
@@ -546,7 +558,7 @@ fn resolve_link_urls(
         // as written, except when it exactly names a Markdown source file of
         // the site (`/notes/alpha.md`): that file is not served under its
         // source name, so the link resolves to the page like any other path.
-        let (path_part, suffix) = split_path_suffix(&raw);
+        let (path_part, suffix) = split_url_path(&raw);
         let rooted_page = path_part.strip_prefix('/').filter(|rel| names_page_source(rel, graph));
         if raw.starts_with('/') && rooted_page.is_none() {
             *link_url = Url::Resolved(ResolvedUrl::new(raw, UrlKind::Internal));
@@ -581,18 +593,8 @@ fn resolve_link_urls(
                 // matches the rendered heading id. The `?query` portion (if
                 // any) is preserved by `slug_wikilink_suffix`. Markdown links
                 // keep their suffix raw — a literal author-supplied URL.
-                let sentinel = match suffix {
-                    Some(s) => {
-                        let s = if is_wikilink {
-                            slug_wikilink_suffix(s)
-                        } else {
-                            s.to_string()
-                        };
-                        format!("moss-resolved:{}{}", resolved, s)
-                    }
-                    None => format!("moss-resolved:{}", resolved),
-                };
-                *link_url = Url::Unresolved(sentinel);
+                let suffix = if is_wikilink { slug_wikilink_suffix(suffix) } else { suffix.to_string() };
+                *link_url = Url::Unresolved(format!("moss-resolved:{resolved}{suffix}"));
             }
             ResolvedRef::Unresolved => {
                 // Leave the URL as authored — no
@@ -618,30 +620,6 @@ fn names_page_source(rel: &str, graph: &ContentGraph) -> bool {
     is_page && graph.resolve_path(rel, "").as_deref() == Some(rel)
 }
 
-/// Split a URL into (path, suffix) where `suffix` is `?query` and/or
-/// `#fragment` in source order. Suffix is opaque — round-trip parity with
-/// [`classify_url`] (its
-/// decoder) is the contract; this function must not reorder, normalize,
-/// or escape the suffix bytes.
-///
-/// moss-build carries a parallel implementation,
-/// `pipeline.rs::split_path_suffix`, which must share this exact shape.
-fn split_path_suffix(url: &str) -> (&str, Option<&str>) {
-    let q = url.find('?');
-    let h = url.find('#');
-    let cut = match (q, h) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (Some(a), None) => Some(a),
-        (None, Some(b)) => Some(b),
-        (None, None) => None,
-    };
-    match cut {
-        #[allow(clippy::string_slice)]
-        Some(pos) => (&url[..pos], Some(&url[pos..])),
-        None => (url, None),
-    }
-}
-
 /// Slug the `#fragment` of a wikilink `suffix` so the emitted href matches
 /// the rendered heading id (`obsidian_heading_anchor`). Only the fragment is
 /// transformed: any leading `?query` is preserved verbatim. Block refs
@@ -650,8 +628,8 @@ fn split_path_suffix(url: &str) -> (&str, Option<&str>) {
 /// called for wikilinks (`is_wikilink: true`); regular markdown links keep
 /// their fragment raw (it is a literal URL — `#L42`, hand-authored ids, etc.).
 ///
-/// `suffix` is the value returned by [`split_path_suffix`] — it begins with
-/// `?` or `#`. Shapes handled:
+/// `suffix` is the second half of [`split_url_path`]: empty, or beginning
+/// with `?` or `#`. Shapes handled:
 /// - `#frag` → `#<slug>`
 /// - `?query` → `?query` (no fragment, untouched)
 /// - `?query#frag` → `?query#<slug>` (query verbatim, fragment slugged)
@@ -737,9 +715,14 @@ fn classify_unresolved_kind(raw: &str) -> UrlKind {
 /// Walk every `Inline::Image` in the document and invoke `f` with a `&mut`
 /// reference to the inline. Used by phase 1 — separates image src
 /// classification from link URL classification.
+///
+/// `f` returns the reference a picture was written with when no file answers
+/// it, and the picture becomes a box naming it: the whole figure or paragraph
+/// when the picture is all it holds, inline otherwise. A broken `<img>`, with
+/// the size it was asked for and its caption, says nothing about what is wrong.
 fn walk_inline_images_mut<F>(doc: &mut Document, f: &mut F)
 where
-    F: FnMut(&mut Inline),
+    F: FnMut(&mut Inline) -> Option<String>,
 {
     for block in &mut doc.blocks {
         walk_images_in_block(block, f);
@@ -748,8 +731,20 @@ where
 
 fn walk_images_in_block<F>(block: &mut Block, f: &mut F)
 where
-    F: FnMut(&mut Inline),
+    F: FnMut(&mut Inline) -> Option<String>,
 {
+    let alone = match block {
+        Block::Figure { image, .. } => Some(image),
+        Block::Paragraph(children) => match children.as_mut_slice() {
+            [only @ Inline::Image { .. }] => Some(only),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(reference) = alone.and_then(|picture| f(picture)) {
+        *block = Block::Other(missing_file_box("div", &reference));
+        return;
+    }
     match block {
         Block::Heading { children, .. } | Block::Paragraph(children) | Block::DefinitionTitle(children) => {
             for inline in children {
@@ -808,7 +803,7 @@ where
 
 fn walk_images_in_shortcode<F>(sc: &mut Shortcode, f: &mut F)
 where
-    F: FnMut(&mut Inline),
+    F: FnMut(&mut Inline) -> Option<String>,
 {
     match sc {
         Shortcode::Subscribe(_) | Shortcode::Buttons(_) | Shortcode::Recent(_) | Shortcode::Form(_) => {}
@@ -854,11 +849,13 @@ where
 
 fn walk_images_in_inline<F>(inline: &mut Inline, f: &mut F)
 where
-    F: FnMut(&mut Inline),
+    F: FnMut(&mut Inline) -> Option<String>,
 {
     match inline {
         Inline::Image { .. } => {
-            f(inline);
+            if let Some(reference) = f(inline) {
+                *inline = Inline::Other(missing_file_box("span", &reference));
+            }
         }
         Inline::Link { children, .. } => {
             for nested in children {

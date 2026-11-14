@@ -175,6 +175,7 @@ fn a_declared_redirect_to_a_media_collection_page_is_kept() {
     let cfg = config(r#""/old-photos/" = "/photography/""#);
     let b = build(&[
         ("essay.md", "---\ntitle: Essay\n---\n\n![A photo](photo.png)\n<!-- photography -->\n"),
+        ("photo.png", "not decoded here"),
         (".moss/config.toml", &cfg),
     ]);
     assert!(b.has("photography/index.html"), "premise: the collection page is built");

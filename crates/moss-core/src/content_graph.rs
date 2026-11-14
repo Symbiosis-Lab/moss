@@ -397,6 +397,15 @@ impl ContentGraph {
         })
     }
 
+    /// Every file named like `reference` apart from its extension, sorted.
+    pub fn files_with_stem_of(&self, reference: &str) -> Vec<String> {
+        let stem = normalize_component(filename_stem(&normalize_path(reference)));
+        let mut found: Vec<String> =
+            self.filename_index.get(&stem).into_iter().flatten().map(|&i| self.files[i].clone()).collect();
+        found.sort();
+        found
+    }
+
     /// The page at the normalized path `key` plus a page extension, `.md` first.
     fn page_at(&self, key: &str) -> Option<String> {
         PAGE_EXTENSIONS.iter().find_map(|ext| self.path_index.get(&format!("{key}.{ext}"))).map(|&i| self.files[i].clone())

@@ -19,6 +19,7 @@ import { extractImageTargets, extractLinkTargets, nodeTouchesSelection, type Ref
 import { t } from "../i18n/index";
 import { refsResolvedEffect } from './cm-reference-resolver';
 import { referenceSiteAt } from './cm-link-nav';
+import { pathSpan } from './cm-block-embeds';
 import { baseName, toAbsolute, toRelative } from './path-domain';
 import type { CardAction, CardAugmenter } from './cm-reference-card';
 import type { PublishPreflightHint } from './cm-reveal-flash';
@@ -75,19 +76,25 @@ function replaceLinkDestination(view: EditorView, at: number, target: string, in
   view.dispatch({ changes: { from: site.targetFrom, to: site.targetTo, insert } });
 }
 
-/** Replace `target` inside the image span, only if the span still reads
- *  exactly what it read when the card was built: the reference form is
- *  fetched first, and the author may have typed meanwhile. A wikilink embed's
- *  span is the whole `![[…]]` node, so the path is found inside it. */
-function replaceImagePath(view: EditorView, from: number, to: number, text: string, target: string, insert: string): void {
-  if (to > view.state.doc.length || view.state.doc.sliceString(from, to) !== text) return;
-  const offset = text.indexOf(target);
-  if (offset < 0) return;
-  view.dispatch({ changes: { from: from + offset, to: from + offset + target.length, insert } });
+/** Replace the path, only if it still reads what it read when the card was
+ *  built: the reference form is fetched first, and the author may have typed
+ *  meanwhile. */
+function replaceImagePath(view: EditorView, path: { from: number; to: number }, target: string, insert: string): void {
+  if (path.to > view.state.doc.length || view.state.doc.sliceString(path.from, path.to) !== target) return;
+  view.dispatch({ changes: { ...path, insert } });
 }
 
-function imageProblem(env: Envelope, target: string, from: number, to: number, text: string, inputs: ProblemInputs): Problem | null {
-  const base = { from, to, construct: { from, to }, title: target };
+/** What moss looked for: a bare name anywhere in the folder, a path where it points. */
+function missingSentence(reference: string): string {
+  const target = reference.split('|')[0].trim();
+  return target.includes('/') ? t('problem.image_missing_at', { path: target }) : t('problem.image_missing', { name: target });
+}
+
+function imageProblem(env: Envelope, target: string, from: number, to: number, doc: EditorState['doc'], inputs: ProblemInputs): Problem | null {
+  // The mark sits on the path alone, as the build's does: a wikilink embed's
+  // span is the whole node, and its brackets and width open no card.
+  const path = pathSpan(doc, from, to, target);
+  const base = { ...path, construct: { from, to }, title: target };
   const root = inputs.projectRoot();
   const refForPath = inputs.refForPath;
   // The label names the file by its place in the folder; what is written is
@@ -97,21 +104,23 @@ function imageProblem(env: Envelope, target: string, from: number, to: number, t
     label: t('problem.fix_use', { ref: root ? toRelative(absolutePath, root) : baseName(absolutePath) }),
     run: async (view) => {
       const ref = await refForPath(absolutePath);
-      if (ref) replaceImagePath(view, from, to, text, target, ref);
+      if (ref) replaceImagePath(view, path, target, ref);
     },
   }] : []);
+  const useCandidates = (): CardAction[] =>
+    (root ? env.candidates.slice(0, MAX_CANDIDATE_FIXES).flatMap((c) => useFile(toAbsolute(c, root))) : []);
   if (env.kind.kind === 'not-found') {
-    // The asset card that claims this span already offers Replace….
-    return { ...base, consequence: 'blocks', sentence: t('editmisc.asset_missing_hint'), fixes: [] };
+    // The resolver names the same picture under another extension; the asset
+    // card that claims this span adds choosing a file and removing the line.
+    return { ...base, consequence: 'blocks', sentence: missingSentence(target), fixes: useCandidates() };
   }
   if (env.kind.kind === 'ambiguous') {
-    const candidates = env.candidates.slice(0, MAX_CANDIDATE_FIXES);
     return {
       ...base,
       consequence: 'warns',
       // The resolver sorts the file the build uses first.
       sentence: t('problem.image_ambiguous', { name: baseName(target), winner: env.candidates[0] ?? '' }),
-      fixes: root ? candidates.flatMap((c) => useFile(toAbsolute(c, root))) : [],
+      fixes: useCandidates(),
     };
   }
   const provenance = env.resolved?.provenance;
@@ -154,7 +163,7 @@ export function referenceProblems(state: EditorState, inputs: ProblemInputs): { 
     const env = target ? inputs.resolvedCache.get(target, true) : undefined;
     if (!env) continue;
     answered.push({ from, to });
-    const problem = imageProblem(env, target, from, to, state.doc.sliceString(from, to), inputs);
+    const problem = imageProblem(env, target, from, to, state.doc, inputs);
     if (problem) problems.push(problem);
   }
   for (const { target, from, to, nodeFrom, nodeTo } of extractLinkTargets(state)) {
@@ -170,7 +179,7 @@ export function referenceProblems(state: EditorState, inputs: ProblemInputs): { 
 function evidenceProblem(hint: PublishPreflightHint): Problem {
   return {
     from: hint.from, to: hint.to, construct: null, consequence: 'blocks',
-    title: hint.reference, sentence: t('editmisc.asset_missing_hint'), fixes: [],
+    title: hint.reference, sentence: missingSentence(hint.reference), fixes: [],
   };
 }
 
@@ -269,6 +278,18 @@ export const problemCardAugmenter: CardAugmenter = (spec, state, pos) => {
   body.appendChild(spec.body);
   return { ...spec, body, actions: [...problem.fixes, ...(spec.actions ?? [])] };
 };
+
+/** Puts the caret on the next problem that stops publishing, wrapping to the
+ *  first; false when the page has none. */
+export function goToNextProblem(view: EditorView): boolean {
+  const blocking = (view.state.field(problemsField, false)?.all ?? []).filter((p) => p.consequence === 'blocks');
+  if (blocking.length === 0) return false;
+  const head = view.state.selection.main.head;
+  const next = blocking.find((p) => p.from > head) ?? blocking[0];
+  view.dispatch({ selection: { anchor: next.from }, scrollIntoView: true });
+  view.focus();
+  return true;
+}
 
 export function problemsExtension(inputs: ProblemInputs): Extension {
   return [problemInputs.of(inputs), problemsField, problemMarks];

@@ -7331,6 +7331,20 @@ article a:where(:not(.moss-btn)):focus {
   margin-block-start: var(--moss-space-xl);
 }
 
+/* Something the page names that is not in the folder. */
+.moss-embed-missing {
+  margin-block: 0 var(--moss-space-md);
+  padding: var(--moss-space-sm) var(--moss-space-md);
+  border: 1px dashed var(--moss-border-medium);
+  color: var(--moss-color-muted);
+  font-size: var(--moss-size-sm);
+}
+
+span.moss-embed-missing {
+  margin-block: 0;
+  padding: 0 var(--moss-space-xs);
+}
+
 /* Body and cover start together: the first line of the body (date, kicker
    or title) and the cover share the row's block-start edge; `stretch` keeps
    that shared start edge (same as flex-start would) and additionally sizes

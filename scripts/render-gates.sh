@@ -110,6 +110,7 @@ GATES_BUILD=(
   place-dot-links
   preview-parity-gate
   plain-tab-reload
+  missing-file-box
   touch-targets
   places-explorer-boot
   places-explorer-camera

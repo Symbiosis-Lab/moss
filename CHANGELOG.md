@@ -23,6 +23,11 @@ All notable changes to moss will be documented here.
 - When making a page fails, the log now carries the reason the message gave.
 - In the app, the message that answers your own command (Send Logs' "sending" and "sent") shows at once while the preview is still preparing a page. It used to wait for that screen to clear, so a wait that never ended never showed it.
 - In the app, the Edit button no longer stays beside the open editor when Preview features are on.
+- ⌘K pressed right after a click on a link's address or a picture's path keeps its card. The card lost its fields and buttons a moment after it opened.
+- The buttons on a link's or picture's ⌘K card can be read in dark mode. They were pale grey words on a pale grey button.
+- The red underline on a missing picture stays on the file's name. On `![[slide.jpg|800x450]]` it widened to the brackets and the size a moment after the page opened, where resting the pointer shows nothing.
+- The width buttons on a picture's ⌘K card wrap onto a second row. They ran out past the card's edge.
+- A picture written with a query or fragment after its name (`photo.jpg?v=2`) is found: it was reported as missing and stopped the publish.
 
 ### Changed
 
@@ -36,6 +41,9 @@ All notable changes to moss will be documented here.
 - In the toolbar a channel that is not selected keeps its logo's colour; only a selected channel carries the circle.
 - A `moss build --serve --watch` that waited for another moss process and then takes over the folder prints its address line again, since the port can differ.
 - A new page shows in the preview at its own address before anything is written in it. Since 0.15.21 a page with no text and no fields built nothing, so the preview waited on "Preparing this page" without end. Giving the page its title brings the preview to its new address at once: the rename asks for its own build, where it used to wait for the folder to be noticed as changed, up to 20 seconds. A page made in the editor (a new page, a copy, one from a template, a translation) shows in the preview at once too. The empty page is still never published and is in no listing, feed, sitemap or menu; `moss list` gives its reason as `empty`, and a publish that links to it says the page is empty. An empty home file (`index.md`, `README.md`, or a note named after its folder) still builds nothing, so its folder keeps the index moss generates. A published page whose file turns up empty still stops the publish as a lost address. For an app embedding the engine: `CommandHost::changed` is required; `ops::watch::hand_off` implements it.
+- In the editor, the number of files a page can't find shows once, on the page. The breadcrumb used to repeat it on every folder up to the site; a folder now shows a number only while it is closed in the file list, and otherwise only the amber tint that leads to the page. The number on the open page is a button: each press moves the caret to the page's next missing file.
+- A picture the editor can't find says what was looked for ("No file named slide.jpg in your folder. The site can't be published without it."). Its ⌘K card offers the same picture under another extension when the folder has one, Choose a file…, and Remove, which takes the line with it and comes back with one undo. The width buttons are not shown for a file that is not there.
+- In the preview, a picture or other media file that is not in the folder is a box reading "Picture not found: slide.jpg". It was an empty frame of the size asked for with that size as its caption, a broken image, or a bare link.
 
 ### New
 

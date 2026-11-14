@@ -167,6 +167,7 @@ const GATE_PORT_KEYS = [
   'card-min-token',
   'nav-submenu',
   'page-chrome-none',
+  'missing-file-box',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

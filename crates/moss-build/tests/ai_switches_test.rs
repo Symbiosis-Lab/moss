@@ -13,7 +13,8 @@ const PAGES: &[(&str, &str)] = &[
     ("about.md", "---\ntitle: About\n---\n\nA small site about the river.\n"),
     ("notes/spring.md", "---\ntitle: Spring\ntags: [flood]\n---\n\nFlood, day three.\n"),
     ("draft.md", "---\ntitle: Draft\ndraft: true\n---\n\nNot yet.\n"),
-    ("gallery.md", "---\ntitle: Gallery\n---\n\n![Sunset](sunset.jpg)\n<!-- photography -->\n"),
+    ("gallery.md", "---\ntitle: Gallery\n---\n\n![Sunset](sunset.svg)\n<!-- photography -->\n"),
+    ("sunset.svg", r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 3"/>"#),
 ];
 
 fn robots_tags(html: &str) -> Vec<&str> {

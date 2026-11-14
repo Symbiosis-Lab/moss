@@ -179,6 +179,16 @@ fn resolve_embeds_inner(
     }
 }
 
+/// What stands where a picture or other media file is not in the folder: a
+/// block of its own (`div`), or within a line of text (`span`).
+pub(crate) fn missing_file_box(tag: &str, target: &str) -> String {
+    let ext = crate::path_ext::path_extension(target);
+    let is_picture = crate::resolve::ext_kind::reference_kind_for_ext(ext.as_deref().unwrap_or(""))
+        == crate::resolve::ext_kind::ExtKind::Image;
+    let what = if is_picture { "Picture" } else { "File" };
+    format!("<{tag} class=\"moss-embed-missing\">{what} not found: {}</{tag}>", crate::media::html_escape(target))
+}
+
 /// Visible fallback using the same class as missing folder embeds.
 fn missing_embed(target: &str) -> String {
     format!("<div class=\"moss-embed-missing\">Embed unavailable: {}</div>", crate::media::html_escape(target))

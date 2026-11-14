@@ -68,8 +68,8 @@ describe('Mod-k opens the link card at the caret', () => {
     view.destroy();
   });
   test.each([
-    ['an inline picture\'s brackets', 'see ![[a.png]] here', 5, 4],
-    ['an inline picture\'s path', 'see ![[a.png]] here', 9, 4],
+    ['an inline picture\'s brackets', 'see ![[a.png]] here', 5, 7],
+    ['an inline picture\'s path', 'see ![[a.png]] here', 9, 7],
     ['a block picture line', '![a](x.png)', 8, 5],
   ])('Mod-k with the caret in %s opens the picture card', (_where, doc, anchor, probe) => {
     const state = EditorState.create({ doc, selection: { anchor }, extensions: [markdown({ extensions: [wikilinkConfig] }), actAtCaretExtension()] });

@@ -5,11 +5,13 @@ import { describe, test, expect, vi } from 'vitest';
 import { EditorSelection, EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { markdown } from '@codemirror/lang-markdown';
+import { history, undo } from '@codemirror/commands';
 import { forceParsing, syntaxTreeAvailable } from '@codemirror/language';
 import { wikilinkConfig } from '@symbiosis-lab/moss-syntax';
 import type { ReferenceCacheRead } from '@symbiosis-lab/moss-syntax/cm6';
-import { problemCardAugmenter, problemsExtension, readProblems, setEvidenceProblems, type ProblemInputs } from '../cm-problems';
+import { goToNextProblem, problemCardAugmenter, problemsExtension, problemsField, readProblems, setEvidenceProblems, type ProblemInputs } from '../cm-problems';
 import { refsResolvedEffect } from '../cm-reference-resolver';
+import { embedAt } from '../cm-block-embeds';
 import {
   assetCardProvider, cardAugmenters, cardProviders, cardSpecAt, linkCardProvider, openCardAt, referenceCardExtension, withLinkControls, type CardProvider,
 } from '../cm-reference-card';
@@ -59,12 +61,32 @@ const resolvedImage = (absolute_path: string, provenance: string) =>
   ({ provenance, absolute_path }) as Env['resolved'];
 
 describe('what each envelope becomes', () => {
-  test('a missing image blocks publishing; its card has no fix of its own', () => {
-    const state = stateWith('x\n\n![](gone.png)\n', cacheOf([['gone.png', true, env('not-found')]]), { anchor: 0 });
-    expect(marks(state)).toEqual([['gone.png', 'blocks']]);
-    const [p] = readProblems(state);
-    expect(p.sentence).toContain("isn't in your folder");
-    expect(p.fixes).toEqual([]);
+  test('a missing image blocks publishing and says what moss looked for', () => {
+    const cache = cacheOf([['gone.png', true, env('not-found')], ['img/far.jpg', true, env('not-found')], ['slide.jpg', true, env('not-found')]]);
+    const state = stateWith('x\n\n![](gone.png)\n\n![](img/far.jpg)\n\n![[slide.jpg|800x450]]\n', cache, { anchor: 0 });
+    // The mark is the path alone, never an embed's brackets or width.
+    expect(marks(state)).toEqual([['gone.png', 'blocks'], ['img/far.jpg', 'blocks'], ['slide.jpg', 'blocks']]);
+    const [bare, path, wiki] = readProblems(state);
+    expect(bare.sentence).toBe("No file named gone.png in your folder. The site can't be published without it.");
+    expect(path.sentence).toBe("No file at img/far.jpg in your folder. The site can't be published without it.");
+    expect(wiki.sentence).toBe("No file named slide.jpg in your folder. The site can't be published without it.");
+    expect(bare.fixes).toEqual([]);
+    // A card opened with the caret on the embed's brackets still carries the reason.
+    const probe = embedAt(state, state.doc.toString().indexOf('![[') + 1)!.probe;
+    expect(problemCardAugmenter(null, state, probe)?.body.textContent).toBe(wiki.sentence);
+  });
+
+  test('a missing image offers the same picture under another extension', async () => {
+    const cache = cacheOf([['slide.jpg', true, env('not-found', { candidates: ['img/slide.png', 'a.jpeg', 'b.jpeg', 'c.jpeg'] })]]);
+    const doc = '![[slide.jpg|800x450]]\n\nx';
+    const refForPath = vi.fn(async () => 'slide.png');
+    const view = new EditorView({ state: stateWith(doc, cache, { over: { refForPath } }), parent: document.body });
+    const problem = view.state.field(problemsField).all[0];
+    expect(problem.fixes.map((f) => f.label)).toEqual(['Use img/slide.png', 'Use a.jpeg', 'Use b.jpeg']);
+    await problem.fixes[0].run(view);
+    expect(refForPath).toHaveBeenCalledWith('/site/img/slide.png');
+    expect(view.state.doc.toString()).toBe('![[slide.png|800x450]]\n\nx');
+    view.destroy();
   });
 
   test('an ambiguous image warns, names the file moss uses, and offers each candidate', () => {
@@ -210,6 +232,29 @@ describe('build evidence', () => {
   });
 });
 
+describe('stepping through a page’s problems', () => {
+  test('the caret goes to the next problem that stops publishing, and wraps', () => {
+    const cache = cacheOf([['a.png', true, env('not-found')], ['b.png', true, env('not-found')], ['someday', false, env('not-found')]]);
+    const doc = 'x\n\n![](a.png)\n\n[[someday]]\n\n![](b.png)\n';
+    const view = new EditorView({ state: stateWith(doc, cache, { anchor: 0 }), parent: document.body });
+    const head = () => view.state.selection.main.head;
+    expect(goToNextProblem(view)).toBe(true);
+    expect(head()).toBe(doc.indexOf('a.png'));
+    goToNextProblem(view);
+    expect(head()).toBe(doc.indexOf('b.png'));
+    goToNextProblem(view);
+    expect(head()).toBe(doc.indexOf('a.png'));
+    view.destroy();
+  });
+
+  test('a page with none is left alone', () => {
+    const view = new EditorView({ state: stateWith('plain', cacheOf([]), { anchor: 2 }), parent: document.body });
+    expect(goToNextProblem(view)).toBe(false);
+    expect(view.state.selection.main.head).toBe(2);
+    view.destroy();
+  });
+});
+
 describe('the card', () => {
   function cardState(doc: string, cache: ReferenceCacheRead, providers: CardProvider[], over: Partial<ProblemInputs> = {}): EditorState {
     return EditorState.create({
@@ -225,13 +270,41 @@ describe('the card', () => {
   const withControls = (cache: ReferenceCacheRead) => (base: CardProvider): CardProvider =>
     (state, pos) => { const spec = base(state, pos); return spec && withLinkControls(spec, state, pos, cache); };
 
-  test('a missing image keeps the asset card’s Replace…, with the sentence first in its body', () => {
+  test('a missing image’s card leads with the sentence and offers choosing a file or removing the line', () => {
     const cache = cacheOf([['gone.png', true, env('not-found')]]);
     const doc = '![](gone.png)';
     const state = cardState(doc, cache, [assetCardProvider(cache as never, { pagePath: () => '/site/p.md', projectRoot: () => '/site', applyWidth: vi.fn() })]);
     const spec = cardSpecAt(state, doc.indexOf('gone'))!;
-    expect(spec.body.firstElementChild?.textContent).toContain("isn't in your folder");
-    expect(spec.actions?.map((a) => a.label)).toContain('Replace…');
+    expect(spec.body.firstElementChild?.textContent).toBe("No file named gone.png in your folder. The site can't be published without it.");
+    expect(spec.actions?.map((a) => a.label)).toEqual(['Choose a file…', 'Remove']);
+  });
+
+  test('a picture that is there keeps Replace… and its widths', () => {
+    const cache = cacheOf([['here.png', true, env('image', { resolved: resolvedImage('/site/here.png', 'literal') })]]);
+    const doc = '![](here.png)';
+    const state = cardState(doc, cache, [assetCardProvider(cache as never, { pagePath: () => '/site/p.md', projectRoot: () => '/site', applyWidth: vi.fn() })]);
+    expect(cardSpecAt(state, doc.indexOf('here'))!.actions?.map((a) => a.label)).toEqual(['Replace…', '25%', '50%', '75%', '100%', 'Reset']);
+  });
+
+  test('Remove takes the embed, and its line when alone on it, in one undo step', () => {
+    const cache = cacheOf([['gone.png', true, env('not-found')]]);
+    const provider = assetCardProvider(cache as never, { pagePath: () => '/site/p.md', projectRoot: () => '/site', applyWidth: vi.fn() });
+    const remove = (doc: string) => {
+      const view = new EditorView({
+        state: EditorState.create({ doc, extensions: [markdown({ extensions: [wikilinkConfig] }), history(), problemsExtension(inputs(cache)), cardProviders.of(provider), cardAugmenters.of(problemCardAugmenter)] }),
+        parent: document.body,
+      });
+      void cardSpecAt(view.state, doc.indexOf('gone'))!.actions!.find((a) => a.label === 'Remove')!.run(view);
+      const after = view.state.doc.toString();
+      undo(view);
+      expect(view.state.doc.toString()).toBe(doc);
+      view.destroy();
+      return after;
+    };
+    expect(remove('before\n\n![](gone.png)\n\nafter')).toBe('before\n\nafter');
+    expect(remove('before\n![](gone.png)\nafter')).toBe('before\nafter');
+    expect(remove('before\n\n![](gone.png)')).toBe('before\n');
+    expect(remove('see ![](gone.png) here')).toBe('see  here');
   });
 
   test('a link to a page that does not exist still has its URL field and Unlink', () => {

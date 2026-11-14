@@ -1256,6 +1256,8 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
   font-family: var(--moss-font-ui, system-ui);
   box-shadow: var(--moss-elevation-2);
 }
+/* A file that is not there has nothing to preview. */
+.cm-asset-hover:empty { display: none; }
 
 /* Container 2 — CM6 completion info pane. moss styles nothing under
    .cm-tooltip today, so without this the pane inherits CM6's baseTheme chrome
@@ -1303,6 +1305,7 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
 }
 .cm-reference-card-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--moss-space-2xs, 4px);
   margin-top: var(--moss-space-xs);
 }

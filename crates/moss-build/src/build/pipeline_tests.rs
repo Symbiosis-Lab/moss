@@ -7492,6 +7492,7 @@ fn pages_deleted_outside_moss_leave_the_sitemap_on_the_next_build() {
     fs::create_dir_all(test_dir.join("Writings/Letters")).unwrap();
     // The marked photo gives the site a `photography/` collection page, which
     // is written after the home page, like the redirect stubs are.
+    fs::write(test_dir.join("Writings/photo.png"), "not decoded here").unwrap();
     fs::write(
         test_dir.join("Writings/essay.md"),
         "---\ntitle: Essay\ndate: 2026-01-01\n---\n\nAn essay.\n\n![A photo](photo.png)\n<!-- photography -->\n",
@@ -7732,6 +7733,7 @@ fn an_unchanged_warm_build_writes_no_page_to_the_stage() {
     // A photograph makes the build emit the photography collection page, and a
     // site id makes it emit the subscribe landing pages.
     fs::write(test_dir.join("gallery.md"), "# Gallery\n\n![Sunset](sunset.jpg)\n<!-- photography -->\n").unwrap();
+    fs::write(test_dir.join("sunset.jpg"), "not decoded here").unwrap();
     fs::create_dir_all(test_dir.join(".moss")).unwrap();
     fs::write(test_dir.join(".moss/state.toml"), "[deployment]\nsite_id = \"test-site\"\n").unwrap();
     let mut slots = ResolvedSlots::empty();

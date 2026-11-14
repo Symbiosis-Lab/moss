@@ -664,6 +664,9 @@ export class FileTree {
     this.container?.classList.toggle('moss-tree--sealed', sealed);
   }
 
+  /** Moves the editor's caret to the open page's next problem. */
+  onNextProblem?: () => void;
+
   /** Replace, never merge, the completed-build evidence shown by tree rows. */
   setPublishPreflight(projection: import('@symbiosis-lab/moss-ui').PublishPreflightProjection | null): void {
     this.preflightEvidence.replace(projection?.missing_references.map(({ source_path }) => source_path) ?? []);
@@ -785,6 +788,10 @@ export class FileTree {
       const hint = act?.closest<HTMLElement>('.nav-hint-row');
       if (act && hint) {
         this.runHintAction(act, hint.dataset.derivePath ?? '');
+        return;
+      }
+      if ((e.target as Element | null)?.closest('[data-preflight-next]')) {
+        this.onNextProblem?.();
         return;
       }
       const row = rowAt(e.target);
@@ -1116,7 +1123,7 @@ export class FileTree {
     // Skip while rename/create input is focused (isEditing() gate)
     if (this.isEditing()) return;
     // A focused hint-row button owns its own Enter/Space; the tree's would act on the selection.
-    if ((event.target as Element | null)?.closest?.('.nav-hint-row')) return;
+    if ((event.target as Element | null)?.closest?.('.nav-hint-row, [data-preflight-next]')) return;
 
     // Skip if focus is neither inside the tree container nor the document body
     // (i.e., some unrelated part of the page has focus). But always handle

@@ -145,6 +145,14 @@ describe('dwell arming', () => {
     expect(v.state.field(cardField)).toBeNull();
   });
 
+  test('a card opened from the keyboard while the dwell is still running keeps its controls', () => {
+    const v = mountView();
+    fireMouseMove(v, URL_AT);
+    openCardAt(v, URL_AT);
+    vi.advanceTimersByTime(150);
+    expect(v.state.field(cardField)?.editable).toBe(true);
+  });
+
   test('holding the chord widens nothing: the text still opens no card', () => {
     const v = mountView();
     chordDown(v);

@@ -53,7 +53,7 @@ describe('embedAt', () => {
   });
   test('an inline embed answers over every one of its own characters, edges included, and only there', () => {
     const state = EditorState.create({ doc: 'see ![[a.png]] here', extensions: wiki });
-    for (const pos of [4, 5, 7, 10, 13, 14]) expect(embedAt(state, pos)).toMatchObject({ from: 4, to: 14, inline: true, probe: 4 }); // a wikilink embed's target span is the whole node
+    for (const pos of [4, 5, 7, 10, 13, 14]) expect(embedAt(state, pos)).toMatchObject({ from: 4, to: 14, inline: true, probe: 7 }); // the start of the path, not of the node
     expect(embedAt(state, 1)).toBeNull();
     expect(embedAt(state, 16)).toBeNull();
   });

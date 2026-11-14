@@ -96,7 +96,7 @@ import {
   selectTextNearLine,
 } from './cm-scroll-sync';
 import { preflightHints, revealLines, revealPublishPreflight, shouldPreserveEditorPosition, type PublishPreflightOpen } from './cm-reveal-flash';
-import { readProblems, setEvidenceProblems } from './cm-problems';
+import { goToNextProblem, readProblems, setEvidenceProblems } from './cm-problems';
 import { loadEditorFontSize, stepEditorFontSize } from "../shared/editor-font-size";
 import { createGenerationToken } from "../shared/utils/generation-token";
 import { initEditorFontScale, setEditorFontSize } from "../utils/editor-font-scale";
@@ -908,6 +908,7 @@ async function init(): Promise<void> {
       setEditorCommitLock: (locked) => setEditorCommitLock(locked),
       reloadActiveFileFromDisk: reloadExternalDocument,
     });
+    fileTree.onNextProblem = () => { const view = cmEditor?.getView(); if (view) goToNextProblem(view); };
     osDragIn = createOsDragInController(fileTree);
     w.__moss_debug.getSelection = () => {
       if (!fileTree) return null;

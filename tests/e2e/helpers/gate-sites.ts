@@ -5124,3 +5124,28 @@ Second page.
 `,
   },
 };
+
+/** A page naming four files that are not in the folder: a sized picture on a
+ *  line of its own, a markdown picture on a line of its own, a picture within
+ *  a sentence, and a video. */
+export const MISSING_FILE_BOX_GATE: ScratchSiteSpec = {
+  name: "missing-file-box-gate",
+  files: {
+    "index.md": `---
+title: Missing
+---
+
+Before.
+
+![[slide-06.jpg|800x450]]
+
+![A chart](charts/gone.png)
+
+A sentence with ![[mark.png]] inside it.
+
+![[talk.mp4]]
+
+After.
+`,
+  },
+};

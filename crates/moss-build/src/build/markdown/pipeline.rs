@@ -1842,13 +1842,12 @@ fn sweep_unresolved_hrefs(html: &str, resolve_link: &dyn Fn(&str) -> String) -> 
 }
 
 /// Split a URL into (path, suffix) where `suffix` is `?query` and/or `#fragment`
-/// in source order. Mirrors `moss_core::ast::resolve_urls::split_path_suffix`
-/// (the typed-AST visitor's local helper) — the path is what's looked up
-/// in `page_map`; the suffix passes through verbatim to the final href so
-/// query strings survive resolution.
+/// in source order. The path is what's looked up in `page_map`; the suffix
+/// passes through verbatim to the final href so query strings survive
+/// resolution.
 ///
-/// Suffix is opaque — round-trip parity with `moss_core::ast::classify_url` is the
-/// contract; both implementations must share this exact shape.
+/// Suffix is opaque: round-trip parity with `moss_core::ast::classify_url` is
+/// the contract.
 fn split_path_suffix(url: &str) -> (&str, Option<&str>) {
     // `find` over a char set returns the FIRST of either delimiter, which is
     // what "in source order" means here.
