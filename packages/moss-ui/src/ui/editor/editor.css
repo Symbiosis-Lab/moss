@@ -1309,6 +1309,13 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
   gap: var(--moss-space-2xs, 4px);
   margin-top: var(--moss-space-xs);
 }
+/* A path longer than the card wraps inside its button. */
+.cm-reference-card-actions .moss-btn {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
 
 /* ── Completion row glyphs ───────────────────────────────────────────────
  * One 18px icon box per row, the file tree's own vocabulary so the author
