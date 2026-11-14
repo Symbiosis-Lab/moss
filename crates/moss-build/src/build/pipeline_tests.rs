@@ -6495,6 +6495,38 @@ fn publish(dir: &Path, sealed: &crate::build::manifest::SealedManifest) {
     ));
 }
 
+/// The page-state view over a real build: every document that makes a page
+/// is in the kept map, so a page it does not have is one the site lacks.
+#[test]
+fn every_page_a_publish_built_reads_back_as_served_or_held_back() {
+    use crate::build::manifest::{last_publish_state, PublishState};
+    let (dir, _cleanup) = create_test_dir();
+    fs::create_dir_all(dir.join("posts")).unwrap();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\nHi").unwrap();
+    fs::write(dir.join("about.md"), "---\ntitle: About\n---\nUs").unwrap();
+    fs::write(dir.join("footer.md"), "Made here").unwrap();
+    fs::write(dir.join("draft.md"), "---\ntitle: Draft\ndraft: true\n---\nSoon").unwrap();
+    fs::write(dir.join("posts/index.md"), "---\ntitle: Posts\n---\n").unwrap();
+    fs::write(dir.join("posts/a.md"), "---\ntitle: A\n---\nText").unwrap();
+    fs::write(dir.join("posts/letter.md"), "---\ntitle: Letter\nmembers: subscribers\n---\nOpen\n\n<!--members-only-->\n\nFor members").unwrap();
+    fs::write(dir.join("posts/whole.md"), "---\ntitle: Whole\nmembers: subscribers\n---\nFor members").unwrap();
+    assert_eq!(last_publish_state(&dir, "about.md"), PublishState::Unknown, "nothing is published yet");
+
+    let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+    publish(&dir, &sealed);
+    let live = crate::config::deployment::DomainDeploymentConfig { site_id: Some("site-1".into()), last_deployed_generation_id: Some(sealed.generation_id().to_string()), ..Default::default() };
+    crate::vault::deployment_state::save_domain_config(dir.to_str().unwrap(), &live).unwrap();
+    fs::write(dir.join("new.md"), "---\ntitle: New\n---\nLater").unwrap();
+
+    // A members page is served, with a public part or without one.
+    for page in ["index.md", "about.md", "posts/index.md", "posts/a.md", "posts/letter.md", "posts/whole.md"] {
+        assert_eq!(last_publish_state(&dir, page), PublishState::Served, "{page}");
+    }
+    assert_eq!(last_publish_state(&dir, "draft.md"), PublishState::HeldBack);
+    assert_eq!(last_publish_state(&dir, "new.md"), PublishState::Absent, "written after the publish");
+    assert_eq!(last_publish_state(&dir, "footer.md"), PublishState::Absent, "a slot file makes no page");
+}
+
 /// A duplicated note carries the original's uid; the copy is built under a new
 /// one, and the publish that puts it online replaces the copied uid in its file.
 #[test]
