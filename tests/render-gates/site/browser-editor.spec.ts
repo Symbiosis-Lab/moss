@@ -100,7 +100,7 @@ test.beforeEach(async () => {
       MOSS_HOME: join(home, 'moss'),
       MOSS_DESKTOP_SEARCH_ROOT: home,
       MOSS_PREVIEW_PORT_BASE: String(gatePort('browser-editor:preview')),
-      // The new-page test reads the watch's start and the rename's own request from the log.
+      // The new-page test reads the rename's own request from the log.
       MOSS_LOG_LEVEL: 'info',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -401,9 +401,6 @@ test('a new page in a language folder shows in the preview before it has text, a
 
   await preview.click('a:has-text("To the Chinese pages")');
   await expect.poll(openFile, { timeout: 15_000 }).toContain('zh-hans/index.md');
-  // The editor is usable about a second before the watch starts, and a rename
-  // made in that second has no rebuild worker to ask.
-  await expect.poll(() => output, { timeout: 30_000 }).toContain('File watcher active');
   await editor.click('#editor-create-btn');
   await expect.poll(openFile, { timeout: 15_000 }).toContain('zh-hans/untitled.md');
   await editor.click('#editor-heading');

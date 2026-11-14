@@ -369,6 +369,12 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
             None
         };
 
+        // Before the first build: the server it starts serves the editor
+        // while it is still sealing.
+        if run.flags.serve && run.flags.watch {
+            watch::headless::register_worker(&run.folder_path, &run.host_ports, watch_plugins);
+        }
+
         let result = run_pipeline(PipelineConfig {
             root: VaultRoot::resolve(std::path::Path::new(&run.folder_path)),
             progress: crate::build::stdout_sink(),

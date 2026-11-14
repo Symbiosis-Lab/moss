@@ -2206,9 +2206,11 @@ pub(crate) fn dispatch_video_conversions(
             // drives, and `trigger_media_settle_rerender` uses for an
             // in-build poster settle). `register_worker`/`ensure_worker`
             // register it at folder-open, before the first build ever runs
-            // (`ops/watch.rs`), so this read is reliable for the app and for
-            // `moss build --serve --watch` on every build including the
-            // first. A one-shot `moss build`, `moss deploy`, or a plugin
+            // (`ops/watch.rs`), so this read is reliable on every build
+            // including the first. Only a host that supplies a spawner gets
+            // this far: a headless build, `moss build --serve --watch`
+            // included, has none and takes the synchronous branch below, so
+            // its seal waits for the encode. A one-shot `moss build`, `moss deploy`, or a plugin
             // install has no such worker and will exit the moment this
             // function returns — there is nobody left to pick up a later
             // "enqueue a rebuild", so a manifest sealed without this video

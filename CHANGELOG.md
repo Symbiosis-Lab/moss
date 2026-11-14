@@ -6,6 +6,8 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A page made or renamed in the browser editor in the first second after it opens is built at once. It used to wait until the folder was noticed as changed, up to 20 seconds.
+- `moss build --serve --watch` opens a folder at once while a plugin is still reading its files, and fills each page in when the read ends. It used to wait for the read.
 - A newsletter is not sent for a post the published site does not show. Publishing a post whose file says `draft: true` no longer opens its email and says the newsletter was skipped, and sending one the last publish left out says to publish the site first; the email used to go out linking to a page that was not there.
 - A newsletter's list of recent posts links each post at the address the site serves, and leaves out pages the site does not show. It used to build each address from the file's name and list whatever the folder held, so a post with its own address was linked at a page that did not exist, and a draft or a post written since the last publish could be listed.
 - A newsletter's "Read on the web" link opens the post. It used to open the site's home page, and links in the post written relative to it pointed there too.
