@@ -329,6 +329,7 @@ pub fn generate_blocking_content_for_build(
     instant: jiff::Timestamp,
 ) -> Result<BlockingContentOutput, BuildStopped> {
     let total_start = std::time::Instant::now();
+    let inputs_phase = PhaseTrace::start("render_inputs");
     let mut og_requests = Vec::new();
 
     // `pending` is pre-seeded with previous_hashes by the caller (PendingManifest::new).
@@ -506,7 +507,8 @@ pub fn generate_blocking_content_for_build(
     // Empty when no page in the site sets the field. Passed into
     // `process_markdown_file` so the wikilink resolver routes cross-references
     // to the external destination instead of the local archive.
-    log::debug!(target: "timing", "[render] external_url_map ({} entries): {:?}", external_url_map.len(), total_start.elapsed());
+    drop(inputs_phase);
+    let parse_setup_phase = PhaseTrace::start("render_parse_setup");
 
     // Resolved once at the pipeline's config construction and handed down (see
     // `SiteConfig::lang`); here the code becomes a `Language`, English being
@@ -661,6 +663,7 @@ pub fn generate_blocking_content_for_build(
 
     // `deferred_paths` travels out of the parallel markdown pass. Missing
     // media stays attached to each document and is flattened after Loop A.
+    drop(parse_setup_phase);
     let (mut documents, deferred_paths, source_records) = {
         use rayon::prelude::*;
         use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -1724,7 +1727,6 @@ pub fn generate_blocking_content_for_build(
     // re-saves the facade cache, and builds the dep graph — all sized by the
     // vault, not by the edit. The partition it feeds costs 1.0ms and the one
     // page it spares costs 3.5ms. Medians of 7 rebuilds.
-    log::debug!(target: "timing", "[render] verdict computed: {:?}", total_start.elapsed());
 
     // Built once here rather than once per page. See `BuildShared`.
     let mut shared = super::build_shared::BuildShared::new(scripts, project_structure, &dir_overrides, now);
@@ -2591,6 +2593,7 @@ pub fn generate_blocking_content_for_build(
         page_count += 1;
     }
 
+    let records_phase = PhaseTrace::start("render_site_records");
     // What sitemap.xml lists: every page a reader is meant to land on. That is
     // every page registered by now, the home page included; then the media
     // collection pages, the pages still in the cloud, the static `.html` pages
@@ -2744,7 +2747,6 @@ pub fn generate_blocking_content_for_build(
             }
         }
     }
-    log::debug!(target: "timing", "[render] prelude: article_map+inventory+previews+subscribe: {:?}", total_start.elapsed());
 
     send_progress(
         progress_sender,
@@ -2807,7 +2809,6 @@ pub fn generate_blocking_content_for_build(
         }
         items
     };
-    log::debug!(target: "timing", "[render] prelude: video_items collected: {:?}", total_start.elapsed());
 
     // Generate media collection pages (photography, videos, experiments)
     {
@@ -2914,7 +2915,6 @@ pub fn generate_blocking_content_for_build(
         // `emit::scripts` table, gated on the same `media_pages` fact this
         // loop's `<script>` tag reads.
     }
-    log::debug!(target: "timing", "[render] prelude: media collection pages: {:?}", total_start.elapsed());
 
     // Every runtime script this build ships, from the registration table.
     // Each file's gate is the same fact its `<script>` tag reads, so a tag can
@@ -2935,7 +2935,8 @@ pub fn generate_blocking_content_for_build(
     // The diagrams' email and feed pictures, the same append-only shape.
     crate::build::emit::diagram_png::emit_diagram_pngs(&documents, output_dir, pending)
         .map_err(|e| format!("Failed to emit diagram pictures: {}", e))?;
-    log::debug!(target: "timing", "[render] prelude: scripts+math_png+diagram_png: {:?}", total_start.elapsed());
+    drop(records_phase);
+    let redirects_phase = PhaseTrace::start("render_redirects_sitemap");
 
     send_progress(
         progress_sender,
@@ -3173,7 +3174,7 @@ pub fn generate_blocking_content_for_build(
         .or_else(|| documents.first().map(|d| d.title.clone()))
         .unwrap_or_else(|| crate::i18n::t(site_lang, "untitled_site").to_string());
 
-    log::debug!(target: "timing", "[render] total: {:?}", total_start.elapsed());
+    drop(redirects_phase);
     // The background lane's work list and the math cache's sweep.
     let _phase_handoff = PhaseTrace::start("render_handoff");
 

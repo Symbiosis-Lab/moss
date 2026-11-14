@@ -78,8 +78,8 @@
 //!   the task on a different worker thread, which a plain thread-local would
 //!   not survive.
 //! - [`BLOCKING_PHASE_COLLECTOR`] — a plain `thread_local!`, bridged in
-//!   explicitly via [`enter_blocking_scope`] right where `build.rs` enters
-//!   its `spawn_blocking` closure. Sound there specifically because that
+//!   explicitly via [`inherit_blocking`] where
+//!   `build.rs` enters its `spawn_blocking` closure. Sound there specifically because that
 //!   closure is synchronous top to bottom (the whole point of
 //!   `spawn_blocking`) — no `.await` inside it that could hop threads.
 //!
@@ -87,8 +87,19 @@
 //! example inside a `rayon` worker thread spawned deeper in the render loop)
 //! is simply absent from the summary line rather than mis-attributed to it —
 //! its DEBUG started/completed pair is still there for that level of detail.
+//!
+//! ## Parents
+//!
+//! Each recorded phase names the phase it ran inside, taken from what was
+//! open in the same task or thread when it started and still open when it
+//! ended. The same two carriers hand that across a thread hop, so a phase in
+//! a `spawn_blocking` closure names the phase open where it was spawned. A
+//! lane spawned to run beside its spawner (the media workers) marks its
+//! phases `beside`: they overlap their parent's own time rather than
+//! dividing it.
 
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -149,6 +160,16 @@ const PHASE_BUDGETS_MS: &[(&str, u64)] = &[
     ("config_reads", 2_000),
     ("reduce", 5_000),
     ("render_site_files", 5_000),
+    // The content graph, page map and per-folder lookups the render reads.
+    ("render_inputs", 2_000),
+    // The parse cache's session, the media size lookup and the other inputs
+    // the markdown loop needs, read before it starts.
+    ("render_parse_setup", 2_000),
+    // The article map, inventory, previews, media pages and math and diagram
+    // pictures written after the home page.
+    ("render_site_records", 5_000),
+    // The redirect table and the sitemap.
+    ("render_redirects_sitemap", 5_000),
     ("render_handoff", 5_000),
     // Loop A: parse + resolve every markdown file (blocking.rs). Dominant
     // render-phase cost on image/link-heavy vaults — measured ~16-18s on a
@@ -250,6 +271,72 @@ pub struct PhaseSample {
     pub pass: usize,
     pub name: &'static str,
     pub ms: u128,
+    /// The phase this one ran inside; absent at the top level.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<&'static str>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub beside: bool,
+    #[serde(skip)]
+    id: u64,
+    #[serde(skip)]
+    parent_id: Option<u64>,
+}
+
+/// Build time in no phase that names work: the total minus every phase that
+/// contains no other. That equals each container's time outside its children,
+/// plus the total outside the top-level phases. A `beside` phase overlaps the
+/// main lane, so it neither counts as work nor makes its parent a container.
+pub(crate) fn unattributed_ms(phases: &[PhaseSample], total: Duration) -> i64 {
+    let containers: std::collections::HashSet<u64> = phases.iter().filter(|p| !p.beside).filter_map(|p| p.parent_id).collect();
+    let work: u128 = phases.iter().filter(|p| !p.beside && !containers.contains(&p.id)).map(|p| p.ms).sum();
+    i64::try_from(total.as_millis()).unwrap_or(i64::MAX) - i64::try_from(work).unwrap_or(i64::MAX)
+}
+
+/// A started phase. Ending one marks it closed instead of popping a stack,
+/// because some are ended by an explicit `drop` out of nesting order.
+struct OpenPhase {
+    id: u64,
+    name: &'static str,
+    outer: Option<Arc<OpenPhase>>,
+    open: AtomicBool,
+}
+
+static NEXT_PHASE_ID: AtomicU64 = AtomicU64::new(0);
+
+/// The innermost phase in `at`'s chain that has not ended.
+fn innermost_open(mut at: Option<Arc<OpenPhase>>) -> Option<Arc<OpenPhase>> {
+    while let Some(outer) = at.as_ref().filter(|p| !p.open.load(Ordering::Acquire)).map(|p| p.outer.clone()) {
+        at = outer;
+    }
+    at
+}
+
+/// Where phases started in one task or thread nest.
+#[derive(Clone, Default)]
+struct Lane {
+    innermost: Option<Arc<OpenPhase>>,
+    beside: bool,
+}
+
+fn read_lane() -> Lane {
+    ASYNC_LANE.try_with(|lane| lane.borrow().clone()).unwrap_or_else(|_| BLOCKING_LANE.with(|lane| lane.borrow().clone()))
+}
+
+fn write_lane(lane: Lane) {
+    if ASYNC_LANE.try_with(|current| *current.borrow_mut() = lane.clone()).is_err() {
+        BLOCKING_LANE.with(|current| *current.borrow_mut() = lane);
+    }
+}
+
+/// What phases on another thread take from the code that spawns them: the
+/// build's collector and the phase they nest in.
+pub struct Inherited {
+    collector: Option<PhaseCollector>,
+    lane: Lane,
+}
+
+fn inherited() -> Inherited {
+    Inherited { collector: current_collector(), lane: read_lane() }
 }
 
 #[derive(Debug)]
@@ -281,12 +368,14 @@ tokio::task_local! {
     /// [`with_collector`]. See the module-level "`build.summary` collector"
     /// doc for why this is a task-local rather than a thread-local.
     static ASYNC_PHASE_COLLECTOR: PhaseCollector;
+    static ASYNC_LANE: RefCell<Lane>;
 }
 
 thread_local! {
     /// Bridges a collector into a `spawn_blocking` closure's OS thread; see
     /// [`enter_blocking_scope`].
     static BLOCKING_PHASE_COLLECTOR: RefCell<Option<PhaseCollector>> = const { RefCell::new(None) };
+    static BLOCKING_LANE: RefCell<Lane> = const { RefCell::new(Lane { innermost: None, beside: false }) };
 }
 
 /// RAII guard restoring the previous blocking-scope collector on drop, so
@@ -295,25 +384,27 @@ thread_local! {
 /// that) compose safely instead of leaking the outer scope's collector.
 pub struct BlockingScopeGuard {
     previous: Option<PhaseCollector>,
+    previous_lane: Lane,
 }
 
 impl Drop for BlockingScopeGuard {
     fn drop(&mut self) {
         BLOCKING_PHASE_COLLECTOR.with(|c| *c.borrow_mut() = self.previous.take());
+        BLOCKING_LANE.with(|lane| *lane.borrow_mut() = std::mem::take(&mut self.previous_lane));
     }
 }
 
-/// Bridge `collector` (typically [`current_collector`]'s result, captured
-/// before entering a `spawn_blocking` closure) onto the current OS thread for
-/// the life of the returned guard. Call this as the very first line inside
-/// the blocking closure.
-pub fn enter_blocking_scope(collector: Option<PhaseCollector>) -> BlockingScopeGuard {
-    let previous = BLOCKING_PHASE_COLLECTOR.with(|c| c.replace(collector));
-    BlockingScopeGuard { previous }
+/// Bridge `from` (an [`inherited`] captured before entering a `spawn_blocking`
+/// closure) onto the current OS thread for the life of the returned guard.
+/// Call this as the very first line inside the blocking closure.
+fn enter_blocking_scope(from: Inherited) -> BlockingScopeGuard {
+    let previous = BLOCKING_PHASE_COLLECTOR.with(|c| c.replace(from.collector));
+    let previous_lane = BLOCKING_LANE.with(|lane| lane.replace(from.lane));
+    BlockingScopeGuard { previous, previous_lane }
 }
 
-/// Snapshot the active async-task collector, if any, so it can be handed to
-/// [`enter_blocking_scope`] before a `spawn_blocking` call. `None` outside a
+/// The active collector, if any: the async task's, else the blocking
+/// thread's. `None` outside a
 /// [`with_collector`] scope (tests, CLI paths that call phase-guarded code
 /// directly) — every caller here treats that as "nothing to record", never
 /// an error.
@@ -323,13 +414,30 @@ pub fn current_collector() -> Option<PhaseCollector> {
 }
 
 /// Capture before spawning: neither a new task nor its blocking thread inherits carriers.
+/// For a closure its spawner waits on, so its phases divide the spawner's time.
 pub(crate) fn inherit_blocking<F, T>(body: F) -> impl FnOnce() -> T + Send + 'static
 where
     F: FnOnce() -> T + Send + 'static,
 {
-    let collector = current_collector();
+    inherit(inherited(), body)
+}
+
+/// For a closure that runs while its spawner goes on working.
+pub(crate) fn inherit_beside<F, T>(body: F) -> impl FnOnce() -> T + Send + 'static
+where
+    F: FnOnce() -> T + Send + 'static,
+{
+    let mut from = inherited();
+    from.lane.beside = true;
+    inherit(from, body)
+}
+
+fn inherit<F, T>(from: Inherited, body: F) -> impl FnOnce() -> T + Send + 'static
+where
+    F: FnOnce() -> T + Send + 'static,
+{
     move || {
-        let _scope = enter_blocking_scope(collector);
+        let _scope = enter_blocking_scope(from);
         body()
     }
 }
@@ -347,16 +455,16 @@ where
         if let Ok(mut t) = outer.lock() { t.nested_started_at.get_or_insert(telemetry.started_at); }
     }
     let collector: PhaseCollector = Arc::new(Mutex::new(telemetry));
-    let result = ASYNC_PHASE_COLLECTOR.scope(collector.clone(), body).await;
+    let result = ASYNC_PHASE_COLLECTOR.scope(collector.clone(), ASYNC_LANE.scope(RefCell::new(Lane::default()), body)).await;
     (result, collector)
 }
 
-/// Record a phase's elapsed time into whichever collector (async-task or
-/// blocking-thread) is active. A no-op outside any collector scope.
-fn record_phase(collector: &Option<PhaseCollector>, pass: usize, name: &'static str, elapsed: Duration) {
+/// Record a phase into whichever collector (async-task or blocking-thread) is
+/// active. A no-op outside any collector scope.
+fn record_phase(collector: &Option<PhaseCollector>, sample: PhaseSample) {
     if let Some(c) = collector {
         if let Ok(mut t) = c.lock() {
-            t.phases.push(PhaseSample { pass, name, ms: elapsed.as_millis() });
+            t.phases.push(sample);
         }
     }
 }
@@ -469,7 +577,7 @@ fn profile_record(t: &BuildTelemetry, kind: &str, keys: &[&[&'static str]], tota
     counts.extend(t.counts.iter().copied());
     let mut record = profile_record_of(kind, serde_json::json!({
         "started_at": t.started_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        "total_ms": total.as_millis(), "outcome": outcome,
+        "total_ms": total.as_millis(), "unattributed_ms": unattributed_ms(&t.phases, total), "outcome": outcome,
         "passes": t.passes, "phases": t.phases, "counts": counts,
     }));
     #[cfg(unix)]
@@ -553,7 +661,7 @@ pub(crate) fn run_detached<T>(profile: std::path::PathBuf, body: impl FnOnce() -
     let collector: PhaseCollector = Arc::new(Mutex::new(BuildTelemetry { passes: 1, ..BuildTelemetry::default() }));
     let started = Instant::now();
     let result = {
-        let _scope = enter_blocking_scope(Some(collector.clone()));
+        let _scope = enter_blocking_scope(Inherited { collector: Some(collector.clone()), lane: Lane::default() });
         body()
     };
     if let Ok(t) = collector.lock() {
@@ -570,6 +678,8 @@ pub struct PhaseTrace {
     started: Instant,
     collector: Option<PhaseCollector>,
     pass: usize,
+    open: Arc<OpenPhase>,
+    beside: bool,
 }
 
 impl PhaseTrace {
@@ -583,11 +693,16 @@ impl PhaseTrace {
         log::debug!(target: "phase", "{} started", name);
         let collector = current_collector();
         let pass = collector.as_ref().and_then(|c| c.lock().ok().map(|t| t.passes)).unwrap_or(0);
+        let lane = read_lane();
+        let open = Arc::new(OpenPhase { id: NEXT_PHASE_ID.fetch_add(1, Ordering::Relaxed), name, outer: innermost_open(lane.innermost), open: AtomicBool::new(true) });
+        write_lane(Lane { innermost: Some(open.clone()), beside: lane.beside });
         Self {
             name,
             started: Instant::now(),
             collector,
             pass,
+            open,
+            beside: lane.beside,
         }
     }
 }
@@ -596,7 +711,16 @@ impl Drop for PhaseTrace {
     fn drop(&mut self) {
         let elapsed = self.started.elapsed();
         log::debug!(target: "phase", "{} completed in {:?}", self.name, elapsed);
-        record_phase(&self.collector, self.pass, self.name, elapsed);
+        self.open.open.store(false, Ordering::Release);
+        let parent = innermost_open(self.open.outer.clone());
+        let lane = read_lane();
+        if lane.innermost.as_ref().is_some_and(|p| Arc::ptr_eq(p, &self.open)) {
+            write_lane(Lane { innermost: parent.clone(), beside: lane.beside });
+        }
+        record_phase(&self.collector, PhaseSample {
+            pass: self.pass, name: self.name, ms: elapsed.as_millis(), beside: self.beside,
+            parent: parent.as_ref().map(|p| p.name), id: self.open.id, parent_id: parent.as_ref().map(|p| p.id),
+        });
         // Budget overrun logging. Observability only: never panics, never
         // changes control flow, never counts toward the CLI's problem count,
         // and there is no CI wall-clock gate. See `budget_log`'s doc for why
@@ -709,6 +833,68 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), before + 1);
     }
 
+    #[test]
+    fn unattributed_is_each_containers_time_outside_its_children() {
+        let sample = |id, name, ms, parent_id: Option<u64>, beside| PhaseSample {
+            pass: 1, name, ms, parent: None, beside, id, parent_id,
+        };
+        let phases = [
+            sample(0, "run_pipeline", 100, None, false),
+            sample(1, "scan", 10, Some(0), false),
+            sample(2, "build", 80, Some(0), false),
+            sample(3, "lock_wait", 5, Some(2), false),
+            sample(4, "lock_wait", 7, Some(2), false),
+            sample(5, "reduce", 30, Some(2), false),
+            sample(6, "media_prelude", 40, Some(2), true),
+        ];
+        // Outside the top level, then run_pipeline and build outside their children.
+        let by_hand = (110 - 100) + (100 - (10 + 80)) + (80 - (5 + 7 + 30));
+        assert_eq!(unattributed_ms(&phases, Duration::from_millis(110)), by_hand);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_phase_names_the_phase_open_around_it_where_it_ran() {
+        let nap = || std::thread::sleep(Duration::from_millis(3));
+        let ((), collector) = with_collector(async move {
+            begin_pass();
+            let _outer = PhaseTrace::start("outer");
+            for _ in 0..2 { let _wait = PhaseTrace::start("lock_wait"); nap(); }
+            tokio::task::spawn_blocking(inherit_blocking(move || {
+                let _inner = PhaseTrace::start("inner");
+                let _leaf = PhaseTrace::start("leaf");
+                nap();
+            })).await.unwrap();
+            tokio::task::spawn_blocking(inherit_beside(move || {
+                let _media = PhaseTrace::start("media");
+                nap();
+            })).await.unwrap();
+            let early = PhaseTrace::start("early");
+            let late = PhaseTrace::start("late");
+            drop(early);
+            { let _after = PhaseTrace::start("after"); nap(); }
+            drop(late);
+        }).await;
+        let t = collector.lock().unwrap();
+        let entry = |name| t.phases.iter().find(|p| p.name == name).unwrap();
+        let parent = |name| entry(name).parent;
+        assert_eq!(parent("outer"), None);
+        assert!(t.phases.iter().filter(|p| p.name == "lock_wait").all(|p| p.parent == Some("outer")));
+        assert_eq!(parent("inner"), Some("outer"), "the parent crosses into spawn_blocking");
+        assert_eq!(parent("leaf"), Some("inner"));
+        assert_eq!((parent("media"), entry("media").beside), (Some("outer"), true));
+        assert!(!entry("inner").beside);
+        // `early` ended before `late` did, so `late` was not inside it.
+        assert_eq!(parent("late"), Some("outer"));
+        assert_eq!(parent("after"), Some("late"));
+        let ms = |name| entry(name).ms as i64;
+        let waits: i64 = t.phases.iter().filter(|p| p.name == "lock_wait").map(|p| p.ms as i64).sum();
+        let total = Duration::from_millis(ms("outer") as u64 + 4);
+        let by_hand = 4 + (ms("outer") - (waits + ms("inner") + ms("early") + ms("late")))
+            + (ms("inner") - ms("leaf")) + (ms("late") - ms("after"));
+        assert!(waits >= 6 && ms("after") >= 3, "the naps are measured: {:?}", t.phases);
+        assert_eq!(unattributed_ms(&t.phases, total), by_hand);
+    }
+
     /// Time spent waiting for another holder of the folder is its own phase,
     /// not part of the work around it.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -788,10 +974,25 @@ mod tests {
             assert_eq!(record["outcome"], "ok");
             let phases = record["phases"].as_array().unwrap();
             // The fixture has no search index, so search_index and its counts are covered by the serializer test.
-            for name in ["config_reads", "reduce", "render_site_files", "render_handoff", "slot_injection", "media_prelude", "background_asset_copy", "seal_persist", "seal_promote"] {
+            for name in ["config_reads", "render_inputs", "render_parse_setup", "reduce", "render_site_files", "render_site_records", "render_redirects_sitemap", "render_handoff", "slot_injection", "media_prelude", "background_asset_copy", "seal_persist", "seal_promote"] {
                 assert!(phases.iter().any(|p| p["name"] == name), "missing {name}: {record}");
             }
             assert!(phases.iter().all(|p| p["pass"].as_u64().unwrap() >= 1));
+            let entry = |name: &str| phases.iter().find(|p| p["name"] == name).unwrap_or_else(|| panic!("missing {name}: {record}"));
+            assert!(entry("run_pipeline").get("parent").is_none(), "{record}");
+            assert_eq!(entry("build")["parent"], "run_pipeline", "{record}");
+            for name in ["config_reads", "render_inputs", "render_parse_setup", "reduce", "render_site_files", "render_site_records", "render_redirects_sitemap", "render_handoff", "slot_injection"] {
+                assert_eq!(entry(name)["parent"], "build", "{name}: {record}");
+            }
+            // The media lane runs beside the render, so neither it nor anything inside it divides `build`.
+            assert_eq!(entry("media_prelude")["beside"], true, "{record}");
+            assert!(phases.iter().filter(|p| p["parent"] == "media_prelude").all(|p| p["beside"] == true), "{record}");
+            let main_lane: Vec<_> = phases.iter().filter(|p| p.get("beside").is_none()).collect();
+            let containers: std::collections::BTreeSet<_> = main_lane.iter().filter_map(|p| p["parent"].as_str()).collect();
+            let work: i64 = main_lane.iter().filter(|p| !containers.contains(p["name"].as_str().unwrap())).map(|p| p["ms"].as_i64().unwrap()).sum();
+            assert_eq!(record["unattributed_ms"].as_i64().unwrap(), record["total_ms"].as_i64().unwrap() - work, "{record}");
+            assert!(record["unattributed_ms"].as_i64().unwrap() >= 0, "work on the main lane overlaps itself: {record}");
+            eprintln!("profile phases, build {run}: {}", record["phases"]);
             for name in ["hash_index_hits_process", "hash_index_rehashed_process", "pages_rendered", "pages_carried", "slot_html_scanned", "slot_html_rewritten", "background_assets_copied", "background_assets_hits", "background_assets_misses", "images_unchanged", "images_dispatched", "files_sealed"] {
                 assert!(record["counts"][name].is_number(), "missing {name}: {record}");
             }
@@ -890,12 +1091,7 @@ mod tests {
         // instant past the "native_process_spawn" budget (100ms). The log line
         // itself isn't captured (no log-capture harness in this crate); the
         // threshold decision is covered by the pure budget_class tests above.
-        let p = PhaseTrace {
-            name: "native_process_spawn",
-            started: Instant::now() - Duration::from_millis(150),
-            collector: None,
-            pass: 0,
-        };
+        let p = PhaseTrace::since("native_process_spawn", Instant::now() - Duration::from_millis(150));
         assert_eq!(
             budget_class(p.name, p.started.elapsed()),
             BudgetClass::Warn
@@ -905,12 +1101,7 @@ mod tests {
 
     #[test]
     fn over_double_budget_drop_takes_severe_log_path_without_panicking() {
-        let p = PhaseTrace {
-            name: "native_process_spawn",
-            started: Instant::now() - Duration::from_millis(500),
-            collector: None,
-            pass: 0,
-        };
+        let p = PhaseTrace::since("native_process_spawn", Instant::now() - Duration::from_millis(500));
         assert_eq!(
             budget_class(p.name, p.started.elapsed()),
             BudgetClass::Severe
@@ -1014,7 +1205,7 @@ mod tests {
         // enter_blocking_scope's explicit bridge is actually doing the work,
         // not the task-local alone.
         let ((), collector) = with_collector(async {
-            let bridged = current_collector();
+            let bridged = inherited();
             tokio::task::spawn_blocking(move || {
                 let _guard = enter_blocking_scope(bridged);
                 let _p = PhaseTrace::start("inside_blocking");

@@ -1236,18 +1236,14 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             let derived_owned = derived_site.clone();
             let (services, port_owned) = (services.clone(), port_owned.clone());
             let refresh = crate::build::watch::RefreshRequest { rename_pairs: config.rename_pairs.clone(), events: config.host.events.clone() };
-            // Bridge the current build.summary collector (if any) onto the
-            // spawn_blocking closure's own OS thread: spawn_blocking does not
-            // inherit task-locals, so without this, every PhaseTrace inside
-            // pipeline::run (e.g. "slot_resolution") would go unrecorded. See
-            // build/phase.rs's module doc.
-            let phase_collector_for_blocking = crate::build::phase::current_collector();
+            // spawn_blocking does not inherit task-locals: without this bridge
+            // every phase inside pipeline::run would go unrecorded.
+            let run = crate::build::phase::inherit_blocking(move || {
+                let incremental = crate::build::render::IncrementalGates::for_build(&trigger, root_owned.path(), &builder, &last_seal);
+                pipeline::run_leased(&root_owned, Some(&state_owned), reporter_owned.as_deref(), &port_owned, Some(&services), Some(slot_resolver), &ps, site_url_override, incremental, search_freshness, &cache_keys_owned, derived_owned, Some(lease), refresh, Some(last_seal.clone()))
+            });
             async move {
-                tokio::task::spawn_blocking(move || {
-                    let _blocking_scope = crate::build::phase::enter_blocking_scope(phase_collector_for_blocking);
-                    let incremental = crate::build::render::IncrementalGates::for_build(&trigger, root_owned.path(), &builder, &last_seal);
-                    pipeline::run_leased(&root_owned, Some(&state_owned), reporter_owned.as_deref(), &port_owned, Some(&services), Some(slot_resolver), &ps, site_url_override, incremental, search_freshness, &cache_keys_owned, derived_owned, Some(lease), refresh, Some(last_seal.clone()))
-                }).await.map_err(|e| BuildStopped::from(format!("Build task panicked: {}", e)))?
+                tokio::task::spawn_blocking(run).await.map_err(|e| BuildStopped::from(format!("Build task panicked: {}", e)))?
             }
         };
         retry_once_after_discard(attempt).await?
