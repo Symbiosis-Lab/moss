@@ -124,6 +124,17 @@ describe('focus point instrument', () => {
     expect(view.state.doc.line(2).text).toBe('![[photo.jpg|cover focus:49%,10%]]');
   });
 
+  test('a screen reader is given the dot as a named slider whose value text carries both axes after each key', async () => {
+    open(HERO, 2);
+    await settle();
+    expect(dot().getAttribute('role')).toBe('slider');
+    expect(dot().getAttribute('aria-label')).toBe('Focus point of the picture');
+    dot().dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', shiftKey: true, bubbles: true }));
+    dot().dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+    // A slider has one number; the text is what carries the second axis.
+    expect(dot().getAttribute('aria-valuetext')).toBe('49% 10%');
+  });
+
   test('without an answer there is no outline; with one, the outline is the cover crop at the dot', async () => {
     const { answer } = open(HERO, 2);
     await settle();
