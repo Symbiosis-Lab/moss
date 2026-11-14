@@ -1378,6 +1378,7 @@ const EN = {
   // mid-guidance ("collects them — publish…"), so the rail showed a
   // 103-char head and the detail was a sentence fragment.
   'deploy_toast.no_subscribers_yet': "Newsletter skipped: no subscribers yet — the subscribe form on your site collects them; publish this article by email once someone signs up.",
+  'deploy_toast.draft_not_emailed': "Newsletter skipped: this post is a draft.",
   'deploy_toast.deploy_website_first': "Deploy to website first",
   // [pubmgr]
   'pubmgr.lamp.attention': "last publish failed",
@@ -3071,6 +3072,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'deploy_toast.readiness_unknown': 'Nichts veröffentlicht — moss konnte die Eingaben dieses Builds nicht prüfen. Versuche es erneut, wenn der Build abgeschlossen ist.',
     'deploy_toast.no_channel_selected': 'Kein Veröffentlichungskanal ausgewählt',
     'deploy_toast.no_subscribers_yet': 'Newsletter übersprungen: noch keine Abonnierenden. Das Abo-Formular auf deiner Website sammelt sie. Veröffentliche diesen Beitrag per E-Mail, sobald sich jemand eingetragen hat.',
+    'deploy_toast.draft_not_emailed': "Newsletter übersprungen: Dieser Beitrag ist ein Entwurf.",
     'deploy_toast.deploy_website_first': 'Zuerst auf der Website online stellen',
     'pubmgr.lamp.attention': 'Letzte Veröffentlichung fehlgeschlagen',
     'pubmgr.lamp.tooltip': "{name} · {state} · {hint}",
@@ -4717,6 +4719,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'deploy_toast.readiness_unknown': "未发布——青苔无法检查这次构建的输入。构建完成后请重试。",
     'deploy_toast.no_channel_selected': "未选择发布渠道",
     'deploy_toast.no_subscribers_yet': "本次未发送邮件通讯：还没有订阅者。你的网站已带有订阅表单，等有人订阅后即可通过邮件发布这篇文章。",
+    'deploy_toast.draft_not_emailed': "本次未发送邮件通讯：这篇文章是草稿。",
     'deploy_toast.deploy_website_first': "请先上线到网站",
     // [pubmgr]
     'pubmgr.lamp.attention': "上次发布失败",
@@ -6397,6 +6400,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'deploy_toast.readiness_unknown': "未發佈——青苔無法檢查這次建置的輸入。建置完成後請重試。",
     'deploy_toast.no_channel_selected': "未選擇發佈管道",
     'deploy_toast.no_subscribers_yet': "本次未發送郵件通訊：還沒有訂閱者。你的網站已帶有訂閱表單，等有人訂閱後即可透過郵件發佈這篇文章。",
+    'deploy_toast.draft_not_emailed': "本次未發送郵件通訊：這篇文章是草稿。",
     'deploy_toast.deploy_website_first': "請先上線到網站",
     // [pubmgr]
     'pubmgr.lamp.attention': "上次發佈失敗",

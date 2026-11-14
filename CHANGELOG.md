@@ -6,7 +6,8 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
-- A newsletter is not sent for a post the published site does not show. Publishing a post whose file says `draft: true` no longer opens its email, and sending one the last publish left out says to publish the site first; the email used to go out linking to a page that was not there.
+- A newsletter is not sent for a post the published site does not show. Publishing a post whose file says `draft: true` no longer opens its email and says the newsletter was skipped, and sending one the last publish left out says to publish the site first; the email used to go out linking to a page that was not there.
+- A newsletter's list of recent posts links each post at the address the site serves, and leaves out pages the site does not show. It used to build each address from the file's name and list whatever the folder held, so a post with its own address was linked at a page that did not exist, and a draft or a post written since the last publish could be listed.
 - A site with a comment server also gets the build that renders only what changed. The record of the last comment refresh, rewritten by every build, was counted as something a page reads, so such a site rendered every page each time.
 - `syndicate:` takes the name a network goes by as well as its channel's id, ignoring case, so `syndicate: [x]` posts to the X channel (`xcom`). Such a page was told no channel named x was set up. A name two channels go by posts to neither, and the publish says which two.
 - `moss deploy --dry-run` prints the length of an article copy's text. The line read "would post as long ( characters)", with no number.
