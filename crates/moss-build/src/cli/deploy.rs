@@ -124,6 +124,9 @@ pub struct DeployFlags {
     /// `--retry-copies=<channel>`: send again the copies on that channel whose
     /// last send stopped before the network answered.
     pub retry_copies: Vec<String>,
+    /// `--copies-of=<file>`: send only this page's copies this run; with
+    /// `--retry-copies`, a copy handed to the author is handed over again.
+    pub copies_of: Option<String>,
 }
 
 /// A parsed `moss deploy` command line.
@@ -168,6 +171,7 @@ impl DeployArgs {
                 a if a.starts_with("--retry-copies=") => {
                     flags.retry_copies.extend(a["--retry-copies=".len()..].split(',').map(str::trim).filter(|c| !c.is_empty()).map(str::to_string))
                 }
+                a if a.starts_with("--copies-of=") => flags.copies_of = Some(a["--copies-of=".len()..].to_string()),
                 a if a.starts_with('-') => {
                     return Err(format!("error: unknown option '{}'\n{}", a, usage()))
                 }
@@ -298,7 +302,10 @@ pub fn publish(
     if let Some(url) = report.as_ref().ok().filter(|r| r.landed()).and_then(|r| r.site_url()) {
         let print = |s: &crate::syndication::send::Sent| eprint!("{}", crate::syndication::send::render(std::slice::from_ref(s)));
         let _phase = crate::build::phase::PhaseTrace::start("after_publish");
-        crate::syndication::send::after_publish(folder, url, host_ports, &flags.retry_copies, &print).await;
+        crate::syndication::send::after_publish(folder, url, host_ports, &flags.retry_copies, flags.copies_of.as_deref(), &print).await;
+        if let Some(page) = flags.copies_of.as_deref().filter(|p| !crate::syndication::send::is_a_page(folder, p)) {
+            eprintln!("--copies-of={page} names no page of this site; no copies sent");
+        }
     }
     report
     }))
@@ -682,6 +689,7 @@ mod removal_flag_tests {
         let flags = parse(&["site", "--retry-copies=bluesky, mastodon", "--retry-copies=x,"]).unwrap().flags;
         assert_eq!(flags.retry_copies, ["bluesky", "mastodon", "x"]);
         assert!(parse(&["site"]).unwrap().flags.retry_copies.is_empty());
+        assert_eq!(parse(&["site", "--copies-of=notes/a.md"]).unwrap().flags.copies_of.as_deref(), Some("notes/a.md"));
     }
 
     #[test]

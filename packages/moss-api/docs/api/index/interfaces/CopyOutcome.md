@@ -7,7 +7,31 @@ or, with `success: false`, why the network refused; or a hand-off, a copy
 the author posts by hand (`text` to paste at `open_url`) or a draft on the
 network for the author to publish (empty `text`, the draft's `id`).
 
+`find_copy` answers the copy, a hand-off still waiting, or `absent: true`.
+Any other answer, an empty one included, leaves whether the copy exists
+unknown, and only `absent` lets moss send it again.
+
 ## Properties
+
+### absent?
+
+```ts
+optional absent?: boolean;
+```
+
+`find_copy` only: the network says there is no such copy.
+
+***
+
+### account?
+
+```ts
+optional account?: string;
+```
+
+`copy_account` only: the account the channel is signed in to, as an id that stays the same while it is that account.
+
+***
 
 ### handoff?
 

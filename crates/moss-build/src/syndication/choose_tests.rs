@@ -36,6 +36,10 @@ fn article(own: Option<&[String]>, folders: &[String], listed: &[String]) -> Art
     }
 }
 
+fn chip(view: &PostView<'_>, info: &ChannelInfo) -> ChannelChoice {
+    view.choice("bluesky", plan::verdict("bluesky", Some(info), &view.facts, &view.records, false))
+}
+
 fn record(records: &Records, state: Option<State>) {
     if let Some(state) = state {
         let mut r = CopyRecord::due(UID, "bluesky", SOURCE, URL);
@@ -88,7 +92,7 @@ fn a_chip_reads_on_exactly_when_a_publish_would_act_or_a_copy_stands() {
                                 records: Records::at(dir.path().join("copies")),
                             };
                             let named = list.iter().any(|c| c == "bluesky");
-                            let got = view.choice("bluesky", info);
+                            let got = chip(&view, info);
                             assert_eq!(got.on, acts || (named && state.is_some()), "own {own:?} folders {folders:?} live {live} state {state:?} listed {listed:?} edited {edited} -> {got:?}");
                         }
                     }
@@ -113,7 +117,7 @@ fn a_copy_of_a_channel_the_list_no_longer_names_reads_off() {
         live: Live::Yes,
         records,
     };
-    assert_eq!(view.choice("bluesky", &channels()["bluesky"]), ChannelChoice { channel: "bluesky".into(), on: false, origin: ChoiceOrigin::LeftOut, reason: None });
+    assert_eq!(chip(&view, &channels()["bluesky"]), ChannelChoice { channel: "bluesky".into(), on: false, origin: ChoiceOrigin::LeftOut, reason: None });
 }
 
 #[test]
@@ -129,10 +133,10 @@ fn an_unreadable_baseline_says_unknown_unless_a_copy_stands() {
         records,
     };
     let info = &channels()["bluesky"];
-    assert_eq!(view(Records::at(dir.path().join("copies"))).choice("bluesky", info).origin, ChoiceOrigin::Unknown);
+    assert_eq!(chip(&view(Records::at(dir.path().join("copies"))), info).origin, ChoiceOrigin::Unknown);
     let records = Records::at(dir.path().join("copies"));
     record(&records, Some(State::Posted));
-    assert_eq!(view(records).choice("bluesky", info).origin, ChoiceOrigin::Copied);
+    assert_eq!(chip(&view(records), info).origin, ChoiceOrigin::Copied);
 }
 
 #[test]
@@ -174,6 +178,23 @@ fn site(post: &str) -> tempfile::TempDir {
     map.articles.insert(URL.into(), article(None, &strings(&["bluesky"]), &[]));
     map.save(&root.join(".moss")).unwrap();
     dir
+}
+
+/// Named or not, a channel that cannot take the page reads off, with why.
+#[test]
+fn a_channel_that_cannot_take_the_page_reads_unavailable_with_the_reason() {
+    let dir = site("---\ntitle: A\n---\n\nBody.\n");
+    let mut map = ArticleMap::load(&dir.path().join(".moss")).unwrap();
+    map.articles.get_mut(URL).unwrap().content = "word ".repeat(100);
+    map.save(&dir.path().join(".moss")).unwrap();
+    let mut channels = channels();
+    channels.get_mut("bluesky").unwrap().spec.max_chars = Some(300);
+    for own in ["", "syndicate: false\n"] {
+        std::fs::write(dir.path().join(SOURCE), format!("---\ntitle: A\n{own}---\n\nBody.\n")).unwrap();
+        let chips = read_post_with(dir.path(), SOURCE, &channels).unwrap();
+        assert_eq!((chips[0].on, chips[0].origin), (false, ChoiceOrigin::Unavailable), "{own:?}: {chips:?}");
+        assert!(chips[0].reason.is_some(), "{chips:?}");
+    }
 }
 
 fn page_of(dir: &tempfile::TempDir, rel: &str) -> String {

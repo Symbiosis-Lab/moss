@@ -228,7 +228,7 @@ export interface CopyJob {
   /** The original the copy points back to; `url` is absolute, `title` empty for an untitled post. */
   post: { url: string; source_path: string; title: string; lang?: string | null; date?: string | null; tags?: string[] };
   /** Payload fields may be absent for a delete or a lookup whose copy no longer fits. */
-  form?: "short" | "thread" | "long" | "teaser" | "handoff";
+  form?: "short" | "thread" | "long" | "teaser";
   parts?: CopyPart[];
   /** Upload attachments for plain copies. Long articles own images in HTML, with no duplicate attachments. */
   pictures?: CopyPicture[];
@@ -251,6 +251,10 @@ export interface CopyJob {
  * the author posts by hand (`text` to paste at `open_url`) or a draft on the
  * network for the author to publish (empty `text`, the draft's `id`).
  *
+ * `find_copy` answers the copy, a hand-off still waiting, or `absent: true`.
+ * Any other answer, an empty one included, leaves whether the copy exists
+ * unknown, and only `absent` lets moss send it again.
+ *
  * @category Copies
  */
 export interface CopyOutcome {
@@ -259,7 +263,24 @@ export interface CopyOutcome {
   /** A thread's later parts, in order. */
   parts?: CopyRef[];
   handoff?: { text: string; open_url?: string; id?: string };
+  /** `find_copy` only: the network says there is no such copy. */
+  absent?: boolean;
+  /** `copy_account` only: the account the channel is signed in to, as an id that stays the same while it is that account. */
+  account?: string;
   refused?: { cause: "auth" | "content" | "rate" | "network" | "unknown"; message?: string };
+}
+
+/**
+ * What a channel's optional `copy_account` receives. It answers which account
+ * the channel is signed in to, in {@link CopyOutcome.account}; moss keeps it
+ * on each copy, and leaves a copy sent from another account alone.
+ *
+ * @category Copies
+ */
+export interface AccountQuery {
+  channel: string;
+  /** The channel's resolved settings. */
+  config: Record<string, unknown>;
 }
 
 /**

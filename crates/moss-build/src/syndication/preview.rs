@@ -40,9 +40,6 @@ pub struct PreviewCopy {
     pub included_pictures: usize,
     /// The final page address is unknown; length and links need checking at send.
     pub pending_site_url: bool,
-    /// The copy could not be shaped for this network.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
 }
 
 /// What a publish of the dry run's build would plan, each copy shaped.
@@ -73,7 +70,6 @@ pub fn for_dry_run(folder: &Path, sealed: &SealedManifest) -> Vec<PreviewCopy> {
                 omitted_pictures: 0,
                 included_pictures: 0,
                 pending_site_url: false,
-                error: None,
             };
             if let (Action::Due | Action::Update, Some(post), Some(info)) = (&entry.action, post, info) {
                 fill(&config, &records, folder, &live, &mut copy, post, &info.spec, &site);
@@ -110,7 +106,6 @@ pub fn for_post(folder: &Path, source_path: &str, site_url: &str) -> Vec<Preview
                 omitted_pictures: 0,
                 included_pictures: 0,
                 pending_site_url: false,
-                error: None,
             };
             match channels.get(channel) {
                 Some(ChannelInfo { spec, .. }) => fill(&config, &records, folder, &live, &mut copy, post, spec, site_url),
@@ -141,7 +136,7 @@ fn fill(config: &crate::config::ConfigFile, records: &super::record::Records, fo
             copy.omitted_pictures = shaped.omitted_pictures;
             copy.included_pictures = shaped.included_pictures;
         }
-        Err(e) => { copy.action = Action::Unavailable { reason: e.clone() }; copy.error = Some(e); }
+        Err(reason) => copy.action = Action::Unavailable { reason },
     }
 }
 

@@ -134,15 +134,9 @@ pub fn read_post_with(folder: &Path, source: &str, channels: &BTreeMap<String, C
     };
     let config = crate::build::site_config::read_project_config(&folder.to_string_lossy()).ok()?;
     Some(channels.iter().map(|(id, info)| {
-        let mut choice = view.choice(id, info);
-        let verdict = plan::verdict(id, Some(info), &view.facts, &view.records, false);
         let opts = super::shape::ShapeOptions::new(&config, folder, &map, post, id, None);
-        if let Verdict::Unavailable { reason } = plan::assess_verdict(verdict, post, info, &view.records, id, config.site_str("url"), &opts) {
-            choice.on = false;
-            choice.origin = ChoiceOrigin::Unavailable;
-            choice.reason = Some(reason);
-        }
-        choice
+        let verdict = plan::verdict(id, Some(info), &view.facts, &view.records, false);
+        view.choice(id, plan::assess_verdict(verdict, post, info, &view.records, id, config.site_str("url"), &opts))
     }).collect())
 }
 
@@ -158,23 +152,23 @@ struct PostView<'a> {
 }
 
 impl PostView<'_> {
-    fn choice(&self, id: &str, info: &ChannelInfo) -> ChannelChoice {
+    /// A channel that cannot take the page reads so whether or not it is named.
+    fn choice(&self, id: &str, verdict: Verdict) -> ChannelChoice {
         let named = |l: &[String]| l.iter().any(|c| c == id);
+        let chosen = if named(self.facts.own) { ChoiceOrigin::Post } else { ChoiceOrigin::Folder };
         // A copy marks a channel only while the list names it, or leaving it
         // out could never turn the chip off.
-        let (on, origin) = if !named(self.list) {
-            (false, if self.has_own && named(self.folders) { ChoiceOrigin::LeftOut } else { ChoiceOrigin::NotIncluded })
-        } else {
-            let chosen = if named(self.facts.own) { ChoiceOrigin::Post } else { ChoiceOrigin::Folder };
-            match plan::verdict(id, Some(info), &self.facts, &self.records, false) {
-                Verdict::Settled(Some(State::Posted)) => (true, ChoiceOrigin::Copied),
-                Verdict::Settled(_) => (true, chosen),
-                _ if self.live == Live::Unknown => (false, ChoiceOrigin::Unknown),
-                Verdict::LiveBeforeNamed => (false, ChoiceOrigin::LiveBefore),
-                Verdict::Unavailable { .. } => (false, ChoiceOrigin::Unavailable),
-                Verdict::NotSetUp => (false, ChoiceOrigin::NotIncluded),
-                Verdict::Due | Verdict::Update | Verdict::Adopt { .. } => (true, chosen),
+        let (on, origin) = match verdict {
+            Verdict::Unavailable { reason } => {
+                return ChannelChoice { channel: id.to_string(), on: false, origin: ChoiceOrigin::Unavailable, reason: Some(reason) };
             }
+            _ if !named(self.list) => (false, if self.has_own && named(self.folders) { ChoiceOrigin::LeftOut } else { ChoiceOrigin::NotIncluded }),
+            Verdict::Settled(Some(State::Posted)) => (true, ChoiceOrigin::Copied),
+            Verdict::Settled(_) => (true, chosen),
+            _ if self.live == Live::Unknown => (false, ChoiceOrigin::Unknown),
+            Verdict::LiveBeforeNamed => (false, ChoiceOrigin::LiveBefore),
+            Verdict::NotSetUp => (false, ChoiceOrigin::NotIncluded),
+            Verdict::Due | Verdict::Update | Verdict::Adopt { .. } => (true, chosen),
         };
         ChannelChoice { channel: id.to_string(), on, origin, reason: None }
     }

@@ -13,6 +13,15 @@ release heading.
 
 ## [Unreleased]
 
+### Added
+
+- `CopyOutcome.absent`: `find_copy` answers `{ absent: true }` when the network says there is no such copy. Any other answer without the copy means moss cannot tell, and only `absent` lets it post again. An earlier moss reads it as absent too, so a plugin can answer this way now.
+- `copy_account(query: AccountQuery)`, an optional channel export answering `copy: { account }`: the account the channel is signed in to. moss keeps it on each copy and leaves a copy sent from another account alone.
+
+### Removed
+
+- `"handoff"` from `CopyJob.form`. A channel that hands copies to the author declares `teaser` and answers with `handoff`.
+
 ## [0.18.0] - 2026-11-12
 
 ### Added

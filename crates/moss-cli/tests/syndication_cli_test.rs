@@ -24,6 +24,8 @@ struct Network {
     find_failing: bool,
     /// `/find` reports this copy as present.
     holds: Option<(String, String)>,
+    /// `/publish` hands the copy to the author to post while set.
+    handing_off: bool,
     requests: Vec<(String, serde_json::Value)>,
 }
 
@@ -65,6 +67,7 @@ fn serve(net: Arc<Mutex<Network>>) -> u16 {
                 match path.as_str() {
                     "/publish" if n.failing => (500, serde_json::json!({})),
                     "/publish" if n.refusing => (422, serde_json::json!({"error": "text too long"})),
+                    "/publish" if n.handing_off => (200, serde_json::json!({"handoff": true})),
                     "/find" if n.find_failing => (500, serde_json::json!({})),
                     "/find" => match &n.holds {
                         Some((id, url)) => (200, serde_json::json!({"found": true, "id": id, "url": url})),
@@ -95,10 +98,11 @@ var FixturePlugin = {{
   publish_copy: async function (job) {{
     var c = await call("/publish", job);
     if (c.refused) return {{ success: false, copy: {{ refused: {{ cause: "content", message: c.refused }} }} }};
+    if (c.handoff) return {{ success: true, copy: {{ handoff: {{ text: "paste me", open_url: "https://example.social/new" }} }} }};
     return {{ success: true, copy: {{ id: c.id, url: c.url }} }};
   }},
   update_copy: async function (job) {{ var c = await call("/update", job); return {{ success: true, copy: {{ id: job.previous.id, url: job.previous.url }} }}; }},
-  find_copy: async function (job) {{ var c = await call("/find", job); return {{ success: true, copy: c.found ? {{ id: c.id, url: c.url }} : null }}; }}
+  find_copy: async function (job) {{ var c = await call("/find", job); return {{ success: true, copy: c.found ? {{ id: c.id, url: c.url }} : {{ absent: true }} }}; }}
 }};
 window.FixturePlugin = FixturePlugin;
 "#
@@ -261,6 +265,25 @@ fn an_unconfirmed_copy_waits_for_the_author_and_retry_copies_sends_it() {
     let retried = deploy(&s, &["--retry-copies=fixture"]);
     assert!(stderr(&retried).contains("posted to fixture"), "{}", stderr(&retried));
     assert_eq!(paths(&net), ["/publish", "/find", "/find", "/publish"]);
+}
+
+/// A copy handed to the author rests there: the network finding nothing does
+/// not hand it over again, nor does retrying the channel; retrying it for the
+/// one page does.
+#[test]
+fn a_handed_off_copy_is_handed_over_again_only_for_the_page_named() {
+    let net = Arc::new(Mutex::new(Network { handing_off: true, ..Default::default() }));
+    let s = site(serve(net.clone()), false, true);
+    assert!(stderr(&deploy(&s, &[])).contains("ready to paste into fixture"));
+    let quiet = [deploy(&s, &[]), deploy(&s, &["--retry-copies=fixture"])];
+    assert!(quiet.iter().all(|o| !stderr(o).contains("ready to paste")), "{}", stderr(&quiet[1]));
+    assert_eq!(paths(&net), ["/publish", "/find", "/find"]);
+    let misspelt = deploy(&s, &["--retry-copies=fixture", "--copies-of=notes/frist.md"]);
+    assert!(stderr(&misspelt).contains("--copies-of=notes/frist.md names no page of this site; no copies sent"), "{}", stderr(&misspelt));
+    let again = deploy(&s, &["--retry-copies=fixture", "--copies-of=notes/first.md"]);
+    assert!(!stderr(&again).contains("names no page"), "{}", stderr(&again));
+    assert!(stderr(&again).contains("ready to paste into fixture"), "{}", stderr(&again));
+    assert_eq!(paths(&net), ["/publish", "/find", "/find", "/find", "/publish"]);
 }
 
 #[test]

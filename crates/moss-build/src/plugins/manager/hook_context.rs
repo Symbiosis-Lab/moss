@@ -42,6 +42,7 @@ impl_hook_context!(
     SyndicateContext,
     ConfigureDomainContext,
     crate::syndication::job::CopyJob,
+    crate::syndication::job::AccountQuery,
 );
 
 impl HookContext for ProcessContext {

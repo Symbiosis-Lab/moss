@@ -33,7 +33,8 @@ Plugins attach to stages by declaring **capabilities** in their manifest.
 | `publish_copy` | multiple | `CopyJob` | Post one copy of a post to a channel's network once its page is live (contributes.channel.syndication); returns the copy's id and address. |
 | `update_copy` | multiple | `CopyJob` | Edit a posted copy after its post's source changed; optional, absent means the network cannot edit a copy. |
 | `delete_copy` | multiple | `CopyJob` | Remove a deleted post's copy, when the author asks; optional. |
-| `find_copy` | multiple | `CopyJob` | Look a copy up after a send whose outcome is unknown, or a draft left for the author to publish on the network; optional. |
+| `find_copy` | multiple | `CopyJob` | Look a copy up after a send whose outcome is unknown, or one handed off to the author; optional. Answers the copy, a `handoff` still waiting, or `absent: true`; anything else leaves it unknown, and only `absent` lets moss send again. |
+| `copy_account` | multiple | `AccountQuery` | Say which account a channel is signed in to, as `copy.account`; optional. Asked once per run before a channel's copies are worked on; a copy sent from another account is left alone until that account is signed in again. |
 | `listing` | multiple | `ListingContext` | Draw a folder's listing in a style the plugin contributes (contributes.listing_styles); runs after render, once per folder home page whose children_style names one of the plugin's styles. |
 | `login` | multiple | `BaseContext` | Connect a user account for a plugin that needs one (e.g. Matters); invoked once via `connect_account`, not part of the build pipeline. |
 <!-- auto:end:hooks -->
@@ -67,7 +68,7 @@ Use for: GitHub Pages, Netlify, or custom hosting.
 
 ## The copy hooks
 
-A channel posts a copy of each new post to another network (POSSE: publish on your own site, syndicate elsewhere). It declares what its network carries under `contributes.channel.syndication`, and moss decides which posts are due, shapes each copy to the network's limits, never posts one twice, and writes each copy's address back into the post's `syndicated:`. The channel exports one function per operation, each handling exactly one copy: `publish_copy`, and optionally `update_copy`, `delete_copy` and `find_copy`.
+A channel posts a copy of each new post to another network (POSSE: publish on your own site, syndicate elsewhere). It declares what its network carries under `contributes.channel.syndication`, and moss decides which posts are due, shapes each copy to the network's limits, never posts one twice, and writes each copy's address back into the post's `syndicated:`. The channel exports one function per operation, each handling exactly one copy: `publish_copy`, and optionally `update_copy`, `delete_copy` and `find_copy`. A channel that exports `copy_account` keeps each copy with the account it was sent from.
 
 Use for: cross-posting to Bluesky, Mastodon, Matters.town, LinkedIn, X; a hand-off for a network with no posting API.
 

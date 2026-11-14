@@ -26,7 +26,8 @@ pub enum State {
     Refused,
     /// The latest published page cannot be copied; a fitting edit can resume it.
     Unavailable,
-    /// No posting API: the author was given the copy to paste.
+    /// The author was given the copy to post themselves; a lookup adopts it
+    /// once it is published.
     HandedOff,
     /// A send stopped mid-call on a network that cannot retry safely. Not
     /// retried until the author says so.
@@ -67,6 +68,15 @@ pub struct CopyOutcome {
     pub parts: Vec<RemoteRef>,
     #[serde(default)]
     pub handoff: Option<Handoff>,
+    /// `find_copy` only: the network says there is no such copy. The one
+    /// answer that lets moss post it again; any other answer without the copy
+    /// leaves whether it exists unknown.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub absent: bool,
+    /// `copy_account` only: the account the channel is signed in to, as an
+    /// id that stays the same while it is that account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
     /// Why the network refused, with `success: false`.
     #[serde(default)]
     pub refused: Option<CopyRefusal>,
@@ -141,6 +151,15 @@ pub struct CopyRecord {
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handoff: Option<Handoff>,
+    /// The account the copy was sent from, for a channel that says which
+    /// (`copy_account`). Signed in to another, the channel leaves it alone.
+    /// A record from before accounts were kept takes the channel's account
+    /// the next time it is worked on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    /// The run has said the copy waits for the account it was sent from.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub held_for_account: bool,
     pub updated_at: String,
 }
 
@@ -154,8 +173,8 @@ impl CopyRecord {
             State::Sending if !idempotent => Some(Op::Find),
             State::Due | State::Refused | State::Sending => Some(Op::Publish),
             State::Posted if self.update_due => Some(Op::Update),
-            State::HandedOff if self.draft().is_some() => Some(Op::Find),
-            State::Posted | State::HandedOff | State::Unavailable => None,
+            State::HandedOff => Some(Op::Find),
+            State::Posted | State::Unavailable => None,
         }
     }
 
@@ -168,6 +187,9 @@ impl CopyRecord {
 
     /// Cancel only definite work. Remote identity and uncertain side effects survive.
     pub(super) fn make_unavailable(&mut self, reason: &str) -> bool {
+        if self.state == State::Unavailable && self.reason.as_deref() == Some(reason) {
+            return false;
+        }
         if self.definite_first() {
             self.state = State::Unavailable;
         } else if self.state == State::Posted && self.update_due {
@@ -190,7 +212,7 @@ impl CopyRecord {
         }
     }
 
-    /// The draft a handed-off copy waits in on its network.
+    /// The draft a handed-off copy waits in on its network, which a lookup names.
     pub fn draft(&self) -> Option<RemoteRef> {
         let h = self.handoff.as_ref()?;
         Some(RemoteRef { id: h.id.clone()?, url: h.open_url.clone().unwrap_or_default() })
@@ -218,6 +240,8 @@ impl CopyRecord {
             update_due: false,
             reason: None,
             handoff: None,
+            account: None,
+            held_for_account: false,
             updated_at: now(),
         }
     }
@@ -406,12 +430,19 @@ mod tests {
         assert_eq!(at(State::Refused, false, false), Some(Op::Publish));
         assert_eq!(at(State::Posted, true, false), Some(Op::Update));
         assert_eq!(at(State::Posted, false, false), None);
-        assert_eq!(at(State::HandedOff, false, false), None);
+        assert_eq!(at(State::HandedOff, false, false), Some(Op::Find), "a handed-off copy is looked up, draft id or not");
+    }
 
-        let mut drafted = CopyRecord::due("ab12cd34", "c", "a.md", "a/");
-        drafted.state = State::HandedOff;
-        drafted.handoff = Some(Handoff { text: String::new(), open_url: None, id: Some("d-1".into()) });
-        assert_eq!(drafted.next_op(false), Some(Op::Find), "a draft on the network is asked about again");
+    /// Planning the same unavailable copy again leaves its record, and its
+    /// file, as they were.
+    #[test]
+    fn an_unavailable_copy_is_not_rewritten_for_the_same_reason() {
+        let mut r = CopyRecord::due("ab12cd34", "c", "a.md", "a/");
+        assert!(r.make_unavailable("too long"));
+        r.updated_at = "then".into();
+        assert!(!r.make_unavailable("too long"));
+        assert_eq!(r.updated_at, "then");
+        assert!(r.make_unavailable("no pictures"), "a new reason is saved");
     }
 
     #[test]

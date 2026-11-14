@@ -52,19 +52,20 @@ A channel is a plugin with `contributes.channel` in its manifest, as today; post
 }
 ```
 
-- `forms`: the shapes of copy the network takes. `short` is a post's whole text; `thread` is a post written in parts, posted as replies to the first; `long` is a whole article, where the network has an article format; `teaser` is the article's description or opening, cut at a sentence end that fits, with a link to the original; `handoff` means the network has no posting API (below).
+- `forms`: the shapes of copy the network takes. `short` is a post's whole text; `thread` is a post written in parts, posted as replies to the first; `long` is a whole article, where the network has an article format; `teaser` is the article's description or opening, cut at a sentence end that fits, with a link to the original. How a copy is shaped says nothing about who posts it: a network the author posts to by hand declares its forms like any other (below).
 - `max_chars`, `counting` (`graphemes`, `chars`, `utf16` as a JavaScript string's length counts, or `weighted`, where a CJK character counts two), `link_chars` (what every address counts as, where the network counts it so: 23 on X and Mastodon, assumed for `weighted`) and `images` bound a copy. moss checks them, so a plugin is never handed a copy its network would refuse.
 - `host_setting`: for a network on the author's own server (a Mastodon instance), the setting that holds the server's address. Its host joins the manifest's `domains` as a host the channel's copies live on, so a copy listed by hand there is adopted.
 - `idempotent`: the plugin passes the job's `idempotency_key` to its network (a record key, an `Idempotency-Key` header), so a retry cannot make a second copy. It changes what moss does after a crash; see below.
 
-The plugin exports up to four functions, one per operation, each handling exactly one copy. Whether a channel can edit or remove its copies is read from which of them it exports, the way moss already detects every other hook.
+The plugin exports up to four functions, one per operation, each handling exactly one copy, and optionally a fifth that says which account it is signed in to. Whether a channel can edit or remove its copies is read from which of them it exports, the way moss already detects every other hook.
 
 | Export | Called when |
 |---|---|
 | `publish_copy(job)` | a post is due on this network and has no copy there |
 | `update_copy(job)` | the post's source changed in the publish that just landed, and the copy's content would differ |
 | `delete_copy(job)` | the author asks for a deleted post's copies to be removed; copies otherwise stand, since a folder moved by mistake must not erase a year of posts elsewhere |
-| `find_copy(job)` | a send stopped before the network answered: is the copy there? |
+| `find_copy(job)` | a send stopped before the network answered, or a copy was handed to the author: is the copy there? |
+| `copy_account({ channel, config })` | once per run, before moss works on any of the channel's copies: which account is the channel signed in to? |
 
 A job carries the post's absolute address, its language, date and tags, the form moss chose, and the copy already shaped: the text of each part with its links, each picture's file and alt text, for a teaser its title, description and cover, and for a whole article its title, HTML, description and cover. An update or delete also carries the copy's `id` and `url`. Its `idempotency_key` is derived from the post's note id and the channel alone, so every retry, on any computer, carries the same key, and an edit made between a crash and its retry cannot turn the retry into a second post.
 
@@ -75,11 +76,13 @@ The plugin answers with the `HookResult` every hook returns, with the outcome in
 - `success: true` with `copy: { handoff: { text, open_url, id } }`: see below.
 - Throwing, a timeout, or no answer: moss cannot know whether a copy exists.
 
+`find_copy` answers one of four things. `copy: { id, url }`: the copy is there. `copy: { handoff }`: a draft or scheduled post is waiting on the network. `copy: { absent: true }`: the network says there is no such copy. Anything else, a successful answer with no copy included, means moss still cannot tell, because a feed that has not caught up looks the same as an absence. Only `absent` lets moss post the copy again. `copy_account` answers `copy: { account }`, an id that stays the same while it is that account.
+
 The plugin turns the job into its network's request (Bluesky's facets, Mastodon's form fields) and nothing else: it does not decide whether to post, does not read or write the post's file, and keeps no record of what it posted.
 
-A network with no posting API declares the `handoff` form. Its `publish_copy` returns the shaped copy and the page where the author pastes it; moss prints it after the publish (the app shows it with a Copy button), records the copy as *handed off*, and adopts the copy when the author adds its address to `syndicated:`. Substack is this case: it has no API for posts or Notes, so its channel hands off a teaser and link.
+A network with no posting API declares the forms it takes, `teaser` for a teaser and link, and its `publish_copy` returns the shaped copy and the page where the author pastes it. moss prints it after the publish (the app shows it with a Copy button) and records the copy as *handed off*. Later runs look it up, and adopt it once it is published or once the author adds its address to `syndicated:`. Substack is this case: it has no API for posts or Notes, so its channel hands off a teaser and link.
 
-A network that has a publishing API publishes through it, even where its own site offers an editor: the author is not sent to finish a copy elsewhere. Matters' articles were once put into a draft for the author to publish in Matters' editor; they now publish directly, like every other copy. A published Matters article is archived permanently and can be revised only a few times, so its button and preview say so, and the receipt says when a page's edits can no longer reach its Matters copy. The draft hand-off, and the waiting state a hand-off with a draft id kept, are removed.
+A network that has a publishing API publishes through it, even where its own site offers an editor: the author is not sent to finish a copy elsewhere. Matters articles publish directly, like every other copy. A published Matters article is archived permanently and can be revised only a few times, so its button and preview say so, and the receipt says when a page's edits can no longer reach its Matters copy. A draft or scheduled post that a network holds for the author is a handed-off copy, which a lookup reports as waiting until it is published.
 
 ## Never twice
 
@@ -93,10 +96,12 @@ A record is keyed by the post's note id (the `uid:` moss keeps through renames) 
 | *sending* (a run stopped mid-call) | if the channel is `idempotent`, sends again with the same key; otherwise looks the copy up first, as for *unconfirmed* |
 | *posted* | nothing, unless the post's source changed in a landed publish and `update_copy` is exported |
 | *refused* | sends it again on the next run |
-| *handed off* | for a draft on the network, looks it up with `find_copy` and records it as posted once published; otherwise nothing, until the author adds the copy's address to `syndicated:` |
+| *handed off* | looks it up with `find_copy` and records it as posted once found; absent or unknown, nothing, until the author adds the copy's address to `syndicated:` or resends that one post's copy on that channel (`moss deploy <folder> --retry-copies=<channel> --copies-of=<file>`), which hands it off again. A run looks up at most ten handed-off copies per channel, the most recently handed off first, and none handed off more than 30 days ago; a run that names the post (the app's resend of one post, or `--copies-of`) looks it up and says it is waiting again, which starts its 30 days over |
 | *unconfirmed* | looks the copy up with `find_copy`: found, it is recorded as posted; absent, it is sent; when the channel cannot look it up, nothing, until the author adds the copy's address to `syndicated:` (moss adopts it) or runs `moss deploy --retry-copies=<channel>` |
 
-The *sending* state is written to disk before the network is called and the result after, so a crash between them leaves a mark rather than an empty slot. A network that is not idempotent cannot make a retry safe, so for it moss chooses at most once: a copy may be missing, and the author is told, but it is not posted twice.
+The *sending* state is written to disk before the network is called and the result after, so a crash between them leaves a mark rather than an empty slot. A network that is not idempotent cannot make a retry safe, so for it moss chooses at most once: a copy may be missing, and the author is told, but it is not posted twice. `--retry-copies=<channel>` sends the channel's *unconfirmed* copies again; it leaves *handed off* copies as they are, since handed off is where most such copies rest. With `--copies-of=<file>`, which sends only that page's copies, it hands that page's copy over again.
+
+A record also holds the account the copy was sent from, for a channel that exports `copy_account`. It is written with the *sending* mark, so an interrupted send is already tied to the account that made it. While the channel is signed in to another account, moss does not look the copy up, send it again, update or delete it: an idempotency key does not stop a second copy on a different account, and another account's lookup says nothing about the first one's copies. The run says so once per copy, and the work goes on when the first account is signed in again. A copy with nothing on the network yet (due, or refused outright) is sent from the new account. A record written before accounts were kept takes the channel's account the next time it is worked on, so an interrupted send recorded then is tied to whichever account is signed in at its lookup.
 
 Two more guards:
 

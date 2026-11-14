@@ -218,12 +218,11 @@ impl DryRun {
         }
         out.push_str("Not run: the upload itself, where a real deploy can still stop.\n");
         for c in &self.copies {
-            let what = match (&c.action, &c.error, c.form) {
-                (_, Some(e), _) => format!("not postable: {e}"),
-                (crate::syndication::plan::Action::Unavailable { reason }, ..) => format!("unavailable: {reason}"),
+            let what = match (&c.action, c.form) {
+                (crate::syndication::plan::Action::Unavailable { reason }, _) => format!("unavailable: {reason}"),
                 (crate::syndication::plan::Action::Skip { reason }, ..) => format!("not posted: {reason}"),
                 (crate::syndication::plan::Action::Adopt { url }, ..) => format!("already there: {url}"),
-                (action, None, form) => {
+                (action, form) => {
                     let verb = if matches!(action, crate::syndication::plan::Action::Update) { "would update" } else { "would post" };
                     let sizes: Vec<String> = c.parts.iter().map(|p| match p.max_chars {
                         Some(max) => format!("{}/{max}", p.chars),

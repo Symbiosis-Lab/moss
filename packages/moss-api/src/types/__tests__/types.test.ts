@@ -1,6 +1,8 @@
 import { describe, it, expect, expectTypeOf } from "vitest";
 import type {
+  AccountQuery,
   CopyJob,
+  CopyOutcome,
   CopyPicture,
   ProjectInfo,
   PluginManifest,
@@ -352,6 +354,18 @@ describe("Type Definitions", () => {
       ];
       expect(messages).toHaveLength(6);
     });
+  });
+});
+
+describe("copy lookup and account answers", () => {
+  it("types an explicit absence and the signed-in account through the public barrel", () => {
+    expectTypeOf<CopyOutcome["absent"]>().toEqualTypeOf<boolean | undefined>();
+    expectTypeOf<CopyOutcome["account"]>().toEqualTypeOf<string | undefined>();
+    expectTypeOf<CopyJob["form"]>().toEqualTypeOf<"short" | "thread" | "long" | "teaser" | undefined>();
+    const query: AccountQuery = { channel: "one", config: {} };
+    const absent: CopyOutcome = { absent: true };
+    const account: CopyOutcome = { account: "did:example:one" };
+    expect([query.channel, absent.absent, account.account]).toEqual(["one", true, "did:example:one"]);
   });
 });
 

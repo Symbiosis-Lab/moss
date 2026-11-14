@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use super::{context_for_plugin, PluginManager};
 use crate::plugins::types::{HookResult, Plugin, PluginManifest};
 use crate::syndication::channel::ChannelSpec;
-use crate::syndication::job::{CopyJob, Op};
+use crate::syndication::job::{AccountQuery, CopyJob, Op};
 
 /// What a channel that takes copies declares.
 #[derive(Debug, Clone, Default)]
@@ -71,6 +71,17 @@ pub(crate) fn host_of(address: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
+/// The account a channel is signed in to now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Account {
+    /// The channel names no account (no `copy_account`, or an answer without
+    /// one, as when the author posts by hand); its copies are not tied to one.
+    Unsaid,
+    Known(String),
+    /// It exports `copy_account`, which failed.
+    Unknown(String),
+}
+
 impl PluginManager {
     /// Installed channels whose manifest declares a `syndication` block,
     /// keyed by channel id.
@@ -80,17 +91,35 @@ impl PluginManager {
 
     /// Call `job.channel`'s hook for `job.op`, with the channel's own config.
     pub async fn send_copy(&self, job: &CopyJob) -> CopyCall {
+        self.call_channel(&job.channel, job.op.hook(), job).await
+    }
+
+    /// Ask `channel`'s `copy_account` which account it is signed in to.
+    pub async fn copy_account(&self, channel: &str) -> Account {
+        let query = AccountQuery { channel: channel.to_string(), config: Default::default() };
+        match self.call_channel(channel, "copy_account", &query).await {
+            CopyCall::NoExport => Account::Unsaid,
+            CopyCall::Answered(r) if !r.success => Account::Unknown(r.message.unwrap_or_else(|| "copy_account failed".into())),
+            CopyCall::Answered(r) => match r.copy.and_then(|c| c.account).filter(|a| !a.is_empty()) {
+                Some(account) => Account::Known(account),
+                None => Account::Unsaid,
+            },
+            CopyCall::Unknown(e) => Account::Unknown(e),
+        }
+    }
+
+    async fn call_channel<C: super::hook_context::HookContext + serde::Serialize>(&self, channel: &str, hook: &str, context: &C) -> CopyCall {
         let plugin = {
             let plugins = self.plugins.read().unwrap_or_else(|e| e.into_inner());
-            plugins.iter().find(|p| p.manifest.name == job.channel).cloned()
+            plugins.iter().find(|p| p.manifest.name == channel).cloned()
         };
         let Some(plugin) = plugin else {
-            return CopyCall::Unknown(format!("the {} plugin is not loaded", job.channel));
+            return CopyCall::Unknown(format!("the {channel} plugin is not loaded"));
         };
-        let job = context_for_plugin(&self.project_path, job, &plugin);
-        match self.execute_hook_with_result(&plugin, job.op.hook(), &job).await {
+        let context = context_for_plugin(&self.project_path, context, &plugin);
+        match self.execute_hook_with_result(&plugin, hook, &context).await {
             Ok(Some(result)) => CopyCall::Answered(result),
-            Ok(None) => CopyCall::Unknown(format!("{} returned no result", job.op.hook())),
+            Ok(None) => CopyCall::Unknown(format!("{hook} returned no result")),
             // The engine reports a missing export by this exact substring.
             Err(e) if e.contains("Hook function not found") => CopyCall::NoExport,
             Err(e) => CopyCall::Unknown(e),

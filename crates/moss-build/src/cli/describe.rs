@@ -109,9 +109,15 @@ fn plugin_hooks() -> Vec<PluginHookInfo> {
         },
         PluginHookInfo {
             name: "find_copy",
-            description: "Look a copy up after a send whose outcome is unknown, or a draft left for the author to publish on the network; optional.",
+            description: "Look a copy up after a send whose outcome is unknown, or one handed off to the author; optional. Answers the copy, a `handoff` still waiting, or `absent: true`; anything else leaves it unknown, and only `absent` lets moss send again.",
             arity: "multiple",
             context: "CopyJob",
+        },
+        PluginHookInfo {
+            name: "copy_account",
+            description: "Say which account a channel is signed in to, as `copy.account`; optional. Asked once per run before a channel's copies are worked on; a copy sent from another account is left alone until that account is signed in again.",
+            arity: "multiple",
+            context: "AccountQuery",
         },
         PluginHookInfo {
             name: "listing",

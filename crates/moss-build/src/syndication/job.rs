@@ -88,6 +88,14 @@ impl CopyJob {
     }
 }
 
+/// What `copy_account` receives: the channel, with its resolved settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountQuery {
+    pub channel: String,
+    #[serde(default)]
+    pub config: HashMap<String, serde_json::Value>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Previous {
     #[serde(flatten)]

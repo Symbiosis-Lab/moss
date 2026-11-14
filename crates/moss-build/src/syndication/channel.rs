@@ -14,9 +14,9 @@ pub enum Form {
     /// The whole article, where the network has an article format.
     Long,
     /// The article's description or opening, with a link to the original.
+    /// `handoff` reads as a teaser.
+    #[serde(alias = "handoff")]
     Teaser,
-    /// No posting API: the shaped copy goes to the author to paste.
-    Handoff,
 }
 
 /// How the network measures a post's length.
@@ -168,5 +168,11 @@ mod tests {
         assert_eq!(spec.counting, Counting::Graphemes);
         assert_eq!(spec.max_images(), 4);
         assert!(!spec.idempotent);
+    }
+
+    #[test]
+    fn a_copy_recorded_as_a_handoff_reads_as_a_teaser() {
+        assert_eq!(serde_json::from_str::<Form>(r#""handoff""#).unwrap(), Form::Teaser);
+        assert_eq!(serde_json::to_string(&Form::Teaser).unwrap(), r#""teaser""#);
     }
 }
