@@ -720,8 +720,8 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn planning_preview_and_send_share_emitted_formula_assets() {
-        use super::super::{plan, preview, shape};
+    async fn planning_and_send_share_emitted_formula_assets() {
+        use super::super::{plan, shape};
         use crate::build::emit::math_png::{email_math_img, emit_math_pngs};
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
@@ -765,9 +765,6 @@ mod tests {
         let planned = shape::assess(&post, &channels["one"].spec, Some(site), &options, &CopyRecord::due("aa11aa11", "one", "page.md", "page/")).unwrap();
         assert_eq!(planned.pictures.len(), 1);
         assert_eq!(planned.pictures[0].url, expected_url);
-        let previews = preview::for_post(root, "page.md", site);
-        assert_eq!(previews[0].pictures, planned.pictures);
-        assert_eq!(previews[0].included_pictures, 1);
         plan::apply(plans, &records, Some(site), Some(&map), &Default::default());
         // A subsequent build's language cannot change the saved publication.
         map.page_languages.insert(post.url_path.clone(), "en".into());

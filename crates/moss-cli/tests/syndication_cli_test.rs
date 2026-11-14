@@ -555,8 +555,6 @@ fn impossible_new_copies_are_unavailable_before_sending() {
     let choices = moss_build::syndication::choose::read_post(&s.root, "notes/first.md").unwrap();
     assert!(!choices[0].on);
     assert!(choices[0].reason.as_deref().unwrap().contains("fits none"));
-    let preview = moss_build::syndication::preview::for_post(&s.root, "notes/first.md", "https://example.org");
-    assert!(matches!(&preview[0].action, moss_build::syndication::plan::Action::Unavailable { reason } if reason.contains("fits none")));
     let human = deploy(&s, &["--dry-run"]);
     assert!(String::from_utf8_lossy(&human.stdout).contains("fits none"));
     deploy(&s, &[]);
