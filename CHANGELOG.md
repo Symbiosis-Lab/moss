@@ -47,6 +47,7 @@ All notable changes to moss will be documented here.
 - In the editor, the number of files a page can't find shows once, on the page. The breadcrumb used to repeat it on every folder up to the site; a folder now shows a number only while it is closed in the file list, and otherwise only the amber tint that leads to the page. The number on the open page is a button: each press moves the caret to the page's next missing file.
 - A picture the editor can't find says what was looked for ("No file named slide.jpg in your folder. The site can't be published without it."). Its ⌘K card offers the same picture under another extension when the folder has one, Choose a file…, and Remove, which takes the line with it and comes back with one undo. The width buttons are not shown for a file that is not there.
 - In the preview, a picture or other media file that is not in the folder is a box reading "Picture not found: slide.jpg". It was an empty frame of the size asked for with that size as its caption, a broken image, or a bare link.
+- For plugin authors: `moss describe` no longer lists the `syndicate` hook, which moss no longer calls. A channel posts through the copy hooks (`publish_copy` and the others listed there).
 
 ### New
 

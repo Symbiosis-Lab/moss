@@ -413,10 +413,7 @@ fn get_builtin_channels() -> Vec<AvailablePlugin> {
         .collect()
 }
 
-/// Get the list of built-in channel IDs.
-///
-/// Used by `get_syndicator_plugins` to check which built-in channels
-/// are active without doing a full channel scan.
+/// The ids of the built-in channels, without a full channel scan.
 pub fn get_builtin_channel_ids() -> Vec<&'static str> {
     BUILTIN_CHANNELS.iter().map(|c| c.id).collect()
 }

@@ -84,12 +84,6 @@ fn plugin_hooks() -> Vec<PluginHookInfo> {
             context: "DeployContext",
         },
         PluginHookInfo {
-            name: "syndicate",
-            description: "Being removed: the earlier way to cross-post, one call for every article. A channel posts through the copy hooks instead.",
-            arity: "multiple",
-            context: "SyndicateContext",
-        },
-        PluginHookInfo {
             name: "publish_copy",
             description: "Post one copy of a post to a channel's network once its page is live (contributes.channel.syndication); returns the copy's id and address.",
             arity: "multiple",

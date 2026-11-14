@@ -29,7 +29,6 @@ Plugins attach to stages by declaring **capabilities** in their manifest.
 |---|---|---|---|
 | `process` | multiple | `ProcessContext` | Pre-process source files before generation (e.g. download remote assets, transform markdown). |
 | `deploy` | single | `DeployContext` | Deploy the built site to a hosting platform (e.g. GitHub Pages, Netlify). |
-| `syndicate` | multiple | `SyndicateContext` | Being removed: the earlier way to cross-post, one call for every article. A channel posts through the copy hooks instead. |
 | `publish_copy` | multiple | `CopyJob` | Post one copy of a post to a channel's network once its page is live (contributes.channel.syndication); returns the copy's id and address. |
 | `update_copy` | multiple | `CopyJob` | Edit a posted copy after its post's source changed; optional, absent means the network cannot edit a copy. |
 | `delete_copy` | multiple | `CopyJob` | Remove a deleted post's copy, when the author asks; optional. |
