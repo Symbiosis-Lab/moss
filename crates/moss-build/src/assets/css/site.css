@@ -5436,13 +5436,12 @@ code.moss-math {
 
 /* Blockquotes */
 blockquote {
-  /* Quiet grey rule (not the brand accent) so the bar reads as a typographic
-     device that recedes behind the text, matching the literary blockquote of
-     editorial references. --moss-border-medium is theme-aware (light #d1cdc4 /
-     dark #443d32); --moss-border-light nearly vanishes in the reading column,
-     so keep medium at 3px rather than widening. */
+  /* A grey rule, not the accent, so the bar recedes behind the text.
+     --moss-border-light nearly vanishes in the reading column. */
   border-inline-start: 3px solid var(--moss-border-medium);
   margin-block: var(--moss-space-lg);
+  /* Without this the browser's own 40px on each side narrows the quote. */
+  margin-inline: 0;
   padding-inline-start: var(--moss-space-lg);
   color: var(--moss-color-text-secondary);
 }

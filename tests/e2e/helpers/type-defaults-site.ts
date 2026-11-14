@@ -3,8 +3,8 @@
  * (so the title keeps room for the theme controls) whose pages each isolate one
  * default that a hand-built design pinned down: the spacing of a captioned
  * picture in a grid card, the colour of a link, a year range in a heading, a
- * subtitle beside the title, a grid of equal rows, and a quote in Chinese or
- * Japanese in a collage. All names and text are invented.
+ * subtitle beside the title, a grid of equal rows, a quote in Chinese or
+ * Japanese in a collage, and a quotation in running text. All names and text are invented.
  * Served by playwright/type-defaults.config.ts.
  */
 import { EIGHTY_WORDS } from "./gate-sites";
@@ -416,6 +416,15 @@ uid: "tdg00045"
 ---
 
 朝の港に霧が降りて、船は静かに眠る。
+`,
+    "quoted.md": `---
+title: Quoted
+uid: "tdg00009"
+---
+
+The harbour board wrote to the keepers every spring, and the keepers wrote back.
+
+> The lamp was lit at dusk and trimmed at midnight, and no ship was lost that winter.
 `,
     "quotes.md": `---
 title: Quotes
