@@ -6,6 +6,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- `moss build` fails when it could not write the site: it prints "Build failed: the site was not written." and exits 1. It used to print "0 problems" and exit 0 while the folder still held the site from the build before, so a script that read the exit code went on with a site that lacked the latest edits. The same now holds when the build's background work failed or its output could not be verified.
 - Publish no longer waits without end after part of a build crashed. A crash while copying the folder's files, converting an image or a video, or in the render, left the folder marked busy, so every later publish in that session sat at "waiting for background build tasks" until it timed out.
 - The button that sets a domain's records up at its DNS provider is offered only where the provider will write every record moss asks for. At a provider holding an older copy of moss's records it wrote two of them and left the rest.
 - On macOS a folder with many files at its top level is watched as soon as it opens. With 300 files it took a minute or more, and changes made meanwhile waited for the 20-second check of the folder.

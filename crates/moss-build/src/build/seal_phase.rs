@@ -345,7 +345,11 @@ async fn run_materialize_phase(req: PendingSeal) {
             Ok((sealed, Ok(Promotion::Withheld(crate::build::ship::WithholdReason::SourcesDownloading)))) => {
                 Some(BuildEnd::SourcesUnread(sealed.unresolved_inputs()))
             }
-            _ => Some(BuildEnd::Failed),
+            Ok((_, Ok(Promotion::Withheld(
+                crate::build::ship::WithholdReason::Unverified { .. } | crate::build::ship::WithholdReason::ImplausibleLoss { .. },
+            ))))
+            | Ok((_, Err(_)))
+            | Err(_) => Some(BuildEnd::Failed),
         };
         if let Some(end) = end {
             records().record_build_end(&folder_path, promotion_epoch, end);
@@ -377,7 +381,7 @@ async fn run_materialize_phase(req: PendingSeal) {
         ),
         // Said once, with its reason, by `materialize_and_promote`.
         Ok(Promotion::Withheld(_)) => {}
-        Err(_) => log::error!("run_materialize_phase: materialize failed — current_ptr stays put"),
+        Err(e) => log::error!("run_materialize_phase: materialize failed — current_ptr stays put: {e}"),
     }
     // Observed at the plain path on purpose: `build_dir()` follows the
     // handle, so it can never disagree with the start identity.

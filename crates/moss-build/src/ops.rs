@@ -397,6 +397,12 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
         .await;
 
         match result {
+            // The build that exits writes its site before the pipeline
+            // returns, so the record is final here.
+            Ok(_) if !run.flags.serve && crate::system::build_records::records().last_build_failed(&run.folder_path) => {
+                cli_eprintln!("Build failed: the site was not written.");
+                1
+            }
             Ok(msg) => {
                 // `launch_server` failing is not itself a build failure (the
                 // pipeline logs a warning and carries on with no server —
