@@ -105,6 +105,11 @@ fn comment_sync_state_path(folder: &Path) -> PathBuf {
 /// so silent fresh-start is the right recovery.
 pub fn load_comment_sync_state(folder_path: &str) -> CommentSyncState {
     let path = comment_sync_state_path(Path::new(folder_path));
+    // Reading a cloud-only placeholder waits for the provider's download, and
+    // no page needs these bytes.
+    if crate::build::icloud::is_evicted(&path) {
+        return CommentSyncState::default();
+    }
     match std::fs::read_to_string(&path) {
         Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
         Err(_) => CommentSyncState::default(),
@@ -572,6 +577,15 @@ mod tests {
         assert!(state.last_success_at.is_none());
         assert!(state.last_attempt_at.is_none());
         assert!(state.last_error.is_none());
+    }
+
+    #[test]
+    fn sync_state_in_the_cloud_reads_as_never_synced() {
+        let dir = tmp_dir();
+        let folder = dir.path().to_str().unwrap();
+        record_comment_sync_success(folder, 1_000.0);
+        let _in_cloud = crate::build::icloud::pretend::evicted(&comment_sync_state_path(dir.path()));
+        assert_eq!(load_comment_sync_state(folder).last_success_at, None);
     }
 
     #[test]

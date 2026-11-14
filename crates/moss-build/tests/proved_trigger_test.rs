@@ -284,6 +284,35 @@ fn turning_plugins_on_keeps_the_build_full() {
     assert!(rendered_everything(&record), "{record}");
 }
 
+/// Every build of a site with a comment server records the refresh's outcome,
+/// which no page reads, so it must not count as an input.
+#[test]
+fn a_comment_refresh_that_fails_every_build_still_lets_the_next_build_prove() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    for proxy in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"] {
+        std::env::remove_var(proxy);
+    }
+    // A loopback port nothing listens on: every refresh fails at once.
+    let server = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        format!("http://{}", listener.local_addr().unwrap())
+    };
+    let site = Site::new();
+    site.write(
+        ".moss/config.toml",
+        &format!("[site]\ndomain = \"example.com\"\n\n[services.comments]\nprovider = \"artalk\"\nserver_url = \"{server}\"\n"),
+    );
+    site.sealed();
+    let state = ".moss/data/comment-sync-state.json";
+    for n in 1..=2 {
+        let record = build(site.root(), BuildTrigger::Unobserved);
+        let written = fs::read_to_string(site.root().join(state)).expect("the refresh ran and recorded its outcome");
+        assert!(written.contains("last_error") && !written.contains("\"last_error\": null"), "{written}");
+        assert_eq!(count(&record, "proved_from_seal"), 1, "build {n}, recorded {state}: {:?}: {record}", recorded_moss_input(&site, state));
+        assert_eq!(count(&record, "pages_rendered"), 0, "build {n}: {record}");
+    }
+}
+
 fn recorded_moss_input(site: &Site, rel: &str) -> Option<serde_json::Value> {
     let manifest: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(site.root().join(".moss/build.nosync/hashes.json")).unwrap()).unwrap();

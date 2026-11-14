@@ -4,6 +4,11 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- A site with a comment server also gets the build that renders only what changed. The record of the last comment refresh, rewritten by every build, was counted as something a page reads, so such a site rendered every page each time.
+
+
 ## [0.15.24] - 2026-11-13
 
 ### New

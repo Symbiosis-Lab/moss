@@ -869,6 +869,12 @@ pub const MOSS_PATH_RULES: &[MossPathRule] = &[
     // reading an evicted one as empty turns a merge into an erase
     // (`feeds::redirects`).
     r_negatable(".moss/data/", true, CloudPolicy::Synced, false, true),
+    // The comment refresh's last outcome, rewritten on every attempt and read
+    // by no page. Not materialized, so a build does not count it as an input
+    // and the next build can still prove nothing changed; an evicted copy
+    // reads as "never refreshed", which only words a note. `data/*` already
+    // ignores it.
+    r(".moss/data/comment-sync-state.json", false, CloudPolicy::Synced, false, false),
     // What the last publish put live: one record per target, holding the page
     // hashes the change set is computed from and the note ID that was live at
     // each URL.
@@ -1345,7 +1351,7 @@ mod tests {
         const DELIBERATELY_SHARED: &[(&str, &str)] = &[
             (".moss/identity/", "the site's signing identity: a second machine cannot publish the same site without it, so it MUST travel"),
             (".moss/keys/", "same — the keystore is the site's identity, and the alternative is a site only one computer can ever publish"),
-            (".moss/data/", "site state the site itself owns (comment-sync results, plugin data), which moss reads back and writes"),
+            (".moss/data/", "site state the site itself owns (imported addresses, plugin data), which moss reads back and writes"),
             (".moss/redirects.json", "the old addresses the site still answers: every checkout and machine must serve the same ones. Its reader keeps unreadable apart from absent (feeds::redirects)"),
             (".moss/plugins/", "installed plugin bundles — re-installable, and an evicted bundle simply fails to load"),
             (".moss/state.toml", "where this site is published: wanted on a second machine, which would otherwise bake localhost into pages"),
