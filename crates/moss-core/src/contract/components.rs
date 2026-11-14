@@ -1998,7 +1998,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: ":::grid 2\nLeft cell\n+++\nRight cell\n:::\n",
         status: Status::Confirmed,
         since: "0",
-        description: "Generic grid container (used by profiles, link previews, etc.). Modifier classes: `profiles`, `featured`, `no-cards`, `summary`. `summary` REPLACES this container rather than decorating it: the fence emits `.moss-cards-container > .moss-cards[data-layout=\"list\"]` instead, so a `.moss-grid` never reaches the page and a column count is dropped — `scroll` is dropped the same way when both are written on one fence. v1 adds `data-width` (P9); a later release adds `data-scroll`.",
+        description: "Generic grid container. Classes on the fence that moss reads: `no-cards`, `summary`. `summary` REPLACES this container rather than decorating it: the fence emits `.moss-cards-container > .moss-cards[data-layout=\"list\"]` instead, so a `.moss-grid` never reaches the page and a column count is dropped — `scroll` is dropped the same way when both are written on one fence. v1 adds `data-width` (P9); a later release adds `data-scroll`.",
     },
     ComponentEntry {
         class: "moss-grid-card",
@@ -2034,7 +2034,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "Card instance inside `.moss-grid`. Today emits sibling classes `link-card` / `friend-card` / `no-cards`; v1 collapses to `data-kind`.",
+        description: "Card instance inside `.moss-grid`. Its variant is the `data-kind` attribute.",
     },
     ComponentEntry {
         class: "link-preview",

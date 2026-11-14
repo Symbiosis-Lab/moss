@@ -9185,7 +9185,7 @@ body > footer.container:has(> .moss-hero-closing) {
    hook, not a design token, so it is deliberately not in tokens.json.
 
    A theme sets these on the grid, not on the image:
-     .moss-grid.featured { --moss-grid-image-ratio: 3 / 4; }
+     .moss-grid { --moss-grid-image-ratio: 3 / 4; }
    which is what a wall of pre-designed portrait artwork needs — the default
    1:1 would crop a 3:4 poster's top and bottom off. `contain` suits artwork
    whose edges carry meaning (typographic posters); `cover` suits photography.
