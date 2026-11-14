@@ -336,7 +336,7 @@ model (dark mode, quiet chrome, `@layer` rules), see
   `"/old/" = "/new/"` line under `[redirects]` in `.moss/config.toml`; past 20
   addresses, `moss deploy <folder> --dry-run --json` lists every one, and its
   `redirects_to_add` holds the lines to paste; in that JSON, `refusal.kind` is one
-  of `unresolved_inputs`, `missing_references`, `drafts_linked`, `links_in_cloud`, `links_in_flight`, `pending_derivations`, `removals`, `stale_content`, `output_collision`, `no_environment`, `foreign_inputs`, `not_owner`, `stale_copy`;
+  of `unresolved_inputs`, `missing_references`, `drafts_linked`, `links_in_cloud`, `links_in_flight`, `pending_derivations`, `build_unfinished`, `removals`, `stale_content`, `output_collision`, `no_environment`, `foreign_inputs`, `not_owner`, `stale_copy`;
   a setup failure prints `{"error"}` instead; an `output_path` is a file of the
   build output, an `address` is what a visitor asks for; with `--prebuilt` the
   refused files are `transfer.removed_output_paths`), or pass `--accept-removals` — only when

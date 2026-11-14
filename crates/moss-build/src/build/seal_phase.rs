@@ -336,6 +336,21 @@ async fn run_materialize_phase(req: PendingSeal) {
     })
     .await;
     drop(promote_trace);
+    {
+        use crate::system::build_records::{records, BuildEnd};
+        let end = match &blocking_result {
+            // The newer build answers for the folder.
+            Ok((_, Ok(Promotion::Superseded))) => None,
+            Ok((_, Ok(Promotion::Promoted))) => Some(BuildEnd::Publishable),
+            Ok((sealed, Ok(Promotion::Withheld(crate::build::ship::WithholdReason::SourcesDownloading)))) => {
+                Some(BuildEnd::SourcesUnread(sealed.unresolved_inputs()))
+            }
+            _ => Some(BuildEnd::Failed),
+        };
+        if let Some(end) = end {
+            records().record_build_end(&folder_path, promotion_epoch, end);
+        }
+    }
     let (mut sealed, promotion) = match blocking_result {
         Ok(pair) => pair,
         Err(e) => {

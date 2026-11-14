@@ -1207,8 +1207,14 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                 let incremental = crate::build::render::IncrementalGates::for_build(&trigger, root_owned.path(), &builder, &last_seal);
                 pipeline::run_leased(&root_owned, Some(&state_owned), reporter_owned.as_deref(), &port_owned, Some(&services), Some(slot_resolver), &ps, site_url_override, incremental, search_freshness, &cache_keys_owned, derived_owned, Some(lease), refresh, Some(last_seal.clone()))
             });
+            let folder = folder_path.clone();
             async move {
-                tokio::task::spawn_blocking(run).await.map_err(|e| BuildStopped::from(format!("Build task panicked: {}", e)))?
+                let built = tokio::task::spawn_blocking(run).await.unwrap_or_else(|e| Err(BuildStopped::from(format!("Build task panicked: {}", e))));
+                built.inspect_err(|stopped| {
+                    use crate::system::build_records::BuildEnd;
+                    let end = if stopped.is_deferred() { BuildEnd::Downloading } else { BuildEnd::Failed };
+                    crate::system::build_records::records().record_build_end(&folder, build_generation, end);
+                })
             }
         };
         retry_once_after_discard(attempt).await?
@@ -1286,19 +1292,8 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // content-hash `generation_id` can never say which build is newer.
     let promotion_epoch = build_generation;
 
-    // Spawn the seal+persist side task that owns the BackgroundHandle.
-    //
-    // This fixes B1 from the build lifecycle review: previously the handle was stored
-    // in AppState and only awaited at deploy time. If the user never deployed (just
-    // rebuilt), nobody awaited the handle, nobody wrote hashes.json with deferred
-    // entries, and the next build's stale cleanup deleted generated media files.
-    //
-    // New flow: a side task increments the FolderSession's UiBound counter (so
-    // wait_for_in_flight_work gates on it), awaits await_completion(), writes
-    // the SealedManifest to hashes.json, stores it in AppState.current_sealed_manifest,
-    // then decrements the counter.
-    // Deploy hard-errors on None (no disk fallback), so the seal+persist task
-    // must populate the slot before Publish is attempted.
+    // The seal task owns the BackgroundHandle: every build awaits its workers
+    // and seals, whether or not a publish follows.
 
     let mut media_rerender_owed = false;
     if let Some(handle) = _bg_handle {
@@ -1416,6 +1411,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                     }
                     Err(e) => {
                         log::error!("seal+persist: background work failed: {}", e);
+                        crate::system::build_records::records().record_build_end(&folder_path_for_mat, promotion_epoch, crate::system::build_records::BuildEnd::Failed);
                         seal_ports.events.report(
                             &crate::build::progress::PipelineEvent::BackgroundProgress {
                                 task: "sealing".to_string(),
@@ -1520,6 +1516,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                 }
                 Err(e) => {
                     log::error!("seal+persist (sync): background work failed: {}", e);
+                    crate::system::build_records::records().record_build_end(&folder_path, promotion_epoch, crate::system::build_records::BuildEnd::Failed);
                 }
             }
         }

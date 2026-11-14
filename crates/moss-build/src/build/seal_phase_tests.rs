@@ -69,6 +69,10 @@ impl Vault {
     }
 
     async fn build_with(&self, host: HostPorts) {
+        self.try_build_with(host, false).await.expect("build");
+    }
+
+    async fn try_build_with(&self, host: HostPorts, exits_after_build: bool) -> Result<String, String> {
         run_pipeline(PipelineConfig {
             root: crate::vault::paths::VaultRoot::resolve(&self.folder),
             progress: crate::build::null_sink(),
@@ -77,7 +81,7 @@ impl Vault {
             start_server: false,
             host,
             trigger: BuildTrigger::Full,
-            exits_after_build: false,
+            exits_after_build,
             site_url_override: None,
             server_port: None,
             admission_epoch: None,
@@ -85,7 +89,6 @@ impl Vault {
             rename_pairs: Vec::new(),
         })
         .await
-        .expect("build");
     }
 
     /// Wait for the per-build half (`advertise_sealed`) to finish — NOT for
@@ -682,6 +685,8 @@ async fn an_unreadable_page_keeps_its_published_address_until_a_fresh_render() {
             .publish_preflight(vault.folder.to_str().unwrap()).expect("latest attempt recorded");
         assert!(projection.unresolved_inputs.iter().any(|source| source == "about.md"));
         assert!(crate::deploy::refuse_publish(vault.folder.to_str().unwrap()).is_err());
+        let end = crate::system::build_records::records().build_end(vault.folder.to_str().unwrap());
+        assert_eq!(end, Some(crate::system::build_records::BuildEnd::SourcesUnread(vec!["about.md".into()])), "the seal names what it waits for");
 
         std::fs::write(&path, "---\ntitle: About\n---\n\nrestored\n").unwrap();
         let (recovered, set) = vault.seal_and_tap().await;
@@ -716,4 +721,133 @@ async fn generation_original_receipt_flows_from_headless_render_through_promote(
     assert_eq!(original.source, source);
     assert_eq!(original.oid, crate::build::cache::ObjectStore::hash_file(&source_path).unwrap());
     assert!(!vault.mp.current_ptr().join(path.file_name().unwrap()).exists(), "receipt is outside the served tree");
+}
+
+/// A person who edits and then publishes must get the edit or a refusal. When
+/// the edit's generation never reaches disk, the slot a publish reads still
+/// holds the generation before it, and the gates must not pass that one.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_publish_after_a_failed_materialize_is_refused_not_served_the_generation_before_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let vault = Vault::new();
+    let mut host = vault.host();
+    let slot = capture_seal(&mut host);
+    vault.build_with(host).await;
+    vault.drained().await;
+    settle(&vault.mp).await;
+    let before = slot.lock().unwrap().clone().expect("the first build seals");
+
+    vault.edit("the edit a person just saved");
+    let generations = vault.mp.generations_dir();
+    std::fs::set_permissions(&generations, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let mut host = vault.host();
+    let adopted_later = capture_seal(&mut host);
+    vault.build_with(host).await;
+    vault.drained().await;
+    settle(&vault.mp).await;
+    std::fs::set_permissions(&generations, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(adopted_later.lock().unwrap().is_none(), "premise: the edit's generation was never offered to a publish");
+    assert_eq!(vault.mp.current_generation_id().unwrap(), before.generation_id(), "premise: current still names the generation before the edit");
+    let live = std::fs::read_to_string(vault.mp.current_ptr().join("index.html")).unwrap();
+    assert!(!live.contains("the edit a person just saved"), "premise: that generation lacks the edit");
+
+    let refusal = crate::deploy::refuse_before_upload(&vault.folder, &before)
+        .expect_err("the generation before the edit passed every gate, so a publish would ship the site without it");
+    assert!(refusal.contains("the last build failed"), "{refusal}");
+}
+
+/// Panics in the asset-copy worker, which reports its "assets" tick through
+/// this port on every build, and notes when the seal task says it failed.
+#[derive(Default)]
+struct FailingAssetCopy {
+    seal_failed: std::sync::atomic::AtomicBool,
+}
+
+impl crate::build::ports::reporter::BuildReporter for FailingAssetCopy {
+    fn report(&self, event: &crate::build::progress::PipelineEvent) {
+        let crate::build::progress::PipelineEvent::BackgroundProgress { task, message, .. } = event else { return };
+        if task == "assets" {
+            panic!("the asset copy failed");
+        }
+        if message == "Seal failed" {
+            self.seal_failed.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+}
+
+/// The other way a seal ends with nothing to publish: a background worker
+/// fails, so the build never seals. The build after it clears the refusal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_publish_after_failed_background_work_is_refused_until_a_build_seals() {
+    let vault = Vault::new();
+    let (before, _) = vault.seal_and_tap().await;
+
+    vault.edit("the edit a person just saved");
+    let mut host = vault.host();
+    let failing = Arc::new(FailingAssetCopy::default());
+    host.services.reporter = failing.clone();
+    host.events = failing.clone();
+    let adopted_later = capture_seal(&mut host);
+    vault.build_with(host).await;
+    for _ in 0..2000 {
+        if failing.seal_failed.load(std::sync::atomic::Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(failing.seal_failed.load(std::sync::atomic::Ordering::SeqCst), "premise: the seal task saw its background work fail");
+    // The panic above skipped the worker's own release of the session.
+    vault.session.end_ui_bound();
+    vault.drained().await;
+    settle(&vault.mp).await;
+    assert!(adopted_later.lock().unwrap().is_none(), "premise: the build with the edit never sealed");
+
+    let refusal = crate::deploy::refuse_before_upload(&vault.folder, &before)
+        .expect_err("the generation before the edit passed every gate, so a publish would ship the site without it");
+    assert!(refusal.contains("the last build failed"), "{refusal}");
+
+    let (after, _) = vault.seal_and_tap().await;
+    assert_eq!(crate::deploy::refuse_before_upload(&vault.folder, &after), Ok(()), "a build that seals is publishable again");
+}
+
+/// Panics on the first event the render reports.
+struct FailingRender;
+
+impl crate::build::ports::reporter::BuildReporter for FailingRender {
+    fn report(&self, _: &crate::build::progress::PipelineEvent) {
+        panic!("the render failed");
+    }
+}
+
+/// A build that fails before it seals leaves the same generation on offer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_publish_after_a_failed_render_is_refused() {
+    let vault = Vault::new();
+    let (before, _) = vault.seal_and_tap().await;
+
+    vault.edit("the edit a person just saved");
+    let mut host = vault.host();
+    host.services.reporter = Arc::new(FailingRender);
+    vault.try_build_with(host, false).await.expect_err("premise: the build with the edit failed");
+
+    let refusal = crate::deploy::refuse_before_upload(&vault.folder, &before)
+        .expect_err("the generation before the edit passed every gate, so a publish would ship the site without it");
+    assert!(refusal.contains("the last build failed"), "{refusal}");
+}
+
+/// A one-shot build seals inline; a serving process that runs one keeps its
+/// records, so the failure must reach them from that tail too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_one_shot_build_whose_background_work_failed_is_recorded_as_failed() {
+    let vault = Vault::new();
+    vault.promote().await;
+
+    vault.edit("the edit a person just saved");
+    let mut host = vault.host();
+    host.services.reporter = Arc::new(FailingAssetCopy::default());
+    let _ = vault.try_build_with(host, true).await;
+
+    assert!(crate::system::build_records::records().last_build_failed(vault.folder.to_str().unwrap()));
 }

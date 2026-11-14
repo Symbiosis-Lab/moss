@@ -111,6 +111,8 @@ pub struct BuildRecords {
     /// placeholder because their text was still being read. A publish waits
     /// for zero: a placeholder is not something to put on the web.
     pending_derivations: FolderSlot<usize>,
+    /// How the newest build ended, with its build generation.
+    build_end: FolderSlot<Option<(u64, BuildEnd)>>,
     /// What the last seal found going offline, and what the author accepted
     /// losing — see `refuse_publish`. One slot, because the two change
     /// together: a seal prunes the accepted set against its own list, and an
@@ -128,6 +130,21 @@ pub struct BuildRecords {
     public_scripts: FolderSlot<Vec<String>>,
     /// The last build's file copies and folder redirects, for its seal to write.
     late_redirects: FolderSlot<crate::build::feeds::kept_addresses::LateRedirects>,
+}
+
+/// How a build ended, for the publish that follows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BuildEnd {
+    /// Its generation is the one a publish reads.
+    Publishable,
+    /// It produced no generation: the render or its background work failed,
+    /// or the output could not be written or read back.
+    Failed,
+    /// Held back because these sources could not be read.
+    SourcesUnread(Vec<String>),
+    /// Stopped on a file the cloud provider has not handed back; its arrival
+    /// starts the next build.
+    Downloading,
 }
 
 /// See [`BuildRecords::removals`].
@@ -215,6 +232,27 @@ impl BuildRecords {
     /// `None` means no render has recorded an answer yet.
     pub fn pending_derivations(&self, folder_path: &str) -> Option<usize> {
         self.pending_derivations.get(&Self::key(folder_path))
+    }
+
+    /// `build_generation` orders the answers: a failed build can end after the
+    /// build that followed it sealed, and must not overwrite that answer.
+    pub(crate) fn record_build_end(&self, folder_path: &str, build_generation: u64, end: BuildEnd) {
+        self.build_end.update(Self::key(folder_path), |newest| {
+            if newest.as_ref().is_none_or(|(generation, _)| *generation <= build_generation) {
+                *newest = Some((build_generation, end));
+            }
+        });
+    }
+
+    /// `None` means no build of the folder has ended in this process.
+    pub(crate) fn build_end(&self, folder_path: &str) -> Option<BuildEnd> {
+        self.build_end.get(&Self::key(folder_path)).flatten().map(|(_, end)| end)
+    }
+
+    /// The newest build failed, so the generation on offer to a publish is
+    /// from a build before it. A host can build again before it publishes.
+    pub fn last_build_failed(&self, folder_path: &str) -> bool {
+        self.build_end(folder_path) == Some(BuildEnd::Failed)
     }
 
     /// Always called, including with an empty `Vec`: a rebuild that restores
@@ -419,4 +457,17 @@ mod tests {
         assert!(records.publish_preflight(folder).unwrap().unresolved_inputs.is_empty());
     }
 
+    #[test]
+    fn a_failed_build_that_ends_late_cannot_replace_the_newer_builds_answer() {
+        let records = BuildRecords::default();
+        let folder = "/tmp/a-vault";
+        assert!(!records.last_build_failed(folder), "no build yet is not a failed build");
+
+        records.record_build_end(folder, 2, BuildEnd::Publishable);
+        records.record_build_end(folder, 1, BuildEnd::Failed);
+        assert!(!records.last_build_failed(folder));
+
+        records.record_build_end(folder, 3, BuildEnd::Failed);
+        assert!(records.last_build_failed(folder));
+    }
 }
