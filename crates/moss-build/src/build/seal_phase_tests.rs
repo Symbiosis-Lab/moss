@@ -798,8 +798,6 @@ async fn a_publish_after_failed_background_work_is_refused_until_a_build_seals()
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
     assert!(failing.seal_failed.load(std::sync::atomic::Ordering::SeqCst), "premise: the seal task saw its background work fail");
-    // The panic above skipped the worker's own release of the session.
-    vault.session.end_ui_bound();
     vault.drained().await;
     settle(&vault.mp).await;
     assert!(adopted_later.lock().unwrap().is_none(), "premise: the build with the edit never sealed");
@@ -831,6 +829,7 @@ async fn a_publish_after_a_failed_render_is_refused() {
     let mut host = vault.host();
     host.services.reporter = Arc::new(FailingRender);
     vault.try_build_with(host, false).await.expect_err("premise: the build with the edit failed");
+    assert!(!vault.session.has_ui_bound(), "a render that panicked must not leave the folder busy, or every later publish waits on it");
 
     let refusal = crate::deploy::refuse_before_upload(&vault.folder, &before)
         .expect_err("the generation before the edit passed every gate, so a publish would ship the site without it");

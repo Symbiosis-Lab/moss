@@ -1325,11 +1325,9 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             // its UiBound counter once seal+persist completes.
             let session_opt = crate::system::folder_session::registry().get(&folder_path);
 
-            // Increment BEFORE spawning so wait_for_in_flight_work gates on this
+            // Taken BEFORE spawning so wait_for_in_flight_work gates on this
             // task starting immediately (no window where has_ui_bound() is false).
-            if let Some(ref s) = session_opt {
-                s.begin_ui_bound();
-            }
+            let sealing = session_opt.as_ref().map(|s| s.hold_ui_bound());
 
             // The host's ports ride into the 'static task as owned Arcs —
             // which is the whole point of resolving them at the entry point:
@@ -1424,12 +1422,9 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                         );
                     }
                 }
-                // Decrement so deploy's wait_for_in_flight_work can proceed.
-                // Runs AFTER cleanup so wait_for_in_flight_work gates on the
-                // cleanup step too.
-                if let Some(s) = session_opt {
-                    s.end_ui_bound();
-                }
+                // AFTER cleanup, so deploy's wait_for_in_flight_work gates on
+                // the cleanup step too.
+                drop(sealing);
             }));
         } else {
             // No app context AND the caller (CLI / build_sync / snapshot harness)

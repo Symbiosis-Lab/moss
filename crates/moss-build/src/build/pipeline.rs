@@ -960,19 +960,13 @@ pub(crate) fn run_leased(
     // nothing to the next build.
     last_seal: Option<std::sync::Arc<crate::build::incremental_gates::LastSeal>>,
 ) -> Result<PipelineRunOutput, BuildStopped> {
-    // Track build state in the FolderSession's UiBound counter for window
-    // close / CLI-wait decisions. begin_ui_bound is a no-op in headless mode.
-    if let Some(svc) = services {
-        svc.begin_ui_bound();
-    }
+    // The folder reads as busy for window close and publish while this
+    // build runs, however it exits. No session in headless mode.
+    let building = services.and_then(|s| s.session.as_ref()).map(|s| s.hold_ui_bound());
 
-    // Use inner function pattern to ensure build state is cleared on ALL exit paths
     let result = build_inner(root, site_dir_state, progress_sender, preview_port, services, slot_resolver, project_structure, site_url_override, incremental, search_freshness, cache_keys, derived, cache_lease, refresh, last_seal);
 
-    // Clear build state after build completes (success or error)
-    if let Some(svc) = services {
-        svc.end_ui_bound();
-    }
+    drop(building);
 
     // The gate verdict is emitted from INSIDE `build_inner`, so any `?` before
     // it skips the gate and the user gets a raw errno where the waiting screen
@@ -2089,10 +2083,9 @@ fn build_inner(
             // copy_deferred_assets runs synchronously (no internal spawn).
             {
                 let tx_assets = tx.clone();
-                if let Some(ref s) = session_for_assets {
-                    s.begin_ui_bound();
-                }
+                let copying = session_for_assets.as_ref().map(|s| s.hold_ui_bound());
                 crate::build::background::spawn_traced_worker(workers, move || {
+                    let _copying = copying;
                     let reporter_for_assets = reporter_for_assets
                         .as_deref()
                         .unwrap_or(crate::build::ports::reporter::discarding());
@@ -2114,9 +2107,6 @@ fn build_inner(
                     if let Some(ev) = crate::build::progress::make_symlink_skip_advisory(stats.skipped_symlinks) {
                         reporter_for_assets.report(&ev);
                     }
-                    if let Some(s) = session_for_assets {
-                        s.end_ui_bound();
-                    }
                     Ok(())
                 });
             }
@@ -2125,19 +2115,14 @@ fn build_inner(
             // placeholder generation seals now instead of after every read.
             // The finished reads trigger the rebuild that renders the text.
             if let Some(job) = derive_job {
-                if let Some(ref s) = session_for_derive {
-                    s.begin_ui_bound();
-                }
+                let deriving = session_for_derive.as_ref().map(|s| s.hold_ui_bound());
                 let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
                 if let Some(s) = &session_for_derive {
                     s.bridge_to_atomic(cancel.clone());
                 }
                 tokio::task::spawn_blocking(move || {
-                    let _derive_lease = derive_lease;
+                    let (_derive_lease, _deriving) = (derive_lease, deriving);
                     job.run(reporter_for_derive.as_deref(), &cancel);
-                    if let Some(s) = session_for_derive {
-                        s.end_ui_bound();
-                    }
                 });
             }
             // No search worker: a generation-free worker is never

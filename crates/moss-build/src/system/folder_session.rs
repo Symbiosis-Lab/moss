@@ -125,6 +125,15 @@ pub enum PreviewSource {
 #[path = "folder_session/preview_requirement_tests.rs"]
 mod preview_requirement_tests;
 
+/// See [`FolderSession::hold_ui_bound`].
+pub struct UiBoundHold(Arc<FolderSession>);
+
+impl Drop for UiBoundHold {
+    fn drop(&mut self) {
+        self.0.end_ui_bound();
+    }
+}
+
 impl FolderSession {
     pub fn new(folder: PathBuf) -> Arc<Self> {
         Self::with_stage_write_lock(folder, Arc::new(Mutex::new(())))
@@ -221,6 +230,14 @@ impl FolderSession {
         let _ = self.ui_bound.fetch_update(
             Ordering::SeqCst, Ordering::SeqCst,
             |v| if v == 0 { None } else { Some(v - 1) });
+    }
+
+    /// [`begin_ui_bound`](Self::begin_ui_bound), ended when the hold drops: a
+    /// panic or an early return cannot leave the folder looking busy for
+    /// good, which would stall every later publish.
+    pub fn hold_ui_bound(self: &Arc<Self>) -> UiBoundHold {
+        self.begin_ui_bound();
+        UiBoundHold(self.clone())
     }
 
     pub fn has_ui_bound(&self) -> bool {

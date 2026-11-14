@@ -517,7 +517,7 @@ pub(crate) async fn run(
             let dispatched_at = Instant::now();
             // `ui_bound` brackets only the dispatch, never the loop —
             // `wait_for_in_flight_work` reads it as "deploy should wait".
-            let _ui = UiBoundGuard::begin(&session);
+            let _ui = session.hold_ui_bound();
             // An arrival is a file materializing out of the cloud — a create
             // as far as the site is concerned, and it carries no classification
             // of its own, so it takes the dispatch back to `Full`.
@@ -765,21 +765,3 @@ pub(crate) fn note_failed_pass(session: &FolderSession, folder: &str, streak: &m
     }
 }
 
-/// Decrements the session's `ui_bound` counter however the scope exits — a
-/// leaked count makes the folder look permanently busy and stalls every
-/// publish (`has_ui_bound` is what the close handler and
-/// `wait_for_in_flight_work` consult).
-struct UiBoundGuard<'a>(&'a FolderSession);
-
-impl<'a> UiBoundGuard<'a> {
-    fn begin(session: &'a FolderSession) -> Self {
-        session.begin_ui_bound();
-        Self(session)
-    }
-}
-
-impl Drop for UiBoundGuard<'_> {
-    fn drop(&mut self) {
-        self.0.end_ui_bound();
-    }
-}
