@@ -87,6 +87,7 @@ const fullBaseline = (value, deps = {}) => ({
   lines_per_function: { letter: 'g', disposition: 'permanent', armed: true, value: {}, oversized: {} },
   string_slices_per_crate: { letter: 'h', disposition: 'permanent', armed: true, value: { 'moss-build': 0, 'moss-cli': 0 } },
   raw_radius_shadow_ui: { letter: 'i', disposition: 'permanent', armed: true, value: 0 },
+  raw_env_reads: { letter: 'j', disposition: 'permanent', armed: true, value: 0 },
 });
 
 /** a and b are over their baselines, c sits exactly at its own. */
