@@ -9,7 +9,7 @@
 //! entry point — background tasks in GUI mode, synchronous headlessly — and
 //! `run_video_conversion()` is the loop it runs. What happens to one video in
 //! that loop is an [`ItemStep`], and everything derived from it (the census,
-//! `AssetReady`, the registry, the UiBound budget) is applied in one place.
+//! `AssetReady`, the registry) is applied in one place.
 
 use crate::moss_paths::MossPaths;
 use crate::types::assets::Failure;
@@ -830,11 +830,10 @@ struct Delivery {
 /// What the conversion loop decided about one video.
 ///
 /// Every arm of the per-item body returns one of these instead of running its
-/// own teardown, so the census push, the `AssetReady` emit, the registry
-/// `set_ready` and the UiBound release happen in exactly ONE place and a new
-/// exit arm cannot skip a step. The eight `end_ui_bound(); continue;` arms
-/// this replaces already had: all three fallback arms forgot the census push,
-/// so `remove_stale_files` deleted the bytes they had just staged.
+/// own teardown, so the census push, the `AssetReady` emit and the registry
+/// `set_ready` happen in exactly ONE place and a new exit arm cannot skip a
+/// step, as the fallback arms once skipped the census push and had
+/// `remove_stale_files` delete the bytes they had just staged.
 enum ItemStep {
     /// Handled. `delivered` names every URL now on disk (empty when nothing
     /// shipped) and `advisories` is what to tell the user about this video.
@@ -1085,9 +1084,8 @@ impl RunEnd {
 /// stderr lines are gated explicitly, on `reporter.is_terminal()`.
 ///
 /// The loop body decides and returns an [`ItemStep`]; the loop applies it.
-/// Nothing inside the body releases a UiBound permit, pushes to the census or
-/// emits an `AssetReady` of its own — that is what keeps the three from ever
-/// getting out of step.
+/// Nothing inside the body pushes to the census or emits an `AssetReady` of
+/// its own — that is what keeps the two from ever getting out of step.
 pub(crate) fn run_video_conversion(
     services: &BuildServices,
     ctx: &BackgroundContext,
@@ -1532,19 +1530,13 @@ pub(crate) fn run_video_conversion(
                     converted_count += 1;
                     crate::build::phase::record_count("videos_converted", 1);
                 }
-                services.end_ui_bound();
             }
-            // Both abandonments release this item's budget along with every item
-            // after it, from the one place that knows how many are left. Neither
-            // emits the census: this dispatch's coordinator may already be gone,
+            // Neither abandonment emits the census: this dispatch's coordinator may already be gone,
             // and the next build's carry-forward re-registers the previous
             // build's outputs. The one thing they do not share is the receipt —
             // a superseded run must leave it to the fresh epoch, whose count is
             // still growing, while a cancelled run publishes what it reached.
             abandoned @ (ItemStep::Superseded | ItemStep::Cancelled) => {
-                for _ in index..(total as usize) {
-                    services.end_ui_bound();
-                }
                 if matches!(abandoned, ItemStep::Cancelled) {
                     services
                         .videos_converted
@@ -2145,8 +2137,8 @@ pub(crate) fn dispatch_video_conversions(
             // run in flight — so the videos it was still converting, if this
             // build still wants them, ride along into the new run. Only the
             // changed/new/missing-output subset ever enters it; unchanged
-            // videos never contend for an encode permit, an iCloud
-            // materialization wait, or a UiBound slot behind one slow encode.
+            // videos never contend for an encode permit or an iCloud
+            // materialization wait behind one slow encode.
             to_dispatch.extend(joined);
 
             // Bump the epoch so stale tasks exit on their next epoch check — the
@@ -2172,15 +2164,11 @@ pub(crate) fn dispatch_video_conversions(
             background_ctx.video_items = to_dispatch.into_iter().map(|(item, _)| item).collect();
             background_ctx.carried_advisories = carried_advisories;
 
-            // GUI/CLI mode with event sink: async spawn
-            // Increment tracker BEFORE spawn to close the race window.
-            // Without this, the CLI could check has_ui_bound() between
-            // tokio::spawn scheduling the task and the task actually starting,
-            // finding no active tasks, and exiting prematurely.
+            // Held from before the spawn: a wait on `has_ui_bound()` between
+            // the spawn and the task starting would otherwise find the folder
+            // idle and exit early.
             let total = background_ctx.video_items.len() as u32;
-            for _ in 0..total {
-                svc.begin_ui_bound();
-            }
+            let converting = svc.session.as_ref().map(|s| s.hold_ui_bound());
 
             // Field-wise Arc::clone: the same counters, tokens and parent cell,
             // reached from the spawned task. See `BuildServices`'s own doc.
@@ -2229,6 +2217,7 @@ pub(crate) fn dispatch_video_conversions(
                 crate::build::phase::record_value("videos_detached", total as usize);
                 let profile = MossPaths::from_moss_dir(background_ctx.moss_dir.clone()).profile();
                 spawner.spawn_blocking(Box::new(move || {
+                    let _converting = converting;
                     let _encode_lease = encode_lease;
                     let end = crate::build::phase::run_detached(profile, || run_video_conversion(&services_arc, &background_ctx, epoch, None), RunEnd::outcome);
                     // Only a run that put bytes on disk has anything for a
@@ -2244,17 +2233,13 @@ pub(crate) fn dispatch_video_conversions(
                 }));
             } else {
                 spawner.spawn_blocking(Box::new(crate::build::phase::inherit_blocking(move || {
+                    let _converting = converting;
                     run_video_conversion(&services_arc, &background_ctx, epoch, tx).log(epoch, false);
                 })));
             }
         } else {
             // Headless mode: run synchronously with epoch=0
-            // Increment tracker BEFORE calling run_video_conversion — the inner loop
-            // calls fetch_sub(1) per video, so the counter must start at `total`.
-            let total = background_ctx.video_items.len() as u32;
-            for _ in 0..total {
-                svc.begin_ui_bound();
-            }
+            let _converting = svc.session.as_ref().map(|s| s.hold_ui_bound());
             log::info!(
                 "Running headless video conversion for {} videos",
                 background_ctx.video_items.len()

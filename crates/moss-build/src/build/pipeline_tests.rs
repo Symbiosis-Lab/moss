@@ -1820,7 +1820,7 @@ fn test_run_video_conversion_headless_empty_videos() {
 // a fresh local AtomicBool seeded `false`; trivially false in headless.)
 
 // -------------------------------------------------------------------------
-// One outcome per video: the census, the URL, and the UiBound budget
+// One outcome per video: the census and the URL
 // -------------------------------------------------------------------------
 
 /// A vault holding `names`, with a stand-in for ffmpeg built from `script` — so
@@ -1873,18 +1873,58 @@ fn vault_with_one_unencodable_video() -> (TempDir, BackgroundContext) {
     vault_with_videos(&["videos/clip.mov"], "#!/bin/sh\nexit 1\n")
 }
 
-/// Headless services with a folder session attached, so the UiBound counter the
-/// progress bar reads is observable, and `begin_ui_bound` called `n` times the
-/// way `dispatch_video_conversions` does before spawning the worker.
-fn services_with_budget(n: u32) -> BuildServices {
+/// Headless services with a folder session attached.
+fn services_with_session() -> BuildServices {
     let mut services = BuildServices::headless();
     services.session = Some(crate::system::folder_session::FolderSession::new(
         std::path::PathBuf::from("/tmp/moss-video-outcome-test"),
     ));
-    for _ in 0..n {
-        services.begin_ui_bound();
-    }
     services
+}
+
+/// Panics when the second video starts, noting whether the folder was busy.
+struct PanicsOnSecondVideo {
+    session: std::sync::Arc<crate::system::folder_session::FolderSession>,
+    busy: std::sync::OnceLock<bool>,
+}
+
+impl crate::build::ports::reporter::BuildReporter for PanicsOnSecondVideo {
+    fn report(&self, event: &crate::build::progress::PipelineEvent) {
+        if matches!(event, crate::build::progress::PipelineEvent::BackgroundProgress { task, current: 2, .. } if task == "videos") {
+            let _ = self.busy.set(self.session.has_ui_bound());
+            panic!("the video worker failed");
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_video_that_panics_its_worker_does_not_leave_the_folder_busy() {
+    let (_temp, ctx) = vault_with_videos(&["videos/first.mov", "videos/second.mov"], "#!/bin/sh\nexit 1\n");
+    let session = crate::system::folder_session::FolderSession::new(std::path::PathBuf::from(&ctx.source_path));
+    let failing = std::sync::Arc::new(PanicsOnSecondVideo { session: session.clone(), busy: Default::default() });
+    let mut services = BuildServices::headless();
+    services.session = Some(session.clone());
+    services.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
+    services.reporter = failing.clone();
+
+    tokio::task::spawn_blocking(move || crate::build::media::video::dispatch_video_conversions(Some(&services), ctx, None))
+        .await
+        .unwrap();
+
+    for _ in 0..2000 {
+        if failing.busy.get().is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(failing.busy.get(), Some(&true), "the worker reached its second video, and the folder is busy while its videos convert");
+    for _ in 0..400 {
+        if !session.has_ui_bound() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(!session.has_ui_bound(), "a video worker that panicked must not leave the folder busy, or every later publish waits on it");
 }
 
 /// Run the worker the way production does: on a blocking thread, inside a
@@ -1937,7 +1977,7 @@ fn drain_registered_paths(
 async fn failed_encode_ships_original_at_the_mp4_url_and_registers_it() {
     let (_temp, ctx) = vault_with_one_unencodable_video();
     let ctx = std::sync::Arc::new(ctx);
-    let services = std::sync::Arc::new(services_with_budget(1));
+    let services = std::sync::Arc::new(services_with_session());
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);
 
     run_worker(&services, &ctx, 0, Some(tx)).await;
@@ -1961,12 +2001,6 @@ async fn failed_encode_ships_original_at_the_mp4_url_and_registers_it() {
         drain_registered_paths(&mut rx),
         vec!["videos/clip.mp4".to_string()],
         "the shipped video must be in the census the manifest's video_outputs is built from"
-    );
-
-    assert!(
-        !services.has_ui_bound(),
-        "the item's UiBound permit is released on the failure path too — an unpaired \
-         begin leaves the progress bar running forever"
     );
 }
 
@@ -2000,7 +2034,7 @@ async fn superseded_mid_encode_abandons_instead_of_shipping_a_fallback() {
     let release = temp.path().join("release");
 
     let ctx = std::sync::Arc::new(ctx);
-    let services = std::sync::Arc::new(services_with_budget(2));
+    let services = std::sync::Arc::new(services_with_session());
     // A sentinel the run must not touch: the receipt belongs to the epoch that
     // superseded this one, and that count is still growing.
     services
@@ -2030,12 +2064,6 @@ async fn superseded_mid_encode_abandons_instead_of_shipping_a_fallback() {
     assert!(
         !ctx.staging_dir.join("videos/clip.mp4").exists(),
         "a superseded encode must not ship a fallback: the fresh epoch owns that output path"
-    );
-    assert!(
-        !services.has_ui_bound(),
-        "abandoning at item 0 of 2 releases BOTH permits — releasing only the current \
-         item's leaves the progress bar running forever, because there is no next \
-         iteration to notice"
     );
     assert_eq!(
         services
@@ -2483,30 +2511,6 @@ fn test_run_video_conversion_singleflight_dedup_headless() {
         "Sequential call should succeed"
     );
     assert!(!shared2, "Sequential call should execute independently");
-}
-
-#[test]
-fn test_run_video_conversion_task_tracker_with_session() {
-    // With a session attached, begin/end accumulate as expected.
-    // This documents the production wiring: BuildServices::from_app
-    // attaches a FolderSession; begin_ui_bound/end_ui_bound increment
-    // and decrement the session's counter. (Headless mode has no
-    // session, so the counter is permanently 0 — see
-    // test_build_services_headless_tracker_works.)
-    let mut services = BuildServices::headless();
-    services.session = Some(crate::system::folder_session::FolderSession::new(
-        std::path::PathBuf::from("/tmp/test"),
-    ));
-
-    for _ in 0..5 {
-        services.begin_ui_bound();
-    }
-    assert!(services.has_ui_bound());
-
-    for _ in 0..3 {
-        services.end_ui_bound();
-    }
-    assert!(services.has_ui_bound());
 }
 
 // =========================================================================
@@ -5187,15 +5191,6 @@ fn test_image_compression_pipeline_end_to_end() {
         hashes.image_outputs.contains("photo2.webp"),
         "hashes.json::image_outputs should contain photo2.webp, got: {:?}",
         hashes.image_outputs
-    );
-
-    // Task tracker must return to zero after headless conversion.
-    // (In headless mode, has_ui_bound() is always false because no
-    // session is attached. Asserting it stays false confirms no
-    // panic / inconsistent state during conversion.)
-    assert!(
-        !services.has_ui_bound(),
-        "ui_bound counter must drain after headless build"
     );
 }
 

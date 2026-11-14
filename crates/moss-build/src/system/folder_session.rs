@@ -11,8 +11,7 @@
 //!
 //! `spawn_ui_bound` is scaffolding for future code that wants to spawn a
 //! cancellable task into the session's `JoinSet`. Today the JoinSet is
-//! empty in production — UiBound work uses the `services.begin/end_ui_bound`
-//! counter pattern instead.
+//! empty in production — UiBound work takes a [`UiBoundHold`] instead.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -130,7 +129,7 @@ pub struct UiBoundHold(Arc<FolderSession>);
 
 impl Drop for UiBoundHold {
     fn drop(&mut self) {
-        self.0.end_ui_bound();
+        self.0.ui_bound.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -219,24 +218,11 @@ impl FolderSession {
         self.stage_write_lock.try_lock().ok()
     }
 
-    pub fn begin_ui_bound(&self) {
-        self.ui_bound.fetch_add(1, Ordering::SeqCst);
-    }
-
-    /// Saturating at zero is a double-end guard: an unbalanced `end` would
-    /// otherwise underflow the level and make a busy folder look idle, which
-    /// is the one direction that matters (deploy would read the slot mid-seal).
-    pub fn end_ui_bound(&self) {
-        let _ = self.ui_bound.fetch_update(
-            Ordering::SeqCst, Ordering::SeqCst,
-            |v| if v == 0 { None } else { Some(v - 1) });
-    }
-
-    /// [`begin_ui_bound`](Self::begin_ui_bound), ended when the hold drops: a
-    /// panic or an early return cannot leave the folder looking busy for
-    /// good, which would stall every later publish.
+    /// Marks the folder busy until the hold drops, the only way to raise or
+    /// lower the count: a panic or an early return cannot leave the folder
+    /// looking busy for good, which would stall every later publish.
     pub fn hold_ui_bound(self: &Arc<Self>) -> UiBoundHold {
-        self.begin_ui_bound();
+        self.ui_bound.fetch_add(1, Ordering::SeqCst);
         UiBoundHold(self.clone())
     }
 
@@ -474,21 +460,13 @@ pub(crate) fn register_session_in_registry(
 mod tests {
     use super::*;
 
-    /// `end_ui_bound` saturates at zero. An unbalanced end must not underflow
-    /// the level: `has_ui_bound()` is what the close handler and the publish
-    /// drain consult, and a wrapped `u32` would report a busy folder as idle,
-    /// letting deploy read the manifest slot mid-seal.
     #[test]
-    fn a_no_op_end_ui_bound_does_not_underflow_the_level() {
+    fn a_folder_is_busy_until_its_last_hold_drops() {
         let s = FolderSession::new(PathBuf::from("/tmp/test"));
-        s.end_ui_bound(); // must not panic or underflow
-        assert!(!s.has_ui_bound());
-
-        s.begin_ui_bound();
+        let (first, second) = (s.hold_ui_bound(), s.hold_ui_bound());
+        drop(first);
         assert!(s.has_ui_bound());
-        s.end_ui_bound();
-        assert!(!s.has_ui_bound());
-        s.end_ui_bound(); // the extra one is the double-end being guarded
+        drop(second);
         assert!(!s.has_ui_bound());
     }
 

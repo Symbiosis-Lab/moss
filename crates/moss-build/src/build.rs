@@ -1399,8 +1399,8 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                                 build_root_identity: start_identity,
                                 // Long-lived runtime: the materialize is
                                 // debounced (`build::seal_phase`), and the
-                                // hand-off is non-blocking, so `end_ui_bound()`
-                                // below fires once the per-build half is done.
+                                // hand-off is non-blocking, so the `sealing` hold
+                                // drops once the per-build half is done.
                                 handoff: Handoff::Lane,
                             },
                         )
@@ -1799,7 +1799,7 @@ pub(crate) enum Handoff {
 /// `link_audit_tests.rs`.
 ///
 /// `FolderSession::has_ui_bound` / `wait_for_in_flight_work` can observe "no
-/// in-flight work" in the gap between a video's own `end_ui_bound()` and the
+/// in-flight work" in the gap between a video run dropping its hold and the
 /// follow-up rebuild's admission. A publish landing in that gap still cannot
 /// ship a page whose asset it promised and did not deliver, because the promise
 /// recorded here outlives the counter's timing. Those two keep their job as a

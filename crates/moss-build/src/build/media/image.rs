@@ -1694,12 +1694,10 @@ fn promised_rungs(
 ///
 /// Every exit of the per-item body returns one of these instead of running its
 /// own teardown, so the census push, the `AssetReady` emit, the registry
-/// transition, the converted-count bump, the UiBound release and the progress
-/// tick happen in ONE place and a new exit cannot skip a step. The seven
-/// `end_ui_bound()` sites this replaces had drifted: the hash-failure arm was
-/// the only failure here that told nobody — no advisory and no `set_failed`,
-/// so the base `.webp` and every rung blocking.rs had promised sat Pending
-/// forever behind a placeholder that never resolved.
+/// transition, the converted-count bump and the progress tick happen in ONE
+/// place and a new exit cannot skip a step: a failure that tells nobody (no
+/// advisory, no `set_failed`) leaves the base `.webp` and every rung
+/// blocking.rs promised Pending forever behind a placeholder.
 ///
 /// The distinction the type exists to keep is Failed vs Pending. A source the
 /// provider has not finished downloading is *deferred* and stays Pending (the
@@ -1815,8 +1813,8 @@ fn record_deliveries(
 /// huge images decoding at once (not N threads) is what OOMs. Each worker
 /// decides an [`ItemStep`] and applies it as it finishes, so images stream into
 /// the preview as they land; the accumulators are `Mutex`/atomic and reduced
-/// after the scope, and the shared `AssetRegistry`, coordinator `Sender`,
-/// singleflight and `end_ui_bound` counter are internally synchronized.
+/// after the scope, and the shared `AssetRegistry`, coordinator `Sender`
+/// and singleflight are internally synchronized.
 /// Returns whether the run was cancelled.
 pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunContext) -> bool {
     use crate::build::cache::{ObjectStore, TransformCache};
@@ -1952,13 +1950,11 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                     let item = &ctx.items[index];
                     // The whole of one image's decision. Every exit is a value,
                     // never a `return` with teardown attached — see `ItemStep`.
-                    // Nothing in here releases a UiBound permit, pushes to the
-                    // census, ticks progress or touches the registry.
+                    // Nothing in here pushes to the census, ticks progress or
+                    // touches the registry.
                     let step: ItemStep = (|| {
-        // Cancellation: skip remaining work. Every dispatched item still runs
-        // exactly one `end_ui_bound()` below (matching the old per-item count);
-        // `any_cancelled` drives the partial-output registration + early bail
-        // AFTER the loop, replacing the old mid-loop early return.
+        // Cancellation: skip remaining work. `any_cancelled` drives the
+        // partial-output registration and the early bail AFTER the loop.
         if cancel_flag.map_or(false, |f| f.load(Ordering::SeqCst)) {
             return ItemStep::Cancelled;
         }
@@ -2284,7 +2280,6 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                             if encoded {
                                 converted_count.fetch_add(1, Ordering::SeqCst);
                             }
-                            services.end_ui_bound();
                             // Progress ticks on COMPLETION: items finish out of
                             // order, so a monotonic done-count beats the index.
                             let done = completed.fetch_add(1, Ordering::SeqCst) + 1;
@@ -2300,7 +2295,6 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                         ItemStep::Cancelled => {
                             item.ended(false, &[]);
                             any_cancelled.store(true, Ordering::SeqCst);
-                            services.end_ui_bound();
                         }
                     }
                 });
@@ -2833,9 +2827,7 @@ pub(crate) fn dispatch_image_conversions_at(
         };
 
         let total = run_ctx.items.len() as u32;
-        for _ in 0..total {
-            svc.begin_ui_bound();
-        }
+        let converting = svc.session.as_ref().map(|s| s.hold_ui_bound());
 
         // Image dispatch does not use epochs, and a newer build never cancels
         // an older build's worker: a later dispatch that finds an image already
@@ -2881,6 +2873,7 @@ pub(crate) fn dispatch_image_conversions_at(
             log::info!("Spawning background image conversion for {} images", total);
             let clock = clock.clone();
             spawner.spawn_blocking(Box::new(crate::build::phase::inherit_blocking(move || {
+                let _converting = converting;
                 let cancelled = run_image_conversion(&services_arc, &run_ctx);
                 redispatch_note::settle(&run_ctx.moss_dir, &run_ctx.staging_dir, &redispatched, clock(), cancelled);
             })));

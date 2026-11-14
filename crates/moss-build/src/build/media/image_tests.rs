@@ -907,7 +907,6 @@ async fn base_failure_fails_registered_rung_promises() {
     let mut services = BuildServices::headless();
     services.assets = Some(registry.clone());
     let services = std::sync::Arc::new(services);
-    services.begin_ui_bound();
     let services_clone = services.clone();
     tokio::task::spawn_blocking(move || {
         run_image_conversion(&services_clone, &run_ctx);
@@ -989,7 +988,6 @@ async fn base_failed_advisory_names_the_full_nested_source_path() {
     let mut services = BuildServices::headless();
     services.reporter = recorder.clone();
     let services = std::sync::Arc::new(services);
-    services.begin_ui_bound();
     let services_clone = services.clone();
     tokio::task::spawn_blocking(move || {
         run_image_conversion(&services_clone, &run_ctx);
@@ -1027,7 +1025,7 @@ async fn base_failed_advisory_names_the_full_nested_source_path() {
 /// A source moss cannot hash must retract its promises, not go quiet.
 ///
 /// The hash-failure arm was the one failure in the worker that told nobody:
-/// it logged, released its UiBound permit and returned, so the base `.webp`
+/// it logged and returned, so the base `.webp`
 /// and every rung `blocking.rs` had promised stayed Pending forever. The
 /// author saw a placeholder that never resolved and no advisory explaining
 /// it, and the published site referenced a `.webp` that was never staged —
@@ -1085,7 +1083,6 @@ async fn unhashable_source_fails_its_promises_instead_of_going_quiet() {
     let mut services = BuildServices::headless();
     services.assets = Some(registry.clone());
     let services = std::sync::Arc::new(services);
-    services.begin_ui_bound();
     let services_clone = services.clone();
     tokio::task::spawn_blocking(move || {
         run_image_conversion(&services_clone, &run_ctx);
@@ -1158,7 +1155,6 @@ async fn rung_collision_keeps_user_file_and_produces_other_rungs() {
     };
 
     let services = std::sync::Arc::new(BuildServices::headless());
-    services.begin_ui_bound();
     let services_clone = services.clone();
     tokio::task::spawn_blocking(move || {
         run_image_conversion(&services_clone, &run_ctx);
@@ -2704,12 +2700,75 @@ fn test_dispatch_image_conversions_with_items_produces_webp_headless() {
         ".webp should have been produced in staging: {:?}",
         webp_output
     );
+}
 
-    // Task tracker for images should return to zero after conversion.
-    assert!(
-        !services.has_ui_bound(),
-        "ui_bound counter must decrement after conversion finishes"
-    );
+/// Panics when an image reports ready, inside that image's teardown, noting
+/// whether the folder was busy.
+struct PanicsOnImageReady {
+    session: std::sync::Arc<crate::system::folder_session::FolderSession>,
+    busy: std::sync::OnceLock<bool>,
+}
+
+impl crate::build::ports::reporter::BuildReporter for PanicsOnImageReady {
+    fn report(&self, event: &PipelineEvent) {
+        if matches!(event, PipelineEvent::AssetReady { .. }) {
+            let _ = self.busy.set(self.session.has_ui_bound());
+            panic!("the image worker failed");
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_image_that_panics_its_worker_does_not_leave_the_folder_busy() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    make_big_jpeg(&root.join("photo.jpg"), 400, 300);
+    let moss_dir = root.join(".moss");
+    let staging = moss_dir.join("build.nosync").join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    let ctx = BackgroundContext {
+        video_items: vec![],
+        image_items: vec![ImageConversionItem {
+            source_path: PathBuf::from("photo.jpg"),
+            source_oid: crate::build::cache::ObjectStore::hash_file(&root.join("photo.jpg")).unwrap(),
+            ext: "jpg".to_string(),
+            dimensions: None,
+            skip: None,
+            fingerprint: None,
+        }],
+        source_path: root.to_string_lossy().to_string(),
+        staging_dir: staging,
+        moss_dir,
+        notebook_files: vec![],
+        rung_collisions: Default::default(),
+        ..BackgroundContext::for_test()
+    };
+    let session = crate::system::folder_session::FolderSession::new(root.to_path_buf());
+    let failing = std::sync::Arc::new(PanicsOnImageReady { session: session.clone(), busy: Default::default() });
+    let mut services = BuildServices::headless();
+    services.session = Some(session.clone());
+    services.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
+    services.reporter = failing.clone();
+
+    dispatch_image_conversions(Some(&services), &ctx, None);
+
+    for _ in 0..2000 {
+        if failing.busy.get().is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(failing.busy.get(), Some(&true), "the worker reached the image's teardown, and the folder is busy while its images convert");
+    for _ in 0..400 {
+        if !session.has_ui_bound() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(!session.has_ui_bound(), "an image worker that panicked must not leave the folder busy, or every later publish waits on it");
 }
 
 /// An image a previous build converted: 1000x600 on disk, its base `.webp` cached
@@ -3829,8 +3888,6 @@ async fn test_image_cancel_aborts_image_runner() {
         carried_advisories: Vec::new(),
         suppressed: Default::default(),
     };
-    // Mirror dispatch's bookkeeping (runner decrements on early-exit).
-    services.begin_ui_bound();
 
     // The runner is synchronous CPU work. Run it on a blocking thread so
     // the tokio runtime can poll the bridge task between calls (and so
@@ -3924,9 +3981,6 @@ async fn test_image_hashes_updated_on_cancellation() {
         carried_advisories: Vec::new(),
         suppressed: Default::default(),
     };
-    for _ in 0..2 {
-        services.begin_ui_bound();
-    }
 
     // Watcher thread: cancel the session as soon as the first webp
     // materializes. The runner's `bridge_to_atomic` flips a local
