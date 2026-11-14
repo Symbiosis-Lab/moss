@@ -30,7 +30,7 @@ import { ProgressSeam } from './progress/progress-seam';
 import { CACHE_BUST_PARAM, NavigationManager, type ActivePage, type NavigationResultInfo } from "./navigation-manager";
 import { PreviewState, PreviewStatus, resolveUnshowableReason, type OpenFailure, type UnshowableReason } from "./preview-state";
 import { getFileChangeAction, decideNewPageWait, type NewPageWaitState, FileChangeEvent, LINKED_SELECTOR, linkedPaths, changedNonPages } from "./preview-actions";
-import { extractPathFromUrl, sourcePathToHtmlPath } from "./path-matcher";
+import { extractPathFromUrl } from "./path-matcher";
 import { withShellMarker } from "./shell-marker";
 import { BuildSingleflight } from "./build-singleflight";
 import { info, warn, error } from "../log";
@@ -2154,7 +2154,10 @@ export class PreviewManager {
       const baseUrl = iframeSrc || this.currentPreviewUrl;
 
       if (baseUrl) {
-        const newUrl = `${new URL(baseUrl).origin}/${sourcePathToHtmlPath(newPath)}`;
+        // A folder's page is served at the folder: the frame's address is
+        // what Copy page address copies.
+        const served = newPath.replace(/(^|\/)index\.html$/, '$1');
+        const newUrl = `${new URL(baseUrl).origin}/${served}`;
         // Arm the 404-retry BEFORE navigating: the moved page is published by a
         // detached seal+generation-swap that can land just after this nav, so
         // the first hit may 404. The same wait covers creation and output moves.

@@ -44,12 +44,16 @@
  * it has none: a version linked by `translationKey` under another file name
  * counts.
  *
+ * Then a page renamed in the folder while the preview shows it: the preview
+ * follows it to the folder's address, never `index.html`, because the frame's
+ * address is what Copy page address copies.
+ *
  * Ports: playwright/gate-ports.ts, keys `browser-editor:ui` /
  * `browser-editor:preview`. Config: playwright/browser-editor.config.ts.
  */
 import { test, expect, type Frame, type Page } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gatePort } from '../../../playwright/gate-ports';
@@ -634,4 +638,16 @@ test('the create menu offers another language only for a page with no version in
   await preview.click('a:has-text("Talk")');
   await expect.poll(openFile, { timeout: 15_000 }).toContain('talk.md');
   expect(await rows()).toContain('简体中文 version of this page');
+});
+
+test('a page renamed in the folder while it is shown is followed to its folder address', async ({ page }) => {
+  const { preview } = await openEditor(page);
+  await preview.click('a:has-text("About")');
+  await expect(preview.locator('body')).toContainText('About the garden', { timeout: 30_000 });
+
+  renameSync(join(site, 'about.md'), join(site, 'about-us.md'));
+  // Past the sweep's 20 s, for a rename the file watcher delivers late.
+  await expect.poll(() => new URL(preview.url()).pathname, { timeout: 40_000 }).toMatch(/^\/about-us\//);
+  expect(new URL(preview.url()).pathname).toBe('/about-us/');
+  await expect(preview.locator('body')).toContainText('About the garden', { timeout: 30_000 });
 });

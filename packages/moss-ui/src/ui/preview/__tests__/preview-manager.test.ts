@@ -2211,13 +2211,14 @@ describe('PreviewManager', () => {
       expect(refreshSpy).toHaveBeenCalledTimes(1);
     });
 
-    test('updateUrlForRename converts md to html and updates URL', () => {
+    test('updateUrlForRename opens a moved folder page at its folder, not at index.html', () => {
       const loadPreviewSpy = vi.spyOn(previewManager, 'loadPreview');
-      mockIframe.src = 'http://localhost:3000/blog/old.html';
+      mockIframe.src = 'http://localhost:3000/untitled/';
 
-      (previewManager as any).updateUrlForRename('blog/new.md', stubCtx);
+      (previewManager as any).updateUrlForRename('quiet-harbour-notes/index.html', stubCtx);
+      (previewManager as any).updateUrlForRename('index.html', stubCtx);
 
-      expect(loadPreviewSpy).toHaveBeenCalledWith('http://localhost:3000/blog/new.html');
+      expect(loadPreviewSpy.mock.calls).toEqual([['http://localhost:3000/quiet-harbour-notes/'], ['http://localhost:3000/']]);
     });
 
     test('updateUrlForRename with html extension preserves extension', () => {
@@ -2234,7 +2235,7 @@ describe('PreviewManager', () => {
       const refreshSpy = vi.spyOn(previewManager, 'refresh');
       mockIframe.src = 'invalid-url';
 
-      (previewManager as any).updateUrlForRename('new.md', stubCtx);
+      (previewManager as any).updateUrlForRename('new.html', stubCtx);
 
       expect(loadPreviewSpy).not.toHaveBeenCalled();
       expect(refreshSpy).toHaveBeenCalledTimes(1);
@@ -3793,8 +3794,8 @@ describe('PreviewManager', () => {
       mockIframe.src = 'http://localhost:8080/untitled/';
       previewManager.armNewPageWait('/untitled/');
       (previewManager as any).handleFileChangeEvent({ moved_output_paths: [['untitled/index.html', 'posts/index.html']], changed_output_files: ['posts/index.html'] });
-      expect((previewManager as any).newPageWait.pathname).toBe('/posts/index.html');
-      expect(mockIframe.src).toContain('/posts/index.html');
+      expect((previewManager as any).newPageWait.pathname).toBe('/posts/');
+      expect(mockIframe.src).toMatch(/\/posts\/(\?|$)/);
       expect(mockOverlay.classList.contains('visible')).toBe(true);
     });
 
