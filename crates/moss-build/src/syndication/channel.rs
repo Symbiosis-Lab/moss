@@ -68,6 +68,10 @@ pub struct ChannelSpec {
     /// self-hosted data server), whose host the channel's copies live on.
     #[serde(default)]
     pub host_setting: Option<String>,
+    /// The on/off setting without which the channel does not take `long`:
+    /// for a network whose article format only some accounts have.
+    #[serde(default)]
+    pub long_setting: Option<String>,
 }
 
 impl ChannelSpec {

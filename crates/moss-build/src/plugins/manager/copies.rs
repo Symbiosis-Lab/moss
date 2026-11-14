@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use super::{context_for_plugin, PluginManager};
 use crate::plugins::types::{HookResult, Plugin, PluginManifest};
-use crate::syndication::channel::ChannelSpec;
+use crate::syndication::channel::{ChannelSpec, Form};
 use crate::syndication::job::{AccountQuery, CopyJob, Op};
 
 /// What a channel that takes copies declares.
@@ -48,12 +48,17 @@ pub fn copy_channels_of(project_path: &str, plugins: &[Plugin]) -> BTreeMap<Stri
         .iter()
         .filter(|p| installed.is_installed(&p.manifest.name))
         .filter_map(|p| {
-            let spec = copy_spec(&p.manifest)?.clone();
+            let mut spec = copy_spec(&p.manifest)?.clone();
             let declared = p.manifest.domains.clone().unwrap_or_else(|| p.manifest.domain.iter().cloned().collect());
             let mut domains: Vec<String> = declared.iter().filter_map(|d| host_of(d)).collect();
-            if let Some(key) = &spec.host_setting {
+            if spec.host_setting.is_some() || spec.long_setting.is_some() {
                 let config = super::hook_context::hook_config_for_plugin(project_path, p);
-                domains.extend(config.get(key).and_then(|v| v.as_str()).and_then(host_of));
+                if let Some(key) = &spec.host_setting {
+                    domains.extend(config.get(key).and_then(|v| v.as_str()).and_then(host_of));
+                }
+                if spec.long_setting.as_ref().is_some_and(|key| config.get(key).and_then(|v| v.as_bool()) != Some(true)) {
+                    spec.forms.retain(|form| *form != Form::Long);
+                }
             }
             Some((p.manifest.name.clone(), CopyChannel { spec, domains }))
         })
@@ -145,5 +150,38 @@ mod tests {
         std::fs::write(root.join(".moss/config.toml"), "[channels.social]\n").unwrap();
         let channels = crate::syndication::landing::channels(root);
         assert_eq!(channels["social"].domains, ["social.example.net"]);
+    }
+
+    #[test]
+    fn a_channel_takes_articles_only_while_its_setting_is_on() {
+        use crate::syndication::channel::Form;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let plugin = root.join(".moss/plugins/social");
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::fs::write(plugin.join("manifest.json"), serde_json::json!({
+            "name": "social", "version": "0.0.1", "display_name": "Social", "description": "", "author": "",
+            "entry": "main.bundle.js", "global_name": "SocialPlugin",
+            "contributes": {"channel": {"syndication": {"forms": ["short", "long", "teaser"], "long_setting": "articles"}}}
+        }).to_string()).unwrap();
+        std::fs::write(plugin.join("main.bundle.js"), "window.SocialPlugin = {};").unwrap();
+        std::fs::write(root.join(".moss/config.toml"), "[channels.social]\n").unwrap();
+        let forms = || crate::syndication::landing::channels(root)["social"].spec.forms.clone();
+        assert_eq!(forms(), [Form::Short, Form::Teaser], "unset is off");
+        std::fs::write(plugin.join("config.json"), r#"{"articles": false}"#).unwrap();
+        assert_eq!(forms(), [Form::Short, Form::Teaser]);
+        std::fs::write(plugin.join("config.json"), r#"{"articles": true}"#).unwrap();
+        assert_eq!(forms(), [Form::Short, Form::Long, Form::Teaser]);
+
+        // An article posted while the setting was on is left as posted once it is off.
+        use crate::syndication::{record::{CopyRecord, RemoteRef}, shape};
+        let mut posted = CopyRecord::due("u", "social", "page.md", "page/");
+        posted.form = Some(Form::Long);
+        posted.remote = Some(RemoteRef { id: "1".into(), url: "https://social.example.net/1".into() });
+        let post: crate::build::scan::article_map::ArticleInfo = serde_json::from_value(serde_json::json!({ "source_path": "page.md", "title": "Page", "content": "Body.", "url_path": "page/", "date": null })).unwrap();
+        let reshape = || shape::shape_record(&post, &crate::syndication::landing::channels(root)["social"].spec, "https://example.org", &shape::ShapeOptions::default(), &posted);
+        assert!(reshape().is_ok());
+        std::fs::write(plugin.join("config.json"), r#"{"articles": false}"#).unwrap();
+        assert_eq!(reshape().unwrap_err(), "retaining the prior version: the channel no longer accepts its original form");
     }
 }

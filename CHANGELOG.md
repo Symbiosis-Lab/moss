@@ -15,6 +15,11 @@ All notable changes to moss will be documented here.
 - A copy stays with the account it was posted from. While a channel is signed in to another account, moss does not look it up, post it again, edit it or delete it; the publish says so once, and the work goes on when that account is signed in again. This applies to channels whose plugin says which account is signed in.
 - For plugin authors: `find_copy` answers `copy: { absent: true }` when the network says there is no such copy; any other answer without the copy now means moss cannot tell. A channel can export `copy_account`, answering `copy: { account }`. The `handoff` form is gone: a channel that hands copies to the author declares `teaser` and answers `handoff`, as before.
 
+### New
+
+- A channel plugin can make its article form depend on a setting (`long_setting` in its `syndication` block), for a network whose articles only some accounts have. With the setting off, a long page goes out in the next form the channel takes.
+
+
 ## [0.15.24] - 2026-11-13
 
 ### New
