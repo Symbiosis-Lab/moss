@@ -365,6 +365,17 @@ describe('linkedPaths', () => {
   test('leaves out off-site URLs', () => {
     expect(linkedPaths([{ attributes: { href: 'https://fonts.example.com/a.css' } }], page).size).toBe(0);
   });
+
+  test('leaves out an alternate link the page loads nothing from, and keeps an alternate stylesheet', () => {
+    const paths = linkedPaths([
+      { attributes: { rel: 'alternate', type: 'application/rss+xml', href: '/rss.xml' } },
+      { attributes: { rel: 'ALTERNATE', href: '/zh-hans/' } },
+      { attributes: { rel: 'alternate stylesheet', href: '/dark.css' } },
+      { attributes: { rel: 'stylesheet', href: '/_moss/style.css' } },
+      { attributes: { rel: 'icon', href: '/assets/favicon.svg' } },
+    ], page);
+    expect([...paths].sort()).toEqual(['_moss/style.css', 'assets/favicon.svg', 'dark.css']);
+  });
 });
 
 describe('changedNonPages', () => {

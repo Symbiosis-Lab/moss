@@ -48,6 +48,10 @@
  * follows it to the folder's address, never `index.html`, because the frame's
  * address is what Copy page address copies.
  *
+ * Then an edit to a dated note changes the feed the page links as
+ * `alternate`, and the preview still updates the page in place rather than
+ * reloading it, since the page loads nothing from its feed.
+ *
  * Ports: playwright/gate-ports.ts, keys `browser-editor:ui` /
  * `browser-editor:preview`. Config: playwright/browser-editor.config.ts.
  */
@@ -114,6 +118,12 @@ test.beforeEach(async () => {
   writeFileSync(join(site, 'zh-hans', 'index.md'), '---\ntitle: 花园\n---\n你好，花园。\n');
   writeFileSync(join(site, 'about.md'), '---\ntitle: About\ntranslationKey: about\n---\nAbout the garden. [Talk](talk.md)\n');
   writeFileSync(join(site, 'zh-hans', '关于.md'), '---\ntitle: 关于\ntranslationKey: about\n---\n关于花园。\n');
+  // A published address gives the site its feed, which every page links as
+  // `alternate`, and a dated note is in that feed.
+  mkdirSync(join(site, '.moss'));
+  writeFileSync(join(site, '.moss', 'config.toml'), '[site]\nurl = "https://garden.example.org"\n');
+  mkdirSync(join(site, 'notes'));
+  writeFileSync(join(site, 'notes', 'first-frost.md'), '---\ntitle: First frost\ndate: 2026-10-01\n---\nThe beds are covered.\n');
   // MOSS_HOME and the search root keep the binary from finding, or handing
   // the folder to, an installed desktop app.
   server = spawn(MOSS_BIN, ['edit', site, '--serve', '--no-browser', '--port', String(gatePort('browser-editor:ui'))], {
@@ -650,4 +660,22 @@ test('a page renamed in the folder while it is shown is followed to its folder a
   await expect.poll(() => new URL(preview.url()).pathname, { timeout: 40_000 }).toMatch(/^\/about-us\//);
   expect(new URL(preview.url()).pathname).toBe('/about-us/');
   await expect(preview.locator('body')).toContainText('About the garden', { timeout: 30_000 });
+});
+
+test('an edit to a page in the feed updates it in place, not by a reload', async ({ page }) => {
+  const { preview } = await openEditor(page);
+  // The first build is promoted about 20 s after the server starts, and the
+  // preview refreshes for that too: the marker below is set after it.
+  await expect.poll(() => output, { timeout: 60_000, message: 'the first build promoted' }).toMatch(/promoted generation \S+ to current/);
+  await preview.evaluate(() => location.assign('/notes/first-frost/'));
+  // The home page lists the note's text too: wait for the note's own address.
+  await preview.waitForFunction(() => location.pathname === '/notes/first-frost/' && document.readyState === 'complete' && document.body.innerText.includes('The beds are covered'), null, { timeout: 30_000 });
+  await expect(preview.locator('link[rel="alternate"][href="/rss.xml"]')).toHaveCount(1);
+  // A reload makes a new window; an update in place keeps this one.
+  await preview.evaluate(() => ((window as unknown as { kept: boolean }).kept = true));
+
+  writeFileSync(join(site, 'notes', 'first-frost.md'), readFileSync(join(site, 'notes', 'first-frost.md'), 'utf8') + '\nThe well is closed.\n');
+  await preview.waitForFunction(() => document.body?.innerText.includes('The well is closed'), null, { timeout: 30_000 });
+  expect(await preview.evaluate(async () => (await (await fetch('/rss.xml')).text()).includes('The well is closed')), 'the edit changed the feed').toBe(true);
+  expect(await preview.evaluate(() => (window as unknown as { kept?: boolean }).kept), 'the page was reloaded').toBe(true);
 });
