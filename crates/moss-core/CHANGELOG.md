@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING:** `RenderHooks::emit_heading_anchors(level) -> bool` is now `heading_anchors(level) -> HeadingAnchors`, one of `All`, `Named` (only a heading whose id the author wrote as `{#id}`) and `None`. Return `All` where the old method returned `true` and `None` where it returned `false`. `DefaultHooks::card_titles` builds the hooks for a grid cell, which answer `Named`.
 - **BREAKING:** `Block::Heading` gains `named_id: bool`, set when the id was written `{#id}`, and `HeadingMarks` gains `named`. A heading with a named id carries its permalink mark on a page too short for marks. A struct literal must name the new field.
 
+### Fixed
+
+- `body_supplies_title`, `body_heading_replacing_title` and the title outcomes no longer count a `# Heading` inside an HTML comment block.
+
 ## [0.25.0] - 2026-11-13
 
 ### Added

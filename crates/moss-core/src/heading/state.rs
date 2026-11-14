@@ -227,8 +227,7 @@ pub(crate) fn skip_leading_comments(body: &str) -> &str {
         while let Some((_, next)) = block.split_once('\n').filter(|(line, _)| line.trim().is_empty()) {
             block = next;
         }
-        let opening = block.trim_start_matches(' ');
-        let Some((head, tail)) = block.split_once("-->").filter(|_| block.len() - opening.len() < 4 && opening.starts_with("<!--")) else {
+        let Some((head, tail)) = block.split_once("-->").filter(|_| opens_comment(block)) else {
             return rest;
         };
         let end = head.len() + 3 + tail.find('\n').map_or(tail.len(), |i| i + 1);
@@ -238,6 +237,14 @@ pub(crate) fn skip_leading_comments(body: &str) -> &str {
         }
         rest = next;
     }
+}
+
+/// True for a line that opens an HTML comment block to the parser: `<!--`
+/// indented under four spaces. The block runs through the first line that
+/// holds `-->`.
+fn opens_comment(line: &str) -> bool {
+    let opening = line.trim_start_matches(' ');
+    line.len() - opening.len() < 4 && opening.starts_with("<!--")
 }
 
 /// True for text that holds only HTML comments.
@@ -313,11 +320,18 @@ fn body_h1s(body_markdown: &str) -> impl Iterator<Item = &str> {
     unfenced_lines(body_markdown).flatten().filter_map(h1_text)
 }
 
-/// Each line of the body with its indent trimmed, or `None` for a code fence
-/// line or a line inside a fence.
+/// Each line of the body with its indent trimmed, or `None` for a line the
+/// parser reads as code or as an HTML comment block: a code fence line, a
+/// line inside a fence, and each line of a comment block.
 fn unfenced_lines(body_markdown: &str) -> impl Iterator<Item = Option<&str>> {
     let mut fence: Option<&str> = None;
-    body_markdown.lines().map(str::trim_start).map(move |line| {
+    let mut in_comment = false;
+    body_markdown.lines().map(move |raw| {
+        let line = raw.trim_start();
+        if fence.is_none() && (in_comment || opens_comment(raw)) {
+            in_comment = !line.contains("-->");
+            return None;
+        }
         let marker = if line.starts_with("```") { Some("```") } else if line.starts_with("~~~") { Some("~~~") } else { None };
         if let Some(m) = marker {
             fence = match fence {
@@ -564,6 +578,11 @@ mod tests {
         assert!(!body_supplies_title("#hashtag"));
         assert!(!body_supplies_title("```\n# comment in code\n```\n"));
         assert!(!body_supplies_title("~~~sh\n# comment\n~~~\ntext"));
+        assert!(!body_supplies_title("<!--\n# Draft\n-->\ntext"));
+        assert!(body_supplies_title("<!-- a -->\n# Title\n"));
+        // Code to the parser, so the fence it holds does not open.
+        assert!(body_supplies_title("```\n<!--\n```\n# Title\n"));
+        assert!(body_supplies_title("    <!--\n\n# Title\n"));
         assert!(!body_supplies_title(""));
     }
 
@@ -1117,6 +1136,14 @@ mod tests {
         // Text after the comment on its line makes the line a block a reader sees.
         assert_eq!(article_title_outcome(article_inputs("<!-- note --> Intro.\n\n# Custom\n", Some("Custom")), false), TitleOutcome::Visible);
         assert_eq!(article_title_outcome(article_inputs("<!-- a --> <!-- b --> Intro.\n\n# Custom\n", Some("Custom")), false), TitleOutcome::Visible);
+    }
+
+    #[test]
+    fn a_heading_inside_a_comment_is_not_the_pages_heading() {
+        let draft_then_title = article_inputs("<!--\n# Draft\n-->\n# Title\n\ntext", Some("Custom"));
+        assert_eq!(body_heading_replacing_title(draft_then_title, true), Some("Title"));
+        let draft_only = article_inputs("<!--\n# Draft\n-->\ntext", Some("Custom"));
+        assert_eq!(article_title_outcome(draft_only, true), TitleOutcome::Visible);
     }
 
     #[test]
