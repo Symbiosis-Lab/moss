@@ -18,7 +18,7 @@ import { IframeRPC } from "./iframe-rpc";
 import { pageSource } from "./page-source";
 import type { PageInfo } from "@symbiosis-lab/moss-ui";
 import { UrlAutocomplete } from "./url-autocomplete";
-import { withShellMarker, stripShellMarker } from "./shell-marker";
+import { withShellMarker, withoutPreviewParams } from "./shell-marker";
 import { applyAmbientBand, applySiteAccent } from "./ambient-band";
 import { t, onLocaleChange } from "../i18n/index";
 import { setThemeOverride } from "../shared/theme";
@@ -94,16 +94,6 @@ export function sameUrlPathname(a: string, b: string): boolean {
 /** Parse a URL string safely, returning null if invalid. */
 function tryParseUrl(url: string): URL | null {
   try { return new URL(url); } catch { return null; }
-}
-
-/** The query key the preview sets to force a reload of the page it shows. */
-export const CACHE_BUST_PARAM = "_t";
-
-function withoutCacheBust(url: string): string {
-  const parsed = tryParseUrl(url);
-  if (!parsed?.searchParams.has(CACHE_BUST_PARAM)) return url;
-  parsed.searchParams.delete(CACHE_BUST_PARAM);
-  return parsed.toString();
 }
 
 /**
@@ -274,7 +264,7 @@ export class NavigationManager {
   /** Record intent before assigning iframe.src, so late refresh work loses authority. */
   beginNavigation(url: string): void {
     this.pageRequest.bump();
-    this.requestedUrl = stripShellMarker(url);
+    this.requestedUrl = withoutPreviewParams(url);
     pageSource.invalidate(extractDisplayPath(url));
     this.reportPreviewRequirement();
     this.armNavDeadline(NavigationManager.NAV_DEADLINE_MS);
@@ -800,12 +790,10 @@ export class NavigationManager {
     opts: { synthesized?: boolean } = {}
   ): void {
     this.lastNavigationAt = Date.now();
-    // Strip the shell marker (`__moss_shell=1`) so it never enters
-    // history, echo matching, display paths, or the PREVIEW_URL_CHANGED
-    // event payload. The marker is a private shell↔server side-channel;
-    // see `packages/moss-ui/src/ui/preview/shell-marker.ts` for the contract.
-    // The cache-busting query goes too: a forced reload is still the page it reloads.
-    const currentUrl = withoutCacheBust(stripShellMarker(data.url));
+    // Neither parameter enters history, echo matching, display paths or the
+    // PREVIEW_URL_CHANGED payload: the marker is a private shell↔server
+    // side-channel (shell-marker.ts), and a forced reload is still the page it reloads.
+    const currentUrl = withoutPreviewParams(data.url);
     // A replaced document can still echo while its successor is loading.
     if (this.requestedUrl && !this.sameRoute(currentUrl, this.requestedUrl)) return;
     // Confirmed. A mismatched echo (above) changes nothing and leaves the deadline armed.
@@ -1237,7 +1225,7 @@ export class NavigationManager {
     // clear any pendingEcho that was optimistically recorded — nothing will
     // bounce back, and leaving the token live would misclassify unrelated
     // in-frame link clicks to the same URL as echoes.
-    const onOrHeadingTo = this.requestedUrl ?? this.activePage?.url ?? stripShellMarker(this.iframe.src);
+    const onOrHeadingTo = this.requestedUrl ?? this.activePage?.url ?? withoutPreviewParams(this.iframe.src);
     if (!new URL(url).hash && this.sameRoute(onOrHeadingTo, url)) {
       this.pendingEcho = null;
       // The preview is already on the page whose footer we were asked to

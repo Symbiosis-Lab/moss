@@ -86,7 +86,6 @@ const mockNavState = vi.hoisted(() => ({
   bridgeAnswer: null as ((...args: unknown[]) => unknown) | null,
 }));
 vi.mock('../navigation-manager', () => ({
-  CACHE_BUST_PARAM: '_t',
   NavigationManager: class {
     destroy() {}
     isMobilePreview() { return false; }

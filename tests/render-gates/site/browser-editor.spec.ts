@@ -52,6 +52,11 @@
  * `alternate`, and the preview still updates the page in place rather than
  * reloading it, since the page loads nothing from its feed.
  *
+ * Then the address of a page just made, which the preview loads again with a
+ * stamp on the frame's address once its first build ends: the right-click
+ * hands that address to the menu the desktop opens, whose page entry copies it
+ * without the stamp.
+ *
  * Ports: playwright/gate-ports.ts, keys `browser-editor:ui` /
  * `browser-editor:preview`. Config: playwright/browser-editor.config.ts.
  */
@@ -62,6 +67,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gatePort } from '../../../playwright/gate-ports';
 import { MOSS_BIN } from '../../e2e/helpers/scratch-site';
+import { buildPreviewCtxEntries, type PreviewCtxPayload } from '../../../packages/moss-ui/src/ui/preview/preview-context-menu';
 
 // Event pages, each linking to the next: the forms a person writes by hand,
 // one the build rejects, and the empty field an event template leaves.
@@ -678,4 +684,31 @@ test('an edit to a page in the feed updates it in place, not by a reload', async
   await preview.waitForFunction(() => document.body?.innerText.includes('The well is closed'), null, { timeout: 30_000 });
   expect(await preview.evaluate(async () => (await (await fetch('/rss.xml')).text()).includes('The well is closed')), 'the edit changed the feed').toBe(true);
   expect(await preview.evaluate(() => (window as unknown as { kept?: boolean }).kept), 'the page was reloaded').toBe(true);
+});
+
+test('the address copied from a page just made carries no reload stamp', async ({ page }) => {
+  const { shell, editor, preview } = await openEditor(page);
+  await preview.click('a:has-text("To the Chinese pages")');
+  await expect.poll(() => editor.evaluate(() => decodeURIComponent(location.search)), { timeout: 15_000 }).toContain('zh-hans/index.md');
+  await editor.click('#editor-create-btn');
+  // The preview waits at the new page's address and, once its first build ends, loads it again with the stamp.
+  await expect.poll(() => preview.url(), { timeout: 40_000 }).toMatch(/\/zh-hans\/untitled\/\?.*_t=/);
+  await expect(shell.locator('#moss-preview-overlay')).not.toHaveClass(/visible/, { timeout: 30_000 });
+
+  // The browser editor opens no menu of its own, so the payload is read where the desktop reads it.
+  const rightClick = shell.evaluate(() => new Promise<PreviewCtxPayload>((resolve) =>
+    window.addEventListener('message', (e) => e.data?.type === 'moss-context-menu' && resolve(e.data))));
+  await preview.click('body', { button: 'right', position: { x: 5, y: 5 } });
+
+  const copied: string[] = [];
+  const payload = await rightClick;
+  expect(payload.page).toContain('_t=');
+  const entries = buildPreviewCtxEntries(payload, {
+    siteUrl: null, canEdit: false, pageFile: null,
+    openTarget: () => {}, openStyle: () => {}, openExternal: () => {},
+    copy: (text) => copied.push(text),
+  });
+  const copyPage = entries.find((e) => 'action' in e && e.label === 'Copy page address') as { action(): void };
+  copyPage.action();
+  expect(copied).toEqual(['/zh-hans/untitled/']);
 });

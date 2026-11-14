@@ -10,7 +10,6 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   isPreviewCtxMessage,
   translateIframePoint,
-  localPreviewUrl,
   publishedUrlFor,
   buildPreviewCtxEntries,
   type PreviewCtxPayload,
@@ -97,14 +96,6 @@ describe('translateIframePoint', () => {
   });
 });
 
-describe('localPreviewUrl', () => {
-  it('strips the shell marker but keeps everything else', () => {
-    expect(localPreviewUrl('http://localhost:4832/a/?__moss_shell=1&x=2#h')).toBe(
-      'http://localhost:4832/a/?x=2#h',
-    );
-  });
-});
-
 describe('publishedUrlFor', () => {
   it('joins a same-origin path onto the published site URL', () => {
     expect(publishedUrlFor('http://localhost:4832/posts/foo/', PAGE, 'https://her-blog.mosspub.com'))
@@ -115,6 +106,14 @@ describe('publishedUrlFor', () => {
     expect(
       publishedUrlFor('http://localhost:4832/posts/foo/?__moss_shell=1', PAGE, 'https://example.com'),
     ).toEqual({ text: 'https://example.com/posts/foo/', siteRelative: false });
+  });
+
+  it('drops the reload stamp from a page, a link within it and a refreshed image, and keeps the page\'s own query', () => {
+    const reloaded = 'http://localhost:4832/map/?place=oaxaca&_t=1731600000000&__moss_shell=1';
+    expect(publishedUrlFor(reloaded, reloaded, null).text).toBe('/map/?place=oaxaca');
+    expect(publishedUrlFor('http://localhost:4832/map/?_t=1731600000000#north', reloaded, null).text).toBe('/map/#north');
+    expect(publishedUrlFor('http://localhost:4832/img/a.png?_t=1731600000000', reloaded, 'https://example.com').text)
+      .toBe('https://example.com/img/a.png');
   });
 
   it('falls back to the site-relative path when no site URL is configured', () => {
