@@ -1322,6 +1322,19 @@ fn gate_passes_when_path_is_unknown_to_manifest() {
     assert!(should_rebuild_for_paths(folder.to_str().unwrap(), &[p], None));
 }
 
+/// An unknown path that is definitely gone is unchanged, as a moved page's old
+/// name is; one whose stat fails another way, here a path under a file, still
+/// rebuilds.
+#[test]
+fn an_unknown_path_is_unchanged_only_when_definitely_absent() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().canonicalize().unwrap();
+    gate_write_file(&folder, "a.txt", b"a file");
+    let (f, known) = (folder.to_str().unwrap(), crate::types::content::SiteHashes::new());
+    assert!(!should_rebuild_for_paths(f, &[folder.join("gone.md")], Some(&known)));
+    assert!(should_rebuild_for_paths(f, &[folder.join("a.txt/under-a-file.md")], Some(&known)));
+}
+
 #[test]
 fn gate_passes_when_manifest_file_absent() {
     let dir = tempfile::tempdir().unwrap();

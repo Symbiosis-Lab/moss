@@ -49,6 +49,7 @@ All notable changes to moss will be documented here.
 - In the preview, a picture or other media file that is not in the folder is a box reading "Picture not found: slide.jpg". It was an empty frame of the size asked for with that size as its caption, a broken image, or a bare link.
 - For plugin authors: `moss describe` no longer lists the `syndicate` hook, which moss no longer calls. A channel posts through the copy hooks (`publish_copy` and the others listed there).
 - An edit saved in moss's editor shows in the preview without waiting for the computer to report the change to the file: the save asks for its own rebuild. That report took anywhere from a twentieth of a second to five seconds, and sometimes never came until the next periodic check.
+- A page renamed in moss's editor is seldom built twice. The computer's report of the same rename used to build the site again on most renames.
 
 ### New
 

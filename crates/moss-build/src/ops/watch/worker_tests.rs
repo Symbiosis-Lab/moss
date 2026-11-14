@@ -253,6 +253,9 @@ async fn a_request_arriving_mid_build_is_built_next() {
 #[derive(Clone, Copy)]
 enum Ask {
     Save,
+    /// An editor rename of `O.md` to the page.
+    Move,
+    /// The watcher's event; a stitched rename names `O.md` and the page.
     Event(notify::EventKind),
     Full,
 }
@@ -267,6 +270,7 @@ enum When {
 async fn request_for(ask: Ask, root: &std::path::Path, page: &std::path::Path) -> RebuildRequest {
     match ask {
         Ask::Save => crate::ops::watch::request_for(root, crate::commands::Change::Wrote(page)).expect("a save of a page asks for a rebuild"),
+        Ask::Move => crate::ops::watch::request_for(root, crate::commands::Change::Moved(&[("O.md".into(), "P.md".into())])).unwrap(),
         Ask::Event(kind) => {
             let held = std::sync::Arc::new(std::sync::Mutex::new(None));
             let h = held.clone();
@@ -277,6 +281,9 @@ async fn request_for(ask: Ask, root: &std::path::Path, page: &std::path::Path) -
             let emit: crate::ops::watch::EventRelay = std::sync::Arc::new(|_| {});
             let mut event = notify::Event::new(kind);
             event.paths = vec![page.to_path_buf()];
+            if kind == notify::EventKind::Modify(notify::event::ModifyKind::Name(notify::event::RenameMode::Both)) {
+                event.paths.insert(0, root.join("O.md"));
+            }
             let batch = vec![notify_debouncer_full::DebouncedEvent::new(event, std::time::Instant::now())];
             crate::ops::watch::handle_debounced_batch(batch, root.to_str().unwrap(), &emit, &dispatch).await;
             let request = held.lock().unwrap().take();
@@ -394,6 +401,19 @@ async fn a_save_and_its_watcher_event_build_once_in_any_order() {
     ] {
         let label = format!("{} first, the other {}", if matches!(first, Ask::Save) { "save" } else { "event" }, ["in the slot", "during", "after"][when as usize]);
         assert_eq!(two_asks(first, second, when, None).await, (1, b"saved again".to_vec()), "{label}");
+    }
+}
+
+/// An editor rename's echo from the watcher, as one stitched rename or per
+/// path, before, during or after the rename's own build, adds no build.
+#[tokio::test]
+async fn a_move_and_its_watcher_echo_build_once_in_any_order() {
+    use notify::event::{ModifyKind, RenameMode};
+    for mode in [RenameMode::Both, RenameMode::Any] {
+        for when in [When::InTheSlot, When::DuringTheFirstBuild, When::AfterTheFirstBuild] {
+            let echo = Ask::Event(notify::EventKind::Modify(ModifyKind::Name(mode)));
+            assert_eq!(two_asks(Ask::Move, echo, when, None).await.0, 1, "{mode:?}, {}", ["in the slot", "during", "after"][when as usize]);
+        }
     }
 }
 

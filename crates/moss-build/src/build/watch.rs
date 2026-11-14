@@ -865,6 +865,7 @@ fn canonical_through_missing(abs: &Path) -> std::path::PathBuf {
 /// Returns `true` (caller must proceed with rebuild) if any of:
 ///   - the manifest is missing/corrupt (first build, or write-crash),
 ///   - any path is not in the manifest (new file, or outside the asset pipeline),
+///     unless it is definitely absent too, as a moved page's old name is,
 ///   - any path's current bytes differ from the stored `SourceMetadata`,
 ///   - any I/O error or path-outside-folder issue (fail open).
 ///
@@ -897,6 +898,8 @@ pub fn should_rebuild_for_paths(
         };
         let meta = match hashes.source_metadata_for(&rel) {
             Some(m) => m,
+            // Not built and definitely gone, as a moved page's old name is.
+            None if abs.symlink_metadata().is_err_and(|e| crate::build::icloud::is_definitely_absent(abs, &e)) => continue,
             None => return true, // unknown to manifest → fail open
         };
         match source_metadata_matches_at(meta, abs, hashes.captured_at) {
