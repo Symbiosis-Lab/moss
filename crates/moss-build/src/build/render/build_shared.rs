@@ -23,9 +23,9 @@ pub struct BuildShared<'d> {
     /// a file that same snapshot emitted.
     pub scripts: ScriptAssets,
     /// Dimensions, colors and LQIP for the vault's media, read by the cards,
-    /// covers and embeds a page body resolves. Registry-less: page bodies
-    /// have never folded in the build's encoded variants.
-    pub media_lookup: MediaDimensionLookup,
+    /// covers and embeds a page body resolves: the run's lookup, which the
+    /// markdown render reads too.
+    pub media_lookup: &'d MediaDimensionLookup,
     /// Each folder's prev/next reading order.
     pub sequences: SequenceChains<'d>,
     /// The calendar files this build writes and the pages that link them. Empty
@@ -40,23 +40,12 @@ pub struct BuildShared<'d> {
     pub now: chrono::NaiveDateTime,
 }
 
-impl BuildShared<'_> {
-    /// Takes the build's script snapshot and indexes `project`'s images and
-    /// videos under the build's slug overrides.
-    pub fn new(
-        scripts: ScriptAssets,
-        project: &ProjectStructure,
-        dir_overrides: &HashMap<String, String>,
-        now: chrono::NaiveDateTime,
-    ) -> Self {
+impl<'d> BuildShared<'d> {
+    /// Takes the build's script snapshot and media lookup.
+    pub fn new(scripts: ScriptAssets, media_lookup: &'d MediaDimensionLookup, now: chrono::NaiveDateTime) -> Self {
         Self {
             scripts,
-            media_lookup: MediaDimensionLookup::new(
-                &project.image_files,
-                &project.video_files,
-                dir_overrides,
-                None,
-            ),
+            media_lookup,
             sequences: SequenceChains::default(),
             calendar: Default::default(),
             theme_modules: ThemeModules::default(),

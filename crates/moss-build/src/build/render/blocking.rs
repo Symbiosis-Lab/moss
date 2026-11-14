@@ -1729,7 +1729,7 @@ pub fn generate_blocking_content_for_build(
     // page it spares costs 3.5ms. Medians of 7 rebuilds.
 
     // Built once here rather than once per page. See `BuildShared`.
-    let mut shared = super::build_shared::BuildShared::new(scripts, project_structure, &dir_overrides, now);
+    let mut shared = super::build_shared::BuildShared::new(scripts, &event_level_image_lookup, now);
     shared.calendar = calendar;
     shared.theme_modules = theme_modules;
 
@@ -1753,7 +1753,7 @@ pub fn generate_blocking_content_for_build(
             },
             show_rss_in_footer, emit_source_lines, has_sidebar_layout,
             home_breadcrumb: crate::build::components::nav::home_breadcrumb_setting(&documents),
-            media_lookup: &shared.media_lookup,
+            media_lookup: shared.media_lookup,
         },
         content_graph: Some(&content_graph), dir_overrides: &dir_overrides,
         site_url: &site_url, output_dir: Some(output_dir), source_root: source_path_buf, shared: &shared,

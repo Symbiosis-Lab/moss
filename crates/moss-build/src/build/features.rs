@@ -176,8 +176,9 @@ pub fn should_inject_places_explorer(
 /// srcset="X.webp">` emission on manifest presence — eliminating the
 /// WebP-404 failure mode for the colophon — and adds attribute-injection
 /// (`width`/`height`/`loading`/`data-placeholder-src`) at the typed-data
-/// layer. `None` is the test/fragment-rendering fallback.
-pub fn generate_native_slots(
+/// layer. It is called only when a colophon draws a cover, so a caller can
+/// build the lookup on first call. `None` is the test/fragment-rendering fallback.
+pub fn generate_native_slots<'m>(
     services: &ServicesConfig,
     project_path: &str,
     // Whether the `email` channel is installed for this project. Handed in
@@ -196,7 +197,7 @@ pub fn generate_native_slots(
     domain: Option<&str>,
     cached_deploy_config: &DomainDeploymentConfig,
     start_server: bool,
-    media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
+    media_lookup: Option<&dyn Fn() -> &'m crate::build::media::dimensions::MediaDimensionLookup>,
     // The site-wide `[site] comments` default, resolved by the caller from
     // the SAME `.moss/config.toml` parse `pipeline.rs::build_inner` already
     // did to build `render::SiteConfig` (`site_bool("comments")` at

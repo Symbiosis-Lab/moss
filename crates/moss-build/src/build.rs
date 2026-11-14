@@ -574,7 +574,8 @@ fn collect_native_slots_for_documents(
     let article_map_path = crate::moss_paths::MossPaths::new(Path::new(folder_path)).article_map();
     let native_article_map = load_article_map_for_features(&article_map_path);
     let domain = cached_domain_config.domain.clone();
-    let media_lookup = crate::build::media::dimensions::MediaDimensionLookup::new(
+    // Walks every image and video, so built only when a colophon first reads it.
+    let media_lookup = std::cell::LazyCell::new(|| crate::build::media::dimensions::MediaDimensionLookup::new(
         &project_structure.image_files,
         &project_structure.video_files,
         // Feature/email path: no dir_overrides in scope here. Base slugification
@@ -583,7 +584,7 @@ fn collect_native_slots_for_documents(
         &std::collections::HashMap::new(),
         // Feature/email path: no `BuildServices` here, so no variants.
         None,
-    );
+    ));
 
     crate::build::features::generate_native_slots(
         &services_config,
@@ -596,7 +597,7 @@ fn collect_native_slots_for_documents(
         domain.as_deref(),
         &cached_domain_config,
         start_server,
-        Some(&media_lookup),
+        Some(&|| &*media_lookup),
         site_comments,
         input_evidence,
     )
