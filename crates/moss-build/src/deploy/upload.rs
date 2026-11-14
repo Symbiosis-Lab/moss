@@ -241,12 +241,12 @@ pub(crate) async fn regular_file_sizes(
 }
 
 /// The error an upload failure reports. A refusal the server words for the
-/// person (over the storage cap, superseded by a newer publish) is shown as
+/// person (over the storage cap, superseded by a newer publish, moss too old) is shown as
 /// it is; any other failure names the file.
 fn upload_failure(file_path: &str, e: crate::seta::client::SetaError) -> String {
     use crate::seta::client::SetaError;
     match e {
-        SetaError::StorageCapExceeded { .. } | SetaError::DeploySuperseded { .. } => e.to_string(),
+        SetaError::StorageCapExceeded { .. } | SetaError::DeploySuperseded { .. } | SetaError::UpdateRequired { .. } => e.to_string(),
         e => format!("Failed to upload {}: {}", file_path, e),
     }
 }

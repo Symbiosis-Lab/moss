@@ -2,6 +2,7 @@
 //! invented titles and text, and reserved `.example` addresses.
 
 use super::*;
+use crate::vault::import::scrape::fetch::test_server;
 use serde_json::json;
 use std::io::Write;
 use zip::write::SimpleFileOptions;
@@ -194,7 +195,7 @@ async fn an_unknown_table_is_counted_and_ignored() {
 
 #[tokio::test]
 async fn a_note_with_an_image_becomes_a_bundle_fetched_with_the_pages_origin() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let img = server
         .mock("GET", "/pic/a.jpg")
         .match_header("referer", format!("{}/", server.url()).as_str())
@@ -274,7 +275,7 @@ fn a_file_url_reaches_the_reader() {
 
 #[tokio::test]
 async fn duplicate_ids_keep_successful_media_in_separate_bundles() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let first = server.mock("GET", "/picture.jpg")
         .match_header("referer", format!("{}/", server.url()).as_str())
         .with_header("content-type", "image/jpeg").with_body("first image").create_async().await;

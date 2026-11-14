@@ -9,7 +9,8 @@ import { EditorLink } from '../ui/shell/editor-link';
 import { ActionPanelManager } from '../ui/editor/action-panel-manager';
 import { EditorPanelView } from '../ui/editor/editor-panel-view';
 import { openFileInEditor } from '../ui/editor/session/open-file-request';
-import { deliverEditorPosition, sourceTargetPosition } from '../ui/editor/session/editor-position';
+import { deliverEditorPosition, EditorHandshake, sourceTargetPosition } from '../ui/editor/session/editor-position';
+import { toRelative } from '../ui/editor/path-domain';
 import type { PreviewManager } from '../ui/preview/preview-manager';
 import { framesApi } from './frames';
 import { mountDevicePanel } from './device-panel';
@@ -39,6 +40,9 @@ export async function startShell(
     setLayout('closed');
   };
 
+  const handshake = new EditorHandshake((path) => toRelative(path, folder.path));
+  host.bus.on<{ path: string }>('editor:file-ready', (payload) => handshake.ready(payload.path));
+
   const link = new EditorLink({
     preview: () => preview,
     editorIsOpen,
@@ -46,10 +50,16 @@ export async function startShell(
     folderPath: () => folder.path,
     openTarget: (target) => {
       const at = sourceTargetPosition(target);
-      if (target.path && target.path !== link.node?.sourcePath) {
-        openFileInEditor(panels, editor, target.path, folder.path);
-      } else if (!editorIsOpen()) void openPreviewedPage();
-      if (at) deliverEditorPosition(at);
+      // A file that still has to load takes its caret once the editor says it is ready.
+      if (target.path) {
+        handshake.expect(target.path, at);
+        // An open editor loads by name, which reports ready even for the file it already shows.
+        if (editorIsOpen()) host.bus.emit('editor:load-file', { filePath: target.path });
+        else openFileInEditor(panels, editor, target.path, folder.path);
+      } else if (!editorIsOpen()) {
+        handshake.expect(null, at);
+        void openPreviewedPage();
+      } else if (at) deliverEditorPosition(at);
     },
     // The desktop's preview menu offers its own actions; a browser has its own context menu.
     openContextMenu: () => {},

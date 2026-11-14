@@ -63,6 +63,7 @@ impl Seta {
                     match status_http {
                         200 => ("200 OK", format!(r#"{{"status":"{status}","email":{email}}}"#)),
                         403 => ("403 Forbidden", r#"{"error":"blocked by policy"}"#.to_string()),
+                        410 => ("410 Gone", r#"{"error":"Session expired"}"#.to_string()),
                         _ => ("500 Internal Server Error", r#"{"error":"upstream down"}"#.to_string()),
                     }
                 } else if path.ends_with("/sync") {
@@ -283,6 +284,23 @@ async fn the_status_email_matches_the_typed_one_ignoring_case_and_padding() {
     verify_folder_email(folder.dir.path(), "ada@example.test", None, TICK, Duration::from_secs(2)).await.expect("same account");
 
     assert_eq!(crate::identity::Identity::read_email(folder.dir.path()).as_deref(), Some("ada@example.test"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_expired_link_stops_the_wait_at_once_and_says_to_run_the_command_again() {
+    let seta = Seta::start_with(usize::MAX, "verified", None, 410).await;
+    let folder = Folder::new(&seta);
+
+    let err = verify_folder_email(folder.dir.path(), "ada@example.test", None, TICK, Duration::from_secs(2))
+        .await
+        .expect_err("the link expired");
+
+    assert_eq!(
+        err,
+        "The sign-in link sent to ada@example.test expired before it was opened. \
+         Run the command again with --email to get a new link."
+    );
+    assert_eq!(seta.polls.load(Ordering::SeqCst), 1, "an expired link is final");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

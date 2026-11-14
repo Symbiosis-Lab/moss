@@ -4,6 +4,7 @@
  */
 
 import { host } from "../../host";
+import { normalizePath } from '../path-domain';
 import type { OpenFileInEditorEvent } from '../../context/event-bus';
 
 export type EditorPosition =
@@ -61,7 +62,7 @@ export class EditorHandshake {
     const pending = this.pending;
     if (!pending) return;
     this.pending = null;
-    if (pending.path !== null && this.normalize(pending.path) !== this.normalize(path)) return;
+    if (pending.path !== null && normalizePath(this.normalize(pending.path)) !== normalizePath(this.normalize(path))) return;
     deliverEditorPosition(pending.at);
   }
 }

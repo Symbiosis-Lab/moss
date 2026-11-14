@@ -915,3 +915,21 @@ fn a_decomposed_address_now_served_composed_is_not_a_removal() {
     prev.files.insert("images/cre\u{300}me.png".into(), bytes);
     assert_eq!(removed_of(&prev, &cur), vec![]);
 }
+
+/// A file that becomes members-only keeps answering at its address, so it is
+/// not a removed address; one that was members-only and is now served to
+/// everyone is reported as opened, which refuses the publish.
+#[test]
+fn becoming_members_only_is_not_a_removal_and_becoming_public_is_opened() {
+    let page = ("a.md", "a/index.html", "h", &b"A"[..]);
+    let open = sealed(&[page], &[("map/rows.csv", &b"rows"[..])]);
+    let gated = sealed(&[page], &[("_gated/map/rows.csv", &b"rows"[..]), ("_gated/a/index.html", &b"A whole"[..])]);
+
+    assert_eq!(removed_of(&snapshot(&open), &gated), []);
+    assert_eq!(
+        removed_of(&snapshot(&gated), &open),
+        [("a/index.html".to_string(), RemovalReason::Opened), ("map/rows.csv".to_string(), RemovalReason::Opened)]
+    );
+    assert_eq!(pending_removals(&removed_addresses(&snapshot(&gated), &open, |_| true), None).len(), 2);
+    assert_eq!(removed_of(&snapshot(&gated), &gated), []);
+}

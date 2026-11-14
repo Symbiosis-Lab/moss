@@ -184,9 +184,10 @@ pub struct ServeConfig {
     pub standby_on_conflict: bool,
     /// Fires on an admitted `POST /__moss/yield` — see `super::yield_route`.
     pub yield_notify: Arc<tokio::sync::Notify>,
-    /// Routes an embedding host contributes, merged in before the
-    /// `ServeDir` fallback so a host route wins over a site file at the
-    /// same path. `None` merges nothing.
+    /// Routes an embedding host contributes. A host route wins over a site
+    /// file at the same path, sits behind the trust boundary, and gets none
+    /// of the site's content layers (bridge injection, wrapping, asset
+    /// rewriting). `None` merges nothing.
     pub host_routes: Option<Router>,
     /// Optional UI listener, isolated from author scripts on the preview origin.
     pub ui: Option<super::ui::UiOriginConfig>,
@@ -326,6 +327,7 @@ pub async fn start_server(
                 "/__moss/comments/api/v2/comments",
                 axum::routing::post(super::comment_stub::handle_comment_stub),
             )
+            .route("/__moss/reload", get(super::events::handle_reload))
             // Unconditional like health/source/comments — see `yield_route`.
             .route(
                 "/__moss/yield",
@@ -455,12 +457,7 @@ pub async fn start_server(
                 );
         }
 
-        // See `host_routes::merge_host_routes` (split out for router.rs's
-        // own size gate): merged in before `.fallback()`, same ordering rule
-        // as every route above.
-        let router = super::host_routes::merge_host_routes(router, host_routes);
-
-        router
+        let site = router
             .fallback(move |request: Request<Body>| {
                 let state = state.clone();
                 let registry = registry.clone();
@@ -687,7 +684,14 @@ pub async fn start_server(
                     }
                 })
             })
-            .layer(middleware::from_fn(inject_iframe_bridge))
+            .layer(middleware::from_fn(inject_iframe_bridge));
+
+        // Host routes join after the site's content layers, so a host's own
+        // pages get no bridge script (whose plain-tab reload would reload the
+        // host's page on every save), and before the trust boundary below,
+        // which covers both. A route beats the fallback, so a host route
+        // wins over a site file at the same path.
+        host_routes.into_iter().fold(site, |site, host| site.merge(host))
             // A navigation — a page, not one of its assets — means someone is
             // looking (`super::events::viewer_activity`). Inside the trust
             // boundary, so a refused request is not a viewer.

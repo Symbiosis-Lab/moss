@@ -537,7 +537,7 @@ pub fn generate_blocking_content_for_build(
     // design), but the parse cache tolerates a batch containing stylesheets,
     // scripts and fonts, which cannot change any page's parse. Images and
     // `config.toml` still disable it. See `build/parse_cache.rs` and
-    // `PipelineConfig::allows_parse_cache_reuse`.
+    // `ChangeProof::allows_parse_cache_reuse`.
     //
     // The fingerprint covers Loop A's inputs that are not any page's own bytes
     // — most importantly `page_map`, which pre-scans every file's frontmatter,
@@ -761,6 +761,9 @@ pub fn generate_blocking_content_for_build(
                     if super::empty_home::skip_empty_source(&content, &file_info.path) { return None; }
                     md_read_ns.fetch_add(t_read.elapsed().as_nanos() as u64, Ordering::Relaxed);
 
+                    // Runs once for the page, and once more over the whole source
+                    // of a members page whose gated version a host can serve.
+                    let parse = |content: &str| -> Option<ParsedDocument> {
                     // RESOLVE phase: transform Obsidian syntax (wikilinks, embeds,
                     // callouts, block refs) into standard markdown before HTML
                     // conversion.  This is transparent for non-Obsidian content.
@@ -978,6 +981,12 @@ pub fn generate_blocking_content_for_build(
                     // touches the emitted HTML.
 
                     md_process_ns.fetch_add(t_process.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                    Some(doc)
+                    };
+                    let mut doc = parse(&content)?;
+                    if crate::build::scan::members::has_gated_version(&content, &source_content) {
+                        doc.members_full = parse(&source_content).map(Box::new);
+                    }
                     Some((doc, Some((source_content, stat_before_read))))
                 },
             )
@@ -1028,19 +1037,23 @@ pub fn generate_blocking_content_for_build(
         folders: &folder_index,
         urls: &url_index,
     };
+    let mut gated_embeds = Vec::new();
     for record in &source_records {
         let doc = &mut documents[record.document_index];
+        let public_source = members_policy.public_source(&record.source_path, &record.source);
         doc.missing_reference_occurrences = crate::build::types::MissingReferenceOccurrence::from_authored_source(
             &record.source_path,
-            &members_policy.public_source(&record.source_path, &record.source),
+            &public_source,
             &authored_evidence_parse_config,
             &reference_context,
         );
+        gated_embeds.extend(crate::build::scan::members::gated_embeds(members_policy, &record.source_path, &public_source, doc.members_full.is_some().then_some(record.source.as_str()), &authored_evidence_parse_config, &content_graph));
         parse_session.note_source_bytes(&record.source_path, record.source.as_bytes(), record.stat());
         parse_session.verify_shadow(&record.source_path, doc);
         page_source_hashes.insert(record.source_path.clone(), record.source_metadata());
     }
     page_source_hashes.extend(parse_session.replayed_sources());
+    crate::build::scan::members::refuse_gated_embeds(&gated_embeds)?;
     if let Some(event) = crate::build::progress::make_empty_folder_advisory(&project_structure.empty_folders) {
         reporter.report(&event);
     }
@@ -1332,6 +1345,7 @@ pub fn generate_blocking_content_for_build(
 
         log::debug!(target: "timing", "[reduce] translation_links: {:?}", reduce_start.elapsed());
         log::debug!(target: "timing", "[reduce] total (uid_dedup..translation_links): {:?}", reduce_pre_start.elapsed());
+        drop(PhaseTrace::since("reduce", reduce_pre_start));
 
         // Create layout configuration.
         // Site name is one STRUCTURAL decision — `moss_core::home::site_name`
@@ -1523,7 +1537,7 @@ pub fn generate_blocking_content_for_build(
     let user_css_version = user_css_content.as_ref().zip(theme_css.as_ref()).map(|(content, themed)| {
         // Warn when theme references pre-v1 (Retired) class
         // vocabulary. Non-fatal; one warning per retired class found.
-        for warning in crate::build::theme_lint::lint_theme_css(content) {
+        for warning in crate::build::theme_lint::lint_theme_css(content, site_config.color_scheme) {
             log_warn_problem!("{}", warning);
         }
         compute_content_hash(&themed.css)
@@ -1698,6 +1712,7 @@ pub fn generate_blocking_content_for_build(
             typesetting: layout_config.typesetting.as_deref(),
             math: site_config.math,
             term_nav: &layout_config.term_nav,
+            build_day: now.date(),
             render_id: pending.render_id(),
             sealed_render_id: previous_hashes.render_id.as_deref(),
         },
@@ -2347,11 +2362,6 @@ pub fn generate_blocking_content_for_build(
             target: "incremental",
             "{auto_index_count} generated folder indexes rendered, {auto_index_carried} carried",
         );
-        // All vault SHAPE, so measure before optimizing: each index costs in
-        // proportion to the children it lists. One flat `posts/` folder of 225
-        // children is 259ms of a 388ms call; a real 223-page site with a deep
-        // tree is 0.4ms. Medians of 7 rebuilds.
-        log::debug!(target: "timing", "[render] auto folder indexes rendered: {:?}", total_start.elapsed());
     }
 
     // Site 6 (Pattern A): emit _moss/style.<hash>.css (content-hashed filename).
@@ -2396,13 +2406,10 @@ pub fn generate_blocking_content_for_build(
     // emit that used to sit here wrote the same bytes to the same path a second
     // time.
 
-    // Prelude instrumentation: everything from here to `[render]
-    // total` runs unconditionally on the DOCUMENT COUNT, not on what changed —
-    // so on a single-page edit it is pure prelude. These checkpoints (added
-    // while investigating why that prelude did not shrink) are cumulative
-    // from `total_start`, matching the style of every other `timing` line
-    // in this function.
-    log::debug!(target: "timing", "[render] prelude: css+js emitted: {:?}", total_start.elapsed());
+    // Everything from here to `[render] total` scales with the document
+    // count, not with what changed: on a one-page edit it is all overhead.
+    // The `timing` checkpoints below are cumulative from `total_start`.
+    let site_files_phase = PhaseTrace::start("render_site_files");
 
     // Generate RSS feed and sitemap (only if a real https URL was resolved)
     if has_rss {
@@ -2515,7 +2522,7 @@ pub fn generate_blocking_content_for_build(
     crate::build::emit::members::emit(&site_config.members, output_dir, pending)?;
     let own_icon = (!favicon.used_default).then_some(crate::build::site_meta::site_identity::OwnIcon { file: &favicon_filename, raster_sizes: &favicon_raster_sizes });
     crate::build::site_meta::site_identity::emit(&layout_config, own_icon, user_css_content.as_deref(), output_dir, pending)?;
-    log::debug!(target: "timing", "[render] prelude: llms.txt: {:?}", total_start.elapsed());
+    drop(site_files_phase);
     send_progress(
         progress_sender,
         "generating",
@@ -2583,7 +2590,6 @@ pub fn generate_blocking_content_for_build(
         }
         page_count += 1;
     }
-    log::debug!(target: "timing", "[render] prelude: homepage: {:?}", total_start.elapsed());
 
     // What sitemap.xml lists: every page a reader is meant to land on. That is
     // every page registered by now, the home page included; then the media
@@ -2592,6 +2598,11 @@ pub fn generate_blocking_content_for_build(
     // noindex subscribe pages in between. `pending.files()` would also hand
     // back the previous build's pages until seal, a deleted source's among them.
     let mut sitemap_pages: std::collections::BTreeSet<String> = pending.pages_registered().cloned().collect();
+    // After the sitemap's pages are taken: a gated version is not a page of
+    // its own. Every build, since a carried page's gated version is not carried.
+    for (path, html) in super::page_chrome::render_gated_pages(&render_context, &documents, &sitemap_pages)? {
+        pending.register_unwritten_page(&path, html);
+    }
 
     // All asset copying (images, other files, static dirs, colocated assets) is
     // deferred to the background phase. The guiding principle: "every source file
@@ -3163,6 +3174,8 @@ pub fn generate_blocking_content_for_build(
         .unwrap_or_else(|| crate::i18n::t(site_lang, "untitled_site").to_string());
 
     log::debug!(target: "timing", "[render] total: {:?}", total_start.elapsed());
+    // The background lane's work list and the math cache's sweep.
+    let _phase_handoff = PhaseTrace::start("render_handoff");
 
     // Build site-level meta defaults for bundled-SPA `<head>` injection
     // (link-preview defaults). The injector preserves anything

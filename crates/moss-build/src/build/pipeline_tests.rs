@@ -7277,7 +7277,7 @@ fn a_presence_pass_that_cannot_read_its_tree_drops_nothing_and_ships_nothing() {
     // The preview shows this render on staging; `current` is g1.
     let _record = crate::build::lifecycle::lock_for(&mp);
     let cell = std::sync::Arc::new(std::sync::RwLock::new(std::path::PathBuf::new()));
-    crate::build::lifecycle::adopt_server(&mp, &cell);
+    let _ = crate::build::lifecycle::adopt_server(&mp, &cell);
     let (render, _) = crate::build::lifecycle::show_render(&mp, true);
     assert_eq!(*cell.read().unwrap(), stage);
     let html = concat!(

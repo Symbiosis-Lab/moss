@@ -28,7 +28,6 @@
 // The native observers are attached too, feature-detected, as a zero-cost bonus
 // if the webview ever supports them (Chromium does; WKWebView silently no-ops).
 
-// popup-dismiss: names '#dropdown' in a selector list only; builds no popup.
 import type { EditorView } from '@codemirror/view';
 
 import { diagWarn, diagRateLimited, rateGate, count, diagEnabled } from './diag';
@@ -236,7 +235,6 @@ const CHROME_SELECTOR = [
   '.cm-gutters', // comment + fold gutter
   '.cm-panels', // find bar
   '.cm-tooltip', // completions, slash menu, lint
-  '#dropdown',
   '#chip-bar',
   // Controls, bounded to the editor webview's own root: a `<button>` ABOVE
   // `.moss-editor` is a page the editor was embedded into, not chrome the user

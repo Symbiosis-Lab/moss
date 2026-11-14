@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="{{lang}}"{{html_class}}>
+<head>
+    <title>{{title}}</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" type="text/css" href="/assets/built/screen.css" />
+    <meta property="og:site_name" content="Field Notes Weekly" />
+    <style>:root {--ghost-accent-color: #ff1a75;}</style>
+    <meta property="article:published_time" content="{{date}}T08:00:00.000Z">
+</head>
+<body class="post-template is-head-left-logo has-cover{{body_class}}">
+<div class="viewport">
+    <header id="gh-head" class="gh-head outer">
+        <div class="gh-head-inner inner">
+            <div class="gh-head-brand">
+                <a class="gh-head-logo no-image" href="/">Field Notes Weekly</a>
+            </div>
+            <nav class="gh-head-menu">
+                <ul class="nav">
+                    <li class="nav-home nav-current"><a href="/">Home</a></li>
+                    <li class="nav-about"><a href="/about/">About</a></li>
+                </ul>
+            </nav>
+        </div>
+    </header>
+    <div class="site-content">
+        <main id="site-main" class="site-main">
+        <article class="article post">
+            <header class="article-header gh-canvas">
+                <h1 class="article-title">{{title}}</h1>
+                <div class="article-byline"><section class="article-byline-content"><div class="article-byline-meta">
+                    <div class="byline-meta-content"><time class="byline-meta-date" datetime="{{date}}">{{date}}</time></div>
+                </div></section></div>
+            </header>
+            <section class="gh-content gh-canvas">
+                <p>{{text}}</p>
+                <h2 id="notes">Notes</h2>
+                <p>{{text}} <a href="/first-light/">Read the first walk.</a></p>
+            </section>
+        </article>
+        </main>
+    </div>
+    <footer class="site-footer outer">
+        <div class="inner">
+            <section class="copyright"><a href="/">Field Notes Weekly</a> &copy; 2026</section>
+        </div>
+    </footer>
+</div>
+</body>
+</html>

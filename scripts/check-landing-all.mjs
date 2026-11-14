@@ -33,11 +33,12 @@ const CHECKS = [
   'check-docs-footer-icon.mjs',
   'check-docs-media.mjs',
   'check-favicon-theme.mjs',
+  'check-landing-logo.mjs',
 ];
-// These three read the moss doc theme/media pipeline, not the landing page
+// These read the moss doc theme/media pipeline, not the landing page
 // itself -- --landing-only skips them for a faster loop while iterating on
 // the page alone, the same CHECKS list and order otherwise.
-const DOCS_CHECKS = new Set(['check-docs-footer-icon.mjs', 'check-docs-media.mjs', 'check-favicon-theme.mjs']);
+const DOCS_CHECKS = new Set(['check-docs-footer-icon.mjs', 'check-docs-media.mjs', 'check-favicon-theme.mjs', 'check-landing-logo.mjs']);
 
 const ENGINE_RE = /\b(chromium|webkit)\b/g;
 function engineMentions(text) {

@@ -247,35 +247,6 @@ fn resolve_folder_id(path: &str, from: &str) -> String {
     parts.join("/")
 }
 
-/// A folder note (`work/Opera/Opera.md`) may list its own folder by name, as
-/// `![[Opera/]]`. Read beside the note, that target is `work/Opera/Opera/`,
-/// which usually does not exist. When the folder-relative target is missing
-/// and its first segment is the note's own folder name, return a `from` path
-/// anchored in the note's parent folder, so the target means `work/Opera/`.
-/// An existing folder-relative target keeps its meaning.
-fn folder_note_parent_from(
-    path: &str,
-    from: &str,
-    ctx: &moss_core::resolve::reference::ReferenceContext<'_>,
-) -> Option<String> {
-    use moss_core::resolve::reference::{classify_reference, ReferenceKind};
-    if path.starts_with('/') {
-        return None;
-    }
-    let note = Path::new(from);
-    let own_dir = note.parent()?.to_str()?;
-    let own_name = Path::new(own_dir).file_name()?.to_str()?;
-    if note.file_stem()?.to_str()? != own_name {
-        return None;
-    }
-    if path.trim_end_matches('/').split('/').next()? != own_name {
-        return None;
-    }
-    let parent_from = Path::new(own_dir).parent()?.join("_.md").to_str()?.to_string();
-    let target_missing = matches!(classify_reference(path, from, true, ctx).kind, ReferenceKind::NotFound);
-    target_missing.then_some(parent_from)
-}
-
 /// Auto-detect children rendering style and grouping.
 ///
 /// Checks whether children have "rich" metadata (covers or descriptions)
@@ -889,75 +860,104 @@ pub fn expand_markers_in_documents_with_place_maps(
     hero_from::resolve_all(documents, project, dir_overrides, math, media_lookup, now);
     stream::absorb_listed_features(documents, project, now);
     let has_marker = |d: &ParsedDocument| [Some(d.html_content.as_str()), d.hero_html.as_deref()].into_iter().flatten().any(|h| h.contains(MARKER_FOLDER_LIST));
-    if !documents.iter().any(has_marker) {
+    if !documents.iter().any(|d| has_marker(d) || d.members_full.as_deref().is_some_and(has_marker)) {
         return;
     }
     for i in 0..documents.len() {
-        if !has_marker(&documents[i]) {
-            continue;
+        if has_marker(&documents[i]) {
+            expand_document(documents, i, project, dir_overrides, math, media_lookup, site_typesetting, place_maps, calendar, now);
         }
-        let from = documents[i]
-            .source_path
-            .clone()
-            .unwrap_or_else(|| documents[i].url_path.clone());
-        maps::record_placements(&mut documents[i], &from);
-        let lang = documents[i].lang; // hosting page's language, not site default
-        let typesetting = crate::build::render::config::effective_typesetting(
-            documents[i].typesetting.as_deref(),
-            site_typesetting,
-        )
-        .map(str::to_owned);
-        let mut plan = documents[i].body_plan.take();
-        // Every marker here came from an authored `![[folder/|…]]`, never from
-        // `synthesize_children_marker`. One SVG identity sequence per page.
-        let run = EmbedRun::default();
-        let shown = ListingHost::of(&documents[i]);
-        // The markers still carry the authored options, so the page's script
-        // gate is read from them before they are replaced by the listing.
-        documents[i].features.marquee |= has_marquee_marker(&documents[i]);
-        let expand = |html: &str| {
-            resolve_markers_impl(
-                html,
-                &from,
-                documents,
-                project,
-                dir_overrides,
-                lang,
-                typesetting.as_deref(),
-                Some(media_lookup),
-                math,
-                true,
-                place_maps,
-                &run,
-                &shown,
-                now,
-            )
-        };
-        let links_for = calendar_tokens::links_for(calendar, &documents[i], now);
-        // The hero sits before the body, so its listings come first in the page's order.
-        let hero = documents[i].hero_html.as_deref().map(&expand);
-        let mut dropped = Vec::new();
-        let resolved = match plan.as_mut() {
-            Some(p) => {
-                dropped = p.expand_html(&expand);
-                calendar_tokens::settle(p, &links_for);
-                p.to_html()
+        // The whole body of a members page takes the page's place for its
+        // own expansion, so it lists what the page itself would.
+        if let Some(full) = documents[i].members_full.take() {
+            if has_marker(&full) {
+                let public = std::mem::take(&mut documents[i]);
+                documents[i] = public.with_body_of(&full);
+                expand_document(documents, i, project, dir_overrides, math, media_lookup, site_typesetting, place_maps, calendar, now);
+                let expanded = std::mem::replace(&mut documents[i], public);
+                documents[i].members_full = Some(Box::new(expanded));
+            } else {
+                documents[i].members_full = Some(full);
             }
-            None => {
-                let mut p = crate::build::markdown::body_plan::BodyPlan::opaque(expand(&documents[i].html_content));
-                calendar_tokens::settle(&mut p, &links_for);
-                p.to_html()
-            }
-        };
-        documents[i].body_plan = plan;
-        documents[i].html_content = resolved;
-        documents[i].hero_html = hero;
-        if shown.stream.get() {
-            stream::absorb_into(documents, i, &shown.streamed.into_inner());
         }
-        documents[i].embedded_listing_urls = shown.urls.into_inner();
-        empty_section_note::note_dropped_sections(&documents[i], &dropped);
     }
+}
+
+/// Replace the folder-embed markers of `documents[i]` with their listings.
+#[allow(clippy::too_many_arguments)]
+fn expand_document(
+    documents: &mut [ParsedDocument],
+    i: usize,
+    project: &ProjectStructure,
+    dir_overrides: &std::collections::HashMap<String, String>,
+    math: bool,
+    media_lookup: &crate::build::media::dimensions::MediaDimensionLookup,
+    site_typesetting: Option<&str>,
+    place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
+    calendar: Option<(&crate::build::feeds::calendar::CalendarPlan, &crate::build::site_url::SiteUrl)>,
+    now: chrono::NaiveDateTime,
+) {
+    let from = documents[i]
+        .source_path
+        .clone()
+        .unwrap_or_else(|| documents[i].url_path.clone());
+    maps::record_placements(&mut documents[i], &from);
+    let lang = documents[i].lang; // hosting page's language, not site default
+    let typesetting = crate::build::render::config::effective_typesetting(
+        documents[i].typesetting.as_deref(),
+        site_typesetting,
+    )
+    .map(str::to_owned);
+    let mut plan = documents[i].body_plan.take();
+    // Every marker here came from an authored `![[folder/|…]]`, never from
+    // `synthesize_children_marker`. One SVG identity sequence per page.
+    let run = EmbedRun::default();
+    let shown = ListingHost::of(&documents[i]);
+    // The markers still carry the authored options, so the page's script
+    // gate is read from them before they are replaced by the listing.
+    documents[i].features.marquee |= has_marquee_marker(&documents[i]);
+    let expand = |html: &str| {
+        resolve_markers_impl(
+            html,
+            &from,
+            documents,
+            project,
+            dir_overrides,
+            lang,
+            typesetting.as_deref(),
+            Some(media_lookup),
+            math,
+            true,
+            place_maps,
+            &run,
+            &shown,
+            now,
+        )
+    };
+    let links_for = calendar_tokens::links_for(calendar, &documents[i], now);
+    // The hero sits before the body, so its listings come first in the page's order.
+    let hero = documents[i].hero_html.as_deref().map(expand);
+    let mut dropped = Vec::new();
+    let resolved = match plan.as_mut() {
+        Some(p) => {
+            dropped = p.expand_html(&expand);
+            calendar_tokens::settle(p, &links_for);
+            p.to_html()
+        }
+        None => {
+            let mut p = crate::build::markdown::body_plan::BodyPlan::opaque(expand(&documents[i].html_content));
+            calendar_tokens::settle(&mut p, &links_for);
+            p.to_html()
+        }
+    };
+    documents[i].body_plan = plan;
+    documents[i].html_content = resolved;
+    documents[i].hero_html = hero;
+    if shown.stream.get() {
+        stream::absorb_into(documents, i, &shown.streamed.into_inner());
+    }
+    documents[i].embedded_listing_urls = shown.urls.into_inner();
+    empty_section_note::note_dropped_sections(&documents[i], &dropped);
 }
 
 /// Scan `html` for folder-list markers and replace each with rendered HTML.
@@ -1429,7 +1429,7 @@ fn list_pages<'a>(
     dir_overrides: &std::collections::HashMap<String, String>,
     now: chrono::NaiveDateTime,
 ) -> Result<Listed<'a>, String> {
-    // Route the three-branch decision through moss-core's `classify_reference`:
+    // Route the three-branch decision through moss-core's `classify_reference_verdict`:
     // `dir_has_markdown_index` → FolderListing (Branch 1), else
     // `dir_has_static_index` → FolderIndexIframe (Branch 2), else NotFound.
     // The asset/url stubs are never consulted.
@@ -1445,10 +1445,10 @@ fn list_pages<'a>(
         folders: &folder_idx,
         urls: &no_urls,
     };
+    let verdict = moss_core::resolve::reference::classify_reference_verdict(parsed.path, from, true, &ctx);
     // `from` is always the page hosting the embed. Only the target is read
     // from a different anchor when a folder note embeds its own folder by name.
-    let own_name_anchor = folder_note_parent_from(parsed.path, from, &ctx);
-    let resolve_from = own_name_anchor.as_deref().unwrap_or(from);
+    let resolve_from = verdict.anchored_from.as_deref().unwrap_or(from);
     let folder_id = resolve_folder_id(parsed.path, resolve_from);
     // `folder_id` is case-preserving (e.g. "Resources/cities-heat-map-app"),
     // while `ParsedDocument.url_path` is slugified — lowercased and
@@ -1462,7 +1462,7 @@ fn list_pages<'a>(
         moss_core::slug::slugify_path_segments(&crate::build::scan::page_map::resolve_path_with_overrides(id, dir_overrides))
     };
     let folder_id_slug = url_slug(&folder_id);
-    let classified = moss_core::resolve::reference::classify_reference(parsed.path, resolve_from, true, &ctx);
+    let classified = verdict.resolved;
     use moss_core::resolve::reference::ReferenceKind;
 
     let target_doc: Option<&ParsedDocument> = match classified.kind {

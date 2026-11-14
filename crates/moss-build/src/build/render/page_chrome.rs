@@ -299,3 +299,24 @@ impl PageOwnedAssets {
         )
     }
 }
+
+/// The members-only version of every members page among the `published`
+/// pages, with the path it is written at. It is the page rendered from its
+/// whole source: the same page as its public version in everything but the
+/// body, with no share card of its own. A draft has none, and neither has a
+/// page with no public version, since the address would then answer members
+/// with a page nobody published.
+pub(super) fn render_gated_pages<'d>(
+    context: &super::html::RenderCtx<'_, 'd>,
+    documents: &[crate::build::types::ParsedDocument],
+    published: &std::collections::BTreeSet<String>,
+) -> Result<Vec<(crate::build::served_path::ServedPath, String)>, String> {
+    let gated = documents.iter().filter(|doc| doc.draft != Some(true) && published.contains(&doc.url_path));
+    gated.filter_map(|doc| Some((doc, doc.members_full.as_deref()?))).map(|(doc, full)| {
+        let address = crate::build::served_path::ServedPath::from_source(&doc.url_path)
+            .map_err(|e| format!("Failed to construct article URL path: {e}"))?;
+        let whole = doc.with_body_of(full);
+        let html = super::html::render_page(context, Some(&whole), crate::build::render::lang_roots::is_language_root(&doc.url_path), None)?;
+        Ok((address.gated(), html))
+    }).collect()
+}

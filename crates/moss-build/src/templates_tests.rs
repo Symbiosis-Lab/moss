@@ -180,3 +180,33 @@ fn template_ids_are_lowercase_names_that_stay_in_the_folder() {
         assert!(validate_template_id(good).is_ok(), "{good:?} was refused");
     }
 }
+
+#[test]
+fn a_template_left_in_the_cloud_is_fetched_and_listed() {
+    use crate::build::icloud::pretend;
+    let root = site();
+    let file = tpl(root.path(), "production.md");
+    write(&file, PRODUCTION);
+    let _cloud = pretend::evicted_until_requested(&file);
+
+    let listing = list_templates(root.path()).unwrap();
+
+    assert_eq!(listing.templates.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["production"]);
+    assert_eq!(listing.problems, Vec::<String>::new());
+    assert_eq!(pretend::requests_for(&file), 1);
+}
+
+#[test]
+fn a_template_that_never_arrives_is_a_problem_naming_the_file() {
+    let root = site();
+    let file = tpl(root.path(), "production.md");
+    write(&file, PRODUCTION);
+    let _cloud = crate::build::icloud::pretend::evicted(&file);
+    crate::build::cloud_readiness::TEST_DEADLINE.with(|d| d.set(Some(std::time::Duration::from_millis(20))));
+
+    let listing = list_templates(root.path()).unwrap();
+    crate::build::cloud_readiness::TEST_DEADLINE.with(|d| d.set(None));
+
+    assert!(listing.templates.is_empty());
+    assert!(matches!(&listing.problems[..], [problem] if problem.contains("production.md")), "{:?}", listing.problems);
+}

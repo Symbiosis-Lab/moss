@@ -2018,7 +2018,7 @@ export class ChipBar {
       }
       items.forEach((item, i) => {
         const row = document.createElement('div');
-        row.className = 'pop-file-picker-item' + (i === highlighted ? ' is-highlighted' : '');
+        row.className = 'pop-file-picker-item moss-menu-row' + (i === highlighted ? ' is-highlighted' : '');
         row.id = `${listboxId}-item-${i}`;
         row.setAttribute('role', 'option');
         row.setAttribute('aria-selected', String(i === highlighted));
@@ -2266,7 +2266,7 @@ export class ChipBar {
     };
 
     const handle = openOverlay({
-      className: 'omenu',
+      className: 'omenu moss-menu',
       position: { kind: 'below', anchor },
       onClose: () => {
         detachKeys?.();
@@ -2308,7 +2308,7 @@ export class ChipBar {
           for (const f of this.hiddenFields) {
             const widget = this.widgetFor(f.def, f.value);
             const row = document.createElement('div');
-            row.className = 'orow';
+            row.className = 'orow moss-menu-row';
             row.id = `omenu-row-${MENU_ROW_SEQ++}`;
             row.setAttribute('role', 'option');
             const label = document.createElement('span');
@@ -2382,7 +2382,7 @@ export class ChipBar {
               for (const f of filtered) {
                 const widget = this.widgetFor(f.def, undefined);
                 const row = document.createElement('div');
-                row.className = 'orow orow-add';
+                row.className = 'orow orow-add moss-menu-row';
                 row.id = `omenu-row-${MENU_ROW_SEQ++}`;
                 row.setAttribute('role', 'option');
                 const head = document.createElement('div');

@@ -510,3 +510,52 @@ fn event_row_without_visitor_parses_as_none() {
     let row: EventRow = serde_json::from_str(json).unwrap();
     assert_eq!(row.visitor, None);
 }
+
+/// The client ignores response fields it does not know, so a newer server can add them.
+#[test]
+fn a_response_with_an_unknown_field_still_deserializes() {
+    let json = r#"{"url": "https://her-blog.mosspub.com", "files_updated": 5, "files_removed": 1, "timestamp": 1711756800, "added_later": {"x": 1}}"#;
+    let resp: CommitResponse = serde_json::from_str(json).unwrap();
+    assert_eq!(resp.files_updated, 5);
+}
+
+fn available(server: &StandIn) -> impl std::future::Future<Output = Result<bool, crate::seta::client::SetaError>> + '_ {
+    let client = client_for(server);
+    async move { client.check_site_id_available("her-blog").await }
+}
+
+#[tokio::test]
+async fn the_name_check_answers_taken_and_available() {
+    let taken = StandIn::json(200, r#"{"available":false}"#).await;
+    assert!(matches!(available(&taken).await, Ok(false)));
+    let free = StandIn::json(200, r#"{"available":true}"#).await;
+    assert!(matches!(available(&free).await, Ok(true)));
+}
+
+#[tokio::test]
+async fn the_name_check_reports_a_server_failure_instead_of_taken() {
+    let server = StandIn::json(500, r#"{"error":"boom"}"#).await;
+    let result = available(&server).await;
+    assert!(matches!(result, Err(crate::seta::client::SetaError::Api { status: 500, .. })), "{result:?}");
+}
+
+#[test]
+fn sync_and_commit_bodies_name_each_gated_file_with_its_access_and_fallback() {
+    let manifest: std::collections::HashMap<String, String> = [
+        "index.html", "post/index.html", "_gated/post/index.html", "_gated/map/rows.json",
+    ].into_iter().map(|p| (p.to_string(), "100644:0123456789abcdef".to_string())).collect();
+    let gated = serde_json::json!({
+        "_gated/post/index.html": { "access": "subscribers", "fallback": "projection" },
+        "_gated/map/rows.json": { "access": "subscribers", "fallback": "unauthorized" },
+    });
+    let sync = sync_body(&manifest, &Default::default());
+    assert_eq!(sync["gated"], gated);
+    assert_eq!(sync["files"].as_object().unwrap().len(), 4);
+    let commit = commit_body(&manifest, "abc123def456abcd");
+    assert_eq!(commit["gated"], gated);
+    assert_eq!(commit["generation_id"], "abc123def456abcd");
+
+    let public = crate::build::emit::members::public_files(&manifest);
+    assert!(sync_body(&public, &Default::default()).get("gated").is_none());
+    assert!(commit_body(&public, "abc123def456abcd").get("gated").is_none());
+}

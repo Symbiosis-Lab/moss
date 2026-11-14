@@ -49,6 +49,10 @@ pub struct SyncManifestResponse {
     /// as 0.
     #[serde(default)]
     pub internal_remove: Option<u64>,
+    /// `true` when the server will serve the manifest's `gated` files to
+    /// members only. A server that does not say so is sent no gated file.
+    #[serde(default)]
+    pub gated: Option<bool>,
 }
 
 impl SyncManifestResponse {
@@ -58,6 +62,34 @@ impl SyncManifestResponse {
     pub fn needs_commit(&self) -> bool {
         !self.need.is_empty() || !self.remove.is_empty() || self.internal_remove.unwrap_or(0) > 0
     }
+}
+
+/// The body of POST /api/sites/{id}/sync. A manifest with members-only files
+/// names each one under `gated`, by its path in `files`, with who may read it
+/// and what the address answers for anyone else:
+///
+///   "gated": { "_gated/post/index.html": { "access": "subscribers", "fallback": "projection" },
+///              "_gated/map/rows.json":   { "access": "subscribers", "fallback": "unauthorized" } }
+///
+/// A manifest without one sends no `gated` key.
+pub(crate) fn sync_body(
+    manifest: &std::collections::HashMap<String, String>,
+    sizes: &std::collections::HashMap<String, u64>,
+) -> serde_json::Value {
+    with_gated(serde_json::json!({ "files": manifest, "sizes": sizes }), manifest)
+}
+
+/// The body of POST /api/sites/{id}/commit, with the same `gated` key as the sync.
+pub(crate) fn commit_body(manifest: &std::collections::HashMap<String, String>, generation_id: &str) -> serde_json::Value {
+    with_gated(serde_json::json!({ "manifest": manifest, "generation_id": generation_id }), manifest)
+}
+
+fn with_gated(mut body: serde_json::Value, manifest: &std::collections::HashMap<String, String>) -> serde_json::Value {
+    let gated = crate::build::emit::members::gated_entries(manifest);
+    if !gated.is_empty() {
+        body["gated"] = serde_json::json!(gated);
+    }
+    body
 }
 
 /// Response from POST /api/sites/{id}/commit (finalize sync).
@@ -174,6 +206,7 @@ impl MossSetaClient {
     // ========== Site Hosting (Public) Endpoints ==========
 
     /// Check if a site ID is available on mosspub.com (public, no auth required).
+    /// `Ok(false)` is the server's own "taken"; any failed request is an `Err`.
     pub async fn check_site_id_available(&self, site_id: &str) -> Result<bool, SetaError> {
         let url = format!("{}/api/sites/{}/available", self.base_url, site_id);
 
@@ -182,7 +215,7 @@ impl MossSetaClient {
         let response = self.client.get(&url).send().await?;
 
         if !response.status().is_success() {
-            return Ok(false);
+            return Err(SetaError::from_failed_response(response).await);
         }
 
         #[derive(Deserialize)]
@@ -232,8 +265,7 @@ impl MossSetaClient {
         // re-sends the identical buffer instead of re-encoding a 10k-entry map,
         // and the exact body length is what sets the deadline below.
         let body = Bytes::from(
-            serde_json::to_vec(&serde_json::json!({ "files": manifest, "sizes": sizes }))
-                .map_err(|e| SetaError::Parse(e.to_string()))?,
+            serde_json::to_vec(&sync_body(manifest, sizes)).map_err(|e| SetaError::Parse(e.to_string()))?,
         );
         // The deadline scales with the body (I1). A flat 150 s here was a
         // deadline on the SITE'S SIZE: a 10k-file manifest cannot be POSTed in
@@ -250,13 +282,12 @@ impl MossSetaClient {
             "sync manifest",
             &budget,
             || async move {
-                let resp = this
+                let request = this
                     .signed(Method::POST, path_ref, body_ref.clone())?
                     .timeout(timeout)
                     .header("Content-Type", "application/json")
-                    .header("X-Moss-Generation", generation_id)
-                    .send()
-                    .await?;
+                    .header("X-Moss-Generation", generation_id);
+                let resp = this.send(request).await?;
                 if !resp.status().is_success() {
                     return Err(SetaError::from_failed_response(resp).await);
                 }
@@ -304,11 +335,10 @@ impl MossSetaClient {
             if let Some(tp) = stats {
                 tp.note_request();
             }
-            let response = request
+            let response = this.send(request
                 .timeout(UPLOAD_REQUEST_TIMEOUT)
                 .header("Content-Type", "application/octet-stream")
-                .header("X-Moss-Generation", generation_id)
-                .send()
+                .header("X-Moss-Generation", generation_id))
                 .await?;
             if !response.status().is_success() {
                 return Err(SetaError::from_failed_response(response).await);
@@ -350,16 +380,15 @@ impl MossSetaClient {
         let (this, path, target) = (self, path.as_str(), &target);
         let budget = crate::seta::client::RetryBudget::new();
         crate::seta::client::retry_transient(file_path, &budget, || async move {
-            let response = this
+            let request = this
                 .signed(Method::PUT, path, target.clone())?
                 // Stated, not inherited: the retry budget reserves
                 // UPLOAD_REQUEST_TIMEOUT per attempt (`client::MAX_ATTEMPT_DURATION`).
                 .timeout(UPLOAD_REQUEST_TIMEOUT)
                 .header("Content-Type", "text/plain; charset=utf-8")
                 .header("X-Moss-Entry", crate::types::content::MODE_SYMLINK)
-                .header("X-Moss-Generation", generation_id)
-                .send()
-                .await?;
+                .header("X-Moss-Generation", generation_id);
+            let response = this.send(request).await?;
             if !response.status().is_success() {
                 return Err(SetaError::from_failed_response(response).await);
             }
@@ -401,7 +430,7 @@ impl MossSetaClient {
             urlencoding::encode(site_id),
             urlencoding::encode(generation_id),
         );
-        let response = self.signed(Method::GET, &path, Bytes::new())?.timeout(UPLOAD_REQUEST_TIMEOUT).send().await?;
+        let response = self.send(self.signed(Method::GET, &path, Bytes::new())?.timeout(UPLOAD_REQUEST_TIMEOUT)).await?;
         if response.status().as_u16() == 404 {
             log::debug!(target: "seta", "GET {} → 404: server predates the resume endpoint, uploading from zero", path);
             return Ok(Vec::new());
@@ -435,11 +464,7 @@ impl MossSetaClient {
         // Same shape as sync_manifest: serialize once, and let the deadline
         // scale with the body rather than with nothing (I1).
         let body = Bytes::from(
-            serde_json::to_vec(&serde_json::json!({
-                "manifest": manifest,
-                "generation_id": generation_id,
-            }))
-            .map_err(|e| SetaError::Parse(e.to_string()))?,
+            serde_json::to_vec(&commit_body(manifest, generation_id)).map_err(|e| SetaError::Parse(e.to_string()))?,
         );
         let timeout = manifest_request_timeout(body.len() as u64);
 
@@ -449,12 +474,11 @@ impl MossSetaClient {
             "commit deploy",
             &budget,
             || async move {
-                let resp = this
+                let request = this
                     .signed(Method::POST, path_ref, body_ref.clone())?
                     .timeout(timeout)
-                    .header("Content-Type", "application/json")
-                    .send()
-                    .await?;
+                    .header("Content-Type", "application/json");
+                let resp = this.send(request).await?;
                 if !resp.status().is_success() {
                     return Err(SetaError::from_failed_response(resp).await);
                 }
@@ -500,7 +524,7 @@ impl MossSetaClient {
         if let Some(timeout) = timeout {
             request = request.timeout(timeout);
         }
-        let response = request.send().await?;
+        let response = self.send(request).await?;
         match response.status().as_u16() {
             200..=299 => Ok(Generation::Live(response.json().await.map_err(|e| SetaError::Parse(e.to_string()))?)),
             404 => Ok(Generation::NotFound),

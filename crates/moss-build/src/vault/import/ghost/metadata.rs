@@ -1,13 +1,11 @@
 //! Public address facts and allowlisted configuration; never export settings.
 use std::{collections::HashMap, path::Path};
 use serde_json::Value;
-use crate::{build::feeds::redirect_table::{Addr, Target}, vault::config::{load_managed_toml, subtable, write_managed_toml}};
 use super::{bundle::Bundle, text};
 use crate::vault::import::scrape::writer::OutputPaths;
 
-pub(super) fn write(bundle: &mut Bundle, folder: &Path, site: Option<&url::Url>, paths: &OutputPaths, users: &[Value], ids: &HashMap<String, (String, String)>, report: &mut Vec<String>) -> Result<(), String> {
-    let config_path = folder.join(".moss/config.toml");
-    let mut config = load_managed_toml(&config_path)?;
+/// The bundle's redirects and author routes, as `(from, to)` rows on the old site.
+pub(super) fn rows(bundle: &mut Bundle, users: &[Value], report: &mut Vec<String>) -> Result<Vec<(String, String)>, String> {
     let mut rows = Vec::new();
     if let Some(bytes) = bundle.read("redirects.yaml")? {
         match serde_yaml::from_slice::<Value>(&bytes) {
@@ -26,26 +24,12 @@ pub(super) fn write(bundle: &mut Bundle, folder: &Path, site: Option<&url::Url>,
             rows.push((format!("/author/{slug}/"), format!("/authors/{}/", moss_core::terms::term_slug(name))));
         }
     }
-    let redirects = subtable(&mut config.root, "redirects")?;
-    for (from, to) in rows {
-        let Some(site) = site else { report.push(format!("Redirect {from} skipped: the source host is unknown.")); continue };
-        let from = match own_path(&from, site) {
-            Some(from) if !from.contains(['*', '[', ']', '(', ')', '^', '$', '|']) && Addr::parse(&from).is_ok() => from,
-            _ => { report.push(format!("Redirect {from} skipped: source must be an exact path on the original host, without queries or fragments.")); continue; }
-        };
-        let to = own_path(&to, site).unwrap_or(to);
-        let to = if let Ok(mut address) = site.join(&to) {
-            let suffix = format!("{}{}", address.query().map(|q| format!("?{q}")).unwrap_or_default(), address.fragment().map(|f| format!("#{f}")).unwrap_or_default());
-            address.set_query(None); address.set_fragment(None);
-            paths.get(address.as_str()).map(|p| format!("{}{suffix}", served(p))).unwrap_or(to)
-        } else { to };
-        if Target::parse(&to).is_err() { report.push(format!("Redirect {from} skipped: unsupported target.")); continue; }
-        if from == to { continue; }
-        if redirects.contains_key(&from) { report.push(format!("Existing redirect {from} was preserved.")); continue; }
-        redirects.insert(from, toml::Value::String(to));
-    }
-    std::fs::create_dir_all(folder.join(".moss")).map_err(|e| e.to_string())?;
-    write_managed_toml(&config_path, &config.original, &config.root, crate::config::migrations::CURRENT_VERSION)?;
+    if bundle.read("routes.yaml")?.is_some() { report.push("Custom routes.yaml templates and collections need manual review; imported pages use their slugs.".into()); }
+    Ok(rows)
+}
+
+/// Keep each written post's feed id, so readers do not see it again as new.
+pub(super) fn ledger(folder: &Path, paths: &OutputPaths, ids: &HashMap<String, (String, String)>) -> Result<(), String> {
     let path = folder.join(crate::build::feeds::import_addresses::PATH);
     let mut ledger = crate::build::feeds::import_addresses::read(&path)?;
     for (origin, (uid, feed_id)) in ids {
@@ -54,17 +38,5 @@ pub(super) fn write(bundle: &mut Bundle, folder: &Path, site: Option<&url::Url>,
         }
     }
     let json = serde_json::to_string_pretty(&ledger).map_err(|e| e.to_string())?;
-    super::super::page::write_note(folder, crate::build::feeds::import_addresses::PATH, &json)?;
-    if bundle.read("routes.yaml")?.is_some() { report.push("Custom routes.yaml templates and collections need manual review; imported pages use their slugs.".into()); }
-    Ok(())
-}
-fn own_path(value: &str, site: &url::Url) -> Option<String> {
-    if value.starts_with('/') && !value.starts_with("//") { return Some(value.into()); }
-    let url = url::Url::parse(value).ok()?;
-    (url.origin() == site.origin() && url.query().is_none() && url.fragment().is_none()).then(|| url.path().into())
-}
-fn served(path: &str) -> String {
-    let stem = Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("index");
-    let output = moss_core::frontmatter_typed::compute_url_path(path, stem == "index", None, stem);
-    format!("/{}", crate::build::scan::article_map::to_pretty_url(&output))
+    super::super::page::write_note(folder, crate::build::feeds::import_addresses::PATH, &json)
 }

@@ -1,0 +1,3 @@
+# Design import fixtures
+
+`casper/screen.css` and `source/screen.css` are the built stylesheets of Ghost's Casper (commit 79d237b69a8e) and Source (commit 7c678147b624) themes, unmodified, under the MIT licence in each folder's `LICENSE`. `home.html` and `post.html` in each folder are a home page and a post written by hand from the theme's own templates (`default.hbs`, `index.hbs`, `post.hbs` and their partials) with the theme's default settings, for an invented site; the `{{placeholders}}` in it are filled by the tests. The design import reads these pages and stylesheets, and `scripts/design-import/judge.mjs` serves them as a reference site.

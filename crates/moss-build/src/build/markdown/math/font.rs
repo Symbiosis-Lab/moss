@@ -96,7 +96,7 @@ impl PinnedFont {
 /// is the Regular weight moss wants.
 fn candidates() -> Vec<(PathBuf, u32)> {
     let mut out = Vec::new();
-    if let Ok(p) = std::env::var("MOSS_MATH_CJK_FONT") {
+    if let Some(p) = crate::build::inputs::env("MOSS_MATH_CJK_FONT") {
         if !p.is_empty() {
             out.push((PathBuf::from(p), 0));
         }

@@ -3,10 +3,12 @@
 //! resolution, the resumable verified download, the single-shot `fetch_text`/
 //! `fetch_bytes` pair `moss desktop install` uses for the updater manifest and
 //! the release tarball, the outbound `User-Agent`, and "Show in Finder"
-//! ([`reveal`], which two carriers ask for), and a bounded wait for blocking
-//! work ([`deadline`]). The rest of the family (windows,
+//! ([`reveal`], which two carriers ask for), a bounded wait for blocking
+//! work ([`deadline`]), and the class of an IP address a fetch may not reach
+//! ([`address`]). The rest of the family (windows,
 //! menus, dialogs, commands) stays app-side; the reqwest adapter over
 //! [`proxy`] stays there too, so this crate carries no reqwest.
+pub mod address;
 pub mod bounded_command;
 pub mod deadline;
 pub mod derive;

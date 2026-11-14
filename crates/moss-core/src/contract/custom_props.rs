@@ -350,6 +350,18 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Colour of a link in a page's text under the pointer or with focus. In the dark theme the default is `--moss-color-accent-hover`. A theme that accents its resting links sets this to a different colour, for example `var(--moss-color-accent-hover)`, so a hover or focus still shows.",
     },
     CustomProp {
+        name: "--moss-font-body-han",
+        owner: ":root",
+        default: "-apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'Moss PingFang SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'WenQuanYi Micro Hei', sans-serif",
+        description: "The Han-first body stack, which `--moss-font-body` takes on a Chinese, Japanese or Korean page; on a `zh-Hant` page its Traditional faces come first. Set on every page's root, so a theme font for those pages stands in front of it: `html:is([lang|=\"zh\"], [lang|=\"ja\"], [lang|=\"ko\"]) { --moss-font-body: 'Your Face', var(--moss-font-body-han); }`.",
+    },
+    CustomProp {
+        name: "--moss-font-heading-han",
+        owner: ":root",
+        default: "'Source Han Serif SC', 'Noto Serif CJK SC', 'Songti SC', 'STSongti', 'NSimSun', 'SimSun', 'Source Serif 4', 'Source Serif Pro', 'Times New Roman', Times, serif",
+        description: "The Han-first heading stack, which `--moss-font-heading` takes on a Chinese, Japanese or Korean page; on a `zh-Hant` page its Traditional faces come first. Set on every page's root, so a theme font for those pages stands in front of it, as with `--moss-font-body-han`.",
+    },
+    CustomProp {
         name: "--moss-font-cjk",
         owner: "moss-quote",
         default: "var(--moss-font-heading-han)",

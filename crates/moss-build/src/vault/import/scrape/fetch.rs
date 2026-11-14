@@ -69,6 +69,17 @@ fn parse_retry_after(value: &str) -> Option<std::time::Duration> {
     (secs > 0).then(|| std::time::Duration::from_secs(secs as u64).min(MAX_RETRY_AFTER))
 }
 
+/// Debug builds only: let imports reach this machine, for a local test
+/// server. A process flag rather than the environment variable, which a test
+/// cannot set while other tests' threads read the environment.
+#[cfg(debug_assertions)]
+pub fn allow_loopback() {
+    ALLOW_LOOPBACK.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(debug_assertions)]
+static ALLOW_LOOPBACK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Refuse a URL that is not a plain `http`/`https` request to a public host.
 ///
 /// The import path hands `start_url` (and, via [`fetch_with_validated_redirects`],
@@ -87,17 +98,6 @@ fn parse_retry_after(value: &str) -> Option<std::time::Duration> {
 /// resolves to a loopback/link-local address only at connect time — is NOT
 /// covered here; that needs a connect-time check inside the fetch itself,
 /// out of scope for this string-level gate.
-/// Debug builds only: let imports reach this machine, for a local test
-/// server. A process flag rather than the environment variable, which a test
-/// cannot set while other tests' threads read the environment.
-#[cfg(debug_assertions)]
-pub fn allow_loopback() {
-    ALLOW_LOOPBACK.store(true, std::sync::atomic::Ordering::Relaxed);
-}
-
-#[cfg(debug_assertions)]
-static ALLOW_LOOPBACK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
 pub fn refuse_unsafe_scrape_url(url_str: &str) -> Result<(), String> {
     let url = url::Url::parse(url_str).map_err(|e| format!("invalid URL: {e}"))?;
     match url.scheme() {
@@ -123,50 +123,20 @@ pub fn refuse_unsafe_scrape_url(url_str: &str) -> Result<(), String> {
     // returns an IPv6 literal WITH its brackets (`"[::1]"`), which fails a
     // plain `str::parse::<IpAddr>()` and would silently let every bracketed
     // IPv6 literal through unchecked.
-    match url.host() {
-        Some(url::Host::Domain(d)) => {
-            if d.eq_ignore_ascii_case("localhost") {
-                return Err("URL must not target localhost".to_string());
-            }
+    let ip: std::net::IpAddr = match url.host() {
+        Some(url::Host::Domain(d)) if d.eq_ignore_ascii_case("localhost") => {
+            return Err("URL must not target localhost".to_string());
         }
-        Some(url::Host::Ipv4(v4)) => {
-            let ip = std::net::IpAddr::V4(v4);
-            if is_loopback_or_link_local(&ip) {
-                return Err(format!(
-                    "URL must not target a loopback or link-local address ({ip})"
-                ));
-            }
-        }
-        Some(url::Host::Ipv6(v6)) => {
-            let ip = std::net::IpAddr::V6(v6);
-            if is_loopback_or_link_local(&ip) {
-                return Err(format!(
-                    "URL must not target a loopback or link-local address ({ip})"
-                ));
-            }
-        }
+        Some(url::Host::Domain(_)) => return Ok(()),
+        Some(url::Host::Ipv4(v4)) => v4.into(),
+        Some(url::Host::Ipv6(v6)) => v6.into(),
         None => return Err("URL has no host".to_string()),
+    };
+    use crate::system::address::{classify, AddressClass};
+    if matches!(classify(ip), AddressClass::Loopback | AddressClass::LinkLocal) {
+        return Err(format!("URL must not target a loopback or link-local address ({ip})"));
     }
     Ok(())
-}
-
-/// True for a loopback or link-local address, including an IPv4 address
-/// spelled as an IPv4-mapped IPv6 literal (`::ffff:127.0.0.1`) — a common
-/// bypass for a check that only inspects the IPv6 form directly.
-fn is_loopback_or_link_local(ip: &std::net::IpAddr) -> bool {
-    match ip {
-        std::net::IpAddr::V4(v4) => v4.is_loopback() || v4.is_link_local(),
-        std::net::IpAddr::V6(v6) => {
-            if v6.is_loopback() {
-                return true;
-            }
-            if let Some(mapped) = v6.to_ipv4_mapped() {
-                return mapped.is_loopback() || mapped.is_link_local();
-            }
-            // fe80::/10
-            (v6.segments()[0] & 0xffc0) == 0xfe80
-        }
-    }
 }
 
 /// `agent.get(url)`, following redirects by hand so every hop's target is
@@ -190,6 +160,9 @@ fn is_loopback_or_link_local(ip: &std::net::IpAddr) -> bool {
 /// `mailto:`/`tel:` address is not requested but handed back as the 3xx
 /// response, so the caller sees where the link leads; every other target is
 /// still validated and followed, and a non-http(s) target still refused.
+///
+/// `refused` is set when the address policy refuses `start_url` or a redirect
+/// target, which the caller cannot tell from the refusal's 400 status alone.
 fn fetch_with_validated_redirects(
     agent: &ureq::Agent,
     start_url: &str,
@@ -197,10 +170,64 @@ fn fetch_with_validated_redirects(
     accept: Option<&str>,
     referer: Option<&str>,
     scope: Option<&UrlScope>,
+    refused: &std::cell::Cell<bool>,
 ) -> Result<ureq::Response, ureq::Error> {
-    fetch_following_redirects(agent, start_url, user_agent, accept, referer, refuse_unsafe_scrape_url, |next| {
+    let policy = |url: &str| import_policy(url).inspect_err(|_| refused.set(true));
+    fetch_following_redirects(agent, start_url, user_agent, accept, referer, policy, |next| {
         scope.is_some_and(|scope| leaves_site(scope, next))
     })
+}
+
+/// [`refuse_unsafe_scrape_url`], except in this crate's own tests, where the
+/// loopback servers they started with [`test_server`] are let through. Any
+/// other address, loopback included, still meets the real policy.
+fn import_policy(url: &str) -> Result<(), String> {
+    #[cfg(test)]
+    if test_servers::started(url) {
+        return Ok(());
+    }
+    refuse_unsafe_scrape_url(url)
+}
+
+/// A mockito server the import may fetch from. mockito keeps its servers
+/// bound for the life of the process, so a registered port never passes to
+/// another listener.
+#[cfg(test)]
+pub(crate) async fn test_server() -> mockito::ServerGuard {
+    let server = mockito::Server::new_async().await;
+    test_servers::STARTED.lock().unwrap().insert(server.host_with_port());
+    server
+}
+
+/// A loopback address no test registered, answering every request with an
+/// empty 200, and how many requests reached it.
+#[cfg(test)]
+pub(crate) fn unregistered_loopback_server() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::io::{Read as _, Write as _};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = hits.clone();
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let _ = stream.read(&mut [0; 4096]);
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        }
+    });
+    (address, hits)
+}
+
+#[cfg(test)]
+mod test_servers {
+    pub(super) static STARTED: std::sync::Mutex<std::collections::BTreeSet<String>> =
+        std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+    pub(super) fn started(url: &str) -> bool {
+        let Ok(url) = url::Url::parse(url) else { return false };
+        let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) else { return false };
+        STARTED.lock().unwrap().contains(&format!("{host}:{port}"))
+    }
 }
 
 /// Whether `next` is a contact address or an http(s) URL off the site.
@@ -271,12 +298,19 @@ fn fetch_following_redirects(
 #[derive(Debug, Clone)]
 pub(crate) struct FetchError {
     status: Option<u16>,
+    refused: bool,
     message: String,
 }
 
 impl FetchError {
     fn message(message: String) -> Self {
-        Self { status: None, message }
+        Self { status: None, refused: false, message }
+    }
+
+    /// Whether the address policy refused the URL or a redirect target, so
+    /// nothing was requested there.
+    pub(crate) fn is_refused(&self) -> bool {
+        self.refused
     }
 }
 
@@ -338,10 +372,11 @@ fn call_with_retry_n(
         // (see `fetch_with_validated_redirects`) rather than trusting
         // ureq's own follower, which never re-checks a Location header.
         let agent = crate::system::proxy::proxied_ureq_agent_no_redirects(url, timeout);
-        match fetch_with_validated_redirects(&agent, url, user_agent, accept, referer, scope) {
+        let refused = std::cell::Cell::new(false);
+        match fetch_with_validated_redirects(&agent, url, user_agent, accept, referer, scope, &refused) {
             Ok(resp) => return Ok(resp),
             Err(ureq::Error::Status(code, resp)) => {
-                let err = FetchError { status: Some(code), message: format!("{} {}", code, resp.status_text()) };
+                let err = FetchError { status: Some(code), refused: refused.get(), message: format!("{} {}", code, resp.status_text()) };
                 if !should_retry_status(Some(code)) {
                     return Err(err);
                 }
@@ -443,7 +478,7 @@ const MAX_RAW_FETCH_BYTES: usize = 10 * 1024 * 1024;
 /// text conversion happens. See [`fetch_raw`] for why a single attempt, no
 /// content-type gate, and the same SSRF-revalidating fetch a page fetch
 /// itself uses.
-pub(crate) async fn fetch_raw_bytes(url: &str, user_agent: &str) -> Result<Vec<u8>, String> {
+pub(crate) async fn fetch_raw_bytes(url: &str, user_agent: &str) -> Result<Vec<u8>, FetchError> {
     let url = url.to_string();
     let user_agent = user_agent.to_string();
     tokio::task::spawn_blocking(move || {
@@ -461,16 +496,16 @@ pub(crate) async fn fetch_raw_bytes(url: &str, user_agent: &str) -> Result<Vec<u
             .into_reader()
             .take((MAX_RAW_FETCH_BYTES + 1) as u64)
             .read_to_end(&mut buf)
-            .map_err(|e| format!("Failed to read response: {}", e))?;
+            .map_err(|e| FetchError::message(format!("Failed to read response: {}", e)))?;
         if buf.len() > MAX_RAW_FETCH_BYTES {
-            return Err(format!(
+            return Err(FetchError::message(format!(
                 "response body exceeds {MAX_RAW_FETCH_BYTES} bytes"
-            ));
+            )));
         }
         Ok(buf)
     })
     .await
-    .map_err(|e| format!("Task error: {}", e))?
+    .map_err(|e| FetchError::message(format!("Task error: {}", e)))?
 }
 
 /// A URL's raw body with no content-type gate, decoded as UTF-8 (lossily —
@@ -485,7 +520,7 @@ pub(crate) async fn fetch_raw_bytes(url: &str, user_agent: &str) -> Result<Vec<u
 /// sitemap at all, so a 404 here is the ordinary, expected case, not a
 /// transient failure worth waiting out before falling through to a
 /// link-only crawl.
-pub(crate) async fn fetch_raw(url: &str, user_agent: &str) -> Result<String, String> {
+pub(crate) async fn fetch_raw(url: &str, user_agent: &str) -> Result<String, FetchError> {
     let bytes = fetch_raw_bytes(url, user_agent).await?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }

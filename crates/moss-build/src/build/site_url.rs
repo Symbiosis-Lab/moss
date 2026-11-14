@@ -253,11 +253,9 @@ pub fn resolve_for_project(
     // other than "active") falls back to the bare apex — an unverified
     // `www.` is a canonical URL nothing answers on.
     let cdn_active = domain_cfg.cdn_status.as_deref() == Some("active");
-    let env_var = std::env::var("MOSS_SITE_URL")
-        .ok()
+    let env_var = crate::build::inputs::env("MOSS_SITE_URL")
         .filter(|s| !s.trim().is_empty());
-    let preview_port = std::env::var("VITE_PORT")
-        .ok()
+    let preview_port = crate::build::inputs::env("VITE_PORT")
         .and_then(|s| s.parse::<u16>().ok());
     let cli_flag = cli_override.filter(|s| !s.trim().is_empty());
     let site_suffix = crate::build::site_config::resolve_environment(project_path)

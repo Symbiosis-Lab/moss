@@ -54,6 +54,9 @@ pub struct ScrapeConfig {
     pub user_agent: String,
     /// Largest single file a page's link may pull into the site.
     pub(crate) linked_file_max_bytes: u64,
+    /// A source's menu (a WordPress export's), the nav bar when the home
+    /// page shows none.
+    pub(crate) menu: Vec<super::design::NavEntry>,
 }
 
 impl ScrapeConfig {
@@ -66,6 +69,7 @@ impl ScrapeConfig {
             max_pages: Some(DEFAULT_MAX_PAGES),
             user_agent: default_user_agent(),
             linked_file_max_bytes: super::fetch::LINKED_FILE_MAX_BYTES,
+            menu: Vec::new(),
         }
     }
 }

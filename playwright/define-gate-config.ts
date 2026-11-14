@@ -50,6 +50,8 @@ interface ViteHarnessServer {
 interface MossPreviewServer {
   srcDir: string;
   port: number;
+  /** Rebuild on every source change, for a gate that edits the site while it is served. */
+  watch?: boolean;
 }
 
 type GateServer = ScratchHttpServer | ScratchHttpServer[] | ViteHarnessServer | MossPreviewServer;
@@ -89,7 +91,7 @@ function toWebServerConfig(server: ScratchHttpServer | ViteHarnessServer | MossP
     // `run_headless_build` blocks forever under `--serve` (ctrl-C to stop),
     // exactly the shape Playwright's webServer wants.
     return {
-      command: `"${MOSS_BIN}" build "${server.srcDir}" --serve --no-plugins`,
+      command: `"${MOSS_BIN}" build "${server.srcDir}" --serve --no-plugins${server.watch ? ' --watch' : ''}`,
       cwd: repoRoot,
       url: `http://127.0.0.1:${server.port}/__moss_health/`,
       reuseExistingServer: false as const,

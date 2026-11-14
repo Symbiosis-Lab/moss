@@ -15,12 +15,24 @@
  * Then the editor follows the preview back: a page opened from the file tree
  * is shown without entering the preview's back/forward history, and a click
  * from it to the home page must still bring the editor to the home page's file.
+ * And a click in the page while the editor shows a file that is no page (the
+ * footer) leaves that file alone, while a double click opens the page's own
+ * file at the place clicked. In a `:::grid` of the built page, a double click
+ * on a column's second line puts the caret on that line, not the column's first.
  *
  * Then an event's `start` and `end` open the browser's own date and time
  * controls from the page properties, in the narrowest popover and in both
  * themes: leaving a value untouched keeps the file byte for byte however it
  * was written, and a chosen date and time reach the file in the form the
  * build draws.
+ *
+ * Then two new pages in a row in one folder, `Workshops`: the second is
+ * `untitled 2.md`, its address (`workshops/untitled-2/`) spells neither name,
+ * and no build has mapped it, so the editor opens it only if the address is
+ * matched back to the file.
+ *
+ * Then a folder's own page that lists its folder by name carries no
+ * missing-file mark, while an embed of a folder that does not exist does.
  *
  * Ports: playwright/gate-ports.ts, keys `browser-editor:ui` /
  * `browser-editor:preview`. Config: playwright/browser-editor.config.ts.
@@ -56,11 +68,18 @@ test.beforeEach(async () => {
   site = realpathSync(mkdtempSync(join(tmpdir(), 'moss-browser-editor-site-')));
   home = realpathSync(mkdtempSync(join(tmpdir(), 'moss-browser-editor-home-')));
   mkdirSync(join(home, 'moss'));
-  writeFileSync(join(site, 'index.md'), '---\ntitle: Garden\n---\nHello garden.\n\n![[doc.pdf]]\n\n[Talk](talk.md)\n');
+  writeFileSync(join(site, 'index.md'), '---\ntitle: Garden\n---\nHello garden.\n\n![[doc.pdf]]\n\n[Talk](talk.md)\n\n[To the workshops](/workshops/)\n\n' +
+    ':::grid 2\nBeds are dug in March.\n\nSeeds go in by April.\n+++\nWater comes from the well.\n\nThe well is closed in winter.\n:::\n');
   for (const [name, text] of Object.entries(EVENTS)) writeFileSync(join(site, name), text);
   writeFileSync(join(site, 'doc.pdf'), ONE_PAGE_PDF);
+  writeFileSync(join(site, 'footer.md'), 'Tended by hand.\n');
   mkdirSync(join(site, 'events'));
+  mkdirSync(join(site, 'Workshops'));
+  writeFileSync(join(site, 'Workshops', 'index.md'), '---\ntitle: Workshops\n---\nAll workshops.\n');
   writeFileSync(join(site, 'events', 'reading-circle.md'), '---\ntitle: Reading circle\n---\nWe read together.\n\n[Back home](/)\n');
+  mkdirSync(join(site, 'meetings'));
+  writeFileSync(join(site, 'meetings', 'meetings.md'), '---\ntitle: Meetings\n---\nOurs:\n\n![[meetings/|style:summary]]\n\nGone:\n\n![[nowhere/|style:summary]]\n');
+  writeFileSync(join(site, 'meetings', 'first.md'), '---\ntitle: First\n---\nThe first meeting.\n');
   // MOSS_HOME and the search root keep the binary from finding, or handing
   // the folder to, an installed desktop app.
   server = spawn(MOSS_BIN, ['edit', site, '--serve', '--no-browser', '--port', String(gatePort('browser-editor:ui'))], {
@@ -175,6 +194,65 @@ test('the browser editor boots, saves, opens a sandboxed PDF in the file viewer,
     await expect.poll(openFile, { timeout: 15_000, message: 'the file the editor shows once the preview is home' }).toContain('index.md');
     await expect(editor.locator('.cm-content')).toContainText('Hello garden');
   });
+
+  const caretLine = () => editor.evaluate(() => {
+    const at = getSelection()?.anchorNode;
+    return (at instanceof Element ? at : at?.parentElement)?.closest('.cm-line')?.textContent ?? '';
+  });
+
+  await test.step('a double click in the page brings the editor back from another file', async () => {
+    // The footer is no page of its own: the preview stays on the home page.
+    // The footer asks before it opens; answered "don't ask again" here.
+    await editor.evaluate(() => localStorage.setItem('moss.specialFile.skipConfirm.footer', '1'));
+    // The root crumb toggles the list: open it only when it is closed.
+    if ((await editor.locator('.seg[data-path="footer.md"]').count()) === 0) await editor.click('.seg.bc[data-path=""]');
+    await editor.click('.seg[data-path="footer.md"]');
+    // The editor's own address names a file only when the preview follows to it, so the text is read.
+    await expect(editor.locator('.cm-content')).toContainText('Tended by hand', { timeout: 15_000 });
+    await page.waitForTimeout(500); // the settle after the footer reveal
+
+    // One click points at nothing in the footer's text.
+    await preview.click('p:has-text("Hello garden")');
+    await page.waitForTimeout(700);
+    expect(await editor.locator('.cm-reveal-flash').count(), 'lines washed in the footer file').toBe(0);
+    await expect(editor.locator('.cm-content')).toContainText('Tended by hand');
+
+    await preview.dblclick('p:has-text("Hello garden")');
+    await expect(editor.locator('.cm-content'), 'the file the editor shows after the double click').toContainText('Hello garden', { timeout: 15_000 });
+    await expect.poll(caretLine, { timeout: 15_000, message: 'the line the caret is on' }).toContain('Hello garden');
+  });
+
+  await test.step("a double click on a grid column's second line puts the caret on that line", async () => {
+    // The build marks a column with its range and each line in it with its own line.
+    const secondLine = preview.locator('.moss-grid-card[data-source-range]').nth(1).locator('p[data-source-line]').nth(1);
+    await expect(secondLine).toHaveText('The well is closed in winter.');
+    await page.waitForTimeout(500); // page clicks wait while the editor settles on the file the last step loaded
+    await secondLine.dblclick();
+    await expect.poll(caretLine, { timeout: 15_000, message: "the line the caret is on in the grid's second column" }).toContain('The well is closed in winter');
+  });
+
+  await test.step('a second new page in a folder opens in the editor', async () => {
+    const openFile = () => editor.evaluate(() => decodeURIComponent(location.search));
+    // Reached as a visitor would: the editor follows the preview into the folder.
+    await preview.click('a:has-text("To the workshops")');
+    await expect.poll(openFile, { timeout: 15_000 }).toContain('Workshops/index.md');
+    await editor.hover('#editor-create-btn');
+    await expect(editor.locator('#editor-create-btn')).toHaveAttribute('data-tooltip', /Workshops/);
+    await editor.click('#editor-create-btn');
+    await expect.poll(openFile, { timeout: 15_000 }).toContain('Workshops/untitled.md');
+    // The preview follows to the new page's address and the shell asks what backs it.
+    const backing = page.waitForResponse(
+      (r) => r.url().endsWith('/resolve_page_source') && (r.request().postData() ?? '').includes('workshops/untitled-2'),
+      { timeout: 30_000 },
+    );
+    await editor.click('#editor-create-btn');
+    await expect.poll(openFile, { timeout: 15_000 }).toContain('Workshops/untitled 2.md');
+    expect((await (await backing).json()).source_path, 'the file behind the new address').toMatch(/Workshops\/untitled 2\.md$/);
+    await expect(editor.locator('body')).not.toContainText('No page to edit');
+    await editor.click('.cm-content');
+    await page.keyboard.type('Second new page.');
+    await expect.poll(() => readFileSync(join(site, 'Workshops', 'untitled 2.md'), 'utf8'), { timeout: 15_000 }).toContain('Second new page.');
+  });
 });
 
 test("an event's start and end open date and time controls that write what the build reads", async ({ page }, testInfo) => {
@@ -277,4 +355,15 @@ test("an event's start and end open date and time controls that write what the b
   expect(file()).toBe(fair(''));
   await page.keyboard.press('Enter');
   await expect.poll(file, { timeout: 15_000 }).toBe(fair(`start: ${today}\n`));
+});
+
+test("a folder's own page listing its folder by name is not marked missing", async ({ page }) => {
+  const { editor } = await openEditor(page);
+  await editor.click('.seg.bc[data-path=""]');
+  await editor.click('.seg[data-path="meetings"]:not(.bc)');
+  await editor.click('.seg[data-path="meetings/meetings.md"]');
+  const marked = (target: string) => editor.locator(`.cm-line:has-text("![[${target}/") .cm-problem--blocks`);
+  // The missing folder's mark shows the resolver has answered for this page.
+  await expect(marked('nowhere')).not.toHaveCount(0, { timeout: 30_000 });
+  await expect(marked('meetings')).toHaveCount(0);
 });

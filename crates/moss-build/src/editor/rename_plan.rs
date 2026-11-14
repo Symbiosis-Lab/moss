@@ -38,7 +38,7 @@ use moss_core::resolve::md_extract::{extract_md_references, extract_structural_a
 use moss_core::resolve::fuzzy_path::{
     percent_decoded_fallback, resolve_reference, ResolvedRef,
 };
-use moss_core::resolve::reference::{classify_reference, ReferenceContext, ReferenceKind};
+use moss_core::resolve::reference::{classify_reference, classify_reference_verdict, ReferenceContext, ReferenceKind};
 
 use crate::build::folder_index::NoUrlIndex;
 use crate::editor::ref_rewrite::{
@@ -89,8 +89,10 @@ pub struct RenamePlan {
     /// each file under a moved folder and its carried home page.
     #[serde(default)]
     pub file_moves: Vec<(String, String)>,
-    /// One entry per link left as authored because only the resolver's name
-    /// search finds its file: the referencing file, at its post-move path.
+    /// One entry per link to a moved file that was left as authored, for
+    /// the person to check: the referencing file, at its post-move path.
+    /// Either only the resolver's name search finds its file, or it is a
+    /// folder note's embed of its own folder that no spelling reaches now.
     #[serde(default)]
     pub left_as_written: Vec<String>,
 }
@@ -406,15 +408,19 @@ fn plan_one_ref(
     // never returns a bare directory — its folder-note step always resolves
     // through to a FILE (the folder's home page) — so a PageGraph reference
     // is never itself "a directory" to retarget.
-    let (t, target_is_dir) = match route {
-        _ if served.is_some() => (served.as_ref().map(|s| s.page.clone()), false),
+    //
+    // `own_folder_parent`: a folder note's `![[Opera/]]` names its own folder,
+    // spelled from the folder's parent.
+    let (t, target_is_dir, own_folder_parent) = match route {
+        _ if served.is_some() => (served.as_ref().map(|s| s.page.clone()), false, None),
         RefRoute::AssetOrEmbed => {
-            let resolved = classify_reference(raw_text, from_source_pre, true, ctx_pre);
+            let verdict = classify_reference_verdict(raw_text, from_source_pre, true, ctx_pre);
             let is_dir =
-                matches!(resolved.kind, ReferenceKind::FolderListing | ReferenceKind::FolderIndexIframe);
-            (resolved.target_path, is_dir)
+                matches!(verdict.resolved.kind, ReferenceKind::FolderListing | ReferenceKind::FolderIndexIframe);
+            let parent = verdict.anchored_from.filter(|_| is_dir).map(|anchor| dirname(&anchor).to_string());
+            (verdict.resolved.target_path, is_dir, parent)
         }
-        RefRoute::PageGraph => (resolve_by_route(route, raw_text, from_source_pre, ctx_pre, graph_pre), false),
+        RefRoute::PageGraph => (resolve_by_route(route, raw_text, from_source_pre, ctx_pre, graph_pre), false, None),
     };
     let Some(t) = t else {
         // Unresolved before the move: leave it alone (case 4 of the
@@ -448,7 +454,7 @@ fn plan_one_ref(
     let exact_of = |from_dir: &str, target: &str| exact_style_of_text(base_text, from_dir, target, target_is_dir, wiki);
     let exact = match served {
         Some(_) => Some(ExactStyle::root_address(base_text.ends_with('/'))),
-        None if synthetic_auto_index => None,
+        None if synthetic_auto_index || own_folder_parent.is_some() => None,
         None => exact_of(dirname(from_source_pre), &t),
     };
     // A markdown path that names no file exactly (from the page, from the
@@ -552,7 +558,11 @@ fn plan_one_ref(
     // Attempt 1: same authored shape for a reference that was never an exact
     // path (a bare name, a suffix match). `verify` (against the POST-move
     // context) confirms the result; correctness is never assumed.
-    if let Some(full) = match_and_retarget(base_text, &retarget_t, &retarget_map_t, target_is_dir)
+    let (shape_t, shape_map_t) = match &own_folder_parent {
+        Some(parent) => (relative_root_path(parent, &t), relative_root_path(dirname(from_dir_post), &map_t)),
+        None => (retarget_t.clone(), retarget_map_t.clone()),
+    };
+    if let Some(full) = match_and_retarget(base_text, &shape_t, &shape_map_t, target_is_dir)
         .and_then(|c| render(&c))
     {
         if verify(&full) {
@@ -565,9 +575,12 @@ fn plan_one_ref(
     if target_is_dir {
         doc_rel.push('/');
     }
-    if let Some(full) = render(&doc_rel) {
-        if verify(&full) {
-            return Ok(Some(full));
+    // The page's own folder has no relative spelling here: a lone `/` is the site root.
+    if doc_rel != "/" {
+        if let Some(full) = render(&doc_rel) {
+            if verify(&full) {
+                return Ok(Some(full));
+            }
         }
     }
 
@@ -584,6 +597,12 @@ fn plan_one_ref(
         }
     }
 
+    // A note moved out of its folder no longer names that folder in any
+    // spelling the build lists: the embed stays as written, and is reported.
+    if own_folder_parent.is_some() && !(wiki && map_t.contains(WIKI_UNWRITABLE)) {
+        left_as_written.push(from_source_post.to_string());
+        return Ok(None);
+    }
     Err(no_rewrite())
 }
 

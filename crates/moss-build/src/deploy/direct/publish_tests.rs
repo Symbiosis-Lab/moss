@@ -415,3 +415,21 @@ async fn a_site_file_whose_path_leaves_the_destination_is_refused() {
     assert!(refused.contains("../escape.html"), "{refused}");
     assert!(read(out.path(), RECORD_NAME).is_none(), "refused before anything was written");
 }
+
+#[tokio::test]
+async fn a_plain_file_host_is_sent_no_members_only_file() {
+    let out = tempfile::tempdir().unwrap();
+    let dest = FolderDestination::new(out.path()).unwrap();
+    let built = site(&[
+        ("index.html", "home"),
+        ("post/index.html", "public part"),
+        ("_gated/post/index.html", "members part"),
+        ("_gated/map/rows.csv", "members rows"),
+    ]);
+
+    let done = publish_to(&dest, &built).await.unwrap();
+
+    assert_eq!(done, Published { uploaded: 2, removed: 0 });
+    assert_eq!(recorded(out.path()), set(&["index.html", "post/index.html"]));
+    assert!(!out.path().join("_gated").exists());
+}

@@ -192,6 +192,7 @@ async fn push_site_inner_impl(
     // never deployed) falls through to the normal path for back-compat.
     let probe_phase = crate::build::phase::PhaseTrace::start("live_generation");
     let server_says = client.get_live_generation(&site_id).await.ok().flatten();
+    let has_gated = crate::build::emit::members::has_gated(&manifest);
     if server_says.as_deref() == Some(sealed.generation_id()) {
         log::info!("deploy: generation {} already live on server, skipping deploy", sealed.generation_id());
         return Ok(settle_already_live(sealed, cx, environment, server_says.as_deref()).await);
@@ -199,8 +200,33 @@ async fn push_site_inner_impl(
     drop(probe_phase);
 
     let site_dir = MossPaths::new(folder_path).generation_dir(sealed.generation_id());
-    let sizes = upload::regular_file_sizes(&site_dir, &manifest).await?;
-    let diff = super::profile::sync(client.sync_manifest(&site_id, &manifest, &sizes, sealed.generation_id())).await?;
+    let mut sizes = upload::regular_file_sizes(&site_dir, &manifest).await?;
+    // Only a server that says it serves the gated files to members alone is
+    // sent them. One that answers without saying so, or refuses them, gets
+    // the public files; any other failure is the publish's own.
+    let mut cannot_gate = false;
+    let mut diff = super::profile::sync(async {
+        let answer = client.sync_manifest(&site_id, &manifest, &sizes, sealed.generation_id()).await;
+        cannot_gate = match &answer {
+            Ok(answer) => answer.gated != Some(true),
+            Err(refusal) => matches!(refusal, crate::seta::client::SetaError::GatedNotEnforceable { .. }),
+        };
+        answer
+    }).await;
+    // The public files are a generation of their own, named by their own
+    // hash, so no id ever stands for two sets of files.
+    let mut generation = sealed.generation_id().to_string();
+    if has_gated && cannot_gate {
+        manifest = crate::build::emit::members::public_files(&manifest);
+        sizes.retain(|path, _| manifest.contains_key(path));
+        generation = crate::build::assets::paths::compute_manifest_generation_id(&manifest);
+        if server_says.as_deref() == Some(generation.as_str()) {
+            return Ok(settle_already_live(sealed, cx, environment, server_says.as_deref()).await);
+        }
+        diff = super::profile::sync(client.sync_manifest(&site_id, &manifest, &sizes, &generation)).await;
+    }
+    super::profile::count("manifest_kb", sizes.values().sum::<u64>().div_ceil(1024));
+    let diff = diff?;
 
     if !diff.needs_commit() {
         return Ok(settle_already_live(sealed, cx, environment, server_says.as_deref()).await);
@@ -242,7 +268,7 @@ async fn push_site_inner_impl(
     // generation directory; without it, sync and upload land in
     // generations/_default/ while the commit targets generations/<16-hex>/
     // (an empty dir), which fails the 422 completeness gate.
-    let generation_id_str = sealed.generation_id().to_string();
+    let generation_id_str = generation.clone();
 
 
     // The bytes to upload, from the sizes the sync sent (regular files only —
@@ -520,10 +546,10 @@ async fn push_site_inner_impl(
     sink.stage(progress::DeployStage::Committing, 0, 0, "Making changes live...");
     log::info!(
         "deploy: shipping generation {} ({} files)",
-        sealed.generation_id(),
+        generation,
         manifest.len()
     );
-    let commit_result = super::profile::commit(client.commit_sync(&site_id, &manifest, sealed.generation_id())).await?;
+    let commit_result = super::profile::commit(client.commit_sync(&site_id, &manifest, &generation)).await?;
     let _after_publish = crate::build::phase::PhaseTrace::start("after_publish");
 
     // Record what just went live, so the NEXT publish can say what it will
@@ -569,7 +595,7 @@ async fn push_site_inner_impl(
             environment.clone(),
             &site_id,
             &folder_path_str,
-            sealed.generation_id(),
+            &generation,
             &page_summary,
         )
         .await;
@@ -661,7 +687,7 @@ async fn push_site_inner_impl(
             url: subdomain_url,
             deployed_at,
             dns_target: moss_dns_target,
-            generation_id: Some(sealed.generation_id().to_string()),
+            generation_id: Some(generation.clone()),
             // No site_url: moss derives it from site_id at build time.
             ..Default::default()
         },
@@ -1524,6 +1550,110 @@ mod tests {
         assert_eq!(body["sizes"], serde_json::json!({ "index.html": page.len() }), "regular files only");
         let bytes_total = recorder.take().iter().find_map(|e| e.bytes_total);
         assert_eq!(bytes_total, Some(page.len() as f64), "the upload counts the sizes the sync sent");
+    }
+
+    /// Publish a generation holding one page and the members-only copy of a
+    /// data file against `responses`: the outcome, and request `capture`.
+    async fn gated_publish(responses: Vec<&'static [u8]>, capture: usize) -> (Result<PushResult, String>, Option<serde_json::Value>) {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_url = std::env::var("MOSS_SETA_URL").ok();
+        let (addr, captured) = mock_seta_sequence_capturing_at(responses, capture).await;
+        std::env::set_var("MOSS_SETA_URL", format!("http://{addr}"));
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut pending = PendingManifest::for_build(SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(dir.path()));
+        pending.register(&ServedPath::from_source("index.html").unwrap(), b"home", HashBucket::Files);
+        pending.register(&ServedPath::from_source("map/rows.csv").unwrap().gated(), b"rows", HashBucket::Files);
+        let sealed = pending.seal();
+        let gen_dir = MossPaths::new(dir.path()).generation_dir(sealed.generation_id());
+        std::fs::create_dir_all(gen_dir.join("_gated/map")).unwrap();
+        std::fs::write(gen_dir.join("index.html"), b"home").unwrap();
+        std::fs::write(gen_dir.join("_gated/map/rows.csv"), b"rows").unwrap();
+
+        let identity = Identity::generate().expect("generate identity");
+        let sink = progress::silent();
+        let spy = SpyPorts::default();
+        let events_lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let cx = PushContext { folder_path: dir.path(), identity: &identity, site_id: "gated-test", sink: &sink, ports: &spy, events_lock: &events_lock };
+        let result = push_site_inner(&sealed, &cx).await.map_err(|e| e.to_string());
+        match prev_url {
+            Some(u) => std::env::set_var("MOSS_SETA_URL", u),
+            None => std::env::remove_var("MOSS_SETA_URL"),
+        }
+        let sent = tokio::time::timeout(std::time::Duration::from_millis(500), captured).await;
+        let body = sent.ok().and_then(Result::ok).map(|request: Vec<u8>| {
+            serde_json::from_slice(&request[request.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4..]).unwrap()
+        });
+        (result, body)
+    }
+
+    fn json_refusal(status: &str, body: &str) -> &'static [u8] {
+        let response = format!("HTTP/1.1 {status}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+        Box::leak(response.into_bytes().into_boxed_slice())
+    }
+
+    const NO_LIVE_GENERATION: &[u8] = b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}";
+    const PUT_OK: &[u8] = b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+    const COMMITTED: &[u8] = b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 99\r\n\r\n{\"url\":\"https://gated-test.mosspub.com\",\"files_updated\":1,\"files_removed\":0,\"timestamp\":1700000000}";
+
+    /// A server that answers without saying it serves gated files to members
+    /// alone, an older one or one that refuses them, is sent the public files only.
+    #[tokio::test]
+    async fn a_server_that_cannot_gate_is_sent_the_public_files_only() {
+        for first_sync in [
+            json_200(r#"{"need":["index.html","_gated/map/rows.csv"],"remove":[]}"#),
+            json_refusal("422 Unprocessable Entity", r#"{"error":"this server does not serve subscribers-only files","code":"gated_not_enforceable"}"#),
+        ] {
+            let second_sync = json_200(r#"{"need":["index.html"],"remove":[]}"#);
+            let (result, commit) = gated_publish(vec![NO_LIVE_GENERATION, first_sync, second_sync, PUT_OK, COMMITTED], 4).await;
+            assert!(result.is_ok(), "{result:?}");
+            let commit = commit.expect("the commit was sent");
+            assert_eq!(commit["manifest"].as_object().unwrap().keys().collect::<Vec<_>>(), ["index.html"]);
+            assert!(commit.get("gated").is_none(), "{commit}");
+            let public: std::collections::HashMap<String, String> = serde_json::from_value(commit["manifest"].clone()).unwrap();
+            let public_id = crate::build::assets::paths::compute_manifest_generation_id(&public);
+            assert_eq!(commit["generation_id"], public_id, "the public files are a generation of their own");
+
+            // Live on that generation, the same build publishes nothing more.
+            let live: &'static [u8] = json_200(&format!(r#"{{"generation_id":"{public_id}","deployed_at":1790258580}}"#));
+            let (result, third) = gated_publish(vec![live, first_sync, second_sync], 2).await;
+            assert!(result.is_ok(), "{result:?}");
+            assert!(third.is_none(), "nothing is synced a second time: {third:?}");
+        }
+    }
+
+    /// A sync that fails for another reason fails the publish: nothing says
+    /// the server cannot gate, so its live gated files are not replaced.
+    #[tokio::test]
+    async fn a_sync_that_fails_for_another_reason_sends_nothing() {
+        let refused = json_refusal("403 Forbidden", r#"{"error":"subscription_expired"}"#);
+        let second_sync = json_200(r#"{"need":["index.html"],"remove":[]}"#);
+        let (result, second) = gated_publish(vec![NO_LIVE_GENERATION, refused, second_sync], 2).await;
+        assert!(result.is_err(), "{result:?}");
+        assert!(second.is_none(), "no public-only sync follows: {second:?}");
+    }
+
+    /// A server error is no answer about gating: the one sync, retried to its
+    /// four attempts, fails the publish, and no public-only sync follows.
+    #[tokio::test]
+    async fn a_server_error_on_sync_fails_the_publish_after_one_sync() {
+        let failed = json_refusal("500 Internal Server Error", "{}");
+        let second_sync = json_200(r#"{"need":["index.html"],"remove":[]}"#);
+        let responses = [vec![NO_LIVE_GENERATION], vec![failed; 4], vec![second_sync]].concat();
+        let (result, second) = gated_publish(responses, 5).await;
+        assert!(result.is_err(), "{result:?}");
+        assert!(second.is_none(), "no public-only sync follows: {second:?}");
+    }
+
+    /// A server that says it gates is sent the gated file and its policy.
+    #[tokio::test]
+    async fn a_server_that_gates_is_sent_the_gated_files_and_their_policy() {
+        let sync = json_200(r#"{"need":["index.html","_gated/map/rows.csv"],"remove":[],"gated":true}"#);
+        let (result, commit) = gated_publish(vec![NO_LIVE_GENERATION, sync, PUT_OK, PUT_OK, COMMITTED], 4).await;
+        assert!(result.is_ok(), "{result:?}");
+        let commit = commit.expect("the commit was sent");
+        assert!(commit["manifest"].get("_gated/map/rows.csv").is_some(), "{commit}");
+        assert_eq!(commit["gated"], serde_json::json!({ "_gated/map/rows.csv": { "access": "subscribers", "fallback": "unauthorized" } }));
     }
 
     /// A needed file the sync sent no size for fails its upload with a plain

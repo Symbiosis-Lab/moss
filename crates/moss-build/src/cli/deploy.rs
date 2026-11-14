@@ -502,7 +502,7 @@ fn removed_by_author(folder: &str) -> String {
         .removed_addresses(folder)
         .unwrap_or_default()
         .into_iter()
-        .filter(|r| r.reason != RemovalReason::Unexplained)
+        .filter(|r| !r.reason.refuses())
         .collect();
     if gone.is_empty() {
         return String::new();

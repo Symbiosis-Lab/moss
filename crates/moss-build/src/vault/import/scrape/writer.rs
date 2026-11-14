@@ -15,6 +15,7 @@ use super::design::norm_url;
 use url::Url;
 
 use super::scope::UrlScope;
+use crate::vault::import::items::ImportedPages;
 
 /// THE filename policy for everything the importer writes — one authority, so
 /// a caller cannot pick the weaker of two.
@@ -175,23 +176,55 @@ pub(crate) struct PendingPage {
     pub source: String,
     content: tempfile::TempPath,
     pub imported: bool,
+    /// The page's own `origin:`, which says which page of the folder it is.
+    origin: Option<String>,
 }
 
 impl PendingPage {
     pub fn new(source: &str, content: &str, imported: bool) -> Result<Self, String> {
         let mut spool = tempfile::NamedTempFile::new().map_err(|e| format!("Cannot spool imported page: {e}"))?;
         spool.write_all(content.as_bytes()).map_err(|e| format!("Cannot spool imported page: {e}"))?;
-        Ok(Self { source: source.to_string(), content: spool.into_temp_path(), imported })
+        let origin = if imported { field(&moss_core::frontmatter::frontmatter_map(content), "origin") } else { None };
+        Ok(Self { source: source.to_string(), content: spool.into_temp_path(), imported, origin })
     }
+
+    /// The address that names this page: its `origin:`, or for a failed
+    /// fetch's placeholder, the address it failed on.
+    pub fn identity(&self) -> Option<String> {
+        origin_key(self.origin.as_deref().unwrap_or(&self.source))
+    }
+}
+
+fn field(fields: &HashMap<String, serde_yaml::Value>, key: &str) -> Option<String> {
+    fields.get(key).and_then(moss_core::frontmatter::value_as_string)
+}
+
+/// An imported page's address as one key: the scheme, a leading `www.`, the
+/// fragment and a trailing slash do not make two pages.
+pub(crate) fn origin_key(address: &str) -> Option<String> {
+    let url = Url::parse(address.trim()).ok()?;
+    let host = super::scope::bare_host(url.host_str()?);
+    let port = url.port().map(|p| format!(":{p}")).unwrap_or_default();
+    let query = url.query().map(|q| format!("?{q}")).unwrap_or_default();
+    Some(format!("{host}{port}{}{query}", url.path().trim_end_matches('/')))
 }
 
 /// The crawl's final addresses, including collisions with existing author files.
 pub(crate) struct OutputPaths {
     pub pages: HashMap<String, String>,
+    /// Pages the folder already had, and whether this import wrote them: an
+    /// import adds only the fields they lack.
+    kept: HashMap<String, bool>,
 }
 
 impl OutputPaths {
+    #[cfg(test)]
     pub fn reserve(folder: &Path, scope: &UrlScope, pages: &[PendingPage]) -> Result<Self, String> {
+        Self::reserve_with(folder, scope, pages, &ImportedPages::scan(folder))
+    }
+
+    /// One origin, one page: a page the folder already has keeps its file.
+    pub fn reserve_with(folder: &Path, scope: &UrlScope, pages: &[PendingPage], held: &ImportedPages) -> Result<Self, String> {
         let proposed: Vec<String> = pages.iter().map(|p| url_to_file_path(&p.source, scope)).collect();
         let desired: Vec<String> = pages.iter().zip(&proposed).map(|(page, proposed_path)| {
             let leaf = proposed_path.strip_suffix("/index.md").filter(|folder| {
@@ -217,10 +250,19 @@ impl OutputPaths {
             }
         }
         let mut reserved = HashMap::new();
+        let mut kept = HashMap::new();
         for (page, desired) in pages.iter().zip(&desired) {
-            let relative = available_path(desired, |candidate| {
-                folder.join(candidate).exists() || occupied.contains(&normalize_path(candidate))
-            });
+            let existing = page.identity().and_then(|key| held.get(&key));
+            let relative = match existing {
+                Some(held) => {
+                    // A stub is replaced; a page is kept, and a failed fetch never covers it.
+                    if !held.placeholder { kept.insert(held.path.clone(), held.this_run); }
+                    held.path.clone()
+                }
+                None => available_path(desired, |candidate| {
+                    folder.join(candidate).exists() || occupied.contains(&normalize_path(candidate))
+                }),
+            };
             occupied.insert(normalize_path(&relative));
             if let Some(key) = source_key(&page.source) {
                 reserved.insert(key, relative);
@@ -235,11 +277,16 @@ impl OutputPaths {
                 }
             }
         }
-        Ok(Self { pages: reserved })
+        Ok(Self { pages: reserved, kept })
     }
 
     pub fn get(&self, source: &str) -> Option<&String> {
         self.pages.get(&source_key(source)?)
+    }
+
+    /// Whether `path` is a page the folder had before these pages were placed.
+    pub fn kept(&self, path: &str) -> bool {
+        self.kept.contains_key(path)
     }
 
     pub fn write(
@@ -263,6 +310,12 @@ impl OutputPaths {
             } else {
                 source
             };
+            if let Some(&this_run) = self.kept.get(relative) {
+                if page.imported {
+                    members |= add_absent_fields(folder, relative, &content, this_run).is_some_and(|merged| restricts(&merged));
+                }
+                continue;
+            }
             crate::vault::import::page::write_note(folder, relative, &content)?;
             members |= restricts(&content);
             if page.imported {
@@ -272,6 +325,47 @@ impl OutputPaths {
         if members { crate::vault::config::require_members_moss(folder)?; }
         Ok(written)
     }
+}
+
+/// Fields that decide whether, to whom or where a page shows. A page this
+/// import did not write takes them only with a body (see below).
+const PLACEMENT: &[&str] = &["draft", "members", "nav", "weight"];
+
+/// Give a page the folder already had the fields of `incoming` it lacks, and
+/// return the page as written. Every field it has stays, and so does its
+/// body, unless it has none (a restricted page a public crawl could only
+/// write empty): then it takes `incoming`'s body, and `incoming`'s `draft`
+/// and `members` replace the page's own, so a body never lands without its
+/// visibility. A page an earlier import or the author wrote never takes a
+/// placement field otherwise, so one the author removed stays removed.
+fn add_absent_fields(folder: &Path, relative: &str, incoming: &str, this_run: bool) -> Option<String> {
+    let split = |text: &str| moss_core::frontmatter::frontmatter_span(text).and_then(|s| Some((text.get(..s.body)?.to_string(), text.get(s.body..)?.to_string())));
+    let mapping: serde_yaml::Mapping = moss_core::frontmatter::frontmatter_map(incoming)
+        .into_iter().map(|(k, v)| (serde_yaml::Value::String(k), v)).collect();
+    let result = crate::build::cloud_readiness::rewrite_input(&folder.join(relative), |bytes| {
+        let existing = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
+        let body = split(incoming).map(|(_, body)| body).filter(|b| !b.trim().is_empty());
+        let body = body.filter(|_| split(existing).is_some_and(|(_, own)| own.trim().is_empty()));
+        let mapping: serde_yaml::Mapping = mapping.iter().filter(|(key, _)| {
+            let key = key.as_str().unwrap_or("");
+            this_run || !PLACEMENT.contains(&key) || (body.is_some() && matches!(key, "draft" | "members"))
+        }).map(|(k, v)| (k.clone(), v.clone())).collect();
+        let (fields, _) = moss_core::frontmatter_typed::project_typed(&mapping);
+        let visibility: Vec<moss_core::frontmatter::FieldEdit> = ["draft", "members"].into_iter()
+            .filter(|_| body.is_some())
+            .filter_map(|key| Some(moss_core::frontmatter::FieldEdit::Set { key: key.into(), value: mapping.get(key)?.clone() }))
+            .collect();
+        let existing = &moss_core::frontmatter::edit_fields(existing, &visibility)?;
+        let merged = crate::vault::import::page::with_fields_absent(existing, &fields);
+        Ok(match (body, split(merged.as_deref().unwrap_or(existing))) {
+            (Some(body), Some((head, _))) => Some(format!("{}\n\n{}", head.trim_end(), body.trim_start())),
+            _ => merged.or_else(|| (existing.as_bytes() != bytes).then(|| existing.clone())),
+        })
+    });
+    result.unwrap_or_else(|e| {
+        log::warn!("import: kept {relative} as it was; could not add the fields it lacks: {e}");
+        None
+    })
 }
 
 /// Whether an older moss would publish more of this page than this one does.
@@ -467,6 +561,91 @@ mod tests {
         let error = OutputPaths::reserve(folder.path(), &scope("https://example.test/"), &pages).err().unwrap();
         assert!(error.contains("Cannot inspect import destination"), "{error}");
         assert!(error.contains("posts"), "{error}");
+    }
+
+    fn imported(origin: &str, rest: &str) -> String {
+        format!("---\ntitle: \"Post\"\n{rest}origin: \"{origin}\"\n---\n\nBody\n")
+    }
+
+    #[test]
+    fn an_address_is_one_key_whatever_its_scheme_www_slash_or_fragment() {
+        let key = origin_key("https://example.test/a/").unwrap();
+        for same in ["http://www.example.test/a", "https://EXAMPLE.test/a/#top", "https://example.test:443/a"] {
+            assert_eq!(origin_key(same).unwrap(), key, "{same}");
+        }
+        for other in ["https://example.test/a/b", "https://example.test/a?p=2", "https://other.test/a/"] {
+            assert_ne!(origin_key(other).unwrap(), key, "{other}");
+        }
+    }
+
+    /// One origin, one page: a re-import gains the descriptive fields the page
+    /// lacks, never a second copy beside it, the author's text, or a field
+    /// that decides whether it shows (the author may have removed `draft:`).
+    #[test]
+    fn a_page_the_folder_already_has_keeps_its_file_and_body_and_gains_absent_fields() {
+        let folder = tempfile::tempdir().unwrap();
+        let edited = "---\ntitle: \"My own title\"\norigin: \"https://example.test/post/\"\n---\n\nThe author's edited body.\n";
+        std::fs::write(folder.path().join("post.md"), edited).unwrap();
+        let incoming = imported("https://www.example.test/post", "date: \"2024-05-01\"\ndraft: true\nnav: true\nweight: 2\n");
+        let pages = vec![PendingPage::new("https://www.example.test/post", &incoming, true).unwrap()];
+        let paths = OutputPaths::reserve(folder.path(), &scope("https://example.test/"), &pages).unwrap();
+        let written = paths.write(folder.path(), &pages, &HashMap::new(), true).unwrap();
+        assert!(written.is_empty(), "{written:?}");
+        assert!(!folder.path().join("post 2.md").exists());
+        let after = std::fs::read_to_string(folder.path().join("post.md")).unwrap();
+        assert_eq!(after, edited.replace("---\n\nThe", "date: \"2024-05-01\"\n---\n\nThe"));
+    }
+
+    /// A page written empty takes the text an export brings, and the
+    /// `members:` that keeps it private in the same write, and the folder's
+    /// moss floor rises, so an older moss never publishes that text whole.
+    #[test]
+    fn an_empty_page_the_folder_has_takes_the_imported_body_with_its_visibility() {
+        crate::system::seed_app_version("0.15.23");
+        let folder = tempfile::tempdir().unwrap();
+        let empty = "---\ntitle: \"Post\"\norigin: \"https://example.test/post/\"\n---\n\n";
+        std::fs::write(folder.path().join("post.md"), empty).unwrap();
+        let incoming = imported("https://example.test/post/", "members: \"subscribers\"\nnav: true\n");
+        let pages = vec![PendingPage::new("https://example.test/post/", &incoming, true).unwrap()];
+        let paths = OutputPaths::reserve(folder.path(), &scope("https://example.test/"), &pages).unwrap();
+        paths.write(folder.path(), &pages, &HashMap::new(), true).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(folder.path().join("post.md")).unwrap(),
+            empty.replace("---\n\n", "members: subscribers\n---\n\nBody\n"),
+        );
+        let config = std::fs::read_to_string(folder.path().join(".moss/config.toml")).unwrap();
+        assert!(config.contains("min_moss_version"), "{config}");
+    }
+
+    /// A page served at its own address needs no redirect, however the
+    /// address is spelled.
+    #[test]
+    fn a_page_at_its_own_percent_encoded_address_gets_no_redirect() {
+        let folder = tempfile::tempdir().unwrap();
+        let site = Url::parse("https://example.test/").unwrap();
+        let pages = vec![PendingPage::new("https://example.test/%E4%BD%A0/", "Body", true).unwrap()];
+        let paths = OutputPaths::reserve(folder.path(), &scope("https://example.test/"), &pages).unwrap();
+        let mut report = Vec::new();
+        crate::vault::import::items::add_redirects(folder.path(), Some(&site), &paths, vec![("/%E4%BD%A0/".into(), "https://example.test/%E4%BD%A0/".into())], &mut report).unwrap();
+        let config = std::fs::read_to_string(folder.path().join(".moss/config.toml")).unwrap_or_default();
+        assert!(!config.contains("E4"), "{config}");
+    }
+
+    #[test]
+    fn a_failed_fetchs_placeholder_is_replaced_and_never_covers_a_page() {
+        let folder = tempfile::tempdir().unwrap();
+        let placeholder = super::super::service::render_error_markdown("https://example.test/about/", "timed out");
+        std::fs::write(folder.path().join("about.md"), &placeholder).unwrap();
+        std::fs::write(folder.path().join("post.md"), imported("https://example.test/post/", "")).unwrap();
+        let pages = vec![
+            PendingPage::new("https://example.test/about/", &imported("https://example.test/about/", ""), true).unwrap(),
+            PendingPage::new("https://example.test/post/", &super::super::service::render_error_markdown("https://example.test/post/", "timed out"), false).unwrap(),
+        ];
+        let paths = OutputPaths::reserve(folder.path(), &scope("https://example.test/"), &pages).unwrap();
+        assert_eq!(paths.write(folder.path(), &pages, &HashMap::new(), true).unwrap(), ["about.md"]);
+        assert_eq!(std::fs::read_to_string(folder.path().join("about.md")).unwrap(), imported("https://example.test/about/", ""));
+        assert_eq!(std::fs::read_to_string(folder.path().join("post.md")).unwrap(), imported("https://example.test/post/", ""));
+        assert_eq!(std::fs::read_dir(folder.path()).unwrap().count(), 2);
     }
 
     #[test]

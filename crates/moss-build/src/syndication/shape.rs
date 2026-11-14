@@ -131,7 +131,7 @@ pub fn shape_with(post: &ArticleInfo, spec: &ChannelSpec, site_url: &str, opts: 
         if spec.takes(Form::Thread) && parts.len() > 1 && parts.iter().all(|p| spec.fits(&p.text)) {
             (Form::Thread, parts, None, None)
         } else if spec.takes(Form::Long) {
-            let (mut html, included, omitted) = super::pictures::article_html(post, site_url, opts, spec.max_images());
+            let (mut html, included, omitted) = super::pictures::article_html(post, site_url, opts, spec.max_article_images());
             included_pictures = included;
             omitted_pictures = omitted;
             if opts.link_back {

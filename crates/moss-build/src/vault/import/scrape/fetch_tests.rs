@@ -72,7 +72,7 @@ fn parse_retry_after_rejects_a_past_http_date() {
 fn observe_pace_passes_the_typed_status_through_to_the_pacer() {
     let mut pacer = HostPacer::default();
     let err: Result<(), FetchError> =
-        Err(FetchError { status: Some(429), message: "429 Too Many Requests".to_string() });
+        Err(FetchError { status: Some(429), refused: false, message: "429 Too Many Requests".to_string() });
     observe_pace(&mut pacer, "example.test", &err);
     assert!(pacer.current_interval("example.test") > std::time::Duration::ZERO);
 }
@@ -88,6 +88,7 @@ fn observe_pace_matches_by_typed_status_not_message_wording() {
     let mut pacer = HostPacer::default();
     let err: Result<(), FetchError> = Err(FetchError {
         status: Some(429),
+        refused: false,
         message: "fetch failed, server said: too many requests".to_string(),
     });
     observe_pace(&mut pacer, "example.test", &err);
@@ -148,20 +149,25 @@ fn refuses_loopback_ipv6() {
 }
 
 #[test]
-fn refuses_ipv4_mapped_loopback() {
-    // ::ffff:127.0.0.1 — a common bypass for a check that only inspects
-    // the plain IPv6 loopback form.
-    refuse_unsafe_scrape_url("http://[::ffff:127.0.0.1]/")
-        .expect_err("an IPv4-mapped loopback literal must be refused");
-}
-
-#[test]
 fn refuses_link_local() {
     // 169.254.169.254 — the AWS/GCP/Azure instance-metadata address, the
     // canonical SSRF target.
     let err = refuse_unsafe_scrape_url("http://169.254.169.254/latest/meta-data/")
         .expect_err("a link-local URL must be refused");
     assert!(err.contains("link-local"), "{err}");
+}
+
+#[test]
+fn refuses_loopback_and_link_local_written_in_any_ipv6_form() {
+    for form in [
+        "::ffff:127.0.0.1", "::127.0.0.1", "64:ff9b::127.0.0.1",
+        "::ffff:169.254.169.254", "::169.254.169.254", "64:ff9b::169.254.169.254",
+    ] {
+        refuse_unsafe_scrape_url(&format!("http://[{form}]/")).expect_err(form);
+    }
+    for form in ["::ffff:93.184.216.34", "::93.184.216.34", "64:ff9b::93.184.216.34"] {
+        assert!(refuse_unsafe_scrape_url(&format!("http://[{form}]/")).is_ok(), "{form}");
+    }
 }
 
 #[test]
@@ -181,15 +187,13 @@ fn allows_a_plain_http_url() {
 
 // ── fetch_with_validated_redirects (SSRF via redirect) ──────────────
 //
-// `refuse_unsafe_scrape_url` alone only checks the URL the caller typed
-// — a public host that PASSES that check can still 302/303/307/308 to a
-// loopback/link-local target, and ureq's own redirect-follower (what
-// `proxied_ureq_agent`'s 5-redirect default drives) would walk straight
-// into it with no re-check at all. These tests exercise the manual
-// follower instead, using a mockito server as the "allowed host" that
-// issues the redirect — mockito binds to 127.0.0.1, but that is the
-// server ISSUING the 3xx, never a target these tests ask the follower to
-// fetch, so it never trips `refuse_unsafe_scrape_url` itself.
+// A public host that passes `refuse_unsafe_scrape_url` can still
+// 302/303/307/308 to a loopback/link-local target, and ureq's own
+// redirect-follower (what `proxied_ureq_agent`'s 5-redirect default
+// drives) would walk straight into it with no re-check at all. These tests
+// exercise the manual follower instead, with a `test_server` as the
+// allowed host that issues the redirect: it binds to 127.0.0.1, and only
+// that registered address is let through, so the hop meets the real policy.
 
 fn no_redirect_test_agent(url: &str) -> ureq::Agent {
     crate::system::proxy::proxied_ureq_agent_no_redirects(
@@ -211,7 +215,7 @@ fn refusal_detail(err: &ureq::Error) -> String {
 
 #[tokio::test]
 async fn a_redirect_to_loopback_is_refused() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let _m = server
         .mock("GET", "/start")
         .with_status(302)
@@ -221,19 +225,21 @@ async fn a_redirect_to_loopback_is_refused() {
 
     let start = format!("{}/start", server.url());
     let agent = no_redirect_test_agent(&start);
-    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None)
+    let refused = std::cell::Cell::new(false);
+    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None, &refused)
         .expect_err("a redirect to a loopback address must be refused");
+    assert!(refused.get(), "a refused hop is marked as the address policy's");
     // Not just `.expect_err(...)`: an ablated per-hop check would still
     // ATTEMPT the connection to 127.0.0.1:1 and get a real connection
     // error back (nothing listens there in the sandbox) — an `Err` for
     // the wrong reason. Asserting the detail is what actually
     // distinguishes "the check refused this" from "the network did".
-    assert!(refusal_detail(&err).contains("disallowed"), "{}", refusal_detail(&err));
+    assert!(refusal_detail(&err).contains("redirected to a disallowed"), "{}", refusal_detail(&err));
 }
 
 #[tokio::test]
 async fn a_redirect_to_a_mail_address_is_refused_not_a_panic() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let _m = server
         .mock("GET", "/start")
         .with_status(302)
@@ -243,15 +249,15 @@ async fn a_redirect_to_a_mail_address_is_refused_not_a_panic() {
 
     let start = format!("{}/start", server.url());
     let agent = no_redirect_test_agent(&start);
-    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None)
+    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None, &Default::default())
         .expect_err("a redirect to a mailto: address must be refused");
     let detail = refusal_detail(&err);
-    assert!(detail.contains("disallowed") && detail.contains("mailto"), "{detail}");
+    assert!(detail.contains("redirected to a disallowed") && detail.contains("mailto"), "{detail}");
 }
 
 #[tokio::test]
 async fn a_refusal_reason_that_is_not_ascii_is_carried_not_a_panic() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let _m = server
         .mock("GET", "/start")
         .with_status(302)
@@ -261,8 +267,8 @@ async fn a_refusal_reason_that_is_not_ascii_is_carried_not_a_panic() {
 
     let start = format!("{}/start", server.url());
     let agent = no_redirect_test_agent(&start);
-    let err = fetch_following_redirects(&agent, &start, "test-agent", None, None, |_| {
-        Err("refusé — not here".to_string())
+    let err = fetch_following_redirects(&agent, &start, "test-agent", None, None, |u: &str| {
+        if u == start { Ok(()) } else { Err("refusé — not here".to_string()) }
     }, |_| false)
     .expect_err("a refused hop must be an error");
     let detail = refusal_detail(&err);
@@ -271,7 +277,7 @@ async fn a_refusal_reason_that_is_not_ascii_is_carried_not_a_panic() {
 
 #[tokio::test]
 async fn a_redirect_to_link_local_metadata_is_refused() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let _m = server
         .mock("GET", "/start")
         .with_status(302)
@@ -281,18 +287,18 @@ async fn a_redirect_to_link_local_metadata_is_refused() {
 
     let start = format!("{}/start", server.url());
     let agent = no_redirect_test_agent(&start);
-    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None)
+    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None, &Default::default())
         .expect_err("a redirect to the cloud-metadata address must be refused");
     // Asserting the detail (not just "some Err") matters here: an
     // ablated check would still connect-fail refusing this unroutable
     // address in most sandboxes, which is an Err for the wrong reason —
     // see `a_redirect_to_loopback_is_refused`'s comment.
-    assert!(refusal_detail(&err).contains("disallowed"), "{}", refusal_detail(&err));
+    assert!(refusal_detail(&err).contains("redirected to a disallowed"), "{}", refusal_detail(&err));
 }
 
 #[tokio::test]
 async fn a_redirect_to_ipv6_loopback_is_refused() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let _m = server
         .mock("GET", "/start")
         .with_status(302)
@@ -302,9 +308,9 @@ async fn a_redirect_to_ipv6_loopback_is_refused() {
 
     let start = format!("{}/start", server.url());
     let agent = no_redirect_test_agent(&start);
-    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None)
+    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None, &Default::default())
         .expect_err("a redirect to ::1 must be refused");
-    assert!(refusal_detail(&err).contains("disallowed"), "{}", refusal_detail(&err));
+    assert!(refusal_detail(&err).contains("redirected to a disallowed"), "{}", refusal_detail(&err));
 }
 
 #[tokio::test]
@@ -318,7 +324,7 @@ async fn a_legitimate_redirect_is_still_followed() {
     // `refuse_unsafe_scrape_url` would refuse this hop regardless of how
     // legitimate it is (that policy is proven separately, on real
     // public URLs, by `allows_a_plain_http(s)_url` above).
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let _redirect = server
         .mock("GET", "/old-path")
         .with_status(301)
@@ -343,7 +349,7 @@ async fn a_legitimate_redirect_is_still_followed() {
 
 #[tokio::test]
 async fn a_redirect_chain_longer_than_the_hop_cap_is_refused() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let mut mocks = Vec::new();
     for i in 0..=MAX_REDIRECT_HOPS {
         mocks.push(
@@ -358,8 +364,81 @@ async fn a_redirect_chain_longer_than_the_hop_cap_is_refused() {
 
     let start = format!("{}/hop0", server.url());
     let agent = no_redirect_test_agent(&start);
-    fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None)
+    let refused = std::cell::Cell::new(false);
+    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None, &refused)
         .expect_err("a chain past MAX_REDIRECT_HOPS must be refused, not followed forever");
+    assert!(!refused.get(), "a long chain is no address refusal");
+    assert!(refusal_detail(&err).contains("too many redirects"), "{}", refusal_detail(&err));
+}
+
+// ── a fetch's first address ─────────────────────────────────────────
+//
+// Media, linked files, the logo and sitemaps are addresses a page names,
+// on any host. Each is refused before its first request, not only when a
+// redirect points there.
+
+const LINK_LOCAL: &str = "http://169.254.0.1";
+
+/// The refusal of a first address, as opposed to a refused hop or a
+/// connection that failed.
+fn refused_before_any_request(message: &str) -> bool {
+    message.starts_with("400 disallowed URL: ")
+}
+
+#[tokio::test]
+async fn a_first_address_the_validator_refuses_is_never_requested() {
+    let (address, hits) = unregistered_loopback_server();
+    let start = format!("{address}/page");
+    let agent = no_redirect_test_agent(&start);
+    let err = crate::system::redirects::get_following_redirects(
+        &agent,
+        &start,
+        "test-agent",
+        None,
+        None,
+        |u: &str| if u == start { Err("not this one".to_string()) } else { Ok(()) },
+        |next| next,
+        |_| false,
+    )
+    .expect_err("the validator refuses the first address");
+    assert_eq!(refusal_detail(&err), "disallowed URL: not this one");
+    assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn a_media_download_on_loopback_or_link_local_is_refused_unrequested() {
+    let (loopback, hits) = unregistered_loopback_server();
+    let tmp = tempfile::tempdir().unwrap();
+    for base in [loopback.as_str(), LINK_LOCAL] {
+        let err = download_asset(&format!("{base}/a.png"), tmp.path(), "test-agent", Some("https://pages.example.test/"))
+            .await
+            .expect_err(base);
+        assert!(err.is_refused() && refused_before_any_request(&err.to_string()), "{err}");
+    }
+    assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn a_linked_file_on_loopback_or_link_local_is_refused_unrequested() {
+    let (loopback, hits) = unregistered_loopback_server();
+    let tmp = tempfile::tempdir().unwrap();
+    for base in [loopback.as_str(), LINK_LOCAL] {
+        let result = download_linked_file(&format!("{base}/f.pdf"), tmp.path(), "test-agent", None, 8, "f.pdf".into()).await;
+        let err = result.err().expect(base);
+        assert!(err.is_refused() && refused_before_any_request(&err.to_string()), "{err}");
+    }
+    assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(!tmp.path().join("f.pdf").exists());
+}
+
+#[tokio::test]
+async fn a_raw_fetch_on_loopback_or_link_local_is_refused_unrequested() {
+    let (loopback, hits) = unregistered_loopback_server();
+    for base in [loopback.as_str(), LINK_LOCAL] {
+        let err = fetch_raw_bytes(&format!("{base}/sitemap.xml"), "test-agent").await.expect_err(base);
+        assert!(err.is_refused() && refused_before_any_request(&err.to_string()), "{err}");
+    }
+    assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
 // ── media Accept header (CDN content negotiation, not SSRF) ─────────
@@ -374,7 +453,7 @@ async fn a_redirect_chain_longer_than_the_hop_cap_is_refused() {
 
 #[tokio::test]
 async fn a_media_download_sends_the_media_accept_header() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let _m = server
         .mock("GET", "/content/v1/abc/def/photo.jpg")
         .match_header("accept", crate::vault::import::media::MEDIA_ACCEPT)
@@ -394,7 +473,7 @@ async fn a_media_download_sends_the_media_accept_header() {
 
 #[tokio::test]
 async fn a_media_download_sends_the_pages_origin_as_referer() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let _m = server
         .mock("GET", "/img/a.jpg")
         .match_header("referer", "http://pages.example.test/")
@@ -424,7 +503,7 @@ fn referer_is_the_origin_and_never_sent_on_a_downgrade() {
 
 #[tokio::test]
 async fn a_linked_file_over_the_cap_is_not_written_and_one_under_it_keeps_its_name() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let _big = server
         .mock("GET", "/files/big.pdf")
         .with_status(200)
@@ -462,7 +541,7 @@ fn a_linked_file_keeps_the_name_its_url_gave_it() {
 
 #[tokio::test]
 async fn a_page_fetch_keeps_the_default_accept_header() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let _m = server
         .mock("GET", "/article")
         // ureq's own default, unchanged by this fix — a page fetch must
@@ -482,7 +561,7 @@ async fn a_page_fetch_keeps_the_default_accept_header() {
 
 #[tokio::test]
 async fn a_redirect_target_on_a_ruled_host_is_rewritten_before_validation() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let _m = server
         .mock("GET", "/start")
         .with_status(302)
@@ -508,7 +587,10 @@ async fn a_redirect_target_on_a_ruled_host_is_rewritten_before_validation() {
         "test-agent",
         Some(crate::vault::import::media::MEDIA_ACCEPT),
         None,
-        move |u: &str| {
+        |u: &str| {
+            if u == start {
+                return Ok(());
+            }
             *seen_clone.lock().unwrap() = Some(u.to_string());
             Err("refused for test".to_string())
         },
@@ -526,7 +608,7 @@ async fn a_redirect_target_on_a_ruled_host_is_rewritten_before_validation() {
 
 #[tokio::test]
 async fn a_page_fetch_redirect_is_never_rewritten_even_on_a_ruled_host() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let _m = server
         .mock("GET", "/start")
         .with_status(302)
@@ -544,7 +626,10 @@ async fn a_page_fetch_redirect_is_never_rewritten_even_on_a_ruled_host() {
     // `accept: None` — a page fetch, same as `fetch_page` passes. The
     // rewrite hook must not fire just because the redirect target
     // happens to land on a host the media table rules on.
-    let err = fetch_following_redirects(&agent, &start, "test-agent", None, None, move |u: &str| {
+    let err = fetch_following_redirects(&agent, &start, "test-agent", None, None, |u: &str| {
+        if u == start {
+            return Ok(());
+        }
         *seen_clone.lock().unwrap() = Some(u.to_string());
         Err("refused for test".to_string())
     }, |_| false)
@@ -594,7 +679,7 @@ fn short_and_long_estimates_read_naturally() {
 
 #[tokio::test]
 async fn a_link_of_the_site_that_leads_off_it_is_reported_not_requested() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let _mail = server
         .mock("GET", "/mail")
         .with_status(302)
@@ -623,7 +708,7 @@ async fn a_link_of_the_site_that_leads_off_it_is_reported_not_requested() {
     let scope = super::super::scope::UrlScope::new(&format!("{}/", server.url())).unwrap();
     let destination = |path: &str| {
         let start = format!("{}{path}", server.url());
-        fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, Some(&scope))
+        fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, Some(&scope), &Default::default())
             .map(|r| crate::system::redirects::redirect_target(&r))
     };
 
@@ -631,12 +716,12 @@ async fn a_link_of_the_site_that_leads_off_it_is_reported_not_requested() {
     assert_eq!(destination("/away").unwrap().as_deref(), Some("https://other.example.test/form?ref=127.0.0.1"));
     assert_eq!(destination("/port").unwrap().as_deref(), Some("http://127.0.0.1:1/form"), "another port is off the site");
     let err = destination("/file").expect_err("any other scheme is still refused");
-    assert!(refusal_detail(&err).contains("disallowed"), "{}", refusal_detail(&err));
+    assert!(refusal_detail(&err).contains("redirected to a disallowed"), "{}", refusal_detail(&err));
 }
 
 #[tokio::test]
 async fn a_redirect_that_returns_to_an_address_it_visited_is_a_loop() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let _a = server.mock("GET", "/a").with_status(302).with_header("Location", "/b").create_async().await;
     let _b = server.mock("GET", "/b").with_status(302).with_header("Location", "/a").create_async().await;
 

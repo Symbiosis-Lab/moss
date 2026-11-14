@@ -13,7 +13,7 @@ fn assert_public(site: &site::Site) {
     let mut count = 0;
     for entry in walkdir::WalkDir::new(site.output("")) {
         let entry = entry.unwrap();
-        if !entry.file_type().is_file() { continue; }
+        if !entry.file_type().is_file() || entry.path().starts_with(site.output("_gated")) { continue; }
         let bytes = fs::read(entry.path()).unwrap();
         assert!(!bytes.windows(SECRET.len()).any(|w| w == SECRET.as_bytes()),
             "private body leaked into {}", entry.path().display());
@@ -58,7 +58,20 @@ fn members_bodies_never_reach_public_outputs_or_transclusions() {
     assert!(site.html("members/index.html").contains("class=\"moss-members\""));
     assert!(site.html("members/index.html").contains("moss-subscribe-form"));
     assert_eq!(site.html("_moss/members.json"), "{\"join\":\"open\"}");
-    assert!(!site.output("_gated").exists());
+    // A subscribers page has its whole version under the gated prefix, at the
+    // same path; a paid page has none, since no host can check a paid reader.
+    let whole = site.html("_gated/members/index.html");
+    assert!(whole.contains(SECRET) && whole.contains("Visible preview."));
+    assert!(!whole.contains("class=\"moss-members\""), "the whole version asks nobody to subscribe");
+    assert!(site.html("_gated/no-preview/index.html").contains(SECRET));
+    assert!(!site.output("_gated/paid").exists());
+    let manifest = manifest_of(&site);
+    let gated = moss_build::build::emit::members::gated_entries(&manifest);
+    assert_eq!(
+        serde_json::to_value(gated.get("_gated/members/index.html")).unwrap(),
+        serde_json::json!({ "access": "subscribers", "fallback": "projection" })
+    );
+    assert!(gated.keys().all(|path| manifest.contains_key(path.strip_prefix("_gated/").unwrap())), "every gated page has its public version");
     assert!(site.html("_moss/source/members.md").contains("Visible preview."));
     assert!(site.html("_moss/source/paid.md").contains("Paid public preview."));
     // The author's source retains the full body.
@@ -288,4 +301,215 @@ fn publishing_a_members_generation_sets_the_folder_floor() {
             assert_eq!(raw["schema_version"].as_integer(), Some(7), "the stamp a moss from before the floor refuses: {text}");
         }
     }
+}
+
+const ROW: &str = "harbour-row-sentinel-552901";
+const PAID_ROW: &str = "ledger-row-sentinel-118734";
+
+/// Every file a visitor can fetch without the gate: the whole output outside
+/// the gated prefix, the published source copy included.
+fn public_bytes(site: &site::Site) -> Vec<(String, Vec<u8>)> {
+    let root = site.output("");
+    walkdir::WalkDir::new(&root).into_iter().map(Result::unwrap).filter(|e| e.file_type().is_file())
+        .map(|e| (e.path().strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/"), fs::read(e.path()).unwrap()))
+        .filter(|(rel, _)| !rel.starts_with("_gated/"))
+        .collect()
+}
+
+fn assert_absent(site: &site::Site, secret: &str) {
+    let files = public_bytes(site);
+    assert!(files.len() > 10, "must inspect a real site's served files");
+    for (rel, bytes) in &files {
+        assert!(!bytes.windows(secret.len()).any(|w| w == secret.as_bytes()), "{secret} leaked into {rel}");
+    }
+    let search = moss_build::build::feeds::search::build_search_index(&site.output("")).unwrap();
+    for file in search.files.iter().filter(|f| f.rel_path.starts_with("fragment/")) {
+        let mut decoded = String::new();
+        flate2::read::GzDecoder::new(&file.bytes[..]).read_to_string(&mut decoded).unwrap();
+        assert!(!decoded.contains(secret), "{secret} in search fragment {}", file.rel_path);
+    }
+}
+
+fn manifest_of(site: &site::Site) -> std::collections::HashMap<String, String> {
+    let hashes = fs::read_to_string(site.root.join(".moss/build.nosync/hashes.json")).unwrap();
+    let hashes: serde_json::Value = serde_json::from_str(&hashes).unwrap();
+    hashes["files"].as_object().unwrap().iter().map(|(k, v)| (k.clone(), v.as_str().unwrap().to_string())).collect()
+}
+
+const MAP_SITE: &[(&str, &str)] = &[
+    (".moss/config.toml", CONFIG),
+    ("index.md", "---\ntitle: Harbour watch\n---\nWelcome.\n"),
+    ("maps/index.md", "---\ntitle: Map\n---\nLevels by region.\n\n![[regions.csv]]\n"),
+    ("maps/regions.csv", "name,level\nNorth quay,2\n"),
+    ("maps/incidents/index.md", "---\npartial: true\ncascade: { members: subscribers }\n---\n"),
+    ("maps/incidents/incidents.csv", "place,date,what\nNorth quay,2026-01-04,harbour-row-sentinel-552901\n"),
+    ("maps/incidents/by-region.json", "{\"north-quay\":[\"harbour-row-sentinel-552901\"]}"),
+    ("maps/incidents/report.md", "---\ntitle: Report\ndate: 2026-01-05\n---\nWhat happened, row by row.\n\n![[incidents.csv]]\n"),
+    ("ledger/index.md", "---\ntitle: Ledger\ncascade: { members: paid }\n---\nLedger.\n"),
+    ("ledger/ledger.csv", "entry\nledger-row-sentinel-118734\n"),
+];
+
+#[test]
+fn a_data_file_under_a_members_cascade_is_published_only_under_the_gated_prefix() {
+    let site = site::Site::new(MAP_SITE);
+    for name in ["incidents.csv", "by-region.json"] {
+        let gated = site.html(&format!("_gated/maps/incidents/{name}"));
+        assert!(gated.contains(ROW), "the gated copy holds the file whole");
+        assert!(!site.output(&format!("maps/incidents/{name}")).exists(), "no public copy of {name}");
+    }
+    assert!(site.html("maps/regions.csv").contains("North quay"), "a file outside the cascade is public");
+    // A page under the same cascade may embed the gated file: the table is in
+    // its members-only version and nowhere else.
+    let report = site.html("_gated/maps/incidents/report/index.html");
+    assert!(report.contains(ROW) && report.contains("<table"), "the gated page draws the gated table");
+    assert!(!site.html("maps/incidents/report/index.html").contains("row by row"));
+    assert!(site.html("maps/index.html").contains("North quay"), "a public file still embeds as a table");
+    assert_absent(&site, ROW);
+
+    // No host can check a paid reader yet, so a paid file is in no output at all.
+    assert_absent(&site, PAID_ROW);
+    assert!(!site.output("_gated/ledger").exists());
+    assert!(!site.output("ledger/ledger.csv").exists());
+
+    let manifest = manifest_of(&site);
+    assert!(!manifest.contains_key("maps/incidents/incidents.csv"));
+    let gated = moss_build::build::emit::members::gated_entries(&manifest);
+    assert_eq!(
+        serde_json::to_value(&gated).unwrap(),
+        serde_json::json!({
+            "_gated/maps/incidents/by-region.json": { "access": "subscribers", "fallback": "unauthorized" },
+            "_gated/maps/incidents/incidents.csv": { "access": "subscribers", "fallback": "unauthorized" },
+            "_gated/maps/incidents/report/index.html": { "access": "subscribers", "fallback": "projection" },
+        })
+    );
+
+    // Renaming the file keeps it gated: the folder is the marker.
+    fs::rename(site.root.join("maps/incidents/incidents.csv"), site.root.join("maps/incidents/renamed.csv")).unwrap();
+    site.rebuild();
+    assert!(site.html("_gated/maps/incidents/renamed.csv").contains(ROW));
+    assert!(!site.output("_gated/maps/incidents/incidents.csv").exists());
+    assert_absent(&site, ROW);
+}
+
+#[test]
+fn the_manifest_records_the_bytes_written_for_each_gated_file() {
+    let site = site::Site::new(MAP_SITE);
+    let manifest = manifest_of(&site);
+    // The bytes a deploy uploads: the sealed generation, not the preview stage.
+    let build = site.root.join(".moss/build.nosync");
+    let generation = build.join("generations").join(fs::read_to_string(build.join("current.generation")).unwrap().trim());
+    let gated: Vec<_> = manifest.iter().filter(|(path, _)| path.starts_with("_gated/")).collect();
+    for name in ["_gated/maps/incidents/report/index.html", "_gated/maps/incidents/by-region.json"] {
+        assert!(gated.iter().any(|(path, _)| *path == name), "{name} is in the manifest");
+    }
+    for (path, entry) in gated {
+        let written = moss_build::build::assets::paths::compute_binary_hash(&fs::read(generation.join(path)).unwrap());
+        assert_eq!(entry.rsplit(':').next(), Some(written.as_str()), "{path}: the manifest names other bytes than the file holds");
+    }
+}
+
+#[test]
+fn a_public_page_that_embeds_a_gated_file_stops_the_build() {
+    let mut files = MAP_SITE.to_vec();
+    files.push(("maps/leak.md", "---\ntitle: Leak\n---\n![[incidents/incidents.csv]]\n"));
+    let root = std::env::temp_dir().join(format!("moss_gated_embed_{}", uuid::Uuid::new_v4()));
+    for (rel, body) in &files {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, body).unwrap();
+    }
+    // The public part of a members page is as public as any page.
+    files.push(("maps/incidents/teaser.md", "---\ntitle: Teaser\n---\n![[incidents.csv]]\n<!--members-only-->\nThe rest.\n"));
+    // And a subscribers page cannot show a paid file.
+    files.push(("maps/incidents/crossed.md", "---\ntitle: Crossed\n---\n![[ledger/ledger.csv]]\n"));
+    for (rel, body) in &files {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, body).unwrap();
+    }
+    let error = site::build_sync(&root.to_string_lossy(), BuildTrigger::Full).unwrap_err();
+    assert!(error.contains("maps/leak.md embeds incidents/incidents.csv"), "{error}");
+    assert!(error.contains("maps/incidents/teaser.md embeds incidents.csv"), "{error}");
+    assert!(error.contains("maps/incidents/crossed.md embeds ledger/ledger.csv"), "{error}");
+    assert!(!error.contains("report.md"), "a page under the cascade may embed its file: {error}");
+    let staged = root.join(".moss/build.nosync/staging");
+    if staged.exists() {
+        for entry in walkdir::WalkDir::new(&staged).into_iter().map(Result::unwrap).filter(|e| e.file_type().is_file()) {
+            let rel = entry.path().strip_prefix(&staged).unwrap().to_string_lossy().replace('\\', "/");
+            let bytes = fs::read(entry.path()).unwrap();
+            assert!(rel.starts_with("_gated/") || !bytes.windows(ROW.len()).any(|w| w == ROW.as_bytes()), "{ROW} leaked into {rel}");
+        }
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_members_cascade_on_a_page_that_is_not_a_folder_home_is_reported() {
+    let site = site::Site::new(&[
+        ("index.md", "---\ntitle: Home\n---\nHome.\n"),
+        ("maps/index.md", "---\ntitle: Map\n---\nMap.\n"),
+        ("maps/detail.md", "---\ntitle: Detail\ncascade: { members: subscribers }\n---\nDetail.\n"),
+    ]);
+    assert!(site::problems().iter().any(|line| line.contains("[maps/detail.md]") && line.contains("has no effect")), "{:?}", site.logged);
+}
+
+const PARA: &str = "lantern-paragraph-sentinel-770412";
+
+fn field_notes(below_the_line: &str) -> String {
+    format!("---\ntitle: Field notes\ndate: 2026-02-01\nmembers: subscribers\n---\nPublic preview.\n<!--members-only-->\n{below_the_line}")
+}
+
+/// What a members page holds below its line changes no file anyone can
+/// fetch: the build of the whole page and the build of its public part alone
+/// write the same public files, whatever the private part draws.
+#[test]
+fn the_private_part_of_a_members_page_changes_no_public_file() {
+    let below = format!(
+        "{PARA}\n\n![[shot.png]]\n\n$$e^{{i\\pi}}+1=0$$\n\n```mermaid\ngraph TD; A-->B;\n```\n\n\
+         [An outside page](https://outside.example/lantern-private-link)\n\n![[notes/]]\n"
+    );
+    let site = site::Site::new(&[
+        (".moss/config.toml", CONFIG),
+        ("index.md", "---\ntitle: Journal\n---\nWelcome.\n"),
+        ("post.md", &field_notes("")),
+        ("drafted.md", &format!("---\ntitle: Drafted\ndraft: true\nmembers: subscribers\n---\nPreview.\n<!--members-only-->\n{PARA}\n")),
+        ("notes/index.md", "---\ntitle: Notes\n---\nNotes.\n"),
+        ("notes/first.md", "---\ntitle: First note\ndate: 2026-01-10\n---\nFirst.\n"),
+    ]);
+    image::RgbImage::from_fn(96, 64, |x, y| image::Rgb([200, (x % 200) as u8, (y % 200) as u8])).save(site.root.join("shot.png")).unwrap();
+    site.rebuild();
+    // A picture stays public under any cascade, and so do its renditions,
+    // which the build makes once a page shows it.
+    let public_files = |site: &site::Site| -> std::collections::BTreeMap<String, Vec<u8>> {
+        public_bytes(site).into_iter().filter(|(path, _)| !path.starts_with("shot.")).collect()
+    };
+    let public_part_only = public_files(&site);
+
+    site.write("post.md", &field_notes(&below));
+    site.rebuild();
+    let whole = public_files(&site);
+    assert_eq!(whole.keys().collect::<Vec<_>>(), public_part_only.keys().collect::<Vec<_>>(), "the private part added or removed a public file");
+    for (path, bytes) in &whole {
+        assert!(bytes == &public_part_only[path], "the private part changed {path}");
+    }
+    assert_absent(&site, PARA);
+    assert_absent(&site, "lantern-private-link");
+
+    // The whole version draws what the private part asks for, and every
+    // picture it names is in the output.
+    let gated = site.html("_gated/post/index.html");
+    assert!(gated.contains(PARA) && gated.contains("First note"), "the private part's listing is drawn");
+    let named = gated.split("src=\"").skip(1).filter_map(|rest| rest.split('"').next())
+        .chain(gated.split("srcset=\"").skip(1).filter_map(|rest| rest.split('"').next()).flat_map(|set| set.split(',')).filter_map(|one| one.split_whitespace().next()));
+    let mut pictures = 0;
+    for url in named.filter(|url| url.contains("shot")) {
+        let path = url.strip_prefix('/').map_or_else(|| format!("post/{url}"), str::to_string);
+        let path: Vec<&str> = path.split('/').fold(Vec::new(), |mut parts, part| { if part == ".." { parts.pop(); } else if part != "." { parts.push(part); } parts });
+        assert!(site.output(&path.join("/")).exists(), "the whole version names {url}, which is not in the output");
+        pictures += 1;
+    }
+    assert!(pictures > 0, "the whole version shows its picture");
+
+    // A draft is published nowhere, so it has no members-only version either.
+    assert!(!site.output("_gated/drafted").exists());
 }

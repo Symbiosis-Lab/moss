@@ -4,13 +4,13 @@
 //! together, away from `build.rs`, because they are one concept answered twice:
 //! "is it safe to skip work because nothing that feeds it moved?"
 //!
-//! Both are resolved HERE, at the entry point, from the build
-//! trigger and the environment — the render phase reads neither. It receives
-//! the answers as plain bools on `SiteConfig`.
+//! Both are resolved HERE, at the entry point, from what the build knows
+//! changed ([`ChangeProof`]) and the environment — the render phase reads
+//! neither. It receives the answers as plain bools on `SiteConfig`.
 
 use super::PipelineConfig;
 use crate::build::BuildTrigger;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The two independent "may this build reuse the last one's work?" permissions.
 ///
@@ -19,15 +19,14 @@ use std::path::Path;
 /// the render skip's markdown-only rule was also switching off the parse cache,
 /// which a stylesheet cannot invalidate. They are separate fields, not one
 /// flag, because the two answers come from different safety arguments — see
-/// [`PipelineConfig::allows_incremental_skip`] and
-/// [`PipelineConfig::allows_parse_cache_reuse`] below, which are the only
+/// [`ChangeProof::allows_incremental_skip`] and
+/// [`ChangeProof::allows_parse_cache_reuse`] below, which are the only
 /// places either is decided.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct IncrementalGates {
     /// May the page-render loop carry forward pages whose
-    /// fingerprint did not move? `false` for every non-watch entry point
-    /// (`moss build`, `moss preview`, deploy all render every page) and
-    /// `false` whenever `MOSS_NO_INCREMENTAL` is set.
+    /// fingerprint did not move? `false` without evidence of what changed
+    /// (deploy renders every page) and whenever `MOSS_NO_INCREMENTAL` is set.
     pub render_skip: bool,
     /// May Loop A replay the previous build's `ParsedDocument`s?
     /// Same entry-point and kill-switch rules; the difference is which changed
@@ -35,21 +34,97 @@ pub struct IncrementalGates {
     pub parse_cache: bool,
 }
 
-impl PipelineConfig {
+impl IncrementalGates {
+    /// Both permissions for one build, from one [`ChangeProof`]. `builder` is
+    /// the fingerprint `run_pipeline` stamps on the manifest it seals.
+    pub fn for_build(trigger: &BuildTrigger, folder: &Path, builder: &str, seal: &LastSeal) -> Self {
+        let proof = {
+            let _trace = crate::build::phase::PhaseTrace::start("change_proof");
+            ChangeProof::for_build(trigger, folder, builder, seal)
+        };
+        crate::build::phase::record_value("proved_from_seal", usize::from(proof == ChangeProof::Manifest));
+        Self { render_skip: proof.allows_incremental_skip(), parse_cache: proof.allows_parse_cache_reuse() }
+    }
+}
+
+/// The last sealed manifest, and this build's `.moss/` measurement against
+/// its record. Taken once, at the entry point, before anything in the build
+/// reads `.moss/`: the proof compares the measurement and the manifest
+/// records it, so a file edited during the build moves the next record.
+///
+/// Some inputs are fetched or written and then rendered in the same build:
+/// link cards a build fetches before rendering, the comments an exiting build
+/// refreshes before its slots, and whatever a blocking process hook writes.
+/// Each lands after this measurement, so the next build renders in full once.
+#[derive(Debug, Default)]
+pub struct LastSeal {
+    manifest: Option<crate::types::content::SiteHashes>,
+    moss: crate::build::inputs::Measured,
+}
+
+impl LastSeal {
+    /// `options` are the build's own, from `inputs::options`.
+    pub fn read(folder: &Path, options: std::collections::BTreeMap<String, String>) -> Self {
+        let _trace = crate::build::phase::PhaseTrace::start("seal_read");
+        let manifest = crate::ops::watch::sweep::walk::read_baseline_from_disk(folder);
+        let moss = crate::build::inputs::measure(folder, manifest.as_ref().and_then(|m| m.build_inputs.as_ref()), options);
+        Self { manifest, moss }
+    }
+
+    /// What this build records of its `.moss/` reads; see
+    /// `PendingManifest::set_build_inputs`.
+    pub(crate) fn record(&self) -> Option<crate::build::inputs::BuildInputs> {
+        self.moss.record.clone()
+    }
+
+    /// The manifest as read, before key migration; `build_inner` migrates its
+    /// own copy, so the proof and the carry judge one read.
+    pub(crate) fn manifest(&self) -> Option<&crate::types::content::SiteHashes> {
+        self.manifest.as_ref()
+    }
+}
+
+/// What this build knows changed since the last sealed build.
+///
+/// The trigger is the caller's fact; this is what the gates make of it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChangeProof {
+    /// The watcher's batch, and whether it created, removed or renamed a file.
+    Events { paths: Vec<PathBuf>, structural: bool },
+    /// The last sealed manifest proves that nothing but markdown pages changed
+    /// since; see [`ChangeProof::from_last_seal`].
+    Manifest,
+    /// Nothing is known, so every page renders.
+    None,
+}
+
+impl ChangeProof {
+    pub fn for_build(trigger: &BuildTrigger, folder: &Path, builder: &str, seal: &LastSeal) -> Self {
+        if kill_switch() {
+            return Self::None;
+        }
+        match trigger {
+            BuildTrigger::Full => Self::None,
+            BuildTrigger::Structural(paths) => Self::Events { paths: paths.clone(), structural: true },
+            BuildTrigger::ContentOnly(paths) => Self::Events { paths: paths.clone(), structural: false },
+            BuildTrigger::Unobserved => Self::from_last_seal(folder, builder, seal),
+        }
+    }
+
     /// Whether the render phase may skip re-rendering pages whose fingerprint
     /// is unchanged.
     ///
     /// Four conditions, all necessary, in the "over-approximate, never
     /// under-approximate" discipline the whole design rests on:
     ///
-    /// 1. `MOSS_NO_INCREMENTAL` unset. The kill switch ships with the first
-    ///    skip, not after it — it is the bisect tool for the first stale-page
-    ///    report. Any value counts, matching `MOSS_WATCH_NO_GATE`.
-    /// 2. The trigger is `ContentOnly`. `moss build`, `moss preview`, deploy
-    ///    and every other entry point pass `Full`, so their behavior is
-    ///    unchanged by this feature. `Structural` (create/remove/rename) is
-    ///    deliberately treated like `Full`: it moves pages in and out of
-    ///    listings, nav and folder indexes.
+    /// 1. `MOSS_NO_INCREMENTAL` unset ([`ChangeProof::for_build`] answers
+    ///    `None` under it). The kill switch ships with the first skip, not
+    ///    after it — it is the bisect tool for the first stale-page report.
+    ///    Any value counts, matching `MOSS_WATCH_NO_GATE`.
+    /// 2. The batch is content-only. Deploy and the other entry points that
+    ///    pass `Full` render everything. A `Structural` batch
+    ///    (create/remove/rename) is deliberately treated like `Full`: it moves
+    ///    pages in and out of listings, nav and folder indexes.
     /// 3. Every changed path is markdown. A `.moss/config.toml` or `.css`
     ///    edit also arrives as a plain modify, but it moves build-globals
     ///    (`css_version`, `site_url`, layout config) that are baked into
@@ -69,14 +144,16 @@ impl PipelineConfig {
     /// stand in for. Two gates, two rules: this one is coarse and cheap to
     /// reason about, the parse cache's is narrow because that is where the
     /// 23-67s lives.
+    ///
+    /// [`ChangeProof::Manifest`] meets conditions 2 to 4 by construction: the
+    /// proof itself checked that no file was created, removed or renamed, that
+    /// only markdown changed and that every build-global input held.
     pub fn allows_incremental_skip(&self) -> bool {
-        if std::env::var("MOSS_NO_INCREMENTAL").is_ok() {
-            return false;
+        match self {
+            Self::Events { paths, structural: false } => !paths.is_empty() && paths.iter().all(|p| is_markdown_ext(p)),
+            Self::Manifest => true,
+            Self::Events { structural: true, .. } | Self::None => false,
         }
-        let BuildTrigger::ContentOnly(paths) = &self.trigger else {
-            return false;
-        };
-        !paths.is_empty() && paths.iter().all(|p| is_markdown_ext(p))
     }
 
     /// Whether Loop A may replay the previous build's `ParsedDocument`s
@@ -120,19 +197,57 @@ impl PipelineConfig {
     /// construction: a new file type is ineligible until someone proves it
     /// parse-irrelevant and adds it here.
     pub fn allows_parse_cache_reuse(&self) -> bool {
-        if std::env::var("MOSS_NO_INCREMENTAL").is_ok() {
-            return false;
+        match self {
+            Self::Events { paths, .. } => !paths.is_empty()
+                && paths.iter().all(|p| is_markdown_ext(p) || is_parse_irrelevant_ext(p)),
+            Self::Manifest => true,
+            Self::None => false,
         }
-        let (BuildTrigger::ContentOnly(paths) | BuildTrigger::Structural(paths)) = &self.trigger
-        else {
-            return false;
-        };
-        !paths.is_empty()
-            && paths
-                .iter()
-                .all(|p| is_markdown_ext(p) || is_parse_irrelevant_ext(p))
     }
 
+    /// What a build with no events can prove from the last sealed manifest:
+    /// that only markdown pages changed since.
+    ///
+    /// Every rule below falls back to [`ChangeProof::None`]:
+    ///
+    /// - The manifest is missing or unreadable, or a different moss binary
+    ///   sealed it (its templates are an input no file shows).
+    /// - Its [`BuildInputs`](crate::build::inputs::BuildInputs) are missing,
+    ///   or a `.moss/` file, a link card or an environment variable they
+    ///   recorded moved. They name what the last build read outside the page
+    ///   tree, so no list of such inputs is kept here.
+    /// - The page tree moved in a way the watcher would have called
+    ///   structural, or a non-markdown file changed. The measurement is the
+    ///   watch sweep's own, judged by the same three-tier compare against the
+    ///   manifest's capture clock, so a file the sweep would call unchanged is
+    ///   unchanged here too.
+    /// - Anything is still in the cloud, could not be judged, or took longer
+    ///   than the sweep's own pass budget.
+    fn from_last_seal(folder: &Path, builder: &str, seal: &LastSeal) -> Self {
+        use crate::build::watch::drift;
+        use crate::ops::watch::sweep::{walk, WALK_DEADLINE};
+        let Some(baseline) = seal.manifest.as_ref() else { return Self::None };
+        if baseline.builder_fingerprint.as_deref() != Some(builder) || !seal.moss.holds {
+            return Self::None;
+        }
+        let deadline = std::time::Instant::now() + WALK_DEADLINE;
+        let Ok(walked) = walk::walk_with_error(folder, Some(deadline), None) else { return Self::None };
+        if walked.deadline_blown || !walked.dataless.is_empty() {
+            return Self::None;
+        }
+        let report = drift::detect_drift(baseline, &walked.files, &[], folder, drift::probe_missing, Some(deadline), true);
+        let only_pages = report.drifted.iter()
+            .all(|(rel, drift)| drift.kind == drift::DriftKind::Edited && crate::build::manifest::is_page_source_key(rel));
+        if report.deadline_blown || report.offline > 0 || !only_pages {
+            return Self::None;
+        }
+        Self::Manifest
+    }
+}
+
+/// The bisect tool for a stale-page report: any value turns both gates off.
+fn kill_switch() -> bool {
+    std::env::var("MOSS_NO_INCREMENTAL").is_ok()
 }
 
 /// `foo.md` / `foo.markdown` — the only sources Loop A parses.

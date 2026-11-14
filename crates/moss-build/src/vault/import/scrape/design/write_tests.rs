@@ -43,7 +43,7 @@ fn folder() -> (tempfile::TempDir, HashMap<String, String>) {
 
 async fn run(root: &Path, written: &HashMap<String, String>, facts: &Facts) -> ChromeSummary {
     let home = HomePage { url: BASE.to_string(), html: String::new(), is_start: true };
-    let capture = Capture { out_dir: root, user_agent: "test", home: &home, written };
+    let capture = Capture { out_dir: root, user_agent: "test", home: &home, post: None, written, menu: &[] };
     apply(&capture, facts, &mut HostPacer::default()).await.unwrap()
 }
 
@@ -153,6 +153,20 @@ async fn an_existing_footer_and_favicon_are_left_alone() {
     assert_eq!(fs::read(tmp.path().join("assets/favicon.png")).unwrap(), b"mine");
     assert!(!tmp.path().join("assets/favicon.svg").exists());
     assert_eq!((summary.footer, summary.favicon), (ChromePart::LeftUnchanged, ChromePart::LeftUnchanged));
+}
+
+#[tokio::test]
+async fn a_logo_or_icon_on_loopback_is_never_requested() {
+    let (tmp, written) = folder();
+    let (loopback, hits) = crate::vault::import::scrape::fetch::unregistered_loopback_server();
+    let mut f = facts();
+    f.logo = Some(format!("{loopback}/logo.png"));
+    f.favicon = Some(Icon { url: format!("{loopback}/icon.png"), kind: IconKind::Png });
+
+    let summary = run(tmp.path(), &written, &f).await;
+
+    assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!((summary.logo, summary.favicon), (ChromePart::NotFound, ChromePart::NotFound));
 }
 
 #[tokio::test]

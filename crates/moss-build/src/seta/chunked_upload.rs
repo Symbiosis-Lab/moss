@@ -174,11 +174,10 @@ impl MossSetaClient {
                 tp.note_request();
                 file_reqs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let started = std::time::Instant::now();
-                let resp = request
+                let resp = this.send(request
                     .timeout(UPLOAD_REQUEST_TIMEOUT)
                     .header("Content-Type", "application/octet-stream")
-                    .header("Upload-Offset", offset.to_string())
-                    .send()
+                    .header("Upload-Offset", offset.to_string()))
                     .await?;
                 if !resp.status().is_success() {
                     return Err(SetaError::from_failed_response(resp).await);
@@ -329,11 +328,10 @@ impl MossSetaClient {
                 return Err(e);
             }
         };
-        let resp = request
+        let resp = self.send(request
             .timeout(UPLOAD_REQUEST_TIMEOUT)
             .header("Content-Length", "0")
-            .header("X-Moss-Content-Hash", &content_hash)
-            .send()
+            .header("X-Moss-Content-Hash", &content_hash))
             .await;
         match resp {
             Ok(r) if r.status().is_success() => {}
@@ -501,7 +499,7 @@ impl MossSetaClient {
             .signed_json(Method::POST, &create_path, &serde_json::json!({ "filePath": file_path, "size": total_size }))?
             .timeout(UPLOAD_REQUEST_TIMEOUT)
             .header("X-Moss-Generation", generation_id);
-        Ok(Self::send_json::<CreateResp>(request).await?.upload_id)
+        Ok(self.send_json::<CreateResp>(request).await?.upload_id)
     }
 
     /// Ask the server how many bytes of this session it actually holds.
@@ -515,7 +513,7 @@ impl MossSetaClient {
         encoded_upload_id: &str,
     ) -> Result<usize, SetaError> {
         let path = format!("/api/sites/{}/upload/{}", urlencoding::encode(site_id), encoded_upload_id);
-        let resp = self.signed(Method::HEAD, &path, Bytes::new())?.timeout(UPLOAD_REQUEST_TIMEOUT).send().await?;
+        let resp = self.send(self.signed(Method::HEAD, &path, Bytes::new())?.timeout(UPLOAD_REQUEST_TIMEOUT)).await?;
         if !resp.status().is_success() {
             return Err(SetaError::from_failed_response(resp).await);
         }
@@ -568,7 +566,7 @@ impl MossSetaClient {
         let Ok(request) = self.signed(Method::DELETE, &path, Bytes::new()) else {
             return;
         };
-        let _ = request.timeout(ABORT_TIMEOUT).send().await;
+        let _ = self.send(request.timeout(ABORT_TIMEOUT)).await;
     }
 }
 

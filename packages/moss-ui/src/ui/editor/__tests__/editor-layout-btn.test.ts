@@ -69,7 +69,6 @@ function setupEditorDOM(): void {
       <div class="chip-bar" id="chip-bar"></div>
       <div class="moss-editor-cm" id="moss-editor-cm"></div>
     </div>
-    <div class="dropdown" id="dropdown"></div>
     <div class="modal-bg" id="modal-bg"><div class="modal" id="modal"></div></div>
   `;
 }

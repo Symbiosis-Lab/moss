@@ -4,9 +4,11 @@
 //! A page's words travel through [`super::converter`]; a site's chrome — its
 //! name, its navigation, its logo, its footer, its icon — is not part of any
 //! page, so it is read once, from the home page's raw HTML, and written once.
-//! This half covers the chrome; [`facts`] reads it (pure, no network),
-//! [`footer`] turns the footer into markdown, [`write`] puts the facts where
-//! moss looks for them.
+//! [`facts`] reads the chrome (pure, no network), [`footer`] turns the footer
+//! into markdown, [`write`] puts the facts where moss looks for them. The look
+//! is the second family: [`style`] reads fonts, colours and the type scale
+//! from the home page's stylesheets, [`mapping`] turns them into overrides of
+//! moss's design tokens, [`theme`] writes those and copies the fonts.
 //!
 //! Convention, from every migration importer: write only when the file or key
 //! is absent. A re-run, or a folder the author already shaped, is never
@@ -18,6 +20,9 @@
 
 mod facts;
 mod footer;
+mod mapping;
+mod style;
+mod theme;
 mod write;
 
 use std::collections::HashMap;
@@ -28,7 +33,8 @@ use specta::Type;
 
 use super::crawl_state::HostPacer;
 
-pub(crate) use facts::norm_url;
+pub(crate) use facts::{norm_url, NavEntry};
+pub(crate) use style::has_text_link;
 
 /// What the import did about one piece of chrome.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -42,8 +48,8 @@ pub enum ChromePart {
     LeftUnchanged,
 }
 
-/// What a recursive import wrote for the site's chrome. All defaults for a run
-/// that did not look (a single-page import).
+/// What a recursive import wrote for the site's chrome and look. All defaults
+/// for a run that did not look (a single-page import).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
 pub struct ChromeSummary {
     /// True when the crawl read a home page for chrome at all.
@@ -54,6 +60,14 @@ pub struct ChromeSummary {
     pub logo: ChromePart,
     pub footer: ChromePart,
     pub favicon: ChromePart,
+    /// The design tokens in `.moss/theme/style.css`.
+    pub theme: ChromePart,
+    /// Tokens written.
+    pub tokens: usize,
+    /// Font families copied into `.moss/theme/fonts/`.
+    pub fonts: Vec<String>,
+    /// What the source's look states that no moss token expresses, one line each.
+    pub residuals: Vec<String>,
 }
 
 impl ChromeSummary {
@@ -71,11 +85,17 @@ impl ChromeSummary {
             ChromePart::Written => Some(format!("nav {} item(s)", self.nav_items)),
             other => part("nav", other),
         };
+        let theme = match self.theme {
+            ChromePart::Written if self.fonts.is_empty() => Some(format!("design {} token(s)", self.tokens)),
+            ChromePart::Written => Some(format!("design {} token(s), font {}", self.tokens, self.fonts.join(", "))),
+            other => part("design", other),
+        };
         let parts: Vec<String> = [
             nav,
             part("logo", self.logo),
             part("footer", self.footer),
             part("favicon", self.favicon),
+            theme,
         ]
         .into_iter()
         .flatten()
@@ -102,9 +122,20 @@ pub(crate) struct Capture<'a> {
     pub out_dir: &'a Path,
     pub user_agent: &'a str,
     pub home: &'a HomePage,
+    /// A page whose text holds a link, for the reading styles.
+    pub post: Option<&'a str>,
     /// Normalised URL ([`norm_url`]) → the note written for it, relative to
     /// `out_dir`.
     pub written: &'a HashMap<String, String>,
+    /// A source's menu, the nav bar when the home page shows none.
+    pub menu: &'a [NavEntry],
+}
+
+/// Make `menu` the nav bar of the pages in `written`, for pages no home page
+/// was read for.
+pub(crate) fn place_menu(out_dir: &Path, written: &HashMap<String, String>, menu: &[NavEntry]) -> Result<(), String> {
+    let home = HomePage { url: String::new(), html: String::new(), is_start: false };
+    write::write_menu(&Capture { out_dir, user_agent: "", home: &home, post: None, written, menu })
 }
 
 /// Read the home page's chrome and write it into the crawl's output folder.
@@ -113,7 +144,9 @@ pub(crate) async fn capture_site_chrome(
     pacer: &mut HostPacer,
 ) -> Result<ChromeSummary, String> {
     let facts = facts::read(&capture.home.html, &capture.home.url);
-    write::apply(capture, &facts, pacer).await
+    let mut summary = write::apply(capture, &facts, pacer).await?;
+    theme::apply(capture, pacer, &mut summary).await?;
+    Ok(summary)
 }
 
 #[cfg(test)]
@@ -133,10 +166,14 @@ mod tests {
             logo: ChromePart::Written,
             footer: ChromePart::LeftUnchanged,
             favicon: ChromePart::Written,
+            theme: ChromePart::Written,
+            tokens: 6,
+            fonts: vec!["Inter".to_string()],
+            residuals: Vec::new(),
         };
         assert_eq!(
             summary.line().unwrap(),
-            "site chrome: nav 3 item(s), logo, footer left unchanged, favicon"
+            "site chrome: nav 3 item(s), logo, footer left unchanged, favicon, design 6 token(s), font Inter"
         );
     }
 

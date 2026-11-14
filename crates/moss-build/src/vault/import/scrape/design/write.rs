@@ -21,7 +21,7 @@ use crate::vault::import::page::{with_fields_absent, with_title, write_note};
 use super::super::run::ASSETS_SUBDIR;
 use moss_core::frontmatter_typed::FrontMatter;
 use super::super::writer::rewrite_links;
-use super::facts::{is_generic_title, norm_url, Facts, Icon, IconKind};
+use super::facts::{is_generic_title, norm_url, Facts, Icon, IconKind, NavEntry};
 use super::{Capture, ChromePart, ChromeSummary};
 
 /// Image extensions a downloaded logo may carry; anything else (`bin`, from a
@@ -37,7 +37,13 @@ pub(super) async fn apply(
     let home_key = norm_url(&capture.home.url);
     let home_note = home_key.as_ref().and_then(|k| capture.written.get(k));
 
-    write_nav(capture, facts, home_note.map(String::as_str), &mut summary)?;
+    let home = home_note.map(String::as_str);
+    // The page's own menu first; a source's menu (a WordPress export's) when the page shows none.
+    let mut targets = nav_targets(capture, &facts.nav, home);
+    if targets.len() < 2 && !capture.menu.is_empty() {
+        targets = nav_targets(capture, capture.menu, home);
+    }
+    write_nav(capture, &targets, home, &mut summary)?;
     if let (true, Some(rel)) = (capture.home.is_start, home_note) {
         write_home_note(capture, facts, rel, pacer, &mut summary).await?;
     }
@@ -60,17 +66,17 @@ fn has_key(content: &str, key: &str) -> bool {
     moss_core::frontmatter::frontmatter_map(content).contains_key(key)
 }
 
-/// `nav: true` and an ascending `weight:` on every written page the home
-/// page's primary nav links to, in the nav's own order. Fewer than two such
-/// pages is not a nav bar.
-fn write_nav(
-    capture: &Capture<'_>,
-    facts: &Facts,
-    home_note: Option<&str>,
-    summary: &mut ChromeSummary,
-) -> Result<(), String> {
+/// A source's menu over pages written without a home page to read one from
+/// (a WordPress export whose site could not be reached).
+pub(super) fn write_menu(capture: &Capture<'_>) -> Result<(), String> {
+    let targets = nav_targets(capture, capture.menu, None);
+    write_nav(capture, &targets, None, &mut ChromeSummary::default())
+}
+
+/// The written pages a menu links to, in its order, home excluded.
+fn nav_targets<'a>(capture: &Capture<'a>, nav: &[NavEntry], home_note: Option<&str>) -> Vec<&'a str> {
     let mut targets: Vec<&str> = Vec::new();
-    for entry in &facts.nav {
+    for entry in nav {
         let Some(rel) = norm_url(&entry.url).and_then(|k| capture.written.get(&k)) else {
             continue;
         };
@@ -78,11 +84,22 @@ fn write_nav(
             targets.push(rel);
         }
     }
+    targets
+}
+
+/// `nav: true` and an ascending `weight:` on each of `targets`, in order.
+/// Fewer than two is not a nav bar.
+fn write_nav(
+    capture: &Capture<'_>,
+    targets: &[&str],
+    home_note: Option<&str>,
+    summary: &mut ChromeSummary,
+) -> Result<(), String> {
     if targets.len() < 2 {
         // No menu to copy, but moss would still list every root-level page.
-        return opt_out_of_auto_nav(capture, &targets, home_note);
+        return opt_out_of_auto_nav(capture, targets, home_note);
     }
-    for rel in &targets {
+    for rel in targets {
         let content = read_note(capture.out_dir, rel)?;
         // An author's `nav` or `weight` stands: writing the other half over it
         // would break the order they chose.
@@ -97,7 +114,7 @@ fn write_nav(
     }
     summary.nav = if summary.nav_items > 0 { ChromePart::Written } else { ChromePart::LeftUnchanged };
     if summary.nav_items > 0 {
-        opt_out_of_auto_nav(capture, &targets, home_note)?;
+        opt_out_of_auto_nav(capture, targets, home_note)?;
     }
     Ok(())
 }

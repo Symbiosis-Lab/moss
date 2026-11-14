@@ -201,7 +201,7 @@ impl MossSetaClient {
     /// when Cloudflare fails — all of which arrive as `SetaError::Api`.
     pub async fn start_domain_cdn(&self, host: &str) -> Result<DomainCdn, SetaError> {
         let request = self.signed(reqwest::Method::POST, &format!("/api/domains/{}/cdn", urlencoding::encode(host)), bytes::Bytes::new())?;
-        Self::send_json::<CdnWire>(request).await.map(DomainCdn::from)
+        self.send_json::<CdnWire>(request).await.map(DomainCdn::from)
     }
 }
 

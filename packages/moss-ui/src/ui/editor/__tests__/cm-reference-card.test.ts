@@ -7,7 +7,7 @@ import { GFM } from '@lezer/markdown';
 import { wikilinkConfig, footnoteConfig } from '@symbiosis-lab/moss-syntax';
 import {
   referenceCardExtension, closeCard, cardProviders, cardSpecAt, cardField, openCardAt, assetCardProvider,
-  footnoteCardProvider, externalCardProvider, linkCardProvider, pageLinkCardProvider,
+  footnoteCardProvider, linkCardProvider, pageLinkCardProvider,
   currentArticleCardProvider, isCurrentArticleMapAt, withLinkControls, unlinkAt, type CardProvider, type CardSpec,
 } from '../cm-reference-card';
 import { chordTrackingExtension } from '../cm-link-nav';
@@ -65,10 +65,15 @@ const FAR = 31;
 /** One fake provider covering both title cases the dwell tests assert on: a
  *  position over the link ("link") and over the wikilink ("wikilink"). */
 const dwellFakeProvider: CardProvider = (_state, pos) => {
-  if (pos >= 0 && pos <= 14) return { title: 'link', body: document.createElement('div') };
-  if (pos >= 19 && pos <= 27) return { title: 'wikilink', body: document.createElement('div') };
+  if (pos >= 0 && pos <= 14) return { title: 'link', body: bodyOf('about the link') };
+  if (pos >= 19 && pos <= 27) return { title: 'wikilink', body: bodyOf('about the page') };
   return null;
 };
+function bodyOf(text: string): HTMLElement {
+  const body = document.createElement('div');
+  body.textContent = text;
+  return body;
+}
 
 describe('dwell arming', () => {
   let container: HTMLElement;
@@ -424,21 +429,130 @@ function stateWithDoc(doc: string): EditorState {
   return EditorState.create({ doc, extensions: [markdown({ extensions: [wikilinkConfig] })] });
 }
 
-describe('external URL and last-resort link providers', () => {
-  test('external URL provider shows the bare URL', () => {
-    const cache = { get: () => ({ kind: { kind: 'external', data: { url: 'https://example.com' } } }) } as any;
-    const spec = externalCardProvider(cache)(stateWithDoc('[x](https://example.com)'), 3);
-    expect(spec?.body.textContent).toBe('https://example.com');
-  });
-
-  test('a non-external kind is not this provider\'s to show', () => {
-    const cache = { get: () => ({ kind: { kind: 'link' } }) } as any;
-    expect(externalCardProvider(cache)(stateWithDoc('[x](https://example.com)'), 3)).toBeNull();
-  });
-
+describe('the last-resort link provider', () => {
   test('any link no other provider claims gets a card titled with its address', () => {
     expect(linkCardProvider(stateWithDoc('[a](nowhere.md)'), 5)?.title).toBe('nowhere.md');
     expect(linkCardProvider(stateWithDoc('plain text'), 3)).toBeNull();
+  });
+});
+
+describe('a hover card opens only for what the line does not already show', () => {
+  let view: EditorView;
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); view?.destroy(); document.body.innerHTML = ''; });
+
+  const EXTERNAL = { kind: { kind: 'external', data: { url: 'https://example.com/events' } } };
+  const PAGE = { kind: { kind: 'link' }, anchor: null };
+  const info = (description: string | null) => ({ status: 'ok', data: { title: 'About', description, source_path: 'about.md', generated: false, heading: null } });
+
+  /** The link providers in the order and wrapping the editor registers them. */
+  function mount(doc: string, env: unknown, call = vi.fn().mockResolvedValue(info(null))): EditorView {
+    const cache = { get: () => env } as any;
+    const withControls = (base: CardProvider): CardProvider => (state, pos) => {
+      const spec = base(state, pos);
+      return spec && withLinkControls(spec, state, pos, cache);
+    };
+    view = new EditorView({
+      state: EditorState.create({
+        doc,
+        extensions: [
+          markdown({ extensions: [wikilinkConfig, footnoteConfig] }), referenceCardExtension(),
+          cardProviders.of(footnoteCardProvider),
+          cardProviders.of(withControls(pageLinkCardProvider(cache, call, { fromFile: () => 'note.md' }))),
+          cardProviders.of(withControls(linkCardProvider)),
+        ],
+      }),
+      parent: document.body,
+    });
+    return view;
+  }
+  function pointAt(v: EditorView, pos: number): void {
+    v.posAtCoords = () => pos;
+    v.dom.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
+  }
+  const card = (v: EditorView) => v.dom.querySelector('.cm-reference-card');
+
+  test('an external link\'s URL opens no card on hover; ⌘K still opens its fields and actions', async () => {
+    const doc = 'See [the events](https://example.com/events) soon.';
+    const v = mount(doc, EXTERNAL);
+    const at = doc.indexOf('example.com') + 3;
+    pointAt(v, at);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(card(v)).toBeNull();
+
+    expect(openCardAt(v, at)).toBe(true);
+    expect((card(v)!.querySelector('input') as HTMLInputElement).getAttribute('value')).toBe('https://example.com/events');
+    expect([...card(v)!.querySelectorAll('button')].map((b) => b.textContent)).toEqual([t('reference.open'), t('reference.unlink')]);
+  });
+
+  test('a page link opens once its description arrives, and shows only that', async () => {
+    const doc = 'See [[about]] soon.';
+    let arrive!: (value: unknown) => void;
+    const v = mount(doc, PAGE, vi.fn(() => new Promise((resolve) => { arrive = resolve; })));
+    pointAt(v, doc.indexOf('about') + 2);
+    await vi.advanceTimersByTimeAsync(150);
+    expect(card(v)).toBeNull();
+    arrive(info('The about page.'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(card(v)!.textContent).toBe('The about page.');
+  });
+
+  test('a page with no description opens no card', async () => {
+    const doc = 'See [[about]] soon.';
+    const call = vi.fn().mockResolvedValue(info(null));
+    const v = mount(doc, PAGE, call);
+    pointAt(v, doc.indexOf('about') + 2);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(call).toHaveBeenCalledOnce();
+    expect(card(v)).toBeNull();
+  });
+
+  test('a description that arrives after the pointer has left opens nothing', async () => {
+    const doc = 'See [[about]] soon.';
+    let arrive!: (value: unknown) => void;
+    const v = mount(doc, PAGE, vi.fn(() => new Promise((resolve) => { arrive = resolve; })));
+    pointAt(v, doc.indexOf('about') + 2);
+    await vi.advanceTimersByTimeAsync(150);
+    pointAt(v, 1);
+    arrive(info('The about page.'));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(card(v)).toBeNull();
+  });
+
+  test('a lookup that fails opens nothing and stops waiting, so the next rest asks again', async () => {
+    const doc = 'See [[about]] soon.';
+    const call = vi.fn().mockRejectedValue(new Error('offline'));
+    const v = mount(doc, PAGE, call);
+    pointAt(v, doc.indexOf('about') + 1);
+    await vi.advanceTimersByTimeAsync(150);
+    expect(card(v)).toBeNull();
+    pointAt(v, doc.indexOf('about') + 3);
+    await vi.advanceTimersByTimeAsync(150);
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(card(v)).toBeNull();
+  });
+
+  test('moving along the same page name while waiting asks once', async () => {
+    const doc = 'See [[about]] soon.';
+    let arrive!: (value: unknown) => void;
+    const call = vi.fn(() => new Promise((resolve) => { arrive = resolve; }));
+    const v = mount(doc, PAGE, call);
+    pointAt(v, doc.indexOf('about') + 1);
+    await vi.advanceTimersByTimeAsync(150);
+    pointAt(v, doc.indexOf('about') + 3);
+    await vi.advanceTimersByTimeAsync(150);
+    expect(call).toHaveBeenCalledOnce();
+    arrive(info('The about page.'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(card(v)).not.toBeNull();
+  });
+
+  test('a footnote\'s hover card is the note alone: no heading repeating the marker, no shortcut line', async () => {
+    const doc = 'A note.[^1]\n\n[^1]: The note.';
+    const v = mount(doc, undefined);
+    pointAt(v, doc.indexOf('[^1]') + 2);
+    await vi.advanceTimersByTimeAsync(150);
+    expect(card(v)!.textContent).toBe('The note.');
   });
 });
 
@@ -452,10 +566,9 @@ describe('a link inside a table cell', () => {
       extensions: [markdown({ extensions: [GFM, wikilinkConfig] }), cardProviders.of(provider(cache))],
     });
 
-  test('an external link gets the external-URL card', () => {
-    const cache = { get: () => ({ kind: { kind: 'external', data: { url: 'https://example.com' } } }) };
-    const spec = cardSpecAt(stateWith(cache, externalCardProvider), doc.indexOf('[x]') + 1);
-    expect(spec?.body.textContent).toBe('https://example.com');
+  test('an external link gets the last-resort link card', () => {
+    const spec = cardSpecAt(stateWith(null, () => linkCardProvider), doc.indexOf('[x]') + 1);
+    expect(spec?.title).toBe('https://example.com');
   });
 
   test('a page link gets the page-link card', () => {
@@ -677,7 +790,6 @@ describe('current article map card', () => {
       expect(provider(state(doc), doc.indexOf('#'))).toBeNull();
       expect(isCurrentArticleMapAt(state(doc), doc.indexOf('#'))).toBe(false);
     }
-    expect(provider(state(), 3)!.hint).toContain('show map details');
   });
 });
 

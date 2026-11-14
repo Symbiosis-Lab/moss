@@ -3,7 +3,19 @@
  * element maps to, nearest first, and the owning file each one carries.
  */
 import { describe, it, expect, afterEach } from "vitest";
-import { resolveSourceTargets, themeSelectors } from "../source-target";
+import { resolveSourceTarget, resolveSourceTargets, themeSelectors } from "../source-target";
+
+describe("resolveSourceTarget", () => {
+  it("picks the line clicked inside a grid column; the column only on its own empty area; a field before either", () => {
+    document.body.innerHTML =
+      '<div class="moss-grid" data-source-range="2-22"><div id="column" class="moss-grid-card" data-source-range="3-10">' +
+      '<h1 data-source-line="3">Title</h1><p data-source-line="5"><b id="words">Words</b></p></div></div>' +
+      '<header data-source-fm="title"><span id="field" data-source-line="1">T</span></header>';
+    expect(resolveSourceTarget(document.getElementById("words"))).toEqual({ kind: "body-line", line: 5 });
+    expect(resolveSourceTarget(document.getElementById("column"))).toEqual({ kind: "body-range", startLine: 3, endLine: 10 });
+    expect(resolveSourceTarget(document.getElementById("field"))).toEqual({ kind: "frontmatter", field: "title" });
+  });
+});
 
 describe("resolveSourceTargets", () => {
   it("stops at data-source-none, so an annotated ancestor above chrome is not reported", () => {

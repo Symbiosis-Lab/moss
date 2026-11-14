@@ -23,7 +23,7 @@ use std::path::Path;
 use scraper::{Html, Selector};
 
 use crate::build::folder_embed::listing_markup::is_listing_name;
-use crate::build::theme_lint::{strip_comments, style_rules};
+use crate::build::theme_lint::{split_top_level, strip_comments, style_rules, syntax_chars};
 use crate::cli::describe::css_query::mentions;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,8 +46,9 @@ pub enum ThemeRules {
     Checked { pages: usize, unmatched: Vec<UnmatchedRule> },
 }
 
-/// At-rule blocks whose inner preludes are not selectors.
-pub(super) const NOT_SELECTOR_BLOCKS: &[&str] = &["keyframes", "@font-face", "@page", "@counter-style", "@property"];
+/// At-rule blocks whose inner preludes are not selectors (a declaration
+/// at-rule such as `@font-face` is one rule of its own, never a block).
+pub(super) const NOT_SELECTOR_BLOCKS: &[&str] = &["keyframes"];
 
 /// Pseudo-classes that depend on interaction or form state, which a built page
 /// never has.
@@ -86,7 +87,7 @@ pub fn check(sheets: &[(String, String)], site: &Path) -> ThemeRules {
             let mut names_in = Vec::new();
             let mut negated = Vec::new();
             let mut unknown = false;
-            for one in split_selector_list(&selector) {
+            for one in split_top_level(&selector, ',') {
                 match static_form(one).and_then(|s| Selector::parse(&s).ok()) {
                     Some(parsed) => statics.push(parsed),
                     None => unknown = true,
@@ -198,60 +199,6 @@ fn ident_end(chars: &[char], from: usize) -> usize {
         end += 1;
     }
     end
-}
-
-/// Calls `visit(i, c, depth)` for each char of `chars` outside quotes and
-/// escapes, where `depth` counts the parentheses and brackets open before it.
-/// A `Some(next)` from `visit` resumes the walk at `next`.
-fn syntax_chars(chars: &[char], mut visit: impl FnMut(usize, char, i32) -> Option<usize>) {
-    let (mut i, mut depth, mut quote) = (0usize, 0i32, None::<char>);
-    while i < chars.len() {
-        let c = chars[i];
-        if c == '\\' {
-            i += 2;
-            continue;
-        }
-        match (quote, c) {
-            (Some(q), c) if c == q => quote = None,
-            (Some(_), _) => {}
-            (None, '"' | '\'') => quote = Some(c),
-            (None, c) => {
-                let at = depth;
-                match c {
-                    '(' | '[' => depth += 1,
-                    ')' | ']' => depth -= 1,
-                    _ => {}
-                }
-                if let Some(next) = visit(i, c, at) {
-                    i = next;
-                    continue;
-                }
-            }
-        }
-        i += 1;
-    }
-}
-
-/// The selectors of a list, split on commas outside parentheses, brackets and quotes.
-fn split_selector_list(list: &str) -> Vec<&str> {
-    let chars: Vec<(usize, char)> = list.char_indices().collect();
-    let plain: Vec<char> = chars.iter().map(|(_, c)| *c).collect();
-    let mut cuts = Vec::new();
-    syntax_chars(&plain, |i, c, depth| {
-        if c == ',' && depth == 0 {
-            cuts.push(chars[i].0);
-        }
-        None
-    });
-    let mut out = Vec::new();
-    let mut from = 0;
-    for cut in cuts {
-        out.push(list[from..cut].trim());
-        from = cut + 1;
-    }
-    out.push(list[from..].trim());
-    out.retain(|s| !s.is_empty());
-    out
 }
 
 /// `selector` with its pseudo-elements and state pseudo-classes removed, so

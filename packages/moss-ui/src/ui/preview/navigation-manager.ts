@@ -94,6 +94,16 @@ function tryParseUrl(url: string): URL | null {
   try { return new URL(url); } catch { return null; }
 }
 
+/** The query key the preview sets to force a reload of the page it shows. */
+export const CACHE_BUST_PARAM = "_t";
+
+function withoutCacheBust(url: string): string {
+  const parsed = tryParseUrl(url);
+  if (!parsed?.searchParams.has(CACHE_BUST_PARAM)) return url;
+  parsed.searchParams.delete(CACHE_BUST_PARAM);
+  return parsed.toString();
+}
+
 /**
  * Navigation event from preview webview
  */
@@ -792,7 +802,8 @@ export class NavigationManager {
     // history, echo matching, display paths, or the PREVIEW_URL_CHANGED
     // event payload. The marker is a private shell↔server side-channel;
     // see `packages/moss-ui/src/ui/preview/shell-marker.ts` for the contract.
-    const currentUrl = stripShellMarker(data.url);
+    // The cache-busting query goes too: a forced reload is still the page it reloads.
+    const currentUrl = withoutCacheBust(stripShellMarker(data.url));
     // A replaced document can still echo while its successor is loading.
     if (this.requestedUrl && !this.sameRoute(currentUrl, this.requestedUrl)) return;
     // Confirmed. A mismatched echo (above) changes nothing and leaves the deadline armed.

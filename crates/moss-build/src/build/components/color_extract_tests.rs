@@ -570,6 +570,8 @@ fn parse_css_color_named() {
     assert_eq!(parse_css_color("black"), Some((0, 0, 0)));
     assert_eq!(parse_css_color("White"), Some((255, 255, 255)));
     assert_eq!(parse_css_color("rebeccapurple"), Some((0x66, 0x33, 0x99)));
+    assert_eq!(parse_css_color("papayawhip"), Some((0xff, 0xef, 0xd5)), "every CSS named colour, not a table of common ones");
+    assert_eq!(parse_css_color("hwb(120 0% 0%)"), Some((0, 255, 0)));
     assert_eq!(parse_css_color("midnightblue"), Some((0x19, 0x19, 0x70)));
 }
 
@@ -654,6 +656,15 @@ fn webpage_last_style_declaration_wins() {
             html, body { background-color: #222222; }
         </style></head><body></body></html>"##;
     assert_eq!(scan_webpage_color(html), Some((0x22, 0x22, 0x22)));
+}
+
+#[test]
+fn webpage_reads_a_rule_whole_and_skips_one_under_a_condition() {
+    let html = r##"<html><head><style>
+            body { /* was } */ background: #123456; }
+            @media (prefers-color-scheme: dark) { body { background: #000000; } }
+        </style></head><body></body></html>"##;
+    assert_eq!(scan_webpage_color(html), Some((0x12, 0x34, 0x56)));
 }
 
 #[test]

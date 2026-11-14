@@ -63,7 +63,7 @@ impl MossSetaClient {
                 "value": r.value,
             })
         }).collect();
-        Self::send_json(self.signed_json(Method::POST, &path, &serde_json::json!({ "records": api_records }))?).await
+        self.send_json(self.signed_json(Method::POST, &path, &serde_json::json!({ "records": api_records }))?).await
     }
 
     /// Get current DNS zone records for a domain.

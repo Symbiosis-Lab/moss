@@ -2,6 +2,7 @@
 //! files the crawl left behind.
 
 use std::path::Path;
+use crate::vault::import::scrape::fetch::test_server;
 
 use super::super::run::scrape_to_folder;
 use super::super::service::ScrapeConfig;
@@ -44,7 +45,7 @@ struct Site {
 }
 
 async fn site(pages: &[(&str, String)], files: &[(&str, &str)]) -> Site {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let mut mocks = Vec::new();
     for (path, body) in pages {
         mocks.push(
@@ -247,4 +248,145 @@ async fn pages_the_menu_does_not_show_are_kept_out_of_the_nav_bar() {
     for rel in ["index.md", "blog/post.md"] {
         assert!(!read(out, rel).contains("nav:"), "{rel} is not a root-level candidate");
     }
+}
+
+const DESIGN_HEAD: &str = "<link rel=\"stylesheet\" href=\"/fonts.css?family=Field+Sans\">\
+    <link rel=\"stylesheet\" href=\"/screen.css\">\
+    <style>:root { --site-accent-color: #b0302a }</style>";
+
+const DESIGN_HOME: &str = "<html><head><title>Studio Example</title>{head}</head>\
+    <body><main><h1>Studio Example</h1><article><p>Body text, long enough to be extracted as content by the generic scorer.</p>\
+    <h2><a href=\"/notes\">Notes</a></h2></article></main></body></html>";
+
+/// A post whose text holds a link, which the theme draws in its own blue.
+const DESIGN_POST: &str = "<html><head><title>Notes</title>{head}</head>\
+    <body><main><article class=\"prose\"><h1>Notes</h1><p>Body text, long enough to be extracted as content by the generic scorer, \
+    with <a href=\"/\">a link home</a>.</p></article></main></body></html>";
+
+/// A Google-Fonts-shaped stylesheet: two families, only one of them used.
+const FONTS_CSS: &str = "@font-face { font-family: 'Field Sans'; font-style: normal; font-weight: 400; \
+    src: url(/static/field-sans-latin.woff2) format('woff2'); }\n\
+    @font-face { font-family: 'Field Sans'; font-style: italic; src: url(/static/field-sans-italic.woff2) format('woff2'); }\n\
+    @font-face { font-family: 'Field Sans'; font-weight: 700; src: url(data:font/woff2;base64,d09GMgABAAA=) format('woff2'); }\n\
+    @font-face { font-family: 'Unused Serif'; src: url(/static/unused.woff2) format('woff2'); }";
+
+const SCREEN_CSS: &str = "body { font-family: 'Field Sans', sans-serif; color: #202020; background: #fdfcf8 } .prose a { color: #2050c0 }";
+
+async fn design_site() -> Site {
+    let pages = [("/", DESIGN_HOME.replace("{head}", DESIGN_HEAD)), ("/notes", DESIGN_POST.replace("{head}", DESIGN_HEAD))];
+    let mut site = site(&pages, &[]).await;
+    for (path, body, kind) in [
+        ("/fonts.css?family=Field+Sans", FONTS_CSS.as_bytes(), "text/css"),
+        ("/screen.css", SCREEN_CSS.as_bytes(), "text/css"),
+        ("/static/field-sans-latin.woff2", b"wOF2 field sans".as_slice(), "font/woff2"),
+        ("/static/unused.woff2", b"wOF2 unused".as_slice(), "font/woff2"),
+        ("/static/field-sans-italic.woff2", b"<html>not found</html>".as_slice(), "text/html"),
+    ] {
+        site._mocks.push(site.server.mock("GET", path).with_status(200).with_header("content-type", kind).with_body(body).create_async().await);
+    }
+    site
+}
+
+#[tokio::test]
+async fn a_crawl_writes_the_sites_look_as_moss_tokens_and_copies_its_font() {
+    let site = design_site().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path();
+
+    let res = crawl(&site, out).await;
+
+    let css = read(out, ".moss/theme/style.css");
+    assert!(css.contains("@font-face {\n  font-family: \"Field Sans\";\n  src: url(fonts/field-sans-latin.woff2) format(\"woff2\");"), "{css}");
+    assert!(css.contains("--moss-font-body: 'Field Sans', -apple-system,"), "{css}");
+    assert!(css.contains("--moss-color-text: #202020;") && css.contains("--moss-color-accent: #b0302a;"), "{css}");
+    assert!(css.contains("--moss-link-color: #2050c0;"), "the link colour is read from the post: {css}");
+    assert!(!css.contains("Unused Serif"), "a family no token names is not copied: {css}");
+    assert_eq!(std::fs::read(out.join(".moss/theme/fonts/field-sans-latin.woff2")).unwrap(), b"wOF2 field sans");
+    assert!(!out.join(".moss/theme/fonts/unused.woff2").exists());
+    assert!(!css.contains("field-sans-italic") && !out.join(".moss/theme/fonts/field-sans-italic.woff2").exists(), "an error page is not a font: {css}");
+    assert!(read(out, ".moss/config.toml").contains("color_scheme = \"light\""), "no dark scheme in the source");
+    assert!(!css.contains("data:"), "{css}");
+    assert!(res.chrome.residuals.iter().any(|r| r == "font Field Sans is served as a data: address, which is not copied"), "{:?}", res.chrome.residuals);
+    let line = res.chrome.line().unwrap();
+    assert!(line.ends_with(", font Field Sans") && line.contains("design "), "{line}");
+}
+
+#[tokio::test]
+async fn a_theme_the_author_already_shaped_stays() {
+    let site = design_site().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path();
+    std::fs::create_dir_all(out.join(".moss/theme")).unwrap();
+    std::fs::write(out.join(".moss/theme/style.css"), ":root { --moss-color-accent: #123456; }\n").unwrap();
+
+    let res = crawl(&site, out).await;
+
+    assert_eq!(read(out, ".moss/theme/style.css"), ":root { --moss-color-accent: #123456; }\n");
+    assert!(!out.join(".moss/theme/fonts").exists());
+    assert!(res.chrome.line().unwrap().ends_with("design left unchanged"), "{:?}", res.chrome.line());
+}
+
+#[tokio::test]
+async fn a_stylesheet_that_cannot_be_read_or_is_imported_is_reported_and_its_host_slowed() {
+    let home = "<html><head><title>Studio Example</title>\
+        <link rel=\"stylesheet\" href=\"/busy.css\">\
+        <style>@import url(\"/print.css\"); body { color: #202020 }</style></head>\
+        <body><main><article><p>Body text, long enough to be extracted as content by the generic scorer.</p></article></main></body></html>";
+    let mut site = site(&[("/", home.to_string())], &[]).await;
+    site._mocks.push(site.server.mock("GET", "/busy.css").with_status(429).create_async().await);
+    let tmp = tempfile::tempdir().unwrap();
+
+    let res = crawl(&site, tmp.path()).await;
+
+    let busy = format!("{}/busy.css", site.server.url());
+    assert!(res.chrome.residuals.iter().any(|r| r.starts_with(&format!("stylesheet {busy} could not be read (429 "))), "{:?}", res.chrome.residuals);
+    assert!(res.chrome.residuals.iter().any(|r| r.ends_with("imports /print.css, which is not read")), "{:?}", res.chrome.residuals);
+    assert!(!res.rate_limited_hosts.is_empty(), "a 429 on a stylesheet slows its host as on a page");
+}
+
+#[tokio::test]
+async fn a_colour_scheme_the_folder_already_sets_stays() {
+    let site = design_site().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path();
+    std::fs::create_dir_all(out.join(".moss")).unwrap();
+    std::fs::write(out.join(".moss/config.toml"), "[site]\ncolor_scheme = \"auto\"\n").unwrap();
+
+    crawl(&site, out).await;
+
+    assert!(read(out, ".moss/theme/style.css").contains("--moss-color-text"), "the design is written");
+    assert_eq!(read(out, ".moss/config.toml"), "[site]\ncolor_scheme = \"auto\"\n");
+}
+
+#[tokio::test]
+async fn a_stylesheet_on_a_local_or_private_address_is_not_requested() {
+    let home = "<html><head><title>Studio Example</title>\
+        <link rel=\"stylesheet\" href=\"http://127.0.0.1:9/theme.css\">\
+        <link rel=\"stylesheet\" href=\"http://169.254.169.254/latest.css\">\
+        <link rel=\"stylesheet\" href=\"http://[fe80::1]/x.css\">\
+        <style>body { color: #202020 }</style></head>\
+        <body><main><article><p>Body text, long enough to be extracted as content by the generic scorer.</p></article></main></body></html>";
+    let site = site(&[("/", home.to_string())], &[]).await;
+    let tmp = tempfile::tempdir().unwrap();
+
+    let res = crawl(&site, tmp.path()).await;
+
+    for sheet in ["http://127.0.0.1:9/theme.css", "http://169.254.169.254/latest.css", "http://[fe80::1]/x.css"] {
+        assert!(res.chrome.residuals.contains(&format!("stylesheet {sheet}: address not allowed")), "{sheet}: {:?}", res.chrome.residuals);
+    }
+}
+
+#[tokio::test]
+async fn a_token_named_only_in_a_comment_is_no_override_of_the_author_s() {
+    let site = design_site().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path();
+    std::fs::create_dir_all(out.join(".moss/theme")).unwrap();
+    let own = "/* --moss-color-accent: #123456; */\nbody { margin: 0; }\n";
+    std::fs::write(out.join(".moss/theme/style.css"), own).unwrap();
+
+    crawl(&site, out).await;
+
+    let css = read(out, ".moss/theme/style.css");
+    assert!(css.starts_with(own.trim_end()) && css.contains("--moss-color-text: #202020;"), "{css}");
 }

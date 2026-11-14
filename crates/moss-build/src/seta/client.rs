@@ -349,7 +349,7 @@ pub fn get_seta_url() -> String {
 }
 
 fn runtime_seta_url() -> Option<String> {
-    let url = std::env::var(SETA_URL_ENV_VAR).ok()?;
+    let url = crate::build::inputs::env(SETA_URL_ENV_VAR)?;
     if is_safe_base_url(&url) {
         Some(url)
     } else {
@@ -393,6 +393,7 @@ pub struct MossSetaClient {
     pub(super) client: Client,
     pub(super) base_url: String,
     pub(super) identity: Option<Identity>,
+    pub(super) wire: std::sync::Arc<super::wire::WireCounters>,
 }
 
 /// Error types for moss-seta operations.
@@ -475,6 +476,26 @@ pub enum SetaError {
     /// `409 {code:'deploy_superseded', error}`. Display is the server's sentence.
     #[error("{message}")]
     DeploySuperseded { message: String },
+
+    /// The server refuses this moss as too old for the route:
+    /// `410 {code:'update_required', min_version?, message}`. Retrying cannot
+    /// help; the app has to be updated first.
+    #[error("{}", update_required_text(message, min_version))]
+    UpdateRequired { min_version: Option<String>, message: String },
+
+    /// The server does not serve this publish's members-only files:
+    /// `422 {code:'gated_not_enforceable', error}`. Display is the server's
+    /// sentence.
+    #[error("{message}")]
+    GatedNotEnforceable { message: String },
+}
+
+/// The server's sentence, then the oldest moss it accepts when it names one.
+fn update_required_text(message: &str, min_version: &Option<String>) -> String {
+    match min_version {
+        Some(v) => format!("{message} This needs moss {v} or newer."),
+        None => message.to_string(),
+    }
 }
 
 /// The folder a sign-in link is for: its site, once it has one, and its own
@@ -723,6 +744,7 @@ impl MossSetaClient {
             client: build_seta_http_client(),
             base_url: url,
             identity: None,
+            wire: super::wire::WireCounters::current(),
         }
     }
 
@@ -760,6 +782,7 @@ impl MossSetaClient {
             client: build_seta_http_client(),
             base_url: url,
             identity: Some(identity.clone()),
+            wire: super::wire::WireCounters::current(),
         }
     }
 
@@ -828,9 +851,20 @@ impl MossSetaClient {
         Ok(self.signed(method, path, bytes)?.header(header::CONTENT_TYPE, "application/json"))
     }
 
+    /// Send `request` and tally it: the one place a deploy's requests are counted.
+    pub(super) async fn send(&self, request: RequestBuilder) -> Result<reqwest::Response, reqwest::Error> {
+        let request = request.build()?;
+        let upload = matches!(*request.method(), Method::PUT | Method::PATCH);
+        let body = request.body().and_then(|b| b.as_bytes()).map_or(0, |b| b.len() as u64);
+        let sent = self.client.execute(request).await;
+        let ray = sent.as_ref().ok().and_then(|r| r.headers().get("cf-ray")).and_then(|v| v.to_str().ok());
+        self.wire.note(if upload { body } else { 0 }, sent.as_ref().ok().map(|r| r.status().as_u16()), ray);
+        sent
+    }
+
     /// Send `request`; a success is read as JSON, a failure becomes its error.
-    pub(super) async fn send_json<T: DeserializeOwned>(request: RequestBuilder) -> Result<T, SetaError> {
-        let resp = request.send().await?;
+    pub(super) async fn send_json<T: DeserializeOwned>(&self, request: RequestBuilder) -> Result<T, SetaError> {
+        let resp = self.send(request).await?;
         if !resp.status().is_success() {
             return Err(SetaError::from_failed_response(resp).await);
         }
@@ -839,7 +873,7 @@ impl MossSetaClient {
 
     /// Signed GET → deserialize JSON response.
     pub async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, SetaError> {
-        Self::send_json(self.signed(Method::GET, path, Bytes::new())?).await
+        self.send_json(self.signed(Method::GET, path, Bytes::new())?).await
     }
 
     /// Signed POST with JSON body → deserialize JSON response.
@@ -848,7 +882,7 @@ impl MossSetaClient {
         path: &str,
         body: &B,
     ) -> Result<T, SetaError> {
-        Self::send_json(self.signed_json(Method::POST, path, body)?).await
+        self.send_json(self.signed_json(Method::POST, path, body)?).await
     }
 
     // ========== Auth Endpoints ==========
@@ -908,7 +942,7 @@ impl MossSetaClient {
 
     /// Ask the server which email is linked to the caller's pubkey.
     pub async fn whoami(&self) -> Result<WhoamiResponse, SetaError> {
-        Self::send_json(self.signed(Method::GET, "/auth/whoami", Bytes::new())?.timeout(Duration::from_secs(5))).await
+        self.send_json(self.signed(Method::GET, "/auth/whoami", Bytes::new())?.timeout(Duration::from_secs(5))).await
     }
 
     /// Fetch the Stripe publishable key for THIS client's environment from the backend.

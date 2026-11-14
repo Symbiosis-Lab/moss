@@ -142,9 +142,11 @@ export function initSelectionActions(): void {
 
   // Create UI elements
   const popover = createPopover(labels, hasTools, hasComments);
+  popover.dataset.mossPermanent = "";
   document.body.appendChild(popover);
 
   const mobileBar = createMobileBar(labels, hasTools, hasComments);
+  mobileBar.dataset.mossPermanent = "";
   document.body.appendChild(mobileBar);
 
   const isMobile =

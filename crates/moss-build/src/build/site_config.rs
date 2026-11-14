@@ -201,7 +201,7 @@ pub fn publish_door(project_path: &Path, restricts_pages: bool) -> Result<(), St
     ensure_config_current(&project_path.to_string_lossy())?;
     if restricts_pages {
         crate::vault::config::require_members_moss(project_path)
-            .map_err(|e| format!("Not published: moss could not write .moss/config.toml. {e}"))?;
+            .map_err(|e| format!("moss could not write .moss/config.toml. {e}"))?;
     }
     Ok(())
 }
@@ -424,13 +424,13 @@ pub fn site_id_for_folder(folder: &Path) -> Result<String, String> {
 /// 3. `.moss/config.toml` top-level `environment` field.
 /// 4. Default: Production.
 pub fn resolve_environment(project_path: &str) -> HostingEnvironment {
-    if let Ok(name) = std::env::var("MOSS_ENV") {
+    if let Some(name) = crate::build::inputs::env("MOSS_ENV") {
         if let Some(env) = parse_env_name(name.trim()) {
             return env;
         }
         log::info!("MOSS_ENV='{}' is not one of staging|local|production; ignoring", name);
     }
-    if let Ok(url) = std::env::var("MOSS_SETA_URL") {
+    if let Some(url) = crate::build::inputs::env("MOSS_SETA_URL") {
         // A raw URL carries no environment name. A localhost URL is the local-dev
         // backend, so label it Local; a staging URL is Staging; any other URL is
         // Production (the client uses the raw URL directly via get_seta_url()/
@@ -692,7 +692,7 @@ mod version_ahead_guard_tests {
         std::fs::write(dir.path().join(".moss/config.toml"), "[site\n").unwrap();
         assert!(publish_door(dir.path(), false).is_ok());
         let err = publish_door(dir.path(), true).unwrap_err();
-        assert!(err.starts_with("Not published: moss could not write .moss/config.toml."), "got: {err}");
+        assert!(err.starts_with("moss could not write .moss/config.toml."), "got: {err}");
     }
 
     #[test]

@@ -135,8 +135,21 @@ const PHASE_BUDGETS_MS: &[(&str, u64)] = &[
     // still contain theirs, so subtract `lock_wait` to read their work. The
     // lock itself costs well under a millisecond, so the budget is a tripwire.
     ("lock_wait", 200),
-    // Native + plugin slot collection/injection before finalization.
+    // A build with no events walking the folder against the last seal
+    // (`incremental_gates::ChangeProof`): one stat per file, plus a hash for
+    // each file whose stat cannot vouch for it.
+    ("change_proof", 2_000),
+    // Reading the last sealed manifest and measuring `.moss/` against its
+    // record, once per build at the entry point.
+    ("seal_read", 1_000),
+    // Native + plugin slot collection before finalization.
     ("slot_resolution", 10_000),
+    // Filling the collected slots into every staged page.
+    ("slot_injection", 10_000),
+    ("config_reads", 2_000),
+    ("reduce", 5_000),
+    ("render_site_files", 5_000),
+    ("render_handoff", 5_000),
     // Loop A: parse + resolve every markdown file (blocking.rs). Dominant
     // render-phase cost on image/link-heavy vaults — measured ~16-18s on a
     // 216-page reference vault; budget set loosely above
@@ -385,6 +398,7 @@ pub fn format_build_summary(
     // path the OS reported twice counts twice, so it is a size hint.
     let trigger = match trigger {
         BuildTrigger::Full => "trigger=full".to_string(),
+        BuildTrigger::Unobserved => "trigger=unobserved".to_string(),
         BuildTrigger::Structural(paths) => format!("trigger=structural changed={}", paths.len()),
         BuildTrigger::ContentOnly(paths) => format!("trigger=content changed={}", paths.len()),
     };
@@ -433,6 +447,7 @@ const BUILD_COUNTS: &[&str] = &[
     "background_assets_linked", "background_assets_stat_only", "sized_raster_blob_checks",
     "images_unchanged", "images_dispatched", "image_variants_stat_only", "image_variants_blob_checks",
     "image_transform_records_loaded", "files_sealed", "hash_index_hits_process", "hash_index_rehashed_process",
+    "proved_from_seal",
 ];
 /// The video counts, which also make up a detached encode's own record.
 const VIDEO_COUNTS: &[&str] = &["videos_cache_hit", "video_blobs_validated", "videos_converted", "videos_detached"];
@@ -473,6 +488,7 @@ fn build_record(t: &BuildTelemetry, total: Duration, outcome: &str, trigger: &cr
     use crate::build::BuildTrigger;
     let (kind, changed) = match trigger {
         BuildTrigger::Full => ("full", 0),
+        BuildTrigger::Unobserved => ("unobserved", 0),
         BuildTrigger::Structural(paths) => ("structural", paths.len()),
         BuildTrigger::ContentOnly(paths) => ("content", paths.len()),
     };
@@ -772,7 +788,7 @@ mod tests {
             assert_eq!(record["outcome"], "ok");
             let phases = record["phases"].as_array().unwrap();
             // The fixture has no search index, so search_index and its counts are covered by the serializer test.
-            for name in ["media_prelude", "background_asset_copy", "seal_persist", "seal_promote"] {
+            for name in ["config_reads", "reduce", "render_site_files", "render_handoff", "slot_injection", "media_prelude", "background_asset_copy", "seal_persist", "seal_promote"] {
                 assert!(phases.iter().any(|p| p["name"] == name), "missing {name}: {record}");
             }
             assert!(phases.iter().all(|p| p["pass"].as_u64().unwrap() >= 1));

@@ -357,20 +357,21 @@ fn link_html(href: &str, label: &str) -> String {
 /// (Plain text `![[url]]` would be escaped by the converter.)
 const EMBED_TAG: &str = "moss-embed";
 
-/// htmd with four changes: a heading (h2 to h6) that is plainly a paragraph
+/// htmd with these changes: a heading (h2 to h6) that is plainly a paragraph
 /// is written as one (see `is_paragraph_text`), a heading with a line break
 /// stays one line with `<br>` for the break, `<moss-embed data-url="…">` becomes the
 /// remote-embed wikilink on its own paragraph, with the label and size its
-/// attributes carry, and an `<img>` whose alt is only a file name is written
-/// with an empty alt (see `describing_alt`).
+/// attributes carry, an `<img>` whose alt is only a file name is written
+/// with an empty alt (see `describing_alt`), and builder residue (spacer
+/// paragraphs, a marquee's repeated pictures) is tidied (see `emit::tidy`).
 pub(crate) fn html_to_markdown(html: &str) -> std::io::Result<String> {
     HtmlToMarkdown::builder()
         .add_handler(vec!["img"], |handlers: &dyn Handlers, el: htmd::Element| {
             let alt = el.attrs.iter().find(|a| &*a.name.local == "alt").map_or("", |a| &*a.value);
             let src = el.attrs.iter().find(|a| &*a.name.local == "src");
             match src {
-                Some(src) if !alt.trim().is_empty() && describing_alt(alt).is_empty() => {
-                    Some(image_line(&src.value, describing_alt(alt)).into())
+                Some(src) if !alt.trim().is_empty() && describing_alt(alt, &src.value).is_empty() => {
+                    Some(image_line(&src.value, "").into())
                 }
                 _ => handlers.fallback(el),
             }
@@ -410,6 +411,7 @@ pub(crate) fn html_to_markdown(html: &str) -> std::io::Result<String> {
         })
         .build()
         .convert(html)
+        .map(|markdown| super::emit::tidy(&markdown))
 }
 
 /// Whether the text of a heading (h2 to h6; h1 is the page title) is plainly a

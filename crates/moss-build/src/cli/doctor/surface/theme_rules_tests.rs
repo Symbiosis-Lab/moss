@@ -134,11 +134,6 @@ fn vendor_keyframes_are_not_selectors() {
 }
 
 #[test]
-fn split_selector_list_keeps_commas_inside_functions() {
-    assert_eq!(split_selector_list(":is(.a, .b) p, .c"), vec![":is(.a, .b) p", ".c"]);
-}
-
-#[test]
 fn a_broad_listing_prefix_does_not_hide_a_dead_rule() {
     let css = ".moss-folder-title .gone { x: 1 }\n.moss-grid-card { x: 1 }\n.moss-card-title .typo-gone { x: 1 }\n";
     let found = unmatched(css, &[("index.html", PAGE)], None);

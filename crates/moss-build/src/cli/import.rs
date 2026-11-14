@@ -7,7 +7,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use crate::vault::import::{import_source, ImportOptions};
+use crate::vault::import::{import_source_in, ImportOptions, ImportSession};
 use crate::vault::import::scrape::run::{dropped_widgets, PageGap, ScrapeProgress, ScrapeResult};
 use crate::vault::import::scrape::service::DEFAULT_MAX_PAGES;
 #[cfg(test)]
@@ -62,13 +62,15 @@ pub fn run(args: &[String]) -> i32 {
     };
 
     let mut totals = ImportTotals::default();
+    let mut session = ImportSession::default();
 
     for url in &urls {
         eprintln!("→ {}", redact_query(url));
-        let result = runtime.block_on(import_source(url, &folder, ImportOptions {
+        let result = runtime.block_on(import_source_in(&mut session, url, &folder, ImportOptions {
             recursive: parsed.recursive,
             private_members_dir: parsed.members_dir.as_ref().map(PathBuf::from),
-        }, print_progress)).map(|result| {
+            export: parsed.export.as_ref().map(PathBuf::from),
+        }, &print_progress)).map(|result| {
             for line in result.report { eprintln!("  ↳ {line}"); }
             if let Some(handoff) = result.subscribers {
                 for path in handoff.files { eprintln!("  ↳ Reader list retained privately: {}", path.display()); }
@@ -136,6 +138,9 @@ pub fn run(args: &[String]) -> i32 {
                 }
                 if let Some(line) = res.chrome.line() {
                     eprintln!("  ↳ {line}");
+                }
+                for residual in &res.chrome.residuals {
+                    eprintln!("  ↳ design not carried: {residual}");
                 }
                 // Silent when the site declared no sitemap at all — the
                 // ordinary case, and the one this line must not clutter.
@@ -328,6 +333,8 @@ struct ParsedArgs {
     folder: Option<String>,
     list_file: Option<String>,
     members_dir: Option<String>,
+    /// A WordPress export added to the address.
+    export: Option<String>,
     recursive: bool,
 }
 
@@ -342,6 +349,10 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
             "--members-dir" => {
                 i += 1;
                 out.members_dir = Some(args.get(i).ok_or("--members-dir requires a private directory")?.clone());
+            }
+            "--export" => {
+                i += 1;
+                out.export = Some(args.get(i).ok_or("--export requires a WordPress export file")?.clone());
             }
             "--list" => {
                 i += 1;
@@ -373,6 +384,9 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
         i += 1;
     }
 
+    if out.list_file.is_some() && out.export.is_some() {
+        return Err("--export adds one export to one address, not to a --list".to_string());
+    }
     match (positional.len(), out.list_file.is_some()) {
         (0, false) => return Err("missing URL".to_string()),
         (0, true) => {}
@@ -473,6 +487,7 @@ fn redact_query(url: &str) -> String {
 
 fn print_usage() {
     eprintln!("Usage: moss import <url|file> [<folder>] [-r|--recursive]");
+    eprintln!("       moss import <address> <folder> --export <export.xml>");
     eprintln!("       moss import --list <file> [<folder>] [-r|--recursive]");
     eprintln!("       moss import <folder> [--with <derivation-id>]");
     eprintln!("       moss import --status [<site>] [--json]");
@@ -481,6 +496,10 @@ fn print_usage() {
     eprintln!("as markdown into <folder> (default: current directory).");
     eprintln!();
     eprintln!("Ghost export folders and All data zips bring posts, tags and restricted text.");
+    eprintln!("A WordPress export (Tools → Export → All content) brings drafts, private pages,");
+    eprintln!("custom post types, dates, terms, the menu and the media library. moss crawls the");
+    eprintln!("site it names first, so published pages keep the body visitors see; --export adds");
+    eprintln!("an export to an address.");
     eprintln!("Reader lists stay in private app data; --members-dir selects a private directory.");
     eprintln!("A URL (http/https) is fetched and distilled with a defuddle-based");
     eprintln!("extractor; metadata is read from schema.org, OpenGraph, and <html lang>.");
@@ -610,6 +629,7 @@ mod tests {
             folder: None,
             list_file: Some(p.to_string_lossy().to_string()),
             members_dir: None,
+            export: None,
             recursive: false,
         };
         let urls = collect_urls(&parsed).unwrap();

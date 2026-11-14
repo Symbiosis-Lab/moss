@@ -319,6 +319,8 @@ pub(crate) fn retry_reporting_timeout<T>(
         Err(e) if icloud::is_offline_not_absent(path, &e) => e,
         Err(e) => return (Err(e), false),
     };
+    #[cfg(test)]
+    let deadline = TEST_DEADLINE.with(|d| d.get()).unwrap_or(deadline);
     if !wait_budget_allows(path) {
         log::debug!(
             "{} is still in the cloud and was already waited out — failing fast",
@@ -377,7 +379,14 @@ fn forget_wait(path: &Path) {
 
 /// Reads a vault file, waiting for a cloud-evicted source to come back.
 pub fn read_with_materialize_wait(path: &Path, deadline: Duration) -> std::io::Result<Vec<u8>> {
-    retry_after_materialize(path, deadline, || std::fs::read(path))
+    retry_after_materialize(path, deadline, || {
+        // A test's cloud-only file fails as a real one does with downloads on read off.
+        #[cfg(test)]
+        if icloud::pretend::marked(path) {
+            return Err(std::io::Error::from_raw_os_error(libc::EDEADLK));
+        }
+        std::fs::read(path)
+    })
 }
 
 /// Bring a vault input's bytes down **before** the caller opens the file by

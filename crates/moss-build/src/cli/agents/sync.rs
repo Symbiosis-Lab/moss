@@ -118,9 +118,10 @@ fn stamp_for(rest: &str) -> String {
 /// When [`sync_after_build`] refreshes the guidance. Documented here rather than
 /// at each call site so the whole policy is visible in one place.
 ///
-/// - **Any full build** — one gate in `build::run_pipeline`, on
-///   `BuildTrigger::Full`: opening a folder in the GUI builds it, and
-///   `moss build` / `moss preview` cover headless use. It writes
+/// - **Any build that is not a watch batch** — one gate in
+///   `build::run_pipeline`, on `!BuildTrigger::is_watch_batch()` (`Full` or
+///   `Unobserved`): opening a folder in the GUI builds it, and `moss build` /
+///   `moss preview` cover headless use, whether or not they carry pages. It writes
 ///   `.moss/agents/SKILL.md` and refreshes the agent files already there; it
 ///   creates none (see the module header).
 /// **Not** on watch rebuilds as a rule: they fire on every save. But

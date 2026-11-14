@@ -258,6 +258,15 @@ fn title_is_shown(body: &str, title: &str) -> bool {
     })
 }
 
+/// Whether `heading` is one whole part of a composite title, the way a
+/// search-engine title is built around the page's own (`Name: Talk | Event`).
+/// A part, never a substring: `Press` is not the page `Press Kit | Studio`.
+fn is_part_of(heading: &str, title: &str) -> bool {
+    let words = visible_words(heading);
+    let parts: Vec<&str> = SEPARATOR.split(title).flat_map(|part| part.split(": ")).collect();
+    parts.len() > 1 && !words.is_empty() && parts.iter().any(|part| visible_words(part) == words)
+}
+
 /// Builders' internal page names (`T_Camino`) are not titles a reader sees.
 fn looks_like_internal_name(title: &str) -> bool {
     let t = title.trim();
@@ -315,11 +324,12 @@ pub(super) fn without_title_heading(
         let bare_title = strip_site_name(title, site_names);
         let repeats = same_name(&heading, title)
             || same_name(&strip_site_name(&heading, site_names), &bare_title);
+        let own_title = text.trim_start().starts_with("# ") && is_part_of(&heading, title)
+            && !site_names.iter().any(|name| same_name(&heading, name));
         let new_title = (!repeats
             && adopt
             && leading
-            && looks_like_internal_name(&bare_title)
-            && !title_is_shown(body, &bare_title))
+            && (own_title || (looks_like_internal_name(&bare_title) && !title_is_shown(body, &bare_title))))
         .then(|| strip_site_name(&heading, site_names))
             .filter(|t| !t.trim().is_empty());
         if !repeats && new_title.is_none() {
@@ -347,6 +357,20 @@ mod tests {
     fn adopted(body: &str, title: &str) -> Option<(String, String)> {
         let r = without_title_heading(body, title, &[], true)?;
         Some((r.title?, r.body))
+    }
+
+    /// A search-engine title built around the page's own: the page's first
+    /// heading names it, so that heading is the title.
+    #[test]
+    fn the_pages_own_heading_wins_over_a_composite_search_title() {
+        assert_eq!(
+            adopted("# Lighting a room\n\nThe talk.\n", "Ada Lampwright: Lighting a room | Spring Talks"),
+            Some(("Lighting a room".to_string(), "The talk.\n".to_string())),
+        );
+        assert_eq!(adopted("# Lighting a room\n\nThe talk.\n", "Lighting a room — Ada Lampwright"), Some(("Lighting a room".to_string(), "The talk.\n".to_string())));
+        // The site's own name is never the page's title.
+        let named = without_title_heading("# Studio\n\nText.\n", "About | Studio", &["Studio"], true);
+        assert!(named.is_none_or(|r| r.title.is_none()));
     }
 
     fn page(title: &str) -> String {
@@ -573,6 +597,8 @@ mod tests {
     #[test]
     fn no_leading_heading_leaves_the_title_alone() {
         assert_eq!(adopted("Just text.\n", "T_Winter_Tale_S"), None);
+        assert_eq!(adopted("# Press\n\nCoverage.\n", "Press Kit | Studio"), None);
+        assert_eq!(adopted("## Lighting a room\n\nText.\n", "Ada Lampwright: Lighting a room | Spring Talks"), None);
         assert_eq!(adopted("Intro paragraph.\n\n# The Winter's Tale\n", "T_Winter_Tale_S"), None);
     }
 

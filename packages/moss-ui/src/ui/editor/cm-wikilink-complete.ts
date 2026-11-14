@@ -126,7 +126,7 @@ export function wikilinkCompleteExtension(
   opts: WikilinkCompleteOptions,
 ): Extension {
   return [
-    autocompletion({ override: [silentInCode(completionSource(opts))] }),
+    autocompletion({ override: [silentInCode(completionSource(opts))], tooltipClass: () => 'moss-menu', optionClass: () => 'moss-menu-row' }),
     wikilinkBracketCloseHandler(),
   ];
 }

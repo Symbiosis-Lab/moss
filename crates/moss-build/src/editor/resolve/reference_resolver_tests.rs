@@ -511,3 +511,27 @@ fn a_link_anchor_stays_out_of_the_file_it_opens() {
         assert_eq!(out[0].url, None, "{scope:?}: an unbuilt page has no URL");
     }
 }
+
+/// A folder note may embed its own folder by name, as the build reads it:
+/// `events/events.md` writing `![[events/]]` lists `events/`, not the missing
+/// `events/events/`. A real subfolder of that name keeps its meaning.
+#[test]
+fn folder_note_embedding_its_own_folder_by_name_is_a_listing() {
+    let dir = scratch_root();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("events")).unwrap();
+    std::fs::write(root.join("events/events.md"), "# Events\n\n![[events/|when:upcoming]]\n").unwrap();
+    std::fs::write(root.join("events/talk.md"), "# Talk\n").unwrap();
+    std::fs::write(root.join("index.md"), "# Home\n").unwrap();
+
+    let own = vec![RefTarget { text: "events/".into(), is_embed: true }];
+    let out = resolve_references_batch(&own, "events/events.md", root, EditorScope::Site);
+    assert_eq!(out[0].kind, ReferenceKind::FolderListing, "got {:?}", out[0].kind);
+    let canonical = root.canonicalize().expect("canonical root");
+    assert_eq!(out[0].resolved_path.as_deref(), Some(canonical.join("events/events.md").to_string_lossy().as_ref()));
+
+    std::fs::create_dir_all(root.join("events/events")).unwrap();
+    std::fs::write(root.join("events/events/events.md"), "# Inner\n").unwrap();
+    let out = resolve_references_batch(&own, "events/events.md", root, EditorScope::Site);
+    assert_eq!(out[0].resolved_path.as_deref(), Some(canonical.join("events/events/events.md").to_string_lossy().as_ref()));
+}

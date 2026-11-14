@@ -342,8 +342,8 @@ listed: true
 /// own public API — same shape `snapshot_tests.rs` uses, parameterized by
 /// `trigger` so a second call against the same folder can pass
 /// `BuildTrigger::ContentOnly` and actually engage the incremental skip
-/// (`IncrementalGates::render_skip`, gated on the trigger alone — see
-/// `build/incremental_gates.rs` — not on watch mode).
+/// (`IncrementalGates::render_skip`, decided from the trigger in
+/// `build/incremental_gates.rs`, not from watch mode).
 fn build(folder_path: &str, trigger: moss_build::build::BuildTrigger) -> Result<String, String> {
     build_with_site_url(folder_path, trigger, None)
 }

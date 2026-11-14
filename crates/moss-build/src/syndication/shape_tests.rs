@@ -328,6 +328,11 @@ fn copies_reuse_emitted_math_pngs_and_keep_picture_alt_and_limits() {
     assert_eq!(limited.included_pictures, 1);
     assert_eq!(limited.omitted_pictures, 2);
     assert_eq!(limited.article.unwrap().html.matches("<img").count(), 1);
+    channel.images = None;
+    let unlimited = shape_with(&p, &channel, SITE, &opts).unwrap();
+    assert_eq!(unlimited.article.unwrap().html.matches("<img").count(), 3, "an article keeps its pictures on a channel that states no limit");
+    assert_eq!((unlimited.included_pictures, unlimited.omitted_pictures), (3, 0));
+    channel.images = Some(super::super::channel::ImageLimits { max: 1, alt: true });
     let missing = shape_with(&p, &channel, SITE, &ShapeOptions::default()).unwrap();
     assert!(!missing.article.unwrap().html.contains("/_moss/math/"));
     assert!(missing.pictures.iter().all(|p| !p.url.contains("/_moss/math/")));

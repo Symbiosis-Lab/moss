@@ -4,7 +4,9 @@
 //! mark them unavailable. Page counts reuse the seal's change set, with
 //! `pages_classified` distinguishing an unknown baseline from zero changes.
 //! `body_requests` and `retries` use the upload summary's accounting, excluding
-//! sync and commit requests. Unentered phases have zero milliseconds.
+//! sync and commit requests. `requests`, `requests_failed`, `sent_kb`, `resent_kb`
+//! and `edge` come from the seta client's request tally and cover every request
+//! of the deploy. Unentered phases have zero milliseconds.
 
 use std::{collections::BTreeMap, future::Future, path::Path, sync::{Arc, Mutex}, time::Instant};
 use crate::build::phase::{self, PhaseTrace};
@@ -88,19 +90,21 @@ pub(crate) fn record<'a, T: Outcome + 'a, E: 'a>(
         let started_at = chrono::Utc::now();
         let started = Instant::now();
         let refusal = Arc::new(Mutex::new(None));
-        let (result, collector) = REFUSAL.scope(refusal.clone(), phase::with_collector(async {
+        let wire = Arc::new(crate::seta::wire::WireCounters::default());
+        let (result, collector) = REFUSAL.scope(refusal.clone(), crate::seta::wire::WireCounters::scope(wire.clone(), phase::with_collector(async {
             let result = body.await;
             if let Ok(value) = &result { value.observe(); }
             result
-        })).await;
+        }))).await;
         let refusal = refusal.lock().unwrap_or_else(|e| e.into_inner()).take();
         let mut counts: BTreeMap<&str, usize> = ["manifest_files", "files_needed", "files_uploaded",
             "bytes_uploaded", "body_requests", "retries", "chunked_files", "single_put_files",
             "final_concurrency", "achieved_bytes_per_s", "server_files_updated", "removed_files",
-            "pages_added", "pages_edited", "pages_deleted", "pages_restyled", "pages_classified"]
+            "pages_added", "pages_edited", "pages_deleted", "pages_restyled", "pages_classified",
+            "manifest_kb"]
             .into_iter().map(|key| (key, 0)).collect();
-        let mut timings: BTreeMap<&str, u128> = ["build", "local_checks", "manifest", "sync",
-            "upload", "publish", "after_publish", "history_snapshot"]
+        let mut timings: BTreeMap<&str, u128> = ["build", "local_checks", "manifest", "whoami",
+            "live_generation", "sync", "upload", "publish", "after_publish", "history_snapshot"]
             .into_iter().map(|key| (key, 0)).collect();
         let mut build_started_at = None;
         if let Ok(t) = collector.lock() {
@@ -108,6 +112,7 @@ pub(crate) fn record<'a, T: Outcome + 'a, E: 'a>(
             for p in &t.phases { *timings.entry(p.name).or_default() += p.ms; }
             build_started_at = t.nested_started_at.map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
         }
+        counts.extend(wire.counts().map(|(name, n)| (name, n as usize)));
         // History runs inside the landing tail; report it separately from that tail.
         let history = timings["history_snapshot"];
         if let Some(after) = timings.get_mut("after_publish") { *after = after.saturating_sub(history); }
@@ -115,7 +120,7 @@ pub(crate) fn record<'a, T: Outcome + 'a, E: 'a>(
         let record = crate::build::phase::profile_record_of("deploy", serde_json::json!({
             "started_at": started_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "total_ms": started.elapsed().as_millis(), "outcome": outcome,
-            "refusal_kind": refusal, "target": target, "dry_run": dry_run,
+            "refusal_kind": refusal, "edge": wire.edge(), "target": target, "dry_run": dry_run,
             "build_started_at": build_started_at,
             "phases": timings.iter().map(|(name, ms)| serde_json::json!({"name": name, "ms": ms})).collect::<Vec<_>>(),
             "counts": counts,

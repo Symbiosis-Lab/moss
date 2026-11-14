@@ -133,9 +133,7 @@ impl FrontmatterScanCache {
     /// Whether the page's public view is restricted: its own `members:`
     /// wins, inherited access otherwise.
     pub(crate) fn is_members(&self, source_path: &str) -> bool {
-        self.entries.get(source_path).and_then(|e| e.access)
-            .or_else(|| self.members_policy.inherited(source_path))
-            .is_some_and(|access| access != Members::Public)
+        crate::build::scan::members::restricted(self.entries.get(source_path).and_then(|e| e.access), || self.members_policy.inherited(source_path))
     }
 
     /// Whether any of `files` declares `members:` or a `cascade:`, by what a
@@ -239,7 +237,7 @@ pub(super) fn scan_frontmatter_urls_with_evicted(
         let cascade = declared_cascade(&content);
         // The page's own access only: inheritance needs every home's entry.
         let content = moss_core::frontmatter::members::public_source(&content);
-        let access = moss_core::frontmatter::frontmatter_map(&content).get("members").map(Members::from_value);
+        let access = crate::build::scan::members::own_access(&content);
 
         // ONE parser, one pass, both fields — same parse
         // `build_page_map`/`build_external_url_map` used to run separately.
@@ -319,6 +317,17 @@ pub(super) fn scan_frontmatter_urls_with_evicted(
         let unread = if pending.contains(home) { HomeCascade::Pending } else { HomeCascade::Unreadable };
         (home, current.map_or(unread, |entry| HomeCascade::Read(entry.cascade)))
     }), uses_members);
+    for file in markdown_files {
+        let misplaced = out.contains_key(&file.path) && !homes.contains(&file.path.as_str())
+            && cache.entries.get(&file.path).is_some_and(|entry| entry.cascade.is_some() && entry.access.is_none());
+        if misplaced {
+            crate::build::cli_output::log_warn_problem!(
+                "[{}] `cascade:` names `members`, but this page is not its folder's home (`index.md`, a page named like \
+                 its folder, or `home: true`), so it has no effect: nothing beneath it is for members only.",
+                file.path
+            );
+        }
+    }
     out
 }
 

@@ -150,6 +150,73 @@ fn folder_note_shorthand_wikilink_and_embed_rewritten() {
 }
 
 #[test]
+fn a_folder_notes_embed_of_its_own_folder_by_name_follows_the_rename() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = &fs::canonicalize(tmp.path()).unwrap();
+    w(root, "events/events.md", "![[events/|style:summary]]\n");
+    w(root, "events/talk.md", "# Talk\n");
+
+    do_move(root, "events", "dates");
+
+    assert_eq!(r(root, "dates/dates.md"), "![[dates/|style:summary]]\n");
+}
+
+#[test]
+fn a_nested_folder_notes_own_folder_embed_keeps_its_short_spelling() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = &fs::canonicalize(tmp.path()).unwrap();
+    w(root, "work/Opera/Opera.md", "![[Opera/]]\n");
+    w(root, "work/Opera/act.md", "# Act\n");
+
+    do_move(root, "work/Opera", "work/Aria");
+
+    assert_eq!(r(root, "work/Aria/Aria.md"), "![[Aria/]]\n");
+}
+
+#[test]
+fn a_folder_with_an_own_folder_embed_moves_under_another_folder() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = &fs::canonicalize(tmp.path()).unwrap();
+    w(root, "events/events.md", "![[events/|style:summary]]\n");
+    w(root, "events/talk.md", "# Talk\n");
+    w(root, "archive/old.md", "# Old\n");
+
+    do_move(root, "events", "archive/events");
+
+    assert_eq!(r(root, "archive/events/events.md"), "![[events/|style:summary]]\n");
+}
+
+#[test]
+fn a_folder_note_with_an_own_folder_embed_is_renamed_to_index() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = &fs::canonicalize(tmp.path()).unwrap();
+    w(root, "events/events.md", "![[events/|style:summary]]\n");
+    w(root, "events/talk.md", "# Talk\n");
+
+    do_move(root, "events/events.md", "events/index.md");
+
+    assert_eq!(r(root, "events/index.md"), "![[/events/|style:summary]]\n");
+    assert_eq!(resolves_to(root, "events"), 1);
+}
+
+#[test]
+fn a_folder_note_with_an_own_folder_embed_moves_out_of_its_folder() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = &fs::canonicalize(tmp.path()).unwrap();
+    w(root, "events/events.md", "![[events/|style:summary]]\n");
+    w(root, "events/talk.md", "# Talk\n");
+    w(root, "notes/other.md", "# Other\n");
+
+    let old = root.join("events/events.md").to_string_lossy().to_string();
+    let new = root.join("notes/events.md").to_string_lossy().to_string();
+    let plan = plan_moves(root, &[(old, new)]).expect("plan");
+    assert_eq!(plan.left_as_written, vec!["notes/events.md".to_string()]);
+    apply_planned_moves(root, &plan).expect("apply");
+
+    assert_eq!(r(root, "notes/events.md"), "![[events/|style:summary]]\n");
+}
+
+#[test]
 fn folder_note_shorthand_frontmatter_cover_rewritten() {
     let tmp = tempfile::tempdir().unwrap();
     let root = &fs::canonicalize(tmp.path()).unwrap();

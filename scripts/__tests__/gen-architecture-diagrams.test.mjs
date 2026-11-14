@@ -21,7 +21,7 @@ test('names that exist pass and prose is not checked', () => {
 });
 
 test('a missing crate, path or item goes red', () => {
-  const md = doc(['  a["moss-wire"]:::crate', '  b["crates/moss-wire"]:::path', '  c["BuildInputs"]:::symbol'].join('\n'));
+  const md = doc(['  a["moss-wire"]:::crate', '  b["crates/moss-wire"]:::path', '  c["WireInputs"]:::symbol'].join('\n'));
   assert.equal(problemsIn(md, resolves).length, 3);
 });
 

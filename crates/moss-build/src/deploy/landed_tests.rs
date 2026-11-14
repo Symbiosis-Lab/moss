@@ -722,6 +722,29 @@ async fn a_copy_that_waits_past_retention_still_carries_its_published_text() {
     assert_eq!((record.state, record.post), (crate::syndication::record::State::Posted, None), "a sent copy keeps no post");
 }
 
+/// After a landing, a page reads back as that publish built it, through the
+/// same records a publish route writes (the generation's kept map, the
+/// landing, the live generation in the deployment state), though the page was
+/// edited and rebuilt since.
+#[tokio::test]
+async fn a_page_reads_back_as_its_landing_published_it_after_an_edit() {
+    let vault = syndicating_vault();
+    let root = vault.path();
+    std::fs::write(root.join(".moss/state.toml"), "[deployment]\nsite_id = \"site-1\"\n").unwrap();
+    let landed = seal_posts(root, &[("a", "aaaa0001", "Sealed", "Sealed words.")]);
+    land(root, &landed).await;
+    crate::vault::deployment_state::record_publish(
+        &root.to_string_lossy(),
+        crate::vault::deployment_state::PublishOutcome { url: "https://example.org".into(), generation_id: Some(landed.generation_id().to_string()), ..Default::default() },
+    )
+    .unwrap();
+    std::fs::write(root.join("posts/a.md"), "---\ntitle: Edited\nuid: aaaa0001\n---\nEdited words.\n").unwrap();
+    rebuild_with_an_edit(root);
+
+    let page = crate::build::manifest::published_article(root, "posts/a.md").expect("the landed page");
+    assert_eq!((page.title.as_str(), page.content.as_str()), ("Sealed", "Sealed words."));
+}
+
 /// Copy records travel with the folder and build stores do not. A copy made
 /// due on one computer and sent from another, which never built the landed
 /// generation and whose own build has an edit, carries the published text.

@@ -45,12 +45,10 @@ fn empty_cell() -> ServedCell {
 #[test]
 fn incomplete_rebuild_uses_immutable_current_then_ready_stage() {
     let (_tmp, mp) = vault(&[("complete", "article")]);
-    // A real build holds its lifecycle record through its cache-write lease.
-    let _record = lock_for(&mp);
     mp.set_current_ptr("complete").unwrap();
     stage_page(&mp, "article");
     let cell = empty_cell();
-    adopt_server(&mp, &cell);
+    let _record = adopt_server(&mp, &cell);
     show_render(&mp, true);
     assert_eq!(read(&cell), mp.staging_dir());
     assert!(park_for_rebuild(&mp, false, Default::default()).is_none());
@@ -70,10 +68,8 @@ fn incomplete_rebuild_uses_immutable_current_then_ready_stage() {
 #[test]
 fn late_ready_render_is_revealed_once_and_stale_tails_cannot_switch_stage() {
     let (_tmp, mp) = vault(&[]);
-    // A cache-write lease keeps this record from idle-folder pruning.
-    let _record = lock_for(&mp);
     let cell = empty_cell();
-    adopt_server(&mp, &cell);
+    let _record = adopt_server(&mp, &cell);
     let (first, _) = show_render(&mp, false);
     let unrelated = tempfile::tempdir().unwrap();
     let _ = lock_for(&MossPaths::new(unrelated.path()));
@@ -94,11 +90,11 @@ fn late_ready_tail_cannot_repoint_shared_cell_after_another_folder_adopts_it() {
     let _record_b = lock_for(&mp_b);
     let cell = empty_cell();
 
-    adopt_server(&mp_a, &cell);
+    let _ = adopt_server(&mp_a, &cell);
     let (render_a, _) = show_render(&mp_a, false);
     assert_eq!(read(&cell), mp_a.initial_serve_dir());
 
-    adopt_server(&mp_b, &cell);
+    let _ = adopt_server(&mp_b, &cell);
     let served_b = read(&cell);
     assert!(served_b.starts_with(&mp_b.build_dir()));
     assert!(!reveal_render_if_latest(&mp_a, Some(render_a)));
@@ -115,9 +111,8 @@ fn late_ready_tail_cannot_repoint_shared_cell_after_another_folder_adopts_it() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_withheld_render_is_never_shown_and_its_workers_block_the_next_sweep() {
     let (_tmp, mp) = vault(&[("g1", "in-g1")]);
-    let _record = lock_for(&mp);
     let cell = empty_cell();
-    adopt_server(&mp, &cell);
+    let _record = adopt_server(&mp, &cell);
     let (r1, _) = show_render(&mp, true);
     assert!(promote(&mp, next_promotion_epoch(), Some(r1), "g1", true).unwrap());
 
@@ -157,11 +152,10 @@ async fn a_withheld_render_is_never_shown_and_its_workers_block_the_next_sweep()
 async fn render_numbers_from_before_this_record_are_never_compared() {
     // (a)
     let (_tmp, mp) = vault(&[("g1", "old")]);
-    let _record = lock_for(&mp);
     mp.set_current_ptr("g1").unwrap();
     stage_page(&mp, "fresh");
     let cell = empty_cell();
-    adopt_server(&mp, &cell);
+    let _record = adopt_server(&mp, &cell);
     assert_eq!(read(&cell), mp.current_ptr());
     assert_eq!(snapshot(&mp).0, None);
     assert!(park_for_rebuild(&mp, false, Default::default()).is_some());
@@ -169,11 +163,10 @@ async fn render_numbers_from_before_this_record_are_never_compared() {
 
     // (b)
     let (_tmp_b, mp_b) = vault(&[("g1", "old")]);
-    let _record_b = lock_for(&mp_b);
     mp_b.set_current_ptr("g1").unwrap();
     stage_page(&mp_b, "fresh");
     let cell_b: ServedCell = Arc::new(RwLock::new(mp_b.staging_dir()));
-    adopt_server(&mp_b, &cell_b);
+    let _record_b = adopt_server(&mp_b, &cell_b);
     assert!(park_for_rebuild(&mp_b, false, Default::default()).is_none(), "an unnumbered render on staging is no licence");
     assert_eq!(read(&cell_b), mp_b.staging_dir());
     let (port, _, stop) = serve(&cell_b, 63200).await;
@@ -182,15 +175,31 @@ async fn render_numbers_from_before_this_record_are_never_compared() {
 
     // (c)
     let (_tmp_c, mp_c) = vault(&[("g1", "old")]);
-    let _record_c = lock_for(&mp_c);
     mp_c.set_current_ptr("g1").unwrap();
     let cell_c = empty_cell();
-    adopt_server(&mp_c, &cell_c);
+    let _record_c = adopt_server(&mp_c, &cell_c);
     show_render(&mp_c, true);
-    adopt_server(&mp_c, &cell_c);
+    let _ = adopt_server(&mp_c, &cell_c);
     assert_eq!(read(&cell_c), mp_c.staging_dir(), "the second build must not pull the preview off render 1");
     assert!(park_for_rebuild(&mp_c, false, Default::default()).is_none());
     assert_eq!(read(&cell_c), mp_c.staging_dir());
+}
+
+/// Another folder's first lookup between a build's adoption and its render
+/// must not take the cell from the record the render points.
+#[test]
+fn the_adopted_record_keeps_the_cell_through_a_folder_switch() {
+    let (_tmp, mp) = vault(&[("g1", "old")]);
+    mp.set_current_ptr("g1").unwrap();
+    let cell = empty_cell();
+    let _record = adopt_server(&mp, &cell);
+    assert_eq!(read(&cell), mp.current_ptr());
+
+    let unrelated = tempfile::tempdir().unwrap();
+    let _ = lock_for(&MossPaths::new(unrelated.path()));
+    let _permit = park_for_rebuild(&mp, false, Default::default());
+    show_render(&mp, true);
+    assert_eq!(read(&cell), mp.staging_dir(), "the preview shows this render");
 }
 
 /// A record something still holds survives a folder switch; an idle one is

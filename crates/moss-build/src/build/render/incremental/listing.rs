@@ -561,6 +561,7 @@ pub fn listing_globals(
     site_lang: crate::i18n::Language,
     typesetting: Option<&str>,
     math: bool,
+    build_day: chrono::NaiveDate,
 ) -> BTreeMap<String, String> {
     let overrides: BTreeMap<&str, &str> = dir_overrides
         .iter()
@@ -586,6 +587,10 @@ pub fn listing_globals(
         // is built from.
         ("image_files", debug_hash(&without_placeholders(&project.image_files))),
         ("video_files", debug_hash(&project.video_files)),
+        // The day the build is as of (`inputs::effective_now`): past and
+        // upcoming events, calendars, event heroes and the archival edition
+        // date all read it, so a new day renders every page once.
+        ("build_day", debug_hash(&build_day)),
     ]
     .into_iter()
     .map(|(name, digest)| (name.to_string(), digest))

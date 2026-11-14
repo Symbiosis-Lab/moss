@@ -929,7 +929,7 @@ pub fn run(
     search_freshness: crate::build::feeds::search_lane::Freshness,
     cache_keys: &crate::build::ports::CacheKeyInputs,
 ) -> Result<PipelineRunOutput, BuildStopped> {
-    run_leased(root, site_dir_state, progress_sender, preview_port, services, slot_resolver, project_structure, site_url_override, incremental, search_freshness, cache_keys, None, None, crate::build::watch::RefreshRequest { rename_pairs: Vec::new(), events: crate::build::null_sink() })
+    run_leased(root, site_dir_state, progress_sender, preview_port, services, slot_resolver, project_structure, site_url_override, incremental, search_freshness, cache_keys, None, None, crate::build::watch::RefreshRequest { rename_pairs: Vec::new(), events: crate::build::null_sink() }, None)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -942,10 +942,8 @@ pub(crate) fn run_leased(
     slot_resolver: Option<SlotResolver>,
     project_structure: &ProjectStructure,
     site_url_override: Option<String>,
-    // Resolved by `PipelineConfig::allows_incremental_skip` (render skip)
-    // and `::allows_parse_cache_reuse` (parse cache) at
-    // the entry point, so the render phase never reads the trigger or the
-    // environment itself.
+    // Resolved at the entry point (`IncrementalGates::for_build`), so the
+    // render phase never reads the trigger or the environment itself.
     incremental: crate::build::render::IncrementalGates,
     search_freshness: crate::build::feeds::search_lane::Freshness,
     cache_keys: &crate::build::ports::CacheKeyInputs,
@@ -956,6 +954,11 @@ pub(crate) fn run_leased(
     // handle so it drops when the workers have joined.
     cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
     refresh: crate::build::watch::RefreshRequest,
+    // The last sealed manifest and the `.moss/` inputs the entry point
+    // measured before reading them. `None` (callers other than
+    // `run_pipeline`) reads the manifest here and seals one that proves
+    // nothing to the next build.
+    last_seal: Option<std::sync::Arc<crate::build::incremental_gates::LastSeal>>,
 ) -> Result<PipelineRunOutput, BuildStopped> {
     // Track build state in the FolderSession's UiBound counter for window
     // close / CLI-wait decisions. begin_ui_bound is a no-op in headless mode.
@@ -964,7 +967,7 @@ pub(crate) fn run_leased(
     }
 
     // Use inner function pattern to ensure build state is cleared on ALL exit paths
-    let result = build_inner(root, site_dir_state, progress_sender, preview_port, services, slot_resolver, project_structure, site_url_override, incremental, search_freshness, cache_keys, derived, cache_lease, refresh);
+    let result = build_inner(root, site_dir_state, progress_sender, preview_port, services, slot_resolver, project_structure, site_url_override, incremental, search_freshness, cache_keys, derived, cache_lease, refresh, last_seal);
 
     // Clear build state after build completes (success or error)
     if let Some(svc) = services {
@@ -1033,6 +1036,7 @@ fn build_inner(
     derived: Option<std::sync::Arc<crate::system::derive::site::DerivedSite>>,
     cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
     refresh: crate::build::watch::RefreshRequest,
+    last_seal: Option<std::sync::Arc<crate::build::incremental_gates::LastSeal>>,
     // `BuildStopped`, not `String`: the gate verdict is emitted from inside this
     // function, so the error type must be able to say "not yet" for the caller
     // to raise the gate instead of reporting. See `build::outcome`.
@@ -1146,9 +1150,7 @@ fn build_inner(
     // whether this build may unlink from it. Both are `lifecycle`'s to decide:
     // it parks the preview on `current` only when that is no step back from
     // the render on screen, and a permit is the only licence to unlink below.
-    if let Some(state) = site_dir_state {
-        crate::build::lifecycle::adopt_server(&paths, &state.current_dir);
-    }
+    let served_record = site_dir_state.map(|state| crate::build::lifecycle::adopt_server(&paths, &state.current_dir));
     let sweep_permit = crate::build::lifecycle::park_for_rebuild(
         &paths,
         cache_lease.is_some(),
@@ -1161,7 +1163,10 @@ fn build_inner(
     // CRITICAL: Must read hashes before generate_blocking_content() runs, because
     // the deferred phase writes new hashes to .moss/build.nosync/hashes.json after asset copying.
     // If we read after, we'd be comparing new hashes against themselves!
-    let previous_hashes = load_previous_hashes(folder_path);
+    let previous_hashes = match &last_seal {
+        Some(seal) => normalized_previous(seal.manifest().cloned().unwrap_or_default()),
+        None => load_previous_hashes(folder_path),
+    };
     log::debug!(target: "timing", "[build] staging: load_hashes: {:?}", build_start.elapsed());
     let home_substituted = home_page_is_a_substitute(project_structure, folder_path);
 
@@ -1292,7 +1297,7 @@ fn build_inner(
     // feeds every `[site]` field below — this span used to be a dozen
     // independent parses of the same file. Still timed so it can be weighed
     // against the lock wait.
-    let t_config = std::time::Instant::now();
+    let config_phase = crate::build::phase::PhaseTrace::start("config_reads");
     let config_path = paths.config();
     input_evidence.require(&config_path, super::cloud_ledger::InputRole::SharedConfig);
     let cfg = match crate::build::site_config::read_managed_toml_no_wait(&config_path) {
@@ -1551,11 +1556,17 @@ fn build_inner(
         derivations: derived.clone(),
         plugins_skipped: services.is_some_and(|s| s.plugins_skipped),
     };
-    log::debug!(target: "timing", "[build] staging: config_reads (1 parse) took {:?}", t_config.elapsed());
+    drop(config_phase);
     // Construct PendingManifest seeded with previous_hashes (carry-forward).
     // Passed to generate_blocking_content so Pattern A emits register via ctx.emit.
     // After the call, pending holds the accumulated site_hashes + blocking_keys;
     let mut pending = PendingManifest::for_build(previous_hashes.clone(), input_evidence.clone());
+    // A carried page read its variables in an earlier build, so their record
+    // stands; a full render reads every one again.
+    let carried_env = previous_hashes.build_inputs.as_ref().filter(|_| incremental.render_skip).map(|inputs| inputs.env.clone());
+    // A carrying build's record is only as complete as the one it carries from.
+    let record = last_seal.and_then(|seal| seal.record()).filter(|_| !incremental.render_skip || previous_hashes.build_inputs.is_some());
+    pending.set_build_inputs(record, carried_env);
     // Register exactly the bytes parsed above; a second read here could
     // certify different bytes from those that shaped the rendered pages.
     if let Some(content) = places_content.as_ref() {
@@ -1801,6 +1812,7 @@ fn build_inner(
     // Step 5: show this render, unless this build could not read its own
     // sources: showing it is the moment the user sees this build's output.
     let (seq, announce) = crate::build::lifecycle::show_render(&paths, publishable);
+    drop(served_record);
     let render_seq = Some(seq);
     // A shown render tells the preview at once what it now serves; what the
     // background writes later is the seal tail's to announce.
@@ -2229,11 +2241,16 @@ fn sweep_staging(
 pub fn load_previous_hashes(folder_path: &str) -> SiteHashes {
     let paths = MossPaths::new(Path::new(folder_path));
     let hashes_path = paths.hashes();
-    let mut hashes: SiteHashes = if let Ok(content) = fs::read_to_string(&hashes_path) {
+    let hashes: SiteHashes = if let Ok(content) = fs::read_to_string(&hashes_path) {
         serde_json::from_str(&content).unwrap_or_default()
     } else {
         SiteHashes::default()
     };
+    normalized_previous(hashes)
+}
+
+/// A manifest read from disk, with keys older moss versions wrote migrated.
+fn normalized_previous(mut hashes: SiteHashes) -> SiteHashes {
     migrate_to_normalized_paths(&mut hashes);
     hashes
 }

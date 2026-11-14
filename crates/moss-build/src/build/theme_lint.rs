@@ -64,7 +64,7 @@ static VAR_REF: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"var\(\s*(--moss-[A-Za-z0-9_-]+)").unwrap());
 
 /// Matches a `--moss-x:` declaration, capturing the property name.
-static PROP_DECL: LazyLock<regex::Regex> =
+pub(crate) static PROP_DECL: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"(--moss-[A-Za-z0-9_-]+)\s*:").unwrap());
 
 /// Matches a `.moss-x` class selector, capturing the complete class name
@@ -76,14 +76,18 @@ static CLASS_REF: LazyLock<regex::Regex> =
 /// Lint a theme CSS source against moss's contract vocabulary.
 /// Returns a list of warning strings; empty if clean. Every warning is
 /// informational — this never blocks a build.
-pub fn lint_theme_css(css: &str) -> Vec<String> {
+/// A site fixed to one scheme (`color_scheme = "light"`) never shows the
+/// other, so a colour set for one side only is not a gap there.
+pub fn lint_theme_css(css: &str, scheme: crate::build::page::color_scheme::ColorScheme) -> Vec<String> {
     let stripped = strip_comments(css);
     let mut warnings = Vec::new();
 
     lint_retired_classes(&stripped, &mut warnings);
     lint_custom_properties(&stripped, &mut warnings);
     lint_classes(&stripped, &mut warnings);
-    lint_light_only_colours(&stripped, &mut warnings);
+    if scheme == crate::build::page::color_scheme::ColorScheme::Auto {
+        lint_light_only_colours(&stripped, &mut warnings);
+    }
 
     warnings
 }
@@ -130,25 +134,26 @@ type Decl = (Scope, String, String);
 
 /// Every custom property declaration as (scope, property, value), once per
 /// selector of its rule: `:root, main {}` sets the root and another scope.
-fn custom_properties(stripped: &str) -> Vec<Decl> {
+/// With `lang`, a rule the root of a page in that language matches
+/// (`html[lang="zh-Hant"]`, `html:is([lang|="zh"], …)`) also sets the root.
+fn custom_properties(stripped: &str, lang: Option<&str>) -> Vec<Decl> {
     let mut out = Vec::new();
     for rule in style_rules(stripped) {
-        let Some((_, body)) = rule.rule.split_once('{') else { continue };
-        for selector in rule.prelude.split(',') {
-            push_custom_properties(&mut out, scope_of(rule.conditions.is_empty(), selector), body);
+        let body = rule.declarations();
+        let unconditioned = rule.conditions.is_empty();
+        for selector in split_top_level(rule.prelude, ',') {
+            let scope = match scope_of(unconditioned, selector) {
+                Scope::Other if unconditioned && lang.is_some_and(|l| selects_root_in(selector, l)) => Scope::Light,
+                scope => scope,
+            };
+            push_custom_properties(&mut out, scope, &body);
         }
     }
     out
 }
 
-fn push_custom_properties(out: &mut Vec<Decl>, scope: Scope, body: &str) {
-    for decl in body.trim_end_matches('}').split(';') {
-        let Some((prop, value)) = decl.split_once(':') else { continue };
-        let prop = prop.trim();
-        if prop.starts_with("--") {
-            out.push((scope, prop.to_string(), value.trim().trim_end_matches("!important").trim().to_string()));
-        }
-    }
+fn push_custom_properties(out: &mut Vec<Decl>, scope: Scope, body: &[(String, String)]) {
+    out.extend(body.iter().filter(|(p, _)| p.starts_with("--")).map(|(p, v)| (scope, p.clone(), v.clone())));
 }
 
 /// moss's own token values, the lowest layer of the page: the registry's light
@@ -169,17 +174,17 @@ fn page_layer(lang: &str) -> Vec<Decl> {
     let css = strip_comments(crate::build::page::shell::DEFAULT_CSS);
     let mut out = Vec::new();
     for rule in style_rules(&css) {
-        let Some((_, body)) = rule.rule.split_once('{') else { continue };
         // A cascade layer orders rules; it does not condition them.
         if rule.conditions.iter().all(|c| c.starts_with("@layer")) && selects_root_in(rule.prelude, lang) {
-            push_custom_properties(&mut out, Scope::Light, body);
+            push_custom_properties(&mut out, Scope::Light, &rule.declarations());
         }
     }
     out
 }
 
-/// Whether a selector the page stylesheet writes for its root matches a page in
-/// `lang`: `:root`, `html[lang="x"]` and `html:is([lang|="x"], …)`.
+/// Whether a selector the page stylesheet or a theme writes for the root matches
+/// a page in `lang`: `:root`, `html[lang="x"]`, `html:lang(x)` and
+/// `html:is([lang|="x"], …)`.
 fn selects_root_in(prelude: &str, lang: &str) -> bool {
     let sel: String = prelude.chars().filter(|c| !c.is_whitespace() && !matches!(c, '"' | '\'')).collect::<String>().to_ascii_lowercase();
     let lang = lang.to_ascii_lowercase();
@@ -188,6 +193,10 @@ fn selects_root_in(prelude: &str, lang: &str) -> bool {
     }
     if let Some(exact) = sel.strip_prefix("html[lang=").and_then(|s| s.strip_suffix(']')) {
         return exact == lang;
+    }
+    // `:lang(x)` matches x and every subtag of it, as `[lang|=x]` does.
+    if let Some(range) = sel.strip_prefix("html:lang(").and_then(|s| s.strip_suffix(')')) {
+        return range.split(',').any(|x| lang == x || lang.starts_with(&format!("{x}-")));
     }
     let Some(list) = sel.strip_prefix("html:is(").and_then(|s| s.strip_suffix(')')) else { return false };
     list.split(',').filter_map(|item| item.strip_prefix("[lang|=")?.strip_suffix(']')).any(|x| lang == x || lang.starts_with(&format!("{x}-")))
@@ -229,12 +238,12 @@ impl Layered {
     /// The theme over the registry. Enough for colours: the page stylesheet's
     /// root rules set fonts only.
     pub(crate) fn new(theme_css: Option<&str>) -> Self {
-        Self { theme: custom_properties(&strip_comments(theme_css.unwrap_or_default())), page: Vec::new() }
+        Self { theme: custom_properties(&strip_comments(theme_css.unwrap_or_default()), None), page: Vec::new() }
     }
 
     /// The theme over the page stylesheet's root rules for `lang` and the registry.
     pub(crate) fn for_page(theme_css: Option<&str>, lang: &str) -> Self {
-        Self { page: page_layer(lang), ..Self::new(theme_css) }
+        Self { theme: custom_properties(&strip_comments(theme_css.unwrap_or_default()), Some(lang)), page: page_layer(lang) }
     }
 
     fn resolve(&self, token: &str, side: Scope) -> (Option<&str>, bool) {
@@ -260,7 +269,7 @@ impl Layered {
 /// A colour token set on `:root` with no dark value stays at its light value
 /// in dark mode, so the page ships unreadable.
 fn lint_light_only_colours(stripped: &str, warnings: &mut Vec<String>) {
-    let declared = custom_properties(stripped);
+    let declared = custom_properties(stripped, None);
     let colours = |scope: Scope| declared.iter().filter(move |(s, p, _)| *s == scope && p.starts_with("--moss-color-"));
     let dark: BTreeSet<&str> = colours(Scope::Dark).map(|(_, p, _)| p.as_str()).collect();
     // A `var()` value resolves on the element, so it follows into dark mode.
@@ -405,6 +414,28 @@ fn find_complete_class(css: &str, pattern: &str) -> bool {
     })
 }
 
+/// The browser's root font size, which moss's stylesheet leaves as it is.
+pub(crate) const ROOT_PX: f32 = 16.0;
+
+/// `1.5rem` or `24px` as px at the [`ROOT_PX`] root.
+pub(crate) fn plain_px(value: &str) -> Option<f32> {
+    let value = value.trim().trim_end_matches("!important").trim();
+    match value.strip_suffix("rem") {
+        Some(n) => n.trim().parse::<f32>().ok().map(|n| n * ROOT_PX),
+        None => value.strip_suffix("px")?.trim().parse().ok(),
+    }
+}
+
+/// The weight a `font-weight` value names, `None` for one the build cannot read.
+pub(crate) fn weight_of(value: &str) -> Option<u16> {
+    match value.trim().trim_end_matches("!important").trim() {
+        "normal" => Some(400),
+        "bold" => Some(700),
+        "lighter" | "light" | "thin" => Some(300),
+        n => n.parse().ok(),
+    }
+}
+
 /// Strip `/* ... */` block comments from CSS. CSS has no `//` line comments.
 pub(crate) fn strip_comments(css: &str) -> String {
     let b = css.as_bytes();
@@ -440,6 +471,21 @@ pub(crate) fn string_end(b: &[u8], start: usize, quote: u8) -> usize {
     j.min(b.len())
 }
 
+/// A declaration block's `property: value` pairs, split on `;` outside
+/// parentheses and quotes (`url(data:…;…)` stays one value). A property is
+/// lowercased unless it is a custom one; `!important` is dropped.
+pub(crate) fn declarations(block: &str) -> Vec<(String, String)> {
+    split_top_level(block, ';')
+        .into_iter()
+        .filter_map(|d| d.split_once(':'))
+        .map(|(p, v)| {
+            let p = p.trim();
+            let p = if p.starts_with("--") { p.to_string() } else { p.to_ascii_lowercase() };
+            (p, v.trim().trim_end_matches("!important").trim().to_string())
+        })
+        .collect()
+}
+
 /// One style rule of a stylesheet, with the context needed to reproduce its effect.
 pub(crate) struct StyleRule<'a> {
     /// The `@media`/`@supports`/`@layer` conditions the rule sits inside,
@@ -454,6 +500,78 @@ pub(crate) struct StyleRule<'a> {
     pub rule: &'a str,
     /// Byte offset of the selector list in the sheet.
     pub start: usize,
+}
+
+/// At-rules whose block holds declarations, not rules: each is one rule, its
+/// at-keyword the prelude.
+const DECLARATION_AT_RULES: &[&str] = &["@font-face", "@page", "@property", "@counter-style", "@font-palette-values"];
+
+fn is_declaration_at_rule(prelude: &str) -> bool {
+    let keyword = prelude.split(|c: char| c.is_whitespace() || c == '{').next().unwrap_or_default();
+    DECLARATION_AT_RULES.iter().any(|k| keyword.eq_ignore_ascii_case(k))
+}
+
+/// Calls `visit(i, c, depth)` for each char of `chars` outside quotes and
+/// escapes, where `depth` counts the parentheses and brackets open before it.
+/// A `Some(next)` from `visit` resumes the walk at `next`.
+pub(crate) fn syntax_chars(chars: &[char], mut visit: impl FnMut(usize, char, i32) -> Option<usize>) {
+    let (mut i, mut depth, mut quote) = (0usize, 0i32, None::<char>);
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\\' {
+            i += 2;
+            continue;
+        }
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, c) => {
+                let at = depth;
+                match c {
+                    '(' | '[' => depth += 1,
+                    ')' | ']' => depth -= 1,
+                    _ => {}
+                }
+                if let Some(next) = visit(i, c, at) {
+                    i = next;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+}
+
+/// `list` split on `sep` outside parentheses, brackets and quotes, each part
+/// trimmed and empty ones dropped: a selector list on `,`, a declaration block
+/// on `;`, a font stack on `,`.
+pub(crate) fn split_top_level(list: &str, sep: char) -> Vec<&str> {
+    let chars: Vec<(usize, char)> = list.char_indices().collect();
+    let plain: Vec<char> = chars.iter().map(|(_, c)| *c).collect();
+    let mut cuts = Vec::new();
+    syntax_chars(&plain, |i, c, depth| {
+        if c == sep && depth == 0 {
+            cuts.push(chars[i].0);
+        }
+        None
+    });
+    let mut out = Vec::new();
+    let mut from = 0;
+    for cut in cuts {
+        out.push(list[from..cut].trim());
+        from = cut + sep.len_utf8();
+    }
+    out.push(list[from..].trim());
+    out.retain(|s| !s.is_empty());
+    out
+}
+
+impl StyleRule<'_> {
+    /// The rule's declarations (see [`declarations`]).
+    pub(crate) fn declarations(&self) -> Vec<(String, String)> {
+        declarations(self.rule.split_once('{').map_or("", |(_, block)| block).trim_end_matches('}'))
+    }
 }
 
 /// Walk a stylesheet by brace depth, collecting every style rule along with the
@@ -499,7 +617,7 @@ pub(crate) fn style_rules<'a>(css: &'a str) -> Vec<StyleRule<'a>> {
             b'{' => {
                 let prelude = css[prelude_start..i].trim();
                 let rule_start = prelude_start + (css[prelude_start..].len() - css[prelude_start..].trim_start().len());
-                if prelude.starts_with('@') {
+                if prelude.starts_with('@') && !is_declaration_at_rule(prelude) {
                     // An at-rule block: descend, remembering the condition.
                     conditions.push(prelude);
                     i += 1;
@@ -559,6 +677,36 @@ pub(crate) fn style_rules<'a>(css: &'a str) -> Vec<StyleRule<'a>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::build::page::color_scheme::ColorScheme;
+
+    #[test]
+    fn a_lang_list_selects_each_of_its_languages() {
+        for lang in ["zh-Hant", "ja"] {
+            assert!(selects_root_in("html:lang(zh, \"ja\")", lang), "{lang}");
+        }
+        assert!(!selects_root_in("html:lang(zh, ja)", "en"));
+    }
+
+    #[test]
+    fn a_theme_may_stand_its_font_in_front_of_moss_s_han_stacks() {
+        let css = "html:is([lang|=\"zh\"]) { --moss-font-body: 'Field Sans', var(--moss-font-body-han); --moss-font-heading: var(--moss-font-heading-han); }";
+        assert!(lint_theme_css(css, ColorScheme::Auto).is_empty(), "{:?}", lint_theme_css(css, ColorScheme::Auto));
+    }
+
+    #[test]
+    fn a_semicolon_inside_a_quoted_value_ends_no_declaration() {
+        let css = ":root { --moss-color-bg: #fafafa; --moss-hero-bg: url(\"data:image/svg+xml;--moss-color-bg: red\"); }";
+        assert_eq!(root_colours(Some(css), "--moss-color-bg").0.root, Some((0xfa, 0xfa, 0xfa)));
+    }
+
+    #[test]
+    fn a_declaration_at_rule_is_one_rule_and_a_split_keeps_nested_separators() {
+        let rules = style_rules("@font-face { font-family: A; src: url(a.woff2) }\n@media (min-width: 1px) { .b { x: 1 } }\n");
+        let shape: Vec<(&str, usize)> = rules.iter().map(|r| (r.prelude, r.conditions.len())).collect();
+        assert_eq!(shape, vec![("@font-face", 0), (".b", 1)]);
+        assert_eq!(split_top_level(":is(.a, .b) p, .c", ','), vec![":is(.a, .b) p", ".c"]);
+        assert_eq!(split_top_level("src: url(data:x;y); color: red;", ';'), vec!["src: url(data:x;y)", "color: red"]);
+    }
 
     #[test]
     fn a_comment_opener_or_brace_inside_a_string_ends_no_rule() {
@@ -568,7 +716,15 @@ mod tests {
     }
 
     fn dark_gap(css: &str) -> Vec<String> {
-        lint_theme_css(css).into_iter().filter(|w| w.contains("dark mode keeps")).collect()
+        lint_theme_css(css, ColorScheme::Auto).into_iter().filter(|w| w.contains("dark mode keeps")).collect()
+    }
+
+    #[test]
+    fn a_site_fixed_to_one_scheme_has_no_dark_gap() {
+        let css = ":root { --moss-color-bg: #fafafa; }";
+        assert!(lint_theme_css(css, ColorScheme::Light).is_empty());
+        assert!(lint_theme_css(css, ColorScheme::Dark).is_empty());
+        assert_eq!(dark_gap(css).len(), 1, "a site that follows the reader's scheme does show the other side");
     }
 
     #[test]
@@ -690,7 +846,7 @@ mod tests {
                 color: var(--moss-color-accent);
             }
         "#;
-        let warnings = lint_theme_css(css);
+        let warnings = lint_theme_css(css, ColorScheme::Auto);
         assert!(warnings.is_empty(), "expected no warnings, got: {:?}", warnings);
     }
 
@@ -699,7 +855,7 @@ mod tests {
     #[test]
     fn footer_end_space_property_has_no_warning() {
         let css = "footer.container { --moss-footer-end: 0; }";
-        let warnings = lint_theme_css(css);
+        let warnings = lint_theme_css(css, ColorScheme::Auto);
         assert!(warnings.is_empty(), "expected no warnings, got: {:?}", warnings);
     }
 
@@ -715,7 +871,7 @@ mod tests {
                 border-color: var(--moss-my-brand);
             }
         "#;
-        let warnings = lint_theme_css(css);
+        let warnings = lint_theme_css(css, ColorScheme::Auto);
         assert!(warnings.is_empty(), "expected no warnings, got: {:?}", warnings);
     }
 
@@ -730,7 +886,7 @@ mod tests {
                 color: var(--moss-colr-accent);
             }
         "#;
-        let warnings = lint_theme_css(css);
+        let warnings = lint_theme_css(css, ColorScheme::Auto);
         assert_eq!(warnings.len(), 1, "warnings: {:?}", warnings);
         assert!(warnings[0].contains("--moss-colr-accent"));
         assert!(warnings[0].contains("--moss-color-accent"));
@@ -745,7 +901,7 @@ mod tests {
                 --moss-colr-accent: #c00;
             }
         "#;
-        let warnings = lint_theme_css(css);
+        let warnings = lint_theme_css(css, ColorScheme::Auto);
         assert_eq!(warnings.len(), 1, "warnings: {:?}", warnings);
         assert!(warnings[0].contains("does not read"));
         assert!(warnings[0].contains("--moss-colr-accent"));
@@ -758,7 +914,7 @@ mod tests {
     fn retired_class_keeps_migration_warning() {
         let retired = retired_class_names().next().expect("at least one retired class");
         let css = format!(".{} {{ color: red; }}", retired);
-        let warnings = lint_theme_css(&css);
+        let warnings = lint_theme_css(&css, ColorScheme::Auto);
         assert_eq!(warnings.len(), 1, "warnings: {:?}", warnings);
         assert!(warnings[0].contains("pre-v1 class"));
         assert!(warnings[0].contains("migration.html"));
@@ -769,7 +925,7 @@ mod tests {
     #[test]
     fn unknown_class_names_closest_component() {
         let css = ".moss-carrd { color: red; }";
-        let warnings = lint_theme_css(css);
+        let warnings = lint_theme_css(css, ColorScheme::Auto);
         assert_eq!(warnings.len(), 1, "warnings: {:?}", warnings);
         assert!(warnings[0].contains(".moss-carrd"));
         assert!(warnings[0].contains(".moss-card"));
@@ -780,7 +936,7 @@ mod tests {
     #[test]
     fn plugin_namespaced_class_has_no_warning() {
         let css = ".moss-embed-plugin-graphviz { border: 1px solid; }";
-        let warnings = lint_theme_css(css);
+        let warnings = lint_theme_css(css, ColorScheme::Auto);
         assert!(warnings.is_empty(), "expected no warnings, got: {:?}", warnings);
     }
 

@@ -3,15 +3,15 @@
 use std::{collections::HashMap, path::Path};
 use serde_json::Value;
 use moss_core::{frontmatter_typed::FrontMatter, frontmatter::members::Members, terms::TermClaim};
+use super::items::{base_of, write_items, ImportedPages, Progress};
 use super::page::{ImportedPage, PageStyle, media::MediaWriter};
 use super::source::{ImportOptions, ImportResult};
-use super::scrape::{crawl_state::AssetMap, run::{ScrapeProgress, ScrapeResult, ASSETS_SUBDIR}, scope::UrlScope, writer::{OutputPaths, PendingPage}};
+use super::scrape::{crawl_state::{AssetMap, HostPacer}, fetch::FileProgress, run::{ScrapeProgress, ScrapeResult, ASSETS_PREFIX, ASSETS_SUBDIR}, writer::PendingPage};
 pub(crate) mod bundle;
 mod handoff;
 mod metadata;
 
-pub(crate) async fn import<F>(mut bundle: bundle::Bundle, folder: &Path, options: ImportOptions, progress: F) -> Result<ImportResult, String>
-where F: Fn(ScrapeProgress) + Send + Sync + 'static {
+pub(crate) async fn import(mut bundle: bundle::Bundle, folder: &Path, options: ImportOptions, held: &mut ImportedPages, progress: Progress<'_>) -> Result<ImportResult, String> {
     let root = std::fs::canonicalize(folder).map_err(|e| e.to_string())?;
     if bundle.root().starts_with(&root) || root.starts_with(bundle.root()) {
         return Err("Keep the export bundle outside the destination project".into());
@@ -23,8 +23,7 @@ where F: Fn(ScrapeProgress) + Send + Sync + 'static {
     if site.is_none() {
         report.push("The export has no site address; original addresses and remote images could not be recovered.".into());
     }
-    let base = site.clone().unwrap_or_else(|| url::Url::parse("https://import.invalid/").unwrap());
-    let scope = UrlScope::new(base.as_str()).map_err(|e| e.to_string())?;
+    let base = base_of(site.as_ref());
     let rows = |key: &str| bundle.data[key].as_array().cloned().unwrap_or_default();
     let posts = rows("posts");
     let tags = rows("tags");
@@ -35,6 +34,7 @@ where F: Fn(ScrapeProgress) + Send + Sync + 'static {
     let mut pages = Vec::new();
     let mut ids = HashMap::new();
     let mut assets = AssetMap::default();
+    let mut pacer = HostPacer::default();
     let mut restricted = 0;
     let mut paid = 0;
     for post in posts {
@@ -64,7 +64,7 @@ where F: Fn(ScrapeProgress) + Send + Sync + 'static {
             },
             body: convert(html, &base)?,
         };
-        localize(&mut page, &mut bundle, folder, &base, site.is_some(), &mut assets, &mut report).await?;
+        localize(&mut page, &mut bundle, folder, &base, site.is_some(), &mut assets, &mut pacer, &mut report).await?;
         // Ghost's feed gives each entry its post id as the guid.
         if let (Some(uid), Some(id)) = (text(&post, "uuid"), text(&post, "id")) {
             ids.insert(source.to_string(), (uid.to_string(), id.to_string()));
@@ -99,10 +99,8 @@ where F: Fn(ScrapeProgress) + Send + Sync + 'static {
         body: String::new(),
     };
     pages.push(PendingPage::new(base.as_str(), &home.render(PageStyle::Html), true)?);
-    let paths = OutputPaths::reserve(folder, &scope, &pages)?;
     let subscribers = handoff::retain(&mut bundle, folder, options.private_members_dir.as_deref())?;
-    let written = paths.write(folder, &pages, &HashMap::new(), true)?;
-    metadata::write(&mut bundle, folder, site.as_ref(), &paths, &users, &ids, &mut report)?;
+    let rows = metadata::rows(&mut bundle, &users, &mut report)?;
     if restricted > 0 {
         report.push(format!("{restricted} restricted posts retain their full source; builds publish only their public previews."));
     }
@@ -119,10 +117,10 @@ where F: Fn(ScrapeProgress) + Send + Sync + 'static {
         false => "No Ghost theme was included.".into(),
     });
     report.push("Newsletter settings, tiers and comments are not imported into pages.".into());
-    let lines: Vec<_> = report.iter().map(|s| format!("- {s}")).collect();
-    super::page::write_note(folder, ".moss/data/import/report.md", &format!("# Import report\n\n{}\n", lines.join("\n")))?;
-    progress(ScrapeProgress { pages_scraped: written.len(), pages_failed: 0, current_url: None, complete: true });
-    Ok(ImportResult { scrape: ScrapeResult { success: true, total_pages: written.len(), ..Default::default() }, report, subscribers })
+    let (mut result, paths) = write_items(folder, site.as_ref(), held, &pages, rows, report, ScrapeResult::default(), progress)?;
+    metadata::ledger(folder, &paths, &ids)?;
+    result.subscribers = subscribers;
+    Ok(result)
 }
 
 fn text<'a>(v: &'a Value, key: &str) -> Option<&'a str> { v[key].as_str().filter(|s| !s.is_empty()) }
@@ -150,7 +148,7 @@ fn convert(html: &str, base: &url::Url) -> Result<String, String> {
 }
 async fn localize(
     page: &mut ImportedPage, bundle: &mut bundle::Bundle, folder: &Path, base: &url::Url,
-    fetch: bool, assets: &mut AssetMap, report: &mut Vec<String>,
+    fetch: bool, assets: &mut AssetMap, pacer: &mut HostPacer, report: &mut Vec<String>,
 ) -> Result<(), String> {
     let mut images: Vec<_> = super::scrape::converter::extract_image_urls_in_markdown(&page.body)
         .into_iter()
@@ -163,7 +161,7 @@ async fn localize(
         images.push((cover.clone(), cover.clone()));
     }
     let dir = folder.join(ASSETS_SUBDIR);
-    let prefix = format!("./{ASSETS_SUBDIR}/");
+    let prefix = ASSETS_PREFIX;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let mut remote = Vec::new();
     for (raw, address) in images {
@@ -176,7 +174,7 @@ async fn localize(
         let bytes = match local { Some(name) => bundle.read(name)?, None => None };
         if let Some(bytes) = bytes {
             let extension = Path::new(local.unwrap()).extension().and_then(|e| e.to_str()).unwrap_or("bin");
-            let local = MediaWriter { directory: &dir, prefix: &prefix, user_agent: "", referer: None }.bytes(&address, extension, &bytes)?;
+            let local = MediaWriter { directory: &dir, prefix, user_agent: "", referer: None }.bytes(&address, extension, &bytes)?;
             assets.insert(raw, local);
         } else if fetch {
             remote.push((raw, address));
@@ -185,8 +183,9 @@ async fn localize(
         }
     }
     let user_agent = super::scrape::service::default_user_agent();
-    let downloads = MediaWriter { directory: &dir, prefix: &prefix, user_agent: &user_agent, referer: Some(base.as_str()) };
-    let result = downloads.download(&remote, assets, None).await;
+    let downloads = MediaWriter { directory: &dir, prefix, user_agent: &user_agent, referer: Some(base.as_str()) };
+    let mut files = FileProgress::new(remote.len());
+    let result = downloads.download(&remote, assets, Some((pacer, &mut files))).await;
     if result.media_failed > 0 {
         report.push(format!("{} images could not be downloaded; their remote links remain.", result.media_failed));
     }

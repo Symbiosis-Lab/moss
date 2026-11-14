@@ -558,6 +558,12 @@ pub struct SiteHashes {
     /// that can read it, same as before this field existed.
     #[serde(default)]
     pub page_meta: HashMap<String, PageMeta>,
+    /// What the build read besides its source tree: `.moss/` files and
+    /// environment variables. A later build that saw no events proves from
+    /// these that nothing it cannot see moved. `None` on a manifest that
+    /// predates it, which proves nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_inputs: Option<crate::build::inputs::BuildInputs>,
 }
 
 /// A page's nav/listing-relevant metadata, carried alongside

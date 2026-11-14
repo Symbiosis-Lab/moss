@@ -76,11 +76,9 @@ export function resolveSourceTarget(el: Element | null): SourceTarget | null {
   const fm = el.closest('[data-source-fm]');
   if (fm) return { kind: 'frontmatter', field: fm.getAttribute('data-source-fm')!, ...pathOf(fm) };
 
-  const range = el.closest('[data-source-range]');
-  if (range) return bodyRange(range);
-
-  const line = el.closest('[data-source-line]');
-  if (line) return bodyLine(line);
+  // Nearest wins: a line inside a grid column or a hero is that line, not its container.
+  const body = el.closest('[data-source-range],[data-source-line]');
+  if (body) return body.hasAttribute('data-source-range') ? bodyRange(body) : bodyLine(body);
 
   if (el.closest('[data-source-none]')) return { kind: 'none' };
 

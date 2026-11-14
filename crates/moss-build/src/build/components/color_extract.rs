@@ -519,216 +519,91 @@ pub(crate) fn scan_webpage_color(html: &str) -> Option<(u8, u8, u8)> {
     // Rung 3: static background scan, scoped to html/body.
     let style_attr_bg = |sel: &str| -> Option<(u8, u8, u8)> {
         let s = Selector::parse(sel).unwrap();
-        doc.select(&s).next()?.value().attr("style").and_then(scan_decls_for_background)
+        doc.select(&s).next()?.value().attr("style").and_then(|style| scan_decls_for_background(&crate::build::theme_lint::declarations(style)))
     };
     let body_attr = style_attr_bg("body");
     let html_attr = style_attr_bg("html");
 
+    // `<style>` rules whose selector list is only `body` and `html`, outside
+    // any at-rule; a later one wins. Not a cascade: anything fancier falls
+    // through the ladder.
     let (mut body_css, mut html_css) = (None, None);
     let style_sel = Selector::parse("style").unwrap();
     for st in doc.select(&style_sel) {
-        let css: String = st.text().collect();
-        scan_style_rules(&css, &mut body_css, &mut html_css);
+        let css = crate::build::theme_lint::strip_comments(&st.text().collect::<String>());
+        for rule in crate::build::theme_lint::style_rules(&css).iter().filter(|r| r.conditions.is_empty()) {
+            let sels: Vec<String> = crate::build::theme_lint::split_top_level(rule.prelude, ',').iter().map(|s| s.to_ascii_lowercase()).collect();
+            if !sels.iter().all(|s| s == "body" || s == "html") {
+                continue;
+            }
+            let Some(c) = scan_decls_for_background(&rule.declarations()) else { continue };
+            if sels.iter().any(|s| s == "body") {
+                body_css = Some(c);
+            }
+            if sels.iter().any(|s| s == "html") {
+                html_css = Some(c);
+            }
+        }
     }
 
     body_attr.or(body_css).or(html_attr).or(html_css)
 }
 
-/// Scan a `<style>` block for `background(-color)` declarations on rules
-/// whose selector list contains ONLY the simple selectors `body` / `html`.
-/// Anything fancier (classes, combinators, `@media` nesting — whose brace
-/// structure this naive `}`-splitter mis-chunks into non-matching selector
-/// text) is skipped, deliberately: this is NOT a CSS cascade, and every
-/// unsupported form falls through the ladder. Later rules overwrite
-/// earlier ones (last-wins).
-fn scan_style_rules(
-    css: &str,
-    body_bg: &mut Option<(u8, u8, u8)>,
-    html_bg: &mut Option<(u8, u8, u8)>,
-) {
-    for chunk in css.split('}') {
-        let Some((sels, decls)) = chunk.split_once('{') else { continue };
-        let (mut body, mut html, mut only_simple) = (false, false, true);
-        for sel in sels.split(',') {
-            match sel.trim().to_ascii_lowercase().as_str() {
-                "body" => body = true,
-                "html" => html = true,
-                "" => {}
-                _ => only_simple = false,
-            }
-        }
-        if !only_simple || (!body && !html) {
-            continue;
-        }
-        if let Some(c) = scan_decls_for_background(decls) {
-            if body {
-                *body_bg = Some(c);
-            }
-            if html {
-                *html_bg = Some(c);
-            }
+/// The last `background` / `background-color` whose value is a SINGLE color
+/// literal. Shorthand values with extra parts (`black url(x)`), gradients,
+/// `var()`, and `transparent` fail `parse_css_color` and are skipped.
+fn scan_decls_for_background(decls: &[(String, String)]) -> Option<(u8, u8, u8)> {
+    decls.iter().filter(|(p, _)| p == "background" || p == "background-color").filter_map(|(_, v)| parse_css_color(v)).last()
+}
+
+/// One CSS colour: its rgb bytes and alpha (0 to 1).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Rgba {
+    pub rgb: (u8, u8, u8),
+    pub alpha: f32,
+}
+
+impl std::fmt::Display for Rgba {
+    /// `#rrggbb`, or `rgba(r, g, b, a)` when translucent.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (r, g, b) = self.rgb;
+        if self.alpha >= 1.0 {
+            write!(f, "#{r:02x}{g:02x}{b:02x}")
+        } else {
+            write!(f, "rgba({r}, {g}, {b}, {})", (self.alpha * 100.0).round() / 100.0)
         }
     }
 }
 
-/// Scan a `;`-separated declaration list for `background` /
-/// `background-color` whose value is a SINGLE color literal. Shorthand
-/// values with extra parts (`black url(x)`), gradients, `var()`, and
-/// `transparent` fail `parse_css_color` and are skipped. Last wins.
-fn scan_decls_for_background(decls: &str) -> Option<(u8, u8, u8)> {
-    let mut found = None;
-    for decl in decls.split(';') {
-        let Some((prop, value)) = decl.split_once(':') else { continue };
-        let prop = prop.trim().to_ascii_lowercase();
-        if prop == "background" || prop == "background-color" {
-            if let Some(c) = parse_css_color(value.trim()) {
-                found = Some(c);
-            }
-        }
-    }
-    found
+/// A CSS colour literal: any named colour, hex, `rgb()`, `hsl()` or `hwb()`.
+/// `None` for anything that is not one colour (`var()`, a gradient,
+/// `currentColor`, the newer colour spaces).
+pub(crate) fn colour(input: &str) -> Option<Rgba> {
+    use cssparser::{Color, Parser, ParserInput};
+    let mut input = ParserInput::new(input.trim());
+    let mut parser = Parser::new(&mut input);
+    let parsed = Color::parse(&mut parser).ok()?;
+    parser.expect_exhausted().ok()?;
+    let byte = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let ((r, g, b), alpha) = match parsed {
+        Color::Rgba(c) => return Some(Rgba { rgb: (c.red?, c.green?, c.blue?), alpha: c.alpha.unwrap_or(1.0) }),
+        Color::Hsl(c) => (cssparser::hsl_to_rgb(c.hue?.rem_euclid(360.0) / 360.0, c.saturation?, c.lightness?), c.alpha),
+        Color::Hwb(c) => (cssparser::hwb_to_rgb(c.hue?.rem_euclid(360.0) / 360.0, c.whiteness?, c.blackness?), c.alpha),
+        _ => return None,
+    };
+    Some(Rgba { rgb: (byte(r), byte(g), byte(b)), alpha: alpha.unwrap_or(1.0) })
 }
 
-/// Parse a CSS color literal into RGB bytes.
-///
-/// Accepts `#hex` (3- and 6-digit), `rgb()`/`rgba()` (commas, spaces, or
-/// `/`-alpha syntax; numeric or percentage components), `hsl()`/`hsla()`,
-/// and a table of common named colors (CSS basic-16 + frequent extended
-/// names). Unknown names and non-color values (gradients, `url()`, `var()`,
-/// `transparent`) return `None` — callers fall through to the next signal
-/// in the cover-color ladder, so a miss is always benign.
-/// Alpha components are parsed but ignored (cover bands are opaque).
+/// A CSS colour literal as RGB bytes, its alpha ignored (cover bands are
+/// opaque). `transparent` and non-colour values (gradients, `url()`,
+/// `var()`) return `None`, so callers fall through to the next signal in the
+/// cover-color ladder.
 pub(crate) fn parse_css_color(input: &str) -> Option<(u8, u8, u8)> {
-    let v = input.trim();
-    if let Some(hex) = v.strip_prefix('#') {
-        return parse_hex_rgb(hex);
+    if input.trim().eq_ignore_ascii_case("transparent") {
+        return None;
     }
-    let lower = v.to_ascii_lowercase();
-    if let Some(inner) = lower.strip_prefix("rgba(").or_else(|| lower.strip_prefix("rgb(")) {
-        let inner = inner.strip_suffix(')')?;
-        let toks = split_color_args(inner);
-        if toks.len() < 3 {
-            return None;
-        }
-        let r = parse_rgb_component(toks[0])?;
-        let g = parse_rgb_component(toks[1])?;
-        let b = parse_rgb_component(toks[2])?;
-        return Some((r, g, b));
-    }
-    if let Some(inner) = lower.strip_prefix("hsla(").or_else(|| lower.strip_prefix("hsl(")) {
-        let inner = inner.strip_suffix(')')?;
-        let toks = split_color_args(inner);
-        if toks.len() < 3 {
-            return None;
-        }
-        let h = toks[0].trim_end_matches("deg").parse::<f32>().ok()?.rem_euclid(360.0);
-        let s = parse_percent(toks[1])?;
-        let l = parse_percent(toks[2])?;
-        let (r, g, b) = hsl_to_rgb(h, s, l);
-        return Some((
-            (r * 255.0).round() as u8,
-            (g * 255.0).round() as u8,
-            (b * 255.0).round() as u8,
-        ));
-    }
-    NAMED_COLORS
-        .iter()
-        .find(|(name, _)| *name == lower)
-        .map(|(_, rgb)| (((rgb >> 16) & 0xFF) as u8, ((rgb >> 8) & 0xFF) as u8, (rgb & 0xFF) as u8))
+    colour(input).map(|c| c.rgb)
 }
-
-/// Split `rgb()`/`hsl()` arguments on commas, whitespace, and the modern
-/// `/`-alpha separator, dropping empties — accepts both `rgb(1, 2, 3)` and
-/// `rgb(1 2 3 / 0.5)` forms.
-fn split_color_args(inner: &str) -> Vec<&str> {
-    inner
-        .split(|c: char| c == ',' || c == '/' || c.is_whitespace())
-        .filter(|t| !t.is_empty())
-        .collect()
-}
-
-/// Parse one rgb() component: `0`–`255` numeric or `0%`–`100%` percentage.
-fn parse_rgb_component(tok: &str) -> Option<u8> {
-    if let Some(p) = tok.strip_suffix('%') {
-        let f = p.parse::<f32>().ok()?;
-        return Some((f.clamp(0.0, 100.0) * 255.0 / 100.0).round() as u8);
-    }
-    let f = tok.parse::<f32>().ok()?;
-    Some(f.clamp(0.0, 255.0).round() as u8)
-}
-
-/// Parse a percentage token (`"45%"`) into 0.0–1.0.
-fn parse_percent(tok: &str) -> Option<f32> {
-    let p = tok.strip_suffix('%')?;
-    Some((p.parse::<f32>().ok()? / 100.0).clamp(0.0, 1.0))
-}
-
-/// Common CSS named colors: the basic-16 plus frequent extended names.
-/// `transparent` is deliberately absent (it is not a cover-band signal).
-/// Unknown names fall through the cover-color ladder harmlessly, so this
-/// table favors certainty over completeness — extend on demand.
-const NAMED_COLORS: &[(&str, u32)] = &[
-    ("aqua", 0x00FFFF),
-    ("beige", 0xF5F5DC),
-    ("black", 0x000000),
-    ("blue", 0x0000FF),
-    ("brown", 0xA52A2A),
-    ("chocolate", 0xD2691E),
-    ("coral", 0xFF7F50),
-    ("crimson", 0xDC143C),
-    ("cyan", 0x00FFFF),
-    ("darkblue", 0x00008B),
-    ("darkgray", 0xA9A9A9),
-    ("darkgreen", 0x006400),
-    ("darkgrey", 0xA9A9A9),
-    ("darkred", 0x8B0000),
-    ("dimgray", 0x696969),
-    ("dimgrey", 0x696969),
-    ("forestgreen", 0x228B22),
-    ("fuchsia", 0xFF00FF),
-    ("gainsboro", 0xDCDCDC),
-    ("gold", 0xFFD700),
-    ("gray", 0x808080),
-    ("green", 0x008000),
-    ("grey", 0x808080),
-    ("hotpink", 0xFF69B4),
-    ("indigo", 0x4B0082),
-    ("ivory", 0xFFFFF0),
-    ("khaki", 0xF0E68C),
-    ("lightgray", 0xD3D3D3),
-    ("lightgrey", 0xD3D3D3),
-    ("lime", 0x00FF00),
-    ("magenta", 0xFF00FF),
-    ("maroon", 0x800000),
-    ("midnightblue", 0x191970),
-    ("navy", 0x000080),
-    ("olive", 0x808000),
-    ("orange", 0xFFA500),
-    ("orangered", 0xFF4500),
-    ("orchid", 0xDA70D6),
-    ("pink", 0xFFC0CB),
-    ("purple", 0x800080),
-    ("rebeccapurple", 0x663399),
-    ("red", 0xFF0000),
-    ("royalblue", 0x4169E1),
-    ("salmon", 0xFA8072),
-    ("seagreen", 0x2E8B57),
-    ("sienna", 0xA0522D),
-    ("silver", 0xC0C0C0),
-    ("skyblue", 0x87CEEB),
-    ("slategray", 0x708090),
-    ("slategrey", 0x708090),
-    ("snow", 0xFFFAFA),
-    ("steelblue", 0x4682B4),
-    ("tan", 0xD2B48C),
-    ("teal", 0x008080),
-    ("tomato", 0xFF6347),
-    ("turquoise", 0x40E0D0),
-    ("violet", 0xEE82EE),
-    ("white", 0xFFFFFF),
-    ("whitesmoke", 0xF5F5F5),
-    ("yellow", 0xFFFF00),
-];
 
 /// Neutral near-black band for iframe covers that declare no color —
 /// consistent with extracted bands, which land around 21–25% lightness

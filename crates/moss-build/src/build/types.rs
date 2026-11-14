@@ -696,6 +696,12 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub title_block: Option<String>,
+    /// A members page parsed from its whole source. Every other field holds
+    /// the public part only; this is read by the members-only render alone
+    /// and is never serialized.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub members_full: Option<Box<ParsedDocument>>,
     /// `chrome: none` — the page is drawn without the site's header, nav
     /// island, footer and skip link. The page's own, never cascaded.
     #[serde(skip)]
@@ -806,6 +812,32 @@ impl ParsedDocument {
     /// article's locator (default `[site] locator`).
     pub fn shows_own_map(&self, site_default: bool) -> bool {
         self.map.unwrap_or(site_default)
+    }
+
+    /// This page with the body of `full`, its parse from the whole source:
+    /// what the members-only version of the page renders. Everything that
+    /// names the page (its address, title, date, place in the site) stays this
+    /// page's own, so both versions are one page.
+    pub(crate) fn with_body_of(&self, full: &ParsedDocument) -> ParsedDocument {
+        ParsedDocument {
+            members_full: None,
+            content: full.content.clone(),
+            html_content: full.html_content.clone(),
+            body_plan: full.body_plan.clone(),
+            reading_time: full.reading_time,
+            media_items: full.media_items.clone(),
+            features: full.features.clone(),
+            citations: full.citations.clone(),
+            opening_heading: full.opening_heading.clone(),
+            body_cover_path: full.body_cover_path.clone(),
+            body_cover_candidates: full.body_cover_candidates.clone(),
+            body_claims_eager: full.body_claims_eager,
+            lists_folders: full.lists_folders,
+            has_own_map_embed: full.has_own_map_embed,
+            country_lists: full.country_lists.clone(),
+            embedded_listing_urls: full.embedded_listing_urls.clone(),
+            ..self.clone()
+        }
     }
 
     /// Rewrite the page body, keeping the typed plan and the flattened

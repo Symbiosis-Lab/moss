@@ -38,7 +38,7 @@ import { insertCommentAndEdit } from './cm-comment';
 import { detectFileType, type EditorFileType } from './file-types';
 import {
   referenceCardExtension, assetCardProvider, footnoteCardProvider,
-  externalCardProvider, linkCardProvider, pageLinkCardProvider, cardProviders, cardAugmenters,
+  linkCardProvider, pageLinkCardProvider, cardProviders, cardAugmenters,
   currentArticleCardProvider, isCurrentArticleMapAt, openCardAt, withLinkControls, type CurrentArticleCardData, type CardProvider,
 } from './cm-reference-card';
 import { problemCardAugmenter, problemsExtension } from './cm-problems';
@@ -476,12 +476,12 @@ export class CmEditor {
           const requestUrl = env?.resolved?.request_url ?? '';
           return resolveCachedImage(env, assetBustQuery(requestUrl));
         };
-        // The reference card: dwell on a link or, chord-held, any reference —
+        // The reference card: dwell on a reference's destination, or ⌘K —
         // reading the SAME unified reference cache the problem marks read.
         // Keyed (text, is_embed).
         //
-        // The three link-kind providers (page link, external, and
-        // the last-resort link card) each gain a URL field + Open/Unlink through
+        // The two link providers (page link and the last-resort link card,
+        // which takes external URLs too) each gain a URL field + Open/Unlink through
         // `withLinkControls`, wrapped HERE rather than inside
         // cm-reference-card.ts — the wrap needs the SAME `resolvedCache` the
         // providers already close over.
@@ -501,7 +501,6 @@ export class CmEditor {
             applyWidth: applyEmbedWidth,
           })),
           cardProviders.of(footnoteCardProvider),
-          cardProviders.of(withControls(externalCardProvider(refResolver.resolvedCache))),
           cardProviders.of(withControls(
             pageLinkCardProvider(refResolver.resolvedCache, engine.editorReferenceCard, pathOpts),
           )),

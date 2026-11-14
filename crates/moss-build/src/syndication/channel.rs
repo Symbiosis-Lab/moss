@@ -79,6 +79,12 @@ impl ChannelSpec {
         self.images.as_ref().map_or(0, |i| i.max as usize)
     }
 
+    /// An article's pictures are part of its HTML: all of them go, unless the
+    /// channel states a limit.
+    pub fn max_article_images(&self) -> usize {
+        self.images.as_ref().map_or(usize::MAX, |i| i.max as usize)
+    }
+
     /// The text's length as this network counts it.
     pub fn length(&self, text: &str) -> usize {
         let weighted = self.counting == Counting::Weighted;

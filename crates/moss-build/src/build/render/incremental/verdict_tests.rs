@@ -82,6 +82,7 @@ struct Harness {
     globals_salt: bool,
     render_id: Option<String>,
     sealed_render_id: Option<String>,
+    build_day: chrono::NaiveDate,
 }
 
 impl Harness {
@@ -97,6 +98,7 @@ impl Harness {
             overrides: std::collections::HashMap::new(),
             skip: true,
             globals_salt: false,
+            build_day: chrono::NaiveDate::from_ymd_opt(2026, 3, 14).unwrap(),
             render_id: None,
             sealed_render_id: None,
         }
@@ -120,6 +122,7 @@ impl Harness {
                 typesetting: None,
                 math: false,
                 term_nav: &[],
+                build_day: self.build_day,
                 render_id: self.render_id.as_deref(),
                 sealed_render_id: self.sealed_render_id.as_deref(),
             },
@@ -400,6 +403,13 @@ fn each_full_render_says_why() {
     let mut h = Harness::new();
     h.run(&vault());
     h.globals_salt = true;
+    assert_full(&h.run(&vault()), FullCause::ListingGlobalsMoved);
+
+    // A new build day: upcoming and past events, calendars and edition dates
+    // read it, on a watch rebuild and a proved one alike, with no page moving.
+    let mut h = Harness::new();
+    h.run(&vault());
+    h.build_day = h.build_day.succ_opt().unwrap();
     assert_full(&h.run(&vault()), FullCause::ListingGlobalsMoved);
 
     // LangGlobalsMoved — a FOOTER-eligible page's own `lang` changes which

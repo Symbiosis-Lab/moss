@@ -88,6 +88,7 @@ import { clampLeft, maxSurfaceWidth, verticalSlot } from "./viewport";
     popup.addEventListener("click", () => {
       if (currentLink) window.location.href = currentLink.href;
     });
+    popup.dataset.mossPermanent = "";
     document.body.appendChild(popup);
   }
 

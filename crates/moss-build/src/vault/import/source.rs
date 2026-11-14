@@ -10,6 +10,24 @@ pub struct ImportOptions {
     /// A persistent private directory outside the project. Native hosts can
     /// supply their own app-data directory; the CLI uses the app-data default.
     pub private_members_dir: Option<PathBuf>,
+    /// A WordPress export added to an address: read after the address is crawled.
+    pub export: Option<PathBuf>,
+}
+
+/// One import run into one folder, across the sources given to it: the
+/// folder's imported pages are read once and kept current as pages land.
+#[derive(Default)]
+pub struct ImportSession {
+    held: Option<(PathBuf, super::items::ImportedPages)>,
+}
+
+impl ImportSession {
+    fn pages(&mut self, folder: &Path) -> &mut super::items::ImportedPages {
+        if self.held.as_ref().is_none_or(|(f, _)| f != folder) {
+            self.held = Some((folder.to_path_buf(), super::items::ImportedPages::scan(folder)));
+        }
+        &mut self.held.as_mut().expect("just set").1
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -56,6 +74,9 @@ pub async fn recognise_source(source: &str) -> Result<RecognisedSource, String> 
         return Ok(RecognisedSource { kind, host: url::Url::parse(&final_url).ok().and_then(|u| u.host_str().map(str::to_string)), title: doc.select(&title).next().map(|n| n.text().collect()) });
     }
     let path = local_path(source)?;
+    if let Some(head) = super::wordpress::wxr::sniff(&path) {
+        return Ok(RecognisedSource { kind: SourceKind::Wordpress, host: head.site.and_then(|u| url::Url::parse(&u).ok()).and_then(|u| u.host_str().map(str::to_string)), title: head.title });
+    }
     if let Some(bundle) = super::ghost::bundle::Bundle::open(&path)? {
         return Ok(RecognisedSource { kind: SourceKind::Ghost, host: bundle.site_url().and_then(|u| url::Url::parse(&u).ok()).and_then(|u| u.host_str().map(str::to_string)), title: bundle.setting("title") });
     }
@@ -64,18 +85,33 @@ pub async fn recognise_source(source: &str) -> Result<RecognisedSource, String> 
 
 pub async fn import_source<F>(source: &str, folder: &Path, options: ImportOptions, on_progress: F) -> Result<ImportResult, String>
 where F: Fn(ScrapeProgress) + Send + Sync + 'static {
+    import_source_in(&mut ImportSession::default(), source, folder, options, &on_progress).await
+}
+
+/// [`import_source`] as one of several sources imported into one folder.
+pub async fn import_source_in(
+    session: &mut ImportSession, source: &str, folder: &Path, options: ImportOptions,
+    on_progress: &(dyn Fn(ScrapeProgress) + Send + Sync),
+) -> Result<ImportResult, String> {
     let source = source.trim();
     if !folder.is_dir() { return Err("Output directory does not exist".into()); }
     if is_remote_url(source) {
         super::scrape::fetch::refuse_unsafe_scrape_url(source)?;
+        if let Some(export) = &options.export {
+            if super::wordpress::wxr::sniff(export).is_none() { return Err("--export takes a WordPress export file (Tools → Export).".into()); }
+            return super::wordpress::import(export, Some(source), folder, session.pages(folder), on_progress).await;
+        }
         let mut config = ScrapeConfig::new(source, folder);
         config.recursive = options.recursive;
-        let scrape = super::scrape::run::scrape_to_folder(config, on_progress).await?;
+        let scrape = super::scrape::run::scrape_into(config, session.pages(folder), on_progress).await?.result;
         return Ok(ImportResult { report: if scrape.restricted_pages > 0 { vec![format!("{} posts are for subscribers only; add a Ghost export to bring their text.", scrape.restricted_pages)] } else { Vec::new() }, subscribers: None, scrape });
     }
     let path = local_path(source)?;
+    if super::wordpress::wxr::sniff(&path).is_some() {
+        return super::wordpress::import(&path, None, folder, session.pages(folder), on_progress).await;
+    }
     if let Some(bundle) = super::ghost::bundle::Bundle::open(&path)? {
-        return super::ghost::import(bundle, folder, options, on_progress).await;
+        return super::ghost::import(bundle, folder, options, session.pages(folder), on_progress).await;
     }
     let (scrape, report) = if super::douban::is_tofu_backup(&path) {
         let (scrape, report) = super::douban::import_tofu_backup(&path, folder).await?;

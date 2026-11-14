@@ -75,6 +75,9 @@ use std::path::Path;
 
 pub(crate) mod preview_originals;
 pub(crate) mod publish_view;
+pub use publish_view::published_article;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use publish_view::keep_articles_for_tests;
 
 use crate::build::assets::paths::{compute_binary_hash, compute_manifest_generation_id};
 use crate::types::content::{file_entry, SiteHashes};
@@ -343,6 +346,8 @@ impl PendingManifest {
         // sweep compares file mtimes against the moment hashing began, and a
         // stale capture time would mark nothing suspect ever again.
         inner.captured_at = crate::build::stat::recording_clock();
+        // Only this build's own record may vouch for what this build read.
+        inner.build_inputs = None;
         inner.render_id = Some(uuid::Uuid::new_v4().simple().to_string());
         let carried_source_to_output = std::mem::take(&mut inner.source_to_output);
         let carried_page_meta = std::mem::take(&mut inner.page_meta);
@@ -646,6 +651,23 @@ impl PendingManifest {
         Some(())
     }
 
+    /// Record the `.moss/` inputs measured before this build read any of them,
+    /// with this build's options over `carried_env`, the record of the pages
+    /// this build carried; [`seal`][PendingManifest::seal] adds the
+    /// environment this process read. `None` leaves the manifest proving
+    /// nothing.
+    pub(crate) fn set_build_inputs(
+        &mut self,
+        inputs: Option<crate::build::inputs::BuildInputs>,
+        carried_env: Option<std::collections::BTreeMap<String, String>>,
+    ) {
+        self.inner.build_inputs = inputs.map(|mut inputs| {
+            let options = std::mem::take(&mut inputs.env);
+            inputs.env = carried_env.unwrap_or_default().into_iter().chain(options).collect();
+            inputs
+        });
+    }
+
     /// Set the plugin and builder fingerprints on the pending manifest. These
     /// flow through to the `SealedManifest::write_to_disk` output so the next
     /// build's `load_previous_hashes` can detect plugin/builder changes.
@@ -936,6 +958,9 @@ impl PendingManifest {
         let input_root = self.input_evidence.as_ref().map(|e| e.root_path().to_path_buf());
         let input_evidence = self.input_evidence.as_ref().map(|e| e.snapshot());
         let mut inner = self.inner;
+        if let Some(inputs) = inner.build_inputs.as_mut() {
+            inputs.env.extend(crate::build::inputs::env_read());
+        }
         let touched = self.touched;
         // A page the previous build hashed and this build neither re-read nor
         // carried forward is a deleted page. Its hash must go with it, or the

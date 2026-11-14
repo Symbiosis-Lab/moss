@@ -177,9 +177,9 @@ fn missing_snapshot_returns_none_for_generic_fallback() {
 /// Corpus snapshot harness over a saved sample-site export (not a CI test).
 ///
 /// `MOSS_READYMAG_CORPUS` holds `viewer.html` + `snapshot-{uri}.html` per
-/// page; outputs land in `MOSS_CORPUS_OUT`. Inline assertions pin the
-/// acceptance invariants; interleave positions are
-/// verified manually against the live site.
+/// page; outputs land in `MOSS_CORPUS_OUT`. The assertions check only what is
+/// structural (embeds, nav, sections), since the corpus is a real site and
+/// these tests hold no text from it; diff two runs' outputs for the rest.
 #[test]
 #[ignore = "corpus harness: set MOSS_READYMAG_CORPUS and MOSS_CORPUS_OUT"]
 fn readymag_corpus_snapshot() {
@@ -209,8 +209,6 @@ fn readymag_corpus_snapshot() {
     let count = |s: &str, needle: &str| s.matches(needle).count();
 
     let home = &rendered["home"];
-    assert!(home.contains("Sam Placeholder"), "home name: {home}");
-    assert!(home.contains("March 3, 1958"), "home dates: {home}");
     assert!(!home.contains("[Personal History]"), "nav leaked: {home}");
 
     let videos = &rendered["videos"];
@@ -227,21 +225,4 @@ fn readymag_corpus_snapshot() {
         "music page should carry 6 Drive audio embeds: {music}"
     );
     assert!(music.contains("ORIGINAL SONGS"), "music sections: {music}");
-
-    let finaldays = &rendered["finaldays"];
-    for date in [
-        "March 2023",
-        "October 5, 2023",
-        "December 3, 2023",
-        "December 10, 2023",
-        "December 18, 2023",
-    ] {
-        assert!(finaldays.contains(date), "missing letter {date}");
-    }
-
-    let history = &rendered["personalhistory"];
-    assert!(
-        history.contains("Sam River Placeholder"),
-        "obituary lead: {history}"
-    );
 }

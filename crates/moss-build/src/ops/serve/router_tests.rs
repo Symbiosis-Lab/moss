@@ -619,7 +619,7 @@ async fn the_seal_tail_leaves_the_served_staging_tree_alone() {
     let _record = lifecycle::lock_for(&mp);
     std::fs::create_dir_all(mp.generation_dir("g1")).unwrap();
     let site_dir_cell = Arc::new(std::sync::RwLock::new(std::path::PathBuf::new()));
-    lifecycle::adopt_server(&mp, &site_dir_cell);
+    let _ = lifecycle::adopt_server(&mp, &site_dir_cell);
     let (shown, _) = lifecycle::show_render(&mp, true);
     assert!(lifecycle::promote(&mp, crate::build::ship::next_promotion_epoch(), Some(shown), "g1", true).unwrap());
     let (port2, _, shutdown_tx2) = start_server(ServeConfig {
@@ -685,7 +685,7 @@ async fn a_rebuild_never_parks_the_preview_on_a_generation_older_than_the_render
 
     // Render 1 is shown and promoted as g1, which has no `fresh/`.
     let cell = Arc::new(std::sync::RwLock::new(std::path::PathBuf::new()));
-    lifecycle::adopt_server(&mp, &cell);
+    let _ = lifecycle::adopt_server(&mp, &cell);
     let (r1, _) = lifecycle::show_render(&mp, true);
     assert!(lifecycle::promote(&mp, next_promotion_epoch(), Some(r1), "g1", true).unwrap());
 
@@ -3060,6 +3060,38 @@ async fn event_stream_delivers_a_published_event_to_a_browser() {
     let _ = shutdown_tx.send(());
 }
 
+/// A page holds no token, so the reload stream opens without one, and for
+/// that reason its frame says only that a rebuild happened.
+#[tokio::test(flavor = "multi_thread")]
+async fn reload_stream_tells_a_page_of_a_rebuild_and_nothing_else() {
+    let _streams = event_stream_lock();
+    use crate::ops::serve::events;
+    use crate::types::events::{FileChangeEvent, MossEvent};
+
+    let (_parent, _vault_path, site_dir) = confinement_vault();
+    let (port, shutdown_tx, _token) = serve_bound(site_dir.clone(), 63470).await;
+
+    let url = format!("http://localhost:{port}/__moss/reload");
+    let reader = tokio::task::spawn_blocking(move || {
+        ureq::get(&url).timeout(std::time::Duration::from_secs(10)).call().expect("the stream opens with no token").into_reader()
+    })
+    .await
+    .unwrap();
+
+    // A finished build with no new files is not a reason to reload.
+    let rebuilt = events::reloads().subscribe();
+    events::publish(&MossEvent::BuildComplete(crate::build::progress::BuildComplete { videos_converted: 0, total_time_ms: 42, skipped_symlinks: 0 }));
+    assert!(!rebuilt.has_changed().unwrap());
+    let mut changed = FileChangeEvent::new();
+    changed.changed_output_files = Some(vec!["private/page/index.html".into()]);
+    events::publish(&MossEvent::FileChanged(changed));
+
+    let record = tokio::task::spawn_blocking(move || read_one_sse_record(reader)).await.unwrap().expect("a rebuild arrives as one SSE record");
+    assert_eq!(record, "data: reload\n\n");
+
+    let _ = shutdown_tx.send(());
+}
+
 /// An event stream counts while a browser holds it open and stops counting
 /// once it disconnects, and both moments are activity — the signal a host
 /// waits on to tell whether anyone is watching outside its own window.
@@ -3330,6 +3362,39 @@ async fn host_route_colliding_with_an_engine_path_fails_construction_instead_of_
         result.is_err() && result.unwrap_err().is_panic(),
         "a host route at an engine path must fail construction loudly (panic), not shadow the engine's handler"
     );
+}
+
+/// A host's own page is not a page of the site: it is served as the host
+/// wrote it. The preview bridge in a page that no frame holds reloads the page
+/// on every rebuild, which in a host's editor discards what was being typed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_page_is_served_as_the_host_wrote_it() {
+    const HOST_PAGE: &str = "<!doctype html><html><head></head><body>the host's own page</body></html>";
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(temp_dir.path().join("index.html"), HOST_PAGE).unwrap();
+    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let host = axum::Router::new()
+        .route("/__moss/host/", axum::routing::get(|| async { axum::response::Html(HOST_PAGE) }));
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
+        host_routes: Some(host),
+        ..ServeConfig::new(site_dir_state, 59600)
+    })
+    .await
+    .expect("Server should start");
+    let get = |path: &str| {
+        ureq::get(&format!("http://localhost:{port}{path}"))
+            .timeout(std::time::Duration::from_secs(5))
+            .call()
+            .expect("the page must be served")
+            .into_string()
+            .expect("body should read")
+    };
+
+    assert_eq!(get("/__moss/host/"), HOST_PAGE);
+    // The same bytes as a page of the site do carry the bridge.
+    assert_ne!(get("/"), HOST_PAGE);
+
+    let _ = shutdown_tx.send(());
 }
 
 // ===== File operations: rename-with-refs, batch delete, reference cleanup and undo =====

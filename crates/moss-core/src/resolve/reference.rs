@@ -110,6 +110,10 @@ impl ResolvedReference {
 pub struct ReferenceVerdict {
     pub resolved: ResolvedReference,
     pub missing_kind: crate::resolve::DiagnosticKind,
+    /// The second place the target was read from when the page's own folder
+    /// had nothing: a folder note naming its own folder (see
+    /// `own_folder_anchor`). Set whether or not a folder was found there.
+    pub anchored_from: Option<String>,
 }
 
 impl ReferenceVerdict {
@@ -139,6 +143,27 @@ fn parse_reference(inner: &str) -> ParsedReference<'_> {
     ParsedReference { path, pothole, anchor }
 }
 
+/// A folder note (`work/Opera/Opera.md`) may list its own folder by name, as
+/// `![[Opera/]]`. Read beside the note, that target is `work/Opera/Opera/`.
+/// When the target's first segment is the note's own folder name, return a
+/// `from` path in the note's parent folder, from which it means `work/Opera/`.
+fn own_folder_anchor(path: &str, from: &str) -> Option<String> {
+    use std::path::Path;
+    if path.starts_with('/') {
+        return None;
+    }
+    let note = Path::new(from);
+    let own_dir = note.parent()?.to_str()?;
+    let own_name = Path::new(own_dir).file_name()?.to_str()?;
+    if note.file_stem()?.to_str()? != own_name {
+        return None;
+    }
+    if path.trim_end_matches('/').split('/').next()? != own_name {
+        return None;
+    }
+    Some(Path::new(own_dir).parent()?.join("_.md").to_str()?.to_string())
+}
+
 /// Classify a reference's inner text (target + optional |pothole / #anchor /
 /// ?query) into a kind + resolved source path. Pure.
 pub fn classify_reference(
@@ -160,7 +185,19 @@ pub fn classify_reference_verdict(
 ) -> ReferenceVerdict {
     let inner = inner.trim();
     let parsed = parse_reference(inner);
-    let resolved = classify_reference_parts(inner, &parsed, from_source, is_embed, ctx);
+    let mut resolved = classify_reference_parts(inner, &parsed, from_source, is_embed, ctx);
+    // An existing page-relative target keeps its meaning; only a missing one
+    // is read again as the note's own folder, and only a folder is accepted.
+    let mut anchored_from = None;
+    if is_embed && matches!(resolved.kind, ReferenceKind::NotFound) {
+        if let Some(anchor) = own_folder_anchor(parsed.path, from_source) {
+            let own = classify_reference_parts(inner, &parsed, &anchor, is_embed, ctx);
+            if matches!(own.kind, ReferenceKind::FolderListing | ReferenceKind::FolderIndexIframe) {
+                resolved = own;
+            }
+            anchored_from = Some(anchor);
+        }
+    }
     let missing_kind = if matches!(resolved.kind, ReferenceKind::NotFound) {
         crate::resolve::ext_kind::missing_reference_kind(
             crate::path_ext::path_extension(parsed.path).as_deref(),
@@ -168,7 +205,7 @@ pub fn classify_reference_verdict(
     } else {
         crate::resolve::DiagnosticKind::Other
     };
-    ReferenceVerdict { resolved, missing_kind }
+    ReferenceVerdict { resolved, missing_kind, anchored_from }
 }
 
 fn classify_reference_parts(

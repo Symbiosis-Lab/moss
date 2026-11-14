@@ -247,6 +247,21 @@ describe('buildPreviewCtxEntries', () => {
     ]);
   });
 
+  it('a picture in a grid column: the column is not a second grid row', () => {
+    const entries = buildPreviewCtxEntries(
+      ctx({
+        targets: [
+          { kind: 'body-line', line: 10, element: 'p' },
+          { kind: 'body-range', startLine: 3, endLine: 10, element: 'div.moss-grid-card' },
+          { kind: 'body-range', startLine: 2, endLine: 22, element: 'div.moss-grid' },
+        ],
+        image: 'http://localhost:4832/pictures/room.jpg',
+      }),
+      deps({ canEdit: true, pageFile: '/site/index.md' }),
+    );
+    expect(labels(entries).slice(0, 3)).toEqual(['Edit paragraph', 'Edit block', 'Grid settings']);
+  });
+
   it('nav entry: a settings row, then the named page row that opens the page itself', () => {
     const d = deps();
     const entries = buildPreviewCtxEntries(

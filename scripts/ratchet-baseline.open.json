@@ -65,13 +65,13 @@
         "crates/moss-build/src/build": 80,
         "crates/moss-build/src/build/media": 20,
         "crates/moss-build/src/deploy": 22,
-        "crates/moss-build/src/js-src/bridge": 17,
+        "crates/moss-build/src/js-src/bridge": 18,
         "crates/moss-build/src/js-src/site": 28,
         "crates/moss-build/src/plugins": 19,
         "crates/moss-core/src": 47,
         "crates/moss-core/src/ast": 29,
         "crates/moss-core/src/resolve": 20,
-        "crates/moss-build/src/ops/serve": 20,
+        "crates/moss-build/src/ops/serve": 19,
         "crates/moss-build/src/js-src/site/maps/places-explorer": 18,
         "crates/moss-build/src/vault/import/scrape": 17,
         "crates/moss-build/src/cli": 25,
@@ -84,7 +84,8 @@
         "packages/moss-ui/src/ui/editor": 94,
         "packages/moss-ui/src/ui/editor/tree": 17,
         "packages/moss-ui/src/ui/preview": 29,
-        "crates/moss-build/src/vault/import": 20
+        "crates/moss-build/src/vault/import": 23,
+        "crates/moss-build/src/system": 16
       },
       "oversized": {
         "crates/moss-core/src": "Flat by charter: pure, zero-I/O leaf modules (parse, schema, contract, resolve) that are named-scanned, not navigated. ast/ and resolve/ are the two clusters that earned subdirectories. (carried over from the desktop baseline's open/crates/moss-core/src entry, dated pre-2026-09-16.)",
@@ -126,7 +127,7 @@
         "crates/moss-build/src/build/media/video.rs::run_video_conversion": 350,
         "crates/moss-build/src/build/parse_cache.rs::begin": 250,
         "crates/moss-build/src/build/pipeline.rs::run_notebook_processing": 350,
-        "crates/moss-build/src/build/pipeline.rs::build_inner": 650,
+        "crates/moss-build/src/build/pipeline.rs::build_inner": 700,
         "crates/moss-build/src/build/render/blocking.rs::generate_blocking_content_for_build": 1800,
         "crates/moss-build/src/build/render/html.rs::render_page": 550,
         "crates/moss-build/src/build/render/incremental/verdict.rs::compute": 250,
@@ -136,7 +137,7 @@
         "crates/moss-build/src/engine/host_fns.rs::dispatch_command_core": 300,
         "crates/moss-build/src/ops/serve/router.rs::start_server": 350,
         "crates/moss-build/src/ops/watch/sweep/tick.rs::run": 400,
-        "crates/moss-build/src/vault/import/scrape/run.rs::scrape_to_folder": 300,
+        "crates/moss-build/src/vault/import/scrape/run.rs::scrape_into": 300,
         "crates/moss-core/src/ast/hooks.rs::render_shortcode": 350,
         "crates/moss-core/src/ast/parser.rs::parse_block_with_tag": 300,
         "crates/moss-core/src/ast/render.rs::render_block": 450,
@@ -166,6 +167,18 @@
         "moss-build": 242,
         "moss-cli": 0
       }
+    },
+    "raw_radius_shadow_ui": {
+      "letter": "i",
+      "disposition": "permanent",
+      "armed": true,
+      "value": 107
+    },
+    "raw_env_reads": {
+      "letter": "j",
+      "disposition": "permanent",
+      "armed": true,
+      "value": 27
     }
   }
 }

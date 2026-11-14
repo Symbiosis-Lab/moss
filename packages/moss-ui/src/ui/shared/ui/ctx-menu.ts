@@ -253,7 +253,7 @@ export function openCtxMenu(opts: OpenCtxMenuOptions): CtxMenuHandle {
   activeMenu?.close();
 
   const menu = document.createElement('div');
-  menu.className = 'ctx-menu';
+  menu.className = 'ctx-menu moss-menu';
   menu.setAttribute('role', 'menu');
   if (opts.className) menu.classList.add(...opts.className.split(/\s+/));
 
@@ -335,7 +335,7 @@ export function openCtxMenu(opts: OpenCtxMenuOptions): CtxMenuHandle {
     role: 'menuitem' | 'menuitemcheckbox' = 'menuitem',
   ): HTMLElement => {
     const item = document.createElement('div');
-    item.className = 'ctx-item';
+    item.className = 'ctx-item moss-menu-row';
     item.setAttribute('role', role);
     item.id = `${menuUid}-r${++rowSeq}`;
     if (id) item.dataset.action = id;

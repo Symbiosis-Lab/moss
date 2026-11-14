@@ -208,6 +208,8 @@ pub struct VerdictInputs<'a> {
     pub math: bool,
     /// Term kinds shown in the nav bar — see `LayoutConfig::term_nav`.
     pub term_nav: &'a [crate::build::terms::TermNavEntry],
+    /// The day this build is as of; see `listing::listing_globals`.
+    pub build_day: chrono::NaiveDate,
     /// This build's render ([`SiteHashes::render_id`]), saved with the cache.
     ///
     /// [`SiteHashes::render_id`]: crate::types::content::SiteHashes::render_id
@@ -391,6 +393,7 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
         inputs.site_lang,
         inputs.typesetting,
         inputs.math,
+        inputs.build_day,
     );
     let listing_globals_changed = previous.digests_moved(DigestMap::ListingGlobals, &listing_globals);
     let image_placeholders = listing::image_placeholders(inputs.project);

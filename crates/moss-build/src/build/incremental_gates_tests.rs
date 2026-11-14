@@ -3,25 +3,12 @@
 //! charged to an edit that could not have invalidated one.
 
 use super::*;
-use crate::build::{BuildTrigger, PluginMode, VaultRoot};
+use crate::build::BuildTrigger;
 use std::path::PathBuf;
 
-fn cfg(trigger: BuildTrigger) -> PipelineConfig {
-    PipelineConfig {
-        root: VaultRoot::resolve(&PathBuf::from("/tmp/moss-gate-test")),
-        progress: crate::build::null_sink(),
-        plugins: PluginMode::Blocking,
-        watch: true,
-        start_server: false,
-        host: crate::build::ports::host::test_host_ports(),
-        trigger,
-        exits_after_build: false,
-        site_url_override: None,
-        admission_epoch: None,
-        server_port: None,
-        live_port: None,
-        rename_pairs: Vec::new(),
-    }
+/// An event batch never reads the disk, so no folder or seal is needed.
+fn proof(trigger: BuildTrigger) -> ChangeProof {
+    ChangeProof::for_build(&trigger, Path::new(""), "", &LastSeal::default())
 }
 
 fn paths(rels: &[&str]) -> Vec<PathBuf> {
@@ -32,13 +19,13 @@ fn paths(rels: &[&str]) -> Vec<PathBuf> {
 
 #[test]
 fn the_render_skip_opens_only_for_a_content_only_markdown_batch() {
-    assert!(cfg(BuildTrigger::ContentOnly(paths(&["a.md"]))).allows_incremental_skip());
+    assert!(proof(BuildTrigger::ContentOnly(paths(&["a.md"]))).allows_incremental_skip());
     assert!(
-        !cfg(BuildTrigger::ContentOnly(paths(&["a.md", "s.css"]))).allows_incremental_skip(),
+        !proof(BuildTrigger::ContentOnly(paths(&["a.md", "s.css"]))).allows_incremental_skip(),
         "a stylesheet moves build-globals baked into every page"
     );
-    assert!(!cfg(BuildTrigger::ContentOnly(vec![])).allows_incremental_skip());
-    assert!(!cfg(BuildTrigger::Full).allows_incremental_skip());
+    assert!(!proof(BuildTrigger::ContentOnly(vec![])).allows_incremental_skip());
+    assert!(!proof(BuildTrigger::Full).allows_incremental_skip());
 }
 
 /// `Structural` must keep closing the render skip even now that it opens the
@@ -46,7 +33,7 @@ fn the_render_skip_opens_only_for_a_content_only_markdown_batch() {
 /// and folder indexes, none of which is a page's own fingerprint.
 #[test]
 fn the_render_skip_stays_shut_for_a_structural_batch() {
-    assert!(!cfg(BuildTrigger::Structural(paths(&["a.md"]))).allows_incremental_skip());
+    assert!(!proof(BuildTrigger::Structural(paths(&["a.md"]))).allows_incremental_skip());
 }
 
 // ── The parse cache: an extension question, not a trigger question ────────
@@ -60,9 +47,9 @@ fn the_render_skip_stays_shut_for_a_structural_batch() {
 /// fingerprint and bypasses the cache for the whole build regardless.
 #[test]
 fn a_structural_markdown_batch_may_still_replay_the_parse_cache() {
-    assert!(cfg(BuildTrigger::Structural(paths(&["a.md"]))).allows_parse_cache_reuse());
+    assert!(proof(BuildTrigger::Structural(paths(&["a.md"]))).allows_parse_cache_reuse());
     assert!(
-        cfg(BuildTrigger::Structural(paths(&["a.md", "s.css"]))).allows_parse_cache_reuse(),
+        proof(BuildTrigger::Structural(paths(&["a.md", "s.css"]))).allows_parse_cache_reuse(),
         "stylesheets are parse-irrelevant whether the batch is a create or an edit"
     );
 }
@@ -72,14 +59,14 @@ fn a_structural_markdown_batch_may_still_replay_the_parse_cache() {
 /// so it disables the cache no matter how it arrived.
 #[test]
 fn an_image_disables_the_parse_cache_under_any_trigger() {
-    assert!(!cfg(BuildTrigger::Structural(paths(&["a.md", "hero.png"]))).allows_parse_cache_reuse());
-    assert!(!cfg(BuildTrigger::ContentOnly(paths(&["a.md", "hero.png"]))).allows_parse_cache_reuse());
+    assert!(!proof(BuildTrigger::Structural(paths(&["a.md", "hero.png"]))).allows_parse_cache_reuse());
+    assert!(!proof(BuildTrigger::ContentOnly(paths(&["a.md", "hero.png"]))).allows_parse_cache_reuse());
     assert!(
-        !cfg(BuildTrigger::Structural(paths(&["c.toml"]))).allows_parse_cache_reuse(),
+        !proof(BuildTrigger::Structural(paths(&["c.toml"]))).allows_parse_cache_reuse(),
         "config.toml moves site scalars process_markdown_file reads"
     );
     assert!(
-        !cfg(BuildTrigger::Structural(paths(&["LICENSE"]))).allows_parse_cache_reuse(),
+        !proof(BuildTrigger::Structural(paths(&["LICENSE"]))).allows_parse_cache_reuse(),
         "extensionless is unrecognised, and unrecognised is ineligible"
     );
 }
@@ -89,14 +76,14 @@ fn an_image_disables_the_parse_cache_under_any_trigger() {
 /// this process happens to be holding.
 #[test]
 fn a_full_build_reuses_nothing() {
-    assert!(!cfg(BuildTrigger::Full).allows_parse_cache_reuse());
-    assert!(!cfg(BuildTrigger::Full).allows_incremental_skip());
+    assert!(!proof(BuildTrigger::Full).allows_parse_cache_reuse());
+    assert!(!proof(BuildTrigger::Full).allows_incremental_skip());
 }
 
 #[test]
 fn an_empty_batch_carries_no_information_so_it_reuses_nothing() {
-    assert!(!cfg(BuildTrigger::Structural(vec![])).allows_parse_cache_reuse());
-    assert!(!cfg(BuildTrigger::ContentOnly(vec![])).allows_parse_cache_reuse());
+    assert!(!proof(BuildTrigger::Structural(vec![])).allows_parse_cache_reuse());
+    assert!(!proof(BuildTrigger::ContentOnly(vec![])).allows_parse_cache_reuse());
 }
 
 #[test]
@@ -105,4 +92,48 @@ fn every_page_extension_counts_as_markdown_for_the_gates() {
         assert!(is_markdown_extension(ext), "{ext} is a page source");
     }
     assert!(!is_markdown_extension("txt"));
+}
+
+// ── A build that watched nothing ──────────────────────────────────────────
+
+/// A save queued behind the first build is folded into it: the proof that
+/// build asks for compares the whole disk with the last seal, so it sees that
+/// path too. `Full` still absorbs everything.
+#[test]
+fn unobserved_absorbs_disk_changes_and_full_absorbs_unobserved() {
+    let edit = || BuildTrigger::ContentOnly(paths(&["a.md"]));
+    let created = || BuildTrigger::Structural(paths(&["b.md"]));
+    assert_eq!(BuildTrigger::Unobserved.merge(edit()), BuildTrigger::Unobserved);
+    assert_eq!(created().merge(BuildTrigger::Unobserved), BuildTrigger::Unobserved);
+    assert_eq!(BuildTrigger::Unobserved.merge(BuildTrigger::Unobserved), BuildTrigger::Unobserved);
+    assert_eq!(BuildTrigger::Unobserved.merge(BuildTrigger::Full), BuildTrigger::Full);
+    assert_eq!(BuildTrigger::Full.merge(BuildTrigger::Unobserved), BuildTrigger::Full);
+}
+
+/// A manifest proof opens both gates even when nothing changed, where an
+/// empty event batch carries no information.
+#[test]
+fn a_manifest_proof_opens_both_gates_even_when_nothing_changed() {
+    assert!(ChangeProof::Manifest.allows_incremental_skip());
+    assert!(ChangeProof::Manifest.allows_parse_cache_reuse());
+    assert!(!ChangeProof::None.allows_incremental_skip());
+    assert!(!ChangeProof::None.allows_parse_cache_reuse());
+}
+
+/// A folder with no sealed manifest proves nothing.
+#[test]
+fn an_unobserved_build_with_no_seal_renders_everything() {
+    let dir = tempfile::tempdir().unwrap();
+    let seal = LastSeal::read(dir.path(), Default::default());
+    assert_eq!(ChangeProof::for_build(&BuildTrigger::Unobserved, dir.path(), "b", &seal), ChangeProof::None);
+}
+
+/// Agent guidance refreshes on every build that is not a watch batch, the
+/// unobserved one included.
+#[test]
+fn only_a_watch_batch_is_a_watch_batch() {
+    assert!(!BuildTrigger::Unobserved.is_watch_batch());
+    assert!(!BuildTrigger::Full.is_watch_batch());
+    assert!(BuildTrigger::ContentOnly(paths(&["a.md"])).is_watch_batch());
+    assert!(BuildTrigger::Structural(paths(&["a.md"])).is_watch_batch());
 }

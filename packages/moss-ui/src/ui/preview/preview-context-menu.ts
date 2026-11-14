@@ -176,7 +176,7 @@ function rowLabel(target: PreviewSourceTarget): string {
       return t('preview.ctx_edit_field', { field: target.field ?? '' });
     case 'body-range':
       if (el === 'section.moss-hero') return t('preview.ctx_hero_settings');
-      if (el.startsWith('div.moss-grid')) return t('preview.ctx_grid_settings');
+      if (el === 'div.moss-grid') return t('preview.ctx_grid_settings');
       return t('preview.ctx_edit_block');
     case 'body-line':
       switch (el.split('.')[0]) {

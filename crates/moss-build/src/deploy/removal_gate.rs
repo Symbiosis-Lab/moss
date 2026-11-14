@@ -76,6 +76,7 @@ pub(crate) fn pending_line(p: &PendingRemoval) -> String {
             format!("{at} is still in your folder ({source}) but is no longer published.")
         }
         RemovalCause::Generated => format!("{at} is no longer produced by your site."),
+        RemovalCause::Opened => format!("{at} was for members only and would be open to everyone."),
     }
 }
 
@@ -198,6 +199,23 @@ pub(crate) fn capped_lines_cut<T>(
 /// The refusal, which has to stand on its own: a caller with no accept button
 /// shows only this text.
 pub(crate) fn refusal_text(pending: &[PendingRemoval]) -> String {
+    let (opened, lost): (Vec<PendingRemoval>, Vec<PendingRemoval>) =
+        pending.iter().cloned().partition(|p| p.cause == RemovalCause::Opened);
+    if opened.is_empty() {
+        return lost_refusal_text(&lost);
+    }
+    let text = format!(
+        "Nothing published — {}:\n{}Either keep {} for members (`members:` on the page, or `cascade:` on its folder's home), \
+         or accept that and publish with `moss deploy --accept-removals`.",
+        if opened.len() == 1 { "1 address that was for members only would be open to everyone".to_string() }
+        else { format!("{} addresses that were for members only would be open to everyone", opened.len()) },
+        capped_lines_cut(&opened, pending_line, more_in_json),
+        if opened.len() == 1 { "it" } else { "them" },
+    );
+    if lost.is_empty() { text } else { format!("{text}\n{}", lost_refusal_text(&lost)) }
+}
+
+fn lost_refusal_text(pending: &[PendingRemoval]) -> String {
     let (head, them) = if pending.len() == 1 {
         ("1 address your site has served would stop working, and you did not remove it".to_string(), "it")
     } else {
@@ -292,6 +310,39 @@ mod tests {
             withdrawn_by: None,
         };
         assert_eq!(cause_line(&r), "/events/talk/event.ics is gone because no event page says `start:` there any more.");
+    }
+
+    fn files(paths: &[&str]) -> std::collections::HashMap<String, String> {
+        paths.iter().map(|p| (p.to_string(), "100644:0123456789abcdef".to_string())).collect()
+    }
+
+    /// An address that was for members only and is now served whole to
+    /// everyone refuses the publish; one that stays gated, or becomes gated,
+    /// or is gone altogether, is not opened.
+    #[test]
+    fn an_address_that_was_for_members_and_would_be_open_refuses_the_publish() {
+        use crate::build::manifest::change_set::opened_addresses;
+        let last = files(&["index.html", "post/index.html", "_gated/post/index.html", "_gated/map/rows.csv", "_gated/kept/index.html", "kept/index.html", "_gated/gone.csv"]);
+        let now = files(&["index.html", "post/index.html", "map/rows.csv", "_gated/kept/index.html", "kept/index.html", "_gated/new.csv"]);
+        let mut opened = opened_addresses(&last, &now);
+        opened.sort();
+        assert_eq!(opened, ["map/rows.csv", "post/index.html"]);
+
+        let pending: Vec<PendingRemoval> = opened.iter().map(|path| RemovedAddress {
+            path: path.clone(), reason: RemovalReason::Opened, moved_to: None, source: None, withdrawn_by: None,
+        }.pending()).collect();
+        assert_eq!(
+            refusal_text(&pending),
+            "Nothing published — 2 addresses that were for members only would be open to everyone:\n  \
+             /map/rows.csv was for members only and would be open to everyone.\n  \
+             /post/ was for members only and would be open to everyone.\n\
+             Either keep them for members (`members:` on the page, or `cascade:` on its folder's home), \
+             or accept that and publish with `moss deploy --accept-removals`."
+        );
+        let accepted = opened.into_iter().collect();
+        let removed = [RemovedAddress { path: "post/index.html".into(), reason: RemovalReason::Opened, moved_to: None, source: None, withdrawn_by: None }];
+        assert!(crate::build::manifest::change_set::pending_removals(&removed, Some(&accepted)).is_empty(), "accepting publishes");
+        assert_eq!(crate::build::manifest::change_set::pending_removals(&removed, None).len(), 1);
     }
 
     #[test]

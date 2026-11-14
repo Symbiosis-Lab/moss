@@ -120,7 +120,7 @@ export class UrlAutocomplete {
           data-form-type="other"
         />
         <div
-          class="moss-url-autocomplete-dropdown"
+          class="moss-url-autocomplete-dropdown moss-menu"
           role="listbox"
           id="${this.listboxId}"
         >
@@ -286,7 +286,7 @@ export class UrlAutocomplete {
 
         return `
           <div
-            class="moss-url-autocomplete-item ${isHighlighted ? 'moss-url-autocomplete-item--highlighted' : ''}"
+            class="moss-url-autocomplete-item moss-menu-row ${isHighlighted ? 'moss-url-autocomplete-item--highlighted' : ''}"
             role="option"
             id="${itemId}"
             aria-selected="${isHighlighted}"

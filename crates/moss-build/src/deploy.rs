@@ -666,6 +666,7 @@ pub(crate) async fn publish_client(
     environment: &crate::config::environment::HostingEnvironment,
 ) -> crate::seta::client::MossSetaClient {
     let client = crate::seta::client::MossSetaClient::for_environment(identity, environment);
+    let _phase = crate::build::phase::PhaseTrace::start("whoami");
     crate::identity::verify_email::refresh_recorded_email(folder, identity, &client).await;
     client
 }

@@ -10,6 +10,8 @@
 //   3. The sign-up's copies of moss's subscribe script and state stylesheet
 //      match their source (build-backend-scripts.mjs --check), and every state
 //      of the form looks right (check-landing-subscription.mjs).
+//   4. The mark at the top of every page shows against its ground in the
+//      light and the dark theme, whatever the OS setting (check-landing-logo.mjs).
 // Pass the staged URL as the first argument to run the click-through against
 // the deployed copy instead of the local source: predeploy-landing.mjs [url].
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -35,4 +37,5 @@ const run = (script, ...args) => spawnSync(process.execPath, [fileURLToPath(new 
 if (!run('build-backend-scripts.mjs', '--check')) fail('site/home/subscribe.js or subscribe-form.css is stale; run node scripts/build-backend-scripts.mjs and commit.');
 if (!run('check-landing-download.mjs', ...process.argv.slice(2))) fail('the download check failed; do not deploy.');
 if (!run('check-landing-subscription.mjs', ...process.argv.slice(2))) fail('the sign-up check failed; do not deploy.');
-console.log('predeploy-landing: ok — merged to develop, copies of moss current, download button and sign-up states verified.');
+if (!run('check-landing-logo.mjs', ...process.argv.slice(2))) fail('the mark at the top of a page does not stand out from its ground in some theme; do not deploy.');
+console.log('predeploy-landing: ok — merged to develop, copies of moss current, download button, sign-up states and the mark in both themes verified.');

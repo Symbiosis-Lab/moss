@@ -17,6 +17,7 @@ fn paths(svg: &str) -> Vec<(String, String)> {
 }
 
 const BRAND: &str = "../../site/assets/brand/logo.svg";
+const BRAND_DARK: &str = "../../site/assets/brand/logo-dark.svg";
 const DROP: &str = "#4f7031";
 const DROP_DARK: &str = "#a3d483";
 
@@ -34,7 +35,24 @@ fn the_small_mark_keeps_the_brand_inks() {
     let fills: Vec<&str> = small.iter().map(|(fill, _)| fill.as_str()).collect();
     assert_eq!(fills, ["currentColor", DROP], "body tinted by CSS, tips in the drop green");
     assert_eq!(brand[1].0, DROP, "the brand's tips moved off {DROP}");
-    let (logo, mark_css) = (read(BRAND), read("src/assets/css/mark.css"));
-    assert!(logo.contains(DROP_DARK) && mark_css.contains(DROP_DARK), "the dark-ground drop is {DROP_DARK} in both");
+    let (dark, mark_css) = (paths(&read(BRAND_DARK)), read("src/assets/css/mark.css"));
+    assert_eq!(dark[1].0, DROP_DARK, "the dark page's tips moved off {DROP_DARK}");
+    assert!(mark_css.contains(DROP_DARK), "the dark-ground drop is {DROP_DARK} in mark.css too");
     assert!(mark_css.contains(&format!("[fill=\"{DROP}\"]")), "mark.css retints the drop by its literal");
+}
+
+/// A page's theme can be the reader's stored choice against their OS setting,
+/// so a mark drawn in the page must not repaint itself from the OS: the theme
+/// stylesheet swaps two fixed files. (The favicon does follow the OS: it sits
+/// on the browser's tab strip.)
+#[test]
+fn the_header_logo_follows_the_page_theme_not_the_os() {
+    let (light, dark) = (read(BRAND), read(BRAND_DARK));
+    for (name, svg) in [(BRAND, &light), (BRAND_DARK, &dark)] {
+        assert!(!svg.contains("prefers-color-scheme"), "{name} repaints itself from the OS colour setting");
+    }
+    let shapes = |svg: &str| paths(svg).into_iter().map(|(_, d)| d).collect::<Vec<_>>();
+    assert_eq!(shapes(&dark), shapes(&light), "{BRAND_DARK} and {BRAND} draw different marks");
+    let theme = read("../../site/.moss/theme/style.css");
+    assert!(theme.contains(r#"[data-theme="dark"] .site-logo { content: url("/assets/brand/logo-dark.svg"); }"#), "the site theme no longer swaps in {BRAND_DARK} on a dark page");
 }

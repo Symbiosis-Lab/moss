@@ -86,6 +86,8 @@ const fullBaseline = (value, deps = {}) => ({
   direct_deps_per_crate: { letter: 'f', disposition: 'permanent', armed: true, value: deps },
   lines_per_function: { letter: 'g', disposition: 'permanent', armed: true, value: {}, oversized: {} },
   string_slices_per_crate: { letter: 'h', disposition: 'permanent', armed: true, value: { 'moss-build': 0, 'moss-cli': 0 } },
+  raw_radius_shadow_ui: { letter: 'i', disposition: 'permanent', armed: true, value: 0 },
+  raw_env_reads: { letter: 'j', disposition: 'permanent', armed: true, value: 0 },
 });
 
 /** a and b are over their baselines, c sits exactly at its own. */
@@ -1444,6 +1446,32 @@ describe('row (h) string_slices_per_crate', () => {
       const r = good.run('check');
       assert.equal(r.status, 0, r.stdout + r.stderr);
       assert.match(r.stdout, /\(h\) string_slices_per_crate\s+measured by `ratchet\.mjs slices`/);
+    });
+  });
+});
+
+describe('row (i) raw_radius_shadow_ui', () => {
+  const sheet = (css) => tree({ 'packages/moss-ui/src/ui/menu.css': css }, fullBaseline({}));
+
+  it('a corner or shadow that reads a token, paints nothing, or defines a token is not counted', () => {
+    const css = [
+      '.a { border-radius: var(--moss-menu-radius); box-shadow: var(--moss-elevation-2); }',
+      '.b { border-radius: 0; box-shadow: none; }',
+      '.dot { border-radius: 50%; }',
+      ':root { --moss-border-radius: 8px; } /* border-radius: 6px */',
+      '.c { border-radius: 0 var(--r) var(--r) 0; }',
+    ].join('\n');
+    within(sheet(css), (t) => {
+      const r = t.run('check');
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+    });
+  });
+
+  it('a literal corner and a literal shadow are each refused', () => {
+    within(sheet('.menu { border-radius: 6px; box-shadow: 0 2px 8px rgba(0, 0, 0, .2); }'), (t) => {
+      const r = t.run('check');
+      assert.notEqual(r.status, 0);
+      assert.match(r.stdout, /raw_radius_shadow_ui: 2 > baseline 0/);
     });
   });
 });

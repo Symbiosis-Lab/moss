@@ -381,9 +381,9 @@ fn print_human(payload: &DescribePayload) {
     // the whole complaint this surface answers is that the thorough form is too
     // much context to read. Printing them only in the 116 KB payload would have
     // left `moss describe` showing exactly the surface that was already there.
-    println!("Custom properties ({}) — set on a component or a scope, not `:root`:", payload.custom_properties.len());
+    println!("Custom properties ({}) — each set where its owner reads it:", payload.custom_properties.len());
     for p in &payload.custom_properties {
-        println!("  {} on .{} (default: {})", p.name, p.owner, p.default);
+        println!("  {}", custom_property_line(&p.name, &p.owner, &p.default));
     }
     println!();
     println!("Scope attributes ({}) — what to scope a structural override to:", payload.scope_attributes.len());
@@ -434,8 +434,21 @@ fn print_human(payload: &DescribePayload) {
     println!("The CSS behind a class or property: moss describe --css <selector>");
 }
 
+/// One custom property as `moss describe` lists it: an owner that is a moss
+/// class is written as a class selector, any other (`:root`, `body`) as it is.
+fn custom_property_line(name: &str, owner: &str, default: &str) -> String {
+    let owner = if owner.starts_with("moss-") { format!(".{owner}") } else { owner.to_string() };
+    format!("{name} on {owner} (default: {default})")
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_custom_property_s_owner_is_a_class_only_when_it_is_one() {
+        assert_eq!(super::custom_property_line("--moss-font-body-han", ":root", "x"), "--moss-font-body-han on :root (default: x)");
+        assert_eq!(super::custom_property_line("--moss-font-cjk", "moss-quote", "y"), "--moss-font-cjk on .moss-quote (default: y)");
+    }
+
     use super::*;
 
     /// Every `[site]` key the build reads must be listed in `site_settings()`,

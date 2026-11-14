@@ -1,8 +1,72 @@
 //! Pure request and response shapes for the seta client: the error bodies it
 //! recognizes and the verification request it sends. Status and body in, value
-//! out, so they test without a `reqwest::Response`.
+//! out, so they test without a `reqwest::Response`. Also the per-deploy request
+//! tally, which holds numbers and an edge code only.
 
 use super::client::SetaError;
+use std::sync::{atomic::{AtomicU64, Ordering}, Arc, OnceLock};
+
+tokio::task_local! { static DEPLOY_WIRE: Arc<WireCounters>; }
+
+/// What one deploy asked of the hosting server, counted where each request
+/// goes out and its answer comes back ([`super::client::MossSetaClient::send`]).
+#[derive(Default)]
+pub(crate) struct WireCounters {
+    requests: AtomicU64,
+    failed: AtomicU64,
+    sent_bytes: AtomicU64,
+    resent_bytes: AtomicU64,
+    edge: OnceLock<String>,
+}
+
+impl WireCounters {
+    /// The tally of the deploy this task runs in; a client built outside one
+    /// keeps a tally nobody reads.
+    pub(crate) fn current() -> Arc<Self> {
+        DEPLOY_WIRE.try_with(Arc::clone).unwrap_or_default()
+    }
+
+    pub(crate) async fn scope<F: std::future::Future>(wire: Arc<Self>, body: F) -> F::Output {
+        DEPLOY_WIRE.scope(wire, body).await
+    }
+
+    /// One request answered (`status`) or lost in transport (`None`).
+    /// `file_bytes` is the body of a file upload or chunk, else 0; a failed
+    /// request's body is sent again, so it counts as resent.
+    pub(crate) fn note(&self, file_bytes: u64, status: Option<u16>, ray: Option<&str>) {
+        self.requests.fetch_add(1, Ordering::Relaxed);
+        match status {
+            Some(s) if (200..300).contains(&s) => { self.sent_bytes.fetch_add(file_bytes, Ordering::Relaxed); }
+            Some(s) if s != 429 && s < 500 => {}
+            _ => {
+                self.failed.fetch_add(1, Ordering::Relaxed);
+                self.resent_bytes.fetch_add(file_bytes, Ordering::Relaxed);
+            }
+        }
+        if let Some(ray) = ray {
+            let _ = self.edge.set(edge_of(ray).map_or("none".into(), str::to_ascii_uppercase));
+        }
+    }
+
+    /// Kilobytes round up, so a deploy that sent something never reads 0.
+    pub(crate) fn counts(&self) -> [(&'static str, u64); 4] {
+        let kb = |a: &AtomicU64| a.load(Ordering::Relaxed).div_ceil(1024);
+        [("requests", self.requests.load(Ordering::Relaxed)),
+         ("requests_failed", self.failed.load(Ordering::Relaxed)),
+         ("sent_kb", kb(&self.sent_bytes)), ("resent_kb", kb(&self.resent_bytes))]
+    }
+
+    pub(crate) fn edge(&self) -> &str {
+        self.edge.get().map_or("none", String::as_str)
+    }
+}
+
+/// The location code after the last `-` of a `cf-ray` value: 3 or 4 ASCII
+/// letters. The ray id itself is never kept.
+pub(super) fn edge_of(ray: &str) -> Option<&str> {
+    let code = ray.rsplit_once('-')?.1;
+    ((3..=4).contains(&code.len()) && code.bytes().all(|b| b.is_ascii_alphabetic())).then_some(code)
+}
 
 /// The JSON body of a 403 whose `error` field is exactly `code`.
 fn error_body(status: u16, body: &str, code: &str) -> Option<serde_json::Value> {
@@ -16,7 +80,8 @@ fn error_body(status: u16, body: &str, code: &str) -> Option<serde_json::Value> 
 /// A refusal the server names in a `code` field: `storage_cap_exceeded` on a
 /// 413 and `deploy_superseded` on a 409, whose `error` is the sentence to
 /// show; `folder_not_signed_in` on a 403 and `key_has_other_site` on a 409,
-/// which name a `site`. Any other body, or a known code on another status, is
+/// which name a `site`; `update_required` on a 410, whose `message` is the
+/// sentence to show and `min_version` the oldest moss the route accepts. Any other body, or a known code on another status, is
 /// not one of these and falls through to the generic path.
 pub(super) fn parse_coded_refusal(status: u16, body: &str) -> Option<SetaError> {
     let json = serde_json::from_str::<serde_json::Value>(body).ok()?;
@@ -28,8 +93,10 @@ pub(super) fn parse_coded_refusal(status: u16, body: &str) -> Option<SetaError> 
             message: text("error")?,
         }),
         (409, "deploy_superseded") => Some(SetaError::DeploySuperseded { message: text("error")? }),
+        (422, "gated_not_enforceable") => Some(SetaError::GatedNotEnforceable { message: text("error")? }),
         (403, "folder_not_signed_in") => Some(SetaError::NotSignedIn { site: text("site")? }),
         (409, "key_has_other_site") => Some(SetaError::KeyHasOtherSite { site: text("site")? }),
+        (410, "update_required") => Some(SetaError::UpdateRequired { min_version: text("min_version"), message: text("message")? }),
         _ => None,
     }
 }
