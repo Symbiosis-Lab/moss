@@ -1030,7 +1030,7 @@ pub fn generate_blocking_content_for_build(
     };
 
     #[cfg(test)]
-    if let Some(hook) = AFTER_THE_READS.with(|h| h.borrow_mut().take()) {
+    if let Some(hook) = after_the_reads(source_path_buf) {
         hook();
     }
     let folder_index = crate::build::folder_index::NoFolderIndex;
@@ -3632,10 +3632,20 @@ pub(super) fn resolve_favicon(
     })
 }
 
+/// Each runs once, in the next build of its folder, after the render has read
+/// every page and before any source hash is registered. Keyed by folder, not
+/// thread-local: `run_pipeline` renders on the blocking pool.
 #[cfg(test)]
-thread_local! {
-    /// Runs once after the render has read every page, before any source hash is registered.
-    pub(crate) static AFTER_THE_READS: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+pub(crate) static AFTER_THE_READS: std::sync::Mutex<Vec<(std::path::PathBuf, AfterTheReads)>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+type AfterTheReads = Box<dyn FnOnce() + Send>;
+
+#[cfg(test)]
+fn after_the_reads(root: &std::path::Path) -> Option<AfterTheReads> {
+    let mut hooks = AFTER_THE_READS.lock().unwrap_or_else(|e| e.into_inner());
+    let at = hooks.iter().position(|(folder, _)| folder == root)?;
+    Some(hooks.remove(at).1)
 }
 
 #[cfg(test)]

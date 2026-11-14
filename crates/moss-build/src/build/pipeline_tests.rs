@@ -325,14 +325,12 @@ fn the_stash_records_the_bytes_the_render_read_not_a_later_save() {
     let build = || build_test_with_stash(folder, None, None, None, None, &ResolvedSlots::empty(), gates).expect("build").2;
     let build_saving_during = |read: (&str, &str), page: &'static str, footer: &'static str| {
         let d = dir.clone();
-        crate::build::render::blocking::AFTER_THE_READS.with(|h| {
-            *h.borrow_mut() = Some(Box::new(move || {
-                fs::write(d.join("index.md"), page).unwrap();
-                fs::write(d.join("footer.md"), footer).unwrap();
-            }))
-        });
+        crate::build::render::blocking::AFTER_THE_READS.lock().unwrap_or_else(|e| e.into_inner()).push((dir.clone(), Box::new(move || {
+            fs::write(d.join("index.md"), page).unwrap();
+            fs::write(d.join("footer.md"), footer).unwrap();
+        })));
         let stash = build();
-        assert!(crate::build::render::blocking::AFTER_THE_READS.with(|h| h.borrow().is_none()), "the save ran inside the build");
+        assert!(crate::build::render::blocking::AFTER_THE_READS.lock().unwrap_or_else(|e| e.into_inner()).iter().all(|(folder, _)| *folder != dir), "the save ran inside the build");
         let sealed = load_previous_hashes(folder);
         for (key, map) in [("stash", &stash), ("sealed manifest", &sealed)] {
             let recorded = |src: &str| map.sources.get(src).map(|m| m.hash.clone());

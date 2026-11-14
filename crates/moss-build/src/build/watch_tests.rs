@@ -3175,6 +3175,73 @@ async fn a_page_rewritten_on_disk_between_two_real_builds_is_in_modified_paths()
     assert_eq!(event.modified_paths, Some(vec![page.to_string()]));
 }
 
+/// A save that lands after the build read the page, and before the build
+/// stashed its hashes, is built next: the stash holds the hash of the bytes
+/// the render read, so a request for the page is admitted rather than gated,
+/// and the next build shows the later text. The two texts are the same length,
+/// so only the stat and the hash can tell them apart.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_save_between_the_builds_read_and_its_stash_is_built() {
+    use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
+    std::fs::create_dir_all(&base).unwrap();
+    let tmp = tempfile::Builder::new().prefix("save-in-window-").tempdir_in(&base).unwrap();
+    let folder = tmp.path().canonicalize().unwrap();
+    std::fs::write(folder.join("index.md"), "# Home\n\nbody\n").unwrap();
+    let page = folder.join("note.md");
+    std::fs::write(&page, "# Note\n\nfirst\n").unwrap();
+
+    let root = crate::vault::paths::VaultRoot::resolve(&folder);
+    let folder_key = root.as_str().to_string();
+    let session = crate::system::folder_session::FolderSession::new(folder.clone());
+    let _record = crate::build::lifecycle::lock_for(&crate::moss_paths::MossPaths::new(&folder));
+    let build = |trigger: BuildTrigger| {
+        let mut services = crate::types::services::BuildServices::headless();
+        services.session = Some(session.clone());
+        run_pipeline(PipelineConfig {
+            root: root.clone(),
+            progress: crate::build::null_sink(),
+            plugins: PluginMode::Skip,
+            watch: false,
+            start_server: false,
+            host: crate::build::ports::host::HostPorts {
+                spawner: std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner),
+                services,
+                ..crate::build::ports::host::test_host_ports()
+            },
+            trigger,
+            exits_after_build: false,
+            site_url_override: None,
+            server_port: None,
+            admission_epoch: None,
+            live_port: None,
+            rename_pairs: Vec::new(),
+        })
+    };
+    let served = || std::fs::read_to_string(crate::moss_paths::MossPaths::new(&folder).staging_dir().join("note/index.html")).unwrap();
+    let edit = || BuildTrigger::ContentOnly(vec![page.clone()]);
+
+    build(BuildTrigger::Full).await.expect("build 1");
+    std::fs::write(&page, "# Note\n\nsecond\n").unwrap();
+    let p = page.clone();
+    crate::build::render::blocking::AFTER_THE_READS.lock().unwrap_or_else(|e| e.into_inner()).push((root.path().to_path_buf(), Box::new(move || {
+        std::fs::write(&p, "# Note\n\nthird!\n").unwrap();
+    })));
+    build(edit()).await.expect("build 2");
+    assert!(crate::build::render::blocking::AFTER_THE_READS.lock().unwrap_or_else(|e| e.into_inner()).iter().all(|(f, _)| f != root.path()), "the second save landed inside build 2");
+    assert!(served().contains("second"), "build 2 shows the text it read");
+    let stash = crate::system::build_records::records().content_hashes(&folder_key).expect("build 2 stashed its hashes");
+    let read = crate::build::render::blocking::source_metadata(None, b"# Note\n\nsecond\n").hash;
+    assert_eq!(stash.sources.get("note.md").map(|m| m.hash.clone()), Some(read), "the stash holds the hash of the bytes build 2 read");
+
+    let request = crate::ops::watch::worker::RebuildRequest { rename_pairs: Vec::new(), trigger: edit(), gate_paths: Some(vec![page.clone()]) };
+    assert!(request.gate_admits(&folder_key, "test").await, "the second save is admitted, not gated");
+    build(edit()).await.expect("build 3");
+    crate::system::build_records::records().forget_content_hashes(&folder_key);
+    assert!(served().contains("third!"), "the next build shows the second save");
+}
+
 /// A rebuild tells the preview what changed from inside the pipeline, the
 /// moment it shows the render: `FileChanged` names the edited page and
 /// the render's number, and arrives before the build reports "complete" (the
