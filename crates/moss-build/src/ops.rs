@@ -5,6 +5,7 @@
 //! debouncer driver).
 
 pub mod serve;
+pub mod stop;
 pub mod watch;
 
 use std::sync::Arc;
@@ -229,7 +230,7 @@ pub struct HeadlessBuildRun {
     pub start_watch: WatchStarter,
     /// Everything the host decides about the server this driver starts under
     /// `--serve` — routes, bind address, sign-in landing, port. The driver
-    /// fills `standby_on_conflict` and `yield_notify` itself.
+    /// fills `on_conflict` and `yield_notify` itself.
     pub serve: serve::HeadlessServe,
 }
 
@@ -329,8 +330,8 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
             let assets = host.services.assets.clone();
             // Standing by for an existing owner only makes sense for a
             // long-lived watcher: a one-shot build would just exit right
-            // after anyway, so `--serve` alone keeps A2's plain refusal.
-            let standby_on_conflict = run.flags.watch;
+            // after anyway, so `--serve` alone refuses.
+            let on_conflict = if run.flags.watch { serve::ownership::OnConflict::StandBy } else { serve::ownership::OnConflict::Refuse };
             let yield_notify = yield_requested.clone();
             let host_serve = std::mem::take(&mut run.serve);
             let launch: Arc<dyn Fn(String, Option<Arc<std::sync::RwLock<std::path::PathBuf>>>) -> crate::build::ServerFuture + Send + Sync> =
@@ -345,7 +346,7 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
                         &moss_dir,
                         cell,
                         assets,
-                        serve::HeadlessServe { standby_on_conflict, yield_notify, ..host_serve },
+                        serve::HeadlessServe { on_conflict, yield_notify, ..host_serve },
                     )
                     .await {
                         Ok((port, _ui_port, shutdown_tx)) => {
@@ -451,7 +452,7 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
                     loop {
                         cli_eprintln!("Press Ctrl+C to stop the server");
                         tokio::select! {
-                            _ = tokio::signal::ctrl_c() => {
+                            _ = stop::requested() => {
                                 cli_eprintln!("Stopping...");
                                 shut_down_current(&mut watch_shutdown);
                                 cli_eprintln!("Stopped");
@@ -472,24 +473,19 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
                                     break;
                                 }
                                 let folder = std::path::Path::new(&run.folder_path);
-                                match serve::ownership::wait_for_owner_to_appear(folder, YIELD_STANDBY_TIMEOUT).await {
-                                    Some(owner) => {
-                                        cli_eprintln!("{}", serve::ownership::preview_ready_line(&owner.url));
-                                        cli_eprintln!("{}", serve::ownership::standing_by_message(&owner));
-                                        if serve::ownership::wait_for_owner_to_leave_or_interrupt(folder).await {
-                                            cli_eprintln!("Stopping...");
-                                            cli_eprintln!("Stopped");
-                                            break;
-                                        }
-                                    }
-                                    None => {
-                                        cli_eprintln!("no other moss claimed the folder; serving again");
-                                    }
+                                if serve::ownership::stand_by_after_yield(folder, YIELD_STANDBY_TIMEOUT).await {
+                                    cli_eprintln!("Stopping...");
+                                    cli_eprintln!("Stopped");
+                                    break;
                                 }
                                 let Some(launch) = &launch_server_fn else { break };
-                                if let Err(e) = launch(run.folder_path.clone(), None).await {
-                                    cli_eprintln!("Could not resume serving after yielding: {}", e);
-                                    break;
+                                match launch(run.folder_path.clone(), None).await {
+                                    // The port can differ from the first one, and a host reads this line to find the page.
+                                    Ok(port) => cli_eprintln!("{}", serve::ownership::preview_ready_line(&format!("http://localhost:{port}"))),
+                                    Err(e) => {
+                                        cli_eprintln!("Could not resume serving after yielding: {}", e);
+                                        break;
+                                    }
                                 }
                                 cli_eprintln!("Watching for file changes (Ctrl+C to stop)");
                                 watch_shutdown = Some((run.start_watch)(run.folder_path.clone(), watch_plugins).await);

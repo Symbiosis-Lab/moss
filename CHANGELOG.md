@@ -10,6 +10,8 @@ All notable changes to moss will be documented here.
 - `syndicate:` takes the name a network goes by as well as its channel's id, ignoring case, so `syndicate: [x]` posts to the X channel (`xcom`). Such a page was told no channel named x was set up. A name two channels go by posts to neither, and the publish says which two.
 - `moss deploy --dry-run` prints the length of an article copy's text. The line read "would post as long ( characters)", with no number.
 - The selected ＋ and the gear sit exactly on the ends of the toolbar; the selected circle used to cross the toolbar's outline.
+- A folder that an editor plugin or the command line is previewing opens in the app: the earlier preview hands the folder over even while a page of it is open in a browser, and that page reconnects to the app's preview. Before, the app could be refused and show "could not open".
+- When a folder cannot be served because another moss process has it, the message names that process's address, kind, pid and version only when it answers as the folder's server, and otherwise says the folder is already served by another moss process. It no longer prints "already served at  by Server (pid 0, moss unknown)".
 
 ### Changed
 
@@ -21,10 +23,12 @@ All notable changes to moss will be documented here.
 - The ＋ in the app's toolbar opens a page of channels only: the places a copy of a post can be sent, each named under its icon, with the ones already added first. Hosts are added from Deployment, and every other plugin is behind "Other plugins" under the channels; that link is marked when one of them has an update, was withdrawn or waits to be allowed.
 - A plugin's settings page has a Remove action.
 - In the toolbar a channel that is not selected keeps its logo's colour; only a selected channel carries the circle.
+- A `moss build --serve --watch` that waited for another moss process and then takes over the folder prints its address line again, since the port can differ.
 
 ### New
 
 - A channel plugin can make its article form depend on a setting (`long_setting` in its `syndication` block), for a network whose articles only some accounts have. With the setting off, a long page goes out in the next form the channel takes.
+- A program that starts `moss build --serve` can set `MOSS_STOP_ON_STDIN_CLOSE=1`: the preview then stops when that program closes moss's standard input or exits, however it ends. The Obsidian plugin sets it on macOS and Linux, so its preview no longer keeps running after Obsidian quits. The guide's "Starting moss from another program" has the details.
 
 
 ## [0.15.24] - 2026-11-13

@@ -243,17 +243,32 @@ fn event_stream(
     })
 }
 
+/// Cancelled when the server a stream was opened on is told to stop. The
+/// stream then ends, so the browser reconnects to whoever serves the address
+/// next.
+#[derive(Clone, Default)]
+pub(crate) struct Stopping(pub(crate) tokio_util::sync::CancellationToken);
+
+/// Pending forever for a router no server drives.
+async fn stopped(stopping: Option<axum::Extension<Stopping>>) {
+    match stopping {
+        Some(axum::Extension(Stopping(token))) => token.cancelled_owned().await,
+        None => std::future::pending().await,
+    }
+}
+
 /// `GET /__moss/reload`: one constant frame each time rebuilt bytes become
 /// servable, for a page open in a plain browser tab, which reloads on it.
 ///
 /// Token-free, unlike `/__moss/events`: the frame names no path, page or
 /// result, so it tells a page only that a rebuild happened. A frame missed
 /// while disconnected is not replayed; the page reloads when it reconnects.
-pub(crate) async fn handle_reload() -> impl axum::response::IntoResponse {
+pub(crate) async fn handle_reload(stopping: Option<axum::Extension<Stopping>>) -> impl axum::response::IntoResponse {
     let stream = futures::stream::unfold(Subscription::open(reloads().subscribe()), |mut sub| async move {
         sub.rx().changed().await.ok()?;
         Some((Ok::<_, std::convert::Infallible>(Event::default().data("reload")), sub))
-    });
+    })
+    .take_until(stopped(stopping));
     ([("x-accel-buffering", "no")], Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
@@ -269,11 +284,12 @@ pub(crate) async fn handle_reload() -> impl axum::response::IntoResponse {
 pub(crate) async fn handle_events(
     axum::Extension(session): axum::Extension<Arc<super::invoke::Session>>,
     browser: Option<axum::Extension<super::ui::auth::BrowserSession>>,
+    stopping: Option<axum::Extension<Stopping>>,
 ) -> impl axum::response::IntoResponse {
     // Subscribe BEFORE returning, so an event emitted between the request
     // arriving and the stream being polled is buffered rather than missed.
     // `setup-panel.ts` depends on exactly this ordering on the Tauri side.
-    let stream = event_stream(Subscription::open(bus().subscribe()), browser.map(|b| b.0)).take_until(session.retired().clone().cancelled_owned());
+    let stream = event_stream(Subscription::open(bus().subscribe()), browser.map(|b| b.0)).take_until(session.retired().clone().cancelled_owned()).take_until(stopped(stopping));
     // A reverse proxy that buffers responses (nginx by default) would hold events back.
     ([("x-accel-buffering", "no")], Sse::new(stream).keep_alive(KeepAlive::default()))
 }

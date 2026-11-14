@@ -14,7 +14,7 @@ import {
 export type SpawnFn = (
   command: string,
   args: string[],
-  options: { cwd?: string },
+  options: { cwd?: string; env?: NodeJS.ProcessEnv },
 ) => ChildProcess;
 
 export interface RunCallbacks {
@@ -52,7 +52,11 @@ export class MossProcess {
     this.lastServerUrl = null;
     this.announcedError = false;
 
-    const child = this.spawnFn(binary, args, { cwd });
+    // moss stops when the pipe to its standard input closes, so it ends with
+    // Obsidian even when no plugin code runs; an older moss ignores the variable.
+    // Not on Windows, where moss reading that pipe is unproven.
+    const env = process.platform === "win32" ? process.env : { ...process.env, MOSS_STOP_ON_STDIN_CLOSE: "1" };
+    const child = this.spawnFn(binary, args, { cwd, env });
     this.child = child;
     // A stopped child can still print and exit after the next start(); only
     // the current one may change this process's state.
