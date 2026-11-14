@@ -19,6 +19,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use moss_core::ast::visit::for_each_child_sequence;
+use moss_core::ast::{parse_with_config, Block, ParseConfig};
 use pulldown_cmark::{Event, Parser};
 use regex::Regex;
 use scraper::{Html, Selector};
@@ -165,9 +167,24 @@ fn imported_sheets(folder: &Path, sheets: &[(String, String)]) -> Vec<(String, S
     out
 }
 
+/// The classes on `block`'s fence if it is a typed one (`:::grid 2 {.x}`), and
+/// on every typed fence inside it, all at `line`.
+fn typed_fence_classes(block: &Block, line: usize, out: &mut BTreeMap<String, usize>) {
+    if let Block::Shortcode(shortcode) = block {
+        for class in shortcode.classes().split_whitespace() {
+            out.entry(class.to_string()).or_insert(line);
+        }
+    }
+    for_each_child_sequence(block, |blocks| {
+        blocks.iter().for_each(|nested| typed_fence_classes(nested, line, out));
+        true
+    });
+}
+
 /// Class names a page's Markdown writes, with the line of each: the classed
-/// divs the build's extractor finds, and `class=` on HTML in the page. Code
-/// blocks and spans are not HTML events, so they never count.
+/// divs the build's extractor finds, the classes on typed fences (one nested
+/// in another takes the outer block's line), and `class=` on HTML in the page.
+/// Code blocks and spans are not HTML events, so they never count.
 fn page_classes(content: &str) -> BTreeMap<String, usize> {
     let mut out = BTreeMap::new();
     for region in super::page_css_regions(content) {
@@ -176,6 +193,10 @@ fn page_classes(content: &str) -> BTreeMap<String, usize> {
         }
     }
     let (body, offset) = super::super::page_body(content);
+    let document = parse_with_config(&body, &ParseConfig { emit_source_lines: true, ..ParseConfig::default() });
+    for (block, meta) in document.blocks.iter().zip(&document.block_meta) {
+        typed_fence_classes(block, offset + meta.source_line.unwrap_or(1), &mut out);
+    }
     let with_class = Selector::parse("[class]").expect("static selector");
     for (event, range) in Parser::new(&body).into_offset_iter() {
         let (Event::Html(html) | Event::InlineHtml(html)) = event else { continue };

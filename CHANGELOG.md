@@ -7,6 +7,7 @@ All notable changes to moss will be documented here.
 ### Fixed
 
 - A page renamed while it is open in the preview is shown at its own address. The preview sometimes opened it at `…/index.html`, and Copy page address copied that.
+- `moss doctor --surface` counts a class written on a grid, gallery, hero or buttons fence (`:::grid 2 {.tall}`) as used in pages. It called such a class "used nowhere".
 - A page made or renamed in the browser editor in the first second after it opens is built at once. It used to wait until the folder was noticed as changed, up to 20 seconds.
 - `moss build --serve --watch` opens a folder at once while a plugin is still reading its files, and fills each page in when the read ends. It used to wait for the read.
 - With the caret on a hero's picture far down a long page, the outline of what the page keeps now appears on the picture. It was missing until the caret was moved away and back.
