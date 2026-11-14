@@ -3313,7 +3313,7 @@ fn test_remove_stale_html_preserves_notebook_outputs() {
     let mut previous = SiteHashes::default();
     previous.files.extend(["index.html", "jupyter/lab/index.html", "jupyter/tree/index.html", "jupyter/stale-section/index.html"].map(|key| (key.to_string(), "hash".to_string())));
     let deleted = crate::build::media::pipeline::stale_html_keys(&previous, &blocking_keys, &notebook_outputs, &HashSet::new());
-    remove_stale_html(&dir, &deleted, &HashSet::new(), &crate::build::lifecycle::permit_for_test());
+    remove_stale_html(&dir, &crate::build::lifecycle::stale_html_for_test(&deleted), &HashSet::new());
 
     assert!(dir.join("index.html").exists(), "home kept");
     assert!(
@@ -3455,7 +3455,7 @@ fn test_remove_stale_html_deletes_orphaned_index_pages() {
     let mut previous = SiteHashes::default();
     previous.files.extend(["index.html", "文字/article/index.html", "视频/old-video/index.html", "index-2.html"].map(|key| (key.to_string(), "hash".to_string())));
     let deleted = crate::build::media::pipeline::stale_html_keys(&previous, &blocking_keys, &HashSet::new(), &HashSet::new());
-    remove_stale_html(&dir, &deleted, &HashSet::new(), &crate::build::lifecycle::permit_for_test());
+    remove_stale_html(&dir, &crate::build::lifecycle::stale_html_for_test(&deleted), &HashSet::new());
 
     assert!(dir.join("index.html").exists(), "current index.html kept");
     assert!(
@@ -3493,7 +3493,7 @@ fn test_remove_stale_html_preserves_non_html_files() {
     let mut previous = SiteHashes::default();
     previous.files.extend(["index.html", "style.css", "photo.jpg"].map(|key| (key.to_string(), "hash".to_string())));
     let deleted = crate::build::media::pipeline::stale_html_keys(&previous, &blocking_keys, &HashSet::new(), &HashSet::new());
-    remove_stale_html(&dir, &deleted, &HashSet::new(), &crate::build::lifecycle::permit_for_test());
+    remove_stale_html(&dir, &crate::build::lifecycle::stale_html_for_test(&deleted), &HashSet::new());
 
     assert!(dir.join("index.html").exists());
     assert!(dir.join("style.css").exists(), "CSS preserved");
@@ -3536,8 +3536,10 @@ fn html_deletions_spares_the_pages_the_seal_forwards_again() {
     let (_, mut stale) = crate::build::media::pipeline::html_deletions(&previous, &pending,
         &crate::types::content::ProjectStructure::default(), &folder_path, &Default::default(), &late);
     stale.sort();
-    assert_eq!(stale, ["gone.html", "old/authored.html", "old/orphan.html", "retired.html"],
-        "a forwarding page stays staged until the seal writes it again; a deleted page under the old address goes");
+    let source = |source: &str| Some(source.to_string());
+    assert_eq!(stale, [("gone.html".to_string(), None), ("old/authored.html".to_string(), source("Old/authored.html")),
+            ("old/orphan.html".to_string(), None), ("retired.html".to_string(), source("retired.html"))],
+        "a forwarding page stays staged until the seal writes it again; a deleted page under the old address goes, with its source");
 }
 
 /// A page in the cloud under a decomposed name is the composed source the
@@ -3556,7 +3558,7 @@ fn html_deletions_holds_an_evicted_page_whatever_its_spelling() {
     let (deleted, stale) = crate::build::media::pipeline::html_deletions(&previous, &PendingManifest::new(SiteHashes::default()),
         &structure, &folder_path, &Default::default(), &Default::default());
     assert!(!deleted);
-    assert_eq!(stale, Vec::<String>::new());
+    assert_eq!(stale, Vec::new());
 }
 
 #[test]
@@ -3570,7 +3572,7 @@ fn remove_stale_html_keeps_a_case_only_rename_and_removes_a_distinct_file() {
     if !insensitive {
         fs::write(dir.join("Guide.html"), "deleted page").unwrap();
     }
-    remove_stale_html(dir, &["Guide.html".to_string()], &live, &crate::build::lifecycle::permit_for_test());
+    remove_stale_html(dir, &crate::build::lifecycle::stale_html_for_test(&["Guide.html".to_string()]), &live);
     assert_eq!(fs::read_to_string(dir.join("guide.html")).unwrap(), "renamed page");
     if !insensitive {
         assert!(!dir.join("Guide.html").exists(), "a distinct file that differs only in case is still deleted");

@@ -1804,9 +1804,8 @@ fn build_inner(
 
     crate::build::phase::record_value("served_staging", usize::from(publishable));
     if has_output_changes {
-        if let Some(permit) = sweep_permit.as_ref() {
-            remove_stale_html(&stage_dir, &stale_html, pending.blocking_keys(), permit);
-        }
+        let stale_html = crate::build::lifecycle::StaleHtml::licence(sweep_permit.as_ref(), publishable, Path::new(folder_path), stale_html);
+        remove_stale_html(&stage_dir, &stale_html, pending.blocking_keys());
     }
 
     // Step 5: show this render, unless this build could not read its own
@@ -2209,9 +2208,11 @@ pub(crate) fn send_progress(
 /// that no longer exist, `.pending.*` litter from an interrupted write.
 ///
 /// Staging is the tree the preview reads, so this needs a
-/// `lifecycle::SweepPermit`. Without one it does nothing: the leftovers cost
-/// local disk until the next caught-up build, never a generation, because
-/// `ship_phase` copies `sealed.files()` and nothing else. A one-shot build
+/// `lifecycle::SweepPermit`. Without one it does nothing: the leftovers never
+/// reach a generation, because `ship_phase` copies `sealed.files()` and
+/// nothing else, but the preview serves them until the next caught-up build.
+/// The one leftover that must not wait, the page of a deleted source, goes
+/// through `lifecycle::StaleHtml` instead. A one-shot build
 /// never gets a next build, so `ship::reclaim_staging_now` is its last chance.
 ///
 /// An empty previous manifest (first build, or one that could not be read)

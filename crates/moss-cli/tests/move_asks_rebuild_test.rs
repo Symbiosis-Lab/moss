@@ -14,14 +14,6 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-fn status(port: u16, path: &str) -> u16 {
-    match ureq::get(&format!("http://localhost:{port}{path}")).call() {
-        Ok(r) => r.status(),
-        Err(ureq::Error::Status(code, _)) => code,
-        Err(e) => panic!("the server did not answer: {e}"),
-    }
-}
-
 /// A site of `pages` served with the watcher blind and the sweep out of reach.
 struct Served {
     _dirs: (tempfile::TempDir, tempfile::TempDir),

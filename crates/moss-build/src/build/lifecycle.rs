@@ -10,6 +10,12 @@
 //! preview to staging. [`withdraw_render`] also returns to the older copy when
 //! the visible render itself proves unreadable.
 //!
+//! Known gap: a process killed between a render and its seal, on a folder
+//! that has never promoted, leaves pages in staging that no manifest names.
+//! If such a page's source is then deleted while the folder is closed, the
+//! next open has no `current` to park on and no recorded source to prove
+//! gone, so the page is served until a later build gets a sweep permit.
+//!
 //! Nothing here is persisted. Every render number was minted by this process,
 //! and the two that get compared are `Option`s that start `None`, so a number
 //! from a dead process can never be compared with one from this one.
@@ -257,10 +263,53 @@ pub(crate) fn gc_token_for_test() -> CacheGcToken {
     CacheGcToken { record: Arc::new(LifecycleCell::default()) }
 }
 
+/// Every key of `keys` licensed, as under a permit, for tests that drive
+/// `remove_stale_html` directly.
+#[cfg(test)]
+pub(crate) fn stale_html_for_test(keys: &[String]) -> StaleHtml {
+    StaleHtml::licence(Some(&permit_for_test()), false, Path::new(""), keys.iter().map(|key| (key.clone(), None)).collect())
+}
+
 /// A permit for tests that drive a sweep directly.
 #[cfg(test)]
 pub(crate) fn permit_for_test() -> SweepPermit {
     SweepPermit { _record: Arc::new(LifecycleCell::default()), encode_outputs: Default::default() }
+}
+
+/// The stale page HTML a build may unlink from staging, spent only by
+/// `media::pipeline::remove_stale_html`.
+///
+/// Under a [`SweepPermit`] that is every stale key. Without one the preview
+/// is still reading staging, and a page whose source is gone would go on
+/// being served from it, so a render about to be shown may still remove the
+/// HTML of a page whose recorded source is no longer on disk. A source that
+/// is offline, unreadable or only unlisted keeps its page.
+pub(crate) struct StaleHtml {
+    keys: Vec<String>,
+}
+
+impl StaleHtml {
+    /// `stale` pairs each stale HTML key with the source the last manifest
+    /// recorded for it, relative to `root`; `shown` is whether this render
+    /// will be shown.
+    pub(crate) fn licence(permit: Option<&SweepPermit>, shown: bool, root: &Path, stale: Vec<(String, Option<String>)>) -> Self {
+        let source_gone = |source: &Option<String>| {
+            source.as_ref().is_some_and(|source| {
+                let path = root.join(source);
+                std::fs::symlink_metadata(&path).is_err_and(|e| crate::build::icloud::is_definitely_absent(&path, &e))
+            })
+        };
+        let keys = stale
+            .into_iter()
+            .filter(|(_, source)| permit.is_some() || (shown && source_gone(source)))
+            .map(|(key, _)| key)
+            .collect();
+        Self { keys }
+    }
+
+    pub(crate) fn keys(&self) -> &[String] {
+        &self.keys
+    }
 }
 
 /// Move the preview off staging for a rebuild when that is no step back, and

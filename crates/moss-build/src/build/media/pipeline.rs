@@ -456,8 +456,9 @@ pub(crate) fn stale_html_keys(previous: &SiteHashes, keep: &HashSet<String>, not
 }
 
 /// Whether an authored HTML page the previous build copied has lost its
-/// source, and the previous HTML outputs the sweep removes. The manifest
-/// carries every previous output until seal, so the hash compare cannot see
+/// source, and the previous HTML outputs the sweep removes, each with the
+/// source the previous build recorded for it (generated pages have none). The
+/// manifest carries every previous output until seal, so the hash compare cannot see
 /// the deletion; outputs with no source of their own, like forwarding pages,
 /// never count as one. A source in the cloud is offline, not deleted. An
 /// address an authored page held is never spared as a forwarding page: its
@@ -469,7 +470,7 @@ pub(crate) fn html_deletions(
     folder_path: &str,
     dir_overrides: &HashMap<String, String>,
     late: &crate::build::feeds::kept_addresses::LateRedirects,
-) -> (bool, Vec<String>) {
+) -> (bool, Vec<(String, Option<String>)>) {
     let held: HashSet<String> = structure.evicted_paths.iter()
         .filter_map(|path| path.strip_prefix(folder_path).ok())
         .map(logical_path)
@@ -482,16 +483,19 @@ pub(crate) fn html_deletions(
     let forwarded = crate::build::feeds::kept_addresses::moved_folder_files(&late.folder_moves, pending.blocking_keys())
         .into_iter().map(|(old, _)| old).chain(late.copies.iter().map(|copy| copy.from.clone()));
     let spared: HashSet<String> = held.iter().map(address).chain(forwarded.filter(|key| !authored.contains(key))).collect();
-    (deleted, stale_html_keys(previous, pending.blocking_keys(), pending.notebook_outputs(), &spared))
+    let mut source_of: HashMap<String, &String> = previous.source_to_output.iter().map(|(source, output)| (output.clone(), source)).collect();
+    source_of.extend(previous.sources.keys().filter(|key| is_html_path(key)).map(|key| (address(key), key)));
+    let stale = stale_html_keys(previous, pending.blocking_keys(), pending.notebook_outputs(), &spared);
+    (deleted, stale.into_iter().map(|key| { let source = source_of.get(&key).map(|source| (*source).clone()); (key, source) }).collect())
 }
 
 /// Remove exactly the deleted HTML outputs before search reads staging. A key
 /// that differs from a `live` one only in case is kept when both name the same
 /// file, as after a case-only rename on a case-insensitive disk.
-pub(crate) fn remove_stale_html(dir: &Path, deleted: &[String], live: &HashSet<String>, _permit: &crate::build::lifecycle::SweepPermit) {
+pub(crate) fn remove_stale_html(dir: &Path, deleted: &crate::build::lifecycle::StaleHtml, live: &HashSet<String>) {
     let disk = |key: &str| crate::build::served_path::ServedPath::from_cached(key).ok().map(|path| path.to_disk(dir));
     let folded: HashMap<String, &String> = live.iter().map(|key| (key.to_lowercase(), key)).collect();
-    for key in deleted {
+    for key in deleted.keys() {
         let Some(path) = disk(key) else { continue; };
         let renamed = folded.get(&key.to_lowercase()).and_then(|live| disk(live))
             .is_some_and(|live| same_file::is_same_file(&path, live).unwrap_or(false));

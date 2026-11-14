@@ -321,3 +321,38 @@ fn serves_accepts_the_relative_link_and_the_absolute_one_older_folders_carry() {
     std::os::unix::fs::symlink("generations/g2", mp.current_ptr()).unwrap();
     assert!(!serves(&mp, "g1"), "marker says g1 but the link says g2");
 }
+
+#[test]
+fn without_a_permit_only_a_page_whose_source_is_gone_from_disk_is_licensed() {
+    let (tmp, _) = vault(&[]);
+    let root = tmp.path();
+    std::fs::write(root.join("kept.md"), "# Kept").unwrap();
+    // What an evicted file leaves on a system that keeps a stub beside it.
+    std::fs::write(root.join(".cloud.md.icloud"), "").unwrap();
+    // A folder that cannot be searched; root can still search it and finds the file.
+    std::fs::create_dir(root.join("locked")).unwrap();
+    std::fs::write(root.join("locked/page.md"), "# Page").unwrap();
+    let lock = |mode| {
+        #[cfg(unix)]
+        std::fs::set_permissions(root.join("locked"), std::os::unix::fs::PermissionsExt::from_mode(mode)).unwrap();
+    };
+    lock(0o000);
+    let stale = || {
+        vec![
+            ("gone/index.html".to_string(), Some("gone.md".to_string())),
+            ("kept/index.html".to_string(), Some("kept.md".to_string())),
+            ("locked/page/index.html".to_string(), Some("locked/page.md".to_string())),
+            ("cloud/index.html".to_string(), Some("cloud.md".to_string())),
+            ("tags/index.html".to_string(), None),
+        ]
+    };
+    let licensed = |permit: Option<&SweepPermit>, shown| StaleHtml::licence(permit, shown, root, stale()).keys().to_vec();
+
+    let (shown, held, permitted) = (licensed(None, true), licensed(None, false), licensed(Some(&permit_for_test()), false));
+    lock(0o755);
+
+    let gone_only = if cfg!(target_os = "macos") { vec!["gone/index.html"] } else { vec!["gone/index.html", "cloud/index.html"] };
+    assert_eq!(shown, gone_only, "a present, offline or sourceless page keeps its HTML");
+    assert_eq!(held, Vec::<String>::new(), "a render that will not be shown removes nothing");
+    assert_eq!(permitted.len(), 5, "a permit licenses every stale key");
+}

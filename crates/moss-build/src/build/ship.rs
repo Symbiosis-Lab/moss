@@ -672,8 +672,16 @@ pub fn materialize_and_promote(
         // the entry's CAS blob surviving a concurrent build's GC across this
         // whole call — see `CacheWriteLease` at this function's own call sites.
         let object_store = crate::build::cache::ObjectStore::for_seal(mp);
-        drifted = ship_phase(stage_dir, &gen_dir, sealed, Some(&object_store), base.as_deref())
-            .map_err(|e| format!("Failed to materialize generation {}: {}", sealed.generation_id(), e))?;
+        drifted = match ship_phase(stage_dir, &gen_dir, sealed, Some(&object_store), base.as_deref()) {
+            Ok(drifted) => drifted,
+            // A newer render owns staging and may have removed a page this
+            // generation names: its own generation is the one to promote.
+            Err(e) if !crate::build::lifecycle::is_latest_render(mp, render) => {
+                log::info!("generation {} is not promoted, a newer render has replaced what it staged: {}", sealed.generation_id(), e);
+                return Ok(Promotion::Superseded);
+            }
+            Err(e) => return Err(format!("Failed to materialize generation {}: {}", sealed.generation_id(), e)),
+        };
     } else {
         log::info!("generation {} is already on disk — promoting it without a copy", sealed.generation_id());
     }
@@ -1613,6 +1621,27 @@ mod tests {
         assert_eq!(promotion, Promotion::Promoted);
         assert_eq!(sealed.files().len(), 39);
         assert_eq!(served_generation(&mp), sealed.generation_id());
+    }
+
+    /// A generation that names a page a newer render has since removed from
+    /// staging is superseded, not failed; with no newer render it is a failure.
+    #[test]
+    fn a_generation_whose_page_a_newer_render_removed_is_superseded() {
+        let tmp = tempdir().unwrap();
+        let mp = crate::moss_paths::MossPaths::new(tmp.path());
+        let stage = mp.staging_dir();
+        std::fs::create_dir_all(&stage).unwrap();
+        std::fs::write(stage.join("index.html"), b"<h1>home</h1>").unwrap();
+        let sealed = manifest_of(&[("index.html", b"<h1>home</h1>"), ("gone/index.html", b"<h1>gone</h1>")]);
+        // A build's write lease holds the folder's record for as long as it ships.
+        let _record = crate::build::lifecycle::lock_for(&mp);
+        let (render, _) = crate::build::lifecycle::show_render(&mp, true);
+        let ship = || materialize_and_promote(&sealed, &mp, &stage, next_promotion_epoch(), Some(render), ShipVerdict::Ship);
+
+        ship().expect_err("the newest render's generation is short of a file it names");
+        crate::build::lifecycle::show_render(&mp, true);
+        assert_eq!(ship(), Ok(Promotion::Superseded));
+        assert!(!mp.current_ptr().exists());
     }
 
     /// A marker that outlived its pointer — `retire_legacy_roots` removes a
