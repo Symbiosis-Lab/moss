@@ -98,18 +98,81 @@ pub(crate) fn read_articles(generations: &Path, generation: &str) -> Option<crat
     serde_json::from_slice(&bytes).ok()
 }
 
+/// What the site's last publish did with a page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublishState {
+    /// The site serves it.
+    Served,
+    /// Built for preview only: the site does not serve it.
+    HeldBack,
+    /// That publish had no such page.
+    Absent,
+    /// Nothing says: the site has not been published, or that publish kept no
+    /// record of its pages.
+    Unknown,
+}
+
+/// The pages of the site's last publish, as it built them: what a step that
+/// follows the upload (a newsletter) reads, so it names the pages and addresses
+/// the site serves whatever the folder says now.
+pub struct PublishedPages {
+    map: crate::build::scan::article_map::ArticleMap,
+    /// Pretty addresses of the pages built for preview only.
+    held_back: BTreeSet<String>,
+}
+
+/// The last publish's pages; `None` before the site's first publish, or when
+/// that publish kept no record of them.
+pub fn published_pages(folder: &Path) -> Option<PublishedPages> {
+    let generation = crate::build::site_config::get_domain_config(&folder.to_string_lossy()).ok()?.last_deployed_generation_id?;
+    let generations = crate::moss_paths::MossPaths::new(folder).generations_dir();
+    let map = read_articles(&generations, &generation)?;
+    let held_back = read_withheld(&generations, &generation).iter().map(|out| crate::build::scan::article_map::to_pretty_url(out)).collect();
+    Some(PublishedPages { map, held_back })
+}
+
+impl PublishedPages {
+    /// What the publish did with the page at `source_path`; never `Unknown`.
+    pub fn state(&self, source_path: &str) -> PublishState {
+        let source = crate::build::scan::path_collision::logical_path(source_path);
+        let address = self.map.articles.values().find(|a| a.source_path == source).map(|a| &a.url_path)
+            .or_else(|| self.map.pages.iter().find(|(_, s)| **s == source).map(|(address, _)| address));
+        match address {
+            None => PublishState::Absent,
+            Some(address) if self.held_back.contains(address) => PublishState::HeldBack,
+            Some(_) => PublishState::Served,
+        }
+    }
+
+    /// The article at `source_path` as the site serves it.
+    pub fn article(&self, source_path: &str) -> Option<&crate::build::scan::article_map::ArticleInfo> {
+        let source = crate::build::scan::path_collision::logical_path(source_path);
+        self.articles().find(|a| a.source_path == source)
+    }
+
+    /// The articles the site serves.
+    pub fn articles(&self) -> impl Iterator<Item = &crate::build::scan::article_map::ArticleInfo> {
+        self.map.articles.values().filter(|a| !self.held_back.contains(&a.url_path))
+    }
+
+    /// The home and section pages the site serves, as (address, title).
+    pub fn index_pages(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.map.pages.keys().filter(|address| !self.held_back.contains(*address))
+            .map(|address| (address.as_str(), self.map.page_titles.get(address).map_or("", String::as_str)))
+    }
+}
+
+/// [`PublishedPages::state`] for one page, `Unknown` when there is nothing to read.
+pub fn last_publish_state(folder: &Path, source_path: &str) -> PublishState {
+    published_pages(folder).map_or(PublishState::Unknown, |pages| pages.state(source_path))
+}
+
 /// The page at `source_path` as the site's last publish built it: the text on
 /// the site, whatever the folder says now, so a step that follows the upload
 /// (a newsletter) sends what the site published even when the page was edited
-/// while it uploaded. `None` before the site's first publish, for a page that
-/// publish withheld as a draft or did not have, or when its map was never kept.
+/// while it uploaded. `None` unless that publish serves it as an article.
 pub fn published_article(folder: &Path, source_path: &str) -> Option<crate::build::scan::article_map::ArticleInfo> {
-    let generation = crate::build::site_config::get_domain_config(&folder.to_string_lossy()).ok()?.last_deployed_generation_id?;
-    let generations = crate::moss_paths::MossPaths::new(folder).generations_dir();
-    let source = crate::build::scan::path_collision::logical_path(source_path);
-    let article = read_articles(&generations, &generation)?.articles.into_values().find(|a| a.source_path == source)?;
-    let withheld = read_withheld(&generations, &generation);
-    (!withheld.iter().any(|out| crate::build::scan::article_map::to_pretty_url(out) == article.url_path)).then_some(article)
+    published_pages(folder)?.article(source_path).cloned()
 }
 
 /// Keeps `map` beside `generation` as the article map its render built, so a
@@ -121,6 +184,16 @@ pub fn keep_articles_for_tests(folder: &Path, generation: &str, map: &crate::bui
     std::fs::create_dir_all(&generations)?;
     // allow:raw_write a test fixture; no production build compiles it
     std::fs::write(articles_path(&generations, generation), serde_json::to_vec(map).map_err(std::io::Error::other)?)
+}
+
+/// Marks `outputs` as built for preview only in `generation`, for the same tests.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn hold_back_for_tests(folder: &Path, generation: &str, outputs: &[&str]) -> std::io::Result<()> {
+    let generations = crate::moss_paths::MossPaths::new(folder).generations_dir();
+    // allow:raw_write a test fixture; no production build compiles it
+    std::fs::create_dir_all(&generations)?;
+    // allow:raw_write a test fixture; no production build compiles it
+    std::fs::write(receipt_path(&generations, generation), serde_json::to_vec(outputs).map_err(std::io::Error::other)?)
 }
 
 /// The paths of `generation` that must not leave the machine; empty when the
@@ -150,6 +223,7 @@ mod tests {
         let folder = dir.path().to_string_lossy().to_string();
         let generations = crate::moss_paths::MossPaths::new(dir.path()).generations_dir();
         assert!(published_article(dir.path(), "notes/caf\u{e9}.md").is_none(), "nothing has been published");
+        assert_eq!(last_publish_state(dir.path(), "notes/draft.md"), PublishState::Unknown, "nothing has been published");
 
         std::fs::create_dir_all(&generations).unwrap();
         let page = |source: &str, url: &str| -> crate::build::scan::article_map::ArticleInfo {
@@ -159,8 +233,12 @@ mod tests {
         for a in [page("notes/caf\u{e9}.md", "notes/cafe/"), page("notes/draft.md", "notes/draft/")] {
             map.articles.insert(a.url_path.clone(), a);
         }
+        for (address, source, title) in [("", "index.md", "Home"), ("wip/", "wip/index.md", "In progress")] {
+            map.pages.insert(address.into(), source.into());
+            map.page_titles.insert(address.into(), title.into());
+        }
         keep_articles_for_tests(dir.path(), "g1", &map).unwrap();
-        std::fs::write(receipt_path(&generations, "g1"), r#"["notes/draft/index.html"]"#).unwrap();
+        hold_back_for_tests(dir.path(), "g1", &["notes/draft/index.html", "wip/index.html"]).unwrap();
         let config = crate::config::deployment::DomainDeploymentConfig { site_id: Some("example".into()), last_deployed_generation_id: Some("g1".into()), ..Default::default() };
         crate::vault::deployment_state::save_domain_config(&folder, &config).unwrap();
 
@@ -168,5 +246,15 @@ mod tests {
         assert_eq!(published_article(dir.path(), decomposed).map(|a| a.content).as_deref(), Some("As published."));
         assert!(published_article(dir.path(), "notes/draft.md").is_none(), "a draft the publish withheld");
         assert!(published_article(dir.path(), "notes/other.md").is_none());
+        let states: Vec<PublishState> = [decomposed, "notes/draft.md", "notes/other.md", "index.md", "wip/index.md"].iter().map(|p| last_publish_state(dir.path(), p)).collect();
+        use PublishState::{Absent, HeldBack, Served};
+        assert_eq!(states, [Served, HeldBack, Absent, Served, HeldBack]);
+
+        let pages = published_pages(dir.path()).unwrap();
+        assert_eq!(pages.articles().map(|a| a.url_path.as_str()).collect::<Vec<_>>(), ["notes/cafe/"], "a held-back article is not listed");
+        assert_eq!(pages.index_pages().collect::<Vec<_>>(), [("", "Home")], "nor a held-back section page");
+
+        std::fs::remove_file(articles_path(&generations, "g1")).unwrap();
+        assert_eq!(last_publish_state(dir.path(), "notes/draft.md"), PublishState::Unknown, "a publish that kept no record of its pages");
     }
 }

@@ -75,9 +75,9 @@ use std::path::Path;
 
 pub(crate) mod preview_originals;
 pub(crate) mod publish_view;
-pub use publish_view::published_article;
+pub use publish_view::{last_publish_state, published_article, published_pages, PublishState, PublishedPages};
 #[cfg(any(test, feature = "test-fixtures"))]
-pub use publish_view::keep_articles_for_tests;
+pub use publish_view::{hold_back_for_tests, keep_articles_for_tests};
 
 use crate::build::assets::paths::{compute_binary_hash, compute_manifest_generation_id};
 use crate::types::content::{file_entry, SiteHashes};
