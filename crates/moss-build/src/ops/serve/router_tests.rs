@@ -3364,6 +3364,39 @@ async fn host_route_colliding_with_an_engine_path_fails_construction_instead_of_
     );
 }
 
+/// A host's own page is not a page of the site: it is served as the host
+/// wrote it. The preview bridge in a page that no frame holds reloads the page
+/// on every rebuild, which in a host's editor discards what was being typed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_page_is_served_as_the_host_wrote_it() {
+    const HOST_PAGE: &str = "<!doctype html><html><head></head><body>the host's own page</body></html>";
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(temp_dir.path().join("index.html"), HOST_PAGE).unwrap();
+    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
+    let host = axum::Router::new()
+        .route("/__moss/host/", axum::routing::get(|| async { axum::response::Html(HOST_PAGE) }));
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
+        host_routes: Some(host),
+        ..ServeConfig::new(site_dir_state, 59600)
+    })
+    .await
+    .expect("Server should start");
+    let get = |path: &str| {
+        ureq::get(&format!("http://localhost:{port}{path}"))
+            .timeout(std::time::Duration::from_secs(5))
+            .call()
+            .expect("the page must be served")
+            .into_string()
+            .expect("body should read")
+    };
+
+    assert_eq!(get("/__moss/host/"), HOST_PAGE);
+    // The same bytes as a page of the site do carry the bridge.
+    assert_ne!(get("/"), HOST_PAGE);
+
+    let _ = shutdown_tx.send(());
+}
+
 // ===== File operations: rename-with-refs, batch delete, reference cleanup and undo =====
 
 /// `rename_entry_with_refs` renames in place and rewrites the referencing
