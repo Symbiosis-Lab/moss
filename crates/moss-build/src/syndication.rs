@@ -47,16 +47,73 @@ pub fn parse_choice(value: &serde_json::Value) -> Result<Vec<String>, String> {
     }
 }
 
+/// A `syndicate:` list with each entry turned into its channel's id, the one
+/// form records and idempotency keys are kept under. Everything in this
+/// module reads a page's list through here, never as the page wrote it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Named {
+    ids: Vec<String>,
+    shared: Vec<(String, String)>,
+}
+
+impl Named {
+    /// An id stays, and so does `email`; any other entry is the name one
+    /// channel goes by, ignoring case. An entry that matches nothing stays as
+    /// written, so the plan can say no such channel is set up.
+    pub fn of(list: &[String], channels: &std::collections::BTreeMap<String, plan::ChannelInfo>) -> Self {
+        let mut named = Self::default();
+        for entry in list {
+            let goes_by = |c: &plan::ChannelInfo| c.name.as_ref().is_some_and(|n| n.to_lowercase() == entry.to_lowercase());
+            let by_name: Vec<&str> = channels.iter().filter(|(_, c)| goes_by(c)).map(|(id, _)| id.as_str()).collect();
+            let id = match by_name.as_slice() {
+                _ if entry == plan::RESERVED_EMAIL || channels.contains_key(entry) => entry,
+                [] => entry,
+                [id] => *id,
+                ids => {
+                    named.shared.push((entry.clone(), format!("{entry} is the name of more than one channel ({}): write the id of the one meant", ids.join(", "))));
+                    continue;
+                }
+            };
+            if !named.ids.iter().any(|i| i == id) {
+                named.ids.push(id.to_string());
+            }
+        }
+        named
+    }
+
+    /// The channels a post's copies go to, its folders' list applied; `None`
+    /// when neither the post nor a folder names any.
+    pub fn of_post(post: &crate::build::scan::article_map::ArticleInfo, channels: &std::collections::BTreeMap<String, plan::ChannelInfo>) -> Option<Self> {
+        post.syndicate.as_ref().map(|list| Self::of(list, channels))
+    }
+
+    pub fn ids(&self) -> &[String] {
+        &self.ids
+    }
+
+    /// Entries that name more than one channel, each as written with why it
+    /// names none.
+    pub fn shared(&self) -> &[(String, String)] {
+        &self.shared
+    }
+}
+
 /// A channel plugin running `js` as its hooks, set up for the site at `root`,
 /// for tests that call real hooks.
 #[cfg(test)]
 pub(crate) fn test_channel(root: &std::path::Path, name: &str, js: &str) {
+    test_channel_named(root, name, name, js);
+}
+
+/// [`test_channel`] for a network that goes by `display`.
+#[cfg(test)]
+pub(crate) fn test_channel_named(root: &std::path::Path, name: &str, display: &str, js: &str) {
     use std::io::Write;
     let dir = root.join(".moss/plugins").join(name);
     std::fs::create_dir_all(&dir).unwrap();
     let global = format!("{}Plugin", name.to_uppercase());
     let manifest = serde_json::json!({
-        "name": name, "version": "0.0.1", "display_name": name, "description": "", "author": "",
+        "name": name, "version": "0.0.1", "display_name": display, "description": "", "author": "",
         "entry": "main.bundle.js", "global_name": global,
         "contributes": {"channel": {"syndication": {"forms": ["short", "teaser"], "max_chars": 300}}}
     });
@@ -68,8 +125,41 @@ pub(crate) fn test_channel(root: &std::path::Path, name: &str, js: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_choice;
+    use super::{parse_choice, Named};
     use serde_json::json;
+
+    fn channels(named: &[(&str, &str)]) -> std::collections::BTreeMap<String, super::plan::ChannelInfo> {
+        named.iter().map(|(id, name)| (id.to_string(), super::plan::ChannelInfo { name: Some(name.to_string()), ..Default::default() })).collect()
+    }
+
+    fn list(entries: &[&str]) -> Vec<String> {
+        entries.iter().map(|e| e.to_string()).collect()
+    }
+
+    #[test]
+    fn an_entry_is_a_channels_id_or_the_name_its_network_goes_by() {
+        let set_up = channels(&[("xcom", "X"), ("bluesky", "Bluesky"), ("buttondown", "Email")]);
+        let named = Named::of(&list(&["x", "BLUESKY", "xcom", "email", "ghost"]), &set_up);
+        assert_eq!(named.ids(), ["xcom", "bluesky", "email", "ghost"], "one id each, the newsletter and an unknown entry as written");
+        assert!(named.shared().is_empty());
+    }
+
+    #[test]
+    fn an_id_is_taken_before_another_channels_name() {
+        let set_up = channels(&[("x", "Elsewhere"), ("xcom", "X")]);
+        assert_eq!(Named::of(&list(&["x"]), &set_up).ids(), ["x"]);
+        assert_eq!(Named::of(&list(&["X"]), &set_up).ids(), ["xcom"]);
+    }
+
+    #[test]
+    fn a_name_two_channels_go_by_names_neither_and_says_both() {
+        let set_up = channels(&[("xcom", "X"), ("xmirror", "x"), ("bluesky", "Bluesky")]);
+        let named = Named::of(&list(&["X", "bluesky"]), &set_up);
+        assert_eq!(named.ids(), ["bluesky"]);
+        let [(written, why)] = named.shared() else { panic!("{named:?}") };
+        assert_eq!(written, "X");
+        assert!(why.contains("xcom") && why.contains("xmirror"), "{why}");
+    }
 
     #[test]
     fn a_list_a_single_id_and_false_are_what_an_author_writes() {

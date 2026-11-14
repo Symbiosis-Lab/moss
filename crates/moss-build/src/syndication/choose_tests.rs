@@ -478,3 +478,32 @@ fn adopt_refusals_serialize_with_kebab_case_names() {
         assert_eq!(serde_json::to_value(refusal).unwrap(), wire);
     }
 }
+
+/// A site whose X channel is set up, and a second channel its network also calls X.
+fn site_with_x(post: &str) -> tempfile::TempDir {
+    let dir = site(post);
+    super::super::test_channel_named(dir.path(), "xcom", "X", "{}");
+    super::super::test_channel(dir.path(), "bluesky", "{}");
+    dir
+}
+
+#[test]
+fn turning_a_channel_off_takes_out_the_name_the_page_wrote_for_it() {
+    let dir = site_with_x("---\ntitle: A\nsyndicate: [x, bluesky]\n---\n\nBody stays.\n");
+    let on: Vec<_> = read_post(dir.path(), SOURCE).unwrap().into_iter().filter(|c| c.on).map(|c| c.channel).collect();
+    assert_eq!(on, strings(&["bluesky", "xcom"]), "the chip of the channel the page names as x is on");
+    set_post(dir.path(), SOURCE, "xcom", false).unwrap();
+    assert_eq!(page_of(&dir, SOURCE), "---\ntitle: A\n---\n\nBody stays.\n", "the folder's list, bluesky, is what is left");
+}
+
+#[test]
+fn a_name_two_channels_go_by_turns_no_chip_on_and_a_write_keeps_it() {
+    let page = "---\ntitle: A\nsyndicate: [x]\n---\n\nBody stays.\n";
+    let dir = site_with_x(page);
+    super::super::test_channel_named(dir.path(), "xmirror", "x", "{}");
+    let chips = read_post(dir.path(), SOURCE).unwrap();
+    assert!(chips.iter().all(|c| !c.on), "{chips:?}");
+    assert_eq!(page_of(&dir, SOURCE), page, "reading writes nothing");
+    set_post(dir.path(), SOURCE, "bluesky", true).unwrap();
+    assert_eq!(page_of(&dir, SOURCE), "---\ntitle: A\nsyndicate:\n  - bluesky\n  - x\n---\n\nBody stays.\n");
+}

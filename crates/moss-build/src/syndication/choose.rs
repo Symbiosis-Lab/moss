@@ -10,6 +10,7 @@ use serde::Serialize;
 use specta::Type;
 
 use super::plan::{self, ChannelInfo, PostFacts, Verdict};
+use super::Named;
 use super::record::{Records, State};
 use crate::build::cloud_readiness::{probe_input_to_string, rewrite_input};
 use crate::build::manifest::live_baseline::{self, Baseline};
@@ -83,22 +84,26 @@ fn read_page(folder: &Path, source: &str) -> Option<String> {
     probe_input_to_string(&on_disk(folder, source)).ok().flatten()
 }
 
-fn choice_of(value: &serde_yaml::Value) -> Result<Vec<String>, String> {
-    serde_json::to_value(value).map_err(|e| e.to_string()).and_then(|v| super::parse_choice(&v))
+type Channels = BTreeMap<String, ChannelInfo>;
+
+fn choice_of(value: &serde_yaml::Value, channels: &Channels) -> Result<Named, String> {
+    let list = serde_json::to_value(value).map_err(|e| e.to_string()).and_then(|v| super::parse_choice(&v))?;
+    Ok(Named::of(&list, channels))
 }
 
 /// A folder page's own `cascade: syndicate:`; `None` when absent or invalid,
 /// which leaves the value to the folders above, as the cascade does.
-fn folder_own(content: &str) -> Option<Vec<String>> {
-    choice_of(frontmatter::parse(content).frontmatter.get("cascade")?.get("syndicate")?).ok()
+fn folder_own(content: &str, channels: &Channels) -> Option<Named> {
+    choice_of(frontmatter::parse(content).frontmatter.get("cascade")?.get("syndicate")?, channels).ok()
 }
 
 /// The list the nearest folder above `url_path` sets.
-fn inherited(folder: &Path, map: &ArticleMap, url_path: &str) -> Vec<String> {
+fn inherited(folder: &Path, map: &ArticleMap, url_path: &str, channels: &Channels) -> Vec<String> {
     ancestors(url_path)
         .iter()
         .filter_map(|key| map.pages.get(key))
-        .find_map(|source| folder_own(&read_page(folder, source)?))
+        .find_map(|source| folder_own(&read_page(folder, source)?, channels))
+        .map(|named| named.ids().to_vec())
         .unwrap_or_default()
 }
 
@@ -118,15 +123,16 @@ pub fn read_post_with(folder: &Path, source: &str, channels: &BTreeMap<String, C
     let content = read_page(folder, source)?;
     let front = frontmatter::parse(&content).frontmatter;
     // An invalid `syndicate:` is the page's say, as in the cascade: it names nothing.
-    let own: Option<Vec<String>> = front.get("syndicate").map(|v| choice_of(v).unwrap_or_default());
+    let own: Option<Named> = front.get("syndicate").map(|v| choice_of(v, channels).unwrap_or_default());
+    let own = own.as_ref().map(Named::ids);
     let listed = serde_json::to_value(front.get("syndicated")).ok();
     let listed = crate::build::types::syndicated_urls(listed.as_ref());
-    let folders = inherited(folder, &map, &post.url_path);
+    let folders = inherited(folder, &map, &post.url_path, channels);
     let mp = MossPaths::new(folder);
     let live = live_state(&live_baseline::load(&mp), post, uid);
     let view = PostView {
-        facts: PostFacts { uid, own: own.as_deref().unwrap_or_default(), listed: &listed, already_live: live != Live::No },
-        list: own.as_deref().unwrap_or(&folders),
+        facts: PostFacts { uid, own: own.unwrap_or_default(), listed: &listed, already_live: live != Live::No },
+        list: own.unwrap_or(&folders),
         folders: &folders,
         has_own: own.is_some(),
         live,
@@ -174,6 +180,12 @@ impl PostView<'_> {
     }
 }
 
+/// The names in `own` that more than one channel goes by: a write puts them
+/// back as written, since no chip stands for them.
+fn kept(own: Option<&Named>) -> impl Iterator<Item = String> + '_ {
+    own.into_iter().flat_map(|n| n.shared().iter().map(|(written, _)| written.clone()))
+}
+
 /// `current` with `channel` added or taken out, keeping the folder's order.
 fn next_list(current: &[String], folders: &[String], channel: &str, on: bool) -> Vec<String> {
     let mut list: Vec<String> = current.iter().filter(|c| *c != channel).cloned().collect();
@@ -210,15 +222,17 @@ pub fn set_post(folder: &Path, source: &str, channel: &str, on: bool) -> Result<
     let uid = post.uid.as_deref().ok_or("this post has no note ID yet")?;
     let mp = MossPaths::new(folder);
     let live = live_state(&live_baseline::load(&mp), post, uid);
-    let folders = inherited(folder, &map, &post.url_path);
+    let channels = super::landing::channels(folder);
+    let folders = inherited(folder, &map, &post.url_path, &channels);
     rewrite_input(&on_disk(folder, source), |bytes| {
         let content = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
-        let own: Option<Vec<String>> = frontmatter::parse(content).frontmatter.get("syndicate").map(|v| choice_of(v).unwrap_or_default());
-        let list = next_list(own.as_deref().unwrap_or(&folders), &folders, channel, on);
+        let own: Option<Named> = frontmatter::parse(content).frontmatter.get("syndicate").map(|v| choice_of(v, &channels).unwrap_or_default());
+        let mut list = next_list(own.as_ref().map_or(&folders, |n| n.ids()), &folders, channel, on);
+        list.extend(kept(own.as_ref()));
         let edit = key_edit(&list, &folders, live);
         frontmatter::edit_fields(content, &[edit]).map(|after| (after != content).then_some(after))
     })?;
-    read_post(folder, source).ok_or_else(|| "the post could not be read back".to_string())
+    read_post_with(folder, source, &channels).ok_or_else(|| "the post could not be read back".to_string())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
@@ -281,26 +295,30 @@ pub fn adopt(folder: &Path, source: &str, channel: &str, url: &str) -> Result<Ad
 pub fn read_folder(folder: &Path, url_path: &str, index_source: &str) -> Option<Vec<String>> {
     let url_path = to_pretty_url(url_path);
     let content = read_page(folder, index_source)?;
-    Some(match folder_own(&content) {
-        Some(own) => own,
-        None => inherited(folder, &load_map(folder)?, &url_path),
+    let channels = super::landing::channels(folder);
+    Some(match folder_own(&content, &channels) {
+        Some(own) => own.ids().to_vec(),
+        None => inherited(folder, &load_map(folder)?, &url_path, &channels),
     })
 }
 
 /// Set one channel in a folder page's `cascade: syndicate:`. Returns the
 /// folder's list after the write.
 pub fn set_folder(folder: &Path, url_path: &str, index_source: &str, channel: &str, on: bool) -> Result<Vec<String>, String> {
-    let above = inherited(folder, &load_map(folder).ok_or("this site has not been built yet")?, &to_pretty_url(url_path));
+    let channels = super::landing::channels(folder);
+    let above = inherited(folder, &load_map(folder).ok_or("this site has not been built yet")?, &to_pretty_url(url_path), &channels);
     let mut result = Vec::new();
     rewrite_input(&on_disk(folder, index_source), |bytes| {
         let content = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
-        let list = next_list(&folder_own(content).unwrap_or_else(|| above.clone()), &above, channel, on);
-        let value = if list == above {
+        let own = folder_own(content, &channels);
+        let list = next_list(own.as_ref().map_or(&above, |n| n.ids()), &above, channel, on);
+        let written: Vec<String> = list.iter().cloned().chain(kept(own.as_ref())).collect();
+        let value = if written == above {
             None
         } else if list.is_empty() {
             Some(serde_yaml::Value::Bool(false))
         } else {
-            Some(yaml_list(&list))
+            Some(yaml_list(&written))
         };
         result = list;
         let edit = FieldEdit::SetChild { parent: "cascade".into(), key: "syndicate".into(), value };

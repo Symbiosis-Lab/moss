@@ -362,3 +362,52 @@ fn unavailable_edits_preserve_uncertain_attempts_and_drafts() {
         assert_eq!(r, before);
     }
 }
+
+fn with_x() -> BTreeMap<String, ChannelInfo> {
+    let mut channels = channels();
+    let short = super::super::channel::ChannelSpec { forms: vec![super::super::channel::Form::Short], ..Default::default() };
+    channels.insert("xcom".into(), ChannelInfo { spec: short, domains: vec!["x.com".into()], name: Some("X".into()) });
+    channels
+}
+
+fn decide_with(channels: &BTreeMap<String, ChannelInfo>, m: &ArticleMap, before: Option<&[LiveEntry]>, records: &Records) -> Vec<(String, String, Action)> {
+    let config = crate::config::ConfigFile::parse("").unwrap();
+    actions(&decide(&PlanInputs { folder: std::path::Path::new("."), config: &config, site_url: Some("https://example.org"), articles: m, previously_live: before, edited_sources: &HashSet::new(), channels }, records))
+}
+
+#[test]
+fn a_page_that_names_a_channel_by_its_networks_name_is_planned_under_the_channels_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let records = Records::at(dir.path().into());
+    let m = map(vec![post("notes/a.md", "notes/a/", "aa11aa11", &["x"], serde_json::json!({}))]);
+    assert_eq!(decide_with(&with_x(), &m, None, &records), [("notes/a/".into(), "xcom".into(), Action::Due)]);
+
+    // The copy it then has is the one the page names: nothing is planned again.
+    let mut posted = CopyRecord::due("aa11aa11", "xcom", "notes/a.md", "notes/a/");
+    posted.state = State::Posted;
+    records.save(&posted).unwrap();
+    assert_eq!(decide_with(&with_x(), &m, None, &records), []);
+}
+
+#[test]
+fn a_page_live_before_that_names_the_channel_itself_by_name_is_posted() {
+    let dir = tempfile::tempdir().unwrap();
+    let records = Records::at(dir.path().into());
+    let m = map(vec![post("notes/own.md", "notes/own/", "0b0b0b0b", &["X"], serde_json::json!({"uid": "0b0b0b0b", "syndicate": ["X"]}))]);
+    let before = [live("0b0b0b0b", "notes/own/")];
+    assert_eq!(decide_with(&with_x(), &m, Some(&before), &records), [("notes/own/".into(), "xcom".into(), Action::Due)]);
+}
+
+#[test]
+fn a_name_two_channels_go_by_is_unavailable_and_says_both() {
+    let dir = tempfile::tempdir().unwrap();
+    let records = Records::at(dir.path().into());
+    let mut channels = with_x();
+    channels.insert("xmirror".into(), ChannelInfo { name: Some("x".into()), ..channels["xcom"].clone() });
+    let m = map(vec![post("notes/a.md", "notes/a/", "aa11aa11", &["x", "bluesky"], serde_json::json!({}))]);
+    let got = decide_with(&channels, &m, None, &records);
+    assert_eq!(got[0], ("notes/a/".into(), "bluesky".into(), Action::Due));
+    let Action::Unavailable { reason } = &got[1].2 else { panic!("{got:?}") };
+    assert!(got[1].1 == "x" && reason.contains("xcom") && reason.contains("xmirror"), "{got:?}");
+    assert_eq!(got.len(), 2);
+}

@@ -16,6 +16,8 @@ pub struct CopyChannel {
     /// this channel's copy rather than posted again: the manifest's `domains`
     /// (else `domain`), and the host of the setting `host_setting` names.
     pub domains: Vec<String>,
+    /// The name its network goes by, which a `syndicate:` entry may use for it.
+    pub name: Option<String>,
 }
 
 /// How a copy hook call ended.
@@ -60,7 +62,9 @@ pub fn copy_channels_of(project_path: &str, plugins: &[Plugin]) -> BTreeMap<Stri
                     spec.forms.retain(|form| *form != Form::Long);
                 }
             }
-            Some((p.manifest.name.clone(), CopyChannel { spec, domains }))
+            let channel = p.manifest.contributes.as_ref().and_then(|c| c.channel.as_ref());
+            let name = channel.and_then(|c| c.display_name.clone()).or_else(|| p.manifest.display_name.clone());
+            Some((p.manifest.name.clone(), CopyChannel { spec, domains, name }))
         })
         .collect()
 }

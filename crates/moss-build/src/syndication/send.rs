@@ -225,7 +225,7 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
     let mut due = records.all();
     due.sort_by_cached_key(|r| {
         let post = r.post.as_ref().map(|p| &p.article).or_else(|| by_uid.get(&r.uid).copied());
-        let rank = post.and_then(|p| p.syndicate.as_ref()).and_then(|c| c.iter().position(|c| *c == r.channel));
+        let rank = post.and_then(|p| super::Named::of_post(p, &channels)).and_then(|n| n.ids().iter().position(|c| *c == r.channel));
         (r.url_path.clone(), rank.unwrap_or(usize::MAX), r.channel.clone())
     });
     let config = match crate::build::site_config::read_project_config(&folder.to_string_lossy()) {
@@ -247,7 +247,7 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
         }
         // The latest build is the author's latest word: a channel the post no
         // longer names gets nothing more, and its record keeps its history.
-        if now.is_some_and(|p| !p.syndicate.as_ref().is_some_and(|c| c.contains(&record.channel))) {
+        if now.is_some_and(|p| !super::Named::of_post(p, &channels).is_some_and(|n| n.ids().contains(&record.channel))) {
             continue;
         }
         let Some(channel) = channels.get(&record.channel) else { continue };
@@ -809,7 +809,7 @@ mod tests {
                 record.remote = Some(super::super::record::RemoteRef { id: "1".into(), url: "https://example.social/1".into() });
                 record.update_due = true;
             }
-            let channel = CopyChannel { spec: ChannelSpec { forms: vec![Form::Short], max_chars: Some(300), ..Default::default() }, domains: Vec::new() };
+            let channel = CopyChannel { spec: ChannelSpec { forms: vec![Form::Short], max_chars: Some(300), ..Default::default() }, ..Default::default() };
             let post: ArticleInfo = serde_json::from_value(serde_json::json!({"source_path": "page.md", "title": "", "content": "Hello.", "url_path": "page/"})).unwrap();
             let emit = |_: &Sent| {};
             let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
@@ -835,7 +835,7 @@ mod tests {
         records.save(&record).unwrap();
         let before = records.get("u", "one").unwrap();
         let post: ArticleInfo = serde_json::from_value(serde_json::json!({"source_path": "edited.md", "title": "New", "content": "Edited", "url_path": "edited/"})).unwrap();
-        let channel = CopyChannel { spec: super::super::channel::ChannelSpec { forms: vec![super::super::channel::Form::Long], ..Default::default() }, domains: Vec::new() };
+        let channel = CopyChannel { spec: super::super::channel::ChannelSpec { forms: vec![super::super::channel::Form::Long], ..Default::default() }, ..Default::default() };
         let emit = |_: &Sent| panic!("a frozen copy cannot send");
         let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
         let result = send_one(root, &manager, &records, record, &channel, &post, &ShapeOptions::default(), Op::Update, &opts).await.unwrap();
@@ -849,7 +849,7 @@ mod tests {
         let mut record = CopyRecord::due("u", "one", "page.md", "page/");
         record.form = Some(super::super::channel::Form::Short);
         record.part_count = Some(1);
-        let channel = CopyChannel { spec: super::super::channel::ChannelSpec { forms: vec![super::super::channel::Form::Short], max_chars: Some(1), ..Default::default() }, domains: Vec::new() };
+        let channel = CopyChannel { spec: super::super::channel::ChannelSpec { forms: vec![super::super::channel::Form::Short], max_chars: Some(1), ..Default::default() }, ..Default::default() };
         let post: ArticleInfo = serde_json::from_value(serde_json::json!({ "source_path": "page.md", "title": "", "content": "Longer than allowed", "url_path": "page/", "date": null })).unwrap();
         let (job, _) = build_job(&record, &channel, &post, &ShapeOptions::default(), Op::Find, "https://example.org").unwrap();
         assert_eq!(job.idempotency_key, idempotency_key("u", "one"));
@@ -1139,6 +1139,42 @@ mod tests {
         assert_eq!(records.get("aaaa0001", "two").unwrap().state, State::Due);
         let kept = records.get("aaaa0002", "two").unwrap();
         assert!(kept.state == State::Posted && kept.update_due && kept.remote.unwrap().id == "b-1");
+    }
+
+    /// Records are kept under ids, so a page that names a channel as its
+    /// network is called still has its copies sent, in the order it names them.
+    #[tokio::test]
+    async fn a_page_that_names_a_channel_by_its_networks_name_has_its_copies_sent_in_its_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let posts = "{ publish_copy: async function (job) { return { success: true, copy: { id: job.post.url, url: 'https://example.social/' + job.channel } }; } }";
+        super::super::test_channel(root, "one", posts);
+        super::super::test_channel_named(root, "xcom", "X", posts);
+        std::fs::create_dir_all(root.join("notes")).unwrap();
+        std::fs::write(root.join("notes/a.md"), "Hello.\n").unwrap();
+        let post: ArticleInfo = serde_json::from_value(serde_json::json!({
+            "source_path": "notes/a.md", "title": "", "content": "Hello.\n", "url_path": "notes/a/", "date": null, "uid": "aaaa0001", "syndicate": ["x", "one"]
+        }))
+        .unwrap();
+        let mut landed = ArticleMap::default();
+        landed.articles.insert(post.url_path.clone(), post);
+        let records = Records::in_vault(&crate::moss_paths::MossPaths::new(root));
+        for channel in ["one", "xcom"] {
+            let mut r = CopyRecord::due("aaaa0001", channel, "notes/a.md", "notes/a/");
+            r.post = Some(Box::new(PublishedPost::new(&landed.articles["notes/a/"], &landed)));
+            records.save(&r).unwrap();
+        }
+        let cache = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned());
+        let manager = cache.get_or_create(&root.to_string_lossy()).unwrap();
+        let emit = |_: &Sent| {};
+        let opts = SendOptions { site_url: "https://publish.example.net", retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
+        let sent = send_due(root, &manager, &landed, &opts).await;
+
+        let got: Vec<_> = sent.iter().filter(|s| s.outcome != Outcome::Sending).map(|s| (s.channel.as_str(), &s.outcome)).collect();
+        assert_eq!(got, [
+            ("xcom", &Outcome::Posted { url: "https://example.social/xcom".into() }),
+            ("one", &Outcome::Posted { url: "https://example.social/one".into() }),
+        ]);
     }
 
     /// Two runs in one folder, the second started once the first has read its
