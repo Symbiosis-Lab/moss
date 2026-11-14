@@ -980,7 +980,9 @@ pub(crate) fn should_gate_modify_event(kind: notify::EventKind) -> bool {
 #[derive(Debug, PartialEq)]
 pub enum PumpGate {
     /// Drop the event on the pump — every path is a root agent-instruction
-    /// file, which the scan skips and which moss itself writes.
+    /// file, which the scan skips and which moss itself writes. The watcher's
+    /// whole per-event verdict (`ops::watch::event_gate`) also answers it for
+    /// an event its filters drop.
     Suppress,
     /// Rebuild unconditionally — the kill-switch is set, or the event kind is
     /// one the hash gate can never vouch for (`Create`/`Remove`).

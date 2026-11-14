@@ -202,6 +202,9 @@ pub async fn save_editor_content(
     let r = host.saving(&path, &mut || {
         crate::editor::content::persist_editor_content(&path, &a.frontmatter, &a.body, &a.expected_hash, a.keep_displaced)
     })?;
+    if matches!(r, crate::editor::content::SaveResult::Saved { .. }) {
+        host.changed(super::Change::Wrote(std::path::Path::new(&path)));
+    }
     if let Some(event) = crate::editor::content::displaced_event(&path, &r) {
         host.publish(&event);
     }

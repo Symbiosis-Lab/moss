@@ -581,44 +581,10 @@ async fn handle_debounced_batch(
 
     let mut actionable: Vec<&DebouncedEvent> = Vec::with_capacity(events.len());
     for ev in &events {
-        if !any_path_watchable(root_path, &ev.paths) {
-            continue;
-        }
-        // The root-relative question `path_is_watchable` cannot ask: is every
-        // path in this event something moss wrote? A root `AGENTS.md` is, and
-        // the non-recursive root watch on Linux/Windows still hears it.
-        if scope::all_paths_moss_written(root_path, &ev.paths) {
-            continue;
-        }
-        if !should_recompile_for_event(ev.kind, &ev.paths) {
-            log::trace!(
-                target: "moss::build::watch",
-                "Suppressed {:?} on {} path(s): {:?}",
-                ev.kind,
-                ev.paths.len(),
-                ev.paths
-            );
-            continue;
-        }
-        if !any_path_passes_filter(root_path, &ev.paths) {
-            continue;
-        }
-        match pump_gate(ev.kind, folder_path, &ev.paths) {
-            PumpGate::Suppress => {
-                log::debug!(
-                    target: "moss::build::watch",
-                    "Suppressed on the pump: {} agent-config path(s) ({:?})",
-                    ev.paths.len(),
-                    ev.kind
-                );
-                continue;
-            }
-            PumpGate::Proceed => {
-                all_gate_eligible = false;
-            }
-            PumpGate::DeferHashCheck => {
-                deferred_gate_paths.extend(ev.paths.iter().cloned());
-            }
+        match event_gate(root_path, ev.kind, &ev.paths) {
+            PumpGate::Suppress => continue,
+            PumpGate::Proceed => all_gate_eligible = false,
+            PumpGate::DeferHashCheck => deferred_gate_paths.extend(ev.paths.iter().cloned()),
         }
         actionable.push(ev);
     }
@@ -689,6 +655,31 @@ async fn handle_debounced_batch(
     .await;
 }
 
+/// The watcher's verdict on one event: `Suppress` when it asks for no rebuild
+/// (a path outside the watch, moss's own output, a kind that changes nothing,
+/// a root agent-instruction file), otherwise whether the rebuild may wait on
+/// the worker's content-hash check.
+fn event_gate(root: &Path, kind: notify::EventKind, paths: &[std::path::PathBuf]) -> PumpGate {
+    // `all_paths_moss_written` is the root-relative question `path_is_watchable`
+    // cannot ask: a root `AGENTS.md` is moss's, and the non-recursive root watch
+    // on Linux/Windows still hears it.
+    if !any_path_watchable(root, paths) || scope::all_paths_moss_written(root, paths) {
+        return PumpGate::Suppress;
+    }
+    if !should_recompile_for_event(kind, paths) {
+        log::trace!(target: "moss::build::watch", "Suppressed {:?} on {} path(s): {:?}", kind, paths.len(), paths);
+        return PumpGate::Suppress;
+    }
+    if !any_path_passes_filter(root, paths) {
+        return PumpGate::Suppress;
+    }
+    let gate = pump_gate(kind, &root.to_string_lossy(), paths);
+    if gate == PumpGate::Suppress {
+        log::debug!(target: "moss::build::watch", "Suppressed on the pump: {} agent-config path(s) ({:?})", paths.len(), kind);
+    }
+    gate
+}
+
 /// The rebuild a change moss made asks for: what the watcher's event for it
 /// asks, and for a move the pairs the preview follows a renamed page by.
 /// `folder` is the built folder. A change of no file asks for none.
@@ -697,6 +688,21 @@ pub fn request_for(folder: &Path, change: crate::commands::Change<'_>) -> Option
     let (rename_pairs, paths): (Vec<_>, Vec<_>) = match change {
         Change::Moved(pairs) => (pairs.to_vec(), pairs.iter().flat_map(|(from, to)| [folder.join(from), folder.join(to)]).collect()),
         Change::Created(paths) => (Vec::new(), paths.iter().map(std::path::PathBuf::from).collect()),
+        // A write changes no file's existence, so it is content-only, as the
+        // watcher reads the same write: Structural would close the render skip
+        // for every save. A page's save waits on the hash check, so the
+        // watcher's later event for it, or a save of the same bytes, builds
+        // nothing; any other file (or MOSS_WATCH_NO_GATE) builds unconditionally.
+        Change::Wrote(path) => {
+            use notify::event::{DataChange, ModifyKind};
+            let paths = vec![path.to_path_buf()];
+            let gate_paths = match event_gate(folder, notify::EventKind::Modify(ModifyKind::Data(DataChange::Content)), &paths) {
+                PumpGate::Suppress => return None,
+                PumpGate::Proceed => None,
+                PumpGate::DeferHashCheck => Some(paths.clone()),
+            };
+            return Some(worker::RebuildRequest { rename_pairs: Vec::new(), trigger: crate::build::BuildTrigger::ContentOnly(paths), gate_paths });
+        }
     };
     (!paths.is_empty()).then(|| worker::RebuildRequest { rename_pairs, trigger: crate::build::BuildTrigger::Structural(paths), gate_paths: None })
 }

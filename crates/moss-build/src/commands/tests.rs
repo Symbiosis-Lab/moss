@@ -202,6 +202,7 @@ impl CommandHost for TestHost {
         match change {
             super::Change::Moved(pairs) => self.moved.lock().unwrap().extend_from_slice(pairs),
             super::Change::Created(paths) => self.created.lock().unwrap().extend_from_slice(paths),
+            super::Change::Wrote(_) => crate::ops::watch::hand_off(self.root(), change),
         }
     }
     fn served_dir(&self) -> PathBuf {

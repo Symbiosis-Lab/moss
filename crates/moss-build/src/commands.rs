@@ -206,6 +206,8 @@ pub enum Change<'a> {
     Moved(&'a [(String, String)]),
     /// New files, absolute.
     Created(&'a [String]),
+    /// A file the editor saved, absolute.
+    Wrote(&'a Path),
 }
 
 impl Change<'_> {
@@ -214,6 +216,7 @@ impl Change<'_> {
         match self {
             Change::Moved(_) => "move",
             Change::Created(_) => "new file",
+            Change::Wrote(_) => "save",
         }
     }
 }

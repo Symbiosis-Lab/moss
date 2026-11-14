@@ -48,6 +48,7 @@ All notable changes to moss will be documented here.
 - A picture the editor can't find says what was looked for ("No file named slide.jpg in your folder. The site can't be published without it."). Its ⌘K card offers the same picture under another extension when the folder has one, Choose a file…, and Remove, which takes the line with it and comes back with one undo. The width buttons are not shown for a file that is not there.
 - In the preview, a picture or other media file that is not in the folder is a box reading "Picture not found: slide.jpg". It was an empty frame of the size asked for with that size as its caption, a broken image, or a bare link.
 - For plugin authors: `moss describe` no longer lists the `syndicate` hook, which moss no longer calls. A channel posts through the copy hooks (`publish_copy` and the others listed there).
+- An edit saved in moss's editor shows in the preview without waiting for the computer to report the change to the file: the save asks for its own rebuild. That report took anywhere from a twentieth of a second to five seconds, and sometimes never came until the next periodic check.
 
 ### New
 
