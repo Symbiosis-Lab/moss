@@ -80,7 +80,10 @@ impl ChannelSpec {
     }
 
     /// An article's pictures are part of its HTML: all of them go, unless the
-    /// channel states a limit.
+    /// channel states a limit. `images.max` is what a short post may attach,
+    /// read here as an article's limit too: a channel that states it for its
+    /// posts has its articles cut to the same number, until the two are
+    /// separate fields.
     pub fn max_article_images(&self) -> usize {
         self.images.as_ref().map_or(usize::MAX, |i| i.max as usize)
     }
