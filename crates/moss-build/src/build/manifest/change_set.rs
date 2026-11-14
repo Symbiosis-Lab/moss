@@ -778,7 +778,7 @@ pub fn removed_addresses(
     let page_sources = by_output(&baseline.source_to_output);
     let asset_sources = baseline.asset_source_to_output.as_ref().map(by_output);
     let exists = |src: &&str| source_exists(src);
-    let withheld = current.withheld();
+    let withheld = current.withheld_by_author();
     let withdrawn = current.withdrawn();
     let files = current.files();
     // A moved folder file keeps its bytes but loses its recorded source. The

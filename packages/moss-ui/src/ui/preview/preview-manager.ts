@@ -239,9 +239,11 @@ export class PreviewManager {
       if (this.folderPath) {
         const request = this.navigationManager.getRequestRevision();
         void this.startBuild(this.folderPath).then(() => {
-          if (request === this.navigationManager.getRequestRevision() && this.newPageWait) {
-            this.loadPreview(this.newPageWait.targetUrl);
-          }
+          if (request !== this.navigationManager.getRequestRevision() || !this.newPageWait) return;
+          // A finished build that still serves no page is the answer: show what the server says there.
+          const { targetUrl } = this.newPageWait;
+          this.endNewPageWait();
+          this.loadPreview(targetUrl);
         });
       }
     },
@@ -759,9 +761,6 @@ export class PreviewManager {
   setOnEmptyFolder(cb: () => void): void {
     this.onEmptyFolder = cb;
   }
-
-  /** The same feature state used by preview instruments and shell affordances. */
-  getEditsOnPreview(): boolean { return this.editsOnPreview; }
 
   /** The preview-features setting; turning it off clears what an instrument drew. */
   setEditsOnPreview(on: boolean): void {

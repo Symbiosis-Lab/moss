@@ -1643,6 +1643,7 @@ async function init(): Promise<void> {
     pathOf: (id) => registry?.pathOf(id) ?? null,
     registerPendingRename: (from, to) => pendingRenames.register(from, to),
     renameEntry: renameViaTree,
+    showInPreview: (rel) => void previewFollower?.navigate(rel, engine.resolveExpectedUrlForFile),
     setTitleField,
     setHeadingSaved: (text) => headingController?.noteSavedText(text),
     listDirectory: (absDir) => engine.listDirectory(absDir, true),

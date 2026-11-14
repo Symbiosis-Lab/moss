@@ -576,12 +576,21 @@ pub struct PageMeta {
     /// `draft: true`: built and previewed, never published.
     #[serde(default)]
     pub draft: bool,
+    /// The draft is an empty source, not the author's `draft: true`. Absent in
+    /// a record written before the field existed, which reads as the author's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub empty_source: bool,
     /// The uid this build gave the page. A publish writes this one into the
     /// page and records it, so it must come from the generation being
     /// published, not from build output a later build overwrites. `None` in a
     /// manifest written before the field existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
+}
+
+impl PageMeta {
+    /// Withheld from the publish by the author's own `draft: true`.
+    pub fn withheld_by_author(&self) -> bool { self.draft && !self.empty_source }
 }
 
 impl SiteHashes {

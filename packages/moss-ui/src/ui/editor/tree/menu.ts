@@ -39,7 +39,7 @@ type Point = { clientX: number; clientY: number };
 export interface MenuHost {
   readonly ops: TreeOps;
   /** "Save as Template…" is the tree's one template action; the rest live on the ＋▾ menu. */
-  readonly commands: Pick<TemplateCommands, 'createTemplate'> & LanguageSource;
+  readonly commands: Pick<TemplateCommands, 'createTemplate'> & Pick<LanguageSource, 'pageTranslations'>;
   /** False for a loose document's folder (document mode). Templates,
    *  publish history, URL import and home files are a site's, so its menus
    *  leave those rows out rather than offer what can only fail. */

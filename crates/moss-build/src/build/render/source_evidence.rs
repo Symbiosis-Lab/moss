@@ -58,6 +58,9 @@ pub struct DraftLinkOccurrence {
     pub reference: String,
     /// The draft page's source file.
     pub draft_source: String,
+    /// The page is withheld because its source is empty, not by `draft: true`.
+    #[serde(default)]
+    pub empty: bool,
     /// One-based line of the link in `source_path`, when it could be found.
     pub line: Option<u32>,
 }

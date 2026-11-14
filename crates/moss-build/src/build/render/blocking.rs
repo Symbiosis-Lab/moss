@@ -247,6 +247,7 @@ fn page_meta_of(doc: &crate::build::types::ParsedDocument) -> crate::types::cont
         title: doc.title.clone(),
         date: doc.date.clone(),
         draft: doc.is_draft(),
+        empty_source: doc.empty_source,
         uid: doc.uid.clone(),
     }
 }
@@ -761,7 +762,8 @@ pub fn generate_blocking_content_for_build(
                     });
                     let source_content = content?;
                     let content = members_policy.public_source(&file_info.path, &source_content);
-                    if super::empty_home::skip_empty_source(&content, &file_info.path) { return None; }
+                    let empty_page = super::empty_home::is_empty_source(&content);
+                    if empty_page && super::empty_home::skips_empty_source(&file_info.path, root_folder_name) { return None; }
                     md_read_ns.fetch_add(t_read.elapsed().as_nanos() as u64, Ordering::Relaxed);
 
                     // Runs once for the page, and once more over the whole source
@@ -865,10 +867,8 @@ pub fn generate_blocking_content_for_build(
                         authored_source: Some(&content),
                     };
 
-                    let mut doc = match process_markdown_file(&file_info.path, resolved_content, root_folder_name, &page_map, emit_source_lines, site_lang, site_id.as_deref(), markdown, Some(&event_level_image_lookup), Some(&external_url_map), Some(&content_graph), page_context) {
-                        Ok(doc) => doc,
-                        Err(_) => return None,
-                    };
+                    let mut doc = process_markdown_file(&file_info.path, resolved_content, root_folder_name, &page_map, emit_source_lines, site_lang, site_id.as_deref(), markdown, Some(&event_level_image_lookup), Some(&external_url_map), Some(&content_graph), page_context).ok()?;
+                    if empty_page { doc.mark_empty_source(); }
                     // Keep the transclusion
                     // edges the resolve phase just computed instead of dropping
                     // them on the floor. These are the ONLY page→page embed

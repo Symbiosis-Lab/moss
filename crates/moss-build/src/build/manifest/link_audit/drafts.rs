@@ -61,10 +61,10 @@ pub fn drafts_linked(
     documents: &[ParsedDocument],
     read_source: impl Fn(&str) -> Option<String>,
 ) -> Vec<DraftLinkOccurrence> {
-    let drafts: HashMap<&str, &str> = documents
+    let drafts: HashMap<&str, (&str, bool)> = documents
         .iter()
         .filter(|doc| doc.is_draft() && !doc.slot_only)
-        .filter_map(|doc| Some((doc.url_path.as_str(), doc.source_path.as_deref()?)))
+        .filter_map(|doc| Some((doc.url_path.as_str(), (doc.source_path.as_deref()?, doc.empty_source))))
         .collect();
     if drafts.is_empty() {
         return Vec::new();
@@ -75,7 +75,7 @@ pub fn drafts_linked(
         let mut seen = std::collections::HashSet::new();
         for href in url_attr_values(&doc.html_content) {
             let Some(keys) = candidates_from(&doc.url_path, &href) else { continue };
-            let Some(draft_source) = keys.iter().find_map(|key| drafts.get(key.as_str())) else { continue };
+            let Some(&(draft_source, empty)) = keys.iter().find_map(|key| drafts.get(key.as_str())) else { continue };
             if !seen.insert(href.clone()) {
                 continue;
             }
@@ -84,6 +84,7 @@ pub fn drafts_linked(
                 source_path: source_path.to_string(),
                 reference: href,
                 draft_source: draft_source.to_string(),
+                empty,
                 line,
             });
         }

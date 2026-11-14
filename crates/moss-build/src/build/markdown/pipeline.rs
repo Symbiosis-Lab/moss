@@ -1620,6 +1620,7 @@ pub fn process_markdown_file(
         // drives `is_index_by_home_override` above (page_map URL shape).
         is_home_override: is_index_by_home_override,
         draft,
+        empty_source: false,
         listed,
         search_engines: frontmatter.search_engines,
         hidden_home: None,

@@ -67,6 +67,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("delete_template", json!({ "id": "t" })),
         ("set_template_folder", json!({ "id": "t", "folder": null })),
         ("site_languages", json!({})),
+        ("page_translations", json!({ "path": "a.md" })),
         ("instantiate_template", json!({ "id": "t", "targetDir": "posts", "name": "untitled.md" })),
         ("create_translation", json!({ "sourceAbs": "a.md", "lang": "zh" })),
         (
@@ -135,6 +136,7 @@ struct TestHost {
     dates: crate::editor::filesystem::PublishDateMemo,
     announced: std::sync::Mutex<Vec<(String, String)>>,
     withdrawn: std::sync::Mutex<Vec<(String, String)>>,
+    moved: std::sync::Mutex<Vec<(String, String)>>,
     saved: std::sync::Mutex<Vec<String>>,
     refuses_moss_dir: bool,
 }
@@ -157,6 +159,7 @@ impl TestHost {
             dates: Default::default(),
             announced: Default::default(),
             withdrawn: Default::default(),
+            moved: Default::default(),
             saved: Default::default(),
             refuses_moss_dir: false,
         }
@@ -192,6 +195,10 @@ impl CommandHost for TestHost {
     }
     fn withdraw_moves(&self, pairs: &[(String, String)]) {
         self.withdrawn.lock().unwrap().extend_from_slice(pairs);
+    }
+    fn moved(&self, pairs: &[(String, String)]) {
+        assert!(!pairs.is_empty(), "a move of no page asks for no rebuild");
+        self.moved.lock().unwrap().extend_from_slice(pairs);
     }
     fn served_dir(&self) -> PathBuf {
         self.root().join(".moss")
@@ -492,6 +499,18 @@ async fn a_site_rename_rewrites_links_and_announces_the_move() {
     ok::<Value>(write::dispatch(&host, "rename_entry_with_refs", json!({ "oldPath": "a.md", "newPath": "c.md" })).await).await;
     assert!(std::fs::read_to_string(root.join("b.md")).unwrap().contains("c.md"));
     assert_eq!(*host.announced.lock().unwrap(), vec![("a.md".to_string(), "c.md".to_string())]);
+    assert_eq!(*host.moved.lock().unwrap(), *host.announced.lock().unwrap(), "the host hears the move was made");
+}
+
+#[tokio::test]
+async fn a_renamed_picture_asks_for_no_rebuild() {
+    let (_d, root) = pages();
+    // allow:raw_write test fixture picture in a temp folder
+    std::fs::write(root.join("pic.png"), b"png").unwrap();
+    let host = TestHost::site(&root);
+    ok::<Value>(write::dispatch(&host, "rename_entry_with_refs", json!({ "oldPath": "pic.png", "newPath": "photo.png" })).await).await;
+    assert!(root.join("photo.png").exists());
+    assert!(host.moved.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -503,6 +522,7 @@ async fn undo_announces_the_reverse_move() {
     ok::<Value>(write::dispatch(&host, "undo_rename", json!({ "undoId": summary["undo_id"] })).await).await;
     assert!(root.join("a.md").exists());
     assert_eq!(host.announced.lock().unwrap().last(), Some(&("c.md".to_string(), "a.md".to_string())));
+    assert_eq!(host.moved.lock().unwrap().last(), Some(&("c.md".to_string(), "a.md".to_string())));
 }
 
 /// `decoy/x.md` makes `x.md` ambiguous, so the links cannot resolve by unique name.
@@ -558,6 +578,7 @@ async fn a_failed_loose_rename_withdraws_its_announcement() {
     assert!(root.join("a.md").exists());
     assert_eq!(*host.withdrawn.lock().unwrap(), *host.announced.lock().unwrap());
     assert!(!host.withdrawn.lock().unwrap().is_empty());
+    assert!(host.moved.lock().unwrap().is_empty(), "a move that failed asks for no rebuild");
 }
 
 /// The delete is refused at its first path (outside the folder), after the

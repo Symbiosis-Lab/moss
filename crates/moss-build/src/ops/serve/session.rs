@@ -96,6 +96,10 @@ impl CommandHost for Session {
     fn publish(&self, event: &MossEvent) {
         super::events::publish(event);
     }
+
+    fn moved(&self, pairs: &[(String, String)]) {
+        crate::ops::watch::hand_off_moves(self.root(), pairs);
+    }
 }
 
 impl InvokeCtx {

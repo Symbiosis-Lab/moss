@@ -8507,6 +8507,74 @@ fn marking_a_published_page_as_a_draft_is_not_an_unexplained_removal() {
     assert!(pending_removals(&removed, None).is_empty(), "{removed:?}");
 }
 
+/// A page with nothing in it is in the preview at its address and in nothing
+/// a publish sends or lists.
+#[test]
+fn an_empty_page_is_served_in_the_preview_and_left_out_of_what_publishes() {
+    let (dir, _cleanup) = create_test_dir();
+    let folder = dir.to_str().unwrap();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n").unwrap();
+    fs::create_dir_all(dir.join("fr")).unwrap();
+    fs::write(dir.join("fr/index.md"), "---\ntitle: Accueil\n---\n\nBonjour.\n").unwrap();
+    fs::write(dir.join("fr/Quiet Harbour Notes.md"), "").unwrap();
+
+    let (_, _, _, built) = build_test_promoted_or_withheld(folder).unwrap();
+    let page = built.source_to_output()["fr/Quiet Harbour Notes.md"].clone();
+    assert_eq!(page, "fr/quiet-harbour-notes/index.html");
+    let mp = crate::moss_paths::MossPaths::new(&dir);
+    assert!(mp.current_ptr().join(&page).exists(), "the preview has no page at the address");
+    assert!(built.all_files().contains_key(&page));
+    assert!(!built.files().contains_key(&page), "the publish view lists the empty page");
+    assert!(!built.published_source_to_output().contains_key("fr/Quiet Harbour Notes.md"));
+    assert!(built.published_uids().all(|(source, _)| source != "fr/Quiet Harbour Notes.md"));
+    for key in built.files().keys().filter(|k| k.ends_with(".html") || k.ends_with(".json") || k.ends_with(".xml") || k.ends_with(".txt")) {
+        let text = fs::read_to_string(mp.current_ptr().join(key)).unwrap_or_default();
+        assert!(!text.contains("quiet-harbour-notes") && !text.contains("Quiet Harbour Notes"), "published {key} names the empty page");
+    }
+    let inventory: serde_json::Value = serde_json::from_str(&fs::read_to_string(crate::build::emit::inventory::inventory_path(&dir.join(".moss"))).unwrap()).unwrap();
+    let row = inventory.as_array().unwrap().iter().find(|e| e["url_path"] == page.as_str()).expect("the list has the page");
+    let hidden: Vec<&str> = row["hidden"].as_array().unwrap().iter().filter_map(|h| h.as_str()).collect();
+    assert!(row["draft"] == false && hidden.contains(&"empty") && !hidden.contains(&"draft"), "the list calls an empty page a draft: {row}");
+}
+
+/// An empty home file would take its folder's address and keep the folder's
+/// generated index out of the publish, so it builds no page.
+#[test]
+fn an_empty_home_file_leaves_its_folders_generated_index_published() {
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n").unwrap();
+    fs::create_dir_all(dir.join("stories")).unwrap();
+    fs::write(dir.join("stories/index.md"), "").unwrap();
+    fs::write(dir.join("stories/one.md"), "---\ntitle: One\n---\n\nOne.\n").unwrap();
+
+    let (_, _, _, built) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+    assert!(!built.source_to_output().contains_key("stories/index.md"), "the empty home file built a page");
+    assert!(built.files().contains_key("stories/index.html"), "the folder's generated index is not published");
+    assert!(built.withheld().is_empty(), "{:?}", built.withheld());
+}
+
+/// A published page whose source turns up empty was not taken down by its
+/// author, so its address is a loss the publish refuses.
+#[test]
+fn a_published_page_whose_source_turns_up_empty_is_an_unexplained_removal() {
+    use crate::build::manifest::change_set::{pending_removals, removed_addresses, PublishedSnapshot, RemovalReason};
+    let (dir, _cleanup) = create_test_dir();
+    let folder = dir.to_str().unwrap();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n").unwrap();
+    fs::write(dir.join("plan.md"), "---\ntitle: Plan\n---\n\nBody.\n").unwrap();
+    let (_, _, _, live) = build_test_promoted_or_withheld(folder).unwrap();
+    let baseline = PublishedSnapshot::from_sealed(&live, "test", "2026-01-01T00:00:00Z".into());
+
+    fs::write(dir.join("plan.md"), "").unwrap();
+    let (_, _, _, emptied) = build_test_promoted_or_withheld(folder).unwrap();
+    assert!(!emptied.files().contains_key("plan/index.html"), "premise: the empty page is withheld");
+    let removed = removed_addresses(&baseline, &emptied, |src| dir.join(src).exists());
+
+    let gone = removed.iter().find(|r| r.path == "plan/index.html").expect("the address leaves the site");
+    assert_eq!(gone.reason, RemovalReason::Unexplained);
+    assert_eq!(pending_removals(&removed, None).len(), 1, "{removed:?}");
+}
+
 /// The whole route from source to the gate: a build of a published page that
 /// links to a draft installs the evidence `refuse_publish` reads, and taking
 /// the link out clears it.

@@ -34,12 +34,20 @@
  * Then a folder's own page that lists its folder by name carries no
  * missing-file mark, while an embed of a folder that does not exist does.
  *
+ * Then a new page in a language folder, named with spaces and capitals: the
+ * preview shows it at its address before it has any text, in no listing, and
+ * after one typed word it is an ordinary page its folder lists.
+ *
+ * Then the create menu offers a page's version in another language only when
+ * it has none: a version linked by `translationKey` under another file name
+ * counts.
+ *
  * Ports: playwright/gate-ports.ts, keys `browser-editor:ui` /
  * `browser-editor:preview`. Config: playwright/browser-editor.config.ts.
  */
 import { test, expect, type Frame, type Page } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gatePort } from '../../../playwright/gate-ports';
@@ -68,7 +76,7 @@ test.beforeEach(async () => {
   site = realpathSync(mkdtempSync(join(tmpdir(), 'moss-browser-editor-site-')));
   home = realpathSync(mkdtempSync(join(tmpdir(), 'moss-browser-editor-home-')));
   mkdirSync(join(home, 'moss'));
-  writeFileSync(join(site, 'index.md'), '---\ntitle: Garden\n---\nHello garden.\n\n![[doc.pdf]]\n\n[Talk](talk.md)\n\n[To the workshops](/workshops/)\n\n' +
+  writeFileSync(join(site, 'index.md'), '---\ntitle: Garden\n---\nHello garden.\n\n![[doc.pdf]]\n\n[Talk](talk.md)\n\n[To the workshops](/workshops/)\n\n[About](about.md)\n\n[To the Chinese pages](/zh-hans/)\n\n' +
     ':::grid 2\nBeds are dug in March.\n\nSeeds go in by April.\n+++\nWater comes from the well.\n\nThe well is closed in winter.\n:::\n');
   for (const [name, text] of Object.entries(EVENTS)) writeFileSync(join(site, name), text);
   writeFileSync(join(site, 'doc.pdf'), ONE_PAGE_PDF);
@@ -80,6 +88,10 @@ test.beforeEach(async () => {
   mkdirSync(join(site, 'meetings'));
   writeFileSync(join(site, 'meetings', 'meetings.md'), '---\ntitle: Meetings\n---\nOurs:\n\n![[meetings/|style:summary]]\n\nGone:\n\n![[nowhere/|style:summary]]\n');
   writeFileSync(join(site, 'meetings', 'first.md'), '---\ntitle: First\n---\nThe first meeting.\n');
+  mkdirSync(join(site, 'zh-hans'));
+  writeFileSync(join(site, 'zh-hans', 'index.md'), '---\ntitle: 花园\n---\n你好，花园。\n');
+  writeFileSync(join(site, 'about.md'), '---\ntitle: About\ntranslationKey: about\n---\nAbout the garden. [Talk](talk.md)\n');
+  writeFileSync(join(site, 'zh-hans', '关于.md'), '---\ntitle: 关于\ntranslationKey: about\n---\n关于花园。\n');
   // MOSS_HOME and the search root keep the binary from finding, or handing
   // the folder to, an installed desktop app.
   server = spawn(MOSS_BIN, ['edit', site, '--serve', '--no-browser', '--port', String(gatePort('browser-editor:ui'))], {
@@ -88,6 +100,8 @@ test.beforeEach(async () => {
       MOSS_HOME: join(home, 'moss'),
       MOSS_DESKTOP_SEARCH_ROOT: home,
       MOSS_PREVIEW_PORT_BASE: String(gatePort('browser-editor:preview')),
+      // The new-page test reads the watch's start and the rename's own request from the log.
+      MOSS_LOG_LEVEL: 'info',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -103,6 +117,16 @@ test.afterEach(async () => {
   rmSync(site, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
+
+/**
+ * Open the file tree's list from the root crumb and wait for the panel to
+ * finish growing. Its rows move while it grows, so a click made then can press
+ * one row and release on another, which the tree takes as a click on no row.
+ */
+async function openTreeRoot(editor: Frame) {
+  await editor.click('.seg.bc[data-path=""]');
+  await editor.waitForFunction(() => document.querySelector('.nav-surface')?.getAnimations().length === 0);
+}
 
 /** Sign in, wait for the home page in the preview, and open the editor beside it. */
 async function openEditor(page: Page) {
@@ -184,7 +208,7 @@ test('the browser editor boots, saves, opens a sandboxed PDF in the file viewer,
 
   await test.step('the editor follows the preview home from a page opened in the file tree', async () => {
     const openFile = () => editor.evaluate(() => decodeURIComponent(location.search));
-    await editor.click('.seg.bc[data-path=""]');
+    await openTreeRoot(editor);
     await editor.click('.seg[data-path="events"]:not(.bc)');
     await editor.click('.seg[data-path="events/reading-circle.md"]');
     await expect.poll(openFile, { timeout: 15_000 }).toContain('reading-circle.md');
@@ -205,7 +229,7 @@ test('the browser editor boots, saves, opens a sandboxed PDF in the file viewer,
     // The footer asks before it opens; answered "don't ask again" here.
     await editor.evaluate(() => localStorage.setItem('moss.specialFile.skipConfirm.footer', '1'));
     // The root crumb toggles the list: open it only when it is closed.
-    if ((await editor.locator('.seg[data-path="footer.md"]').count()) === 0) await editor.click('.seg.bc[data-path=""]');
+    if ((await editor.locator('.seg[data-path="footer.md"]').count()) === 0) await openTreeRoot(editor);
     await editor.click('.seg[data-path="footer.md"]');
     // The editor's own address names a file only when the preview follows to it, so the text is read.
     await expect(editor.locator('.cm-content')).toContainText('Tended by hand', { timeout: 15_000 });
@@ -359,11 +383,70 @@ test("an event's start and end open date and time controls that write what the b
 
 test("a folder's own page listing its folder by name is not marked missing", async ({ page }) => {
   const { editor } = await openEditor(page);
-  await editor.click('.seg.bc[data-path=""]');
+  await openTreeRoot(editor);
   await editor.click('.seg[data-path="meetings"]:not(.bc)');
   await editor.click('.seg[data-path="meetings/meetings.md"]');
   const marked = (target: string) => editor.locator(`.cm-line:has-text("![[${target}/") .cm-problem--blocks`);
   // The missing folder's mark shows the resolver has answered for this page.
   await expect(marked('nowhere')).not.toHaveCount(0, { timeout: 30_000 });
   await expect(marked('meetings')).toHaveCount(0);
+});
+
+test('a new page in a language folder shows in the preview before it has text, and is an ordinary page after one word', async ({ page }, testInfo) => {
+  const { shell, editor, preview } = await openEditor(page);
+  const openFile = () => editor.evaluate(() => decodeURIComponent(location.search));
+  const file = join(site, 'zh-hans', 'Quiet Harbour Notes.md');
+  const address = '/zh-hans/quiet-harbour-notes/';
+  const folderLists = () => preview.evaluate(async (at) => (await (await fetch('/zh-hans/')).text()).includes(at), address);
+
+  await preview.click('a:has-text("To the Chinese pages")');
+  await expect.poll(openFile, { timeout: 15_000 }).toContain('zh-hans/index.md');
+  // The editor is usable about a second before the watch starts, and a rename
+  // made in that second has no rebuild worker to ask.
+  await expect.poll(() => output, { timeout: 30_000 }).toContain('File watcher active');
+  await editor.click('#editor-create-btn');
+  await expect.poll(openFile, { timeout: 15_000 }).toContain('zh-hans/untitled.md');
+  await editor.click('#editor-heading');
+  await page.keyboard.type('Quiet Harbour Notes');
+  await page.keyboard.press('Enter');
+  await expect.poll(() => existsSync(file), { timeout: 15_000 }).toBe(true);
+  expect(readFileSync(file, 'utf8').trim(), 'the new page has no text yet').toBe('');
+
+  // Shown at its address with the site's design, the waiting screen gone, the editor still on it.
+  // Under the sweep's 20 s: the rename asks for its own build, whatever the file watcher delivers.
+  await expect.poll(() => new URL(preview.url()).pathname, { timeout: 10_000 }).toBe(address);
+  expect(output, 'the rename asked for its own build').toContain('Rebuild asked by move');
+  await expect(preview.locator('h1')).toContainText('Quiet Harbour Notes', { timeout: 30_000 });
+  await expect(shell.locator('#moss-preview-overlay')).not.toHaveClass(/visible/, { timeout: 30_000 });
+  await expect(editor.locator('body')).not.toContainText('No page to edit');
+  expect(await folderLists(), 'an empty page is in no listing').toBe(false);
+  await page.screenshot({ path: testInfo.outputPath('new-page-before-text.png') });
+
+  await editor.click('.cm-content');
+  await page.keyboard.type('Word');
+  await expect.poll(() => readFileSync(file, 'utf8'), { timeout: 15_000 }).toContain('Word');
+  await expect(preview.locator('article, main').first()).toContainText('Word', { timeout: 30_000 });
+  await expect.poll(folderLists, { timeout: 30_000, message: 'the folder lists the page once it has text' }).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('new-page-after-one-word.png') });
+});
+
+test('the create menu offers another language only for a page with no version in it', async ({ page }) => {
+  const { editor, preview } = await openEditor(page);
+  const openFile = () => editor.evaluate(() => decodeURIComponent(location.search));
+  const rows = async () => {
+    await editor.click('#editor-create-caret');
+    await editor.locator('.ctx-menu .ctx-label').first().waitFor({ timeout: 10_000 });
+    const labels = await editor.locator('.ctx-menu .ctx-label').allTextContents();
+    await page.keyboard.press('Escape');
+    return labels;
+  };
+
+  // Its Chinese version is linked by key under another file name.
+  await preview.click('a:has-text("About")');
+  await expect.poll(openFile, { timeout: 15_000 }).toContain('about.md');
+  expect(await rows()).not.toContain('简体中文 version of this page');
+
+  await preview.click('a:has-text("Talk")');
+  await expect.poll(openFile, { timeout: 15_000 }).toContain('talk.md');
+  expect(await rows()).toContain('简体中文 version of this page');
 });

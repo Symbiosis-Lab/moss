@@ -450,9 +450,9 @@ mod tests {
 
     // ── resolve_url_for_file_inner tests ──────────────────────────────────────
 
-    /// An empty placeholder has no built address until the author adds content.
+    /// A new page has its address in the preview before the author adds content.
     #[test]
-    fn newly_created_empty_markdown_file_has_no_built_url() {
+    fn newly_created_empty_markdown_file_has_a_built_url() {
         // NOTE: uses a `prefix("moss")` TempDir rather than the module's
         // `repo_temp()` helper. `repo_temp()` relies on `TempDir::new_in`'s
         // default `.tmp`-prefixed name, which is fine for the other tests in
@@ -507,10 +507,7 @@ mod tests {
 
         let resolved =
             resolve_url_for_file_inner(new_file_name, folder_path, &served(folder_path)).unwrap();
-        assert!(
-            resolved.is_none(),
-            "an empty placeholder must have no published URL: {resolved:?}"
-        );
+        assert_eq!(resolved.as_deref(), Some("/auguries-of-innocence/"));
     }
 
     #[test]

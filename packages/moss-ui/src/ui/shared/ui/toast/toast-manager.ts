@@ -244,14 +244,10 @@ function renderToast(
   const container = document.getElementById("moss-toast-container");
   if (!container) return;
 
-  // No message content — that's the payload, not the diagnostic. id/variant
-  // only, and the id doubles as the key a duplicate/coalesce is keyed on.
-  // Single choke point: every showToast/showAck/showOrUpdateToast call, plus
-  // the overlay-toast-gate's deferred flush, ends up here.
-  // Goes through the
-  // injected runtime, not a direct `log.ts` import — toast-manager
-  // stays pure, like `logError` right below it already does.
-  getToastRuntime().logInfo(`[toast] shown id=${options.id ?? '(none)'} variant=${variant}`);
+  // Every toast passes here. An error's words are logged, since the log of a
+  // failed action has to say why; any other toast logs id and variant only.
+  // Through the injected runtime, so this module imports no logger.
+  getToastRuntime().logInfo(`[toast] shown id=${options.id ?? '(none)'} variant=${variant}${variant === 'error' ? ` text=${message}` : ''}`);
 
   // `persistent` overrides any duration → no auto-dismiss timer. (undefined
   // duration is also persistent.)

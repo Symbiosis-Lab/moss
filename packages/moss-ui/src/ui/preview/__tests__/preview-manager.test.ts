@@ -3802,12 +3802,28 @@ describe('PreviewManager', () => {
       previewManager = new PreviewManager('moss-preview-iframe');
       (previewManager as any).folderPath = '/vault';
       previewManager.armNewPageWait('/posts/');
-      const build = vi.spyOn(previewManager, 'startBuild').mockResolvedValue(undefined);
+      let built!: () => void;
+      const build = vi.spyOn(previewManager, 'startBuild').mockReturnValue(new Promise<void>((resolve) => { built = resolve; }));
       (previewManager as any).waitingScreen.deps.retryPage();
       await Promise.resolve();
       expect(build).toHaveBeenCalledWith('/vault');
       expect((previewManager as any).newPageWait).not.toBeNull();
       expect(mockOverlay.classList.contains('visible')).toBe(true);
+      built();
+    });
+
+    test('Try again ends the wait when its build finishes without the page', async () => {
+      previewManager = new PreviewManager('moss-preview-iframe');
+      (previewManager as any).folderPath = '/vault';
+      previewManager.armNewPageWait('/posts/');
+      vi.spyOn(previewManager, 'startBuild').mockResolvedValue(undefined);
+      const load = vi.spyOn(previewManager, 'loadPreview');
+      (previewManager as any).waitingScreen.deps.retryPage();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect((previewManager as any).newPageWait).toBeNull();
+      expect(mockOverlay.classList.contains('visible')).toBe(false);
+      expect(load).toHaveBeenLastCalledWith(expect.stringContaining('/posts/'));
     });
 
     test('unrelated builds and terminal completion cannot uncover a new page', async () => {

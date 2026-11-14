@@ -123,11 +123,13 @@ describe("toast is an Advisory rendered ephemerally", () => {
     expect(el.querySelector(".moss-toast-message")!.textContent).toBe("Copied");
   });
 
-  test("logs id and variant, never the message content", () => {
-    showToast({ what: "a secret detail", severity: "Blocking" }, { id: "my-id" });
-    expect(vi.mocked(mockedInfo)).toHaveBeenCalledWith("[toast] shown id=my-id variant=error");
+  test("logs an error's words, and for any other toast only its id and variant", () => {
+    showToast({ what: "Could not make the page", severity: "Blocking" }, { id: "my-id" });
+    expect(vi.mocked(mockedInfo)).toHaveBeenCalledWith("[toast] shown id=my-id variant=error text=Could not make the page");
+    showToast({ what: "a private detail", severity: "NeedsAction" });
+    showAck("another private detail");
     for (const call of vi.mocked(mockedInfo).mock.calls) {
-      expect(String(call[0])).not.toContain("a secret detail");
+      expect(String(call[0])).not.toContain("private detail");
     }
   });
 

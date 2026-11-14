@@ -22,7 +22,7 @@ pub(crate) fn articles_path(generations: &Path, generation: &str) -> PathBuf {
 
 impl SealedManifest {
     /// The output-path → mode-tagged-hash entries that are published: every
-    /// built file except a `draft: true` page's HTML. Every publish path (the
+    /// built file except the HTML of a `draft: true` or empty page. Every publish path (the
     /// upload, the change set, the sitemap-adjacent counts) reads this view.
     /// Borrowed when nothing is withheld, which is the common case.
     pub fn files(&self) -> std::borrow::Cow<'_, HashMap<String, String>> {
@@ -69,11 +69,21 @@ impl SealedManifest {
     }
 
     /// Output paths built for preview only: the pages whose source says
-    /// `draft: true`. Derived from the persisted page metadata, so a page
-    /// carried forward unrendered stays withheld.
+    /// `draft: true` or is empty. Derived from the persisted page metadata, so
+    /// a page carried forward unrendered stays withheld.
     pub fn withheld(&self) -> HashSet<&str> {
+        self.outputs_where(|meta| meta.draft)
+    }
+
+    /// The withheld pages the author took off the site with `draft: true`. A
+    /// source that turned up empty is not among them.
+    pub fn withheld_by_author(&self) -> HashSet<&str> {
+        self.outputs_where(crate::types::content::PageMeta::withheld_by_author)
+    }
+
+    fn outputs_where(&self, keep: impl Fn(&crate::types::content::PageMeta) -> bool) -> HashSet<&str> {
         self.inner.page_meta.iter()
-            .filter(|(_, meta)| meta.draft)
+            .filter(|(_, meta)| keep(meta))
             .filter_map(|(source, _)| self.inner.source_to_output.get(source).map(String::as_str))
             .collect()
     }

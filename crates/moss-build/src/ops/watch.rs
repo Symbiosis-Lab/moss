@@ -689,6 +689,29 @@ async fn handle_debounced_batch(
     .await;
 }
 
+/// The rebuild that page moves moss made ask for: what the watcher's rename
+/// event asks, with the pairs the preview follows a renamed page by. `pairs`
+/// are root-relative.
+pub fn move_request(root: &Path, pairs: &[(String, String)]) -> worker::RebuildRequest {
+    let paths = pairs.iter().flat_map(|(from, to)| [root.join(from), root.join(to)]).collect();
+    worker::RebuildRequest { rename_pairs: pairs.to_vec(), trigger: crate::build::BuildTrigger::Structural(paths), gate_paths: None }
+}
+
+/// Hand moves moss made to the folder's rebuild worker, so their build does
+/// not wait for the OS to report them. Without a running worker nothing
+/// happens: the watcher's own event is the fallback, and a move never builds
+/// inline. The worker is looked up by the key the headless watch registers it
+/// under.
+pub fn hand_off_moves(root: &Path, pairs: &[(String, String)]) {
+    if !worker::worker_enabled() {
+        return;
+    }
+    let folder = headless::absolute_watch_root(&root.to_string_lossy());
+    let Some(handle) = worker::get(&folder) else { return };
+    log::info!(target: "moss::build::watch", "Rebuild asked by move: {} pair(s)", pairs.len());
+    handle.enqueue(move_request(Path::new(&folder), pairs));
+}
+
 #[cfg(test)]
 #[path = "watch/rearm_tests.rs"]
 mod rearm_tests;

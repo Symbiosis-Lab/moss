@@ -675,6 +675,10 @@ reference: string;
  */
 draft_source: string; 
 /**
+ * The page is withheld because its source is empty, not by `draft: true`.
+ */
+empty?: boolean; 
+/**
  * One-based line of the link in `source_path`, when it could be found.
  */
 line: number | null }
@@ -1808,6 +1812,8 @@ source_pending?: boolean;
 source_known?: boolean }
 
 export type PageSourceArgs = { urlPath: string }
+
+export type PageTranslationsArgs = { path: VaultPath }
 
 /**
  * What happened to one page since the last publish.
@@ -3080,7 +3086,26 @@ dot?: ToastDot | null;
  * yet. None (the default) draws no bar, and on a `ShowToastUpdate`
  * removes one.
  */
-progress?: number | null }
+progress?: number | null; 
+/**
+ * The toast answers something the person just did (a menu command), so a
+ * surface draws it at once instead of holding it for a waiting screen to
+ * clear. False (the default) for a background result.
+ */
+user_initiated?: boolean }
+
+/**
+ * One other language's place for a page's version.
+ */
+export type TranslationSlot = { lang: string; 
+/**
+ * The page that is the version, else the mirrored path one would be made at.
+ */
+rel: string; exists: boolean; 
+/**
+ * The page is a folder's home file and that folder is missing in this language.
+ */
+folder_missing: boolean }
 
 /**
  * A recursive tree node for the full project file tree.
@@ -3346,6 +3371,7 @@ export type EngineCommands = {
 	read_source_text: { args: FileArgs; out: string };
 	list_templates: { args: NoArgs; out: TemplateMeta[] };
 	site_languages: { args: NoArgs; out: SiteLanguages };
+	page_translations: { args: PageTranslationsArgs; out: TranslationSlot[] };
 	derivation_state: { args: NoArgs; out: FolderDerivation[] };
 	create_files: { args: CreateFilesArgs; out: string[] };
 	create_folder: { args: CreateFolderArgs; out: string };
@@ -3406,6 +3432,7 @@ export const ENGINE_TIER = {
 	read_source_text: "session_read",
 	list_templates: "session_read",
 	site_languages: "session_read",
+	page_translations: "session_read",
 	derivation_state: "session_read",
 	create_files: "write",
 	create_folder: "write",
@@ -3466,6 +3493,7 @@ export type EngineParams = {
 	read_source_text: [filePath: VaultPath];
 	list_templates: [];
 	site_languages: [];
+	page_translations: [path: VaultPath];
 	derivation_state: [];
 	create_files: [files: NewFile[]];
 	create_folder: [parentDir: string, name: string];
@@ -3524,6 +3552,7 @@ export const ENGINE_PARAMS = {
 	read_source_text: ["filePath"],
 	list_templates: [],
 	site_languages: [],
+	page_translations: ["path"],
 	derivation_state: [],
 	create_files: ["files"],
 	create_folder: ["parentDir", "name"],

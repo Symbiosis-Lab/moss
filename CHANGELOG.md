@@ -16,6 +16,11 @@ All notable changes to moss will be documented here.
 - When a folder is open in another moss app, the app's "could not open" screen says so and what to close. When the preview could not start for another reason it says that, instead of "The build stopped before the site was ready". The server's own message is under Details.
 - A folder that an editor plugin or the command line is previewing opens in the app: the earlier preview hands the folder over even while a page of it is open in a browser, and that page reconnects to the app's preview. Before, the app could be refused and show "could not open".
 - When a folder cannot be served because another moss process has it, the message names that process's address, kind, pid and version only when it answers as the folder's server, and otherwise says the folder is already served by another moss process. It no longer prints "already served at  by Server (pid 0, moss unknown)".
+- Try again on "This page is taking longer than expected" ends the wait: when its build finishes and the page is still not there, the preview shows what is at that address.
+- The create menu offers a page's version in another language only when it has none. A version linked by `translationKey` under a different file name was not counted, so the menu offered one and making it failed. The refusal now names the page that is the translation: "This page is already translated: <file>."
+- When making a page fails, the log now carries the reason the message gave.
+- In the app, the message that answers your own command (Send Logs' "sending" and "sent") shows at once while the preview is still preparing a page. It used to wait for that screen to clear, so a wait that never ended never showed it.
+- In the app, the Edit button no longer stays beside the open editor when Preview features are on.
 
 ### Changed
 
@@ -28,6 +33,7 @@ All notable changes to moss will be documented here.
 - A plugin's settings page has a Remove action.
 - In the toolbar a channel that is not selected keeps its logo's colour; only a selected channel carries the circle.
 - A `moss build --serve --watch` that waited for another moss process and then takes over the folder prints its address line again, since the port can differ.
+- A new page shows in the preview at its own address before anything is written in it. Since 0.15.21 a page with no text and no fields built nothing, so the preview waited on "Preparing this page" without end. Giving the page its title brings the preview to its new address at once: the rename asks for its own build, where it used to wait for the folder to be noticed as changed, up to 20 seconds. The empty page is still never published and is in no listing, feed, sitemap or menu; `moss list` gives its reason as `empty`, and a publish that links to it says the page is empty. An empty home file (`index.md`, `README.md`, or a note named after its folder) still builds nothing, so its folder keeps the index moss generates. A published page whose file turns up empty still stops the publish as a lost address.
 
 ### New
 

@@ -1,4 +1,4 @@
-//! Empty files are skipped; ambiguous output addresses render with diagnostics.
+//! Empty files build for the preview only; ambiguous output addresses render with diagnostics.
 
 #[path = "support/site.rs"]
 mod site;
@@ -7,7 +7,7 @@ use moss_build::build::BuildTrigger;
 use site::Site;
 
 #[test]
-fn empty_sources_are_skipped_but_metadata_only_pages_remain() {
+fn an_empty_page_is_built_for_the_preview_and_noted() {
     let site = Site::new(&[
         ("index.md", "Welcome."),
         ("blank.md", " \n\t\n"),
@@ -17,26 +17,46 @@ fn empty_sources_are_skipped_but_metadata_only_pages_remain() {
         ("metadata.md", "---\ntitle: Metadata\n---\n"),
     ]);
     for name in ["blank", "untitled", "yaml", "mapping"] {
-        assert!(!site.output(&format!("{name}/index.html")).exists(), "{name} emitted a page");
-        assert!(site.notes.iter().any(|line| line.contains(&format!("{name}.md")) && line.contains("empty")), "{:?}", site.logged);
+        assert!(site.output(&format!("{name}/index.html")).exists(), "{name} has no page to preview");
+        assert!(site.notes.iter().any(|line| line.contains(&format!("{name}.md")) && line.contains("preview only")), "{:?}", site.notes);
+        assert!(!site.html("index.html").contains(&format!("/{name}/")), "the home lists or links {name}");
     }
     assert!(site.output("metadata/index.html").exists());
+    assert!(!site.notes.iter().any(|line| line.contains("metadata.md")), "{:?}", site.notes);
 }
 
 #[test]
-fn a_page_emptied_on_rebuild_loses_its_output() {
-    let site = Site::new(&[("index.md", "Welcome."), ("note.md", "A useful note.")]);
-    assert!(site.output("note/index.html").exists());
-    site.write("note.md", " \n");
-    site::build_sync(&site.root.to_string_lossy(), BuildTrigger::ContentOnly(vec![site.root.join("note.md")])).unwrap();
-    assert!(!site.output("note/index.html").exists());
+fn an_empty_page_becomes_an_ordinary_page_with_its_first_word() {
+    let site = Site::new(&[("index.md", "Welcome."), ("notes/first.md", "A note."), ("notes/Second Note.md", "")]);
+    assert!(site.output("notes/second-note/index.html").exists());
+    assert!(!site.html("notes/index.html").contains("second-note"), "an empty page is listed");
+    site.write("notes/Second Note.md", "Word");
+    site::build_sync(&site.root.to_string_lossy(), BuildTrigger::ContentOnly(vec![site.root.join("notes/Second Note.md")])).unwrap();
+    assert!(site.html("notes/second-note/index.html").contains("Word"));
+    assert!(site.html("notes/index.html").contains("second-note"), "the page is not listed once it has text");
+}
+
+#[test]
+fn an_empty_home_file_builds_no_page_and_its_folder_keeps_the_generated_index() {
+    let site = Site::new(&[
+        ("index.md", "Welcome."),
+        ("stories/index.md", ""),
+        ("stories/one.md", "One."),
+        ("letters/Letters.md", "---\n---\n"),
+        ("letters/two.md", "Two."),
+        ("essays/index.fr.md", ""),
+        ("essays/three.md", "Three."),
+    ]);
+    for (folder, page) in [("stories", "one"), ("letters", "two"), ("essays", "three")] {
+        assert!(site.html(&format!("{folder}/index.html")).contains(&format!("/{folder}/{page}/")), "{folder} lost its generated index");
+        assert!(site.notes.iter().any(|line| line.contains(&format!("{folder}/")) && line.contains("Skipping empty page")), "{:?}", site.notes);
+    }
 }
 
 #[test]
 fn an_empty_site_still_has_a_synthetic_home() {
     let site = Site::new(&[("blank.md", "")]);
     assert!(site.output("index.html").exists());
-    assert!(!site.output("blank/index.html").exists());
 }
 
 fn collision(files: &[(&str, &str)], first: &str, second: &str, url: &str) {

@@ -156,6 +156,7 @@ fn legend(rows: &[InventoryEntry]) -> Option<String> {
     for k in kinds {
         lines.push(match k {
             "draft" => "  draft           frontmatter `draft: true` — built for preview, never published; hidden from every listing, feed, the sitemap and nav".to_string(),
+            "empty" => "  empty           nothing written in it yet — built for preview, never published; hidden from every listing, feed, the sitemap and nav".to_string(),
             "unlisted" => "  unlisted        frontmatter `listed: false` — out of generated listings and feeds, but still a public, indexable page".to_string(),
             "search-engines" => "  search-engines  frontmatter `search_engines: false` — noindex, and out of every listing, feed, the sitemap and search; reached only by its link".to_string(),
             "hidden-folder" => "  hidden-folder   in a folder whose home says `search_engines: false` — noindex, and listed only inside that folder".to_string(),

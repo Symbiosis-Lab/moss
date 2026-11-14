@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `template::existing_translation` answers which page already is a page's version in another language: the one at the mirrored path, or the one in that language's tree carrying its `translationKey`. `template::translation_key` reads a page's key.
+
+### Changed
+
+- **BREAKING:** `template::plan_translation` takes `target_keys` as a map from each `translationKey` in the target tree to its page, where it took a set of keys, and `PlanError::AlreadyTranslated` carries that page's path instead of the mirrored path when the two differ.
+
 ## [0.25.0] - 2026-11-13
 
 ### Added

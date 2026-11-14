@@ -551,21 +551,24 @@ pub(crate) fn refusal_text(missing: &[crate::build::types::MissingReferenceOccur
     )
 }
 
-/// The refusal for links from published pages to drafts. A draft is not
-/// published, so each of these would be a dead link on the live site.
+/// The refusal for links from published pages to drafts and empty pages.
+/// Neither is published, so each of these would be a dead link on the live site.
 pub(crate) fn drafts_linked_refusal_text(links: &[crate::build::types::DraftLinkOccurrence]) -> String {
-    let head = if links.len() == 1 {
-        "1 link goes to a draft".to_string()
+    let empty = links.iter().filter(|l| l.empty).count();
+    let (one, many, fix) = if empty == links.len() {
+        ("an empty page", "empty pages", "An empty page is not published. Remove the link, or write the page")
+    } else if empty == 0 {
+        ("a draft", "drafts", "Drafts are not published. Remove the link, or take `draft: true` off the page")
     } else {
-        format!("{} links go to drafts", links.len())
+        ("a page that is not published", "pages that are not published",
+         "Drafts and empty pages are not published. Remove the link, or take `draft: true` off the page or write it")
     };
+    let head = if links.len() == 1 { format!("1 link goes to {one}") } else { format!("{} links go to {many}", links.len()) };
     let lines = removal_gate::capped_lines(links, |l| {
-        format!("`{}` links to `{}`, and `{}` says `draft: true`.", l.source_path, l.reference, l.draft_source)
+        let why = if l.empty { "has nothing in it yet" } else { "says `draft: true`" };
+        format!("`{}` links to `{}`, and `{}` {why}.", l.source_path, l.reference, l.draft_source)
     });
-    format!(
-        "Nothing published — {head}:\n{lines}Drafts are not published. Remove the link, or take \
-         `draft: true` off the page, then publish again."
-    )
+    format!("Nothing published — {head}:\n{lines}{fix}, then publish again.")
 }
 
 /// The refusal for text a render showed as a placeholder because the file was

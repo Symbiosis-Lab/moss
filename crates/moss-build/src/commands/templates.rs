@@ -11,7 +11,7 @@ use moss_core::template::{
     folder_in_default_tree, normalise_folder, plan_page_from_template, PlanError, SiteLanguages, Template, TemplateKind,
 };
 
-use super::{resolve, lossy, site_root, CommandHost, NoArgs, VaultPath};
+use super::{resolve, lossy, site_relative, site_root, CommandHost, NoArgs, VaultPath};
 use crate::templates as store;
 use crate::vault::fs::{create_file_with_content_inner, create_folder_inner, recheck_canonical};
 
@@ -309,6 +309,18 @@ pub async fn create_translation(host: &dyn CommandHost, a: CreateTranslationArgs
     create_translation_in(site_root(host)?, &lossy(&resolve(host, &a.source_abs)?), &a.lang)
 }
 
+#[derive(serde::Deserialize, specta::Type)]
+pub struct PageTranslationsArgs {
+    pub path: VaultPath,
+}
+
+/// Every other language's place for the page: the page that is its version
+/// there, or where one would be made. The rule `create_translation` refuses by.
+pub async fn page_translations(host: &dyn CommandHost, a: PageTranslationsArgs) -> Result<Vec<crate::cli::new::TranslationSlot>, String> {
+    let (root, rel) = site_relative(host, &a.path)?;
+    crate::cli::new::translation_slots(root, &rel)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -466,6 +478,27 @@ mod tests {
         assert_eq!(made.frontmatter.get("translationKey"), orig.frontmatter.get("translationKey"));
         assert_eq!(orig.frontmatter.get("translationKey").unwrap().as_str(), Some("x"));
         assert_eq!(made.frontmatter.get("lang").unwrap().as_str(), Some("zh-hans"));
+    }
+
+    /// A page linked to its other-language version by key, under another file
+    /// name: the menu's answer and the refusal both name that file.
+    #[test]
+    fn a_version_linked_by_key_under_another_name_is_found_and_named() {
+        let vault = vault();
+        let root = vault.path();
+        write(root, ".moss/config.toml", "[site]\nlang = \"zh-hans\"\n");
+        write(root, "林梅.md", "---\ntranslationKey: home\n---\n你好\n");
+        let english = write(root, "en/Mei Lin.md", "---\ntranslationKey: home\n---\nHello\n");
+        write(root, "en/about.md", "---\ntitle: About\n---\nHi\n");
+        let slot = |rel: &str, exists| vec![crate::cli::new::TranslationSlot { lang: "zh-hans".into(), rel: rel.into(), exists, folder_missing: false }];
+
+        assert_eq!(crate::cli::new::translation_slots(root, "en/Mei Lin.md").unwrap(), slot("林梅.md", true));
+        assert_eq!(crate::cli::new::translation_slots(root, "en/about.md").unwrap(), slot("about.md", false));
+        assert_eq!(crate::cli::new::translation_slots(root, "林梅.md").unwrap()[0].rel, "en/Mei Lin.md");
+
+        let refusal = create_translation_in(root, english.to_str().unwrap(), "zh-hans").unwrap_err();
+        assert_eq!(refusal, "This page is already translated: 林梅.md.");
+        assert!(!root.join("Mei Lin.md").exists());
     }
 
     #[test]

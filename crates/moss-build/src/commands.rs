@@ -65,6 +65,13 @@ pub trait CommandHost: Send + Sync {
     /// Moves announced by [`Self::announce_moves`] that did not happen.
     fn withdraw_moves(&self, _pairs: &[(String, String)]) {}
 
+    /// The announced moves are on disk. The host asks the folder's rebuild
+    /// worker for the build the watcher's rename event would ask for
+    /// (`ops::watch::hand_off_moves` does exactly that), never builds inline,
+    /// and does nothing when no worker runs. Required, so a host with its own
+    /// rebuild bookkeeping cannot skip it by accident.
+    fn moved(&self, pairs: &[(String, String)]);
+
     /// The schema the editor checks frontmatter against. A host with a live
     /// plugin runtime answers from it; the default reads a site's installed
     /// plugins and config from disk, and a loose document gets the built-in one.
@@ -190,8 +197,9 @@ fn site_relative<'h>(host: &'h dyn CommandHost, path: &VaultPath) -> Result<(&'h
     Ok((root, logical_path(rel)))
 }
 
-/// Run `apply` with its page moves announced to the host first, and withdrawn
-/// if it fails.
+/// Run `apply` with its page moves announced to the host first, withdrawn if
+/// it fails, and handed to the host's rebuild once they are made. A move of
+/// no page (a picture, a folder of files) hands over nothing.
 fn with_moves_announced<T>(
     host: &dyn CommandHost,
     pairs: &[(String, String)],
@@ -199,8 +207,10 @@ fn with_moves_announced<T>(
 ) -> Result<T, String> {
     host.announce_moves(pairs);
     let out = apply();
-    if out.is_err() {
-        host.withdraw_moves(pairs);
+    match out {
+        Ok(_) if pairs.is_empty() => {}
+        Ok(_) => host.moved(pairs),
+        Err(_) => host.withdraw_moves(pairs),
     }
     out
 }
@@ -370,6 +380,7 @@ tier! {
         read_source_text => reads::read_source_text,
         list_templates => templates::list_templates,
         site_languages => templates::site_languages,
+        page_translations => templates::page_translations,
         derivation_state => derivations::derivation_state,
     }
 }

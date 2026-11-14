@@ -38,6 +38,8 @@ export interface ToastPayload {
   dot?: ToastOpts["dot"] | null;
   /** `0`–`100`, or negative for indeterminate; absent draws no bar. */
   progress?: number | null;
+  /** The toast answers the person's own action: a gate draws it at once. */
+  user_initiated?: boolean;
 }
 
 /** A queued event; only the toast kinds are drawn. */
