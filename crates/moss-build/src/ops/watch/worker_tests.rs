@@ -257,6 +257,11 @@ enum Ask {
     Move,
     /// The watcher's event; a stitched rename names `O.md` and the page.
     Event(notify::EventKind),
+    /// A sweep pass that found the page edited against the baseline its walk read.
+    Sweep,
+    /// The same, against a seal newer than this process's stash: another moss
+    /// process built the folder.
+    SweepAgainstANewerSeal,
     Full,
 }
 
@@ -288,6 +293,14 @@ async fn request_for(ask: Ask, root: &std::path::Path, page: &std::path::Path) -
             crate::ops::watch::handle_debounced_batch(batch, root.to_str().unwrap(), &emit, &dispatch).await;
             let request = held.lock().unwrap().take();
             request.expect("the watcher asks for a rebuild")
+        }
+        Ask::Sweep | Ask::SweepAgainstANewerSeal => {
+            use crate::build::watch::drift::{Drift, DriftKind, DriftReport};
+            let mut report = DriftReport::default();
+            report.drifted.insert("P.md".into(), Drift { kind: DriftKind::Edited, stamp: crate::build::stat::FileStat::of(&std::fs::metadata(page).unwrap()) });
+            let stash_at = crate::system::build_records::records().content_hashes(root.to_str().unwrap()).and_then(|s| s.captured_at);
+            let judged_at = if matches!(ask, Ask::Sweep) { stash_at } else { Some(stash_at.unwrap_or(0) + 1) };
+            crate::ops::watch::sweep::request_for_drift(root, &report, &["P.md".into()], judged_at)
         }
         Ask::Full => RebuildRequest::full(),
     }
@@ -415,6 +428,50 @@ async fn a_move_and_its_watcher_echo_build_once_in_any_order() {
             assert_eq!(two_asks(Ask::Move, echo, when, None).await.0, 1, "{mode:?}, {}", ["in the slot", "during", "after"][when as usize]);
         }
     }
+}
+
+/// A sweep pass that caught a page a save or the watcher's event is building,
+/// or has built, adds no build: the pass judged it against the baseline from
+/// before that build.
+#[tokio::test]
+async fn a_sweep_catch_of_a_page_already_built_builds_nothing_more() {
+    for (first, when) in [
+        (Ask::Save, When::InTheSlot),
+        (Ask::Save, When::DuringTheFirstBuild),
+        (Ask::Save, When::AfterTheFirstBuild),
+        (Ask::Event(MODIFY), When::DuringTheFirstBuild),
+        (Ask::Event(MODIFY), When::AfterTheFirstBuild),
+    ] {
+        let label = format!("{} first, the sweep {}", if matches!(first, Ask::Save) { "save" } else { "event" }, ["in the slot", "during", "after"][when as usize]);
+        assert_eq!(two_asks(first, Ask::Sweep, when, None).await, (1, b"saved again".to_vec()), "{label}");
+    }
+}
+
+/// A sweep pass that judged the page against a seal another moss process
+/// wrote, newer than this process's stash, builds it even though the disk
+/// holds the bytes this process last built: the stash cannot vouch for what
+/// that other build serves.
+#[tokio::test]
+async fn a_sweep_catch_against_a_newer_foreign_seal_is_built() {
+    assert_eq!(two_asks(Ask::Save, Ask::SweepAgainstANewerSeal, When::AfterTheFirstBuild, None).await, (2, b"saved again".to_vec()));
+}
+
+/// A write the watcher never delivered, landing after a build read the page,
+/// is built by the sweep's catch alone.
+#[tokio::test]
+async fn a_write_only_the_sweep_caught_is_built() {
+    assert_eq!(two_asks(Ask::Full, Ask::Sweep, When::DuringTheFirstBuild, Some(b"saved again")).await, (2, b"saved again".to_vec()));
+}
+
+/// An editor's rename-save that the watcher reports as a bare rename of the
+/// page, with no pair, is built, even when it lands after a build read the
+/// page; the sweep's later catch of it adds nothing.
+#[tokio::test]
+async fn a_rename_save_reported_as_a_bare_rename_is_built_once() {
+    use notify::event::{ModifyKind, RenameMode};
+    let rename = Ask::Event(notify::EventKind::Modify(ModifyKind::Name(RenameMode::Any)));
+    assert_eq!(two_asks(Ask::Full, rename, When::DuringTheFirstBuild, Some(b"saved again")).await, (2, b"saved again".to_vec()));
+    assert_eq!(two_asks(rename, Ask::Sweep, When::AfterTheFirstBuild, None).await, (1, b"saved again".to_vec()));
 }
 
 /// The boundary: a watcher event that arrives as a create is never

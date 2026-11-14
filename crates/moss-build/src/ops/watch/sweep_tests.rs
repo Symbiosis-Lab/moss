@@ -412,6 +412,19 @@ fn scan_recognized_extensions_are_drift_eligible_even_when_the_watcher_filter_mi
     }
 }
 
+/// An edit the sweep catches in such a file, which the watcher's filters skip,
+/// builds unconditionally rather than being dropped.
+#[test]
+fn a_caught_edit_the_watcher_would_drop_builds_unconditionally() {
+    let dir = tempfile::tempdir().unwrap();
+    let page = dir.path().join("report.docx");
+    std::fs::write(&page, "words").unwrap();
+    let mut report = drift::DriftReport::default();
+    report.drifted.insert("report.docx".into(), drift::Drift { kind: drift::DriftKind::Edited, stamp: stamp(1) });
+    let request = request_for_drift(dir.path(), &report, &["report.docx".into()], None);
+    assert_eq!((request.trigger, request.gate_paths), (crate::build::BuildTrigger::ContentOnly(vec![page]), None));
+}
+
 /// The relocation invariant, at the sweep's two predicates: **where the user
 /// keeps the vault must not change the verdict on a file inside it.**
 ///

@@ -688,23 +688,25 @@ pub fn request_for(folder: &Path, change: crate::commands::Change<'_>) -> Option
     let (rename_pairs, paths): (Vec<_>, Vec<_>) = match change {
         Change::Moved(pairs) => (pairs.to_vec(), pairs.iter().flat_map(|(from, to)| [folder.join(from), folder.join(to)]).collect()),
         Change::Created(paths) => (Vec::new(), paths.iter().map(std::path::PathBuf::from).collect()),
-        // A write changes no file's existence, so it is content-only, as the
-        // watcher reads the same write: Structural would close the render skip
-        // for every save. A page's save waits on the hash check, so the
-        // watcher's later event for it, or a save of the same bytes, builds
-        // nothing; any other file (or MOSS_WATCH_NO_GATE) builds unconditionally.
-        Change::Wrote(path) => {
-            use notify::event::{DataChange, ModifyKind};
-            let paths = vec![path.to_path_buf()];
-            let gate_paths = match event_gate(folder, notify::EventKind::Modify(ModifyKind::Data(DataChange::Content)), &paths) {
-                PumpGate::Suppress => return None,
-                PumpGate::Proceed => None,
-                PumpGate::DeferHashCheck => Some(paths.clone()),
-            };
-            return Some(worker::RebuildRequest { rename_pairs: Vec::new(), trigger: crate::build::BuildTrigger::ContentOnly(paths), gate_paths });
-        }
+        Change::Wrote(path) => return request_for_writes(folder, vec![path.to_path_buf()]),
     };
     (!paths.is_empty()).then(|| worker::RebuildRequest { rename_pairs, trigger: crate::build::BuildTrigger::Structural(paths), gate_paths: None })
+}
+
+/// The rebuild writes to `paths` ask for, as the watcher reads the same
+/// writes: content-only, since a write changes no file's existence and
+/// Structural would close the render skip for every save. Pages wait on the
+/// hash check, so a write the last build already read builds nothing; any
+/// other file (or MOSS_WATCH_NO_GATE) builds unconditionally. `None` when the
+/// watcher would drop the writes.
+pub(crate) fn request_for_writes(folder: &Path, paths: Vec<std::path::PathBuf>) -> Option<worker::RebuildRequest> {
+    use notify::event::{DataChange, ModifyKind};
+    let gate_paths = match event_gate(folder, notify::EventKind::Modify(ModifyKind::Data(DataChange::Content)), &paths) {
+        PumpGate::Suppress => return None,
+        PumpGate::Proceed => None,
+        PumpGate::DeferHashCheck => Some(paths.clone()),
+    };
+    Some(worker::RebuildRequest { rename_pairs: Vec::new(), trigger: crate::build::BuildTrigger::ContentOnly(paths), gate_paths })
 }
 
 /// Hand a change moss made to the folder's rebuild worker, so its build does

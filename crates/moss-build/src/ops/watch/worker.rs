@@ -80,7 +80,8 @@ pub struct RebuildRequest {
     /// gate over these paths at admission and disposes of the request when
     /// nothing changed — the pump no longer reads files (phase 1b). `None`
     /// means at least one producer needs the rebuild regardless (create/
-    /// remove, lost-events full scan, reconciler, cloud supervisor, thaw).
+    /// remove, lost-events full scan, the sweep's top-level change or cloud
+    /// arrival, thaw).
     pub gate_paths: Option<Vec<std::path::PathBuf>>,
 }
 

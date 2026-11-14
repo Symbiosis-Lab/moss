@@ -159,14 +159,13 @@ pub(crate) async fn run(
         let tick = std::panic::AssertUnwindSafe(async {
         let now = Instant::now();
         promote_focused_source(&session, &mut focused_revision);
-        // What this tick found, as the narrowest honest trigger — not a bool.
-        // A drift pass that saw only content edits can take the SAME
-        // incremental path an event-driven rebuild takes; dispatching it as
-        // `Full` (which is what a bool forces) made a sweep catch cost a
-        // full-site render where the pump's classification would have cost
-        // one page. Contributions merge through `BuildTrigger::merge`, so
-        // the structural sources below still win over a content-only drift.
-        let mut dirty: Option<crate::build::BuildTrigger> = None;
+        // What this tick found, as the narrowest honest request — not a bool.
+        // A drift pass that saw only content edits takes the same incremental
+        // path and content gate an event-driven rebuild takes; a bool forced
+        // `Full`, a full-site render where one page changed. Contributions
+        // merge through `worker::merge_requests`, so a structural source still
+        // wins over a content-only drift and makes the request unconditional.
+        let mut dirty: Option<worker::RebuildRequest> = None;
         // Whether THIS tick's dirt (if any) came from the top-level read_dir
         // diff — the one change source the watcher never subscribes to, and
         // therefore must not be blamed for (see the StrikeArm decl above).
@@ -199,7 +198,7 @@ pub(crate) async fn run(
                             );
                             // The entry set moved with no per-path evidence to pass,
                             // so this source is honestly `Full`.
-                            dirty = Some(crate::build::BuildTrigger::Full);
+                            dirty = Some(worker::RebuildRequest::full());
                             top_level_dirty = true;
                         }
                     }
@@ -415,25 +414,14 @@ pub(crate) async fn run(
                                     String::new()
                                 }
                             );
-                            // The trigger describes THE BATCH BEING SENT, so
-                            // it is read off the filtered set: a create or a
-                            // delete that is being suppressed must not make
-                            // this dispatch structural, which would close both
-                            // incremental gates over an ordinary edit.
-                            let structural = report.any_structural(&fresh);
-                            if structural {
+                            if report.any_structural(&fresh) {
                                 // New files the watcher never announced are arrivals all the same.
                                 derive_folders::react_swept_detached(&folder_str, &report, &fresh);
                             }
-                            let paths: Vec<std::path::PathBuf> =
-                                fresh.iter().map(|r| folder.join(r)).collect();
-                            let found = if structural {
-                                crate::build::BuildTrigger::Structural(paths)
-                            } else {
-                                crate::build::BuildTrigger::ContentOnly(paths)
-                            };
+                            let judged_at = baseline_cache.as_ref().and_then(|b| b.captured_at);
+                            let found = super::request_for_drift(&folder, &report, &fresh, judged_at);
                             dirty = Some(match dirty.take() {
-                                Some(t) => t.merge(found),
+                                Some(r) => worker::merge_requests(r, found),
                                 None => found,
                             });
                             // Every drift catch is a change the watcher failed
@@ -533,12 +521,12 @@ pub(crate) async fn run(
             // An arrival is a file materializing out of the cloud — a create
             // as far as the site is concerned, and it carries no classification
             // of its own, so it takes the dispatch back to `Full`.
-            let trigger = match (dirty.take(), arrivals_due) {
-                (Some(t), false) => t,
-                _ => crate::build::BuildTrigger::Full,
+            let request = match (dirty.take(), arrivals_due) {
+                (Some(r), false) => r,
+                _ => worker::RebuildRequest::full(),
             };
             while_servicing_queries(
-                dispatch(worker::RebuildRequest { rename_pairs: Vec::new(), trigger, gate_paths: None }),
+                dispatch(request),
                 &mut unavailable_rx,
                 &folder,
                 Some(&pending),
