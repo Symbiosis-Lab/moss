@@ -19,6 +19,8 @@
  * footer) leaves that file alone, while a double click opens the page's own
  * file at the place clicked. In a `:::grid` of the built page, a double click
  * on a column's second line puts the caret on that line, not the column's first.
+ * A single click on text in a long page washes that line in the editor and
+ * scrolls it into view; in a grid column it picks the click's own line.
  *
  * Then an event's `start` and `end` open the browser's own date and time
  * controls from the page properties, in the narrowest popover and in both
@@ -85,6 +87,10 @@ test.beforeEach(async () => {
   for (const [name, text] of Object.entries(EVENTS)) writeFileSync(join(site, name), text);
   writeFileSync(join(site, 'doc.pdf'), ONE_PAGE_PDF);
   writeFileSync(join(site, 'footer.md'), 'Tended by hand.\n');
+  // Long enough that its last lines start outside both panes.
+  writeFileSync(join(site, 'almanac.md'), '---\ntitle: Almanac\n---\n' +
+    Array.from({ length: 80 }, (_, i) => `Entry ${i + 1} of the almanac.\n\n`).join('') +
+    ':::grid 2\nFrost comes early.\n\nSnow stays late.\n+++\nCranes pass over.\n\nThe pond freezes last.\n:::\n');
   mkdirSync(join(site, 'events'));
   mkdirSync(join(site, 'Workshops'));
   writeFileSync(join(site, 'Workshops', 'index.md'), '---\ntitle: Workshops\n---\nAll workshops.\n');
@@ -289,6 +295,39 @@ test('the browser editor boots, saves, opens a sandboxed PDF in the file viewer,
     await page.keyboard.type('Second new page.');
     await expect.poll(() => readFileSync(join(site, 'Workshops', 'untitled 2.md'), 'utf8'), { timeout: 15_000 }).toContain('Second new page.');
   });
+});
+
+test('a click on text in the page washes its line in the editor and brings it into view', async ({ page }) => {
+  const { editor, preview } = await openEditor(page);
+  await editor.waitForSelector('.cm-content', { timeout: 30_000 });
+  if ((await editor.locator('.seg[data-path="almanac.md"]').count()) === 0) await openTreeRoot(editor);
+  await editor.click('.seg[data-path="almanac.md"]');
+  await preview.waitForFunction(() => document.body?.innerText.includes('Entry 1 of the almanac'), null, { timeout: 30_000 });
+  await expect(editor.locator('.cm-content')).toContainText('Entry 1 of the almanac', { timeout: 15_000 });
+  await page.waitForTimeout(700); // outlasts the longest hold in editor-link.ts SETTLE_MS, during which page clicks are ignored
+
+  // Every washed line, and whether the editor's own scroll area shows all of it.
+  const washed = () => editor.evaluate(() =>
+    [...document.querySelectorAll('.cm-reveal-flash')].map((line) => {
+      const at = line.getBoundingClientRect();
+      const area = line.closest('.cm-scroller')!.getBoundingClientRect();
+      return { text: line.textContent, shown: at.top >= area.top && at.bottom <= area.bottom };
+    }));
+
+  // The editor draws only the lines near its scroll position.
+  expect(await editor.locator('.cm-line:has-text("Entry 70 of the almanac.")').count(), 'the far line before the click').toBe(0);
+  await preview.locator('p:has-text("Entry 70 of the almanac.")').click();
+  await expect.poll(washed, { timeout: 10_000, message: 'the washed lines after a click on a far paragraph' })
+    .toEqual([{ text: 'Entry 70 of the almanac.', shown: true }]);
+
+  await preview.locator('p:has-text("Entry 3 of the almanac.")').click();
+  await expect.poll(washed, { timeout: 10_000, message: 'the washed lines after a click back near the top' })
+    .toEqual([{ text: 'Entry 3 of the almanac.', shown: true }]);
+
+  // Inside a grid column the click picks its own line, not the column.
+  await preview.locator('.moss-grid-card p:has-text("The pond freezes last.")').click();
+  await expect.poll(washed, { timeout: 10_000, message: 'the washed lines after a click inside a grid column' })
+    .toEqual([{ text: 'The pond freezes last.', shown: true }]);
 });
 
 test("an event's start and end open date and time controls that write what the build reads", async ({ page }, testInfo) => {
