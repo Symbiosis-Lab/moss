@@ -53,13 +53,13 @@ describe('embedAt', () => {
   });
   test('an inline embed answers over every one of its own characters, edges included, and only there', () => {
     const state = EditorState.create({ doc: 'see ![[a.png]] here', extensions: wiki });
-    for (const pos of [4, 5, 7, 10, 13, 14]) expect(embedAt(state, pos)).toMatchObject({ from: 4, to: 14, inline: true, probe: 7 }); // the start of the path, not of the node
+    for (const pos of [4, 5, 7, 10, 13, 14]) expect(embedAt(state, pos)).toMatchObject({ from: 4, to: 14, inline: true, parts: { targetFrom: 7 } }); // the start of the path, not of the node
     expect(embedAt(state, 1)).toBeNull();
     expect(embedAt(state, 16)).toBeNull();
   });
-  test('![alt](x.png) inline: the probe is its path', () => {
+  test('![alt](x.png) inline: its target starts at its path', () => {
     const state = EditorState.create({ doc: 'see ![a](x.png) here', extensions: [markdown()] });
-    expect(embedAt(state, 5)).toMatchObject({ from: 4, to: 15, inline: true, probe: 9 });
+    expect(embedAt(state, 5)).toMatchObject({ from: 4, to: 15, inline: true, parts: { targetFrom: 9 } });
   });
 });
 

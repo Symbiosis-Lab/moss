@@ -154,18 +154,10 @@ function embedSiteAt(state: EditorState, pos: number, inside: (a: number, b: num
   } : null;
 }
 
-/** An embed's site: its path, trimmed, is both the target and the destination — `embedParts` spans a wikilink embed's whole node, brackets and `|width` included. */
+/** An embed's site: its path is both the target and the destination. */
 function embedSite(state: EditorState, node: SiteNode): ReferenceSite | null {
   const parts = embedParts(node, state.doc);
-  if (!parts) return null;
-  let from = parts.targetFrom, to = parts.targetTo;
-  const path = node.name === 'WikilinkEmbed' ? node.node.getChild('WikilinkTarget') : null;
-  if (path) {
-    const raw = state.doc.sliceString(path.from, path.to);
-    from = path.from + (raw.length - raw.trimStart().length);
-    to = from + parts.target.length;
-  }
-  return { from: node.from, to: node.to, target: parts.target, targetFrom: from, targetTo: to, isEmbed: true, wiki: false };
+  return parts && { from: node.from, to: node.to, target: parts.target, targetFrom: parts.targetFrom, targetTo: parts.targetTo, isEmbed: true, wiki: false };
 }
 
 /** A link's or wikilink's site, from its `Link` / `Wikilink` node: the one resolver that hover, follow and the inert marks all read. */

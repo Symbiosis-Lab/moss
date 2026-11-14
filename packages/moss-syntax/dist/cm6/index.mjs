@@ -176,15 +176,17 @@ function embedParts(node, doc) {
 	if (node.name !== "WikilinkEmbed") return null;
 	const t = node.node.getChild("WikilinkTarget");
 	if (!t) return null;
-	const target = doc.sliceString(t.from, t.to).trim();
+	const raw = doc.sliceString(t.from, t.to);
+	const target = raw.trim();
 	if (!target) return null;
+	const targetFrom = t.from + raw.length - raw.trimStart().length;
 	const hasPothole = doc.sliceString(t.to, t.to + 1) === "|";
 	const pothole = hasPothole ? doc.sliceString(t.to + 1, node.to - 2) : "";
 	return {
 		syntax: "wikilink-embed",
 		target,
-		targetFrom: node.from,
-		targetTo: node.to,
+		targetFrom,
+		targetTo: targetFrom + target.length,
 		alt: hasPothole ? pothole.trim() : target,
 		pothole: hasPothole ? pothole : null,
 		width: hasPothole ? widthFromPipe(pothole) : void 0
@@ -372,10 +374,13 @@ function shortcodeOpenLineAsset(openLine, doc) {
 	if (!name || attrsFrom < 0) return null;
 	const ref = shortcodeAssetRef(name, doc.sliceString(attrsFrom, attrsTo));
 	if (!ref) return null;
+	const from = attrsFrom + ref.from, to = attrsFrom + ref.to;
 	return {
 		target: ref.target,
-		from: attrsFrom + ref.from,
-		to: attrsFrom + ref.to,
+		from,
+		to,
+		nodeFrom: from,
+		nodeTo: to,
 		attr: true
 	};
 }
@@ -384,8 +389,8 @@ function shortcodeOpenLineAsset(openLine, doc) {
 * image or asset embed:
 *
 *   - `![alt](url)`     → `{ target: url, from: urlFrom, to: urlTo }`
-*   - `![[file.png]]`   → `{ target: 'file.png', from: nodeFrom, to: nodeTo }`
-*   - `![[f.png|alt]]`  → `{ target: 'f.png', from: nodeFrom, to: nodeTo }`
+*   - `![[file.png]]`   → `{ target: 'file.png', from: pathFrom, to: pathTo }`
+*   - `![[f.png|alt]]`  → `{ target: 'f.png', from: pathFrom, to: pathTo }`
 *
 * …plus the one place an asset is named OUTSIDE an embed — a shortcode
 * attribute on an opening fence:
@@ -415,6 +420,8 @@ function extractImageTargets(state) {
 			target: parts.target,
 			from: parts.targetFrom,
 			to: parts.targetTo,
+			nodeFrom: node.from,
+			nodeTo: node.to,
 			width: parts.width
 		});
 		return false;

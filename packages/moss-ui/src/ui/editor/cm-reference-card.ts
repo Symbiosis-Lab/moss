@@ -11,7 +11,7 @@ import { extractImageTargets, footnoteIndex, folderParamsFromEmbed, type Referen
 import { syntaxTree } from '@codemirror/language';
 import { charAtPointer, hitSiteAt, navigateToReference, referenceSiteAt } from './cm-link-nav';
 import { linkTextRange, type LinkTextNode } from './cm-markdown-style';
-import { blockEmbedOnLine, embedAt, embedProbe, pathSpan } from './cm-block-embeds';
+import { blockEmbedOnLine, embedAt } from './cm-block-embeds';
 import { buildHoverDom, type AssetReferenceEnvelope } from './asset-preview';
 import type { ApplyEmbedWidthFn } from './embed-width';
 import { pickAssetRef } from './asset-picker/browse-button';
@@ -201,7 +201,7 @@ export function unlinkAt(view: EditorView, pos: number): boolean {
 function referenceAt(state: EditorState, pos: number, onBlock: boolean): { from: number; to: number; probe: number } | null {
   if (onBlock) {
     const b = blockEmbedOnLine(state, pos);
-    return b ? { from: b.line.from, to: b.line.to, probe: embedProbe(state, b.parts) } : null;
+    return b ? { from: b.line.from, to: b.line.to, probe: b.parts.targetFrom } : null;
   }
   const site = hitSiteAt(state, pos);
   if (site) return { from: site.targetFrom, to: site.targetTo, probe: site.targetFrom };
@@ -408,7 +408,6 @@ export function assetCardProvider(
       const embed = embedAt(state, pos);
       if (!opts || !embed) return { title: target.target, body };
       // Only the path is replaced, by the field and by Replace…: a wikilink embed keeps its brackets and width.
-      const { from: targetFrom, to: targetTo } = pathSpan(state.doc, target.from, target.to, target.target);
       // Bound to a local so the non-null narrowing above survives into the
       // async closure below (TS does not carry a parameter's narrowing
       // across a function-expression boundary).
@@ -418,7 +417,7 @@ export function assetCardProvider(
         title: target.target,
         body,
         fields: [{ label: t('chip.url.label'), value: target.target, commit: (view, value) => {
-          view.dispatch({ changes: { from: targetFrom, to: targetTo, insert: value } });
+          view.dispatch({ changes: { from: target.from, to: target.to, insert: value } });
         } }],
         actions: [
           { label: t(missing ? 'problem.choose_file' : 'reference.replace'), run: async (view) => {
@@ -426,7 +425,7 @@ export function assetCardProvider(
               pagePath: pickOpts.pagePath, projectRoot: pickOpts.projectRoot,
               kinds: () => null, afterImport: undefined,
             });
-            if (picked) view.dispatch({ changes: { from: targetFrom, to: targetTo, insert: picked.insert } });
+            if (picked) view.dispatch({ changes: { from: target.from, to: target.to, insert: picked.insert } });
           } },
           // A file that is not there has no width to set; the way out is to drop the line.
           ...(missing ? [{ label: t('problem.remove'), run: (view: EditorView) => removeEmbed(view, embed) }] : [

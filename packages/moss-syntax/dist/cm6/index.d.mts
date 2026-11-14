@@ -59,6 +59,9 @@ interface ImageTarget {
   from: number;
   /** End offset of the target span in the document (exclusive). */
   to: number;
+  /** The whole embed, brackets and width included; a shortcode attribute's own span. */
+  nodeFrom: number;
+  nodeTo: number;
   /** Parsed width token (`"55%"` or named) if present, else undefined. */
   width?: string;
   /**
@@ -87,7 +90,7 @@ interface EmbedParts {
   syntax: EmbedSyntax;
   /** The asset reference text. */
   target: string;
-  /** Target span: the URL child for a markdown image, the whole node for an embed. */
+  /** Where the target is written: the URL of a markdown image, the path of a wikilink embed. */
   targetFrom: number;
   targetTo: number;
   /** Display text (the pothole for `![[a|b]]`, the alt text for `![b](a)`). */
@@ -229,8 +232,8 @@ declare function linkUnitOfEmbed(embed: TreeNode, doc: DocSlice): LinkedEmbed | 
  * image or asset embed:
  *
  *   - `![alt](url)`     → `{ target: url, from: urlFrom, to: urlTo }`
- *   - `![[file.png]]`   → `{ target: 'file.png', from: nodeFrom, to: nodeTo }`
- *   - `![[f.png|alt]]`  → `{ target: 'f.png', from: nodeFrom, to: nodeTo }`
+ *   - `![[file.png]]`   → `{ target: 'file.png', from: pathFrom, to: pathTo }`
+ *   - `![[f.png|alt]]`  → `{ target: 'f.png', from: pathFrom, to: pathTo }`
  *
  * …plus the one place an asset is named OUTSIDE an embed — a shortcode
  * attribute on an opening fence:

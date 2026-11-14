@@ -72,7 +72,7 @@ describe('what each envelope becomes', () => {
     expect(wiki.sentence).toBe("No file named slide.jpg in your folder. The site can't be published without it.");
     expect(bare.fixes).toEqual([]);
     // A card opened with the caret on the embed's brackets still carries the reason.
-    const probe = embedAt(state, state.doc.toString().indexOf('![[') + 1)!.probe;
+    const probe = embedAt(state, state.doc.toString().indexOf('![[') + 1)!.parts.targetFrom;
     expect(problemCardAugmenter(null, state, probe)?.body.textContent).toBe(wiki.sentence);
   });
 
@@ -159,6 +159,15 @@ describe('when a mark hides', () => {
     state = state.update({ selection: EditorSelection.cursor(doc.indexOf('gone') + 1) }).state;
     expect(readProblems(state)).toEqual(before);
     expect(marks(state)).toEqual([['lost', 'warns']]);
+  });
+
+  test("a picture's construct is its whole embed, in either form", () => {
+    const pictures = cacheOf([['gone.png', true, env('not-found')]]);
+    for (const [text, inside] of [['![alt](gone.png)', 'alt'], ['![[gone.png|200]]', '200']]) {
+      const page = `${text}\n\nx`;
+      expect(marks(stateWith(page, pictures))).toEqual([['gone.png', 'blocks']]);
+      for (const anchor of [page.indexOf(inside) + 1, text.length]) expect(marks(stateWith(page, pictures, { anchor }))).toEqual([]);
+    }
   });
 });
 

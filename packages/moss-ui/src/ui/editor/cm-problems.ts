@@ -19,7 +19,6 @@ import { extractImageTargets, extractLinkTargets, nodeTouchesSelection, type Ref
 import { t } from "../i18n/index";
 import { refsResolvedEffect } from './cm-reference-resolver';
 import { referenceSiteAt } from './cm-link-nav';
-import { pathSpan } from './cm-block-embeds';
 import { baseName, toAbsolute, toRelative } from './path-domain';
 import type { CardAction, CardAugmenter } from './cm-reference-card';
 import type { PublishPreflightHint } from './cm-reveal-flash';
@@ -90,11 +89,10 @@ function missingSentence(reference: string): string {
   return target.includes('/') ? t('problem.image_missing_at', { path: target }) : t('problem.image_missing', { name: target });
 }
 
-function imageProblem(env: Envelope, target: string, from: number, to: number, doc: EditorState['doc'], inputs: ProblemInputs): Problem | null {
-  // The mark sits on the path alone, as the build's does: a wikilink embed's
-  // span is the whole node, and its brackets and width open no card.
-  const path = pathSpan(doc, from, to, target);
-  const base = { ...path, construct: { from, to }, title: target };
+function imageProblem(env: Envelope, target: string, path: { from: number; to: number }, construct: { from: number; to: number }, inputs: ProblemInputs): Problem | null {
+  // The mark sits on the path alone, as the build's does: an embed's brackets
+  // and width open no card.
+  const base = { ...path, construct, title: target };
   const root = inputs.projectRoot();
   const refForPath = inputs.refForPath;
   // The label names the file by its place in the folder; what is written is
@@ -159,11 +157,11 @@ function linkProblem(env: Envelope, target: string, from: number, to: number, co
 export function referenceProblems(state: EditorState, inputs: ProblemInputs): { problems: Problem[]; answered: Array<{ from: number; to: number }> } {
   const problems: Problem[] = [];
   const answered: Array<{ from: number; to: number }> = [];
-  for (const { target, from, to } of extractImageTargets(state)) {
+  for (const { target, from, to, nodeFrom, nodeTo } of extractImageTargets(state)) {
     const env = target ? inputs.resolvedCache.get(target, true) : undefined;
     if (!env) continue;
     answered.push({ from, to });
-    const problem = imageProblem(env, target, from, to, state.doc, inputs);
+    const problem = imageProblem(env, target, { from, to }, { from: nodeFrom, to: nodeTo }, inputs);
     if (problem) problems.push(problem);
   }
   for (const { target, from, to, nodeFrom, nodeTo } of extractLinkTargets(state)) {

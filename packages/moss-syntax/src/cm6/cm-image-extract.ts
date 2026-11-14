@@ -4,18 +4,14 @@
  * Walks the full `syntaxTree(state)` and collects the TARGET reference for
  * every image or asset embed in the document:
  *
- *   - Standard markdown image  `![alt](url)`    → Lezer `Image`, URL child range
- *   - Wikilink embed           `![[file.png]]`  → `WikilinkEmbed`, whole node range
+ *   - Standard markdown image  `![alt](url)`    → Lezer `Image`
+ *   - Wikilink embed           `![[file.png]]`  → `WikilinkEmbed`
  *
  * The two are DIFFERENT node types and are told apart by NAME, via
  * [`isEmbedNode`] — never by probing for an absent `URL` child.
  *
- * For standard images the `from`/`to` span is the URL child node — i.e. the
- * path text only, not the surrounding `(…)`.
- * For wikilink embeds the `from`/`to` span is the WHOLE node — i.e.
- * `![[file.png]]` in its entirety. (A `WikilinkTarget` child exists, but
- * narrowing to it would shrink every hover and problem span; deliberately not
- * done here.)
+ * In both forms the `from`/`to` span is the path text only, and
+ * `nodeFrom`/`nodeTo` the whole embed.
  *
  * This module is PURE — it only reads `EditorState` and returns data.
  * It has no CM6 side effects (no ViewPlugin, no StateField, no Decoration).
@@ -45,6 +41,9 @@ export interface ImageTarget {
   from: number;
   /** End offset of the target span in the document (exclusive). */
   to: number;
+  /** The whole embed, brackets and width included; a shortcode attribute's own span. */
+  nodeFrom: number;
+  nodeTo: number;
   /** Parsed width token (`"55%"` or named) if present, else undefined. */
   width?: string;
   /**
@@ -108,7 +107,7 @@ export interface EmbedParts {
   syntax: EmbedSyntax;
   /** The asset reference text. */
   target: string;
-  /** Target span: the URL child for a markdown image, the whole node for an embed. */
+  /** Where the target is written: the URL of a markdown image, the path of a wikilink embed. */
   targetFrom: number;
   targetTo: number;
   /** Display text (the pothole for `![[a|b]]`, the alt text for `![b](a)`). */
@@ -191,8 +190,10 @@ export function embedParts(node: EmbedNodeRef, doc: DocSlice): EmbedParts | null
   if (node.name !== 'WikilinkEmbed') return null;
   const t = node.node.getChild('WikilinkTarget');
   if (!t) return null;
-  const target = doc.sliceString(t.from, t.to).trim();
+  const raw = doc.sliceString(t.from, t.to);
+  const target = raw.trim();
   if (!target) return null;
+  const targetFrom = t.from + raw.length - raw.trimStart().length;
   // The pothole is everything between the `|` and the closing `]]`. The
   // grammar ends WikilinkTarget at the `|` and the node ends just past `]]`,
   // so both bounds are structural.
@@ -201,10 +202,8 @@ export function embedParts(node: EmbedNodeRef, doc: DocSlice): EmbedParts | null
   return {
     syntax: 'wikilink-embed',
     target,
-    // The WHOLE node, not the WikilinkTarget child: narrowing would shrink
-    // every hover and problem span this feeds.
-    targetFrom: node.from,
-    targetTo: node.to,
+    targetFrom,
+    targetTo: targetFrom + target.length,
     // A PRESENT pothole wins even when empty — `![[a.png|]]` has alt ''.
     alt: hasPothole ? pothole.trim() : target,
     pothole: hasPothole ? pothole : null,
@@ -411,7 +410,8 @@ function shortcodeOpenLineAsset(
   if (!name || attrsFrom < 0) return null;
   const ref = shortcodeAssetRef(name, doc.sliceString(attrsFrom, attrsTo));
   if (!ref) return null;
-  return { target: ref.target, from: attrsFrom + ref.from, to: attrsFrom + ref.to, attr: true };
+  const from = attrsFrom + ref.from, to = attrsFrom + ref.to;
+  return { target: ref.target, from, to, nodeFrom: from, nodeTo: to, attr: true };
 }
 
 /** The slice of CM6's `TreeCursor` this module walks. */
@@ -428,8 +428,8 @@ interface TreeCursorLike {
  * image or asset embed:
  *
  *   - `![alt](url)`     → `{ target: url, from: urlFrom, to: urlTo }`
- *   - `![[file.png]]`   → `{ target: 'file.png', from: nodeFrom, to: nodeTo }`
- *   - `![[f.png|alt]]`  → `{ target: 'f.png', from: nodeFrom, to: nodeTo }`
+ *   - `![[file.png]]`   → `{ target: 'file.png', from: pathFrom, to: pathTo }`
+ *   - `![[f.png|alt]]`  → `{ target: 'f.png', from: pathFrom, to: pathTo }`
  *
  * …plus the one place an asset is named OUTSIDE an embed — a shortcode
  * attribute on an opening fence:
@@ -464,6 +464,8 @@ export function extractImageTargets(state: EditorState): ImageTarget[] {
           target: parts.target,
           from: parts.targetFrom,
           to: parts.targetTo,
+          nodeFrom: node.from,
+          nodeTo: node.to,
           width: parts.width,
         });
       }

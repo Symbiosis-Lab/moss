@@ -12,7 +12,7 @@ import { EditorState, StateField, type Extension } from '@codemirror/state';
 import { Decoration, type DecorationSet, EditorView, type ViewUpdate } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
 import {
-  embedParts, isEmbedNode, folderParamsFromEmbed, linkUnitOfEmbed,
+  embedParts, isEmbedNode, folderParamsFromEmbed, linkUnitOfEmbed, type EmbedParts,
   shortcodeBodyRanges, inShortcodeBody,
 } from '@symbiosis-lab/moss-syntax/cm6';
 import { folderCardDetail, type MediaEmbedKind, type FolderListingFacts } from './cm-media-embed';
@@ -27,7 +27,7 @@ import {
  *  (`[![[x]]](url)` reads as one clickable unit), and whether nothing but
  *  whitespace shares its line outside that unit. */
 interface EmbedSite {
-  parts: NonNullable<ReturnType<typeof embedParts>>;
+  parts: EmbedParts;
   unit: ReturnType<typeof linkUnitOfEmbed>;
   line: { from: number; to: number };
   alone: boolean;
@@ -73,24 +73,15 @@ export function blockEmbedOnLine(state: EditorState, pos: number): BlockEmbed | 
   return blockEmbedsIn(state, line.from, line.to)[0] ?? null;
 }
 
-/** Where the path is written inside an embed's target span, which for a wikilink embed is its whole node. Goes, with `embedSite`'s own recomputation, once `embedParts` carries the path span. */
-export function pathSpan(doc: { sliceString(from: number, to: number): string }, from: number, to: number, target: string): { from: number; to: number } {
-  const offset = doc.sliceString(from, to).indexOf(target);
-  return offset < 0 ? { from, to } : { from: from + offset, to: from + offset + target.length };
-}
-
-/** The position inside an embed that the card providers and the problem marks key off: the start of its path. */
-export const embedProbe = (state: EditorState, parts: EmbedSite['parts']): number => pathSpan(state.doc, parts.targetFrom, parts.targetTo, parts.target).from;
-
-/** The embed a caret or hover at `pos` is on, with the position inside it that the card providers key off (`probe`, the start of its path). Any position of a block embed's line counts; an inline embed counts over any of its own characters, either edge included. An inline picture is only its source text: nothing is drawn for it, so this is how its card is found. */
-export function embedAt(state: EditorState, pos: number): { from: number; to: number; probe: number; inline: boolean; parts: EmbedSite['parts'] } | null {
+/** The embed a caret or hover at `pos` is on, Any position of a block embed's line counts; an inline embed counts over any of its own characters, either edge included. An inline picture is only its source text: nothing is drawn for it, so this is how its card is found. */
+export function embedAt(state: EditorState, pos: number): { from: number; to: number; inline: boolean; parts: EmbedParts } | null {
   const block = blockEmbedOnLine(state, pos);
-  if (block) return { from: block.from, to: block.to, probe: embedProbe(state, block.parts), inline: false, parts: block.parts };
+  if (block) return { from: block.from, to: block.to, inline: false, parts: block.parts };
   for (const side of [1, -1] as const) {
     for (let node: EmbedTreeNode | null = syntaxTree(state).resolveInner(pos, side) as unknown as EmbedTreeNode | null; node; node = node.parent) {
       if (!isEmbedNode(node.name)) continue;
       const parts = embedParts(node as unknown as Parameters<typeof embedParts>[0], state.doc);
-      if (parts) return { from: node.from, to: node.to, probe: embedProbe(state, parts), inline: true, parts };
+      if (parts) return { from: node.from, to: node.to, inline: true, parts };
     }
   }
   return null;
