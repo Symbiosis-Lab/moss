@@ -28,7 +28,7 @@ import { deployFraction } from './progress/hairline-pacing';
 import { eventBus, Events, type DeployProgressEvent } from '../context/event-bus';
 import { ProgressSeam } from './progress/progress-seam';
 import { CACHE_BUST_PARAM, NavigationManager, type ActivePage, type NavigationResultInfo } from "./navigation-manager";
-import { PreviewState, PreviewStatus, resolveUnshowableReason, type UnshowableReason } from "./preview-state";
+import { PreviewState, PreviewStatus, resolveUnshowableReason, type OpenFailure, type UnshowableReason } from "./preview-state";
 import { getFileChangeAction, decideNewPageWait, type NewPageWaitState, FileChangeEvent, LINKED_SELECTOR, linkedPaths, changedNonPages } from "./preview-actions";
 import { extractPathFromUrl, sourcePathToHtmlPath } from "./path-matcher";
 import { withShellMarker } from "./shell-marker";
@@ -657,7 +657,8 @@ export class PreviewManager {
     if (reason === 'error-hard' || reason === 'error-soft') {
       // A failure is not a wait, but it IS this window with nothing in it:
       // same screen, with why and the ways on.
-      this.showFailure(status.type === 'error' ? status.message : '');
+      const failed = status.type === 'error' ? status : undefined;
+      this.showFailure(failed?.message ?? '', this.folderName ?? folderBaseName(this.folderPath), failed?.cause);
       return;
     }
     const overlay = this.raiseOverlay()!;
@@ -1013,7 +1014,7 @@ export class PreviewManager {
     // Recorded, not rendered: the panel owns the detail. This is the evidence
     // separating a real server failure from a rebuild that never started one;
     // see `noteServerFailed`.
-    await onMossEvent("PreviewServerFailed", (m) => this.state.noteServerFailed(m.payload.message));
+    await onMossEvent("PreviewServerFailed", (m) => this.state.noteServerFailed(m.payload.message, m.payload.open_in_another_app));
 
     // Drive the nav-pill hairline from DEPLOY upload progress.
     await this.setupDeployHairlineListener();
@@ -1829,10 +1830,10 @@ export class PreviewManager {
   }
 
   /** The open stopped: say so in this window, with why. */
-  private showFailure(detail: string, folderName = this.folderName ?? folderBaseName(this.folderPath)): void {
+  private showFailure(detail: string, folderName: string, cause?: OpenFailure): void {
     const overlay = this.raiseOverlay();
     if (!overlay) return;
-    this.waitingScreen.show(overlay, { kind: 'failed', folderName, detail });
+    this.waitingScreen.show(overlay, { kind: 'failed', folderName, detail, cause });
   }
 
   /**

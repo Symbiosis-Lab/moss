@@ -1589,7 +1589,9 @@ const EN = {
   'preview.starting_title': "Starting moss",
   'preview.opening_title': "Opening {name}",         // {name}
   'preview.open_failed_title': "moss could not open {name}",         // {name}
-  'preview.open_failed_reason': "The build stopped before the site was ready. Try again, or send the logs so we can see why.",
+  'preview.open_failed_reason': "The build stopped before the site was ready.",
+  'preview.open_failed_server': "The preview could not start.",
+  'preview.open_failed_other_app': "{name} is open in another moss app. Close it, then try again.",         // {name}
   'preview.open_failed_details': "Details",
   'preview.send_logs': "Send logs",
   'preview.building_title': "Building {name}",        // {name}
@@ -3262,7 +3264,9 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'preview.starting_title': 'moss wird gestartet',
     'preview.opening_title': '{name} wird geöffnet',
     'preview.open_failed_title': 'moss konnte {name} nicht öffnen',
-    'preview.open_failed_reason': 'Der Build ist angehalten, bevor die Website fertig war. Versuche es erneut oder sende die Protokolle, damit wir sehen, warum.',
+    'preview.open_failed_reason': 'Der Build ist angehalten, bevor die Website fertig war.',
+    'preview.open_failed_server': 'Die Vorschau konnte nicht starten.',
+    'preview.open_failed_other_app': '{name} ist in einer anderen moss-App geöffnet. Schließe sie und versuche es erneut.',
     'preview.open_failed_details': 'Einzelheiten',
     'preview.send_logs': 'Protokolle senden',
     'preview.building_title': '{name} wird erzeugt',
@@ -4913,7 +4917,9 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'preview.starting_title': "正在启动青苔",
     'preview.opening_title': "正在打开 {name}",
     'preview.open_failed_title': "青苔无法打开 {name}",
-    'preview.open_failed_reason': "网站生成在完成前停止了。请重试，或发送日志让我们查明原因。",
+    'preview.open_failed_reason': "网站生成在完成前停止了。",
+    'preview.open_failed_server': "预览无法启动。",
+    'preview.open_failed_other_app': "{name} 已在另一个青苔应用中打开。请关闭它，然后重试。",
     'preview.open_failed_details': "详细信息",
     'preview.send_logs': "发送日志",
     'preview.building_title': "正在生成 {name}",
@@ -6591,7 +6597,9 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'preview.starting_title': "正在啟動青苔",
     'preview.opening_title': "正在開啟 {name}",
     'preview.open_failed_title': "青苔無法開啟 {name}",
-    'preview.open_failed_reason': "網站生成在完成前停止了。請重試，或傳送記錄讓我們查明原因。",
+    'preview.open_failed_reason': "網站生成在完成前停止了。",
+    'preview.open_failed_server': "預覽無法啟動。",
+    'preview.open_failed_other_app': "{name} 已在另一個青苔應用程式中開啟。請關閉它，然後重試。",
     'preview.open_failed_details': "詳細資訊",
     'preview.send_logs': "傳送記錄",
     'preview.building_title': "正在建置 {name}",

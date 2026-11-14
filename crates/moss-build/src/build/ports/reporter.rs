@@ -258,7 +258,7 @@ impl BuildReporter for StdoutReporter {
             PipelineEvent::Error { phase, message } => {
                 cli_eprintln!("[error] {}: {}", phase, message);
             }
-            PipelineEvent::PreviewServerFailed { message } => {
+            PipelineEvent::PreviewServerFailed { message, .. } => {
                 cli_eprintln!("[error] preview server failed: {}", message);
             }
             PipelineEvent::PluginProgress(p) => {

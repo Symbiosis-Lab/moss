@@ -1398,8 +1398,11 @@ export type MossEvent = { kind: "BackgroundProgress"; payload: BackgroundProgres
  * the portless completion and leaves the panel stuck at the last
  * `BackgroundProgress` value. This event surfaces the real failure so
  * the user sees an error instead of a hung progress bar.
+ * 
+ * `open_in_another_app`: another process's desktop app is serving the
+ * folder.
  */
-{ kind: "PreviewServerFailed"; payload: { message: string } } | { kind: "ActionPanelLoaded" } | { kind: "ActionPanelOpened"; payload: ActionPanelOpened } | { kind: "ActionPanelClosed" } | { kind: "DividerPositionChanged"; payload: { position: number } } | 
+{ kind: "PreviewServerFailed"; payload: { message: string; open_in_another_app: boolean } } | { kind: "ActionPanelLoaded" } | { kind: "ActionPanelOpened"; payload: ActionPanelOpened } | { kind: "ActionPanelClosed" } | { kind: "DividerPositionChanged"; payload: { position: number } } | 
 /**
  * Preview-tiling mode flip (wry#175 cursor constraint — see
  * system/preview_tiling.rs). `tiled: true` → the preview webview is

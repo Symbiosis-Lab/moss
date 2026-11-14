@@ -272,6 +272,17 @@ pub async fn find_live_owner(folder: &Path) -> Option<OwnerRecord> {
     }
 }
 
+/// Whether another process's desktop app answers as the server of the
+/// folder `site_dir` resolves to. A CLI holder yields to the app when asked;
+/// another desktop app is never asked, so it is still answering after a
+/// start it refused.
+pub async fn open_in_another_app(site_dir: &std::sync::Arc<std::sync::RwLock<PathBuf>>) -> bool {
+    let Some(folder) = resolve_vault_folder(site_dir) else { return false };
+    find_live_owner(&folder)
+        .await
+        .is_some_and(|owner| owner.pid != std::process::id() && owner.kind == HostKind::Desktop)
+}
+
 /// The one line that names a folder's owner. `None` is a holder that does
 /// not answer as this folder's server: it is stopping, or its record is not
 /// its own.
@@ -713,19 +724,10 @@ mod tests {
         assert!(matches!(waited, Ok(Some(_))), "the wait must end with the folder: {waited:?}");
     }
 
-    /// The ablation target for `find_live_owner`'s folder-identity check:
-    /// a record whose advertised URL answers, but for a DIFFERENT folder
-    /// than the one the caller asked about, must read as unowned — a fake
-    /// local listener stands in for "some other moss process, somewhere
-    /// else, happens to be using this same loopback port right now."
-    #[tokio::test]
-    async fn find_live_owner_is_none_when_the_health_body_names_a_different_folder() {
-        let _guard = env_guard();
-        let home = moss_home_dir();
-        std::env::set_var("MOSS_HOME", &home);
-        let folder = tempfile::tempdir().expect("tempdir for the served folder");
-        let canonical = std::fs::canonicalize(folder.path()).unwrap();
-
+    /// A loopback listener that answers every request with a schema-2 health
+    /// body for `folder_id`, and a record on disk for `folder` naming it as
+    /// `pid`. Call the returned closure to stop the listener.
+    fn recorded_holder(folder: &Path, folder_id: String, pid: u32, kind: HostKind) -> impl FnOnce() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a fake health server");
         let port = listener.local_addr().unwrap().port();
         listener.set_nonblocking(true).expect("set_nonblocking");
@@ -738,10 +740,9 @@ mod tests {
                         use std::io::{Read, Write};
                         let mut buf = [0u8; 1024];
                         let _ = stream.read(&mut buf);
-                        // A well-formed schema-2 body, but for a folder id
-                        // that can never match a real canonicalized path's
-                        // hash: the mismatch this test exists to exercise.
-                        let body = "{\"server\":\"moss-preview-server\",\"version\":\"x\",\"preview\":true,\"schema\":2,\"folder_id\":\"not-the-right-folder\",\"pid\":1}";
+                        let body = format!(
+                            "{{\"server\":\"moss-preview-server\",\"version\":\"x\",\"preview\":true,\"schema\":2,\"folder_id\":\"{folder_id}\",\"pid\":{pid}}}"
+                        );
                         let response = format!(
                             "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
                             body.len(),
@@ -756,28 +757,65 @@ mod tests {
                 }
             }
         });
-
         let record = OwnerRecord {
-            folder: canonical.clone(),
-            pid: 4242,
-            kind: HostKind::Cli,
+            folder: folder.to_path_buf(),
+            pid,
+            kind,
             version: "0.0.0".to_string(),
             url: format!("http://127.0.0.1:{port}"),
             ui_url: None,
             started_at: crate::system::now_iso(),
         };
-        atomic_write::write_json_atomic(&record_path(&canonical).unwrap(), &record).unwrap();
+        atomic_write::write_json_atomic(&record_path(folder).unwrap(), &record).unwrap();
+        move || {
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            let _ = server.join();
+        }
+    }
+
+    /// A record whose address answers for a DIFFERENT folder (another moss
+    /// process that happens to use the same loopback port) reads as unowned.
+    #[tokio::test]
+    async fn find_live_owner_is_none_when_the_health_body_names_a_different_folder() {
+        let _guard = env_guard();
+        std::env::set_var("MOSS_HOME", moss_home_dir());
+        let folder = tempfile::tempdir().expect("tempdir for the served folder");
+        let canonical = std::fs::canonicalize(folder.path()).unwrap();
+        let stop = recorded_holder(&canonical, "not-the-right-folder".to_string(), 4242, HostKind::Cli);
 
         let found = find_live_owner(&canonical).await;
 
-        stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        let _ = server.join();
+        stop();
         std::env::remove_var("MOSS_HOME");
-
         assert!(
             found.is_none(),
             "a health body naming a different folder must not read as this folder's live owner, got {:?}",
             found
+        );
+    }
+
+    #[tokio::test]
+    async fn open_in_another_app_is_another_process_answering_as_the_desktop_app() {
+        let _guard = env_guard();
+        std::env::set_var("MOSS_HOME", moss_home_dir());
+        let folder = tempfile::tempdir().expect("tempdir for the served folder");
+        std::fs::create_dir(folder.path().join(".moss")).unwrap();
+        let canonical = std::fs::canonicalize(folder.path()).unwrap();
+        let site_dir = std::sync::Arc::new(std::sync::RwLock::new(canonical.join(".moss")));
+        let other_pid = std::process::id().wrapping_add(1);
+        let mut seen = vec![open_in_another_app(&site_dir).await];
+        for (pid, kind) in [(other_pid, HostKind::Desktop), (other_pid, HostKind::Cli), (std::process::id(), HostKind::Desktop)] {
+            let stop = recorded_holder(&canonical, folder_id(&canonical), pid, kind);
+            seen.push(open_in_another_app(&site_dir).await);
+            stop();
+        }
+        seen.push(open_in_another_app(&site_dir).await);
+        std::env::remove_var("MOSS_HOME");
+
+        assert_eq!(
+            seen,
+            [false, true, false, false, false],
+            "nobody recorded, another app, another program, this process, a record that no longer answers"
         );
     }
 }

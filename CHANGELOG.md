@@ -10,6 +10,7 @@ All notable changes to moss will be documented here.
 - `syndicate:` takes the name a network goes by as well as its channel's id, ignoring case, so `syndicate: [x]` posts to the X channel (`xcom`). Such a page was told no channel named x was set up. A name two channels go by posts to neither, and the publish says which two.
 - `moss deploy --dry-run` prints the length of an article copy's text. The line read "would post as long ( characters)", with no number.
 - The selected ＋ and the gear sit exactly on the ends of the toolbar; the selected circle used to cross the toolbar's outline.
+- When a folder is open in another moss app, the app's "could not open" screen says so and what to close. When the preview could not start for another reason it says that, instead of "The build stopped before the site was ready". The server's own message is under Details.
 - A folder that an editor plugin or the command line is previewing opens in the app: the earlier preview hands the folder over even while a page of it is open in a browser, and that page reconnects to the app's preview. Before, the app could be refused and show "could not open".
 - When a folder cannot be served because another moss process has it, the message names that process's address, kind, pid and version only when it answers as the folder's server, and otherwise says the folder is already served by another moss process. It no longer prints "already served at  by Server (pid 0, moss unknown)".
 

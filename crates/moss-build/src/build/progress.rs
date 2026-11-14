@@ -232,6 +232,8 @@ pub enum PipelineEvent {
     /// error state (`preview-state.ts`); other hosts log/relay it.
     PreviewServerFailed {
         message: String,
+        /// Another process's desktop app is serving the folder.
+        open_in_another_app: bool,
     },
     /// A plugin hook's progress; `completed: true` is the hook's end. The
     /// plugin manager reports it like any other pipeline event — the shell

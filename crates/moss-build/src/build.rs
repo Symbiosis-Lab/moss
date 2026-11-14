@@ -880,6 +880,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                 // flip to an error state and unblock the user.
                 config.host.events.report(&progress::PipelineEvent::PreviewServerFailed {
                     message: e.clone(),
+                    open_in_another_app: crate::ops::serve::ownership::open_in_another_app(&standalone_state.current_dir).await,
                 });
                 None
             }

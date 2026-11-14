@@ -63,7 +63,13 @@ export type PreviewStatus =
   | { type: 'initial' }
   | { type: 'loading'; message: string; percentage: number }
   | { type: 'ready'; url: string }
-  | { type: 'error'; message: string; verdict: PreviewErrorVerdict };
+  | { type: 'error'; message: string; verdict: PreviewErrorVerdict; cause?: OpenFailure };
+
+/**
+ * What stopped the open, when it was not the build: the preview server did
+ * not start, or the folder is open in another moss app.
+ */
+export type OpenFailure = 'server' | 'other-app';
 
 /**
  * Where an `error` status came from — told, or guessed.
@@ -187,7 +193,7 @@ export class PreviewState {
    * precedes the completion it explains. Its presence is what turns a portless
    * completion from a guess into a verdict; see [`PreviewErrorVerdict`].
    */
-  private serverFailure: string | null = null;
+  private serverFailure: { message: string; cause: OpenFailure } | null = null;
 
   /**
    * Check if server URL has been established.
@@ -312,15 +318,9 @@ export class PreviewState {
       this.status = { type: 'ready', url: this.serverUrl };
     } else if (this.serverFailure !== null) {
       // Told: Rust's `start_preview_server` returned Err and said so on the
-      // typed bus. The detailed reason is the progress-panel's — it upserts a
-      // row with `detail: msg` so the popover carries it — and the overlay
-      // shows the generic structural message.
+      // typed bus.
       if (this.status.type !== 'error') {
-        this.status = {
-          type: 'error',
-          message: t('preview.server_unavailable'),
-          verdict: 'reported',
-        };
+        this.status = { type: 'error', ...this.serverFailure, verdict: 'reported' };
       }
     } else {
       // Guessed. A completion carries no port whenever the pipeline that sent
@@ -358,15 +358,12 @@ export class PreviewState {
   /**
    * Record that Rust reported the preview server failed to start.
    *
-   * The message itself is the progress-panel's to surface; what this class
-   * needs is only that a failure was REPORTED, which is what lets the next
-   * portless completion be read as a verdict rather than a guess. Deliberately
-   * does not set an error status of its own: the completion is the event that
-   * ends the build, and the panel already owns the detail (the overlay listener
-   * that used to double-signal here was removed).
+   * That a failure was REPORTED is what lets the next portless completion be
+   * read as a verdict rather than a guess. Deliberately does not set an error
+   * status of its own: the completion is the event that ends the build.
    */
-  noteServerFailed(message: string): void {
-    this.serverFailure = message;
+  noteServerFailed(message: string, openInAnotherApp: boolean): void {
+    this.serverFailure = { message, cause: openInAnotherApp ? 'other-app' : 'server' };
   }
 
   /**

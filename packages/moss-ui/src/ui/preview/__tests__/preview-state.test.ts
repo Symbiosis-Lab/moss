@@ -280,7 +280,7 @@ describe('PreviewState', () => {
       state.handleProgressUpdate(createProgressUpdate({ percentage: 50 }));
       // Rust starts the server before anything else and emits this on the Err
       // arm, so the report always precedes the completion it explains.
-      state.noteServerFailed('Address already in use (os error 48)');
+      state.noteServerFailed('Address already in use (os error 48)', false);
 
       const status = state.handleProgressUpdate(createProgressUpdate({
         percentage: 100,
@@ -291,6 +291,22 @@ describe('PreviewState', () => {
 
       expect(status.type).toBe('error');
       expect((status as { verdict: string }).verdict).toBe('reported');
+    });
+
+    it('a reported failure carries the server\'s words and whether another app has the folder', () => {
+      state.noteServerFailed('this folder is already served by another moss process', true);
+      const held = state.handleProgressUpdate(createProgressUpdate({ percentage: 100, completed: true, port: null, is_empty: false }));
+      expect(held).toEqual({
+        type: 'error',
+        message: 'this folder is already served by another moss process',
+        cause: 'other-app',
+        verdict: 'reported',
+      });
+
+      state.reset();
+      state.noteServerFailed('Address already in use (os error 48)', false);
+      const unheld = state.handleProgressUpdate(createProgressUpdate({ percentage: 100, completed: true, port: null, is_empty: false }));
+      expect(unheld).toMatchObject({ message: 'Address already in use (os error 48)', cause: 'server' });
     });
 
     it('a portless completion from another pipeline never unseats a live server', () => {
@@ -328,7 +344,7 @@ describe('PreviewState', () => {
       // would upgrade the next portless completion to `reported`, and
       // `reported` is the verdict allowed to tear down a live download
       // screen.
-      state.noteServerFailed('Address already in use (os error 48)');
+      state.noteServerFailed('Address already in use (os error 48)', false);
       state.handleProgressUpdate(createProgressUpdate({
         step: 'build',
         percentage: 10,
@@ -348,7 +364,7 @@ describe('PreviewState', () => {
     });
 
     it('a reported failure is forgotten on reset, so the next folder starts clean', () => {
-      state.noteServerFailed('Address already in use (os error 48)');
+      state.noteServerFailed('Address already in use (os error 48)', false);
       state.reset();
 
       const status = state.handleProgressUpdate(createProgressUpdate({

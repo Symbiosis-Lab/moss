@@ -2438,10 +2438,10 @@ describe('PreviewManager', () => {
       await previewManager.initialize();
 
       for (const cb of mossEventCallbacks) {
-        cb({ kind: 'PreviewServerFailed', payload: { message: 'Port 8080 already in use' } });
+        cb({ kind: 'PreviewServerFailed', payload: { message: 'Port 8080 already in use', open_in_another_app: true } });
       }
 
-      expect(noteSpy).toHaveBeenCalledWith('Port 8080 already in use');
+      expect(noteSpy).toHaveBeenCalledWith('Port 8080 already in use', true);
 
       // And now a portless completion is a verdict, not a guess.
       (previewManager as any).handleProgressUpdate({
@@ -2450,7 +2450,8 @@ describe('PreviewManager', () => {
       });
       expect(previewManager.getState().getStatus()).toEqual({
         type: 'error',
-        message: expect.any(String),
+        message: 'Port 8080 already in use',
+        cause: 'other-app',
         verdict: 'reported',
       });
 
@@ -2949,6 +2950,29 @@ describe('PreviewManager', () => {
       expect(mockOverlay.textContent).toContain('Failed to build: a page links to a missing file');
       mockOverlay.querySelector<HTMLButtonElement>('#moss-waiting-retry-open')!.click();
       expect(build).toHaveBeenCalledWith('/Users/test/my-blog');
+    });
+
+    test.each([
+      ['other-app', 'my-blog is open in another moss app. Close it, then try again.', false],
+      ['server', 'The preview could not start.', true],
+      [undefined, 'The build stopped before the site was ready.', true],
+    ] as const)('a start stopped by %s says so, with the server\'s own words under Details', async (cause, hint, offersLogs) => {
+      const { host } = await import("../../host");
+      const kept = host.sendLogs;
+      host.sendLogs = async () => ({ status: 'ok', data: '' });
+      try {
+        await setup();
+        (previewManager as any).folderPath = '/Users/test/my-blog';
+        const message = 'this folder is already served at http://127.0.0.1:8080 by Cli (pid 4242, moss 0.15.24)';
+
+        (previewManager as any).renderStatus({ type: 'error', message, verdict: 'reported', cause });
+
+        expect(mockOverlay.querySelector('.moss-waiting-screen__hint')!.textContent).toBe(hint);
+        expect(mockOverlay.querySelector('details')!.textContent).toContain(message);
+        expect(mockOverlay.querySelector('#moss-waiting-send-logs') !== null).toBe(offersLogs);
+      } finally {
+        host.sendLogs = kept;
+      }
     });
 
     test('a host without a launcher, a log upload or a file manager offers none of their buttons', async () => {

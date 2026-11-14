@@ -278,7 +278,10 @@ pub enum MossEvent {
     /// the portless completion and leaves the panel stuck at the last
     /// `BackgroundProgress` value. This event surfaces the real failure so
     /// the user sees an error instead of a hung progress bar.
-    PreviewServerFailed { message: String },
+    ///
+    /// `open_in_another_app`: another process's desktop app is serving the
+    /// folder.
+    PreviewServerFailed { message: String, open_in_another_app: bool },
     ActionPanelLoaded,
     ActionPanelOpened(ActionPanelOpened),
     ActionPanelClosed,
@@ -580,8 +583,9 @@ pub fn moss_event_for(
             MossEvent::BuildComplete(bc)
         }
         PipelineEvent::FileChanged(fc) => MossEvent::FileChanged(fc.clone()),
-        PipelineEvent::PreviewServerFailed { message } => MossEvent::PreviewServerFailed {
+        PipelineEvent::PreviewServerFailed { message, open_in_another_app } => MossEvent::PreviewServerFailed {
             message: message.clone(),
+            open_in_another_app: *open_in_another_app,
         },
         PipelineEvent::PluginProgress(progress) => MossEvent::PluginProgress(progress.clone()),
         // The shell's handler (`app.ts`) is keyed by the one plugin that can
