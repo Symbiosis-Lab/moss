@@ -134,6 +134,7 @@ GATES_BUILD=(
   type-defaults
   diagrams
   browser-editor
+  focus-point
   series-nav
   card-min-token
 )

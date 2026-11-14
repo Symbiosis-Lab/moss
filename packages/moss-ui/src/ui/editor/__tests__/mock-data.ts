@@ -58,8 +58,7 @@ export const MOCK_FILES: Record<string, { frontmatter: Record<string, unknown>; 
       date: '2024-12-21',
       tags: ['纽约', '食物'],
     },
-    // The grid feeds media-density.spec.ts, which measures that a fence body's
-    // image is one line tall and STAYS one line when the caret enters it.
+    // A picture in a fence body and one outside it, for tests of how tall each is drawn.
     body: '## 冬至\n\n在纽约包饺子。\n\n:::grid\n![](dumplings.jpg)\n+++\n![](wonton.jpg)\n:::\n\n![](dumplings.jpg)\n',
   },
   '/mock/刘果/关于.md': {

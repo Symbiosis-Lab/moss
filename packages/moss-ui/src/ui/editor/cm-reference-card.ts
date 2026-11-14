@@ -11,7 +11,7 @@ import { extractImageTargets, footnoteIndex, folderParamsFromEmbed, type Referen
 import { syntaxTree } from '@codemirror/language';
 import { charAtPointer, hitSiteAt, navigateToReference, referenceSiteAt } from './cm-link-nav';
 import { linkTextRange, type LinkTextNode } from './cm-markdown-style';
-import { blockEmbedOnLine, embedAt } from './cm-block-embeds';
+import { blockEmbedOnLine, drawnPictureBelow, embedAt } from './cm-block-embeds';
 import { buildHoverDom, type AssetReferenceEnvelope } from './asset-preview';
 import type { ApplyEmbedWidthFn } from './embed-width';
 import { pickAssetRef } from './asset-picker/browse-button';
@@ -209,6 +209,13 @@ function referenceAt(state: EditorState, pos: number, onBlock: boolean): { from:
   return note ? { ...note, probe: pos } : null;
 }
 
+/** The reference is a picture's own address (an embed's, or a hero's
+ *  `image=`) and the picture is drawn below its line: a card would only repeat
+ *  it. A link around a picture has its own address, and keeps its card. */
+export function pictureIsDrawn(view: EditorView, ref: { probe: number }): boolean {
+  return extractImageTargets(view.state).some((t) => t.from <= ref.probe && ref.probe <= t.to) && !!drawnPictureBelow(view, ref.probe);
+}
+
 const dwellPlugin = ViewPlugin.fromClass(class {
   private timer: ReturnType<typeof setTimeout> | null = null;
   /** Start of the reference whose card is waiting for its body. */
@@ -243,8 +250,9 @@ const dwellPlugin = ViewPlugin.fromClass(class {
   private open(pos: number, onBlock: boolean): void {
     const { state } = this.view;
     const ref = referenceAt(state, pos, onBlock);
-    const spec = ref && cardSpecAt(state, ref.probe);
-    if (!ref || !spec) return;
+    if (!ref || pictureIsDrawn(this.view, ref)) return;
+    const spec = cardSpecAt(state, ref.probe);
+    if (!spec) return;
     const show = () => {
       // A card opened meanwhile from the keyboard has controls this one lacks.
       if (!spec.body.hasChildNodes() || this.view.state.field(cardField)?.editable) return;

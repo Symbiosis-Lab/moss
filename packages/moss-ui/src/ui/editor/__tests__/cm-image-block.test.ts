@@ -16,7 +16,7 @@ import { ensureSyntaxTree, syntaxTree } from '@codemirror/language';
 import { buildBlockEmbedDecorations } from '../cm-block-embeds';
 import { ImageBlockWidget, type ResolveImageFn } from '../cm-block-embed-widgets';
 import { clampPercent } from '../cm-resize-controller';
-import { IMAGE_HEIGHT_CAP, ROW_PADDING } from '../block-row-height';
+import { COMPACT_IMAGE_HEIGHT_CAP, IMAGE_HEIGHT_CAP, ROW_PADDING } from '../block-row-height';
 
 const resolveImage = () => ({ url: 'http://x/p.jpg', width: 400, height: 300 });
 
@@ -264,13 +264,18 @@ describe('resize handle', () => {
 });
 
 /**
- * Inside a `:::` fence the body is STRUCTURE, not reading matter: an embed's
- * source line stays as text and nothing is drawn for it — no token, no picture
- * below — because a picture under each cell would turn a six-cell grid into six
- * full-column photographs. The preview pane shows the grid in its real layout.
+ * Inside a `:::` fence the body is STRUCTURE, not reading matter: a full picture
+ * under each cell would turn a six-cell grid into six full-column photographs.
+ * A picture there is drawn small below its line, always, so the text does not
+ * move when the caret reaches it; the preview pane shows the real layout.
  * Browser measurements of media density verify the resulting height.
  */
-describe('an embed inside a `:::` fence is its source line only', () => {
+describe('a picture inside a `:::` fence is drawn small below its line', () => {
+  const compactRows = (out: ReturnType<typeof fenceDecos>) => out.map((d) => {
+    const row = (d.widget as ImageBlockWidget).toDOM();
+    return { block: d.block, height: (d.widget as ImageBlockWidget).estimatedHeight, handle: !!row.querySelector('.cm-lp-image-handle') };
+  });
+
   function fenceDecos(doc: string, selection?: { anchor: number }) {
     let state = EditorState.create({
       doc, selection,
@@ -292,16 +297,20 @@ describe('an embed inside a `:::` fence is its source line only', () => {
     return out;
   }
 
-  test('draws nothing: no token over the source, no picture below it', () => {
-    expect(fenceDecos(':::grid\n![alt](p.jpg)\n:::\n', { anchor: 0 })).toEqual([]);
+  const small = { block: true, height: COMPACT_IMAGE_HEIGHT_CAP + ROW_PADDING, handle: false };
+
+  test('one small picture below the line, with no resize handle, wherever the caret is', () => {
+    const doc = ':::grid\n![alt](p.jpg)\n:::\n';
+    expect(compactRows(fenceDecos(doc, { anchor: 0 }))).toEqual([small]);
+    expect(compactRows(fenceDecos(doc, { anchor: 10 }))).toEqual([small]);
   });
 
-  test('every cell of a grid is source only', () => {
-    expect(fenceDecos(':::grid\n![[a.jpg]]\n+++\n![[b.jpg]]\n+++\n![[c.jpg]]\n:::\n')).toEqual([]);
+  test('every cell of a grid gets its small picture', () => {
+    expect(compactRows(fenceDecos(':::grid\n![[a.jpg]]\n+++\n![[b.jpg]]\n+++\n![[c.jpg|50%]]\n:::\n'))).toEqual([small, small, small]);
   });
 
-  test('a nested block is inside its parent, so its images are source only too', () => {
-    expect(fenceDecos(':::grid\n::::buttons\n![alt](p.jpg)\n::::\n:::\n', { anchor: 0 })).toEqual([]);
+  test('a nested block is inside its parent, so its pictures are small too', () => {
+    expect(compactRows(fenceDecos(':::grid\n::::buttons\n![alt](p.jpg)\n::::\n:::\n', { anchor: 0 }))).toEqual([small]);
   });
 
   test('the same image outside a fence still renders as a block below its line', () => {

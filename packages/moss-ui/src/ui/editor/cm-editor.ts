@@ -525,10 +525,7 @@ export class CmEditor {
       const currentFile = () => options.getFromFile?.() ?? '';
       const host = uiHost.bus;
       extensions.push(pictureAtCaretField);
-      extensions.push(focusPointExtension({
-        path: currentFile, host,
-        resolveAsset: async (target) => { const r = await engine.editorResolveAsset(target, currentFile()); return r.status === 'ok' ? r.data : null; },
-      }));
+      extensions.push(focusPointExtension({ path: currentFile, host, resolveImage }));
       extensions.push(heroWordsExtension(currentFile, host));
       extensions.push(expandDerivedExtension({ label: () => t('editor.expand_derived'), getFrontmatter: options.getFrontmatter, applyFrontmatter: options.applyFrontmatter, onFacts: options.onDerivedFacts, expand: expandViaBackend(engine.expandDerived, () => options.getFromFile?.()) }));
       extensions.push(actAtCaretExtension());

@@ -68,6 +68,11 @@
   --moss-editor-highlight: rgba(245, 200, 0, 0.25);
   --moss-editor-highlight-soft: rgba(245, 200, 0, 0.12);
 
+  /* A control drawn over a picture (the resize handle, the focus point): white
+     with a dark halo reads on any picture, in either theme. */
+  --moss-on-picture: #fff;
+  --moss-on-picture-halo: drop-shadow(0 0 1.5px rgba(0, 0, 0, 0.6));
+
   --moss-color-bg: #f6f7f9;
   --moss-color-surface: #eef0f3;
   --moss-color-text: #24262b;

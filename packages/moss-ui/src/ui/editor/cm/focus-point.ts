@@ -1,25 +1,27 @@
 /**
- * The focus-point instrument: with the caret on a picture the page crops (a
- * hero's, or any image embed line), the whole picture is drawn under that line
- * with a dot on the part that must stay in view and an outline of what the
- * frame keeps at the preview's current width. A picture the page shows whole
- * gets no widget.
- * Dragging the dot redraws the preview live; letting go writes the position
+ * The focus-point instrument. Every picture the page may crop is drawn below
+ * its line at all times by the block embeds, so the text never moves when the
+ * caret does. With the caret on such a line, the drawn picture carries a dot
+ * on the part that must stay in view and an outline of what the frame keeps at
+ * the preview's current width. A picture the page shows whole carries neither.
+ * Dragging the dot (or moving it with the arrow keys, after Alt-Enter puts the
+ * keyboard on it) redraws the preview live; letting go writes the position
  * into the picture's pipe options as one undoable edit, and the preview keeps
  * showing the written position until the rebuilt page does.
  *
- * The widget exists only while the caret is on the line it edits, and writes
- * only through the editor. The shell is asked for two things: the picture's frame
- * shape, and to crop the preview's picture while the dot moves.
+ * The dot and outline are laid over the picture and take no room of their own.
+ * Writes go only through the editor. The shell is asked for two things: the
+ * picture's frame shape, and to crop the preview's picture while the dot moves.
  */
 
 import type { Bus } from "../../host";
 import { isolateHistory } from '@codemirror/commands';
 import { StateEffect, StateField, Prec, type Extension } from '@codemirror/state';
-import { Decoration, EditorView, ViewPlugin, WidgetType, keymap, type DecorationSet, type ViewUpdate } from '@codemirror/view';
+import { EditorView, ViewPlugin, keymap, type ViewUpdate } from '@codemirror/view';
+import { syntaxTree } from '@codemirror/language';
 import { t } from "../../i18n/index";
-import { assetBustQuery } from '../asset-bust';
-import { sourceAssetUrl } from '../source-asset-url';
+import type { ResolveImageFn } from '../cm-block-embed-widgets';
+import { drawnPictureBelow } from '../cm-block-embeds';
 import {
   HERO_FRAME, HERO_FRAME_REQUEST, HERO_IMAGE_FOCUS, isLine,
   type HeroFrame, type HeroFrameRequest, type HeroImageFocus,
@@ -27,33 +29,30 @@ import {
 import { pictureAtCaretField, type HeroPicture } from './picture-context';
 import { coverRect, pointOfPosition, positionWord, type Point } from './image-position';
 
-/** The slice of a resolved asset the instrument reads. */
-export interface InstrumentAsset { request_url: string; mime_type: string; width: number | null; height: number | null }
-
 export interface FocusPointOptions {
   /** The editor file's project-relative path. */
   path: () => string;
-  resolveAsset: (target: string) => Promise<InstrumentAsset | null | undefined>;
+  /** The editor's one cache of resolved pictures. */
+  resolveImage?: ResolveImageFn;
   host: Bus;
 }
 
-interface Asset { target: string; url: string; aspect: number }
 interface Frame { line: number; aspect: number }
+/** What the dot and outline are drawn from. */
+interface Overlay { line: number; imageAspect: number; frameAspect: number | null; at: Point }
 interface FocusState {
   /** The picture the instrument is open on: under the caret, and not closed with Escape. */
   shown: { frameLine: number; hero: boolean; picture: HeroPicture } | null;
   /** The line Escape closed; the caret has to leave it to bring the instrument back. */
   dismissed: number | null;
-  asset: Asset | null;
   frame: Frame | null;
-  decos: DecorationSet;
+  overlay: Overlay | null;
 }
 
-const assetEffect = StateEffect.define<Asset>();
 const frameEffect = StateEffect.define<Frame>();
 const dismissEffect = StateEffect.define<number>();
 
-/** A picture the page shows whole has nothing to crop, so no widget. Until the page has answered, only a hero (always a crop) shows one. */
+/** A picture the page shows whole has nothing to crop, so no dot. Until the page has answered, only a hero (always a crop) shows one. */
 function cropped(hero: boolean, imageAspect: number, frame: Frame | null): boolean {
   if (!frame) return hero;
   return !imageAspect || Math.abs(frame.aspect / imageAspect - 1) > CROP_TOLERANCE;
@@ -61,136 +60,141 @@ function cropped(hero: boolean, imageAspect: number, frame: Frame | null): boole
 
 const CROP_TOLERANCE = 0.01;
 const CENTER: Point = { x: 50, y: 50 };
+const KEY_STEP: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+const clamp = (v: number) => Math.min(100, Math.max(0, v));
 
-interface Host {
-  move(x: number, y: number): void;
-  drop(x: number, y: number): void;
-}
-const hosts = new WeakMap<EditorView, Host>();
+/** The dot and outline laid over a drawn picture. It reports where the dot goes and writes nothing itself. */
+class FocusOverlay {
+  readonly root = document.createElement('div');
+  private readonly scrim = document.createElement('div');
+  private readonly frame = document.createElement('div');
+  readonly dot = document.createElement('button');
+  private shape: Overlay | null = null;
+  private at: Point = CENTER;
+  /** A move in progress and not yet written: by the pointer, or by the arrow keys. */
+  private gesture: 'drag' | 'keys' | null = null;
 
-class FocusPointWidget extends WidgetType {
-  constructor(
-    private readonly url: string,
-    private readonly imageAspect: number,
-    private readonly frameAspect: number | null,
-    private readonly at: Point,
-  ) { super(); }
-
-  eq(o: FocusPointWidget): boolean {
-    return o.url === this.url && o.imageAspect === this.imageAspect && o.frameAspect === this.frameAspect
-      && o.at.x === this.at.x && o.at.y === this.at.y;
-  }
-
-  ignoreEvent(): boolean { return true; }
-
-  toDOM(view: EditorView): HTMLElement {
-    const host = hosts.get(view);
-    const row = document.createElement('div');
-    row.className = 'cm-focus-point';
-    const pic = document.createElement('div');
-    pic.className = 'cm-focus-point-pic';
-    pic.setAttribute('role', 'img');
-    pic.setAttribute('aria-label', t('instrument.focus_aria'));
-    let aspect = this.imageAspect || 1.5;
-    pic.style.aspectRatio = String(aspect);
-    const img = document.createElement('img');
-    img.src = this.url;
-    img.alt = '';
-    img.draggable = false;
-    const scrim = document.createElement('div');
-    scrim.className = 'cm-focus-point-scrim';
-    const frame = document.createElement('div');
-    frame.className = 'cm-focus-point-frame';
-    const dot = document.createElement('div');
-    dot.className = 'cm-focus-point-dot';
-    pic.append(img, scrim, frame, dot);
-    const hint = document.createElement('div');
-    hint.className = 'cm-focus-point-hint';
-    hint.textContent = t('instrument.focus_hint');
-    row.append(pic, hint);
-
-    const draw = (x: number, y: number) => {
-      dot.style.left = `${x}%`;
-      dot.style.top = `${y}%`;
-      if (this.frameAspect === null) { frame.hidden = true; scrim.hidden = true; return; }
-      const r = coverRect(aspect, this.frameAspect, x / 100, y / 100);
-      const [l, tp, rt, b] = [r.left * 100, r.top * 100, (r.left + r.width) * 100, (r.top + r.height) * 100];
-      Object.assign(frame.style, { left: `${l}%`, top: `${tp}%`, width: `${r.width * 100}%`, height: `${r.height * 100}%` });
-      scrim.style.clipPath = `polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, 0 0, ${l}% ${tp}%, ${l}% ${b}%, ${rt}% ${b}%, ${rt}% ${tp}%, ${l}% ${tp}%)`;
-    };
-    draw(this.at.x, this.at.y);
-    if (!this.imageAspect) {
-      img.addEventListener('load', () => {
-        if (!img.naturalWidth || !img.naturalHeight) return;
-        aspect = img.naturalWidth / img.naturalHeight;
-        pic.style.aspectRatio = String(aspect);
-        draw(parseFloat(dot.style.left), parseFloat(dot.style.top));
-      });
-    }
+  constructor(view: EditorView, move: (p: Point) => void, drop: (p: Point) => void) {
+    this.root.className = 'cm-focus-point';
+    this.scrim.className = 'cm-focus-point-scrim';
+    this.frame.className = 'cm-focus-point-frame';
+    this.dot.className = 'cm-focus-point-dot';
+    this.dot.type = 'button';
+    this.dot.setAttribute('role', 'slider');
+    this.dot.setAttribute('aria-label', t('instrument.focus_aria'));
+    this.root.append(this.scrim, this.frame, this.dot);
 
     const pointer = (e: MouseEvent): Point => {
-      const r = pic.getBoundingClientRect();
-      const clamp = (v: number) => Math.min(100, Math.max(0, v));
+      const r = this.root.getBoundingClientRect();
       return { x: clamp(((e.clientX - r.left) / (r.width || 1)) * 100), y: clamp(((e.clientY - r.top) / (r.height || 1)) * 100) };
     };
-    let dragging = false;
-    pic.addEventListener('pointerdown', (e) => {
+    const go = (p: Point) => { this.at = p; this.paint(); move(p); };
+    this.dot.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
       e.preventDefault();
-      dragging = true;
-      pic.setPointerCapture?.(e.pointerId);
-      const p = pointer(e);
-      draw(p.x, p.y);
-      host?.move(p.x, p.y);
+      this.gesture = 'drag';
+      this.root.classList.add('is-adjusting');
+      this.dot.setPointerCapture?.(e.pointerId);
     });
-    pic.addEventListener('pointermove', (e) => {
-      if (!dragging) return;
-      const p = pointer(e);
-      draw(p.x, p.y);
-      host?.move(p.x, p.y);
-    });
+    // The press is the dot's: the editor must not read it as a click on the picture.
+    this.dot.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); });
+    this.dot.addEventListener('pointermove', (e) => { if (this.gesture === 'drag') go(pointer(e)); });
     const end = (e: PointerEvent) => {
-      if (!dragging) return;
-      dragging = false;
-      const p = pointer(e);
-      host?.drop(p.x, p.y);
+      if (this.gesture !== 'drag') return;
+      this.gesture = null;
+      this.root.classList.remove('is-adjusting');
+      drop(pointer(e));
     };
-    pic.addEventListener('pointerup', end);
-    pic.addEventListener('pointercancel', end);
-    return row;
+    this.dot.addEventListener('pointerup', end);
+    this.dot.addEventListener('pointercancel', end);
+    this.dot.addEventListener('keydown', (e) => {
+      const step = KEY_STEP[e.key];
+      if (step) {
+        const by = e.shiftKey ? 10 : 1;
+        this.gesture = 'keys';
+        this.root.classList.add('is-adjusting');
+        go({ x: clamp(Math.round(this.at.x) + step[0] * by), y: clamp(Math.round(this.at.y) + step[1] * by) });
+      } else if (e.key === 'Enter' || e.key === 'Escape') {
+        // Escape leaves the picture as it was: the blur then drops the dot where it started.
+        if (e.key === 'Escape' && this.shape) { this.at = this.shape.at; this.paint(); }
+        view.focus();
+      } else {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    this.dot.addEventListener('blur', () => {
+      this.root.classList.remove('is-adjusting');
+      if (this.gesture !== 'keys') return;
+      this.gesture = null;
+      drop(this.at);
+    });
+  }
+
+  /** Lay the overlay over `block` and draw it for `shape`. A gesture in progress keeps its own dot position. */
+  show(block: HTMLElement, shape: Overlay): void {
+    if (this.root.parentElement !== block) block.append(this.root);
+    this.shape = shape;
+    if (!this.gesture) this.at = shape.at;
+    this.paint();
+  }
+
+  hide(): void {
+    // First: removing a focused dot blurs it, and that blur must not write.
+    this.gesture = null;
+    this.root.remove();
+    this.root.classList.remove('is-adjusting');
+  }
+
+  private paint(): void {
+    const { x, y } = this.at;
+    this.dot.style.left = `${x}%`;
+    this.dot.style.top = `${y}%`;
+    this.dot.setAttribute('aria-valuenow', String(Math.round(x)));
+    this.dot.setAttribute('aria-valuetext', `${Math.round(x)}% ${Math.round(y)}%`);
+    const shape = this.shape;
+    const box = this.root.getBoundingClientRect();
+    const imageAspect = shape?.imageAspect || (box.height ? box.width / box.height : 0);
+    const known = !!shape && shape.frameAspect !== null && imageAspect > 0;
+    this.frame.hidden = !known;
+    this.scrim.hidden = !known;
+    if (!known) return;
+    const r = coverRect(imageAspect, shape.frameAspect!, x / 100, y / 100);
+    const [l, tp, rt, b] = [r.left * 100, r.top * 100, (r.left + r.width) * 100, (r.top + r.height) * 100];
+    Object.assign(this.frame.style, { left: `${l}%`, top: `${tp}%`, width: `${r.width * 100}%`, height: `${r.height * 100}%` });
+    this.scrim.style.clipPath = `polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, 0 0, ${l}% ${tp}%, ${l}% ${b}%, ${rt}% ${b}%, ${rt}% ${tp}%, ${l}% ${tp}%)`;
   }
 }
 
 export function focusPointExtension(opts: FocusPointOptions): Extension {
   const field = StateField.define<FocusState>({
-    create: () => ({ shown: null, dismissed: null, asset: null, frame: null, decos: Decoration.none }),
+    create: () => ({ shown: null, dismissed: null, frame: null, overlay: null }),
     update(prev, tr) {
-      if (!tr.docChanged && !tr.selection && !tr.effects.length) return prev;
+      const parsed = syntaxTree(tr.state) !== syntaxTree(tr.startState);
+      if (!tr.docChanged && !tr.selection && !tr.effects.length && !parsed) return prev;
       const at = tr.state.field(pictureAtCaretField);
       const picture = at?.picture ?? null;
-      let { dismissed, asset, frame } = prev;
+      let { dismissed, frame } = prev;
       if (picture?.line !== dismissed) dismissed = null;
-      if (picture?.target !== asset?.target) asset = null;
       if (at?.frameLine !== frame?.line) frame = null;
       for (const e of tr.effects) {
-        if (e.is(assetEffect)) asset = e.value;
-        else if (e.is(frameEffect)) frame = e.value;
+        if (e.is(frameEffect)) frame = e.value;
         else if (e.is(dismissEffect)) dismissed = e.value;
       }
       const shown = at && picture && picture.line !== dismissed ? { frameLine: at.frameLine, hero: at.heroLine !== null, picture } : null;
-      let decos = Decoration.none;
-      if (shown && asset?.target === shown.picture.target && cropped(shown.hero, asset.aspect, frame)) {
-        const widget = new FocusPointWidget(asset.url, asset.aspect, frame?.aspect ?? null, shown.picture.position ?? CENTER);
-        decos = Decoration.set([Decoration.widget({ widget, block: true, side: 1 }).range(tr.state.doc.line(shown.picture.line).to)]);
-      }
-      return { shown, dismissed, asset, frame, decos };
+      const img = shown && opts.resolveImage?.(shown.picture.target);
+      const imageAspect = img && img.width && img.height ? img.width / img.height : 0;
+      const overlay = shown && img && cropped(shown.hero, imageAspect, frame)
+        ? { line: shown.picture.line, imageAspect, frameAspect: frame?.aspect ?? null, at: shown.picture.position ?? CENTER }
+        : null;
+      return { shown, dismissed, frame, overlay };
     },
-    provide: (f) => EditorView.decorations.from(f, (s) => s.decos),
   });
 
   const controller = ViewPlugin.fromClass(class {
     private ctx: string | null = null;
-    private target: string | null = null;
+    readonly overlay: FocusOverlay;
     private frameLine = 0;
     private live: string | null = null;
     private dirty = false;
@@ -200,7 +204,7 @@ export function focusPointExtension(opts: FocusPointOptions): Extension {
     private readonly off: () => void;
 
     constructor(private readonly view: EditorView) {
-      hosts.set(view, { move: (x, y) => this.move(x, y), drop: (x, y) => this.drop(x, y) });
+      this.overlay = new FocusOverlay(view, (p) => this.move(p.x, p.y), (p) => this.drop(p.x, p.y));
       this.off = opts.host.on<HeroFrame>(HERO_FRAME, (f) => this.onFrame(f));
       this.sync();
     }
@@ -208,6 +212,21 @@ export function focusPointExtension(opts: FocusPointOptions): Extension {
     update(u: ViewUpdate): void {
       if (this.held && u.docChanged) this.letGoIfMoved(u);
       this.sync();
+    }
+
+    /** Lay the dot over the drawn picture once the editor's DOM is in place. */
+    private place(): void {
+      this.view.requestMeasure({
+        key: this,
+        read: (view) => {
+          const shape = view.state.field(field).overlay;
+          return shape ? { shape, block: drawnPictureBelow(view, view.state.doc.line(shape.line).from) } : null;
+        },
+        write: (found) => {
+          if (this.gone || !found?.block) this.overlay.hide();
+          else this.overlay.show(found.block, found.shape);
+        },
+      });
     }
 
     /**
@@ -230,7 +249,7 @@ export function focusPointExtension(opts: FocusPointOptions): Extension {
     destroy(): void {
       this.gone = true;
       this.off();
-      hosts.delete(this.view);
+      this.overlay.hide();
       this.release();
     }
 
@@ -244,20 +263,7 @@ export function focusPointExtension(opts: FocusPointOptions): Extension {
         this.frameLine = shown?.frameLine ?? 0;
         if (shown) opts.host.emit(HERO_FRAME_REQUEST, { path: opts.path(), line: shown.frameLine } satisfies HeroFrameRequest);
       }
-      const target = shown?.picture.target ?? null;
-      if (target !== this.target) {
-        this.target = target;
-        if (target) void this.resolve(target);
-      }
-    }
-
-    private async resolve(target: string): Promise<void> {
-      let asset: InstrumentAsset | null | undefined;
-      try { asset = await opts.resolveAsset(target); } catch { return; }
-      if (this.gone || this.target !== target || !asset?.mime_type.startsWith('image/')) return;
-      const url = sourceAssetUrl(asset.request_url, assetBustQuery(asset.request_url));
-      const aspect = asset.width && asset.height ? asset.width / asset.height : 0;
-      this.view.dispatch({ effects: assetEffect.of({ target, url, aspect }) });
+      this.place();
     }
 
     private onFrame(f: HeroFrame): void {
@@ -301,7 +307,7 @@ export function focusPointExtension(opts: FocusPointOptions): Extension {
     }
   });
 
-  const escape = Prec.high(keymap.of([{
+  const keys = Prec.high(keymap.of([{
     key: 'Escape',
     run: (view) => {
       const shown = view.state.field(field).shown;
@@ -309,7 +315,16 @@ export function focusPointExtension(opts: FocusPointOptions): Extension {
       view.dispatch({ effects: dismissEffect.of(shown.picture.line) });
       return true;
     },
+  }, {
+    // Not Mod-Enter, which opens what the caret is on.
+    key: 'Alt-Enter',
+    run: (view) => {
+      const dot = view.plugin(controller)?.overlay.dot;
+      if (!dot?.isConnected) return false;
+      dot.focus();
+      return true;
+    },
   }]));
 
-  return [field, controller, escape];
+  return [field, controller, keys];
 }

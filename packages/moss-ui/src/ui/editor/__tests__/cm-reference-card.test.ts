@@ -166,12 +166,12 @@ describe('hover on what no longer hides its source', () => {
   let view: EditorView;
   afterEach(() => { vi.useRealTimers(); view?.destroy(); document.body.innerHTML = ''; });
 
-  function mount(doc: string, provider: CardProvider): EditorView {
+  function mount(doc: string, provider: CardProvider, more: Extension[] = []): EditorView {
     vi.useFakeTimers();
     view = new EditorView({
       state: EditorState.create({
         doc,
-        extensions: [markdown({ extensions: [wikilinkConfig, footnoteConfig] }), referenceCardExtension(), chordTrackingExtension(), cardProviders.of(provider)],
+        extensions: [markdown({ extensions: [wikilinkConfig, footnoteConfig] }), referenceCardExtension(), chordTrackingExtension(), cardProviders.of(provider), ...more],
       }),
       parent: document.body,
     });
@@ -188,17 +188,26 @@ describe('hover on what no longer hides its source', () => {
     expect(v.state.field(cardField)?.spec.body.textContent).toBe('The note.');
   });
 
-  test('plain hover on the rendered block below an embed line opens the asset card for that embed', () => {
+  test("hover on an embed's path opens its card only while no picture is drawn below the line", async () => {
+    const { blockEmbedsExtension } = await import('../cm-block-embeds');
     const doc = '![Alt](images/logo.png)\n\ntext';
     const cache = { get: () => ({ kind: { kind: 'image' } }) } as any;
-    const v = mount(doc, assetCardProvider(cache));
-    const row = document.createElement('div');
-    row.className = 'cm-lp-image-row';
-    v.dom.appendChild(row); // outside contentDOM: jsdom cannot measure a foreign block there
-    v.posAtDOM = () => doc.indexOf('\n'); // a block widget's position is its source line's end
-    row.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
-    vi.advanceTimersByTime(150);
-    expect(v.state.field(cardField)?.spec.title).toBe('images/logo.png');
+    for (const drawn of [false, true]) {
+      const v = mount(doc, assetCardProvider(cache), [blockEmbedsExtension({ resolveImage: () => (drawn ? { url: 'moss-source://logo.png' } : undefined) })]);
+      expect(!!v.dom.querySelector('.cm-lp-image-block')).toBe(drawn);
+      v.posAtCoords = () => doc.indexOf('logo');
+      v.dom.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
+      vi.advanceTimersByTime(500);
+      expect(v.state.field(cardField)?.spec.title, `drawn: ${drawn}`).toBe(drawn ? undefined : 'images/logo.png');
+      if (drawn) {
+        // Nor on the picture itself.
+        v.posAtDOM = () => doc.indexOf('\n'); // a block widget's position is its source line's end
+        v.dom.querySelector('.cm-lp-image-row')!.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
+        vi.advanceTimersByTime(500);
+        expect(v.state.field(cardField)).toBeNull();
+      }
+      v.destroy();
+    }
   });
 
   test('hover on the same embed\'s source opens its card over the path only, not the alt text', () => {
@@ -813,4 +822,47 @@ test('map matching reads the same parsed style modifiers for hover and follow', 
     const state = EditorState.create({ doc, extensions: [markdown({ extensions: [wikilinkConfig] })] });
     expect(isCurrentArticleMapAt(state, doc.indexOf('#'))).toBe(true);
   }
+});
+
+describe('pictureIsDrawn', () => {
+  async function drawn(doc: string, resolves = true) {
+    const { blockEmbedsExtension } = await import('../cm-block-embeds');
+    const { shortcodeBlockConfig } = await import('@symbiosis-lab/moss-syntax');
+    const { pictureIsDrawn } = await import('../cm-reference-card');
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        extensions: [markdown({ extensions: [wikilinkConfig, shortcodeBlockConfig] }), blockEmbedsExtension({ resolveImage: () => (resolves ? { url: 'moss-source://c.png' } : undefined) })],
+      }),
+    });
+    return { at: (text: string) => pictureIsDrawn(view, { probe: doc.indexOf(text) + 1 }), view };
+  }
+
+  test("an embed's own path, once its picture is drawn below the line", async () => {
+    const { at, view } = await drawn('![cover](c.png)\n');
+    expect(at('c.png')).toBe(true);
+    view.destroy();
+  });
+
+  test('a link around a picture keeps its card: only the picture’s path is the picture', async () => {
+    const { at, view } = await drawn('[![cover](c.png)](/about/)\n');
+    expect(at('c.png')).toBe(true);
+    expect(at('/about/')).toBe(false);
+    view.destroy();
+  });
+
+  test("a hero's picture, written as `image=` or as the bare path", async () => {
+    for (const doc of [':::hero {image=art/c.png}\n# Title\n:::\n', ':::hero art/c.png\n# Title\n:::\n']) {
+      const { at, view } = await drawn(doc);
+      expect(view.dom.querySelector('.cm-lp-image-block'), doc).not.toBeNull();
+      expect(at('art/c.png'), doc).toBe(true);
+      view.destroy();
+    }
+  });
+
+  test('a picture that is not drawn keeps its card', async () => {
+    const { at, view } = await drawn('![cover](c.png)\n', false);
+    expect(at('c.png')).toBe(false);
+    view.destroy();
+  });
 });

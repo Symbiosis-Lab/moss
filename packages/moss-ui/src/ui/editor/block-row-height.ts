@@ -201,6 +201,12 @@ function widthFraction(widthToken: string | undefined): number {
  * trade-off is the part to argue with.
  */
 export const IMAGE_HEIGHT_CAP = 400;
+/**
+ * The cap for a picture whose line is structure (a cell of a `:::` fence, a
+ * hero's opening line): it is drawn small, so a six-cell gallery stays a few
+ * rows of the editor and the preview shows the real layout.
+ */
+export const COMPACT_IMAGE_HEIGHT_CAP = 120;
 
 /**
  * The width a block image actually renders at — the ONE owner of that answer,
@@ -224,16 +230,17 @@ export function imageDisplayWidth(
   intrinsicHeight: number,
   widthToken: string | undefined,
   columnWidth: number,
+  heightCap = IMAGE_HEIGHT_CAP,
 ): number {
   const column = columnWidth > 0 ? columnWidth : FALLBACK_COLUMN_WIDTH;
   const requested = widthToken
     ? column * widthFraction(widthToken)
     : Math.min(column, intrinsicWidth);
-  return Math.min(requested, imageCapWidth(intrinsicWidth, intrinsicHeight));
+  return Math.min(requested, imageCapWidth(intrinsicWidth, intrinsicHeight, heightCap));
 }
 
 /**
- * The width at which this image is exactly `IMAGE_HEIGHT_CAP` tall.
+ * The width at which this image is exactly `heightCap` tall.
  *
  * Depends on the picture alone, never on the column, which is what lets
  * `toDOM` hand it straight to `max-width` in px: a `|NN%` box stays a
@@ -241,8 +248,8 @@ export function imageDisplayWidth(
  * column-derived px width would go stale the moment the pane was resized,
  * because `toDOM` does not re-run for a geometry change.
  */
-export function imageCapWidth(intrinsicWidth: number, intrinsicHeight: number): number {
-  return IMAGE_HEIGHT_CAP * (intrinsicWidth / intrinsicHeight);
+export function imageCapWidth(intrinsicWidth: number, intrinsicHeight: number, heightCap = IMAGE_HEIGHT_CAP): number {
+  return heightCap * (intrinsicWidth / intrinsicHeight);
 }
 
 /**
@@ -260,8 +267,9 @@ export function imageRowHeight(
   intrinsicHeight: number | undefined,
   widthToken: string | undefined,
   columnWidth: number,
+  heightCap = IMAGE_HEIGHT_CAP,
 ): number {
-  if (!intrinsicWidth || !intrinsicHeight) return ROW_PADDING + 200;
-  const renderedWidth = imageDisplayWidth(intrinsicWidth, intrinsicHeight, widthToken, columnWidth);
+  if (!intrinsicWidth || !intrinsicHeight) return ROW_PADDING + Math.min(200, heightCap);
+  const renderedWidth = imageDisplayWidth(intrinsicWidth, intrinsicHeight, widthToken, columnWidth, heightCap);
   return ROW_PADDING + Math.round((intrinsicHeight / intrinsicWidth) * renderedWidth);
 }

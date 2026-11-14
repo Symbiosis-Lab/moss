@@ -1,5 +1,6 @@
 /** What the caret is on, read once for every instrument: the hero it is in (if any), whether it is on the hero's opening line, and the picture on the caret's line. */
 
+import { syntaxTree } from '@codemirror/language';
 import { StateField, type EditorState } from '@codemirror/state';
 import { collectShortcodeBlocks, flattenBlocks } from '@symbiosis-lab/moss-syntax/cm6';
 import {
@@ -61,5 +62,6 @@ function pictureAtCaret(state: EditorState): PictureAtCaret | null {
 
 export const pictureAtCaretField = StateField.define<PictureAtCaret | null>({
   create: pictureAtCaret,
-  update: (value, tr) => (tr.docChanged || tr.selection ? pictureAtCaret(tr.state) : value),
+  // The hero around the caret is read off the syntax tree, which can finish parsing after the caret is placed.
+  update: (value, tr) => (tr.docChanged || tr.selection || syntaxTree(tr.state) !== syntaxTree(tr.startState) ? pictureAtCaret(tr.state) : value),
 });

@@ -12,7 +12,7 @@ import { EditorState, StateField, type Extension } from '@codemirror/state';
 import { Decoration, type DecorationSet, EditorView, type ViewUpdate } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
 import {
-  embedParts, isEmbedNode, folderParamsFromEmbed, linkUnitOfEmbed, type EmbedParts,
+  embedParts, extractImageTargets, isEmbedNode, folderParamsFromEmbed, linkUnitOfEmbed, type EmbedParts,
   shortcodeBodyRanges, inShortcodeBody,
 } from '@symbiosis-lab/moss-syntax/cm6';
 import { folderCardDetail, type MediaEmbedKind, type FolderListingFacts } from './cm-media-embed';
@@ -71,6 +71,19 @@ export function blockEmbedsIn(state: EditorState, from: number, to: number): Blo
 export function blockEmbedOnLine(state: EditorState, pos: number): BlockEmbed | null {
   const line = state.doc.lineAt(pos);
   return blockEmbedsIn(state, line.from, line.to)[0] ?? null;
+}
+
+/** The picture drawn below the line that holds `pos`, or null when none is drawn there. */
+export function drawnPictureBelow(view: EditorView, pos: number): HTMLElement | null {
+  const line = view.state.doc.lineAt(pos);
+  if (line.to < view.viewport.from || line.from > view.viewport.to) return null;
+  const at = view.domAtPos(line.from).node;
+  const lineEl = (at instanceof Element ? at : at.parentElement)?.closest('.cm-line');
+  for (let el = lineEl?.nextElementSibling; el && !el.classList.contains('cm-line'); el = el.nextElementSibling) {
+    const block = el.matches('.cm-lp-image-row') ? el.querySelector<HTMLElement>('.cm-lp-image-block') : null;
+    if (block) return block;
+  }
+  return null;
 }
 
 /** The embed a caret or hover at `pos` is on, Any position of a block embed's line counts; an inline embed counts over any of its own characters, either edge included. An inline picture is only its source text: nothing is drawn for it, so this is how its card is found. */
@@ -193,6 +206,14 @@ export function buildBlockEmbedDecorations(
       if (d) decos.push(d);
     }
   }
+  // A hero's `image=` is drawn like a fence cell's picture: small, below its line.
+  for (const { from: at, target } of extractImageTargets(state).filter((t) => t.attr)) {
+    const { to } = state.doc.lineAt(at);
+    const img = opts.resolveImage?.(target);
+    if (!img) continue;
+    const widget = new ImageBlockWidget({ url: img.url, srcset: img.srcset, alt: '', intrinsicWidth: img.width, intrinsicHeight: img.height, intraLineOffset: 0, compact: true });
+    decos.push({ from: to, to, deco: Decoration.widget({ widget, block: true, side: 1 }) });
+  }
   return Decoration.set(decos.map((d) => d.deco.range(d.from, d.to)), true);
 }
 
@@ -207,14 +228,16 @@ function blockEmbedDecoration(
   const intraLineOffset = b.from - line.from;
 
   // A `:::` fence body is STRUCTURE, not reading matter: a gallery or grid lists
-  // one embed per cell, so a picture below every source line would turn six cells
-  // into six full-column photographs (~3000px against six lines). Its source line
-  // is all the editor shows; the preview pane draws the picture in its real layout.
-  if (inShortcodeBody(fenceBodies, b.from)) return null;
+  // one embed per cell, so a full picture below every source line would turn six
+  // cells into six full-column photographs (~3000px against six lines). A picture
+  // there is drawn small and a player or card not at all; the preview pane draws
+  // them in their real layout.
+  const structure = inShortcodeBody(fenceBodies, b.from);
 
   const classification = classifyEmbedTarget(target, opts.resolveImage, opts.resolveEmbed);
   // link/anchor/not-found/ambiguous, or not yet resolved: nothing to draw below.
   if (classification.kind === 'unrenderable' || classification.kind === 'pending') return null;
+  if (structure && classification.kind === 'media') return null;
   const unit = b.unit;
   let widget: ImageBlockWidget | MediaEmbedBlockWidget;
   if (classification.kind === 'media') {
@@ -249,6 +272,7 @@ function blockEmbedDecoration(
       onSetWidth: opts.onSetWidth,
       link: unit && opts.canFollowLink?.(unit.href) ? { href: unit.href } : undefined,
       onNavigate: opts.navigateLink,
+      compact: structure,
     });
   }
   // After the line's end, in the gap before the next line: the source line is

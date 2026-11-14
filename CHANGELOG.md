@@ -8,6 +8,7 @@ All notable changes to moss will be documented here.
 
 - A page made or renamed in the browser editor in the first second after it opens is built at once. It used to wait until the folder was noticed as changed, up to 20 seconds.
 - `moss build --serve --watch` opens a folder at once while a plugin is still reading its files, and fills each page in when the read ends. It used to wait for the read.
+- With the caret on a hero's picture far down a long page, the outline of what the page keeps now appears on the picture. It was missing until the caret was moved away and back.
 - A newsletter is not sent for a post the published site does not show. Publishing a post whose file says `draft: true` no longer opens its email and says the newsletter was skipped, and sending one the last publish left out says to publish the site first; the email used to go out linking to a page that was not there.
 - A newsletter's list of recent posts links each post at the address the site serves, and leaves out pages the site does not show. It used to build each address from the file's name and list whatever the folder held, so a post with its own address was linked at a page that did not exist, and a draft or a post written since the last publish could be listed.
 - A newsletter's "Read on the web" link opens the post. It used to open the site's home page, and links in the post written relative to it pointed there too.
@@ -35,6 +36,9 @@ All notable changes to moss will be documented here.
 
 ### Changed
 
+- In the editor, a picture inside a `:::` block and a hero's picture are drawn small below their line at all times, so the text no longer moves when the caret reaches a picture's line. The focus point is a dot on that picture, with an outline of what the page keeps; it replaces the second picture and the line of instruction that appeared under the line. Drag the dot, or press ⌥⏎ (Alt+Enter) on the line and move it with the arrow keys (Shift for steps of 10). A hero written with a bare path (`:::hero cover.jpg`) is drawn without a dot; write it as `image=` to set its focus point.
+- Resting the pointer on a picture drawn in the editor, or on its path, no longer opens a card repeating the picture. ⌘K on an embedded picture's line still opens the card with its fields.
+- In the editor, dragging the dot no longer repairs a picture line whose focus point was left in its address (`(photo.jpg|focus:20%,62%)`): that line names no file, so no picture is drawn for it. Move `|focus:20%,62%` from the address into the brackets by hand.
 - A copy whose send was cut off is posted again only when its network says outright that there is no such copy. A channel plugin that answered "nothing found" now leaves the copy waiting, as it does when the network cannot be asked, until `moss deploy --retry-copies=<channel>`; the channel's next release answers in the new way.
 - A copy handed to you to post yourself is found and recorded once you post it, not only when the network kept a draft of it. If it cannot be found it stays handed off. `moss deploy <folder> --retry-copies=<channel> --copies-of=<file>` hands that page's copy to you again (`--copies-of` sends only that page's copies); `--retry-copies` alone leaves handed-off copies as they are.
 - A copy stays with the account it was posted from. While a channel is signed in to another account, moss does not look it up, post it again, edit it or delete it; the publish says so once, and the work goes on when that account is signed in again. This applies to channels whose plugin says which account is signed in.

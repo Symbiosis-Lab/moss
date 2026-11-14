@@ -1,9 +1,11 @@
-import { afterEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, describe, expect, test } from 'vitest';
 import { markdown } from '@codemirror/lang-markdown';
+import { forceParsing } from '@codemirror/language';
 import { EditorState, Transaction } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { history, undo } from '@codemirror/commands';
 import { focusPointExtension } from '../focus-point';
+import { blockEmbedsExtension } from '../../cm-block-embeds';
 import { pictureAtCaretField } from '../picture-context';
 import { MARKDOWN_EXTENSIONS } from '../source-extensions';
 import { HERO_FRAME, HERO_FRAME_REQUEST, HERO_IMAGE_FOCUS } from '../../session/instrument-events';
@@ -18,45 +20,108 @@ const host = {
 };
 
 const HERO = [':::hero', '![[photo.jpg|cover top]]', '# Title', ':::', '', '![[photo.jpg]]'].join('\n');
-const ASSET = { request_url: '/photo.jpg', mime_type: 'image/jpeg', width: 2000, height: 1000 };
+const IMAGE = { url: '/photo.jpg', width: 2000, height: 1000 };
 
 let view: EditorView | null = null;
 afterEach(() => { view?.destroy(); view = null; document.body.innerHTML = ''; wire.sent.length = 0; wire.handlers.clear(); });
 
-function open(doc: string, caretLine: number, asset = ASSET) {
+function open(doc: string, caretLine: number, image: typeof IMAGE | null = IMAGE, parse = true) {
   const userEvents: (string | undefined)[] = [];
-  const resolveAsset = vi.fn(async () => asset);
+  const resolveImage = () => image ?? undefined;
   view = new EditorView({
-    state: EditorState.create({ doc, extensions: [markdown({ extensions: MARKDOWN_EXTENSIONS }), history(), pictureAtCaretField, focusPointExtension({ path: () => 'p.md', resolveAsset, host }),
+    state: EditorState.create({ doc, extensions: [markdown({ extensions: MARKDOWN_EXTENSIONS }), history(), pictureAtCaretField, focusPointExtension({ path: () => 'p.md', resolveImage, host }),
+      blockEmbedsExtension({ resolveImage }),
       EditorView.updateListener.of((u) => u.transactions.forEach((tr) => userEvents.push(tr.annotation(Transaction.userEvent))))] }),
     parent: document.body,
   });
+  // The first parse runs on a time budget; a slow machine can place the caret before the hero is parsed.
+  if (parse) forceParsing(view, doc.length, 10_000);
   const goto = (n: number) => view!.dispatch({ selection: { anchor: view!.state.doc.line(n).from } });
   goto(caretLine);
   const answer = (payload: unknown) => wire.handlers.get(HERO_FRAME)!({ payload });
-  return { view, sent: wire.sent, answer, goto, resolveAsset, userEvents };
+  return { view, sent: wire.sent, answer, goto, userEvents };
 }
 
-const settle = () => new Promise((r) => setTimeout(r, 0));
-const picture = () => document.querySelector<HTMLElement>('.cm-focus-point-pic');
+/** The editor's measure pass lays the dot over the drawn picture. */
+const settle = async () => {
+  await new Promise((r) => setTimeout(r, 0));
+  for (let i = 0; i < 2; i++) await new Promise<void>((r) => requestAnimationFrame(() => r()));
+};
+const picture = () => document.querySelector<HTMLElement>('.cm-lp-image-block > .cm-focus-point');
+const dot = () => document.querySelector<HTMLElement>('.cm-focus-point-dot')!;
 const frame = () => document.querySelector<HTMLElement>('.cm-focus-point-frame');
 const focusWrites = (sent: [string, unknown][]) => sent.filter(([n]) => n === HERO_IMAGE_FOCUS).map(([, p]) => p);
 
-/** Pointer events on the picture, with a 200x100 box at the origin. */
+/** Pointer events on the dot, over a picture with a 200x100 box at the origin. */
 function pointer(type: string, xPct: number, yPct: number) {
-  const pic = picture()!;
-  pic.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 100, right: 200, bottom: 100, x: 0, y: 0, toJSON: () => ({}) });
-  pic.dispatchEvent(new MouseEvent(type, { bubbles: true, button: 0, clientX: xPct * 2, clientY: yPct }));
+  picture()!.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 100, right: 200, bottom: 100, x: 0, y: 0, toJSON: () => ({}) });
+  dot().dispatchEvent(new MouseEvent(type, { bubbles: true, button: 0, clientX: xPct * 2, clientY: yPct }));
 }
 
 describe('focus point instrument', () => {
-  test('caret on a hero picture asks for the hero frame and draws the whole picture with a dot', async () => {
+  test('caret on a hero picture asks for the hero frame and lays a dot over the drawn picture', async () => {
     const { sent } = open(HERO, 2);
     expect(sent).toContainEqual([HERO_FRAME_REQUEST, { path: 'p.md', line: 1 }]);
     await settle();
-    expect(document.querySelector('.cm-focus-point img')?.getAttribute('src')).toContain('/photo.jpg');
-    const dot = document.querySelector<HTMLElement>('.cm-focus-point-dot')!;
-    expect([dot.style.left, dot.style.top]).toEqual(['50%', '0%']);
+    expect(picture()!.parentElement!.querySelector('img')?.getAttribute('src')).toContain('/photo.jpg');
+    expect([dot().style.left, dot().style.top]).toEqual(['50%', '0%']);
+  });
+
+  test('a hero parsed after the caret is placed is still asked for by its own line', () => {
+    const above = 'A paragraph of prose.\n\n'.repeat(60_000);
+    const first = above.split('\n').length;
+    const { view, sent } = open(above + HERO, first + 1, IMAGE, false);
+    expect(sent).not.toContainEqual([HERO_FRAME_REQUEST, { path: 'p.md', line: first }]);
+    forceParsing(view, view.state.doc.length, 30_000);
+    expect(sent).toContainEqual([HERO_FRAME_REQUEST, { path: 'p.md', line: first }]);
+  }, 60_000);
+
+  test('Escape on the dot writes nothing and puts the preview back', async () => {
+    const { view, sent } = open(HERO, 2);
+    await settle();
+    view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', altKey: true, bubbles: true }));
+    dot().dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    dot().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(view.state.doc.toString()).toBe(HERO);
+    expect(focusWrites(sent).at(-1)).toEqual({ path: 'p.md', line: 1, position: null });
+  });
+
+  test('the instrument adds no row and no words to the document', async () => {
+    const { goto } = open(HERO, 3);
+    await settle();
+    const rows = () => [...document.querySelectorAll('.cm-content > *')].map((el) => el.className);
+    const before = rows();
+    goto(2);
+    await settle();
+    expect(picture()).not.toBeNull();
+    expect(rows()).toEqual(before);
+    expect(picture()!.textContent).toBe('');
+  });
+
+  test('the picture of a hero opened with image= is drawn below its line wherever the caret is', async () => {
+    const { goto } = open([':::hero {image=photo.jpg}', 'Words', ':::', '', 'after'].join('\n'), 5);
+    await settle();
+    const drawn = () => document.querySelectorAll('.cm-line:first-child + .cm-lp-image-row img').length;
+    expect(drawn()).toBe(1);
+    goto(1);
+    await settle();
+    expect(drawn()).toBe(1);
+  });
+
+  test('Alt-Enter puts the keyboard on the dot, and Mod-Enter is left to open the picture; arrows move the dot and leaving it writes once', async () => {
+    const { view, sent } = open(HERO, 2);
+    await settle();
+    view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }));
+    view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true }));
+    expect(document.activeElement).not.toBe(dot());
+    view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', altKey: true, bubbles: true }));
+    expect(document.activeElement).toBe(dot());
+    dot().dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', shiftKey: true, bubbles: true }));
+    dot().dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+    expect(focusWrites(sent).at(-1)).toEqual({ path: 'p.md', line: 1, position: '49% 10%' });
+    expect(view.state.doc.toString()).toBe(HERO);
+    dot().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(view.state.doc.line(2).text).toBe('![[photo.jpg|cover focus:49%,10%]]');
   });
 
   test('without an answer there is no outline; with one, the outline is the cover crop at the dot', async () => {
@@ -64,6 +129,7 @@ describe('focus point instrument', () => {
     await settle();
     expect(frame()!.hidden).toBe(true);
     answer({ line: 1, width: 500, height: 500 });
+    await settle();
     // picture 2:1, frame 1:1, dot at the top-centre: the left half-width strip centred on 50%.
     expect(frame()!.hidden).toBe(false);
     expect([frame()!.style.left, frame()!.style.top, frame()!.style.width, frame()!.style.height]).toEqual(['25%', '0%', '50%', '100%']);
@@ -73,6 +139,7 @@ describe('focus point instrument', () => {
     const { answer } = open(HERO, 2);
     await settle();
     answer({ line: 9, width: 500, height: 500 });
+    await settle();
     expect(frame()!.hidden).toBe(true);
   });
 
@@ -80,6 +147,7 @@ describe('focus point instrument', () => {
     const { view, sent } = open(HERO, 2);
     await settle();
     pointer('pointerdown', 20, 62);
+    pointer('pointermove', 20, 62);
     pointer('pointermove', 20, 70);
     expect(focusWrites(sent)).toEqual([{ path: 'p.md', line: 1, position: '20% 62%' }, { path: 'p.md', line: 1, position: '20% 70%' }]);
     expect(view.state.doc.toString()).toBe(HERO);
@@ -141,6 +209,7 @@ describe('focus point instrument', () => {
     const { view, sent } = open(HERO, 2);
     await settle();
     pointer('pointerdown', 20, 62);
+    pointer('pointermove', 20, 62);
     pointer('pointerup', 50, 0);
     expect(view.state.doc.toString()).toBe(HERO);
     expect(focusWrites(sent).at(-1)).toEqual({ path: 'p.md', line: 1, position: null });
@@ -150,7 +219,9 @@ describe('focus point instrument', () => {
     const { view, sent, goto } = open(HERO, 2);
     await settle();
     pointer('pointerdown', 20, 62);
+    pointer('pointermove', 20, 62);
     goto(3);
+    await settle();
     expect(picture()).toBeNull();
     expect(focusWrites(sent).at(-1)).toEqual({ path: 'p.md', line: 1, position: null });
     expect(view.state.doc.toString()).toBe(HERO);
@@ -160,7 +231,9 @@ describe('focus point instrument', () => {
     const { view, sent, goto } = open(HERO, 2);
     await settle();
     pointer('pointerdown', 20, 62);
+    pointer('pointermove', 20, 62);
     view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await settle();
     expect(picture()).toBeNull();
     expect(focusWrites(sent).at(-1)).toEqual({ path: 'p.md', line: 1, position: null });
     expect(view.state.doc.toString()).toBe(HERO);
@@ -182,10 +255,10 @@ describe('focus point instrument', () => {
     ['the closing fence', HERO, 4],
     ['the opening line of a block that only starts with hero', ':::hero-banner {image=photo.jpg}\nwords\n:::', 1],
   ])('%s gets no instrument', async (_what, doc, line) => {
-    const { sent, resolveAsset } = open(doc, line);
+    const { sent } = open(doc, line);
     await settle();
     expect(sent).toEqual([]);
-    expect(resolveAsset).not.toHaveBeenCalled();
+    expect(picture()).toBeNull();
   });
 
   describe('a picture outside any hero', () => {
@@ -194,8 +267,10 @@ describe('focus point instrument', () => {
       expect(sent).toContainEqual([HERO_FRAME_REQUEST, { path: 'p.md', line: 6 }]);
       await settle();
       answer({ line: 6, width: 500, height: 500 });
+      await settle();
       expect(picture()).not.toBeNull();
       pointer('pointerdown', 20, 62);
+      pointer('pointermove', 20, 62);
       expect(focusWrites(sent)).toEqual([{ path: 'p.md', line: 6, position: '20% 62%' }]);
       pointer('pointerup', 20, 62);
       expect(view.state.doc.line(6).text).toBe('![[photo.jpg|focus:20%,62%]]');
@@ -207,6 +282,7 @@ describe('focus point instrument', () => {
       await settle();
       expect(picture()).toBeNull();
       answer({ line: 6, width: 500, height: 500 });
+      await settle();
       expect(picture()).not.toBeNull();
     });
 
@@ -214,10 +290,13 @@ describe('focus point instrument', () => {
       const { answer } = open(HERO, 6);
       await settle();
       answer({ line: 6, width: 400, height: 200 });
+      await settle();
       expect(picture()).toBeNull();
       answer({ line: 6, width: 400, height: 201 });
+      await settle();
       expect(picture()).toBeNull();
       answer({ line: 6, width: 400, height: 210 });
+      await settle();
       expect(picture()).not.toBeNull();
     });
   });
@@ -226,11 +305,12 @@ describe('focus point instrument', () => {
     const { answer } = open(HERO, 2);
     await settle();
     answer({ line: 1, width: 400, height: 200 });
+    await settle();
     expect(picture()).toBeNull();
   });
 
   test('something that is not an image gets no widget', async () => {
-    open(HERO, 2, { ...ASSET, mime_type: 'video/mp4' });
+    open(HERO, 2, null);
     await settle();
     expect(picture()).toBeNull();
   });

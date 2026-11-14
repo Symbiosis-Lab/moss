@@ -135,8 +135,6 @@ describe('extractImageTargets — shortcode attributes', () => {
     expect(t).toHaveLength(1);
     expect(t[0].target).toBe('assets/cover.jpg');
     expect(doc.slice(t[0].from, t[0].to)).toBe('assets/cover.jpg');
-    // The flag is what stops the hover popover suppressing itself: nothing
-    // paints a hero attribute inline, so the hover is the only way to see it.
     expect(t[0].attr).toBe(true);
   });
 

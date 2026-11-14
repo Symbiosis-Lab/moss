@@ -68,11 +68,8 @@ interface ImageTarget {
    * True when the path was written as a shortcode ATTRIBUTE
    * (`:::hero {image=photo.jpg}`) rather than as a markdown embed.
    *
-   * Callers that ask "is this already on screen?" must branch on it. An
-   * embed's answer is yes — live preview paints it full size, which is why
-   * the hover popover suppresses itself over one. A hero attribute's answer
-   * is no: nothing paints it but the micro-tag's ~18px thumbnail, so the
-   * hover is the only way to actually see the picture.
+   * The editor draws its picture small below the fence line; an embed's is
+   * drawn at the size the page gives it.
    */
   attr?: boolean;
 }

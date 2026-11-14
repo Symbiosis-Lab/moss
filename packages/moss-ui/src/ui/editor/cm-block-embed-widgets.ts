@@ -11,7 +11,7 @@ import { iconFor, type MediaEmbedKind, type FolderCardDetail } from './cm-media-
 import { isFollowChord } from './cm-link-nav';
 import {
   imageRowHeight, imageCapWidth, imageDisplayWidth, editorColumnWidth, refreshEditorColumnWidth,
-  mediaRowHeight, recordVideoAspect, type MediaRowShape,
+  mediaRowHeight, recordVideoAspect, IMAGE_HEIGHT_CAP, COMPACT_IMAGE_HEIGHT_CAP, type MediaRowShape,
 } from './block-row-height';
 import { t } from "../i18n/index";
 import type { UiStringMap } from "../i18n/index";
@@ -58,6 +58,8 @@ export interface ImageBlockWidgetOptions {
   link?: { href: string };
   /** Cmd/Ctrl+click handler for a linked embed. */
   onNavigate?: (href: string) => void;
+  /** Drawn small, with no width of its own: the picture of a line that is structure. */
+  compact?: boolean;
 }
 
 export class ImageBlockWidget extends WidgetType {
@@ -73,6 +75,7 @@ export class ImageBlockWidget extends WidgetType {
   private readonly onSetWidth: SetImageWidthFn | undefined;
   private readonly link: { href: string } | undefined;
   private readonly onNavigate: ((href: string) => void) | undefined;
+  private readonly heightCap: number;
 
   constructor(opts: ImageBlockWidgetOptions) {
     super();
@@ -82,8 +85,9 @@ export class ImageBlockWidget extends WidgetType {
     this.intrinsicWidth = opts.intrinsicWidth;
     this.intrinsicHeight = opts.intrinsicHeight;
     this.intraLineOffset = opts.intraLineOffset;
-    this.width = opts.width;
-    this.onSetWidth = opts.onSetWidth;
+    this.width = opts.compact ? undefined : opts.width;
+    this.onSetWidth = opts.compact ? undefined : opts.onSetWidth;
+    this.heightCap = opts.compact ? COMPACT_IMAGE_HEIGHT_CAP : IMAGE_HEIGHT_CAP;
     this.link = opts.link;
     this.onNavigate = opts.onNavigate;
   }
@@ -95,12 +99,12 @@ export class ImageBlockWidget extends WidgetType {
   // just finished must reach the <img>.
   eq(other: ImageBlockWidget): boolean {
     return other.url === this.url && other.srcset === this.srcset && other.alt === this.alt
-      && other.width === this.width
+      && other.width === this.width && other.heightCap === this.heightCap
       && other.link?.href === this.link?.href;
   }
 
   get estimatedHeight(): number {
-    return imageRowHeight(this.intrinsicWidth, this.intrinsicHeight, this.width, editorColumnWidth());
+    return imageRowHeight(this.intrinsicWidth, this.intrinsicHeight, this.width, editorColumnWidth(), this.heightCap);
   }
 
   toDOM(view?: EditorView): HTMLElement {
@@ -115,11 +119,13 @@ export class ImageBlockWidget extends WidgetType {
       wrapper.style.width = this.width;
     }
     if (this.intrinsicWidth && this.intrinsicHeight) {
-      const cap = imageCapWidth(this.intrinsicWidth, this.intrinsicHeight);
+      const cap = imageCapWidth(this.intrinsicWidth, this.intrinsicHeight, this.heightCap);
       wrapper.style.maxWidth = `${Math.round(
         this.width ? cap : Math.min(this.intrinsicWidth, cap)
       )}px`;
       wrapper.style.aspectRatio = `${this.intrinsicWidth} / ${this.intrinsicHeight}`;
+    } else if (this.heightCap !== IMAGE_HEIGHT_CAP) {
+      wrapper.style.maxWidth = `${this.heightCap}px`;
     }
 
     const img = document.createElement('img');
@@ -139,7 +145,7 @@ export class ImageBlockWidget extends WidgetType {
     if (this.srcset && this.intrinsicWidth && this.intrinsicHeight) {
       // The width at this toDOM; a later divider drag does not re-run toDOM,
       // so `sizes` keeps this value until the widget is rebuilt.
-      img.sizes = `${Math.round(imageDisplayWidth(this.intrinsicWidth, this.intrinsicHeight, this.width, editorColumnWidth()))}px`;
+      img.sizes = `${Math.round(imageDisplayWidth(this.intrinsicWidth, this.intrinsicHeight, this.width, editorColumnWidth(), this.heightCap))}px`;
       img.srcset = this.srcset;
     }
     img.src = this.url;
