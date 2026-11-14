@@ -126,8 +126,6 @@ const PHASE_BUDGETS_MS: &[(&str, u64)] = &[
     // Observed ~13.4s for a Matters sync; generous — the pathology this
     // catches is the multi-minute hang class, not a slow-but-working sync.
     ("process_hooks_await", 60_000),
-    // Same walk as "scan", re-run after content-producing hooks.
-    ("scan_after_process_hooks", 2_000),
     // Non-blocking spawn — observed ~1ms. Anything slower means the spawn
     // path grew blocking work, which violates the minimal-blocking principle.
     ("native_process_spawn", 100),

@@ -33,7 +33,7 @@
         "crates/moss-core/src/frontmatter_typed.rs": 900
       },
       "oversized": {
-        "crates/moss-build/src/build.rs": "Crate root: dozens of submodule declarations plus the single run_pipeline entry point (zero-flicker staging, seal, ship, generation GC) that the rest of build/ hangs off of; deliberately free of any GUI-framework dependency via the HostPorts ports. run_pipeline_body (about 450 code lines) is most of it: scan once, re-scan after content-producing hooks, the native process phase, then the build. It needs the scan as an explicit value carried across the re-scan before the phases can move to their own file.",
+        "crates/moss-build/src/build.rs": "Crate root: dozens of submodule declarations plus the single run_pipeline entry point (zero-flicker staging, seal, ship, generation GC) that the rest of build/ hangs off of; deliberately free of any GUI-framework dependency via the HostPorts ports. run_pipeline_body (about 440 code lines) is most of it: one scan, the process hooks, the native process phase, then the build. The scan is a single value now, so the phases can move to their own file.",
         "crates/moss-build/src/build/folder_embed.rs": "Three resolution branches (content folder, static-index folder, missing) share one marker-parsing frontend; retires by extracting that shared parsing into its own file first, which none of the three branches currently need enough to justify.",
         "crates/moss-build/src/build/markdown/pipeline.rs": "The sole markdown-to-HTML entry point, process_markdown_file (one long function whose phases are already numbered), plus URL classification and prettification. It shrinks by giving each phase its own result instead of locals shared across the function; moving URL handling to another file would only relocate it.",
         "crates/moss-build/src/build/media/image.rs": "The image half of media conversion: WebP encode, EXIF, resize, CAS store, dispatched on threads under a megapixel budget. It shares output registration and the coherence summary with video through output_emit; its dispatch, concurrency and state model differ on purpose, so no further shared skeleton is planned.",
@@ -116,7 +116,7 @@
       "disposition": "permanent",
       "armed": true,
       "value": {
-        "crates/moss-build/src/build.rs::run_pipeline_body": 500,
+        "crates/moss-build/src/build.rs::run_pipeline_body": 450,
         "crates/moss-build/src/build/features.rs::generate_native_slots": 300,
         "crates/moss-build/src/build/markdown/pipeline.rs::process_markdown_file": 750,
         "crates/moss-build/src/build/markdown/typed_renderers.rs::render_hero_html_typed": 350,

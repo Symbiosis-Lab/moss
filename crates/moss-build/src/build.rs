@@ -925,12 +925,8 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
 
     // --- SCAN ONCE at pipeline start ---
     // Build ProjectInfo + ProjectStructure once; shared by all consumers
-    // (process hooks, enhance, build). Eliminates the redundant second scan
-    // that build_inner() previously did.
+    // (process hooks, enhance, build).
     let _scan_trace = PhaseTrace::start("scan");
-    // `mut`: content-producing process hooks (e.g. Matters import) may write
-    // files into the source folder; we re-scan + rebind after the hook await
-    // so the SAME build renders them (B13). See the post-hook re-scan below.
     let scan_failure = |failure: scan::scan::ScanFailure| {
         let evidence = cloud_ledger::InputEvidence::new(config.source());
         evidence.require(config.source(), cloud_ledger::InputRole::DirectoryStructure);
@@ -953,7 +949,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
         }
         format!("Failed to scan folder: {}", failure)
     };
-    let (mut project_info, mut project_structure) = {
+    let (project_info, project_structure) = {
         let ps = scan::scan::scan_folder_with_dedup_emit_with_error(
             &folder_path,
             config.host.metadata_dedup.as_deref(),
@@ -980,8 +976,8 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // then dumping every article at once.
     //
     // Everything else still AWAITS inline:
-    //  - Blocking (moss build / publish): the SAME build must render imported
-    //    content and the enhance hook must read complete process output
+    //  - Blocking (moss build / publish): derivations and the enhance hook
+    //    must read complete process output
     //    (e.g. comment.json). The detached path preserves this via the file
     //    watcher — its final debounce batch re-runs the pipeline (enhance
     //    included) on the complete on-disk output (see the detached branch below).
@@ -1009,9 +1005,8 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     if let Some(handle) = process_hooks_handle {
         if wait_process {
             let _trace = PhaseTrace::start("process_hooks_await");
-            // Blocking build: block until the hook finishes so the SAME build
-            // re-scans + renders the imported content and the enhance hook reads
-            // complete process output.
+            // Blocking build: wait for the hook, so derivations and the enhance
+            // hook read its complete output under `.moss/`.
             let await_start = std::time::Instant::now();
             progress::announce_process_hook_wait(&config.progress, port_now());
             if let Err(e) = handle.await {
@@ -1025,11 +1020,10 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             // own detached task, and dropping a `Spawner::spawn` handle detaches
             // rather than aborts (the underlying runtime aborts only via an
             // explicit `.abort()`), so dropping it here lets the run complete. The first build below paints the
-            // shell immediately; the file watcher then renders downloaded content
-            // as it lands (a full re-scan per debounce batch), and its FINAL
-            // batch re-runs the enhance hook on the COMPLETE process output —
-            // the watcher watches the source folder recursively (plus the
-            // allowlisted `.moss/*` files), which is where process hooks write.
+            // shell immediately; the file watcher then rebuilds as the hook's
+            // output lands, and its FINAL batch re-runs the enhance hook on the
+            // COMPLETE process output — the watcher watches `.moss/data/social/`,
+            // where a build-started hook writes its comment data.
             // This preserves the invariant that made Blocking await, without
             // blocking the preview on the entire sync.
             log::info!("[diag] preview-wait: process hooks detached — preview paints now, watcher fills as sync lands");
@@ -1054,36 +1048,6 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // from, read after them: a hook may have installed one.
     let derived_site = crate::system::derive::site::DerivedSite::load(!skip_plugins, std::path::Path::new(&folder_path));
 
-    // --- RE-SCAN after content-producing process hooks ---
-    // Process hooks (e.g. the Matters import) may have written .md / asset files
-    // into the source folder. Re-scan + rebind so the SAME build renders them,
-    // instead of rendering the pre-import (empty/stale) snapshot from the scan
-    // at pipeline start (B13). This INTENTIONALLY reverts the "scan once"
-    // optimization above for the import case only — do not "re-optimize" it
-    // away. The re-scan is SILENT (no ScanEventEmitter): the live file watcher
-    // drives the editor's file tree; this scan only feeds render + language
-    // resolution. Gated to the import case where we AWAITED the hook (Blocking):
-    // the detached preview path renders pre-hook content and lets the watcher
-    // re-scan as downloaded files land, so a synchronous re-scan here would only
-    // re-render the same empty snapshot.
-    // The app supplies only the metadata dedup cache, which is an optimization —
-    // gating the whole re-scan on it made a headless build render the pre-import
-    // snapshot and left every imported page one generation behind.
-    if wait_process && !skip_plugins && !skip_process {
-        let _rescan_trace = PhaseTrace::start("scan_after_process_hooks");
-        match scan::scan::scan_folder_with_dedup_emit_with_error(
-            &folder_path,
-            config.host.metadata_dedup.as_deref(),
-            None,
-            config.defers_image_placeholders(),
-        ) {
-            Ok(ps) => {
-                project_info = ProjectInfo::from_structure(&ps, &config.root);
-                project_structure = ps;
-            }
-            Err(failure) => return Err(scan_failure(failure)),
-        }
-    }
     crate::build::template_check::warn_template_problems(Path::new(&folder_path));
 
     // Cache domain config once — reused by native process, feature slots, and build.
