@@ -1056,7 +1056,7 @@ pub fn generate_blocking_content_for_build(
         page_source_hashes.insert(record.source_path.clone(), record.source_metadata());
     }
     page_source_hashes.extend(parse_session.replayed_sources());
-    crate::build::scan::members::refuse_gated_embeds(&gated_embeds)?;
+    crate::build::scan::members::check_build(source_path, &gated_embeds, &project_structure.other_files, members_policy)?;
     if let Some(event) = crate::build::progress::make_empty_folder_advisory(&project_structure.empty_folders) {
         reporter.report(&event);
     }

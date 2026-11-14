@@ -15,6 +15,7 @@ All notable changes to moss will be documented here.
 - A copy handed to you to post yourself is found and recorded once you post it, not only when the network kept a draft of it. If it cannot be found it stays handed off. `moss deploy <folder> --retry-copies=<channel> --copies-of=<file>` hands that page's copy to you again (`--copies-of` sends only that page's copies); `--retry-copies` alone leaves handed-off copies as they are.
 - A copy stays with the account it was posted from. While a channel is signed in to another account, moss does not look it up, post it again, edit it or delete it; the publish says so once, and the work goes on when that account is signed in again. This applies to channels whose plugin says which account is signed in.
 - For plugin authors: `find_copy` answers `copy: { absent: true }` when the network says there is no such copy; any other answer without the copy now means moss cannot tell. A channel can export `copy_account`, answering `copy: { account }`. The `handoff` form is gone: a channel that hands copies to the author declares `teaser` and answers `handoff`, as before.
+- The build names, in a note, each `.js` or `.mjs` file under a members `cascade:`, since scripts there are published to everyone, and `moss deploy` and `moss deploy --dry-run` give their count and the first. Put members-only data in a CSV or JSON file.
 
 ### New
 

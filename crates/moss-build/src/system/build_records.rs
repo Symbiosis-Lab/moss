@@ -124,6 +124,8 @@ pub struct BuildRecords {
     /// `(old, served)` output paths the last seal kept answering — see
     /// `feeds::kept_addresses`.
     kept: FolderSlot<Vec<(String, String)>>,
+    /// Scripts the last build published to everyone from a members folder.
+    public_scripts: FolderSlot<Vec<String>>,
     /// The last build's file copies and folder redirects, for its seal to write.
     late_redirects: FolderSlot<crate::build::feeds::kept_addresses::LateRedirects>,
 }
@@ -238,6 +240,16 @@ impl BuildRecords {
 
     pub fn kept(&self, folder_path: &str) -> Vec<(String, String)> {
         self.kept.get(&Self::key(folder_path)).unwrap_or_default()
+    }
+
+    /// Always called by a build, empty included, so moving the data out clears it.
+    pub(crate) fn record_public_scripts(&self, folder_path: &str, scripts: Vec<String>) {
+        self.public_scripts.record(Self::key(folder_path), scripts);
+    }
+
+    /// `None` means no build of the folder has recorded a list, which is not "none".
+    pub(crate) fn public_scripts(&self, folder_path: &str) -> Option<Vec<String>> {
+        self.public_scripts.get(&Self::key(folder_path))
     }
 
     /// What the last seal of `folder_path` found going offline. `None` means

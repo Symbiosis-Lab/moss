@@ -95,7 +95,7 @@ fn source_files(structure: &ProjectStructure, members_policy: &moss_core::frontm
         .map(|file| file.path.clone())
         .chain(layer_files)
         .filter(|path| !path.split('/').any(|segment| segment == "_moss" || segment == "node_modules"))
-        .filter(|path| crate::build::scan::members::file_access(members_policy, path).is_none())
+        .filter(|path| crate::build::scan::members::file_access(members_policy, path).gated().is_none())
         .collect();
     files.sort_unstable_by(|a, b| crate::build::scan::path_collision::nfc_order(a, b));
     files.dedup();

@@ -19,23 +19,76 @@ pub(crate) fn restricted(own: Option<Members>, inherited: impl FnOnce() -> Optio
     own.or_else(inherited).is_some_and(|access| access != Members::Public)
 }
 
-/// The access a folder's cascade gives the file at `rel_path` that is not a
-/// page: `None` for a file anyone may fetch. Pictures, video and audio stay
-/// public, since a members page's public part (its cover, its preview) may
-/// show them and their encoders write beside them; so do a notebook, which
-/// its own viewer serves, and the stylesheets, scripts and fonts a public
-/// version draws with. Every other file beneath the cascade is gated by
-/// where it sits, so renaming it cannot open it.
-pub(crate) fn file_access(policy: &MemberCascade, rel_path: &str) -> Option<Members> {
-    use moss_core::resolve::ext_kind::{reference_kind_for_ext, ExtKind};
-    let ext = Path::new(rel_path).extension().map_or(String::new(), |e| e.to_string_lossy().to_lowercase());
-    if matches!(reference_kind_for_ext(&ext), ExtKind::Image | ExtKind::Video | ExtKind::Audio | ExtKind::Transclusion | ExtKind::Notebook)
-        || matches!(ext.as_str(), "css" | "js" | "mjs" | "woff" | "woff2" | "ttf" | "otf")
-        || classify::is_page_path(Path::new(rel_path))
-    {
-        return None;
+/// Who may fetch a file that is not a page, and why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FileAccess {
+    /// No restricting cascade covers it, or it is a page, whose access its
+    /// own render applies.
+    Public,
+    /// A restricting cascade covers it, and its kind keeps it public.
+    PublicByKind(PublicKind),
+    /// Only these readers may fetch it.
+    Gated(Members),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PublicKind {
+    Script,
+    /// A picture, video, audio, notebook, stylesheet or font.
+    Other,
+}
+
+impl FileAccess {
+    /// The readers a gated file is published for: `None` for a file anyone may fetch.
+    pub(crate) fn gated(self) -> Option<Members> {
+        match self {
+            FileAccess::Gated(access) => Some(access),
+            FileAccess::Public | FileAccess::PublicByKind(_) => None,
+        }
     }
-    policy.inherited(rel_path).filter(|access| *access != Members::Public)
+}
+
+/// The access a folder's cascade gives the file at `rel_path`. Pictures,
+/// video and audio stay public, since a members page's public part (its
+/// cover, its preview) may show them and their encoders write beside them;
+/// so do a notebook, which its own viewer serves, and the stylesheets,
+/// scripts and fonts a public version draws with. Every other file beneath
+/// the cascade is gated by where it sits, so renaming it cannot open it.
+pub(crate) fn file_access(policy: &MemberCascade, rel_path: &str) -> FileAccess {
+    use moss_core::resolve::ext_kind::{reference_kind_for_ext, ExtKind};
+    if classify::is_page_path(Path::new(rel_path)) { return FileAccess::Public; }
+    let Some(access) = policy.inherited(rel_path).filter(|access| *access != Members::Public) else { return FileAccess::Public };
+    let ext = Path::new(rel_path).extension().map_or(String::new(), |e| e.to_string_lossy().to_lowercase());
+    if matches!(ext.as_str(), "js" | "mjs") {
+        FileAccess::PublicByKind(PublicKind::Script)
+    } else if matches!(reference_kind_for_ext(&ext), ExtKind::Image | ExtKind::Video | ExtKind::Audio | ExtKind::Transclusion | ExtKind::Notebook)
+        || matches!(ext.as_str(), "css" | "woff" | "woff2" | "ttf" | "otf")
+    {
+        FileAccess::PublicByKind(PublicKind::Other)
+    } else {
+        FileAccess::Gated(access)
+    }
+}
+
+/// The scripts a members folder publishes to everyone, in the order given:
+/// each that gets an address and is public only by its kind.
+pub(crate) fn public_scripts<'a>(files: impl IntoIterator<Item = &'a FileInfo>, policy: &MemberCascade) -> Vec<String> {
+    files.into_iter().map(|file| file.path.as_str())
+        .filter(|path| !crate::build::render::is_ignored_root_theme_file(path) && crate::build::served_path::ServedPath::from_source(path).is_ok())
+        .filter(|path| file_access(policy, path) == FileAccess::PublicByKind(PublicKind::Script))
+        .map(str::to_string)
+        .collect()
+}
+
+/// The publish summary's line for those scripts: a count and the first.
+/// `None` is a folder no build in this process has listed.
+pub(crate) fn public_scripts_line(scripts: Option<&[String]>) -> Option<String> {
+    let Some(scripts) = scripts else { return Some("Scripts in members folders: not listed.".into()) };
+    match scripts {
+        [] => None,
+        [only] => Some(format!("1 script in a members folder is published to everyone: {only}")),
+        [first, ..] => Some(format!("{} scripts in members folders are published to everyone, first {first}", scripts.len())),
+    }
 }
 
 /// Whether a members page gets a members-only version: its public view holds
@@ -85,14 +138,27 @@ fn embeds_of(
                 AssetResolution::Ambiguous { chosen, .. } => chosen,
                 AssetResolution::NotFound => return false,
             };
-            file_access(policy, &file).is_some_and(|access| Some(access) != allowed)
+            file_access(policy, &file).gated().is_some_and(|access| Some(access) != allowed)
         })
         .map(|reference| reference.raw.text)
         .collect()
 }
 
+/// The members checks a build makes once it has read its pages: stop on an
+/// embed its readers may not read, then name each script a members folder
+/// publishes to everyone and record the list for the publish summary.
+pub(crate) fn check_build(folder: &str, embeds: &[String], files: &[FileInfo], policy: &MemberCascade) -> Result<(), String> {
+    refuse_gated_embeds(embeds)?;
+    let scripts = public_scripts(files, policy);
+    for path in &scripts {
+        crate::build::cli_output::log_note!("{path} is in a members folder and is published to everyone. Put members-only data in a CSV or JSON file.");
+    }
+    crate::system::build_records::records().record_public_scripts(folder, scripts);
+    Ok(())
+}
+
 /// Stop a build that would show a file to readers who may not read it.
-pub(crate) fn refuse_gated_embeds(embeds: &[String]) -> Result<(), String> {
+fn refuse_gated_embeds(embeds: &[String]) -> Result<(), String> {
     if embeds.is_empty() { return Ok(()); }
     Err(format!(
         "Nothing built: a page embeds a file its readers may not read:\n{}\nMove the embed below \
@@ -200,6 +266,28 @@ mod tests {
             std::fs::write(path, bytes).unwrap();
         }
         site
+    }
+
+    /// Why a file is public is one answer: a script under a restricting
+    /// cascade is public by its kind, and nowhere else is it singled out.
+    #[test]
+    fn a_script_under_a_restricting_cascade_is_public_by_kind() {
+        let policy = |homes: &[(&str, Option<Members>)]| MemberCascade::from_homes(homes.iter().map(|(home, access)| (*home, HomeCascade::Read(*access))), false);
+        let notes = policy(&[("notes/index.md", Some(Members::Subscribers)), ("notes/open/index.md", Some(Members::Public)), ("ledger/index.md", Some(Members::Paid))]);
+        let script = FileAccess::PublicByKind(PublicKind::Script);
+        assert_eq!(file_access(&notes, "notes/detail.js"), script);
+        assert_eq!(file_access(&notes, "notes/charts/regions.MJS"), script);
+        assert_eq!(file_access(&notes, "ledger/totals.js"), script, "a paid cascade restricts too");
+        assert_eq!(file_access(&notes, "detail.js"), FileAccess::Public, "no cascade");
+        assert_eq!(file_access(&notes, "notes/open/detail.js"), FileAccess::Public, "the nearest cascade is public");
+        assert_eq!(file_access(&policy(&[]), "notes/detail.js"), FileAccess::Public);
+        assert_eq!(file_access(&notes, "notes/detail.json"), FileAccess::Gated(Members::Subscribers));
+        assert_eq!(file_access(&notes, "notes/detail.json").gated(), Some(Members::Subscribers));
+        for other in ["notes/site.css", "notes/face.woff2", "notes/cover.jpg"] {
+            assert_eq!(file_access(&notes, other), FileAccess::PublicByKind(PublicKind::Other), "{other}");
+        }
+        assert_eq!(file_access(&notes, "notes/article.md"), FileAccess::Public, "a page's access is its render's");
+        assert_eq!(file_access(&notes, "notes/detail.js").gated(), None);
     }
 
     #[test]

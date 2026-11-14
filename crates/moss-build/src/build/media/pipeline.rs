@@ -1106,7 +1106,7 @@ fn copy_asset_entry(
     // A file beneath a members cascade is published only as its gated copy.
     // A link there is not published: its target would be served to everyone.
     let access = file_path.strip_prefix(source_root).ok()
-        .and_then(|rel| crate::build::scan::members::file_access(&ctx.members_policy, &logical_path(rel)));
+        .and_then(|rel| crate::build::scan::members::file_access(&ctx.members_policy, &logical_path(rel)).gated());
     if access.is_some() && file_type.is_symlink() {
         run.stats.skipped_symlinks += 1;
         return;

@@ -370,6 +370,8 @@ async fn send(
     crate::deploy::profile::begin_attempt();
     match route {
         DeployRoute::Prebuilt { dir } => {
+            // Nothing is built, so no members cascade applies.
+            crate::system::build_records::records().record_public_scripts(&folder.to_string_lossy(), Vec::new());
             crate::deploy::prebuilt::run_prebuilt_deploy(
                 folder,
                 dir,
@@ -450,6 +452,9 @@ pub fn report(result: Result<DeployReport, String>, folder_display: &str, json: 
             println!("{}", url);
             eprintln!("{}", published_line(folder_display, &url, files_uploaded, files_removed));
             eprint!("{}", removed_by_author(folder_display));
+            if let Some(line) = public_scripts_after_publish(folder_display) {
+                eprintln!("{line}");
+            }
             0
         }
         // The plugin's own sentence, unchanged, and nothing beside it. moss
@@ -483,6 +488,12 @@ pub fn report(result: Result<DeployReport, String>, folder_display: &str, json: 
             1
         }
     }
+}
+
+/// The line about scripts a members folder published to everyone, read from
+/// the build this process ran for the publish.
+fn public_scripts_after_publish(folder: &str) -> Option<String> {
+    crate::build::scan::members::public_scripts_line(crate::system::build_records::records().public_scripts(folder).as_deref())
 }
 
 /// The line a landed publish prints on stderr: which folder went where.
@@ -1135,6 +1146,28 @@ mod dry_run_tests {
         assert!(fx.requests().is_empty());
     }
 
+    /// The scripts a members folder publishes to everyone come from the folder
+    /// the dry run built, as a count and the first file.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dry_run_names_the_scripts_a_members_folder_publishes_to_everyone() {
+        let fx = unpublished(false).await;
+        for (rel, body) in [
+            ("maps/incidents/index.md", "---\npartial: true\ncascade: { members: subscribers }\n---\n"),
+            ("maps/incidents/detail.js", "window.regions = {};\n"),
+            ("maps/incidents/regions.mjs", "export const regions = {};\n"),
+            ("maps/incidents/levels.json", "{}"),
+            ("maps/open.js", "window.open = {};\n"),
+        ] {
+            let path = fx.dir.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        }
+        let report = fx.run(true).await.expect("a dry run reports");
+        let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
+        assert_eq!(dry.public_scripts.as_deref(), Some(&["maps/incidents/detail.js".to_string(), "maps/incidents/regions.mjs".to_string()][..]));
+        assert!(dry.render().contains("\n2 scripts in members folders are published to everyone, first maps/incidents/detail.js\n"), "{}", dry.render());
+    }
+
     /// The refusal a first publish would meet is knowable from the folder: no
     /// email is recorded for its key. Saying so sends nothing.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1335,6 +1368,49 @@ mod email_wiring_tests {
             &printing(),
         )
         .await
+    }
+
+    /// A folder with a site, a verified key and a script in a members folder.
+    fn members_folder(folder: &Folder) {
+        for (rel, body) in [
+            (".moss/config.toml", "environment = \"staging\"\n"),
+            (".moss/state.toml", "[deployment]\nsite_id = \"my-site\"\n"),
+            ("index.md", "---\ntitle: Home\n---\nHello.\n"),
+            ("maps/incidents/index.md", "---\npartial: true\ncascade: { members: subscribers }\n---\n"),
+            ("maps/incidents/detail.js", "window.regions = {};\n"),
+            ("_site/index.html", "<p>hi</p>"),
+        ] {
+            let path = folder.dir.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        }
+    }
+
+    async fn publish_on(folder: &Folder, route: DeployRoute) -> Result<DeployReport, String> {
+        let flags = DeployFlags { overwrite_newer: true, ..DeployFlags::default() };
+        dispatch(folder.dir.path(), &route, &crate::cli::host::cli_host_ports, crate::build::PluginMode::Skip, &flags, &printing()).await
+    }
+
+    /// A landed publish gives the count line for the folder as the person
+    /// typed it, and a prebuilt publish, which builds nothing, says nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_landed_publish_names_the_scripts_a_members_folder_publishes_and_never_says_not_listed() {
+        let seta = Seta::start(0, "verified").await;
+        {
+            let built = Folder::new(&seta);
+            members_folder(&built);
+            let result = publish_on(&built, DeployRoute::Hosted).await;
+            assert!(matches!(result, Ok(DeployReport::Push(PushResult::Success { .. }))), "{result:?}");
+            let typed = format!("{}/", built.dir.path().display());
+            assert_eq!(public_scripts_after_publish(&typed).as_deref(), Some("1 script in a members folder is published to everyone: maps/incidents/detail.js"));
+        }
+        // One folder at a time: each holds the process's environment lock.
+        let prebuilt = Folder::new(&seta);
+        members_folder(&prebuilt);
+        let site = prebuilt.dir.path().join("_site");
+        let result = publish_on(&prebuilt, DeployRoute::Prebuilt { dir: site }).await;
+        assert!(matches!(result, Ok(DeployReport::Push(PushResult::Success { .. }))), "{result:?}");
+        assert_eq!(public_scripts_after_publish(&prebuilt.dir.path().to_string_lossy()), None);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

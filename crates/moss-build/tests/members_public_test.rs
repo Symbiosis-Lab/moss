@@ -567,3 +567,71 @@ fn the_private_part_of_a_members_page_changes_no_public_file() {
     // A draft is published nowhere, so it has no members-only version either.
     assert!(!site.output("_gated/drafted").exists());
 }
+
+const SCRIPT: &str = "window.regions = {\"north-quay\": 2};\n";
+const NOTICE: &str = "maps/incidents/detail.js is in a members folder and is published to everyone. Put members-only data in a CSV or JSON file.";
+
+fn script_site(cascade: &str) -> site::Site {
+    site::Site::new(&[
+        (".moss/config.toml", CONFIG),
+        ("index.md", "---\ntitle: Harbour watch\n---\nWelcome.\n"),
+        ("maps/incidents/index.md", &format!("---\npartial: true\ncascade: {{ members: {cascade} }}\n---\n")),
+        ("maps/incidents/detail.js", SCRIPT),
+        ("maps/incidents/map.css", "body { color: teal; }\n"),
+        ("maps/regions.js", SCRIPT),
+    ])
+}
+
+/// The published script, read from the sealed generation a deploy uploads, with its manifest entry.
+fn sealed_script(site: &site::Site) -> (String, Option<String>) {
+    let build = site.root.join(".moss/build.nosync");
+    let generation = build.join("generations").join(fs::read_to_string(build.join("current.generation")).unwrap().trim());
+    let bytes = fs::read_to_string(generation.join("maps/incidents/detail.js")).unwrap();
+    (bytes, manifest_of(site).get("maps/incidents/detail.js").cloned())
+}
+
+#[test]
+fn a_script_a_members_folder_publishes_to_everyone_is_named_and_published_unchanged() {
+    let members = script_site("subscribers");
+    let problems = site::problems();
+    let public = script_site("public");
+    let (bytes, entry) = sealed_script(&members);
+    assert_eq!(bytes, SCRIPT, "published at its own address, whole");
+    assert!(entry.is_some(), "in the manifest a deploy uploads");
+    assert_eq!((bytes, entry), sealed_script(&public), "the notice changes nothing published");
+    assert!(!members.output("_gated/maps/incidents/detail.js").exists());
+
+    assert_eq!(members.notes.iter().filter(|line| line.as_str() == NOTICE).count(), 1, "{:?}", members.notes);
+    assert_eq!(assert_named_are_published(&members, &members.notes), ["maps/incidents/detail.js"]);
+    assert!(!problems.iter().any(|line| line.contains("detail.js")), "a notice, not a problem: {problems:?}");
+    assert!(!members.notes.iter().any(|line| line.contains("map.css") || line.contains("maps/regions.js")), "{:?}", members.notes);
+    assert!(!public.notes.iter().any(|line| line.contains("published to everyone")), "{:?}", public.notes);
+
+    members.rebuild();
+    assert_eq!(site::notes().iter().filter(|line| line.as_str() == NOTICE).count(), 1, "a warm rebuild names it again");
+}
+
+/// The paths the notes name, each of which must be in the manifest a deploy uploads.
+fn assert_named_are_published(site: &site::Site, notes: &[String]) -> Vec<String> {
+    let named: Vec<String> = notes.iter().filter_map(|line| line.strip_suffix(" is in a members folder and is published to everyone. Put members-only data in a CSV or JSON file.")).map(str::to_string).collect();
+    let manifest = manifest_of(site);
+    for path in &named {
+        assert!(manifest.contains_key(path), "{path} is named but not published");
+    }
+    named
+}
+
+/// What is not served is not named: a root `script.js` (the theme's script
+/// lives in `.moss/theme/`), and scripts in folders a build leaves out.
+#[test]
+fn a_script_that_is_not_served_is_not_named() {
+    let site = site::Site::new(&[
+        ("index.md", "---\ntitle: Harbour watch\ncascade: { members: subscribers }\n---\nWelcome.\n"),
+        ("script.js", SCRIPT),
+        ("node_modules/charts/index.js", SCRIPT),
+        ("_moss/extra.js", SCRIPT),
+        ("maps/detail.js", SCRIPT),
+    ]);
+    assert_eq!(assert_named_are_published(&site, &site.notes), ["maps/detail.js"], "{:?}", site.notes);
+    assert!(!site.output("script.js").exists());
+}

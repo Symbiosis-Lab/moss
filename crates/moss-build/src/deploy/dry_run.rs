@@ -87,6 +87,9 @@ pub struct DryRun {
     pub copies: Vec<crate::syndication::preview::PreviewCopy>,
     /// What the server said about this folder's key and site.
     pub owner: Owner,
+    /// Scripts in a members folder that are published to everyone; `None`
+    /// when no build listed them.
+    pub public_scripts: Option<Vec<String>>,
 }
 
 impl DryRun {
@@ -110,6 +113,7 @@ impl DryRun {
             pending_removals,
             copies,
             owner,
+            public_scripts,
         } = self;
         let mut change_set = serde_json::to_value(set).expect("a change set serializes");
         if let Some(fields) = change_set.as_object_mut() {
@@ -144,6 +148,7 @@ impl DryRun {
             "prebuilt": prebuilt,
             "copies": copies,
             "owner": owner,
+            "public_scripts": public_scripts,
         })
     }
 
@@ -198,6 +203,9 @@ impl DryRun {
                 "Transfer: not known, because there is no record of an earlier publish from this folder.\n",
             ),
             Transfer::NotCounted => out.push_str("Transfer: not counted for a deploy plugin.\n"),
+        }
+        if let Some(line) = crate::build::scan::members::public_scripts_line(self.public_scripts.as_deref()) {
+            out.push_str(&format!("{line}\n"));
         }
         if let Some(site) = &self.would_register {
             out.push_str(&format!("A first publish would register the site \"{site}\". Nothing was registered.\n"));
@@ -494,6 +502,7 @@ pub async fn run_dry_run(
         pending_removals: crate::system::build_records::records().pending_removals(&folder_str),
         copies: crate::syndication::preview::for_dry_run(folder, &sealed),
         owner,
+        public_scripts: crate::system::build_records::records().public_scripts(&folder_str),
     })
 }
 
@@ -556,6 +565,8 @@ pub async fn run_prebuilt_dry_run(
         pending_removals: Vec::new(),
         copies: Vec::new(),
         owner,
+        // Nothing was built, so no members cascade applies.
+        public_scripts: Some(Vec::new()),
     })
 }
 
@@ -589,6 +600,7 @@ mod tests {
             pending_removals: Vec::new(),
             copies: Vec::new(),
             owner: Owner::Unchecked { reason: "this folder has no site".into() },
+            public_scripts: Some(Vec::new()),
         }
     }
 
@@ -635,6 +647,7 @@ mod tests {
             pending_removals: Vec::new(),
             copies: Vec::new(),
             owner: Owner::Unchecked { reason: "this folder has no site".into() },
+            public_scripts: Some(Vec::new()),
         };
 
         let text = dry.render();
@@ -705,6 +718,19 @@ mod tests {
     }
 
     #[test]
+    fn scripts_a_members_folder_publishes_are_counted_with_the_first_named() {
+        let dry = |scripts: &[&str]| DryRun { public_scripts: Some(scripts.iter().map(|s| s.to_string()).collect()), ..small() };
+        assert!(dry(&["maps/detail.js"]).render().contains("\n1 script in a members folder is published to everyone: maps/detail.js\n"));
+        let text = dry(&["maps/detail.js", "maps/regions.mjs", "notes/table.js"]).render();
+        assert!(text.contains("\n3 scripts in members folders are published to everyone, first maps/detail.js\n"), "{text}");
+        assert!(!text.contains("notes/table.js"), "one line, not one per file: {text}");
+        assert_eq!(dry(&["maps/detail.js", "notes/table.js"]).to_json()["public_scripts"], serde_json::json!(["maps/detail.js", "notes/table.js"]));
+        assert!(!small().render().contains("script"), "{}", small().render());
+        let unlisted = DryRun { public_scripts: None, ..small() }.render();
+        assert!(unlisted.contains("\nScripts in members folders: not listed.\n"), "{unlisted}");
+    }
+
+    #[test]
     fn removed_files_not_already_offline_addresses_are_listed_and_capped() {
         let removed: Vec<String> = (0..23).map(|i| format!("old-{i:02}.css")).collect();
         let dry = DryRun { transfer: Transfer::SinceLastPublish { upload: 0, removed }, ..small() };
@@ -748,6 +774,7 @@ mod tests {
             pending_removals: Vec::new(),
             copies: Vec::new(),
             owner: Owner::Unchecked { reason: "this folder has no site".into() },
+            public_scripts: Some(Vec::new()),
         };
         let text = dry.render();
         assert!(text.contains("Pages: not classified"), "{text}");
