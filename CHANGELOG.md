@@ -9,6 +9,7 @@ All notable changes to moss will be documented here.
 - A site with a comment server also gets the build that renders only what changed. The record of the last comment refresh, rewritten by every build, was counted as something a page reads, so such a site rendered every page each time.
 - `syndicate:` takes the name a network goes by as well as its channel's id, ignoring case, so `syndicate: [x]` posts to the X channel (`xcom`). Such a page was told no channel named x was set up. A name two channels go by posts to neither, and the publish says which two.
 - `moss deploy --dry-run` prints the length of an article copy's text. The line read "would post as long ( characters)", with no number.
+- The selected ＋ and the gear sit exactly on the ends of the toolbar; the selected circle used to cross the toolbar's outline.
 
 ### Changed
 
@@ -17,6 +18,9 @@ All notable changes to moss will be documented here.
 - A copy stays with the account it was posted from. While a channel is signed in to another account, moss does not look it up, post it again, edit it or delete it; the publish says so once, and the work goes on when that account is signed in again. This applies to channels whose plugin says which account is signed in.
 - For plugin authors: `find_copy` answers `copy: { absent: true }` when the network says there is no such copy; any other answer without the copy now means moss cannot tell. A channel can export `copy_account`, answering `copy: { account }`. The `handoff` form is gone: a channel that hands copies to the author declares `teaser` and answers `handoff`, as before.
 - The build names, in a note, each `.js` or `.mjs` file under a members `cascade:`, since scripts there are published to everyone, and `moss deploy` and `moss deploy --dry-run` give their count and the first. Put members-only data in a CSV or JSON file.
+- The ＋ in the app's toolbar opens a page of channels only: the places a copy of a post can be sent, each named under its icon, with the ones already added first. Hosts are added from Deployment, and every other plugin is behind "Other plugins" under the channels; that link is marked when one of them has an update, was withdrawn or waits to be allowed.
+- A plugin's settings page has a Remove action.
+- In the toolbar a channel that is not selected keeps its logo's colour; only a selected channel carries the circle.
 
 ### New
 

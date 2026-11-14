@@ -605,12 +605,6 @@ const EN = {
   'settings.tab.site': 'Site',
   'settings.tab.analytics': 'Analytics',
   'settings.tab.subscribers': 'Subscribers',
-  // The install catalog's rail affordance (a glyph-only circle): this string is
-  // its tooltip and its accessible name, never visible text. Names BOTH kinds of
-  // package moss-registry distributes — plugins (code it runs) and themes
-  // (presentation it never executes) — because either noun alone would be wrong
-  // for half the grid.
-  'settings.tab.catalog': 'Plugins & themes',
   // The Search & AI tab: three switches, each a request to the programs that read the site.
   'settings.tab.search_ai': "Search & AI",
   'search_ai.intro': "Each switch is a request. Off asks; it does not block. Only a password keeps a page private.",
@@ -753,8 +747,8 @@ const EN = {
   'channels.none': 'No channels available',
   'channels.removing': 'Removing {name}…',                     // {name}
   'channels.adding': 'Adding {name}…',                       // {name}
-  'channels.click_to_remove': '{name} (click to remove)',              // {name}
-  'channels.click_to_add': '{name} (click to add)',                 // {name}
+  'channels.click_to_remove': 'Remove {name}',              // {name}
+  'channels.click_to_add': 'Add {name}',                 // {name}
   'channels.revoked_tooltip': '{name} was withdrawn by the plugin registry and will not run: {reason}',              // {name} {reason}
   'channels.incompatible_tooltip': '{name} needs moss {needs} or newer and will not run until you update. This is moss {host}.',         // {name} {needs} {host}
   'channels.unapproved_tooltip': 'The plugin "{name}" is installed in this folder. Do you trust it?',           // {name}
@@ -820,9 +814,9 @@ const EN = {
   'trust.chip_tooltip_many': '{n} plugins in this folder are not running. Click to review them.', // {n}
   'trust.publish_waits_one': 'Publishing waits for {name}, which is off. Click to review it.', // {name}
   'trust.publish_waits_many': 'Publishing waits for {names}, which are off. Click to review them.', // {names}
-  'channels.filter.import': 'Showing plugins that can bring in your content',
-  'channels.filter.deploy': 'Showing plugins that can host your site',
-  'channels.filter.show_all': 'Show all',
+  'channels.hosts': 'Hosts',
+  'channels.other_plugins': 'Other plugins',
+  'channels.back_to_channels': 'Channels',
   'channels.downloading_tooltip': '{name} (installing… {percent}%)',      // {name} {percent}
   'channels.downloading_step_tooltip': '{name} (installing… {percent}%) — {step}', // {name} {percent} {step}
   'channels.installing_tooltip': '{name} (installing…)',       // {name} — no numeric claim yet
@@ -1862,6 +1856,7 @@ const EN = {
   // offer only ever appears on a button: moss never takes an update itself.
   'plugin.version.installed': 'Version {version}',    // {version}
   'plugin.version.update': 'Update to {version}',       // Button label; {version} being offered
+  'plugin.remove_failed': 'Could not remove {name}',    // Beside the Remove button on a plugin's settings page
   'plugin.version.updating': 'Updating…',     // Busy label while update_plugin runs
   'plugin.version.update_failed': "Couldn't update. The plugin is unchanged.",
 
@@ -2403,7 +2398,6 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'settings.tab.site': 'Website',
     'settings.tab.analytics': 'Statistiken',
     'settings.tab.subscribers': 'Abonnierende',
-    'settings.tab.catalog': 'Plugins & Themes',
     'settings.tab.search_ai': "Suche & KI",
     'search_ai.intro': "Jeder Schalter ist eine Bitte. Aus bittet, es sperrt nicht. Nur ein Passwort hält eine Seite privat.",
     'search_ai.search.label': "Suchmaschinen",
@@ -2530,8 +2524,8 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'channels.none': 'Keine Kanäle verfügbar',
     'channels.removing': '{name} wird entfernt …',
     'channels.adding': '{name} wird hinzugefügt …',
-    'channels.click_to_remove': '{name} (klicken zum Entfernen)',
-    'channels.click_to_add': '{name} (klicken zum Hinzufügen)',
+    'channels.click_to_remove': '{name} entfernen',
+    'channels.click_to_add': '{name} hinzufügen',
     'channels.revoked_tooltip': '{name} wurde vom Plugin-Verzeichnis zurückgezogen und wird nicht ausgeführt: {reason}',
     'channels.incompatible_tooltip': '{name} braucht moss {needs} oder neuer und läuft erst, wenn du aktualisierst. Du hast moss {host}.',
     'channels.unapproved_tooltip': 'Das Plugin „{name}“ ist in diesem Ordner installiert. Vertraust du ihm?',
@@ -2594,9 +2588,9 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'trust.chip_tooltip_many': '{n} Plugins in diesem Ordner laufen nicht. Klicke, um sie zu prüfen.',
     'trust.publish_waits_one': 'Veröffentlichen wartet auf {name}, das aus ist. Klicke, um es zu prüfen.',
     'trust.publish_waits_many': 'Veröffentlichen wartet auf {names}, die aus sind. Klicke, um sie zu prüfen.',
-    'channels.filter.import': 'Plugins anzeigen, die deine Inhalte importieren können',
-    'channels.filter.deploy': 'Plugins anzeigen, die deine Website hosten können',
-    'channels.filter.show_all': 'Alle anzeigen',
+    'channels.hosts': 'Hosts',
+    'channels.other_plugins': 'Andere Plugins',
+    'channels.back_to_channels': 'Kanäle',
     'channels.downloading_tooltip': '{name} (wird installiert … {percent} %)',
     'channels.downloading_step_tooltip': '{name} (wird installiert … {percent} %) – {step}',
     'channels.installing_tooltip': '{name} (wird installiert …)',
@@ -3491,6 +3485,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'plugin.connection.connect_failed': 'Verbindung mit Matters fehlgeschlagen: {error}',
     'plugin.version.installed': 'Version {version}',
     'plugin.version.update': 'Auf {version} aktualisieren',
+    'plugin.remove_failed': '{name} konnte nicht entfernt werden',
     'plugin.version.updating': 'Wird aktualisiert …',
     'plugin.version.update_failed': 'Aktualisierung fehlgeschlagen. Das Plugin ist unverändert.',
     'plugin.unavailable_images_title': 'Nicht verfügbare Bilder ({count})',
@@ -4029,7 +4024,6 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'settings.tab.site': '站点',
     'settings.tab.analytics': '流量统计',
     'settings.tab.subscribers': '订阅者',
-    'settings.tab.catalog': '插件与主题',
     'settings.tab.search_ai': "搜索与 AI",
     'search_ai.intro': "每个开关都是一项请求。关闭是请求，不是封锁。只有密码才能让页面保持私密。",
     'search_ai.search.label': "搜索引擎",
@@ -4162,8 +4156,8 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'channels.none': '暂无可用渠道',
     'channels.removing': '正在移除 {name}…',
     'channels.adding': '正在添加 {name}…',
-    'channels.click_to_remove': '{name}（点击移除）',
-    'channels.click_to_add': '{name}（点击添加）',
+    'channels.click_to_remove': '移除 {name}',
+    'channels.click_to_add': '添加 {name}',
     'channels.revoked_tooltip': '{name} 已被插件仓库下架，不会运行：{reason}',
     'channels.incompatible_tooltip': '{name} 需要青苔 {needs} 或更新版本，更新后才会运行。当前版本为 {host}。',
     'channels.unapproved_tooltip': '文件夹中安装了插件「{name}」。是否信任该插件？',
@@ -4226,9 +4220,9 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'trust.publish_waits_many': '发布需要等待 {names}，它们目前处于关闭状态。点击查看。',
     'channels.allowed': '已允许 {name}',
     'channels.allow_failed': '未能允许 {name}，它仍未运行。',
-    'channels.filter.import': '正在显示可导入内容的插件',
-    'channels.filter.deploy': '正在显示可托管网站的插件',
-    'channels.filter.show_all': '显示全部',
+    'channels.hosts': '托管',
+    'channels.other_plugins': '其他插件',
+    'channels.back_to_channels': '渠道',
     'channels.downloading_tooltip': '{name}（正在安装… {percent}%）',
     'channels.downloading_step_tooltip': '{name}（正在安装… {percent}%）— {step}',
     'channels.installing_tooltip': '{name}（正在安装…）',
@@ -5167,6 +5161,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'plugin.connection.connect_failed': '没能连接到 Matters：{error}',
     'plugin.version.installed': '版本 {version}',
     'plugin.version.update': '更新到 {version}',
+    'plugin.remove_failed': '无法移除 {name}',
     'plugin.version.updating': '正在更新…',
     'plugin.version.update_failed': '没能更新，插件保持原样。',
     'plugin.unavailable_images_title': '无法获取的图片 ({count})',
@@ -5707,7 +5702,6 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'settings.tab.site': '站點',
     'settings.tab.analytics': '流量統計',
     'settings.tab.subscribers': '訂閱者',
-    'settings.tab.catalog': '插件與佈景主題',
     'settings.tab.search_ai': "搜尋與 AI",
     'search_ai.intro': "每個開關都是一項請求。關閉是請求，不是封鎖。只有密碼才能讓頁面保持私密。",
     'search_ai.search.label': "搜尋引擎",
@@ -5840,8 +5834,8 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'channels.none': '目前沒有可用的管道',
     'channels.removing': '正在移除 {name}…',
     'channels.adding': '正在新增 {name}…',
-    'channels.click_to_remove': '{name}（點擊移除）',
-    'channels.click_to_add': '{name}（點擊新增）',
+    'channels.click_to_remove': '移除 {name}',
+    'channels.click_to_add': '新增 {name}',
     'channels.revoked_tooltip': '{name} 已被插件倉庫下架，不會執行：{reason}',
     'channels.incompatible_tooltip': '{name} 需要青苔 {needs} 或更新版本，更新後才會執行。目前版本為 {host}。',
     'channels.unapproved_tooltip': '檔案夾中安裝了插件「{name}」。是否信任該插件？',
@@ -5904,9 +5898,9 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'trust.publish_waits_many': '發佈需要等待 {names}，它們目前處於關閉狀態。點擊查看。',
     'channels.allowed': '已允許 {name}',
     'channels.allow_failed': '未能允許 {name}，它仍未執行。',
-    'channels.filter.import': '正在顯示可匯入內容的插件',
-    'channels.filter.deploy': '正在顯示可託管網站的插件',
-    'channels.filter.show_all': '顯示全部',
+    'channels.hosts': '託管',
+    'channels.other_plugins': '其他插件',
+    'channels.back_to_channels': '管道',
     'channels.downloading_tooltip': '{name}（正在安裝… {percent}%）',
     'channels.downloading_step_tooltip': '{name}（正在安裝… {percent}%）— {step}',
     'channels.installing_tooltip': '{name}（正在安裝…）',
@@ -6845,6 +6839,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'plugin.connection.connect_failed': '沒能連接到 Matters：{error}',
     'plugin.version.installed': '版本 {version}',
     'plugin.version.update': '更新到 {version}',
+    'plugin.remove_failed': '無法移除 {name}',
     'plugin.version.updating': '正在更新…',
     'plugin.version.update_failed': '沒能更新，插件保持原樣。',
     'plugin.unavailable_images_title': '無法取得的圖片 ({count})',

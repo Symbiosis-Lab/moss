@@ -70,6 +70,7 @@ const GERMAN_IDENTICAL = [
   'onboard.card_plugin_title',
   'publish_receipt.row_newsletter',
   'deployment.label.host',
+  'channels.hosts',
   'deployment.label.domain',
   'deployment.label.repository',
   'domain.label_name',

@@ -276,8 +276,8 @@ export interface UiHost {
   startWriting?: (folder: string) => Promise<EngineResult<string>>;
   /** Imports the site at `url` into `folder`. */
   importSite?: (url: string, folder: string) => Promise<EngineResult<ImportOutcome>>;
-  /** Opens the plugins view filtered to `filter`. */
-  openPluginsView?: (filter: string, folder: string) => Promise<EngineResult<null>>;
+  /** Opens the plugins view. */
+  openPluginsView?: (folder: string) => Promise<EngineResult<null>>;
   hideComment?: CommentAction;
   unhideComment?: CommentAction;
   /** The host's queued app-level toasts, drawn by the editor while it is what the person sees. */

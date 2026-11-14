@@ -623,7 +623,7 @@ export async function handleConnectPlugin(deps: CardHandlerDeps): Promise<void> 
   // ends at "open the plugins view"; the plugin install flow takes over
   // and PanelTask events arrive via `report_plugin_task_lifecycle`.
   if (!host.openPluginsView) throw new Error("this host has no plugins view");
-  const result = await host.openPluginsView("import", deps.folderPath);
+  const result = await host.openPluginsView(deps.folderPath);
   if (result.status === "error") {
     // Backstop: the IPC call should always succeed when moss is up. If
     // the emit_to fails (e.g., main webview labeled differently in a

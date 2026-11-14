@@ -213,7 +213,7 @@ pub(super) fn merge_registry_rows(plugins: &mut Vec<AvailablePlugin>, entries: &
             // `resolve_channel_icon`, which serves the cached copy the backend
             // downloaded and sanitized.
             icon_url: None,
-            capabilities: entry.capabilities.clone(),
+            capabilities: entry.granted_capabilities(),
             installed: false,
             source: default_plugin_source(),
             requires_stack: entry.requires_stack,
@@ -274,6 +274,68 @@ mod tests {
     }
 
 
+
+    /// A plugin is offered before install where it will be found after: a
+    /// registry entry and a manifest that declare the same kinds grant the
+    /// same capabilities.
+    #[test]
+    fn a_published_row_is_granted_what_its_manifest_would_be() {
+        let capabilities_of = |kinds: &[&str], legacy: &[&str]| -> (Vec<String>, Vec<String>) {
+            let mut published = entry("stranger", "1.0.0", None);
+            published.contributes = kinds.iter().map(|kind| kind.to_string()).collect();
+            published.capabilities = legacy.iter().map(|c| c.to_string()).collect();
+            let mut rows = Vec::new();
+            merge_registry_rows(&mut rows, &[published]);
+
+            let contributes: serde_json::Map<String, serde_json::Value> =
+                kinds.iter().map(|kind| (kind.to_string(), serde_json::json!({}))).collect();
+            let manifest = crate::plugins::PluginManifest::parse(
+                &serde_json::json!({
+                    "name": "stranger", "version": "1.0.0", "entry": "main.js",
+                    "capabilities": legacy, "contributes": contributes,
+                })
+                .to_string(),
+            )
+            .unwrap();
+
+            let mut from_index = rows.remove(0).capabilities;
+            let mut from_manifest: Vec<String> =
+                manifest.capabilities.iter().map(|c| c.hook_name().to_string()).collect();
+            from_index.sort();
+            from_manifest.sort();
+            (from_index, from_manifest)
+        };
+
+        for (kinds, legacy) in [
+            (&["channel"][..], &[][..]),
+            (&["deploy_target"], &[]),
+            (&["channel", "jobs"], &["process"]),
+            (&["derivations"], &[]),
+            // An index from before entries named their kinds.
+            (&[], &["deploy"]),
+        ] {
+            let (from_index, from_manifest) = capabilities_of(kinds, legacy);
+            assert_eq!(from_index, from_manifest, "kinds {kinds:?}, declared {legacy:?}");
+        }
+
+        let (channel, _) = capabilities_of(&["channel"], &[]);
+        let (host, _) = capabilities_of(&["deploy_target"], &[]);
+        assert_eq!(channel, ["syndicate"]);
+        assert_eq!(host, ["deploy"], "a host is not a channel");
+
+        // The one grant the index cannot make: `login` is a field of the
+        // channel's body, and the index lists kinds by name only.
+        let signs_in = crate::plugins::PluginManifest::parse(
+            &serde_json::json!({
+                "name": "stranger", "version": "1.0.0", "entry": "main.js",
+                "contributes": { "channel": { "login": true } },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert!(signs_in.capabilities.contains(&crate::plugins::Capability::Login));
+        assert!(!channel.contains(&"login".to_string()));
+    }
 
     /// The catalog is bundled ∪ published, and the union has one rule.
     ///

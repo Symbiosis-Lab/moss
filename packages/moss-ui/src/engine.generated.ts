@@ -1485,7 +1485,7 @@ paths: string[] } } |
 { kind: "OutsideEditKept"; payload: { path: string; version_id: string } } | 
 /**
  * Ask the app shell (main webview) to open the plugin
- * catalog filtered to importers. Produced by the editor webview's
+ * catalog, which rests on channels. Produced by the editor webview's
  * "Plugin" card; consumed by `app.ts`'s `onMossEvent("OpenPluginsView", …)`
  * listener which opens the settings modal at the `channels` section.
  * 
@@ -1497,13 +1497,6 @@ paths: string[] } } |
  * See project memory: "NEVER use `app.emit()` broadcast".
  */
 { kind: "OpenPluginsView"; payload: { 
-/**
- * Capability the catalog pre-filters to. The catalog recognizes
- * `"import"` (onboarding "Connect a service" card) and `"deploy"`
- * (deploy-target chooser); any other value falls back to the
- * unfiltered grid.
- */
-filter: string; 
 /**
  * Absolute folder path the user is onboarding — surfaced so the
  * catalog UI can pre-fill any "install into this site" affordance

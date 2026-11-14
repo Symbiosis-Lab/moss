@@ -1298,7 +1298,8 @@ body.starter-picker-active .moss-preview-container.action-panel-open.mobile-mode
   display: flex;
   flex-direction: column;
   overflow: hidden; /* clip children to pill shape */
-  padding: 4px 0;
+  /* No padding: the first and last buttons are as wide as the pill, so each
+     is the pill's own end cap and a selected one lies on its contour. */
 }
 
 /* Hide panel and shadow when .hidden class is added */
@@ -1858,12 +1859,6 @@ body.divider-dragging * {
   transform: translate(-0.5px, 0.5px);
 }
 
-/* Off reads as off at a glance: a logo keeps its colour only while the channel is on. */
-.moss-syndication-button:not(.enabled) :is(.channel-icon-glyph, .channel-icon-fallback) {
-  filter: grayscale(1);
-  opacity: 0.55;
-}
-
 .moss-syndication-button:hover {
   color: var(--moss-color-accent);
   background: var(--moss-color-surface);
@@ -2093,9 +2088,10 @@ body.divider-dragging * {
   background-color: transparent;
 }
 
-/* Visible-at-rest caption under the tile (install percentage / failure).
-   Absolutely positioned below the 48px box so the flex grid doesn't reflow;
-   the grid's 16px row gap absorbs it. LITERAL rem (2xs), not
+/* Visible-at-rest caption (install percentage / failure) under whatever it
+   is appended to: the tile, or in the catalog the cell, below the name.
+   Absolutely positioned so the flex grid doesn't reflow; the grid's row gap
+   absorbs it. LITERAL rem (2xs), not
    var(--moss-size-2xs) — the app shell's tokens.css defines only a fragment
    of the size scale (see the .fp-caption type-scale note). */
 .plugin-icon-caption {
@@ -5972,7 +5968,7 @@ body.own-titlebar.controls-trailing .moss-titlebar-traffic-light-space {
 .moss-settings-tabs-item.hidden {
   display: none;
 }
-/* The install catalog (plugins + themes), LAST in the rail: a rail-spanning row
+/* Add channel, LAST in the rail: a rail-spanning row
    like every tab above it, carrying a bare plus and no label.
 
    It SHARES the pill — same width, height, radius, padding, and therefore the
@@ -6064,6 +6060,8 @@ body.own-titlebar.controls-trailing .moss-titlebar-traffic-light-space {
 .moss-settings-tabs-dot--current { background: var(--moss-success); }
 .moss-settings-tabs-dot--pending { border: 1.5px solid var(--moss-success); }
 .moss-settings-tabs-dot--attention { background: var(--moss-warning-amber); }
+/* An offer: the attention lamp unfilled, as on a catalog tile. */
+.moss-settings-tabs-dot--offer { border: 1.5px solid var(--moss-warning-amber); }
 
 .moss-settings-tabs-empty {
   font-size: 13px;
@@ -6568,11 +6566,10 @@ body.own-titlebar.controls-trailing .moss-titlebar-traffic-light-space {
 .moss-plugin-catalog-grid {
   display: flex;
   flex-wrap: wrap;
-  /* Rows are taller than columns are wide for a reason: a tile is 48px, but
-     its install ring paints 6px past that and its caption sits below the ring.
-     At a symmetric 16px gap the caption of one row ran into the ring of the
-     next while a download was in flight. */
+  /* The row gap is taller than the column gap: an install's caption sits
+     under a cell's name, and the next row's ring paints 6px above its tile. */
   gap: 28px 16px;
+  align-items: flex-start;
   padding: 8px 0;
 }
 
@@ -6587,16 +6584,58 @@ body.own-titlebar.controls-trailing .moss-titlebar-traffic-light-space {
   min-width: 180px;
 }
 
-/* Entry-point capability-filter context line above the catalog grid.
-   One muted sentence + "Show all" (.moss-link--subtle) as the dismissal —
-   no chips, no persistent chrome in the unfiltered state. */
-.moss-catalog-filter-note {
+/* A catalog tile: the icon, then its name. The cell is the caption's anchor
+   too, so an install's percent lands under the name; the grid's row gap is
+   where it goes. Wide enough for the ring, which paints past the icon. */
+.moss-plugin-catalog-cell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 72px;
+}
+
+/* Clears the ring's lowest arc, as the caption does. Literal rem for the
+   reason given at .plugin-icon-caption. */
+.moss-plugin-catalog-name {
+  margin-top: 10px;
+  max-width: 100%;
+  font-size: 0.75rem;
+  line-height: 1.3;
+  color: var(--moss-color-text);
+  text-align: center;
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+/* A quiet link set a group apart from what is above it: the catalog's way
+   to its other plugins, and removal on a plugin's settings page. */
+.moss-plugin-catalog-view-link,
+.moss-settings-remove-row {
+  display: flex;
+  align-items: center;
+  gap: var(--moss-space-sm);
+  margin-top: var(--moss-space-lg);
+  font-size: var(--moss-size-sm, 13px);
+}
+
+/* Above the grid on a view that is not channels: the way back, then the
+   view's name, which is the darker of the two because it is where you are. */
+.moss-plugin-catalog-view-note {
   display: flex;
   align-items: baseline;
-  gap: var(--moss-space-sm);
+  gap: var(--moss-space-xs);
   color: var(--moss-color-text-secondary);
   font-size: var(--moss-size-sm, 13px);
   margin-bottom: var(--moss-space-xs);
+}
+.moss-plugin-catalog-view-note [aria-current] {
+  color: var(--moss-color-text);
 }
 
 /* Responsive: small windows (≤700px) */

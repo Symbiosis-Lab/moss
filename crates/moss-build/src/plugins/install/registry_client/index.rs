@@ -55,6 +55,11 @@ pub struct IndexEntry {
     pub repository: Option<String>,
     #[serde(default)]
     pub capabilities: Vec<String>,
+    /// The names of the kinds the manifest contributes (`channel`,
+    /// `deploy_target`, …). Absent in an index published before the registry
+    /// listed them.
+    #[serde(default)]
+    pub contributes: Vec<String>,
     pub download_url: String,
     /// The artifact hash pinned at review time. This is the whole integrity
     /// story: what was reviewed is what installs, wherever it is hosted.
@@ -96,6 +101,25 @@ pub struct IndexEntry {
     /// starter without every entry type's fields living on this one struct.
     #[serde(flatten, default)]
     extra: serde_json::Map<String, serde_json::Value>,
+}
+
+impl IndexEntry {
+    /// What the plugin can do, for a row drawn before it is installed: what
+    /// its contributed kinds grant, plus whatever the old `capabilities` list
+    /// names. Once installed, the manifest on disk answers instead.
+    pub fn granted_capabilities(&self) -> Vec<String> {
+        let kinds = self.contributes.iter().map(String::as_str);
+        let mut granted: Vec<String> = crate::plugins::contributions::capabilities_of_kinds(kinds)
+            .iter()
+            .map(|capability| capability.hook_name().to_string())
+            .collect();
+        for declared in &self.capabilities {
+            if !granted.contains(declared) {
+                granted.push(declared.clone());
+            }
+        }
+        granted
+    }
 }
 
 /// A plugin a starter carries, with the code hash the registry saw in it.

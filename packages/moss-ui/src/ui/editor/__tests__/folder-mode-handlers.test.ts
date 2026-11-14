@@ -454,7 +454,7 @@ describe("handleConnectPlugin", () => {
       loadFile: vi.fn(),
       host: makeHost(),
     });
-    expect(openPluginsView).toHaveBeenCalledWith("import", "/site");
+    expect(openPluginsView).toHaveBeenCalledWith("/site");
     expect(showAck).toHaveBeenCalledWith("Opening plugins…");
   });
 
@@ -516,7 +516,7 @@ describe("makeCardClickHandler", () => {
     });
     handler("connect-plugin");
     await new Promise((r) => setTimeout(r, 10));
-    expect(openPluginsView).toHaveBeenCalledWith("import", "/site");
+    expect(openPluginsView).toHaveBeenCalledWith("/site");
   });
 });
 

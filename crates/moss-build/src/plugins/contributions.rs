@@ -732,21 +732,45 @@ impl PluginManifest {
             self.capabilities.clear();
             return;
         };
-        let mut derived = Vec::new();
-        if let Some(channel) = &contributes.channel {
-            derived.push(Capability::Syndicate);
-            if channel.login {
-                derived.push(Capability::Login);
-            }
-        }
-        if contributes.deploy_target.is_some() {
-            derived.push(Capability::Deploy);
-        }
-        if contributes.processor.is_some() {
-            derived.push(Capability::Process);
+        let mut derived = capabilities_of_kinds(contributes.kinds().iter().map(String::as_str));
+        // An export the channel also provides, not a kind of its own.
+        if contributes.channel.as_ref().is_some_and(|channel| channel.login) {
+            derived.push(Capability::Login);
         }
         self.capabilities = derived;
     }
+}
+
+impl PluginContributes {
+    /// Every kind this declares, as a manifest spells it and as the registry's
+    /// index lists it: the keys it serializes. Which of them grant a
+    /// capability is [`capabilities_of_kinds`]'s answer alone.
+    fn kinds(&self) -> Vec<String> {
+        let Ok(serde_json::Value::Object(declared)) = serde_json::to_value(self) else {
+            return Vec::new();
+        };
+        declared.into_iter().filter(|(_, body)| !body.is_null()).map(|(kind, _)| kind).collect()
+    }
+}
+
+/// What a set of contribution kinds lets a plugin do.
+///
+/// The one place a kind's name becomes a capability. An installed manifest
+/// and a registry entry both ask it, so a plugin is offered before install
+/// where it will be found after. A kind that grants nothing is skipped.
+///
+/// `login` is not here: it is a field of the channel, which the index does
+/// not carry, so a channel that signs in is granted it only once installed.
+pub fn capabilities_of_kinds<'a>(kinds: impl IntoIterator<Item = &'a str>) -> Vec<Capability> {
+    kinds
+        .into_iter()
+        .filter_map(|kind| match kind {
+            "channel" => Some(Capability::Syndicate),
+            "deploy_target" => Some(Capability::Deploy),
+            "processor" => Some(Capability::Process),
+            _ => None,
+        })
+        .collect()
 }
 
 #[cfg(test)]
