@@ -83,7 +83,6 @@ pub mod carrier_token;
 pub(crate) mod comment_stub;
 pub(crate) mod content_wrapper;
 pub mod events;
-pub(crate) mod host_routes;
 pub(crate) mod iframe_bridge;
 mod image_original;
 pub mod invoke;

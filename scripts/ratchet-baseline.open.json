@@ -71,7 +71,7 @@
         "crates/moss-core/src": 47,
         "crates/moss-core/src/ast": 29,
         "crates/moss-core/src/resolve": 20,
-        "crates/moss-build/src/ops/serve": 20,
+        "crates/moss-build/src/ops/serve": 19,
         "crates/moss-build/src/js-src/site/maps/places-explorer": 18,
         "crates/moss-build/src/vault/import/scrape": 17,
         "crates/moss-build/src/cli": 25,
