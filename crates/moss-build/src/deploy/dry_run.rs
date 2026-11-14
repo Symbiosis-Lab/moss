@@ -224,10 +224,14 @@ impl DryRun {
                 (crate::syndication::plan::Action::Adopt { url }, ..) => format!("already there: {url}"),
                 (action, form) => {
                     let verb = if matches!(action, crate::syndication::plan::Action::Update) { "would update" } else { "would post" };
-                    let sizes: Vec<String> = c.parts.iter().map(|p| match p.max_chars {
+                    let mut sizes: Vec<String> = c.parts.iter().map(|p| match p.max_chars {
                         Some(max) => format!("{}/{max}", p.chars),
                         None => p.chars.to_string(),
                     }).collect();
+                    // An article has no parts: its length is its text's.
+                    if let Some(article) = &c.article {
+                        sizes.push(crate::build::markdown::html_post::strip_html_tags(&article.html).chars().count().to_string());
+                    }
                     let pictures = if c.included_pictures == 0 && c.omitted_pictures == 0 {
                         String::new()
                     } else {
@@ -586,6 +590,27 @@ mod tests {
             copies: Vec::new(),
             owner: Owner::Unchecked { reason: "this folder has no site".into() },
         }
+    }
+
+    #[test]
+    fn an_article_copy_is_printed_with_the_length_of_its_text() {
+        use crate::syndication::{channel::Form, plan::Action, preview::PreviewCopy, shape::Article};
+        let mut run = small();
+        run.copies = vec![PreviewCopy {
+            source_path: "essays/autumn.md".into(),
+            channel: "matters".into(),
+            action: Action::Due,
+            form: Some(Form::Long),
+            parts: Vec::new(),
+            link_card: None,
+            article: Some(Article { title: "Autumn".into(), html: "<p>The <em>leaves</em> turn.</p>".into(), description: None, cover: None }),
+            pictures: Vec::new(),
+            omitted_pictures: 0,
+            included_pictures: 0,
+            pending_site_url: false,
+        }];
+        let text = run.render();
+        assert!(text.contains("Copy to matters: essays/autumn.md — would post as long (16 characters)\n"), "{text}");
     }
 
     /// The one page the author changed must be in the list however many pages

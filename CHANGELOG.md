@@ -7,6 +7,7 @@ All notable changes to moss will be documented here.
 ### Fixed
 
 - A site with a comment server also gets the build that renders only what changed. The record of the last comment refresh, rewritten by every build, was counted as something a page reads, so such a site rendered every page each time.
+- `moss deploy --dry-run` prints the length of an article copy's text. The line read "would post as long ( characters)", with no number.
 
 ### Changed
 
