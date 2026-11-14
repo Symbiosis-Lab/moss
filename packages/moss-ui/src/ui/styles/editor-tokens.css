@@ -77,7 +77,7 @@
   --moss-color-surface: #eef0f3;
   --moss-color-text: #24262b;
   --moss-color-text-secondary: #555a62;
-  --moss-color-muted: #7a7f8a;
+  --moss-color-muted: #676c76; /* 4.6:1 on the light --moss-color-surface */
   --moss-color-accent: #3a7a8a;
   --moss-color-accent-hover: #2a6070;
   --moss-accent-light: rgba(58, 122, 138, 0.15);

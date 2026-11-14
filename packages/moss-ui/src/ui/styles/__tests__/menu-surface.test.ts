@@ -44,16 +44,18 @@ describe('the menu surface', () => {
     expect(box + row).not.toMatch(/\d(px|rem|em)\b/);
   });
 
-  it('muted text reads on the raised dark surface a menu is filled with', () => {
+  it('muted text reads on the ground and on the raised surface, light and dark', () => {
     const luminance = (hex: string) => {
       const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
       return 0.2126 * r + 0.7152 * g + 0.0722 * b;
     };
+    const ratio = (a: string, b: string) => { const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
     for (const file of ['styles/shared/tokens.css', 'styles/editor-tokens.css']) {
-      const dark = /\[data-theme="dark"\]\s*\{([^}]*)\}/.exec(stripComments(read(file)))![1];
-      const hex = (name: string) => new RegExp(`--moss-color-${name}:\\s*(#[0-9a-f]{6})`).exec(dark)![1];
-      const ratio = (luminance(hex('muted')) + 0.05) / (luminance(hex('surface')) + 0.05);
-      expect(ratio, file).toBeGreaterThanOrEqual(4.5);
+      for (const [theme, block] of [['light', /\n:root\s*\{([^}]*)\}/], ['dark', /\[data-theme="dark"\]\s*\{([^}]*)\}/]] as const) {
+        const colors = block.exec(stripComments(read(file)))![1];
+        const hex = (name: string) => new RegExp(`--moss-color-${name}:\\s*(#[0-9a-f]{6})`).exec(colors)![1];
+        for (const ground of ['bg', 'surface']) expect(ratio(hex('muted'), hex(ground)), `${file} ${theme} on ${ground}`).toBeGreaterThanOrEqual(4.5);
+      }
     }
     expect(/\[data-theme="dark"\]\s*\{([^}]*)\}/.exec(stripComments(tokens))![1]).toMatch(/--moss-menu-bg:\s*var\(--moss-color-surface\);/);
   });
