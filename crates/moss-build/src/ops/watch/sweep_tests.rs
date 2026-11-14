@@ -392,6 +392,11 @@ fn outside_moss_the_watcher_filter_still_decides() {
     assert!(!should_request(folder, &folder.join("notes/scratch.xyz")));
 }
 
+/// `drift_eligible` as the walk asks it.
+fn eligible(folder: &Path, path: &Path) -> bool {
+    drift_eligible(folder, path, scope::path_is_watchable(folder, path))
+}
+
 /// `drift_eligible` used to defer its extension question entirely
 /// to `scope::path_passes_filter`, a hand-maintained watcher-side list that
 /// never included `.html`/`.htm` and still doesn't include word-processor
@@ -406,7 +411,7 @@ fn scan_recognized_extensions_are_drift_eligible_even_when_the_watcher_filter_mi
     let folder = Path::new("/vault");
     for rel in ["page.html", "page.htm", "report.docx", "notes.pages", "manual.doc"] {
         assert!(
-            drift_eligible(folder, &folder.join(rel)),
+            eligible(folder, &folder.join(rel)),
             "`{rel}` is a scan-recognized source and must be drift-eligible"
         );
     }
@@ -450,19 +455,19 @@ fn a_relocated_vault_is_swept_the_same_way() {
         for rel in ["index.md", "notes/post.md"] {
             let path = mount_join(mount, rel);
             assert!(should_request(folder, &path), "`{rel}` under {shape}");
-            assert!(drift_eligible(folder, &path), "`{rel}` under {shape}");
+            assert!(eligible(folder, &path), "`{rel}` under {shape}");
         }
         // moss's own inputs are requested (they cannot be regenerated) but
         // never drift-compared (the manifest does not carry them).
         let config = mount_join(mount, ".moss/config.toml");
         assert!(should_request(folder, &config), "moss's own inputs, under {shape}");
-        assert!(!drift_eligible(folder, &config), "under {shape}");
+        assert!(!eligible(folder, &config), "under {shape}");
         // The dot rule still applies to what is INSIDE the vault — that is the
         // whole reason the predicate is consulted at all.
         for rel in [".git/HEAD", "node_modules/x/index.js", "notes/scratch.xyz"] {
             let path = mount_join(mount, rel);
             assert!(!should_request(folder, &path), "`{rel}` under {shape}");
-            assert!(!drift_eligible(folder, &path), "`{rel}` under {shape}");
+            assert!(!eligible(folder, &path), "`{rel}` under {shape}");
         }
     }
 }
@@ -740,9 +745,9 @@ fn everything_the_walk_judges_the_scan_consumes() {
 
 // ── Invariant 2: one path normalizer ──────────────────────────────────────
 
-/// The walk keys files exactly the way the manifest does — through the same
-/// `path_to_relative_key` the event pump uses. Two normalizers is how a path
-/// matches its own baseline entry on one side and not the other.
+/// The walk keys files exactly the way the event pump's
+/// `path_to_relative_key` does. Two normalizers is how a path matches its own
+/// baseline entry on one side and not the other.
 #[test]
 fn the_walk_keys_files_the_manifest_way() {
     let dir = tempfile::Builder::new().prefix("moss_sweep").tempdir().unwrap();
@@ -758,6 +763,53 @@ fn the_walk_keys_files_the_manifest_way() {
         "same key the pump would derive for the same file"
     );
     assert_eq!(walked.files[0].rel, "图片/nested/照 片.jpg", "forward slashes, original case");
+}
+
+/// The walk keys a file from its own path, without the realpath the event
+/// pump pays for, so it must never yield a path it reached through a link:
+/// there the two keys differ. Through a symlinked folder, beside a symlinked
+/// file and a symlinked directory pointing inside and outside, under a
+/// decomposed name, and for the missing real name behind a cloud placeholder,
+/// every key it yields is the realpath key, and only the real files are keyed.
+#[cfg(unix)]
+#[test]
+fn the_walk_keys_only_real_paths_as_the_realpath_would() {
+    use std::os::unix::fs::symlink;
+    let outside = tempfile::Builder::new().prefix("moss-sweep-outside-").tempdir().unwrap();
+    std::fs::write(outside.path().join("elsewhere.md"), "# Elsewhere\n").unwrap();
+    let tmp = tempfile::Builder::new().prefix("moss-sweep-test-").tempdir().unwrap();
+    let real = tmp.path().join("site");
+    std::fs::create_dir_all(real.join("posts")).unwrap();
+    std::fs::write(real.join("index.md"), "# Home\n").unwrap();
+    std::fs::write(real.join("posts/one.md"), "# One\n").unwrap();
+    std::fs::write(real.join("cafe\u{301}.md"), "# Caf\u{e9}\n").unwrap();
+    // A pre-Sonoma placeholder: on macOS the walk yields `away.md`, which
+    // does not exist.
+    std::fs::write(real.join(".away.md.icloud"), b"").unwrap();
+    symlink(real.join("posts/one.md"), real.join("alias.md")).unwrap();
+    symlink(real.join("posts"), real.join("inside-link")).unwrap();
+    symlink(outside.path(), real.join("outside-link")).unwrap();
+    let linked_root = tmp.path().join("linked-root");
+    symlink(&real, &linked_root).unwrap();
+
+    for root in [&real, &linked_root] {
+        let walked = walk(root, None, None);
+        for file in &walked.files {
+            assert_eq!(
+                Some(file.rel.clone()),
+                crate::build::watch::path_to_relative_key(root, &file.abs),
+                "{} under {}",
+                file.abs.display(),
+                root.display()
+            );
+        }
+        let keys: std::collections::BTreeSet<_> = walked.files.iter().map(|f| f.rel.as_str()).collect();
+        let mut expected: std::collections::BTreeSet<_> = ["caf\u{e9}.md", "index.md", "posts/one.md"].into_iter().collect();
+        if cfg!(target_os = "macos") {
+            expected.insert("away.md");
+        }
+        assert_eq!(keys, expected, "under {}", root.display());
+    }
 }
 
 /// The counters behind the blind-folder warning, measured on a real tree.

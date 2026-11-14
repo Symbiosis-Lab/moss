@@ -818,7 +818,13 @@ pub(crate) fn source_metadata_verdict(
 pub fn path_to_relative_key(folder: &Path, abs: &Path) -> Option<String> {
     let folder_canon = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
     let abs_canon = canonical_through_missing(abs);
-    let rel = abs_canon.strip_prefix(&folder_canon).ok()?;
+    relative_key(abs_canon.strip_prefix(&folder_canon).ok()?)
+}
+
+/// The manifest key of a path already relative to the folder: plain names
+/// only, forward slashes, composed Unicode. A caller whose path is its own
+/// walk under the folder, through no link, needs no realpath first.
+pub(crate) fn relative_key(rel: &Path) -> Option<String> {
     let mut parts = Vec::new();
     for comp in rel.components() {
         use std::path::Component;
