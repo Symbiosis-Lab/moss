@@ -6,6 +6,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- The button that sets a domain's records up at its DNS provider is offered only where the provider will write every record moss asks for. At a provider holding an older copy of moss's records it wrote two of them and left the rest.
 - On macOS a folder with many files at its top level is watched as soon as it opens. With 300 files it took a minute or more, and changes made meanwhile waited for the 20-second check of the folder.
 - A page renamed while it is open in the preview is shown at its own address. The preview sometimes opened it at `…/index.html`, and Copy page address copied that.
 - `moss doctor --surface` counts a class written on a grid, gallery, hero or buttons fence (`:::grid 2 {.tall}`) as used in pages. It called such a class "used nowhere".
