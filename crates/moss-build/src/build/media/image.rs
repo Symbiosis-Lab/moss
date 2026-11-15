@@ -1579,6 +1579,8 @@ pub(crate) struct ImageRunContext {
     /// suppressed item out of `items`, so the worker needs the set only to
     /// keep an expected absence out of its violation report.
     pub suppressed: std::collections::HashSet<String>,
+    /// The build's shared source hashes; see `BackgroundContext::source_oids`.
+    pub(crate) source_oids: std::sync::Arc<crate::build::cache::source_oids::SourceOids>,
 }
 
 impl ImageRunContext {
@@ -1594,6 +1596,7 @@ impl ImageRunContext {
             rung_collisions: ctx.rung_collisions.clone(),
             carried_advisories: Vec::new(),
             suppressed: std::collections::HashSet::new(),
+            source_oids: ctx.source_oids.clone(),
         }
     }
 
@@ -2052,7 +2055,9 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
         // the one transient reason for it: the gate above took the source while it was
         // local, and `resolve` refuses one that has gone back to the cloud since.
         let source_oid = if item.source_oid.is_empty() {
-            match bg_hash_index.lock().unwrap().resolve(&source_file, &rel_source_str) {
+            // Waits for the asset walk outside the index lock, which every worker shares.
+            let shared = ctx.source_oids.resolve(&source_file, &rel_source_str, || bg_hash_index.lock().unwrap().resolve(&source_file, &rel_source_str));
+            match shared.map(|(stat, oid)| oid.recorded_in(&mut bg_hash_index.lock().unwrap(), &rel_source_str, &stat, false)) {
                 Ok(oid) => oid,
                 Err(_) if crate::build::outcome::not_yet(project_root, &source_file) => {
                     return ItemStep::nothing_shipped(Vec::new());

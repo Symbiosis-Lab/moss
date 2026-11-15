@@ -1303,8 +1303,10 @@ pub(crate) fn run_video_conversion(
             let superseded_or_cancelled =
                 || services.cancellation.current_id() != epoch || is_cancelled();
 
-            // Hash source file (uses HashIndex cache to avoid re-reading large files)
-            let source_oid = match resolve_source_hash(&source_file, &item, &mut hash_index) {
+            // The asset walk may be hashing this file now, or has: take its oid.
+            let shared = ctx.source_oids.resolve(&source_file, item, || resolve_source_hash(&source_file, item, &mut hash_index))
+                .map(|(stat, oid)| oid.recorded_in(&mut hash_index, item, &stat, true));
+            let source_oid = match shared {
                 Ok(oid) => oid,
                 Err(e) => {
                     // The read failed, so there is nothing to encode — but the bytes
@@ -3432,6 +3434,34 @@ pub(crate) mod tests {
         assert!(image_temp.exists(), "a video run must not take an image batch's temp");
         let left: Vec<_> = std::fs::read_dir(&cache_tmp).unwrap().map(|e| e.unwrap().file_name()).collect();
         assert_eq!(left, vec![image_batch.path().file_name().unwrap().to_owned()], "each run removes its own scratch");
+    }
+
+    /// A video the asset walk hashed this build is not read again: the lane takes
+    /// the walk's oid and records it in its own index.
+    #[tokio::test]
+    async fn a_video_the_walk_hashed_this_build_is_not_read_again() {
+        let tmp = portable_tmpdir();
+        let vault = tmp.path().join("vault");
+        let moss_dir = tmp.path().join(".moss");
+        std::fs::create_dir_all(vault.join("videos")).unwrap();
+        std::fs::write(vault.join("videos/clip.mp4"), b"clip bytes").unwrap();
+        let stat = crate::build::stat::FileStat::of(&std::fs::metadata(vault.join("videos/clip.mp4")).unwrap());
+        let ctx = BackgroundContext {
+            video_items: vec!["videos/clip.mp4".to_string()],
+            source_path: vault.display().to_string(),
+            staging_dir: tmp.path().join("stage"),
+            moss_dir: moss_dir.clone(),
+            ffmpeg_bin_path: Some(moss_dir.join("no-such-ffmpeg").display().to_string()),
+            ..BackgroundContext::for_test()
+        };
+        ctx.source_oids.resolve_at("videos/clip.mp4", &stat, || Ok("oid-from-the-walk".into())).unwrap();
+
+        let svc = BuildServices::headless();
+        let epoch = svc.cancellation.current_id();
+        tokio::task::spawn_blocking(move || run_video_conversion(&svc, &ctx, epoch, None)).await.unwrap();
+
+        let index = crate::build::cache::HashIndex::load(&MossPaths::from_moss_dir(moss_dir).cache_hash_index());
+        assert_eq!(index.lookup_whole_second("videos/clip.mp4", stat.size, stat.mtime), Some("oid-from-the-walk"));
     }
 
     /// A run that ends having delivered nothing asks for no rebuild. Asking

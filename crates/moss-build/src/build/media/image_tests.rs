@@ -902,6 +902,7 @@ async fn base_failure_fails_registered_rung_promises() {
         rung_collisions: Default::default(),
         carried_advisories: Vec::new(),
         suppressed: Default::default(),
+        source_oids: Default::default(),
     };
 
     let mut services = BuildServices::headless();
@@ -982,6 +983,7 @@ async fn base_failed_advisory_names_the_full_nested_source_path() {
         rung_collisions: Default::default(),
         carried_advisories: Vec::new(),
         suppressed: Default::default(),
+        source_oids: Default::default(),
     };
 
     let recorder = std::sync::Arc::new(RecordingReporter::default());
@@ -1078,6 +1080,7 @@ async fn unhashable_source_fails_its_promises_instead_of_going_quiet() {
         rung_collisions: Default::default(),
         carried_advisories: Vec::new(),
         suppressed: Default::default(),
+        source_oids: Default::default(),
     };
 
     let mut services = BuildServices::headless();
@@ -1152,6 +1155,7 @@ async fn rung_collision_keeps_user_file_and_produces_other_rungs() {
         rung_collisions,
         carried_advisories: Vec::new(),
         suppressed: Default::default(),
+        source_oids: Default::default(),
     };
 
     let services = std::sync::Arc::new(BuildServices::headless());
@@ -3948,6 +3952,7 @@ async fn test_image_cancel_aborts_image_runner() {
         rung_collisions: Default::default(),
         carried_advisories: Vec::new(),
         suppressed: Default::default(),
+        source_oids: Default::default(),
     };
 
     // The runner is synchronous CPU work. Run it on a blocking thread so
@@ -4041,6 +4046,7 @@ async fn test_image_hashes_updated_on_cancellation() {
         rung_collisions: Default::default(),
         carried_advisories: Vec::new(),
         suppressed: Default::default(),
+        source_oids: Default::default(),
     };
 
     // Watcher thread: cancel the session as soon as the first webp
@@ -7295,4 +7301,44 @@ fn a_new_process_suppression_scan_reads_no_unchanged_page() {
     let before = reads();
     assert_eq!(suppressed_variants_for(&paths, &staging), ["assets/gone.webp".to_string()].into());
     assert_eq!(reads() - before, 0, "the next process starts from the kept scan");
+}
+
+/// An image the asset walk hashed this build is not read again: the lane takes
+/// the walk's oid and records it in its own index.
+#[tokio::test]
+async fn an_image_the_walk_hashed_this_build_is_not_read_again() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    image::RgbImage::from_pixel(2600, 8, image::Rgb([20, 90, 160])).save(root.join("cover.webp")).unwrap();
+    let moss_dir = root.join(".moss");
+    let staging = moss_dir.join("build.nosync").join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    let stat = crate::build::stat::FileStat::of(&fs::metadata(root.join("cover.webp")).unwrap());
+    let run_ctx = ImageRunContext {
+        items: vec![ImageConversionItem {
+            source_path: PathBuf::from("cover.webp"),
+            source_oid: String::new(),
+            ext: "webp".to_string(),
+            dimensions: Some((2600, 8)),
+            skip: None,
+            fingerprint: None,
+        }],
+        source_path: root.to_string_lossy().to_string(),
+        staging_dir: staging,
+        moss_dir: moss_dir.clone(),
+        config: ImageCompressionConfig::default(),
+        dir_overrides: std::collections::HashMap::new(),
+        tx: None,
+        rung_collisions: Default::default(),
+        carried_advisories: Vec::new(),
+        suppressed: Default::default(),
+        source_oids: Default::default(),
+    };
+    run_ctx.source_oids.resolve_at("cover.webp", &stat, || Ok("oid-from-the-walk".into())).unwrap();
+
+    let services = std::sync::Arc::new(BuildServices::headless());
+    tokio::task::spawn_blocking(move || run_image_conversion(&services, &run_ctx)).await.unwrap();
+
+    let index = crate::build::cache::HashIndex::load(&crate::moss_paths::MossPaths::from_moss_dir(moss_dir).cache_hash_index());
+    assert_eq!(index.lookup("cover.webp", &stat), Some("oid-from-the-walk"));
 }

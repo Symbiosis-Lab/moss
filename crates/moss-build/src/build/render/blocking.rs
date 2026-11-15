@@ -3393,6 +3393,7 @@ pub fn generate_blocking_content_for_build(
         rung_collisions,
         carried_advisories: Vec::new(),
         members_policy: members_policy.clone(),
+        source_oids: Default::default(),
     };
 
     // Math render cache build-end hook (see `parse_cache::math_cache_finish_build`'s

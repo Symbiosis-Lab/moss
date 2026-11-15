@@ -116,6 +116,8 @@ pub struct BackgroundContext {
     pub carried_advisories: Vec<crate::advisory::Advisory>,
     /// The build's one members policy, for the source copy.
     pub members_policy: moss_core::frontmatter::member_cascade::MemberCascade,
+    /// One hash per source file for this build's asset walk and media lanes.
+    pub(crate) source_oids: std::sync::Arc<crate::build::cache::source_oids::SourceOids>,
 }
 
 impl BackgroundContext {
@@ -143,6 +145,7 @@ impl BackgroundContext {
             rung_collisions: HashMap::new(),
             carried_advisories: Vec::new(),
             members_policy: Default::default(),
+            source_oids: Default::default(),
         }
     }
 }

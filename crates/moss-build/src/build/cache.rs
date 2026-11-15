@@ -45,6 +45,7 @@ mod records;
 pub(crate) mod page_sources;
 mod publication;
 mod process_memo;
+pub(crate) mod source_oids;
 pub(crate) use process_memo::{KeyedMemo, MemoFile, ProcessMemo, ROOTS};
 use crate::build::cloud_readiness::StorageOperation;
 pub use records::{Merged, RecordMode};
@@ -1112,6 +1113,12 @@ impl HashIndex {
     /// will never trust it.
     pub fn update_whole_second(&mut self, relative_path: String, size: u64, mtime: u64, content_hash: String) {
         self.update(relative_path, &FileStat::whole_second(size, mtime), content_hash);
+    }
+
+    /// Record a hash another reader took at `stat`, without saying when it was
+    /// read and without counting a rehash: nothing was read here.
+    pub(crate) fn adopt(&mut self, relative_path: String, stat: FileStat, content_hash: String) {
+        self.entries.insert(relative_path, HashIndexEntry { stat, recorded_at: None, content_hash });
     }
 
     /// Copy `relative_path`'s entry from `previous` exactly as it was recorded.

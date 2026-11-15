@@ -2614,3 +2614,36 @@ fn html_evicted_between_passes_keeps_its_fresh_hash_and_oid() {
     }
     assert_eq!(registrations, vec![(fresh.strip_prefix("100644:").unwrap().to_string(), Some(oid))]);
 }
+
+/// A video or source image a media lane hashed this build is not read again by
+/// the walk: it takes the lane's oid for the file's `sources` entry.
+#[tokio::test]
+async fn the_walk_takes_a_lanes_oid_for_a_file_it_owns() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (source, staging, moss_dir) = (tmp.path().join("site"), tmp.path().join("stage"), tmp.path().join("site/.moss"));
+    std::fs::create_dir_all(&staging).unwrap();
+    std::fs::create_dir_all(&moss_dir).unwrap();
+    std::fs::write(source.join("clip.mp4"), b"clip bytes").unwrap();
+    image::RgbImage::from_pixel(2600, 8, image::Rgb([20, 90, 160])).save(source.join("cover.webp")).unwrap();
+    let ctx = crate::types::services::BackgroundContext {
+        image_items: planned_images(&source, &moss_dir),
+        source_path: source.to_string_lossy().to_string(),
+        staging_dir: staging,
+        moss_dir: moss_dir.clone(),
+        ..crate::types::services::BackgroundContext::for_test()
+    };
+    for rel in ["clip.mp4", "cover.webp"] {
+        let stat = FileStat::of(&std::fs::metadata(source.join(rel)).unwrap());
+        ctx.source_oids.resolve_at(rel, &stat, || Ok(format!("lane-oid-{rel}"))).unwrap();
+    }
+    let (tx, rx) = crate::build::coordinator::test_utils::build_test_coordinator();
+    tokio::task::spawn_blocking(move || {
+        copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
+    })
+    .await
+    .unwrap();
+    let sealed = crate::build::coordinator::test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+    for rel in ["clip.mp4", "cover.webp"] {
+        assert_eq!(sealed.sources().get(rel).map(|m| m.hash.as_str()), Some(format!("lane-oid-{rel}").as_str()), "{rel}");
+    }
+}

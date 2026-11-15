@@ -1104,6 +1104,10 @@ async fn a_sweep_straight_after_a_build_finds_no_drift() {
     std::fs::write(test_dir.join("cafe\u{301}/the\u{301}.csv"), "item,price\n").unwrap();
     // Deliberately ignored: canonical location is .moss/theme/style.css.
     std::fs::write(test_dir.join("style.css"), "body { margin: 0 }\n").unwrap();
+    // Published by the media lanes, not the asset walk.
+    std::fs::write(test_dir.join("clip.mp4"), b"not a video").unwrap();
+    image::RgbImage::from_fn(2600, 8, |x, _| image::Rgb([(x % 251) as u8, 90, 160])).save(test_dir.join("cover.webp")).unwrap();
+    std::fs::write(test_dir.join("media.md"), "# Media\n\n![Cover](cover.webp)\n\n![[clip.mp4]]\n").unwrap();
     // A Finder alias whose target will not resolve: skipped from the output,
     // still judged by the walk.
     #[cfg(target_os = "macos")]

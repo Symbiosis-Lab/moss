@@ -101,6 +101,22 @@ fn a_build_that_watched_nothing_carries_every_page_when_nothing_changed() {
     assert!(count(&record, "pages_carried") > 0, "{record}");
 }
 
+/// A video and a `.webp` source are published by their media lanes, not the
+/// asset walk, but the proof walks them like any other source.
+#[test]
+fn a_site_with_a_video_and_a_webp_source_still_proves_from_the_seal() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let site = Site::new();
+    site.write("media.md", "---\ntitle: Media\n---\n\n![Cover](cover.webp)\n\n![[clip.mp4]]\n");
+    // Wider than the deploy edge, so the encoder plan owns it rather than calling it already small.
+    image::RgbImage::from_fn(2600, 8, |x, _| image::Rgb([(x % 251) as u8, 90, 160])).save(site.root().join("cover.webp")).unwrap();
+    fs::write(site.root().join("clip.mp4"), b"not a video").unwrap();
+    site.sealed();
+    let record = build(site.root(), BuildTrigger::Unobserved);
+    assert_eq!(count(&record, "proved_from_seal"), 1, "{record}");
+    assert_eq!(count(&record, "pages_rendered"), 0, "{record}");
+}
+
 #[test]
 fn a_full_trigger_still_renders_everything() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
