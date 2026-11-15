@@ -3,7 +3,8 @@
  * browser. The picture is drawn below its line whether or not the caret is on
  * it, so placing the caret there moves no line of text. The dot is laid over
  * the picture and carries no words. Dragging it, or moving it with the arrow
- * keys, writes the position into the file in the form the build reads, and the
+ * keys, shows the position in the line as it moves and writes it into the file
+ * on release, in the form the build reads and as one undo step, and the
  * picture on the page is still loaded afterwards. Resting the pointer on the
  * path of a picture that is already drawn opens no card.
  *
@@ -154,6 +155,44 @@ test('dragging the dot writes a position the build reads, and the picture stays 
   expect(after).toHaveLength(2);
   expect(after.every((p) => p.loaded), JSON.stringify(after)).toBe(true);
   expect(await lineTops(editor).then((t) => t.length)).toBeGreaterThan(8);
+});
+
+test('the line shows the position while the dot is dragged, the file waits for the release, and one undo puts it back', async ({ page }) => {
+  // A position is already written, so the word keeps its length while the dot moves and no line can re-wrap.
+  const START = '![A room|focus:40%,60%|](room.png)';
+  writeFileSync(join(serve.site, 'index.md'), PAGE.replace(EMBED, START));
+  const { editor } = await openEditor(page);
+  await select(editor, START);
+  const tops = () => lineTops(editor).then((lines) => lines.map(([, top]) => top));
+  const before = await tops();
+  /** The picture's line as the editor shows it, and whether the part shown in place of the written one has its neighbour's colour. */
+  const shown = () => editor.evaluate(() => {
+    const row = [...document.querySelectorAll('.cm-content .cm-line')].find((l) => l.textContent?.includes('](room.png)'))!;
+    const live = row.querySelector<HTMLElement>('span[contenteditable="false"]');
+    let beside = live?.previousSibling ?? null;
+    while (beside instanceof Element && beside.classList.contains('cm-widgetBuffer')) beside = beside.previousSibling;
+    const neighbour = beside instanceof Element ? beside : live?.parentElement;
+    return { text: row.textContent, sameColour: live && neighbour ? getComputedStyle(live).color === getComputedStyle(neighbour).color : null };
+  });
+
+  const from = (await dot(editor).boundingBox())!;
+  const pic = (await editor.locator('.cm-focus-point').boundingBox())!;
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(pic.x + pic.width * 0.3, pic.y + pic.height * 0.8, { steps: 6 });
+  await expect.poll(async () => (await shown()).text, { message: 'the line follows the dot' }).toMatch(/^!\[A room\|focus:(?!40%,60%)\d\d%,\d\d%\|\]\(room\.png\)$/);
+  const mid = await shown();
+  expect(mid.sameColour, 'the moving position is coloured as the text around it').toBe(true);
+  expect(await tops(), 'no line moves while the dot does').toEqual(before);
+  expect(readFileSync(join(serve.site, 'index.md'), 'utf8'), 'nothing is written before the release').toContain(START);
+  await page.mouse.up();
+
+  await expect.poll(() => readFileSync(join(serve.site, 'index.md'), 'utf8'), { timeout: 15_000 }).toContain(mid.text!);
+  expect((await shown()).text).toBe(mid.text);
+  await line(editor, 'Closing words.').click();
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect.poll(async () => (await shown()).text, { message: 'one undo is the whole drag' }).toBe(START);
+  await expect.poll(() => readFileSync(join(serve.site, 'index.md'), 'utf8'), { timeout: 15_000 }).toContain(START);
 });
 
 test('the keyboard reaches the dot, moves it, and writes on leaving it', async ({ page }) => {

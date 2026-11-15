@@ -5,9 +5,10 @@
  * on the part that must stay in view and an outline of what the frame keeps at
  * the preview's current width. A picture the page shows whole carries neither.
  * Dragging the dot (or moving it with the arrow keys, after Alt-Enter puts the
- * keyboard on it) redraws the preview live; letting go writes the position
- * into the picture's pipe options as one undoable edit, and the preview keeps
- * showing the written position until the rebuilt page does.
+ * keyboard on it) redraws the preview live and shows the position in the
+ * line as it will be written; letting go writes it into the picture's pipe
+ * options as one undoable edit, and the preview keeps showing the written
+ * position until the rebuilt page does.
  *
  * The dot and outline are laid over the picture and take no room of their own.
  * Writes go only through the editor. The shell is asked for two things: the
@@ -16,8 +17,8 @@
 
 import type { Bus } from "../../host";
 import { isolateHistory } from '@codemirror/commands';
-import { StateEffect, StateField, Prec, type Extension } from '@codemirror/state';
-import { EditorView, ViewPlugin, keymap, type ViewUpdate } from '@codemirror/view';
+import { StateEffect, StateField, Prec, type EditorState, type Extension } from '@codemirror/state';
+import { Decoration, EditorView, ViewPlugin, WidgetType, keymap, type DecorationSet, type ViewUpdate } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
 import { t } from "../../i18n/index";
 import type { ResolveImageFn } from '../cm-block-embed-widgets';
@@ -49,12 +50,41 @@ interface FocusState {
   asked: number | null;
   frame: Frame | null;
   overlay: Overlay | null;
+  /** The position word of a move in progress, shown in the line and not yet written. */
+  live: string | null;
 }
 
 const frameEffect = StateEffect.define<Frame>();
 /** Put the keyboard on the dot of the picture on this line once it is drawn: the preview menu's "Set focus point". */
 export const focusDotEffect = StateEffect.define<number>();
 const dismissEffect = StateEffect.define<number>();
+const liveEffect = StateEffect.define<string | null>();
+
+class LiveText extends WidgetType {
+  constructor(private readonly text: string) { super(); }
+  eq(other: LiveText): boolean { return other.text === this.text; }
+  toDOM(): HTMLElement {
+    const el = document.createElement('span');
+    el.textContent = this.text;
+    return el;
+  }
+}
+
+/** The line as the drop would write it: only the characters that differ are replaced, so the rest keeps its own marks. */
+function liveText(state: EditorState, shown: FocusState['shown'], live: string | null): DecorationSet {
+  if (!shown || live === null) return Decoration.none;
+  const { from, to, insert } = shown.picture.edit(live);
+  const now = state.doc.sliceString(from, to);
+  let head = 0;
+  while (head < now.length && head < insert.length && now[head] === insert[head]) head++;
+  let tail = 0;
+  while (tail < now.length - head && tail < insert.length - head && now[now.length - 1 - tail] === insert[insert.length - 1 - tail]) tail++;
+  const text = insert.slice(head, insert.length - tail);
+  const [a, b] = [from + head, to - tail];
+  if (a === b && !text) return Decoration.none;
+  const widget = new LiveText(text);
+  return Decoration.set(a === b ? Decoration.widget({ widget, side: 1 }).range(a) : Decoration.replace({ widget }).range(a, b));
+}
 
 /** A picture the page shows whole has nothing to crop, so no dot. Until the page has answered, only a hero (always a crop) shows one. */
 function cropped(hero: boolean, imageAspect: number, frame: Frame | null): boolean {
@@ -173,13 +203,14 @@ class FocusOverlay {
 
 export function focusPointExtension(opts: FocusPointOptions): Extension {
   const field = StateField.define<FocusState>({
-    create: () => ({ shown: null, dismissed: null, asked: null, frame: null, overlay: null }),
+    create: () => ({ shown: null, dismissed: null, asked: null, frame: null, overlay: null, live: null }),
     update(prev, tr) {
       const parsed = syntaxTree(tr.state) !== syntaxTree(tr.startState);
       if (!tr.docChanged && !tr.selection && !tr.effects.length && !parsed) return prev;
       const at = tr.state.field(pictureAtCaretField);
       const picture = at?.picture ?? null;
       let { dismissed, asked, frame } = prev;
+      let live = tr.docChanged ? null : prev.live;
       if (picture?.line !== dismissed) dismissed = null;
       if (picture?.line !== asked) asked = null;
       if (at?.frameLine !== frame?.line) frame = null;
@@ -187,6 +218,7 @@ export function focusPointExtension(opts: FocusPointOptions): Extension {
         if (e.is(frameEffect)) frame = e.value;
         else if (e.is(dismissEffect)) dismissed = e.value;
         else if (e.is(focusDotEffect) && e.value === picture?.line) asked = e.value;
+        else if (e.is(liveEffect)) live = e.value;
       }
       const shown = at && picture && picture.line !== dismissed ? { frameLine: at.frameLine, hero: at.heroLine !== null, picture } : null;
       const img = shown && opts.resolveImage?.(shown.picture.target);
@@ -194,8 +226,10 @@ export function focusPointExtension(opts: FocusPointOptions): Extension {
       const overlay = shown && img && (cropped(shown.hero, imageAspect, frame) || asked === shown.picture.line)
         ? { line: shown.picture.line, imageAspect, frameAspect: frame?.aspect ?? null, at: shown.picture.position ?? CENTER }
         : null;
-      return { shown, dismissed, asked, frame, overlay };
+      if (!overlay || shown?.picture.line !== prev.shown?.picture.line) live = null;
+      return { shown, dismissed, asked, frame, overlay, live };
     },
+    provide: (f) => EditorView.decorations.compute([f], (state) => liveText(state, state.field(f).shown, state.field(f).live)),
   });
 
   const controller = ViewPlugin.fromClass(class {
@@ -302,6 +336,7 @@ export function focusPointExtension(opts: FocusPointOptions): Extension {
       if (position === this.live) return;
       this.dirty = true;
       this.setLive(position);
+      this.showInLine(positionWord(x, y));
     }
 
     private drop(x: number, y: number): void {
@@ -317,7 +352,12 @@ export function focusPointExtension(opts: FocusPointOptions): Extension {
         this.dirty = false;
       } else {
         this.release();
+        this.showInLine(null);
       }
+    }
+
+    private showInLine(word: string | null): void {
+      if (!this.gone && this.view.state.field(field).live !== word) this.view.dispatch({ effects: liveEffect.of(word) });
     }
   });
 
