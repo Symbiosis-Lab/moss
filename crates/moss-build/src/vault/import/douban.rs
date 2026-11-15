@@ -173,6 +173,7 @@ pub(crate) async fn import_tofu_backup(
         restricted_pages: 0,
             success: true,
             total_pages: total,
+            kept_pages: 0,
             failed_pages: 0,
             skipped_pages: 0,
             duplicate_pages: 0,

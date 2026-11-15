@@ -898,7 +898,12 @@ const EN = {
   'onboard.flow.card_creating': 'Creating…',
   'onboard.flow.url_starting': 'Starting…',
   'onboard.flow.url_nothing_to_import': 'Nothing to import from {hostname}',      // {hostname}
-  'onboard.flow.url_imported_pages': 'Imported {total} pages.',         // {total}
+  'onboard.flow.url_imported_pages': 'Imported {total} pages',         // {total}
+  'onboard.flow.url_imported_pages_one': 'Imported 1 page',
+  'onboard.flow.url_imported_and_kept': 'Imported {total} pages · {kept} already in the folder', // {total}, {kept}
+  'onboard.flow.url_imported_and_kept_one': 'Imported 1 page · {kept} already in the folder',   // {kept}
+  'onboard.flow.url_all_kept': 'The folder already has all {kept} pages', // {kept}
+  'onboard.flow.url_all_kept_one': 'The folder already has this page',
   'onboard.flow.plugins_open_failed': 'Could not open plugins. Try the + button in the toolbar.',
   'onboard.flow.plugins_opening': 'Opening plugins…',
 
@@ -2668,7 +2673,12 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'onboard.flow.card_creating': 'Wird erstellt …',
     'onboard.flow.url_starting': 'Wird gestartet …',
     'onboard.flow.url_nothing_to_import': 'Nichts zu importieren von {hostname}',
-    'onboard.flow.url_imported_pages': '{total} Seiten importiert.',
+    'onboard.flow.url_imported_pages': '{total} Seiten importiert',
+    'onboard.flow.url_imported_pages_one': '1 Seite importiert',
+    'onboard.flow.url_imported_and_kept': '{total} Seiten importiert · {kept} schon im Ordner',
+    'onboard.flow.url_imported_and_kept_one': '1 Seite importiert · {kept} schon im Ordner',
+    'onboard.flow.url_all_kept': 'Alle {kept} Seiten sind schon im Ordner',
+    'onboard.flow.url_all_kept_one': 'Diese Seite ist schon im Ordner',
     'onboard.flow.plugins_open_failed': 'Plugins konnten nicht geöffnet werden. Probiere den +-Button in der Werkzeugleiste.',
     'onboard.flow.plugins_opening': 'Plugins werden geöffnet …',
     'onboard.starter.heading': 'Vorlage wählen',
@@ -4314,7 +4324,12 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'onboard.flow.card_creating': '正在创建…',
     'onboard.flow.url_starting': '正在启动……',
     'onboard.flow.url_nothing_to_import': '在 {hostname} 找不到可导入的内容',
-    'onboard.flow.url_imported_pages': '已导入 {total} 个页面。',
+    'onboard.flow.url_imported_pages': '已导入 {total} 页',
+    'onboard.flow.url_imported_pages_one': '已导入 1 页',
+    'onboard.flow.url_imported_and_kept': '已导入 {total} 页 · 文件夹里已有 {kept} 页',
+    'onboard.flow.url_imported_and_kept_one': '已导入 1 页 · 文件夹里已有 {kept} 页',
+    'onboard.flow.url_all_kept': '这 {kept} 页都已在文件夹里',
+    'onboard.flow.url_all_kept_one': '这一页已在文件夹里',
     'onboard.flow.plugins_open_failed': '无法打开插件。请尝试工具栏中的 + 按钮。',
     'onboard.flow.plugins_opening': '正在打开插件……',
 
@@ -6003,7 +6018,12 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'onboard.flow.card_creating': '正在建立…',
     'onboard.flow.url_starting': '正在啟動……',
     'onboard.flow.url_nothing_to_import': '在 {hostname} 找不到可匯入的內容',
-    'onboard.flow.url_imported_pages': '已匯入 {total} 個頁面。',
+    'onboard.flow.url_imported_pages': '已匯入 {total} 頁',
+    'onboard.flow.url_imported_pages_one': '已匯入 1 頁',
+    'onboard.flow.url_imported_and_kept': '已匯入 {total} 頁 · 資料夾裡已有 {kept} 頁',
+    'onboard.flow.url_imported_and_kept_one': '已匯入 1 頁 · 資料夾裡已有 {kept} 頁',
+    'onboard.flow.url_all_kept': '這 {kept} 頁都已在資料夾裡',
+    'onboard.flow.url_all_kept_one': '這一頁已在資料夾裡',
     'onboard.flow.plugins_open_failed': '無法開啟插件。請試試工具列中的 + 按鈕。',
     'onboard.flow.plugins_opening': '正在開啟插件……',
 

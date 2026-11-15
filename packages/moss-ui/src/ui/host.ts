@@ -48,7 +48,10 @@ export interface HostingEnvironment {
 export interface ImportOutcome {
   success: boolean;
   error?: string | null;
+  /** Pages the import wrote. */
   total_pages: number;
+  /** Pages it reached that the folder already had. */
+  kept_pages: number;
 }
 
 /** What a copy into the folder landed, and what it left behind and why. */

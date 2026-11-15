@@ -53,7 +53,7 @@ pub(crate) async fn import(path: &Path, address: Option<&str>, folder: &Path, cl
             config.menu = menu.clone();
             config.client = client.clone();
             match scrape_into(config, held, &quiet).await {
-                Ok(crawl) if crawl.result.total_pages > 0 => Some(crawl),
+                Ok(crawl) if crawl.fetched > 0 => Some(crawl),
                 _ => {
                     held.remove_stubs_of_this_run(folder);
                     report.push(format!("{} could not be reached; every page was written from the export.", host(site)));
@@ -83,10 +83,13 @@ pub(crate) async fn import(path: &Path, address: Option<&str>, folder: &Path, cl
     let mut pages = Vec::new();
     let mut rows = Vec::new();
     let mut types: BTreeMap<&str, usize> = BTreeMap::new();
+    // Pages the folder lacks so far, for the count a person watches.
+    let mut added = 0;
     for place in &places {
         let item = place.item;
         *types.entry(item.post_type.as_str()).or_default() += 1;
         let fresh = held.path_of(place.link).is_none();
+        added += usize::from(fresh);
         let mut page = ImportedPage {
             frontmatter: FrontMatter {
                 title: Some(item.title.clone()).filter(|t| !t.is_empty()),
@@ -107,7 +110,7 @@ pub(crate) async fn import(path: &Path, address: Option<&str>, folder: &Path, cl
             rows.extend(item.meta.iter().filter(|(k, v)| k == "_wp_old_slug" && !v.is_empty()).map(|(_, slug)| (former(source, slug), source.to_string())));
             rows.push((source.path().to_string(), source.to_string()));
         }
-        progress(ScrapeProgress { pages_scraped: scrape.total_pages + pages.len(), pages_failed: 0, current_url: Some(place.link.to_string()), complete: false });
+        progress(ScrapeProgress { pages_scraped: scrape.total_pages + scrape.kept_pages + added, pages_failed: 0, current_url: Some(place.link.to_string()), complete: false });
         pages.push(PendingPage::new(place.source.as_str(), &page.render(PageStyle::Html), true)?);
     }
 

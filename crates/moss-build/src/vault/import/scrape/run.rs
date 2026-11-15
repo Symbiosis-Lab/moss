@@ -79,7 +79,11 @@ pub struct ScrapeResult {
     #[serde(default)]
     pub restricted_pages: usize,
     pub success: bool,
+    /// Pages this import wrote.
     pub total_pages: usize,
+    /// Pages this import reached that the folder already had, left as they were.
+    #[serde(default)]
+    pub kept_pages: usize,
     pub failed_pages: usize,
     /// Fetched responses whose Content-Type (declared, or sniffed when
     /// missing/generic) was not HTML/XHTML — a PDF, an image, a calendar
@@ -328,6 +332,8 @@ where
 /// files and pacing it settled, so later downloads reuse both.
 pub(crate) struct Crawl {
     pub result: ScrapeResult,
+    /// Pages the site answered with, whether or not the folder had them.
+    pub fetched: usize,
     pub assets: AssetMap,
     pub pacer: HostPacer,
 }
@@ -669,7 +675,7 @@ pub(crate) async fn scrape_into(
 
     let paths = OutputPaths::reserve_with(out_dir, &scope, &pending, held)?;
     let written = paths.write(out_dir, &pending, &left_site, config.recursive)?;
-    held.note(&pending, &paths);
+    let kept_pages = held.note(&pending, &paths);
     // Only the pages this run wrote: a page the folder already had keeps its chrome.
     let fresh: std::collections::HashSet<&String> = written.iter().collect();
     let written_urls: HashMap<String, String> = pending.iter().filter(|page| page.imported)
@@ -703,7 +709,7 @@ pub(crate) async fn scrape_into(
     super::finalize::finalize_written_pages(out_dir, &written, &listings)?;
 
     on_progress(ScrapeProgress {
-        pages_scraped: state.tally.scraped(),
+        pages_scraped: written.len() + kept_pages,
         pages_failed: state.tally.failed(),
         current_url: None,
         complete: true,
@@ -724,7 +730,8 @@ pub(crate) async fn scrape_into(
     let result = ScrapeResult {
         restricted_pages,
         success: true,
-        total_pages: state.tally.scraped(),
+        total_pages: written.len(),
+        kept_pages,
         failed_pages: state.tally.failed(),
         skipped_pages: state.tally.skipped(),
         duplicate_pages: state.tally.duplicate(),
@@ -743,7 +750,7 @@ pub(crate) async fn scrape_into(
         chrome,
         error: None,
     };
-    Ok(Crawl { result, assets: std::mem::take(&mut state.assets), pacer: std::mem::take(&mut state.pacer) })
+    Ok(Crawl { result, fetched: state.tally.scraped(), assets: std::mem::take(&mut state.assets), pacer: std::mem::take(&mut state.pacer) })
 }
 
 #[cfg(test)]

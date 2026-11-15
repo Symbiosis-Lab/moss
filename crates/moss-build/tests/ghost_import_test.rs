@@ -273,7 +273,9 @@ fn an_empty_page_takes_the_exports_visibility_with_its_text() {
         fs::write(out.join(format!("{slug}.md")), format!("---\ntitle: \"Old\"\norigin: \"https://journal.example/{slug}/\"\n{own}\n---\n\n")).unwrap();
     }
     let rt = runtime();
-    rt.block_on(import_source(fixture().to_str().unwrap(), &out, ImportOptions { private_members_dir: Some(temp.path().join("private")), ..Default::default() }, |_| {})).unwrap();
+    let result = rt.block_on(import_source(fixture().to_str().unwrap(), &out, ImportOptions { private_members_dir: Some(temp.path().join("private")), ..Default::default() }, |_| {})).unwrap();
+    // The two files were the folder's before the import, so they count as its own though they gain a body.
+    assert_eq!((result.scrape.total_pages, result.scrape.kept_pages), (5, 2));
     let draft = fs::read_to_string(out.join("draft.md")).unwrap();
     assert!(draft.contains("draft: true") && draft.contains("draft-not-published-827351"), "{draft}");
     let members = fs::read_to_string(out.join("members.md")).unwrap();
@@ -293,4 +295,17 @@ fn an_empty_page_takes_the_exports_visibility_with_its_text() {
     // A draft is built for preview only: kept out of search engines and the feed, never published.
     assert!(fs::read_to_string(stage.join("draft/index.html")).unwrap().contains("noindex"));
     assert!(!fs::read_to_string(stage.join("rss.xml")).unwrap().contains("draft-not-published-827351"));
+}
+
+#[test]
+fn a_bundle_imported_again_writes_nothing_and_counts_every_page_as_the_folders() {
+    let temp = tempfile::tempdir().unwrap();
+    let out = temp.path().join("site"); fs::create_dir(&out).unwrap();
+    let rt = runtime();
+    let mut run = || rt.block_on(import_source(fixture().to_str().unwrap(), &out, ImportOptions { private_members_dir: Some(temp.path().join("private")), ..Default::default() }, |_| {})).unwrap();
+    let first = run();
+    assert_eq!((first.scrape.total_pages, first.scrape.kept_pages), (7, 0));
+    let again = run();
+    assert_eq!((again.scrape.total_pages, again.scrape.kept_pages), (0, 7));
+    assert_eq!(again.report.last().map(String::as_str), Some("Pages written: 0; pages the folder already had, their text kept: 7."));
 }

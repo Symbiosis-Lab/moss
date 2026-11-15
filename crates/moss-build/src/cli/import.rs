@@ -82,8 +82,8 @@ pub fn run(args: &[String]) -> i32 {
         match result {
             Ok(res) => {
                 eprintln!(
-                    "  ✓ {} page(s) imported, {} failed, {} skipped (non-HTML), {} duplicate(s) skipped",
-                    res.total_pages, res.failed_pages, res.skipped_pages, res.duplicate_pages
+                    "  ✓ {} page(s) imported{}, {} failed, {} skipped (non-HTML), {} duplicate(s) skipped",
+                    res.total_pages, noted(res.kept_pages, "already in the folder"), res.failed_pages, res.skipped_pages, res.duplicate_pages
                 );
                 // A failed fetch of a query-string variant of a page already
                 // imported is neither `failed_pages` (the content isn't
@@ -205,37 +205,18 @@ pub fn run(args: &[String]) -> i32 {
     }
 
     eprintln!(
-        "Done: {} page(s) imported into {} ({} failed, {} skipped as non-HTML, {} duplicate(s) skipped{}{}{}{}{}{}{})",
+        "Done: {} page(s) imported into {}{} ({} failed, {} skipped as non-HTML, {} duplicate(s) skipped{}{}{}{}{}{}{})",
         totals.pages,
         folder.display(),
+        noted(totals.kept_pages, "already in the folder"),
         totals.failed_pages,
         totals.skipped_pages,
         totals.duplicate_pages,
-        if totals.unreachable_variants > 0 {
-            format!(", {} variant(s) unreachable", totals.unreachable_variants)
-        } else {
-            String::new()
-        },
-        if totals.unreachable_files > 0 {
-            format!(", {} linked file(s) unreachable", totals.unreachable_files)
-        } else {
-            String::new()
-        },
-        if totals.left_by_redirect > 0 {
-            format!(", {} link(s) left the site by redirect", totals.left_by_redirect)
-        } else {
-            String::new()
-        },
-        if totals.linked_files_downloaded > 0 {
-            format!(", {} linked file(s) downloaded", totals.linked_files_downloaded)
-        } else {
-            String::new()
-        },
-        if totals.oversized_files > 0 {
-            format!(", {} oversized linked file(s) not downloaded", totals.oversized_files)
-        } else {
-            String::new()
-        },
+        noted(totals.unreachable_variants, "variant(s) unreachable"),
+        noted(totals.unreachable_files, "linked file(s) unreachable"),
+        noted(totals.left_by_redirect, "link(s) left the site by redirect"),
+        noted(totals.linked_files_downloaded, "linked file(s) downloaded"),
+        noted(totals.oversized_files, "oversized linked file(s) not downloaded"),
         if totals.widgets_carried > 0 || totals.widgets_dropped() > 0 {
             format!(
                 ", {} widget(s) carried to their hosted page, {} with no static form",
@@ -245,14 +226,15 @@ pub fn run(args: &[String]) -> i32 {
         } else {
             String::new()
         },
-        if totals.capped_leftovers > 0 {
-            format!(", {} left unimported by the page cap", totals.capped_leftovers)
-        } else {
-            String::new()
-        },
+        noted(totals.capped_leftovers, "left unimported by the page cap"),
     );
 
     totals.exit_code()
+}
+
+/// A count for a summary line, left out when it is zero.
+fn noted(count: usize, what: &str) -> String {
+    if count > 0 { format!(", {count} {what}") } else { String::new() }
 }
 
 /// The summary's widget lines: one per page that lost a widget, then a count
@@ -278,6 +260,7 @@ fn widget_gap_lines(gaps: &[PageGap]) -> Vec<String> {
 #[derive(Debug, Default)]
 struct ImportTotals {
     pages: usize,
+    kept_pages: usize,
     failed_pages: usize,
     skipped_pages: usize,
     duplicate_pages: usize,
@@ -296,6 +279,7 @@ struct ImportTotals {
 impl ImportTotals {
     fn record(&mut self, res: &ScrapeResult) {
         self.pages += res.total_pages;
+        self.kept_pages += res.kept_pages;
         self.failed_pages += res.failed_pages;
         self.skipped_pages += res.skipped_pages;
         self.duplicate_pages += res.duplicate_pages;
@@ -320,7 +304,7 @@ impl ImportTotals {
     }
 
     fn exit_code(&self) -> i32 {
-        match (self.any_failed(), self.pages) {
+        match (self.any_failed(), self.pages + self.kept_pages) {
             (true, 0) => 1,
             (true, _) => 2,
             (false, _) => 0,
@@ -608,6 +592,15 @@ mod tests {
     #[test]
     fn rejects_too_many_positional() {
         assert!(parse_args(&s(&["a", "b", "c"])).is_err());
+    }
+
+    #[test]
+    fn a_failure_beside_pages_the_folder_already_had_is_partial_and_the_summary_names_them() {
+        let mut totals = ImportTotals::default();
+        totals.record(&ScrapeResult { success: true, kept_pages: 3, failed_pages: 1, ..Default::default() });
+        assert_eq!(totals.exit_code(), 2);
+        assert_eq!(noted(totals.kept_pages, "already in the folder"), ", 3 already in the folder");
+        assert_eq!(noted(0, "already in the folder"), "");
     }
 
     #[test]

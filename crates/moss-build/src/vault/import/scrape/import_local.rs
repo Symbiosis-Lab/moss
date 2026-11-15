@@ -133,6 +133,7 @@ pub(crate) async fn import_local_file(path: &Path, output_dir: &Path, client: &C
         restricted_pages: usize::from(article.members_only),
         success: true,
         total_pages: 1,
+        kept_pages: 0,
         failed_pages: 0,
         skipped_pages: 0,
         duplicate_pages: 0,

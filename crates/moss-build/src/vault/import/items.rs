@@ -20,8 +20,18 @@ pub(crate) struct HeldPage {
     pub path: String,
     /// A failed fetch's stub, which the page replaces once it imports.
     pub placeholder: bool,
+    pub state: PageState,
+}
+
+/// Where a page of the folder stands in the import under way.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum PageState {
+    /// Here before the import began, and not reached by it so far.
+    Earlier,
+    /// Here before the import began, reached by it and counted.
+    Reached,
     /// Written by this import, so it takes every field the source has.
-    pub this_run: bool,
+    Written,
 }
 
 /// The folder's imported pages by the address each came from, read from the
@@ -53,7 +63,7 @@ impl ImportedPages {
             let relative = relative.to_string_lossy().replace('\\', "/");
             // Of two pages from one address (copies an older import made), the shorter name.
             if held.pages.get(&key).is_none_or(|p| p.path.len() > relative.len()) {
-                held.pages.insert(key, HeldPage { path: relative, placeholder, this_run: false });
+                held.pages.insert(key, HeldPage { path: relative, placeholder, state: PageState::Earlier });
             }
         }
         held
@@ -68,21 +78,26 @@ impl ImportedPages {
         self.pages.get(&origin_key(address)?).filter(|p| !p.placeholder).map(|p| p.path.as_str())
     }
 
-    /// Record the pages `paths` placed this run.
-    pub fn note(&mut self, pages: &[PendingPage], paths: &OutputPaths) {
+    /// Record the pages placed this run; return how many of the folder's earlier pages they are the first to reach.
+    pub fn note(&mut self, pages: &[PendingPage], paths: &OutputPaths) -> usize {
+        let mut reached = 0;
         for page in pages {
             let (Some(key), Some(path)) = (page.identity(), paths.get(&page.source)) else { continue };
             if !paths.kept(path) {
-                self.pages.insert(key, HeldPage { path: path.clone(), placeholder: !page.imported, this_run: true });
+                self.pages.insert(key, HeldPage { path: path.clone(), placeholder: !page.imported, state: PageState::Written });
+            } else if let Some(held) = self.pages.get_mut(&key).filter(|held| page.imported && held.state == PageState::Earlier) {
+                held.state = PageState::Reached;
+                reached += 1;
             }
         }
+        reached
     }
 
     /// Remove the failed fetches' stubs this run wrote, for a source that is
     /// written from elsewhere when its site cannot be reached.
     pub fn remove_stubs_of_this_run(&mut self, folder: &Path) {
         self.pages.retain(|_, page| {
-            let stub = page.placeholder && page.this_run;
+            let stub = page.placeholder && page.state == PageState::Written;
             if stub { let _ = std::fs::remove_file(folder.join(&page.path)); }
             !stub
         });
@@ -98,14 +113,14 @@ pub(crate) fn write_items(
     let scope = UrlScope::new(base_of(site).as_str()).map_err(|e| e.to_string())?;
     let paths = OutputPaths::reserve_with(folder, &scope, pages, held)?;
     let written = paths.write(folder, pages, &HashMap::new(), true)?;
-    held.note(pages, &paths);
+    scrape.kept_pages += held.note(pages, &paths);
+    scrape.total_pages += written.len();
     add_redirects(folder, site, &paths, redirects, &mut report)?;
-    report.push(format!("Pages written: {}; pages the folder already had, their text kept: {}.", written.len(), pages.len() - written.len()));
+    report.push(format!("Pages written: {}; pages the folder already had, their text kept: {}.", scrape.total_pages, scrape.kept_pages));
     let lines: Vec<_> = report.iter().map(|s| format!("- {s}")).collect();
     super::page::write_note(folder, ".moss/data/import/report.md", &format!("# Import report\n\n{}\n", lines.join("\n")))?;
     scrape.success = true;
-    scrape.total_pages += written.len();
-    progress(ScrapeProgress { pages_scraped: scrape.total_pages, pages_failed: scrape.failed_pages, current_url: None, complete: true });
+    progress(ScrapeProgress { pages_scraped: scrape.total_pages + scrape.kept_pages, pages_failed: scrape.failed_pages, current_url: None, complete: true });
     Ok((ImportResult { scrape, report, subscribers: None }, paths))
 }
 

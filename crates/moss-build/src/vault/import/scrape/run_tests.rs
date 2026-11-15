@@ -410,6 +410,19 @@ async fn an_unextractable_page_is_counted_as_failed_not_written_empty() {
         body.contains("no article content found"),
         "the placeholder must say why: {body}"
     );
+
+    // Once the page imports it replaces the placeholder: a page written, not one the folder had.
+    empty.remove_async().await;
+    let _page = server
+        .mock("GET", "/nothing/")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body("<html><body><article><p>Real page body, long enough to be extracted as content.</p></article></body></html>")
+        .create_async()
+        .await;
+    let config = ScrapeConfig::new(format!("{}/nothing/", server.url()), tmp.path());
+    let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+    assert_eq!((res.total_pages, res.kept_pages, res.failed_pages), (1, 0, 0));
 }
 
 /// Bug fix: a recursive crawl must never write a non-HTML response as a
@@ -623,11 +636,12 @@ async fn a_reimport_keeps_plain_names_and_a_query_variant_is_one_file() {
         .await;
 
     let tmp = tempfile::tempdir().unwrap();
-    for _ in 0..2 {
+    for written_then_kept in [(1, 0), (0, 1)] {
         let res = scrape_to_folder(ScrapeConfig::new(format!("{base}/"), tmp.path()), |_| {})
             .await
             .expect("the crawl itself succeeds");
         assert_eq!(res.linked_files_downloaded, 1, "the query variant is the same file");
+        assert_eq!((res.total_pages, res.kept_pages), written_then_kept, "the second run finds the page already in the folder");
     }
     pdf.assert_async().await;
     let names: Vec<String> = std::fs::read_dir(tmp.path().join("assets/imported"))

@@ -153,7 +153,7 @@ describe("handleImportUrl", () => {
   it("submits the URL value via startNativeImportTask when the submit button is clicked", async () => {
     importSite.mockResolvedValue({
       status: "ok",
-      data: { success: true, total_pages: "1", failed_pages: 0, error: null },
+      data: { success: true, total_pages: 1, kept_pages: 0, failed_pages: 0, error: null },
     });
     (engine.listTree as any).mockResolvedValue({
       status: "ok",
@@ -223,6 +223,7 @@ describe("handleImportUrl", () => {
       data: {
         success: false,
         total_pages: 0,
+        kept_pages: 0,
         failed_pages: 0,
         error: "robots.txt disallows",
       },
@@ -252,7 +253,7 @@ describe("handleImportUrl", () => {
     // Zero-result routes to inline label, not showToast.
     importSite.mockResolvedValue({
       status: "ok",
-      data: { success: true, total_pages: 0, failed_pages: 0, error: null },
+      data: { success: true, total_pages: 0, kept_pages: 0, failed_pages: 0, error: null },
     });
     const host = makeHost();
     await handleImportUrl({
@@ -287,10 +288,25 @@ describe("handleImportUrl", () => {
     expect(reInput?.getAttribute("placeholder")).toBe("https://example.com");
   });
 
+  it("when the folder already has every page, says so and leaves the card closed", async () => {
+    importSite.mockResolvedValue({
+      status: "ok",
+      data: { success: true, total_pages: 0, kept_pages: 47, failed_pages: 0, error: null },
+    });
+    (engine.listTree as any).mockResolvedValue({ status: "ok", data: dir("/site", []) });
+    const host = makeHost();
+    await handleImportUrl({ folderPath: "/site", folderName: "site", loadFile: vi.fn(), host });
+    host.querySelector<HTMLInputElement>("[data-folder-mode-url-input]")!.value = "https://example.com";
+    host.querySelector<HTMLButtonElement>("[data-folder-mode-url-submit]")!.click();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(showAck).toHaveBeenCalledWith("The folder already has all 47 pages");
+    expect(host.querySelector("[data-folder-mode-url-status]")).toBeNull();
+  });
+
   it("does NOT call showOrUpdateToast for progress (the progress panel is the home)", async () => {
     importSite.mockResolvedValue({
       status: "ok",
-      data: { success: true, total_pages: "1", failed_pages: 0, error: null },
+      data: { success: true, total_pages: 1, kept_pages: 0, failed_pages: 0, error: null },
     });
     (engine.listTree as any).mockResolvedValue({
       status: "ok",
@@ -313,7 +329,7 @@ describe("handleImportUrl", () => {
   it("does NOT call removeToastById in the finally block", async () => {
     importSite.mockResolvedValue({
       status: "ok",
-      data: { success: true, total_pages: "1", failed_pages: 0, error: null },
+      data: { success: true, total_pages: 1, kept_pages: 0, failed_pages: 0, error: null },
     });
     (engine.listTree as any).mockResolvedValue({
       status: "ok",
