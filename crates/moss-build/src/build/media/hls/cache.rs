@@ -3,8 +3,8 @@
 //!
 //! Split out of `hls.rs` (the encode/link/argument-building half) because
 //! this is a different question: not "how do we ask ffmpeg for a ladder" but
-//! "does the cache already hold the bytes today's policy would produce, and
-//! how do we tell without reading the source." `HLS_TRANSFORM_PREFIX` and
+//! "does the cache already hold a whole ladder for this source, and how do we
+//! tell without reading the source." `HLS_TRANSFORM_PREFIX` and
 //! `transform_name` stay in the parent module — `link_members` there needs
 //! them too, and both files reach them the same way, through `super::`.
 
@@ -12,17 +12,19 @@ use moss_core::asset_paths::{
     rung_list_fingerprint, video_ladder_rungs_within, VideoRung, HLS_MASTER_NAME, VIDEO_LADDER,
 };
 
-use crate::build::cache::{TransformCache, TransformRecord};
+use crate::build::cache::{Fit, TransformCache, TransformRecord};
 use crate::build::media::ffmpeg::{progressive_rung, SourceVideo, VideoCompressionConfig};
 
 use super::{transform_name, HLS_TRANSFORM_PREFIX, KEYFRAME_SECONDS, SEGMENT_SECONDS};
 
-/// Bump when the bytes a rung's encode produces change for the same inputs.
+/// The recipe a ladder was made with, recorded in its key. Bump when the bytes
+/// a rung's encode produces change for the same inputs; a ladder already made
+/// keeps its version (see [`cached_ladder`]).
 /// 3: every rung aims at a picture quality under its rate, and the master
 /// declares what each rung measures; version 2 ladders aimed at the rate.
 /// 2: rungs are frames fitted to the source's own shape with square pixels;
 /// version 1 ladders (and the unversioned ones before them) forced every rung
-/// to a fixed 16:9 frame. Each bump rebuilds existing ladders once.
+/// to a fixed 16:9 frame.
 pub(super) const LADDER_FORMAT: u32 = 3;
 
 /// This source's effective ladder under `config`'s current budgets: the
@@ -87,72 +89,56 @@ fn record_rung_count(record: &TransformRecord) -> Option<usize> {
     (2..=VIDEO_LADDER.len()).contains(&rung_count).then_some(rung_count)
 }
 
-/// A cached ladder, or nothing — never a partial one, and never a LEGACY-form
-/// one (a record from before this crate started keying on effective rungs: it
-/// carries no `"source"` block, so it misses and is encoded afresh).
+/// A cached ladder, or nothing — never a partial one.
 ///
-/// The rung count is read back out of the record rather than re-derived from
-/// the source, because the record is the only thing that knows how many
-/// files were encoded.
+/// A ladder is made once per source: one made with an older recipe or rung
+/// table is kept while every file its own master names is usable and within
+/// today's per-file budget. The page links only the master, so a kept ladder
+/// stays self-consistent. A ladder made with today's key is checked against
+/// today's file list instead, with no read. Never reads the source: on an
+/// evicted cloud vault, probing first would turn a build that has everything
+/// into a download.
 ///
-/// Never reads the source: its probe facts are read back out of the record —
-/// `ladder_params` stored them there at encode time — and recomputed against
-/// TODAY's config. `video_ladder_rungs_within` only ever narrows from the top,
-/// so two rung lists computed from the SAME source facts and landing at the
-/// SAME length are the same rungs; a length mismatch alone is therefore
-/// enough to catch a budget or table edit that would change this ladder. If
-/// the record's `video/hls*` entries are not exactly that census — a rung
-/// evicted, a blob swept, a table edited — it is a miss, because a ladder's
-/// files that reference each other are only valid together.
+/// The params returned are the ones the ladder was made with, so the record
+/// keeps saying which recipe made it.
 pub(super) fn cached_ladder(
     transforms: &TransformCache,
     source_oid: &str,
     config: &VideoCompressionConfig,
 ) -> Option<(Vec<String>, Vec<String>, serde_json::Value)> {
     let record = transforms.get_with(source_oid, crate::build::cache::RecordMode::Wait)?;
-    let rung_count = record_rung_count(&record)?;
-
-    let stored = record.transforms.get(&transform_name(HLS_MASTER_NAME))?;
-    let source = source_from_json(stored.params.get("source")?)?;
-    let effective = effective_rungs(&source, config);
-    if effective.len() != rung_count {
-        return None;
-    }
-
-    let members = super::ladder_members(&effective, source.has_audio);
+    record_rung_count(&record)?;
+    let master = record.transforms.get(&transform_name(HLS_MASTER_NAME))?;
+    let today = master.params.get("source").and_then(source_from_json).map(|source| {
+        let rungs = effective_rungs(&source, config);
+        (super::ladder_members(&rungs, source.has_audio), ladder_params(config, &rungs, &source))
+    });
+    let (members, today_params) = match today {
+        Some((members, params)) if params == master.params => (members, params),
+        other => {
+            let text = std::fs::read_to_string(transforms.objects().ready_blob(&master.oid)?).ok()?;
+            (super::members_named_by(&text), other.map_or(serde_json::Value::Null, |(_, params)| params))
+        }
+    };
     if record.transforms.keys().filter(|k| k.starts_with(HLS_TRANSFORM_PREFIX)).count() != members.len() {
         return None;
     }
-
-    let params = ladder_params(config, &effective, &source);
+    let budget = u64::from(config.hls_max_file_mb) * 1024 * 1024;
+    let within = || Some(crate::build::cache::Need::AtMost(budget));
     let oids: Option<Vec<String>> = members
         .iter()
-        .map(|name| transforms.find_cached_output(source_oid, &transform_name(name), &params, crate::build::cache::RecordMode::Wait))
+        .map(|name| transforms.kept_entry(&record, &transform_name(name), &today_params, Fit::Kept(&within)).map(|e| e.oid))
         .collect();
-    Some((members, oids?, params))
+    Some((members, oids?, master.params.clone()))
 }
 
-/// The transform-cache key for one ladder member: what shapes its bytes — the
-/// encoder settings and the EFFECTIVE rung list this video is (or would be)
-/// encoded at — plus the probe facts `cached_ladder` needs to answer
-/// "would TODAY's budget produce a different ladder?" without re-probing.
+/// The transform-cache key for one ladder member: the encoder settings and the
+/// effective rung list that shape its bytes, plus the probe facts
+/// [`cached_ladder`] reads back to compute today's ladder without probing.
+/// Budgets and the static table are absent: their whole effect lives in
+/// `rungs`. A ladder under another key is still kept while it fits.
 ///
-/// Policy inputs that do not shape the bytes ON THEIR OWN are deliberately
-/// absent: the static table's fingerprint, the per-file byte budget, and the
-/// old bitrate-cap marker. Their entire effect already lives in `rungs` — a
-/// table edit or a budget edit that leaves one particular video's effective
-/// ladder unchanged no longer re-encodes it, which is the point of keying on
-/// the EFFECT rather than every input that could in principle change it.
-///
-/// `source` is never independently verified against anything: every caller
-/// reads it straight back out of a record (or a fresh probe) before calling
-/// this, so it always matches what's already there or about to be stored —
-/// it rides along in the key purely so a later `cached_ladder` lookup has
-/// somewhere to read it back from.
-///
-/// `pub(crate)`, not private: video.rs's own tests seed a `TransformRecord`
-/// directly (no real ffmpeg) to exercise the staging self-heal, and need the
-/// exact params a real encode would have stored so `cached_ladder` sees a hit.
+/// `pub(crate)` so video.rs's tests can seed the params a real encode stores.
 pub(crate) fn ladder_params(
     config: &VideoCompressionConfig,
     rungs: &[VideoRung],
@@ -186,6 +172,20 @@ pub(crate) enum LegacyShape {
     /// Commit `3f5111ff` (develop): the per-file budget added to the key —
     /// this repo's real shape immediately before this crate's own rekeying.
     WithBudget,
+}
+
+/// A master playlist naming `members`, as a real encode writes one.
+#[cfg(test)]
+pub(crate) fn master_naming(members: &[String]) -> String {
+    let mut master = String::from("#EXTM3U\n");
+    for name in members.iter().filter(|n| n.ends_with(".m3u8") && n.as_str() != HLS_MASTER_NAME) {
+        if name.starts_with('a') {
+            master.push_str(&format!("#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"{name}\",URI=\"{name}\"\n"));
+        } else {
+            master.push_str(&format!("#EXT-X-STREAM-INF:BANDWIDTH=1\n{name}\n"));
+        }
+    }
+    master
 }
 
 #[cfg(test)]

@@ -1977,7 +1977,7 @@ fn a_pre_fix_media_meta_entry_is_not_reused_after_the_version_bump() {
     let json_bytes = serde_json::to_vec(&stale).unwrap();
     let meta_oid = fx.objects.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request).unwrap();
     let old_entry = TransformEntry {
-        validation: None,
+        kept_for: None, validation: None,
         oid: meta_oid,
         size: json_bytes.len() as u64,
         params: serde_json::json!({}),
@@ -2004,7 +2004,7 @@ fn a_version_5_media_meta_entry_is_not_reused() {
     let stale = CachedMediaMeta { dimensions: None, dominant_color: None, lqip_data_uri: None, is_animated: false };
     let json_bytes = serde_json::to_vec(&stale).unwrap();
     let meta_oid = fx.objects.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request).unwrap();
-    let old_entry = TransformEntry { validation: None, oid: meta_oid, size: json_bytes.len() as u64, params: serde_json::json!({ "v": 5 }) };
+    let old_entry = TransformEntry { kept_for: None, validation: None, oid: meta_oid, size: json_bytes.len() as u64, params: serde_json::json!({ "v": 5 }) };
     let record = TransformRecord {
         source_oid: hash.to_string(),
         source_size: 1,
@@ -2855,7 +2855,7 @@ fn media_metadata_is_not_written_over_a_record_that_cannot_be_read() {
         .merge(hash, 10, crate::build::cache::RecordMode::Wait, |record| {
             record.transforms.insert(
                 "image/webp".to_string(),
-                crate::build::cache::TransformEntry { validation: None, oid: "w".into(), size: 1, params: serde_json::Value::Null },
+                crate::build::cache::TransformEntry { kept_for: None, validation: None, oid: "w".into(), size: 1, params: serde_json::Value::Null },
             );
         })
         .unwrap();

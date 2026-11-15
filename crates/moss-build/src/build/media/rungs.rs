@@ -33,6 +33,30 @@ pub struct RungOutcome {
     pub error: Option<String>,
 }
 
+/// A source picture's pixel size after EXIF orientation, from its header
+/// alone: what scan stores, without decoding.
+pub(super) fn sniffed_oriented_dims(source_file: &Path) -> Option<(u32, u32)> {
+    let (w, h) = super::decode::sniff_dimensions(source_file).ok()?;
+    let swap = crate::build::scan::scan::should_swap_dimensions(read_exif_orientation(source_file));
+    Some(if swap { (h, w) } else { (w, h) })
+}
+
+/// The cached base picture of `source_oid`: made with today's recipe, or with
+/// an older one whose pixels are still what today's resize gives.
+pub(super) fn kept_base(
+    transforms: &crate::build::cache::TransformCache,
+    source_oid: &str,
+    params: &serde_json::Value,
+    source_file: &Path,
+    max_edge: u32,
+) -> Option<crate::build::cache::TransformEntry> {
+    let today = || {
+        let (w, h) = sniffed_oriented_dims(source_file)?;
+        Some(crate::build::cache::Need::Scaled { source: (w, h), bound: moss_core::asset_paths::deployed_long_edge(w, h, max_edge) })
+    };
+    transforms.find_kept_entry(source_oid, "image/webp", params, crate::build::cache::RecordMode::Wait, crate::build::cache::Fit::Kept(&today))
+}
+
 /// Dir-override-mapped path of every vault image file → the ABSOLUTE vault
 /// source path of that file, for detecting collisions between generated
 /// responsive-rung URLs and REAL user files.
@@ -144,7 +168,7 @@ pub(crate) fn encode_rungs(
     decoded: Option<&image::DynamicImage>,
     base_webp_len: u64,
 ) -> Vec<RungOutcome> {
-    use crate::build::cache::TransformEntry;
+    use crate::build::cache::{Fit, TransformEntry};
     use moss_core::asset_paths;
 
     // Oriented dims: from the decoded image when we have it (post-EXIF by
@@ -156,17 +180,9 @@ pub(crate) fn encode_rungs(
     let mut lazy: Option<image::DynamicImage> = None;
     let dims = match decoded {
         Some(img) => Some((img.width(), img.height())),
-        None => match super::decode::sniff_dimensions(source_file) {
-            Ok((w, h)) => {
-                if crate::build::scan::scan::should_swap_dimensions(read_exif_orientation(
-                    source_file,
-                )) {
-                    Some((h, w))
-                } else {
-                    Some((w, h))
-                }
-            }
-            Err(_) => match decode_oriented(source_file) {
+        None => match sniffed_oriented_dims(source_file) {
+            Some(dims) => Some(dims),
+            None => match decode_oriented(source_file) {
                 Ok(img) => {
                     let d = (img.width(), img.height());
                     lazy = Some(img);
@@ -213,6 +229,9 @@ pub(crate) fn encode_rungs(
         }
         let kind = format!("image/webp-w{}", rung);
         let out_path = staging_dir.join(&rung_rel);
+        // EXACT target dims: same integer family as `deployed_width` (u64
+        // mul, truncating div, floor at 1).
+        let target_h = ((h as u64 * rung as u64 / w as u64) as u32).max(1);
 
         // Design doc § Guards: a rung at least as heavy as the base webp is
         // an anomaly worth one log line — debug, not warn, because it is
@@ -232,7 +251,9 @@ pub(crate) fn encode_rungs(
         };
 
         // ---- Warm path: reuse the cached rung blob. ----
-        if let Some(cached) = transforms.find_cached_output(source_oid, &kind, &params, crate::build::cache::RecordMode::Wait) {
+        let today = || Some(crate::build::cache::Need::Dims(rung, target_h));
+        let kept = transforms.find_kept_entry(source_oid, &kind, &params, crate::build::cache::RecordMode::Wait, Fit::Kept(&today));
+        if let Some(cached) = kept.map(|entry| entry.oid) {
             // Cheap 0-byte guard (iCloud-eviction class); a bad blob falls
             // through to re-encode, self-healing the cache entry. The stat's
             // length doubles as the anomaly-log input — no extra I/O.
@@ -280,9 +301,6 @@ pub(crate) fn encode_rungs(
                 lazy.as_ref().unwrap()
             }
         };
-        // EXACT target dims: same integer family as `deployed_width` (u64
-        // mul, truncating div, floor at 1).
-        let target_h = ((h as u64 * rung as u64 / w as u64) as u32).max(1);
         let resized = img.resize_exact(rung, target_h, image::imageops::FilterType::Lanczos3);
         // No alpha flatten: `encode_webp` encodes alpha directly (`from_rgba`);
         // see `image.rs::flatten_alpha_to_white`'s doc comment for why this
@@ -332,7 +350,7 @@ pub(crate) fn encode_rungs(
             record.transforms.insert(
                 kind,
                 TransformEntry {
-                    validation: None,
+                    kept_for: None, validation: None,
                     oid: oid.clone(),
                     size: webp_bytes.len() as u64,
                     params: params.clone(),

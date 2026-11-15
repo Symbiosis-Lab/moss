@@ -261,6 +261,11 @@ pub(crate) fn ladder_members_from_master(ladder_dir: &Path) -> Option<Vec<String
             return Some(directory_listing(ladder_dir));
         }
     };
+    Some(members_named_by(&master))
+}
+
+/// The ladder files a master playlist's text names, the master included.
+pub(crate) fn members_named_by(master: &str) -> Vec<String> {
     let mut members = vec![HLS_MASTER_NAME.to_string()];
     let mut after_stream_inf = false;
     for raw in master.lines() {
@@ -283,7 +288,7 @@ pub(crate) fn ladder_members_from_master(ladder_dir: &Path) -> Option<Vec<String
         }
         after_stream_inf = false;
     }
-    Some(members)
+    members
 }
 
 /// The pre-census fallback for a `master.m3u8` that exists but could not be
@@ -579,7 +584,7 @@ fn link_members(
         entries.push((
             transform_name(name),
             TransformEntry {
-                validation: None,
+                kept_for: None, validation: None,
                 oid: oid.clone(),
                 size,
                 params: params.clone(),
@@ -649,7 +654,7 @@ use cache::cached_ladder;
 // Test-only: video.rs's own staging-heal test needs the same real legacy
 // shapes hls_tests.rs's migration tests do — see `cache::legacy_form_params`.
 #[cfg(test)]
-pub(crate) use cache::{legacy_form_params, LegacyShape};
+pub(crate) use cache::{legacy_form_params, master_naming, LegacyShape};
 
 /// Register every ladder already present in `staging`, returning how many.
 ///

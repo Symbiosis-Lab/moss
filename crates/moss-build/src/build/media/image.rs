@@ -562,7 +562,7 @@ pub(crate) fn should_skip(
                     record.transforms.insert(
                         FORMAT_PROBE_TRANSFORM.to_string(),
                         crate::build::cache::TransformEntry {
-                            validation: None,
+                            kept_for: None, validation: None,
                             oid: blob_oid,
                             size: json_bytes.len() as u64,
                             params,
@@ -1014,11 +1014,10 @@ pub(crate) fn convert_single_image(
     );
 
     // ---- Step 1: cache lookup ----
-    // `find_cached_output` matches on params, so old sentinel entries (oid="",
-    // params=Null) naturally miss against current params and fall through to
-    // re-encode. The new record overwrites the sentinel on `transforms.put`.
+    // An old sentinel entry (oid="", params=Null) misses: its oid names no
+    // blob. The new record overwrites it on `transforms.put`.
     let output_webp = staging_dir.join(relative_webp);
-    if let Some(cached) = transforms.find_cached_entry(source_oid, "image/webp", &params, crate::build::cache::RecordMode::Wait) {
+    if let Some(cached) = super::rungs::kept_base(transforms, source_oid, &params, source_file, config.max_edge) {
         let cached_oid = cached.oid;
         // Self-healing size guard (mirrors video.rs): compare cache record's
         // recorded size against actual blob size to catch iCloud-truncation
@@ -1324,7 +1323,7 @@ pub(crate) fn convert_single_image(
         record.transforms.insert(
             "image/webp".to_string(),
             TransformEntry {
-                validation: None,
+                kept_for: None, validation: None,
                 oid: oid.clone(),
                 size: encoded_len,
                 params: params.clone(),
@@ -2474,7 +2473,9 @@ fn heal_and_verify_variant(
     if suppressed {
         return (crate::build::io_utils::output_present(staging_path), None);
     }
-    match rematerialize_with_record(heal_objects, record, heal_params, staged, staging_path, transform) {
+    // Today's recipe, or a variant the worker already found to fit it; one
+    // not yet measured is sent to the worker, which checks its pixel size.
+    match rematerialize_with_record(heal_objects, record, heal_params, crate::build::cache::Fit::Kept(&|| None), staged, staging_path, transform) {
         HealOutcome::Healed { oid } => {
             *healed_count += 1;
             (true, Some(oid))

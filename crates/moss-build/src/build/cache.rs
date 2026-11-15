@@ -45,10 +45,12 @@ mod records;
 pub(crate) mod page_sources;
 mod publication;
 mod process_memo;
+mod fit;
 pub(crate) mod source_oids;
 pub(crate) use process_memo::{KeyedMemo, MemoFile, ProcessMemo, ROOTS};
 use crate::build::cloud_readiness::StorageOperation;
 pub use records::{Merged, RecordMode};
+pub use fit::{Facts, Fit, Need};
 
 /// Size of the read buffer used by [`ObjectStore::hash_file`].
 ///
@@ -620,11 +622,10 @@ impl ObjectStore {
 /// A record that maps a source file (by OID) to one or more transformed
 /// outputs.
 ///
-/// This is conceptually similar to **Bazel's action cache**: the key is
-/// the hash of the inputs (here, the source file) and the value records
-/// what each transform produced. By also storing the `params` used for
-/// each transform, we can detect when the transform configuration has
-/// changed and invalidate the cached output.
+/// Like Bazel's action cache, the key is the source file's hash and the value
+/// records what each transform produced and the `params` it was made with. A
+/// verdict is reused only under today's params; a published file made with
+/// other params is kept while it fits ([`Fit`]).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct TransformRecord {
     /// SHA-256 OID of the source file.
@@ -651,6 +652,10 @@ pub struct TransformEntry {
     /// Stored as opaque JSON so any transform can define its own config
     /// shape.
     pub params: serde_json::Value,
+    /// Today's params under which this entry, made with `params`, was last
+    /// found to fit, so a later build serves it without measuring it again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept_for: Option<serde_json::Value>,
 }
 
 /// A validator revision and the size of the blob it accepted.
@@ -815,18 +820,48 @@ impl TransformCache {
         transform: &str,
         current_params: &serde_json::Value,
     ) -> Option<TransformEntry> {
-        // 2. Transform entry exists?
-        let entry = record.transforms.get(transform)?;
+        self.kept_entry(record, transform, current_params, Fit::Exact)
+    }
 
-        // 3. Params match?
-        if entry.params != *current_params {
+    /// [`usable_entry`](Self::usable_entry) for a published file: an entry
+    /// made with another recipe is kept when `fit` keeps its blob.
+    pub fn kept_entry(
+        &self,
+        record: &TransformRecord,
+        transform: &str,
+        current_params: &serde_json::Value,
+        fit: Fit<'_>,
+    ) -> Option<TransformEntry> {
+        let entry = record.transforms.get(transform)?;
+        if entry.params != *current_params && matches!(fit, Fit::Exact) {
             return None;
         }
+        let blob = self.objects.ready_blob(&entry.oid)?;
+        fit.keeps(entry, &blob, current_params).then(|| entry.clone())
+    }
 
-        // 4. Output blob usable, or arriving?
-        self.objects.ready_blob(&entry.oid)?;
-
-        Some(entry.clone())
+    /// [`find_cached_entry`](Self::find_cached_entry) under [`kept_entry`](Self::kept_entry)'s rule.
+    /// An entry kept from another recipe has the verdict recorded on it, so
+    /// only a kind whose need the source and `current_params` fully fix may
+    /// look up through here (pictures: the bound and rung width are keyed).
+    pub fn find_kept_entry(
+        &self,
+        source_oid: &str,
+        transform: &str,
+        current_params: &serde_json::Value,
+        mode: RecordMode,
+        fit: Fit<'_>,
+    ) -> Option<TransformEntry> {
+        let record = self.get_with(source_oid, mode)?;
+        let entry = self.kept_entry(&record, transform, current_params, fit)?;
+        if entry.params != *current_params && entry.kept_for.as_ref() != Some(current_params) {
+            let _ = self.merge(source_oid, record.source_size, mode, |r| {
+                if let Some(e) = r.transforms.get_mut(transform).filter(|e| e.oid == entry.oid) {
+                    e.kept_for = Some(current_params.clone());
+                }
+            });
+        }
+        Some(entry)
     }
 
     /// Compute the path where a transform record is stored on disk, under the

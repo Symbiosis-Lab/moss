@@ -397,7 +397,7 @@ fn test_transform_cache_roundtrip() {
     transforms.insert(
         "thumbnail".to_string(),
         TransformEntry {
-            validation: None,
+            kept_for: None, validation: None,
             oid: "bbbb".repeat(16),
             size: 1024,
             params: serde_json::json!({"width": 200}),
@@ -462,7 +462,7 @@ fn test_find_cached_output_hit() {
     transforms.insert(
         "thumbnail".to_string(),
         TransformEntry {
-            validation: None,
+            kept_for: None, validation: None,
             oid: output_oid.clone(),
             size: 18,
             params: params.clone(),
@@ -503,7 +503,7 @@ fn test_find_cached_output_params_mismatch() {
     transforms.insert(
         "thumbnail".to_string(),
         TransformEntry {
-            validation: None,
+            kept_for: None, validation: None,
             oid: output_oid,
             size: 18,
             params: stored_params,
@@ -541,7 +541,7 @@ fn test_find_cached_output_blob_missing() {
     transforms.insert(
         "thumbnail".to_string(),
         TransformEntry {
-            validation: None,
+            kept_for: None, validation: None,
             oid: fake_output_oid,
             size: 0,
             params: params.clone(),
@@ -581,7 +581,7 @@ fn test_find_cached_output_rejects_zero_byte_blob() {
     transforms.insert(
         "video/mp4".to_string(),
         TransformEntry {
-            validation: None,
+            kept_for: None, validation: None,
             oid: output_oid.clone(),
             size: 15,
             params: params.clone(),
@@ -653,7 +653,7 @@ fn test_transform_cache_remove() {
     transforms.insert(
         "thumbnail".to_string(),
         TransformEntry {
-            validation: None,
+            kept_for: None, validation: None,
             oid: output_oid.clone(),
             size: 18,
             params: params.clone(),
@@ -1412,7 +1412,7 @@ fn test_metadata_cache_hit_returns_stored_meta() {
     transforms.insert(
         "media/meta".to_string(),
         TransformEntry {
-            validation: None,
+            kept_for: None, validation: None,
             oid: meta_oid.clone(),
             size: json_bytes.len() as u64,
             params: params.clone(),
@@ -1493,7 +1493,7 @@ fn test_metadata_cache_full_roundtrip() {
     transforms.insert(
         "media/meta".to_string(),
         TransformEntry {
-            validation: None,
+            kept_for: None, validation: None,
             oid: meta_oid.clone(),
             size: json_bytes.len() as u64,
             params: params.clone(),
@@ -2390,7 +2390,7 @@ fn test_gc_removes_orphaned_transform() {
             m.insert(
                 "thumbnail".to_string(),
                 TransformEntry {
-                    validation: None,
+                    kept_for: None, validation: None,
                     oid: live_output.clone(),
                     size: 50,
                     params: serde_json::json!({}),
@@ -2407,7 +2407,7 @@ fn test_gc_removes_orphaned_transform() {
             m.insert(
                 "thumbnail".to_string(),
                 TransformEntry {
-                    validation: None,
+                    kept_for: None, validation: None,
                     oid: orphan_output.clone(),
                     size: 75,
                     params: serde_json::json!({}),
@@ -2579,7 +2579,7 @@ fn test_gc_preserves_objects_referenced_by_transforms() {
             m.insert(
                 "webp".to_string(),
                 TransformEntry {
-                    validation: None,
+                    kept_for: None, validation: None,
                     oid: output_oid.clone(),
                     size: 300,
                     params: serde_json::json!({"quality": 80}),
@@ -2636,7 +2636,7 @@ fn record_with(source_oid: &str, output_oid: &str) -> TransformRecord {
     let mut transforms = HashMap::new();
     transforms.insert(
         "webp".to_string(),
-        TransformEntry { validation: None, oid: output_oid.to_string(), size: 300, params: serde_json::json!({}) },
+        TransformEntry { kept_for: None, validation: None, oid: output_oid.to_string(), size: 300, params: serde_json::json!({}) },
     );
     TransformRecord { source_oid: source_oid.to_string(), source_size: 500, transforms }
 }
@@ -2673,7 +2673,7 @@ fn gc_keeps_another_machines_record_and_its_blobs_until_the_record_ages_out() {
 
 /// A fresh `html/slots` record with its summary and page blobs in the shared store.
 fn put_slot_record(objects_dir: &Path, transforms_dir: &Path, source: &str, page: &str) {
-    let entry = |oid: &str| TransformEntry { validation: None, oid: oid.to_string(), size: 1, params: serde_json::json!({}) };
+    let entry = |oid: &str| TransformEntry { kept_for: None, validation: None, oid: oid.to_string(), size: 1, params: serde_json::json!({}) };
     let record = TransformRecord {
         source_oid: source.to_string(),
         source_size: 1,
@@ -2779,7 +2779,7 @@ fn gc_deletes_nothing_when_a_mark_input_is_unreadable() {
         let mut transforms = HashMap::new();
         transforms.insert(
             "webp".to_string(),
-            TransformEntry { validation: None, oid: output_oid.clone(), size: 3, params: serde_json::json!({}) },
+            TransformEntry { kept_for: None, validation: None, oid: output_oid.clone(), size: 3, params: serde_json::json!({}) },
         );
         put_transform(
             &transforms_dir,
@@ -3319,7 +3319,7 @@ fn availability_owned_record_changes_recover_without_erasing_newer_merges() {
         let oid = "b".repeat(64);
         let path = cache.record_path(&oid);
         let fault = TestFault::install(cache.root(), &path, stage, 1000, std::time::Duration::from_millis(20));
-        let entry = |hash: &str| TransformEntry { validation: None, oid: hash.into(), size: 1, params: serde_json::json!({}) };
+        let entry = |hash: &str| TransformEntry { kept_for: None, validation: None, oid: hash.into(), size: 1, params: serde_json::json!({}) };
         let _ = cache.merge(&oid, 1, RecordMode::Request, |record| { record.transforms.insert("first".into(), entry("old")); });
         let _ = cache.merge(&oid, 1, RecordMode::Request, |record| {
             record.transforms.insert("first".into(), entry("new"));
@@ -3379,7 +3379,7 @@ fn availability_owned_merge_publishes_over_a_record_still_in_the_cloud() {
         let cache = TransformCache::for_site(&paths);
         let oid = "e".repeat(64);
         let path = cache.record_path(&oid);
-        let entry = |hash: &str| TransformEntry { validation: None, oid: hash.into(), size: 1, params: serde_json::Value::Null };
+        let entry = |hash: &str| TransformEntry { kept_for: None, validation: None, oid: hash.into(), size: 1, params: serde_json::Value::Null };
         let _managed = TestFault::install(cache.root(), &path, StorageOperation::CacheWrite, 0, std::time::Duration::from_millis(20));
         let seed = TransformRecord { source_oid: oid.clone(), source_size: 1, transforms: [("image/webp-w800".into(), entry("other machine"))].into_iter().collect() };
         write_record_file_for_test(&path, &seed);
@@ -3415,7 +3415,7 @@ fn availability_owned_record_replace_removes_omitted_entries_and_keeps_later_mer
         let cache = TransformCache::for_site(&paths);
         let oid = "d".repeat(64);
         let path = cache.record_path(&oid);
-        let entry = |name: &str| TransformEntry { validation: None, oid: name.into(), size: 1, params: serde_json::Value::Null };
+        let entry = |name: &str| TransformEntry { kept_for: None, validation: None, oid: name.into(), size: 1, params: serde_json::Value::Null };
         let mut record = TransformRecord { source_oid: oid.clone(), source_size: 1, transforms: [("removed".into(), entry("old")), ("kept".into(), entry("kept"))].into_iter().collect() };
         cache.put(&record, RecordMode::Request).unwrap();
         let fault = TestFault::install(cache.root(), &path, StorageOperation::CacheWrite, 1000, std::time::Duration::from_millis(20));
@@ -3446,7 +3446,7 @@ fn availability_owned_record_delete_cannot_be_resurrected_by_older_pending_publi
         let path = cache.record_path(&oid);
         let fault = TestFault::install(cache.root(), &path, StorageOperation::CacheWrite, 1000, std::time::Duration::from_millis(20));
         let _ = cache.merge(&oid, 1, RecordMode::Request, |record| {
-            record.transforms.insert("invalid".into(), TransformEntry { validation: None, oid: "invalid-old-output".into(), size: 1, params: serde_json::Value::Null });
+            record.transforms.insert("invalid".into(), TransformEntry { kept_for: None, validation: None, oid: "invalid-old-output".into(), size: 1, params: serde_json::Value::Null });
         });
         let _ = cache.remove(&oid);
         drop(fault);
@@ -3502,7 +3502,7 @@ fn availability_new_merge_after_owned_full_intent_survives_unreadable_old_record
             let mut edited = false;
             let _ = cache.merge_via(&oid, 1, RecordMode::Request, &|_, _| Err(std::io::Error::from_raw_os_error(libc::EDEADLK)), |r| {
                 edited = true;
-                r.transforms.insert("reencoded".into(), TransformEntry { validation: None, oid: "fresh".into(), size: 1, params: serde_json::Value::Null });
+                r.transforms.insert("reencoded".into(), TransformEntry { kept_for: None, validation: None, oid: "fresh".into(), size: 1, params: serde_json::Value::Null });
             });
             assert!(edited, "an owned replacement or accepted deletion supplies a complete baseline for the next edit");
             drop(read);
@@ -3556,7 +3556,7 @@ fn gc_drops_a_shared_copy_of_an_original_kept_as_its_own_output() {
     put_transform(&transforms_dir, &TransformRecord {
         source_oid: oid.clone(),
         source_size: 9,
-        transforms: [("video/mp4".to_string(), TransformEntry { validation: None, oid: oid.clone(), size: 9, params: serde_json::json!({}) })]
+        transforms: [("video/mp4".to_string(), TransformEntry { kept_for: None, validation: None, oid: oid.clone(), size: 9, params: serde_json::json!({}) })]
             .into_iter().collect(),
     });
     put_object(&objects_dir, &oid, b"web-ready");

@@ -901,7 +901,7 @@ fn a_missing_rung_invalidates_the_whole_cached_ladder() {
             record.transforms.insert(
                 format!("video/hls/{name}"),
                 TransformEntry {
-                    validation: None,
+                    kept_for: None, validation: None,
                     oid: oid.clone(),
                     size: 1,
                     params: params.clone(),
@@ -950,7 +950,7 @@ fn cached_ladder_hits_a_new_form_record_with_no_probe_needed() {
     for name in &members {
         record
             .transforms
-            .insert(format!("video/hls/{name}"), TransformEntry { validation: None, oid: oid.clone(), size: 1, params: params.clone() });
+            .insert(format!("video/hls/{name}"), TransformEntry { kept_for: None, validation: None, oid: oid.clone(), size: 1, params: params.clone() });
     }
     transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
 
@@ -960,30 +960,41 @@ fn cached_ladder_hits_a_new_form_record_with_no_probe_needed() {
     assert!(oids.iter().all(|o| o == &oid));
 }
 
-/// A full ladder record for `source_oid` in `transforms`, every member keyed
-/// by `params`. The blobs are placeholders: these tests ask whether a record
-/// is a hit, never what its files hold.
-fn seed_ladder_record(transforms: &TransformCache, scratch: &Path, source_oid: &str, params: &serde_json::Value) {
+/// A full seven-rung ladder record for `source_oid` in `transforms`, every
+/// member keyed by `params` and `size` bytes long. The master is a real
+/// playlist naming every member; the other blobs are placeholders.
+fn seed_ladder_record(transforms: &TransformCache, scratch: &Path, source_oid: &str, params: &serde_json::Value) -> TransformRecord {
+    seed_sized_ladder_record(transforms, scratch, source_oid, params, 1)
+}
+
+fn seed_sized_ladder_record(transforms: &TransformCache, scratch: &Path, source_oid: &str, params: &serde_json::Value, size: u64) -> TransformRecord {
     let blob = scratch.join("blob");
     std::fs::write(&blob, b"ladder file").unwrap();
     let oid = transforms.objects().store_file(&blob, crate::build::cache::RecordMode::Request).unwrap();
+    let members = hls_members(&VIDEO_LADDER);
+    let master = master_naming(&members);
+    let master_oid = transforms.objects().store_bytes(master.as_bytes(), crate::build::cache::RecordMode::Request).unwrap();
     let mut record = TransformRecord {
         source_oid: source_oid.to_string(),
         source_size: 0,
         transforms: std::collections::HashMap::new(),
     };
-    for name in hls_members(&VIDEO_LADDER) {
+    for name in members {
+        let oid = if name == HLS_MASTER_NAME { master_oid.clone() } else { oid.clone() };
         record
             .transforms
-            .insert(format!("video/hls/{name}"), TransformEntry { validation: None, oid: oid.clone(), size: 1, params: params.clone() });
+            .insert(format!("video/hls/{name}"), TransformEntry { kept_for: None, validation: None, oid, size, params: params.clone() });
     }
     transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
+    record
 }
 
-/// A ladder from the format before today's is a miss, so the next build
-/// re-encodes it once (format 2 aimed every rung at its rate).
+/// A whole ladder made with an earlier format is kept with the bytes it has:
+/// moss's own encoder changes reach new and changed sources only. The record
+/// keeps naming the format that made it. A file its master names going
+/// missing still makes the whole ladder again.
 #[test]
-fn cached_ladder_misses_a_ladder_from_the_previous_format() {
+fn a_whole_ladder_from_the_previous_format_is_kept() {
     let dir = tempfile::tempdir().expect("tempdir");
     let transforms = TransformCache::new(
         dir.path().join("transforms"),
@@ -994,12 +1005,45 @@ fn cached_ladder_misses_a_ladder_from_the_previous_format() {
     seed_ladder_record(&transforms, dir.path(), "oid-current", &params);
     assert!(cached_ladder(&transforms, "oid-current", &config).is_some(), "today's key is a hit");
     params["format"] = serde_json::json!(cache::LADDER_FORMAT - 1);
-    seed_ladder_record(&transforms, dir.path(), "oid-previous", &params);
-    assert!(cached_ladder(&transforms, "oid-previous", &config).is_none());
+    let mut record = seed_ladder_record(&transforms, dir.path(), "oid-previous", &params);
+    let (members, _, made_with) = cached_ladder(&transforms, "oid-previous", &config).expect("kept");
+    assert_eq!(members.len(), 19);
+    assert_eq!(made_with, params, "the record still names the format that made it");
+
+    record.transforms.remove("video/hls/v3.m4s");
+    transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
+    assert!(cached_ladder(&transforms, "oid-previous", &config).is_none(), "a missing file makes the ladder again");
 }
 
+/// A kept ladder is made again when one of its files is over today's
+/// per-file budget, since the host would refuse it.
 #[test]
-fn cached_ladder_misses_a_record_keyed_before_aspect_fitted_frames() {
+fn a_kept_ladder_over_todays_per_file_budget_is_made_again() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let transforms = TransformCache::new(
+        dir.path().join("transforms"),
+        ObjectStore::new(dir.path().join("objects")),
+    );
+    let config = VideoCompressionConfig::default();
+    let mut params = ladder_params(&config, &VIDEO_LADDER, &wide_source());
+    params["format"] = serde_json::json!(cache::LADDER_FORMAT - 1);
+    let budget = u64::from(config.hls_max_file_mb) * 1024 * 1024;
+    seed_sized_ladder_record(&transforms, dir.path(), "oid-within", &params, budget);
+    assert!(cached_ladder(&transforms, "oid-within", &config).is_some());
+    // The budget is not in the key, so keeping the ladder must record no
+    // verdict a tighter budget would then trust.
+    let tighter = VideoCompressionConfig { hls_max_file_mb: config.hls_max_file_mb - 1, ..config.clone() };
+    assert!(cached_ladder(&transforms, "oid-within", &tighter).is_none(), "a tighter budget makes it again");
+    seed_sized_ladder_record(&transforms, dir.path(), "oid-over", &params, budget + 1);
+    assert!(cached_ladder(&transforms, "oid-over", &config).is_none());
+}
+
+/// A ladder from before format 2 (rungs in a fixed 16:9 frame, a key with no
+/// version and no height or pixel aspect) still plays: it is kept from its own
+/// master, and the no-probe heal relinks it rather than dispatching. So is
+/// each real key shape from before ladders were keyed by their source.
+#[test]
+fn a_ladder_keyed_before_aspect_fitted_frames_is_kept() {
     let dir = tempfile::tempdir().expect("tempdir");
     let transforms = TransformCache::new(
         dir.path().join("transforms"),
@@ -1013,12 +1057,17 @@ fn cached_ladder_misses_a_record_keyed_before_aspect_fitted_frames() {
     assert!(facts.remove("height").is_some() && facts.remove("sar").is_some());
     seed_ladder_record(&transforms, dir.path(), "oid-old-frames", &params);
 
-    assert!(cached_ladder(&transforms, "oid-old-frames", &config).is_none());
-    // The no-probe heal path must not relink it either: it asks for a real
-    // dispatch, where the source is probed afresh (height and all) and encoded.
+    assert!(cached_ladder(&transforms, "oid-old-frames", &config).is_some());
     let heal = heal_cached_ladder(&transforms, "oid-old-frames", &dir.path().join("ladder"), &config)
         .expect("heal");
-    assert_eq!(heal, LadderHeal::NeedsDispatch);
+    assert_eq!(heal, LadderHeal::Healed);
+
+    for (oid, shape) in [("oid-no-budget", LegacyShape::NoBudget), ("oid-with-budget", LegacyShape::WithBudget)] {
+        seed_ladder_record(&transforms, dir.path(), oid, &legacy_form_params(&config, shape));
+        assert!(cached_ladder(&transforms, oid, &config).is_some(), "{shape:?}");
+        let heal = heal_cached_ladder(&transforms, oid, &dir.path().join(oid), &config).expect("heal");
+        assert_eq!(heal, LadderHeal::Healed, "{shape:?}");
+    }
 }
 
 /// A budget edit that does not change what a PARTICULAR video's effective
@@ -1048,7 +1097,7 @@ fn cached_ladder_ignores_a_looser_budget_that_doesnt_change_the_effective_ladder
     for name in &members {
         record
             .transforms
-            .insert(format!("video/hls/{name}"), TransformEntry { validation: None, oid: oid.clone(), size: 1, params: params.clone() });
+            .insert(format!("video/hls/{name}"), TransformEntry { kept_for: None, validation: None, oid: oid.clone(), size: 1, params: params.clone() });
     }
     transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
 
@@ -1056,44 +1105,6 @@ fn cached_ladder_ignores_a_looser_budget_that_doesnt_change_the_effective_ladder
     assert!(
         cached_ladder(&transforms, "oid-loose", &read_back_under).is_some(),
         "a budget change this video's own ladder never felt must stay a hit"
-    );
-}
-
-/// The other half: a budget edit that DOES narrow this source's effective
-/// ladder must invalidate the cache — a 903.47 s source drops to 5 rungs
-/// under the default 150 MiB budget (pinned in asset_paths' own tests), so
-/// reading a record stored under a much looser budget back with the default
-/// one must miss.
-#[test]
-fn cached_ladder_misses_when_a_tighter_budget_narrows_the_effective_ladder() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let transforms = TransformCache::new(
-        dir.path().join("transforms"),
-        ObjectStore::new(dir.path().join("objects")),
-    );
-    let recorded_under = VideoCompressionConfig { hls_max_file_mb: 100_000, ..VideoCompressionConfig::default() };
-    let source = SourceVideo { duration_secs: 903.47, ..source_facts(1920, 1080) };
-    let params = ladder_params(&recorded_under, &VIDEO_LADDER, &source);
-    let blob = dir.path().join("blob");
-    std::fs::write(&blob, b"ladder file").unwrap();
-    let oid = transforms.objects().store_file(&blob, crate::build::cache::RecordMode::Request).unwrap();
-    let members = hls_members(&VIDEO_LADDER);
-    let mut record = TransformRecord {
-        source_oid: "oid-tight".to_string(),
-        source_size: 0,
-        transforms: std::collections::HashMap::new(),
-    };
-    for name in &members {
-        record
-            .transforms
-            .insert(format!("video/hls/{name}"), TransformEntry { validation: None, oid: oid.clone(), size: 1, params: params.clone() });
-    }
-    transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
-
-    let tight = VideoCompressionConfig::default();
-    assert!(
-        cached_ladder(&transforms, "oid-tight", &tight).is_none(),
-        "a budget change that narrows this video's own effective ladder must miss"
     );
 }
 
@@ -1142,7 +1153,7 @@ fn a_shrunk_ladder_is_recorded_as_a_hit_not_a_stale_miss() {
     for name in &stale_members {
         record.transforms.insert(
             format!("video/hls/{name}"),
-            TransformEntry { validation: None, oid: stale_oid.clone(), size: 1, params: stale_params.clone() },
+            TransformEntry { kept_for: None, validation: None, oid: stale_oid.clone(), size: 1, params: stale_params.clone() },
         );
     }
     transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
@@ -1162,7 +1173,7 @@ fn a_shrunk_ladder_is_recorded_as_a_hit_not_a_stale_miss() {
         .map(|name| {
             (
                 format!("video/hls/{name}"),
-                TransformEntry { validation: None, oid: fresh_oid.clone(), size: 1, params: fresh_params.clone() },
+                TransformEntry { kept_for: None, validation: None, oid: fresh_oid.clone(), size: 1, params: fresh_params.clone() },
             )
         })
         .collect();
@@ -1255,12 +1266,11 @@ fn produce_ladder_honors_a_tiny_per_file_budget() {
 // genuinely legacy-form record, and a second reconstruction of git history
 // in a second file is exactly the kind of copy that drifts from the first.
 
-/// A legacy record is never reused, whatever the source: its bytes predate
-/// aspect-fitted frames and own-size top rungs, so `produce_ladder`
-/// re-encodes it once — different oids, and the two rungs a 416x234 source
-/// gets today instead of the legacy record's six.
+/// A legacy record whose master names none of its files is not a whole
+/// ladder, so `produce_ladder` re-encodes it once: different oids, and the two
+/// rungs a 416x234 source gets today instead of the legacy record's six.
 #[test]
-fn produce_ladder_re_encodes_a_legacy_record() {
+fn produce_ladder_re_encodes_a_legacy_record_whose_master_names_nothing() {
     let Some(bin) = real_ffmpeg() else {
         eprintln!("skipping: ffmpeg not on PATH");
         return;
@@ -1297,7 +1307,7 @@ fn produce_ladder_re_encodes_a_legacy_record() {
     for (name, oid) in members.iter().zip(&fabricated_oids) {
         record.transforms.insert(
             format!("video/hls/{name}"),
-            TransformEntry { validation: None, oid: oid.clone(), size: 1, params: legacy_params.clone() },
+            TransformEntry { kept_for: None, validation: None, oid: oid.clone(), size: 1, params: legacy_params.clone() },
         );
     }
     transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();

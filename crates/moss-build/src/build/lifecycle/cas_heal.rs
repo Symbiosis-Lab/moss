@@ -74,13 +74,17 @@ pub(crate) fn rematerialize_with_record(
     objects: &crate::build::cache::ObjectStore,
     record: Option<&crate::build::cache::TransformRecord>,
     params: &serde_json::Value,
+    fit: crate::build::cache::Fit<'_>,
     staged: &mut StagedLinks,
     staging_path: &Path,
     transform: &str,
 ) -> HealOutcome {
-    let Some(entry) = record.and_then(|r| r.transforms.get(transform)).filter(|e| e.params == *params) else {
+    let Some(entry) = record.and_then(|r| r.transforms.get(transform)) else {
         return HealOutcome::NotCached;
     };
+    if entry.params != *params && !objects.ready_blob(&entry.oid).is_some_and(|blob| fit.keeps(entry, &blob, params)) {
+        return HealOutcome::NotCached;
+    }
     let oid = entry.oid.clone();
     if staged.holds_oid(staging_path, &oid) {
         return HealOutcome::AlreadyPresent { oid: Some(oid) };

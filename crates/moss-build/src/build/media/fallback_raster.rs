@@ -469,8 +469,7 @@ pub(crate) fn sized_raster_oid_for_original(
     let is_png = ext == "png";
     // The fallback is capped at the top ladder rung, not at the global deploy
     // cap — see `FALLBACK_MAX_EDGE`. `.min` keeps a caller that lowered the
-    // global cap authoritative. It goes into the cache params, so bumping
-    // either constant invalidates the old entries by itself.
+    // global cap authoritative. A kept fallback of another size is re-made.
     let fallback_edge = config.max_edge.min(FALLBACK_MAX_EDGE);
     let params = serde_json::json!({
         "quality": quality,
@@ -493,7 +492,11 @@ pub(crate) fn sized_raster_oid_for_original(
         }
         crate::build::phase::record_count("sized_raster_blob_checks", 1);
     }
-    let cached = || transforms.find_cached_output(source_oid, SIZED_RASTER_TRANSFORM, &params, crate::build::cache::RecordMode::Wait);
+    let today = || Some(crate::build::cache::Need::Scaled { source: super::rungs::sniffed_oriented_dims(source_file)?, bound: fallback_edge });
+    let cached = || {
+        let fit = crate::build::cache::Fit::Kept(&today);
+        transforms.find_kept_entry(source_oid, SIZED_RASTER_TRANSFORM, &params, crate::build::cache::RecordMode::Wait, fit).map(|e| e.oid)
+    };
     if let Some(hit) = cached() {
         return Some(hit);
     }
@@ -648,7 +651,7 @@ fn produce_sized_raster(
             record.transforms.insert(
                 SIZED_RASTER_TRANSFORM.to_string(),
                 TransformEntry {
-                    validation: None,
+                    kept_for: None, validation: None,
                     oid: out_oid.clone(),
                     size: out_size,
                     params: params.clone(),

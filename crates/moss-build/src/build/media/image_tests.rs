@@ -1320,6 +1320,72 @@ fn convert_single_image_cache_hit() {
     assert_eq!(second.webp_oid.as_deref(), Some(first_oid.as_str()));
 }
 
+/// A picture made with an older recipe keeps the bytes already published
+/// while its pixel size is still today's; a base of another size is made
+/// again. The planted blobs are other encodes of the same pictures, so a
+/// re-encode would show as another oid.
+#[test]
+fn a_picture_made_with_an_older_recipe_keeps_its_bytes() {
+    use crate::build::cache::RecordMode::Wait;
+    let h = harness();
+    let src = h._tmp.path().join("photo.jpg");
+    make_big_jpeg(&src, 2000, 1500);
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+    let cfg = ImageCompressionConfig::default();
+    let convert = || convert_single_image(&src, &source_oid, "photo.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &cfg, None, None, &HashMap::new());
+    let first = convert();
+    assert!(first.error.is_none(), "{:?}", first.error);
+    assert!(!first.rungs.is_empty(), "the fixture needs rungs");
+
+    let plant = |scale: f64| {
+        let mut record = h.transforms.get_with(&source_oid, Wait).unwrap();
+        let mut planted = HashMap::new();
+        for (name, entry) in record.transforms.iter_mut().filter(|(name, _)| name.starts_with("image/webp")) {
+            let img = image::load_from_memory(&fs::read(h.objects.get_path(&entry.oid).unwrap()).unwrap()).unwrap();
+            let img = if name == "image/webp" && scale != 1.0 {
+                img.resize_exact((f64::from(img.width()) * scale) as u32, (f64::from(img.height()) * scale) as u32, image::imageops::FilterType::Triangle)
+            } else {
+                img
+            };
+            let bytes = encode_webp(&img, 10, None).unwrap();
+            entry.oid = h.objects.store_bytes(&bytes, Wait).unwrap();
+            entry.size = bytes.len() as u64;
+            entry.params = serde_json::json!({ "quality": 79 });
+            entry.kept_for = None;
+            planted.insert(name.clone(), entry.oid.clone());
+        }
+        h.transforms.put(&record, Wait).unwrap();
+        planted
+    };
+
+    let planted = plant(1.0);
+    let second = convert();
+    assert_eq!(second.webp_oid.as_ref(), planted.get("image/webp"), "the base keeps its bytes");
+    for rung in &second.rungs {
+        assert_eq!(rung.oid.as_ref(), planted.get(&format!("image/webp-w{}", rung.width)), "rung {} keeps its bytes", rung.width);
+    }
+
+    // The verdict is recorded, so the next build's skip path serves the kept
+    // files without sending the picture to the worker again.
+    let params = cfg.to_params();
+    let record = h.transforms.get_with(&source_oid, Wait);
+    let mut links = staged_links(&h);
+    let skip = h._tmp.path().join("skip");
+    fs::create_dir_all(&skip).unwrap();
+    let mut healed = 0;
+    for (name, oid) in &planted {
+        assert_eq!(record.as_ref().unwrap().transforms[name].kept_for.as_ref(), Some(&params), "{name} records its verdict");
+        let path = skip.join(name.replace('/', "_"));
+        let (served, got) = heal_and_verify_variant(&h.objects, record.as_ref(), &params, &mut links, &path, name, false, &mut healed);
+        assert!(served && got.as_ref() == Some(oid), "{name} is served from the skip path");
+    }
+
+    let planted = plant(0.5);
+    let third = convert();
+    assert!(third.webp_oid.is_some());
+    assert_ne!(third.webp_oid.as_ref(), planted.get("image/webp"), "a base of another size is made again");
+}
+
 #[test]
 fn convert_single_image_ignores_legacy_sentinel_and_writes_webp() {
     // Old caches may still hold sentinel records (`oid=""`, `params=Null`)
@@ -1341,7 +1407,7 @@ fn convert_single_image_ignores_legacy_sentinel_and_writes_webp() {
     record.transforms.insert(
         "image/webp".to_string(),
         TransformEntry {
-            validation: None,
+            kept_for: None, validation: None,
             oid: String::new(),
             size: 0,
             params: serde_json::Value::Null,
@@ -1808,7 +1874,7 @@ fn should_skip_ignores_legacy_sentinel() {
     record.transforms.insert(
         "image/webp".to_string(),
         TransformEntry {
-            validation: None,
+            kept_for: None, validation: None,
             oid: String::new(),
             size: 0,
             params: serde_json::Value::Null,
@@ -2254,7 +2320,7 @@ fn a_stale_pre_fix_format_probe_entry_is_not_reused_after_the_version_bump() {
         transforms: std::collections::HashMap::from([(
             FORMAT_PROBE_TRANSFORM.to_string(),
             crate::build::cache::TransformEntry {
-                validation: None,
+                kept_for: None, validation: None,
                 oid: blob_oid,
                 size: json_bytes.len() as u64,
                 params: old_params,
@@ -2378,7 +2444,7 @@ fn prime_cached_transform(
     });
     record.transforms.insert(
         transform.to_string(),
-        crate::build::cache::TransformEntry { validation: None, oid: blob_oid.clone(), size: webp_bytes.len() as u64, params: params.clone() },
+        crate::build::cache::TransformEntry { kept_for: None, validation: None, oid: blob_oid.clone(), size: webp_bytes.len() as u64, params: params.clone() },
     );
     transforms.put(&record, crate::build::cache::RecordMode::Request).expect("test transform-cache put");
     blob_oid
@@ -4633,6 +4699,47 @@ fn sized_raster_oid_reuses_transform_cache() {
     );
 }
 
+/// A fallback made with an older recipe keeps its bytes while it is still
+/// today's pixel size, and is made again once it is not.
+#[test]
+fn kept_recipe_a_sized_raster_of_todays_size_keeps_its_bytes() {
+    use crate::build::cache::{ObjectStore, RecordMode::Wait, TransformCache};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let objects_root = tmp.path().join("objects");
+    let objects = ObjectStore::new(objects_root.clone());
+    let transforms = TransformCache::new(tmp.path().join("transforms"), ObjectStore::new(objects_root));
+    let src = tmp.path().join("big.jpg");
+    make_detailed_jpeg(&src, 2400, 1800);
+    let source_oid = objects.store_file(&src, crate::build::cache::RecordMode::Request).unwrap();
+    let cfg = ImageCompressionConfig::default();
+    let size = || sized_raster_oid_for_original(&src, &source_oid, &objects, &transforms, &cfg, SIZED_JPEG_QUALITY, None).unwrap();
+    let first = size();
+    assert_ne!(first, source_oid, "the fixture needs a downscaled fallback");
+
+    let plant = |scale: u32| {
+        let mut record = transforms.get_with(&source_oid, Wait).unwrap();
+        let entry = record.transforms.get_mut("image/sized-raster").unwrap();
+        let img = image::load_from_memory(&fs::read(objects.get_path(&first).unwrap()).unwrap()).unwrap();
+        let img = img.resize_exact(img.width() / scale, img.height() / scale, image::imageops::FilterType::Triangle);
+        let mut bytes = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 30).encode_image(&img.to_rgb8()).unwrap();
+        entry.oid = objects.store_bytes(&bytes, Wait).unwrap();
+        entry.size = bytes.len() as u64;
+        entry.params = serde_json::json!({ "quality": 30 });
+        entry.kept_for = None;
+        let oid = entry.oid.clone();
+        transforms.put(&record, Wait).unwrap();
+        oid
+    };
+
+    let planted = plant(1);
+    assert_ne!(planted, first);
+    assert_eq!(size(), planted, "a fallback of today's size keeps its bytes");
+    let planted = plant(2);
+    assert_ne!(size(), planted, "a fallback of another size is made again");
+}
+
 /// Overlapping builds each run their own asset walk. On a cold cache they must
 /// share one encode per source, and a later warm walk must encode nothing.
 #[test]
@@ -5184,7 +5291,7 @@ fn rematerialize_with_record_overwrites_a_stale_staged_file_never_trusts_its_mer
 
     let params = cfg.to_params();
     let mut links = staged_links(&h);
-    let outcome = rematerialize_with_record(&h.objects, h.transforms.get_with(&source_oid, crate::build::cache::RecordMode::Wait).as_ref(), &params, &mut links, &staged, "image/webp");
+    let outcome = rematerialize_with_record(&h.objects, h.transforms.get_with(&source_oid, crate::build::cache::RecordMode::Wait).as_ref(), &params, crate::build::cache::Fit::Exact, &mut links, &staged, "image/webp");
     assert!(matches!(outcome, HealOutcome::Healed { .. }), "must relink over the stale file, got {:?}", outcome);
     assert_eq!(
         fs::read(&staged).unwrap(),
@@ -5262,7 +5369,7 @@ fn photo_staged_and_recorded(h: &TestHarness) -> (PathBuf, String, serde_json::V
 /// Heal `staged` the way the next build would, and say whether it relinked.
 fn next_build_relinks(h: &TestHarness, staged: &Path, source_oid: &str, params: &serde_json::Value) -> bool {
     let mut links = staged_links(h);
-    let outcome = rematerialize_with_record(&h.objects, h.transforms.get_with(source_oid, crate::build::cache::RecordMode::Wait).as_ref(), params, &mut links, staged, "image/webp");
+    let outcome = rematerialize_with_record(&h.objects, h.transforms.get_with(source_oid, crate::build::cache::RecordMode::Wait).as_ref(), params, crate::build::cache::Fit::Exact, &mut links, staged, "image/webp");
     links.save();
     matches!(outcome, HealOutcome::Healed { .. })
 }
