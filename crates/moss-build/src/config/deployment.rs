@@ -229,6 +229,13 @@ pub struct DomainDeploymentConfig {
 }
 
 impl DomainDeploymentConfig {
+    /// The moss host serves this site: it has a site id and no deploy plugin
+    /// pinned in its place. Only there do subscribing and private `.moss-email/` work.
+    pub fn on_moss_host(&self) -> bool {
+        self.site_id.as_deref().is_some_and(|id| !id.trim().is_empty())
+            && self.deploy_method.as_deref().map_or(true, |m| m == MOSS_TARGET_ID)
+    }
+
     /// The publish target this project ships to now, or `None` when nothing
     /// names one yet. Delegates to [`slot_for`] — the one identity function —
     /// so the read side, both record-writing publish paths, and the

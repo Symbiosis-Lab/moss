@@ -3686,7 +3686,7 @@ fn per_page_language_subscribe_in_zh_hans_subdir() {
         doc.html_content
     );
     assert!(
-        doc.html_content.contains("请在邮箱中确认订阅"),
+        doc.html_content.contains("请查收邮件"),
         "zh-hans confirmation copy must appear, got:\n{}",
         doc.html_content
     );

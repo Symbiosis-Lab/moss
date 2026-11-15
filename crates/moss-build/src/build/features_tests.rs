@@ -1154,6 +1154,50 @@ fn seta_form_injects_with_site_id_but_no_deploy_method() {
     );
 }
 
+/// A site that publishes with a deploy plugin has no subscribing, even with a
+/// site id left from moss hosting: its footer form is pending, which published
+/// pages hide.
+#[test]
+fn seta_form_is_pending_when_a_deploy_plugin_publishes_the_site() {
+    use crate::build::types::ParsedDocument;
+    use tempfile::TempDir;
+    let test_tmp = concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/test-tmp");
+    std::fs::create_dir_all(test_tmp).unwrap();
+    let temp_dir = TempDir::new_in(test_tmp).unwrap();
+    let project_path = temp_dir.path().to_str().unwrap();
+    let moss_dir = temp_dir.path().join(".moss");
+    std::fs::create_dir_all(&moss_dir).unwrap();
+    std::fs::write(
+        moss_dir.join("config.toml"),
+        &format!("schema_version = {}\n\n[channels.email]\n", crate::config::migrations::CURRENT_VERSION),
+    )
+    .unwrap();
+    let pages = vec![ParsedDocument { url_path: "index.html".to_string(), ..Default::default() }];
+    let deploy = DomainDeploymentConfig {
+        site_id: Some("my-lab".into()),
+        deploy_method: Some("github-pages".into()),
+        ..Default::default()
+    };
+    let slots = generate_native_slots(
+        &ServicesConfig::default(),
+        project_path,
+        email_installed(project_path),
+        crate::build::features::comment::MATTERS_DOMAIN_FALLBACK,
+        &HashMap::new(),
+        &pages,
+        "en",
+        None,
+        &deploy,
+        false,
+        None,
+        None,
+        None,
+    );
+    let html = slots.get_html("footer-end", "index.html").expect("the form is still drawn for the preview");
+    assert!(!html.contains("/sites/my-lab/subscribe"), "no form may post for a site published elsewhere: {html}");
+    assert!(html.contains(r#"data-moss-pending="true""#), "{html}");
+}
+
 /// site_id present → wired seta form, regardless of leftover third-party
 /// email config: a site with both a seta site_id and stale `[services.email]`
 /// content from before the 2026-06-10 redesign still gets the wired seta

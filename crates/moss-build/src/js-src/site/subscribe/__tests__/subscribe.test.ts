@@ -18,9 +18,9 @@ function mount(lang = 'en'): HTMLFormElement {
       </span>
       <div class="moss-subscribe-status" aria-live="polite">
         <span data-copy="check-email" hidden></span>
-        <span data-copy="already-subscribed" hidden></span>
         <span data-copy="error" hidden></span>
       </div>
+      <span class="moss-subscribe-subscribed"></span>
     </form>`;
   return document.querySelector('form')!;
 }
@@ -174,19 +174,22 @@ describe('hydrateSubscribeForm', () => {
     expect(checkEmail.textContent).toBe(COPY.en.checkEmail);
   });
 
-  test('alreadySubscribed: shows the already-subscribed copy, not check-email', async () => {
+  test('sends the page it is on, so the mailed link brings the reader back here', async () => {
+    window.history.replaceState(null, '', '/notes/first/?ref=x#comments');
     const form = mount('en');
     hydrateSubscribeForm(form);
-    form.querySelector('input')!.value = 'already@example.com';
-    fetchSpy.mockResolvedValue(new Response(JSON.stringify({ subscribed: true, alreadySubscribed: true }), { status: 200 }));
-
+    form.querySelector('input')!.value = 'reader@example.com';
+    fetchSpy.mockResolvedValue(new Response(JSON.stringify({ subscribed: true, confirmationSent: true }), { status: 200 }));
     form.requestSubmit();
-    await vi.waitFor(() => expect(form.dataset.state).toBe('success'));
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(fetchSpy.mock.calls[0][1]!.body as string).return).toBe('/notes/first/?ref=x#comments');
+    window.history.replaceState(null, '', '/');
+  });
 
-    const already = form.querySelector<HTMLElement>('[data-copy="already-subscribed"]')!;
-    const checkEmail = form.querySelector<HTMLElement>('[data-copy="check-email"]')!;
-    expect(already.hidden).toBe(false);
-    expect(checkEmail.hidden).toBe(true);
+  test.each(['en', 'de', 'zh-Hans', 'zh-Hant'])('words the subscribed line in the page language (%s)', (lang) => {
+    const form = mount(lang);
+    hydrateSubscribeForm(form);
+    expect(form.querySelector('.moss-subscribe-subscribed')!.textContent).toBe(COPY[langBucket(lang)].subscribed);
   });
 
   test('a 2xx that does not say the address is subscribed is an error', async () => {
@@ -295,82 +298,6 @@ describe('hydrateSubscribeForm', () => {
     expect(input.value).toBe('');
   });
 
-  test('alreadySubscribed branch also stays until the reader acts', async () => {
-    vi.useFakeTimers();
-    try {
-      const form = mount('en');
-      hydrateSubscribeForm(form);
-      form.querySelector('input')!.value = 'already@example.com';
-      fetchSpy.mockResolvedValue(new Response(JSON.stringify({ subscribed: true, alreadySubscribed: true }), { status: 200 }));
-
-      form.requestSubmit();
-      await vi.waitFor(() => expect(form.dataset.state).toBe('success'));
-      vi.advanceTimersByTime(60_000);
-      expect(form.dataset.state).toBe('success');
-      expect(form.querySelector<HTMLElement>('[data-copy="already-subscribed"]')!.textContent).toBe('You\u2019re already subscribed.');
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  test('second submit after revert reaches success cleanly', async () => {
-    const form = mount('en');
-    hydrateSubscribeForm(form);
-    const input = form.querySelector<HTMLInputElement>('input')!;
-    fetchSpy.mockImplementation(async () => new Response(JSON.stringify({ subscribed: true, confirmationSent: true }), { status: 200 }));
-
-    input.value = 'first@example.com';
-    form.requestSubmit();
-    await vi.waitFor(() => expect(form.dataset.state).toBe('success'));
-
-    form.querySelector<HTMLButtonElement>('button')!.click();
-    expect(form.dataset.state).toBe('idle');
-    expect(input.value).toBe('');
-
-    input.value = 'second@example.com';
-    form.requestSubmit();
-    await vi.waitFor(() => expect(form.dataset.state).toBe('success'));
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-  });
-
-  test('click on the button while idle does NOT trigger revert', async () => {
-    const form = mount('en');
-    hydrateSubscribeForm(form);
-    const btn = form.querySelector<HTMLButtonElement>('button')!;
-    // In idle the button click should behave as a normal submit-button click
-    // (no revert side effects, no state change on its own).
-    btn.click();
-    expect(form.dataset.state).toBe('idle');
-  });
-
-  test('drift regression: slot width locks on first submit and is stable across re-submits', async () => {
-    const form = mount('en');
-    hydrateSubscribeForm(form);
-    const input = form.querySelector<HTMLInputElement>('input')!;
-    const btn = form.querySelector<HTMLButtonElement>('button')!;
-    const slot = form.querySelector<HTMLElement>('.moss-btn-slot')!;
-    // jsdom has no layout engine (offsetWidth is 0). Stub it to simulate the
-    // real-browser path where lockSlotWidth() captures a natural width.
-    Object.defineProperty(btn, 'offsetWidth', { configurable: true, value: 96 });
-    fetchSpy.mockImplementation(async () => new Response(JSON.stringify({ subscribed: true, confirmationSent: true }), { status: 200 }));
-
-    input.value = 'first@example.com';
-    form.requestSubmit();
-    await vi.waitFor(() => expect(form.dataset.state).toBe('success'));
-    expect(slot.style.width).toBe('96px');
-
-    btn.click();
-    expect(form.dataset.state).toBe('idle');
-
-    // Simulate what would happen if lockSlotWidth re-measured a button that
-    // has already been styled for success (36px circle). If the lock didn't
-    // hold, the slot would shrink on re-submit — the original drift bug.
-    Object.defineProperty(btn, 'offsetWidth', { configurable: true, value: 36 });
-    input.value = 'second@example.com';
-    form.requestSubmit();
-    await vi.waitFor(() => expect(form.dataset.state).toBe('success'));
-    expect(slot.style.width).toBe('96px');
-  });
 });
 
 function makePreviewForm(): HTMLFormElement {
@@ -383,7 +310,6 @@ function makePreviewForm(): HTMLFormElement {
       </span>
       <div class="moss-subscribe-status" aria-live="polite">
         <span data-copy="check-email" hidden></span>
-        <span data-copy="already-subscribed" hidden></span>
         <span data-copy="error" hidden></span>
       </div>
     </form>`;

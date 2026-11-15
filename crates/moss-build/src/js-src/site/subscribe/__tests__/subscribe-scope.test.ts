@@ -50,7 +50,7 @@ describe('subscribe POST body', () => {
 
     const status = document.createElement('div');
     status.classList.add('moss-subscribe-status');
-    for (const key of ['check-email', 'already-subscribed', 'error']) {
+    for (const key of ['check-email', 'error']) {
       const span = document.createElement('span');
       span.dataset.copy = key;
       span.hidden = true;
@@ -68,7 +68,7 @@ describe('subscribe POST body', () => {
     form.requestSubmit();
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(body).toEqual({ email: 'alice@example.com', scope: 'zh', lang: 'en' });
+    expect(body).toEqual({ email: 'alice@example.com', scope: 'zh', lang: 'en', return: '/' });
   });
 
   it.each([

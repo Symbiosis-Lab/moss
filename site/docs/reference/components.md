@@ -131,6 +131,7 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.moss-subscribe-form` | instance | Form element inside `.moss-subscribe`. |
 | `.moss-btn-slot` | instance | Fixed-width slot wrapping a form's submit button; used by both the subscribe and comment forms to prevent layout shift across idle/loading/success states. |
 | `.moss-subscribe-status` | instance | Status message shown after submit (success/error). |
+| `.moss-subscribe-subscribed` | instance | Shown in place of the field and button while the page's root carries `data-moss-subscribed` (a browser signed in to the site); hidden otherwise. |
 | `.moss-subscribe-status__icon` | instance | Icon slot inside `.moss-subscribe-status`. |
 | `.moss-subscribe-landing` | standalone | Standalone subscribe landing page surface (larger variant). |
 | `.moss-calendar-links` | standalone | Closing line of an event page ("Add to calendar") or of a folder that holds events (its calendar file and a webcal subscribe link). |

@@ -519,12 +519,11 @@ pub fn generate_blocking_content_for_build(
     let site_lang: crate::i18n::Language =
         crate::i18n::Language::from_code(&site_config.lang).unwrap_or(crate::i18n::Language::En);
 
-    // Resolve site_id for the inline subscribe shortcode. Per-build (not per-file)
-    // so we read .moss/config.toml once. None means no published site → renders
-    // an empty action path which the form treats as a no-op.
+    // The site id inline `:::subscribe` forms post with, read once per build.
+    // None (unpublished, or published elsewhere) renders the pending form.
     let deploy = crate::build::site_config::get_domain_config(source_path)
         .unwrap_or_default();
-    let site_id = deploy.site_id.clone();
+    let site_id = crate::build::features::email::subscribe_site_id(&deploy).map(str::to_string);
 
     // Resolve the seta base URL once per build from the project environment.
     // Passed into `process_markdown_file` so inline `:::subscribe` shortcodes
@@ -2508,7 +2507,7 @@ pub fn generate_blocking_content_for_build(
     }
     // Only the moss host keeps `.moss-email/` private; any other host would
     // publish the templates.
-    let on_moss_host = crate::build::site_config::get_domain_config(source_path).unwrap_or_default().site_id.is_some();
+    let on_moss_host = deploy.on_moss_host();
     if on_moss_host { crate::build::emit::welcome_email::emit(&documents, output_dir, pending)?; }
     site_config.blocks.emit_assets(&documents, output_dir, pending)?;
     crate::plugins::contributions::public_data::emit(&site_config.public_data, output_dir, pending)?;

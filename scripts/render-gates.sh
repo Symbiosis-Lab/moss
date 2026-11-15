@@ -131,6 +131,7 @@ GATES_BUILD=(
   content-grid
   wcag-output
   archival-footer
+  subscribed-state
   type-defaults
   diagrams
   browser-editor

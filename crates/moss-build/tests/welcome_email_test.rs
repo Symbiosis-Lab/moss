@@ -150,6 +150,13 @@ fn a_site_not_on_the_moss_host_emits_nothing() {
 }
 
 #[test]
+fn a_site_published_by_a_deploy_plugin_emits_nothing_though_it_keeps_a_site_id() {
+    let config = ("".to_string() + ".moss/config.toml", "schema_version = 6\n\n[site]\nlang = \"en\"\n\n[hooks]\ndeploy = \"github-pages\"\n");
+    let (_c, stage) = build_with_state(&[(config.0.as_str(), config.1), ("welcome-email.md", ROOT_MAIL)], Some(HOSTED));
+    assert!(!stage.join(".moss-email").exists(), "a plugin host would publish the template");
+}
+
+#[test]
 fn comments_in_the_body_do_not_reach_subscribers() {
     let (_c, stage) = build(&[(
         "welcome-email.md",

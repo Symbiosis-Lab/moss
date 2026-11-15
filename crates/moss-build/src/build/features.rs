@@ -499,6 +499,9 @@ pub fn generate_native_slots<'m>(
         // CSS+JS assets: always inject when email is in play so the inactive
         // form in preview is styled correctly.
         if should_inject_subscribe_assets(pages, email_installed) {
+            if let Some(note) = email::subscribe_elsewhere_note(deploy_config) {
+                crate::build::cli_output::log_warn_problem!("{note}");
+            }
             // CSS as a <link> (see `build::emit::feature_styles`); the
             // subscribe script stays inline. The script is ~2 KB and its
             // absence breaks the form outright, so the extra round trip buys
@@ -555,7 +558,7 @@ pub fn generate_native_slots<'m>(
         if email_installed && !has_footer_file {
             // An empty site_id reads as none, so a site with no id gets
             // the pending form, never one posting to /sites//subscribe.
-            let site_id = deploy_config.site_id.as_deref();
+            let site_id = email::subscribe_site_id(deploy_config);
             // The "default email footer" is just the :::subscribe shortcode
             // injected into footer-end: one renderer for both.
             // `form_lang` localizes the form copy in the hosting page's own

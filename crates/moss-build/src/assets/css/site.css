@@ -1763,6 +1763,16 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
   transition-delay: 0.35s;
 }
 
+/* --- subscribed: a browser signed in to the site sees the word in place of
+   the field and button; subscribe.ts sets the root attribute before paint --- */
+.moss-subscribe-form[data-moss-hosted="true"] .moss-subscribe-subscribed { display: none; }
+:root[data-moss-subscribed] .moss-subscribe-form[data-moss-hosted="true"] > :not(.moss-subscribe-subscribed) { display: none; }
+:root[data-moss-subscribed] .moss-subscribe-form[data-moss-hosted="true"] .moss-subscribe-subscribed {
+  display: block;
+  color: var(--moss-color-muted);
+  font-size: var(--moss-subscribe-status-size, 0.95rem);
+}
+
 /* --- error (re-uses success animation for the status row) --- */
 .moss-subscribe-form[data-state="error"] .moss-btn__label { opacity: 1; }
 .moss-subscribe-form[data-state="error"] .moss-btn__spinner { opacity: 0; }

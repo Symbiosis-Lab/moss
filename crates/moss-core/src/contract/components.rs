@@ -2397,6 +2397,17 @@ const CORE: &[ComponentEntry] = &[
         description: "Status message shown after submit (success/error).",
     },
     ComponentEntry {
+        class: "moss-subscribe-subscribed",
+        kind: "instance",
+        parent: "moss-subscribe-form",
+        data_attrs: &[],
+        example_html: r#"<span class="moss-subscribe-subscribed">Subscribed</span>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "0",
+        description: "Shown in place of the field and button while the page's root carries `data-moss-subscribed` (a browser signed in to the site); hidden otherwise.",
+    },
+    ComponentEntry {
         class: "moss-subscribe-status__icon",
         kind: "instance",
         parent: "moss-subscribe-status",
