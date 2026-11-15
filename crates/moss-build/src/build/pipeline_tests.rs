@@ -1899,7 +1899,20 @@ impl crate::build::ports::reporter::BuildReporter for PanicsOnSecondVideo {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_video_that_panics_its_worker_does_not_leave_the_folder_busy() {
+    a_video_worker_that_panics_leaves_the_folder_idle(false).await;
+}
+
+/// A folder with a watcher: the encode is detached from the build's seal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_detached_video_that_panics_its_worker_does_not_leave_the_folder_busy() {
+    a_video_worker_that_panics_leaves_the_folder_idle(true).await;
+}
+
+async fn a_video_worker_that_panics_leaves_the_folder_idle(watched: bool) {
     let (_temp, ctx) = vault_with_videos(&["videos/first.mov", "videos/second.mov"], "#!/bin/sh\nexit 1\n");
+    let folder = ctx.source_path.clone();
+    let _watcher = watched.then(|| crate::ops::watch::worker::register_counted(&folder));
+    assert_eq!(crate::ops::watch::worker::get(&folder).is_some(), watched, "premise: which dispatch arm the run takes");
     let session = crate::system::folder_session::FolderSession::new(std::path::PathBuf::from(&ctx.source_path));
     let failing = std::sync::Arc::new(PanicsOnSecondVideo { session: session.clone(), busy: Default::default() });
     let mut services = BuildServices::headless();
