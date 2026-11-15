@@ -504,7 +504,7 @@ fn a_members_cascade_on_a_page_that_is_not_a_folder_home_is_reported() {
         ("maps/index.md", "---\ntitle: Map\n---\nMap.\n"),
         ("maps/detail.md", "---\ntitle: Detail\ncascade: { members: subscribers }\n---\nDetail.\n"),
     ]);
-    assert!(site::problems().iter().any(|line| line.contains("[maps/detail.md]") && line.contains("has no effect")), "{:?}", site.logged);
+    assert!(site.problems.iter().any(|line| line.contains("[maps/detail.md]") && line.contains("has no effect")), "{:?}", site.logged);
 }
 
 const PARA: &str = "lantern-paragraph-sentinel-770412";
@@ -593,7 +593,7 @@ fn sealed_script(site: &site::Site) -> (String, Option<String>) {
 #[test]
 fn a_script_a_members_folder_publishes_to_everyone_is_named_and_published_unchanged() {
     let members = script_site("subscribers");
-    let problems = site::problems();
+    let problems = &members.problems;
     let public = script_site("public");
     let (bytes, entry) = sealed_script(&members);
     assert_eq!(bytes, SCRIPT, "published at its own address, whole");

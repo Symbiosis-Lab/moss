@@ -50,10 +50,10 @@ static SEQUENTIAL: Mutex<()> = Mutex::new(());
 
 /// Build `folder_path` and return what it logged at warn level and above.
 pub fn build_sync(folder_path: &str, trigger: moss_build::build::BuildTrigger) -> Result<Vec<String>, String> {
-    build_captured(folder_path, trigger).map(|(logs, _)| logs)
+    build_captured(folder_path, trigger).map(|(logs, _, _)| logs)
 }
 
-fn build_captured(folder_path: &str, trigger: moss_build::build::BuildTrigger) -> Result<(Vec<String>, Vec<String>), String> {
+fn build_captured(folder_path: &str, trigger: moss_build::build::BuildTrigger) -> Result<(Vec<String>, Vec<String>, Vec<String>), String> {
     use moss_build::build::{run_pipeline, PipelineConfig, PluginMode};
     use moss_build::cli::host::cli_host_ports;
     use moss_build::vault_root::VaultRoot;
@@ -82,7 +82,7 @@ fn build_captured(folder_path: &str, trigger: moss_build::build::BuildTrigger) -
         live_port: None,
         rename_pairs: Vec::new(),
     }))?;
-    Ok((std::mem::take(&mut *CAPTURE.0.lock().unwrap()), notes()))
+    Ok((std::mem::take(&mut *CAPTURE.0.lock().unwrap()), notes(), problems()))
 }
 
 pub struct Site {
@@ -90,6 +90,9 @@ pub struct Site {
     /// What the first build logged at warn level and above.
     pub logged: Vec<String>,
     pub notes: Vec<String>,
+    /// The first build's problems, read while it still held its turn: the
+    /// global `problems()` is another test's the moment the turn ends.
+    pub problems: Vec<String>,
 }
 
 impl Site {
@@ -105,12 +108,12 @@ impl Site {
     pub fn in_language(lang: &str, extra_config: &str, files: &[(&str, &str)]) -> Site {
         let root = std::env::temp_dir().join(format!("moss_inline_site_{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
-        let mut site = Site { root, logged: Vec::new(), notes: Vec::new() };
+        let mut site = Site { root, logged: Vec::new(), notes: Vec::new(), problems: Vec::new() };
         site.write(".moss/config.toml", &format!("schema_version = 6\n\n[site]\nlang = \"{lang}\"\n{extra_config}"));
         for (rel, body) in files {
             site.write(rel, body);
         }
-        (site.logged, site.notes) = build_captured(&site.root.to_string_lossy(), moss_build::build::BuildTrigger::Full).unwrap();
+        (site.logged, site.notes, site.problems) = build_captured(&site.root.to_string_lossy(), moss_build::build::BuildTrigger::Full).unwrap();
         site
     }
 
