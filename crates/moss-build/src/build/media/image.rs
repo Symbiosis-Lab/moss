@@ -127,9 +127,9 @@ impl ImageConversionItem {
     /// The worker is done with this image: its dispatch's marker ends and, when the
     /// worker `delivered`, the source it was queued for is recorded as delivered,
     /// alongside whatever `advisories` this delivery has to say about it.
-    fn ended(&self, delivered: bool, advisories: &[Advisory]) {
+    fn ended(&self, folder: &str, delivered: bool, advisories: &[Advisory]) {
         if let Some(fingerprint) = &self.fingerprint {
-            end_image_item(&self.source_path.to_string_lossy(), fingerprint, delivered, advisories);
+            end_image_item(folder, &self.source_path.to_string_lossy(), fingerprint, delivered, advisories);
         }
     }
 }
@@ -1401,7 +1401,7 @@ pub(crate) fn compute_image_item_fingerprint(
     Some(ImageFingerprint { stat, params: config.to_params() })
 }
 
-/// What a dispatch remembers about each image's WORKER, process-wide
+/// What a dispatch remembers about each image's WORKER in one folder
 /// (independent of `VideoConversionState`, which owns the video's), keyed by
 /// the image's relative source path. Per item, not per set.
 ///
@@ -1427,39 +1427,49 @@ struct ImageLedger {
     advisories: HashMap<String, Vec<Advisory>>,
 }
 
+/// `folder`'s ledger. One per folder, process-wide: two folders can hold an
+/// image at the same relative path, and a dispatch prunes the ledger to its
+/// own folder's images.
+/// A folder reached under two spellings gets two ledgers: at worst an image
+/// is encoded twice, never joined to another folder's worker.
+//
 // A poisoned lock is taken anyway: `PendingImageMarks` locks it while a
 // worker's panic unwinds, where a second panic would abort the process.
-fn image_ledger() -> std::sync::MutexGuard<'static, ImageLedger> {
-    static IMAGE_LEDGER: OnceLock<Mutex<ImageLedger>> = OnceLock::new();
-    IMAGE_LEDGER.get_or_init(Mutex::default).lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+fn with_image_ledger<R>(folder: &str, f: impl FnOnce(&mut ImageLedger) -> R) -> R {
+    static IMAGE_LEDGERS: OnceLock<Mutex<HashMap<String, ImageLedger>>> = OnceLock::new();
+    let mut ledgers = IMAGE_LEDGERS.get_or_init(Mutex::default).lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    f(ledgers.entry(folder.to_string()).or_default())
 }
 
 /// Whether a worker a dispatch spawned has yet to finish `path`, from a source with
 /// this fingerprint. A later dispatch that finds the same source joins that worker
 /// instead of spawning another to encode the same bytes.
-pub(crate) fn image_item_is_pending(path: &str, fingerprint: &ImageFingerprint) -> bool {
-    image_ledger().pending.get(path).is_some_and(|marked| **marked == *fingerprint)
+pub(crate) fn image_item_is_pending(folder: &str, path: &str, fingerprint: &ImageFingerprint) -> bool {
+    with_image_ledger(folder, |ledger| ledger.pending.get(path).is_some_and(|marked| **marked == *fingerprint))
 }
 
 /// A dispatch is about to hand these (path, fingerprint) to a worker. Before the
 /// worker is spawned, or it could finish first and leave the marker behind for good.
 /// The worker's run owns what this returns.
 #[must_use]
-pub(crate) fn mark_image_items_pending(items: impl IntoIterator<Item = (String, Arc<ImageFingerprint>)>) -> PendingImageMarks {
+pub(crate) fn mark_image_items_pending(folder: &str, items: impl IntoIterator<Item = (String, Arc<ImageFingerprint>)>) -> PendingImageMarks {
     let marked: Vec<_> = items.into_iter().collect();
-    image_ledger().pending.extend(marked.iter().cloned());
-    PendingImageMarks(marked)
+    with_image_ledger(folder, |ledger| ledger.pending.extend(marked.iter().cloned()));
+    PendingImageMarks { folder: folder.to_string(), marked }
 }
 
 /// The marks one worker run was handed. Dropped when the run ends, however it
 /// ends: a mark the run never reached (it panicked first) would otherwise have
 /// every later build join a worker that is gone.
-pub(crate) struct PendingImageMarks(Vec<(String, Arc<ImageFingerprint>)>);
+pub(crate) struct PendingImageMarks {
+    folder: String,
+    marked: Vec<(String, Arc<ImageFingerprint>)>,
+}
 
 impl Drop for PendingImageMarks {
     fn drop(&mut self) {
-        for (path, queued_as) in &self.0 {
-            end_image_item(path, queued_as, false, &[]);
+        for (path, queued_as) in &self.marked {
+            end_image_item(&self.folder, path, queued_as, false, &[]);
         }
     }
 }
@@ -1476,23 +1486,24 @@ impl Drop for PendingImageMarks {
 /// behind (e.g. a rung failure since fixed). Recorded only when `delivered`:
 /// an item that never delivers is always redispatched, so it never needs a
 /// carried-forward advisory.
-pub(crate) fn end_image_item(path: &str, queued_as: &Arc<ImageFingerprint>, delivered: bool, advisories: &[Advisory]) {
-    let mut ledger = image_ledger();
-    if !ledger.pending.get(path).is_some_and(|marked| Arc::ptr_eq(marked, queued_as)) {
-        return;
-    }
-    ledger.pending.remove(path);
-    if delivered {
-        ledger.advisories.insert(path.to_string(), advisories.to_vec());
-    }
+pub(crate) fn end_image_item(folder: &str, path: &str, queued_as: &Arc<ImageFingerprint>, delivered: bool, advisories: &[Advisory]) {
+    with_image_ledger(folder, |ledger| {
+        if !ledger.pending.get(path).is_some_and(|marked| Arc::ptr_eq(marked, queued_as)) {
+            return;
+        }
+        ledger.pending.remove(path);
+        if delivered {
+            ledger.advisories.insert(path.to_string(), advisories.to_vec());
+        }
+    })
 }
 
 /// The advisories recorded for `path` alongside its last delivered
 /// fingerprint — what a skip-carried image still has to say, re-emitted by
 /// `dispatch_image_conversions` in that image's stead when it carries the
 /// image forward without re-running it.
-pub(crate) fn image_item_advisories(path: &str) -> Vec<Advisory> {
-    image_ledger().advisories.get(path).cloned().unwrap_or_default()
+pub(crate) fn image_item_advisories(folder: &str, path: &str) -> Vec<Advisory> {
+    with_image_ledger(folder, |ledger| ledger.advisories.get(path).cloned().unwrap_or_default())
 }
 
 /// Drop stored state for paths not in `keep` — called once per dispatch with
@@ -1508,19 +1519,20 @@ pub(crate) fn image_item_advisories(path: &str) -> Vec<Advisory> {
 /// silently leave its advisory stranded in the app: the caller uses this to
 /// fire a terminal tick even when nothing was dispatched, so the sweep on the
 /// desktop app side can drop it.
-pub(crate) fn retain_image_item_fingerprints(keep: &std::collections::HashSet<String>) -> bool {
-    let mut ledger = image_ledger();
-    ledger.pending.retain(|path, _| keep.contains(path));
-    let mut dropped_advisory = false;
-    ledger.advisories.retain(|path, advisories| {
-        if keep.contains(path) {
-            true
-        } else {
-            dropped_advisory |= !advisories.is_empty();
-            false
-        }
-    });
-    dropped_advisory
+pub(crate) fn retain_image_item_fingerprints(folder: &str, keep: &std::collections::HashSet<String>) -> bool {
+    with_image_ledger(folder, |ledger| {
+        ledger.pending.retain(|path, _| keep.contains(path));
+        let mut dropped_advisory = false;
+        ledger.advisories.retain(|path, advisories| {
+            if keep.contains(path) {
+                true
+            } else {
+                dropped_advisory |= !advisories.is_empty();
+                false
+            }
+        });
+        dropped_advisory
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -2291,7 +2303,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                     // The one teardown.
                     match step {
                         ItemStep::Handled { delivered, failed, advisories: item_advisories, encoded } => {
-                            item.ended(!delivered.is_empty(), &item_advisories);
+                            item.ended(&ctx.source_path, !delivered.is_empty(), &item_advisories);
                             record_deliveries(services, &produced_webp_paths, delivered);
                             if let Some(ref registry) = services.assets {
                                 for (url, err) in failed {
@@ -2317,7 +2329,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                             });
                         }
                         ItemStep::Cancelled => {
-                            item.ended(false, &[]);
+                            item.ended(&ctx.source_path, false, &[]);
                             any_cancelled.store(true, Ordering::SeqCst);
                         }
                     }
@@ -2604,7 +2616,7 @@ pub(crate) fn dispatch_image_conversions_at(
             // megapixel budget of its own — and a heal here would put this dispatch's
             // link on a target that worker is about to link. Whatever an earlier build
             // left staged is still carried forward.
-            if fingerprint.as_ref().is_some_and(|fp| image_item_is_pending(&rel_source, fp)) {
+            if fingerprint.as_ref().is_some_and(|fp| image_item_is_pending(&ctx.source_path, &rel_source, fp)) {
                 joined += 1;
                 let keys = std::iter::once(relative_webp).chain(promised_rungs(item, &mapped, &ctx.rung_collisions).into_iter().map(|(_, key)| key));
                 skip_paths.extend(
@@ -2704,8 +2716,8 @@ pub(crate) fn dispatch_image_conversions_at(
                 // This image will not re-enter `run_image_conversion` this
                 // round, so it cannot re-raise its own advisory there — carry
                 // forward whatever the fingerprint cache still has on file
-                // for it (moss#1205's partial-dispatch gap).
-                carried_advisories.extend(image_item_advisories(&rel_source));
+                // for it.
+                carried_advisories.extend(image_item_advisories(&ctx.source_path, &rel_source));
                 if let Some(ref asset_reg) = svc.assets {
                     // Relay an AssetReady swap ONLY when set_ready actually
                     // flips the asset Pending→Ready — e.g. a just-re-dropped
@@ -2759,7 +2771,7 @@ pub(crate) fn dispatch_image_conversions_at(
         // changed. Bounds the map to the live image set. A dropped image's
         // own advisory (if it had one) goes with it — see the `to_dispatch.
         // is_empty()` branch below for why that still needs a tick.
-        let dropped_advisory = retain_image_item_fingerprints(&current_paths);
+        let dropped_advisory = retain_image_item_fingerprints(&ctx.source_path, &current_paths);
         staged.save();
 
         // ONE line, not one per file: the per-file form was 96% of an upload.
@@ -2866,6 +2878,7 @@ pub(crate) fn dispatch_image_conversions_at(
         // only under a sweep permit, against the previous sealed manifest, and
         // the permit keeps an encode's output until a build registers it.
         let marks = mark_image_items_pending(
+            &ctx.source_path,
             run_ctx.items.iter().filter_map(|item| Some((item.source_path.to_string_lossy().into_owned(), item.fingerprint.clone()?))),
         );
 

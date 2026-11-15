@@ -2301,29 +2301,15 @@ fn format_probe_cache_ignores_empty_source_oid() {
 
 // ----- Fingerprint cache helper -----
 
-/// The image fingerprint cell is one process-global, so a test that expects
-/// its own value back must not run beside another test that writes it.
-///
-/// That includes every test that runs `dispatch_image_conversions` with a
-/// spawner (the GUI branch), whether or not it reads a value back: the branch
-/// ends by pruning the cell to its own image set
-/// (`retain_image_item_fingerprints`), which drops the entries a concurrent
-/// test primed a moment ago. Two such tests took no lock, and
-/// `a_new_image_only_dispatches_the_new_one…` then found one.jpg and two.jpg
-/// re-dispatched in 3 of 12 runs of this module.
-fn image_fingerprint_test_lock() -> &'static std::sync::Mutex<()> {
-    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-    LOCK.get_or_init(|| std::sync::Mutex::new(()))
-}
-
 /// Record that a worker delivered `path`'s advisories, the way a dispatch queues it and
 /// the worker's end reports it — the ledger's advisory carry-forward
 /// (`ImageLedger.advisories`) fixture. The skip decision itself is disk-origin, so a
 /// test that needs a skip candidate also calls `prime_disk_hash_index` below.
-fn prime_delivered_with_advisories(path: &str, fingerprint: ImageFingerprint, advisories: &[Advisory]) {
+fn prime_delivered_with_advisories(folder: &Path, path: &str, fingerprint: ImageFingerprint, advisories: &[Advisory]) {
+    let folder = folder.to_string_lossy();
     let fingerprint = std::sync::Arc::new(fingerprint);
-    let _marks = mark_image_items_pending([(path.to_string(), fingerprint.clone())]);
-    end_image_item(path, &fingerprint, true, advisories);
+    let _marks = mark_image_items_pending(&folder, [(path.to_string(), fingerprint.clone())]);
+    end_image_item(&folder, path, &fingerprint, true, advisories);
 }
 
 /// A cancelled run ends its images' marks at once and can outlast the next dispatch,
@@ -2332,21 +2318,21 @@ fn prime_delivered_with_advisories(path: &str, fingerprint: ImageFingerprint, ad
 /// dispatch after that spawns a third worker for bytes the second is encoding.
 #[test]
 fn a_run_that_ends_late_leaves_a_newer_dispatchs_mark_on_the_same_source() {
-    let _guard = image_fingerprint_test_lock().lock();
     let tmp = tempfile::tempdir().unwrap();
     make_big_jpeg(&tmp.path().join("pic.jpg"), 40, 30);
-    let seen = compute_image_item_fingerprint(&tmp.path().to_string_lossy(), Path::new("pic.jpg"), &ImageCompressionConfig::default()).unwrap();
-    let path = "a-run-that-ends-late.jpg";
+    let folder = tmp.path().to_string_lossy();
+    let seen = compute_image_item_fingerprint(&folder, Path::new("pic.jpg"), &ImageCompressionConfig::default()).unwrap();
+    let path = "pic.jpg";
 
     let cancelled = std::sync::Arc::new(seen.clone());
-    let cancelled_run = mark_image_items_pending([(path.to_string(), cancelled.clone())]);
-    end_image_item(path, &cancelled, false, &[]);
-    assert!(!image_item_is_pending(path, &seen), "premise: the cancelled run ended its mark");
-    let _newer_run = mark_image_items_pending([(path.to_string(), std::sync::Arc::new(seen.clone()))]);
+    let cancelled_run = mark_image_items_pending(&folder, [(path.to_string(), cancelled.clone())]);
+    end_image_item(&folder, path, &cancelled, false, &[]);
+    assert!(!image_item_is_pending(&folder, path, &seen), "premise: the cancelled run ended its mark");
+    let _newer_run = mark_image_items_pending(&folder, [(path.to_string(), std::sync::Arc::new(seen.clone()))]);
 
     drop(cancelled_run);
 
-    assert!(image_item_is_pending(path, &seen), "the run that ended late removed the mark a newer dispatch made for its own worker");
+    assert!(image_item_is_pending(&folder, path, &seen), "the run that ended late removed the mark a newer dispatch made for its own worker");
 }
 
 /// Write `rel_path`'s stat and content hash into the ON-DISK hash index the
@@ -2809,7 +2795,6 @@ impl crate::build::ports::reporter::BuildReporter for PanicsOnFirstImageProgress
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_image_whose_worker_panicked_is_converted_by_the_next_build() {
-    let _guard = image_fingerprint_test_lock().lock();
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     let rel = "panicked-worker.jpg";
@@ -2922,7 +2907,6 @@ fn cached_base_of_size(root: &Path, file_dimensions: (u32, u32), scan_dimensions
 /// worker, which reuses the cached base and encodes the rung.
 #[test]
 fn an_unchanged_image_missing_a_promised_rung_is_dispatched_to_produce_it() {
-    let _guard = image_fingerprint_test_lock().lock();
     let tmp = tempfile::tempdir().unwrap();
     let (ctx, staging) = unchanged_image_with_cached_base(tmp.path(), (1000, 600));
     assert_eq!(moss_core::asset_paths::ladder_rungs(1000, 600, false), &[800][..], "premise");
@@ -2939,7 +2923,6 @@ fn an_unchanged_image_missing_a_promised_rung_is_dispatched_to_produce_it() {
 /// must not re-encode what it already has.
 #[test]
 fn a_rung_the_ladder_gained_is_written_on_the_first_warm_build() {
-    let _guard = image_fingerprint_test_lock().lock();
     let tmp = tempfile::tempdir().unwrap();
     let (ctx, staging) = cached_base_of_size(tmp.path(), (1400, 840), (1400, 840));
     assert_eq!(moss_core::asset_paths::ladder_rungs(1400, 840, false), &[800, 1200][..], "premise");
@@ -2965,7 +2948,6 @@ fn a_rung_the_ladder_gained_is_written_on_the_first_warm_build() {
 /// scan says so that a wrongly dispatched image would visibly produce a rung.
 #[test]
 fn an_unchanged_image_with_no_promised_rung_is_still_skipped() {
-    let _guard = image_fingerprint_test_lock().lock();
     let tmp = tempfile::tempdir().unwrap();
     let (ctx, staging) = unchanged_image_with_cached_base(tmp.path(), (700, 420));
     assert!(moss_core::asset_paths::ladder_rungs(700, 420, false).is_empty(), "premise");
@@ -3016,7 +2998,6 @@ fn rung_produced(staging: &Path) -> bool {
 /// window it is tried again.
 #[test]
 fn a_rung_a_redispatch_did_not_produce_is_not_retried_within_the_window() {
-    let _guard = image_fingerprint_test_lock().lock();
     let tmp = tempfile::tempdir().unwrap();
     let (ctx, staging) = unchanged_image_with_cached_base(tmp.path(), (1000, 600));
     let (clock, now) = hand_clock();
@@ -3042,7 +3023,6 @@ fn a_rung_a_redispatch_did_not_produce_is_not_retried_within_the_window() {
 /// since the dispatch path never re-dispatches a size inside its window.
 #[test]
 fn a_produced_rung_clears_the_note() {
-    let _guard = image_fingerprint_test_lock().lock();
     let tmp = tempfile::tempdir().unwrap();
     let (ctx, staging) = unchanged_image_with_cached_base(tmp.path(), (1000, 600));
     let (clock, _now) = hand_clock();
@@ -3070,7 +3050,6 @@ fn a_produced_rung_clears_the_note() {
 /// size, so it leaves no note: the next dispatch sends the image back at once.
 #[tokio::test]
 async fn a_cancelled_run_notes_nothing_it_did_not_attempt() {
-    let _guard = image_fingerprint_test_lock().lock();
     let tmp = tempfile::tempdir().unwrap();
     let (ctx, staging) = unchanged_image_with_cached_base(tmp.path(), (1000, 600));
     let (clock, _now) = hand_clock();
@@ -3088,7 +3067,6 @@ async fn a_cancelled_run_notes_nothing_it_did_not_attempt() {
 /// Notes belong to one site cache: another site holding the same image is unaffected.
 #[test]
 fn a_note_in_one_cache_root_does_not_hold_back_another() {
-    let _guard = image_fingerprint_test_lock().lock();
     let (tmp_a, tmp_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let (ctx_a, staging_a) = unchanged_image_with_cached_base(tmp_a.path(), (1000, 600));
     let (ctx_b, staging_b) = unchanged_image_with_cached_base(tmp_b.path(), (1000, 600));
@@ -3393,7 +3371,6 @@ async fn a_new_image_only_dispatches_the_new_one_others_survive_seal_and_stale_s
         }
     }
 
-    let _guard = image_fingerprint_test_lock().lock();
 
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
@@ -3576,7 +3553,6 @@ async fn a_skip_carried_images_advisory_rides_the_terminal_ticks_full_set() {
         }
     }
 
-    let _guard = image_fingerprint_test_lock().lock();
 
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
@@ -3591,11 +3567,7 @@ async fn a_skip_carried_images_advisory_rides_the_terminal_ticks_full_set() {
 
     // "broken-<uuid>.jpg": already converted, fingerprint primed, and a
     // rung-failure advisory recorded alongside that delivery — the shape
-    // `end_image_item` leaves behind for a real rung failure. UUID-suffixed
-    // (not the bare literal a sibling test in this file also uses) because
-    // `image_ledger()` is a process-global static keyed by this exact
-    // string, and `image_fingerprint_test_lock()` only serializes tests
-    // that both remember to take it.
+    // `end_image_item` leaves behind for a real rung failure.
     let heal_paths = MossPaths::from_moss_dir(moss_dir.clone());
     let heal_objects = crate::build::cache::ObjectStore::for_site(&heal_paths);
     let heal_transforms = crate::build::cache::TransformCache::for_site(&heal_paths);
@@ -3621,7 +3593,7 @@ async fn a_skip_carried_images_advisory_rides_the_terminal_ticks_full_set() {
     // doc) — a real cached record whose blob IS the sentinel, so the
     // verified relink is a same-bytes no-op.
     prime_cached_transform(&heal_objects, &heal_transforms, &broken_oid, "image/webp", &params, b"SENTINEL");
-    prime_delivered_with_advisories(broken_name, broken_fp, &[broken_advisory]);
+    prime_delivered_with_advisories(root, broken_name, broken_fp, &[broken_advisory]);
 
     // "fresh-<uuid>.jpg": brand new, so it dispatches for real and produces
     // no advisory of its own.
@@ -3726,7 +3698,6 @@ async fn a_deleted_images_advisory_still_fires_a_tick_with_nothing_to_dispatch()
         }
     }
 
-    let _guard = image_fingerprint_test_lock().lock();
 
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
@@ -3741,9 +3712,7 @@ async fn a_deleted_images_advisory_still_fires_a_tick_with_nothing_to_dispatch()
 
     // "broken-<uuid>.jpg" carries an advisory from an earlier delivery;
     // "safe-<uuid>.jpg" does not. Both are unchanged (fingerprint primed,
-    // output present). UUID-suffixed — see the sibling test above for why a
-    // bare literal here is unsafe (`image_ledger()` is a process-global
-    // static keyed by this exact string).
+    // output present).
     let broken_name = format!("broken-{}.jpg", uuid::Uuid::new_v4());
     let broken_name = broken_name.as_str();
     let broken_webp = format!("{}.webp", broken_name.trim_end_matches(".jpg"));
@@ -3758,7 +3727,7 @@ async fn a_deleted_images_advisory_still_fires_a_tick_with_nothing_to_dispatch()
     );
     let broken_fp = compute_image_item_fingerprint(&root.to_string_lossy(), Path::new(broken_name), &cfg)
         .expect("source exists and is stat-able");
-    prime_delivered_with_advisories(broken_name, broken_fp, &[broken_advisory]);
+    prime_delivered_with_advisories(root, broken_name, broken_fp, &[broken_advisory]);
 
     let safe_name = format!("safe-{}.jpg", uuid::Uuid::new_v4());
     let safe_name = safe_name.as_str();
@@ -3769,7 +3738,7 @@ async fn a_deleted_images_advisory_still_fires_a_tick_with_nothing_to_dispatch()
         .expect("source exists and is stat-able");
     let safe_oid = crate::build::cache::ObjectStore::hash_file(&root.join(safe_name)).unwrap();
     prime_disk_hash_index(&moss_dir, safe_name, &safe_fp, &safe_oid);
-    prime_delivered_with_advisories(safe_name, safe_fp, &[]);
+    prime_delivered_with_advisories(root, safe_name, safe_fp, &[]);
 
     // "broken" is deleted: this build's image set names only the "safe" file.
     let ctx = BackgroundContext {
@@ -3836,7 +3805,6 @@ fn an_unreferenced_image_is_not_redispatched_until_a_page_references_it() {
         }
     }
 
-    let _guard = image_fingerprint_test_lock().lock();
 
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
@@ -5921,7 +5889,6 @@ impl crate::build::ports::spawner::Spawner for OidTestInlineSpawner {
 async fn ship_phase_ships_a_freshly_encoded_webp_from_cas_despite_stage_overwrite() {
     use crate::build::coordinator::test_utils;
 
-    let _guard = image_fingerprint_test_lock().lock();
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     make_big_jpeg(&root.join("photo.jpg"), 400, 300);
@@ -6003,7 +5970,6 @@ async fn ship_phase_ships_a_freshly_encoded_webp_from_cas_despite_stage_overwrit
 async fn run_image_conversion_always_records_a_staged_oid_for_base_and_rungs() {
     use crate::build::coordinator::test_utils;
 
-    let _guard = image_fingerprint_test_lock().lock();
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     // 1000×750 lands one ladder rung (w800): deployed_width(1000,750) = 1000,
@@ -6077,7 +6043,6 @@ async fn run_image_conversion_always_records_a_staged_oid_for_base_and_rungs() {
 /// or stale oid either: it must be the one the cache actually verified.
 #[tokio::test]
 async fn skip_path_carry_forward_registers_the_verified_cas_oid_not_a_stale_or_fabricated_one() {
-    let _guard = image_fingerprint_test_lock().lock();
     use crate::build::coordinator::test_utils;
 
     let tmp = tempfile::tempdir().unwrap();
@@ -6178,7 +6143,6 @@ async fn skip_path_carry_forward_registers_the_verified_cas_oid_not_a_stale_or_f
 /// of a real re-encode landing.
 #[test]
 fn a_stale_staged_webp_from_an_earlier_generation_is_not_shipped_as_unchanged() {
-    let _guard = image_fingerprint_test_lock().lock();
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     let name = "photo.jpg";
@@ -6273,7 +6237,6 @@ fn a_missing_output_is_dispatched_while_its_unaffected_sibling_takes_the_skip_pa
         }
     }
 
-    let _guard = image_fingerprint_test_lock().lock();
 
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
@@ -6834,7 +6797,6 @@ async fn a_same_size_rewrite_in_the_same_second_is_re_encoded() {
 /// carried forward without ever reaching the worker.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_same_size_rewrite_in_the_same_second_gets_past_the_fingerprint_gate() {
-    let _guard = image_fingerprint_test_lock().lock();
     let vault = RewriteVault::new();
     vault.write_pic([200, 30, 30]);
     vault.rebuild(true).await;
@@ -6860,7 +6822,6 @@ async fn a_same_size_rewrite_in_the_same_second_gets_past_the_fingerprint_gate()
 async fn a_source_changed_under_a_worker_that_left_is_encoded_by_the_next_build(
     leave: impl FnOnce(&RewriteVault) -> (BuildServices, Option<crate::build::icloud::pretend::Guard>),
 ) {
-    let _guard = image_fingerprint_test_lock().lock();
     let vault = RewriteVault::new();
     vault.write_pic([200, 30, 30]);
     vault.rebuild(true).await;
@@ -6886,7 +6847,6 @@ async fn a_source_changed_under_a_worker_that_left_is_encoded_by_the_next_build(
 /// depends on it).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_image_a_worker_delivered_is_carried_forward_by_the_next_build() {
-    let _guard = image_fingerprint_test_lock().lock();
     let vault = RewriteVault::new();
     vault.write_pic([200, 30, 30]);
     let mut oids = Vec::new();
@@ -6914,7 +6874,6 @@ async fn an_image_a_worker_delivered_is_carried_forward_by_the_next_build() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_warm_rebuild_over_unchanged_images_relinks_no_staged_variant() {
     use std::os::unix::fs::MetadataExt;
-    let _guard = image_fingerprint_test_lock().lock();
     let vault = RewriteVault::new();
     vault.write_pic([200, 30, 30]);
     vault.write_named("other.png", [30, 200, 30]);
@@ -6957,7 +6916,6 @@ async fn a_warm_rebuild_over_unchanged_images_relinks_no_staged_variant() {
 /// three dispatch on the second build instead of just the one that changed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_second_build_only_re_encodes_the_one_image_that_actually_changed() {
-    let _guard = image_fingerprint_test_lock().lock();
     let vault = RewriteVault::new();
     vault.write_pic([200, 30, 30]);
     vault.write_named("other.png", [30, 200, 30]);
@@ -6974,7 +6932,7 @@ async fn a_second_build_only_re_encodes_the_one_image_that_actually_changed() {
     }
 
     // Simulate a genuinely new process: nothing in memory remembers this build ran.
-    retain_image_item_fingerprints(&std::collections::HashSet::new());
+    retain_image_item_fingerprints(&vault.root.to_string_lossy(), &std::collections::HashSet::new());
 
     vault.write_named("other.png", [10, 250, 10]); // the one real change
     let (second, second_dispatched) = vault.sealed_rebuild_with_dispatched(&names).await;
@@ -7023,7 +6981,6 @@ async fn a_source_changed_under_a_worker_that_deferred_it_to_the_cloud_is_encode
 /// tell the dispatch to leave it alone.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_second_dispatch_before_the_worker_ran_joins_it_instead_of_spawning_another() {
-    let _guard = image_fingerprint_test_lock().lock();
     let vault = RewriteVault::new();
     vault.write_pic([200, 30, 30]);
     vault.rebuild(true).await;
@@ -7046,7 +7003,6 @@ async fn a_second_dispatch_before_the_worker_ran_joins_it_instead_of_spawning_an
 /// for it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_dispatch_over_a_source_changed_again_since_the_worker_was_queued_spawns_its_own() {
-    let _guard = image_fingerprint_test_lock().lock();
     let vault = RewriteVault::new();
     vault.write_pic([200, 30, 30]);
     vault.rebuild(true).await;
@@ -7076,11 +7032,10 @@ async fn a_dispatch_over_a_source_changed_again_since_the_worker_was_queued_spaw
 /// help retire.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_worker_finishing_an_image_that_has_left_the_site_does_not_vouch_for_it() {
-    let _guard = image_fingerprint_test_lock().lock();
     let vault = RewriteVault::new();
     vault.write_pic([200, 30, 30]);
     vault.write_named("other.png", [30, 200, 30]);
-    let vouched = |name: &str| image_ledger().advisories.contains_key(name);
+    let vouched = |name: &str| with_image_ledger(&vault.root.to_string_lossy(), |ledger| ledger.advisories.contains_key(name));
 
     let workers = std::sync::Arc::new(HeldSpawner::default());
     vault.dispatch(vault.collect_of(&["pic.png", "other.png"]), workers.services()).await;
@@ -7101,13 +7056,12 @@ async fn a_worker_finishing_an_image_that_has_left_the_site_does_not_vouch_for_i
 /// rewritten after the dispatch and before the worker runs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_source_rewritten_between_dispatch_and_worker_is_not_vouched_for_by_the_variant_of_the_old_bytes() {
-    let _guard = image_fingerprint_test_lock().lock();
     let vault = RewriteVault::new();
     vault.write_pic([200, 30, 30]);
     vault.rebuild(true).await;
     let first = vault.webp();
     // A new process: the index still knows the file, nothing remembers a worker delivered it.
-    retain_image_item_fingerprints(&std::collections::HashSet::new());
+    retain_image_item_fingerprints(&vault.root.to_string_lossy(), &std::collections::HashSet::new());
 
     let items = vault.collect();
     assert!(!items[0].source_oid.is_empty(), "premise: the blocking phase found the file in the index");
@@ -7122,13 +7076,35 @@ async fn a_source_rewritten_between_dispatch_and_worker_is_not_vouched_for_by_th
     assert_ne!(vault.webp(), first, "pic.png is blue on disk but its variant is still the red encode: the worker vouched for the new stat");
 }
 
+/// Each folder has a ledger of its own. A dispatch prunes the marks to its own image
+/// set and marks what it hands out; one in another folder must not end this folder's
+/// mark, nor take over the mark of an image at the same relative path, or the next
+/// dispatch here spawns a second worker for bytes the first still has.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dispatch_in_another_folder_leaves_this_folders_worker_to_be_joined() {
+    for others_image in ["other.png", "pic.png"] {
+        let (here, there) = (RewriteVault::new(), RewriteVault::new());
+        here.write_pic([200, 30, 30]);
+        there.write_named(others_image, [30, 200, 30]);
+
+        let workers = std::sync::Arc::new(HeldSpawner::default());
+        here.dispatch(here.collect(), workers.services()).await;
+        there.dispatch(there.collect_of(&[others_image]), workers.services()).await;
+        assert_eq!(workers.spawned(), 2, "premise: each folder's image went to a worker of its own");
+
+        here.dispatch(here.collect(), workers.services()).await;
+
+        assert_eq!(workers.spawned(), 2, "the other folder's dispatch of {others_image} ended this folder's mark, and a second worker was spawned here");
+        workers.run_held().await;
+    }
+}
+
 /// The worker that finishes an image ends only the marker its own dispatch made. A newer
 /// dispatch over a rewritten source has queued a worker of its own and marked the image
 /// for it; the older worker reaching the image first must leave that mark alone, or the
 /// next dispatch spawns a third worker for bytes the second is about to encode.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_older_worker_finishing_an_image_leaves_a_newer_dispatchs_worker_to_be_joined() {
-    let _guard = image_fingerprint_test_lock().lock();
     let vault = RewriteVault::new();
     vault.write_pic([200, 30, 30]);
 
@@ -7158,7 +7134,6 @@ async fn an_older_worker_finishing_an_image_leaves_a_newer_dispatchs_worker_to_b
 async fn a_source_changed_under_a_worker_whose_hash_failed_is_encoded_by_the_next_build() {
     use std::os::unix::fs::PermissionsExt;
 
-    let _guard = image_fingerprint_test_lock().lock();
     let vault = RewriteVault::new();
     vault.write_pic([200, 30, 30]);
     vault.rebuild(true).await;
@@ -7189,7 +7164,6 @@ async fn a_source_changed_under_a_worker_whose_hash_failed_is_encoded_by_the_nex
 /// decides whether the author sees a broken image.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_source_that_went_back_to_the_cloud_before_its_hash_was_read_is_deferred_not_failed() {
-    let _guard = image_fingerprint_test_lock().lock();
     let vault = RewriteVault::new();
     vault.write_pic([200, 30, 30]);
     let registry = std::sync::Arc::new(AssetRegistry::new());
@@ -7218,7 +7192,6 @@ async fn a_source_that_went_back_to_the_cloud_before_its_hash_was_read_is_deferr
 /// is the control — that one is hashed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_worker_takes_the_hash_the_index_holds_for_an_unchanged_file_instead_of_reading_it() {
-    let _guard = image_fingerprint_test_lock().lock();
     let vault = RewriteVault::new();
     vault.write_pic([200, 30, 30]);
     let paths = MossPaths::from_moss_dir(vault.moss_dir.clone());
@@ -7263,7 +7236,6 @@ async fn the_worker_takes_the_hash_the_index_holds_for_an_unchanged_file_instead
 /// `first`'s.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_image_that_left_the_site_and_came_back_unchanged_is_still_carried_forward() {
-    let _guard = image_fingerprint_test_lock().lock();
     let vault = RewriteVault::new();
     vault.write_pic([200, 30, 30]);
     vault.write_named("other.png", [30, 200, 30]);
