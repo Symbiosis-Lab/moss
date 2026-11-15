@@ -69,7 +69,7 @@ Exact redirects on the original host and author routes become entries in the sit
 
 Native hosts can call the public `moss_build::vault::import::recognise_source` entry before import. For a URL it reads the origin homepage's generator metadata, even when the supplied address names a subpage, and distinguishes Ghost, WordPress and an ordinary site. Directory and zip recognition uses export contents rather than the archive filename; other local files use the file fallback. The result includes the recognized host and title when available. `recognise_source(source, own_site)` takes a second argument, the address the person typed or confirmed (`None` when there is none), and `ImportOptions::own_site` carries the same value to the import: a site on a private network is fetched only when it is that address, and `RecognisedSource::local` is true for it. Never fill it from a file or a page.
 
-A site on your own network imports by giving its address; the report starts with "<host> is on your network.". Every other private-network address a page names is not fetched, nor is an address on the importing machine itself, and the report ends with a "Not fetched: <address>" line for each.
+A site on your own network imports by giving its address or its name (`http://nas.local:2368`); the report starts with "<host> is on your network.". Every other private-network address a page names is not fetched, nor is an address on the importing machine itself, and the report ends with a "Not fetched: <address>" line for each.
 
 ## From WordPress — the address, then the export file
 

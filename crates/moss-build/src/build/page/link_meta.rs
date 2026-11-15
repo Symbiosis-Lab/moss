@@ -371,6 +371,7 @@ fn read_capped_body(reader: impl std::io::Read) -> (String, bool) {
 /// ureq does internally.
 fn link_agent(url: &str, timeout: std::time::Duration) -> ureq::Agent {
     crate::system::proxy::proxied_agent_builder(url, timeout, 0)
+        .0
         .timeout_connect(timeout)
         .timeout_read(timeout)
         .build()

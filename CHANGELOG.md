@@ -6,7 +6,7 @@ All notable changes to moss will be documented here.
 
 ### Added
 
-- A site on your own network can be imported by giving its address, for example `http://192.168.1.20:2368`, and the report says it is on your network. Any other private address a page names (an image, a stylesheet, a sitemap) is not fetched, and the report lists each one under "Not fetched".
+- A site on your own network can be imported by giving its address or its name, for example `http://192.168.1.20:2368` or `http://nas.local:2368`, and the report says it is on your network. Any other private address a page names (an image, a stylesheet, a sitemap), whether written as a number or as a name that leads to one, is not fetched, and the report lists each one under "Not fetched".
 
 ### Fixed
 

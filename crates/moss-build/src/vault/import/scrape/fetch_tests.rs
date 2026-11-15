@@ -864,3 +864,228 @@ async fn a_redirect_that_returns_to_an_address_it_visited_is_a_loop() {
         .expect_err("a loop must be refused");
     assert!(refusal_detail(&err).contains("itself in a loop"), "{}", refusal_detail(&err));
 }
+
+// ── the check at connect ────────────────────────────────────────────
+
+fn answers(ips: &[&str], port: u16) -> Vec<std::net::SocketAddr> {
+    ips.iter().map(|ip| std::net::SocketAddr::new(ip.parse().unwrap(), port)).collect()
+}
+
+fn kept(client: &Client, host: &str, port: u16, ips: &[&str]) -> std::io::Result<Vec<String>> {
+    client.admitted(host, port, answers(ips, port)).map(|kept| kept.iter().map(|a| a.ip().to_string()).collect())
+}
+
+fn is_refusal(err: &std::io::Error) -> bool {
+    err.get_ref().is_some_and(|inner| inner.is::<Refused>())
+}
+
+#[test]
+fn a_public_answer_passes_and_every_other_class_is_cut() {
+    let client = Client::no_own_site();
+    assert_eq!(kept(&client, "example.test", 443, &["93.184.216.34", "2606:2800:220:1::1"]).unwrap(), ["93.184.216.34", "2606:2800:220:1::1"]);
+    for ip in ["127.0.0.1", "::1", "169.254.169.254", "fe80::1", "0.0.0.0", "::", "224.0.0.1", "ff02::1", "10.0.0.7", "100.64.0.9", "fd00::1"] {
+        assert!(is_refusal(&kept(&client, "example.test", 80, &[ip]).unwrap_err()), "{ip}");
+    }
+}
+
+#[test]
+fn an_answer_in_a_mapped_form_is_judged_as_the_address_it_carries() {
+    let client = Client::no_own_site();
+    for ip in ["::ffff:127.0.0.1", "::ffff:169.254.169.254", "::ffff:10.0.0.7", "64:ff9b::192.168.1.1"] {
+        assert!(is_refusal(&kept(&client, "example.test", 80, &[ip]).unwrap_err()), "{ip}");
+    }
+    assert!(kept(&client, "example.test", 80, &["::ffff:93.184.216.34"]).is_ok());
+}
+
+#[test]
+fn a_mixed_answer_is_cut_down_and_one_with_nothing_left_carries_the_refusal() {
+    let client = Client::no_own_site();
+    assert_eq!(kept(&client, "example.test", 80, &["127.0.0.1", "93.184.216.34", "10.0.0.7"]).unwrap(), ["93.184.216.34"]);
+    let err = kept(&client, "example.test", 80, &["127.0.0.1", "10.0.0.7"]).unwrap_err();
+    assert!(is_refusal(&err), "{err}");
+    assert!(err.to_string().contains("Loopback"), "{err}");
+    assert!(kept(&client, "example.test", 80, &[]).unwrap().is_empty(), "no answers at all is a failed lookup, not a refusal");
+}
+
+#[test]
+fn an_own_name_is_fixed_by_its_first_answer_on_its_own_port() {
+    let client = Client::new(Some("http://nas.test/"));
+    assert_eq!(client.local_host(), None, "nothing is known before the lookup");
+    assert_eq!(kept(&client, "nas.test", 80, &["192.168.1.5", "192.168.1.6"]).unwrap(), ["192.168.1.5", "192.168.1.6"]);
+    assert_eq!(client.local_host(), Some("nas.test"));
+    assert!(kept(&client, "nas.test", 80, &["192.168.1.9"]).is_err(), "a later answer is not the site the person meant");
+    assert!(kept(&client, "nas.test", 443, &["192.168.1.5"]).is_ok(), "80, 443 and none written are one port");
+    assert!(kept(&client, "nas.test", 8080, &["192.168.1.5"]).is_err(), "the own address on another port");
+    assert!(kept(&client, "other.test", 8080, &["10.0.0.7"]).is_err());
+}
+
+#[test]
+fn a_second_name_on_an_own_address_passes_by_the_same_rule() {
+    let client = Client::new(Some("http://nas.test/"));
+    kept(&client, "nas.test", 80, &["192.168.1.5"]).unwrap();
+    assert!(kept(&client, "www.nas.test", 80, &["192.168.1.5"]).is_ok());
+    assert!(kept(&client, "www.nas.test", 80, &["::ffff:192.168.1.5"]).is_ok());
+    assert!(kept(&client, "www.nas.test", 80, &["192.168.1.6"]).is_err());
+}
+
+#[test]
+fn an_own_name_written_another_way_is_still_the_own_name() {
+    for (typed, looked_up) in [("http://NAS.Test/", "nas.test"), ("http://nas.test./", "nas.test"), ("http://nas.test/", "NAS.test."), ("https://nas.test:443/", "nas.test")] {
+        let client = Client::new(Some(typed));
+        assert!(kept(&client, looked_up, 80, &["192.168.1.5"]).is_ok(), "{typed} {looked_up}");
+        assert!(client.local_host().is_some(), "{typed} {looked_up}");
+    }
+}
+
+#[test]
+fn an_empty_first_answer_does_not_fix_the_own_addresses() {
+    let client = Client::new(Some("http://nas.test/"));
+    kept(&client, "nas.test", 80, &[]).unwrap();
+    assert!(kept(&client, "nas.test", 80, &["192.168.1.5"]).is_ok());
+    assert_eq!(client.local_host(), Some("nas.test"));
+}
+
+#[test]
+fn a_public_own_name_is_no_local_site() {
+    let client = Client::new(Some("http://example.test/"));
+    kept(&client, "example.test", 80, &["93.184.216.34"]).unwrap();
+    assert_eq!(client.local_host(), None);
+    assert!(kept(&client, "other.test", 80, &["10.0.0.7"]).is_err());
+}
+
+#[test]
+fn a_literal_own_site_admits_its_address_under_any_name_on_its_port() {
+    let client = Client::new(Some("http://192.168.1.5:8080/"));
+    assert!(kept(&client, "printer.test", 8080, &["192.168.1.5"]).is_ok());
+    assert!(kept(&client, "printer.test", 8080, &["::ffff:192.168.1.5"]).is_ok());
+    assert!(kept(&client, "printer.test", 9090, &["192.168.1.5"]).is_err());
+    assert!(kept(&client, "printer.test", 8080, &["192.168.1.9"]).is_err());
+}
+
+fn port_of(server: &mockito::ServerGuard) -> String {
+    server.host_with_port().rsplit_once(':').unwrap().1.to_string()
+}
+
+#[tokio::test]
+async fn an_own_site_given_as_a_name_is_fetched_and_so_is_its_literal_address() {
+    use crate::system::address::AddressClass::Private;
+    let mut server = test_server_as(Private).await;
+    test_name_as("nas.test", &server, Private);
+    let page = server.mock("GET", "/page").with_body("ok").expect(2).create_async().await;
+    let client = Client::new(Some(&format!("http://nas.test:{}/", port_of(&server))));
+
+    fetch_page(&format!("http://nas.test:{}/page", port_of(&server)), &client, None).await.expect("the own name");
+    assert_eq!(client.local_host(), Some("nas.test"));
+    fetch_page(&format!("{}/page", server.url()), &client, None).await.expect("the own address, written as a literal");
+
+    page.assert_async().await;
+    assert!(client.refused_report().is_empty());
+}
+
+#[tokio::test]
+async fn a_name_that_resolves_to_a_public_address_is_fetched() {
+    let mut server = test_server().await;
+    test_name_as("example.test", &server, crate::system::address::AddressClass::Public);
+    let page = server.mock("GET", "/page").with_body("ok").expect(1).create_async().await;
+
+    fetch_page(&format!("http://example.test:{}/page", port_of(&server)), &Client::no_own_site(), None).await.expect("public");
+
+    page.assert_async().await;
+}
+
+#[tokio::test]
+async fn a_name_that_resolves_to_a_private_address_is_not_fetched_by_any_path() {
+    use crate::system::address::AddressClass::Private;
+    let mut site = test_server().await;
+    let mut printer = test_server_as(Private).await;
+    test_name_as("printer.test", &printer, Private);
+    let hits = printer.mock("GET", mockito::Matcher::Any).expect(0).create_async().await;
+    let base = format!("http://printer.test:{}", port_of(&printer));
+    let _hop = site.mock("GET", "/hop").with_status(302).with_header("Location", &format!("{base}/target")).create_async().await;
+    let client = Client::no_own_site();
+    let tmp = tempfile::tempdir().unwrap();
+
+    let page = fetch_page(&format!("{base}/page"), &client, None).await.err().expect("a page link");
+    let image = download_asset(&format!("{base}/img.png"), tmp.path(), &client, Some(&site.url())).await.err().expect("an image");
+    let sheet = fetch_raw(&format!("{base}/style.css"), &client).await.err().expect("a stylesheet");
+    let hop = fetch_page(&format!("{}/hop", site.url()), &client, None).await.err().expect("a redirect hop");
+
+    for err in [page, image, sheet, hop] {
+        assert!(refused_before_any_request(&err.to_string()), "{err}");
+    }
+    hits.assert_async().await;
+    assert_eq!(client.refused_report(), [format!("Not fetched: {base}/img.png"), format!("Not fetched: {base}/page"), format!("Not fetched: {base}/style.css"), format!("Not fetched: {base}/target")]);
+}
+
+#[tokio::test]
+async fn a_name_on_another_private_address_is_not_fetched_as_the_own_site() {
+    use crate::system::address::AddressClass::Private;
+    let mut own = test_server_as(Private).await;
+    test_name_as("nas.test", &own, Private);
+    let mut other = test_server_as(Private).await;
+    test_name_as("printer.test", &other, Private);
+    let _page = own.mock("GET", "/page").with_body("ok").create_async().await;
+    let hits = other.mock("GET", mockito::Matcher::Any).expect(0).create_async().await;
+    let client = Client::new(Some(&format!("http://nas.test:{}/", port_of(&own))));
+
+    fetch_page(&format!("http://nas.test:{}/page", port_of(&own)), &client, None).await.expect("the own name");
+    let err = fetch_page(&format!("http://printer.test:{}/page", port_of(&other)), &client, None).await.err().expect("another private name");
+
+    assert!(refused_before_any_request(&err.to_string()), "{err}");
+    hits.assert_async().await;
+}
+
+#[tokio::test]
+async fn a_refused_name_is_not_retried() {
+    use crate::system::address::AddressClass::Private;
+    let printer = test_server_as(Private).await;
+    test_name_as("printer.test", &printer, Private);
+    let started = Instant::now();
+
+    let err = fetch_page(&format!("http://printer.test:{}/page", port_of(&printer)), &Client::no_own_site(), None).await.err().expect("refused");
+
+    assert!(started.elapsed() < BACKOFF_BASE, "{:?}", started.elapsed());
+    assert!(refused_before_any_request(&err.to_string()), "{err}");
+}
+
+#[tokio::test]
+async fn a_failed_lookup_is_still_tried_three_times() {
+    test_name_unanswered("gone.test");
+    let started = Instant::now();
+
+    let err = fetch_page("http://gone.test/page", &Client::no_own_site(), None).await.err().expect("no such name");
+
+    assert!(started.elapsed() >= BACKOFF_BASE * 3, "{:?}", started.elapsed());
+    assert!(!refused_before_any_request(&err.to_string()), "{err}");
+}
+
+#[tokio::test]
+async fn behind_a_proxy_the_proxy_does_the_lookup() {
+    use crate::system::address::AddressClass::Private;
+    // A private stand-in: were the hook installed, the proxy's own address would be refused.
+    let mut proxy = test_server_as(Private).await;
+    let mut printer = test_server_as(Private).await;
+    test_name_as("printer.test", &printer, Private);
+    let via_proxy = proxy.mock("GET", mockito::Matcher::Any).with_body("via proxy").expect(1).create_async().await;
+    let direct = printer.mock("GET", mockito::Matcher::Any).expect(0).create_async().await;
+    let url = format!("http://printer.test:{}/page", port_of(&printer));
+    let client = Client::no_own_site();
+    let timeout = std::time::Duration::from_secs(5);
+
+    let proxied = agent_for(crate::system::proxy::proxied_agent_builder_via(Some(&proxy.url()), timeout, 0), &client);
+    let response = fetch_with_validated_redirects(&proxied, &url, &client, None, None, None).expect("the proxy answers");
+    assert_eq!(response.into_string().unwrap(), "via proxy");
+
+    let unproxied = agent_for(crate::system::proxy::proxied_agent_builder_via(None, timeout, 0), &client);
+    let err = fetch_with_validated_redirects(&unproxied, &url, &client, None, None, None).expect_err("the same name, looked up here");
+    assert!(refusal_in(&err).is_some(), "{err}");
+    via_proxy.assert_async().await;
+    direct.assert_async().await;
+}
+
+#[test]
+fn a_lookup_reads_a_bracketed_address_and_fails_on_one_without_a_port() {
+    let client = Client::no_own_site();
+    assert!(is_refusal(&client.resolve("[fd00::1]:80").unwrap_err()));
+    assert!(!is_refusal(&client.resolve("nas.test").unwrap_err()));
+}

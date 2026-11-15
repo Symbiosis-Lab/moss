@@ -32,7 +32,7 @@
 pub fn proxied_ureq_agent(url: &str, timeout: std::time::Duration) -> ureq::Agent {
     // ureq's own default (`AgentBuilder::redirects` doc) — spelled out now
     // that a second caller needs a different value, not a behavior change.
-    proxied_agent_builder(url, timeout, 5).build()
+    proxied_agent_builder(url, timeout, 5).0.build()
 }
 
 /// [`proxied_ureq_agent`] with automatic redirect-following disabled — for a
@@ -46,28 +46,44 @@ pub fn proxied_ureq_agent(url: &str, timeout: std::time::Duration) -> ureq::Agen
 /// (ureq's documented `redirects(0)` behavior) rather than as an `Err`, so
 /// the caller can read its `Location` header and decide.
 pub fn proxied_ureq_agent_no_redirects(url: &str, timeout: std::time::Duration) -> ureq::Agent {
-    proxied_agent_builder(url, timeout, 0).build()
+    proxied_agent_builder(url, timeout, 0).0.build()
 }
 
 /// Shared proxy-resolution setup for both agent constructors above — the
 /// only difference between them is `redirects`. Public to the crate for a
 /// caller that sets further timeouts before building.
+///
+/// Also says whether it set a proxy. A caller that must know cannot ask
+/// [`resolve_proxy_for_url`] again: a resolved proxy that fails to parse falls
+/// back to a direct connection here, so a second call would report a proxy
+/// the agent does not use. Other callers ignore the flag.
 pub(crate) fn proxied_agent_builder(
     url: &str,
     timeout: std::time::Duration,
     redirects: u32,
-) -> ureq::AgentBuilder {
+) -> (ureq::AgentBuilder, bool) {
+    proxied_agent_builder_via(resolve_proxy_for_url(url).as_deref(), timeout, redirects)
+}
+
+/// [`proxied_agent_builder`] with the proxy address given rather than resolved.
+pub(crate) fn proxied_agent_builder_via(
+    proxy_url: Option<&str>,
+    timeout: std::time::Duration,
+    redirects: u32,
+) -> (ureq::AgentBuilder, bool) {
     let mut builder = ureq::AgentBuilder::new().timeout(timeout).redirects(redirects);
-    if let Some(proxy_url) = resolve_proxy_for_url(url) {
-        match ureq::Proxy::new(&proxy_url) {
+    let mut proxied = false;
+    if let Some(proxy_url) = proxy_url {
+        match ureq::Proxy::new(proxy_url) {
             Ok(proxy) => {
                 log::debug!("http: routing request via system proxy");
                 builder = builder.proxy(proxy);
+                proxied = true;
             }
             Err(_) => log::info!("http: resolved proxy is invalid; connecting directly"),
         }
     }
-    builder
+    (builder, proxied)
 }
 
 /// The proxy moss's HTTP clients should use for `url`, or `None` for a direct
@@ -405,5 +421,13 @@ mod tests {
         assert!(bypasses_proxy("https://[fd00::1]/", Some("fd00::1")));
         assert!(bypasses_proxy("https://[fd00::1]:8443/", Some("[fd00::1]:8443")));
         assert!(!bypasses_proxy("https://[fd00::1]:443/", Some("[fd00::1]:8443")));
+    }
+
+    #[test]
+    fn the_builder_says_whether_it_set_a_proxy() {
+        let timeout = std::time::Duration::from_secs(1);
+        assert!(super::proxied_agent_builder_via(Some("http://127.0.0.1:3128"), timeout, 0).1);
+        assert!(!super::proxied_agent_builder_via(None, timeout, 0).1);
+        assert!(!super::proxied_agent_builder_via(Some("fakeproto://proxy.test:3128"), timeout, 0).1, "an invalid proxy falls back to direct");
     }
 }
