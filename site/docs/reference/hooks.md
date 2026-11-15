@@ -32,9 +32,9 @@ Plugins attach to stages by declaring **capabilities** in their manifest.
 | `publish_copy` | multiple | `CopyJob` | Post one copy of a post to a channel's network once its page is live (contributes.channel.syndication); returns the copy's id and address. |
 | `update_copy` | multiple | `CopyJob` | Edit a posted copy after its post's source changed; optional, absent means the network cannot edit a copy. |
 | `find_copy` | multiple | `CopyJob` | Look a copy up after a send whose outcome is unknown, or one handed off to the author; optional. Answers the copy, a `handoff` still waiting, or `absent: true`; anything else leaves it unknown, and only `absent` lets moss send again. |
-| `copy_account` | multiple | `AccountQuery` | Say which account a channel is signed in to, as `copy.account`; optional. Asked once per run before a channel's copies are worked on; a copy sent from another account is left alone until that account is signed in again. |
+| `copy_account` | multiple | `AccountQuery` | Say which account a channel is signed in to, as `copy.account` (and `copy.name`, shown to the person), or `copy.signed_out: true` when its session or credential was read and holds none; optional. Asked once per run before a channel's copies are worked on; a copy sent from another account is left alone until that account is signed in again, and a signed-out channel's copies wait for a sign-in. A read that failed or is not available on this host is a failed call, never `signed_out`. |
 | `listing` | multiple | `ListingContext` | Draw a folder's listing in a style the plugin contributes (contributes.listing_styles); runs after render, once per folder home page whose children_style names one of the plugin's styles. |
-| `login` | multiple | `BaseContext` | Connect a user account for a plugin that needs one (e.g. Matters); invoked once via `connect_account`, not part of the build pipeline. |
+| `login` | multiple | `BaseContext` | Sign the person in to a channel's account (contributes.channel.login: true); invoked once via `connect_account`, not part of the build pipeline. |
 <!-- auto:end:hooks -->
 
 ## process
@@ -74,7 +74,9 @@ Use for: cross-posting to Bluesky, Mastodon, Matters.town, LinkedIn, X; a hand-o
 
 ## login
 
-Connects a user account for a plugin that needs one to operate (e.g. Matters). Not a build-pipeline stage: moss calls it once via `connect_account` when the user starts a connection flow — clicking "Connect" in the plugin's settings row, or the auto-open nudge on a folder with no bound session — not on every build.
+Signs the person in to a channel's account (e.g. Matters). Not a build-pipeline stage: moss calls it once via `connect_account` when the person starts a sign-in, from the channel's settings or the prompt on a folder with no signed-in account, not on every build. The channel declares it as `contributes.channel.login: true`.
+
+How it is known that a channel is signed in: its `copy_account` answer. `copy.account` (with `copy.name`, shown to the person) means signed in; `copy.signed_out: true` means its session or credential was read and holds none, or the service refused authentication. A read that failed, or that is not available where moss runs (the webview's cookies exist only in the desktop app, not in a terminal), is `success: false`, never `signed_out`, so it leaves the recorded sign-in as it was. moss records each definite answer per channel on this computer, outside the site folder.
 
 Use for: authenticating with a remote platform before `process` or a copy hook can act on the user's behalf.
 

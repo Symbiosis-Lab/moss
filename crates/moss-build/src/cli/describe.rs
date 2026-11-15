@@ -103,7 +103,7 @@ fn plugin_hooks() -> Vec<PluginHookInfo> {
         },
         PluginHookInfo {
             name: "copy_account",
-            description: "Say which account a channel is signed in to, as `copy.account`; optional. Asked once per run before a channel's copies are worked on; a copy sent from another account is left alone until that account is signed in again.",
+            description: "Say which account a channel is signed in to, as `copy.account` (and `copy.name`, shown to the person), or `copy.signed_out: true` when its session or credential was read and holds none; optional. Asked once per run before a channel's copies are worked on; a copy sent from another account is left alone until that account is signed in again, and a signed-out channel's copies wait for a sign-in. A read that failed or is not available on this host is a failed call, never `signed_out`.",
             arity: "multiple",
             context: "AccountQuery",
         },
@@ -115,7 +115,7 @@ fn plugin_hooks() -> Vec<PluginHookInfo> {
         },
         PluginHookInfo {
             name: "login",
-            description: "Connect a user account for a plugin that needs one (e.g. Matters); invoked once via `connect_account`, not part of the build pipeline.",
+            description: "Sign the person in to a channel's account (contributes.channel.login: true); invoked once via `connect_account`, not part of the build pipeline.",
             arity: "multiple",
             context: "BaseContext",
         },

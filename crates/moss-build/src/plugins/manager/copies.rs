@@ -86,7 +86,10 @@ pub enum Account {
     /// The channel names no account (no `copy_account`, or an answer without
     /// one, as when the author posts by hand); its copies are not tied to one.
     Unsaid,
-    Known(String),
+    /// `id` binds copies; `name` is only shown.
+    Known { id: String, name: Option<String> },
+    /// The channel answered that it has no usable session; someone signs in.
+    SignedOut,
     /// It exports `copy_account`, which failed.
     Unknown(String),
 }
@@ -109,8 +112,12 @@ impl PluginManager {
         match self.call_channel(channel, "copy_account", &query).await {
             CopyCall::NoExport => Account::Unsaid,
             CopyCall::Answered(r) if !r.success => Account::Unknown(r.message.unwrap_or_else(|| "copy_account failed".into())),
-            CopyCall::Answered(r) => match r.copy.and_then(|c| c.account).filter(|a| !a.is_empty()) {
-                Some(account) => Account::Known(account),
+            CopyCall::Answered(r) => match r.copy {
+                Some(c) if c.signed_out => Account::SignedOut,
+                Some(c) => match c.account.filter(|a| !a.is_empty()) {
+                    Some(id) => Account::Known { id, name: c.name.filter(|n| !n.is_empty()) },
+                    None => Account::Unsaid,
+                },
                 None => Account::Unsaid,
             },
             CopyCall::Unknown(e) => Account::Unknown(e),

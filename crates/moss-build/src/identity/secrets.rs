@@ -36,21 +36,21 @@ pub struct SecretStore {
 }
 
 impl SecretStore {
-    /// `app_data_dir` is Tauri's `app_data_dir()` — see `infra::app_config`.
+    /// `app_data_dir` is Tauri's `app_data_dir()` — see `infra::app_data`.
     pub fn in_app_data(app_data_dir: &Path) -> Self {
         Self { root: app_data_dir.join(SECRETS_DIRNAME) }
     }
 
     /// The store, resolved without a Tauri path resolver.
     ///
-    /// Same reasoning as `infra::app_config::app_config_path_early`: Tauri's
+    /// Same reasoning as `infra::app_data::app_data_dir_early`: Tauri's
     /// `app_data_dir()` is `data_dir()/<bundle identifier>` on every desktop
     /// platform, so the two resolutions cannot diverge. Doing it this way is
     /// what lets the host-function arms answer a plugin directly, the way the
     /// keystore arms do, instead of adding an app-only capability that would
     /// deny under `moss-cli`. `None` = the platform has no data dir.
     fn app_default() -> Option<Self> {
-        dirs::data_dir().map(|d| Self::in_app_data(&d.join("host.moss.publisher")))
+        crate::infra::app_data::app_data_dir_early().map(|d| Self::in_app_data(&d))
     }
 
     /// The store or a refusal naming what wanted it. Every caller that cannot

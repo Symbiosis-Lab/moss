@@ -715,6 +715,14 @@ interface CopyOutcome {
   absent?: boolean;
   /** `copy_account` only: the account the channel is signed in to, as an id that stays the same while it is that account. */
   account?: string;
+  /** `copy_account` only: the account as a person knows it (`@ada`), for display; never compared. */
+  name?: string;
+  /**
+   * `copy_account` only: a definite answer that the channel has no usable session or
+   * credential (it was read and holds none, or the service refused authentication).
+   * A read that failed, or is not available on this host, is `success: false` instead.
+   */
+  signed_out?: boolean;
   refused?: {
     cause: "auth" | "content" | "rate" | "network" | "unknown";
     message?: string;

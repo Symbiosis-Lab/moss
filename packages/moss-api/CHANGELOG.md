@@ -17,6 +17,7 @@ release heading.
 
 - `CopyOutcome.absent`: `find_copy` answers `{ absent: true }` when the network says there is no such copy. Any other answer without the copy means moss cannot tell, and only `absent` lets it post again. An earlier moss reads it as absent too, so a plugin can answer this way now.
 - `copy_account(query: AccountQuery)`, an optional channel export answering `copy: { account }`: the account the channel is signed in to. moss keeps it on each copy and leaves a copy sent from another account alone.
+- `CopyOutcome.name` and `CopyOutcome.signed_out`, for `copy_account`: the account as a person knows it, and a definite answer that the channel has no usable session or credential. A read that failed, or is not available where moss runs, is `success: false`, never `signed_out`.
 
 ### Removed
 

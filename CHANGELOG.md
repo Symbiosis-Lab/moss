@@ -94,6 +94,7 @@ All notable changes to moss will be documented here.
 
 ### New
 
+- A channel's `copy_account` can answer that it is signed out (`signed_out: true`) and give the account's name (`name`); a signed-out channel's copies wait until someone signs in, and moss remembers each channel's sign-in on this computer, outside the site folder.
 - A channel plugin can make its article form depend on a setting (`long_setting` in its `syndication` block), for a network whose articles only some accounts have. With the setting off, a long page goes out in the next form the channel takes.
 - A program that starts `moss build --serve` can set `MOSS_STOP_ON_STDIN_CLOSE=1`: the preview then stops when that program closes moss's standard input or exits, however it ends. The Obsidian plugin sets it on macOS and Linux, so its preview no longer keeps running after Obsidian quits. The guide's "Starting moss from another program" has the details.
 

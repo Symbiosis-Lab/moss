@@ -10,6 +10,7 @@ use serde::Serialize;
 use super::job::{CopyJob, Op, PostRef, Previous};
 use super::record::{Cause, CopyOutcome, CopyRecord, PublishedPost, Records, State};
 use super::shape::{idempotency_key, page_url, shape_record, ShapeOptions};
+use super::sign_ins::SignIns;
 use crate::build::scan::article_map::{ArticleInfo, ArticleMap};
 use crate::build::scan::path_collision::{logical_path, on_disk};
 use crate::plugins::manager::copies::{Account, CopyCall, CopyChannel};
@@ -28,18 +29,24 @@ const HANDOFF_LOOKUP_DAYS: i64 = 30;
 const OTHER_ACCOUNT: &str = "posted from another account. Sign in to that account.";
 
 /// The account each channel is signed in to, asked once per run and only of
-/// a channel with a copy to work on.
-#[derive(Default)]
-struct Accounts(HashMap<String, Account>);
+/// a channel with a copy to work on. Each answer also updates this computer's
+/// sign-in record, so a lapse found while sending shows in settings.
+struct Accounts<'a> {
+    seen: HashMap<String, Account>,
+    sign_ins: Option<&'a SignIns>,
+}
 
-impl Accounts {
+impl Accounts<'_> {
     /// `record` tied to its channel's account, or why it waits; see [`bind`].
     async fn check(&mut self, manager: &PluginManager, record: &mut CopyRecord) -> Result<(), Outcome> {
-        if !self.0.contains_key(&record.channel) {
+        if !self.seen.contains_key(&record.channel) {
             let account = manager.copy_account(&record.channel).await;
-            self.0.insert(record.channel.clone(), account);
+            if let Some(Err(e)) = self.sign_ins.map(|s| s.record(&record.channel, &account)) {
+                log::warn!(target: "syndication", "{}'s sign-in not recorded: {e}", record.channel);
+            }
+            self.seen.insert(record.channel.clone(), account);
         }
-        bind(record, &self.0[&record.channel])
+        bind(record, &self.seen[&record.channel])
     }
 }
 
@@ -51,8 +58,9 @@ fn bind(record: &mut CopyRecord, account: &Account) -> Result<(), Outcome> {
     match (account, &record.account) {
         (Account::Unsaid, _) => Ok(()),
         (Account::Unknown(why), _) => Err(Outcome::Held { why: HeldWhy::Failed, reason: format!("which {} account is signed in is unknown ({why})", record.channel) }),
-        (Account::Known(now), Some(sent_from)) if sent_from != now && !record.definite_first() => Err(Outcome::Held { why: HeldWhy::OtherAccount, reason: OTHER_ACCOUNT.into() }),
-        (Account::Known(now), _) => {
+        (Account::SignedOut, _) => Err(Outcome::Held { why: HeldWhy::SignedOut, reason: format!("signed out of {}", record.channel) }),
+        (Account::Known { id: now, .. }, Some(sent_from)) if sent_from != now && !record.definite_first() => Err(Outcome::Held { why: HeldWhy::OtherAccount, reason: OTHER_ACCOUNT.into() }),
+        (Account::Known { id: now, .. }, _) => {
             record.account = Some(now.clone());
             Ok(())
         }
@@ -121,6 +129,8 @@ pub enum HeldWhy {
     /// The copy was sent from an account other than the one the channel is
     /// signed in to now.
     OtherAccount,
+    /// The channel has no usable session; it waits for someone to sign in.
+    SignedOut,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
@@ -151,6 +161,17 @@ pub struct SendOptions<'a> {
     /// that does not answer yet. A host that has its own proof the site is
     /// live says false.
     pub check_pages: bool,
+    /// This computer's sign-in records, updated from each channel's answer;
+    /// `None` leaves them alone.
+    pub sign_ins: Option<&'a SignIns>,
+}
+
+#[cfg(test)]
+impl<'a> SendOptions<'a> {
+    /// Every copy due, none retried, no page check and no sign-in record.
+    pub(crate) fn test(site_url: &'a str, emit: &'a (dyn Fn(&Sent) + Sync)) -> Self {
+        Self { site_url, retry: &[], emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false, sign_ins: None }
+    }
 }
 
 /// Send the folder's due copies once a publish to `site_url` has landed.
@@ -162,7 +183,8 @@ pub async fn after_publish(
     only_source: Option<&str>,
     emit: &(dyn Fn(&Sent) + Sync),
 ) -> Vec<Sent> {
-    let opts = SendOptions { site_url, retry, emit, only_source, only_channel: None, cap: PER_RUN, check_pages: true };
+    let sign_ins = SignIns::app_default();
+    let opts = SendOptions { site_url, retry, emit, only_source, only_channel: None, cap: PER_RUN, check_pages: true, sign_ins: sign_ins.as_ref() };
     let folder_str = folder.to_string_lossy();
     after_live(folder, &opts, || host_ports(&folder_str).plugins.get_or_create(&folder_str)).await
 }
@@ -231,7 +253,7 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
     };
     let mut sent_per_channel: BTreeMap<String, usize> = BTreeMap::new();
     let handoffs = handoffs_to_look_up(&due, opts.cap);
-    let mut accounts = Accounts::default();
+    let mut accounts = Accounts { seen: HashMap::new(), sign_ins: opts.sign_ins };
     let mut out = Vec::new();
     let mut push = |s: Sent| {
         (opts.emit)(&s);
@@ -729,7 +751,7 @@ mod tests {
         map.page_languages.insert(post.url_path.clone(), "en".into());
         let manager = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()).get_or_create(&root.to_string_lossy()).unwrap();
         let emit = |_: &Sent| {};
-        let opts = SendOptions { site_url: site, retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
+        let opts = SendOptions::test(site, &emit);
         let sent = send_due(root, &manager, &map, &opts).await;
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].outcome, Outcome::Posted { url: "https://example.social/formula".into() });
@@ -768,7 +790,7 @@ mod tests {
             let channel = CopyChannel { spec: ChannelSpec { forms: vec![Form::Short], max_chars: Some(300), ..Default::default() }, ..Default::default() };
             let post: ArticleInfo = serde_json::from_value(serde_json::json!({"source_path": "page.md", "title": "", "content": "Hello.", "url_path": "page/"})).unwrap();
             let emit = |_: &Sent| {};
-            let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
+            let opts = SendOptions::test("https://example.org", &emit);
             send_one(root, &manager, &records, record, &channel, &post, &ShapeOptions::default(), op, &opts).await.unwrap();
             let saved = records.get("u", "one").unwrap();
             assert_eq!(saved.state, expected_state, "{name}");
@@ -793,7 +815,7 @@ mod tests {
         let post: ArticleInfo = serde_json::from_value(serde_json::json!({"source_path": "edited.md", "title": "New", "content": "Edited", "url_path": "edited/"})).unwrap();
         let channel = CopyChannel { spec: super::super::channel::ChannelSpec { forms: vec![super::super::channel::Form::Long], ..Default::default() }, ..Default::default() };
         let emit = |_: &Sent| panic!("a frozen copy cannot send");
-        let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
+        let opts = SendOptions::test("https://example.org", &emit);
         let result = send_one(root, &manager, &records, record, &channel, &post, &ShapeOptions::default(), Op::Update, &opts).await.unwrap();
         assert!(matches!(result.outcome, Outcome::Refused { reason, .. } if reason.contains("retaining the prior version")));
         assert_eq!(records.get("u", "one").unwrap(), before);
@@ -856,7 +878,7 @@ mod tests {
         let _held = records.turn().expect("the turn is free");
 
         let emit = |_: &Sent| {};
-        let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
+        let opts = SendOptions::test("https://example.org", &emit);
         assert!(after_live(root, &opts, || panic!("no channel may load")).await.is_empty());
         assert_eq!(records.get("ab12cd34", "removes"), Some(r), "the copy and its record stay");
     }
@@ -881,7 +903,7 @@ mod tests {
         std::fs::create_dir_all(mp.article_map().parent().unwrap()).unwrap();
         std::fs::write(mp.article_map(), serde_json::to_vec(&articles).unwrap()).unwrap();
         let emit = |_: &Sent| {};
-        let opts = |only_source| SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source, only_channel: None, cap: PER_RUN, check_pages: false };
+        let opts = |only_source| SendOptions { only_source, ..SendOptions::test("https://example.org", &emit) };
 
         assert!(after_live(root, &opts(Some("notes/other.md")), || panic!("no channel may load")).await.is_empty());
         assert!(after_live(root, &opts(Some("notes/old.md")), || panic!("no channel may load")).await.is_empty());
@@ -913,7 +935,7 @@ mod tests {
         std::fs::create_dir_all(mp.article_map().parent().unwrap()).unwrap();
         std::fs::write(mp.article_map(), serde_json::to_vec(&articles).unwrap()).unwrap();
         let emit = |_: &Sent| {};
-        let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source: Some("notes/cafe\u{301}.md"), only_channel: None, cap: PER_RUN, check_pages: false };
+        let opts = SendOptions { only_source: Some("notes/cafe\u{301}.md"), ..SendOptions::test("https://example.org", &emit) };
         let loaded = std::sync::atomic::AtomicBool::new(false);
         after_live(root, &opts, || {
             loaded.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -954,15 +976,7 @@ mod tests {
         let cache = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned());
         let manager = cache.get_or_create(&root.to_string_lossy()).unwrap();
         let emit = |_: &Sent| {};
-        let opts = |only_source, only_channel, cap| SendOptions {
-            site_url: "https://publish.example.net",
-            retry: &[],
-            emit: &emit,
-            only_source,
-            only_channel,
-            cap,
-            check_pages: false,
-        };
+        let opts = |only_source, only_channel, cap| SendOptions { only_source, only_channel, cap, ..SendOptions::test("https://publish.example.net", &emit) };
         let outcomes = |sent: &[Sent]| sent.iter().map(|s| (s.source_path.clone(), s.channel.clone(), s.outcome.clone())).collect::<Vec<_>>();
         let posted = |path: &str| Outcome::Posted { url: format!("https://example.social/{path}") };
 
@@ -1002,7 +1016,7 @@ mod tests {
         articles.articles.insert(post.url_path.clone(), post);
         let manager = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()).get_or_create(&root.to_string_lossy()).unwrap();
         let emit = |_: &Sent| {};
-        let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
+        let opts = SendOptions::test("https://example.org", &emit);
         let sent = send_due(root, &manager, &articles, &opts).await;
         let Some(Outcome::Held { why, reason }) = sent.last().map(|s| s.outcome.clone()) else { panic!("{sent:?}") };
         assert_eq!(why, HeldWhy::Failed);
@@ -1052,7 +1066,7 @@ mod tests {
         let cache = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned());
         let manager = cache.get_or_create(&root.to_string_lossy()).unwrap();
         let emit = |_: &Sent| {};
-        let opts = SendOptions { site_url: "https://publish.example.net", retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
+        let opts = SendOptions::test("https://publish.example.net", &emit);
         let sent = send_due(root, &manager, &latest, &opts).await;
 
         let got: Vec<_> = sent.iter().map(|s| (s.source_path.as_str(), s.channel.as_str(), &s.outcome)).collect();
@@ -1088,7 +1102,7 @@ mod tests {
         let cache = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned());
         let manager = cache.get_or_create(&root.to_string_lossy()).unwrap();
         let emit = |_: &Sent| {};
-        let opts = SendOptions { site_url: "https://publish.example.net", retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
+        let opts = SendOptions::test("https://publish.example.net", &emit);
         let sent = send_due(root, &manager, &landed, &opts).await;
 
         let got: Vec<_> = sent.iter().filter(|s| s.outcome != Outcome::Sending).map(|s| (s.channel.as_str(), &s.outcome)).collect();
@@ -1119,7 +1133,7 @@ mod tests {
         articles.articles.insert(post.url_path.clone(), post);
         async fn run(root: &Path, articles: &ArticleMap, emit: &(dyn Fn(&Sent) + Sync)) -> Vec<Sent> {
             let manager = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()).get_or_create(&root.to_string_lossy()).unwrap();
-            let opts = SendOptions { site_url: "https://example.org", retry: &[], emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
+            let opts = SendOptions::test("https://example.org", emit);
             send_due(root, &manager, articles, &opts).await
         }
         let posted = |sent: &[Sent]| sent.iter().filter(|s| matches!(s.outcome, Outcome::Posted { .. })).count();
@@ -1191,7 +1205,7 @@ mod tests {
     async fn run_lookups(root: &Path, articles: &ArticleMap, retry: &[String], only_source: Option<&str>, cap: usize) -> Vec<Sent> {
         let manager = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()).get_or_create(&root.to_string_lossy()).unwrap();
         let emit = |_: &Sent| {};
-        let opts = SendOptions { site_url: "https://example.org", retry, emit: &emit, only_source, only_channel: None, cap, check_pages: false };
+        let opts = SendOptions { retry, only_source, cap, ..SendOptions::test("https://example.org", &emit) };
         send_due(root, &manager, articles, &opts).await.into_iter().filter(|s| s.outcome != Outcome::Sending).collect()
     }
 

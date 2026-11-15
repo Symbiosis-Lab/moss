@@ -1,6 +1,7 @@
 //! A copy stays with the account it was sent from.
 
 use super::*;
+use crate::syndication::sign_ins::{SignInState, SignIns};
 
 const SOURCE: &str = "a.md";
 const UID: &str = "aaaa0001";
@@ -48,9 +49,14 @@ fn site(root: &Path, state: State, account: Option<&str>) -> (Records, ArticleMa
 }
 
 async fn run(root: &Path, articles: &ArticleMap) -> Vec<Outcome> {
+    run_recording(root, articles, None).await
+}
+
+/// A run with no `AppHost`, as from a terminal, updating `sign_ins`.
+async fn run_recording(root: &Path, articles: &ArticleMap, sign_ins: Option<&SignIns>) -> Vec<Outcome> {
     let manager = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()).get_or_create(&root.to_string_lossy()).unwrap();
     let emit = |_: &Sent| {};
-    let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
+    let opts = SendOptions { sign_ins, ..SendOptions::test("https://example.org", &emit) };
     send_due(root, &manager, articles, &opts).await.into_iter().map(|s| s.outcome).filter(|o| *o != Outcome::Sending).collect()
 }
 
@@ -155,4 +161,46 @@ async fn a_resting_handoff_says_nothing_while_the_account_is_unknown() {
     channel(root, None, REFUSE_ALL);
     assert_eq!(run(root, &articles).await, []);
     assert_eq!(records.get(UID, "acct").unwrap(), before);
+}
+
+/// Signed out, a channel's copies wait for someone to sign in, and this
+/// computer's record says so, keeping the account it was signed in to.
+#[tokio::test]
+async fn signed_out_holds_the_copies_and_records_the_lapse() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let sign_ins = SignIns::in_app_data(app.path());
+    sign_ins.record("acct", &Account::Known { id: "did:a".into(), name: Some("@ada".into()) }).unwrap();
+    let (records, articles) = site(root, State::Due, None);
+    super::super::test_channel(root, "acct", &format!("{{ copy_account: async function () {{ return {{ success: true, copy: {{ signed_out: true }} }}; }}, {REFUSE_ALL} }}"));
+    let held = run_recording(root, &articles, Some(&sign_ins)).await;
+    assert!(matches!(&held[..], [Outcome::Held { why: HeldWhy::SignedOut, .. }]), "{held:?}");
+    assert_eq!(records.get(UID, "acct").unwrap().state, State::Due);
+    let lapsed = sign_ins.get("acct").unwrap();
+    assert_eq!((lapsed.state, lapsed.account.as_deref()), (SignInState::NeedsSignIn, Some("did:a")));
+}
+
+/// A channel that reads its session from the webview's cookies cannot read
+/// them where there is no app (a terminal run): the read fails rather than
+/// answering an empty jar, so the channel cannot say it is signed out, and the
+/// app's record of a signed-in session stands.
+#[tokio::test]
+async fn a_run_with_no_app_leaves_the_sign_in_record_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let sign_ins = SignIns::in_app_data(app.path());
+    sign_ins.record("acct", &Account::Known { id: "x:1".into(), name: None }).unwrap();
+    let before = sign_ins.get("acct").unwrap();
+    let (records, articles) = site(root, State::Due, None);
+    super::super::test_channel(root, "acct", &format!("{{ copy_account: async function () {{ \
+        try {{ const jar = await globalThis.__TAURI__.core.invoke('get_plugin_cookie', {{ pluginName: 'acct', projectPath: '/p' }}); \
+               const session = (jar || []).find(c => c.name === 'auth_token'); \
+               return session ? {{ success: true, copy: {{ account: 'x:1' }} }} : {{ success: true, copy: {{ signed_out: true }} }}; }} \
+        catch (e) {{ return {{ success: false, message: String(e) }}; }} }}, {REFUSE_ALL} }}"));
+    let held = run_recording(root, &articles, Some(&sign_ins)).await;
+    assert!(matches!(&held[..], [Outcome::Held { why: HeldWhy::Failed, .. }]), "{held:?}");
+    assert_eq!(records.get(UID, "acct").unwrap().state, State::Due);
+    assert_eq!(sign_ins.get("acct").unwrap(), before);
 }

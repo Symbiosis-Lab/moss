@@ -67,6 +67,16 @@ optional id?: string;
 
 ***
 
+### name?
+
+```ts
+optional name?: string;
+```
+
+`copy_account` only: the account as a person knows it (`@ada`), for display; never compared.
+
+***
+
 ### parts?
 
 ```ts
@@ -94,6 +104,18 @@ cause: "auth" | "content" | "rate" | "network" | "unknown";
 ```ts
 optional message?: string;
 ```
+
+***
+
+### signed\_out?
+
+```ts
+optional signed_out?: boolean;
+```
+
+`copy_account` only: a definite answer that the channel has no usable session or
+credential (it was read and holds none, or the service refused authentication).
+A read that failed, or is not available on this host, is `success: false` instead.
 
 ***
 

@@ -16,6 +16,7 @@ pub mod preview;
 pub mod record;
 pub mod send;
 pub mod shape;
+pub mod sign_ins;
 
 /// What a page's `syndicate:` asks for: the channel ids, in the author's order.
 /// An empty list is the author's `syndicate: false`, which also stops a

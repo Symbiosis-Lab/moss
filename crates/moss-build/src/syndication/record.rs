@@ -77,6 +77,16 @@ pub struct CopyOutcome {
     /// id that stays the same while it is that account.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
+    /// `copy_account` only: the account as a person knows it (`@ada`), for
+    /// display; never compared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// `copy_account` only: a definite answer that the channel has no usable
+    /// session or credential (it was read and holds none, or the service
+    /// refused authentication). A read that failed or is not available here
+    /// is a failed call instead, which leaves the sign-in as it was.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub signed_out: bool,
     /// Why the network refused, with `success: false`.
     #[serde(default)]
     pub refused: Option<CopyRefusal>,
