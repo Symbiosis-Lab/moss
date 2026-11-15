@@ -183,6 +183,25 @@ fn a_declared_redirect_to_a_media_collection_page_is_kept() {
     assert_eq!(b.problems, 0);
 }
 
+/// Both sources name one old address: the config's line is the one served,
+/// and a line that is reported and skipped leaves the history's entry working.
+#[test]
+fn a_declared_line_beats_the_history_for_the_same_old_address() {
+    let cfg = config(
+        r#""/old/" = "/about/"
+"/kept/" = "/nowhere/""#,
+    );
+    let b = build(&[
+        ABOUT,
+        ("contact.md", &page("Contact")),
+        (".moss/config.toml", &cfg),
+        (".moss/redirects.json", r#"{"old/": "contact/", "kept/": "contact/"}"#),
+    ]);
+    assert!(b.read("old/index.html").contains("url=/about/"));
+    assert!(b.read("kept/index.html").contains("url=/contact/"));
+    assert_eq!(b.problems, 1);
+}
+
 #[test]
 fn a_declared_page_address_gets_a_stub_in_each_spelling() {
     let cfg = config(

@@ -384,12 +384,13 @@ pub(crate) fn plan(candidates: Vec<Candidate>, probe: &Probe) -> Plan {
 /// What the build does with a `[redirects]` line, one sentence each, as
 /// `moss describe --json` prints them. Kept here, beside the code they
 /// describe, so a change to one is a change to the other.
-pub(crate) const RULES: [&str; 7] = [
+pub(crate) const RULES: [&str; 8] = [
     "Both sides are site-absolute; the new side is an address this site serves or an https:// URL.",
     "A page address (/old/ or /old) or an .html file gets a forwarding page.",
     "Any other file can only be sent to another non-HTML file of the site, and gets a copy of the file the site serves there (for a picture, the processed one), so both addresses give the same bytes; any other target is reported and does not redirect.",
     "When both sides are folders of this site (ending in /, with no # or ?), the line also moves everything under the old folder: each page and .html file served under the new folder gets a forwarding page at the same path under the old one, and every other file a copy of the served file. A folder line naming the site root, or a new folder that contains the old one, moves no folder.",
     "An old address the site still serves keeps what it serves; a line that changes nothing is reported.",
+    "A line here is served over a .moss/redirects.json entry for the same old address; a line that is reported and does not redirect leaves that entry working.",
     "An old address with capitals or spaces in a folder name cannot be a file path, so it is reported and does not redirect.",
     "No list of redirects is published: each old address answers through its own forwarding page or copy.",
 ];
