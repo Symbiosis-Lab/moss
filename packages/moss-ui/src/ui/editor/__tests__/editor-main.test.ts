@@ -2056,6 +2056,9 @@ describe('scroll sync always-on', () => {
           // editor is the healthy case it leaves alone.
           hasFocus: true,
           lineBlockAtHeight: vi.fn().mockReturnValue({ from: 0 }),
+          // The last line far below the fold: a long file, not at its end.
+          lineBlockAt: vi.fn().mockReturnValue({ top: 0, bottom: 10_000 }),
+          documentTop: 0,
           coordsAtPos: vi.fn().mockReturnValue({ top: 0 }),
           state: {
             selection: { main: { head: 0 } },

@@ -801,7 +801,11 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
   color: var(--moss-editor-body-color);
   font-variant-ligatures: no-common-ligatures;
 }
-.moss-editor-cm .cm-content { padding: 20px 0 60px; cursor: text; }
+/* The bottom room lets a jump from the preview lift a file's last lines to the
+   reveal line, a third of the way down (REVEAL_FRACTION in cm-scroll-sync.ts),
+   instead of the bottom edge; the editor's webview is the viewport, so 2/3 of
+   it always covers the editor's height. */
+.moss-editor-cm .cm-content { padding: 20px 0 calc(100vh * 2 / 3); cursor: text; }
 .moss-editor-cm .cm-line { padding-left: var(--moss-editor-line-inset); padding-right: var(--moss-editor-line-inset); }
 /* The inset for a pseudo-element positioned against the line: its `100%` is the line's width, a hang less than the padding's (`.cm-li-hang` has margin-left only), so it adds the hang back. */
 .moss-editor-cm .cm-line {

@@ -186,33 +186,60 @@ export function scrollEditorToTop(view: { scrollDOM: HTMLElement }): void {
 }
 
 /**
- * Scroll the editor to its maximum scrollTop. Used by the scroll-sync receiver
- * when the preview reports atBottom: true, so reaching the end of the page in
- * the preview reaches the end of the file in the editor — the symmetric
- * counterpart of scrollEditorToTop, and of the bridge's scrollTo(max) when it
- * receives scrollToSourceLine with atBottom.
- *
- * Assigning scrollHeight (past the real maximum) is clamped by the browser, so
- * this parks the scroller at its true bottom regardless of viewport height.
+ * Scroll the editor until its last line meets the bottom edge (clear of the
+ * insert bar, CM6's bottom scroll margin), not into the empty room kept below
+ * it. Used by the scroll-sync receiver when the preview reports atBottom:
+ * true, so reaching the end of the page in the preview reaches the end of the
+ * file in the editor — the symmetric counterpart of scrollEditorToTop.
  */
-export function scrollEditorToBottom(view: { scrollDOM: HTMLElement }): void {
-  view.scrollDOM.scrollTop = view.scrollDOM.scrollHeight;
+export function scrollEditorToBottom(view: Pick<EditorView, 'state' | 'dispatch'>): void {
+  view.dispatch({ effects: EditorView.scrollIntoView(view.state.doc.length, { y: 'end' }) });
+}
+
+/** Whether the file's last line is fully in view: the editor's end, the room below it aside. */
+export function lastLineInView(view: Pick<EditorView, 'scrollDOM' | 'state' | 'lineBlockAt' | 'documentTop'>, slack = 0): boolean {
+  const bottom = view.lineBlockAt(view.state.doc.length).bottom + view.documentTop;
+  return bottom <= view.scrollDOM.getBoundingClientRect().bottom + slack;
 }
 
 /**
- * Move the cursor to the beginning of the given 1-based line number
- * and scroll it into view. Used for click-to-source navigation.
- *
- * @param view - The CM6 EditorView instance
- * @param lineNumber - 1-based line number to navigate to
+ * Where a jump from the preview puts its line: a third of the way down the
+ * editor. The eye lands there first, and the block the line starts (however
+ * tall) runs on below it rather than off the bottom.
  */
-export function gotoLine(view: { dispatch(spec: { selection: { anchor: number }; scrollIntoView: boolean }): void; focus(): void; state: { doc: { lines: number; line(n: number): { from: number } } } }, lineNumber: number): void {
+export const REVEAL_FRACTION = 1 / 3;
+
+/** A line whose top is already in the editor's upper two-thirds stays put: moving text the eye is on loses it. */
+const REVEAL_KEEP_ABOVE = 2 / 3;
+
+/**
+ * Bring a line to where the eye finds it after a jump from the preview. The
+ * first line goes to the very top, title in view; any other line out of the
+ * upper two-thirds has its top placed at REVEAL_FRACTION. Typing and caret
+ * movement keep CM6's own "nearest" scroll; this is for jumps only.
+ */
+export function revealLine(view: Pick<EditorView, 'scrollDOM' | 'contentDOM' | 'state' | 'dispatch' | 'lineBlockAt' | 'documentTop'>, lineNumber: number): void {
+  const n = Math.max(1, Math.min(lineNumber, view.state.doc.lines));
+  if (n === 1) {
+    scrollEditorToTop(view);
+    return;
+  }
+  const sd = view.scrollDOM;
+  const top = view.lineBlockAt(view.state.doc.line(n).from).top + view.documentTop - sd.getBoundingClientRect().top;
+  if (top >= 0 && top < sd.clientHeight * REVEAL_KEEP_ABOVE) return;
+  scrollEditorToLine(view, n, REVEAL_FRACTION);
+}
+
+type RevealView = Pick<EditorView, 'scrollDOM' | 'contentDOM' | 'state' | 'dispatch' | 'lineBlockAt' | 'documentTop' | 'focus'>;
+
+/**
+ * Put the caret at the start of a 1-based line and reveal it: the jump from
+ * the preview (double click, the right-click rows, Style rule).
+ */
+export function gotoLine(view: RevealView, lineNumber: number): void {
   const clampedLine = Math.max(1, Math.min(lineNumber, view.state.doc.lines));
-  const line = view.state.doc.line(clampedLine);
-  view.dispatch({
-    selection: { anchor: line.from },
-    scrollIntoView: true,
-  });
+  view.dispatch({ selection: { anchor: view.state.doc.line(clampedLine).from } });
+  revealLine(view, clampedLine);
   view.focus();
 }
 
@@ -346,11 +373,7 @@ const MD_MARKERS = /\*{1,2}|~~|`/g;
  * @param text - The selected text from the preview (plain text, no HTML tags)
  */
 export function selectTextNearLine(
-  view: {
-    dispatch(spec: { selection: { anchor: number; head: number }; scrollIntoView: boolean }): void;
-    focus(): void;
-    state: { doc: { lines: number; line(n: number): { from: number; to: number }; sliceString(from: number, to: number): string } };
-  },
+  view: RevealView,
   startLine: number,
   endLine: number,
   text: string,
@@ -386,17 +409,13 @@ export function selectTextNearLine(
     // Found — select the text
     const anchor = rangeFrom + idx;
     const head = rangeFrom + idx + matchLen;
-    view.dispatch({
-      selection: { anchor, head },
-      scrollIntoView: true,
-    });
+    view.dispatch({ selection: { anchor, head } });
+    revealLine(view, doc.lineAt(anchor).number);
   } else {
     // Fallback: just go to the line
     const line = doc.line(fromLine);
-    view.dispatch({
-      selection: { anchor: line.from, head: line.from },
-      scrollIntoView: true,
-    });
+    view.dispatch({ selection: { anchor: line.from, head: line.from } });
+    revealLine(view, fromLine);
   }
   view.focus();
 }

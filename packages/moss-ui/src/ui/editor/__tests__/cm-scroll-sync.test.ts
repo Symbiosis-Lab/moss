@@ -9,7 +9,15 @@
 
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { EditorView } from '@codemirror/view';
-import { findNearestHeading, headingToAnchor, gotoLine, findRuleLine, selectTextNearLine, mapStrippedToOriginal, scrollEditorToLine, scrollEditorToTop, scrollEditorToBottom, computeContentOffset, getFocusLine } from '../cm-scroll-sync';
+import { findNearestHeading, headingToAnchor, gotoLine, findRuleLine, selectTextNearLine, mapStrippedToOriginal, scrollEditorToLine, scrollEditorToTop, scrollEditorToBottom, computeContentOffset, getFocusLine, revealLine, lastLineInView, REVEAL_FRACTION } from '../cm-scroll-sync';
+
+/** A 600px editor whose every line sits at `lineTop`, inside the upper band unless moved. */
+const layout = (lineTop = 100) => ({
+  scrollDOM: { scrollTop: 0, clientHeight: 600, getBoundingClientRect: () => ({ top: 0, bottom: 600 }) },
+  contentDOM: { offsetTop: 0 },
+  documentTop: 0,
+  lineBlockAt: () => ({ top: lineTop, bottom: lineTop + 20 }),
+});
 
 // ── findNearestHeading ──────────────────────────────────────────────────
 
@@ -177,6 +185,7 @@ describe('gotoLine', () => {
   test('places cursor at start of target line and focuses', () => {
     const dispatched: any[] = [];
     const mockView = {
+      ...layout(),
       dispatch: (spec: any) => dispatched.push(spec),
       focus: vi.fn(),
       state: {
@@ -189,13 +198,15 @@ describe('gotoLine', () => {
     gotoLine(mockView as any, 5);
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0].selection.anchor).toBe(80); // (5-1)*20
-    expect(dispatched[0].scrollIntoView).toBe(true);
+    // No "nearest" scroll: revealLine places the line (here already in view).
+    expect(dispatched[0].scrollIntoView).toBeUndefined();
     expect(mockView.focus).toHaveBeenCalled();
   });
 
   test('clamps line number to valid range', () => {
     const dispatched: any[] = [];
     const mockView = {
+      ...layout(),
       dispatch: (spec: any) => dispatched.push(spec),
       focus: vi.fn(),
       state: {
@@ -212,6 +223,7 @@ describe('gotoLine', () => {
   test('clamps to line 1 for zero or negative input', () => {
     const dispatched: any[] = [];
     const mockView = {
+      ...layout(),
       dispatch: (spec: any) => dispatched.push(spec),
       focus: vi.fn(),
       state: {
@@ -272,6 +284,7 @@ describe('selectTextNearLine', () => {
     const dispatched: any[] = [];
     return {
       view: {
+        ...layout(),
         dispatch(spec: any) { dispatched.push(spec); },
         focus() {},
         state: {
@@ -286,6 +299,9 @@ describe('selectTextNearLine', () => {
             },
             sliceString(from: number, to: number) {
               return content.slice(from, to);
+            },
+            lineAt(pos: number) {
+              return { number: content.slice(0, pos).split('\n').length };
             },
           },
         },
@@ -360,21 +376,51 @@ describe('selectTextNearLine', () => {
 // "go to top" explicitly via scrollEditorToTop.
 
 describe('scrollEditorToBottom', () => {
-  test('parks the scroller at its maximum (scrollTop = scrollHeight)', () => {
-    const scrollDOM = { scrollTop: 120, scrollHeight: 4000 };
-    scrollEditorToBottom({ scrollDOM: scrollDOM as unknown as HTMLElement });
-    // Assigning scrollHeight is clamped to the real max by the browser; the
-    // helper's job is simply to request the bottom.
-    expect(scrollDOM.scrollTop).toBe(4000);
+  test('brings the last line to the bottom edge, not into the room below it', () => {
+    const into = vi.spyOn(EditorView, 'scrollIntoView');
+    const view = { state: { doc: { length: 1234 } }, dispatch: vi.fn() };
+    scrollEditorToBottom(view as unknown as Parameters<typeof scrollEditorToBottom>[0]);
+    expect(into).toHaveBeenLastCalledWith(1234, { y: 'end' });
+    expect(view.dispatch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('lastLineInView', () => {
+  const view = (lineTop: number) => ({ ...layout(lineTop), state: { doc: { length: 9 } } }) as unknown as Parameters<typeof lastLineInView>[0];
+  test('true while the last line is inside the scroller, with the room below it', () => {
+    expect(lastLineInView(view(300))).toBe(true);
+  });
+  test('false while the last line is below the bottom edge', () => {
+    expect(lastLineInView(view(590))).toBe(false);
+    expect(lastLineInView(view(590), 20)).toBe(true);
+  });
+});
+
+describe('revealLine', () => {
+  const view = (lineTop: number) => ({ ...layout(lineTop), state: { doc: { lines: 50, line: (n: number) => ({ from: (n - 1) * 10 }) } }, dispatch: vi.fn() }) as unknown as Parameters<typeof revealLine>[0] & { dispatch: ReturnType<typeof vi.fn>; scrollDOM: { scrollTop: number } };
+
+  test('a line already in the upper two-thirds stays where it is', () => {
+    const v = view(350);
+    revealLine(v, 20);
+    expect(v.dispatch).not.toHaveBeenCalled();
   });
 
-  test('is the symmetric counterpart of scrollEditorToTop', () => {
-    const top = { scrollTop: 999, scrollHeight: 4000 };
-    const bottom = { scrollTop: 0, scrollHeight: 4000 };
-    scrollEditorToTop({ scrollDOM: top as unknown as HTMLElement });
-    scrollEditorToBottom({ scrollDOM: bottom as unknown as HTMLElement });
-    expect(top.scrollTop).toBe(0);
-    expect(bottom.scrollTop).toBe(4000);
+  test('a line on the bottom edge, or above the top, goes a third of the way down', () => {
+    const into = vi.spyOn(EditorView, 'scrollIntoView');
+    for (const top of [560, -40, 5000]) {
+      const v = view(top);
+      revealLine(v, 20);
+      expect(into).toHaveBeenLastCalledWith(190, { y: 'start', yMargin: 600 * REVEAL_FRACTION });
+      expect(v.dispatch).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  test('the first line goes to the very top, where the title is', () => {
+    const v = view(5000);
+    v.scrollDOM.scrollTop = 900;
+    revealLine(v, 1);
+    expect(v.scrollDOM.scrollTop).toBe(0);
+    expect(v.dispatch).not.toHaveBeenCalled();
   });
 });
 

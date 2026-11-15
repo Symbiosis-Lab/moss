@@ -91,6 +91,7 @@ import {
   scrollEditorToLine,
   scrollEditorToTop,
   scrollEditorToBottom,
+  lastLineInView,
   computeContentOffset,
   gotoLine,
   findRuleLine,
@@ -3288,15 +3289,14 @@ function onEditorScroll(): void {
     const offset = computeContentOffset(view);
     const atTop = view.scrollDOM.scrollTop < offset + TOP_THRESHOLD;
 
-    // Symmetric to atTop: the editor's scroller is at (or within a hair of)
-    // its maximum. The top-visible line is then some line BEFORE the last, so
+    // Symmetric to atTop: the file's last line is in view (the empty room
+    // below it is not the file). The top-visible line is then some line BEFORE the last, so
     // a line-based sync parks that line's element at block:start and leaves the
     // preview short of its own bottom (the reported "preview stops mid-way"
     // bug). The preview short-circuits to its max scroll on this flag, exactly
     // as atTop short-circuits to 0. atTop is checked first on the bridge, so a
     // doc too short to scroll (both true) resolves to top, which is correct.
-    const sd = view.scrollDOM;
-    const atBottom = sd.scrollTop + sd.clientHeight >= sd.scrollHeight - BOTTOM_THRESHOLD;
+    const atBottom = lastLineInView(view, BOTTOM_THRESHOLD);
 
     // Primary: line-based sync (requires data-source-line in built HTML)
     uiHost.bus.emit('scroll-sync:editor-to-preview', {
