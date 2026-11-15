@@ -28,6 +28,11 @@ specta = { version = "=2.0.0-rc.20", features = ["derive"], optional = true }
 # Same version as the desktop app's to avoid duplicate compilation.
 pulldown-cmark = { version = "0.13", default-features = false }
 
+# sha2 0.10 hashes in software on ARM unless `asm` is on. With it, a CPU that
+# has the SHA-2 instructions (every Apple one) uses them.
+[target.'cfg(all(target_arch = "aarch64", target_vendor = "apple"))'.dependencies]
+sha2 = { version = "0.10", features = ["asm"] }
+
 [features]
 default = []
 # Inserts `Options::ENABLE_CJK_FRIENDLY_EMPHASIS` in `parser_options`
