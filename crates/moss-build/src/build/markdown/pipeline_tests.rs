@@ -4023,6 +4023,20 @@ fn bare_trailing_pipe_renders_alt_without_a_figcaption() {
     assert!(!html.contains("figcaption"), "got: {html}");
 }
 
+/// A picture that is all of a link takes its bracket text, in either
+/// spelling, as its alt text, which names the link; the bracket text is never
+/// a caption, so the wiki spelling needs no trailing `|`.
+#[test]
+fn a_linked_picture_takes_its_bracket_text_as_alt_text() {
+    for md in ["[![Harbour from the east pier](harbour.png)](/harbour/)\n", "[![[harbour.png|Harbour from the east pier]]](/harbour/)\n"] {
+        let html = render_with_graph(md, &["harbour.png"]);
+        let (before, img) = html.split_once("<img").unwrap_or_else(|| panic!("{md}: {html}"));
+        assert!(before.contains(r#"href="/harbour/""#), "{md}: {html}");
+        assert!(img.split('>').next().unwrap().contains(r#"alt="Harbour from the east pier""#), "{md}: {html}");
+        assert!(!html.contains("figcaption"), "{md}: {html}");
+    }
+}
+
 #[test]
 fn hero_header_over_marks_only_the_opening_hero() {
     let opening = render_hero_with_graph(
