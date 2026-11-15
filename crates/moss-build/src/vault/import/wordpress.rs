@@ -11,9 +11,9 @@ use super::page::{ImportedPage, PageStyle, media::MediaWriter};
 use super::source::ImportResult;
 use super::scrape::{
     converter::rewrite_file_links, crawl_state::{AssetMap, HostPacer}, design::{self, norm_url, NavEntry},
-    fetch::{Downloaded, FileProgress, LINKED_FILE_MAX_BYTES},
+    fetch::{Client, Downloaded, FileProgress, LINKED_FILE_MAX_BYTES},
     run::{scrape_into, ScrapeProgress, ScrapeResult, ASSETS_PREFIX, ASSETS_SUBDIR}, scope::{bare_host, UrlScope},
-    service::{default_user_agent, ScrapeConfig}, writer::PendingPage,
+    service::ScrapeConfig, writer::PendingPage,
 };
 pub(crate) mod wxr;
 use wxr::{Item, RECORDS};
@@ -28,7 +28,7 @@ struct Place<'a> {
 
 /// Import the export at `path` into `folder`, after crawling `address` (or the
 /// site the export names) so published pages keep the body the site renders.
-pub(crate) async fn import(path: &Path, address: Option<&str>, folder: &Path, held: &mut ImportedPages, progress: Progress<'_>) -> Result<ImportResult, String> {
+pub(crate) async fn import(path: &Path, address: Option<&str>, folder: &Path, client: &Client, held: &mut ImportedPages, progress: Progress<'_>) -> Result<ImportResult, String> {
     let export = wxr::read(path)?;
     let site = match address {
         Some(address) => {
@@ -51,6 +51,7 @@ pub(crate) async fn import(path: &Path, address: Option<&str>, folder: &Path, he
             let mut config = ScrapeConfig::new(site.as_str(), folder);
             config.recursive = true;
             config.menu = menu.clone();
+            config.client = client.clone();
             match scrape_into(config, held, &quiet).await {
                 Ok(crawl) if crawl.result.total_pages > 0 => Some(crawl),
                 _ => {
@@ -70,8 +71,7 @@ pub(crate) async fn import(path: &Path, address: Option<&str>, folder: &Path, he
 
     let dir = folder.join(ASSETS_SUBDIR);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let user_agent = default_user_agent();
-    let media = MediaWriter { directory: &dir, prefix: ASSETS_PREFIX, user_agent: &user_agent, referer: Some(base.as_str()) };
+    let media = MediaWriter { directory: &dir, prefix: ASSETS_PREFIX, client, referer: Some(base.as_str()) };
     let (landed, remote) = fetch_library(&export.items, &media, &mut assets, &mut pacer).await;
     if landed + remote > 0 {
         report.push(format!("Media library files downloaded: {landed}; left at their addresses: {remote}."));
@@ -287,15 +287,57 @@ mod tests {
         let folder = tmp.path().join("site");
         std::fs::create_dir_all(&folder).unwrap();
 
-        let result = import(&path, None, &folder, &mut ImportedPages::default(), &|_| {}).await.unwrap();
+        let client = Client::no_own_site();
+        let result = import(&path, None, &folder, &client, &mut ImportedPages::default(), &|_| {}).await.unwrap();
 
         assert!(result.report.iter().any(|l| l == "Media library files downloaded: 0; left at their addresses: 2."), "{:?}", result.report);
         assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
         // No listener can count the link-local request: the library's file
         // download is the address check's refusal, where a request would fail to connect.
-        let media = MediaWriter { directory: &folder, prefix: ASSETS_PREFIX, user_agent: "test", referer: None };
-        let refused = media.linked(link_local, &mut AssetMap::default(), &mut HostPacer::default(), LINKED_FILE_MAX_BYTES).await.err().unwrap();
-        assert!(refused.is_refused(), "{refused}");
+        let mut recorded = client.refused_report();
+        recorded.sort();
+        assert!(recorded.contains(&format!("Not fetched: {link_local}")) && recorded.contains(&format!("Not fetched: {loopback}/harbour.png")), "{recorded:?}");
+    }
+
+    fn export_naming(site: &str, dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+        let path = dir.join("export.xml");
+        std::fs::write(&path, format!(
+            "<?xml version=\"1.0\"?><rss version=\"2.0\" xmlns:wp=\"http://wordpress.org/export/1.2/\"><channel><title>Lantern Studio</title><link>{site}</link></channel></rss>"
+        )).unwrap();
+        let folder = dir.join("site");
+        std::fs::create_dir_all(&folder).unwrap();
+        (path, folder)
+    }
+
+    #[tokio::test]
+    async fn an_export_with_an_address_crawls_the_own_site() {
+        let mut p = crate::vault::import::scrape::fetch::private_pair().await;
+        let home = p.own.mock("GET", "/").with_header("content-type", "text/html")
+            .with_body("<html><body><article><p>Home page body, long enough to be extracted as content by the generic scorer.</p></article></body></html>")
+            .expect_at_least(1).create_async().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let (path, folder) = export_naming(&p.own.url(), tmp.path());
+
+        let result = import(&path, Some(&p.own.url()), &folder, &p.client, &mut ImportedPages::default(), &|_| {}).await.unwrap();
+
+        home.assert_async().await;
+        assert_eq!(result.scrape.total_pages, 1);
+        assert!(p.client.refused_report().is_empty(), "{:?}", p.client.refused_report());
+    }
+
+    #[tokio::test]
+    async fn an_export_alone_naming_another_private_site_does_not_crawl_it() {
+        let mut p = crate::vault::import::scrape::fetch::private_pair().await;
+        let home = p.other.mock("GET", mockito::Matcher::Any).expect(0).create_async().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let (path, folder) = export_naming(&p.other.url(), tmp.path());
+
+        let result = import(&path, None, &folder, &p.client, &mut ImportedPages::default(), &|_| {}).await.unwrap();
+
+        home.assert_async().await;
+        let named = host(&url::Url::parse(&p.other.url()).unwrap());
+        assert!(result.report.contains(&format!("{named} could not be reached; every page was written from the export.")), "{:?}", result.report);
+        assert!(p.client.refused_report().contains(&format!("Not fetched: {}/", p.other.url())), "{:?}", p.client.refused_report());
     }
 
     #[test]

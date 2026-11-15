@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 
 use super::crawl_state::HostPacer;
+use super::fetch::Client;
 
 pub(crate) use facts::{norm_url, NavEntry};
 pub(crate) use style::has_text_link;
@@ -120,7 +121,7 @@ pub(crate) struct HomePage {
 /// Everything one chrome pass needs from the finished crawl.
 pub(crate) struct Capture<'a> {
     pub out_dir: &'a Path,
-    pub user_agent: &'a str,
+    pub client: &'a Client,
     pub home: &'a HomePage,
     /// A page whose text holds a link, for the reading styles.
     pub post: Option<&'a str>,
@@ -135,7 +136,7 @@ pub(crate) struct Capture<'a> {
 /// was read for.
 pub(crate) fn place_menu(out_dir: &Path, written: &HashMap<String, String>, menu: &[NavEntry]) -> Result<(), String> {
     let home = HomePage { url: String::new(), html: String::new(), is_start: false };
-    write::write_menu(&Capture { out_dir, user_agent: "", home: &home, post: None, written, menu })
+    write::write_menu(&Capture { out_dir, client: &Client::no_own_site(), home: &home, post: None, written, menu })
 }
 
 /// Read the home page's chrome and write it into the crawl's output folder.

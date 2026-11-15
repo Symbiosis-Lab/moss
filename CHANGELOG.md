@@ -4,6 +4,10 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
+### Added
+
+- A site on your own network can be imported by giving its address, for example `http://192.168.1.20:2368`, and the report says it is on your network. Any other private address a page names (an image, a stylesheet, a sitemap) is not fetched, and the report lists each one under "Not fetched".
+
 ### Fixed
 
 - In the editor, resting the pointer on a folder embed's path (`![[Termine/|when:upcoming]]`), or on an embedded page's name, opens no card. The card only repeated the path. A page property whose value is shown whole has no tooltip repeating it.

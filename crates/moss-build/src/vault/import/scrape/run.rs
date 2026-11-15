@@ -356,7 +356,7 @@ pub(crate) async fn scrape_into(
     // only against identities already WRITTEN, so whichever is written
     // first survives).
     let sitemap = if config.recursive {
-        super::sitemap::discover(&scope, &config.start_url, &config.user_agent).await
+        super::sitemap::discover(&scope, &config.start_url, &config.client).await
     } else {
         super::sitemap::SitemapDiscovery::default()
     };
@@ -409,7 +409,7 @@ pub(crate) async fn scrape_into(
         state.pacer.wait(&fetch_host).await;
         // A link found on the site that leads off it is reported, not fetched.
         let link_of_site = config.recursive && norm_url(&url) != norm_url(&config.start_url);
-        let page_result = fetch_page(&url, &config.user_agent, link_of_site.then_some(&scope)).await;
+        let page_result = fetch_page(&url, &config.client, link_of_site.then_some(&scope)).await;
         observe_pace(&mut state.pacer, &fetch_host, &page_result);
         let (html, content_type, final_url) = match page_result {
             Ok(v) => v,
@@ -518,7 +518,7 @@ pub(crate) async fn scrape_into(
             Some(snapshot_url) => {
                 let snapshot_host = host_of(&snapshot_url);
                 state.pacer.wait(&snapshot_host).await;
-                let snapshot_result = fetch_page(&snapshot_url, &config.user_agent, None).await;
+                let snapshot_result = fetch_page(&snapshot_url, &config.client, None).await;
                 observe_pace(&mut state.pacer, &snapshot_host, &snapshot_result);
                 match snapshot_result {
                     Ok((s, _, _)) => Some(s),
@@ -569,7 +569,7 @@ pub(crate) async fn scrape_into(
         let images: Vec<_> = article.media_urls.iter().map(|u| (u.clone(), u.clone())).collect();
         let media = MediaWriter {
             directory: &assets_dir, prefix: ASSETS_PREFIX,
-            user_agent: &config.user_agent, referer: Some(&url),
+            client: &config.client, referer: Some(&url),
         };
         media.download(&images, &mut state.assets, Some((&mut state.pacer, &mut progress))).await;
 
@@ -684,7 +684,7 @@ pub(crate) async fn scrape_into(
         Some(home) => {
             let capture = Capture {
                 out_dir,
-                user_agent: &config.user_agent,
+                client: &config.client,
                 home,
                 post: post_html.as_deref(),
                 written: &written_urls,

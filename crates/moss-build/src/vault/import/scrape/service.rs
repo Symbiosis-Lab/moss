@@ -50,8 +50,8 @@ pub struct ScrapeConfig {
     pub recursive: bool,
     /// Cap on pages visited during a recursive walk. None disables the cap.
     pub max_pages: Option<usize>,
-    /// User-Agent used for HTTP requests.
-    pub user_agent: String,
+    /// The user agent and address policy every request of the crawl uses.
+    pub(crate) client: super::fetch::Client,
     /// Largest single file a page's link may pull into the site.
     pub(crate) linked_file_max_bytes: u64,
     /// A source's menu (a WordPress export's), the nav bar when the home
@@ -67,7 +67,7 @@ impl ScrapeConfig {
             output_dir: output_dir.into(),
             recursive: false,
             max_pages: Some(DEFAULT_MAX_PAGES),
-            user_agent: default_user_agent(),
+            client: super::fetch::Client::no_own_site(),
             linked_file_max_bytes: super::fetch::LINKED_FILE_MAX_BYTES,
             menu: Vec::new(),
         }

@@ -72,7 +72,7 @@ fn parse_retry_after_rejects_a_past_http_date() {
 fn observe_pace_passes_the_typed_status_through_to_the_pacer() {
     let mut pacer = HostPacer::default();
     let err: Result<(), FetchError> =
-        Err(FetchError { status: Some(429), refused: false, message: "429 Too Many Requests".to_string() });
+        Err(FetchError { status: Some(429), message: "429 Too Many Requests".to_string() });
     observe_pace(&mut pacer, "example.test", &err);
     assert!(pacer.current_interval("example.test") > std::time::Duration::ZERO);
 }
@@ -88,7 +88,6 @@ fn observe_pace_matches_by_typed_status_not_message_wording() {
     let mut pacer = HostPacer::default();
     let err: Result<(), FetchError> = Err(FetchError {
         status: Some(429),
-        refused: false,
         message: "fetch failed, server said: too many requests".to_string(),
     });
     observe_pace(&mut pacer, "example.test", &err);
@@ -239,10 +238,10 @@ async fn a_redirect_to_loopback_is_refused() {
 
     let start = format!("{}/start", server.url());
     let agent = no_redirect_test_agent(&start);
-    let refused = std::cell::Cell::new(false);
-    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None, &refused)
+    let client = Client::no_own_site();
+    let err = fetch_with_validated_redirects(&agent, &start, &client, None, None, None)
         .expect_err("a redirect to a loopback address must be refused");
-    assert!(refused.get(), "a refused hop is marked as the address policy's");
+    assert_eq!(client.refused_report(), ["Not fetched: http://127.0.0.1:1/internal"], "a refused hop is recorded");
     // Not just `.expect_err(...)`: an ablated per-hop check would still
     // ATTEMPT the connection to 127.0.0.1:1 and get a real connection
     // error back (nothing listens there in the sandbox) — an `Err` for
@@ -263,7 +262,7 @@ async fn a_redirect_to_a_mail_address_is_refused_not_a_panic() {
 
     let start = format!("{}/start", server.url());
     let agent = no_redirect_test_agent(&start);
-    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None, &Default::default())
+    let err = fetch_with_validated_redirects(&agent, &start, &Client::no_own_site(), None, None, None)
         .expect_err("a redirect to a mailto: address must be refused");
     let detail = refusal_detail(&err);
     assert!(detail.contains("redirected to a disallowed") && detail.contains("mailto"), "{detail}");
@@ -301,7 +300,7 @@ async fn a_redirect_to_link_local_metadata_is_refused() {
 
     let start = format!("{}/start", server.url());
     let agent = no_redirect_test_agent(&start);
-    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None, &Default::default())
+    let err = fetch_with_validated_redirects(&agent, &start, &Client::no_own_site(), None, None, None)
         .expect_err("a redirect to the cloud-metadata address must be refused");
     // Asserting the detail (not just "some Err") matters here: an
     // ablated check would still connect-fail refusing this unroutable
@@ -322,7 +321,7 @@ async fn a_redirect_to_ipv6_loopback_is_refused() {
 
     let start = format!("{}/start", server.url());
     let agent = no_redirect_test_agent(&start);
-    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None, &Default::default())
+    let err = fetch_with_validated_redirects(&agent, &start, &Client::no_own_site(), None, None, None)
         .expect_err("a redirect to ::1 must be refused");
     assert!(refusal_detail(&err).contains("redirected to a disallowed"), "{}", refusal_detail(&err));
 }
@@ -378,10 +377,10 @@ async fn a_redirect_chain_longer_than_the_hop_cap_is_refused() {
 
     let start = format!("{}/hop0", server.url());
     let agent = no_redirect_test_agent(&start);
-    let refused = std::cell::Cell::new(false);
-    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, None, &refused)
+    let client = Client::no_own_site();
+    let err = fetch_with_validated_redirects(&agent, &start, &client, None, None, None)
         .expect_err("a chain past MAX_REDIRECT_HOPS must be refused, not followed forever");
-    assert!(!refused.get(), "a long chain is no address refusal");
+    assert!(client.refused_report().is_empty(), "a long chain is no address refusal");
     assert!(refusal_detail(&err).contains("too many redirects"), "{}", refusal_detail(&err));
 }
 
@@ -424,10 +423,12 @@ async fn a_media_download_on_loopback_or_link_local_is_refused_unrequested() {
     let (loopback, hits) = unregistered_loopback_server();
     let tmp = tempfile::tempdir().unwrap();
     for base in [loopback.as_str(), LINK_LOCAL] {
-        let err = download_asset(&format!("{base}/a.png"), tmp.path(), "test-agent", Some("https://pages.example.test/"))
+        let client = Client::no_own_site();
+        let err = download_asset(&format!("{base}/a.png"), tmp.path(), &client, Some("https://pages.example.test/"))
             .await
             .expect_err(base);
-        assert!(err.is_refused() && refused_before_any_request(&err.to_string()), "{err}");
+        assert!(refused_before_any_request(&err.to_string()), "{err}");
+        assert_eq!(client.refused_report(), [format!("Not fetched: {base}/a.png")]);
     }
     assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
@@ -437,9 +438,11 @@ async fn a_linked_file_on_loopback_or_link_local_is_refused_unrequested() {
     let (loopback, hits) = unregistered_loopback_server();
     let tmp = tempfile::tempdir().unwrap();
     for base in [loopback.as_str(), LINK_LOCAL] {
-        let result = download_linked_file(&format!("{base}/f.pdf"), tmp.path(), "test-agent", None, 8, "f.pdf".into()).await;
+        let client = Client::no_own_site();
+        let result = download_linked_file(&format!("{base}/f.pdf"), tmp.path(), &client, None, 8, "f.pdf".into()).await;
         let err = result.err().expect(base);
-        assert!(err.is_refused() && refused_before_any_request(&err.to_string()), "{err}");
+        assert!(refused_before_any_request(&err.to_string()), "{err}");
+        assert_eq!(client.refused_report(), [format!("Not fetched: {base}/f.pdf")]);
     }
     assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
     assert!(!tmp.path().join("f.pdf").exists());
@@ -449,10 +452,126 @@ async fn a_linked_file_on_loopback_or_link_local_is_refused_unrequested() {
 async fn a_raw_fetch_on_loopback_or_link_local_is_refused_unrequested() {
     let (loopback, hits) = unregistered_loopback_server();
     for base in [loopback.as_str(), LINK_LOCAL] {
-        let err = fetch_raw_bytes(&format!("{base}/sitemap.xml"), "test-agent").await.expect_err(base);
-        assert!(err.is_refused() && refused_before_any_request(&err.to_string()), "{err}");
+        let client = Client::no_own_site();
+        let err = fetch_raw_bytes(&format!("{base}/sitemap.xml"), &client).await.expect_err(base);
+        assert!(refused_before_any_request(&err.to_string()), "{err}");
+        assert_eq!(client.refused_report(), [format!("Not fetched: {base}/sitemap.xml")]);
     }
     assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+// ── the person's own site ───────────────────────────────────────────
+
+#[test]
+fn a_private_literal_passes_only_as_the_address_the_person_gave() {
+    let client = Client::new(Some("http://192.168.1.5:8080/blog"));
+    assert!(client.check("http://192.168.1.5:8080/page").is_ok());
+    assert!(client.check("http://192.168.1.6:8080/page").is_err(), "another address");
+    assert!(client.check("http://192.168.1.5:9090/page").is_err(), "the same address on another port");
+    assert!(client.check("https://example.test/page").is_ok(), "names and public addresses are not the rule's business");
+    assert!(Client::no_own_site().check("http://192.168.1.5:8080/page").is_err());
+    assert!(Client::new(Some("not an address")).check("http://192.168.1.5/").is_err());
+    assert!(Client::new(Some("ftp://192.168.1.5/")).check("http://192.168.1.5/").is_err());
+}
+
+#[test]
+fn the_own_site_is_matched_by_address_value_and_port_not_by_spelling() {
+    let client = Client::new(Some("http://192.168.1.5/"));
+    assert!(client.check("http://[::ffff:192.168.1.5]/x").is_ok(), "the same address written as IPv6");
+    assert!(client.check("https://192.168.1.5/x").is_ok(), "the default ports of http and https are one");
+    assert!(client.check("http://192.168.1.5:81/x").is_err());
+    let own = Client::new(Some("http://[::ffff:10.0.0.2]:3000/"));
+    assert!(own.check("http://10.0.0.2:3000/").is_ok());
+}
+
+#[test]
+fn a_login_in_the_own_site_address_is_not_kept() {
+    let client = Client::new(Some("http://writer:secret@192.168.1.5:3000/"));
+    assert!(client.check("http://192.168.1.5:3000/").is_ok());
+    assert!(!format!("{client:?}").contains("secret"));
+    assert_eq!(client.local_host(), Some("192.168.1.5"));
+}
+
+#[test]
+fn only_a_private_literal_own_site_is_local() {
+    assert_eq!(Client::new(Some("http://10.0.0.7/")).local_host(), Some("10.0.0.7"));
+    assert_eq!(Client::new(Some("http://100.64.0.9:80/")).local_host(), Some("100.64.0.9"));
+    for own in [Some("http://93.184.216.34/"), Some("https://example.test/"), Some("http://127.0.0.1/"), None] {
+        assert_eq!(Client::new(own).local_host(), None, "{own:?}");
+    }
+}
+
+#[test]
+fn the_report_names_twenty_refused_addresses_and_counts_the_rest() {
+    let client = Client::no_own_site();
+    for i in 1..=25 {
+        client.check(&format!("http://10.0.0.{i}/")).expect_err("private");
+    }
+    let report = client.refused_report();
+    assert_eq!(report.len(), 21, "{report:?}");
+    assert!(report[..20].iter().all(|l| l.starts_with("Not fetched: http://10.0.0.")));
+    assert_eq!(report[20], "Not fetched: 5 more addresses.");
+}
+
+#[test]
+fn a_refused_address_is_named_once_and_only_a_thousand_are_kept() {
+    let client = Client::no_own_site();
+    client.check("http://10.0.0.1/a?x=1").unwrap_err();
+    client.check("http://10.0.0.1/a?x=2").unwrap_err();
+    assert_eq!(client.refused_report(), ["Not fetched: http://10.0.0.1/a"]);
+    let signed = Client::no_own_site();
+    signed.check("http://reader:secret@10.0.0.2/a#top").unwrap_err();
+    assert_eq!(signed.refused_report(), ["Not fetched: http://10.0.0.2/a"], "sign-in details never reach the report");
+    for i in 0..1100 {
+        client.check(&format!("http://10.1.{}.{}/", i / 250, i % 250)).unwrap_err();
+    }
+    assert_eq!(client.refused.lock().unwrap().len(), 1000);
+}
+
+#[tokio::test]
+async fn the_own_site_redirecting_to_another_private_address_is_not_followed() {
+    let mut p = private_pair().await;
+    let _m = p.own.mock("GET", "/start").with_status(302).with_header("Location", &format!("{}/x", p.other.url())).create_async().await;
+    let target = p.other.mock("GET", "/x").expect(0).create_async().await;
+    let start = format!("{}/start", p.own.url());
+    let agent = no_redirect_test_agent(&start);
+
+    let err = fetch_with_validated_redirects(&agent, &start, &p.client, None, None, None).expect_err("the hop is another private address");
+
+    assert!(refusal_detail(&err).contains("redirected to a disallowed"), "{}", refusal_detail(&err));
+    target.assert_async().await;
+    assert_eq!(p.client.refused_report(), [format!("Not fetched: {}/x", p.other.url())]);
+}
+
+#[tokio::test]
+async fn the_own_site_redirecting_to_itself_is_followed() {
+    let mut p = private_pair().await;
+    let _old = p.own.mock("GET", "/old").with_status(301).with_header("Location", "/new").create_async().await;
+    let _new = p.own.mock("GET", "/new").with_status(200).with_body("ok").create_async().await;
+    let start = format!("{}/old", p.own.url());
+    let agent = no_redirect_test_agent(&start);
+
+    let response = fetch_with_validated_redirects(&agent, &start, &p.client, None, None, None).expect("a hop on the own site");
+
+    assert_eq!(response.get_url(), format!("{}/new", p.own.url()));
+    assert!(p.client.refused_report().is_empty());
+}
+
+#[tokio::test]
+async fn a_linked_file_is_fetched_from_the_own_site_and_not_from_another_private_address() {
+    let mut p = private_pair().await;
+    let own = p.own.mock("GET", "/f.pdf").with_header("content-type", "application/pdf").with_body("012345").expect(1).create_async().await;
+    let other = p.other.mock("GET", "/g.pdf").with_header("content-type", "application/pdf").with_body("012345").expect(0).create_async().await;
+    let tmp = tempfile::tempdir().unwrap();
+
+    let saved = download_linked_file(&format!("{}/f.pdf", p.own.url()), tmp.path(), &p.client, None, 100, "f.pdf".into()).await.unwrap();
+    let err = download_linked_file(&format!("{}/g.pdf", p.other.url()), tmp.path(), &p.client, None, 100, "g.pdf".into()).await.err().expect("another private address");
+
+    assert!(matches!(saved, Downloaded::Saved(name) if name == "f.pdf"));
+    assert!(refused_before_any_request(&err.to_string()), "{err}");
+    own.assert_async().await;
+    other.assert_async().await;
+    assert_eq!(p.client.refused_report(), [format!("Not fetched: {}/g.pdf", p.other.url())]);
 }
 
 // ── media Accept header (CDN content negotiation, not SSRF) ─────────
@@ -479,7 +598,7 @@ async fn a_media_download_sends_the_media_accept_header() {
 
     let tmp = tempfile::tempdir().unwrap();
     let url = format!("{}/content/v1/abc/def/photo.jpg", server.url());
-    download_asset(&url, tmp.path(), "test-agent", None)
+    download_asset(&url, tmp.path(), &Client::no_own_site(), None)
         .await
         .expect("mock only matches the request carrying MEDIA_ACCEPT; an \
                  unmatched mockito request errors instead of 200-ing");
@@ -499,7 +618,7 @@ async fn a_media_download_sends_the_pages_origin_as_referer() {
 
     let tmp = tempfile::tempdir().unwrap();
     let url = format!("{}/img/a.jpg", server.url());
-    download_asset(&url, tmp.path(), "test-agent", Some("http://pages.example.test/notes/1?x=2#top"))
+    download_asset(&url, tmp.path(), &Client::no_own_site(), Some("http://pages.example.test/notes/1?x=2#top"))
         .await
         .expect("mock only matches a request carrying the page origin as Referer");
 }
@@ -534,14 +653,14 @@ async fn a_linked_file_over_the_cap_is_not_written_and_one_under_it_keeps_its_na
         .await;
 
     let tmp = tempfile::tempdir().unwrap();
-    let big = download_linked_file(&format!("{}/files/big.pdf", server.url()), tmp.path(), "t", None, 8, "big.pdf".into())
+    let big = download_linked_file(&format!("{}/files/big.pdf", server.url()), tmp.path(), &Client::no_own_site(), None, 8, "big.pdf".into())
         .await
         .unwrap();
     assert!(matches!(big, Downloaded::TooLarge));
     assert!(!tmp.path().join("big.pdf").exists(), "an oversized file is never written");
 
     let small =
-        download_linked_file(&format!("{}/files/small.pdf", server.url()), tmp.path(), "t", None, 8, "small.pdf".into())
+        download_linked_file(&format!("{}/files/small.pdf", server.url()), tmp.path(), &Client::no_own_site(), None, 8, "small.pdf".into())
             .await
             .unwrap();
     assert!(matches!(small, Downloaded::Saved(name) if name == "small.pdf"));
@@ -568,7 +687,7 @@ async fn a_page_fetch_keeps_the_default_accept_header() {
         .await;
 
     let url = format!("{}/article", server.url());
-    fetch_page(&url, "test-agent", None)
+    fetch_page(&url, &Client::no_own_site(), None)
         .await
         .expect("mock only matches Accept: */*; a page fetch must still send it");
 }
@@ -722,7 +841,7 @@ async fn a_link_of_the_site_that_leads_off_it_is_reported_not_requested() {
     let scope = super::super::scope::UrlScope::new(&format!("{}/", server.url())).unwrap();
     let destination = |path: &str| {
         let start = format!("{}{path}", server.url());
-        fetch_with_validated_redirects(&agent, &start, "test-agent", None, None, Some(&scope), &Default::default())
+        fetch_with_validated_redirects(&agent, &start, &Client::no_own_site(), None, None, Some(&scope))
             .map(|r| crate::system::redirects::redirect_target(&r))
     };
 

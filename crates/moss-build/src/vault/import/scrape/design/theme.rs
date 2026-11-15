@@ -14,7 +14,7 @@ use url::Url;
 
 use super::super::crawl_state::HostPacer;
 use super::super::crawler::host_of;
-use super::super::fetch::{fetch_raw, fetch_raw_bytes, hash_url, linked_filename, observe_pace};
+use super::super::fetch::{Client, fetch_raw, fetch_raw_bytes, hash_url, linked_filename, observe_pace};
 use crate::build::theme_lint::{strip_comments, PROP_DECL};
 use super::facts::sel;
 use super::mapping::{self, Overrides};
@@ -23,7 +23,7 @@ use super::{Capture, ChromePart, ChromeSummary};
 
 pub(super) async fn apply(capture: &Capture<'_>, pacer: &mut HostPacer, summary: &mut ChromeSummary) -> Result<(), String> {
     let mut notes = Vec::new();
-    let sheets = fetch_sheets(&capture.home.html, &capture.home.url, capture.user_agent, pacer, &mut notes).await;
+    let sheets = fetch_sheets(&capture.home.html, &capture.home.url, capture.client, pacer, &mut notes).await;
     let facts = style::read(&capture.home.html, capture.post, &sheets);
     let overrides = mapping::map(&facts, &moss_core::contract::tokens::load_tokens()?);
     summary.residuals = notes;
@@ -39,7 +39,7 @@ pub(super) async fn apply(capture: &Capture<'_>, pacer: &mut HostPacer, summary:
         summary.theme = ChromePart::LeftUnchanged;
         return Ok(());
     }
-    let (faces, fonts) = copy_fonts(&facts.font_faces, &overrides.families, &theme_dir, capture.user_agent, pacer, MAX_FONT_BYTES, &mut summary.residuals).await;
+    let (faces, fonts) = copy_fonts(&facts.font_faces, &overrides.families, &theme_dir, capture.client, pacer, MAX_FONT_BYTES, &mut summary.residuals).await;
     let css = match existing.as_deref().map(str::trim_end).filter(|c| !c.is_empty()) {
         Some(own) => format!("{own}\n\n{faces}{}", overrides.css()),
         None => format!("{faces}{}", overrides.css()),
@@ -69,7 +69,7 @@ fn overrides_a_token(css: &str) -> bool {
 /// written, each linked one fetched. A sheet that cannot be fetched, and one
 /// a sheet `@import`s (not followed), leave the read incomplete; `notes` names
 /// each.
-async fn fetch_sheets(html: &str, page_url: &str, user_agent: &str, pacer: &mut HostPacer, notes: &mut Vec<String>) -> Vec<Sheet> {
+async fn fetch_sheets(html: &str, page_url: &str, client: &Client, pacer: &mut HostPacer, notes: &mut Vec<String>) -> Vec<Sheet> {
     let Ok(base) = Url::parse(page_url) else { return Vec::new() };
     let found: Vec<Result<String, Url>> = {
         let doc = Html::parse_document(html);
@@ -88,11 +88,10 @@ async fn fetch_sheets(html: &str, page_url: &str, user_agent: &str, pacer: &mut 
             Err(url) => {
                 let host = host_of(url.as_str());
                 pacer.wait(&host).await;
-                let fetched = fetch_raw(url.as_str(), user_agent).await;
+                let fetched = fetch_raw(url.as_str(), client).await;
                 observe_pace(pacer, &host, &fetched);
                 match fetched {
                     Ok(css) => sheets.push(Sheet { css, base: url }),
-                    Err(e) if e.is_refused() => notes.push(format!("stylesheet {url}: address not allowed")),
                     Err(e) => notes.push(format!("stylesheet {url} could not be read ({e}), so what it styles is missing")),
                 }
             }
@@ -122,7 +121,7 @@ async fn copy_fonts(
     faces: &[FontFace],
     families: &[String],
     theme_dir: &Path,
-    user_agent: &str,
+    client: &Client,
     pacer: &mut HostPacer,
     max_bytes: usize,
     notes: &mut Vec<String>,
@@ -156,12 +155,11 @@ async fn copy_fonts(
             }
             let host = host_of(&face.source);
             pacer.wait(&host).await;
-            let fetched = fetch_raw_bytes(&face.source, user_agent).await;
+            let fetched = fetch_raw_bytes(&face.source, client).await;
             observe_pace(pacer, &host, &fetched);
             match fetched {
                 Ok(bytes) if is_font(&bytes) => found.push((face, file, Some(bytes))),
                 Ok(_) => notes.push(format!("font {} at {} is not a font file (WOFF2, WOFF, TrueType or OpenType), so it is not copied", face.family, face.source)),
-                Err(e) if e.is_refused() => notes.push(format!("font {} at {}: address not allowed", face.family, face.source)),
                 Err(e) => notes.push(format!("font {} at {} could not be fetched ({e}), so it is not copied", face.family, face.source)),
             }
         }

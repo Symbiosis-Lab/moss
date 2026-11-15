@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 use crate::vault::import::{import_source_in, ImportOptions, ImportSession};
 use crate::vault::import::scrape::run::{dropped_widgets, PageGap, ScrapeProgress, ScrapeResult};
 use crate::vault::import::scrape::service::DEFAULT_MAX_PAGES;
-#[cfg(test)]
 use crate::vault::import::source::is_remote_url;
 use crate::vault::import::widgets::grouped_kinds;
 
@@ -70,6 +69,8 @@ pub fn run(args: &[String]) -> i32 {
             recursive: parsed.recursive,
             private_members_dir: parsed.members_dir.as_ref().map(PathBuf::from),
             export: parsed.export.as_ref().map(PathBuf::from),
+            // The typed address is the person's own site; a --list file's lines are not.
+            own_site: (parsed.url.as_deref() == Some(url.as_str()) && is_remote_url(url)).then(|| url.clone()),
         }, &print_progress)).map(|result| {
             for line in result.report { eprintln!("  ↳ {line}"); }
             if let Some(handoff) = result.subscribers {

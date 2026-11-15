@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use super::super::facts::{Facts, Icon, IconKind, NavEntry};
 use super::super::HomePage;
 use super::*;
+use crate::vault::import::scrape::fetch::{private_pair, Client};
 
 const BASE: &str = "https://studio.example/";
 
@@ -42,8 +43,12 @@ fn folder() -> (tempfile::TempDir, HashMap<String, String>) {
 }
 
 async fn run(root: &Path, written: &HashMap<String, String>, facts: &Facts) -> ChromeSummary {
+    run_as(root, written, facts, &Client::no_own_site()).await
+}
+
+async fn run_as(root: &Path, written: &HashMap<String, String>, facts: &Facts, client: &Client) -> ChromeSummary {
     let home = HomePage { url: BASE.to_string(), html: String::new(), is_start: true };
-    let capture = Capture { out_dir: root, user_agent: "test", home: &home, post: None, written, menu: &[] };
+    let capture = Capture { out_dir: root, client, home: &home, post: None, written, menu: &[] };
     apply(&capture, facts, &mut HostPacer::default()).await.unwrap()
 }
 
@@ -167,6 +172,44 @@ async fn a_logo_or_icon_on_loopback_is_never_requested() {
 
     assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
     assert_eq!((summary.logo, summary.favicon), (ChromePart::NotFound, ChromePart::NotFound));
+}
+
+#[tokio::test]
+async fn a_logo_is_fetched_from_the_own_site_and_not_from_another_private_address() {
+    let mut p = private_pair().await;
+    let own = p.own.mock("GET", "/logo.png").with_header("content-type", "image/png").with_body("png").expect(1).create_async().await;
+    let other = p.other.mock("GET", "/logo.png").with_header("content-type", "image/png").with_body("png").expect(0).create_async().await;
+    let (tmp, written) = folder();
+    let mut f = facts();
+    f.logo = Some(format!("{}/logo.png", p.own.url()));
+    fs::create_dir_all(tmp.path().join(ASSETS_SUBDIR)).unwrap();
+    assert_eq!(run_as(tmp.path(), &written, &f, &p.client).await.logo, ChromePart::Written);
+    f.logo = Some(format!("{}/logo.png", p.other.url()));
+    let (tmp, written) = folder();
+    assert_eq!(run_as(tmp.path(), &written, &f, &p.client).await.logo, ChromePart::NotFound);
+
+    own.assert_async().await;
+    other.assert_async().await;
+    assert_eq!(p.client.refused_report(), [format!("Not fetched: {}/logo.png", p.other.url())]);
+}
+
+#[tokio::test]
+async fn a_favicon_is_fetched_from_the_own_site_and_not_from_another_private_address() {
+    let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 8 8\"><path d=\"M0 0h8v8z\"/></svg>";
+    let mut p = private_pair().await;
+    let own = p.own.mock("GET", "/icon.svg").with_header("content-type", "image/svg+xml").with_body(svg).expect(1).create_async().await;
+    let other = p.other.mock("GET", "/icon.svg").with_header("content-type", "image/svg+xml").with_body(svg).expect(0).create_async().await;
+    let (tmp, written) = folder();
+    let mut f = facts();
+    f.favicon = Some(Icon { url: format!("{}/icon.svg", p.own.url()), kind: IconKind::Svg });
+    assert_eq!(run_as(tmp.path(), &written, &f, &p.client).await.favicon, ChromePart::Written);
+    f.favicon = Some(Icon { url: format!("{}/icon.svg", p.other.url()), kind: IconKind::Svg });
+    let (tmp, written) = folder();
+    assert_eq!(run_as(tmp.path(), &written, &f, &p.client).await.favicon, ChromePart::NotFound);
+
+    own.assert_async().await;
+    other.assert_async().await;
+    assert_eq!(p.client.refused_report(), [format!("Not fetched: {}/icon.svg", p.other.url())]);
 }
 
 #[tokio::test]

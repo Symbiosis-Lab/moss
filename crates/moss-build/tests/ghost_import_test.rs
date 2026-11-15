@@ -43,7 +43,7 @@ fn directory_and_zip_import_keep_content_and_retain_readers_privately() {
         let out = temp.path().join("site"); fs::create_dir(&out).unwrap();
         let private = temp.path().join("private");
         let rt = runtime();
-        let recognised = rt.block_on(recognise_source(input.to_str().unwrap())).unwrap();
+        let recognised = rt.block_on(recognise_source(input.to_str().unwrap(), None)).unwrap();
         assert!(matches!(recognised.kind, SourceKind::Ghost));
         assert_eq!(recognised.host.as_deref(), Some("journal.example"));
         assert_eq!(recognised.title.as_deref(), Some("Copper Journal"));
@@ -187,14 +187,14 @@ fn shared_url_entry_recognises_a_lock_page_and_downloads_missing_export_media() 
     let temp = tempfile::tempdir().unwrap(); let out = temp.path().join("site"); fs::create_dir(&out).unwrap();
     moss_build::vault::import::scrape::fetch::allow_loopback();
     let rt = runtime();
-    let recognised = rt.block_on(recognise_source(&format!("{base}deep/article/?view=full#section")));
+    let recognised = rt.block_on(recognise_source(&format!("{base}deep/article/?view=full#section"), None));
     let imported = rt.block_on(import_source(&base, &out, Default::default(), |_| {}));
     let input = temp.path().join("bundle"); copy_fixture(&input);
     fs::write(input.join("site.json"), serde_json::json!({"url": base}).to_string()).unwrap();
     fs::remove_file(input.join("content/images/cover.svg")).unwrap();
     let media = rt.block_on(import_source(input.to_str().unwrap(), &out, ImportOptions { private_members_dir: Some(temp.path().join("private")), ..Default::default() }, |_| {}));
-    let wordpress = rt.block_on(recognise_source(&format!("{base}another/post/")));
-    let ordinary = rt.block_on(recognise_source(&format!("{base}plain/article/?q=1")));
+    let wordpress = rt.block_on(recognise_source(&format!("{base}another/post/"), None));
+    let ordinary = rt.block_on(recognise_source(&format!("{base}plain/article/?q=1"), None));
     let (served, requests) = server.join().unwrap();
     let recognised = recognised.unwrap();
     assert!(matches!(recognised.kind, SourceKind::Ghost));
@@ -215,7 +215,7 @@ fn saved_html_recognition_remains_a_file_fallback() {
     let temp = tempfile::tempdir().unwrap();
     let file = temp.path().join("saved.html");
     fs::write(&file, "<html><head><title>Saved page</title><meta name=generator content=Ghost></head></html>").unwrap();
-    let recognised = runtime().block_on(recognise_source(file.to_str().unwrap())).unwrap();
+    let recognised = runtime().block_on(recognise_source(file.to_str().unwrap(), None)).unwrap();
     assert!(matches!(recognised.kind, SourceKind::File));
     assert_eq!(recognised.title.as_deref(), Some("saved.html"));
     assert_eq!(recognised.host, None);

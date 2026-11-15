@@ -2,7 +2,7 @@
 use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use super::scrape::{run::{ScrapeProgress, ScrapeResult}, service::ScrapeConfig};
+use super::scrape::{fetch::Client, run::{ScrapeProgress, ScrapeResult}, service::ScrapeConfig};
 
 #[derive(Debug, Clone, Default)]
 pub struct ImportOptions {
@@ -12,6 +12,10 @@ pub struct ImportOptions {
     pub private_members_dir: Option<PathBuf>,
     /// A WordPress export added to an address: read after the address is crawled.
     pub export: Option<PathBuf>,
+    /// The address the person typed or confirmed. When it is a literal on a
+    /// private network, that site is fetched and no other private address is.
+    /// Fill it only from what the person gave, never from a file or a page.
+    pub own_site: Option<String>,
 }
 
 /// One import run into one folder, across the sources given to it: the
@@ -52,35 +56,39 @@ pub struct RecognisedSource {
     pub kind: SourceKind,
     pub host: Option<String>,
     pub title: Option<String>,
+    /// The site is on the person's own network.
+    pub local: bool,
 }
 
 /// Inspect the origin homepage for URL sources, or export contents for local sources.
-/// A subpage need not repeat its platform's generator metadata.
-pub async fn recognise_source(source: &str) -> Result<RecognisedSource, String> {
+/// A subpage need not repeat its platform's generator metadata. `own_site` is the
+/// address the person gave, as in [`ImportOptions::own_site`].
+pub async fn recognise_source(source: &str, own_site: Option<&str>) -> Result<RecognisedSource, String> {
     let source = source.trim();
+    let client = Client::new(own_site);
     if is_remote_url(source) {
-        super::scrape::fetch::refuse_unsafe_scrape_url(source)?;
+        client.check(source)?;
         let mut home = url::Url::parse(source).map_err(|e| e.to_string())?;
         home.set_path("/");
         home.set_query(None);
         home.set_fragment(None);
-        let (html, _, final_url) = super::scrape::fetch::fetch_page(home.as_str(), &super::scrape::service::default_user_agent(), None)
+        let (html, _, final_url) = super::scrape::fetch::fetch_page(home.as_str(), &client, None)
             .await.map_err(|e| e.to_string())?;
         let doc = scraper::Html::parse_document(&html);
         let generator = scraper::Selector::parse("meta[name=generator]").unwrap();
         let generator = doc.select(&generator).filter_map(|n| n.value().attr("content")).collect::<Vec<_>>().join(" ").to_lowercase();
         let kind = if generator.contains("ghost") { SourceKind::Ghost } else if generator.contains("wordpress") { SourceKind::Wordpress } else { SourceKind::Site };
         let title = scraper::Selector::parse("title").unwrap();
-        return Ok(RecognisedSource { kind, host: url::Url::parse(&final_url).ok().and_then(|u| u.host_str().map(str::to_string)), title: doc.select(&title).next().map(|n| n.text().collect()) });
+        return Ok(RecognisedSource { kind, host: url::Url::parse(&final_url).ok().and_then(|u| u.host_str().map(str::to_string)), title: doc.select(&title).next().map(|n| n.text().collect()), local: client.local_host().is_some() });
     }
     let path = local_path(source)?;
     if let Some(head) = super::wordpress::wxr::sniff(&path) {
-        return Ok(RecognisedSource { kind: SourceKind::Wordpress, host: head.site.and_then(|u| url::Url::parse(&u).ok()).and_then(|u| u.host_str().map(str::to_string)), title: head.title });
+        return Ok(RecognisedSource { kind: SourceKind::Wordpress, host: head.site.and_then(|u| url::Url::parse(&u).ok()).and_then(|u| u.host_str().map(str::to_string)), title: head.title, local: false });
     }
     if let Some(bundle) = super::ghost::bundle::Bundle::open(&path)? {
-        return Ok(RecognisedSource { kind: SourceKind::Ghost, host: bundle.site_url().and_then(|u| url::Url::parse(&u).ok()).and_then(|u| u.host_str().map(str::to_string)), title: bundle.setting("title") });
+        return Ok(RecognisedSource { kind: SourceKind::Ghost, host: bundle.site_url().and_then(|u| url::Url::parse(&u).ok()).and_then(|u| u.host_str().map(str::to_string)), title: bundle.setting("title"), local: false });
     }
-    Ok(RecognisedSource { kind: SourceKind::File, host: None, title: path.file_name().map(|s| s.to_string_lossy().into_owned()) })
+    Ok(RecognisedSource { kind: SourceKind::File, host: None, title: path.file_name().map(|s| s.to_string_lossy().into_owned()), local: false })
 }
 
 pub async fn import_source<F>(source: &str, folder: &Path, options: ImportOptions, on_progress: F) -> Result<ImportResult, String>
@@ -93,30 +101,42 @@ pub async fn import_source_in(
     session: &mut ImportSession, source: &str, folder: &Path, options: ImportOptions,
     on_progress: &(dyn Fn(ScrapeProgress) + Send + Sync),
 ) -> Result<ImportResult, String> {
+    let client = Client::new(options.own_site.as_deref());
+    let mut result = import_with(&client, session, source, folder, options, on_progress).await?;
+    if let Some(host) = client.local_host() { result.report.insert(0, format!("{host} is on your network.")); }
+    result.report.extend(client.refused_report());
+    Ok(result)
+}
+
+async fn import_with(
+    client: &Client, session: &mut ImportSession, source: &str, folder: &Path, options: ImportOptions,
+    on_progress: &(dyn Fn(ScrapeProgress) + Send + Sync),
+) -> Result<ImportResult, String> {
     let source = source.trim();
     if !folder.is_dir() { return Err("Output directory does not exist".into()); }
     if is_remote_url(source) {
-        super::scrape::fetch::refuse_unsafe_scrape_url(source)?;
+        client.check(source)?;
         if let Some(export) = &options.export {
             if super::wordpress::wxr::sniff(export).is_none() { return Err("--export takes a WordPress export file (Tools → Export).".into()); }
-            return super::wordpress::import(export, Some(source), folder, session.pages(folder), on_progress).await;
+            return super::wordpress::import(export, Some(source), folder, client, session.pages(folder), on_progress).await;
         }
         let mut config = ScrapeConfig::new(source, folder);
         config.recursive = options.recursive;
+        config.client = client.clone();
         let scrape = super::scrape::run::scrape_into(config, session.pages(folder), on_progress).await?.result;
         return Ok(ImportResult { report: if scrape.restricted_pages > 0 { vec![format!("{} posts are for subscribers only; add a Ghost export to bring their text.", scrape.restricted_pages)] } else { Vec::new() }, subscribers: None, scrape });
     }
     let path = local_path(source)?;
     if super::wordpress::wxr::sniff(&path).is_some() {
-        return super::wordpress::import(&path, None, folder, session.pages(folder), on_progress).await;
+        return super::wordpress::import(&path, None, folder, client, session.pages(folder), on_progress).await;
     }
     if let Some(bundle) = super::ghost::bundle::Bundle::open(&path)? {
-        return super::ghost::import(bundle, folder, options, session.pages(folder), on_progress).await;
+        return super::ghost::import(bundle, folder, options, client, session.pages(folder), on_progress).await;
     }
     let (scrape, report) = if super::douban::is_tofu_backup(&path) {
-        let (scrape, report) = super::douban::import_tofu_backup(&path, folder).await?;
+        let (scrape, report) = super::douban::import_tofu_backup(&path, folder, client).await?;
         (scrape, report.lines())
-    } else { (super::scrape::import_local::import_local_file(&path, folder).await?, Vec::new()) };
+    } else { (super::scrape::import_local::import_local_file(&path, folder, client).await?, Vec::new()) };
     let mut report = report;
     if scrape.restricted_pages > 0 { report.push("This saved page contains a Ghost lock box; add the export to bring its text.".into()); }
     Ok(ImportResult { scrape, report, subscribers: None })
@@ -129,3 +149,7 @@ fn local_path(source: &str) -> Result<PathBuf, String> {
     }
     Ok(PathBuf::from(source))
 }
+
+#[cfg(test)]
+#[path = "source_tests.rs"]
+mod tests;

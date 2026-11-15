@@ -152,7 +152,7 @@ fn refuse_unsafe(url: &url::Url) -> Result<Option<std::net::IpAddr>, String> {
 }
 
 /// `agent.get(url)`, following redirects by hand so every hop's target is
-/// re-validated by [`refuse_unsafe_scrape_url`] before it is followed —
+/// re-validated by [`Client::check`] before it is followed —
 /// `agent` must be built with `redirects(0)`
 /// ([`crate::system::proxy::proxied_ureq_agent_no_redirects`]), or ureq
 /// would already have followed (and connected to) the first hop before this
@@ -173,42 +173,183 @@ fn refuse_unsafe(url: &url::Url) -> Result<Option<std::net::IpAddr>, String> {
 /// response, so the caller sees where the link leads; every other target is
 /// still validated and followed, and a non-http(s) target still refused.
 ///
-/// `refused` is set when the address policy refuses `start_url` or a redirect
-/// target, which the caller cannot tell from the refusal's 400 status alone.
 fn fetch_with_validated_redirects(
     agent: &ureq::Agent,
     start_url: &str,
-    user_agent: &str,
+    client: &Client,
     accept: Option<&str>,
     referer: Option<&str>,
     scope: Option<&UrlScope>,
-    refused: &std::cell::Cell<bool>,
 ) -> Result<ureq::Response, ureq::Error> {
-    let policy = |url: &str| import_policy(url).inspect_err(|_| refused.set(true));
-    fetch_following_redirects(agent, start_url, user_agent, accept, referer, policy, |next| {
+    fetch_following_redirects(agent, start_url, client.user_agent(), accept, referer, |url| client.check(url), |next| {
         scope.is_some_and(|scope| leaves_site(scope, next))
     })
 }
 
-/// [`refuse_unsafe_scrape_url`], except in this crate's own tests, where the
-/// loopback servers they started with [`test_server`] are let through. Any
-/// other address, loopback included, still meets the real policy.
-fn import_policy(url: &str) -> Result<(), String> {
-    #[cfg(test)]
-    if test_servers::started(url) {
-        return Ok(());
-    }
-    refuse_unsafe_scrape_url(url)
+/// What one import fetches with: the user agent, the address the person gave,
+/// and the addresses it refused. Every fetch of the import carries the same
+/// client, so a refusal anywhere reaches one report.
+#[derive(Clone, Debug)]
+pub(crate) struct Client {
+    user_agent: String,
+    own: Option<OwnSite>,
+    refused: std::sync::Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
 }
 
-/// A mockito server the import may fetch from. mockito keeps its servers
-/// bound for the life of the process, so a registered port never passes to
-/// another listener.
+/// The private-network address the person gave. A redirect never changes it.
+#[derive(Clone, Debug)]
+struct OwnSite {
+    host: String,
+    ip: std::net::IpAddr,
+    class: crate::system::address::AddressClass,
+    /// `None` is the scheme's own port, so `http://192.168.1.5/` and
+    /// `https://192.168.1.5/` name one site.
+    port: Option<u16>,
+}
+
+/// Most refused addresses a client keeps, so a page of private links cannot
+/// grow the record without bound.
+const MAX_REFUSED: usize = 1000;
+/// Refused addresses the report names one by one.
+const REPORTED_REFUSED: usize = 20;
+
+impl Client {
+    /// A client for `own_site`, the address the person typed or confirmed. One
+    /// that is not an http(s) address with a literal host is no own site.
+    pub(crate) fn new(own_site: Option<&str>) -> Self {
+        let own = own_site.and_then(|s| url::Url::parse(s.trim()).ok()).filter(|u| matches!(u.scheme(), "http" | "https")).and_then(|u| {
+            let ip = literal_ip(&u)?;
+            Some(OwnSite { host: u.host_str()?.to_string(), ip, class: class_of(&u, ip), port: u.port() })
+        });
+        Self { user_agent: super::service::default_user_agent(), own, refused: Default::default() }
+    }
+
+    pub(crate) fn no_own_site() -> Self {
+        Self::new(None)
+    }
+
+    pub(crate) fn user_agent(&self) -> &str {
+        &self.user_agent
+    }
+
+    /// Whether `url` may be requested; a refusal is recorded for the report.
+    /// Run on the start address and on every redirect hop against that hop's
+    /// own address.
+    pub(crate) fn check(&self, url: &str) -> Result<(), String> {
+        let decided = url::Url::parse(url).map_err(|e| format!("invalid URL: {e}")).and_then(|u| self.decide(&u));
+        if decided.is_err() {
+            let mut refused = self.refused.lock().unwrap();
+            if refused.len() < MAX_REFUSED {
+                refused.insert(reportable(url));
+            }
+        }
+        decided
+    }
+
+    fn decide(&self, url: &url::Url) -> Result<(), String> {
+        #[cfg(test)]
+        if let Some(class) = test_servers::class_of(url) {
+            return self.admit(class, literal_ip(url).ok_or("a registered server is a literal address")?, url.port());
+        }
+        match refuse_unsafe(url)? {
+            Some(ip) => self.admit(crate::system::address::classify(ip), ip, url.port()),
+            None => Ok(()),
+        }
+    }
+
+    /// A public address is fetched; a private-network one only as the person's
+    /// own site.
+    fn admit(&self, class: crate::system::address::AddressClass, ip: std::net::IpAddr, port: Option<u16>) -> Result<(), String> {
+        use crate::system::address::AddressClass::{Private, Public};
+        let own = self.own.as_ref().is_some_and(|own| own.ip == ip && own.port == port);
+        match class {
+            Public => Ok(()),
+            Private if own => Ok(()),
+            Private => Err(format!("URL must not target a private-network address ({ip}) other than the one you gave")),
+            other => Err(format!("URL must not target a {other:?} address ({ip})")),
+        }
+    }
+
+    /// The own site's host when it is on a private network.
+    pub(crate) fn local_host(&self) -> Option<&str> {
+        self.own.as_ref().filter(|own| own.class == crate::system::address::AddressClass::Private).map(|own| own.host.as_str())
+    }
+
+    /// The refused addresses, sorted: `Not fetched:` lines for the first 20,
+    /// then how many more.
+    pub(crate) fn refused_report(&self) -> Vec<String> {
+        let refused = self.refused.lock().unwrap();
+        let mut lines: Vec<String> = refused.iter().take(REPORTED_REFUSED).map(|a| format!("Not fetched: {a}")).collect();
+        if let Some(more) = refused.len().checked_sub(REPORTED_REFUSED).filter(|n| *n > 0) {
+            lines.push(format!("Not fetched: {more} more {}.", if more == 1 { "address" } else { "addresses" }));
+        }
+        lines
+    }
+}
+
+/// `url` as a report may show it: no query, fragment or sign-in details.
+fn reportable(url: &str) -> String {
+    let Ok(mut u) = url::Url::parse(url) else { return "an address that could not be read".to_string() };
+    u.set_query(None);
+    u.set_fragment(None);
+    let _ = u.set_username("");
+    let _ = u.set_password(None);
+    u.to_string()
+}
+
+/// The class of a literal `ip` address named by `url`; a test server's is the
+/// class it was registered as.
+#[cfg_attr(not(test), allow(unused_variables))]
+fn class_of(url: &url::Url, ip: std::net::IpAddr) -> crate::system::address::AddressClass {
+    #[cfg(test)]
+    if let Some(class) = test_servers::class_of(url) {
+        return class;
+    }
+    crate::system::address::classify(ip)
+}
+
+/// The literal host of `url`, as the IPv4 address an IPv6 form carries.
+fn literal_ip(url: &url::Url) -> Option<std::net::IpAddr> {
+    let ip = match url.host()? {
+        url::Host::Ipv4(v4) => v4.into(),
+        url::Host::Ipv6(v6) => v6.into(),
+        url::Host::Domain(_) => return None,
+    };
+    Some(crate::system::address::carried_ipv4(ip))
+}
+
+/// A mockito server the import may fetch from, as an address of `class`: a
+/// `Public` one is fetched for every client, a `Private` one only as the own
+/// site. mockito keeps its servers bound for the life of the process, so a
+/// registered port never passes to another listener.
+#[cfg(test)]
+pub(crate) async fn test_server_as(class: crate::system::address::AddressClass) -> mockito::ServerGuard {
+    let server = mockito::Server::new_async().await;
+    test_servers::STARTED.lock().unwrap().insert(server.host_with_port(), class);
+    server
+}
+
+/// [`test_server_as`] a public address, the usual stand-in for a site.
 #[cfg(test)]
 pub(crate) async fn test_server() -> mockito::ServerGuard {
-    let server = mockito::Server::new_async().await;
-    test_servers::STARTED.lock().unwrap().insert(server.host_with_port());
-    server
+    test_server_as(crate::system::address::AddressClass::Public).await
+}
+
+/// Two private-network stand-ins: `own`, the address the person gave, and
+/// `other`, one a page names. `client` has `own` alone as its own site.
+#[cfg(test)]
+pub(crate) struct PrivatePair {
+    pub own: mockito::ServerGuard,
+    pub other: mockito::ServerGuard,
+    pub client: Client,
+}
+
+#[cfg(test)]
+pub(crate) async fn private_pair() -> PrivatePair {
+    let own = test_server_as(crate::system::address::AddressClass::Private).await;
+    let other = test_server_as(crate::system::address::AddressClass::Private).await;
+    let client = Client::new(Some(&own.url()));
+    PrivatePair { own, other, client }
 }
 
 /// A loopback address no test registered, answering every request with an
@@ -232,13 +373,14 @@ pub(crate) fn unregistered_loopback_server() -> (String, std::sync::Arc<std::syn
 
 #[cfg(test)]
 mod test_servers {
-    pub(super) static STARTED: std::sync::Mutex<std::collections::BTreeSet<String>> =
-        std::sync::Mutex::new(std::collections::BTreeSet::new());
+    use crate::system::address::AddressClass;
 
-    pub(super) fn started(url: &str) -> bool {
-        let Ok(url) = url::Url::parse(url) else { return false };
-        let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) else { return false };
-        STARTED.lock().unwrap().contains(&format!("{host}:{port}"))
+    pub(super) static STARTED: std::sync::Mutex<std::collections::BTreeMap<String, AddressClass>> =
+        std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+    pub(super) fn class_of(url: &url::Url) -> Option<AddressClass> {
+        let (host, port) = (url.host_str()?, url.port_or_known_default()?);
+        STARTED.lock().unwrap().get(&format!("{host}:{port}")).copied()
     }
 }
 
@@ -255,7 +397,7 @@ fn leaves_site(scope: &UrlScope, next: &str) -> bool {
 /// [`fetch_with_validated_redirects`]'s body, taking the per-hop validator as
 /// a parameter so the redirect-following MECHANISM (hop resolution, the hop
 /// cap, handing back a Location-less or unparsable 3xx as-is) is testable
-/// independently of the SSRF POLICY (`refuse_unsafe_scrape_url`) — every
+/// independently of the SSRF POLICY (`Client::check`) — every
 /// test server a unit test can stand up is itself a loopback address, so a
 /// test proving a legitimate same-host redirect is still followed cannot
 /// use the real policy without tripping its own loopback refusal. Production
@@ -310,19 +452,12 @@ fn fetch_following_redirects(
 #[derive(Debug, Clone)]
 pub(crate) struct FetchError {
     status: Option<u16>,
-    refused: bool,
     message: String,
 }
 
 impl FetchError {
     fn message(message: String) -> Self {
-        Self { status: None, refused: false, message }
-    }
-
-    /// Whether the address policy refused the URL or a redirect target, so
-    /// nothing was requested there.
-    pub(crate) fn is_refused(&self) -> bool {
-        self.refused
+        Self { status: None, message }
     }
 }
 
@@ -358,7 +493,7 @@ impl From<FetchError> for String {
 /// media::MEDIA_ACCEPT)` for an asset download.
 fn call_with_retry_n(
     url: &str,
-    user_agent: &str,
+    client: &Client,
     timeout: std::time::Duration,
     tries: u32,
     accept: Option<&str>,
@@ -384,11 +519,10 @@ fn call_with_retry_n(
         // (see `fetch_with_validated_redirects`) rather than trusting
         // ureq's own follower, which never re-checks a Location header.
         let agent = crate::system::proxy::proxied_ureq_agent_no_redirects(url, timeout);
-        let refused = std::cell::Cell::new(false);
-        match fetch_with_validated_redirects(&agent, url, user_agent, accept, referer, scope, &refused) {
+        match fetch_with_validated_redirects(&agent, url, client, accept, referer, scope) {
             Ok(resp) => return Ok(resp),
             Err(ureq::Error::Status(code, resp)) => {
-                let err = FetchError { status: Some(code), refused: refused.get(), message: format!("{} {}", code, resp.status_text()) };
+                let err = FetchError { status: Some(code), message: format!("{} {}", code, resp.status_text()) };
                 if !should_retry_status(Some(code)) {
                     return Err(err);
                 }
@@ -410,14 +544,14 @@ fn call_with_retry_n(
 /// + 2 retries) — every page and asset fetch goes through this one.
 fn call_with_retry(
     url: &str,
-    user_agent: &str,
+    client: &Client,
     timeout: std::time::Duration,
     accept: Option<&str>,
     referer: Option<&str>,
     scope: Option<&UrlScope>,
 ) -> Result<ureq::Response, FetchError> {
     const TRIES: u32 = 3;
-    call_with_retry_n(url, user_agent, timeout, TRIES, accept, referer, scope)
+    call_with_retry_n(url, client, timeout, TRIES, accept, referer, scope)
 }
 
 /// Translates a fetch's `Result` into the bare `Result<(), Option<u16>>`
@@ -445,16 +579,16 @@ pub(crate) fn observe_pace<T>(pacer: &mut HostPacer, host: &str, result: &Result
 /// is not requested, and the address it pointed at comes back as the final URL.
 pub(crate) async fn fetch_page(
     url: &str,
-    user_agent: &str,
+    client: &Client,
     scope: Option<&UrlScope>,
 ) -> Result<(String, String, String), FetchError> {
     let url = url.to_string();
-    let user_agent = user_agent.to_string();
+    let client = client.clone();
     let scope = scope.cloned();
     tokio::task::spawn_blocking(move || {
         let response = call_with_retry(
             &url,
-            &user_agent,
+            &client,
             std::time::Duration::from_secs(30),
             None,
             None,
@@ -490,13 +624,13 @@ const MAX_RAW_FETCH_BYTES: usize = 10 * 1024 * 1024;
 /// text conversion happens. See [`fetch_raw`] for why a single attempt, no
 /// content-type gate, and the same SSRF-revalidating fetch a page fetch
 /// itself uses.
-pub(crate) async fn fetch_raw_bytes(url: &str, user_agent: &str) -> Result<Vec<u8>, FetchError> {
+pub(crate) async fn fetch_raw_bytes(url: &str, client: &Client) -> Result<Vec<u8>, FetchError> {
     let url = url.to_string();
-    let user_agent = user_agent.to_string();
+    let client = client.clone();
     tokio::task::spawn_blocking(move || {
         let response = call_with_retry_n(
             &url,
-            &user_agent,
+            &client,
             std::time::Duration::from_secs(15),
             1,
             None,
@@ -532,8 +666,8 @@ pub(crate) async fn fetch_raw_bytes(url: &str, user_agent: &str) -> Result<Vec<u
 /// sitemap at all, so a 404 here is the ordinary, expected case, not a
 /// transient failure worth waiting out before falling through to a
 /// link-only crawl.
-pub(crate) async fn fetch_raw(url: &str, user_agent: &str) -> Result<String, FetchError> {
-    let bytes = fetch_raw_bytes(url, user_agent).await?;
+pub(crate) async fn fetch_raw(url: &str, client: &Client) -> Result<String, FetchError> {
+    let bytes = fetch_raw_bytes(url, client).await?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
@@ -566,10 +700,10 @@ pub(crate) enum Downloaded {
 pub(crate) async fn download_asset(
     url: &str,
     assets_dir: &Path,
-    user_agent: &str,
+    client: &Client,
     page_url: Option<&str>,
 ) -> Result<String, FetchError> {
-    match download_to(url, assets_dir, user_agent, page_url, hashed_filename, u64::MAX).await? {
+    match download_to(url, assets_dir, client, page_url, hashed_filename, u64::MAX).await? {
         Downloaded::Saved(filename) => Ok(filename),
         Downloaded::TooLarge => Err(FetchError::message(format!("{url} is too large to download"))),
     }
@@ -586,12 +720,12 @@ fn hashed_filename(url: &str, _assets_dir: &Path, content_type: &str) -> String 
 pub(crate) async fn download_linked_file(
     url: &str,
     assets_dir: &Path,
-    user_agent: &str,
+    client: &Client,
     page_url: Option<&str>,
     max_bytes: u64,
     filename: String,
 ) -> Result<Downloaded, FetchError> {
-    download_to(url, assets_dir, user_agent, page_url, move |_, _, _| filename, max_bytes).await
+    download_to(url, assets_dir, client, page_url, move |_, _, _| filename, max_bytes).await
 }
 
 /// The name a linked file keeps: the last path segment of its URL,
@@ -621,7 +755,7 @@ pub(crate) fn linked_filename(url: &str) -> String {
 async fn download_to(
     url: &str,
     assets_dir: &Path,
-    user_agent: &str,
+    client: &Client,
     page_url: Option<&str>,
     name: impl FnOnce(&str, &Path, &str) -> String + Send + 'static,
     max_bytes: u64,
@@ -629,7 +763,7 @@ async fn download_to(
     let referer = page_url.and_then(|page| referer_for(page, url));
     let url_clone = url.to_string();
     let assets_dir = assets_dir.to_path_buf();
-    let user_agent = user_agent.to_string();
+    let client = client.clone();
 
     tokio::task::spawn_blocking(move || {
         // `Some(MEDIA_ACCEPT)`: a media download wants the file as uploaded,
@@ -637,7 +771,7 @@ async fn download_to(
         // own `Accept: */*` default — see that constant's doc comment.
         let response = call_with_retry(
             &url_clone,
-            &user_agent,
+            &client,
             std::time::Duration::from_secs(60),
             Some(crate::vault::import::media::MEDIA_ACCEPT),
             referer.as_deref(),

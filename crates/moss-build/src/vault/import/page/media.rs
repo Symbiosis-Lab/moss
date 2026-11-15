@@ -5,7 +5,7 @@ use std::path::Path;
 use super::{ImportedPage, PageStyle};
 use crate::vault::import::scrape::{
     crawl_state::{AssetMap, HostPacer}, crawler::host_of,
-    fetch::{content_type_to_extension, download_asset, download_linked_file, hash_url, linked_filename, observe_pace, Downloaded, FetchError, FileProgress},
+    fetch::{content_type_to_extension, download_asset, download_linked_file, hash_url, linked_filename, observe_pace, Downloaded, Client, FetchError, FileProgress},
     mhtml::MhtmlResource, writer::rename_for_collision,
 };
 
@@ -20,7 +20,7 @@ pub(crate) struct MediaWriter<'a> {
     pub directory: &'a Path,
     /// Prefix of saved filenames as seen from the page (or the crawl spool).
     pub prefix: &'a str,
-    pub user_agent: &'a str,
+    pub client: &'a Client,
     pub referer: Option<&'a str>,
 }
 
@@ -38,7 +38,7 @@ impl MediaWriter<'_> {
             if assets.is_settled(raw) { continue; }
             let host = host_of(url);
             if let Some((pacer, _)) = pacing.as_mut() { pacer.wait(&host).await; }
-            let result = download_asset(url, self.directory, self.user_agent, self.referer).await;
+            let result = download_asset(url, self.directory, self.client, self.referer).await;
             if let Some((pacer, progress)) = pacing.as_mut() {
                 observe_pace(pacer, &host, &result);
                 progress.finished_one(pacer.current_interval(&host));
@@ -65,7 +65,7 @@ impl MediaWriter<'_> {
         let host = host_of(url);
         pacer.wait(&host).await;
         let filename = assets.claim_name(linked_filename(url), url);
-        let result = download_linked_file(url, self.directory, self.user_agent, self.referer, max_bytes, filename).await;
+        let result = download_linked_file(url, self.directory, self.client, self.referer, max_bytes, filename).await;
         observe_pace(pacer, &host, &result);
         match &result {
             Ok(Downloaded::Saved(file)) => assets.insert(url.to_string(), format!("{}{file}", self.prefix)),
@@ -113,7 +113,7 @@ pub(crate) async fn write_bundle_page(
     root: &Path,
     folder: &str,
     slug: &str,
-    user_agent: &str,
+    client: &Client,
 ) -> Result<PageReport, String> {
     let images = page.images();
     let bundle = !images.is_empty();
@@ -130,7 +130,7 @@ pub(crate) async fn write_bundle_page(
     }
     let mut assets = AssetMap::default();
     let mut report = MediaWriter {
-        directory: &root.join(&dir), prefix: "./", user_agent,
+        directory: &root.join(&dir), prefix: "./", client,
         referer: page.frontmatter.origin.as_deref(),
     }.download(&images, &mut assets, None).await;
     page.localize(&assets.local_map());

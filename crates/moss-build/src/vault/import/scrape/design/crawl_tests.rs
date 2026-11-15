@@ -2,7 +2,7 @@
 //! files the crawl left behind.
 
 use std::path::Path;
-use crate::vault::import::scrape::fetch::test_server;
+use crate::vault::import::scrape::fetch::{test_server, Client};
 
 use super::super::run::scrape_to_folder;
 use super::super::service::ScrapeConfig;
@@ -73,8 +73,13 @@ async fn site(pages: &[(&str, String)], files: &[(&str, &str)]) -> Site {
 }
 
 async fn crawl(site: &Site, out: &Path) -> super::super::run::ScrapeResult {
+    crawl_as(site, out, Client::no_own_site()).await
+}
+
+async fn crawl_as(site: &Site, out: &Path, client: Client) -> super::super::run::ScrapeResult {
     let mut config = ScrapeConfig::new(format!("{}/", site.server.url()), out);
     config.recursive = true;
+    config.client = client;
     scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds")
 }
 
@@ -207,7 +212,7 @@ async fn a_single_file_import_reads_no_chrome() {
     let file = out.join("saved.html");
     std::fs::write(&file, page).unwrap();
 
-    let res = super::super::import_local::import_local_file(&file, out).await.unwrap();
+    let res = super::super::import_local::import_local_file(&file, out, &Client::no_own_site()).await.unwrap();
 
     assert_eq!(res.chrome.line(), None);
     assert!(!out.join("footer.md").exists());
@@ -369,10 +374,13 @@ async fn a_stylesheet_on_a_local_or_private_address_is_not_requested() {
     let site = site(&[("/", home.to_string())], &[]).await;
     let tmp = tempfile::tempdir().unwrap();
 
-    let res = crawl(&site, tmp.path()).await;
+    let client = Client::no_own_site();
 
+    crawl_as(&site, tmp.path(), client.clone()).await;
+
+    let refused = client.refused_report();
     for sheet in ["http://127.0.0.1:9/theme.css", "http://169.254.169.254/latest.css", "http://[fe80::1]/x.css"] {
-        assert!(res.chrome.residuals.contains(&format!("stylesheet {sheet}: address not allowed")), "{sheet}: {:?}", res.chrome.residuals);
+        assert!(refused.contains(&format!("Not fetched: {sheet}")), "{sheet}: {refused:?}");
     }
 }
 

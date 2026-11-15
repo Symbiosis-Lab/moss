@@ -67,7 +67,7 @@ fn an_export_alone_crawls_its_site_first_and_adds_what_the_crawl_cannot_see() {
     let out = temp.path().join("site");
     fs::create_dir(&out).unwrap();
 
-    let recognised = rt.block_on(recognise_source(export.to_str().unwrap())).unwrap();
+    let recognised = rt.block_on(recognise_source(export.to_str().unwrap(), None)).unwrap();
     assert!(matches!(recognised.kind, SourceKind::Wordpress));
     assert_eq!(recognised.title.as_deref(), Some("Lantern Studio"));
     assert_eq!(recognised.host.as_deref(), Some("127.0.0.1"));
