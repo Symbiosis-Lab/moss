@@ -96,12 +96,6 @@ fn plugin_hooks() -> Vec<PluginHookInfo> {
             context: "CopyJob",
         },
         PluginHookInfo {
-            name: "delete_copy",
-            description: "Remove a deleted post's copy, when the author asks; optional.",
-            arity: "multiple",
-            context: "CopyJob",
-        },
-        PluginHookInfo {
             name: "find_copy",
             description: "Look a copy up after a send whose outcome is unknown, or one handed off to the author; optional. Answers the copy, a `handoff` still waiting, or `absent: true`; anything else leaves it unknown, and only `absent` lets moss send again.",
             arity: "multiple",

@@ -44,8 +44,8 @@ impl Accounts {
 }
 
 /// Tie `record` to the account its channel is signed in to, or say why it
-/// waits: sent from another account, nothing may update, delete, look up or
-/// resend it, since the copy is not this account's. A copy never sent, or
+/// waits: sent from another account, nothing may update, look up or resend
+/// it, since the copy is not this account's. A copy never sent, or
 /// refused outright, has nothing on the network and goes with the new one.
 fn bind(record: &mut CopyRecord, account: &Account) -> Result<(), Outcome> {
     match (account, &record.account) {
@@ -102,9 +102,6 @@ pub enum Outcome {
     /// Left due and sent by a later run. `why` is what a person is told;
     /// `reason` is the detail, for the log and the command line.
     Held { why: HeldWhy, reason: String },
-    Deleted,
-    /// The network cannot remove a copy; it stays where it is.
-    CannotDelete,
 }
 
 /// Why a copy was left for a later run.
@@ -504,42 +501,6 @@ async fn send_one(
     })
 }
 
-/// Remove every copy of one post from the networks that can remove one. For a
-/// post the author deleted; nothing calls this on its own.
-pub async fn delete_copies(folder: &Path, manager: &PluginManager, uid: &str, site_url: &str, emit: &(dyn Fn(&Sent) + Sync)) -> Vec<Sent> {
-    let records = Records::in_vault(&crate::moss_paths::MossPaths::new(folder));
-    let Some(_turn) = records.turn() else { return Vec::new() };
-    let mut out = Vec::new();
-    let mut accounts = Accounts::default();
-    for mut record in records.all().into_iter().filter(|r| r.uid == uid) {
-        let Some(previous) = record.remote.clone().filter(|_| record.state == State::Posted) else { continue };
-        if let Err(held) = accounts.check(manager, &mut record).await {
-            let s = sent(&record, held);
-            emit(&s);
-            out.push(s);
-            continue;
-        }
-        let job = CopyJob::delete(&record, previous, site_url);
-        emit(&sent(&record, Outcome::Sending));
-        let outcome = match manager.send_copy(&job).await {
-            CopyCall::Answered(r) if r.success => match records.remove(&record.uid, &record.channel) {
-                Ok(()) => Outcome::Deleted,
-                Err(e) => Outcome::Refused { cause: Cause::Unknown, reason: format!("deleted, but its record remains ({e})") },
-            },
-            CopyCall::Answered(r) => Outcome::Refused {
-                cause: r.copy.as_ref().and_then(|c| c.refused.as_ref()).map(|f| f.cause).unwrap_or_default(),
-                reason: r.message.unwrap_or_else(|| "the network refused".into()),
-            },
-            CopyCall::NoExport => Outcome::CannotDelete,
-            CopyCall::Unknown(reason) => Outcome::Refused { cause: Cause::Unknown, reason },
-        };
-        let s = sent(&record, outcome);
-        emit(&s);
-        out.push(s);
-    }
-    out
-}
-
 /// Whether a reader elsewhere following `url` gets the page: a few tries,
 /// since a publish can land a little before every edge serves it. An onion
 /// address is taken on trust, as nothing here can reach one.
@@ -700,8 +661,6 @@ pub fn render(sent: &[Sent]) -> String {
                 s.channel, s.channel
             ),
             Outcome::Held { reason, .. } => format!("held for {}: {reason}", s.channel),
-            Outcome::Deleted => format!("deleted from {}", s.channel),
-            Outcome::CannotDelete => format!("{} cannot remove a copy; it stays", s.channel),
         };
         out.push_str(&format!("{} — {line}\n", s.source_path));
         if let Some(e) = &s.write_back {
@@ -879,43 +838,13 @@ mod tests {
         assert!(after.contains("https://matters.town/a/1") && after.ends_with("---\nBody.\n"));
     }
 
-    /// A deleted post's copies go where the network can remove them; where it
-    /// cannot, the copy stays and says so.
-    #[tokio::test]
-    async fn delete_copies_removes_what_each_network_can_and_says_what_it_cannot() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        super::super::test_channel(root, "removes", "{ publish_copy: async function () { return { success: true }; }, delete_copy: async function (job) { return { success: job.previous.id === 'r-1' }; } }");
-        super::super::test_channel(root, "keeps", "{ publish_copy: async function () { return { success: true }; } }");
-        let records = Records::in_vault(&crate::moss_paths::MossPaths::new(root));
-        for (channel, id) in [("removes", "r-1"), ("keeps", "k-1")] {
-            let mut r = CopyRecord::due("ab12cd34", channel, "notes/a.md", "notes/a/");
-            r.state = State::Posted;
-            r.remote = Some(super::super::record::RemoteRef { id: id.into(), url: format!("https://example.social/{id}") });
-            records.save(&r).unwrap();
-        }
-
-        let cache = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned());
-        let manager = cache.get_or_create(&root.to_string_lossy()).unwrap();
-        let events = std::sync::Mutex::new(Vec::new());
-        let emit = |s: &Sent| events.lock().unwrap().push(s.outcome.clone());
-        let done = delete_copies(root, &manager, "ab12cd34", "https://notes.example.org", &emit).await;
-
-        let by_channel: BTreeMap<_, _> = done.iter().map(|s| (s.channel.as_str(), s.outcome.clone())).collect();
-        assert_eq!(by_channel["removes"], Outcome::Deleted);
-        assert_eq!(by_channel["keeps"], Outcome::CannotDelete);
-        assert!(!records.exists("ab12cd34", "removes"));
-        assert!(records.exists("ab12cd34", "keeps"), "a copy that stays keeps its record");
-        assert_eq!(events.lock().unwrap().iter().filter(|o| **o == Outcome::Sending).count(), 2);
-    }
-
-    /// While another run holds the folder's turn, neither a send nor a delete
-    /// loads a channel or touches a copy.
+    /// While another run holds the folder's turn, a send loads no channel and
+    /// touches no copy.
     #[tokio::test]
     async fn a_run_that_finds_the_folder_busy_loads_no_channel_and_sends_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        super::super::test_channel(root, "removes", "{ publish_copy: async function () { return { success: true }; }, delete_copy: async function () { return { success: true }; } }");
+        super::super::test_channel(root, "removes", "{ publish_copy: async function () { return { success: true }; } }");
         let records = Records::in_vault(&crate::moss_paths::MossPaths::new(root));
         let mut r = CopyRecord::due("ab12cd34", "removes", "notes/a.md", "notes/a/");
         r.state = State::Posted;
@@ -924,17 +853,12 @@ mod tests {
         let mp = crate::moss_paths::MossPaths::new(root);
         std::fs::create_dir_all(mp.article_map().parent().unwrap()).unwrap();
         std::fs::write(mp.article_map(), serde_json::to_vec(&ArticleMap::default()).unwrap()).unwrap();
-        let held = records.turn().expect("the turn is free");
+        let _held = records.turn().expect("the turn is free");
 
         let emit = |_: &Sent| {};
         let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
         assert!(after_live(root, &opts, || panic!("no channel may load")).await.is_empty());
-        let manager = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()).get_or_create(&root.to_string_lossy()).unwrap();
-        assert!(delete_copies(root, &manager, "ab12cd34", "https://example.org", &emit).await.is_empty());
-        assert!(records.exists("ab12cd34", "removes"), "the copy and its record stay");
-
-        drop(held);
-        assert_eq!(delete_copies(root, &manager, "ab12cd34", "https://example.org", &emit).await[0].outcome, Outcome::Deleted);
+        assert_eq!(records.get("ab12cd34", "removes"), Some(r), "the copy and its record stay");
     }
 
     /// A post is asked for by its source file, which the latest build names

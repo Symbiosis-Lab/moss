@@ -385,11 +385,9 @@ describe("copy picture payload", () => {
     const long: CopyJob = { ...job, form: "long", parts: [], pictures: [], article: { title: "Page", html: '<img src="https://example.org/photo.png" alt="A maple">' } };
     expect(long.pictures).toEqual([]);
     expect(long.included_pictures).toBe(1);
-    for (const op of ["find", "delete"] as const) {
-      const identity: CopyJob = { op, channel: job.channel, idempotency_key: job.idempotency_key, post: job.post, config: {} };
-      expect(identity.pictures).toBeUndefined();
-      expect(identity.included_pictures).toBeUndefined();
-      expect(identity.omitted_pictures).toBeUndefined();
-    }
+    const identity: CopyJob = { op: "find", channel: job.channel, idempotency_key: job.idempotency_key, post: job.post, config: {} };
+    expect(identity.pictures).toBeUndefined();
+    expect(identity.included_pictures).toBeUndefined();
+    expect(identity.omitted_pictures).toBeUndefined();
   });
 });

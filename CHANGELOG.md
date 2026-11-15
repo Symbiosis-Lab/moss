@@ -93,6 +93,10 @@ All notable changes to moss will be documented here.
 - A channel plugin can make its article form depend on a setting (`long_setting` in its `syndication` block), for a network whose articles only some accounts have. With the setting off, a long page goes out in the next form the channel takes.
 - A program that starts `moss build --serve` can set `MOSS_STOP_ON_STDIN_CLOSE=1`: the preview then stops when that program closes moss's standard input or exits, however it ends. The Obsidian plugin sets it on macOS and Linux, so its preview no longer keeps running after Obsidian quits. The guide's "Starting moss from another program" has the details.
 
+### Removed
+
+- The `delete_copy` channel export. Deleting a post leaves its copies on their networks, so moss never calls `delete_copy`; a channel that exports it can drop the function.
+
 
 ## [0.15.24] - 2026-11-13
 

@@ -164,7 +164,7 @@ pub struct ChannelContribution {
     pub login: bool,
 
     /// What the network can carry, for a channel that posts one copy per call
-    /// (`publish_copy`, `update_copy`, `delete_copy`). moss plans and shapes
+    /// (`publish_copy`, `update_copy`, `find_copy`). moss plans and shapes
     /// the copies; such a channel is never called through `syndicate`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub syndication: Option<crate::syndication::channel::ChannelSpec>,

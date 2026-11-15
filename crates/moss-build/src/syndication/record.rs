@@ -339,15 +339,6 @@ impl Records {
         self.path(uid, channel).is_ok_and(|p| p.exists())
     }
 
-    /// Forget a copy that was deleted from its network.
-    pub fn remove(&self, uid: &str, channel: &str) -> Result<(), String> {
-        let path = self.path(uid, channel)?;
-        match std::fs::remove_file(&path) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("remove {}: {e}", path.display())),
-            _ => Ok(()),
-        }
-    }
-
     /// This run's turn to send the site's copies, or `None` while another
     /// run in the folder holds it: two runs working from the same due records
     /// would both post. The turn is an OS lock, so it ends with the process

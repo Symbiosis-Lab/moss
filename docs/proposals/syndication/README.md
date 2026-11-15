@@ -58,17 +58,16 @@ A channel is a plugin with `contributes.channel` in its manifest, as today; post
 - `long_setting`: for a network whose article format only some accounts have (a paid plan), the on/off setting that says this account has it. The channel takes `long` only while that setting is on; otherwise a long page becomes the next form the channel declares. An article already posted stays as posted when the setting goes off. The field goes once a channel's connection can say what its account has.
 - `idempotent`: the plugin passes the job's `idempotency_key` to its network (a record key, an `Idempotency-Key` header), so a retry cannot make a second copy. It changes what moss does after a crash; see below.
 
-The plugin exports up to four functions, one per operation, each handling exactly one copy, and optionally a fifth that says which account it is signed in to. Whether a channel can edit or remove its copies is read from which of them it exports, the way moss already detects every other hook.
+The plugin exports up to three functions, one per operation, each handling exactly one copy, and optionally a fourth that says which account it is signed in to. Whether a channel can edit its copies is read from which of them it exports, the way moss already detects every other hook.
 
 | Export | Called when |
 |---|---|
 | `publish_copy(job)` | a post is due on this network and has no copy there |
 | `update_copy(job)` | the post's source changed in the publish that just landed, and the copy's content would differ |
-| `delete_copy(job)` | the author asks for a deleted post's copies to be removed; copies otherwise stand, since a folder moved by mistake must not erase a year of posts elsewhere |
 | `find_copy(job)` | a send stopped before the network answered, or a copy was handed to the author: is the copy there? |
 | `copy_account({ channel, config })` | once per run, before moss works on any of the channel's copies: which account is the channel signed in to? |
 
-A job carries the post's absolute address, its language, date and tags, the form moss chose, and the copy already shaped: the text of each part with its links, each picture's file and alt text, for a teaser its title, description and cover, and for a whole article its title, HTML, description and cover. An update or delete also carries the copy's `id` and `url`. Its `idempotency_key` is derived from the post's note id and the channel alone, so every retry, on any computer, carries the same key, and an edit made between a crash and its retry cannot turn the retry into a second post.
+A job carries the post's absolute address, its language, date and tags, the form moss chose, and the copy already shaped: the text of each part with its links, each picture's file and alt text, for a teaser its title, description and cover, and for a whole article its title, HTML, description and cover. An update also carries the copy's `id` and `url`. Its `idempotency_key` is derived from the post's note id and the channel alone, so every retry, on any computer, carries the same key, and an edit made between a crash and its retry cannot turn the retry into a second post.
 
 The plugin answers with the `HookResult` every hook returns, with the outcome in its `copy` field, as `check_setup` puts its verdict in `setup`:
 
@@ -102,7 +101,7 @@ A record is keyed by the post's note id (the `uid:` moss keeps through renames) 
 
 The *sending* state is written to disk before the network is called and the result after, so a crash between them leaves a mark rather than an empty slot. A network that is not idempotent cannot make a retry safe, so for it moss chooses at most once: a copy may be missing, and the author is told, but it is not posted twice. `--retry-copies=<channel>` sends the channel's *unconfirmed* copies again; it leaves *handed off* copies as they are, since handed off is where most such copies rest. With `--copies-of=<file>`, which sends only that page's copies, it hands that page's copy over again.
 
-A record also holds the account the copy was sent from, for a channel that exports `copy_account`. It is written with the *sending* mark, so an interrupted send is already tied to the account that made it. While the channel is signed in to another account, moss does not look the copy up, send it again, update or delete it: an idempotency key does not stop a second copy on a different account, and another account's lookup says nothing about the first one's copies. The run says so once per copy, and the work goes on when the first account is signed in again. A copy with nothing on the network yet (due, or refused outright) is sent from the new account. A record written before accounts were kept takes the channel's account the next time it is worked on, so an interrupted send recorded then is tied to whichever account is signed in at its lookup.
+A record also holds the account the copy was sent from, for a channel that exports `copy_account`. It is written with the *sending* mark, so an interrupted send is already tied to the account that made it. While the channel is signed in to another account, moss does not look the copy up, send it again or update it: an idempotency key does not stop a second copy on a different account, and another account's lookup says nothing about the first one's copies. The run says so once per copy, and the work goes on when the first account is signed in again. A copy with nothing on the network yet (due, or refused outright) is sent from the new account. A record written before accounts were kept takes the channel's account the next time it is worked on, so an interrupted send recorded then is tied to whichever account is signed in at its lookup.
 
 Two more guards:
 
@@ -132,7 +131,7 @@ The author sees no screen for any network except the newsletter. Copies go out o
 - **Preview copies** shows each copy read-only, built from exactly what will be sent; a change to the page or to a channel's settings rebuilds it.
 - **Every cut links back** to the page, and every loss of pictures or formatting is named in the preview and on the button.
 - **The receipt names each copy's outcome**, including a send whose answer was lost, which is looked up, never blindly sent again.
-- **Edits are carried** where the network allows and the receipt names where it does not; **removing copies** of a deleted page is offered once, without promising a network erases them.
+- **Edits are carried** where the network allows and the receipt names where it does not; **copies of a deleted page stay** on their networks: moss never removes them, since a folder moved by mistake must not erase a year of posts elsewhere.
 
 The newsletter keeps its own confirmed step (audience, rendered email, a test send), because a delivered email cannot be taken back and reads differently from the page. A network whose publication cannot be undone in the same way gets the same treatment only when its button and preview cannot make the consequence plain.
 
@@ -152,7 +151,7 @@ The earlier path posted through one plugin hook, `syndicate`, that received ever
 
 ## What lives where
 
-- In this repository: the `syndicate:` key, the planner, the records, the write-back, the `syndication` manifest block and the four exports, the plan at landing and the send after it, the dry-run report, `moss plugin secret set`, and the calls a host makes: send one post's copies now, send the held rest now, preview a post's copies, and remove a deleted post's copies.
+- In this repository: the `syndicate:` key, the planner, the records, the write-back, the `syndication` manifest block and the three exports, the plan at landing and the send after it, the dry-run report, `moss plugin secret set`, and the calls a host makes: send one post's copies now, send the held rest now, and preview a post's copies.
 - In the plugin registry: one plugin per network, each tested against a local server of that network where one exists (a Mastodon-compatible server, a local AT Protocol data server) and against recorded responses where none does.
 - In the app: the credential prompt and the Publish summary of copies, both reading the same records.
 - Not in this design: posting on a site's behalf from a hosted service with no computer running. That needs a credential the service can use without seeing it (a broker holding owner-approved, revocable grants), and is a separate design. The contract does not change for it: a due record is the same job wherever it is sent from.

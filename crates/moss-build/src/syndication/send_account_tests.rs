@@ -22,8 +22,7 @@ fn channel(root: &Path, account: Option<&str>, ops: &str) {
 
 const REFUSE_ALL: &str = "publish_copy: async function () { throw new Error('must not publish'); }, \
     find_copy: async function () { throw new Error('must not look up'); }, \
-    update_copy: async function () { throw new Error('must not update'); }, \
-    delete_copy: async function () { throw new Error('must not delete'); }";
+    update_copy: async function () { throw new Error('must not update'); }";
 
 fn site(root: &Path, state: State, account: Option<&str>) -> (Records, ArticleMap) {
     std::fs::write(root.join(SOURCE), "---\ntitle: A\n---\nBody.\n").unwrap();
@@ -156,16 +155,4 @@ async fn a_resting_handoff_says_nothing_while_the_account_is_unknown() {
     channel(root, None, REFUSE_ALL);
     assert_eq!(run(root, &articles).await, []);
     assert_eq!(records.get(UID, "acct").unwrap(), before);
-}
-
-#[tokio::test]
-async fn a_copy_from_another_account_is_not_deleted() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
-    let (records, _) = site(root, State::Posted, Some("did:a"));
-    channel(root, Some("did:b"), REFUSE_ALL);
-    let manager = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()).get_or_create(&root.to_string_lossy()).unwrap();
-    let out = delete_copies(root, &manager, UID, "https://example.org", &|_: &Sent| {}).await;
-    assert_eq!(out.into_iter().map(|s| s.outcome).collect::<Vec<_>>(), [other_account()]);
-    assert!(records.get(UID, "acct").is_some());
 }

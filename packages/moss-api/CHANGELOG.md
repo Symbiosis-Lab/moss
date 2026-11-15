@@ -20,6 +20,7 @@ release heading.
 
 ### Removed
 
+- The `delete_copy` channel export and `"delete"` from `CopyJob.op`. Deleting a post leaves its copies on their networks, so moss never calls `delete_copy`; a channel that exports it can drop the function.
 - `"handoff"` from `CopyJob.form`. A channel that hands copies to the author declares `teaser` and answers with `handoff`.
 
 ## [0.18.0] - 2026-11-12

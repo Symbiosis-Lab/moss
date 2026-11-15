@@ -641,14 +641,14 @@ interface CopyRef {
   url: string;
 }
 /**
- * The one copy a channel's `publish_copy`, `update_copy`, `delete_copy` or
- * `find_copy` receives, already shaped to the limits its manifest declares
+ * The one copy a channel's `publish_copy`, `update_copy` or `find_copy`
+ * receives, already shaped to the limits its manifest declares
  * under `contributes.channel.syndication`.
  *
  * @category Copies
  */
 interface CopyJob {
-  op: "publish" | "update" | "delete" | "find";
+  op: "publish" | "update" | "find";
   channel: string;
   /** The same on every send of this post to this channel, on every computer. */
   idempotency_key: string;
@@ -661,7 +661,7 @@ interface CopyJob {
     date?: string | null;
     tags?: string[];
   };
-  /** Payload fields may be absent for a delete or a lookup whose copy no longer fits. */
+  /** Payload fields may be absent for a lookup whose copy no longer fits. */
   form?: "short" | "thread" | "long" | "teaser";
   parts?: CopyPart[];
   /** Upload attachments for plain copies. Long articles own images in HTML, with no duplicate attachments. */
@@ -682,7 +682,7 @@ interface CopyJob {
     description?: string | null;
     cover?: string | null;
   } | null;
-  /** The copy already on the network (for an update, delete or lookup), or the draft a hand-off left there. */
+  /** The copy already on the network (for an update or lookup), or the draft a hand-off left there. */
   previous?: (CopyRef & {
     parts?: CopyRef[];
   }) | null;
