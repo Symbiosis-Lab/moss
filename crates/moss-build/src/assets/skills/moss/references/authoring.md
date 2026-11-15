@@ -224,7 +224,10 @@ Consequences you can rely on:
   still published for pages and HTML you write yourself. Only relative
   `url()`s to fonts and pictures up to 5 MB that sit inside `.moss/theme/` are
   rewritten; larger files, absolute paths, full URLs and `data:` URLs stay as
-  written. A subset or instanced copy of an OFL font is a modified
+  written. A stylesheet you bring in with `@import "fonts.css"` or
+  `@import url("fonts.css")` is treated the same way: it is published under a
+  name that changes with it, and the files it refers to, counted from its own
+  folder, are renamed inside it too. A subset or instanced copy of an OFL font is a modified
   version: where its licence names a Reserved Font Name (Source Serif's is
   "Source"), rename the family inside the files and in `font-family`, and keep
   the licence beside them.
