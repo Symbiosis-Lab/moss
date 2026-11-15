@@ -478,7 +478,7 @@ fn iframe_block(el: ElementRef) -> Option<Block> {
     if let Some(download) = media::drive_download_from_preview(&src) {
         return Some(Block::Audio { src: download });
     }
-    if src.contains("youtube.com/embed/") || src.contains("player.vimeo.com/video/") {
+    if src.contains("youtube.com/embed/") || src.contains("youtube-nocookie.com/embed/") || src.contains("player.vimeo.com/video/") {
         return Some(Block::Video { url: src });
     }
     log::warn!("readymag import: unrecognized iframe kept as link: {src}");

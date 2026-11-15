@@ -40,12 +40,13 @@ pub fn detect_provider(url: &str) -> ProviderEmbed {
     let (host, path_and_query) = split_host_path(url);
     let bare_host = bare_host(host);
 
-    // YouTube
-    if bare_host == "youtube.com" || bare_host == "youtu.be" {
+    // YouTube, played from its no-cookie host: the page sets no YouTube cookie
+    // until the reader starts the video.
+    if matches!(bare_host, "youtube.com" | "youtu.be" | "youtube-nocookie.com") {
         if let Some((id, start)) = extract_youtube_id(bare_host, path_and_query) {
             let embed_url = match start {
-                Some(t) => format!("https://www.youtube.com/embed/{}?start={}", id, t),
-                None => format!("https://www.youtube.com/embed/{}", id),
+                Some(t) => format!("https://www.youtube-nocookie.com/embed/{}?start={}", id, t),
+                None => format!("https://www.youtube-nocookie.com/embed/{}", id),
             };
             return ProviderEmbed {
                 embed_url,
@@ -354,7 +355,7 @@ mod tests {
     #[test]
     fn detect_provider_youtube_watch() {
         let p = detect_provider("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
-        assert_eq!(p.embed_url, "https://www.youtube.com/embed/dQw4w9WgXcQ");
+        assert_eq!(p.embed_url, "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ");
         assert!(p.allow.contains("encrypted-media"), "allow: {}", p.allow);
         assert!(p.allowfullscreen);
         assert_eq!(p.provider_name, "youtube");
@@ -364,35 +365,42 @@ mod tests {
     #[test]
     fn detect_provider_youtube_shortlink() {
         let p = detect_provider("https://youtu.be/dQw4w9WgXcQ");
-        assert_eq!(p.embed_url, "https://www.youtube.com/embed/dQw4w9WgXcQ");
+        assert_eq!(p.embed_url, "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ");
         assert_eq!(p.provider_name, "youtube");
     }
 
     #[test]
     fn detect_provider_youtube_shorts() {
         let p = detect_provider("https://www.youtube.com/shorts/dQw4w9WgXcQ");
-        assert_eq!(p.embed_url, "https://www.youtube.com/embed/dQw4w9WgXcQ");
+        assert_eq!(p.embed_url, "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ");
         assert_eq!(p.provider_name, "youtube");
     }
 
     #[test]
     fn detect_provider_youtube_live() {
         let p = detect_provider("https://www.youtube.com/live/dQw4w9WgXcQ");
-        assert_eq!(p.embed_url, "https://www.youtube.com/embed/dQw4w9WgXcQ");
+        assert_eq!(p.embed_url, "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ");
         assert_eq!(p.provider_name, "youtube");
     }
 
     #[test]
     fn detect_provider_youtube_already_embed() {
         let p = detect_provider("https://www.youtube.com/embed/dQw4w9WgXcQ");
-        assert_eq!(p.embed_url, "https://www.youtube.com/embed/dQw4w9WgXcQ");
+        assert_eq!(p.embed_url, "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ");
         assert_eq!(p.provider_name, "youtube");
     }
 
     #[test]
     fn detect_provider_youtube_no_www() {
         let p = detect_provider("https://youtube.com/watch?v=dQw4w9WgXcQ");
-        assert_eq!(p.embed_url, "https://www.youtube.com/embed/dQw4w9WgXcQ");
+        assert_eq!(p.embed_url, "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ");
+        assert_eq!(p.provider_name, "youtube");
+    }
+
+    #[test]
+    fn detect_provider_youtube_nocookie_address() {
+        let p = detect_provider("https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?start=42");
+        assert_eq!(p.embed_url, "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?start=42");
         assert_eq!(p.provider_name, "youtube");
     }
 
@@ -484,7 +492,7 @@ mod tests {
             &empty_snapshot(),
         );
         assert!(
-            out.contains(r#"src="https://www.youtube.com/embed/dQw4w9WgXcQ""#),
+            out.contains(r#"src="https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ""#),
             "got: {out}"
         );
         assert!(out.contains(r#"class="moss-embed""#), "got: {out}");

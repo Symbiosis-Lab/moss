@@ -226,3 +226,13 @@ fn readymag_corpus_snapshot() {
     );
     assert!(music.contains("ORIGINAL SONGS"), "music sections: {music}");
 }
+
+#[test]
+fn a_youtube_frame_from_either_host_becomes_a_video() {
+    for src in ["https://www.youtube.com/embed/abc123DEF-_", "https://www.youtube-nocookie.com/embed/abc123DEF-_?start=42"] {
+        let html = scraper::Html::parse_fragment(&format!(r#"<div class="rmwidget widget-iframe"><iframe src="{src}"></iframe></div>"#));
+        let widget = Selector::parse(".rmwidget").expect("static selector");
+        let el = html.select(&widget).next().expect("the widget");
+        assert!(matches!(iframe_block(el), Some(Block::Video { url }) if url == src), "{src}");
+    }
+}
