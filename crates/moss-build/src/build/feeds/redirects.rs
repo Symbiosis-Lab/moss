@@ -12,8 +12,7 @@
 //! 1. Compare previous and current `ArticleMap` to detect renames via stable UIDs
 //! 2. Merge new renames into the persistent redirect map (with chain resolution)
 //! 3. Merge in the other two sources, plan each entry's static form, and write
-//!    the stubs and copies — skipping the stub writes when the stub set is
-//!    identical to what the last build of this folder in this process wrote
+//!    the stubs and copies; a stub whose bytes are already on disk is left as it is
 
 use crate::build::assets::paths::compute_binary_hash;
 use crate::build::manifest::live_baseline::{self, Baseline, LiveBaseline, Unreadable};

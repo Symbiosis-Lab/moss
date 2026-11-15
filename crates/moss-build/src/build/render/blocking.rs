@@ -3552,7 +3552,7 @@ pub(super) fn resolve_favicon(
     // lines below never got to speak. The read above already guarded that
     // hazard for the user's favicon; the write did not.
     let (filename, relative_path, content_hash, used_default) = if let Some((name, bytes)) = user_favicon {
-        crate::build::io_utils::write_output(&favicon_dest_dir.join(&name), &bytes)
+        crate::build::io_utils::write_output_if_changed(&favicon_dest_dir.join(&name), &bytes)
             .map_err(|e| format!("Failed to write favicon: {}", e))?;
         let hash = compute_content_hash(&String::from_utf8_lossy(&bytes));
         let rel = format!("assets/{}", name);
@@ -3561,7 +3561,7 @@ pub(super) fn resolve_favicon(
         // The tab icon carries its own round ground, applied only in this
         // written copy — see `ground_default_favicon`'s doc comment for why.
         let grounded_favicon = crate::build::site_meta::favicon::ground_default_favicon(crate::build::page::shell::DEFAULT_FAVICON);
-        crate::build::io_utils::write_output(&favicon_dest_dir.join("favicon.svg"), grounded_favicon.as_bytes())
+        crate::build::io_utils::write_output_if_changed(&favicon_dest_dir.join("favicon.svg"), grounded_favicon.as_bytes())
             .map_err(|e| format!("Failed to write default favicon: {}", e))?;
         let hash = compute_content_hash(&grounded_favicon);
         (

@@ -201,3 +201,31 @@ fn a_declared_copy_that_cannot_be_read_is_reported() {
     assert!(!stage.join("old.pdf").exists());
     assert_eq!(crate::build::cli_output::take_cli_problems(), 1);
 }
+
+/// A forwarding page whose bytes are already staged is left as it is, and
+/// still registered; one whose staged bytes differ is rewritten.
+#[cfg(unix)]
+#[test]
+fn a_moved_folders_forwarding_page_is_rewritten_only_when_its_bytes_differ() {
+    use std::os::unix::fs::MetadataExt;
+    let (_vault, mp) = setup();
+    let stage = mp.staging_dir();
+    let pages: [(&str, &[u8]); 1] = [("new/a/index.html", b"A")];
+    let late = super::LateRedirects { copies: Vec::new(), folder_moves: vec![mv("old/", "new/")] };
+    let old = stage.join("old/a/index.html");
+    let mut sealed = build(&stage, &pages, true);
+    keep(&mp, &stage, &mut sealed, &late);
+    let forwarding = std::fs::read(&old).unwrap();
+    let inode = std::fs::metadata(&old).unwrap().ino();
+
+    let mut sealed = build(&stage, &pages, true);
+    keep(&mp, &stage, &mut sealed, &late);
+    assert_eq!(std::fs::metadata(&old).unwrap().ino(), inode, "identical bytes are not written again");
+    assert!(sealed.files().contains_key("old/a/index.html"), "a page left in place is still served");
+
+    std::fs::write(&old, b"stale").unwrap();
+    let mut sealed = build(&stage, &pages, true);
+    keep(&mp, &stage, &mut sealed, &late);
+    assert_eq!(std::fs::read(&old).unwrap(), forwarding);
+    assert!(sealed.files().contains_key("old/a/index.html"));
+}
