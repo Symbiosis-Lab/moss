@@ -619,7 +619,7 @@ fn run_notebook_processing(
             // registration matches what's on disk regardless of source-folder
             // casing.
             // .unwrap(): source_path comes from the notebook scanner — known valid.
-            let ipynb_out = crate::build::served_path::ServedPath::from_source(&item_source_path).unwrap();
+            let ipynb_out = crate::build::notebook::copy_path(&item_source_path).unwrap();
             let hash = stage_copy(&source, &ipynb_out, &staging_owned)
                 .map_err(|e| format!("Failed to copy notebook: {}", e))?;
             produced.push((ipynb_out, hash));

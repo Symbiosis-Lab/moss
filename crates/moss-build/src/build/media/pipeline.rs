@@ -817,7 +817,7 @@ fn recall_or_hash_output(
 
 /// Register a `Preserved` symlink/alias outcome in `live_symlinks` and the
 /// manifest; any other outcome is already logged by `handle_symlink_entry` /
-/// `handle_alias_entry`. Returns whether it was `Preserved`, so the caller
+/// `handle_alias_entry`. Returns the address it registered, so the caller
 /// can credit its own counter — a real symlink and a resolved Finder alias
 /// count separately even though they register identically. `kind` names the
 /// entry in an invalid-path warning ("symlink" or "alias").
@@ -826,10 +826,10 @@ fn preserve_link(
     site_hashes: &mut SiteHashes,
     live_symlinks: &mut std::collections::HashSet<String>,
     kind: &str,
-) -> bool {
+) -> Option<crate::build::served_path::ServedPath> {
     use crate::build::media::symlink::SymlinkOutcome;
     let SymlinkOutcome::Preserved { rel_path, target } = outcome else {
-        return false;
+        return None;
     };
     live_symlinks.insert(rel_path.clone());
     // Register in the manifest so deploy uploads the symlink.
@@ -837,12 +837,13 @@ fn preserve_link(
     match crate::build::served_path::ServedPath::from_source(rel_path) {
         Ok(out_path) => {
             site_hashes.insert_file_hash(&out_path, crate::types::content::symlink_entry(&target_str));
+            Some(out_path)
         }
         Err(e) => {
             log::warn!("[background-assets] Skipping {kind} with invalid path '{}': {}", rel_path, e);
+            None
         }
     }
-    true
 }
 
 /// A file the video or image lane owns is published by that lane, but the sweep
@@ -855,6 +856,7 @@ fn register_lane_source(
     cached: Option<&crate::build::types::SourceMetadata>,
     previous_write: u64,
     (file, rel, video): (&Path, &str, bool),
+    served_at: Option<String>,
     site_hashes: &mut SiteHashes,
     run: &mut AssetWalkTally,
 ) {
@@ -864,6 +866,9 @@ fn register_lane_source(
     {
         Ok(Some((oid, stat))) => {
             site_hashes.sources.insert(rel.to_string(), crate::build::types::SourceMetadata::from_stat(oid, stat));
+            if let Some(out) = served_at {
+                site_hashes.record_output(rel, &out);
+            }
         }
         Ok(None) => {}
         Err(e) => log::info!("[background-assets] Cannot hash {rel}: {e}"),
@@ -878,12 +883,16 @@ fn register_alias_source(
     source_root: &Path,
     site_hashes: &mut SiteHashes,
     live_source_keys: &mut std::collections::HashSet<String>,
+    served_at: Option<&crate::build::served_path::ServedPath>,
     mut blob: impl FnMut(&Path, &str) -> Result<Option<(String, crate::build::stat::FileStat)>, String>,
 ) {
     let Ok(rel) = path.strip_prefix(source_root) else { return };
     let rel = logical_path(rel);
     if let Ok(Some((oid, stat))) = blob(path, &rel) {
         site_hashes.sources.insert(rel.clone(), crate::build::types::SourceMetadata::from_stat(oid, stat));
+        if let Some(out) = served_at {
+            site_hashes.record_output(&rel, out.as_str());
+        }
         live_source_keys.insert(rel);
     }
 }
@@ -1002,6 +1011,7 @@ impl AssetWalkTally {
     fn prune(&self, hashes: &mut SiteHashes) {
         hashes.files.retain(|key, _| self.live_asset_keys.contains(key) || self.live_symlinks.contains(key));
         hashes.sources.retain(|key, _| self.live_source_keys.contains(key));
+        hashes.asset_outputs.retain(|key, _| self.live_source_keys.contains(key));
     }
 }
 
@@ -1083,6 +1093,7 @@ impl AssetCopy {
 pub(crate) struct StagedHtml {
     pub files: HashMap<String, String>,
     pub sources: HashMap<String, crate::build::types::SourceMetadata>,
+    asset_outputs: HashMap<String, String>,
     pub oids: HashMap<String, String>,
     stats: AssetPipelineRunStats,
     copy: AssetCopy,
@@ -1134,6 +1145,9 @@ pub(crate) fn stage_source_html(
         if let Some(entry) = ctx.previous_hashes.sources.get(&file.path) {
             site_hashes.sources.insert(file.path.clone(), entry.clone());
         }
+        if let Some(out) = ctx.previous_hashes.asset_outputs.get(&file.path) {
+            site_hashes.asset_outputs.insert(file.path.clone(), out.clone());
+        }
         let path = on_disk(Path::new(&ctx.source_path), &file.path);
         match std::fs::symlink_metadata(&path) {
             Ok(meta) => copy_asset_entry(ctx, &mut copy, &path, meta.file_type(), &mut site_hashes, &mut run, reporter, asset_registry.as_deref()),
@@ -1141,7 +1155,7 @@ pub(crate) fn stage_source_html(
         }
     }
     run.prune(&mut site_hashes);
-    StagedHtml { files: site_hashes.files, sources: site_hashes.sources, oids: run.staged_oids, stats: run.stats, copy }
+    StagedHtml { files: site_hashes.files, sources: site_hashes.sources, asset_outputs: site_hashes.asset_outputs, oids: run.staged_oids, stats: run.stats, copy }
 }
 
 fn copy_asset_entry(
@@ -1183,7 +1197,7 @@ fn copy_asset_entry(
             canonical_source_root,
             output_dir,
         );
-        if preserve_link(&outcome, site_hashes, &mut run.live_symlinks, "symlink") {
+        if preserve_link(&outcome, site_hashes, &mut run.live_symlinks, "symlink").is_some() {
             run.stats.preserved_symlinks += 1;
         } else {
             run.stats.skipped_symlinks += 1;
@@ -1207,14 +1221,15 @@ fn copy_asset_entry(
         ) {
             // Count any non-Preserved alias outcome (escape/broken/
             // processable/absolute/unresolvable) as a skipped symlink.
-            if preserve_link(&outcome, site_hashes, &mut run.live_symlinks, "alias") {
+            let preserved = preserve_link(&outcome, site_hashes, &mut run.live_symlinks, "alias");
+            if preserved.is_some() {
                 run.stats.preserved_aliases += 1;
             } else {
                 run.stats.skipped_symlinks += 1;
             }
             let blob = |path: &Path, rel: &str| source_blob(path, prev_sources.get(rel), prev_hashes_mtime_secs,
                 &mut run.stats.cache_hits, &mut run.stats.cache_misses, |_| object_store.store_source_file(path, crate::build::cache::RecordMode::Wait));
-            register_alias_source(file_path, source_root, site_hashes, &mut run.live_source_keys, blob);
+            register_alias_source(file_path, source_root, site_hashes, &mut run.live_source_keys, preserved.as_ref(), blob);
             return;
         }
         // Only genuine non-alias files fall through to byte copying.
@@ -1281,7 +1296,7 @@ fn copy_asset_entry(
     );
     if video_exts.contains(&ext.as_str()) && !configured_passthrough {
         register_lane_source(lane_index, prev_sources.get(&relative_path), prev_hashes_mtime_secs,
-            (file_path, &relative_path, true), site_hashes, run);
+            (file_path, &relative_path, true), None, site_hashes, run);
         return;
     }
 
@@ -1299,7 +1314,7 @@ fn copy_asset_entry(
     // failure or cloud transition must never give this path a second writer.
     if converter_bases.contains(Path::new(&relative_path)) {
         register_lane_source(lane_index, prev_sources.get(&relative_path), prev_hashes_mtime_secs,
-            (file_path, &relative_path, false), site_hashes, run);
+            (file_path, &relative_path, false), Some(super::image::webp_address(&relative_path, &ctx.dir_overrides)), site_hashes, run);
         return;
     }
 
@@ -1398,6 +1413,7 @@ fn copy_asset_entry(
             );
             match out_path {
                 Ok(out_path) => {
+                    site_hashes.record_output(&relative_path, out_path.as_str());
                     // The CAS object actually backing `target`'s bytes: the
                     // post-injection object when SPA injection changed
                     // them, otherwise the object `link_to` placed there
@@ -1584,8 +1600,11 @@ pub(crate) fn copy_deferred_assets(
     // The remaining pass includes the HTML source cache handed over by the
     // early pass, so this replacement covers both phases and prunes deletions.
     site_hashes.sources.extend(html.sources);
-    let sources_payload = std::mem::take(&mut site_hashes.sources);
-    emit(EmitMessage::SourcesReplace(sources_payload));
+    site_hashes.asset_outputs.extend(html.asset_outputs);
+    emit(EmitMessage::SourcesReplace {
+        sources: std::mem::take(&mut site_hashes.sources),
+        asset_outputs: std::mem::take(&mut site_hashes.asset_outputs),
+    });
 
     staged.save();
     // Persist the oid→xxh3 memo once per build (not once per asset — see

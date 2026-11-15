@@ -61,13 +61,12 @@ pub enum EmitMessage {
     /// Bulk-replace `PendingManifest::inner.sources` with the change-detection
     /// cache produced by `copy_deferred_assets`. Sent once at the end of the
     /// deferred-asset walk. Captures both insertions (cache miss → fresh
-    /// `SourceMetadata`) and deletions (live-set pruning) atomically. Before
-    /// this message existed, `copy_deferred_assets` updated only a local
-    /// clone of `site_hashes` and the coordinator's `inner.sources` was
-    /// whatever the previous build's carry-forward left — so the on-disk
-    /// `sources` map was always one build stale and `prev_sources` two builds
-    /// stale.
-    SourcesReplace(HashMap<String, SourceMetadata>),
+    /// `SourceMetadata`) and deletions (live-set pruning) atomically.
+    SourcesReplace {
+        sources: HashMap<String, SourceMetadata>,
+        /// Each folder file's published address, replaced with `sources`.
+        asset_outputs: HashMap<String, String>,
+    },
     /// A producer could not verify `rel_path`'s output: an I/O error other than
     /// a positive `NotFound`. Nothing is registered, failed or deleted for it,
     /// and the generation that carries the mark is withheld.
@@ -125,8 +124,8 @@ impl ManifestCoordinator {
                         self.pending.apply_message(rel_path, &hash, bucket, None);
                     }
                 }
-                EmitMessage::SourcesReplace(sources) => {
-                    self.pending.replace_sources(sources);
+                EmitMessage::SourcesReplace { sources, asset_outputs } => {
+                    self.pending.replace_sources(sources, asset_outputs);
                 }
                 EmitMessage::Unverified { rel_path, detail } => {
                     self.pending.mark_unverified(rel_path, detail);
@@ -183,8 +182,8 @@ pub mod test_utils {
                         pending.apply_message(rel_path, &hash, bucket, None);
                     }
                 }
-                EmitMessage::SourcesReplace(sources) => {
-                    pending.replace_sources(sources);
+                EmitMessage::SourcesReplace { sources, asset_outputs } => {
+                    pending.replace_sources(sources, asset_outputs);
                 }
                 EmitMessage::Unverified { rel_path, detail } => {
                     pending.mark_unverified(rel_path, detail);
@@ -297,7 +296,7 @@ mod tests {
             "live-source.md".to_string(),
             SourceMetadata { hash: "new".into(), stat: FileStat::whole_second(42, 1000) },
         );
-        tx.send(EmitMessage::SourcesReplace(fresh)).await.unwrap();
+        tx.send(EmitMessage::SourcesReplace { sources: fresh, asset_outputs: HashMap::new() }).await.unwrap();
         drop(tx);
 
         let sealed = coord.run_until_drained().await;
@@ -346,7 +345,7 @@ mod tests {
             "Projects/new.md".to_string(),
             SourceMetadata { hash: "src-hash".into(), stat: FileStat::whole_second(100, 2000) },
         );
-        tx.send(EmitMessage::SourcesReplace(fresh_sources)).await.unwrap();
+        tx.send(EmitMessage::SourcesReplace { sources: fresh_sources, asset_outputs: HashMap::new() }).await.unwrap();
         drop(tx);
 
         let sealed = coord.run_until_drained().await;

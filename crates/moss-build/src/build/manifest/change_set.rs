@@ -217,22 +217,24 @@ impl PublishedSnapshot {
     }
 }
 
-/// The non-page half of `sources` (what the asset walk found in the folder),
-/// each mapped to the public output the build shipped it as. Read off the
-/// sealed manifest, so recording it costs no extra walk.
+/// Each folder file with the public address it was published at: the one its
+/// writer recorded, or with no entry, its source path. Notebook processing
+/// copies a notebook to its [`notebook::copy_path`](crate::build::notebook::copy_path).
 ///
-/// A source with no shipped output is left out: it explains no address.
+/// A file with no shipped public output is left out: it explains no address.
 fn asset_sources_to_outputs(sealed: &SealedManifest) -> HashMap<String, String> {
     let files = sealed.files();
+    let recorded = sealed.asset_outputs();
     sealed
         .sources()
         .keys()
         .filter(|src| !is_page_source_key(src) && !sealed.source_to_output().contains_key(*src))
         .filter_map(|src| {
-            let out = ServedPath::from_source(src).ok()?;
-            let out = out.as_str();
-            (is_public_address(out) && files.contains_key(out))
-                .then(|| (src.clone(), out.to_string()))
+            let out = match bucket(src) {
+                ScanBucket::Notebook => crate::build::notebook::copy_path(src).ok()?.as_str().to_string(),
+                _ => recorded.get(src).map_or(src.as_str(), String::as_str).to_string(),
+            };
+            (is_public_address(&out) && files.contains_key(out.as_str())).then(|| (src.clone(), out))
         })
         .collect()
 }

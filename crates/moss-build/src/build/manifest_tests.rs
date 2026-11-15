@@ -1139,7 +1139,7 @@ fn replace_sources_preserves_page_hashes() {
 
     let mut walk_result = HashMap::new();
     walk_result.insert("media/x.jpg".to_string(), meta("asset"));
-    pending.replace_sources(walk_result);
+    pending.replace_sources(walk_result, HashMap::new());
 
     let sealed = pending.seal();
     assert_eq!(sealed.sources().get("posts/a.md").unwrap().hash, "hash-a");

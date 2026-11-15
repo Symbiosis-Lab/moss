@@ -116,6 +116,12 @@ pub struct ImageConversionItem {
     pub(crate) fingerprint: Option<Arc<ImageFingerprint>>,
 }
 
+/// Where a picture's WebP base is written and served: under its folder's
+/// address, which a WebP source shares with the picture itself.
+pub(crate) fn webp_address(rel_source: &str, dir_overrides: &HashMap<String, String>) -> String {
+    moss_core::asset_paths::to_webp(&crate::build::render::resolve_path_with_overrides(rel_source, dir_overrides))
+}
+
 impl ImageConversionItem {
     /// An encoded WebP source writes its resized base at the source's own
     /// output path. Other formats produce a separate variant; skipped items
@@ -1858,7 +1864,6 @@ fn record_deliveries(
 pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunContext) -> bool {
     use crate::build::cache::{ObjectStore, TransformCache};
     use moss_core::asset_paths;
-    use crate::build::render::resolve_path_with_overrides;
 
     let is_headless = services.reporter.is_terminal();
 
@@ -2035,8 +2040,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
 
         // Derived before the hash resolution below, not after: a hash failure
         // has to retract the promises made under these URLs.
-        let mapped_source = resolve_path_with_overrides(&rel_source_str, dir_overrides);
-        let relative_webp = asset_paths::to_webp(&mapped_source);
+        let relative_webp = webp_address(&rel_source_str, dir_overrides);
 
         // A base failure retracts the rung promises registration made for THIS item;
         // the success arm sweeps any the encode did not resolve, so a registered

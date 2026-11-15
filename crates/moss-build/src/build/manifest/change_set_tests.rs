@@ -32,8 +32,7 @@ fn sealed(
 
 /// [`sealed`] plus folder-provided source files: each of `assets` is a source
 /// path whose output is registered at the same path, with its hash in
-/// `sources` (the half the asset walk writes — registered through the page
-/// writer here because a unit test has no walk).
+/// `sources` and its address in `asset_outputs`.
 fn sealed_with_assets(
     pages: &[(&str, &str, &str, &[u8])],
     unmapped: &[(&str, &[u8])],
@@ -54,11 +53,10 @@ fn sealed_with_assets(
     for src in assets {
         let sp = ServedPath::from_source(src).unwrap();
         pending.register(&sp, b"asset", crate::build::manifest::HashBucket::Files);
-        pending.register_page_source_hash(src.to_string(), meta("h-asset"));
     }
-    for src in unshipped_sources {
-        pending.register_page_source_hash(src.to_string(), meta("h-unshipped"));
-    }
+    // What the asset walk hands over: each file's hash and where it was copied.
+    let walked = || assets.iter().chain(unshipped_sources).map(|src| src.to_string());
+    pending.replace_sources(walked().map(|src| (src, meta("h-asset"))).collect(), walked().map(|src| (src.clone(), src)).collect());
     pending.seal()
 }
 

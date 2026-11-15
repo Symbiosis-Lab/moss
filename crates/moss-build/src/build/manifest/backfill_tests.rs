@@ -345,7 +345,7 @@ fn generated_files_and_pictures_are_never_removed_addresses() {
     std::fs::write(vault.path().join(own), b"<svg/>").unwrap();
     last.register(&ServedPath::from_source(own).unwrap(), b"<svg/>", HashBucket::Files);
     let meta = crate::build::types::SourceMetadata { hash: "h".into(), stat: crate::build::stat::FileStat::whole_second(1, 1) };
-    last.register_page_source_hash(own.into(), meta);
+    last.replace_sources([(own.to_string(), meta)].into(), [(own.to_string(), own.to_string())].into());
     published_record::save(&mp, &PublishedSnapshot::from_sealed(&last.seal(), "moss:site-1", "2026-11-05T00:00:00Z".into())).unwrap();
     let now = PendingManifest::new(SiteHashes::default());
     assert_eq!(removed_for_seal(&mp, &now.seal()), vec![]);
