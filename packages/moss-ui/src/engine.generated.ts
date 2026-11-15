@@ -2256,9 +2256,9 @@ export type RemovalReason =
  */
 "withheld" | 
 /**
- * Anything else: a generated file nobody produces now, a source that
- * still exists whose address changed, a file whose bytes moved to
- * another address, or a record too old to say.
+ * Anything else: a page whose source still exists but whose address
+ * changed or that is no longer published, or an HTML file whose bytes
+ * moved to another address.
  */
 "unexplained" | 
 /**
@@ -2268,32 +2268,25 @@ export type RemovalReason =
 "opened"
 
 /**
- * A public address the last publish served that this build will not.
+ * A page the author wrote that the last publish served and this build will
+ * not, or an address that was for members and would be open to everyone.
  */
 export type RemovedAddress = { 
 /**
- * Build output path, e.g. `feed.xml` or `a/index.html`.
+ * Build output path, e.g. `a/index.html` or `scales.html`.
  */
 path: string; reason: RemovalReason; 
 /**
- * Where what was served here is served now, with no redirect: a page
- * whose source still exists under a new slug or permalink, or a file
- * whose bytes moved to another address. Lets a later step offer the
- * redirect.
+ * Where the page served here is served now, with no redirect: under a
+ * new slug or permalink, or an HTML file whose bytes moved to another
+ * address. Lets a later step offer the redirect.
  */
 moved_to?: string | null; 
 /**
- * The source file the last publish recorded for this address: a page's
- * or a folder file's. Absent for a generated file, and for a record too
- * old to name folder files. It is what tells "still in your folder but no
- * longer published" from "no longer produced".
+ * The source file the last publish recorded for this address: a
+ * markdown page or an HTML file. Absent for an opened address.
  */
-source?: string | null; 
-/**
- * The site setting that stopped this generated file, when one did. Such
- * a removal is `AuthorRemoved`: the owner's act, like deleting a source.
- */
-withdrawn_by?: WithdrawnBy | null }
+source?: string | null }
 
 export type RenameArgs = { oldPath: VaultPath; newPath: VaultPath }
 
@@ -3317,24 +3310,6 @@ page: string | null; allowedKinds: ExtKind[] | null }
  * accidental swaps with other string identifiers (site_id, label, etc.).
  */
 export type WindowId = string
-
-/**
- * A site setting that stops a generated file on purpose.
- */
-export type WithdrawnBy = 
-/**
- * AI answers are asked not to use the pages, so there is no `llms.txt`.
- */
-"ai_answers" | 
-/**
- * No search or AI switch is set any more, so there is no `tdmrep.json`.
- */
-"ai_switches" | 
-/**
- * `[site].selection_tools` is off, so there is no Share and no QR code
- * for its picture.
- */
-"selection_tools"
 
 export type WriteEditorFileBinaryArgs = { relativePath: VaultPath; dataBase64: string }
 

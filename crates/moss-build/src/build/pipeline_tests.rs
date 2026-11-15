@@ -6628,6 +6628,7 @@ fn a_page_builds_under_the_uid_its_publish_recorded() {
         uids: Default::default(),
         triples: Some(vec![live]),
         asset_source_to_output: None,
+        page_stubs: Default::default(),
     };
     crate::build::manifest::published_record::save(&paths, &record).unwrap();
     build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();

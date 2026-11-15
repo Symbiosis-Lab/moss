@@ -324,12 +324,19 @@ pub fn emit_redirect_table(
     records.record_late_redirects(&folder_key, super::kept_addresses::LateRedirects { copies, folder_moves });
     // A stub whose bytes are already staged is registered without being
     // written again (`BuildContext::emit`).
+    let pages: HashSet<String> = pending.source_to_output().values().cloned().collect();
     for p in planned.iter().filter(|p| p.form == Form::Stub) {
         let sp = p.from.served_path();
         let html = generate_redirect_html(&p.to.href());
         BuildContext::for_render(output_dir, pending)
             .emit(sp, html.as_bytes(), HashBucket::Files)
             .map_err(|e| format!("Failed to emit redirect stub '{}': {}", sp.as_str(), e))?;
+        // A stub to one of the author's pages is that page's old address.
+        if let table::Target::Internal(t, _) = &p.to {
+            if pages.contains(t.key()) || t.is_html_file() {
+                pending.register_page_stub(sp.as_str(), t.key());
+            }
+        }
     }
     if !planned.is_empty() {
         log::debug!("build: emitted {} redirect(s) into pending manifest", planned.len());
@@ -995,12 +1002,18 @@ mod tests {
         BuildContext::for_render(&output_dir, &mut pending)
             .emit(&new_sp, b"<html>new</html>", HashBucket::Files)
             .unwrap();
+        pending.register_source_mapping("page.md".into(), &new_sp);
 
         // Call the new function.
         emit_redirect_table(&paths, &current_map, &TableInputs::default(), &output_dir, &mut pending).unwrap();
 
         // Seal and inspect.
         let sealed = pending.seal();
+        assert_eq!(
+            sealed.page_stubs().get("old/page/index.html").map(String::as_str),
+            Some("new/page/index.html"),
+            "the stub is recorded as the page's old address"
+        );
 
         // The stub for old/page/ must appear in the sealed manifest.
         let stub_key = "old/page/index.html";

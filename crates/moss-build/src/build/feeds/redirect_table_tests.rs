@@ -486,6 +486,32 @@ fn declared_entries_come_from_the_inputs_not_from_the_file() {
     assert!(fs::read_to_string(out.join("old/index.html")).unwrap().contains("url=/about/"));
 }
 
+/// A stub to an author's page is recorded as that page's old address, so a
+/// publish that loses it names the page; a stub to anything else is not.
+#[test]
+fn a_stub_to_a_page_is_recorded_as_its_old_address_and_others_are_not() {
+    use crate::build::feeds::redirects::{emit_redirect_table, TableInputs};
+    let dir = tempfile::Builder::new().prefix("moss_redirect_stubs_").tempdir().unwrap();
+    let out = dir.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    let paths = crate::moss_paths::MossPaths::new(dir.path());
+    let mut pending = crate::build::manifest::PendingManifest::new(crate::types::content::SiteHashes::default());
+    for key in ["about/index.html", "scales.html", "tags/flood/index.html"] {
+        let sp = crate::build::served_path::ServedPath::from_source(key).unwrap();
+        crate::build::context::BuildContext::for_render(&out, &mut pending)
+            .emit(&sp, b"<html></html>", crate::build::manifest::HashBucket::Files)
+            .unwrap();
+    }
+    pending.register_source_mapping("about.md".into(), &crate::build::served_path::ServedPath::from_source("about/index.html").unwrap());
+    let declared = [("/old/", "/about/"), ("/chart/", "/scales.html"), ("/flood/", "/tags/flood/")];
+    let inputs = TableInputs { declared: declared.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(), ..Default::default() };
+    emit_redirect_table(&paths, &crate::build::scan::article_map::ArticleMap::new(), &inputs, &out, &mut pending)
+        .unwrap();
+    let sealed = pending.seal();
+    let stubs: Vec<_> = sealed.page_stubs().iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    assert_eq!(stubs, [("chart/index.html", "scales.html"), ("old/index.html", "about/index.html")]);
+}
+
 /// The pipeline is what hands the parsed config's entries to the build.
 #[test]
 fn the_pipeline_passes_the_configs_redirects_to_the_build() {

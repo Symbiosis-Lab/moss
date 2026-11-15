@@ -174,12 +174,8 @@ impl DryRun {
             out.push_str("Pages: not classified, because there is no record of an earlier publish from this folder to this target.\n");
         }
         if !set.removed.is_empty() {
-            out.push_str(&format!("Addresses going offline: {}\n", set.removed.len()));
+            out.push_str(&format!("Pages going offline: {}\n", set.removed.len()));
             out.push_str(&capped_lines_cut(&set.removed, cause_line, more_in_json));
-        }
-        if !self.kept_as_redirect.is_empty() {
-            out.push_str("Kept answering at the old address (a picture still served, or a folder redirect):\n");
-            out.push_str(&capped_lines_cut(&self.kept_as_redirect, |k| format!("{} -> {}", k.from, k.to), more_in_json));
         }
         match &self.transfer {
             Transfer::SinceLastPublish { upload, removed } => {
@@ -188,16 +184,6 @@ impl DryRun {
                     files(*upload),
                     files(removed.len() as u32)
                 ));
-                // A removed public address is already listed above; this is the rest.
-                let rest: Vec<String> = removed
-                    .iter()
-                    .filter(|p| !set.removed.iter().any(|a| &a.path == *p))
-                    .map(|p| crate::build::served_path::served_address(p))
-                    .collect();
-                if !rest.is_empty() {
-                    out.push_str(if set.removed.is_empty() { "Removed:\n" } else { "Also removed:\n" });
-                    out.push_str(&capped_lines_cut(&rest, String::clone, more_in_json));
-                }
             }
             Transfer::NoRecord => out.push_str(
                 "Transfer: not known, because there is no record of an earlier publish from this folder.\n",
@@ -587,13 +573,12 @@ mod tests {
                 ..ChangeSet::default()
             }
             .with_removed(vec![RemovedAddress {
-                path: "legacy-feed.xml".into(),
+                path: "old/index.html".into(),
                 reason: RemovalReason::Unexplained,
                 moved_to: None,
-                source: None,
-                withdrawn_by: None,
+                source: Some("old.md".into()),
             }]),
-            transfer: Transfer::SinceLastPublish { upload: 2, removed: vec!["legacy-feed.xml".into(), "style.1a2b3c.css".into()] },
+            transfer: Transfer::SinceLastPublish { upload: 2, removed: vec!["old/index.html".into(), "style.1a2b3c.css".into()] },
             refusal: Some(crate::deploy::Refusal::new(crate::deploy::RefusalKind::Removals, "Nothing published — REFUSED".into())),
             would_register: None,
             would_create_key: false,
@@ -692,11 +677,9 @@ mod tests {
              Nothing was uploaded, no publish record was written and no acceptance was recorded.\n\
              Pages: 1 added, 0 edited, 0 deleted, 0 restyled\n\
              \x20 added    new.md\n\
-             Addresses going offline: 1\n\
-             \x20 /legacy-feed.xml is no longer produced by your site.\n\
+             Pages going offline: 1\n\
+             \x20 /old/ is still in your folder (old.md) but is no longer published.\n\
              Transfer, measured against this folder's last publish: would upload 2 files and remove 2 files.\n\
-             Also removed:\n\
-             \x20 /style.1a2b3c.css\n\
              Publishing: not asked, because this folder has no site: whether this folder's key may publish, and whether another copy published since.\n\
              Publish check: a real deploy would be refused:\n\
              Nothing published — REFUSED\n\
@@ -705,7 +688,7 @@ mod tests {
     }
 
     #[test]
-    fn a_derivative_kept_as_a_redirect_is_named_and_the_check_still_passes() {
+    fn a_derivative_kept_as_a_redirect_is_only_in_the_json_and_the_check_still_passes() {
         let dry = DryRun {
             kept_as_redirect: vec![Kept { from: "/photo-2.webp".into(), to: "/photo-2.jpg".into() }],
             pending_removals: Vec::new(),
@@ -713,10 +696,8 @@ mod tests {
             ..small()
         };
         let text = dry.render();
-        assert!(
-            text.contains("Kept answering at the old address (a picture still served, or a folder redirect):\n  /photo-2.webp -> /photo-2.jpg\n"),
-            "{text}"
-        );
+        assert!(!text.contains("photo-2"), "a picture's file is not named: {text}");
+        assert_eq!(dry.to_json()["kept"][0]["address"], "/photo-2.webp");
         assert!(text.contains("Publish check: passes.\n"), "{text}");
     }
 
@@ -734,24 +715,13 @@ mod tests {
     }
 
     #[test]
-    fn removed_files_not_already_offline_addresses_are_listed_and_capped() {
-        let removed: Vec<String> = (0..23).map(|i| format!("old-{i:02}.css")).collect();
-        let dry = DryRun { transfer: Transfer::SinceLastPublish { upload: 0, removed }, ..small() };
-        let text = dry.render();
-        assert!(text.contains("remove 23 files.\nAlso removed:\n  /old-00.css\n  /old-01.css\n"), "{text}");
-        assert!(text.contains("  /old-19.css\n  and 3 more; `moss deploy --dry-run --json` lists every one\n"), "{text}");
-        assert!(!text.contains("old-20"), "{text}");
-    }
-
-    #[test]
-    fn a_removed_page_is_listed_once_as_its_address_and_hashed_assets_as_served() {
+    fn a_removed_page_is_named_once_and_other_removed_files_only_counted() {
         let mut dry = small();
         dry.change_set.removed.push(RemovedAddress {
             path: "a/index.html".into(),
             reason: RemovalReason::Unexplained,
             moved_to: None,
             source: None,
-            withdrawn_by: None,
         });
         dry.transfer = Transfer::SinceLastPublish {
             upload: 0,
@@ -759,7 +729,7 @@ mod tests {
         };
         let text = dry.render();
         assert_eq!(text.matches("/a/").count(), 1, "{text}");
-        assert!(text.contains("Also removed:\n  /style.1a2b3c.css\n"), "{text}");
+        assert!(text.contains("remove 3 files.\n") && !text.contains("style.1a2b3c.css") && !text.contains("legacy-feed"), "{text}");
     }
 
     /// Never a promise that the deploy goes ahead.
@@ -846,7 +816,6 @@ mod tests {
             assert!(dry.refusal.as_ref().map(|r| r.text.as_str()).is_some_and(|t| t.contains("/old/")), "{dry:?}");
             let text = dry.render();
             assert!(text.contains("nothing was built"), "{text}");
-            assert!(text.contains("\nRemoved:\n  /old/\n") && !text.contains("Also removed"), "{text}");
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -868,7 +837,7 @@ mod tests {
             let dry = run(&dir, false).await;
             assert!(dry.refusal.is_none(), "{dry:?}");
             let text = dry.render();
-            assert!(text.contains("would upload 1 file and remove 1 file.\nRemoved:\n  /_moss/plugins/booking.f.js\n"), "{text}");
+            assert!(text.contains("would upload 1 file and remove 1 file.\n") && !text.contains("booking.f.js"), "{text}");
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

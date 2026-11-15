@@ -560,7 +560,8 @@ async fn a_first_publish_to_a_new_target_still_reports_what_another_target_serve
             generation_id: "old".into(),
             target: "moss:old-site".into(),
             published_at: "2026-08-20T00:00:00Z".into(),
-            files: [("legacy-feed.xml".to_string(), "100644:abc".to_string())].into(),
+            files: [("legacy/index.html".to_string(), "100644:abc".to_string())].into(),
+            source_to_output: [("legacy.md".to_string(), "legacy/index.html".to_string())].into(),
             asset_source_to_output: Some(Default::default()),
             ..Default::default()
         },
@@ -577,7 +578,7 @@ async fn a_first_publish_to_a_new_target_still_reports_what_another_target_serve
     assert!(!set.classified, "verbs stay target-strict: the new target has no record of its own");
     assert_eq!(
         set.removed.iter().map(|r| (r.path.as_str(), r.reason)).collect::<Vec<_>>(),
-        [("legacy-feed.xml", RemovalReason::Unexplained)]
+        [("legacy/index.html", RemovalReason::AuthorRemoved)]
     );
 }
 
@@ -636,20 +637,23 @@ fn removed_pairs(
     set.removed.iter().map(|r| (r.path.clone(), r.reason)).collect()
 }
 
-/// Publish, delete a folder file, build again: the author removed it.
+/// Publish, delete an HTML page and a PDF from the folder, build again: the
+/// author removed the page, and the PDF is not a page.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_folder_file_deleted_after_a_publish_reads_author_removed() {
+async fn an_html_page_deleted_after_a_publish_reads_author_removed() {
     use crate::build::manifest::change_set::RemovalReason::AuthorRemoved;
     let vault = Vault::new();
+    std::fs::write(vault.folder.join("guide.html"), b"<!doctype html><title>Guide</title>").unwrap();
     std::fs::write(vault.folder.join("guide.pdf"), b"%PDF-1.4 fixture").unwrap();
     let (first, _) = vault.seal_and_tap().await;
     vault.publish(&first);
 
+    std::fs::remove_file(vault.folder.join("guide.html")).unwrap();
     std::fs::remove_file(vault.folder.join("guide.pdf")).unwrap();
     let (_, set) = vault.seal_and_tap().await;
 
     assert!(set.classified);
-    assert_eq!(removed_pairs(&set), [("guide.pdf".to_string(), AuthorRemoved)]);
+    assert_eq!(removed_pairs(&set), [("guide.html".to_string(), AuthorRemoved)]);
 }
 
 /// Unreadable authored bytes retain the prior page and refuse this seal for

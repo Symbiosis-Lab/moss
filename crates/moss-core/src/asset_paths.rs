@@ -939,32 +939,6 @@ pub fn hls_members(rungs: &[VideoRung]) -> Vec<String> {
     out
 }
 
-/// The video stem a ladder file belongs to: `clips/demo.hls/v0.m4s` is
-/// `Some("clips/demo")`. `None` unless the path is exactly one of the file names
-/// [`hls_members`] can produce (master playlist, `v<N>` rung playlist or
-/// segment file, an audio group's playlist or segment file) directly inside a
-/// `<stem>.hls` directory — the last `.hls/` in the path, so a folder an author
-/// happens to name `x.hls` or a stray file beside the ladder is not one.
-pub fn hls_ladder_file_stem(path: &str) -> Option<&str> {
-    let (stem, name) = path.rsplit_once(".hls/")?;
-    let is_member = name == HLS_MASTER_NAME
-        || AudioGroup::ALL.iter().any(|g| {
-            name.strip_prefix(g.as_str())
-                .is_some_and(|ext| ext == ".m3u8" || ext == ".m4s")
-        })
-        || name
-            .strip_prefix('v')
-            .and_then(|rest| rest.strip_suffix(".m3u8").or_else(|| rest.strip_suffix(".m4s")))
-            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
-    is_member.then_some(stem)
-}
-
-/// Every path a video with this stem can be served under (`<stem>.mp4`,
-/// `<stem>.webm`, ...): the stem plus each extension [`video_stem`] strips.
-pub fn video_served_paths(stem: &str) -> impl Iterator<Item = String> + '_ {
-    ALL_VIDEO_SUFFIXES.iter().map(move |suffix| format!("{stem}{suffix}"))
-}
-
 /// The distinct audio rendition groups a set of rungs needs, in ladder order.
 ///
 /// Groups, not rungs: several rungs share one rendition and it is encoded once.
@@ -1618,25 +1592,6 @@ mod tests {
         let budget = ((cheap_video_bytes + costly_audio_bytes) / 2.0) as u64;
         assert!(cheap_video_bytes <= budget as f64, "the cheaper file fits");
         assert!(costly_audio_bytes > budget as f64, "the pricier one alone exceeds the same budget");
-    }
-
-    #[test]
-    fn hls_ladder_file_stem_accepts_only_the_ladders_own_file_names() {
-        let rungs = &VIDEO_LADDER[..];
-        for name in hls_members(rungs) {
-            assert_eq!(hls_ladder_file_stem(&format!("clips/demo.hls/{name}")), Some("clips/demo"), "{name}");
-        }
-        for path in [
-            "clips/demo.hls/notes.html",
-            "clips/demo.hls/sub/v0.m4s",
-            "clips/demo.hls/v.m4s",
-            "clips/demo.hls/vx.m3u8",
-            "clips/demo.hls/ahi.txt",
-            "clips/demo/master.m3u8",
-        ] {
-            assert_eq!(hls_ladder_file_stem(path), None, "{path}");
-        }
-        assert_eq!(hls_ladder_file_stem("a.hls/b.hls/master.m3u8"), Some("a.hls/b"));
     }
 
     #[test]

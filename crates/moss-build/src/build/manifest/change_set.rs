@@ -37,6 +37,7 @@
 //! Pure: no filesystem, no network, no clock. Persistence is
 //! [`super::published_record`].
 
+use crate::build::scan::classify::ScanBucket;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -118,14 +119,16 @@ pub struct PublishedSnapshot {
     /// published at: a PDF, an image, a stylesheet copied through. Outputs
     /// under `_moss/` are not recorded.
     ///
-    /// It is what lets a later build tell "the author deleted this file" from
-    /// "moss stopped generating it": an address in `files` that no source here
-    /// accounts for was generated. `Option` so a record written before this
-    /// field (`None`, unknown) stays distinct from a site that had no folder
-    /// assets (`Some` of an empty map); the removed-address check treats
-    /// unknown as unexplained.
+    /// It is what shows an address was an author's HTML page or notebook, and
+    /// whether its source is still there. `Option` so a record written before
+    /// this field (`None`, unknown) stays distinct from a site that had no
+    /// folder assets (`Some` of an empty map).
     #[serde(default)]
     pub asset_source_to_output: Option<HashMap<String, String>>,
+    /// Redirect stub output → the page it forwards to, for each old address
+    /// of one of the author's pages this publish kept answering.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub page_stubs: HashMap<String, String>,
 }
 
 /// One live page: the uid that owns it, where it is served, and which source
@@ -209,6 +212,7 @@ impl PublishedSnapshot {
             uids: HashMap::new(),
             triples: None,
             asset_source_to_output: Some(asset_sources_to_outputs(sealed)),
+            page_stubs: sealed.page_stubs().iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
         }
     }
 }
@@ -289,9 +293,9 @@ pub enum RemovalReason {
     /// The page's source says `draft: true`: it is built for preview and never
     /// published, an author's act like deleting it.
     Withheld,
-    /// Anything else: a generated file nobody produces now, a source that
-    /// still exists whose address changed, a file whose bytes moved to
-    /// another address, or a record too old to say.
+    /// Anything else: a page whose source still exists but whose address
+    /// changed or that is no longer published, or an HTML file whose bytes
+    /// moved to another address.
     Unexplained,
     /// The last publish served the address to members only and this build
     /// serves it to everyone.
@@ -305,73 +309,22 @@ impl RemovalReason {
     }
 }
 
-/// A site setting that stops a generated file on purpose.
-#[derive(Clone, Copy, Debug, Serialize, specta::Type, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum WithdrawnBy {
-    /// AI answers are asked not to use the pages, so there is no `llms.txt`.
-    AiAnswers,
-    /// No search or AI switch is set any more, so there is no `tdmrep.json`.
-    AiSwitches,
-    /// `[site].selection_tools` is off, so there is no Share and no QR code
-    /// for its picture.
-    SelectionTools,
-}
-
-/// The generated files a build left out because the site's own settings say
-/// so. The build that left them out records this on its manifest, so the
-/// publish gate explains the generation it ships, not the config as it reads
-/// by then.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Withdrawn {
-    pub llms_txt: bool,
-    pub tdmrep_json: bool,
-    pub qr_codes: bool,
-}
-
-impl Withdrawn {
-    /// What a build with these settings leaves out: `llms.txt` while AI
-    /// answers are asked not to, `tdmrep.json` while no search or AI switch is
-    /// set, and every QR code while `[site].selection_tools` is off.
-    pub fn from_settings(ai: crate::build::feeds::robots::AiSettings, selection_tools: bool) -> Self {
-        Self { llms_txt: !ai.publishes_llms_txt(), tdmrep_json: ai.tdmrep_json().is_none(), qr_codes: !selection_tools }
-    }
-
-    /// The setting that stopped `path`, when `path` is a file one of these
-    /// generators owns and its setting is off.
-    pub fn by(self, path: &str) -> Option<WithdrawnBy> {
-        if self.llms_txt && path == ServedPath::for_llms_txt().as_str() {
-            return Some(WithdrawnBy::AiAnswers);
-        }
-        if self.tdmrep_json && path == ServedPath::for_tdmrep_json().as_str() {
-            return Some(WithdrawnBy::AiSwitches);
-        }
-        (self.qr_codes && crate::build::media::qr::is_share_qr_path(path)).then_some(WithdrawnBy::SelectionTools)
-    }
-}
-
-/// A public address the last publish served that this build will not.
+/// A page the author wrote that the last publish served and this build will
+/// not, or an address that was for members and would be open to everyone.
 #[derive(Clone, Debug, Serialize, specta::Type, PartialEq, Eq)]
 pub struct RemovedAddress {
-    /// Build output path, e.g. `feed.xml` or `a/index.html`.
+    /// Build output path, e.g. `a/index.html` or `scales.html`.
     pub path: String,
     pub reason: RemovalReason,
-    /// Where what was served here is served now, with no redirect: a page
-    /// whose source still exists under a new slug or permalink, or a file
-    /// whose bytes moved to another address. Lets a later step offer the
-    /// redirect.
+    /// Where the page served here is served now, with no redirect: under a
+    /// new slug or permalink, or an HTML file whose bytes moved to another
+    /// address. Lets a later step offer the redirect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moved_to: Option<String>,
-    /// The source file the last publish recorded for this address: a page's
-    /// or a folder file's. Absent for a generated file, and for a record too
-    /// old to name folder files. It is what tells "still in your folder but no
-    /// longer published" from "no longer produced".
+    /// The source file the last publish recorded for this address: a
+    /// markdown page or an HTML file. Absent for an opened address.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
-    /// The site setting that stopped this generated file, when one did. Such
-    /// a removal is `AuthorRemoved`: the owner's act, like deleting a source.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub withdrawn_by: Option<WithdrawnBy>,
 }
 
 /// Why an unexplained removal happened, with the data a message needs. The
@@ -381,8 +334,8 @@ pub struct RemovedAddress {
 #[derive(Clone, Debug, Serialize, specta::Type, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RemovalCause {
-    /// A file moss generates that this build no longer produces (or a record
-    /// too old to say more).
+    /// A page with no recorded source: one a prebuilt upload served, which
+    /// has no sources to say more.
     Generated,
     /// The page or file that lived here is now served at `to` (served form),
     /// and nothing answers at the old address.
@@ -396,10 +349,10 @@ pub enum RemovalCause {
 /// A removal that would refuse a publish: unexplained and not accepted.
 #[derive(Clone, Debug, Serialize, specta::Type, PartialEq, Eq)]
 pub struct PendingRemoval {
-    /// The build output path, e.g. `feed.xml` or `a/index.html`. What
+    /// The build output path, e.g. `a/index.html` or `scales.html`. What
     /// `accept_unexplained_removals` takes.
     pub path: String,
-    /// The same, as a visitor addresses it: `/feed.xml`, `/a/`.
+    /// The same, as a visitor addresses it: `/a/`, `/scales.html`.
     pub address: String,
     pub cause: RemovalCause,
 }
@@ -736,34 +689,23 @@ fn composes_to_served(out: &str, files: &HashMap<String, String>) -> bool {
     composed != out && files.contains_key(&composed)
 }
 
-/// A video's ladder file (its master playlist, a rung's playlist or segment
-/// file, an audio group's) is a regenerated rendition, never an address an
-/// author hands out. While the video itself is still published, whatever name
-/// it is served under, losing the file only means the video is served without
-/// that rendition, so it is not a removed address. That holds whether or not
-/// the ladder's master playlist is still published: a ladder that lost one rung
-/// is as much a regenerated rendition as one that vanished whole. Only the
-/// ladder's own file names count; an author's file in the same directory is
-/// still reported.
-fn is_ladder_of_published_video(out: &str, current: &HashMap<String, String>) -> bool {
-    moss_core::asset_paths::hls_ladder_file_stem(out).is_some_and(|stem| {
-        moss_core::asset_paths::video_served_paths(stem).any(|p| current.contains_key(&p))
-    })
-}
-
-/// Public addresses the baseline served that `current` does not, each with
-/// why, sorted by path. An old address the new build still serves (a redirect
-/// stub, an alias) is not removed; nothing under `_moss/` is public.
+/// Addresses of pages the author wrote that the baseline served and `current`
+/// does not, each with why, plus addresses that were for members and would be
+/// open to everyone, sorted by path. A written page is one the baseline
+/// recorded as a markdown page's output, an author's HTML file or a notebook's
+/// viewer page; generated files and the folder's other files never count,
+/// since a person hands out links to pages. An old address the last publish
+/// kept answering for one of those pages counts as the page while the page is
+/// served, moved to where it is now. An old address the new build still serves
+/// (a redirect stub, an alias) is not removed; nothing under `_moss/` is
+/// public.
 ///
-/// `AuthorRemoved` needs evidence: the recorded source of the output (a
-/// page's, or a folder file's via `asset_source_to_output`) no longer exists,
-/// and for a file, no address new to this build serves its bytes.
-/// A generated file `current`'s [`Withdrawn`] record says a site setting
-/// stopped is `AuthorRemoved` like a deleted source, naming that setting.
-/// `source_exists` answers from the site folder, not this build's source
+/// `AuthorRemoved` needs evidence: the recorded source of the output no longer
+/// exists, and for an HTML file, no address new to this build serves its
+/// bytes. `source_exists` answers from the site folder, not this build's source
 /// lists, since an unreadable page drops out of the build while its file is
 /// still there. Anything else is `Unexplained`, the cautious answer, and
-/// `moved_to` says where a moved page or file went.
+/// `moved_to` says where a moved page went.
 ///
 /// Pure, and independent of [`classify`]: the baseline may be another
 /// target's record, which must feed this and nothing else.
@@ -780,11 +722,35 @@ pub fn removed_addresses(
         m.values_mut().for_each(|srcs| srcs.sort_unstable());
         m
     }
-    let page_sources = by_output(&baseline.source_to_output);
-    let asset_sources = baseline.asset_source_to_output.as_ref().map(by_output);
+    // Every page the author wrote, by output, with its recorded sources. The
+    // record files an HTML page, and the notebook whose viewer page the build
+    // writes beside it, with the folder's other files. A record with no sources
+    // at all (a prebuilt upload's) can show only that an HTML file was served.
+    let mut written: HashMap<String, Vec<&str>> =
+        by_output(&baseline.source_to_output).into_iter().map(|(out, srcs)| (out.to_string(), srcs)).collect();
+    match &baseline.asset_source_to_output {
+        Some(assets) => {
+            for (out, srcs) in by_output(assets) {
+                for src in &srcs {
+                    match bucket(src) {
+                        ScanBucket::Html => { written.insert(out.to_string(), srcs.clone()); }
+                        ScanBucket::Notebook => {
+                            if let Ok(page) = crate::build::notebook::viewer_path(src) {
+                                written.insert(page.as_str().to_string(), vec![*src]);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        None if written.is_empty() => {
+            written.extend(baseline.files.keys().filter(|out| matches!(bucket(out), ScanBucket::Html)).map(|out| (out.clone(), Vec::new())));
+        }
+        None => {}
+    }
     let exists = |src: &&str| source_exists(src);
     let withheld = current.withheld_by_author();
-    let withdrawn = current.withdrawn();
     let files = current.files();
     // A moved folder file keeps its bytes but loses its recorded source. The
     // same bytes at an address the last publish did not serve are that file.
@@ -797,50 +763,41 @@ pub fn removed_addresses(
         let arrivals = arrived.get(baseline.files.get(out)?.as_str())?;
         arrivals.iter().min_by_key(|c| (c.rsplit('/').next() != name, **c)).map(|c| c.to_string())
     };
+    // Where the page an old address forwarded to is served now, if anywhere.
+    let stub_page = |out: &str| {
+        let page = baseline.page_stubs.get(out)?;
+        if files.contains_key(page) {
+            return Some(page.clone());
+        }
+        written.get(page.as_str())?.iter().find_map(|src| current.source_to_output().get(*src)).cloned()
+    };
     let mut removed: Vec<RemovedAddress> = vanished_outputs(baseline, current)
         .into_iter()
-        .filter(|(out, _)| is_public_address(out) && !is_ladder_of_published_video(out, &files) && !composes_to_served(out, &files))
+        .filter(|(out, _)| is_public_address(out) && !composes_to_served(out, &files))
         // An address that became members-only still answers, for members.
         .filter(|(out, _)| !files.contains_key(&format!("{GATED_PREFIX}{out}")))
-        .map(|(out, is_page)| {
-            let recorded = if is_page { page_sources.get(out) } else { asset_sources.as_ref().and_then(|m| m.get(out)) };
-            let renamed = recorded.and_then(|srcs| {
-                srcs.iter().filter_map(|src| current.source_to_output().get(*src)).find(|now| now.as_str() != out).cloned()
-            });
-            let moved_to = if is_page { renamed } else { renamed.or_else(|| arrival(out)) };
-            let withdrawn_by = if recorded.is_none() && moved_to.is_none() { withdrawn.by(out) } else { None };
-            let reason = match recorded {
-                _ if withheld.contains(out) => RemovalReason::Withheld,
-                _ if moved_to.is_some() => RemovalReason::Unexplained,
-                Some(srcs) if !srcs.iter().any(exists) => RemovalReason::AuthorRemoved,
-                // A calendar file exists while a page says `start:`; losing it is
-                // the author's edit of a page that is still on disk.
-                None if crate::build::feeds::calendar::is_calendar_file(out) => RemovalReason::AuthorRemoved,
-                None if withdrawn_by.is_some() => RemovalReason::AuthorRemoved,
-                _ => RemovalReason::Unexplained,
+        .filter_map(|(out, is_page)| {
+            let Some(srcs) = written.get(out) else {
+                // An old address of a page that is still served is that page's.
+                return stub_page(out).map(|to| RemovedAddress {
+                    path: out.to_string(), reason: RemovalReason::Unexplained, moved_to: Some(to), source: None,
+                });
             };
-            let source = recorded.and_then(|srcs| srcs.first()).map(|s| s.to_string());
-            let withdrawn_by = withdrawn_by.filter(|_| reason == RemovalReason::AuthorRemoved);
-            RemovedAddress { path: out.to_string(), reason, moved_to, source, withdrawn_by }
+            let renamed = srcs.iter().filter_map(|src| current.source_to_output().get(*src)).find(|now| now.as_str() != out).cloned();
+            // A page is matched by its source, never by bytes another page renders alike.
+            let moved_to = if is_page { renamed } else { renamed.or_else(|| arrival(out)) };
+            let reason = if withheld.contains(out) {
+                RemovalReason::Withheld
+            } else if moved_to.is_none() && !srcs.is_empty() && !srcs.iter().any(exists) {
+                RemovalReason::AuthorRemoved
+            } else {
+                RemovalReason::Unexplained
+            };
+            Some(RemovedAddress { path: out.to_string(), reason, moved_to, source: srcs.first().map(|s| s.to_string()) })
         })
         .collect();
-    // A page's QR code and an image derivative have no source of their own: they go with the page or picture.
-    let page_qr: HashMap<String, (RemovalReason, Option<String>)> = removed
-        .iter()
-        .filter(|r| r.reason != RemovalReason::Unexplained && page_sources.contains_key(r.path.as_str()))
-        .map(|r| (crate::build::media::qr::qr_key_for_url_path(&r.path), (r.reason, r.source.clone())))
-        .collect();
-    let picture: HashMap<String, (RemovalReason, Option<String>)> = removed.iter()
-        .filter(|r| r.reason == RemovalReason::AuthorRemoved && !page_sources.contains_key(r.path.as_str()))
-        .map(|r| (r.path.clone(), (r.reason, r.source.clone()))).collect();
-    for r in removed.iter_mut().filter(|r| r.reason == RemovalReason::Unexplained && r.source.is_none()) {
-        let of_picture = || crate::build::feeds::kept_addresses::webp_sources(&r.path).iter().find_map(|c| picture.get(c));
-        if let Some((reason, source)) = page_qr.get(&r.path).or_else(of_picture) {
-            (r.reason, r.source) = (*reason, source.clone());
-        }
-    }
     removed.extend(opened_addresses(&baseline.files, &files).into_iter().map(|path| RemovedAddress {
-        path, reason: RemovalReason::Opened, moved_to: None, source: None, withdrawn_by: None,
+        path, reason: RemovalReason::Opened, moved_to: None, source: None,
     }));
     removed.sort_by(|a, b| a.path.cmp(&b.path));
     removed
@@ -857,12 +814,18 @@ pub fn opened_addresses(previous: &HashMap<String, String>, current: &HashMap<St
         .collect()
 }
 
-/// Public output paths the baseline served that a tree with these `files`
-/// does not, sorted: [`removed_addresses`] without the page and source
-/// bookkeeping, for an upload that has no sources to explain a loss.
+/// What the folder scan reads `path` as, by its extension.
+fn bucket(path: &str) -> ScanBucket {
+    let ext = path.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+    crate::build::scan::classify::classify_extension(&ext)
+}
+
+/// Public HTML pages the baseline served that a tree with these `files` does
+/// not, plus opened addresses, sorted: [`removed_addresses`] for an upload
+/// that has no sources, where a served HTML file is the only sign of a page.
 pub fn removed_public_paths(baseline: &PublishedSnapshot, files: &HashMap<String, String>) -> Vec<String> {
     let mut gone: Vec<String> = vanished_keys(&baseline.files, files)
-        .filter(|out| is_public_address(out) && !is_ladder_of_published_video(out, files))
+        .filter(|out| is_public_address(out) && matches!(bucket(out), ScanBucket::Html))
         .map(str::to_string)
         .chain(opened_addresses(&baseline.files, files))
         .collect();

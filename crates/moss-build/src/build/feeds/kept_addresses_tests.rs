@@ -1,5 +1,5 @@
 use super::keep;
-use crate::build::manifest::change_set::{PublishedSnapshot, RemovalReason};
+use crate::build::manifest::change_set::PublishedSnapshot;
 use crate::build::manifest::{backfill, published_record, HashBucket, PendingManifest, SealedManifest};
 use crate::build::served_path::ServedPath;
 use crate::build::stat::FileStat;
@@ -48,18 +48,16 @@ fn setup() -> (tempfile::TempDir, MossPaths) {
 }
 
 #[test]
-fn a_dropped_derivative_of_a_served_picture_keeps_answering_and_the_removal_check_passes() {
+fn a_dropped_derivative_of_a_served_picture_keeps_answering() {
     let (_vault, mp) = setup();
     let stage = mp.staging_dir();
     let mut sealed = build(&stage, &[], true);
-    assert_eq!(backfill::removed_for_seal(&mp, &sealed).len(), 1, "without the redirect the publish is refused");
 
     let kept = keep(&mp, &stage, &mut sealed, &Default::default());
 
     assert_eq!(kept, [("photo-2.webp".to_string(), "photo-2.jpg".to_string())]);
     assert_eq!(std::fs::read(stage.join("photo-2.webp")).unwrap(), b"JPEG");
     assert!(sealed.files().contains_key("photo-2.webp"));
-    assert!(backfill::removed_for_seal(&mp, &sealed).is_empty());
 }
 
 #[test]
@@ -73,21 +71,14 @@ fn an_address_the_build_already_serves_is_left_alone() {
 }
 
 #[test]
-fn a_derivative_of_a_deleted_picture_is_not_kept_and_stays_the_authors_removal() {
+fn a_derivative_of_a_deleted_picture_is_not_kept_and_names_nothing() {
     let (_vault, mp) = setup();
     let stage = mp.staging_dir();
     let mut sealed = build(&stage, &[], false);
 
     assert!(keep(&mp, &stage, &mut sealed, &Default::default()).is_empty());
     assert!(!stage.join("photo-2.webp").exists());
-    let reasons: Vec<_> = backfill::removed_for_seal(&mp, &sealed).into_iter().map(|r| (r.path, r.reason)).collect();
-    assert_eq!(
-        reasons,
-        [
-            ("photo-2.jpg".to_string(), RemovalReason::AuthorRemoved),
-            ("photo-2.webp".to_string(), RemovalReason::AuthorRemoved),
-        ]
-    );
+    assert!(backfill::removed_for_seal(&mp, &sealed).is_empty(), "neither is a page");
 }
 
 fn served(paths: &[&str]) -> std::collections::HashMap<String, String> {

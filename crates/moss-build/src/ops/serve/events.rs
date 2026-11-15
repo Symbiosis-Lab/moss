@@ -442,11 +442,10 @@ mod removal_announcement_tests {
 
     fn lost() -> Vec<RemovedAddress> {
         vec![RemovedAddress {
-            path: "feed.xml".into(),
+            path: "old/index.html".into(),
             reason: RemovalReason::Unexplained,
             moved_to: None,
             source: None,
-            withdrawn_by: None,
         }]
     }
 
@@ -468,10 +467,10 @@ mod removal_announcement_tests {
         let changes = crate::build::manifest::change_set::ChangeSet { removed: lost(), ..Default::default() };
 
         first_host.announcer.publish_change_set(first.path(), Some(changes.clone())).await;
-        assert!(first_warnings().iter().any(|w| w.contains("/feed.xml")));
+        assert!(first_warnings().iter().any(|w| w.contains("/old/")));
         assert!(second_warnings().is_empty(), "another test's advisories must not leak in");
         second_host.announcer.publish_change_set(second.path(), Some(changes)).await;
-        assert!(second_warnings().iter().any(|w| w.contains("/feed.xml")));
+        assert!(second_warnings().iter().any(|w| w.contains("/old/")));
         assert!(first_warnings().is_empty(), "another test's advisories must not leak in");
     }
 
@@ -485,13 +484,13 @@ mod removal_announcement_tests {
         other.path = "other.xml".into();
         removed.push(other);
         records.record_removed_addresses(&key, removed.clone());
-        records.accept_unexplained_removals(&key, &["feed.xml".into()]);
+        records.accept_unexplained_removals(&key, &["old/index.html".into()]);
         let mut announced = HashSet::new();
         let event = removal_announcement(&mut announced, folder.path(), &removed).unwrap();
         let PipelineEvent::BackgroundProgress { advisories: notices, .. } = event else { panic!("expected advisory") };
         assert_eq!(notices.len(), 1);
         assert!(notices[0].what.contains("/other.xml"));
-        assert!(!notices[0].what.contains("/feed.xml"), "accepted removals must not ask for action");
+        assert!(!notices[0].what.contains("/old/"), "accepted removals must not ask for action");
         records.accept_all_pending_removals(&key);
         assert_eq!(advisories(removal_announcement(&mut announced, folder.path(), &removed).unwrap()), 0);
         assert_eq!(records.removed_addresses(&key).unwrap().len(), 2);

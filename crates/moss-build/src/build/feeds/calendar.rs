@@ -49,7 +49,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use moss_core::event::EventTime;
 
-use crate::build::served_path::{ServedPath, CALENDAR_ICS, EVENT_ICS};
+use crate::build::served_path::ServedPath;
 use crate::build::site_url::SiteUrl;
 use crate::build::types::ParsedDocument;
 use crate::types::content::ProjectStructure;
@@ -67,14 +67,6 @@ fn page_output(doc: &ParsedDocument) -> Option<ServedPath> {
 /// `events/talk/index.html` is in `""`, `events` and `events/talk`.
 fn ancestor_dirs(served: &str) -> impl Iterator<Item = &str> {
     std::iter::once("").chain(served.match_indices('/').map(move |(i, _)| &served[..i]))
-}
-
-/// Is this served path a calendar file the build generates? Used by the
-/// publish gate: such a file has no source of its own, and disappears when the
-/// author's `start:` or listing changes.
-pub fn is_calendar_file(path: &str) -> bool {
-    let name = path.rsplit('/').next().unwrap_or(path);
-    name == EVENT_ICS || name == CALENDAR_ICS
 }
 
 /// Something about a page's event fields the build had to drop or could not use.

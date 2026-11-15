@@ -67,6 +67,7 @@ fn a_folder_written_decomposed_builds_publishes_and_edits_as_the_composed_folder
         target: "moss:example-hall".into(),
         published_at: "2026-11-01T00:00:00+00:00".into(),
         files: last.files,
+        source_to_output: last.source_to_output,
         asset_source_to_output: Some(Default::default()),
         ..Default::default()
     };

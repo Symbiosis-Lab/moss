@@ -328,24 +328,7 @@ model (dark mode, quiet chrome, `@layer` rules), see
   unless `--overwrite-newer`; no answer (offline, a skewed clock) says why and
   refuses nothing. The upload itself is not tried, so a passing dry run is not
   a promise the deploy goes ahead.
-- **Refused because an address would go offline:** an address the site has
-  served must not vanish unasked. When a build would stop serving one for a
-  reason other than the human deleting its source (a page whose address
-  changed, a file moved to another folder, a generated file no longer
-  produced), `deploy` and `--dry-run` list each address with its cause and
-  refuse. Keep the address working (for a moved page or file, add the printed
-  `"/old/" = "/new/"` line under `[redirects]` in `.moss/config.toml`; past 20
-  addresses, `moss deploy <folder> --dry-run --json` lists every one, and its
-  `redirects_to_add` holds the lines to paste; in that JSON, `refusal.kind` is one
-  of `unresolved_inputs`, `missing_references`, `drafts_linked`, `links_in_cloud`, `links_in_flight`, `pending_derivations`, `build_unfinished`, `removals`, `stale_content`, `output_collision`, `no_environment`, `foreign_inputs`, `not_owner`, `stale_copy`;
-  a setup failure prints `{"error"}` instead; an `output_path` is a file of the
-  build output, an `address` is what a visitor asks for; with `--prebuilt` the
-  refused files are `transfer.removed_output_paths`), or pass `--accept-removals` — only when
-  the human has said to lose those addresses. A `.webp` derivative of a picture
-  that is still in the folder needs none of this: when no page embeds the picture
-  any more, moss keeps the derivative's address as a redirect to the picture by
-  itself and the dry run lists it as kept. An entry of your own for that address
-  in `[redirects]` wins.
+- **Refused because a page would go offline:** a page the human wrote (a markdown page, an HTML page, a notebook) that the site has served must not vanish unasked. When a build would stop serving one for a reason other than the human deleting its source (its address changed, an HTML page moved to another folder, an old address of a page stopped forwarding), `deploy` and `--dry-run` list each page with its cause and refuse. Generated files and the folder's other files (pictures, stylesheets, scripts, downloads) never hold a publish; a file that was for members and would be open to everyone does. Keep the page working (for a moved page, add the printed `"/old/" = "/new/"` line under `[redirects]` in `.moss/config.toml`; past 20 pages, `moss deploy <folder> --dry-run --json` lists every one, and its `redirects_to_add` holds the lines to paste; in that JSON, `refusal.kind` is one of `unresolved_inputs`, `missing_references`, `drafts_linked`, `links_in_cloud`, `links_in_flight`, `pending_derivations`, `build_unfinished`, `removals`, `stale_content`, `output_collision`, `no_environment`, `foreign_inputs`, `not_owner`, `stale_copy`; a setup failure prints `{"error"}` instead; an `output_path` is a file of the build output, an `address` is what a visitor asks for; with `--prebuilt`, which has no sources, every missing HTML page counts and the refused files are `transfer.removed_output_paths`), or pass `--accept-removals` — only when the human has said to lose those pages. When no page embeds a picture that is still in the folder any more, moss keeps its `.webp` derivative's address as a redirect to the picture by itself, listed under `kept` in the dry run's JSON. An entry of your own for that address in `[redirects]` wins.
 - **Custom domain:** `moss domain link <folder> example.com` (`www.example.com`
   works too) links the bare domain and `www`, and for a domain registered elsewhere
   prints the DNS records to type at the registrar: leave MX and other TXT records

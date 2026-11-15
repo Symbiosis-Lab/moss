@@ -28,7 +28,6 @@ use crate::build::markdown::{process_markdown_file, resolve_duplicate_slugs_with
 use crate::build::folder_embed::{generate_children, resolve_children_config};
 use crate::build::assets::paths::{compute_binary_hash, compute_content_hash, PathResolver};
 use crate::build::context::BuildContext;
-use crate::build::manifest::change_set::Withdrawn;
 use crate::build::manifest::{HashBucket, PendingManifest};
 use crate::build::media::qr;
 use crate::build::outcome::BuildStopped;
@@ -2452,9 +2451,6 @@ pub fn generate_blocking_content_for_build(
         // cards missing their QR corner.
         qr::emit_share_qrs(&documents, &site_url, layout_config.assets.selection_tools, output_dir, pending)?;
     }
-    // What the settings leave out, so the publish gate reads a missing
-    // llms.txt, tdmrep.json or QR code as the owner's choice.
-    pending.set_withdrawn(Withdrawn::from_settings(site_config.ai, layout_config.assets.selection_tools));
     if frontmatter_scan_cache.restricts_pages(&project_structure.markdown_files) { pending.mark_restricts_pages(); }
 
     // Calendar files for event pages and for folders of them. Written whether or

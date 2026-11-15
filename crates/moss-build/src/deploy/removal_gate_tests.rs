@@ -10,7 +10,7 @@ use crate::build::manifest::change_set::{PendingRemoval, RemovalCause, RemovalRe
 use crate::system::build_records::records;
 
 fn address(path: &str, reason: RemovalReason) -> RemovedAddress {
-    RemovedAddress { path: path.into(), reason, moved_to: None, source: None, withdrawn_by: None }
+    RemovedAddress { path: path.into(), reason, moved_to: None, source: None }
 }
 
 fn moved(path: &str, to: &str, source: &str) -> RemovedAddress {
@@ -19,7 +19,6 @@ fn moved(path: &str, to: &str, source: &str) -> RemovedAddress {
         reason: RemovalReason::Unexplained,
         moved_to: Some(to.into()),
         source: Some(source.into()),
-        withdrawn_by: None,
     }
 }
 
@@ -35,14 +34,14 @@ fn seal(folder: &str, removed: Vec<RemovedAddress>) {
 
 #[test]
 fn an_unexplained_removal_refuses_the_publish() {
-    seal("/removal-refuses", vec![address("feed.xml", RemovalReason::Unexplained)]);
+    seal("/removal-refuses", vec![address("feed.html", RemovalReason::Unexplained)]);
     let err = refuse_publish("/removal-refuses").expect_err("an unexplained removal must stop the publish");
-    assert!(err.contains("/feed.xml"), "{err}");
+    assert!(err.contains("/feed.html"), "{err}");
 }
 
 #[test]
 fn accepting_that_set_lets_the_publish_through_and_a_rebuild_of_it_does_not_ask_again() {
-    let removed = vec![address("feed.xml", RemovalReason::Unexplained)];
+    let removed = vec![address("feed.html", RemovalReason::Unexplained)];
     seal("/removal-accepted", removed.clone());
     assert!(refuse_publish("/removal-accepted").is_err());
 
@@ -55,15 +54,15 @@ fn accepting_that_set_lets_the_publish_through_and_a_rebuild_of_it_does_not_ask_
 
 #[test]
 fn a_different_unexplained_address_after_an_acceptance_refuses_again() {
-    seal("/removal-new-one", vec![address("feed.xml", RemovalReason::Unexplained)]);
+    seal("/removal-new-one", vec![address("feed.html", RemovalReason::Unexplained)]);
     records().accept_all_pending_removals("/removal-new-one");
 
     seal(
         "/removal-new-one",
-        vec![address("feed.xml", RemovalReason::Unexplained), address("a/index.html", RemovalReason::Unexplained)],
+        vec![address("feed.html", RemovalReason::Unexplained), address("a/index.html", RemovalReason::Unexplained)],
     );
     let err = refuse_publish("/removal-new-one").expect_err("a new address needs its own acceptance");
-    assert!(err.contains("/a/") && !err.contains("/feed.xml"), "only the new address is asked about: {err}");
+    assert!(err.contains("/a/") && !err.contains("/feed.html"), "only the new address is asked about: {err}");
 }
 
 /// The acceptance covers the addresses it named, not a count: fewer is still
@@ -72,11 +71,11 @@ fn a_different_unexplained_address_after_an_acceptance_refuses_again() {
 fn an_accepted_set_with_one_address_fewer_still_passes() {
     seal(
         "/removal-fewer",
-        vec![address("a.xml", RemovalReason::Unexplained), address("b.xml", RemovalReason::Unexplained)],
+        vec![address("a.html", RemovalReason::Unexplained), address("b.html", RemovalReason::Unexplained)],
     );
     records().accept_all_pending_removals("/removal-fewer");
 
-    seal("/removal-fewer", vec![address("b.xml", RemovalReason::Unexplained)]);
+    seal("/removal-fewer", vec![address("b.html", RemovalReason::Unexplained)]);
     assert!(refuse_publish("/removal-fewer").is_ok());
 }
 
@@ -88,7 +87,7 @@ fn removals_the_author_made_never_refuse() {
 
 #[test]
 fn a_rebuild_that_restores_the_address_clears_the_refusal() {
-    seal("/removal-restored", vec![address("feed.xml", RemovalReason::Unexplained)]);
+    seal("/removal-restored", vec![address("feed.html", RemovalReason::Unexplained)]);
     assert!(refuse_publish("/removal-restored").is_err());
     seal("/removal-restored", Vec::new());
     assert!(refuse_publish("/removal-restored").is_ok());
@@ -101,35 +100,35 @@ fn the_refusal_for_a_moved_page_names_the_redirect_and_both_ways_out() {
     let text = refusal_text(&[moved("old/index.html", "new/index.html", "old.md")]);
     assert_eq!(
         text,
-        "Nothing published — 1 address your site has served would stop working, and you did not remove it:\n\
+        "Nothing published — 1 page would go offline, and you did not remove it:\n\
          \x20 /old/ now lives at /new/. To keep the old link working, add \"/old/\" = \"/new/\" under [redirects] in .moss/config.toml.\n\
-         Either keep the address working (for a moved page or file, add the redirect shown), or accept losing it and publish with `moss deploy --accept-removals`."
+         Either keep the page working (for a moved page, add the redirect shown), or accept losing it and publish with `moss deploy --accept-removals`."
     );
 }
 
 #[test]
-fn the_refusal_for_a_generated_file_says_it_is_no_longer_produced() {
-    let text = refusal_text(&[address("feed.xml", RemovalReason::Unexplained)]);
-    assert!(text.contains("  /feed.xml is no longer produced by your site.\n"), "{text}");
+fn the_refusal_for_a_page_with_no_recorded_source_says_it_is_no_longer_published() {
+    let text = refusal_text(&[address("old.html", RemovalReason::Unexplained)]);
+    assert!(text.contains("  /old.html is no longer published.\n"), "{text}");
     assert!(text.contains("--accept-removals"), "{text}");
 }
 
 #[test]
 fn the_refusal_for_a_file_still_in_the_folder_names_it() {
     let text = refusal_text(&[RemovedAddress {
-        source: Some("files/a.pdf".into()),
-        ..address("files/a.pdf", RemovalReason::Unexplained)
+        source: Some("files/a.html".into()),
+        ..address("files/a.html", RemovalReason::Unexplained)
     }]);
-    assert!(text.contains("  /files/a.pdf is still in your folder (files/a.pdf) but is no longer published.\n"), "{text}");
+    assert!(text.contains("  /files/a.html is still in your folder (files/a.html) but is no longer published.\n"), "{text}");
 }
 
 #[test]
 fn the_list_is_capped_at_twenty_with_the_rest_counted() {
     let many: Vec<RemovedAddress> =
-        (0..23).map(|i| address(&format!("f{i:02}.xml"), RemovalReason::Unexplained)).collect();
+        (0..23).map(|i| address(&format!("f{i:02}.html"), RemovalReason::Unexplained)).collect();
     let text = refusal_text(&many);
-    assert!(text.contains("23 addresses"), "{text}");
-    assert!(text.contains("/f19.xml") && !text.contains("/f20.xml"), "{text}");
+    assert!(text.contains("23 pages"), "{text}");
+    assert!(text.contains("/f19.html") && !text.contains("/f20.html"), "{text}");
     assert!(text.contains("  and 3 more; `moss deploy --dry-run --json` lists every one\n"), "{text}");
 }
 
@@ -144,7 +143,7 @@ fn only_an_index_page_prints_as_its_directory() {
     assert_eq!(served_address("scale-compare.html"), "/scale-compare.html");
     assert_eq!(served_address("notes/x.html"), "/notes/x.html");
     assert_eq!(served_address("LICENSE"), "/LICENSE");
-    assert_eq!(served_address("feed.xml"), "/feed.xml");
+    assert_eq!(served_address("feed.html"), "/feed.html");
 }
 
 #[test]
@@ -154,7 +153,6 @@ fn a_moved_hand_made_page_suggests_the_redirect_the_table_matches() {
         reason: RemovalReason::Unexplained,
         moved_to: Some("compare/index.html".into()),
         source: Some("scale-compare.html".into()),
-        withdrawn_by: None,
     }]);
     assert!(text.contains("add \"/scale-compare.html\" = \"/compare/\" under [redirects]"), "{text}");
 }
@@ -184,16 +182,16 @@ fn row_nothing_removed() {
 /// unexplained and not accepted: pending, refused.
 #[test]
 fn row_unexplained_not_accepted() {
-    seal("/row-unaccepted", vec![unexplained("a.xml")]);
-    assert_eq!(pending_paths("/row-unaccepted"), ["a.xml"]);
+    seal("/row-unaccepted", vec![unexplained("a.html")]);
+    assert_eq!(pending_paths("/row-unaccepted"), ["a.html"]);
     assert!(refuse_publish("/row-unaccepted").is_err());
 }
 
 /// accepted: not pending, passes.
 #[test]
 fn row_accepted() {
-    seal("/row-accepted", vec![unexplained("a.xml")]);
-    assert!(records().accept_unexplained_removals("/row-accepted", &paths(&["a.xml"])).is_empty());
+    seal("/row-accepted", vec![unexplained("a.html")]);
+    assert!(records().accept_unexplained_removals("/row-accepted", &paths(&["a.html"])).is_empty());
     assert!(pending_paths("/row-accepted").is_empty());
     assert!(refuse_publish("/row-accepted").is_ok());
 }
@@ -201,21 +199,21 @@ fn row_accepted() {
 /// accept A, then a new B appears: refused, naming B only.
 #[test]
 fn row_accept_a_then_b_appears() {
-    seal("/row-a-then-b", vec![unexplained("a.xml")]);
-    records().accept_unexplained_removals("/row-a-then-b", &paths(&["a.xml"]));
-    seal("/row-a-then-b", vec![unexplained("a.xml"), unexplained("b.xml")]);
+    seal("/row-a-then-b", vec![unexplained("a.html")]);
+    records().accept_unexplained_removals("/row-a-then-b", &paths(&["a.html"]));
+    seal("/row-a-then-b", vec![unexplained("a.html"), unexplained("b.html")]);
 
-    assert_eq!(pending_paths("/row-a-then-b"), ["b.xml"]);
+    assert_eq!(pending_paths("/row-a-then-b"), ["b.html"]);
     let err = refuse_publish("/row-a-then-b").unwrap_err();
-    assert!(err.contains("/b.xml") && !err.contains("/a.xml"), "{err}");
+    assert!(err.contains("/b.html") && !err.contains("/a.html"), "{err}");
 }
 
 /// accept A, then accept B: both accepted (acceptance adds).
 #[test]
 fn row_accept_a_then_accept_b() {
-    seal("/row-both", vec![unexplained("a.xml"), unexplained("b.xml")]);
-    records().accept_unexplained_removals("/row-both", &paths(&["a.xml"]));
-    records().accept_unexplained_removals("/row-both", &paths(&["b.xml"]));
+    seal("/row-both", vec![unexplained("a.html"), unexplained("b.html")]);
+    records().accept_unexplained_removals("/row-both", &paths(&["a.html"]));
+    records().accept_unexplained_removals("/row-both", &paths(&["b.html"]));
 
     assert!(pending_paths("/row-both").is_empty());
     assert!(refuse_publish("/row-both").is_ok());
@@ -224,12 +222,12 @@ fn row_accept_a_then_accept_b() {
 /// accept A, A is fixed, A goes offline again: asked again.
 #[test]
 fn row_accepted_then_fixed_then_offline_again_asks_again() {
-    seal("/row-again", vec![unexplained("a.xml")]);
-    records().accept_unexplained_removals("/row-again", &paths(&["a.xml"]));
+    seal("/row-again", vec![unexplained("a.html")]);
+    records().accept_unexplained_removals("/row-again", &paths(&["a.html"]));
     seal("/row-again", Vec::new());
-    seal("/row-again", vec![unexplained("a.xml")]);
+    seal("/row-again", vec![unexplained("a.html")]);
 
-    assert_eq!(pending_paths("/row-again"), ["a.xml"]);
+    assert_eq!(pending_paths("/row-again"), ["a.html"]);
     assert!(refuse_publish("/row-again").is_err());
 }
 
@@ -237,20 +235,20 @@ fn row_accepted_then_fixed_then_offline_again_asks_again() {
 /// reports it back so a caller can tell.
 #[test]
 fn row_a_path_that_is_not_a_current_removal_is_ignored_and_reported() {
-    seal("/row-ignored", vec![unexplained("a.xml"), address("gone/index.html", RemovalReason::AuthorRemoved)]);
-    let ignored = records().accept_unexplained_removals("/row-ignored", &paths(&["nope.xml", "gone/index.html", "a.xml"]));
+    seal("/row-ignored", vec![unexplained("a.html"), address("gone/index.html", RemovalReason::AuthorRemoved)]);
+    let ignored = records().accept_unexplained_removals("/row-ignored", &paths(&["nope.html", "gone/index.html", "a.html"]));
 
-    assert_eq!(ignored, ["nope.xml", "gone/index.html"]);
-    assert!(records().accepted_removals("/row-ignored").iter().eq(["a.xml"].iter()));
+    assert_eq!(ignored, ["nope.html", "gone/index.html"]);
+    assert!(records().accepted_removals("/row-ignored").iter().eq(["a.html"].iter()));
     assert!(pending_paths("/row-ignored").is_empty());
 }
 
 /// an identical rebuild after acceptance: passes.
 #[test]
 fn row_identical_rebuild_after_acceptance_passes() {
-    seal("/row-identical", vec![unexplained("a.xml")]);
-    records().accept_unexplained_removals("/row-identical", &paths(&["a.xml"]));
-    seal("/row-identical", vec![unexplained("a.xml")]);
+    seal("/row-identical", vec![unexplained("a.html")]);
+    records().accept_unexplained_removals("/row-identical", &paths(&["a.html"]));
+    seal("/row-identical", vec![unexplained("a.html")]);
     assert!(refuse_publish("/row-identical").is_ok());
 }
 
@@ -258,13 +256,13 @@ fn row_identical_rebuild_after_acceptance_passes() {
 /// "accept" arrives, and the acceptance covers what was shown, not B.
 #[test]
 fn accepting_what_was_shown_does_not_accept_what_appeared_after() {
-    seal("/race", vec![unexplained("a.xml")]);
+    seal("/race", vec![unexplained("a.html")]);
     let shown: Vec<String> = pending_paths("/race");
-    seal("/race", vec![unexplained("a.xml"), unexplained("b.xml")]);
+    seal("/race", vec![unexplained("a.html"), unexplained("b.html")]);
 
     records().accept_unexplained_removals("/race", &shown);
 
-    assert_eq!(pending_paths("/race"), ["b.xml"]);
+    assert_eq!(pending_paths("/race"), ["b.html"]);
     assert!(refuse_publish("/race").is_err());
 }
 
@@ -274,20 +272,18 @@ fn pending_removals_carry_the_served_address_and_the_cause() {
     seal(
         "/pending-causes",
         vec![
-            RemovedAddress { path: "legacy-feed.xml".into(), reason: RemovalReason::Unexplained, moved_to: None, source: None, withdrawn_by: None },
+            RemovedAddress { path: "legacy.html".into(), reason: RemovalReason::Unexplained, moved_to: None, source: None },
             RemovedAddress {
                 path: "old/index.html".into(),
                 reason: RemovalReason::Unexplained,
                 moved_to: Some("new/index.html".into()),
                 source: Some("moved.md".into()),
-                withdrawn_by: None,
             },
             RemovedAddress {
-                path: "files/a.pdf".into(),
+                path: "files/a.html".into(),
                 reason: RemovalReason::Unexplained,
                 moved_to: None,
-                source: Some("files/a.pdf".into()),
-                withdrawn_by: None,
+                source: Some("files/a.html".into()),
             },
         ],
     );
@@ -295,12 +291,12 @@ fn pending_removals_carry_the_served_address_and_the_cause() {
     let by_path = |p: &str| pending.iter().find(|r| r.path == p).unwrap().clone();
 
     assert_eq!(
-        by_path("legacy-feed.xml"),
-        PendingRemoval { path: "legacy-feed.xml".into(), address: "/legacy-feed.xml".into(), cause: RemovalCause::Generated }
+        by_path("legacy.html"),
+        PendingRemoval { path: "legacy.html".into(), address: "/legacy.html".into(), cause: RemovalCause::Generated }
     );
     assert_eq!(by_path("old/index.html").address, "/old/");
     assert_eq!(by_path("old/index.html").cause, RemovalCause::Moved { to: "/new/".into() });
-    assert_eq!(by_path("files/a.pdf").cause, RemovalCause::StillInFolder { source: "files/a.pdf".into() });
+    assert_eq!(by_path("files/a.html").cause, RemovalCause::StillInFolder { source: "files/a.html".into() });
 }
 
 #[test]
@@ -311,8 +307,8 @@ fn each_cause_serializes_with_a_kind_tag() {
         serde_json::json!({"kind": "moved", "to": "/new/"})
     );
     assert_eq!(
-        serde_json::to_value(RemovalCause::StillInFolder { source: "a.pdf".into() }).unwrap(),
-        serde_json::json!({"kind": "still_in_folder", "source": "a.pdf"})
+        serde_json::to_value(RemovalCause::StillInFolder { source: "a.html".into() }).unwrap(),
+        serde_json::json!({"kind": "still_in_folder", "source": "a.html"})
     );
 }
 
@@ -332,13 +328,13 @@ fn an_acceptance_cannot_straddle_a_seal() {
         let stop = stop.clone();
         std::thread::spawn(move || {
             while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-                records().accept_unexplained_removals(folder, &paths(&["a.xml"]));
+                records().accept_unexplained_removals(folder, &paths(&["a.html"]));
             }
         })
     };
     for round in 0..20_000 {
-        // Alternate a build that loses `a.xml` with one that has it back.
-        seal(folder, if round % 2 == 0 { Vec::new() } else { vec![unexplained("a.xml")] });
+        // Alternate a build that loses `a.html` with one that has it back.
+        seal(folder, if round % 2 == 0 { Vec::new() } else { vec![unexplained("a.html")] });
         let stray = records().accepted_but_not_removed(folder);
         assert!(stray.is_empty(), "round {round}: accepted but no longer a removal: {stray:?}");
     }
@@ -352,17 +348,17 @@ fn an_acceptance_cannot_straddle_a_seal() {
 fn files_moved_with_their_folder_print_one_folder_line() {
     let text = refusal_text(&[
         moved("review/old/index.html", "review/client/old/index.html", "review/old/index.html"),
-        moved("review/old/plan.pdf", "review/client/old/plan.pdf", "review/old/plan.pdf"),
+        moved("review/old/plan.html", "review/client/old/plan.html", "review/old/plan.html"),
         moved("review/old/notes/a.png", "review/client/old/notes/a.png", "review/old/notes/a.png"),
         moved("review/old/notes/b.png", "review/client/old/notes/b.png", "review/old/notes/b.png"),
-        moved("files/x.pdf", "archive/x.pdf", "files/x.pdf"),
+        moved("files/x.html", "archive/x.html", "files/x.html"),
     ]);
-    assert!(text.starts_with("Nothing published — 5 addresses"), "{text}");
+    assert!(text.starts_with("Nothing published — 5 pages"), "{text}");
     assert!(
-        text.contains("  4 addresses under /review/old/ now live under /review/client/old/. To keep them working, add \"/review/old/\" = \"/review/client/old/\" under [redirects]"),
+        text.contains("  4 pages under /review/old/ now live under /review/client/old/. To keep them working, add \"/review/old/\" = \"/review/client/old/\" under [redirects]"),
         "{text}"
     );
-    assert!(text.contains("add \"/files/x.pdf\" = \"/archive/x.pdf\""), "{text}");
+    assert!(text.contains("add \"/files/x.html\" = \"/archive/x.html\""), "{text}");
     assert_eq!(text.matches("under [redirects]").count(), 2, "{text}");
 }
 
@@ -370,7 +366,7 @@ fn files_moved_with_their_folder_print_one_folder_line() {
 /// root, which a folder line cannot.
 #[test]
 fn files_moved_out_of_the_root_keep_their_own_lines() {
-    let text = refusal_text(&[moved("a.pdf", "files/a.pdf", "a.pdf"), moved("b.pdf", "files/b.pdf", "b.pdf")]);
+    let text = refusal_text(&[moved("a.html", "files/a.html", "a.html"), moved("b.html", "files/b.html", "b.html")]);
     assert!(!text.contains("\"/\" ="), "{text}");
     assert_eq!(text.matches("under [redirects]").count(), 2, "{text}");
 }
@@ -379,7 +375,7 @@ fn files_moved_out_of_the_root_keep_their_own_lines() {
 /// line either: it would move a folder into one that contains it.
 #[test]
 fn files_moved_up_into_the_surrounding_folder_keep_their_own_lines() {
-    let text = refusal_text(&[moved("docs/x/a.pdf", "docs/a.pdf", "docs/x/a.pdf"), moved("docs/x/b.pdf", "docs/b.pdf", "docs/x/b.pdf")]);
+    let text = refusal_text(&[moved("docs/x/a.html", "docs/a.html", "docs/x/a.html"), moved("docs/x/b.html", "docs/b.html", "docs/x/b.html")]);
     assert!(!text.contains("\"/docs/x/\" = \"/docs/\""), "{text}");
     assert_eq!(text.matches("under [redirects]").count(), 2, "{text}");
 }
@@ -390,21 +386,21 @@ fn files_moved_up_into_the_surrounding_folder_keep_their_own_lines() {
 #[test]
 fn redirect_lines_are_the_config_lines_for_every_move() {
     let removed = [
-        moved("review/old/a.pdf", "review/new/a.pdf", "review/old/a.pdf"),
-        moved("review/old/b.pdf", "review/new/b.pdf", "review/old/b.pdf"),
-        moved("files/x.pdf", "archive/x.pdf", "files/x.pdf"),
-        address("feed.xml", RemovalReason::Unexplained),
+        moved("review/old/a.html", "review/new/a.html", "review/old/a.html"),
+        moved("review/old/b.html", "review/new/b.html", "review/old/b.html"),
+        moved("files/x.html", "archive/x.html", "files/x.html"),
+        address("feed.html", RemovalReason::Unexplained),
     ];
     let lines = super::removal_gate::redirect_lines(&pending_removals(&removed, None));
-    assert_eq!(lines, [r#""/review/old/" = "/review/new/""#, r#""/files/x.pdf" = "/archive/x.pdf""#]);
+    assert_eq!(lines, [r#""/review/old/" = "/review/new/""#, r#""/files/x.html" = "/archive/x.html""#]);
 }
 
 /// A file name with a quote still gives a line TOML reads back as written.
 #[test]
 fn a_redirect_line_quotes_an_address_toml_can_read_back() {
-    let line = super::removal_gate::redirect_line("/say \"hi\".pdf", "/new.pdf");
+    let line = super::removal_gate::redirect_line("/say \"hi\".pdf", "/new.html");
     let table: toml::Table = toml::from_str(&line).unwrap();
-    assert_eq!(table["/say \"hi\".pdf"].as_str(), Some("/new.pdf"));
+    assert_eq!(table["/say \"hi\".pdf"].as_str(), Some("/new.html"));
 }
 
 fn source_version(hash: &str, mtime: Option<(u64, u32)>) -> crate::build::manifest::SealedManifest {

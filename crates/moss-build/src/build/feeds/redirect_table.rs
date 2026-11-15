@@ -109,6 +109,11 @@ impl Addr {
         self.sp.as_str()
     }
 
+    /// Whether this names a `.html` file, served at exactly its path.
+    pub(crate) fn is_html_file(&self) -> bool {
+        self.kind == Kind::Html
+    }
+
     /// The decoded path, as the file is named in the site folder.
     pub(crate) fn raw(&self) -> &str {
         &self.raw

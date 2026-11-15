@@ -32,6 +32,7 @@ fn record(target: &str, pages: &[(&str, &str, &str)]) -> PublishedSnapshot {
         uids: pages.iter().map(|(src, _, uid)| ((*src).into(), (*uid).into())).collect(),
         triples: None,
         asset_source_to_output: None,
+        page_stubs: Default::default(),
     }
 }
 

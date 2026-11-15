@@ -1740,7 +1740,7 @@ mod removed_addresses_advisory_tests {
     use crate::build::manifest::change_set::{RemovalReason, RemovedAddress};
 
     fn removed(path: &str, reason: RemovalReason) -> RemovedAddress {
-        RemovedAddress { path: path.into(), reason, moved_to: None, source: None, withdrawn_by: None }
+        RemovedAddress { path: path.into(), reason, moved_to: None, source: None }
     }
 
     fn advisories(event: PipelineEvent) -> Vec<Advisory> {

@@ -8,7 +8,7 @@
 //! (`manifest::change_set::removed_addresses`); this module owns what the gate
 //! does with it and how it reads.
 
-use crate::build::manifest::change_set::{PendingRemoval, RemovalCause, RemovalReason, RemovedAddress, WithdrawnBy};
+use crate::build::manifest::change_set::{PendingRemoval, RemovalCause, RemovalReason, RemovedAddress};
 use crate::build::feeds::redirect_table::moves_a_folder;
 use crate::build::served_path::served_address;
 
@@ -24,35 +24,12 @@ pub(crate) const LIST_CAP: usize = 20;
 /// One address and what became of it, in plain words.
 pub(crate) fn cause_line(r: &RemovedAddress) -> String {
     let at = served_address(&r.path);
-    if r.reason == RemovalReason::AuthorRemoved {
-        if r.source.is_none() && crate::build::feeds::calendar::is_calendar_file(&r.path) {
-            return format!("{at} is gone because no event page says `start:` there any more.");
-        }
-        match r.withdrawn_by {
-            Some(WithdrawnBy::AiAnswers) => {
-                return format!("{at} is gone because the site asks AI assistants not to use its pages.");
-            }
-            Some(WithdrawnBy::AiSwitches) => {
-                return format!("{at} is gone because the site no longer sets its AI switches.");
-            }
-            Some(WithdrawnBy::SelectionTools) => {
-                return format!(
-                    "{at} is gone because the site no longer offers Share on selected text \
-                     (`selection_tools` under [site]), whose pictures carry the page's code."
-                );
-            }
-            None => {}
-        }
-        return match &r.source {
-            Some(src) => format!("{at} is gone because you deleted its source ({src})."),
-            None => format!("{at} is gone because you deleted its file."),
-        };
-    }
-    if r.reason == RemovalReason::Withheld {
-        return match &r.source {
-            Some(src) => format!("{at} is no longer published because {src} says `draft: true`."),
-            None => format!("{at} is no longer published because its page says `draft: true`."),
-        };
+    // Both reasons are read off a recorded source.
+    let src = r.source.as_deref().unwrap_or(&r.path);
+    match r.reason {
+        RemovalReason::AuthorRemoved => return format!("{at} is gone because you deleted its source ({src})."),
+        RemovalReason::Withheld => return format!("{at} is no longer published because {src} says `draft: true`."),
+        _ => {}
     }
     pending_line(&r.pending())
 }
@@ -75,7 +52,7 @@ pub(crate) fn pending_line(p: &PendingRemoval) -> String {
         RemovalCause::StillInFolder { source } => {
             format!("{at} is still in your folder ({source}) but is no longer published.")
         }
-        RemovalCause::Generated => format!("{at} is no longer produced by your site."),
+        RemovalCause::Generated => format!("{at} is no longer published."),
         RemovalCause::Opened => format!("{at} was for members only and would be open to everyone."),
     }
 }
@@ -146,7 +123,7 @@ fn grouped_lines(pending: &[PendingRemoval]) -> Vec<String> {
         .into_iter()
         .map(|g| match g {
             Group::Folder { old, new, count } => format!(
-                "{count} addresses under {old} now live under {new}. To keep them working, add {} under [redirects] \
+                "{count} pages under {old} now live under {new}. To keep them working, add {} under [redirects] \
                  in .moss/config.toml.",
                 redirect_line(&old, &new)
             ),
@@ -217,19 +194,19 @@ pub(crate) fn refusal_text(pending: &[PendingRemoval]) -> String {
 
 fn lost_refusal_text(pending: &[PendingRemoval]) -> String {
     let (head, them) = if pending.len() == 1 {
-        ("1 address your site has served would stop working, and you did not remove it".to_string(), "it")
+        ("1 page would go offline, and you did not remove it".to_string(), "it")
     } else {
-        (format!("{} addresses your site has served would stop working, and you did not remove them", pending.len()), "them")
+        (format!("{} pages would go offline, and you did not remove them", pending.len()), "them")
     };
     format!(
-        "Nothing published — {head}:\n{}Either keep {} working (for a moved page or file, add the redirect shown), \
+        "Nothing published — {head}:\n{}Either keep {} working (for a moved page, add the redirect shown), \
          or accept losing {them} and publish with `moss deploy --accept-removals`.",
         capped_lines_cut(&grouped_lines(pending), String::clone, more_in_json),
-        if pending.len() == 1 { "the address" } else { "the addresses" },
+        if pending.len() == 1 { "the page" } else { "the pages" },
     )
 }
 
-/// The refusal for an upload that has no sources: every missing address is
+/// The refusal for an upload that has no sources: every missing page is
 /// unexplained, because nothing here could show the author deleted it.
 pub(crate) fn prebuilt_refusal(paths: &[String]) -> String {
     let pending: Vec<PendingRemoval> = paths
@@ -241,7 +218,7 @@ pub(crate) fn prebuilt_refusal(paths: &[String]) -> String {
         })
         .collect();
     format!(
-        "{} A prebuilt folder has no sources to show you deleted a page on purpose, so every missing address counts.",
+        "{} A prebuilt folder has no sources to show you deleted a page on purpose, so every missing page counts.",
         refusal_text(&pending)
     )
 }
@@ -300,18 +277,6 @@ pub(crate) fn refuse_stale_generation(folder: &std::path::Path, sealed: &crate::
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_vanished_calendar_file_is_worded_as_the_authors_edit() {
-        let r = RemovedAddress {
-            path: "events/talk/event.ics".into(),
-            reason: crate::build::manifest::change_set::RemovalReason::AuthorRemoved,
-            moved_to: None,
-            source: None,
-            withdrawn_by: None,
-        };
-        assert_eq!(cause_line(&r), "/events/talk/event.ics is gone because no event page says `start:` there any more.");
-    }
-
     fn files(paths: &[&str]) -> std::collections::HashMap<String, String> {
         paths.iter().map(|p| (p.to_string(), "100644:0123456789abcdef".to_string())).collect()
     }
@@ -329,7 +294,7 @@ mod tests {
         assert_eq!(opened, ["map/rows.csv", "post/index.html"]);
 
         let pending: Vec<PendingRemoval> = opened.iter().map(|path| RemovedAddress {
-            path: path.clone(), reason: RemovalReason::Opened, moved_to: None, source: None, withdrawn_by: None,
+            path: path.clone(), reason: RemovalReason::Opened, moved_to: None, source: None,
         }.pending()).collect();
         assert_eq!(
             refusal_text(&pending),
@@ -340,32 +305,8 @@ mod tests {
              or accept that and publish with `moss deploy --accept-removals`."
         );
         let accepted = opened.into_iter().collect();
-        let removed = [RemovedAddress { path: "post/index.html".into(), reason: RemovalReason::Opened, moved_to: None, source: None, withdrawn_by: None }];
+        let removed = [RemovedAddress { path: "post/index.html".into(), reason: RemovalReason::Opened, moved_to: None, source: None }];
         assert!(crate::build::manifest::change_set::pending_removals(&removed, Some(&accepted)).is_empty(), "accepting publishes");
         assert_eq!(crate::build::manifest::change_set::pending_removals(&removed, None).len(), 1);
-    }
-
-    #[test]
-    fn a_file_a_setting_stopped_names_the_setting() {
-        let gone = |path: &str, by| RemovedAddress {
-            path: path.into(),
-            reason: RemovalReason::AuthorRemoved,
-            moved_to: None,
-            source: None,
-            withdrawn_by: Some(by),
-        };
-        assert_eq!(
-            cause_line(&gone("qr/notes/spring.svg", WithdrawnBy::SelectionTools)),
-            "/qr/notes/spring.svg is gone because the site no longer offers Share on selected text \
-             (`selection_tools` under [site]), whose pictures carry the page's code."
-        );
-        assert_eq!(
-            cause_line(&gone("llms.txt", WithdrawnBy::AiAnswers)),
-            "/llms.txt is gone because the site asks AI assistants not to use its pages."
-        );
-        assert_eq!(
-            cause_line(&gone(".well-known/tdmrep.json", WithdrawnBy::AiSwitches)),
-            "/.well-known/tdmrep.json is gone because the site no longer sets its AI switches."
-        );
     }
 }

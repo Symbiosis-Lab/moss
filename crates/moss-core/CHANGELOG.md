@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING:** `asset_paths::hls_ladder_file_stem` and `asset_paths::video_served_paths` are removed. Their one caller no longer needed them.
+
 - **BREAKING:** `template::plan_translation` takes `target_keys` as a map from each `translationKey` in the target tree to its page, where it took a set of keys, and `PlanError::AlreadyTranslated` carries that page's path instead of the mirrored path when the two differ.
 - **BREAKING:** `RenderHooks::emit_heading_anchors(level) -> bool` is now `heading_anchors(level) -> HeadingAnchors`, one of `All`, `Named` (only a heading whose id the author wrote as `{#id}`) and `None`. Return `All` where the old method returned `true` and `None` where it returned `false`. `DefaultHooks::card_titles` builds the hooks for a grid cell, which answer `Named`.
 - **BREAKING:** `Block::Heading` gains `named_id: bool`, set when the id was written `{#id}`, and `HeadingMarks` gains `named`. A heading with a named id carries its permalink mark on a page too short for marks. A struct literal must name the new field.

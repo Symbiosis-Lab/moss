@@ -139,12 +139,6 @@ pub fn qr_key_for_url_path(url_path: &str) -> String {
     format!("qr/{}.svg", segments.join("/"))
 }
 
-/// Whether `path` is an output key of the shape [`qr_key_for_url_path`] makes:
-/// a page's code, or a redirect's copy of one at its old address.
-pub fn is_share_qr_path(path: &str) -> bool {
-    path.starts_with("qr/") && path.ends_with(".svg")
-}
-
 /// The `data-share-qr` attribute for a page, or an empty string when it has no
 /// code. This is what the reader reads; [`emit_share_qr`] writes what it points
 /// at, and both derive it from [`share_qr_for_page`], so the attribute cannot
