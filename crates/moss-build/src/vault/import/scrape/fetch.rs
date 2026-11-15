@@ -80,7 +80,8 @@ pub fn allow_loopback() {
 #[cfg(debug_assertions)]
 static ALLOW_LOOPBACK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Refuse a URL that is not a plain `http`/`https` request to a public host.
+/// Refuse a URL that is not a plain `http`/`https` request to a public or
+/// private-network host.
 ///
 /// The import path hands `start_url` (and, via [`fetch_with_validated_redirects`],
 /// every redirect target reached while fetching it) straight to ureq — an
@@ -90,9 +91,12 @@ static ALLOW_LOOPBACK: std::sync::atomic::AtomicBool = std::sync::atomic::Atomic
 /// link-local cloud-metadata address). A URL that passes this check on
 /// `start_url` alone is not enough: a public host the check allowed can
 /// itself 302/303/307/308 to a loopback/link-local target, so
-/// [`fetch_with_validated_redirects`] re-runs this SAME function on every
-/// hop rather than trusting ureq's own redirect-following (which does not
+/// [`fetch_with_validated_redirects`] re-runs the same rows on every hop
+/// rather than trusting ureq's own redirect-following (which does not
 /// re-validate at all).
+///
+/// A private-network literal passes here: whether it is the person's own site
+/// is [`Client::check`]'s decision, which knows the address the person gave.
 ///
 /// Checked on the URL string alone: DNS rebinding — a hostname that
 /// resolves to a loopback/link-local address only at connect time — is NOT
@@ -100,6 +104,15 @@ static ALLOW_LOOPBACK: std::sync::atomic::AtomicBool = std::sync::atomic::Atomic
 /// out of scope for this string-level gate.
 pub fn refuse_unsafe_scrape_url(url_str: &str) -> Result<(), String> {
     let url = url::Url::parse(url_str).map_err(|e| format!("invalid URL: {e}"))?;
+    refuse_unsafe(&url).map(|_| ())
+}
+
+/// The rows every import address meets, from the typed address to each hop:
+/// the scheme, the debug loopback allowance, local names, and literals of the
+/// classes no import may reach. `Ok(Some(ip))` is a literal that passed, as the
+/// IPv4 address it carries; `Ok(None)` a name or an allowed loopback.
+fn refuse_unsafe(url: &url::Url) -> Result<Option<std::net::IpAddr>, String> {
+    use crate::system::address::{carried_ipv4, classify, is_local_name, AddressClass};
     match url.scheme() {
         "http" | "https" => {}
         other => {
@@ -117,26 +130,25 @@ pub fn refuse_unsafe_scrape_url(url_str: &str) -> Result<(), String> {
             Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
             None => false,
         };
-        if loopback { return Ok(()); }
+        if loopback { return Ok(None); }
     }
     // `url::Host::Ipv4`/`Ipv6` carry parsed addresses directly — `host_str()`
     // returns an IPv6 literal WITH its brackets (`"[::1]"`), which fails a
     // plain `str::parse::<IpAddr>()` and would silently let every bracketed
     // IPv6 literal through unchecked.
     let ip: std::net::IpAddr = match url.host() {
-        Some(url::Host::Domain(d)) if d.eq_ignore_ascii_case("localhost") => {
+        Some(url::Host::Domain(d)) if is_local_name(d) => {
             return Err("URL must not target localhost".to_string());
         }
-        Some(url::Host::Domain(_)) => return Ok(()),
+        Some(url::Host::Domain(_)) => return Ok(None),
         Some(url::Host::Ipv4(v4)) => v4.into(),
         Some(url::Host::Ipv6(v6)) => v6.into(),
         None => return Err("URL has no host".to_string()),
     };
-    use crate::system::address::{classify, AddressClass};
-    if matches!(classify(ip), AddressClass::Loopback | AddressClass::LinkLocal) {
-        return Err(format!("URL must not target a loopback or link-local address ({ip})"));
+    if matches!(classify(ip), AddressClass::Loopback | AddressClass::LinkLocal | AddressClass::Unspecified | AddressClass::Multicast) {
+        return Err(format!("URL must not target a loopback, link-local or unspecified address ({ip})"));
     }
-    Ok(())
+    Ok(Some(carried_ipv4(ip)))
 }
 
 /// `agent.get(url)`, following redirects by hand so every hop's target is

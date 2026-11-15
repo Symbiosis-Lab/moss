@@ -10,11 +10,12 @@ pub(crate) enum AddressClass {
     Loopback,
     /// 169.254.0.0/16, fe80::/10.
     LinkLocal,
-    /// 0.0.0.0, `::`.
+    /// 0.0.0.0/8, `::`.
     Unspecified,
     /// 224.0.0.0/4, ff00::/8.
     Multicast,
-    /// 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, fc00::/7.
+    /// 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10 (carrier-grade
+    /// NAT, where overlay networks and mobile carriers put their hosts), fc00::/7.
     Private,
     Public,
 }
@@ -33,7 +34,7 @@ pub(crate) fn classify(ip: IpAddr) -> AddressClass {
 /// (`::a.b.c.d`) or NAT64 well-known-prefix (`64:ff9b::a.b.c.d`) address;
 /// any other address unchanged. `::` and `::1` are themselves, not 0.0.0.0
 /// and 0.0.0.1.
-fn carried_ipv4(ip: IpAddr) -> IpAddr {
+pub(crate) fn carried_ipv4(ip: IpAddr) -> IpAddr {
     let IpAddr::V6(v6) = ip else { return ip };
     if let Some(v4) = v6.to_ipv4_mapped() {
         return v4.into();
@@ -48,16 +49,23 @@ fn carried_ipv4(ip: IpAddr) -> IpAddr {
     }
 }
 
+/// Whether `host` names this machine: `localhost` or any name under it, which
+/// resolvers send to loopback.
+pub(crate) fn is_local_name(host: &str) -> bool {
+    let host = host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase();
+    host == "localhost" || host.ends_with(".localhost")
+}
+
 fn classify_v4(v4: Ipv4Addr) -> AddressClass {
     if v4.is_loopback() {
         AddressClass::Loopback
     } else if v4.is_link_local() {
         AddressClass::LinkLocal
-    } else if v4.is_unspecified() {
+    } else if v4.octets()[0] == 0 {
         AddressClass::Unspecified
     } else if v4.is_multicast() {
         AddressClass::Multicast
-    } else if v4.is_private() {
+    } else if v4.is_private() || (v4.octets()[0] == 100 && v4.octets()[1] & 0xc0 == 64) {
         AddressClass::Private
     } else {
         AddressClass::Public
@@ -82,7 +90,7 @@ fn classify_v6(v6: Ipv6Addr) -> AddressClass {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify, AddressClass};
+    use super::{classify, is_local_name, AddressClass};
 
     fn class(s: &str) -> AddressClass {
         classify(s.parse().unwrap())
@@ -101,6 +109,33 @@ mod tests {
         }
         for form in ["::ffff:93.184.216.34", "::93.184.216.34", "64:ff9b::93.184.216.34", "64:ff9b:1::127.0.0.1"] {
             assert_eq!(class(form), AddressClass::Public, "{form}");
+        }
+    }
+
+    #[test]
+    fn the_shared_address_space_is_private_and_its_neighbours_are_not() {
+        for form in ["100.64.0.1", "100.127.255.254", "::ffff:100.64.0.1"] {
+            assert_eq!(class(form), AddressClass::Private, "{form}");
+        }
+        for form in ["100.63.255.255", "100.128.0.1"] {
+            assert_eq!(class(form), AddressClass::Public, "{form}");
+        }
+    }
+
+    #[test]
+    fn all_of_the_zero_network_is_unspecified() {
+        for form in ["0.0.0.0", "0.1.2.3", "::ffff:0.1.2.3"] {
+            assert_eq!(class(form), AddressClass::Unspecified, "{form}");
+        }
+    }
+
+    #[test]
+    fn localhost_and_names_under_it_are_local() {
+        for name in ["localhost", "a.localhost", "LOCALHOST.", "App.LocalHost."] {
+            assert!(is_local_name(name), "{name}");
+        }
+        for name in ["localhost.example.test", "notlocalhost", "example.test"] {
+            assert!(!is_local_name(name), "{name}");
         }
     }
 }

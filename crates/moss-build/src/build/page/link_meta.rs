@@ -1975,6 +1975,14 @@ mod tests {
     }
 
     #[test]
+    fn is_unsafe_fetch_target_blocks_the_shared_address_space_and_the_zero_network() {
+        for url in ["http://100.64.0.1/", "http://100.127.255.254/", "http://[::ffff:100.64.0.1]/", "http://0.1.2.3/", "http://[::ffff:0.1.2.3]/"] {
+            assert!(is_unsafe_fetch_target(url), "{url}");
+        }
+        assert!(!is_unsafe_fetch_target("http://100.128.0.1/"));
+    }
+
+    #[test]
     fn is_unsafe_fetch_target_blocks_link_local_and_unique_local_v6() {
         assert!(is_unsafe_fetch_target("http://[fe80::1]/"));
         assert!(is_unsafe_fetch_target("http://[fc00::1]/"));

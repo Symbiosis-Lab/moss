@@ -176,6 +176,20 @@ fn refuses_localhost_hostname() {
 }
 
 #[test]
+fn refuses_names_under_localhost_in_any_case() {
+    for url in ["http://a.localhost/", "http://LOCALHOST./", "http://App.LocalHost/x"] {
+        refuse_unsafe_scrape_url(url).expect_err(url);
+    }
+}
+
+#[test]
+fn refuses_unspecified_and_multicast_literals() {
+    for url in ["http://0.0.0.0/", "http://0.1.2.3/", "http://[::]/", "http://224.0.0.1/", "http://[ff02::1]/"] {
+        refuse_unsafe_scrape_url(url).expect_err(url);
+    }
+}
+
+#[test]
 fn allows_a_plain_https_url() {
     assert!(refuse_unsafe_scrape_url("https://example.com/blog").is_ok());
 }
