@@ -176,8 +176,7 @@ fn apply_moves(host: &dyn CommandHost, moves: &[(String, String)]) -> Result<Ren
         return Ok(RenameRefsSummary::empty());
     };
     let plan = rename_plan::plan_moves(root, moves)?;
-    let pairs = ref_scan::page_file_pairs(&plan.file_moves);
-    let applied = with_moves_announced(host, &pairs, || rename_plan::apply_planned_moves(root, &plan))?;
+    let applied = with_moves_announced(host, &plan.file_moves, || rename_plan::apply_planned_moves(root, &plan))?;
     Ok(host.rename_undo().summarize_and_store(root, applied))
 }
 
@@ -196,8 +195,8 @@ pub async fn undo_rename(host: &dyn CommandHost, a: UndoRenameArgs) -> Result<Un
     if root != host.root() {
         return Err("Cannot undo — the folder has changed since this rename".to_string());
     }
-    let pairs = crate::editor::ref_scan::page_file_pairs(&crate::editor::rename_plan::undo_file_moves(&root, &applied)?);
-    with_moves_announced(host, &pairs, || crate::editor::rename_plan::undo_applied(&root, &applied))
+    let moves = crate::editor::rename_plan::undo_file_moves(&root, &applied)?;
+    with_moves_announced(host, &moves, || crate::editor::rename_plan::undo_applied(&root, &applied))
 }
 
 #[derive(serde::Deserialize, specta::Type)]

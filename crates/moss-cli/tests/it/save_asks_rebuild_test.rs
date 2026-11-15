@@ -107,18 +107,23 @@ impl Site {
             "body": body,
             "expectedHash": expected,
         });
-        let reply: serde_json::Value = ureq::post(&format!("http://localhost:{}/__moss/mutate/save_editor_content", self.port))
-            .set("Content-Type", "application/json")
-            .set("X-Moss-Token", &self.token)
-            .send_string(&payload.to_string())
-            .unwrap_or_else(|e| match e {
-                ureq::Error::Status(code, r) => panic!("the save was refused ({code}): {}", r.into_string().unwrap_or_default()),
-                e => panic!("the save never reached the server: {e}"),
-            })
-            .into_json()
-            .unwrap();
+        let reply = self.mutate("save_editor_content", payload);
         assert_eq!(reply["status"], "saved", "{reply}");
         reply["hash"].as_str().unwrap().to_string()
+    }
+
+    /// Run one of the editor's commands over the server's route for them.
+    fn mutate(&self, command: &str, args: serde_json::Value) -> serde_json::Value {
+        ureq::post(&format!("http://localhost:{}/__moss/mutate/{command}", self.port))
+            .set("Content-Type", "application/json")
+            .set("X-Moss-Token", &self.token)
+            .send_string(&args.to_string())
+            .unwrap_or_else(|e| match e {
+                ureq::Error::Status(code, r) => panic!("{command} was refused ({code}): {}", r.into_string().unwrap_or_default()),
+                e => panic!("{command} never reached the server: {e}"),
+            })
+            .into_json()
+            .unwrap()
     }
 
     fn wait_for_home(&self, text: &str, within: Duration) {
@@ -221,4 +226,17 @@ fn a_picture_uploaded_during_the_first_build_is_built_by_its_own_request() {
     let lines = site.child.stderr.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let at = |needle: &str| lines.iter().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("no {needle:?} line:\n{}", lines.join("\n")));
     assert!(at("Rebuild asked by new file") < at("build.summary"), "premise: the upload was made during the first build:\n{}", lines.join("\n"));
+}
+
+/// The album names the picture by its file name alone, so moving it rewrites
+/// no page and no save asks for the build that draws it at its new address.
+#[test]
+fn a_moved_picture_is_drawn_at_its_new_address_with_the_watcher_blind() {
+    let site = serve();
+    site.upload_harbour();
+    site.wait_for_harbour(Duration::from_secs(20));
+    site.settle(Duration::from_secs(2));
+    site.mutate("move_entries", serde_json::json!({ "paths": ["harbour.png"], "targetDir": "notes" }));
+    assert!(site.site.join("notes/harbour.png").exists(), "premise: the picture moved");
+    site.wait_for("album/", "the picture at its new address", Duration::from_secs(20), |album| album.contains("notes/harbour"));
 }
