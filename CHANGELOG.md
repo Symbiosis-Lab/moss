@@ -10,6 +10,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A subscribe or comment form whose bot check never loads or never answers shows its error after 20 seconds, and pressing the button again tries again. The button kept spinning for two minutes. A reader who is shown the puzzle still has two minutes to solve it.
 - A link preview is not fetched from a name that resolves to a private or link-local address. Only an address written as numbers was refused before.
 - A YouTube video on a page plays from `youtube-nocookie.com`, so the page sets no YouTube cookie until the reader starts the video. An existing `youtube-nocookie.com` address in a page is recognised as a YouTube video too.
 - In the editor, resting the pointer on a folder embed's path (`![[Termine/|when:upcoming]]`), or on an embedded page's name, opens no card. The card only repeated the path. A page property whose value is shown whole has no tooltip repeating it.

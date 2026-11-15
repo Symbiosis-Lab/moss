@@ -1,7 +1,7 @@
 import { beforeEach, afterEach, describe, expect, test, vi } from 'vitest';
 import { hydrateSubscribeForm } from '../subscribe.js';
 import { COPY, langBucket } from '../i18n.js';
-import { VERIFYING } from '../captcha.js';
+import { QUIET_MS, VERIFYING } from '../captcha.js';
 
 function mount(lang = 'en'): HTMLFormElement {
   document.documentElement.lang = lang;
@@ -422,6 +422,32 @@ describe('the service asks for its bot check', () => {
     tell('failed');
     await vi.advanceTimersByTimeAsync(0);
     expect(posts).toBe(1);
+    expect(form.dataset.state).toBe('error');
+    expect(dialog()).toBeNull();
+  });
+
+  test('a check page that never answers shows the form error, and a press sends again', async () => {
+    const form = await submit();
+    await vi.advanceTimersByTimeAsync(QUIET_MS - 1);
+    expect(form.dataset.state).toBe('loading');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(form.dataset.state).toBe('error');
+    expect(form.querySelector<HTMLElement>('[data-copy="error"]')!.hidden).toBe(false);
+    expect(dialog()).toBeNull();
+
+    form.requestSubmit();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posts).toBe(2);
+    expect(form.dataset.state).toBe('success');
+  });
+
+  test('a reader with the puzzle open keeps it past that wait, up to two minutes', async () => {
+    const form = await submit();
+    tell('interactive');
+    await vi.advanceTimersByTimeAsync(QUIET_MS * 2);
+    expect(dialog()).not.toBeNull();
+    expect(form.dataset.state).toBe('loading');
+    await vi.advanceTimersByTimeAsync(120000 - QUIET_MS * 2);
     expect(form.dataset.state).toBe('error');
     expect(dialog()).toBeNull();
   });

@@ -18,8 +18,13 @@ export const VERIFYING: Record<Lang, string> = {
  * only time the frame shows, as a modal, and later `passed` or `failed`.
  *
  * Resolves true on `passed`, false when the visitor closes the modal (backdrop
- * click, or Escape in this page or in the frame). Rejects on `failed`, or after two minutes.
+ * click, or Escape in this page or in the frame). Rejects on `failed`, after
+ * `QUIET_MS` with nothing from the page before `interactive` (Turnstile never
+ * loaded or never answered), and two minutes after `interactive`.
  */
+export const QUIET_MS = 20000;
+const OPEN_MS = 120000;
+
 export function solveCaptcha(pageUrl: string): Promise<boolean> {
   const label = VERIFYING[langBucket(document.documentElement.lang)];
   return new Promise<boolean>((resolve, reject) => {
@@ -63,6 +68,9 @@ export function solveCaptcha(pageUrl: string): Promise<boolean> {
       if (ev.source !== frame.contentWindow) return;
       const state = (ev.data as { moss_captcha?: string } | null)?.moss_captcha;
       if (state === "interactive") {
+        // A puzzle the visitor is solving gets the long wait.
+        window.clearTimeout(timer);
+        timer = giveUpAfter(OPEN_MS);
         // A modal takes focus while open and gives it back when it closes.
         overlay.style.visibility = "";
         frame.focus();
@@ -74,9 +82,8 @@ export function solveCaptcha(pageUrl: string): Promise<boolean> {
     window.addEventListener("message", onMessage);
     overlay.addEventListener("click", onClick);
     document.addEventListener("keydown", onKey);
-    const timer = window.setTimeout(
-      () => finish(() => reject(new Error("captcha timeout"))),
-      120000,
-    );
+    const giveUpAfter = (ms: number): number =>
+      window.setTimeout(() => finish(() => reject(new Error("captcha timeout"))), ms);
+    let timer = giveUpAfter(QUIET_MS);
   });
 }
