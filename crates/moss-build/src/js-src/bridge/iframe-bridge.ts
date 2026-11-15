@@ -16,7 +16,7 @@ import { Idiomorph } from "idiomorph";
 import { pickThemeFromMessage, startPageColor } from "./iframe-bridge-theme";
 import { describeScriptChange, syncBodyAttributes, captureServerBody, forceRepaint, morphCounter } from "./morph-guard";
 import { createAssetSwapBuffer } from "./asset-swap-buffer";
-import { bustSrcset, normPath, srcsetMatches, stripBust } from "./asset-urls";
+import { bustSrcset, normPath, refetchSrc, srcsetMatches } from "./asset-urls";
 import { FOCUS_FRACTION, getSourceLine, interpolatedScrollTop, isAlreadyShowing, readScrollPosition } from "./scroll-interpolate";
 import { installBlueprintFallback } from "./blueprint-fallback";
 import { installSwipeNavigation } from "./swipe-gesture";
@@ -792,7 +792,7 @@ import { installCaptureResponder } from "./capture/responder";
       // triggers fresh source-set selection on the parent <picture> per HTML
       // spec; combined with Cache-Control: no-store on the placeholder response
       // this re-fetches the real bytes. For <img src>: cache-bust + LQIP cleanup.
-      const bust = "?_t=" + Date.now();
+      const stamp = Date.now();
 
       // srcset matches: <source srcset> inside a <picture>, and the bare
       // <img srcset> ladder html_post.rs also emits.
@@ -807,7 +807,7 @@ import { installCaptureResponder } from "./capture/responder";
         .forEach((el) => {
           const srcset = el.getAttribute("srcset") || "";
           if (srcsetMatches(srcset, eventAbsPath)) {
-            el.setAttribute("srcset", bustSrcset(srcset, bust));
+            el.setAttribute("srcset", bustSrcset(srcset, stamp));
             matched++;
           }
         });
@@ -816,9 +816,9 @@ import { installCaptureResponder } from "./capture/responder";
       document
         .querySelectorAll<HTMLImageElement>("img[src]")
         .forEach((img) => {
-          const cleanSrc = stripBust(img.getAttribute("src") || "");
-          if (toAbsPath(cleanSrc) === eventAbsPath) {
-            img.src = cleanSrc + bust;
+          const refetch = refetchSrc(img.getAttribute("src") || "", eventAbsPath, stamp);
+          if (refetch !== null) {
+            img.src = refetch;
             img.addEventListener("load", () => {
               img.style.removeProperty("background-image");
               img.style.removeProperty("background-size");
