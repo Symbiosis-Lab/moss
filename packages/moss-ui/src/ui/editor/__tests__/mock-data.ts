@@ -255,14 +255,17 @@ export const mockCommands = {
       data: { insert, label: insert, detail: null, kind: 'page' } satisfies WikilinkCompletion,
     };
   },
-  // Link completion: a page, a file and a folder, whatever was typed.
-  wikilinkCompletions: async () => ({
+  // Link completion: a page, a file and a folder, whatever was typed; `many`
+  // answers with more pages than a list shows at once.
+  wikilinkCompletions: async (query?: string) => ({
     status: 'ok' as const,
-    data: [
-      { insert: 'notes', label: 'notes', detail: 'Notes', kind: 'page' },
-      { insert: 'cover.jpg', label: 'cover.jpg', detail: null, kind: 'asset' },
-      { insert: 'essays/', label: 'essays/', detail: null, kind: 'folder' },
-    ] satisfies WikilinkCompletion[],
+    data: (query === 'many'
+      ? Array.from({ length: 20 }, (_, i) => ({ insert: `page ${i + 1}`, label: `page ${i + 1}`, detail: null, kind: 'page' as const }))
+      : [
+        { insert: 'notes', label: 'notes', detail: 'Notes', kind: 'page' },
+        { insert: 'cover.jpg', label: 'cover.jpg', detail: null, kind: 'asset' },
+        { insert: 'essays/', label: 'essays/', detail: null, kind: 'folder' },
+      ]) satisfies WikilinkCompletion[],
   }),
   // Reference resolution — used by the image-repaint visual spec. An embed
   // target with an image extension resolves to an Image envelope (so the

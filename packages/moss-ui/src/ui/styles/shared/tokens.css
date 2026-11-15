@@ -123,6 +123,8 @@
   --moss-menu-row-pad-block: 6px;
   --moss-menu-row-pad-inline: 12px;
   --moss-menu-row-padding: var(--moss-menu-row-pad-block) var(--moss-menu-row-pad-inline);
+  /* How tall a list of rows grows before it scrolls. */
+  --moss-menu-list-max: 380px;
 
   /* Transitions */
   --moss-transition-fast: 150ms ease;  /* hover/focus state changes */

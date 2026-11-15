@@ -13,7 +13,7 @@
 .moss-menu-row, .cm-editor .cm-tooltip.cm-tooltip-autocomplete > ul > li.moss-menu-row { padding: var(--moss-menu-row-padding); border-radius: var(--moss-menu-row-radius); cursor: pointer; }
 /* One highlight for the row a click or Enter would take, however it is marked. */
 .moss-menu-row:hover, .moss-menu-row:focus, .moss-menu-row.is-active, .moss-menu-row[aria-selected="true"], .cm-editor .cm-tooltip.cm-tooltip-autocomplete > ul > li.moss-menu-row[aria-selected] { background: var(--moss-menu-hover); color: inherit; outline: none; }
-.cm-editor .cm-tooltip.cm-tooltip-autocomplete.moss-menu > ul { font-family: inherit; font-size: 13px; }
+.cm-editor .cm-tooltip.cm-tooltip-autocomplete.moss-menu > ul { font-family: inherit; font-size: 13px; max-height: var(--moss-menu-list-max); }
 
 /* Above the toast tier: a context menu is a direct answer to a click the user
    just made, so a queued notification must not land on top of it. */
@@ -68,7 +68,7 @@
 /* A wide, tall list level (the composer's audience menu): one width for every
    level so a drill-in does not jump, and the back row and filter line stay put
    while the rows scroll under them. */
-.ctx-menu--list { width: 300px; max-height: min(380px, calc(100vh - 16px)); }
+.ctx-menu--list { width: 300px; max-height: min(var(--moss-menu-list-max), calc(100vh - 16px)); }
 .ctx-menu--list .ctx-head { position: sticky; top: calc(-1 * var(--moss-menu-inset)); z-index: var(--z-toast); background: var(--moss-menu-bg); }
 /* The filter shares the back row's block: no rule or gap between them. */
 .ctx-head .ctx-back { padding-bottom: 3px; }

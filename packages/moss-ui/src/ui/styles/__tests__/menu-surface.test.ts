@@ -95,4 +95,12 @@ describe('the menu surface', () => {
     const own = files('.ts').filter((f) => ROLE.test(read(f)) && !read(f).includes('moss-menu'));
     expect(own).toEqual([]);
   });
+
+  it('every list of rows scrolls at the one height', () => {
+    expect(tokens).toMatch(/\n  --moss-menu-list-max: \d+px;/);
+    const editor = stripComments(read('editor/editor.css'));
+    for (const rule of [/\.cm-tooltip-autocomplete\.moss-menu > ul \{([^}]*)\}/.exec(shared)![1], /\.ctx-menu--list \{([^}]*)\}/.exec(shared)![1], /\.omenu \{([^}]*)\}/.exec(editor)![1]]) {
+      expect(rule).toMatch(/max-height: [^;]*var\(--moss-menu-list-max\)/);
+    }
+  });
 });
