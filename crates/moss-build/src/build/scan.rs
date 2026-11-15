@@ -6,6 +6,7 @@
 
 pub mod article_map;
 pub(crate) mod members;
+pub(crate) mod oklab;
 pub use members::page_restricted;
 pub(crate) mod cascade;
 pub(crate) mod path_collision;

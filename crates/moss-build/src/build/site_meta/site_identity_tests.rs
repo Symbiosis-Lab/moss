@@ -48,6 +48,16 @@ fn a_value_set_only_outside_the_root_leaves_the_root_value() {
 }
 
 #[test]
+fn a_theme_written_in_oklch_publishes_its_colours_as_hex() {
+    let css = ":root, :root[data-theme=\"dark\"] { --moss-color-bg: oklch(0.145 0.006 60); --moss-color-text: oklch(0.955 0.008 80); --moss-color-ui-accent: oklch(0.665 0.19 37); --moss-color-surface: oklch(0.145 0.006 60 / .82); }";
+    let t = tokens(&registry(), Some(css), "en", ColorScheme::Auto);
+    assert_eq!(colour(&t, "moss-color-bg"), pair("#0c0a08", "#0c0a08"));
+    assert_eq!(colour(&t, "moss-color-text"), pair("#f3f0ea", "#f3f0ea"));
+    assert_eq!(colour(&t, "moss-color-ui-accent"), pair("#f05e31", "#f05e31"));
+    assert_eq!(colour(&t, "moss-color-surface"), None, "a translucent oklch() is not written as opaque");
+}
+
+#[test]
 fn what_cannot_be_reduced_to_a_plain_value_is_left_out() {
     let css = ":root { --moss-color-accent: color-mix(in oklch, red, blue); --moss-color-surface: var(--nowhere); }";
     let t = tokens(&registry(), Some(css), "en", ColorScheme::Auto);

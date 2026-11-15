@@ -11,7 +11,8 @@
 //! repaints the page background must check its own contrast.
 
 use crate::build::types::SectionAccent;
-use crate::build::scan::wcag::{contrast_ratio, linear_to_srgb, relative_luminance, srgb_to_linear};
+use crate::build::scan::oklab::{oklch_from_srgb, srgb_from_oklch};
+use crate::build::scan::wcag::{contrast_ratio, relative_luminance};
 use moss_core::contract::tokens::{bg_colors, load_tokens};
 use std::sync::LazyLock;
 
@@ -58,49 +59,13 @@ fn contrast(a: Rgb, b: Rgb) -> f32 {
 
 /// sRGB bytes to OKLCH `(lightness, chroma, hue in radians)`.
 fn to_oklch((r, g, b): Rgb) -> (f32, f32, f32) {
-    let (r, g, b) = (srgb_to_linear(r as f32 / 255.0), srgb_to_linear(g as f32 / 255.0), srgb_to_linear(b as f32 / 255.0));
-    let l = (0.412_221_47 * r + 0.536_332_55 * g + 0.051_445_995 * b).cbrt();
-    let m = (0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b).cbrt();
-    let s = (0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b).cbrt();
-    let lightness = 0.210_454_26 * l + 0.793_617_8 * m - 0.004_072_047 * s;
-    let a = 1.977_998_5 * l - 2.428_592_2 * m + 0.450_593_7 * s;
-    let b = 0.025_904_037 * l + 0.782_771_77 * m - 0.808_675_77 * s;
-    (lightness, a.hypot(b), b.atan2(a))
+    oklch_from_srgb([r, g, b].map(|c| c as f32 / 255.0))
 }
 
-/// OKLCH to sRGB bytes, or `None` when the colour lies outside sRGB.
-fn from_oklch(lightness: f32, chroma: f32, hue: f32) -> Option<Rgb> {
-    let (a, b) = (chroma * hue.cos(), chroma * hue.sin());
-    let l = (lightness + 0.396_337_78 * a + 0.215_803_76 * b).powi(3);
-    let m = (lightness - 0.105_561_346 * a - 0.063_854_17 * b).powi(3);
-    let s = (lightness - 0.089_484_18 * a - 1.291_485_5 * b).powi(3);
-    let linear = [
-        4.076_741_7 * l - 3.307_711_6 * m + 0.230_969_93 * s,
-        -1.268_438 * l + 2.609_757_4 * m - 0.341_319_4 * s,
-        -0.004_196_086 * l - 0.703_418_6 * m + 1.707_614_7 * s,
-    ];
-    let mut out = [0u8; 3];
-    for (slot, c) in out.iter_mut().zip(linear) {
-        if !(-0.000_5..=1.000_5).contains(&c) {
-            return None;
-        }
-        *slot = (linear_to_srgb(c.clamp(0.0, 1.0)) * 255.0).round() as u8;
-    }
-    Some((out[0], out[1], out[2]))
-}
-
-/// The colour of lightness `lightness` and hue `hue`, keeping as much of
-/// `chroma` as sRGB can hold there.
+/// The OKLCH colour as sRGB bytes, brought into sRGB as CSS maps it.
 fn in_gamut(lightness: f32, chroma: f32, hue: f32) -> Rgb {
-    if let Some(rgb) = from_oklch(lightness, chroma, hue) {
-        return rgb;
-    }
-    let (mut lo, mut hi) = (0.0, chroma);
-    for _ in 0..24 {
-        let mid = (lo + hi) / 2.0;
-        if from_oklch(lightness, mid, hue).is_some() { lo = mid } else { hi = mid }
-    }
-    from_oklch(lightness, lo, hue).unwrap_or(if lightness > 0.5 { (255, 255, 255) } else { (0, 0, 0) })
+    let [r, g, b] = srgb_from_oklch(lightness, chroma, hue).map(|c| (c * 255.0).round() as u8);
+    (r, g, b)
 }
 
 /// `base` unchanged when it reaches 4.5:1 on `background`; otherwise the

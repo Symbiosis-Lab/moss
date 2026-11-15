@@ -575,20 +575,35 @@ impl std::fmt::Display for Rgba {
     }
 }
 
-/// A CSS colour literal: any named colour, hex, `rgb()`, `hsl()` or `hwb()`.
+/// A CSS colour literal: any named colour, hex, `rgb()`, `hsl()`, `hwb()`,
+/// `lab()`, `lch()`, `oklab()` or `oklch()`, the last four mapped into sRGB.
 /// `None` for anything that is not one colour (`var()`, a gradient,
-/// `currentColor`, the newer colour spaces).
+/// `currentColor`, `color()`, `color-mix()`).
 pub(crate) fn colour(input: &str) -> Option<Rgba> {
+    use crate::build::scan::oklab::{oklab_from_lab, srgb_from_oklch};
     use cssparser::{Color, Parser, ParserInput};
     let mut input = ParserInput::new(input.trim());
     let mut parser = Parser::new(&mut input);
     let parsed = Color::parse(&mut parser).ok()?;
     parser.expect_exhausted().ok()?;
     let byte = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
+    // A missing hue (`none`) is zero, as CSS Color 4 says.
+    let polar = |l: f32, chroma: f32, hue: Option<f32>| {
+        let hue = hue.unwrap_or(0.0).to_radians();
+        [l, chroma * hue.cos(), chroma * hue.sin()]
+    };
+    let srgb = |[l, a, b]: [f32; 3]| {
+        let [r, g, b] = srgb_from_oklch(l, a.hypot(b), b.atan2(a));
+        (r, g, b)
+    };
     let ((r, g, b), alpha) = match parsed {
         Color::Rgba(c) => return Some(Rgba { rgb: (c.red?, c.green?, c.blue?), alpha: c.alpha.unwrap_or(1.0) }),
         Color::Hsl(c) => (cssparser::hsl_to_rgb(c.hue?.rem_euclid(360.0) / 360.0, c.saturation?, c.lightness?), c.alpha),
         Color::Hwb(c) => (cssparser::hwb_to_rgb(c.hue?.rem_euclid(360.0) / 360.0, c.whiteness?, c.blackness?), c.alpha),
+        Color::Oklch(c) => (srgb(polar(c.lightness?, c.chroma?, c.hue)), c.alpha),
+        Color::Oklab(c) => (srgb([c.lightness?, c.a?, c.b?]), c.alpha),
+        Color::Lab(c) => (srgb(oklab_from_lab([c.lightness?, c.a?, c.b?])), c.alpha),
+        Color::Lch(c) => (srgb(oklab_from_lab(polar(c.lightness?, c.chroma?, c.hue))), c.alpha),
         _ => return None,
     };
     Some(Rgba { rgb: (byte(r), byte(g), byte(b)), alpha: alpha.unwrap_or(1.0) })
