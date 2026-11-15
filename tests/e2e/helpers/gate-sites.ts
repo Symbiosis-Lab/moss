@@ -76,6 +76,7 @@ About page.
     ".moss/config.toml": CONFIG_TOML,
     ".moss/theme/style.css": `:root {
   --moss-color-bg: #abcdef;
+  --moss-color-accent: #183058;
 }
 
 .main-nav a {

@@ -255,13 +255,13 @@
   color-scheme: dark;
 }
 
-/* Text selection - moss green tint */
+/* Text selection: a tint of the accent, stronger on a dark page. */
 ::selection {
-  background: rgba(45, 90, 45, 0.15);
+  background: color-mix(in srgb, var(--moss-color-accent) 15%, transparent);
 }
 
 [data-theme="dark"] ::selection {
-  background: rgba(106, 154, 90, 0.25);
+  background: color-mix(in srgb, var(--moss-color-accent) 25%, transparent);
 }
 
 /* Light text on a dark ground renders heavier under macOS subpixel
