@@ -22,7 +22,8 @@
  *
  * The sheet is non-modal: no scrim, and the page scrolls freely behind it —
  * that freedom is what lets the reader scroll to the end and watch the sheet
- * become the list again. Esc, tapping the article, or dragging down dismiss.
+ * become the list again. Esc, tapping the article, or dragging down dismiss;
+ * a note's return arrow scrolls the page to its marker and leaves the sheet up.
  *
  * Ships as its own bundle, gated on `SiteAssets::has_footnotes` — a site
  * with no footnotes serves none of this (`emit::scripts::SITE_SCRIPTS`).
@@ -534,17 +535,17 @@ export function initSidenotes(arrive = true): void {
         "a.moss-footnote-backref",
       );
       if (back && lifted) {
-        // A backref is a departure: the sheet sinks and the page travels
-        // home, washing the marker it returns to.
+        // The sheet stays up: the reader checks the passage against the note.
         e.preventDefault();
         const mark = document.getElementById(
           back.getAttribute("href")?.slice(1) ?? "",
         );
-        // Release instantly rather than animating the sink: shrinking the
-        // sheet shrinks the document while the page sits against its end,
-        // and each frame's scroll clamp would cancel the smooth travel home.
-        putBack();
+        // Closing later returns focus to the marker the reader went to.
+        cur = back.closest<HTMLElement>("li");
         if (mark) {
+          // Centre the marker in the page left showing above the sheet. The
+          // margin is set here because the sheet's height is this script's.
+          mark.style.scrollMarginBottom = `${hTarget}px`;
           mark.scrollIntoView({
             block: "center",
             behavior: reduced() ? "auto" : "smooth",
@@ -552,6 +553,7 @@ export function initSidenotes(arrive = true): void {
           // Focus once the travel rests — focusing mid-flight would let
           // WebKit's async focus scroll cancel the smooth travel.
           afterScroll(() => {
+            mark.style.scrollMarginBottom = "";
             wash(mark);
             mark.focus({ preventScroll: true });
           });

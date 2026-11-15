@@ -64,6 +64,7 @@ All notable changes to moss will be documented here.
 
 ### Changed
 
+- On a phone, the return arrow of a footnote in the open notes drawer scrolls the page to the place that cites it and leaves the drawer open, with that place in the part of the page above the drawer. It used to close the drawer. Dragging the drawer down or tapping the page still closes it.
 - In the editor, a picture inside a `:::` block and a hero's picture are drawn small below their line at all times, so the text no longer moves when the caret reaches a picture's line. The focus point is a dot on that picture, with an outline of what the page keeps; it replaces the second picture and the line of instruction that appeared under the line. Drag the dot, or press ⌥⏎ (Alt+Enter) on the line and move it with the arrow keys (Shift for steps of 10). A hero written with a bare path (`:::hero cover.jpg`) is drawn without a dot; write it as `image=` to set its focus point.
 - Resting the pointer on a picture drawn in the editor, or on its path, no longer opens a card repeating the picture. ⌘K on an embedded picture's line still opens the card with its fields.
 - In the editor, dragging the dot no longer repairs a picture line whose focus point was left in its address (`(photo.jpg|focus:20%,62%)`): that line names no file, so no picture is drawn for it. Move `|focus:20%,62%` from the address into the brackets by hand.
