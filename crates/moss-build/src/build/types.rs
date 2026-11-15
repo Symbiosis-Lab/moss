@@ -913,13 +913,11 @@ impl ParsedDocument {
     /// 1. Test paths that construct `ParsedDocument` by hand without
     ///    seeding the cache.
     /// 2. Production lookup paths where `sort_source_doc` resolves to a
-    ///    synthetic auto-index folder — those are constructed inline in
-    ///    `render/blocking.rs` (around line 1084) AFTER
-    ///    `populate_direct_children_sorts` has run, so their cache is
-    ///    intentionally `None`. The dedicated auto-index render loop
-    ///    (`render/blocking.rs:1331+`) calls `generate_children` with
-    ///    `parent_sort_axis: None` for the same reason, and this
-    ///    helper's Date fallback matches that convention.
+    ///    synthetic auto-index folder — those are constructed in
+    ///    `render/blocking.rs` AFTER `populate_direct_children_sorts` has
+    ///    run, so their cache is intentionally `None`. The generated-index
+    ///    loop passes `generate_children` no sort for the same reason, and
+    ///    this helper's Date fallback matches it.
     ///
     /// If a caller needs a different fallback (e.g. series-chrome
     /// historically wanted Title), it must set up the cache explicitly.

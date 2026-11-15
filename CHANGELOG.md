@@ -35,6 +35,8 @@ All notable changes to moss will be documented here.
 - A comment that a plugin fetches during a build now appears on the page in that same build. It used to appear one build later.
 - Setting the attachment folder to `assets` no longer stops a published site's `/assets/` addresses from answering: they keep forwarding to the home page, as they do without the setting.
 - A sign-in that shows its own page in moss, such as a server picker, no longer stops after a minute while the page is open: moss waits for the person until the page closes. When the sign-in ends, its page closes with it, so a click can no longer go to a sign-in that has already stopped.
+- A folder lists its children in the same order as cards (`children_style: grid`) and as a stream as it does in rows: subfolders first, then the pages. Cards and streams used to mix subfolders in among the pages by date. A subfolder that holds only subfolders, with no pages of its own to count, leads with the other subfolders too; it used to sink below them, out of its `weight:` place. A folder of pictures alone still lists as a page.
+- A folder whose home page types its order (`sort: [first, second]`) lists its children in that order in every style, subfolders included. Rows used to lift the subfolders above the pages and regroup the pages under year headings; `children_group: year` still asks for the headings, and puts the subfolders back above them.
 
 ### Removed
 

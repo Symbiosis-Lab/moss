@@ -6,7 +6,7 @@
 use moss_core::sort::{ResolvedSort, SortAxis};
 use moss_core::PageKind;
 
-use super::{effective_group_for_axis, resolve_children_config, select_children_by_slug, upcoming};
+use super::{effective_group, resolve_children_config, select_children_by_slug, upcoming};
 use crate::build::types::ParsedDocument;
 use crate::types::content::ProjectStructure;
 
@@ -63,7 +63,9 @@ pub(super) struct Ordered<'a> {
     pub style: moss_core::Resolved<String>,
     /// The group the listing draws, after the sort axis has had its say.
     pub group: String,
-    pub skip_resort: bool,
+    /// Upcoming events placed soonest first, which the renderer must not
+    /// date-sort back to newest first.
+    pub pre_ordered: bool,
     pub limited: Vec<&'a ParsedDocument>,
     pub truncated: bool,
 }
@@ -96,11 +98,9 @@ pub(super) fn order<'a>(
         resolved = ResolvedSort { axis, explicit_order: None, series_default: matches!(axis, SortAxis::Weight) };
     }
     let (style, group) = resolve_children_config(folder_docs, style_override, group_override, math);
-    // An explicit `order:`/`sort:` list is a manual sequence the author chose;
-    // it must survive even when the inferred axis is Date (which would otherwise
-    // re-sort the children date-descending and discard the order).
-    let skip_resort = !resolved.axis.shows_date() || resolved.explicit_order.is_some();
-    let group = effective_group_for_axis(&group, resolved.axis);
+    // A typed order is a sequence, not a chronology: year sections found by
+    // default would regroup it, so only ones the author asked for remain.
+    let group = effective_group(&group, &resolved);
     let sorted = moss_core::sort::sort_by_resolved(folder_docs, &resolved);
     // Upcoming events lead whatever the folder's sort is, so `limit` cuts
     // from that order (the same grouping `generate_children` applies later).
@@ -110,17 +110,15 @@ pub(super) fn order<'a>(
         && target_doc.is_none_or(|t| moss_core::sort::SortableDoc::declared_sort(t).is_none());
     let sorted = if group == "upcoming" || soonest_first {
         let upcoming_urls = upcoming::urls("upcoming", folder_docs, now);
-        upcoming::order_docs(sorted, &upcoming_urls, skip_resort && !soonest_first)
+        upcoming::order_docs(sorted, &upcoming_urls, !resolved.is_date_order() && !soonest_first)
     } else {
         sorted
     };
-    // Already ordered: the renderer must not date-sort it back to newest first.
-    let skip_resort = skip_resort || soonest_first;
     let (limited, truncated) = match limit {
         Some(n) if n > 0 && n < sorted.len() => (sorted.iter().take(n).copied().collect(), true),
         _ => (sorted, false),
     };
-    Ordered { resolved, style, group, skip_resort, limited, truncated }
+    Ordered { resolved, style, group, pre_ordered: soonest_first, limited, truncated }
 }
 
 /// Every page the host's listing could reach: the selector's pick for each

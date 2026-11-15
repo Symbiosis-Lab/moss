@@ -255,7 +255,7 @@ fn resolve_folder_id(path: &str, from: &str) -> String {
 /// over auto-detection; the returned `Resolved<String>` carries the
 /// origin so downstream renderers can branch on `is_explicit()`. The
 /// axis-driven group override (auto-detected `year` suppressed under a
-/// non-Date axis) lives in `effective_group_for_axis` below.
+/// non-Date axis) lives in `effective_group` below.
 pub(crate) fn resolve_children_config(
     docs: &[&ParsedDocument],
     style_override: Option<&moss_core::Resolved<String>>,
@@ -292,7 +292,7 @@ pub(crate) fn resolve_children_config(
             // (matching the schema default "year (default for list)" and the
             // contract). A single dated post gets a year heading too; a
             // dateless listing stays flat. Auto-detected `year` is still
-            // suppressed under a non-Date sort axis in `effective_group_for_axis`.
+            // suppressed under a non-Date sort axis in `effective_group`.
             let auto_value = if !matches!(style.value.as_str(), "summary" | "lead" | "stream") && docs.iter().any(|d| d.date.is_some() || d.event.is_some()) {
                 "year".to_string()
             } else {
@@ -304,20 +304,11 @@ pub(crate) fn resolve_children_config(
     (style, group)
 }
 
-/// Decide the effective `children_group` for rendering, honoring author
-/// intent across non-Date sort axes. Explicit (frontmatter or cascade)
-/// values always survive; auto-detected values are overridden to "none"
-/// when the axis isn't Date (alphabetical/weight sorting doesn't pair
-/// well with auto-year-grouping).
-///
-/// Consumes the `Resolved<String>` directly so callers don't need to
-/// destructure-then-recheck (`value.clone()` + separate `is_explicit()`).
-pub(crate) fn effective_group_for_axis(
-    group_resolved: &moss_core::Resolved<String>,
-    axis: moss_core::sort::SortAxis,
-) -> String {
-    let axis_suppresses_auto_year = !axis.shows_date();
-    if axis_suppresses_auto_year && !group_resolved.is_explicit() {
+/// The `children_group` a listing draws: an explicit one always, a detected
+/// one only on a date order (a title, weight or typed order is a sequence,
+/// which year sections would regroup).
+pub(crate) fn effective_group(group_resolved: &moss_core::Resolved<String>, sort: &ResolvedSort) -> String {
+    if !sort.is_date_order() && !group_resolved.is_explicit() {
         "none".to_string()
     } else {
         group_resolved.value.clone()
@@ -378,11 +369,11 @@ pub(crate) fn folder_latest_date<D: std::borrow::Borrow<ParsedDocument>>(
 /// * `style` - "list", "summary", "lead" (summary whose first item leads), "grid" (collection cards), or "stream" (each page drawn whole)
 /// * `group` - "year" or "none"
 /// * `lang` - Language for UI strings
-/// * `skip_resort` - If true, skip the internal date-desc resort and render docs
-///   in the order they arrive. Set true by callers for non-Date axes (Title /
-///   Weight / explicit order) — the caller has already sorted via
-///   `sort_by_resolved`, and the date resort would scramble that order.
+/// * `pre_ordered` - The docs arrive in an order a date sort must not undo
+///   (upcoming events soonest first). A `sort` that is not by date keeps the
+///   arrival order on its own.
 /// * `typesetting` - Typesetting mode ("vertical" or "horizontal"); used for CJK numeral formatting
+/// * `sort` - The folder's resolved sort: its axis fills the card's meta slot, and a typed list is drawn as typed. `None` lists by date.
 /// * `rows` - what the listing says about how its rows are drawn ([`ListingRowOptions`]).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn generate_children(
@@ -392,11 +383,11 @@ pub(crate) fn generate_children(
     style: &str,
     group: &str,
     lang: Language,
-    skip_resort: bool,
+    pre_ordered: bool,
     dir_overrides: &std::collections::HashMap<String, String>,
     typesetting: Option<&str>,
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
-    parent_sort_axis: Option<moss_core::sort::SortAxis>,
+    sort: Option<&ResolvedSort>,
     math: bool,
     rows: &ListingRowOptions<'_>,
     now: chrono::NaiveDateTime,
@@ -471,12 +462,13 @@ pub(crate) fn generate_children(
         }
     };
 
-    // Parent's resolved sort axis drives the card's meta slot
-    // (see child_summary::render_with_sort). Date is the historical
-    // fallback when the caller hasn't populated `direct_children_sort` —
-    // matches the same fallback used in render/html.rs callsites and
-    // preserves legacy test behavior.
-    let parent_axis = parent_sort_axis.unwrap_or(moss_core::sort::SortAxis::Date);
+    // The folder's sort drives the card's meta slot
+    // (see child_summary::render_with_sort); a generated index has none and
+    // lists by date.
+    let parent_axis = sort.map_or(SortAxis::Date, ResolvedSort::presentation_axis);
+    let typed = sort.is_some_and(|s| s.explicit_order.is_some());
+    let ascending = matches!(parent_axis, SortAxis::DateAsc);
+    let skip_resort = pre_ordered || !sort.is_none_or(ResolvedSort::is_date_order);
 
     // Unless the caller already ordered them (a non-Date axis or an explicit
     // order), every style lists by date through the same comparator as the
@@ -485,7 +477,6 @@ pub(crate) fn generate_children(
     // date in the filename, or the file's creation time.
     let mut sorted: Vec<&ChildItemProps> = items.iter().collect();
     if !skip_resort {
-        let ascending = matches!(parent_axis, moss_core::sort::SortAxis::DateAsc);
         // Dated pages first, undated after (`cmp_date_axis`). Subfolders lead
         // the page regardless: they are partitioned out below.
         sorted.sort_by(|a, b| moss_core::sort::cmp_date_axis(&a.date_sort_key(), &b.date_sort_key(), ascending));
@@ -496,17 +487,24 @@ pub(crate) fn generate_children(
         sorted = upcoming::order(sorted, &upcoming, skip_resort);
     }
 
-    if style == "stream" {
-        return stream::render(&sorted, folder_docs, typesetting, rows, true);
-    }
+    // Folders lead the pages in every style, so rows and cards list alike; a
+    // typed order is drawn as typed unless the author asked for year
+    // sections. A dated folder on a date order without year sections takes
+    // its place by date, since year buckets hold only leaves.
+    let folders_lead = !typed || group == "year";
+    let interleave_dated_folders = group != "year" && parent_axis.shows_date();
+    let (folders, articles): (Vec<&ChildItemProps>, Vec<&ChildItemProps>) = sorted
+        .into_iter()
+        .partition(|i| folders_lead && i.subfolder && !(interleave_dated_folders && i.date_display.is_some()));
 
-    // Grid style: render as collection cards.
-    // Bypasses folder/article separation and year grouping — card grids are flat.
-    if style == "grid" {
-        use crate::build::components::grid_card::render_list_with_typesetting;
-
-        return render_list_with_typesetting(
-            &sorted,
+    // Stream and grid draw one flat run, with no divider or year sections.
+    if style == "stream" || style == "grid" {
+        let flat: Vec<&ChildItemProps> = folders.iter().chain(&articles).copied().collect();
+        if style == "stream" {
+            return stream::render(&flat, folder_docs, typesetting, rows, true);
+        }
+        return crate::build::components::grid_card::render_list_with_typesetting(
+            &flat,
             Some(std::path::Path::new(&project.root_path)),
             lang,
             typesetting,
@@ -518,38 +516,18 @@ pub(crate) fn generate_children(
         );
     }
 
-    // Render
     let mut html = String::new();
-
-    // Partition once: folders render above articles. That is a layout
-    // decision independent of which axis sorted the children, with one
-    // exception — a folder whose own home page has a date, on a date-sorted
-    // (either direction), non-year-grouped listing, sorts by that date like
-    // any page instead of being hoisted above one that came before it; a
-    // chronology (a sequence of lectures, say) would otherwise read out of
-    // order the moment one of its entries was a folder. Year-grouped
-    // listings keep every folder above the year sections regardless — a
-    // dated folder landing inside a year bucket is a shape this fix doesn't
-    // reach, since bucketing assumes a leaf (`ArticleListItemProps` has no
-    // count slot to carry it with).
-    //
-    // Previously this filter was written out three times, once per branch,
-    // and skipped entirely for a plain skip_resort (Weight/Title/explicit
-    // order) listing — so a manually-ordered folder lost its folder/article
-    // split, which is what a `children_style: summary` folder of writings,
-    // ordered by `weight:` and holding a subfolder or two, hit.
-    let interleave_dated_folders = group != "year" && parent_axis.shows_date();
-    let (folders, articles): (Vec<&ChildItemProps>, Vec<&ChildItemProps>) = sorted
-        .into_iter()
-        .partition(|i| i.is_folder() && !(interleave_dated_folders && i.date_display.is_some()));
+    let row = |item: &ChildItemProps| {
+        if style == "summary" {
+            components::child_summary::render_with_sort(item, lang, typesetting, Some(media_lookup_ref), parent_axis)
+        } else {
+            components::child_list::render_child(item, lang, typesetting)
+        }
+    };
 
     // Folders always render flat, regardless of group setting.
     for folder in &folders {
-        if style == "summary" {
-            html.push_str(&components::child_summary::render_with_sort(folder, lang, typesetting, Some(media_lookup_ref), parent_axis));
-        } else {
-            html.push_str(&components::child_list::render_child(folder, lang, typesetting));
-        }
+        html.push_str(&row(folder));
         html.push('\n');
     }
 
@@ -561,13 +539,7 @@ pub(crate) fn generate_children(
     // Articles: year-grouped if group == "year", otherwise flat in
     // partition order (already caller order or date-desc, set above).
     if group == "upcoming" {
-        html.push_str(&upcoming::sections(&articles, &upcoming, |article| {
-            if style == "summary" {
-                components::child_summary::render_with_sort(article, lang, typesetting, Some(media_lookup_ref), parent_axis)
-            } else {
-                components::child_list::render_child(article, lang, typesetting)
-            }
-        }));
+        html.push_str(&upcoming::sections(&articles, &upcoming, |article| row(article)));
     } else if group == "year" && !articles.is_empty() {
         if style == "summary" {
             // Summary style: group articles by year, render summary cards
@@ -584,7 +556,7 @@ pub(crate) fn generate_children(
                         .unwrap_or_default();
                     let items_html = arts
                         .iter()
-                        .map(|a| components::child_summary::render_with_sort(a, lang, typesetting, Some(media_lookup_ref), parent_axis))
+                        .map(|a| row(a))
                         .collect::<Vec<_>>()
                         .join("\n");
                     format!(
@@ -616,32 +588,13 @@ pub(crate) fn generate_children(
             // one pass.
             let article_props: Vec<ArticleListItemProps> = articles
                 .iter()
-                .map(|item| ArticleListItemProps {
-                    date_display: item.date_display.clone().unwrap_or_default(),
-                    date_raw: item.date_raw.clone(),
-                    url: item.url.clone(),
-                    title: item.title.clone(),
-                    url_path: item.url_path.clone(),
-                    weight: item.weight,
-                    place: item.place.clone(),
-                    when_html: item.when_html.clone(),
-                    when: item.when,
-                    credits: item.credits.clone(),
-                    subtitle: item.subtitle.clone(),
-                    source_file: item.source_file.clone(),
-                    lang: item.lang.clone(),
-                })
+                .map(|item| ArticleListItemProps::from(*item))
                 .collect();
-            let ascending = matches!(parent_axis, moss_core::sort::SortAxis::DateAsc);
             html.push_str(&components::render_year_grouped_list(&article_props, true, lang, typesetting, ascending));
         }
     } else {
         for article in &articles {
-            if style == "summary" {
-                html.push_str(&components::child_summary::render_with_sort(article, lang, typesetting, Some(media_lookup_ref), parent_axis));
-            } else {
-                html.push_str(&components::child_list::render_child(article, lang, typesetting));
-            }
+            html.push_str(&row(article));
             html.push('\n');
         }
     }
@@ -741,21 +694,7 @@ fn render_minimal_year_section(
     let items_html = arts
         .iter()
         .map(|a| {
-            let props = ArticleListItemProps {
-                date_display: a.date_display.clone().unwrap_or_default(),
-                date_raw: a.date_raw.clone(),
-                url: a.url.clone(),
-                title: a.title.clone(),
-                url_path: a.url_path.clone(),
-                weight: a.weight,
-                place: a.place.clone(),
-                when_html: a.when_html.clone(),
-                when: a.when,
-                credits: a.credits.clone(),
-                subtitle: a.subtitle.clone(),
-                source_file: a.source_file.clone(),
-                lang: a.lang.clone(),
-            };
+            let props = ArticleListItemProps::from(*a);
             components::child_list::render(&props, true, false, lang, typesetting)
         })
         .collect::<Vec<_>>()
@@ -1655,7 +1594,7 @@ fn render_one(
         }
     }
 
-    let members::Ordered { resolved, style: style_resolved, group: effective_group, skip_resort, limited, truncated } =
+    let members::Ordered { resolved, style: style_resolved, group: effective_group, pre_ordered, limited, truncated } =
         order_listed(parsed, &folder_docs, target_doc, is_flatten, math, now);
     host.urls.borrow_mut().extend(limited.iter().map(|d| d.url_path.clone()));
     if style_resolved.value == "stream" {
@@ -1696,11 +1635,11 @@ fn render_one(
             &children_style,
             &effective_group,
             site_lang,
-            skip_resort,
+            pre_ordered,
             dir_overrides,
             typesetting,
             media_lookup,
-            Some(resolved.presentation_axis()),
+            Some(&resolved),
             math,
             &rows,
             now,

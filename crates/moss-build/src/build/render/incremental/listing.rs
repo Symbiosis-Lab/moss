@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::build::facade::debug_hash;
 use crate::build::folder_embed::{
-    effective_group_for_axis, resolve_children_config, select_children_by_slug,
+    effective_group, resolve_children_config, select_children_by_slug,
 };
 use crate::build::types::ParsedDocument;
 use crate::types::content::{MediaMetadata, ProjectStructure};
@@ -202,11 +202,11 @@ fn digest_of(
     let (style, group) = resolve_children_config(members, None, None, math);
     // A default folder declares no `sort:`, so `resolve_folder_sort` reduces
     // to `infer_axis` over the members — exactly the child-derived half.
-    let axis = moss_core::sort::resolve_folder_sort(&ParsedDocument::default(), members).axis;
+    let sort = moss_core::sort::resolve_folder_sort(&ParsedDocument::default(), members);
     let plan = (
-        axis,
+        sort.axis,
         style.value.clone(),
-        effective_group_for_axis(&group, axis),
+        effective_group(&group, &sort),
     );
 
     GroupDigest {
@@ -243,6 +243,9 @@ struct ChildProjection<'a> {
     /// folder even though the folder's own document did not change. This is
     /// what makes the root home re-render when `writings/` gains a post.
     child_count: Option<usize>,
+    /// Whether the card leads the pages: a listable subfolder drafted or added
+    /// two levels down reorders its parent's hosts.
+    leads: bool,
     folder_latest_date: Option<String>,
     /// `extract_date_from_doc` reaches past frontmatter into filename and
     /// filesystem fallbacks, so `date_raw` can be `Some` where `doc.date` is
@@ -280,19 +283,9 @@ fn project_child(
     // No card renders a page's uid.
     stripped.uid = None;
 
-    // Mirrors `child_list::props_for_document`: the card's count is always
-    // recursive (subfolders included), independent of `children_depth`, so
-    // the digest must move on the same trigger the card does — a page added
-    // two levels down still has to re-render every host of this card.
-    let article_count = (doc.kind == PageKind::Folder)
-        .then(|| {
-            crate::build::page::page::count_listable_articles(
-                all_refs,
-                doc.url_path.trim_end_matches("index.html"),
-                &doc.url_path,
-            )
-        })
-        .filter(|n| *n > 0);
+    // The card's own facts, so the digest moves when the card does: a page
+    // added two levels down re-renders every host of this card.
+    let (article_count, leads) = crate::build::page::page::folder_card_facts(doc, all_refs);
     let folder_latest_date = article_count
         .and_then(|_| crate::build::folder_embed::folder_latest_date(doc, all_refs, &project.root_path));
     let (date_display, date_raw, date_explicit) =
@@ -306,6 +299,7 @@ fn project_child(
             math,
         ),
         child_count: article_count,
+        leads,
         folder_latest_date,
         date_display,
         date_raw,

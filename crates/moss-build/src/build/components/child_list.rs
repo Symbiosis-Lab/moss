@@ -10,7 +10,6 @@
 //! - `minimal=false`: Shows "year · month" (e.g., "2025 · 11")
 //! - `minimal=true`: Shows month only (e.g., "11") since year is in section header
 
-use moss_core::PageKind;
 
 use super::date as date_formatters;
 use crate::build::assets::paths::PathResolver;
@@ -95,6 +94,26 @@ pub struct ArticleListItemProps {
     pub source_file: Option<String>,
     /// Set when the page is in another language than the listing.
     pub lang: Option<RowLang>,
+}
+
+impl From<&ChildItemProps> for ArticleListItemProps {
+    fn from(item: &ChildItemProps) -> Self {
+        ArticleListItemProps {
+            date_display: item.date_display.clone().unwrap_or_default(),
+            date_raw: item.date_raw.clone(),
+            url: item.url.clone(),
+            title: item.title.clone(),
+            url_path: item.url_path.clone(),
+            weight: item.weight,
+            place: item.place.clone(),
+            when_html: item.when_html.clone(),
+            when: item.when,
+            credits: item.credits.clone(),
+            subtitle: item.subtitle.clone(),
+            source_file: item.source_file.clone(),
+            lang: item.lang.clone(),
+        }
+    }
 }
 
 impl ArticleListItemProps {
@@ -264,9 +283,9 @@ pub struct ChildItemProps {
     pub date_raw: Option<String>,
     /// Number of articles inside. None for leaf articles
     pub child_count: Option<usize>,
-    /// The count belongs to a term's card, not to a folder: the entry sorts
-    /// and groups as a page ([`Self::is_folder`]).
-    pub count_only: bool,
+    /// A folder with pages to count or folders inside: it leads the pages
+    /// and sorts as a folder. A term's card shows a count and is not one.
+    pub subfolder: bool,
     /// From frontmatter description or auto-extracted. Markdown, not plain
     /// text — a renderer prints it with `page::meta::render_description_html`,
     /// never a bare escape, the way `child_summary`/`grid_card`/this file's
@@ -342,10 +361,6 @@ pub struct ChildItemProps {
 }
 
 impl ChildItemProps {
-    pub(crate) fn is_folder(&self) -> bool {
-        self.child_count.is_some() && !self.count_only
-    }
-
     /// A folder or a term's card: it stands for the pages it holds.
     pub(crate) fn is_collection(&self) -> bool {
         self.child_count.is_some()
@@ -374,7 +389,7 @@ impl ChildItemProps {
     pub(crate) fn date_sort_key(&self) -> moss_core::sort::DateSortKey<'_> {
         moss_core::sort::DateSortKey {
             date: self.date_raw.as_deref(),
-            is_folder: self.is_folder(),
+            is_folder: self.subfolder,
             label: &self.title,
             url_path: &self.url_path,
             weight: self.weight,
@@ -513,15 +528,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
     // `direct` folder can legitimately show fewer items than its card claims;
     // the claim is "this many pages live here", not "this many rows below".
     // No articles → no claim (a date, like grid cards), not "0 articles".
-    let article_count = (doc.kind == PageKind::Folder)
-        .then(|| {
-            crate::build::page::page::count_listable_articles(
-                all_docs,
-                doc.url_path.trim_end_matches("index.html"),
-                &doc.url_path,
-            )
-        })
-        .filter(|n| *n > 0);
+    let (article_count, leads) = crate::build::page::page::folder_card_facts(doc, all_docs);
     // A term's card shows a count without being a folder: it keeps the date
     // and the place in the order of a page.
     let term_count = doc.term_card.as_ref().map(|card| card.count);
@@ -589,9 +596,9 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
     let permalink = external_url.as_ref().and(local_url.clone());
 
     let when = doc.event.as_ref().map(|e| crate::build::folder_embed::upcoming::when_of(e, now));
-    let count_only = child_count.is_none() && term_count.is_some();
+    let term_count_shown = child_count.is_none() && term_count.is_some();
     // A listing's `children_count` applies to a card only where the card has no wording of its own.
-    let count_setting = doc.term_card.as_ref().filter(|_| count_only).and_then(|card| card.count_setting.clone());
+    let count_setting = doc.term_card.as_ref().filter(|_| term_count_shown).and_then(|card| card.count_setting.clone());
 
     ChildItemProps {
         // Child list cards/rows are chrome; use the plain-text label.
@@ -600,7 +607,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         date_display,
         date_raw,
         child_count: child_count.or(term_count),
-        count_only,
+        subfolder: leads,
         description: explicit_card_text(doc),
         pictures: pictures.zip(cover.as_deref()).map_or_else(Vec::new, |(n, cover)| strip_pictures(doc, cover, n, &path_resolver)),
         marquee: false,

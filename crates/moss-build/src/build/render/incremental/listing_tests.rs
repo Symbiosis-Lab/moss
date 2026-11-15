@@ -224,6 +224,25 @@ fn a_first_paragraph_edit_moves_the_contents_digest_and_a_later_one_does_not() {
 }
 
 #[test]
+fn unlisting_the_only_folder_inside_a_card_moves_the_contents_digest() {
+    let docs = vec![
+        folder("index.html"),
+        folder("writings/index.html"),
+        article("writings/alpha/index.html", "Alpha."),
+        folder("writings/deep/index.html"),
+        folder("writings/deep/inner/index.html"),
+    ];
+    let before = digest(&docs, &key("writings"));
+    let mut unlisted = docs.clone();
+    unlisted[4].listed = Some(false);
+    assert_ne!(
+        digest(&unlisted, &key("writings")).contents,
+        before.contents,
+        "the deep card stops leading the pages, so the listing reorders"
+    );
+}
+
+#[test]
 fn a_child_with_a_frontmatter_description_prunes_on_every_body_edit() {
     let mut described = vault();
     described[ALPHA].description = Some("Fixed blurb.".into());

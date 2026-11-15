@@ -467,11 +467,11 @@ fn test_generate_children_pre_sorted_card_style() {
         "summary",
         "none",
         Language::En,
-        true,
+        false,
         &std::collections::HashMap::new(),
         None,
         None,
-        None,
+        Some(&weight_sort()),
         true, &Default::default(), crate::build::inputs::now()
     );
 
@@ -498,16 +498,20 @@ fn test_generate_children_pre_sorted_card_style() {
     );
 }
 
+fn weight_sort() -> moss_core::sort::ResolvedSort {
+    moss_core::sort::ResolvedSort { axis: moss_core::sort::SortAxis::Weight, explicit_order: None, series_default: true }
+}
+
 #[test]
-fn test_generate_children_pre_sorted_preserves_order() {
-    // Verify pre_sorted=true does NOT re-sort by date
+fn test_generate_children_keeps_a_weight_order() {
+    // A weight order is a sequence: it is not re-sorted by date
     let mut newer = make_test_doc("Newer Post", "blog/newer/index.html");
     newer.date = Some("2025-12-01".to_string());
 
     let mut older = make_test_doc("Older Post", "blog/older/index.html");
     older.date = Some("2025-01-01".to_string());
 
-    // Pass older first — with pre_sorted=true, older should stay first
+    // Pass older first — under a weight order, older stays first
     let docs = vec![&older, &newer];
     let project = make_project();
 
@@ -518,11 +522,11 @@ fn test_generate_children_pre_sorted_preserves_order() {
         "list",
         "none",
         Language::En,
-        true,
+        false,
         &std::collections::HashMap::new(),
         None,
         None,
-        None,
+        Some(&weight_sort()),
         true, &Default::default(), crate::build::inputs::now()
     );
 

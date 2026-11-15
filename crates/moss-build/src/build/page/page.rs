@@ -53,6 +53,23 @@ pub(crate) fn count_listable_articles<D: std::borrow::Borrow<ParsedDocument>>(
         .count()
 }
 
+/// A folder card's two facts from the corpus: the listable pages it counts,
+/// and whether it leads the pages. It leads with pages to count, or, unless it
+/// is a term's card, with a listable folder inside; a folder of pictures does not.
+pub(crate) fn folder_card_facts<D: std::borrow::Borrow<ParsedDocument>>(doc: &ParsedDocument, docs: &[D]) -> (Option<usize>, bool) {
+    if doc.kind != moss_core::PageKind::Folder {
+        return (None, false);
+    }
+    let prefix = doc.url_path.trim_end_matches("index.html");
+    let count = Some(count_listable_articles(docs, prefix, &doc.url_path)).filter(|n| *n > 0);
+    let leads = count.is_some()
+        || (doc.term_card.is_none()
+            && docs.iter().map(|d| d.borrow()).any(|d| {
+                d.url_path != doc.url_path && d.url_path.starts_with(prefix) && d.kind == moss_core::PageKind::Folder && d.is_listable_in(prefix)
+            }));
+    (count, leads)
+}
+
 /// Generates a year-grouped article list for auto-index pages.
 /// Uses the components module for consistent HTML generation.
 ///

@@ -64,6 +64,11 @@ impl ResolvedSort {
             self.axis
         }
     }
+
+    /// A chronology, not a sequence: a title, weight or typed order is not one.
+    pub fn is_date_order(&self) -> bool {
+        self.presentation_axis().shows_date()
+    }
 }
 
 /// Minimal document trait for sort inference. Both moss-build's

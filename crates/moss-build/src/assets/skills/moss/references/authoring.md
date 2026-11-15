@@ -1180,6 +1180,8 @@ Under `typesetting = "vertical"` the column is a page, not a scroll: its height 
 sort: [intro, setup, advanced]
 ```
 
+The order is the same whichever `children_style` draws it, so changing rows to cards moves nothing. Subfolders lead the pages, including one that holds only subfolders (a folder of pictures alone lists as a page); on a date order without year sections, a subfolder whose own page has a date takes its place by that date instead. A typed list is drawn as typed, subfolders where you put them, and draws no year sections unless the folder asks for them with `children_group: year`, which keeps its subfolders above the sections.
+
 A page's own `weight:` is an integer that `sort: weight` orders by — lower first, and pages with no weight follow after the weighted ones, tied among themselves by stem. Under `sort: date` or `date-asc`, `weight:` also settles pages with the same date, lower first and weighted before unweighted, so two articles of one year stay in the order you number them; pages without one keep the order of their addresses. A feed keeps pure date order.
 
 ### One-page sites: no header

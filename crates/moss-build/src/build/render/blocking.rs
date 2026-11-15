@@ -2267,9 +2267,7 @@ pub fn generate_blocking_content_for_build(
                 &dir_overrides,
                 layout_config.typesetting.as_deref(),
                 Some(&event_level_image_lookup),
-                // Synthetic folder index — no `ParsedDocument` with a
-                // direct_children_sort exists. Date fallback (None → Date) matches
-                // the legacy meta-slot behavior.
+                // A generated index has no sort: it lists by date and is never typed.
                 None,
                 site_config.math,
                 &crate::build::folder_embed::ListingRowOptions { listing_tag: Some(folder_doc.lang_tag.as_deref().unwrap_or_else(|| folder_lang.as_bcp47_attr())), host_url_path: &folder_doc.url_path, ..Default::default() },
