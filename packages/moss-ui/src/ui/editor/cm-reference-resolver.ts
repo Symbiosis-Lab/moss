@@ -129,6 +129,10 @@ export function createReferenceResolver(opts: ReferenceResolverOptions): Referen
   // a batch is already in flight, so an invalidation is never dropped.
   let revalidateAll = false;
   let revalidatePending = false;
+  // Sources whose cache-bust token waits for the revalidation's swap. Bumped
+  // earlier, a widget rebuilt in between pairs the new token with the old
+  // envelope and fetches a path the file may just have left.
+  const pendingBusts = new Set<string>();
 
   const plugin = ViewPlugin.fromClass(
     class {
@@ -183,9 +187,9 @@ export function createReferenceResolver(opts: ReferenceResolverOptions): Referen
           this.unlistenSourceAssetChanged = opts.fileEvents.onSourceAssetChanged((e) => {
             const path = e.path;
             if (!path) return;
-            // Bump cache-bust so `?_t=<token>` changes → the changed image's URL
-            // differs → ImageBlockWidget.eq() sees a new widget → fresh <img>.
-            bumpAssetBust(path);
+            // The bumped `?_t=` gives the changed image a new URL, so a fresh
+            // <img>; it is applied with the re-resolved envelopes.
+            pendingBusts.add(path);
             // Revalidate-all + synchronous swap (not clear-then-async-refill): a
             // deleted/renamed source re-resolves to not-found and the modified
             // image re-renders with the bumped `?_t=`, while unchanged images keep
@@ -208,13 +212,11 @@ export function createReferenceResolver(opts: ReferenceResolverOptions): Referen
             this.scheduleBatch(view);
           });
           p2.then((u) => { this.unlistenSitePromoted = u; });
-          // SourceAssetChanged: bump bust + clear cache + RE-RESOLVE (see the
-          // coordinator path above — scheduleBatch, not a bare dispatch, so the
-          // image repaints with the bumped `?_t=` instead of detaching).
+          // SourceAssetChanged: as on the coordinator path above.
           const p3 = subscribe('SourceAssetChanged', (msg: { payload?: { path?: string } }) => {
             const path = msg.payload?.path;
             if (!path) return;
-            bumpAssetBust(path);
+            pendingBusts.add(path);
             revalidateAll = true;
             this.scheduleBatch(view);
           });
@@ -276,6 +278,8 @@ export function createReferenceResolver(opts: ReferenceResolverOptions): Referen
         const targets = extractReferenceTargets(view.state);
         const doRevalidate = revalidateAll;
         revalidateAll = false;
+        const busts = doRevalidate ? [...pendingBusts] : [];
+        if (doRevalidate) pendingBusts.clear();
         // A normal typing re-batch resolves only UNCACHED pairs (fast). A
         // revalidation resolves ALL current pairs so a changed/deleted source
         // re-resolves correctly. The same pair can recur — dedup by key.
@@ -307,6 +311,7 @@ export function createReferenceResolver(opts: ReferenceResolverOptions): Referen
             });
             internalCache.clear();
             for (const [k, v] of next) internalCache.set(k, v);
+            for (const path of busts.splice(0)) bumpAssetBust(path);
           } else {
             list.forEach((t, i) => {
               const envelope = results[i];
@@ -316,6 +321,8 @@ export function createReferenceResolver(opts: ReferenceResolverOptions): Referen
           view.dispatch({ effects: refsResolvedEffect.of() });
         } finally {
           inFlight = false;
+          // A batch that failed before its swap leaves its tokens to the next one.
+          for (const path of busts) pendingBusts.add(path);
           if (revalidatePending) {
             revalidatePending = false;
             revalidateAll = true;
