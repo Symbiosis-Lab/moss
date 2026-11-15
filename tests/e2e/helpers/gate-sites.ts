@@ -1116,6 +1116,21 @@ ${HERO_LINK_WORDS}
 
 Body text.
 `,
+    // A picture alone in its paragraph of the words (a title set as a logo)
+    // on a hero that keeps its words over the picture on a phone.
+    "logo.md": `---
+title: Hero logo
+uid: "hlg00102"
+---
+
+:::hero {image=cover.svg mobile=overlay}
+![Example logo|](mark.svg)
+
+## Example words
+:::
+
+Body text.
+`,
     "footer.md": `:::hero {image=cover.svg align=top}
 ${HERO_LINK_WORDS}
 

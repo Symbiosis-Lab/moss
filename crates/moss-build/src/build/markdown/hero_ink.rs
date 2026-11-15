@@ -711,9 +711,8 @@ impl Backing {
 
 /// One picture's measurement: its grid and its height over its width.
 fn measure(lookup: &crate::build::media::dimensions::MediaDimensionLookup, href: &str) -> Option<(std::sync::Arc<Ground>, f32)> {
-    let key = href.strip_prefix('/').unwrap_or(href);
-    let (w, h) = lookup.get(key);
-    Some((lookup.ground(key)?, h as f32 / w.max(1) as f32))
+    let (w, h) = lookup.get(href);
+    Some((lookup.ground(href)?, h as f32 / w.max(1) as f32))
 }
 
 /// What a hero asks of the measurement besides its pictures.
@@ -1379,6 +1378,18 @@ mod tests {
         let overrides = std::collections::HashMap::from([("評選".to_string(), "awards".to_string())]);
         let lookup = MediaDimensionLookup::new(&[meta], &[], &overrides, None).with_grounds(vec![("評選/art.png".to_string(), Ground::from_image(&img))]);
         let attrs = ink_attributes(Some(&lookup), "/awards/art.png", None, plain(Some("top"), Backing::Auto, false));
+        assert!(attrs.contains("data-words="), "{attrs}");
+    }
+
+    #[test]
+    fn a_picture_in_a_non_ascii_folder_is_found_under_its_encoded_url() {
+        let meta = MediaMetadata {
+            path: "評選/art.png".into(),
+            dimensions: Some((160, 70)),
+            ..Default::default()
+        };
+        let lookup = MediaDimensionLookup::new(&[meta], &[], &Default::default(), None).with_grounds(vec![("評選/art.png".to_string(), Ground::from_image(&banded(SKY, GROUND, 0.7)))]);
+        let attrs = ink_attributes(Some(&lookup), "/%E8%A9%95%E9%81%B8/art.png", None, plain(None, Backing::Never, false));
         assert!(attrs.contains("data-words="), "{attrs}");
     }
 

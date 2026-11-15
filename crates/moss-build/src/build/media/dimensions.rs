@@ -159,8 +159,7 @@ impl MediaDimensionLookup {
         // Index every entry a SECOND time under its slugified OUTPUT-URL key.
         //
         // These maps are keyed by raw source path, but `get_cover_color*`
-        // probes with `cover_key(cover_url)` — a resolved output URL. On a site
-        // whose folders carry `slug:` overrides the two never coincide
+        // probes with a resolved output URL. On a site whose folders carry `slug:` overrides the two never coincide
         // (`評選/繪本組/第一屆/…/assets/editor-memo-cover.jpg` against
         // `awards/comics/s1/kayla/assets/editor-memo-cover.jpg`), so the exact
         // and normalized lookups missed on EVERY cover and the whole site fell
@@ -269,8 +268,7 @@ impl MediaDimensionLookup {
     /// Returns `None` when the URL is not in the cache or the color cannot
     /// be parsed.
     pub fn get_cover_color(&self, cover_url: &str) -> Option<String> {
-        let key = cover_key(cover_url);
-        let raw = self.get_dominant_color(&key)?;
+        let raw = self.get_dominant_color(cover_url)?;
         crate::build::components::color_extract::prepare_cover_color(&raw)
     }
 
@@ -279,8 +277,7 @@ impl MediaDimensionLookup {
     /// Same lookup as `get_cover_color` but calls `prepare_cover_color_muted`
     /// (saturation × 0.8) for a softer atmospheric quality over full-width areas.
     pub fn get_cover_color_muted(&self, cover_url: &str) -> Option<String> {
-        let key = cover_key(cover_url);
-        let raw = self.get_dominant_color(&key)?;
+        let raw = self.get_dominant_color(cover_url)?;
         crate::build::components::color_extract::prepare_cover_color_muted(&raw)
     }
 
@@ -300,7 +297,7 @@ impl MediaDimensionLookup {
             return dims;
         }
 
-        // Try normalized path (strip leading ./ or ../)
+        // Try normalized path (strip a leading /, ./ or ../)
         let normalized = normalize_path(path);
         if let Some(&dims) = self.maps.dimensions.get(&normalized) {
             return dims;
@@ -341,20 +338,6 @@ pub fn snapshot_or_empty(
         None => EMPTY.get_or_init(moss_core::asset_snapshot::AssetSnapshot::new),
     }
 }
-
-/// Turn a resolved cover **URL** back into the root-relative **path** the
-/// dominant-color cache is keyed by.
-///
-/// `PathResolver::resolve_url` percent-encodes every segment, so a cover named
-/// `封面.jpg` arrives as `/%E5%B0%81%E9%9D%A2.jpg` while the cache key is the
-/// literal on-disk name. Without the decode the lookup misses and the card
-/// silently loses its dominant color. Decoding is a no-op on a key that carries
-/// no `%`, so this is safe for every caller.
-fn cover_key(cover_url: &str) -> String {
-    let decoded = moss_core::resolve::fuzzy_path::percent_decode_path(cover_url);
-    decoded.strip_prefix('/').unwrap_or(&decoded).to_string()
-}
-
 
 /// A suffix match that lands on a path separator and is unique across the map.
 ///
@@ -416,6 +399,13 @@ fn unique_suffix_match<'a, V>(
 /// iteration order. Ambiguity (two extensions of one stem in one directory)
 /// yields `None`: no value is honest, a neighbour's value is not.
 fn resolve_entry<'a, V>(map: &'a HashMap<String, V>, path: &str) -> Option<&'a V> {
+    // A resolved href is percent-encoded (`%E8%A9%95%E9%81%B8/art.png`) and the
+    // map keys are file paths, so a miss is retried once, decoded.
+    entry_as_written(map, path)
+        .or_else(|| entry_as_written(map, &moss_core::resolve::fuzzy_path::percent_decoded_fallback(path)?))
+}
+
+fn entry_as_written<'a, V>(map: &'a HashMap<String, V>, path: &str) -> Option<&'a V> {
     if let Some(v) = map.get(path) {
         return Some(v);
     }
@@ -442,9 +432,9 @@ fn resolve_entry<'a, V>(map: &'a HashMap<String, V>, path: &str) -> Option<&'a V
     found
 }
 
-/// Normalizes a path by stripping leading ./ and ../
+/// Normalizes a path by stripping a leading `/` (a resolved URL), then leading ./ and ../
 fn normalize_path(path: &str) -> String {
-    let mut result = path;
+    let mut result = path.strip_prefix('/').unwrap_or(path);
 
     // Strip leading ./
     while let Some(rest) = result.strip_prefix("./") {

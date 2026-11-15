@@ -54,3 +54,23 @@ for (const width of [390, 1280]) {
     expect(picture.width).toBeGreaterThan(200);
   });
 }
+
+for (const width of [390, 1280]) {
+  test(`a hero with mobile=overlay at ${width}px: a picture alone in the words is in their flow, and the backdrop still fills the hero`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/logo/");
+    const hero = page.locator(".moss-hero:not(.moss-hero-closing)").first();
+    const logo = hero.locator(".moss-hero-content p img");
+    expect(await logo.evaluate((img) => getComputedStyle(img).position)).toBe("static");
+    const frame = (await hero.boundingBox())!;
+    const words = (await hero.locator(".moss-hero-content").boundingBox())!;
+    const box = (await logo.boundingBox())!;
+    const heading = (await hero.locator(".moss-hero-content h2").boundingBox())!;
+    expect(box.width, "logo keeps its own size").toBeLessThan(40);
+    expect(box.y, "logo top is inside the words").toBeGreaterThanOrEqual(words.y);
+    expect(box.y + box.height, "logo sits above the heading").toBeLessThanOrEqual(heading.y + 1);
+    const backdrop = (await hero.locator(":scope > img, :scope > picture img").first().boundingBox())!;
+    expect(backdrop.width, "backdrop width").toBeGreaterThanOrEqual(frame.width - 1);
+    expect(backdrop.height, "backdrop height").toBeGreaterThanOrEqual(frame.height - 1);
+  });
+}

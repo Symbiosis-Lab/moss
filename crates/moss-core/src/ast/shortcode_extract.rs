@@ -310,6 +310,17 @@ fn cols_alias_warning(shortcode_name: &str) -> String {
     )
 }
 
+/// Warning for a word on a fence's opening line that sits outside its
+/// braces, before or after them, where the fence does not read it.
+fn unread_word_warning(shortcode_name: &str, word: &str) -> String {
+    format!("shortcode `:::{shortcode_name}` has `{word}` outside its braces, where it is not read. A width word or any other option goes inside the braces, after the count: `:::{shortcode_name} 3 {{wide}}`.")
+}
+
+/// The words written after an opener's closing brace.
+fn words_after_braces(args: &str) -> std::str::SplitWhitespace<'_> {
+    args.rsplit_once('}').map_or("", |(_, after)| after).split_whitespace()
+}
+
 /// Most columns a `:::grid` can lay out. The site stylesheet has a column
 /// rule for each count from 1 to this value; a larger count would match no
 /// rule and collapse to one column without a word.
@@ -336,7 +347,8 @@ pub const MAX_GRID_COLUMNS: u32 = 6;
 /// warning), and the `Vec<String>` carries warnings collected while
 /// re-parsing cell bodies as fragments (e.g. a misspelled shortcode nested
 /// inside a cell) — see [`parse_cell_to_blocks`] — plus the `cols=`
-/// deprecation warning when that alias was written.
+/// deprecation warning when that alias was written and one warning for each
+/// word outside the braces that the grid does not read.
 fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, Option<usize>, Diagnostics) {
     let trimmed = args.trim();
     let (positional, attr_block): (&str, &str) = if let Some(pos) = trimmed.find('{') {
@@ -363,6 +375,8 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, O
     let mut columns: u32 = 1;
     let mut ratio: Option<String> = None;
     let (per_line_value, used_cols_alias) = per_line_attr(&parsed);
+    let parts: Vec<&str> = positional.split_whitespace().collect();
+    let mut unread: &[&str] = &parts;
 
     if let Some(cols_value) = per_line_value {
         if cols_value.contains(':') {
@@ -373,17 +387,17 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, O
         }
     } else {
         // Positional fallback: e.g. `2 1:2`.
-        let parts: Vec<&str> = positional.split_whitespace().collect();
-        if let Some(first) = parts.first() {
+        if let Some(first) = unread.first() {
             if first.contains(':') {
                 ratio = Some(first.to_string());
                 columns = first.split(':').count() as u32;
+                unread = &unread[1..];
             } else if let Ok(n) = first.parse::<u32>() {
                 columns = n.max(1);
-                if let Some(second) = parts.get(1) {
-                    if second.contains(':') {
-                        ratio = Some(second.to_string());
-                    }
+                unread = &unread[1..];
+                if let Some(second) = unread.first().filter(|second| second.contains(':')) {
+                    ratio = Some(second.to_string());
+                    unread = &unread[1..];
                 }
             }
         }
@@ -417,6 +431,7 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, O
             blocks
         })
         .collect();
+    fragment.warnings.extend(unread.iter().copied().chain(words_after_braces(args)).map(|word| unread_word_warning("grid", word)));
     if used_cols_alias {
         fragment.warnings.push(cols_alias_warning("grid"));
     }
@@ -1185,8 +1200,8 @@ fn gallery_lines<'a>(lines: impl Iterator<Item = &'a str>, config: &ParseConfig)
 /// a positional `N` when both are present; `cols=` is a deprecated alias
 /// for `per-line=` — see [`per_line_attr`].
 ///
-/// Returns the shortcode plus any deprecation warnings (currently just the
-/// `cols=` alias warning, when that key was written).
+/// Returns the shortcode plus its warnings: the `cols=` alias, a count a
+/// layout word overrides, and each word outside the braces it does not read.
 fn parse_gallery_body(args: &str, body: &str, config: &ParseConfig) -> (GalleryShortcode, Vec<String>) {
     let attrs = split_positional_classes_width_and_per_line(args);
     let mut warnings = Vec::new();
@@ -1201,15 +1216,17 @@ fn parse_gallery_body(args: &str, body: &str, config: &ParseConfig) -> (GalleryS
         (_, Some(rest)) => (false, true, rest),
         _ => (false, false, attrs.positional.as_str()),
     };
-    if (rows || marquee) && (attrs.per_line.is_some() || !count_text.is_empty()) {
+    // The one word read after the layout word, or alone, is the column count.
+    let mut words = count_text.split_whitespace().peekable();
+    let positional_count = words.next_if(|word| word.parse::<u32>().is_ok());
+    if (rows || marquee) && (attrs.per_line.is_some() || positional_count.is_some()) {
         let word = if rows { "rows" } else { "marquee" };
         warnings.push(format!("`:::gallery {word}` sets its own layout, so the column count is ignored"));
     }
-    let count = attrs
-        .per_line
-        .as_deref()
-        .or(if count_text.is_empty() { None } else { Some(count_text) })
-        .and_then(|v| v.parse::<u32>().ok());
+    // `per-line=` wins over a count written beside it, which is then unread.
+    let outvoted = positional_count.filter(|_| attrs.per_line.is_some() && !rows && !marquee);
+    warnings.extend(outvoted.into_iter().chain(words).chain(words_after_braces(args)).map(|word| unread_word_warning("gallery", word)));
+    let count = attrs.per_line.as_deref().or(positional_count).and_then(|v| v.parse::<u32>().ok());
     let columns = if rows || marquee { None } else { count };
     let mut items: Vec<GalleryItem> = Vec::new();
     for line in gallery_lines(body.lines(), config).into_iter().flatten() {

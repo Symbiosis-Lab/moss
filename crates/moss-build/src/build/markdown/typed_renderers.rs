@@ -202,10 +202,7 @@ pub(crate) fn render_hero_html_typed(
         resolved_image
             .as_deref()
             .zip(media_lookup)
-            .and_then(|(href, lookup)| {
-                let key = href.strip_prefix('/').unwrap_or(href);
-                lookup.get_dominant_color(key)
-            })
+            .and_then(|(href, lookup)| lookup.get_dominant_color(href))
     };
     let is_light_tone = raw_hero_color
         .as_deref()
@@ -318,7 +315,7 @@ pub(crate) fn render_hero_html_typed(
     // The picture's height as a share of its width, for the phone layout's
     // reserved band (`--item-hero-ratio`).
     if let (true, Some(href), Some(lookup)) = (closing, &resolved_image, media_lookup) {
-        let (w, h) = lookup.get(href.strip_prefix('/').unwrap_or(href));
+        let (w, h) = lookup.get(href);
         section_style.push(format!("--item-hero-ratio: {:.4}", h as f32 / w.max(1) as f32));
     }
     let style_attr = if section_style.is_empty() {
