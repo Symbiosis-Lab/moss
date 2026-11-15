@@ -49,7 +49,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::mpsc;
 
 use crate::build::coordinator::EmitMessage;
@@ -111,7 +111,9 @@ pub struct ImageConversionItem {
     /// worker vouches for if it delivers. The worker takes no stat of its own: a later
     /// one pairs a rewrite's new stat with the old bytes' `source_oid`. `None` where no
     /// dispatch queued the item (a headless run, a test): nothing is marked for it.
-    pub(crate) fingerprint: Option<ImageFingerprint>,
+    /// The `Arc` is the mark's identity: a later dispatch of the same unchanged
+    /// source makes its own.
+    pub(crate) fingerprint: Option<Arc<ImageFingerprint>>,
 }
 
 impl ImageConversionItem {
@@ -1377,8 +1379,9 @@ pub(crate) fn convert_single_image(
 /// config change is never joined against a worker queued under the old one.
 ///
 /// Per item, not per set: one added, changed or removed image must not invalidate
-/// every other, untouched image's in-flight marker. Compared by value, in-process
-/// only: the cell below is keyed by path.
+/// every other, untouched image's in-flight marker. Joined by value and ended by
+/// the identity of the mark's allocation, in-process only: the cell below is keyed
+/// by path.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ImageFingerprint {
     stat: crate::build::stat::FileStat,
@@ -1414,7 +1417,7 @@ pub(crate) fn compute_image_item_fingerprint(
 #[derive(Default)]
 struct ImageLedger {
     /// The source each image was queued under, until the worker that has it is done.
-    pending: HashMap<String, ImageFingerprint>,
+    pending: HashMap<String, Arc<ImageFingerprint>>,
     /// The advisories the most recent delivered dispatch of each image produced.
     /// `dispatch_image_conversions` re-emits these for an image it carries
     /// forward without ever re-entering `run_image_conversion`, so that
@@ -1424,37 +1427,58 @@ struct ImageLedger {
     advisories: HashMap<String, Vec<Advisory>>,
 }
 
+// A poisoned lock is taken anyway: `PendingImageMarks` locks it while a
+// worker's panic unwinds, where a second panic would abort the process.
 fn image_ledger() -> std::sync::MutexGuard<'static, ImageLedger> {
     static IMAGE_LEDGER: OnceLock<Mutex<ImageLedger>> = OnceLock::new();
-    IMAGE_LEDGER.get_or_init(Mutex::default).lock().expect("image ledger mutex")
+    IMAGE_LEDGER.get_or_init(Mutex::default).lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Whether a worker a dispatch spawned has yet to finish `path`, from a source with
 /// this fingerprint. A later dispatch that finds the same source joins that worker
 /// instead of spawning another to encode the same bytes.
 pub(crate) fn image_item_is_pending(path: &str, fingerprint: &ImageFingerprint) -> bool {
-    image_ledger().pending.get(path) == Some(fingerprint)
+    image_ledger().pending.get(path).is_some_and(|marked| **marked == *fingerprint)
 }
 
 /// A dispatch is about to hand these (path, fingerprint) to a worker. Before the
 /// worker is spawned, or it could finish first and leave the marker behind for good.
-pub(crate) fn mark_image_items_pending(items: impl IntoIterator<Item = (String, ImageFingerprint)>) {
-    image_ledger().pending.extend(items);
+/// The worker's run owns what this returns.
+#[must_use]
+pub(crate) fn mark_image_items_pending(items: impl IntoIterator<Item = (String, Arc<ImageFingerprint>)>) -> PendingImageMarks {
+    let marked: Vec<_> = items.into_iter().collect();
+    image_ledger().pending.extend(marked.iter().cloned());
+    PendingImageMarks(marked)
+}
+
+/// The marks one worker run was handed. Dropped when the run ends, however it
+/// ends: a mark the run never reached (it panicked first) would otherwise have
+/// every later build join a worker that is gone.
+pub(crate) struct PendingImageMarks(Vec<(String, Arc<ImageFingerprint>)>);
+
+impl Drop for PendingImageMarks {
+    fn drop(&mut self) {
+        for (path, queued_as) in &self.0 {
+            end_image_item(path, queued_as, false, &[]);
+        }
+    }
 }
 
 /// The worker queued for `path` under `queued_as` is done with it, and, if it
-/// `delivered`, has advisories to record. Only its own dispatch's mark ends: a newer
-/// dispatch over a rewritten source has marked the image for its own worker, and one
-/// that dropped the path (`retain_image_item_fingerprints`) has said the image left.
+/// `delivered`, has advisories to record. Only its own dispatch's mark ends, told
+/// apart by identity, not value: a newer dispatch has marked the image for its own
+/// worker (over a rewritten source, or the same one after this run was cancelled),
+/// and one that dropped the path (`retain_image_item_fingerprints`) has said the
+/// image left.
 ///
 /// `advisories` is what THIS delivery has to say about `path` — possibly
 /// empty, which correctly overwrites whatever a stale prior delivery left
 /// behind (e.g. a rung failure since fixed). Recorded only when `delivered`:
 /// an item that never delivers is always redispatched, so it never needs a
 /// carried-forward advisory.
-pub(crate) fn end_image_item(path: &str, queued_as: &ImageFingerprint, delivered: bool, advisories: &[Advisory]) {
+pub(crate) fn end_image_item(path: &str, queued_as: &Arc<ImageFingerprint>, delivered: bool, advisories: &[Advisory]) {
     let mut ledger = image_ledger();
-    if ledger.pending.get(path) != Some(queued_as) {
+    if !ledger.pending.get(path).is_some_and(|marked| Arc::ptr_eq(marked, queued_as)) {
         return;
     }
     ledger.pending.remove(path);
@@ -2725,7 +2749,7 @@ pub(crate) fn dispatch_image_conversions_at(
                     let oid = disk_source_oid.as_deref().unwrap_or_default();
                     redispatched.extend(missing_rungs.iter().map(|rel| (oid.to_string(), rel.to_string())));
                 }
-                to_dispatch.push(ImageConversionItem { fingerprint, ..item.clone() });
+                to_dispatch.push(ImageConversionItem { fingerprint: fingerprint.map(Arc::new), ..item.clone() });
             }
         }
 
@@ -2841,7 +2865,7 @@ pub(crate) fn dispatch_image_conversions_at(
         // coordinator, which seals them into `image_outputs`. Staging is swept
         // only under a sweep permit, against the previous sealed manifest, and
         // the permit keeps an encode's output until a build registers it.
-        mark_image_items_pending(
+        let marks = mark_image_items_pending(
             run_ctx.items.iter().filter_map(|item| Some((item.source_path.to_string_lossy().into_owned(), item.fingerprint.clone()?))),
         );
 
@@ -2850,30 +2874,14 @@ pub(crate) fn dispatch_image_conversions_at(
         // `None`, see its doc) runs `run_image_conversion` synchronously
         // inline, exactly as a one-shot `moss build` always has.
         if let Some(spawner) = svc.spawner.clone() {
-            let services_arc = std::sync::Arc::new(BuildServices {
-                session: svc.session.clone(),
-                cancellation: svc.cancellation.clone(),
-                image_cancellation: svc.image_cancellation.clone(),
-                notebook_cancellation: svc.notebook_cancellation.clone(),
-                processes: svc.processes.clone(),
-                reporter: svc.reporter.clone(),
-                spawner: svc.spawner.clone(),
-                assets: svc.assets.clone(),
-                in_flight_videos: svc.in_flight_videos.clone(),
-                in_flight_images: svc.in_flight_images.clone(),
-                in_flight_metadata: svc.in_flight_metadata.clone(),
-                skipped_symlinks: svc.skipped_symlinks.clone(),
-                videos_converted: svc.videos_converted.clone(),
-                task_registry: svc.task_registry.clone(),
-                build_parent: svc.build_parent.clone(),
-                page_count: svc.page_count.clone(),
-                deploy_video_max_size_mb: svc.deploy_video_max_size_mb,
-                plugins_skipped: svc.plugins_skipped,
-            });
+            let services_arc = std::sync::Arc::new(svc.clone());
             log::info!("Spawning background image conversion for {} images", total);
             let clock = clock.clone();
             spawner.spawn_blocking(Box::new(crate::build::phase::inherit_blocking(move || {
+                // Declared last, so dropped first: the marks end before the
+                // folder stops being busy.
                 let _converting = converting;
+                let _marks = marks;
                 let cancelled = run_image_conversion(&services_arc, &run_ctx);
                 redispatch_note::settle(&run_ctx.moss_dir, &run_ctx.staging_dir, &redispatched, clock(), cancelled);
             })));

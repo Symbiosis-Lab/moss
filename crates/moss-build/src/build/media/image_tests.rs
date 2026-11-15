@@ -2321,8 +2321,32 @@ fn image_fingerprint_test_lock() -> &'static std::sync::Mutex<()> {
 /// (`ImageLedger.advisories`) fixture. The skip decision itself is disk-origin, so a
 /// test that needs a skip candidate also calls `prime_disk_hash_index` below.
 fn prime_delivered_with_advisories(path: &str, fingerprint: ImageFingerprint, advisories: &[Advisory]) {
-    mark_image_items_pending([(path.to_string(), fingerprint.clone())]);
+    let fingerprint = std::sync::Arc::new(fingerprint);
+    let _marks = mark_image_items_pending([(path.to_string(), fingerprint.clone())]);
     end_image_item(path, &fingerprint, true, advisories);
+}
+
+/// A cancelled run ends its images' marks at once and can outlast the next dispatch,
+/// which marks the same unchanged source for a worker of its own. The old run's marks
+/// are dropped when it finally ends, and must not take the new one with them, or the
+/// dispatch after that spawns a third worker for bytes the second is encoding.
+#[test]
+fn a_run_that_ends_late_leaves_a_newer_dispatchs_mark_on_the_same_source() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let tmp = tempfile::tempdir().unwrap();
+    make_big_jpeg(&tmp.path().join("pic.jpg"), 40, 30);
+    let seen = compute_image_item_fingerprint(&tmp.path().to_string_lossy(), Path::new("pic.jpg"), &ImageCompressionConfig::default()).unwrap();
+    let path = "a-run-that-ends-late.jpg";
+
+    let cancelled = std::sync::Arc::new(seen.clone());
+    let cancelled_run = mark_image_items_pending([(path.to_string(), cancelled.clone())]);
+    end_image_item(path, &cancelled, false, &[]);
+    assert!(!image_item_is_pending(path, &seen), "premise: the cancelled run ended its mark");
+    let _newer_run = mark_image_items_pending([(path.to_string(), std::sync::Arc::new(seen.clone()))]);
+
+    drop(cancelled_run);
+
+    assert!(image_item_is_pending(path, &seen), "the run that ended late removed the mark a newer dispatch made for its own worker");
 }
 
 /// Write `rel_path`'s stat and content hash into the ON-DISK hash index the
@@ -2769,6 +2793,75 @@ async fn an_image_that_panics_its_worker_does_not_leave_the_folder_busy() {
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
     assert!(!session.has_ui_bound(), "an image worker that panicked must not leave the folder busy, or every later publish waits on it");
+}
+
+/// Panics at the worker's opening progress report, before any image runs.
+struct PanicsOnFirstImageProgress(std::sync::atomic::AtomicBool);
+
+impl crate::build::ports::reporter::BuildReporter for PanicsOnFirstImageProgress {
+    fn report(&self, event: &PipelineEvent) {
+        if matches!(event, PipelineEvent::BackgroundProgress { task, current: 0, .. } if task == "images") {
+            self.0.store(true, Ordering::SeqCst);
+            panic!("the image worker failed");
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_image_whose_worker_panicked_is_converted_by_the_next_build() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let rel = "panicked-worker.jpg";
+    make_big_jpeg(&root.join(rel), 400, 300);
+    let moss_dir = root.join(".moss");
+    let staging = moss_dir.join("build.nosync").join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
+    fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    let ctx = BackgroundContext {
+        video_items: vec![],
+        image_items: vec![ImageConversionItem {
+            source_path: PathBuf::from(rel),
+            source_oid: crate::build::cache::ObjectStore::hash_file(&root.join(rel)).unwrap(),
+            ext: "jpg".to_string(),
+            dimensions: None,
+            skip: None,
+            fingerprint: None,
+        }],
+        source_path: root.to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir,
+        notebook_files: vec![],
+        rung_collisions: Default::default(),
+        ..BackgroundContext::for_test()
+    };
+    let session = crate::system::folder_session::FolderSession::new(root.to_path_buf());
+    let failing = std::sync::Arc::new(PanicsOnFirstImageProgress(Default::default()));
+    let mut services = BuildServices::headless();
+    services.session = Some(session.clone());
+    services.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
+    services.reporter = failing.clone();
+
+    dispatch_image_conversions(Some(&services), &ctx, None);
+
+    for _ in 0..2000 {
+        if failing.0.load(Ordering::SeqCst) && !session.has_ui_bound() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(failing.0.load(Ordering::SeqCst) && !session.has_ui_bound(), "premise: the first build's worker panicked and is gone");
+    assert!(!staging.join("panicked-worker.webp").exists(), "premise: the worker that panicked converted nothing");
+
+    // The next build of the same, unchanged image.
+    dispatch_image_conversions(Some(&BuildServices::headless()), &ctx, None);
+
+    assert!(
+        staging.join("panicked-worker.webp").exists(),
+        "the next build must convert the image itself, not wait on a worker that is gone"
+    );
 }
 
 /// An image a previous build converted: 1000x600 on disk, its base `.webp` cached
