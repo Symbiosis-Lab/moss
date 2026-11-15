@@ -38,6 +38,11 @@ export function installPlainTabReload(
         reload();
       }),
     );
-  // A browser that refuses the lock leaves this tab its own stream.
-  locks.request(SHARED, whileThisPageLives).catch(() => listen(reload));
+  // A browser that refuses the lock leaves this tab its own stream. A page
+  // being left is refused too, once `win` already stands for the page that
+  // took its place: a stream opened then would be a second one in that page.
+  const page = win.document;
+  locks.request(SHARED, whileThisPageLives).catch(() => {
+    if (win.document === page) listen(reload);
+  });
 }

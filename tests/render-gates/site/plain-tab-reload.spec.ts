@@ -9,7 +9,7 @@
  *
  *   npx playwright test -c playwright/plain-tab-reload.config.ts
  */
-import { test, expect, type Frame, type Page } from "@playwright/test";
+import { test, expect, type Frame, type Page, type Request } from "@playwright/test";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { gatePort } from "../../../playwright/gate-ports";
@@ -83,16 +83,24 @@ test("a plain tab opens an internal link in a new tab when asked to", async ({ p
 test("seven tabs of one browser all load, and each follows an edit by reloading once", async ({ context }, testInfo) => {
   const pages: Page[] = [];
   const loads: number[] = [];
+  /** The `/__moss/reload` streams asked for and not ended, in every tab still open. */
+  const streams = new Set<Request>();
+  const isStream = (r: Request) => r.url().endsWith("/__moss/reload");
+  const openStreams = () => [...streams].filter((r) => !r.frame().page().isClosed()).length;
   for (let tab = 0; tab < 7; tab++) {
     const page = await context.newPage();
     loads.push(0);
     page.on("load", () => loads[tab]++);
+    page.on("request", (r) => isStream(r) && streams.add(r));
+    page.on("requestfinished", (r) => streams.delete(r));
+    page.on("requestfailed", (r) => streams.delete(r));
     await page.goto(BASE, { timeout: 10_000 });
     pages.push(page);
   }
   const settled = async (open: number[], expected: number) => {
     await pages[open[0]].waitForTimeout(3_000);
     expect(open.map((tab) => loads[tab])).toEqual(open.map(() => expected));
+    expect(openStreams(), "streams open among the tabs").toBe(1);
   };
   const all = pages.map((_, tab) => tab);
   /** Which of the `open` tabs holds the lock the stream goes with, or -1. */
