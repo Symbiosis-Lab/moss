@@ -397,12 +397,6 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
         .await;
 
         match result {
-            // The build that exits writes its site before the pipeline
-            // returns, so the record is final here.
-            Ok(_) if !run.flags.serve && crate::system::build_records::records().last_build_failed(&run.folder_path) => {
-                cli_eprintln!("Build failed: the site was not written.");
-                1
-            }
             Ok(msg) => {
                 // `launch_server` failing is not itself a build failure (the
                 // pipeline logs a warning and carries on with no server —
@@ -426,7 +420,10 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
                     }
                 }
 
-                let problems = finish_cli_build(&msg, &run.folder_path, run.flags.strict).await;
+                // The build that exits writes its site before the pipeline
+                // returns, so the record is final here.
+                let unwritten = !run.flags.serve && crate::system::build_records::records().last_build_failed(&run.folder_path);
+                let problems = finish_cli_build(&msg, &run.folder_path, run.flags.strict, unwritten).await;
 
                 // Held until a replacement is started (yield) or dropped for
                 // good (ctrl-c): dropping the sender stops the watch. Rebuild
@@ -506,11 +503,7 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
                     }
                 }
 
-                if run.flags.strict && problems > 0 {
-                    1
-                } else {
-                    0
-                }
+                i32::from(unwritten || (run.flags.strict && problems > 0))
             }
             Err(e) => {
                 cli_eprintln!("Build failed: {}", e);
