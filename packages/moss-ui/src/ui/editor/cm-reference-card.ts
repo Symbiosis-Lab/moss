@@ -412,7 +412,7 @@ export function assetCardProvider(
       if (pos < target.from || pos > target.to) continue;
       const env = resolvedCache.get(target.target, true);
       if (env?.kind.kind === 'anchor') return null;
-      const body = buildHoverDom(target.target, env);
+      const body = buildHoverDom(env);
       const embed = embedAt(state, pos);
       if (!opts || !embed) return { title: target.target, body };
       // Only the path is replaced, by the field and by Replace…: a wikilink embed keeps its brackets and width.

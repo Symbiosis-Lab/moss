@@ -6,6 +6,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- In the editor, resting the pointer on a folder embed's path (`![[Termine/|when:upcoming]]`), or on an embedded page's name, opens no card. The card only repeated the path. A page property whose value is shown whole has no tooltip repeating it.
 - `moss build` fails when it could not write the site: it prints "Build failed: the site was not written." and exits 1. It used to print "0 problems" and exit 0 while the folder still held the site from the build before, so a script that read the exit code went on with a site that lacked the latest edits. The same now holds when the build's background work failed or its output could not be verified.
 - `moss deploy` says "Build failed: the site was not written." when its build could not write the site, before it refuses to publish. It used to print "0 problems" first.
 - A picture is converted by the next build after its conversion crashed. A crash before the picture was reached left it marked as being worked on, so every later build in that session skipped it and the page kept the unconverted original.

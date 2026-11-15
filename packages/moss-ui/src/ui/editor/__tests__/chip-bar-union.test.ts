@@ -75,6 +75,11 @@ describe('union chip pill', () => {
     expect(chip().querySelector('.chip-value')?.getAttribute('title')).toBe('content/posts/News');
   });
 
+  test('a value shown whole has no tooltip', () => {
+    const { chip } = mount({ children: '[[News]]' });
+    expect(chip().querySelector('.chip-value')?.hasAttribute('title')).toBe(false);
+  });
+
   test('a list value (series) joins its entries', () => {
     const { chip } = mount({ series: ['[[A]]', '[[B]]'] });
     expect(chip('series').querySelector('.chip-value')?.textContent).toBe('A, B');

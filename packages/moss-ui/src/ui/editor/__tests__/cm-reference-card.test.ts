@@ -163,6 +163,8 @@ describe('dwell arming', () => {
 });
 
 describe('hover on what no longer hides its source', () => {
+  // A picture the card can show; with nothing to show, hover opens no card.
+  const LOGO = { absolute_path: '/images/logo.png', request_url: '/images/logo.png', mime_type: 'image/png', width: 10, height: 10, size_bytes: 1 };
   let view: EditorView;
   afterEach(() => { vi.useRealTimers(); view?.destroy(); document.body.innerHTML = ''; });
 
@@ -191,7 +193,7 @@ describe('hover on what no longer hides its source', () => {
   test("hover on an embed's path opens its card only while no picture is drawn below the line", async () => {
     const { blockEmbedsExtension } = await import('../cm-block-embeds');
     const doc = '![Alt](images/logo.png)\n\ntext';
-    const cache = { get: () => ({ kind: { kind: 'image' } }) } as any;
+    const cache = { get: () => ({ kind: { kind: 'image' }, resolved: LOGO }) } as any;
     for (const drawn of [false, true]) {
       const v = mount(doc, assetCardProvider(cache), [blockEmbedsExtension({ resolveImage: () => (drawn ? { url: 'moss-source://logo.png' } : undefined) })]);
       expect(!!v.dom.querySelector('.cm-lp-image-block')).toBe(drawn);
@@ -212,7 +214,7 @@ describe('hover on what no longer hides its source', () => {
 
   test('hover on the same embed\'s source opens its card over the path only, not the alt text', () => {
     const doc = '![Alt](images/logo.png)\n\ntext';
-    const cache = { get: () => ({ kind: { kind: 'image' } }) } as any;
+    const cache = { get: () => ({ kind: { kind: 'image' }, resolved: LOGO }) } as any;
     const v = mount(doc, assetCardProvider(cache));
     v.posAtCoords = () => doc.indexOf('Alt') + 1;
     v.dom.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));

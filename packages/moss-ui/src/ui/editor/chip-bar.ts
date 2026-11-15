@@ -1211,7 +1211,7 @@ export class ChipBar {
 
   /** Union pill value: one word. A missing value shows the field's default
    *  (the state the build applies), never "empty". A folder shows its name,
-   *  ellipsized by CSS, with the full value in the tooltip. */
+   *  ellipsized by CSS, with the full value in the tooltip when it is longer. */
   private renderUnionValue(el: HTMLElement, def: FieldDefinition | null, value: unknown): void {
     el.classList.remove('chip-value-mono');
     el.removeAttribute('title');
@@ -1221,7 +1221,7 @@ export class ChipBar {
       const full = Array.isArray(v) ? v.map(x => stripWikilinkBrackets(String(x))).join(', ') : stripWikilinkBrackets(String(v));
       const shown = Array.isArray(v) ? full : full.split('/').filter(Boolean).pop() ?? full;
       el.textContent = shown;
-      el.title = full;
+      if (full !== shown) el.title = full;
     } else {
       el.textContent = t(mode === 'on' ? 'chip.ui.on' : 'chip.ui.off');
     }
