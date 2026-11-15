@@ -1056,3 +1056,29 @@ fn a_picture_cover_publishes_its_shape() {
     assert!(!card("prints/flat.jpg").contains("--item-cover-ratio"));
     assert!(!card("prints/clip.mp4").contains("--item-cover-ratio"));
 }
+
+/// A folder card says what is behind it once: by its count, or, with the
+/// count hidden (`children_count: false`), by its own description.
+#[test]
+fn a_folder_card_shows_its_description_only_when_its_count_is_hidden() {
+    let folder = |count_setting: Option<&str>| ChildItemProps {
+        title: "Prizes".to_string(),
+        url: Some("prizes/".to_string()),
+        child_count: Some(4),
+        description: Some("Given every spring.".to_string()),
+        count_setting: count_setting.map(|s| moss_core::frontmatter_union::ChildrenCount(s.to_string())),
+        ..blank()
+    };
+    let render = |props: &ChildItemProps| render_item_with_typesetting(props, None, Language::En, None, None, false, false, None);
+
+    let counted = render(&folder(None));
+    assert!(counted.contains("4 articles"), "Got: {counted}");
+    assert!(!counted.contains("moss-card-description"), "Got: {counted}");
+
+    // A date of the folder's own still shows in the meta when the count is hidden.
+    for date in [None, Some("March 2026")] {
+        let hidden = render(&ChildItemProps { date_display: date.map(str::to_string), ..folder(Some("")) });
+        assert!(!hidden.contains("4 articles"), "Got: {hidden}");
+        assert!(hidden.contains(r#"<p class="moss-card-description">Given every spring.</p>"#), "{date:?}: {hidden}");
+    }
+}

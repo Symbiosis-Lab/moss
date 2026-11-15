@@ -148,28 +148,18 @@ pub fn render_item_with_typesetting(
     // right of (vertical) the title, since production callers populate meta
     // and leave kicker empty: same uppercase overline treatment, same
     // position above the title. Emitting `kicker, meta, title` matches
-    // the parallel emitter at child_summary::render_with_sort (line 64) so
+    // the parallel emitter at child_summary::render_with_sort so
     // the two card surfaces agree on slot order.
     //
-    // Pre-fix this emitted `{kicker}{title}{meta}` — placing the meta
-    // BELOW the title (where it visually read as a subtitle, not a kicker).
-    //
-    // Description slot — a paragraph BELOW the title, file/article cards
-    // only (`child_count.is_none()`). A folder card is a tile: its "N
-    // articles" meta says what is behind it, and a description clamped to a
-    // third of the column only cut the folder note's sentence short. The
-    // text is frontmatter-only (the callers leave `props_for_document`'s
-    // reading alone, never the auto-extracted excerpt), so the slot stays
-    // author-intentional. Mirrors child_summary's below-title
-    // `.moss-card-description` so grid and summary cards agree:
-    // meta = date overline ABOVE, description = paragraph BELOW the title.
-    // Suppressed when the quote slot above already carries this same text
-    // (coverless card, covered list) — otherwise it would print twice.
+    // Description slot — a frontmatter-only paragraph below the title, placed
+    // as in child_summary, on every card that shows no count: a folder's "N articles"
+    // says what is behind it, and with the count hidden the description is all
+    // it has left. Left out when the quote slot above already carries it.
     let used_in_quote_slot = list_has_covers && props.cover.is_none();
     let description_html = props.description.as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .filter(|_| props.child_count.is_none())
+        .filter(|_| count_label.is_none())
         .filter(|_| !used_in_quote_slot)
         .map(|d| format!(r#"<p class="moss-card-description"{}>{}</p>"#, child_list::lang_attr(props.lang.as_ref()), render_description_html_in_link(d)))
         .unwrap_or_default();

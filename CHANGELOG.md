@@ -4,6 +4,10 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- In a grid listing, a folder card whose count is hidden (`children_count: false`) shows its folder's `description:` under the title, as a page's card does. It used to show the title alone.
+
 ## [0.15.25] - 2026-11-16
 
 ### Fixed
