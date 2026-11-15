@@ -33,6 +33,11 @@ describe("importedPagesText", () => {
     }
   });
 
+  it("reads a result without a kept count as none kept", () => {
+    expect(importedPagesText({ total_pages: 47 })).toBe("Imported 47 pages");
+    expect(importedPagesText({ total_pages: 0 })).toBeNull();
+  });
+
   it("is null only when the import reached no page", () => {
     expect(said(0, 0)).toBeNull();
   });

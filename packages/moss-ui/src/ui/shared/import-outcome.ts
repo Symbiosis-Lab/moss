@@ -7,12 +7,13 @@ import { t } from '../i18n';
  */
 export function importedPagesText(counts: Pick<ImportOutcome, 'total_pages' | 'kept_pages'>): string | null {
   const total = counts.total_pages;
-  const kept = String(counts.kept_pages);
+  const keptPages = counts.kept_pages ?? 0;
+  const kept = String(keptPages);
   if (!total) {
-    if (!counts.kept_pages) return null;
-    return counts.kept_pages === 1 ? t('onboard.flow.url_all_kept_one') : t('onboard.flow.url_all_kept', { kept });
+    if (!keptPages) return null;
+    return keptPages === 1 ? t('onboard.flow.url_all_kept_one') : t('onboard.flow.url_all_kept', { kept });
   }
-  if (!counts.kept_pages) {
+  if (!keptPages) {
     return total === 1 ? t('onboard.flow.url_imported_pages_one') : t('onboard.flow.url_imported_pages', { total: String(total) });
   }
   return total === 1

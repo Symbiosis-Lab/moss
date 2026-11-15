@@ -50,8 +50,8 @@ export interface ImportOutcome {
   error?: string | null;
   /** Pages the import wrote. */
   total_pages: number;
-  /** Pages it reached that the folder already had. */
-  kept_pages: number;
+  /** Pages it reached that the folder already had; an engine that does not count them leaves it out. */
+  kept_pages?: number;
 }
 
 /** What a copy into the folder landed, and what it left behind and why. */
