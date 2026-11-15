@@ -32,10 +32,7 @@ use crate::types::content::SiteHashes;
 /// One per-folder verdict, replaced wholesale on every write, never merged.
 /// `None` on read means no build has answered yet in this process — distinct
 /// from "clean" (an empty `Vec`, or whatever value a build genuinely
-/// produced). `content_hashes`, `publish_preflight` and `promised_dead_links`
-/// used to hand-write this insert/clone pair three times over; collapsed
-/// 2026-09-16 (thermo review of the publish promise gate) since the three
-/// differ only in `V`.
+/// produced).
 struct FolderSlot<V>(Mutex<HashMap<String, V>>);
 
 impl<V> Default for FolderSlot<V> {
