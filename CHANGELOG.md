@@ -15,6 +15,7 @@ All notable changes to moss will be documented here.
 - A link preview is not fetched from a name that resolves to a private or link-local address. Only an address written as numbers was refused before.
 - A YouTube video on a page plays from `youtube-nocookie.com`, so the page sets no YouTube cookie until the reader starts the video. An existing `youtube-nocookie.com` address in a page is recognised as a YouTube video too.
 - A transparent picture scaled down for the page has clean edges. The colour hidden under its transparent pixels used to bleed into the edge, drawing a grey fringe.
+- A link in a `:::grid` cell finds its page's card when its address has spaces inside the parentheses (`[Title]( /work/ )`) or a title after it, as the same link does in a paragraph. The cell used to stay a plain link, with an "Unresolved link target" warning or none.
 - In the editor, resting the pointer on a folder embed's path (`![[Termine/|when:upcoming]]`), or on an embedded page's name, opens no card. The card only repeated the path. A page property whose value is shown whole has no tooltip repeating it.
 - A picture whose address has a query of its own (`pic.png?v=2`) keeps that query when the preview refreshes it, and a picture addressed with a fragment (`icons.svg#mark`) is refreshed.
 - `panel=none` and `panel=auto` on a hero, and a closing picture's measured ink, work for a picture in a folder whose name is not plain ASCII (`活動/assets/art.jpg`). The picture was not found for measuring there, so the words kept their tinted panel and nothing was reported.
