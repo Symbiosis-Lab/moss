@@ -256,6 +256,7 @@ A stylesheet that is longer than the design needs is a defect even when it rende
   `<svg data-figure="…">`/`<canvas>` where the element itself is the drawing.
   Drawings and your own JavaScript: `moss guide authoring`.
 - Never write inline `style="..."` — put the rule in `.moss/theme/style.css`.
+- A button that sends or waits changes the moment it is pressed and shows moss's loading state until the answer comes; a form the theme writes itself uses moss's button for it. See `moss guide authoring`, "A press answers at once".
 - Images and media use the standard form: `![](photo.jpg)`, written as a path relative to the page. Wikilinks (`![[photo.jpg]]`) work too and find the file by name. Either way moss resolves the file, so never write a site-absolute or `https://` address for a file in the folder.
 - A deck (standfirst) is a `> blockquote` as the first thing in the body. moss
   injects the title itself, so the deck sits directly under it — do not write a

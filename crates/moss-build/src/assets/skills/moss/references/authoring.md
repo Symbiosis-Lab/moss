@@ -77,6 +77,24 @@ A text field shows focus on its own edge, never as a ring inside or outside it, 
 
 After a reader subscribes, the button becomes a circle one line of the confirmation across, with a check inside. The success circle's size and shape are moss's and a theme cannot change them; a theme sets its colour and border, and its size through `--moss-subscribe-status-size` and the form's line height.
 
+A press answers at once. A button that sends or waits (subscribe, sign in, request, pay) changes the moment it is pressed, and while the answer is on its way, through a bot check, a server or an email, it shows a loading state; it never sits unchanged. moss's subscribe, request and comment forms do this: the label gives way to a spinner the instant the button is pressed. A form a theme writes itself, in a page's HTML or in `.moss/theme/script.js`, uses the same button instead of a spinner or a "Sending…" line of its own:
+
+```html
+<form data-state="idle">
+  <input type="email" name="email" required aria-label="Email">
+  <span class="moss-btn-slot">
+    <button type="submit" class="moss-btn">
+      <span class="moss-btn__label">Send</span>
+      <span class="moss-btn__spinner" aria-hidden="true"></span>
+    </button>
+  </span>
+</form>
+```
+
+The submit handler's first lines, before any `await` (a bot check included), set `form.dataset.state = "loading"` and `aria-disabled="true"` on the button; when the answer comes, set `idle` again, remove `aria-disabled` and say what happened. moss's stylesheet draws the spinner in any `.moss-btn-slot` inside an element whose `data-state` is `loading`, in the button's own colours, at the button's own size. Do not mark the form `class="moss-subscribe-form" data-moss-hosted="true"`: that pair hands it to moss's subscribe script, which sends it as a subscription.
+
+To check a button, hold its request back and press it. In Playwright, route the page's requests before it loads (`context.route("**/*", ...)`): let GET through while the page loads, abort anything else, and from the moment of the press hold every request two seconds and then abort it, so nothing is sent. Fill the form's fields first, since a submit button sends nothing while its form is invalid, then click and confirm that within 150 ms the button's text, its label's or spinner's opacity, or its disabled state has changed. A check that waits for the final answer passes a button that sat still for the whole wait.
+
 ### Rung 4 in detail
 
 The first three rungs restyle a component in place. Rung 4 is for the other
