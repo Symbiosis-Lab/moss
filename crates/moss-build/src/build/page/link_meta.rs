@@ -362,19 +362,54 @@ fn read_capped_body(reader: impl std::io::Read) -> (String, bool) {
     (String::from_utf8_lossy(&buf).into_owned(), read_ok)
 }
 
-/// A ureq agent that resolves the system proxy for `url` and does not follow
-/// redirects (see [`get_checked`]), with `timeout` set THREE ways: the overall
+const UNSAFE_ADDRESS: &str = "private, link-local or local address";
+
+/// A ureq agent that resolves the system proxy for `url`, connects only to
+/// addresses [`safe_answers`] keeps, and does not follow redirects (see
+/// [`get_checked`]), with `timeout` set THREE ways: the overall
 /// per-call timeout, plus the connect and read phases individually. Belt and
 /// suspenders: ureq's overall/connect timeout has been found unreliable against
 /// some stalls. The orchestrator (`fetch_all_link_meta_parallel_bounded`) is the
 /// actual backstop: it stops WAITING on a stuck worker at the deadline whatever
 /// ureq does internally.
 fn link_agent(url: &str, timeout: std::time::Duration) -> ureq::Agent {
-    crate::system::proxy::proxied_agent_builder(url, timeout, 0)
-        .0
-        .timeout_connect(timeout)
-        .timeout_read(timeout)
-        .build()
+    link_agent_looking_up(url, timeout, |netloc| std::net::ToSocketAddrs::to_socket_addrs(netloc).map(Iterator::collect))
+}
+
+/// [`link_agent`] with the name lookup given. Behind a proxy the proxy is
+/// what ureq looks up, so the lookup is left to it.
+fn link_agent_looking_up(
+    url: &str,
+    timeout: std::time::Duration,
+    lookup: impl Fn(&str) -> std::io::Result<Vec<std::net::SocketAddr>> + Send + Sync + 'static,
+) -> ureq::Agent {
+    let (builder, proxied) = crate::system::proxy::proxied_agent_builder(url, timeout, 0);
+    let builder = builder.timeout_connect(timeout).timeout_read(timeout);
+    if proxied {
+        return builder.build();
+    }
+    builder.resolver(move |netloc: &str| safe_answers(netloc, lookup(netloc)?)).build()
+}
+
+/// The answers to a lookup of `netloc` (`host:port`) a link preview may
+/// connect to. When the lookup had answers and none is left, an error: an
+/// empty list would read as a name that does not exist.
+fn safe_answers(netloc: &str, answers: Vec<std::net::SocketAddr>) -> std::io::Result<Vec<std::net::SocketAddr>> {
+    use crate::system::address::{classify, is_local_name, AddressClass::Loopback};
+    if answers.is_empty() {
+        return Ok(answers);
+    }
+    let host = netloc.rsplit_once(':').map_or(netloc, |(host, _)| host);
+    // This machine is reached by its address or its own name, never by a name someone else chose.
+    let this_machine = is_local_name(host) || host.trim_matches(['[', ']']).parse::<std::net::IpAddr>().is_ok();
+    let kept: Vec<_> = answers
+        .into_iter()
+        .filter(|answer| !is_unsafe_address(answer.ip()) && (this_machine || classify(answer.ip()) != Loopback))
+        .collect();
+    if kept.is_empty() {
+        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, UNSAFE_ADDRESS));
+    }
+    Ok(kept)
 }
 
 /// GET `url` through the system proxy, re-checking every redirect target with
@@ -383,7 +418,7 @@ fn link_agent(url: &str, timeout: std::time::Duration) -> ureq::Agent {
 fn get_checked(url: &str, timeout: std::time::Duration) -> Result<ureq::Response, ureq::Error> {
     let validate = |next: &str| {
         if is_unsafe_fetch_target(next) {
-            Err("private or link-local address".to_string())
+            Err(UNSAFE_ADDRESS.to_string())
         } else {
             Ok(())
         }
@@ -417,37 +452,24 @@ fn bare_host(url: &str) -> &str {
     }
 }
 
-/// True when `url`'s literal host is private (RFC1918), link-local
-/// (169.254.0.0/16 — the address every major cloud provider serves instance
-/// metadata from — and its IPv6 twin `fe80::/10`), unspecified, multicast, or
-/// unique-local IPv6 (`fc00::/7`), including an IPv4 one written in an IPv6
-/// form (`[::ffff:169.254.169.254]`).
+/// True when `url`'s host is written as an address that is private,
+/// link-local (where cloud providers serve instance metadata), unspecified or
+/// multicast, in any IPv6 form that carries an IPv4 one. Applied to the start
+/// URL and to every redirect target ([`get_checked`]); a name is checked by
+/// what it resolves to when the request connects ([`safe_answers`]).
 ///
-/// Deliberately does NOT include loopback: this crate's own test suite fakes
-/// "a real remote server" with a `127.0.0.1` `TcpListener` throughout (every
-/// `spawn_*_server` helper in this file and in `html_tests.rs`), so blocking
-/// it here would make the fetch this guards untestable in this codebase's
-/// own idiom, not just harder to exploit. Loopback is also the narrower
-/// threat of the two: reaching the build machine's OWN local services is
-/// less valuable to an attacker than reaching its private network or its
-/// cloud metadata endpoint, which is what link-local and RFC1918 actually
-/// gate.
-///
-/// A build fetches a URL the VAULT AUTHOR wrote in their own content — on a
-/// human's own machine that is not a privilege boundary, since they already
-/// have whatever network access this check would otherwise be guarding.
-/// This exists for the case this fetch actually runs unattended
-/// (`exits_after_build`: a CI runner or a hosted build), where a linked
-/// THIRD-PARTY page's own link could otherwise point the build machine's
-/// request at its own private network or cloud metadata endpoint. It is a
-/// literal-host check, applied to the start URL and to every redirect target
-/// ([`get_checked`]). A hostname that resolves to one of these addresses only at
-/// connect time (DNS rebinding) is NOT caught: closing that needs a custom
-/// resolver/connector, more machinery than this proportional guard is trying
-/// to be.
+/// A build fetches the addresses its pages link to, and a linked page can
+/// redirect anywhere: on a hosted or CI build that must not reach the
+/// machine's own network. A loopback address written out is fetched: the
+/// author wrote it, and this crate's tests serve from `127.0.0.1`.
 fn is_unsafe_fetch_target(url: &str) -> bool {
+    bare_host(url).parse().is_ok_and(is_unsafe_address)
+}
+
+/// The addresses [`is_unsafe_fetch_target`] refuses.
+fn is_unsafe_address(ip: std::net::IpAddr) -> bool {
     use crate::system::address::{classify, AddressClass::*};
-    bare_host(url).parse().is_ok_and(|ip| matches!(classify(ip), Private | LinkLocal | Unspecified | Multicast))
+    matches!(classify(ip), Private | LinkLocal | Unspecified | Multicast)
 }
 
 /// Fetch (or serve from the cache, however old) one URL's link metadata.
@@ -1962,6 +1984,32 @@ mod tests {
         assert_eq!(bare_host("http://user:pass@example.com/"), "example.com");
         assert_eq!(bare_host("http://[::1]:8080/"), "::1");
         assert_eq!(bare_host("http://[fe80::1]/"), "fe80::1");
+    }
+
+    /// An agent for which `host` resolves to `answers`, and the address to ask it for.
+    fn agent_resolving(host: &str, port: u16, answers: &[&str]) -> (ureq::Agent, String) {
+        let answers: Vec<std::net::SocketAddr> = answers.iter().map(|ip| std::net::SocketAddr::new(ip.parse().unwrap(), port)).collect();
+        let url = format!("http://{host}:{port}/");
+        (link_agent_looking_up(&url, std::time::Duration::from_secs(5), move |_| Ok(answers.clone())), url)
+    }
+
+    #[test]
+    fn a_name_that_resolves_only_to_refused_addresses_is_not_connected_to() {
+        // The last is a name someone else chose for this machine.
+        for answers in [&["10.0.0.5"][..], &["169.254.169.254"], &["::ffff:192.168.1.1", "100.64.0.1"], &["127.0.0.1", "::1"]] {
+            let (agent, url) = agent_resolving("preview.test", 80, answers);
+            let error = agent.get(&url).call().expect_err("no connection is made");
+            assert!(error.to_string().contains(UNSAFE_ADDRESS), "{answers:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_name_is_fetched_from_the_answer_that_is_allowed() {
+        let (base, server) = spawn_test_server("<title>ok</title>", 1);
+        let port: u16 = base.rsplit(':').next().unwrap().parse().unwrap();
+        let (agent, url) = agent_resolving("localhost", port, &["10.0.0.5", "127.0.0.1"]);
+        assert_eq!(agent.get(&url).call().unwrap().status(), 200);
+        server.join().unwrap();
     }
 
     #[test]
