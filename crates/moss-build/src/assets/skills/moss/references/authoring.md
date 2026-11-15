@@ -118,6 +118,8 @@ body[data-page="home"] .moss-hero { --moss-hero-object-position: center; }
 
 **Fonts by language.** moss's font stacks split by the page's language: Latin faces first by default, Han faces first on a Chinese, Japanese or Korean page. To change one language's faces on a bilingual site, set `--moss-font-heading` or `--moss-font-body` under `html:lang(en)` (or that language's tag) instead of `:root`, and the other language's pages keep theirs. Give each `@font-face` a `unicode-range` for the script its file covers, so text in the other script never downloads it.
 
+**Bold in a hosted font.** Bold text and headings are set at a medium weight, `--moss-font-weight-strong` and `--moss-font-heading-weight` (both 480). When the family leading `--moss-font-body` or `--moss-font-heading` is one your theme hosts with `@font-face` and it has no face from 401 to 500, where a browser would fall back to Regular, moss sets that weight to the family's lightest face above 500 (700 for a Regular and Bold pair); a weight your theme sets itself is kept.
+
 **The title size.** `--moss-title-size` sets the size of a page's title and a folder's title at every width (a length or `clamp()`). Unset, an article's title follows the reading size (40px by default) and a folder's title is 32px on a desktop and never larger on a phone.
 
 

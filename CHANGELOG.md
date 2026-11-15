@@ -9,6 +9,7 @@ All notable changes to moss will be documented here.
 - In a grid listing, a folder card whose count is hidden (`children_count: false`) shows its folder's `description:` under the title, as a page's card does. It used to show the title alone.
 - A theme stylesheet brought in by `@import` has the fonts and pictures it refers to published under names that change with the file, like those in `style.css`, and `@import "fonts.css"` without `url()` is renamed the same way. Such a sheet kept pointing at the plain names, so a font replaced behind it could be answered from an old copy.
 - Selected text is tinted with the site's accent colour. The tint was moss's green whatever accent a theme set.
+- Bold text and headings are bold in a font the theme hosts as Regular and Bold only. moss asks for them at weight 480, which a browser draws in Regular when the family has no face from 401 to 500; the build now sets `--moss-font-weight-strong` and `--moss-font-heading-weight` to the family's lightest face above 500 unless the theme sets them. `--moss-font-weight-strong` is new: the weight of `strong` and `b`, a comment's author and a callout's title.
 
 ## [0.15.25] - 2026-11-16
 

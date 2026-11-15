@@ -76,7 +76,7 @@
         "crates/moss-build/src/vault/import/scrape": 17,
         "crates/moss-build/src/cli": 25,
         "crates/moss-build/src/build/components": 16,
-        "crates/moss-build/src/build/emit": 19,
+        "crates/moss-build/src/build/emit": 20,
         "crates/moss-build/src/assets/js": 18,
         "crates/moss-build/src/build/place_map": 16,
         "packages/moss-ui/src/ui/shared/ui": 19,

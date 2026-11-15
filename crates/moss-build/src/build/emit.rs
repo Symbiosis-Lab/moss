@@ -24,4 +24,5 @@ pub mod scripts;
 pub mod slots;
 pub mod stylesheet;
 pub mod theme_css_assets;
+pub mod theme_font_weights;
 pub mod welcome_email;

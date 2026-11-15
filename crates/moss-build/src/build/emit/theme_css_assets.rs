@@ -35,6 +35,8 @@ const MAX_HASHED_FILE_BYTES: u64 = 5 * 1024 * 1024;
 pub struct ThemeCss {
     pub css: String,
     pub files: Vec<(ServedPath, Vec<u8>)>,
+    /// The stylesheets `css` imports from the theme folder, as written.
+    pub imported: Vec<String>,
 }
 
 impl ThemeCss {
@@ -64,7 +66,7 @@ pub fn for_site(css: &str, source_root: &Path, evidence: &crate::build::cloud_le
     use crate::build::cloud_readiness::{probe_input, Found};
     let theme_dir = crate::moss_paths::MossPaths::new(source_root).theme_dir();
     let real_theme = theme_dir.canonicalize().ok();
-    let themed = rewrite(css, |rel| {
+    let mut themed = rewrite(css, |rel| {
         let path = theme_dir.join(rel);
         // The plain copy step does not follow symlinks; neither does this, or
         // a link pointing outside the folder would publish its target.
@@ -85,6 +87,8 @@ pub fn for_site(css: &str, source_root: &Path, evidence: &crate::build::cloud_le
             Err(_) => None,
         }
     });
+    let derived = super::theme_font_weights::rules(css, &themed.imported);
+    themed.css.push_str(&derived);
     // The stylesheet's recorded source hash is the rewritten sheet's (see the
     // render pass), so the ledger's read of the file advances with it.
     if themed.css != css {
@@ -98,9 +102,9 @@ pub fn for_site(css: &str, source_root: &Path, evidence: &crate::build::cloud_le
 /// written. A stylesheet it points at (`@import`) is rewritten the same way
 /// before it is hashed, its own references read from its own folder.
 pub fn rewrite(css: &str, read: impl FnMut(&str) -> Option<Vec<u8>>) -> ThemeCss {
-    let mut rewriter = Rewriter { read, by_rel: BTreeMap::new(), files: Vec::new(), open: Vec::new() };
+    let mut rewriter = Rewriter { read, by_rel: BTreeMap::new(), files: Vec::new(), open: Vec::new(), imported: Vec::new() };
     let css = rewriter.sheet(css, "");
-    ThemeCss { css, files: rewriter.files }
+    ThemeCss { css, files: rewriter.files, imported: rewriter.imported }
 }
 
 struct Rewriter<R> {
@@ -110,6 +114,7 @@ struct Rewriter<R> {
     files: Vec<(ServedPath, Vec<u8>)>,
     /// The imported stylesheets being rewritten, outermost first.
     open: Vec<String>,
+    imported: Vec<String>,
 }
 
 impl<R: FnMut(&str) -> Option<Vec<u8>>> Rewriter<R> {
@@ -192,6 +197,7 @@ impl<R: FnMut(&str) -> Option<Vec<u8>>> Rewriter<R> {
         self.open.push(rel.to_string());
         let rewritten = self.sheet(&css, dir);
         self.open.pop();
+        self.imported.push(css);
         Some(rewritten.into_bytes())
     }
 

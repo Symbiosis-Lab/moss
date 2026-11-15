@@ -437,7 +437,7 @@ body {
 
 strong,
 b {
-  font-weight: 480;
+  font-weight: var(--moss-font-weight-strong);
 }
 
 /* Clips an element to a 1px box while keeping it in the accessibility tree
