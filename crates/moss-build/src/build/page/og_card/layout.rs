@@ -403,7 +403,7 @@ pub(super) fn draw_plate(
     rect: PlateRect,
 ) -> Result<(), CardError> {
     let (w, h) = (rect.w.round().max(1.0) as u32, rect.h.round().max(1.0) as u32);
-    let scaled = img.resize_exact(w, h, image::imageops::FilterType::Lanczos3).to_rgba8();
+    let scaled = crate::build::media::scale::scale_exact(img, w, h).into_rgba8();
     let mut plate = tiny_skia::Pixmap::new(w, h)
         .ok_or_else(|| CardError::Encode("plate pixmap allocation failed".into()))?;
     // tiny-skia stores PREMULTIPLIED RGBA; `image` stores straight alpha.

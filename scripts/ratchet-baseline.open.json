@@ -63,7 +63,7 @@
       "value": {
         "crates/moss-build/src": 45,
         "crates/moss-build/src/build": 80,
-        "crates/moss-build/src/build/media": 20,
+        "crates/moss-build/src/build/media": 21,
         "crates/moss-build/src/deploy": 22,
         "crates/moss-build/src/js-src/bridge": 18,
         "crates/moss-build/src/js-src/site": 28,
@@ -105,7 +105,7 @@
       "disposition": "permanent",
       "armed": true,
       "value": {
-        "crates/moss-build/Cargo.toml": 90,
+        "crates/moss-build/Cargo.toml": 91,
         "crates/moss-cli/Cargo.toml": 5,
         "crates/moss-core/Cargo.toml": 9,
         "crates/moss-bindings/Cargo.toml": 5

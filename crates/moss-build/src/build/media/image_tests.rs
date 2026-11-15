@@ -539,6 +539,36 @@ fn rung_encode_produces_exact_width_ladder_files() {
     );
 }
 
+/// White bars over a transparent ground whose hidden colour is black. Scaled
+/// with colour weighted by coverage, a half-covered edge pixel is still white;
+/// scaled channel by channel, the hidden black bleeds in and it turns grey.
+#[test]
+fn a_scaled_picture_keeps_hidden_colour_out_of_its_edges() {
+    let h = harness();
+    let src = h._tmp.path().join("bars.png");
+    image::RgbaImage::from_fn(3000, 1600, |x, _| {
+        if (x / 97) % 2 == 0 { image::Rgba([255; 4]) } else { image::Rgba([0; 4]) }
+    })
+    .save_with_format(&src, image::ImageFormat::Png)
+    .unwrap();
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+    let outcome = convert_single_image(
+        &src, &source_oid, "bars.webp", &h.temp, &h.staging, &h.objects, &h.transforms,
+        &ImageCompressionConfig::default(), None, None, &HashMap::new(),
+    );
+    assert!(outcome.error.is_none(), "{:?}", outcome.error);
+
+    // The base is the 2400-bounded scale; each rung is its own scale.
+    for name in ["bars.webp", "bars.w800.webp", "bars.w1200.webp", "bars.w1600.webp"] {
+        let bytes = fs::read(h.staging.join(name)).unwrap_or_else(|e| panic!("read {name}: {e}"));
+        let img = image::load_from_memory_with_format(&bytes, image::ImageFormat::WebP).unwrap().to_rgba8();
+        let edges: Vec<_> = img.pixels().filter(|p| (64..=191).contains(&p.0[3])).collect();
+        let grey = edges.iter().filter(|p| p.0[0] < 170).count();
+        assert!(edges.len() > 1000, "{name}: only {} half-covered pixels to judge", edges.len());
+        assert!(grey * 10 < edges.len(), "{name}: {grey} of {} edge pixels turned grey", edges.len());
+    }
+}
+
 /// Test 2: a source below the ladder threshold produces NO rung files.
 #[test]
 fn rung_encode_below_threshold_produces_no_rung_files() {

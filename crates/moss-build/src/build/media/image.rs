@@ -1169,7 +1169,7 @@ pub(crate) fn convert_single_image(
 
     // ---- Step 4: resize ----
     // The decoded ORIENTED original outlives the base resize when a ladder
-    // exists: rung encodes (Step 10) `resize_exact` from IT, not from the
+    // exists: rung encodes (Step 10) scale from IT, not from the
     // max_edge-bounded base (no double resampling). `Option` lets the
     // no-ladder path move `img` into `resized` exactly as before — no clone.
     let (w, h) = (img.width(), img.height());
@@ -1181,7 +1181,8 @@ pub(crate) fn convert_single_image(
     let mut original: Option<image::DynamicImage> = Some(img);
     let bound = moss_core::asset_paths::deployed_long_edge(w, h, config.max_edge);
     let resized = if bound < w.max(h) {
-        original.as_ref().unwrap().resize(bound, bound, image::imageops::FilterType::Lanczos3)
+        let (fit_w, fit_h) = super::scale::fit_within(w, h, bound);
+        super::scale::scale_exact(original.as_ref().unwrap(), fit_w, fit_h)
     } else if ladder_len > 0 {
         // Small-but-laddered source (e.g. 2000×1200 under the 2400 cap):
         // the base encodes the unresized pixels, and the original must stay

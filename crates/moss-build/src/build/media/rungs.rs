@@ -113,7 +113,7 @@ pub(crate) fn decode_oriented(source_file: &Path) -> Result<image::DynamicImage,
 /// full encode path of [`convert_single_image`]) so a base failure never
 /// yields rung-only output. Per `ladder_rungs` width — warm: a cached
 /// `image/webp-w{N}` blob is linked to staging (no decode); cold:
-/// `resize_exact` from the decoded ORIENTED original to EXACTLY
+/// [`super::scale::scale_exact`] from the decoded ORIENTED original to EXACTLY
 /// `(rung, h·rung/w)` — the u64 mul/div `.max(1)` integer family of
 /// `asset_paths::deployed_width` — so the emitted `w`-descriptor and encoded
 /// pixels agree. Bounding-box `resize()` is FORBIDDEN: it can undershoot the
@@ -281,7 +281,7 @@ pub(crate) fn encode_rungs(
             }
         }
 
-        // ---- Cold path: resize_exact from the decoded ORIENTED original. ----
+        // ---- Cold path: scale from the decoded ORIENTED original. ----
         let img: &image::DynamicImage = match decoded {
             Some(i) => i,
             None => {
@@ -301,7 +301,7 @@ pub(crate) fn encode_rungs(
                 lazy.as_ref().unwrap()
             }
         };
-        let resized = img.resize_exact(rung, target_h, image::imageops::FilterType::Lanczos3);
+        let resized = super::scale::scale_exact(img, rung, target_h);
         // No alpha flatten: `encode_webp` encodes alpha directly (`from_rgba`);
         // see `image.rs::flatten_alpha_to_white`'s doc comment for why this
         // rung pass never needed it. `params` above is `config.to_params()`,

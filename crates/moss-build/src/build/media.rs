@@ -47,6 +47,7 @@ pub mod qr;
 pub mod raw_img_warning;
 pub(crate) mod remote_cover;
 pub mod rungs;
+pub(crate) mod scale;
 pub(crate) mod sniff;
 pub mod symlink;
 pub mod video;
