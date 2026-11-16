@@ -11,7 +11,7 @@
 //! so round-tripping through the typed struct (which has no catch-all field)
 //! would silently drop them.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use serde_yaml::Value;
 
 use crate::frontmatter::{self, FieldEdit};
@@ -138,7 +138,7 @@ pub enum PlanError {
     /// The folder a template names does not exist in the target tree.
     FolderMissing(String),
     LanguageNotInSite(String),
-    /// The page already has a version in that language.
+    /// The page already has a version in that language, at this path.
     AlreadyTranslated(String),
     /// The original's frontmatter cannot take the translation key.
     OriginalNotEditable(String),
@@ -238,9 +238,30 @@ pub fn plan_page_from_template(
 /// translation does not copy them.
 const LANGUAGE_FIELDS: [&str; 8] = ["title", "description", "lang", "uid", "url", "origin", "syndicated", "translationKey"];
 
+/// The page that already is a page's version in another language: the one at
+/// the `mirrored` path, or the one in that language's tree carrying the page's
+/// `translationKey` (`target_keys` maps each key in the tree to its page).
+pub fn existing_translation(
+    mirrored: &str,
+    source_key: Option<&str>,
+    existing_paths: &BTreeSet<String>,
+    target_keys: &BTreeMap<String, String>,
+) -> Option<String> {
+    if existing_paths.contains(mirrored) {
+        return Some(mirrored.to_string());
+    }
+    source_key.and_then(|key| target_keys.get(key)).cloned()
+}
+
+/// A page's `translationKey`, when it has one.
+pub fn translation_key(text: &str) -> Option<String> {
+    frontmatter::parse(text).frontmatter.get("translationKey").and_then(frontmatter::value_as_string).filter(|k| !k.is_empty())
+}
+
 /// The other language's version of `source_path`, at the mirrored path in
 /// `target_lang`. Its key links it to the original, and the original gains
-/// that key when it had none.
+/// that key when it had none. `target_keys` maps each `translationKey` in the
+/// target tree to its page, which [`PlanError::AlreadyTranslated`] names.
 #[allow(clippy::too_many_arguments)]
 pub fn plan_translation(
     source_path: &str,
@@ -248,7 +269,7 @@ pub fn plan_translation(
     target_lang: &str,
     langs: &SiteLanguages,
     existing_paths: &BTreeSet<String>,
-    target_keys: &BTreeSet<String>,
+    target_keys: &BTreeMap<String, String>,
     all_keys: &BTreeSet<String>,
     template_file: Option<&TemplateFile>,
     declared_claim_keys: &[String],
@@ -264,13 +285,17 @@ pub fn plan_translation(
         Some(tree) => format!("{tree}/{rel}"),
         None => rel.to_string(),
     };
-    if source_tree == target || existing_paths.contains(&path) {
+    if source_tree == target {
         return Err(PlanError::AlreadyTranslated(path));
+    }
+    let source_key = translation_key(source_text);
+    if let Some(page) = existing_translation(&path, source_key.as_deref(), existing_paths, target_keys) {
+        return Err(PlanError::AlreadyTranslated(page));
     }
 
     let source = frontmatter::parse(source_text);
     let mut original_edits = Vec::new();
-    let key = match source.frontmatter.get("translationKey").and_then(frontmatter::value_as_string).filter(|k| !k.is_empty()) {
+    let key = match source_key {
         Some(key) => key,
         None => {
             let key = unique_key(file_stem(rel), all_keys);
@@ -278,9 +303,6 @@ pub fn plan_translation(
             key
         }
     };
-    if target_keys.contains(&key) {
-        return Err(PlanError::AlreadyTranslated(path));
-    }
     if !original_edits.is_empty() {
         frontmatter::edit_fields(source_text, &original_edits).map_err(PlanError::OriginalNotEditable)?;
     }
@@ -473,11 +495,12 @@ mod tests {
         text: &str,
         target: &str,
         existing: &[&str],
-        keys: &[&str],
+        keys: &[(&str, &str)],
         all: &[&str],
         template: Option<&TemplateFile>,
     ) -> Result<PlannedTranslation, PlanError> {
-        plan_translation(path, text, target, &site(), &set(existing), &set(keys), &set(all), template, &[])
+        let keys = keys.iter().map(|(key, page)| (key.to_string(), page.to_string())).collect();
+        plan_translation(path, text, target, &site(), &set(existing), &keys, &set(all), template, &[])
     }
 
     #[test]
@@ -642,7 +665,7 @@ mod tests {
     fn already_translated_is_an_error() {
         let by_path = translate("work/paper-bridges.md", KEYED, "zh-hans", &["zh-hans/work/paper-bridges.md"], &[], &["paper-bridges"], None);
         assert_eq!(by_path.unwrap_err(), PlanError::AlreadyTranslated("zh-hans/work/paper-bridges.md".to_string()));
-        let by_key = translate("work/paper-bridges.md", KEYED, "zh-hans", &[], &["paper-bridges"], &["paper-bridges"], None);
-        assert_eq!(by_key.unwrap_err(), PlanError::AlreadyTranslated("zh-hans/work/paper-bridges.md".to_string()));
+        let by_key = translate("work/paper-bridges.md", KEYED, "zh-hans", &[], &[("paper-bridges", "zh-hans/work/纸桥.md")], &["paper-bridges"], None);
+        assert_eq!(by_key.unwrap_err(), PlanError::AlreadyTranslated("zh-hans/work/纸桥.md".to_string()), "the refusal names the page that holds the key");
     }
 }

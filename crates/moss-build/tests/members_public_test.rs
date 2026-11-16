@@ -393,18 +393,72 @@ fn a_data_file_under_a_members_cascade_is_published_only_under_the_gated_prefix(
 
 #[test]
 fn the_manifest_records_the_bytes_written_for_each_gated_file() {
-    let site = site::Site::new(MAP_SITE);
-    let manifest = manifest_of(&site);
+    let mut files = MAP_SITE.to_vec();
+    files.push(("about.md", "---\ntitle: About\n---\nWho we are.\n"));
+    let site = site::Site::new(&files);
+    assert_gated_manifest_matches_generation(&site, "cold");
+    // A carried page is not rendered, so its gated version must be rendered on
+    // its own. The first unobserved build after a full one renders in full;
+    // the second proves from its seal and carries.
+    unobserved_build(&site);
+    assert!(unobserved_build(&site) > 0, "the unchanged build carried no page");
+    assert_gated_manifest_matches_generation(&site, "unchanged");
+    site.write("about.md", "---\ntitle: About\n---\nWho we are, and since when.\n");
+    assert!(unobserved_build(&site) > 0, "the edited build carried no page");
+    assert_gated_manifest_matches_generation(&site, "public edit");
+}
+
+const TIDE: &str = "tide-private-sentinel-430918";
+
+/// A cascade added to or removed from a warm site moves a page it never
+/// touched into or out of `_gated/`, and the manifest follows.
+#[test]
+fn a_cascade_toggled_on_a_warm_site_moves_its_pages_into_and_out_of_gated() {
+    let tide = format!("---\ntitle: Tide\ndate: 2026-01-06\n---\nTables for the week.\n<!--members-only-->\n{TIDE}\n");
+    let mut files = MAP_SITE.to_vec();
+    files.push(("notes/index.md", "---\ntitle: Notes\n---\nNotes.\n"));
+    files.push(("notes/tide.md", &tide));
+    let site = site::Site::new(&files);
+    unobserved_build(&site);
+    assert!(unobserved_build(&site) > 0, "the site is warm");
+    assert!(site.html("notes/tide/index.html").contains(TIDE), "a public page shows its whole body");
+
+    site.write("notes/index.md", "---\ntitle: Notes\ncascade: { members: subscribers }\n---\nNotes.\n");
+    assert_eq!(unobserved_build(&site), 0, "a cascade edit renders every page; if it now carries pages, prove here that a carried page's public version loses its members-only text and its _gated/ entry is written");
+    assert!(!site.html("notes/tide/index.html").contains(TIDE), "the cascaded page's public version holds its members-only text");
+    assert!(site.html("_gated/notes/tide/index.html").contains(TIDE), "the gated version holds the whole body");
+    assert!(manifest_of(&site).contains_key("_gated/notes/tide/index.html"), "the gated page is in the manifest");
+    assert_gated_manifest_matches_generation(&site, "cascade added");
+
+    site.write("notes/index.md", "---\ntitle: Notes\n---\nNotes.\n");
+    assert_eq!(unobserved_build(&site), 0, "a cascade edit renders every page; if it now carries pages, prove here that a carried page's _gated/ entry is removed and its public version is whole again");
+    assert!(!manifest_of(&site).contains_key("_gated/notes/tide/index.html"), "the gated entry outlived its cascade");
+    assert!(!site.output("_gated/notes/tide/index.html").exists(), "the gated file outlived its cascade");
+    assert!(site.html("notes/tide/index.html").contains(TIDE), "the page is public again");
+    assert_gated_manifest_matches_generation(&site, "cascade removed");
+}
+
+/// Build as `moss build` does, proving from the last seal; returns how many
+/// pages it carried.
+fn unobserved_build(site: &site::Site) -> u64 {
+    site::build_sync(&site.root.to_string_lossy(), BuildTrigger::Unobserved).unwrap();
+    let profile = fs::read_to_string(site.root.join(".moss/build.nosync/profile.jsonl")).unwrap();
+    let record: serde_json::Value = serde_json::from_str(profile.lines().last().unwrap()).unwrap();
+    record["counts"]["pages_carried"].as_u64().unwrap()
+}
+
+fn assert_gated_manifest_matches_generation(site: &site::Site, build_kind: &str) {
+    let manifest = manifest_of(site);
     // The bytes a deploy uploads: the sealed generation, not the preview stage.
     let build = site.root.join(".moss/build.nosync");
     let generation = build.join("generations").join(fs::read_to_string(build.join("current.generation")).unwrap().trim());
     let gated: Vec<_> = manifest.iter().filter(|(path, _)| path.starts_with("_gated/")).collect();
     for name in ["_gated/maps/incidents/report/index.html", "_gated/maps/incidents/by-region.json"] {
-        assert!(gated.iter().any(|(path, _)| *path == name), "{name} is in the manifest");
+        assert!(gated.iter().any(|(path, _)| *path == name), "{build_kind} build: {name} is in the manifest");
     }
     for (path, entry) in gated {
         let written = moss_build::build::assets::paths::compute_binary_hash(&fs::read(generation.join(path)).unwrap());
-        assert_eq!(entry.rsplit(':').next(), Some(written.as_str()), "{path}: the manifest names other bytes than the file holds");
+        assert_eq!(entry.rsplit(':').next(), Some(written.as_str()), "{build_kind} build: {path}: the manifest names other bytes than the file holds");
     }
 }
 
@@ -450,7 +504,7 @@ fn a_members_cascade_on_a_page_that_is_not_a_folder_home_is_reported() {
         ("maps/index.md", "---\ntitle: Map\n---\nMap.\n"),
         ("maps/detail.md", "---\ntitle: Detail\ncascade: { members: subscribers }\n---\nDetail.\n"),
     ]);
-    assert!(site::problems().iter().any(|line| line.contains("[maps/detail.md]") && line.contains("has no effect")), "{:?}", site.logged);
+    assert!(site.problems.iter().any(|line| line.contains("[maps/detail.md]") && line.contains("has no effect")), "{:?}", site.logged);
 }
 
 const PARA: &str = "lantern-paragraph-sentinel-770412";
@@ -512,4 +566,72 @@ fn the_private_part_of_a_members_page_changes_no_public_file() {
 
     // A draft is published nowhere, so it has no members-only version either.
     assert!(!site.output("_gated/drafted").exists());
+}
+
+const SCRIPT: &str = "window.regions = {\"north-quay\": 2};\n";
+const NOTICE: &str = "maps/incidents/detail.js is in a members folder and is published to everyone. Put members-only data in a CSV or JSON file.";
+
+fn script_site(cascade: &str) -> site::Site {
+    site::Site::new(&[
+        (".moss/config.toml", CONFIG),
+        ("index.md", "---\ntitle: Harbour watch\n---\nWelcome.\n"),
+        ("maps/incidents/index.md", &format!("---\npartial: true\ncascade: {{ members: {cascade} }}\n---\n")),
+        ("maps/incidents/detail.js", SCRIPT),
+        ("maps/incidents/map.css", "body { color: teal; }\n"),
+        ("maps/regions.js", SCRIPT),
+    ])
+}
+
+/// The published script, read from the sealed generation a deploy uploads, with its manifest entry.
+fn sealed_script(site: &site::Site) -> (String, Option<String>) {
+    let build = site.root.join(".moss/build.nosync");
+    let generation = build.join("generations").join(fs::read_to_string(build.join("current.generation")).unwrap().trim());
+    let bytes = fs::read_to_string(generation.join("maps/incidents/detail.js")).unwrap();
+    (bytes, manifest_of(site).get("maps/incidents/detail.js").cloned())
+}
+
+#[test]
+fn a_script_a_members_folder_publishes_to_everyone_is_named_and_published_unchanged() {
+    let members = script_site("subscribers");
+    let problems = &members.problems;
+    let public = script_site("public");
+    let (bytes, entry) = sealed_script(&members);
+    assert_eq!(bytes, SCRIPT, "published at its own address, whole");
+    assert!(entry.is_some(), "in the manifest a deploy uploads");
+    assert_eq!((bytes, entry), sealed_script(&public), "the notice changes nothing published");
+    assert!(!members.output("_gated/maps/incidents/detail.js").exists());
+
+    assert_eq!(members.notes.iter().filter(|line| line.as_str() == NOTICE).count(), 1, "{:?}", members.notes);
+    assert_eq!(assert_named_are_published(&members, &members.notes), ["maps/incidents/detail.js"]);
+    assert!(!problems.iter().any(|line| line.contains("detail.js")), "a notice, not a problem: {problems:?}");
+    assert!(!members.notes.iter().any(|line| line.contains("map.css") || line.contains("maps/regions.js")), "{:?}", members.notes);
+    assert!(!public.notes.iter().any(|line| line.contains("published to everyone")), "{:?}", public.notes);
+
+    members.rebuild();
+    assert_eq!(site::notes().iter().filter(|line| line.as_str() == NOTICE).count(), 1, "a warm rebuild names it again");
+}
+
+/// The paths the notes name, each of which must be in the manifest a deploy uploads.
+fn assert_named_are_published(site: &site::Site, notes: &[String]) -> Vec<String> {
+    let named: Vec<String> = notes.iter().filter_map(|line| line.strip_suffix(" is in a members folder and is published to everyone. Put members-only data in a CSV or JSON file.")).map(str::to_string).collect();
+    let manifest = manifest_of(site);
+    for path in &named {
+        assert!(manifest.contains_key(path), "{path} is named but not published");
+    }
+    named
+}
+
+/// What is not served is not named: a root `script.js` (the theme's script
+/// lives in `.moss/theme/`), and scripts in folders a build leaves out.
+#[test]
+fn a_script_that_is_not_served_is_not_named() {
+    let site = site::Site::new(&[
+        ("index.md", "---\ntitle: Harbour watch\ncascade: { members: subscribers }\n---\nWelcome.\n"),
+        ("script.js", SCRIPT),
+        ("node_modules/charts/index.js", SCRIPT),
+        ("_moss/extra.js", SCRIPT),
+        ("maps/detail.js", SCRIPT),
+    ]);
+    assert_eq!(assert_named_are_published(&site, &site.notes), ["maps/detail.js"], "{:?}", site.notes);
+    assert!(!site.output("script.js").exists());
 }

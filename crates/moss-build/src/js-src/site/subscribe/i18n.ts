@@ -14,10 +14,10 @@ export interface SubscribeCopy {
   placeholder: string;
   /** Submit button label. */
   label: string;
-  /** Shown after a fresh subscribe — double-opt-in confirmation prompt. */
+  /** Shown once the link is on its way. */
   checkEmail: string;
-  /** Shown when the email was already confirmed. */
-  alreadySubscribed: string;
+  /** Shown in place of the field and button to a browser signed in to the site. */
+  subscribed: string;
   /** Shown on network / server error. */
   error: string;
 }
@@ -26,29 +26,29 @@ export const COPY: Record<Lang, SubscribeCopy> = {
   en: {
     placeholder: 'your@email.com',
     label: 'Subscribe',
-    checkEmail: 'Check your email to confirm.',
-    alreadySubscribed: "You’re already subscribed.",
+    checkEmail: 'Check your email.',
+    subscribed: 'Subscribed',
     error: 'Something went wrong. Try again?',
   },
   de: {
     placeholder: 'ihre@email.de',
     label: 'Abonnieren',
-    checkEmail: 'Bitte bestätigen Sie das Abonnement in Ihrer E-Mail.',
-    alreadySubscribed: 'Sie haben bereits abonniert.',
+    checkEmail: 'Bitte prüfen Sie Ihre E-Mail.',
+    subscribed: 'Abonniert',
     error: 'Es ist ein Fehler aufgetreten. Bitte versuchen Sie es erneut.',
   },
   'zh-hans': {
     placeholder: '邮箱',
     label: '订阅',
-    checkEmail: '请在邮箱中确认订阅',
-    alreadySubscribed: '你已订阅。',
+    checkEmail: '请查收邮件',
+    subscribed: '已订阅',
     error: '出错了，请重试。',
   },
   'zh-hant': {
     placeholder: '電子郵件',
     label: '訂閱',
-    checkEmail: '請在電子郵件中確認訂閱',
-    alreadySubscribed: '你已訂閱。',
+    checkEmail: '請查收郵件',
+    subscribed: '已訂閱',
     error: '出錯了，請重試。',
   },
 };

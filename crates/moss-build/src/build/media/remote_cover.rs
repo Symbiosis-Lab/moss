@@ -25,7 +25,7 @@
 //! (or relinks it from the store). Only when one is missing is the picture
 //! decoded and encoded again.
 
-use crate::build::cache::{ObjectStore, TransformCache};
+use crate::build::cache::{Fit, Need, ObjectStore, TransformCache};
 use super::image::{convert_single_image, ImageCompressionConfig};
 use crate::build::io_utils;
 use crate::build::lifecycle::cas_heal::{rematerialize_with_record, HealOutcome, Placement, StagedLinks};
@@ -147,7 +147,9 @@ impl Stage<'_> {
         let served = |path: &str| ServedPath::for_jupyterlite_asset(Path::new(path));
 
         let webp = moss_core::asset_paths::to_webp(original.as_str());
-        if !self.heal(record.as_ref(), "image/webp", &webp) {
+        let source = (width, height);
+        let base_need = || Some(Need::Scaled { source, bound: moss_core::asset_paths::deployed_long_edge(width, height, ImageCompressionConfig::default().max_edge) });
+        if !self.heal(record.as_ref(), "image/webp", &webp, Fit::Kept(&base_need)) {
             return None;
         }
         // A webp source is served from the encoded webp itself, at the same
@@ -162,7 +164,9 @@ impl Stage<'_> {
         let mut complete = true;
         for w in rungs {
             let path = moss_core::asset_paths::to_webp_rung(&webp, *w);
-            if self.heal(record.as_ref(), &format!("image/webp-w{w}"), &path) {
+            let target_h = ((u64::from(height) * u64::from(*w) / u64::from(width)) as u32).max(1);
+            let rung_need = || Some(Need::Dims(*w, target_h));
+            if self.heal(record.as_ref(), &format!("image/webp-w{w}"), &path, Fit::Kept(&rung_need)) {
                 outputs.push((served(&path), HashBucket::ImageVariants));
             } else {
                 complete = false;
@@ -172,8 +176,8 @@ impl Stage<'_> {
     }
 
     /// Whether `path` now holds the blob `record` names for `transform`.
-    fn heal(&mut self, record: Option<&crate::build::cache::TransformRecord>, transform: &str, path: &str) -> bool {
-        let outcome = rematerialize_with_record(&self.objects, record, &self.params, &mut self.staged, &self.output_dir.join(path), transform);
+    fn heal(&mut self, record: Option<&crate::build::cache::TransformRecord>, transform: &str, path: &str, fit: Fit<'_>) -> bool {
+        let outcome = rematerialize_with_record(&self.objects, record, &self.params, fit, &mut self.staged, &self.output_dir.join(path), transform);
         matches!(outcome, HealOutcome::AlreadyPresent { .. } | HealOutcome::Healed { .. })
     }
 }
@@ -465,10 +469,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// Outputs encoded under other parameters (an older moss's settings) are
-    /// encoded again, not reused because their files are still in place.
+    /// A cover encoded under other parameters (an older moss's settings) keeps
+    /// its published bytes while its pixel size is still today's.
     #[test]
-    fn a_cover_encoded_under_other_parameters_is_encoded_again() {
+    fn a_cover_encoded_under_other_parameters_is_kept() {
         let (root, mut link_meta, hashes, original) = first_generation("params", &tiny_png_bytes(), "png");
         let oid = link_meta["https://example.com/post"].cover.clone().unwrap();
         let oid = oid.split_once('.').unwrap().0;
@@ -480,12 +484,52 @@ mod tests {
         transforms.put(&record, crate::build::cache::RecordMode::Wait).unwrap();
 
         let (encoded, files) = next_generation(&root, &mut link_meta, hashes);
-        assert_eq!(encoded, 1);
-        let current = ImageCompressionConfig::default().to_params();
+        assert_eq!(encoded, 0);
         let record = transforms.get_with(oid, crate::build::cache::RecordMode::Wait).unwrap();
-        assert_eq!(record.transforms["image/webp"].params, current);
+        assert_eq!(record.transforms["image/webp"].params, serde_json::json!({ "quality": 1 }));
         let webp = moss_core::asset_paths::to_webp(&original);
         assert_eq!(files.get(&webp), Some(&entry_on_disk(&root, &webp)));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A rung keeps bytes made with other parameters while it is still today's
+    /// pixel size, and is encoded again once it is not.
+    #[test]
+    fn kept_recipe_a_cover_rung_of_todays_size_keeps_its_bytes() {
+        use crate::build::cache::RecordMode::Wait;
+        let (root, mut link_meta, hashes, original) = first_generation("rung_params", &image_bytes(900, 500, image::ImageFormat::Png), "png");
+        let oid = link_meta["https://example.com/post"].cover.clone().unwrap();
+        let oid = oid.split_once('.').unwrap().0.to_string();
+        let paths = MossPaths::from_moss_dir(root.join(".moss"));
+        let (objects, transforms) = (ObjectStore::for_site(&paths), TransformCache::for_site(&paths));
+        let rung = moss_core::asset_paths::to_webp_rung(&moss_core::asset_paths::to_webp(&original), 800);
+        let plant = |scale: u32| {
+            let mut record = transforms.get_with(&oid, Wait).unwrap();
+            let entry = record.transforms.get_mut("image/webp-w800").expect("the fixture needs an 800 rung");
+            let img = image::load_from_memory(&std::fs::read(objects.get_path(&entry.oid).unwrap()).unwrap()).unwrap();
+            let img = img.resize_exact(img.width() / scale, img.height() / scale, image::imageops::FilterType::Triangle);
+            let bytes = crate::build::media::image::encode_webp(&img, 10, None).unwrap();
+            entry.oid = objects.store_bytes(&bytes, Wait).unwrap();
+            entry.size = bytes.len() as u64;
+            entry.params = serde_json::json!({ "quality": 10 });
+            entry.kept_for = None;
+            transforms.put(&record, Wait).unwrap();
+            bytes
+        };
+
+        let planted = plant(1);
+        let (encoded, files) = next_generation(&root, &mut link_meta, hashes);
+        assert_eq!(encoded, 0, "a rung of today's size is staged, not encoded");
+        assert!(std::fs::read(root.join("site").join(&rung)).unwrap() == planted, "the rung keeps its bytes");
+
+        let planted = plant(2);
+        let mut hashes = SiteHashes::default();
+        hashes.files = files;
+        let (encoded, _) = next_generation(&root, &mut link_meta, hashes);
+        assert_eq!(encoded, 1, "a rung of another size is encoded again");
+        let on_disk = std::fs::read(root.join("site").join(&rung)).unwrap();
+        assert!(on_disk != planted);
+        assert_eq!(image::load_from_memory(&on_disk).unwrap().width(), 800);
         let _ = std::fs::remove_dir_all(root);
     }
 

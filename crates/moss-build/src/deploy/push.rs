@@ -1791,17 +1791,20 @@ mod tests {
         assert!(probe.starts_with("GET /api/sites/behind-test/generation"), "got: {probe}");
     }
 
-    /// A folder whose last publish served `/feed.xml`, which this build does
-    /// not produce: the address would go offline with nobody having asked.
-    fn folder_that_lost_its_feed() -> tempfile::TempDir {
+    /// A folder whose last publish served its page `kept.md` at `/gone/`,
+    /// where this build serves nothing: the page's old address would go
+    /// offline with nobody having asked.
+    fn folder_that_lost_a_page() -> tempfile::TempDir {
         let tmp = folder_that_last_published(false);
+        std::fs::write(tmp.path().join("kept.md"), "---\ntitle: Kept\n---\n\nStill here.\n").unwrap();
         crate::build::manifest::published_record::save(
             &MossPaths::new(tmp.path()),
             &crate::build::manifest::change_set::PublishedSnapshot {
                 generation_id: "ours".to_string(),
                 target: "moss:behind-test".to_string(),
                 published_at: "2026-09-20T09:12:30+00:00".to_string(),
-                files: [("legacy-feed.xml".to_string(), "100644:abc".to_string())].into(),
+                files: [("gone/index.html".to_string(), "100644:abc".to_string())].into(),
+                source_to_output: [("kept.md".to_string(), "gone/index.html".to_string())].into(),
                 asset_source_to_output: Some(Default::default()),
                 ..Default::default()
             },
@@ -1817,13 +1820,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_deploy_that_would_take_an_address_offline_is_refused_with_both_ways_out() {
         let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        let folder = folder_that_lost_its_feed();
+        let folder = folder_that_lost_a_page();
         let addr = mock_seta_sequence(vec![json_200(r#"{"generation_id":"ours"}"#)]).await;
 
         let result = with_seta_url(addr, cli_deploy(folder.path(), false)).await;
 
         let err = result.expect_err("an unexplained removal must stop the publish");
-        assert!(err.contains("/legacy-feed.xml"), "{err}");
+        assert!(err.contains("/gone/"), "{err}");
         assert!(err.contains("--accept-removals"), "{err}");
     }
 
@@ -1872,16 +1875,16 @@ mod tests {
         assert!(matches!(result, Ok(PushResult::Success { .. })), "got: {result:?}");
     }
 
-    /// The whole path for a moved folder: a file under it is refused as moved
+    /// The whole path for a moved folder: an HTML page under it is refused as moved
     /// (not passed as deleted), and one folder line keeps every address under
     /// the old folder, so the next publish goes through.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_moved_folder_publishes_once_one_folder_redirect_is_added() {
         let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let folder = folder_that_last_published(false);
-        let bytes = b"%PDF-1.4 plan";
+        let bytes = b"<!doctype html><title>Plan</title>";
         std::fs::create_dir_all(folder.path().join("review/client/old")).unwrap();
-        std::fs::write(folder.path().join("review/client/old/plan.pdf"), bytes).unwrap();
+        std::fs::write(folder.path().join("review/client/old/plan.html"), bytes).unwrap();
         let hash = crate::types::content::file_entry(&crate::build::assets::paths::compute_binary_hash(bytes));
         crate::build::manifest::published_record::save(
             &MossPaths::new(folder.path()),
@@ -1889,8 +1892,8 @@ mod tests {
                 generation_id: "ours".to_string(),
                 target: "moss:behind-test".to_string(),
                 published_at: "2026-09-20T09:12:30+00:00".to_string(),
-                files: [("review/old/plan.pdf".to_string(), hash)].into(),
-                asset_source_to_output: Some([("review/old/plan.pdf".to_string(), "review/old/plan.pdf".to_string())].into()),
+                files: [("review/old/plan.html".to_string(), hash)].into(),
+                asset_source_to_output: Some([("review/old/plan.html".to_string(), "review/old/plan.html".to_string())].into()),
                 ..Default::default()
             },
         )
@@ -1905,7 +1908,7 @@ mod tests {
 
         let refused = with_seta_url(addr, cli_deploy(folder.path(), false)).await;
         let text = refused.expect_err("the file moved and nothing answers at its old address");
-        assert!(text.contains(r#""/review/old/plan.pdf" = "/review/client/old/plan.pdf""#), "{text}");
+        assert!(text.contains(r#""/review/old/plan.html" = "/review/client/old/plan.html""#), "{text}");
 
         std::fs::write(folder.path().join(".moss/config.toml"), "[redirects]\n\"/review/old/\" = \"/review/client/old/\"\n").unwrap();
         let result = with_seta_url(addr, cli_deploy(folder.path(), false)).await;
@@ -1918,7 +1921,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn accepting_the_removals_publishes() {
         let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        let folder = folder_that_lost_its_feed();
+        let folder = folder_that_lost_a_page();
         let addr = mock_seta_sequence(vec![
             json_200(r#"{"generation_id":"ours"}"#),
             json_200(r#"{"generation_id":"live"}"#),
@@ -1936,7 +1939,7 @@ mod tests {
         assert!(warnings().is_empty(), "accepted removals must not ask for action");
         let removed = crate::system::build_records::records()
             .removed_addresses(&folder.path().to_string_lossy()).unwrap();
-        assert!(removed.iter().any(|r| r.path == "legacy-feed.xml"));
+        assert!(removed.iter().any(|r| r.path == "gone/index.html"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

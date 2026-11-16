@@ -1128,7 +1128,7 @@ fn dispatch_external_url_youtube_emits_html() {
     match emit.output {
         EmitKind::Html(s) => {
             assert!(s.contains("<iframe"), "got: {s}");
-            assert!(s.contains("youtube.com/embed"), "got: {s}");
+            assert!(s.contains("https://www.youtube-nocookie.com/embed/"), "got: {s}");
             assert!(s.contains(r#"data-provider="youtube""#), "got: {s}");
         }
         other => panic!("expected Html, got: {other:?}"),

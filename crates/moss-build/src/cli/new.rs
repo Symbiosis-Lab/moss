@@ -4,7 +4,7 @@
 //! module reads the site, calls the planner and writes the result, so an
 //! agent can make a page and check where it landed.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
@@ -159,7 +159,7 @@ fn plan_message(err: PlanError) -> String {
             format!("The {dir} folder this template belongs to is gone. Choose a folder or delete the template.")
         }
         PlanError::LanguageNotInSite(lang) => format!("This site has no {lang} language folder."),
-        PlanError::AlreadyTranslated(path) => format!("{path} already exists, so the page is already translated."),
+        PlanError::AlreadyTranslated(path) => format!("This page is already translated: {path}."),
         PlanError::OriginalNotEditable(msg) => format!("The original page cannot be linked to its translation: {msg}"),
         PlanError::NoTemplateFile(id) => format!("Template '{id}' has no file to start from."),
         PlanError::Serialize(msg) => msg,
@@ -319,14 +319,55 @@ fn pages(root: &Path) -> Result<Vec<(String, Option<String>)>, String> {
             continue;
         }
         let Ok(text) = fs::read_to_string(entry.path()) else { continue };
-        let key = frontmatter::parse(&text)
-            .frontmatter
-            .get("translationKey")
-            .and_then(frontmatter::value_as_string)
-            .filter(|k| !k.is_empty());
-        out.push((site_rel(root, entry.path())?, key));
+        out.push((site_rel(root, entry.path())?, moss_core::template::translation_key(&text)));
     }
     Ok(out)
+}
+
+/// Each `translationKey` in one language's tree, with the page that carries it.
+fn keys_in_tree(pages: &[(String, Option<String>)], langs: &SiteLanguages, tree: Option<&str>) -> BTreeMap<String, String> {
+    pages
+        .iter()
+        .filter(|(p, _)| folder_in_default_tree(p, langs).1 == tree)
+        .filter_map(|(p, k)| Some((k.clone()?, p.clone())))
+        .collect()
+}
+
+/// One other language's place for a page's version.
+#[derive(Debug, serde::Serialize, specta::Type, PartialEq)]
+pub struct TranslationSlot {
+    pub lang: String,
+    /// The page that is the version, else the mirrored path one would be made at.
+    pub rel: String,
+    pub exists: bool,
+    /// The page is a folder's home file and that folder is missing in this language.
+    pub folder_missing: bool,
+}
+
+/// Every other language's place for the page at `rel`, decided as
+/// `moss new --translation` decides it. None for a site with one language.
+pub fn translation_slots(root: &Path, rel: &str) -> Result<Vec<TranslationSlot>, String> {
+    let langs = site_languages(root)?;
+    if langs.trees.is_empty() || !rel.ends_with(".md") {
+        return Ok(Vec::new());
+    }
+    let (inner, own) = folder_in_default_tree(rel, &langs);
+    let key = fs::read_to_string(root.join(rel)).ok().and_then(|text| moss_core::template::translation_key(&text));
+    let pages = pages(root)?;
+    let existing: BTreeSet<String> = pages.iter().map(|(p, _)| p.clone()).collect();
+    let file = Path::new(inner);
+    let name = |part: Option<&std::ffi::OsStr>| part.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+    let is_home = moss_core::home::is_home_file(&name(file.file_stem()), &name(file.parent().and_then(Path::file_name)));
+    let trees = std::iter::once(None).chain(langs.trees.iter().map(|t| Some(t.as_str())));
+    Ok(trees
+        .filter(|tree| *tree != own)
+        .map(|tree| {
+            let mirrored = tree.map_or_else(|| inner.to_string(), |t| format!("{t}/{inner}"));
+            let found = moss_core::template::existing_translation(&mirrored, key.as_deref(), &existing, &keys_in_tree(&pages, &langs, tree));
+            let folder_missing = is_home && !Path::new(&mirrored).parent().is_some_and(|dir| root.join(dir).is_dir());
+            TranslationSlot { lang: tree.unwrap_or(&langs.default_lang).to_string(), exists: found.is_some(), rel: found.unwrap_or(mirrored), folder_missing }
+        })
+        .collect())
 }
 
 fn translate(o: &Options, page: &str, cwd: &Path, home: Option<&Path>) -> Result<String, String> {
@@ -350,11 +391,7 @@ fn translate(o: &Options, page: &str, cwd: &Path, home: Option<&Path>) -> Result
     let pages = pages(&root)?;
     let existing_paths: BTreeSet<String> = pages.iter().map(|(p, _)| p.clone()).collect();
     let all_keys: BTreeSet<String> = pages.iter().filter_map(|(_, k)| k.clone()).collect();
-    let target_keys: BTreeSet<String> = pages
-        .iter()
-        .filter(|(p, _)| folder_in_default_tree(p, &langs).1 == target_tree)
-        .filter_map(|(_, k)| k.clone())
-        .collect();
+    let target_keys = keys_in_tree(&pages, &langs, target_tree);
 
     let template_file = template_for_translation(o, &root, &rel, &langs, target_tree)?;
 

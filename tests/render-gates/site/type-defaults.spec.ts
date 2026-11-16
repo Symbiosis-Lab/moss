@@ -554,3 +554,20 @@ test.describe("fonts for the page's script", () => {
     });
   }
 });
+
+test.describe("a quotation in running text", () => {
+  for (const width of [390, 1280]) {
+    test(`fills the text column at ${width}px, its rule on the paragraph's edge`, async ({ page }) => {
+      await open(page, "/quoted/", width);
+      const edges = (selector: string) =>
+        page.locator(selector).first().evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          return [r.left, r.right];
+        });
+      const [left, right] = await edges("article p");
+      const [quoteLeft, quoteRight] = await edges("article blockquote");
+      expect(quoteLeft).toBeCloseTo(left, 0);
+      expect(quoteRight).toBeCloseTo(right, 0);
+    });
+  }
+});

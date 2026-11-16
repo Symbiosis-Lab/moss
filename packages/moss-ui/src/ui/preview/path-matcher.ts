@@ -129,12 +129,3 @@ export function buildPreviewUrl(port: number, path?: string): string {
   return `${base}/${path}`;
 }
 
-/**
- * Convert a source markdown path to the corresponding HTML output path.
- *
- * @param sourcePath - Source file path (e.g., "blog/post.md")
- * @returns HTML output path (e.g., "blog/post.html")
- */
-export function sourcePathToHtmlPath(sourcePath: string): string {
-  return sourcePath.replace(/\.md$/, '.html');
-}

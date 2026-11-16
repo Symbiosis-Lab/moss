@@ -3485,3 +3485,54 @@ fn a_rule_inside_a_hero_is_the_page_s_own() {
     let md = ":::hero {image=a.jpg}\nTitle\n---\nA line.\n\n---\n\nMore.\n:::\n";
     assert_eq!(without_block_syntax(md), "Title\n---\nA line.\n\n---\n\nMore.\n");
 }
+
+#[test]
+fn a_word_outside_the_braces_that_a_grid_or_gallery_does_not_read_is_warned_about() {
+    let grid = extract_shortcodes(":::grid 2 wide\nA\n+++\nB\n:::\n");
+    match &grid.extracted[0].shortcode {
+        Shortcode::Grid(g) => assert_eq!((g.columns, g.width.as_deref()), (2, None)),
+        other => panic!("expected Grid, got {other:?}"),
+    }
+    assert!(grid.warnings.iter().any(|w| w.contains("`wide` outside its braces") && w.contains("`:::grid 3 {wide}`")), "{:?}", grid.warnings);
+
+    let unknown = extract_shortcodes(":::grid 2 1:2 roomy\nA\n+++\nB\n:::\n");
+    assert_eq!(unknown.warnings.len(), 1, "{:?}", unknown.warnings);
+    assert!(unknown.warnings[0].contains("`roomy` outside its braces"), "{:?}", unknown.warnings);
+
+    for (after, word) in [(":::grid {wide} 2\nA\n+++\nB\n:::\n", "`2`"), (":::gallery {wide} 3\na.jpg\n:::\n", "`3`"), (":::gallery 3 {per-line=4}\na.jpg\n:::\n", "`3`"), (":::grid 3 {per-line=2}\nA\n+++\nB\n:::\n", "`3`")] {
+        let result = extract_shortcodes(after);
+        assert_eq!(result.warnings.len(), 1, "{after}: {:?}", result.warnings);
+        assert!(result.warnings[0].contains(word), "{after}: {:?}", result.warnings);
+    }
+
+    let gallery = extract_shortcodes(":::gallery 3 wide\na.jpg\n:::\n");
+    match &gallery.extracted[0].shortcode {
+        Shortcode::Gallery(g) => assert_eq!(g.columns, Some(3)),
+        other => panic!("expected Gallery, got {other:?}"),
+    }
+    assert!(gallery.warnings.iter().any(|w| w.contains("`wide` outside its braces")), "{:?}", gallery.warnings);
+
+    for read in [":::grid 2 1:2 {wide}\nA\n+++\nB\n:::\n", ":::grid 1:2\nA\n+++\nB\n:::\n", ":::gallery rows\na.jpg\n:::\n", ":::gallery 3\na.jpg\n:::\n"] {
+        let result = extract_shortcodes(read);
+        assert!(result.warnings.is_empty(), "{read}: {:?}", result.warnings);
+    }
+}
+
+/// An external text cell stays a plain link, title included, for the host's
+/// preview card.
+#[test]
+fn an_external_text_cell_keeps_its_link_title() {
+    let md = "::::grid 2\n[Harbour notes](https://example.com/harbour \"Field notes\")\n+++\nright\n::::\n";
+    let result = extract_shortcodes(md);
+    let Shortcode::Grid(grid) = &result.extracted[0].shortcode else { panic!("{:?}", result.extracted) };
+    match grid.cells[0].as_slice() {
+        [Block::Paragraph(inlines)] => match inlines.as_slice() {
+            [Inline::Link { url, title, .. }] => {
+                assert_eq!(url.href(), "https://example.com/harbour");
+                assert_eq!(title.as_deref(), Some("Field notes"));
+            }
+            other => panic!("{other:?}"),
+        },
+        other => panic!("{other:?}"),
+    }
+}

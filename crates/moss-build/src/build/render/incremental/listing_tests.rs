@@ -427,6 +427,20 @@ fn hosts_are_mapped_to_the_groups_they_actually_read() {
     assert!(!hosts_listing(&article("writings/alpha/index.html", "")), "a plain article hosts nothing");
 }
 
+/// A plain page whose `children:` names a folder ends in that folder's
+/// listing, so it reads that group; as an unmodelled shape it re-rendered on
+/// every build that changed nothing.
+#[test]
+fn a_page_naming_a_folder_in_children_reads_that_folders_group() {
+    let mut archive = article("archive/index.html", "every post");
+    archive.children_source = Some("[[writings]]".into());
+    let mut docs = vault();
+    docs.push(archive.clone());
+
+    assert!(hosts_listing(&archive));
+    assert_eq!(groups_read_by(&archive, &docs), Some(vec![key("writings")]));
+}
+
 /// A language home lists its own tree like the root home does (depth `all`,
 /// both homepage filters), unless it asks for `direct`; the root home's key is
 /// unchanged beside it.

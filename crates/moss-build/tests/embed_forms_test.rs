@@ -132,6 +132,7 @@ fn typed_site() -> Site {
         "widgets/page.html",
         "models/thing.glb",
         "photos/photo.jpg",
+        "media/odd.xyz",
     ])
 }
 

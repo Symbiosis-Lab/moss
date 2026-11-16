@@ -541,6 +541,16 @@ fn is_link_title(s: &str) -> bool {
         && matches!((s.as_bytes()[0], s.as_bytes()[s.len() - 1]), (b'"', b'"') | (b'\'', b'\'') | (b'(', b')'))
 }
 
+/// A link's destination as CommonMark reads what sits between its
+/// parentheses: spaces around it and a title after it are not part of it.
+// SAFETY: `destination_span` returns char boundaries of the trimmed text.
+#[allow(clippy::string_slice)]
+pub(crate) fn destination(between_parens: &str) -> &str {
+    let trimmed = between_parens.trim();
+    let (offset, len) = destination_span(trimmed);
+    &trimmed[offset..offset + len]
+}
+
 /// Where the destination sits in the trimmed inside of `( … )`: `(offset,
 /// len)`, with the optional title after it left out. The `<…>` form excludes
 /// the brackets, so a rewrite replaces only the inside and the brackets

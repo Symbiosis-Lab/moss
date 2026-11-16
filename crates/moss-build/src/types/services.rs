@@ -116,6 +116,8 @@ pub struct BackgroundContext {
     pub carried_advisories: Vec<crate::advisory::Advisory>,
     /// The build's one members policy, for the source copy.
     pub members_policy: moss_core::frontmatter::member_cascade::MemberCascade,
+    /// One hash per source file for this build's asset walk and media lanes.
+    pub(crate) source_oids: std::sync::Arc<crate::build::cache::source_oids::SourceOids>,
 }
 
 impl BackgroundContext {
@@ -143,6 +145,7 @@ impl BackgroundContext {
             rung_collisions: HashMap::new(),
             carried_advisories: Vec::new(),
             members_policy: Default::default(),
+            source_oids: Default::default(),
         }
     }
 }
@@ -411,27 +414,6 @@ impl BuildServices {
             .expect("BuildServices build_parent mutex poisoned")
     }
 
-    /// Increment the folder session's UiBound counter.
-    /// No-op if no session is attached (headless mode).
-    pub fn begin_ui_bound(&self) {
-        if let Some(s) = self.session.as_ref() {
-            s.begin_ui_bound();
-        }
-    }
-
-    /// Decrement the folder session's UiBound counter (saturating at 0).
-    /// No-op if no session is attached (headless mode).
-    pub fn end_ui_bound(&self) {
-        if let Some(s) = self.session.as_ref() {
-            s.end_ui_bound();
-        }
-    }
-
-    /// Whether the folder session has any UiBound work in flight.
-    /// Returns `false` if no session is attached (headless mode).
-    pub fn has_ui_bound(&self) -> bool {
-        self.session.as_ref().map_or(false, |s| s.has_ui_bound())
-    }
 }
 
 // ============================================================================
@@ -695,9 +677,7 @@ mod tests {
     #[test]
     fn test_build_services_headless_creates_valid_instance() {
         let services = BuildServices::headless();
-        // headless has no session attached — UiBound ops are no-ops.
         assert!(services.session.is_none());
-        assert!(!services.has_ui_bound());
         // Headless reports to nowhere, but the terminal is its surface.
         assert!(services.reporter.is_terminal());
         assert!(services.spawner.is_none());
@@ -741,24 +721,6 @@ mod tests {
             "must attach the SAME session the registry holds, not a fresh one — \
              a private session is a private lock, which is the bug"
         );
-
-        services.begin_ui_bound();
-        assert!(services.has_ui_bound(), "counter reaches the real session");
-        services.end_ui_bound();
-        assert!(!services.has_ui_bound());
-    }
-
-    #[test]
-    fn test_build_services_headless_tracker_works() {
-        // In headless mode there's no session, so begin/end are no-ops and
-        // has_ui_bound() always returns false. This documents the contract:
-        // callers don't need to special-case headless when calling
-        // services.begin_ui_bound() / services.end_ui_bound().
-        let services = BuildServices::headless();
-        services.begin_ui_bound();
-        assert!(!services.has_ui_bound(), "headless: begin is a no-op");
-        services.end_ui_bound();
-        assert!(!services.has_ui_bound());
     }
 
     #[test]

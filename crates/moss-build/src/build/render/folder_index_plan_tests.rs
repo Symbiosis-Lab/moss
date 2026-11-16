@@ -265,3 +265,55 @@ fn passthrough_folder_and_its_subfolders_get_no_listing_but_their_pages_render()
         assert!(output.join(page).exists(), "markdown inside a passthrough folder must render: {page}");
     }
 }
+
+/// The favicon and its PNG sizes are written only when their bytes differ: a
+/// second build leaves identical files as they are and still registers them,
+/// and a staged size holding other bytes is written again. Both the author's
+/// own PNG and the default SVG.
+#[cfg(unix)]
+#[test]
+fn favicons_are_rewritten_only_when_their_bytes_differ() {
+    use std::os::unix::fs::MetadataExt;
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(192, 192, image::Rgba([200, 40, 40, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    for (own, icon) in [(true, "favicon.png"), (false, "favicon.svg")] {
+        let root = tempfile::tempdir().unwrap();
+        write(root.path(), "index.md", "---\ntitle: Garden\n---\n# Garden");
+        if own {
+            fs::create_dir_all(root.path().join("assets")).unwrap();
+            fs::write(root.path().join("assets/favicon.png"), &png).unwrap();
+        }
+        let built = |root: &Path| {
+            let project = crate::build::scan::scan::scan_folder(root.to_str().unwrap()).unwrap();
+            let output = root.join(".moss/build.nosync/site");
+            fs::create_dir_all(&output).unwrap();
+            let kinds = crate::build::terms::term_kinds(&crate::config::ConfigFile::parse("").unwrap(), "en");
+            let mut pending = PendingManifest::for_build(SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(root));
+            super::super::blocking::generate_blocking_content(
+                &crate::vault::paths::VaultRoot::resolve(root), &project, &output,
+                None, None, true,
+                super::super::config::SiteConfig { term_kinds: kinds, ..Default::default() },
+                &mut pending,
+            ).unwrap();
+            (output, pending)
+        };
+        let files: Vec<String> = [icon.to_string()].into_iter().chain([16, 32, 180].map(|s| format!("favicon-{s}.png"))).collect();
+        let (output, _) = built(root.path());
+        let first: Vec<(u64, Vec<u8>)> = files.iter().map(|f| {
+            let path = output.join("assets").join(f);
+            (fs::metadata(&path).unwrap().ino(), fs::read(&path).unwrap())
+        }).collect();
+
+        let (_, pending) = built(root.path());
+        for (f, (ino, _)) in files.iter().zip(&first) {
+            assert_eq!(fs::metadata(output.join("assets").join(f)).unwrap().ino(), *ino, "{icon}: {f} written again");
+            assert!(pending.is_registered(&format!("assets/{f}")), "{icon}: {f} not registered");
+        }
+
+        fs::write(output.join("assets/favicon-32.png"), b"stale").unwrap();
+        built(root.path());
+        assert_eq!(fs::read(output.join("assets/favicon-32.png")).unwrap(), first[2].1, "{icon}: a differing size is written");
+    }
+}

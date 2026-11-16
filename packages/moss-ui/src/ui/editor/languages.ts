@@ -1,12 +1,15 @@
 /**
  * Language trees for the create flow: where a page's version in another
  * language lives, which languages a page lacks, and which template a folder
- * matches. Path arithmetic over what `siteLanguages` reports, plus one
- * existence probe per target. The placement rules are the Rust side's
- * (`moss_core::template`); this file only mirrors them for the menu.
+ * matches. Path arithmetic over what `siteLanguages` reports; which
+ * versions a page has is the Rust side's answer (`pageTranslations`), the
+ * rule a new version is refused by.
  */
 
 import { toAbsolute } from './path-domain';
+import type { TranslationSlot } from '../../engine.generated';
+
+export type { TranslationSlot };
 
 type CommandResult<T> = { status: 'ok'; data: T } | { status: 'error'; error: string };
 
@@ -19,20 +22,11 @@ export interface SiteLanguagesInfo {
 /** The two reads this module makes; the bindings `commands` object satisfies it. */
 export interface LanguageSource {
   siteLanguages(): Promise<CommandResult<SiteLanguagesInfo>>;
-  listDirectory(absDir: string, showInternal: boolean): Promise<CommandResult<Array<{ name: string }>>>;
+  pageTranslations(absPath: string): Promise<CommandResult<TranslationSlot[]>>;
 }
 
 /** A site with no other language trees: every page is in the default language. */
 export const ONE_LANGUAGE: SiteLanguagesInfo = { default_lang: '', trees: [] };
-
-export interface TranslationSlot {
-  lang: string;
-  /** Project-relative path the translation is (or would be) at. */
-  rel: string;
-  exists: boolean;
-  /** The page is a folder's home file and that folder is missing in this language. */
-  folderMissing: boolean;
-}
 
 /** A folder spelling as the Rust side stores it: no leading `./` or `/`, no trailing `/`. */
 export function folderKey(raw: string): string {
@@ -71,40 +65,14 @@ export function templatesNamingFolder<T extends { folder: string | null }>(dir: 
 
 /**
  * Every other language's place for the page at `rel` (project-relative), and
- * whether a page already sits there. A probe that fails counts as absent.
+ * whether the page already has a version there. A read that fails offers nothing.
  */
-export async function translationSlots(
-  rel: string,
-  langs: SiteLanguagesInfo,
-  source: LanguageSource,
-  projectRoot: string,
-): Promise<TranslationSlot[]> {
-  if (langs.trees.length === 0 || !rel.endsWith('.md')) return [];
-  const own = splitTree(rel, langs);
-  const parts = own.inner.split('/');
-  const stem = (parts.pop() ?? '').replace(/\.md$/, '');
-  const isHome = parts.length > 0 && parts[parts.length - 1] === stem;
-  const slots: TranslationSlot[] = [];
-  for (const lang of [langs.default_lang, ...langs.trees]) {
-    if (lang === own.lang) continue;
-    const target = inTree(own.inner, lang, langs);
-    const slash = target.lastIndexOf('/');
-    const dirRel = slash < 0 ? '' : target.slice(0, slash);
-    const name = target.slice(slash + 1);
-    const { dirExists, exists } = await probe(source, dirRel, name, projectRoot);
-    slots.push({ lang, rel: target, exists, folderMissing: isHome && !dirExists });
-  }
-  return slots;
-}
-
-async function probe(source: LanguageSource, dirRel: string, name: string, projectRoot: string): Promise<{ dirExists: boolean; exists: boolean }> {
-  const absDir = dirRel ? toAbsolute(dirRel, projectRoot) : projectRoot;
+export async function translationSlots(rel: string, source: Pick<LanguageSource, 'pageTranslations'>, projectRoot: string): Promise<TranslationSlot[]> {
   try {
-    const listed = await source.listDirectory(absDir, true);
-    if (listed.status !== 'ok') return { dirExists: false, exists: false };
-    return { dirExists: true, exists: listed.data.some((e) => e.name === name) };
+    const slots = await source.pageTranslations(toAbsolute(rel, projectRoot));
+    return slots.status === 'ok' ? slots.data : [];
   } catch {
-    return { dirExists: false, exists: false };
+    return [];
   }
 }
 

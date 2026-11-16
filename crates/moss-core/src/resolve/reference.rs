@@ -59,7 +59,8 @@ pub struct ResolvedReference {
     pub provenance: Option<AssetProvenance>,
     /// Human-readable resolution note (separator-fallback / case-mismatch / …).
     pub message: Option<String>,
-    /// Populated for Ambiguous (the equally near candidate paths).
+    /// For Ambiguous, the equally near candidate paths. For a missing asset,
+    /// the files of its kind with the same name under another extension.
     pub candidates: Vec<String>,
     /// Resolved page/asset URL for a non-embed Link (None for embeds — the
     /// build emits embed URLs itself; editor embeds use `target_path`).
@@ -401,7 +402,14 @@ fn classify_reference_parts(
                 r
             } else {
                 // A known-extension asset that didn't resolve is a broken embed.
-                ResolvedReference::not_found()
+                // Files of the same kind and name under another extension are
+                // what the author most likely meant.
+                let mut r = ResolvedReference::not_found();
+                r.candidates = ctx.assets.files_with_stem_of(path_no_anchor);
+                r.candidates.retain(|c| {
+                    reference_kind_for_ext(crate::path_ext::path_extension(c).as_deref().unwrap_or("")) == query_ext_kind
+                });
+                r
             }
         }
     }
@@ -573,6 +581,16 @@ mod tests {
         let u = FakeUrlIndex::new();
         let r = classify_reference("missing.png", "page.md", true, &ctx(&a, &f, &u));
         assert_eq!(r.kind, ReferenceKind::NotFound);
+    }
+
+    #[test]
+    fn a_missing_asset_names_the_same_picture_under_another_extension() {
+        let a = ContentGraph::from_paths(&["img/slide.png", "old/Slide.jpeg", "slide.md", "slide.mp4", "other.jpg"]);
+        let f = FakeFolderIndex::new();
+        let u = FakeUrlIndex::new();
+        let r = classify_reference("pics/slide.jpg", "page.md", true, &ctx(&a, &f, &u));
+        assert_eq!(r.kind, ReferenceKind::NotFound);
+        assert_eq!(r.candidates, ["img/slide.png", "old/Slide.jpeg"]);
     }
 
     #[test]

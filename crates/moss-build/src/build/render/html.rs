@@ -135,7 +135,7 @@ pub fn generate_html(
         emit_source_lines, favicon_filename, false, output_dir,
         None,
         source_root,
-        &BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), project, dir_overrides, crate::build::inputs::now()),
+        &BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &crate::build::media::dimensions::MediaDimensionLookup::new(&project.image_files, &project.video_files, dir_overrides, None), crate::build::inputs::now()),
     )
 }
 
@@ -413,7 +413,7 @@ fn generate_html_inner<'d>(
             assets: ChromeAssets { paths: path_resolver, scripts: &shared.scripts, has_user_css, has_user_js, page_owned: &Default::default(), head_alternates, theme_modules: &shared.theme_modules },
             show_rss_in_footer, emit_source_lines, has_sidebar_layout,
             home_breadcrumb: crate::build::components::nav::home_breadcrumb_setting(all_docs),
-            media_lookup: &shared.media_lookup,
+            media_lookup: shared.media_lookup,
         },
         content_graph, dir_overrides, site_url, output_dir, source_root, shared,
     };
@@ -573,7 +573,7 @@ impl<'a> PageFacts<'a> {
             context.content_graph,
             context.dir_overrides,
             &context.chrome.project.root_path,
-            &context.shared.media_lookup,
+            context.shared.media_lookup,
             self.typesetting,
             context.shared.now,
         );
@@ -610,7 +610,7 @@ impl<'a> PageFacts<'a> {
             context.dir_overrides,
             doc.lang,
             self.typesetting,
-            Some(&context.shared.media_lookup),
+            Some(context.shared.media_lookup),
             context.chrome.layout.assets.math,
             None,
             &listed,
@@ -777,7 +777,7 @@ pub(super) fn render_page<'d>(
     let site_url = context.site_url;
     let output_dir = context.output_dir;
     let source_root = context.source_root;
-    let media_lookup = &context.shared.media_lookup;
+    let media_lookup = context.shared.media_lookup;
     let now = context.shared.now;
     let path_resolver = &context.chrome.assets.paths;
     let facts = PageFacts::new(context, doc, is_homepage);

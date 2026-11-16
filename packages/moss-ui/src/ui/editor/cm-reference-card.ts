@@ -11,7 +11,7 @@ import { extractImageTargets, footnoteIndex, folderParamsFromEmbed, type Referen
 import { syntaxTree } from '@codemirror/language';
 import { charAtPointer, hitSiteAt, navigateToReference, referenceSiteAt } from './cm-link-nav';
 import { linkTextRange, type LinkTextNode } from './cm-markdown-style';
-import { blockEmbedOnLine, embedAt } from './cm-block-embeds';
+import { blockEmbedOnLine, drawnPictureBelow, embedAt } from './cm-block-embeds';
 import { buildHoverDom, type AssetReferenceEnvelope } from './asset-preview';
 import type { ApplyEmbedWidthFn } from './embed-width';
 import { pickAssetRef } from './asset-picker/browse-button';
@@ -131,7 +131,7 @@ function buildCardDom(card: OpenCard, view: EditorView): HTMLElement {
       for (const action of card.spec.actions) {
         const btn = row.appendChild(document.createElement('button'));
         btn.type = 'button';
-        btn.className = 'moss-btn moss-btn--small';
+        btn.className = 'moss-btn moss-btn-secondary moss-btn--small';
         btn.textContent = action.label;
         btn.addEventListener('click', () => action.run(view));
       }
@@ -209,6 +209,13 @@ function referenceAt(state: EditorState, pos: number, onBlock: boolean): { from:
   return note ? { ...note, probe: pos } : null;
 }
 
+/** The reference is a picture's own address (an embed's, or a hero's
+ *  `image=`) and the picture is drawn below its line: a card would only repeat
+ *  it. A link around a picture has its own address, and keeps its card. */
+export function pictureIsDrawn(view: EditorView, ref: { probe: number }): boolean {
+  return extractImageTargets(view.state).some((t) => t.from <= ref.probe && ref.probe <= t.to) && !!drawnPictureBelow(view, ref.probe);
+}
+
 const dwellPlugin = ViewPlugin.fromClass(class {
   private timer: ReturnType<typeof setTimeout> | null = null;
   /** Start of the reference whose card is waiting for its body. */
@@ -243,10 +250,12 @@ const dwellPlugin = ViewPlugin.fromClass(class {
   private open(pos: number, onBlock: boolean): void {
     const { state } = this.view;
     const ref = referenceAt(state, pos, onBlock);
-    const spec = ref && cardSpecAt(state, ref.probe);
-    if (!ref || !spec) return;
+    if (!ref || pictureIsDrawn(this.view, ref)) return;
+    const spec = cardSpecAt(state, ref.probe);
+    if (!spec) return;
     const show = () => {
-      if (!spec.body.hasChildNodes()) return;
+      // A card opened meanwhile from the keyboard has controls this one lacks.
+      if (!spec.body.hasChildNodes() || this.view.state.field(cardField)?.editable) return;
       this.view.dispatch({ effects: setCard.of({ pos: ref.probe, from: ref.from, to: ref.to, spec, editable: false }) });
     };
     if (spec.body.hasChildNodes() || !spec.pending) return show();
@@ -371,6 +380,22 @@ export function currentArticleCardProvider(current: () => CurrentArticleCardData
 
 const WIDTH_PRESETS = ['25%', '50%', '75%', '100%'] as const;
 
+/** Deletes the embed, and its whole line when nothing else is on it. */
+function removeEmbed(view: EditorView, embed: { from: number; to: number }): void {
+  const doc = view.state.doc;
+  const line = doc.lineAt(embed.from);
+  let { from, to } = embed;
+  if (line.text.trim() === doc.sliceString(from, to)) {
+    const blank = (n: number): boolean => n >= 1 && n <= doc.lines && doc.line(n).text.trim() === '';
+    // Between two blank lines the second goes too, leaving one gap.
+    const last = blank(line.number - 1) && blank(line.number + 1) ? doc.line(line.number + 1) : line;
+    // The line break goes with it: the one after, or the one before on the last line.
+    from = last.to < doc.length ? line.from : Math.max(0, line.from - 1);
+    to = Math.min(doc.length, last.to + 1);
+  }
+  view.dispatch({ changes: { from, to }, selection: { anchor: from }, userEvent: 'delete' });
+}
+
 /** Read-only: the same asset preview card the old hover popover showed,
  *  reusing `buildHoverDom` — asset-preview.ts is "the ONE asset preview
  *  card". Extended with a path field, Replace…, and width-preset
@@ -387,45 +412,36 @@ export function assetCardProvider(
       if (pos < target.from || pos > target.to) continue;
       const env = resolvedCache.get(target.target, true);
       if (env?.kind.kind === 'anchor') return null;
-      const body = buildHoverDom(target.target, env);
+      const body = buildHoverDom(env);
       const embed = embedAt(state, pos);
       if (!opts || !embed) return { title: target.target, body };
-      // `target.from`/`target.to` span the WHOLE embed node for a wikilink
-      // embed (`![[old.png|50%]]` — cm-image-extract.ts's own header: "for
-      // wikilink embeds the from/to span is the WHOLE node"), not just the
-      // filename; a standard `![alt](url)` image's span IS already just the
-      // URL. Deviation from the plan's literal `const { from, to } = t`,
-      // which would have replaced the WHOLE node — brackets, `|50%` suffix
-      // and all — with the bare filename text on every wikilink embed,
-      // losing the width and leaving invalid markdown; this locates the
-      // filename text inside the node's own span instead, so only it is
-      // replaced (both by the field and by Replace…, below).
-      const full = state.doc.sliceString(target.from, target.to);
-      const offset = full.indexOf(target.target);
-      const targetFrom = offset >= 0 ? target.from + offset : target.from;
-      const targetTo = offset >= 0 ? targetFrom + target.target.length : target.to;
+      // Only the path is replaced, by the field and by Replace…: a wikilink embed keeps its brackets and width.
       // Bound to a local so the non-null narrowing above survives into the
       // async closure below (TS does not carry a parameter's narrowing
       // across a function-expression boundary).
       const pickOpts = opts;
+      const missing = env?.kind.kind === 'not-found';
       return {
         title: target.target,
         body,
         fields: [{ label: t('chip.url.label'), value: target.target, commit: (view, value) => {
-          view.dispatch({ changes: { from: targetFrom, to: targetTo, insert: value } });
+          view.dispatch({ changes: { from: target.from, to: target.to, insert: value } });
         } }],
         actions: [
-          { label: t('reference.replace'), run: async (view) => {
+          { label: t(missing ? 'problem.choose_file' : 'reference.replace'), run: async (view) => {
             const picked = await pickAssetRef({
               pagePath: pickOpts.pagePath, projectRoot: pickOpts.projectRoot,
               kinds: () => null, afterImport: undefined,
             });
-            if (picked) view.dispatch({ changes: { from: targetFrom, to: targetTo, insert: picked.insert } });
+            if (picked) view.dispatch({ changes: { from: target.from, to: target.to, insert: picked.insert } });
           } },
-          ...WIDTH_PRESETS.map((pct) => ({
-            label: pct, run: (view: EditorView) => { void pickOpts.applyWidth(view, embed.from, pct); },
-          })),
-          { label: t('reference.reset_width'), run: (view: EditorView) => { void pickOpts.applyWidth(view, embed.from, null); } },
+          // A file that is not there has no width to set; the way out is to drop the line.
+          ...(missing ? [{ label: t('problem.remove'), run: (view: EditorView) => removeEmbed(view, embed) }] : [
+            ...WIDTH_PRESETS.map((pct) => ({
+              label: pct, run: (view: EditorView) => { void pickOpts.applyWidth(view, embed.from, pct); },
+            })),
+            { label: t('reference.reset_width'), run: (view: EditorView) => { void pickOpts.applyWidth(view, embed.from, null); } },
+          ]),
         ],
       };
     }

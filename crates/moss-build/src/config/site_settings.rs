@@ -6,9 +6,9 @@ use moss_core::contract::describe::SiteSettingInfo;
 
 use crate::infra::edit_distance::levenshtein;
 
-/// Read but not listed: `heading_anchors = false` still turns the marks off,
-/// `domain` is read as `url` in a folder written before `url` existed.
-pub(crate) const UNLISTED_SITE_KEYS: [&str; 2] = ["domain", "heading_anchors"];
+/// Read but not listed: `domain` is read as `url` in a folder written before
+/// `url` existed.
+pub(crate) const UNLISTED_SITE_KEYS: [&str; 1] = ["domain"];
 
 /// `[site]` table in `.moss/config.toml` — one entry per key the build reads
 /// through `site_bool` / `site_str`. The drift test in `cli::describe` fails when
@@ -92,6 +92,12 @@ pub(crate) fn site_settings() -> Vec<SiteSettingInfo> {
             r#type: "bool",
             default: Some("true"),
             description: "A single line break in Markdown renders as a line break, as in Obsidian. false restores CommonMark's soft wrap.",
+        },
+        SiteSettingInfo {
+            name: "heading_anchors",
+            r#type: "bool",
+            default: Some("true"),
+            description: "`false` leaves the permalink mark off every heading on every page. `true` is the default and adds none: a heading carries the mark when its id is named (`## Setup {#setup}`) or its page has at least two sections of 80 words. Heading ids are written either way.",
         },
         SiteSettingInfo {
             name: "header",

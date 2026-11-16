@@ -92,6 +92,34 @@ fn sessions_list_and_revoke_persist() {
 }
 
 #[test]
+fn a_session_whose_id_starts_with_a_dash_is_revoked_by_id() {
+    use moss_build::ops::serve::ui::sessions::SessionStore;
+    let temp = tempfile::tempdir().unwrap();
+    let store = SessionStore::new(temp.path().join("ui-sessions.json")).unwrap();
+    let dashed = (0..4000)
+        .find_map(|_| {
+            let secret = store.open("browser").unwrap();
+            let id = store.list().unwrap().pop().unwrap().id;
+            if id.starts_with('-') { Some((secret, id)) } else { store.revoke(&id).unwrap(); None }
+        })
+        .expect("one id in 64 starts with a dash");
+    let (secret, id) = dashed;
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_moss-cli"))
+            .arg("sessions")
+            .args(args)
+            .env("MOSS_HOME", temp.path())
+            .output()
+            .unwrap()
+    };
+    assert!(!run(&["revoke", "--al"]).status.success(), "a mistyped flag is refused");
+    assert!(store.admits(&secret, false).unwrap());
+    let output = run(&["revoke", &id]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(!store.admits(&secret, false).unwrap());
+}
+
+#[test]
 fn help_and_describe_advertise_browser_edit_and_sessions() {
     for args in [
         vec!["--help"],

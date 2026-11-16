@@ -392,6 +392,11 @@ fn outside_moss_the_watcher_filter_still_decides() {
     assert!(!should_request(folder, &folder.join("notes/scratch.xyz")));
 }
 
+/// `drift_eligible` as the walk asks it.
+fn eligible(folder: &Path, path: &Path) -> bool {
+    drift_eligible(folder, path, scope::path_is_watchable(folder, path))
+}
+
 /// `drift_eligible` used to defer its extension question entirely
 /// to `scope::path_passes_filter`, a hand-maintained watcher-side list that
 /// never included `.html`/`.htm` and still doesn't include word-processor
@@ -406,10 +411,23 @@ fn scan_recognized_extensions_are_drift_eligible_even_when_the_watcher_filter_mi
     let folder = Path::new("/vault");
     for rel in ["page.html", "page.htm", "report.docx", "notes.pages", "manual.doc"] {
         assert!(
-            drift_eligible(folder, &folder.join(rel)),
+            eligible(folder, &folder.join(rel)),
             "`{rel}` is a scan-recognized source and must be drift-eligible"
         );
     }
+}
+
+/// An edit the sweep catches in such a file, which the watcher's filters skip,
+/// builds unconditionally rather than being dropped.
+#[test]
+fn a_caught_edit_the_watcher_would_drop_builds_unconditionally() {
+    let dir = tempfile::tempdir().unwrap();
+    let page = dir.path().join("report.docx");
+    std::fs::write(&page, "words").unwrap();
+    let mut report = drift::DriftReport::default();
+    report.drifted.insert("report.docx".into(), drift::Drift { kind: drift::DriftKind::Edited, stamp: stamp(1) });
+    let request = request_for_drift(dir.path(), &report, &["report.docx".into()], None);
+    assert_eq!((request.trigger, request.gate_paths), (crate::build::BuildTrigger::ContentOnly(vec![page]), None));
 }
 
 /// The relocation invariant, at the sweep's two predicates: **where the user
@@ -437,19 +455,19 @@ fn a_relocated_vault_is_swept_the_same_way() {
         for rel in ["index.md", "notes/post.md"] {
             let path = mount_join(mount, rel);
             assert!(should_request(folder, &path), "`{rel}` under {shape}");
-            assert!(drift_eligible(folder, &path), "`{rel}` under {shape}");
+            assert!(eligible(folder, &path), "`{rel}` under {shape}");
         }
         // moss's own inputs are requested (they cannot be regenerated) but
         // never drift-compared (the manifest does not carry them).
         let config = mount_join(mount, ".moss/config.toml");
         assert!(should_request(folder, &config), "moss's own inputs, under {shape}");
-        assert!(!drift_eligible(folder, &config), "under {shape}");
+        assert!(!eligible(folder, &config), "under {shape}");
         // The dot rule still applies to what is INSIDE the vault — that is the
         // whole reason the predicate is consulted at all.
         for rel in [".git/HEAD", "node_modules/x/index.js", "notes/scratch.xyz"] {
             let path = mount_join(mount, rel);
             assert!(!should_request(folder, &path), "`{rel}` under {shape}");
-            assert!(!drift_eligible(folder, &path), "`{rel}` under {shape}");
+            assert!(!eligible(folder, &path), "`{rel}` under {shape}");
         }
     }
 }
@@ -727,9 +745,9 @@ fn everything_the_walk_judges_the_scan_consumes() {
 
 // ── Invariant 2: one path normalizer ──────────────────────────────────────
 
-/// The walk keys files exactly the way the manifest does — through the same
-/// `path_to_relative_key` the event pump uses. Two normalizers is how a path
-/// matches its own baseline entry on one side and not the other.
+/// The walk keys files exactly the way the event pump's
+/// `path_to_relative_key` does. Two normalizers is how a path matches its own
+/// baseline entry on one side and not the other.
 #[test]
 fn the_walk_keys_files_the_manifest_way() {
     let dir = tempfile::Builder::new().prefix("moss_sweep").tempdir().unwrap();
@@ -745,6 +763,53 @@ fn the_walk_keys_files_the_manifest_way() {
         "same key the pump would derive for the same file"
     );
     assert_eq!(walked.files[0].rel, "图片/nested/照 片.jpg", "forward slashes, original case");
+}
+
+/// The walk keys a file from its own path, without the realpath the event
+/// pump pays for, so it must never yield a path it reached through a link:
+/// there the two keys differ. Through a symlinked folder, beside a symlinked
+/// file and a symlinked directory pointing inside and outside, under a
+/// decomposed name, and for the missing real name behind a cloud placeholder,
+/// every key it yields is the realpath key, and only the real files are keyed.
+#[cfg(unix)]
+#[test]
+fn the_walk_keys_only_real_paths_as_the_realpath_would() {
+    use std::os::unix::fs::symlink;
+    let outside = tempfile::Builder::new().prefix("moss-sweep-outside-").tempdir().unwrap();
+    std::fs::write(outside.path().join("elsewhere.md"), "# Elsewhere\n").unwrap();
+    let tmp = tempfile::Builder::new().prefix("moss-sweep-test-").tempdir().unwrap();
+    let real = tmp.path().join("site");
+    std::fs::create_dir_all(real.join("posts")).unwrap();
+    std::fs::write(real.join("index.md"), "# Home\n").unwrap();
+    std::fs::write(real.join("posts/one.md"), "# One\n").unwrap();
+    std::fs::write(real.join("cafe\u{301}.md"), "# Caf\u{e9}\n").unwrap();
+    // A pre-Sonoma placeholder: on macOS the walk yields `away.md`, which
+    // does not exist.
+    std::fs::write(real.join(".away.md.icloud"), b"").unwrap();
+    symlink(real.join("posts/one.md"), real.join("alias.md")).unwrap();
+    symlink(real.join("posts"), real.join("inside-link")).unwrap();
+    symlink(outside.path(), real.join("outside-link")).unwrap();
+    let linked_root = tmp.path().join("linked-root");
+    symlink(&real, &linked_root).unwrap();
+
+    for root in [&real, &linked_root] {
+        let walked = walk(root, None, None);
+        for file in &walked.files {
+            assert_eq!(
+                Some(file.rel.clone()),
+                crate::build::watch::path_to_relative_key(root, &file.abs),
+                "{} under {}",
+                file.abs.display(),
+                root.display()
+            );
+        }
+        let keys: std::collections::BTreeSet<_> = walked.files.iter().map(|f| f.rel.as_str()).collect();
+        let mut expected: std::collections::BTreeSet<_> = ["caf\u{e9}.md", "index.md", "posts/one.md"].into_iter().collect();
+        if cfg!(target_os = "macos") {
+            expected.insert("away.md");
+        }
+        assert_eq!(keys, expected, "under {}", root.display());
+    }
 }
 
 /// The counters behind the blind-folder warning, measured on a real tree.
@@ -1039,6 +1104,10 @@ async fn a_sweep_straight_after_a_build_finds_no_drift() {
     std::fs::write(test_dir.join("cafe\u{301}/the\u{301}.csv"), "item,price\n").unwrap();
     // Deliberately ignored: canonical location is .moss/theme/style.css.
     std::fs::write(test_dir.join("style.css"), "body { margin: 0 }\n").unwrap();
+    // Published by the media lanes, not the asset walk.
+    std::fs::write(test_dir.join("clip.mp4"), b"not a video").unwrap();
+    image::RgbImage::from_fn(2600, 8, |x, _| image::Rgb([(x % 251) as u8, 90, 160])).save(test_dir.join("cover.webp")).unwrap();
+    std::fs::write(test_dir.join("media.md"), "# Media\n\n![Cover](cover.webp)\n\n![[clip.mp4]]\n").unwrap();
     // A Finder alias whose target will not resolve: skipped from the output,
     // still judged by the walk.
     #[cfg(target_os = "macos")]
@@ -1072,6 +1141,59 @@ async fn a_sweep_straight_after_a_build_finds_no_drift() {
          never recorded will drift on every pass, forever",
         report.drifted
     );
+}
+
+/// A page recreated and rebuilt within one wall-clock second of the build that
+/// deleted it, then deleted again, must be reported. The manifest clock is
+/// whole seconds, so the two builds share it; judged by the clock alone the
+/// sweep kept the older build's manifest as its baseline, which never held the
+/// page, and so the second delete read as no change at all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_delete_after_a_same_second_rebuild_is_reported() {
+    let tmp = tempfile::Builder::new().prefix("moss-sweep-test-").tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
+    let folder_path = dir.to_str().unwrap();
+    std::fs::write(dir.join("index.md"), "# Home\n").unwrap();
+    build_once(folder_path).await;
+    let without = read_baseline_from_disk(&dir).expect("first build seals");
+
+    std::fs::write(dir.join("page.md"), "# Page\n").unwrap();
+    let caught = run_pass(&dir, Some(without.clone()), None, None, true).await;
+    let report = caught.drift.expect("premise: a baseline to judge against");
+    assert!(report.drifted.contains_key("page.md"), "premise: the new page is caught");
+    let dispatched: std::collections::BTreeMap<_, _> =
+        report.drifted.iter().map(|(rel, d)| (rel.clone(), d.stamp)).collect();
+
+    // The dispatched rebuild, started in the same second as the first.
+    build_once(folder_path).await;
+    let mut with = read_baseline_from_disk(&dir).expect("second build seals");
+    assert!(with.sources.contains_key("page.md"));
+    assert!(with.render_id.is_some() && with.render_id != without.render_id, "each build names its render");
+    with.captured_at = without.captured_at;
+    std::fs::write(crate::moss_paths::MossPaths::new(&dir).hashes(), serde_json::to_string(&with).unwrap()).unwrap();
+
+    let after = run_pass(&dir, Some(with.clone()), caught.baseline, None, true).await;
+    assert!(after.drift.as_ref().is_some_and(|r| r.is_quiet()), "the rebuild cleared the page: {:?}", after.drift);
+
+    std::fs::remove_file(dir.join("page.md")).unwrap();
+    let deleted = run_pass(&dir, Some(with), after.baseline, None, true).await;
+    let report = deleted.drift.expect("a baseline to judge against");
+    assert_eq!(undispatched_paths(&report.drifted, &dispatched), vec!["page.md".to_string()]);
+}
+
+/// The stash a build leaves and the manifest it seals name the same render,
+/// so a sweep pass with nothing new keeps its cache instead of rereading.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_build_stashes_and_seals_the_same_render() {
+    let tmp = tempfile::Builder::new().prefix("moss-sweep-test-").tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
+    let folder_path = dir.to_str().unwrap();
+    std::fs::write(dir.join("index.md"), "# Home\n").unwrap();
+    build_once(folder_path).await;
+    let stash = stashed_baseline(folder_path).expect("a finished build stashes its hashes");
+    let sealed = read_baseline_from_disk(&dir).expect("a finished build seals");
+    assert!(stash.render_id.is_some());
+    assert_eq!(stash.render_id, sealed.render_id);
 }
 
 /// A rebuild dispatched for a genuine edit must not be

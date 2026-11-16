@@ -223,7 +223,7 @@ async fn a_publish_summarizes_a_rename_and_a_new_page_since_the_last_one() {
 /// A file the author deleted is named in the receipt data, not only counted:
 /// one address record in served form, the page records untouched.
 #[tokio::test]
-async fn a_publish_names_a_folder_file_the_author_deleted() {
+async fn a_publish_names_an_html_page_the_author_deleted() {
     let dir = tempfile::tempdir().unwrap();
     let mp = MossPaths::new(dir.path());
     std::fs::create_dir_all(mp.build_dir()).unwrap();
@@ -232,7 +232,7 @@ async fn a_publish_names_a_folder_file_the_author_deleted() {
         br##"{"articles":{"a/":{"source_path":"a.md","title":"Page A","content":"c","url_path":"a/","uid":"u-a"}}}"##,
     )
     .unwrap();
-    std::fs::write(dir.path().join("guide.pdf"), b"%PDF").unwrap();
+    std::fs::write(dir.path().join("guide.html"), b"<p>Guide</p>").unwrap();
     let history_dir = tempfile::tempdir().unwrap();
     let history = crate::deploy::history::HistoryStore::at(history_dir.path().to_path_buf());
 
@@ -242,15 +242,15 @@ async fn a_publish_names_a_folder_file_the_author_deleted() {
     pending.register_source_mapping("a.md".into(), &page);
     let meta = |h: &str| SourceMetadata { hash: h.into(), stat: FileStat::whole_second(1, 1) };
     pending.register_page_source_hash("a.md".into(), meta("h-a"));
-    let pdf = ServedPath::from_source("guide.pdf").unwrap();
-    pending.register(&pdf, b"%PDF", crate::build::manifest::HashBucket::Files);
-    pending.register_page_source_hash("guide.pdf".into(), meta("h-pdf"));
+    let html = ServedPath::from_source("guide.html").unwrap();
+    pending.register(&html, b"<p>Guide</p>", crate::build::manifest::HashBucket::Files);
+    pending.register_page_source_hash("guide.html".into(), meta("h-html"));
     record_what_is_live(&mp, &pending.seal(), TARGET, &history).await;
 
-    std::fs::remove_file(dir.path().join("guide.pdf")).unwrap();
+    std::fs::remove_file(dir.path().join("guide.html")).unwrap();
     let second = record_what_is_live(&mp, &sealed(&[("a.md", "a/index.html", "h-a", b"A")]), TARGET, &history).await;
 
-    assert_eq!(address_records(&second), [("/guide.pdf".to_string(), crate::build::manifest::change_set::RemovalReason::AuthorRemoved)]);
+    assert_eq!(address_records(&second), [("/guide.html".to_string(), crate::build::manifest::change_set::RemovalReason::AuthorRemoved)]);
     assert!(second.records.is_empty(), "a file is not a page row: {:?}", second.records);
 }
 
@@ -294,14 +294,12 @@ async fn second_publish_summary(
     record_what_is_live(&mp, &build(second_outputs), TARGET, &history).await
 }
 
-/// A generated file whose loss the author accepted is named, with its reason.
+/// A generated file the build stopped producing is not a page: the receipt
+/// does not name it.
 #[tokio::test]
-async fn an_accepted_unexplained_removal_is_named_in_the_receipt_data() {
+async fn a_lost_generated_file_is_not_named_in_the_receipt_data() {
     let summary = second_publish_summary(&["legacy-feed.xml"], &[]).await;
-    assert_eq!(
-        address_records(&summary),
-        [("/legacy-feed.xml".to_string(), crate::build::manifest::change_set::RemovalReason::Unexplained)]
-    );
+    assert_eq!(address_records(&summary), []);
 }
 
 /// An address a stub still answers was not lost, so there is nothing to name.
@@ -589,7 +587,7 @@ async fn send_all(root: &std::path::Path) -> Vec<crate::syndication::send::Sent>
     use crate::syndication::send::{after_live, SendOptions, Sent, PER_RUN};
     let cache = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned());
     let emit = |_: &Sent| {};
-    let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
+    let opts = SendOptions::test("https://example.org", &emit);
     after_live(root, &opts, || cache.get_or_create(&root.to_string_lossy())).await
 }
 

@@ -1,5 +1,5 @@
 use super::*;
-use crate::vault::import::scrape::fetch::test_server;
+use crate::vault::import::scrape::fetch::{private_pair, test_server, PrivatePair};
 
 /// The gap this closes: a host's own `Retry-After` was previously
 /// ignored outright — every retry used the same blind exponential
@@ -410,6 +410,19 @@ async fn an_unextractable_page_is_counted_as_failed_not_written_empty() {
         body.contains("no article content found"),
         "the placeholder must say why: {body}"
     );
+
+    // Once the page imports it replaces the placeholder: a page written, not one the folder had.
+    empty.remove_async().await;
+    let _page = server
+        .mock("GET", "/nothing/")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body("<html><body><article><p>Real page body, long enough to be extracted as content.</p></article></body></html>")
+        .create_async()
+        .await;
+    let config = ScrapeConfig::new(format!("{}/nothing/", server.url()), tmp.path());
+    let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+    assert_eq!((res.total_pages, res.kept_pages, res.failed_pages), (1, 0, 0));
 }
 
 /// Bug fix: a recursive crawl must never write a non-HTML response as a
@@ -623,11 +636,12 @@ async fn a_reimport_keeps_plain_names_and_a_query_variant_is_one_file() {
         .await;
 
     let tmp = tempfile::tempdir().unwrap();
-    for _ in 0..2 {
+    for written_then_kept in [(1, 0), (0, 1)] {
         let res = scrape_to_folder(ScrapeConfig::new(format!("{base}/"), tmp.path()), |_| {})
             .await
             .expect("the crawl itself succeeds");
         assert_eq!(res.linked_files_downloaded, 1, "the query variant is the same file");
+        assert_eq!((res.total_pages, res.kept_pages), written_then_kept, "the second run finds the page already in the folder");
     }
     pdf.assert_async().await;
     let names: Vec<String> = std::fs::read_dir(tmp.path().join("assets/imported"))
@@ -2761,4 +2775,101 @@ async fn a_second_import_of_a_site_keeps_one_page_per_address_and_the_authors_ed
     assert_eq!(before.len(), after.len(), "{after:?}");
     assert_eq!(read_leaf(tmp.path(), "about.md"), edited);
     assert_eq!(read_leaf(tmp.path(), "index.md"), renamed);
+}
+
+// ── the person's own site ───────────────────────────────────────────
+
+const BODY_TEXT: &str = "Page body, long enough to be extracted as content by the generic scorer.";
+
+fn page_with(inner: &str) -> String {
+    format!("<html><body><article><p>{BODY_TEXT}</p>{inner}</article></body></html>")
+}
+
+async fn crawl_as(p: &PrivatePair, start: String, recursive: bool) -> (tempfile::TempDir, ScrapeResult) {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = ScrapeConfig::new(start, tmp.path());
+    config.recursive = recursive;
+    config.client = p.client.clone();
+    let result = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+    (tmp, result)
+}
+
+#[tokio::test]
+async fn a_page_is_fetched_from_the_own_site_and_not_from_another_private_address() {
+    let mut p = private_pair().await;
+    let own = p.own.mock("GET", "/page").with_header("content-type", "text/html").with_body(page_with("")).expect(1).create_async().await;
+    let other = p.other.mock("GET", "/page").with_header("content-type", "text/html").with_body(page_with("")).expect(0).create_async().await;
+
+    let (_, fetched) = crawl_as(&p, format!("{}/page", p.own.url()), false).await;
+    let (_, refused) = crawl_as(&p, format!("{}/page", p.other.url()), false).await;
+
+    assert_eq!((fetched.total_pages, refused.total_pages), (1, 0));
+    own.assert_async().await;
+    other.assert_async().await;
+    assert_eq!(p.client.refused_report(), [format!("Not fetched: {}/page", p.other.url())]);
+}
+
+#[tokio::test]
+async fn crawl_media_is_fetched_from_the_own_site_and_not_from_another_private_address() {
+    let mut p = private_pair().await;
+    let (own_img, other_img) = (format!("{}/own.png", p.own.url()), format!("{}/other.png", p.other.url()));
+    let _page = p.own.mock("GET", "/page").with_header("content-type", "text/html")
+        .with_body(page_with(&format!("<img src=\"{own_img}\" alt=\"a\"><img src=\"{other_img}\" alt=\"b\">"))).create_async().await;
+    let own = p.own.mock("GET", "/own.png").with_header("content-type", "image/png").with_body("png").expect(1).create_async().await;
+    let other = p.other.mock("GET", "/other.png").with_header("content-type", "image/png").with_body("png").expect(0).create_async().await;
+
+    crawl_as(&p, format!("{}/page", p.own.url()), false).await;
+
+    own.assert_async().await;
+    other.assert_async().await;
+    assert_eq!(p.client.refused_report(), [format!("Not fetched: {other_img}")]);
+}
+
+fn readymag_viewer(snapshot: &str) -> String {
+    format!(
+        "<html><head><script>window.ServerData = {{\"mags\":{{\"m1\":{{\"uri\":\"4612303\",\"pages\":[\
+         {{\"uri\":\"home\",\"num\":1,\"htmlUrl\":\"{snapshot}/acc/4612303/Snip-home.html\"}}]}}}}}};\
+         </script><!-- rmcdn.net --></head><body></body></html>"
+    )
+}
+
+#[tokio::test]
+async fn a_snapshot_is_fetched_from_the_own_site_and_not_from_another_private_address() {
+    for snapshot_on_own in [true, false] {
+        let mut p = private_pair().await;
+        let snapshot_base = if snapshot_on_own { p.own.url() } else { p.other.url() };
+        let _viewer = p.own.mock("GET", "/4612303/").with_header("content-type", "text/html").with_body(readymag_viewer(&snapshot_base)).create_async().await;
+        let snapshot = if snapshot_on_own { &mut p.own } else { &mut p.other }
+            .mock("GET", "/acc/4612303/Snip-home.html").with_header("content-type", "text/html")
+            .with_body(page_with("")).expect(usize::from(snapshot_on_own)).create_async().await;
+
+        crawl_as(&p, format!("{}/4612303/", p.own.url()), false).await;
+
+        snapshot.assert_async().await;
+        let refused = p.client.refused_report();
+        if snapshot_on_own {
+            assert!(refused.is_empty(), "{refused:?}");
+        } else {
+            assert_eq!(refused, [format!("Not fetched: {snapshot_base}/acc/4612303/Snip-home.html")]);
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_sitemap_is_fetched_from_the_own_site_and_not_from_another_private_address() {
+    let mut p = private_pair().await;
+    let (own_map, other_map) = (format!("{}/sitemap.xml", p.own.url()), format!("{}/sitemap.xml", p.other.url()));
+    let _robots = p.own.mock("GET", "/robots.txt").with_body(format!("Sitemap: {own_map}\nSitemap: {other_map}\n")).create_async().await;
+    let own = p.own.mock("GET", "/sitemap.xml").with_header("content-type", "application/xml").expect(1)
+        .with_body(format!("<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\"><url><loc>{}/listed</loc></url></urlset>", p.own.url()))
+        .create_async().await;
+    let other = p.other.mock("GET", "/sitemap.xml").with_header("content-type", "application/xml").with_body("<urlset/>").expect(0).create_async().await;
+    let scope = crate::vault::import::scrape::scope::UrlScope::new(&p.own.url()).unwrap();
+
+    let found = crate::vault::import::scrape::sitemap::discover(&scope, &p.own.url(), &p.client).await;
+
+    assert_eq!(found.urls, [format!("{}/listed", p.own.url())]);
+    own.assert_async().await;
+    other.assert_async().await;
+    assert_eq!(p.client.refused_report(), [format!("Not fetched: {other_map}")]);
 }

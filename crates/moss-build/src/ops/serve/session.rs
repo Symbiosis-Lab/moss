@@ -96,6 +96,10 @@ impl CommandHost for Session {
     fn publish(&self, event: &MossEvent) {
         super::events::publish(event);
     }
+
+    fn changed(&self, change: crate::commands::Change<'_>) {
+        crate::ops::watch::hand_off(self.root(), change);
+    }
 }
 
 impl InvokeCtx {

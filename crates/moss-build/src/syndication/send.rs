@@ -2,7 +2,7 @@
 //! here never touches the publish: it is already live, and a copy left due is
 //! sent by the next run.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use serde::Serialize;
@@ -10,9 +10,10 @@ use serde::Serialize;
 use super::job::{CopyJob, Op, PostRef, Previous};
 use super::record::{Cause, CopyOutcome, CopyRecord, PublishedPost, Records, State};
 use super::shape::{idempotency_key, page_url, shape_record, ShapeOptions};
+use super::sign_ins::SignIns;
 use crate::build::scan::article_map::{ArticleInfo, ArticleMap};
 use crate::build::scan::path_collision::{logical_path, on_disk};
-use crate::plugins::manager::copies::{CopyCall, CopyChannel};
+use crate::plugins::manager::copies::{Account, CopyCall, CopyChannel};
 use crate::plugins::manager::PluginManager;
 
 /// At most this many new copies per channel per run; the rest stay due. A
@@ -20,6 +21,75 @@ use crate::plugins::manager::PluginManager;
 pub const PER_RUN: usize = 10;
 
 const INTERRUPTED: &str = "the last send stopped before the network answered";
+
+/// How long after it was handed off a copy is looked up on its own; later, it
+/// is adopted when the author lists its address.
+const HANDOFF_LOOKUP_DAYS: i64 = 30;
+
+const OTHER_ACCOUNT: &str = "posted from another account. Sign in to that account.";
+
+/// The account each channel is signed in to, asked once per run and only of
+/// a channel with a copy to work on. Each answer also updates this computer's
+/// sign-in record, so a lapse found while sending shows in settings.
+struct Accounts<'a> {
+    seen: HashMap<String, Account>,
+    sign_ins: Option<&'a SignIns>,
+}
+
+impl Accounts<'_> {
+    /// `record` tied to its channel's account, or why it waits; see [`bind`].
+    async fn check(&mut self, manager: &PluginManager, record: &mut CopyRecord) -> Result<(), Outcome> {
+        if !self.seen.contains_key(&record.channel) {
+            let account = manager.copy_account(&record.channel).await;
+            if let Some(Err(e)) = self.sign_ins.map(|s| s.record(&record.channel, &account)) {
+                log::warn!(target: "syndication", "{}'s sign-in not recorded: {e}", record.channel);
+            }
+            self.seen.insert(record.channel.clone(), account);
+        }
+        bind(record, &self.seen[&record.channel])
+    }
+}
+
+/// Tie `record` to the account its channel is signed in to, or say why it
+/// waits: sent from another account, nothing may update, look up or resend
+/// it, since the copy is not this account's. A copy never sent, or
+/// refused outright, has nothing on the network and goes with the new one.
+fn bind(record: &mut CopyRecord, account: &Account) -> Result<(), Outcome> {
+    match (account, &record.account) {
+        (Account::Unsaid, _) => Ok(()),
+        (Account::Unknown(why), _) => Err(Outcome::Held { why: HeldWhy::Failed, reason: format!("which {} account is signed in is unknown ({why})", record.channel) }),
+        (Account::SignedOut, _) => Err(Outcome::Held { why: HeldWhy::SignedOut, reason: format!("signed out of {}", record.channel) }),
+        (Account::Known { id: now, .. }, Some(sent_from)) if sent_from != now && !record.definite_first() => Err(Outcome::Held { why: HeldWhy::OtherAccount, reason: OTHER_ACCOUNT.into() }),
+        (Account::Known { id: now, .. }, _) => {
+            record.account = Some(now.clone());
+            Ok(())
+        }
+    }
+}
+
+/// The handed-off copies this run looks up: per channel, the `cap` newest
+/// handed off within [`HANDOFF_LOOKUP_DAYS`]. A lookup that changes nothing
+/// does not rewrite the record, so `updated_at` is when it was handed off, and
+/// older ones age out rather than crowd the newest.
+fn handoffs_to_look_up(records: &[CopyRecord], cap: usize) -> HashSet<(String, String)> {
+    let since = chrono::Utc::now() - chrono::Duration::days(HANDOFF_LOOKUP_DAYS);
+    let mut recent: Vec<(&CopyRecord, chrono::DateTime<chrono::FixedOffset>)> = records
+        .iter()
+        .filter(|r| r.state == State::HandedOff)
+        .filter_map(|r| Some((r, chrono::DateTime::parse_from_rfc3339(&r.updated_at).ok().filter(|at| *at > since)?)))
+        .collect();
+    recent.sort_by(|a, b| b.1.cmp(&a.1));
+    let mut per_channel: BTreeMap<&str, usize> = BTreeMap::new();
+    recent
+        .into_iter()
+        .filter(|(r, _)| {
+            let n = per_channel.entry(r.channel.as_str()).or_default();
+            *n += 1;
+            *n <= cap
+        })
+        .map(|(r, _)| (r.uid.clone(), r.channel.clone()))
+        .collect()
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
@@ -40,9 +110,6 @@ pub enum Outcome {
     /// Left due and sent by a later run. `why` is what a person is told;
     /// `reason` is the detail, for the log and the command line.
     Held { why: HeldWhy, reason: String },
-    Deleted,
-    /// The network cannot remove a copy; it stays where it is.
-    CannotDelete,
 }
 
 /// Why a copy was left for a later run.
@@ -59,6 +126,11 @@ pub enum HeldWhy {
     /// The channel's plugin failed before answering; the same key makes a
     /// second try safe.
     Failed,
+    /// The copy was sent from an account other than the one the channel is
+    /// signed in to now.
+    OtherAccount,
+    /// The channel has no usable session; it waits for someone to sign in.
+    SignedOut,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
@@ -89,6 +161,17 @@ pub struct SendOptions<'a> {
     /// that does not answer yet. A host that has its own proof the site is
     /// live says false.
     pub check_pages: bool,
+    /// This computer's sign-in records, updated from each channel's answer;
+    /// `None` leaves them alone.
+    pub sign_ins: Option<&'a SignIns>,
+}
+
+#[cfg(test)]
+impl<'a> SendOptions<'a> {
+    /// Every copy due, none retried, no page check and no sign-in record.
+    pub(crate) fn test(site_url: &'a str, emit: &'a (dyn Fn(&Sent) + Sync)) -> Self {
+        Self { site_url, retry: &[], emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false, sign_ins: None }
+    }
 }
 
 /// Send the folder's due copies once a publish to `site_url` has landed.
@@ -97,9 +180,11 @@ pub async fn after_publish(
     site_url: &str,
     host_ports: &(dyn Fn(&str) -> crate::build::HostPorts + Send + Sync),
     retry: &[String],
+    only_source: Option<&str>,
     emit: &(dyn Fn(&Sent) + Sync),
 ) -> Vec<Sent> {
-    let opts = SendOptions { site_url, retry, emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: true };
+    let sign_ins = SignIns::app_default();
+    let opts = SendOptions { site_url, retry, emit, only_source, only_channel: None, cap: PER_RUN, check_pages: true, sign_ins: sign_ins.as_ref() };
     let folder_str = folder.to_string_lossy();
     after_live(folder, &opts, || host_ports(&folder_str).plugins.get_or_create(&folder_str)).await
 }
@@ -159,7 +244,7 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
     let mut due = records.all();
     due.sort_by_cached_key(|r| {
         let post = r.post.as_ref().map(|p| &p.article).or_else(|| by_uid.get(&r.uid).copied());
-        let rank = post.and_then(|p| p.syndicate.as_ref()).and_then(|c| c.iter().position(|c| *c == r.channel));
+        let rank = post.and_then(|p| super::Named::of_post(p, &channels)).and_then(|n| n.ids().iter().position(|c| *c == r.channel));
         (r.url_path.clone(), rank.unwrap_or(usize::MAX), r.channel.clone())
     });
     let config = match crate::build::site_config::read_project_config(&folder.to_string_lossy()) {
@@ -167,6 +252,8 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
         Err(e) => { log::warn!(target: "syndication", "copies not sent: {e}"); return Vec::new(); }
     };
     let mut sent_per_channel: BTreeMap<String, usize> = BTreeMap::new();
+    let handoffs = handoffs_to_look_up(&due, opts.cap);
+    let mut accounts = Accounts { seen: HashMap::new(), sign_ins: opts.sign_ins };
     let mut out = Vec::new();
     let mut push = |s: Sent| {
         (opts.emit)(&s);
@@ -179,11 +266,40 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
         }
         // The latest build is the author's latest word: a channel the post no
         // longer names gets nothing more, and its record keeps its history.
-        if now.is_some_and(|p| !p.syndicate.as_ref().is_some_and(|c| c.contains(&record.channel))) {
+        if now.is_some_and(|p| !super::Named::of_post(p, &channels).is_some_and(|n| n.ids().contains(&record.channel))) {
             continue;
         }
         let Some(channel) = channels.get(&record.channel) else { continue };
         let Some(op) = record.next_op(channel.spec.idempotent) else { continue };
+        // A handed-off copy rests there: it is handed off again only when the
+        // author retries its channel for this one post.
+        let retry = opts.retry.contains(&record.channel) && (record.state != State::HandedOff || opts.only_source.is_some());
+        let rests = record.state == State::HandedOff && !retry;
+        if rests && !handoffs.contains(&(record.uid.clone(), record.channel.clone())) {
+            continue;
+        }
+        match accounts.check(manager, &mut record).await {
+            // Said once for each time the copy is held.
+            Err(held @ Outcome::Held { why: HeldWhy::OtherAccount, .. }) => {
+                if !record.held_for_account {
+                    record.held_for_account = true;
+                    let _ = records.save(&record);
+                    push(sent(&record, held));
+                }
+                continue;
+            }
+            // A handed-off copy has nothing to send, so it waits without a word.
+            Err(_) if rests => continue,
+            Err(held) => {
+                push(sent(&record, held));
+                continue;
+            }
+            Ok(()) if record.held_for_account => {
+                record.held_for_account = false;
+                let _ = records.save(&record);
+            }
+            Ok(()) => {}
+        }
         // A record from before copies kept their post reads the latest build.
         let published = record.post.as_deref().cloned().or_else(|| by_uid.get(&record.uid).map(|a| PublishedPost::new(a, articles)));
         let Some(published) = published else {
@@ -206,10 +322,10 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
                     push(adopt(folder, &records, record, outcome));
                     continue;
                 }
-                // A draft still waiting for the author is reported once, when
-                // it first becomes one; a draft the author deleted is absent.
+                // A draft still waiting for the author is reported when it
+                // first becomes one, and whenever the author asks about its post.
                 Found::Waiting(handoff) => {
-                    if record.handoff.as_ref() != Some(&handoff) {
+                    if record.handoff.as_ref() != Some(&handoff) || opts.only_source.is_some() {
                         record.state = State::HandedOff;
                         record.handoff = Some(handoff.clone());
                         record.reason = None;
@@ -217,12 +333,21 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
                     }
                     continue;
                 }
+                // A handoff waits for the author whatever the network says,
+                // unless they asked for it to be handed off again.
+                Found::Absent | Found::Unknown(_) if rests => continue,
                 Found::Absent => {
                     record.discard_attempt();
                     record.state = State::Due;
                     Op::Publish
                 }
-                Found::Unknown(_) if opts.retry.contains(&record.channel) => Op::Publish,
+                Found::Unknown(_) if retry => {
+                    if record.state == State::HandedOff {
+                        record.discard_attempt();
+                        record.state = State::Due;
+                    }
+                    Op::Publish
+                }
                 Found::Unknown(why) => {
                     if record.state == State::Sending {
                         mark_unconfirmed(&records, &mut record, INTERRUPTED);
@@ -268,6 +393,12 @@ fn post_now<'a>(record: &'a CopyRecord, latest: &HashMap<String, &'a ArticleInfo
     latest.get(&record.uid).copied().or(record.post.as_ref().map(|p| &p.article))
 }
 
+/// Whether `source` is a page of the latest build, in any spelling of it.
+pub fn is_a_page(folder: &Path, source: &str) -> bool {
+    let map = std::fs::read(crate::moss_paths::MossPaths::new(folder).article_map()).ok().and_then(|b| serde_json::from_slice::<ArticleMap>(&b).ok());
+    map.is_some_and(|m| m.articles.values().any(|a| a.source_path == logical_path(source)))
+}
+
 /// A host may hand over the disk's spelling of the source; pages are keyed by
 /// its logical path.
 fn asked_for(record: &CopyRecord, now: Option<&ArticleInfo>, opts: &SendOptions<'_>) -> bool {
@@ -286,19 +417,17 @@ async fn send_one(
     op: Op,
     opts: &SendOptions<'_>,
 ) -> Option<Sent> {
-    if record.remote.is_some() && record.form.is_none() {
-        return Some(sent(&record, Outcome::Refused { cause: Cause::Content, reason: "retaining the prior version: its original form was not recorded".into() }));
-    }
     record.source_path.clone_from(&post.source_path);
     record.url_path.clone_from(&post.url_path);
+    let (job, hash) = match build_job(&record, channel, post, shape, op, record.site(opts.site_url)) {
+        Ok(j) => j,
+        // A copy already on the network keeps its saved record as it is.
+        Err(reason) if record.remote.is_some() => return Some(sent(&record, Outcome::Refused { cause: Cause::Content, reason })),
+        Err(reason) => return Some(settle(records, record, Outcome::Refused { cause: Cause::Content, reason })),
+    };
     let had_uncertain_attempt = record.handoff.is_some()
         || matches!(record.state, State::Sending | State::Unconfirmed)
         || (record.state == State::Due && record.form.is_some());
-
-    let (job, hash) = match build_job(&record, channel, post, shape, op, record.site(opts.site_url)) {
-        Ok(j) => j,
-        Err(reason) => return Some(settle(records, record, Outcome::Refused { cause: Cause::Content, reason })),
-    };
     // The source changed but the copy would not (writing `syndicated:` back
     // is such an edit): nothing to send, nothing to say.
     if op == Op::Update && record.hash.as_deref() == Some(hash.as_str()) {
@@ -394,35 +523,6 @@ async fn send_one(
     })
 }
 
-/// Remove every copy of one post from the networks that can remove one. For a
-/// post the author deleted; nothing calls this on its own.
-pub async fn delete_copies(folder: &Path, manager: &PluginManager, uid: &str, site_url: &str, emit: &(dyn Fn(&Sent) + Sync)) -> Vec<Sent> {
-    let records = Records::in_vault(&crate::moss_paths::MossPaths::new(folder));
-    let Some(_turn) = records.turn() else { return Vec::new() };
-    let mut out = Vec::new();
-    for record in records.all().into_iter().filter(|r| r.uid == uid) {
-        let Some(previous) = record.remote.clone().filter(|_| record.state == State::Posted) else { continue };
-        let job = CopyJob::delete(&record, previous, site_url);
-        emit(&sent(&record, Outcome::Sending));
-        let outcome = match manager.send_copy(&job).await {
-            CopyCall::Answered(r) if r.success => match records.remove(&record.uid, &record.channel) {
-                Ok(()) => Outcome::Deleted,
-                Err(e) => Outcome::Refused { cause: Cause::Unknown, reason: format!("deleted, but its record remains ({e})") },
-            },
-            CopyCall::Answered(r) => Outcome::Refused {
-                cause: r.copy.as_ref().and_then(|c| c.refused.as_ref()).map(|f| f.cause).unwrap_or_default(),
-                reason: r.message.unwrap_or_else(|| "the network refused".into()),
-            },
-            CopyCall::NoExport => Outcome::CannotDelete,
-            CopyCall::Unknown(reason) => Outcome::Refused { cause: Cause::Unknown, reason },
-        };
-        let s = sent(&record, outcome);
-        emit(&s);
-        out.push(s);
-    }
-    out
-}
-
 /// Whether a reader elsewhere following `url` gets the page: a few tries,
 /// since a publish can land a little before every edge serves it. An onion
 /// address is taken on trust, as nothing here can reach one.
@@ -450,6 +550,7 @@ enum Found {
     Waiting(super::record::Handoff),
     /// The network says there is no such copy, so sending is safe.
     Absent,
+    /// Anything else: a failed or unrecognised answer, or none.
     Unknown(String),
 }
 
@@ -463,7 +564,8 @@ async fn reconcile(manager: &PluginManager, record: &CopyRecord, channel: &CopyC
         CopyCall::Answered(r) if r.success => match r.copy {
             Some(c @ CopyOutcome { id: Some(_), url: Some(_), .. }) => Found::Copy(c),
             Some(CopyOutcome { handoff: Some(h), .. }) => Found::Waiting(h),
-            _ => Found::Absent,
+            Some(CopyOutcome { absent: true, .. }) => Found::Absent,
+            _ => Found::Unknown("the lookup did not say whether the copy exists".into()),
         },
         CopyCall::Answered(r) => Found::Unknown(r.message.unwrap_or_else(|| "the lookup failed".into())),
         CopyCall::NoExport => Found::Unknown("this channel cannot look a copy up".into()),
@@ -581,8 +683,6 @@ pub fn render(sent: &[Sent]) -> String {
                 s.channel, s.channel
             ),
             Outcome::Held { reason, .. } => format!("held for {}: {reason}", s.channel),
-            Outcome::Deleted => format!("deleted from {}", s.channel),
-            Outcome::CannotDelete => format!("{} cannot remove a copy; it stays", s.channel),
         };
         out.push_str(&format!("{} — {line}\n", s.source_path));
         if let Some(e) = &s.write_back {
@@ -593,12 +693,16 @@ pub fn render(sent: &[Sent]) -> String {
 }
 
 #[cfg(test)]
+#[path = "send_account_tests.rs"]
+mod account_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn planning_preview_and_send_share_emitted_formula_assets() {
-        use super::super::{plan, preview, shape};
+    async fn planning_and_send_share_emitted_formula_assets() {
+        use super::super::{plan, shape};
         use crate::build::emit::math_png::{email_math_img, emit_math_pngs};
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
@@ -642,15 +746,12 @@ mod tests {
         let planned = shape::assess(&post, &channels["one"].spec, Some(site), &options, &CopyRecord::due("aa11aa11", "one", "page.md", "page/")).unwrap();
         assert_eq!(planned.pictures.len(), 1);
         assert_eq!(planned.pictures[0].url, expected_url);
-        let previews = preview::for_post(root, "page.md", site);
-        assert_eq!(previews[0].pictures, planned.pictures);
-        assert_eq!(previews[0].included_pictures, 1);
         plan::apply(plans, &records, Some(site), Some(&map), &Default::default());
         // A subsequent build's language cannot change the saved publication.
         map.page_languages.insert(post.url_path.clone(), "en".into());
         let manager = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()).get_or_create(&root.to_string_lossy()).unwrap();
         let emit = |_: &Sent| {};
-        let opts = SendOptions { site_url: site, retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
+        let opts = SendOptions::test(site, &emit);
         let sent = send_due(root, &manager, &map, &opts).await;
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].outcome, Outcome::Posted { url: "https://example.social/formula".into() });
@@ -686,10 +787,10 @@ mod tests {
                 record.remote = Some(super::super::record::RemoteRef { id: "1".into(), url: "https://example.social/1".into() });
                 record.update_due = true;
             }
-            let channel = CopyChannel { spec: ChannelSpec { forms: vec![Form::Short], max_chars: Some(300), ..Default::default() }, domains: Vec::new() };
+            let channel = CopyChannel { spec: ChannelSpec { forms: vec![Form::Short], max_chars: Some(300), ..Default::default() }, ..Default::default() };
             let post: ArticleInfo = serde_json::from_value(serde_json::json!({"source_path": "page.md", "title": "", "content": "Hello.", "url_path": "page/"})).unwrap();
             let emit = |_: &Sent| {};
-            let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
+            let opts = SendOptions::test("https://example.org", &emit);
             send_one(root, &manager, &records, record, &channel, &post, &ShapeOptions::default(), op, &opts).await.unwrap();
             let saved = records.get("u", "one").unwrap();
             assert_eq!(saved.state, expected_state, "{name}");
@@ -712,9 +813,9 @@ mod tests {
         records.save(&record).unwrap();
         let before = records.get("u", "one").unwrap();
         let post: ArticleInfo = serde_json::from_value(serde_json::json!({"source_path": "edited.md", "title": "New", "content": "Edited", "url_path": "edited/"})).unwrap();
-        let channel = CopyChannel { spec: super::super::channel::ChannelSpec { forms: vec![super::super::channel::Form::Long], ..Default::default() }, domains: Vec::new() };
+        let channel = CopyChannel { spec: super::super::channel::ChannelSpec { forms: vec![super::super::channel::Form::Long], ..Default::default() }, ..Default::default() };
         let emit = |_: &Sent| panic!("a frozen copy cannot send");
-        let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
+        let opts = SendOptions::test("https://example.org", &emit);
         let result = send_one(root, &manager, &records, record, &channel, &post, &ShapeOptions::default(), Op::Update, &opts).await.unwrap();
         assert!(matches!(result.outcome, Outcome::Refused { reason, .. } if reason.contains("retaining the prior version")));
         assert_eq!(records.get("u", "one").unwrap(), before);
@@ -726,7 +827,7 @@ mod tests {
         let mut record = CopyRecord::due("u", "one", "page.md", "page/");
         record.form = Some(super::super::channel::Form::Short);
         record.part_count = Some(1);
-        let channel = CopyChannel { spec: super::super::channel::ChannelSpec { forms: vec![super::super::channel::Form::Short], max_chars: Some(1), ..Default::default() }, domains: Vec::new() };
+        let channel = CopyChannel { spec: super::super::channel::ChannelSpec { forms: vec![super::super::channel::Form::Short], max_chars: Some(1), ..Default::default() }, ..Default::default() };
         let post: ArticleInfo = serde_json::from_value(serde_json::json!({ "source_path": "page.md", "title": "", "content": "Longer than allowed", "url_path": "page/", "date": null })).unwrap();
         let (job, _) = build_job(&record, &channel, &post, &ShapeOptions::default(), Op::Find, "https://example.org").unwrap();
         assert_eq!(job.idempotency_key, idempotency_key("u", "one"));
@@ -759,43 +860,13 @@ mod tests {
         assert!(after.contains("https://matters.town/a/1") && after.ends_with("---\nBody.\n"));
     }
 
-    /// A deleted post's copies go where the network can remove them; where it
-    /// cannot, the copy stays and says so.
-    #[tokio::test]
-    async fn delete_copies_removes_what_each_network_can_and_says_what_it_cannot() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        super::super::test_channel(root, "removes", "{ publish_copy: async function () { return { success: true }; }, delete_copy: async function (job) { return { success: job.previous.id === 'r-1' }; } }");
-        super::super::test_channel(root, "keeps", "{ publish_copy: async function () { return { success: true }; } }");
-        let records = Records::in_vault(&crate::moss_paths::MossPaths::new(root));
-        for (channel, id) in [("removes", "r-1"), ("keeps", "k-1")] {
-            let mut r = CopyRecord::due("ab12cd34", channel, "notes/a.md", "notes/a/");
-            r.state = State::Posted;
-            r.remote = Some(super::super::record::RemoteRef { id: id.into(), url: format!("https://example.social/{id}") });
-            records.save(&r).unwrap();
-        }
-
-        let cache = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned());
-        let manager = cache.get_or_create(&root.to_string_lossy()).unwrap();
-        let events = std::sync::Mutex::new(Vec::new());
-        let emit = |s: &Sent| events.lock().unwrap().push(s.outcome.clone());
-        let done = delete_copies(root, &manager, "ab12cd34", "https://notes.example.org", &emit).await;
-
-        let by_channel: BTreeMap<_, _> = done.iter().map(|s| (s.channel.as_str(), s.outcome.clone())).collect();
-        assert_eq!(by_channel["removes"], Outcome::Deleted);
-        assert_eq!(by_channel["keeps"], Outcome::CannotDelete);
-        assert!(!records.exists("ab12cd34", "removes"));
-        assert!(records.exists("ab12cd34", "keeps"), "a copy that stays keeps its record");
-        assert_eq!(events.lock().unwrap().iter().filter(|o| **o == Outcome::Sending).count(), 2);
-    }
-
-    /// While another run holds the folder's turn, neither a send nor a delete
-    /// loads a channel or touches a copy.
+    /// While another run holds the folder's turn, a send loads no channel and
+    /// touches no copy.
     #[tokio::test]
     async fn a_run_that_finds_the_folder_busy_loads_no_channel_and_sends_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        super::super::test_channel(root, "removes", "{ publish_copy: async function () { return { success: true }; }, delete_copy: async function () { return { success: true }; } }");
+        super::super::test_channel(root, "removes", "{ publish_copy: async function () { return { success: true }; } }");
         let records = Records::in_vault(&crate::moss_paths::MossPaths::new(root));
         let mut r = CopyRecord::due("ab12cd34", "removes", "notes/a.md", "notes/a/");
         r.state = State::Posted;
@@ -804,17 +875,12 @@ mod tests {
         let mp = crate::moss_paths::MossPaths::new(root);
         std::fs::create_dir_all(mp.article_map().parent().unwrap()).unwrap();
         std::fs::write(mp.article_map(), serde_json::to_vec(&ArticleMap::default()).unwrap()).unwrap();
-        let held = records.turn().expect("the turn is free");
+        let _held = records.turn().expect("the turn is free");
 
         let emit = |_: &Sent| {};
-        let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
+        let opts = SendOptions::test("https://example.org", &emit);
         assert!(after_live(root, &opts, || panic!("no channel may load")).await.is_empty());
-        let manager = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()).get_or_create(&root.to_string_lossy()).unwrap();
-        assert!(delete_copies(root, &manager, "ab12cd34", "https://example.org", &emit).await.is_empty());
-        assert!(records.exists("ab12cd34", "removes"), "the copy and its record stay");
-
-        drop(held);
-        assert_eq!(delete_copies(root, &manager, "ab12cd34", "https://example.org", &emit).await[0].outcome, Outcome::Deleted);
+        assert_eq!(records.get("ab12cd34", "removes"), Some(r), "the copy and its record stay");
     }
 
     /// A post is asked for by its source file, which the latest build names
@@ -837,7 +903,7 @@ mod tests {
         std::fs::create_dir_all(mp.article_map().parent().unwrap()).unwrap();
         std::fs::write(mp.article_map(), serde_json::to_vec(&articles).unwrap()).unwrap();
         let emit = |_: &Sent| {};
-        let opts = |only_source| SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source, only_channel: None, cap: PER_RUN, check_pages: false };
+        let opts = |only_source| SendOptions { only_source, ..SendOptions::test("https://example.org", &emit) };
 
         assert!(after_live(root, &opts(Some("notes/other.md")), || panic!("no channel may load")).await.is_empty());
         assert!(after_live(root, &opts(Some("notes/old.md")), || panic!("no channel may load")).await.is_empty());
@@ -869,7 +935,7 @@ mod tests {
         std::fs::create_dir_all(mp.article_map().parent().unwrap()).unwrap();
         std::fs::write(mp.article_map(), serde_json::to_vec(&articles).unwrap()).unwrap();
         let emit = |_: &Sent| {};
-        let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source: Some("notes/cafe\u{301}.md"), only_channel: None, cap: PER_RUN, check_pages: false };
+        let opts = SendOptions { only_source: Some("notes/cafe\u{301}.md"), ..SendOptions::test("https://example.org", &emit) };
         let loaded = std::sync::atomic::AtomicBool::new(false);
         after_live(root, &opts, || {
             loaded.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -910,15 +976,7 @@ mod tests {
         let cache = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned());
         let manager = cache.get_or_create(&root.to_string_lossy()).unwrap();
         let emit = |_: &Sent| {};
-        let opts = |only_source, only_channel, cap| SendOptions {
-            site_url: "https://publish.example.net",
-            retry: &[],
-            emit: &emit,
-            only_source,
-            only_channel,
-            cap,
-            check_pages: false,
-        };
+        let opts = |only_source, only_channel, cap| SendOptions { only_source, only_channel, cap, ..SendOptions::test("https://publish.example.net", &emit) };
         let outcomes = |sent: &[Sent]| sent.iter().map(|s| (s.source_path.clone(), s.channel.clone(), s.outcome.clone())).collect::<Vec<_>>();
         let posted = |path: &str| Outcome::Posted { url: format!("https://example.social/{path}") };
 
@@ -958,7 +1016,7 @@ mod tests {
         articles.articles.insert(post.url_path.clone(), post);
         let manager = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()).get_or_create(&root.to_string_lossy()).unwrap();
         let emit = |_: &Sent| {};
-        let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
+        let opts = SendOptions::test("https://example.org", &emit);
         let sent = send_due(root, &manager, &articles, &opts).await;
         let Some(Outcome::Held { why, reason }) = sent.last().map(|s| s.outcome.clone()) else { panic!("{sent:?}") };
         assert_eq!(why, HeldWhy::Failed);
@@ -1008,7 +1066,7 @@ mod tests {
         let cache = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned());
         let manager = cache.get_or_create(&root.to_string_lossy()).unwrap();
         let emit = |_: &Sent| {};
-        let opts = SendOptions { site_url: "https://publish.example.net", retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
+        let opts = SendOptions::test("https://publish.example.net", &emit);
         let sent = send_due(root, &manager, &latest, &opts).await;
 
         let got: Vec<_> = sent.iter().map(|s| (s.source_path.as_str(), s.channel.as_str(), &s.outcome)).collect();
@@ -1016,6 +1074,42 @@ mod tests {
         assert_eq!(records.get("aaaa0001", "two").unwrap().state, State::Due);
         let kept = records.get("aaaa0002", "two").unwrap();
         assert!(kept.state == State::Posted && kept.update_due && kept.remote.unwrap().id == "b-1");
+    }
+
+    /// Records are kept under ids, so a page that names a channel as its
+    /// network is called still has its copies sent, in the order it names them.
+    #[tokio::test]
+    async fn a_page_that_names_a_channel_by_its_networks_name_has_its_copies_sent_in_its_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let posts = "{ publish_copy: async function (job) { return { success: true, copy: { id: job.post.url, url: 'https://example.social/' + job.channel } }; } }";
+        super::super::test_channel(root, "one", posts);
+        super::super::test_channel_named(root, "xcom", "X", posts);
+        std::fs::create_dir_all(root.join("notes")).unwrap();
+        std::fs::write(root.join("notes/a.md"), "Hello.\n").unwrap();
+        let post: ArticleInfo = serde_json::from_value(serde_json::json!({
+            "source_path": "notes/a.md", "title": "", "content": "Hello.\n", "url_path": "notes/a/", "date": null, "uid": "aaaa0001", "syndicate": ["x", "one"]
+        }))
+        .unwrap();
+        let mut landed = ArticleMap::default();
+        landed.articles.insert(post.url_path.clone(), post);
+        let records = Records::in_vault(&crate::moss_paths::MossPaths::new(root));
+        for channel in ["one", "xcom"] {
+            let mut r = CopyRecord::due("aaaa0001", channel, "notes/a.md", "notes/a/");
+            r.post = Some(Box::new(PublishedPost::new(&landed.articles["notes/a/"], &landed)));
+            records.save(&r).unwrap();
+        }
+        let cache = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned());
+        let manager = cache.get_or_create(&root.to_string_lossy()).unwrap();
+        let emit = |_: &Sent| {};
+        let opts = SendOptions::test("https://publish.example.net", &emit);
+        let sent = send_due(root, &manager, &landed, &opts).await;
+
+        let got: Vec<_> = sent.iter().filter(|s| s.outcome != Outcome::Sending).map(|s| (s.channel.as_str(), &s.outcome)).collect();
+        assert_eq!(got, [
+            ("xcom", &Outcome::Posted { url: "https://example.social/xcom".into() }),
+            ("one", &Outcome::Posted { url: "https://example.social/one".into() }),
+        ]);
     }
 
     /// Two runs in one folder, the second started once the first has read its
@@ -1039,7 +1133,7 @@ mod tests {
         articles.articles.insert(post.url_path.clone(), post);
         async fn run(root: &Path, articles: &ArticleMap, emit: &(dyn Fn(&Sent) + Sync)) -> Vec<Sent> {
             let manager = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()).get_or_create(&root.to_string_lossy()).unwrap();
-            let opts = SendOptions { site_url: "https://example.org", retry: &[], emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
+            let opts = SendOptions::test("https://example.org", emit);
             send_due(root, &manager, articles, &opts).await
         }
         let posted = |sent: &[Sent]| sent.iter().filter(|s| matches!(s.outcome, Outcome::Posted { .. })).count();
@@ -1066,61 +1160,140 @@ mod tests {
         assert_eq!(records.get("aaaa0001", "once").unwrap().state, State::Posted);
     }
 
-    /// A copy left as a draft for the author to finish on the network waits
-    /// quietly, is recorded as posted once the network says it was published,
-    /// and is sent again if the author deleted the draft.
+    /// A channel whose lookup answers `state` for every copy, and posts every
+    /// new copy as `p-<uid>`.
+    fn lookup_channel(root: &Path, state: &str) {
+        let js = format!(
+            "{{ publish_copy: async function (job) {{ return {{ success: true, copy: {{ id: 'p', url: 'https://social.example.net/p-' + job.post.source_path }} }}; }}, \
+             find_copy: async function (job) {{ \
+               return '{state}' === 'found' ? {{ success: true, copy: {{ id: 'f', url: 'https://social.example.net/f-' + job.post.source_path }} }} \
+                 : '{state}' === 'waiting' ? {{ success: true, copy: {{ handoff: {{ text: '', open_url: 'https://social.example.net/draft', id: 'd-1' }} }} }} \
+                 : '{state}' === 'absent' ? {{ success: true, copy: {{ absent: true }} }} \
+                 : {{ success: true, copy: null }}; }} }}"
+        );
+        if root.join(".moss/plugins/social").exists() {
+            std::fs::write(root.join(".moss/plugins/social/main.bundle.js"), format!("window.SOCIALPlugin = {js};")).unwrap();
+        } else {
+            super::super::test_channel(root, "social", &js);
+        }
+    }
+
+    /// Posts `a0.md`, `a1.md`, … each naming the channel, with a record in
+    /// `state` handed off (or last touched) `i` days ago.
+    fn lookup_site(root: &Path, states: &[State]) -> (Records, ArticleMap) {
+        let records = Records::in_vault(&crate::moss_paths::MossPaths::new(root));
+        let mut articles = ArticleMap::default();
+        for (i, state) in states.iter().enumerate() {
+            let (source, url, uid) = (format!("a{i}.md"), format!("a{i}/"), format!("aaaa000{i}"));
+            std::fs::write(root.join(&source), "---\ntitle: A\n---\nBody.\n").unwrap();
+            let mut r = CopyRecord::due(&uid, "social", &source, &url);
+            r.state = *state;
+            r.form = Some(super::super::channel::Form::Short);
+            if *state == State::HandedOff {
+                r.handoff = Some(super::super::record::Handoff { text: "Body".into(), open_url: Some("https://social.example.net/new".into()), id: None });
+            }
+            r.updated_at = (chrono::Utc::now() - chrono::Duration::days(i as i64)).to_rfc3339();
+            records.save(&r).unwrap();
+            let post: ArticleInfo = serde_json::from_value(serde_json::json!({
+                "source_path": source, "title": "A", "content": "Body.\n", "url_path": url, "date": null, "uid": uid, "syndicate": ["social"]
+            })).unwrap();
+            articles.articles.insert(post.url_path.clone(), post);
+        }
+        (records, articles)
+    }
+
+    async fn run_lookups(root: &Path, articles: &ArticleMap, retry: &[String], only_source: Option<&str>, cap: usize) -> Vec<Sent> {
+        let manager = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()).get_or_create(&root.to_string_lossy()).unwrap();
+        let emit = |_: &Sent| {};
+        let opts = SendOptions { retry, only_source, cap, ..SendOptions::test("https://example.org", &emit) };
+        send_due(root, &manager, articles, &opts).await.into_iter().filter(|s| s.outcome != Outcome::Sending).collect()
+    }
+
+    /// A handed-off copy is looked up whether or not the network keeps a
+    /// draft id; only a published copy changes it, and silence, an empty
+    /// answer or absence leaves it waiting for the author.
     #[tokio::test]
-    async fn a_draft_left_for_the_author_is_adopted_once_published_and_resent_once_gone() {
+    async fn a_handed_off_copy_is_adopted_once_found_and_otherwise_waits_quietly() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        let finds = |state: &str| {
-            format!(
-                "{{ publish_copy: async function () {{ return {{ success: false, message: 'sent again' }}; }}, \
-                 find_copy: async function (job) {{ if (job.previous.id !== 'd-1') return {{ success: false }}; \
-                   return '{state}' === 'published' ? {{ success: true, copy: {{ id: 'a-1', url: 'https://articles.example.net/a-1' }} }} \
-                     : '{state}' === 'waiting' ? {{ success: true, copy: {{ handoff: {{ text: '', open_url: 'https://articles.example.net/draft/d-1', id: 'd-1' }} }} }} \
-                     : {{ success: true, copy: null }}; }} }}"
-            )
-        };
-        super::super::test_channel(root, "drafts", &finds("waiting"));
-        std::fs::create_dir_all(root.join("essays")).unwrap();
-        std::fs::write(root.join("essays/a.md"), "---\ntitle: A\n---\nBody.\n").unwrap();
-        let records = Records::in_vault(&crate::moss_paths::MossPaths::new(root));
-        let handoff = super::super::record::Handoff { text: String::new(), open_url: Some("https://articles.example.net/draft/d-1".into()), id: Some("d-1".into()) };
-        let mut r = CopyRecord::due("aaaa0001", "drafts", "essays/a.md", "essays/a/");
-        r.state = State::HandedOff;
-        r.handoff = Some(handoff);
-        r.form = Some(super::super::channel::Form::Long);
-        r.part_count = Some(0);
-        records.save(&r).unwrap();
-        let post: ArticleInfo = serde_json::from_value(serde_json::json!({
-            "source_path": "essays/a.md", "title": "A", "content": "Body.\n", "url_path": "essays/a/", "date": null,
-            "uid": "aaaa0001", "syndicate": ["drafts"]
-        }))
-        .unwrap();
-        let mut articles = ArticleMap::default();
-        articles.articles.insert(post.url_path.clone(), post);
-        let emit = |_: &Sent| {};
-        let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
-        let opts = &opts;
-        let send = |state: &str| {
-            std::fs::write(root.join(".moss/plugins/drafts/main.bundle.js"), format!("window.DRAFTSPlugin = {};", finds(state))).unwrap();
-            let manager = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()).get_or_create(&root.to_string_lossy()).unwrap();
-            let articles = articles.clone();
-            async move { send_due(root, &manager, &articles, opts).await.into_iter().map(|s| s.outcome).collect::<Vec<_>>() }
-        };
+        let (records, articles) = lookup_site(root, &[State::HandedOff]);
+        for state in ["unknown", "absent", "waiting"] {
+            lookup_channel(root, state);
+            let before = records.get("aaaa0000", "social").unwrap();
+            let out = run_lookups(root, &articles, &[], None, PER_RUN).await;
+            let after = records.get("aaaa0000", "social").unwrap();
+            assert_eq!(after.state, State::HandedOff, "{state}");
+            if state == "waiting" {
+                assert!(matches!(&out[..], [Sent { outcome: Outcome::HandedOff { .. }, .. }]), "a new draft is said once: {out:?}");
+            } else {
+                assert!(out.is_empty(), "{state}: {out:?}");
+                assert_eq!(after, before, "{state}");
+            }
+        }
+        assert!(run_lookups(root, &articles, &[], None, PER_RUN).await.is_empty(), "the same draft is not said again");
+        let asked = run_lookups(root, &articles, &[], Some("a0.md"), PER_RUN).await;
+        assert!(matches!(&asked[..], [Sent { outcome: Outcome::HandedOff { .. }, .. }]), "unless its post is asked about: {asked:?}");
+        lookup_channel(root, "found");
+        let out = run_lookups(root, &articles, &[], None, PER_RUN).await;
+        assert_eq!(out[0].outcome, Outcome::Posted { url: "https://social.example.net/f-a0.md".into() });
+        assert!(std::fs::read_to_string(root.join("a0.md")).unwrap().contains("f-a0.md"));
+    }
 
-        assert!(send("waiting").await.is_empty(), "an unpublished draft waits quietly");
-        let waiting = records.get("aaaa0001", "drafts").unwrap();
-        assert_eq!(waiting.state, State::HandedOff);
-        assert_eq!(waiting.form, Some(super::super::channel::Form::Long));
+    /// Only an explicit absence lets an interrupted send go again: an empty
+    /// answer, which an earlier plugin gave for "not found", leaves it held.
+    #[tokio::test]
+    async fn only_an_explicit_absence_lets_an_uncertain_copy_be_sent_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let (records, articles) = lookup_site(root, &[State::Unconfirmed]);
+        lookup_channel(root, "unknown");
+        let out = run_lookups(root, &articles, &[], None, PER_RUN).await;
+        assert!(matches!(&out[..], [Sent { outcome: Outcome::Unconfirmed { .. }, .. }]), "{out:?}");
+        assert_eq!(records.get("aaaa0000", "social").unwrap().state, State::Unconfirmed);
+        lookup_channel(root, "absent");
+        let out = run_lookups(root, &articles, &[], None, PER_RUN).await;
+        assert_eq!(out[0].outcome, Outcome::Posted { url: "https://social.example.net/p-a0.md".into() });
+    }
 
-        assert_eq!(send("published").await, [Outcome::Posted { url: "https://articles.example.net/a-1".into() }]);
-        assert!(std::fs::read_to_string(root.join("essays/a.md")).unwrap().contains("https://articles.example.net/a-1"));
+    /// One run asks about at most `cap` handed-off copies per channel, the
+    /// newest, and none handed off longer ago than the lookup window.
+    #[tokio::test]
+    async fn a_run_looks_up_a_bounded_number_of_handoffs_newest_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let (records, articles) = lookup_site(root, &[State::HandedOff; 6]);
+        // Ages run against the order the run walks the records in.
+        for i in 0..6 {
+            let mut r = records.get(&format!("aaaa000{i}"), "social").unwrap();
+            let days = if i == 0 { HANDOFF_LOOKUP_DAYS + 1 } else { 6 - i as i64 };
+            r.updated_at = (chrono::Utc::now() - chrono::Duration::days(days)).to_rfc3339();
+            records.save(&r).unwrap();
+        }
+        lookup_channel(root, "found");
+        let adopted = |out: Vec<Sent>| out.into_iter().map(|s| s.source_path).collect::<Vec<_>>();
+        assert_eq!(adopted(run_lookups(root, &articles, &[], None, 3).await), ["a3.md", "a4.md", "a5.md"], "the three newest");
+        assert_eq!(adopted(run_lookups(root, &articles, &[], None, 3).await), ["a1.md", "a2.md"], "the rest inside the window");
+        assert_eq!(records.get("aaaa0000", "social").unwrap().state, State::HandedOff, "never one handed off before the window");
+    }
 
-        r.state = State::HandedOff;
-        records.save(&r).unwrap();
-        assert_eq!(send("gone").await, [Outcome::Refused { cause: Cause::Unknown, reason: "sent again".into() }], "a deleted draft is sent again");
+    /// Retrying a channel sends its uncertain copies again and leaves its
+    /// handed-off ones as they are; a retry for one post hands that post's
+    /// copy off again.
+    #[tokio::test]
+    async fn a_retry_hands_off_again_only_the_post_it_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let (records, articles) = lookup_site(root, &[State::Unconfirmed, State::HandedOff, State::HandedOff]);
+        lookup_channel(root, "unknown");
+        let handed = [records.get("aaaa0001", "social").unwrap(), records.get("aaaa0002", "social").unwrap()];
+        let retry = ["social".to_string()];
+        let out = run_lookups(root, &articles, &retry, None, PER_RUN).await;
+        assert_eq!(out.iter().map(|s| (s.source_path.as_str(), &s.outcome)).collect::<Vec<_>>(), [("a0.md", &Outcome::Posted { url: "https://social.example.net/p-a0.md".into() })]);
+        assert_eq!([records.get("aaaa0001", "social").unwrap(), records.get("aaaa0002", "social").unwrap()], handed);
+
+        let out = run_lookups(root, &articles, &retry, Some("a2.md"), PER_RUN).await;
+        assert_eq!(out.iter().map(|s| (s.source_path.as_str(), &s.outcome)).collect::<Vec<_>>(), [("a2.md", &Outcome::Posted { url: "https://social.example.net/p-a2.md".into() })]);
+        assert_eq!(records.get("aaaa0001", "social").unwrap(), handed[0]);
     }
 
     #[test]

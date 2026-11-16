@@ -205,6 +205,18 @@ impl Shortcode {
             _ => None,
         }
     }
+
+    /// The classes the author wrote on the opener, space-separated; empty
+    /// for a kind that takes none.
+    pub fn classes(&self) -> &str {
+        match self {
+            Shortcode::Buttons(b) => &b.classes,
+            Shortcode::Gallery(g) => &g.classes,
+            Shortcode::Grid(g) => &g.classes,
+            Shortcode::Hero(h) => &h.classes,
+            _ => "",
+        }
+    }
 }
 
 impl ShortcodeSource {

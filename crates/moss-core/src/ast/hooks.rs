@@ -659,27 +659,15 @@ pub trait RenderHooks {
         super::node::is_text_link_row(children).then_some("moss-links")
     }
 
-    /// Whether a heading at `level` carries the `moss-heading-anchor`
-    /// permalink. The `id` is kept regardless of the answer, so a fragment
-    /// link (`#section`) still resolves either way — this only gates the
-    /// visible `#` appended after the heading text.
+    /// Which headings at `level` carry the `moss-heading-anchor` permalink.
+    /// The `id` is kept whatever the answer, so a fragment link still
+    /// resolves; this only gates the mark after the heading's text.
     ///
-    /// Trait default: no for `level == 1`, yes otherwise. A level-1 heading
-    /// is a page's own title, not a section of it, so it is never a
-    /// fragment a reader deep-links to — true of an author-written
-    /// `# Title` in the body just as much as the auto-injected article
-    /// title (which skips this hook entirely; see [`RenderHooks::render_heading`]).
-    /// Overrides only narrow further, never widen past `level == 1`:
-    /// [`DefaultHooks::without_heading_anchors`] says no at every level (a
-    /// card/hero heading is a display title regardless of level), and a
-    /// hosting site can do the same for a specific page (e.g. the home page).
-    ///
-    /// A policy hook rather than a `render_heading` override — same shape
-    /// as [`emit_footnote_anchors`](RenderHooks::emit_footnote_anchors) —
-    /// so exactly ONE heading emitter exists; a past regression introduced
-    /// a second, partially-delegating impl that drifted from the first.
-    fn emit_heading_anchors(&self, level: u8) -> bool {
-        level != 1
+    /// Default: none at level 1 (a page's own title, not a section of it),
+    /// every heading otherwise. A policy hook rather than a `render_heading`
+    /// override, so there is one heading emitter.
+    fn heading_anchors(&self, level: u8) -> HeadingAnchors {
+        if level == 1 { HeadingAnchors::None } else { HeadingAnchors::All }
     }
 
     /// The localized `aria-label` for the per-heading permalink anchor
@@ -725,7 +713,7 @@ pub trait RenderHooks {
         source_line: Option<usize>,
         content: &str,
     ) {
-        let HeadingMarks { id, legacy_id, contents_end, contents_label, permalinks_off } = marks;
+        let HeadingMarks { id, legacy_id, contents_end, contents_label, permalinks_off, named } = marks;
         out.push('<');
         out.push('h');
         out.push((b'0' + level) as char);
@@ -753,24 +741,17 @@ pub trait RenderHooks {
             out.push_str("\"></span>");
         }
         out.push_str(&crate::heading::range::keep_ranges_together(content));
-        // Permalink anchor — only when the heading has a slug id AND
-        // `emit_heading_anchors(level)` says yes (never for level 1 by
-        // default; see that method's doc for the rest of the policy).
-        // Appended AFTER content / BEFORE </h> so the opening tag (id,
-        // data-source-line) stays byte-identical for preview scroll-sync.
-        // The auto-injected article-title H1 (`<h1 class="moss-article-title">`)
-        // is emitted separately in moss-build's HTML post-pass and never
-        // reaches this hook — its "no anchor" is structural, not this gate.
+        // The mark comes after the content, so the opening tag stays as the
+        // preview's scroll sync reads it.
         //
-        // The `#` glyph is NOT in here. It is drawn by site.css as
-        // `.moss-heading-anchor::after { content: "#" }`, because generated
-        // content is the only form of it that cannot be copied. A real text
-        // node with `user-select: none` (which is what this used to be, and
-        // what site.css still carries as a second line of defence) is
-        // excluded from the clipboard by Blink but NOT by WebKit — so on
-        // Safari, and in moss's own WebKit preview, selecting a heading
-        // copied "Introduction#". The heading-anchor-copy render gate pins it.
-        if let Some(id) = id.filter(|_| !permalinks_off && self.emit_heading_anchors(level)) {
+        // The `#` glyph is drawn by site.css as generated content, the only
+        // form of it WebKit leaves out of a copied selection.
+        let marked = match self.heading_anchors(level) {
+            HeadingAnchors::All => named || !permalinks_off,
+            HeadingAnchors::Named => named,
+            HeadingAnchors::None => false,
+        };
+        if let Some(id) = id.filter(|_| marked) {
             out.push_str(r##"<a class="moss-heading-anchor" href="#"##);
             out.push_str(&escape_attr(id));
             out.push_str(r##"" aria-label=""##);
@@ -781,6 +762,18 @@ pub trait RenderHooks {
         out.push((b'0' + level) as char);
         out.push('>');
     }
+}
+
+/// Which headings carry the permalink mark.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum HeadingAnchors {
+    /// Every heading, on a page long enough for them; a named id on any page.
+    #[default]
+    All,
+    /// Only a heading whose id the author named with `{#id}`.
+    Named,
+    /// No heading: a display title, or a site that turned the marks off.
+    None,
 }
 
 /// What a heading's opening tag carries besides its level: its anchor id and
@@ -796,8 +789,11 @@ pub struct HeadingMarks<'a> {
     pub legacy_id: Option<&'a str>,
     pub contents_end: bool,
     pub contents_label: Option<&'a str>,
-    /// The page is too short for permalinks: no mark, whatever the hooks say.
+    /// The page is too short for permalinks: no mark on a heading whose id
+    /// moss derived.
     pub permalinks_off: bool,
+    /// The author wrote this id as `{#id}` and it is the one emitted.
+    pub named: bool,
 }
 
 /// Default render hooks. moss-core ships this as the base implementation
@@ -826,10 +822,10 @@ pub struct DefaultHooks<'a> {
     /// `&self` throughout; nesting (a grid inside a grid cell) is why this
     /// is a stack and not an `Option`.
     grid_cell_sizes: std::cell::RefCell<Vec<String>>,
-    /// Display-title mode: suppress the `moss-heading-anchor` permalink.
-    /// Stored negated so `#[derive(Default)]` still means "anchors on".
-    /// Set by [`DefaultHooks::without_heading_anchors`].
-    suppress_heading_anchors: bool,
+    /// The widest answer [`RenderHooks::heading_anchors`] gives.
+    heading_anchors: HeadingAnchors,
+    /// The mark's `aria-label`, when the caller has a localized one.
+    permalink_section_label: Option<&'a str>,
     /// The page is vertically typeset (see [`DefaultHooks::vertical`]).
     vertical: bool,
     /// See [`DefaultHooks::hero_words`].
@@ -926,12 +922,9 @@ impl<'a> DefaultHooks<'a> {
         }
     }
 
-    /// Hooks whose headings carry no permalink anchor, for the blocks of a
-    /// `:::hero` overlay and of a `:::grid` cell: a heading there is a display
-    /// title, not a section a reader deep-links to, and inside a card a `#`
-    /// lands mid-tile. Suppressing outright also means the page-level decision
-    /// and the anchor's localized label, which a delegated render cannot see,
-    /// can never be wrong here.
+    /// Hooks whose headings carry no permalink anchor, for a `:::hero`
+    /// overlay and a caption: a heading there is a display title, not a
+    /// section a reader deep-links to.
     ///
     /// `assets` is the caller's snapshot, if any — the same `None`/`Some`
     /// split as [`new`](Self::new) / [`with_snapshot`](Self::with_snapshot).
@@ -941,7 +934,19 @@ impl<'a> DefaultHooks<'a> {
     pub fn without_heading_anchors(assets: Option<&'a crate::asset_snapshot::AssetSnapshot>) -> Self {
         Self {
             assets,
-            suppress_heading_anchors: true,
+            heading_anchors: HeadingAnchors::None,
+            ..Self::default()
+        }
+    }
+
+    /// Hooks for a `:::grid` cell: a heading there is a card's title, so it
+    /// carries the mark only where the author named its id. `label` is the
+    /// mark's localized `aria-label`, or `None` on a page that has no marks.
+    pub fn card_titles(assets: Option<&'a crate::asset_snapshot::AssetSnapshot>, label: Option<&'a str>) -> Self {
+        Self {
+            assets,
+            heading_anchors: if label.is_some() { HeadingAnchors::Named } else { HeadingAnchors::None },
+            permalink_section_label: label,
             ..Self::default()
         }
     }
@@ -972,8 +977,12 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
         self.assets
     }
 
-    fn emit_heading_anchors(&self, level: u8) -> bool {
-        level != 1 && !self.suppress_heading_anchors
+    fn heading_anchors(&self, level: u8) -> HeadingAnchors {
+        if level == 1 { HeadingAnchors::None } else { self.heading_anchors }
+    }
+
+    fn permalink_section_label(&self) -> &str {
+        self.permalink_section_label.unwrap_or("Permalink to this section")
     }
 
     fn paragraph_class(&self, children: &[super::node::Inline]) -> Option<&'static str> {

@@ -390,12 +390,13 @@ pub fn render_stars(rating: u8) -> String {
 ///
 /// When `media_lookup` is `None`, falls back to the legacy bare-`<img>` emission;
 /// preserves the test/fragment-rendering API surface used by the unit tests
-/// in this module.
-pub fn render_colophon(
+/// in this module. It is called only for a cover, so the caller can build the
+/// lookup on first call.
+pub fn render_colophon<'m>(
     review: &ReviewItem,
     writer_rating: Option<u8>,
     cover_path: Option<&str>,
-    media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
+    media_lookup: Option<&dyn Fn() -> &'m crate::build::media::dimensions::MediaDimensionLookup>,
 ) -> String {
     let mut html = String::from("<footer class=\"review-colophon\">\n");
 
@@ -413,7 +414,7 @@ pub fn render_colophon(
         // (uniform with the other FolderCardCover paths), so a colophon cover
         // under an overridden dir (e.g. CJK `图片/` → `image/`) resolves to its
         // output-URL key and gets real dims instead of the 800x600 fallback.
-        let cover_assets = crate::build::media::dimensions::snapshot_or_empty(media_lookup);
+        let cover_assets = crate::build::media::dimensions::snapshot_or_empty(media_lookup.map(|lookup| lookup()));
         let cover_html = moss_core::render::image::synthesize_image_html(
             &abs_cover,
             &review.title,
@@ -1006,7 +1007,7 @@ mod tests {
             lqip_data_uri: None,
         }];
         let lookup = MediaDimensionLookup::new(&images, &[], &HashMap::new(), None);
-        let html = render_colophon(&review, None, Some("/image/cover.jpg"), Some(&lookup));
+        let html = render_colophon(&review, None, Some("/image/cover.jpg"), Some(&|| &lookup));
         assert!(
             html.contains("review-colophon-cover"),
             "class preserved through synthesizer, got: {}", html
@@ -1060,7 +1061,7 @@ mod tests {
         dir_overrides.insert("图片".to_string(), "image".to_string());
         let lookup = MediaDimensionLookup::new(&images, &[], &dir_overrides, None);
         // info.cover is the resolved (ASCII) form — what article-map stores.
-        let html = render_colophon(&review, None, Some("/image/cover.jpg"), Some(&lookup));
+        let html = render_colophon(&review, None, Some("/image/cover.jpg"), Some(&|| &lookup));
         assert!(
             html.contains("<picture>"),
             "CJK-remapped manifest must still produce <picture> wrap, got: {}", html

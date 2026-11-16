@@ -8,8 +8,11 @@
 //! work — so the next save's latency was a function of the previous build's
 //! slowest background worker.
 //!
-//! The rule: **a generation-free worker may never be a manifest
-//! registrant, and no seal may await one.** Instead:
+//! The rule, for a process that keeps building: **a generation-free worker
+//! may never be a manifest registrant, and no seal may await one.** A process
+//! that exits after its build has no next save to delay, and its seal always
+//! waited on search, so there the index runs on a worker the seal joins
+//! ([`SearchJob`]). Otherwise:
 //!
 //! ```text
 //!   build N  ──seal (already debounced)──► generation N frozen ──request(fp_N)──►  lane
@@ -220,10 +223,12 @@ fn holding_dir(index_dir: &Path, fp: PageSetFp) -> PathBuf {
     index_dir.join(fp.hex())
 }
 
-/// Records which bundle is currently laid into `staging/`, so the steady-state
-/// adoption is ~440 stats rather than ~440 copies.
-fn staged_fp_path(index_dir: &Path) -> PathBuf {
-    index_dir.join("staged.fp")
+/// What every bundle file laid into `staging/` holds, by the stat it had
+/// right after the copy, so an adoption copies only the files whose hash moved
+/// or whose stat no longer vouches: a one-page edit changes a handful of index
+/// chunks and one fragment out of ~440 files.
+fn staged_links(index_dir: &Path, stage_dir: &Path) -> crate::build::lifecycle::cas_heal::StagedLinks {
+    crate::build::lifecycle::cas_heal::StagedLinks::at(index_dir.join("staged-links.json"), stage_dir)
 }
 
 /// Write `produced`'s files into `index_dir/<fp>/`, then the receipt. Older
@@ -266,6 +271,7 @@ fn publish_bundle(
         ));
     }
 
+    let _phase = crate::build::phase::PhaseTrace::start("search_publish");
     let fp = want.fp;
     let files = &produced.files;
     let dir = holding_dir(index_dir, fp);
@@ -275,14 +281,28 @@ fn publish_bundle(
         files: Vec::with_capacity(files.len()),
         staged: staged.map(str::to_string),
     };
+    // A lane-less build publishes every bundle into the same `UNKNOWN`
+    // directory, so a file the receipt there already names with the same hash
+    // is on disk as it is. The receipt goes first, so a publish torn halfway
+    // reads back as no receipt rather than one naming bytes it no longer has.
+    let previous: HashMap<String, String> = read_receipt(index_dir)
+        .filter(|r| r.fp == receipt.fp)
+        .map(|r| r.files.into_iter().collect())
+        .unwrap_or_default();
+    let mut receipt_dropped = false;
     for file in files {
+        let hash = crate::build::assets::paths::compute_binary_hash(&file.bytes);
         let dest = dir.join(&file.rel_path);
-        crate::build::io_utils::write_output(&dest, &file.bytes)
-            .map_err(|e| format!("failed to write search bundle file {:?}: {}", dest, e))?;
-        receipt.files.push((
-            file.rel_path.clone(),
-            crate::build::assets::paths::compute_binary_hash(&file.bytes),
-        ));
+        if previous.get(&file.rel_path) != Some(&hash) || !crate::build::io_utils::output_present(&dest) {
+            if !receipt_dropped && !previous.is_empty() {
+                // allow:unlink the search index under .moss/build.nosync/index, not staging
+                let _ = std::fs::remove_file(index_dir.join("receipt.json"));
+                receipt_dropped = true;
+            }
+            crate::build::io_utils::write_output(&dest, &file.bytes)
+                .map_err(|e| format!("failed to write search bundle file {:?}: {}", dest, e))?;
+        }
+        receipt.files.push((file.rel_path.clone(), hash));
     }
     receipt.files.sort();
 
@@ -290,17 +310,26 @@ fn publish_bundle(
         .map_err(|e| format!("failed to serialize search receipt: {}", e))?;
     crate::build::io_utils::write_output(&index_dir.join("receipt.json"), &json)
         .map_err(|e| format!("failed to write search receipt: {}", e))?;
-    // The staged marker names a bundle that is no longer the receipt's, so the
-    // next adoption must re-lay every file rather than trust its stats.
-    // allow:unlink the search index under .moss/build.nosync/index, not staging
-    let _ = std::fs::remove_file(staged_fp_path(index_dir));
-    gc_holding(index_dir, fp);
+    drop(_phase);
+    gc_holding(index_dir, fp, &receipt);
     Ok(receipt)
 }
 
-/// Drop every holding directory except `keep`.
-fn gc_holding(index_dir: &Path, keep: PageSetFp) {
+/// Drop every holding directory except `keep`, and every file in it that
+/// `kept` does not name: a bundle published over an older one in the same
+/// directory leaves the older one's fragments and chunks behind.
+fn gc_holding(index_dir: &Path, keep: PageSetFp, kept: &BundleReceipt) {
+    let _phase = crate::build::phase::PhaseTrace::start("search_gc");
     let keep = keep.hex();
+    let named: HashSet<&str> = kept.files.iter().map(|(rel, _)| rel.as_str()).collect();
+    let keep_dir = index_dir.join(&keep);
+    for entry in walkdir::WalkDir::new(&keep_dir).into_iter().filter_map(Result::ok).filter(|e| e.file_type().is_file()) {
+        let rel = entry.path().strip_prefix(&keep_dir).ok().and_then(|p| p.to_str()).map(|p| p.replace('\\', "/"));
+        if rel.is_some_and(|rel| !named.contains(rel.as_str())) {
+            // allow:unlink the search index under .moss/build.nosync/index, not staging
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
     let Ok(entries) = std::fs::read_dir(index_dir) else {
         return;
     };
@@ -376,16 +405,95 @@ impl Freshness {
     }
 }
 
-/// Copy the receipt's bundle into `stage_dir` and register every entry in
-/// `pending`. Call once per build, inside the build's own stage-write span.
+/// What [`begin`] leaves the caller: a finished adoption, or a lane-less
+/// build's index still to compute.
+pub enum Begun {
+    Done(Adoption),
+    /// Run it on a worker the seal joins, so it overlaps the background phase.
+    Indexing(SearchJob),
+}
+
+impl Begun {
+    /// The index still owed, if any; a finished adoption is only logged.
+    pub fn into_job(self) -> Option<SearchJob> {
+        match self {
+            Begun::Done(adoption) => {
+                log::debug!(target: "search", "search bundle: {:?}", adoption);
+                None
+            }
+            Begun::Indexing(job) => Some(job),
+        }
+    }
+}
+
+/// A lane-less build's index, its pages already read.
 ///
-/// **Registration is unconditional**, on every branch and every build, because
-/// `PendingManifest` is mark-and-sweep (see the module docs). Only the
-/// *computation* is demand-driven.
-///
-/// Costs ~440 stats (1–2 ms) in the steady state and no byte reads at all: the
-/// hashes come from the receipt, and files already laid into staging by the
-/// bundle the `staged.fp` marker names are not re-copied.
+/// The read happens inside the build's stage-write span, after the last
+/// `.html` write into staging, so the snapshot is this build's whole output.
+/// What remains touches only the holding area and `_moss/pagefind/**`, which
+/// no other worker writes, and it runs after the stage-write guard is
+/// released, as every background worker's staging write does. What covers it
+/// is the seal: it awaits this worker before it takes the guard again, and a
+/// one-shot build holds the cross-process folder lock from its render through
+/// that seal. Its worker sends the laid bundle as one message, so
+/// the manifest gets every file or none, and the seal drains every worker's
+/// sender before it seals.
+pub struct SearchJob {
+    index_dir: PathBuf,
+    stage_dir: PathBuf,
+    read: search::PageRead,
+    key: String,
+    t_read: std::time::Instant,
+}
+
+impl SearchJob {
+    /// Run [`Self::finish`] beside the build's background workers and send
+    /// the laid bundle to the seal as one message.
+    pub(crate) fn spawn(
+        self,
+        workers: &mut tokio::task::JoinSet<Result<(), crate::build::background::BuildError>>,
+        tx: tokio::sync::mpsc::Sender<crate::build::coordinator::EmitMessage>,
+    ) {
+        crate::build::background::spawn_traced_worker(workers, move || {
+            let (adoption, laid) = self.finish();
+            log::debug!(target: "search", "search bundle: {:?}", adoption);
+            if !laid.0.is_empty() {
+                let entries = laid.0.into_iter().map(|(sp, hash)| (sp.as_str().to_string(), hash)).collect();
+                let _ = tx.blocking_send(crate::build::coordinator::EmitMessage::FileSet { entries, bucket: HashBucket::Files });
+            }
+            Ok(())
+        });
+    }
+
+    /// Index, publish and lay the bundle. The laid files are empty when any
+    /// step fails.
+    pub fn finish(self) -> (Adoption, Laid) {
+        let _phase = crate::build::phase::PhaseTrace::start("search_index");
+        let SearchJob { index_dir, stage_dir, read, key, t_read } = self;
+        with_holding(&index_dir, |h| {
+            let published = search::index_pages(read, t_read, &|| false)
+                .and_then(|produced| publish_bundle(h, &index_dir, PageSet::UNKNOWN, Some(&key), &produced.unwrap_or_default()));
+            lay_indexed(h, &index_dir, &stage_dir, published)
+        })
+    }
+}
+
+/// Every file of a bundle laid into staging, as `(served path, hash)`: register
+/// all of them together, never some.
+#[derive(Debug, Default)]
+pub struct Laid(Vec<(ServedPath, String)>);
+
+impl Laid {
+    fn register(&self, pending: &mut PendingManifest) {
+        for (sp, hash) in &self.0 {
+            pending.register_hashed(sp, hash, HashBucket::Files);
+        }
+    }
+}
+
+/// [`begin`], with any index computed in place. Tests only: the pipeline runs
+/// the index on a worker.
+#[cfg(test)]
 pub fn adopt_into(
     mp: &MossPaths,
     stage_dir: &Path,
@@ -393,8 +501,37 @@ pub fn adopt_into(
     enabled: bool,
     freshness: Freshness,
 ) -> Adoption {
+    match begin(mp, stage_dir, pending, enabled, freshness) {
+        Begun::Done(adoption) => adoption,
+        Begun::Indexing(job) => {
+            let (adoption, laid) = job.finish();
+            laid.register(pending);
+            adoption
+        }
+    }
+}
+
+/// Copy the receipt's bundle into `stage_dir` and register every entry in
+/// `pending`. Call once per build, inside the build's own stage-write span.
+///
+/// **Registration is unconditional**, on every branch and every build, because
+/// `PendingManifest` is mark-and-sweep (see the module docs). Only the
+/// *computation* is demand-driven. A [`Begun::Indexing`] lays and registers
+/// later, outside that span (see [`SearchJob`] for what covers it): run it on
+/// a worker whose registrations the seal drains.
+///
+/// Costs ~440 stats (1–2 ms) in the steady state and no byte reads at all: the
+/// hashes come from the receipt, and a file whose recorded stat still vouches
+/// that it holds the receipt's hash is not re-copied.
+pub fn begin(
+    mp: &MossPaths,
+    stage_dir: &Path,
+    pending: &mut PendingManifest,
+    enabled: bool,
+    freshness: Freshness,
+) -> Begun {
     if !enabled {
-        return Adoption::Disabled;
+        return Begun::Done(Adoption::Disabled);
     }
     let index_dir = mp.index_dir();
     // Held across read-receipt → lay → drop-receipt, so the lane cannot GC the
@@ -402,93 +539,101 @@ pub fn adopt_into(
     // deleted by the divergence branch below.
     with_holding(&index_dir, |h| {
         if freshness == Freshness::Now {
-            return index_staging(h, &index_dir, stage_dir, pending);
+            return read_staging(h, &index_dir, stage_dir, pending);
         }
-        let Some(receipt) = read_receipt(&index_dir) else {
-            // Nothing to adopt. Registering nothing here would let this build's
-            // own sweep delete a bundle that no *future* build is scheduled to
-            // rebuild — under the old ticket scheme a newer worker was queued
-            // by construction, and under adoption none is. So fall through to a
-            // synchronous index ("nothing to adopt").
-            //
-            // It indexes `staging/`, not a generation, and that is deliberate:
-            // this build's own HTML is complete and, under the stage-write
-            // guard the caller holds, nothing else is writing it. The
-            // generation for it does not exist yet — it is materialized from
-            // the manifest this call is registering into. The receipt is
-            // stamped `UNKNOWN` so the lane re-indexes the real,
-            // ship-transformed generation as soon as it is frozen.
-            return lay_indexed(h, &index_dir, stage_dir, pending, index_now(h, &index_dir, stage_dir, PageSet::UNKNOWN));
-        };
-
-        if receipt.files.is_empty() {
-            return Adoption::Empty;
-        }
-
-        match lay_and_register(h, &index_dir, &receipt, stage_dir, pending) {
-            Some(n) => Adoption::Adopted(n),
-            None => {
-                // Receipt/disk divergence: an external delete, or the holding
-                // area evicted by a cloud provider. Registering a path that is
-                // not on disk is the deploy error `manifest.rs` documents, so
-                // register nothing and drop the receipt — the next build
-                // re-indexes.
-                drop_receipt_if_still(h, &index_dir, &receipt);
-                log::info!(
-                    target: "search",
-                    "search bundle {} is incomplete on disk — dropped, will re-index",
-                    receipt.fp,
-                );
-                Adoption::Diverged
-            }
-        }
+        Begun::Done(adopt_receipt(h, &index_dir, stage_dir, pending))
     })
+}
+
+fn adopt_receipt(h: &Holding, index_dir: &Path, stage_dir: &Path, pending: &mut PendingManifest) -> Adoption {
+    let Some(receipt) = read_receipt(index_dir) else {
+        // Nothing to adopt. Registering nothing here would let this build's
+        // own sweep delete a bundle that no *future* build is scheduled to
+        // rebuild — under the old ticket scheme a newer worker was queued
+        // by construction, and under adoption none is. So fall through to a
+        // synchronous index ("nothing to adopt").
+        //
+        // It indexes `staging/`, not a generation, and that is deliberate:
+        // this build's own HTML is complete and, under the stage-write
+        // guard the caller holds, nothing else is writing it. The
+        // generation for it does not exist yet — it is materialized from
+        // the manifest this call is registering into. The receipt is
+        // stamped `UNKNOWN` so the lane re-indexes the real,
+        // ship-transformed generation as soon as it is frozen.
+        let (adoption, laid) = lay_indexed(h, index_dir, stage_dir, index_now(h, index_dir, stage_dir, PageSet::UNKNOWN));
+        laid.register(pending);
+        return adoption;
+    };
+
+    if receipt.files.is_empty() {
+        return Adoption::Empty;
+    }
+
+    match lay(h, index_dir, &receipt, stage_dir) {
+        Some(laid) => {
+            laid.register(pending);
+            Adoption::Adopted(laid.0.len())
+        }
+        None => {
+            // Receipt/disk divergence: an external delete, or the holding
+            // area evicted by a cloud provider. Registering a path that is
+            // not on disk is the deploy error `manifest.rs` documents, so
+            // register nothing and drop the receipt — the next build
+            // re-indexes.
+            drop_receipt_if_still(h, index_dir, &receipt);
+            log::info!(
+                target: "search",
+                "search bundle {} is incomplete on disk — dropped, will re-index",
+                receipt.fp,
+            );
+            Adoption::Diverged
+        }
+    }
 }
 
 /// What a lane-less build ([`Freshness::Now`]) does with search: serve the
 /// bundle it holds when [`search::corpus_key`] says that bundle was indexed from
-/// exactly the pages staging holds now, and index them otherwise. A bundle the
-/// lane indexed carries no key, so it is never taken for one.
-fn index_staging(h: &Holding, index_dir: &Path, stage_dir: &Path, pending: &mut PendingManifest) -> Adoption {
-    let _phase = crate::build::phase::PhaseTrace::start("search_index");
+/// exactly the pages staging holds now, and hand back a [`SearchJob`] over the
+/// pages it read otherwise. A bundle the lane indexed carries no key, so it is
+/// never taken for one.
+fn read_staging(h: &Holding, index_dir: &Path, stage_dir: &Path, pending: &mut PendingManifest) -> Begun {
+    let _phase = crate::build::phase::PhaseTrace::start("search_read");
     let t_read = std::time::Instant::now();
     let read = search::read_pages(stage_dir);
-    let key = search::corpus_key(&read.pages);
+    let key = crate::phase!("search_key", { search::corpus_key(&read.pages) });
     let held = read_receipt(index_dir).filter(|receipt| read.unreadable == 0 && receipt.staged.as_deref() == Some(key.as_str()));
     if let Some(receipt) = held {
         if receipt.files.is_empty() {
-            return Adoption::Empty;
+            return Begun::Done(Adoption::Empty);
         }
-        if let Some(n) = lay_and_register(h, index_dir, &receipt, stage_dir, pending) {
+        if let Some(laid) = lay(h, index_dir, &receipt, stage_dir) {
+            laid.register(pending);
             crate::build::phase::record_count("search_bundle_reused", 1);
-            return Adoption::Adopted(n);
+            return Begun::Done(Adoption::Adopted(laid.0.len()));
         }
     }
-    let published = search::index_pages(read, t_read, &|| false)
-        .and_then(|produced| publish_bundle(h, index_dir, PageSet::UNKNOWN, Some(&key), &produced.unwrap_or_default()));
-    lay_indexed(h, index_dir, stage_dir, pending, published)
+    Begun::Indexing(SearchJob { index_dir: index_dir.to_path_buf(), stage_dir: stage_dir.to_path_buf(), read, key, t_read })
 }
 
-/// Lay a bundle this build just indexed and register it.
+/// Lay a bundle this build just indexed.
 fn lay_indexed(
     h: &Holding,
     index_dir: &Path,
     stage_dir: &Path,
-    pending: &mut PendingManifest,
     published: Result<BundleReceipt, String>,
-) -> Adoption {
+) -> (Adoption, Laid) {
     match published {
-        Ok(receipt) => match lay_and_register(h, index_dir, &receipt, stage_dir, pending) {
-            Some(0) => Adoption::Empty,
-            Some(n) => Adoption::Indexed(n),
-            None => Adoption::Diverged,
+        Ok(receipt) => match lay(h, index_dir, &receipt, stage_dir) {
+            Some(laid) if laid.0.is_empty() => (Adoption::Empty, laid),
+            Some(laid) => (Adoption::Indexed(laid.0.len()), laid),
+            None => (Adoption::Diverged, Laid::default()),
         },
         Err(e) => {
             // Transient (a page that will not parse, a full disk, a tree half
             // of which could not be read). No receipt is written, so the next
             // build retries.
             log::info!(target: "search", "search index not generated: {}", e);
-            Adoption::Diverged
+            (Adoption::Diverged, Laid::default())
         }
     }
 }
@@ -505,55 +650,50 @@ fn drop_receipt_if_still(_holding: &Holding, index_dir: &Path, diverged: &Bundle
     }
 }
 
-/// Stat every receipt entry, copy the ones staging is missing, register them
-/// all. `None` if any file is missing or any copy fails — and **nothing is
-/// registered in that case**: a partial registration is the worst outcome of
-/// the three, since the sweep deletes the unregistered remainder and
-/// `pagefind.js` is then left fetching shards that 404. Hence three passes,
-/// not two: stat all, copy all, then register all.
-fn lay_and_register(
+/// Stat every receipt entry, copy the ones staging does not provably hold
+/// (see `StagedLinks`), and return them all to register. `None` if any file is
+/// missing or any copy fails — and **nothing is registered in that case**: a partial registration is the worst
+/// outcome of the three, since the sweep deletes the unregistered remainder and
+/// `pagefind.js` is then left fetching shards that 404. Hence stat all, copy
+/// all, then hand back all.
+fn lay(
     _holding: &Holding,
     index_dir: &Path,
     receipt: &BundleReceipt,
     stage_dir: &Path,
-    pending: &mut PendingManifest,
-) -> Option<usize> {
+) -> Option<Laid> {
+    let _phase = crate::build::phase::PhaseTrace::start("search_lay");
     let holding = holding_dir(index_dir, receipt.fp());
-    let staged = std::fs::read_to_string(staged_fp_path(index_dir)).ok();
-    let refresh = staged.as_deref() != Some(receipt.fp.as_str());
-
-    let mut planned: Vec<(ServedPath, &str, PathBuf, PathBuf)> =
-        Vec::with_capacity(receipt.files.len());
+    let mut planned: Vec<(ServedPath, &str, PathBuf)> = Vec::with_capacity(receipt.files.len());
     for (rel, hash) in &receipt.files {
         let sp = ServedPath::for_search_asset(rel).ok()?;
         let src = holding.join(rel);
         if !crate::build::io_utils::output_present(&src) {
             return None;
         }
-        let dest = stage_dir.join(sp.as_str());
-        planned.push((sp, hash, src, dest));
+        planned.push((sp, hash, src));
     }
 
-    for (sp, _, src, dest) in &planned {
-        if refresh || !crate::build::io_utils::output_present(dest) {
-            if let Err(e) = crate::build::io_utils::copy_output(src, dest) {
+    use crate::build::lifecycle::cas_heal::Placement;
+    let mut links = staged_links(index_dir, stage_dir);
+    let mut laid = 0;
+    for (sp, hash, src) in &planned {
+        match links.copy(src, hash, &stage_dir.join(sp.as_str())) {
+            Placement::Held => {}
+            Placement::Linked => laid += 1,
+            Placement::Unverified(e) => {
+                log::info!(target: "search", "could not check {} in staging: {}", sp, e);
+                return None;
+            }
+            Placement::Failed(e) => {
                 log::info!(target: "search", "failed to lay {} into staging: {}", sp, e);
                 return None;
             }
         }
     }
-
-    for (sp, hash, _, _) in &planned {
-        pending.register_hashed(sp, hash, HashBucket::Files);
-    }
-
-    if refresh {
-        let _ = crate::build::io_utils::write_output(
-            &staged_fp_path(index_dir),
-            receipt.fp.as_bytes(),
-        );
-    }
-    Some(planned.len())
+    links.save();
+    crate::build::phase::record_count("search_files_laid", laid);
+    Some(Laid(planned.into_iter().map(|(sp, hash, ..)| (sp, hash.to_string())).collect()))
 }
 
 /// Index `index_from` synchronously and publish the result. Used by the

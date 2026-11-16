@@ -23,7 +23,7 @@ use serde_json::Value;
 
 use super::scrape::fetch::strip_query;
 use super::scrape::run::ScrapeResult;
-use super::scrape::service::default_user_agent;
+use super::scrape::fetch::Client;
 use super::page::{ImportedPage, PageStyle, media::write_bundle_page};
 use moss_core::frontmatter_typed::FrontMatter;
 use super::scrape::writer::sanitize_filename;
@@ -113,6 +113,7 @@ struct BackupItem {
 pub(crate) async fn import_tofu_backup(
     path: &Path,
     output_dir: &Path,
+    client: &Client,
 ) -> Result<(ScrapeResult, TofuReport), String> {
     let mut archive = open_archive(path)?;
     let db = read_json(&mut archive, "database.json")?;
@@ -145,9 +146,8 @@ pub(crate) async fn import_tofu_backup(
         }
     }
 
-    let user_agent = default_user_agent();
     for item in &mut pages {
-        let written = write_bundle_page(&mut item.page, output_dir, &item.folder, &item.slug, &user_agent).await?;
+        let written = write_bundle_page(&mut item.page, output_dir, &item.folder, &item.slug, client).await?;
         *report.pages.entry(item.folder.clone()).or_default() += written.pages_written;
         report.media_downloaded += written.media_downloaded;
         report.media_failed += written.media_failed;
@@ -173,6 +173,7 @@ pub(crate) async fn import_tofu_backup(
         restricted_pages: 0,
             success: true,
             total_pages: total,
+            kept_pages: 0,
             failed_pages: 0,
             skipped_pages: 0,
             duplicate_pages: 0,

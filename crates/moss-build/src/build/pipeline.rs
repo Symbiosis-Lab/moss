@@ -960,19 +960,13 @@ pub(crate) fn run_leased(
     // nothing to the next build.
     last_seal: Option<std::sync::Arc<crate::build::incremental_gates::LastSeal>>,
 ) -> Result<PipelineRunOutput, BuildStopped> {
-    // Track build state in the FolderSession's UiBound counter for window
-    // close / CLI-wait decisions. begin_ui_bound is a no-op in headless mode.
-    if let Some(svc) = services {
-        svc.begin_ui_bound();
-    }
+    // The folder reads as busy for window close and publish while this
+    // build runs, however it exits. No session in headless mode.
+    let building = services.and_then(|s| s.session.as_ref()).map(|s| s.hold_ui_bound());
 
-    // Use inner function pattern to ensure build state is cleared on ALL exit paths
     let result = build_inner(root, site_dir_state, progress_sender, preview_port, services, slot_resolver, project_structure, site_url_override, incremental, search_freshness, cache_keys, derived, cache_lease, refresh, last_seal);
 
-    // Clear build state after build completes (success or error)
-    if let Some(svc) = services {
-        svc.end_ui_bound();
-    }
+    drop(building);
 
     // The gate verdict is emitted from INSIDE `build_inner`, so any `?` before
     // it skips the gate and the user gets a raw errno where the waiting screen
@@ -1269,7 +1263,7 @@ fn build_inner(
         .map_err(|e| format!("Failed to create staging directory: {}", e))?;
 
     // Step 2b: sweep the previous build's residue out of staging.
-    sweep_staging(&stage_dir, &previous_hashes, sweep_permit.as_ref());
+    crate::phase!("staging_sweep", { sweep_staging(&stage_dir, &previous_hashes, sweep_permit.as_ref()) });
 
     // Step 3: Build to staging directory using internal generator
     //
@@ -1408,7 +1402,7 @@ fn build_inner(
         .find(|kind| kind.is_place)
         .map(|kind| (kind.key.clone(), kind.parents.clone(), kind.explorer_enabled()))
         .and_then(|(namespace, parents, explorer)| {
-            match crate::build::place_map::PlaceMapContext::embedded() {
+            match crate::phase!("place_map_decode", { crate::build::place_map::PlaceMapContext::embedded() }) {
                 Ok(maps) => {
                     // Pure function of the pack and the gazetteer (see its
                     // own doc), so known before any document is parsed —
@@ -1416,7 +1410,7 @@ fn build_inner(
                     // `derive_terms`'s finished output and is set later, in
                     // `generate_blocking_content_for_build`.
                     let layer_plans = crate::build::place_map::layer_warp::plan_layers(&map_layers, root.path(), &gazetteer);
-                    let map_assets_hash = crate::build::emit::place_map_assets::assets_hash_with_layers(&maps, &gazetteer, &map_layers, &layer_plans);
+                    let map_assets_hash = crate::phase!("place_map_hash", { crate::build::emit::place_map_assets::assets_hash_with_layers(&maps, &gazetteer, &map_layers, &layer_plans) });
                     Some(
                         crate::build::place_map::PlaceMapRenderContext::new(
                             maps,
@@ -1437,21 +1431,12 @@ fn build_inner(
                 }
             }
         });
-    // Cloned before `place_maps` moves into `site_config.place_maps` below
-    // — the places-explorer data emitter needs it after the blocking render
-    // returns `documents`, by which point `site_config` is long consumed.
-    // `PlaceMapRenderContext` derives `Clone` and bundles exactly what that
-    // emitter needs (gazetteer, namespace, cycle-repaired parents, the map
-    // pack) behind its own accessors, so this one clone replaces the old
-    // three hand-captured copies plus the emit site's own second
-    // `embedded()` decode.
-    let place_maps_for_places_data = place_maps.clone();
+    // Cloned before `place_maps` moves into `site_config.place_maps` below:
+    // the place-map passes after the blocking render need it, by which point
+    // `site_config` is long consumed.
+    let place_maps_after_render = place_maps.clone();
     let place_kinds: Vec<crate::build::terms::TermKind> = kinds.iter().filter(|k| k.is_place).cloned().collect();
-    // Default-on by key absence, same story as `site_config.math` below is
-    // built from (see that field's own comment) — computed once here so
-    // both the page-rendering config and the places-explorer data emitter,
-    // which needs it again after `site_config` is consumed, read the same
-    // value.
+    // Default-on by key absence; see `site_config.math` below.
     let math = site_bool("math").unwrap_or(true);
     let colophon = site_bool("colophon").unwrap_or(true);
     // The listing styles read every declaration, and `site_config` takes
@@ -1486,9 +1471,7 @@ fn build_inner(
         // `[site].math`, so there is no legacy value to preserve and no
         // migration involved — absence simply means "the author never
         // said", and the answer to that is yes. Explicit
-        // `[site].math = false` is the only way to turn it off. Computed
-        // once, above, since the places-explorer data emitter reads the
-        // same value again after `site_config` is consumed.
+        // `[site].math = false` is the only way to turn it off.
         math,
         // Default-on by key absence, same story as `math`: nothing has ever
         // written `[site].hard_line_breaks`, so absence means "the author
@@ -1588,23 +1571,11 @@ fn build_inner(
     let build_now = site_result.now;
     log::debug!(target: "timing", "[build] staging: generate_blocking_content: {:?}", build_start.elapsed());
 
-    // Places-explorer data file (`_moss/places.<hash>.json`), gated on the
-    // site declaring a place-typed term kind at all — `place_maps_for_places_data`
-    // is `None` exactly when `place_maps` itself is (no place-typed kind, or
-    // the bundled map pack failed to decode; that failure already logged a
-    // warning when `place_maps` was built). `documents` here already carries
-    // `derive_terms`'s finished location-inheritance pass (a work's
-    // companions have theirs filled in) — the same document set every render
-    // above just used.
-    if let Some(context) = place_maps_for_places_data.as_ref() {
-        if let Err(e) = crate::build::place_map::places_data::emit(
-            &documents,
-            context,
-            math,
-            &stage_dir,
-            &mut pending,
-            &background_ctx.dir_overrides,
-        ) {
+    // Places-explorer data file (`_moss/places.<hash>.json`): the bytes the
+    // render computed for the hash its pages name; `None` without a
+    // place-typed term kind.
+    if let Some(json) = site_result.places_data.take() {
+        if let Err(e) = crate::build::place_map::places_data::emit(&json, &stage_dir, &mut pending) {
             log::info!("Failed to emit places-explorer data: {e}");
         }
     }
@@ -1762,7 +1733,7 @@ fn build_inner(
     let preview_embeds = documents.iter().filter_map(|doc| doc.source_path.as_ref())
         .map(|source| (source.clone(), embed_graph.embed_closure(source).into_iter().collect()))
         .collect();
-    pending.set_preview_dependencies(preview_embeds, place_maps_for_places_data.is_some());
+    pending.set_preview_dependencies(preview_embeds, place_maps_after_render.is_some());
     // Navigation may change while this render runs; only the current request
     // may decide which generation becomes visible.
     let current_request = services
@@ -1804,9 +1775,8 @@ fn build_inner(
 
     crate::build::phase::record_value("served_staging", usize::from(publishable));
     if has_output_changes {
-        if let Some(permit) = sweep_permit.as_ref() {
-            remove_stale_html(&stage_dir, &stale_html, pending.blocking_keys(), permit);
-        }
+        let stale_html = crate::build::lifecycle::StaleHtml::licence(sweep_permit.as_ref(), publishable, Path::new(folder_path), stale_html);
+        remove_stale_html(&stage_dir, &stale_html, pending.blocking_keys());
     }
 
     // Step 5: show this render, unless this build could not read its own
@@ -1886,20 +1856,20 @@ fn build_inner(
         }
     }
 
-    // Adopt the search bundle from the lane's receipt: inside the
-    // stage-write span (it lays files into `stage_dir`) and before the seal.
-    // Mark-and-sweep — skipping it deletes `_moss/pagefind/*` off the live site.
+    // Adopt the search bundle, or read the pages a lane-less build indexes:
+    // inside the stage-write span (it lays files into `stage_dir`, and no
+    // `.html` is written after this) and before the seal. Mark-and-sweep —
+    // skipping it deletes `_moss/pagefind/*` off the live site.
     let search_paths = MossPaths::new(std::path::Path::new(folder_path));
-    let adoption = crate::build::feeds::search_lane::adopt_into(
-        &search_paths, &stage_dir, &mut pending, background_ctx.search_enabled, search_freshness);
-    log::debug!(target: "search", "search bundle: {:?}", adoption);
+    let search_job = crate::build::feeds::search_lane::begin(
+        &search_paths, &stage_dir, &mut pending, background_ctx.search_enabled, search_freshness).into_job();
 
     // Places explorer world/tile base-map SVGs; see that module's doc for
-    // the gate and the cache. `place_maps_for_places_data` already carries
-    // the gazetteer (see its own comment above), so there is no second
-    // `load_gazetteer` call here.
+    // the gate and the cache. The context carries the gazetteer, so there is
+    // no second `load_gazetteer` call here.
+    let place_map_phase = crate::build::phase::PhaseTrace::start("place_map_emit");
     crate::build::emit::place_map_assets::emit_if_place_typed(
-        place_maps_for_places_data.as_ref(),
+        place_maps_after_render.as_ref(),
         &paths,
         &stage_dir,
         &mut pending,
@@ -1907,9 +1877,9 @@ fn build_inner(
     crate::build::emit::place_map_assets::emit_country_notice(&documents, &stage_dir, &mut pending);
     crate::build::emit::place_map_assets::emit_country_search(&documents, &stage_dir, &mut pending);
     // `layers.json` beside them; nothing is written without `[map.layers]`.
-    let used_places = place_maps_for_places_data.as_ref().map_or_else(Vec::new, |maps| crate::build::terms::places::used_places(&documents, &place_kinds, maps.gazetteer()));
+    let used_places = place_maps_after_render.as_ref().map_or_else(Vec::new, |maps| crate::build::terms::places::used_places(&documents, &place_kinds, maps.gazetteer()));
     crate::build::emit::place_map_layers::emit_if_place_typed(
-        place_maps_for_places_data.as_ref(),
+        place_maps_after_render.as_ref(),
         &used_places,
         &stage_dir,
         &mut pending,
@@ -1918,12 +1888,13 @@ fn build_inner(
     // above just wrote the world/tile SVGs into — see that module's doc for
     // the gate. Data only: nothing yet reads this to draw a label.
     crate::build::emit::place_map_labels::emit_if_place_typed(
-        place_maps_for_places_data.as_ref(),
+        place_maps_after_render.as_ref(),
         &site_lang,
         &documents,
         &stage_dir,
         &mut pending,
     );
+    drop(place_map_phase);
 
     // Seal-persist-race-404 fix: release the stage-write guard now — this
     // build's own synchronous stage-writing span (generate_blocking_content
@@ -1956,8 +1927,7 @@ fn build_inner(
     // worker and always a seal. The zero-worker branch that used to sit beside
     // this — reachable only when `deferred` was `None`, which
     // `generate_blocking_content` never produced — went with `DeferredWork`.
-    // Search dispatches no worker of its own; its bundle
-    // is adopted from a receipt above.
+    // Search adds a worker only on a lane-less build's index (below).
     // Invariant: build_inner runs inside a Tokio runtime.
     // The legacy `tokio::runtime::Handle::try_current().is_ok()` fallback to
     // a synchronous dispatch path has been removed; existing tests that
@@ -2045,6 +2015,9 @@ fn build_inner(
 
         let register_workers = |tx: tokio::sync::mpsc::Sender<crate::build::coordinator::EmitMessage>,
                             workers: &mut tokio::task::JoinSet<Result<(), crate::build::background::BuildError>>| {
+            if let Some(job) = search_job {
+                job.spawn(workers, tx.clone());
+            }
             if !og_requests.is_empty() {
                 let tx_cards = tx.clone();
                 crate::build::background::spawn_traced_worker(workers, move || {
@@ -2090,10 +2063,9 @@ fn build_inner(
             // copy_deferred_assets runs synchronously (no internal spawn).
             {
                 let tx_assets = tx.clone();
-                if let Some(ref s) = session_for_assets {
-                    s.begin_ui_bound();
-                }
+                let copying = session_for_assets.as_ref().map(|s| s.hold_ui_bound());
                 crate::build::background::spawn_traced_worker(workers, move || {
+                    let _copying = copying;
                     let reporter_for_assets = reporter_for_assets
                         .as_deref()
                         .unwrap_or(crate::build::ports::reporter::discarding());
@@ -2115,9 +2087,6 @@ fn build_inner(
                     if let Some(ev) = crate::build::progress::make_symlink_skip_advisory(stats.skipped_symlinks) {
                         reporter_for_assets.report(&ev);
                     }
-                    if let Some(s) = session_for_assets {
-                        s.end_ui_bound();
-                    }
                     Ok(())
                 });
             }
@@ -2126,24 +2095,21 @@ fn build_inner(
             // placeholder generation seals now instead of after every read.
             // The finished reads trigger the rebuild that renders the text.
             if let Some(job) = derive_job {
-                if let Some(ref s) = session_for_derive {
-                    s.begin_ui_bound();
-                }
+                let deriving = session_for_derive.as_ref().map(|s| s.hold_ui_bound());
                 let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
                 if let Some(s) = &session_for_derive {
                     s.bridge_to_atomic(cancel.clone());
                 }
                 tokio::task::spawn_blocking(move || {
-                    let _derive_lease = derive_lease;
+                    let (_derive_lease, _deriving) = (derive_lease, deriving);
                     job.run(reporter_for_derive.as_deref(), &cancel);
-                    if let Some(s) = session_for_derive {
-                        s.end_ui_bound();
-                    }
                 });
             }
-            // No search worker: a generation-free worker is never
-            // awaited by a seal, so the previous build's index cannot land on
-            // this build's critical path. Its output is adopted from a receipt.
+            // No lane worker: in a process that keeps building, a
+            // generation-free worker is never awaited by a seal, so the
+            // previous build's index cannot land on this build's critical
+            // path; its output is adopted from a receipt. A process that exits
+            // has no next save to delay, hence the index worker above.
 
             // tx dropped here → coordinator drains only worker clones
         };
@@ -2209,9 +2175,11 @@ pub(crate) fn send_progress(
 /// that no longer exist, `.pending.*` litter from an interrupted write.
 ///
 /// Staging is the tree the preview reads, so this needs a
-/// `lifecycle::SweepPermit`. Without one it does nothing: the leftovers cost
-/// local disk until the next caught-up build, never a generation, because
-/// `ship_phase` copies `sealed.files()` and nothing else. A one-shot build
+/// `lifecycle::SweepPermit`. Without one it does nothing: the leftovers never
+/// reach a generation, because `ship_phase` copies `sealed.files()` and
+/// nothing else, but the preview serves them until the next caught-up build.
+/// The one leftover that must not wait, the page of a deleted source, goes
+/// through `lifecycle::StaleHtml` instead. A one-shot build
 /// never gets a next build, so `ship::reclaim_staging_now` is its last chance.
 ///
 /// An empty previous manifest (first build, or one that could not be read)

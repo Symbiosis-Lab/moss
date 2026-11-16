@@ -6,12 +6,12 @@ use moss_core::{frontmatter_typed::FrontMatter, frontmatter::members::Members, t
 use super::items::{base_of, write_items, ImportedPages, Progress};
 use super::page::{ImportedPage, PageStyle, media::MediaWriter};
 use super::source::{ImportOptions, ImportResult};
-use super::scrape::{crawl_state::{AssetMap, HostPacer}, fetch::FileProgress, run::{ScrapeProgress, ScrapeResult, ASSETS_PREFIX, ASSETS_SUBDIR}, writer::PendingPage};
+use super::scrape::{crawl_state::{AssetMap, HostPacer}, fetch::{Client, FileProgress}, run::{ScrapeProgress, ScrapeResult, ASSETS_PREFIX, ASSETS_SUBDIR}, writer::PendingPage};
 pub(crate) mod bundle;
 mod handoff;
 mod metadata;
 
-pub(crate) async fn import(mut bundle: bundle::Bundle, folder: &Path, options: ImportOptions, held: &mut ImportedPages, progress: Progress<'_>) -> Result<ImportResult, String> {
+pub(crate) async fn import(mut bundle: bundle::Bundle, folder: &Path, options: ImportOptions, client: &Client, held: &mut ImportedPages, progress: Progress<'_>) -> Result<ImportResult, String> {
     let root = std::fs::canonicalize(folder).map_err(|e| e.to_string())?;
     if bundle.root().starts_with(&root) || root.starts_with(bundle.root()) {
         return Err("Keep the export bundle outside the destination project".into());
@@ -64,7 +64,7 @@ pub(crate) async fn import(mut bundle: bundle::Bundle, folder: &Path, options: I
             },
             body: convert(html, &base)?,
         };
-        localize(&mut page, &mut bundle, folder, &base, site.is_some(), &mut assets, &mut pacer, &mut report).await?;
+        localize(&mut page, &mut bundle, folder, &base, client, site.is_some(), &mut assets, &mut pacer, &mut report).await?;
         // Ghost's feed gives each entry its post id as the guid.
         if let (Some(uid), Some(id)) = (text(&post, "uuid"), text(&post, "id")) {
             ids.insert(source.to_string(), (uid.to_string(), id.to_string()));
@@ -147,7 +147,7 @@ fn convert(html: &str, base: &url::Url) -> Result<String, String> {
     }).collect::<Result<Vec<_>, _>>().map(|parts| parts.join(&format!("\n\n{marker}\n\n")))
 }
 async fn localize(
-    page: &mut ImportedPage, bundle: &mut bundle::Bundle, folder: &Path, base: &url::Url,
+    page: &mut ImportedPage, bundle: &mut bundle::Bundle, folder: &Path, base: &url::Url, client: &Client,
     fetch: bool, assets: &mut AssetMap, pacer: &mut HostPacer, report: &mut Vec<String>,
 ) -> Result<(), String> {
     let mut images: Vec<_> = super::scrape::converter::extract_image_urls_in_markdown(&page.body)
@@ -174,7 +174,7 @@ async fn localize(
         let bytes = match local { Some(name) => bundle.read(name)?, None => None };
         if let Some(bytes) = bytes {
             let extension = Path::new(local.unwrap()).extension().and_then(|e| e.to_str()).unwrap_or("bin");
-            let local = MediaWriter { directory: &dir, prefix, user_agent: "", referer: None }.bytes(&address, extension, &bytes)?;
+            let local = MediaWriter { directory: &dir, prefix, client, referer: None }.bytes(&address, extension, &bytes)?;
             assets.insert(raw, local);
         } else if fetch {
             remote.push((raw, address));
@@ -182,8 +182,7 @@ async fn localize(
             report.push("An image was absent from the export and its source address is unknown.".into());
         }
     }
-    let user_agent = super::scrape::service::default_user_agent();
-    let downloads = MediaWriter { directory: &dir, prefix, user_agent: &user_agent, referer: Some(base.as_str()) };
+    let downloads = MediaWriter { directory: &dir, prefix, client, referer: Some(base.as_str()) };
     let mut files = FileProgress::new(remote.len());
     let result = downloads.download(&remote, assets, Some((pacer, &mut files))).await;
     if result.media_failed > 0 {

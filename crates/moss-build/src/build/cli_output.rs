@@ -347,10 +347,15 @@ pub(crate) use log_note;
 /// and `--strict` would be green forever. Decide the exit code from the value
 /// returned here.
 #[must_use = "the returned problem count is the only surviving copy — --strict's exit code depends on it"]
-pub fn print_cli_build_result(message: &str, strict: bool) -> usize {
-    cli_eprintln!("{}", message);
+pub fn print_cli_build_result(message: &str, strict: bool, unwritten: bool) -> usize {
     let n = take_cli_problems();
-    if let Some((pages, partials, notes)) = take_built() {
+    let built = take_built();
+    if unwritten {
+        cli_eprintln!("Build failed: the site was not written.");
+        return n;
+    }
+    cli_eprintln!("{}", message);
+    if let Some((pages, partials, notes)) = built {
         cli_eprintln!("{}", built_summary_line(pages, partials, n, notes));
     }
     if let Some(line) = problem_summary_line(n, strict) {
@@ -579,14 +584,17 @@ pub fn preflight_cli_build(folder_path: &str) {
     cli_eprintln!("Building website from: {}", folder_path);
 }
 
-/// Shared epilogue of a successful CLI build: drain-print the result
-/// (printing DRAINS the problem counter — the returned count is the only
+/// Shared epilogue of a CLI build the pipeline returned from: drain-print the
+/// result (printing DRAINS the problem counter — the returned count is the only
 /// surviving copy), print the agent-guidance pointer, then wait out any
 /// ui-bound background tasks with the cancel-aware poll. Returns the
 /// problem count for the caller's strict-mode exit decision. Serve/watch
 /// behaviour stays with the caller — it is host policy, not build epilogue.
-pub async fn finish_cli_build(message: &str, folder: &str, strict: bool) -> usize {
-    let problems = print_cli_build_result(message, strict);
+///
+/// An `unwritten` build says so in place of its result: the pipeline's
+/// message and the summary describe a site that is not there.
+pub async fn finish_cli_build(message: &str, folder: &str, strict: bool, unwritten: bool) -> usize {
+    let problems = print_cli_build_result(message, strict, unwritten);
     crate::cli::agents::sync::print_guidance_pointer(std::path::Path::new(folder));
 
     if let Some(session) = crate::system::folder_session::registry().get(folder) {

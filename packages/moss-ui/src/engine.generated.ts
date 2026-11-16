@@ -675,6 +675,10 @@ reference: string;
  */
 draft_source: string; 
 /**
+ * The page is withheld because its source is empty, not by `draft: true`.
+ */
+empty?: boolean; 
+/**
  * One-based line of the link in `source_path`, when it could be found.
  */
 line: number | null }
@@ -1398,8 +1402,11 @@ export type MossEvent = { kind: "BackgroundProgress"; payload: BackgroundProgres
  * the portless completion and leaves the panel stuck at the last
  * `BackgroundProgress` value. This event surfaces the real failure so
  * the user sees an error instead of a hung progress bar.
+ * 
+ * `open_in_another_app`: another process's desktop app is serving the
+ * folder.
  */
-{ kind: "PreviewServerFailed"; payload: { message: string } } | { kind: "ActionPanelLoaded" } | { kind: "ActionPanelOpened"; payload: ActionPanelOpened } | { kind: "ActionPanelClosed" } | { kind: "DividerPositionChanged"; payload: { position: number } } | 
+{ kind: "PreviewServerFailed"; payload: { message: string; open_in_another_app: boolean } } | { kind: "ActionPanelLoaded" } | { kind: "ActionPanelOpened"; payload: ActionPanelOpened } | { kind: "ActionPanelClosed" } | { kind: "DividerPositionChanged"; payload: { position: number } } | 
 /**
  * Preview-tiling mode flip (wry#175 cursor constraint — see
  * system/preview_tiling.rs). `tiled: true` → the preview webview is
@@ -1485,7 +1492,7 @@ paths: string[] } } |
 { kind: "OutsideEditKept"; payload: { path: string; version_id: string } } | 
 /**
  * Ask the app shell (main webview) to open the plugin
- * catalog filtered to importers. Produced by the editor webview's
+ * catalog, which rests on channels. Produced by the editor webview's
  * "Plugin" card; consumed by `app.ts`'s `onMossEvent("OpenPluginsView", …)`
  * listener which opens the settings modal at the `channels` section.
  * 
@@ -1497,13 +1504,6 @@ paths: string[] } } |
  * See project memory: "NEVER use `app.emit()` broadcast".
  */
 { kind: "OpenPluginsView"; payload: { 
-/**
- * Capability the catalog pre-filters to. The catalog recognizes
- * `"import"` (onboarding "Connect a service" card) and `"deploy"`
- * (deploy-target chooser); any other value falls back to the
- * unfiltered grid.
- */
-filter: string; 
 /**
  * Absolute folder path the user is onboarding — surfaced so the
  * catalog UI can pre-fill any "install into this site" affordance
@@ -1812,6 +1812,8 @@ source_pending?: boolean;
 source_known?: boolean }
 
 export type PageSourceArgs = { urlPath: string }
+
+export type PageTranslationsArgs = { path: VaultPath }
 
 /**
  * What happened to one page since the last publish.
@@ -2254,9 +2256,9 @@ export type RemovalReason =
  */
 "withheld" | 
 /**
- * Anything else: a generated file nobody produces now, a source that
- * still exists whose address changed, a file whose bytes moved to
- * another address, or a record too old to say.
+ * Anything else: a page whose source still exists but whose address
+ * changed or that is no longer published, or an HTML file whose bytes
+ * moved to another address.
  */
 "unexplained" | 
 /**
@@ -2266,32 +2268,25 @@ export type RemovalReason =
 "opened"
 
 /**
- * A public address the last publish served that this build will not.
+ * A page the author wrote that the last publish served and this build will
+ * not, or an address that was for members and would be open to everyone.
  */
 export type RemovedAddress = { 
 /**
- * Build output path, e.g. `feed.xml` or `a/index.html`.
+ * Build output path, e.g. `a/index.html` or `scales.html`.
  */
 path: string; reason: RemovalReason; 
 /**
- * Where what was served here is served now, with no redirect: a page
- * whose source still exists under a new slug or permalink, or a file
- * whose bytes moved to another address. Lets a later step offer the
- * redirect.
+ * Where the page served here is served now, with no redirect: under a
+ * new slug or permalink, or an HTML file whose bytes moved to another
+ * address. Lets a later step offer the redirect.
  */
 moved_to?: string | null; 
 /**
- * The source file the last publish recorded for this address: a page's
- * or a folder file's. Absent for a generated file, and for a record too
- * old to name folder files. It is what tells "still in your folder but no
- * longer published" from "no longer produced".
+ * The source file the last publish recorded for this address: a
+ * markdown page or an HTML file. Absent for an opened address.
  */
-source?: string | null; 
-/**
- * The site setting that stopped this generated file, when one did. Such
- * a removal is `AuthorRemoved`: the owner's act, like deleting a source.
- */
-withdrawn_by?: WithdrawnBy | null }
+source?: string | null }
 
 export type RenameArgs = { oldPath: VaultPath; newPath: VaultPath }
 
@@ -3084,7 +3079,26 @@ dot?: ToastDot | null;
  * yet. None (the default) draws no bar, and on a `ShowToastUpdate`
  * removes one.
  */
-progress?: number | null }
+progress?: number | null; 
+/**
+ * The toast answers something the person just did (a menu command), so a
+ * surface draws it at once instead of holding it for a waiting screen to
+ * clear. False (the default) for a background result.
+ */
+user_initiated?: boolean }
+
+/**
+ * One other language's place for a page's version.
+ */
+export type TranslationSlot = { lang: string; 
+/**
+ * The page that is the version, else the mirrored path one would be made at.
+ */
+rel: string; exists: boolean; 
+/**
+ * The page is a folder's home file and that folder is missing in this language.
+ */
+folder_missing: boolean }
 
 /**
  * A recursive tree node for the full project file tree.
@@ -3297,24 +3311,6 @@ page: string | null; allowedKinds: ExtKind[] | null }
  */
 export type WindowId = string
 
-/**
- * A site setting that stops a generated file on purpose.
- */
-export type WithdrawnBy = 
-/**
- * AI answers are asked not to use the pages, so there is no `llms.txt`.
- */
-"ai_answers" | 
-/**
- * No search or AI switch is set any more, so there is no `tdmrep.json`.
- */
-"ai_switches" | 
-/**
- * `[site].selection_tools` is off, so there is no Share and no QR code
- * for its picture.
- */
-"selection_tools"
-
 export type WriteEditorFileBinaryArgs = { relativePath: VaultPath; dataBase64: string }
 
 export type EngineCommands = {
@@ -3350,6 +3346,7 @@ export type EngineCommands = {
 	read_source_text: { args: FileArgs; out: string };
 	list_templates: { args: NoArgs; out: TemplateMeta[] };
 	site_languages: { args: NoArgs; out: SiteLanguages };
+	page_translations: { args: PageTranslationsArgs; out: TranslationSlot[] };
 	derivation_state: { args: NoArgs; out: FolderDerivation[] };
 	create_files: { args: CreateFilesArgs; out: string[] };
 	create_folder: { args: CreateFolderArgs; out: string };
@@ -3410,6 +3407,7 @@ export const ENGINE_TIER = {
 	read_source_text: "session_read",
 	list_templates: "session_read",
 	site_languages: "session_read",
+	page_translations: "session_read",
 	derivation_state: "session_read",
 	create_files: "write",
 	create_folder: "write",
@@ -3470,6 +3468,7 @@ export type EngineParams = {
 	read_source_text: [filePath: VaultPath];
 	list_templates: [];
 	site_languages: [];
+	page_translations: [path: VaultPath];
 	derivation_state: [];
 	create_files: [files: NewFile[]];
 	create_folder: [parentDir: string, name: string];
@@ -3528,6 +3527,7 @@ export const ENGINE_PARAMS = {
 	read_source_text: ["filePath"],
 	list_templates: [],
 	site_languages: [],
+	page_translations: ["path"],
 	derivation_state: [],
 	create_files: ["files"],
 	create_folder: ["parentDir", "name"],

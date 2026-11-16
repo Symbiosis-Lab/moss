@@ -399,7 +399,7 @@ pub(crate) fn spawn_traced_worker<F>(workers: &mut tokio::task::JoinSet<Result<(
 where
     F: FnOnce() -> Result<(), BuildError> + Send + 'static,
 {
-    let body = crate::build::phase::inherit_blocking(body);
+    let body = crate::build::phase::inherit_beside(body);
     workers.spawn(async move { tokio::task::spawn_blocking(body).await.map_err(BuildError::from)? });
 }
 

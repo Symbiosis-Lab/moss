@@ -21,6 +21,7 @@ const mockRenameTemplate = vi.fn();
 const mockDeleteTemplate = vi.fn();
 const mockSetTemplateFolder = vi.fn();
 const mockSiteLanguages = vi.fn();
+const mockPageTranslations = vi.fn();
 const mockCreateTranslation = vi.fn();
 
 import {
@@ -170,6 +171,7 @@ function makeHarness(anchor: { path: string; isDir: boolean } = { path: 'posts',
     upsert,
     pathOf: (id: EntryId) => byId.get(id as unknown as number) ?? null,
     registerPendingRename: vi.fn(),
+    showInPreview: vi.fn(),
     renameEntry,
     setTitleField: vi.fn(),
     setHeadingSaved: vi.fn(),
@@ -177,7 +179,7 @@ function makeHarness(anchor: { path: string; isDir: boolean } = { path: 'posts',
     createFile: mockCreateFile,
     instantiateTemplate: mockInstantiateTemplate,
     deleteEntry: mockDeleteEntry,
-    languages: { siteLanguages: mockSiteLanguages, listDirectory: mockListDirectory },
+    languages: { siteLanguages: mockSiteLanguages, pageTranslations: mockPageTranslations },
     createTranslation: mockCreateTranslation,
     templates: {
       listTemplates: mockListTemplates,
@@ -229,6 +231,7 @@ beforeEach(() => {
   mockDeleteTemplate.mockResolvedValue({ status: 'ok', data: null });
   mockSetTemplateFolder.mockResolvedValue({ status: 'ok', data: null });
   mockSiteLanguages.mockResolvedValue({ status: 'ok', data: { default_lang: 'en', trees: [] } });
+  mockPageTranslations.mockResolvedValue({ status: 'ok', data: [] });
   mockCreateTranslation.mockImplementation(async (sourceAbs: string, lang: string) => (
     { status: 'ok', data: `${ROOT}/${lang}/${sourceAbs.slice(ROOT.length + 1)}` }
   ));
@@ -371,6 +374,13 @@ describe('rename-follows-title', () => {
     expect(h.statusEl().textContent).toContain(`${today}-winter-light.md`);
   });
 
+  test('the preview is pointed at the renamed page, which no build may have seen under its first name', async () => {
+    const h = makeHarness();
+    await createAndOpen(h);
+    await h.flow.commitTitle('Winter light');
+    expect(h.deps.showInPreview).toHaveBeenCalledWith('posts/Winter light.md');
+  });
+
   test('retitling re-renames while still title-only', async () => {
     const h = makeHarness();
     await createAndOpen(h);
@@ -396,6 +406,7 @@ describe('rename-follows-title', () => {
     h.deps.renameEntry.mockResolvedValueOnce({ status: 'error', error: 'target exists' });
     const result = await h.flow.commitTitle('Winter light');
     expect(result).toEqual({ ok: false, error: 'target exists' });
+    expect(h.deps.showInPreview).not.toHaveBeenCalled();
   });
 
   test('the first body edit ends the session — the filename stops following', async () => {
@@ -686,11 +697,10 @@ describe('folder templates', () => {
 
   test('translation rows list only the languages the page lacks', async () => {
     mockSiteLanguages.mockResolvedValue({ status: 'ok', data: { default_lang: 'en', trees: ['zh-hans', 'zh-hant'] } });
-    mockListDirectory.mockImplementation(async (abs: string) => (
-      abs === `${ROOT}/zh-hans/work`
-        ? { status: 'ok', data: [{ name: 'paper.md' }] }
-        : { status: 'ok', data: [] }
-    ));
+    mockPageTranslations.mockResolvedValue({ status: 'ok', data: [
+      { lang: 'zh-hans', rel: 'zh-hans/work/纸.md', exists: true, folder_missing: false },
+      { lang: 'zh-hant', rel: 'zh-hant/work/paper.md', exists: false, folder_missing: false },
+    ] });
     const h = makeHarness({ path: 'work', isDir: true });
     h.setCurrentPath('work/paper.md');
     await openMenu(h, []);
@@ -709,11 +719,7 @@ describe('folder templates', () => {
 
   test('a folder home page missing in the other tree offers the folder version', async () => {
     mockSiteLanguages.mockResolvedValue({ status: 'ok', data: BILINGUAL });
-    mockListDirectory.mockImplementation(async (abs: string) => (
-      abs === `${ROOT}/zh-hans/work`
-        ? { status: 'error', error: 'no such folder' }
-        : { status: 'ok', data: [] }
-    ));
+    mockPageTranslations.mockResolvedValue({ status: 'ok', data: [{ lang: 'zh-hans', rel: 'zh-hans/work/work.md', exists: false, folder_missing: true }] });
     const h = makeHarness({ path: 'work', isDir: true });
     h.setCurrentPath('work/work.md');
     await openMenu(h, []);
@@ -723,6 +729,7 @@ describe('folder templates', () => {
 
   test('a translation row creates the mirrored page, and its title is not a rename', async () => {
     mockSiteLanguages.mockResolvedValue({ status: 'ok', data: BILINGUAL });
+    mockPageTranslations.mockResolvedValue({ status: 'ok', data: [{ lang: 'zh-hans', rel: 'zh-hans/work/paper.md', exists: false, folder_missing: false }] });
     const h = makeHarness({ path: 'work', isDir: true });
     h.setCurrentPath('work/paper.md');
     await openMenu(h, []);

@@ -3,7 +3,6 @@ import {
   pathMatchesCurrentPage,
   extractPathFromUrl,
   buildPreviewUrl,
-  sourcePathToHtmlPath,
 } from '../path-matcher';
 
 describe('pathMatchesCurrentPage', () => {
@@ -222,23 +221,5 @@ describe('buildPreviewUrl', () => {
 
   it('handles empty path', () => {
     expect(buildPreviewUrl(3000, '')).toBe('http://localhost:3000');
-  });
-});
-
-describe('sourcePathToHtmlPath', () => {
-  it('converts .md to .html', () => {
-    expect(sourcePathToHtmlPath('post.md')).toBe('post.html');
-  });
-
-  it('converts nested path', () => {
-    expect(sourcePathToHtmlPath('blog/post.md')).toBe('blog/post.html');
-  });
-
-  it('preserves non-markdown files', () => {
-    expect(sourcePathToHtmlPath('about.html')).toBe('about.html');
-  });
-
-  it('preserves paths without extension', () => {
-    expect(sourcePathToHtmlPath('README')).toBe('README');
   });
 });

@@ -30,8 +30,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use notify::Watcher;
-use notify_debouncer_full::{new_debouncer, DebouncedEvent};
+use notify_debouncer_full::DebouncedEvent;
 
 use crate::build::ports::spawner::Spawner;
 use crate::build::watch::scope;
@@ -44,6 +43,8 @@ use crate::types::events::MossEvent;
 
 pub mod cadence;
 pub mod derive_folders;
+#[cfg(target_os = "macos")]
+mod fsevent;
 pub mod headless;
 pub mod reconcile;
 pub mod supervision;
@@ -293,9 +294,8 @@ pub async fn start(config: WatchConfig) {
                 notify_debouncer_full::DebounceEventResult,
             >();
 
-            let mut debouncer = match new_debouncer(
+            let mut debouncer = match reconcile::new_debouncer(
                 std::time::Duration::from_millis(DEBOUNCE_MS),
-                None, // tick_rate = timeout/4
                 move |result| {
                     let _ = tx.send(result);
                 },
@@ -336,21 +336,8 @@ pub async fn start(config: WatchConfig) {
             // content it must never see.
             let root = Path::new(&folder_path);
             let mut watched: Vec<scope::WatchTarget> = Vec::new();
-            let initial_targets = match scope::watch_targets_with_error(root) {
-                Ok(targets) => targets,
-                Err(error) => {
-                    log::warn!("⚠️ Cannot enumerate watcher targets in '{}': {} — retrying", root.display(), error);
-                    Vec::new()
-                }
-            };
-            for (path, mode) in initial_targets {
-                if let Err(e) = debouncer.watcher().watch(&path, mode) {
-                    // One unreadable subdirectory must not cost the whole watcher.
-                    log::warn!("⚠️ Not watching '{}': {}", path.display(), e);
-                    continue;
-                }
-                debouncer.cache().add_root(&path, mode);
-                watched.push((path, mode));
+            if let Err(error) = reconcile::targets(&mut debouncer, root, &mut watched) {
+                log::warn!("⚠️ Cannot enumerate watcher targets in '{}': {} — retrying", root.display(), error);
             }
             // An empty set is survivable, not fatal: the reconciler below picks up
             // the first content that appears. Returning here would kill the watcher
@@ -374,14 +361,8 @@ pub async fn start(config: WatchConfig) {
             // Because the root is not watched recursively, a NEW top-level entry
             // is not covered by any existing subscription. Reconcile the set on a
             // low-frequency tick: one `read_dir` over ~10 entries, which also
-            // unsubscribes entries that were removed. The first pass runs
-            // unconditionally, same as the old fixed-interval timer's
-            // immediate-first-tick behavior — a folder opened while the app is
-            // already `Background` still gets its first reconcile promptly,
-            // rather than waiting out a 30s Background interval before it ever
-            // sees content that appeared after the watcher's initial scan.
+            // unsubscribes entries that were removed.
             let mut ticker = cadence::CadenceTicker::new(cadence.clone());
-            let _ = reconcile::targets(&mut debouncer, root, &mut watched);
 
             // Process debounced batches until shutdown, recreate, or channel death
             let end = loop {
@@ -581,44 +562,10 @@ async fn handle_debounced_batch(
 
     let mut actionable: Vec<&DebouncedEvent> = Vec::with_capacity(events.len());
     for ev in &events {
-        if !any_path_watchable(root_path, &ev.paths) {
-            continue;
-        }
-        // The root-relative question `path_is_watchable` cannot ask: is every
-        // path in this event something moss wrote? A root `AGENTS.md` is, and
-        // the non-recursive root watch on Linux/Windows still hears it.
-        if scope::all_paths_moss_written(root_path, &ev.paths) {
-            continue;
-        }
-        if !should_recompile_for_event(ev.kind, &ev.paths) {
-            log::trace!(
-                target: "moss::build::watch",
-                "Suppressed {:?} on {} path(s): {:?}",
-                ev.kind,
-                ev.paths.len(),
-                ev.paths
-            );
-            continue;
-        }
-        if !any_path_passes_filter(root_path, &ev.paths) {
-            continue;
-        }
-        match pump_gate(ev.kind, folder_path, &ev.paths) {
-            PumpGate::Suppress => {
-                log::debug!(
-                    target: "moss::build::watch",
-                    "Suppressed on the pump: {} agent-config path(s) ({:?})",
-                    ev.paths.len(),
-                    ev.kind
-                );
-                continue;
-            }
-            PumpGate::Proceed => {
-                all_gate_eligible = false;
-            }
-            PumpGate::DeferHashCheck => {
-                deferred_gate_paths.extend(ev.paths.iter().cloned());
-            }
+        match event_gate(root_path, ev.kind, &ev.paths) {
+            PumpGate::Suppress => continue,
+            PumpGate::Proceed => all_gate_eligible = false,
+            PumpGate::DeferHashCheck => deferred_gate_paths.extend(ev.paths.iter().cloned()),
         }
         actionable.push(ev);
     }
@@ -687,6 +634,75 @@ async fn handle_debounced_batch(
         gate_paths: all_gate_eligible.then_some(deferred_gate_paths),
     })
     .await;
+}
+
+/// The watcher's verdict on one event: `Suppress` when it asks for no rebuild
+/// (a path outside the watch, moss's own output, a kind that changes nothing,
+/// a root agent-instruction file), otherwise whether the rebuild may wait on
+/// the worker's content-hash check.
+fn event_gate(root: &Path, kind: notify::EventKind, paths: &[std::path::PathBuf]) -> PumpGate {
+    // `all_paths_moss_written` is the root-relative question `path_is_watchable`
+    // cannot ask: a root `AGENTS.md` is moss's, and the non-recursive root watch
+    // on Linux/Windows still hears it.
+    if !any_path_watchable(root, paths) || scope::all_paths_moss_written(root, paths) {
+        return PumpGate::Suppress;
+    }
+    if !should_recompile_for_event(kind, paths) {
+        log::trace!(target: "moss::build::watch", "Suppressed {:?} on {} path(s): {:?}", kind, paths.len(), paths);
+        return PumpGate::Suppress;
+    }
+    if !any_path_passes_filter(root, paths) {
+        return PumpGate::Suppress;
+    }
+    let gate = pump_gate(kind, &root.to_string_lossy(), paths);
+    if gate == PumpGate::Suppress {
+        log::debug!(target: "moss::build::watch", "Suppressed on the pump: {} agent-config path(s) ({:?})", paths.len(), kind);
+    }
+    gate
+}
+
+/// The rebuild a change moss made asks for: what the watcher's event for it
+/// asks, and for a move the pairs the preview follows a renamed page by.
+/// `folder` is the built folder. A change of no file asks for none.
+pub fn request_for(folder: &Path, change: crate::commands::Change<'_>) -> Option<worker::RebuildRequest> {
+    use crate::commands::Change;
+    let (rename_pairs, paths): (Vec<_>, Vec<_>) = match change {
+        Change::Moved(pairs) => (pairs.to_vec(), pairs.iter().flat_map(|(from, to)| [folder.join(from), folder.join(to)]).collect()),
+        Change::Created(paths) => (Vec::new(), paths.iter().map(std::path::PathBuf::from).collect()),
+        Change::Wrote(path) => return request_for_writes(folder, vec![path.to_path_buf()]),
+    };
+    (!paths.is_empty()).then(|| worker::RebuildRequest { rename_pairs, trigger: crate::build::BuildTrigger::Structural(paths), gate_paths: None })
+}
+
+/// The rebuild writes to `paths` ask for, as the watcher reads the same
+/// writes: content-only, since a write changes no file's existence and
+/// Structural would close the render skip for every save. Pages wait on the
+/// hash check, so a write the last build already read builds nothing; any
+/// other file builds unconditionally. `None` when the watcher would drop the
+/// writes.
+pub(crate) fn request_for_writes(folder: &Path, paths: Vec<std::path::PathBuf>) -> Option<worker::RebuildRequest> {
+    use notify::event::{DataChange, ModifyKind};
+    let gate_paths = match event_gate(folder, notify::EventKind::Modify(ModifyKind::Data(DataChange::Content)), &paths) {
+        PumpGate::Suppress => return None,
+        PumpGate::Proceed => None,
+        PumpGate::DeferHashCheck => Some(paths.clone()),
+    };
+    Some(worker::RebuildRequest { rename_pairs: Vec::new(), trigger: crate::build::BuildTrigger::ContentOnly(paths), gate_paths })
+}
+
+/// Hand a change moss made to the folder's rebuild worker, so its build does
+/// not wait for the OS to report it. Without a running worker nothing
+/// happens: the watcher's own event is the fallback, and the change never
+/// builds inline. The worker is looked up by the key the headless watch
+/// registers it under.
+pub fn hand_off(root: &Path, change: crate::commands::Change<'_>) {
+    if !worker::worker_enabled() {
+        return;
+    }
+    let folder = headless::absolute_watch_root(&root.to_string_lossy());
+    let (Some(handle), Some(request)) = (worker::get(&folder), request_for(Path::new(&folder), change)) else { return };
+    log::info!(target: "moss::build::watch", "Rebuild asked by {}", change.what());
+    handle.enqueue(request);
 }
 
 #[cfg(test)]

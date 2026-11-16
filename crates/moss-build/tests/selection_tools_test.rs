@@ -100,30 +100,6 @@ fn turning_them_back_on_restores_the_codes() {
     assert!(site.html("about/index.html").contains(r#"data-share-qr="/qr/about.svg""#));
 }
 
-/// The build that drops the codes says why, so the publish gate passes and
-/// names the setting instead of refusing a site that simply turned it off.
-#[test]
-fn the_codes_an_off_site_stops_serving_are_its_own_choice() {
-    use moss_build::build::manifest::change_set::{PublishedSnapshot, RemovalReason, WithdrawnBy};
-    let site = Site::with_config(ON, PAGES);
-    let mut snapshot = PublishedSnapshot { target: "moss:test".into(), published_at: "2026-11-01T00:00:00Z".into(), ..Default::default() };
-    for served in ["qr/about.svg", "qr/notes/spring.svg"] {
-        snapshot.files.insert(served.into(), "h".into());
-    }
-    moss_build::build::manifest::published_record::save(&moss_build::moss_paths::MossPaths::new(&site.root), &snapshot).unwrap();
-
-    site.write(".moss/config.toml", &format!("schema_version = 6\n\n[site]\nlang = \"en\"\n{OFF}"));
-    site.rebuild();
-    let removed = moss_build::system::build_records::records()
-        .removed_addresses(&site.root.to_string_lossy())
-        .expect("the build records what it stops serving");
-    let qr: Vec<_> = removed.iter().filter(|r| r.path.starts_with("qr/")).collect();
-    assert_eq!(qr.len(), 2, "{removed:?}");
-    for r in qr {
-        assert_eq!((r.reason, r.withdrawn_by), (RemovalReason::AuthorRemoved, Some(WithdrawnBy::SelectionTools)), "{r:?}");
-    }
-}
-
 /// A page's own `comments: true` beats `[site].comments = false`, so the
 /// service being on is enough to ship the popover's Comment.
 #[test]

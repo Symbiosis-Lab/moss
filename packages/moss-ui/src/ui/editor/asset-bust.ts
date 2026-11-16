@@ -9,7 +9,7 @@
 // folded into the resolved image URL as `?_t=<token>`, which changes the widget
 // identity (forcing a repaint) AND defeats the browser cache (forcing a fetch).
 //
-// `?_t=<digits>` is the existing moss bust convention (navigation-manager.ts
+// `?_t=<digits>` is the existing moss bust convention (shell-marker.ts
 // and iframe-bridge.ts strip it the same way).
 
 /** request-url path → monotonic token. */

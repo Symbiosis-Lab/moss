@@ -456,8 +456,9 @@ pub(crate) fn stale_html_keys(previous: &SiteHashes, keep: &HashSet<String>, not
 }
 
 /// Whether an authored HTML page the previous build copied has lost its
-/// source, and the previous HTML outputs the sweep removes. The manifest
-/// carries every previous output until seal, so the hash compare cannot see
+/// source, and the previous HTML outputs the sweep removes, each with the
+/// source the previous build recorded for it (generated pages have none). The
+/// manifest carries every previous output until seal, so the hash compare cannot see
 /// the deletion; outputs with no source of their own, like forwarding pages,
 /// never count as one. A source in the cloud is offline, not deleted. An
 /// address an authored page held is never spared as a forwarding page: its
@@ -469,7 +470,7 @@ pub(crate) fn html_deletions(
     folder_path: &str,
     dir_overrides: &HashMap<String, String>,
     late: &crate::build::feeds::kept_addresses::LateRedirects,
-) -> (bool, Vec<String>) {
+) -> (bool, Vec<(String, Option<String>)>) {
     let held: HashSet<String> = structure.evicted_paths.iter()
         .filter_map(|path| path.strip_prefix(folder_path).ok())
         .map(logical_path)
@@ -482,16 +483,19 @@ pub(crate) fn html_deletions(
     let forwarded = crate::build::feeds::kept_addresses::moved_folder_files(&late.folder_moves, pending.blocking_keys())
         .into_iter().map(|(old, _)| old).chain(late.copies.iter().map(|copy| copy.from.clone()));
     let spared: HashSet<String> = held.iter().map(address).chain(forwarded.filter(|key| !authored.contains(key))).collect();
-    (deleted, stale_html_keys(previous, pending.blocking_keys(), pending.notebook_outputs(), &spared))
+    let mut source_of: HashMap<String, &String> = previous.source_to_output.iter().map(|(source, output)| (output.clone(), source)).collect();
+    source_of.extend(previous.sources.keys().filter(|key| is_html_path(key)).map(|key| (address(key), key)));
+    let stale = stale_html_keys(previous, pending.blocking_keys(), pending.notebook_outputs(), &spared);
+    (deleted, stale.into_iter().map(|key| { let source = source_of.get(&key).map(|source| (*source).clone()); (key, source) }).collect())
 }
 
 /// Remove exactly the deleted HTML outputs before search reads staging. A key
 /// that differs from a `live` one only in case is kept when both name the same
 /// file, as after a case-only rename on a case-insensitive disk.
-pub(crate) fn remove_stale_html(dir: &Path, deleted: &[String], live: &HashSet<String>, _permit: &crate::build::lifecycle::SweepPermit) {
+pub(crate) fn remove_stale_html(dir: &Path, deleted: &crate::build::lifecycle::StaleHtml, live: &HashSet<String>) {
     let disk = |key: &str| crate::build::served_path::ServedPath::from_cached(key).ok().map(|path| path.to_disk(dir));
     let folded: HashMap<String, &String> = live.iter().map(|key| (key.to_lowercase(), key)).collect();
-    for key in deleted {
+    for key in deleted.keys() {
         let Some(path) = disk(key) else { continue; };
         let renamed = folded.get(&key.to_lowercase()).and_then(|live| disk(live))
             .is_some_and(|live| same_file::is_same_file(&path, live).unwrap_or(false));
@@ -721,16 +725,17 @@ pub(crate) fn compute_expected_dirs(site_hashes: &SiteHashes) -> std::collection
     expected_dirs
 }
 
-/// Resolve source bytes once for both ordinary and theme assets. A cached
-/// blob remains usable while its source is evicted; a cold evicted source
-/// is requested and deferred without reading it.
+/// Resolve a source's oid once, for ordinary, theme and lane-owned assets: what
+/// `cached` still vouches for, else `miss` at the stat taken before it reads. A
+/// cached blob remains usable while its source is evicted; a cold evicted
+/// source is requested and deferred without reading it.
 fn source_blob(
     path: &Path,
     cached: Option<&crate::build::types::SourceMetadata>,
     previous_write: u64,
-    object_store: &crate::build::cache::ObjectStore,
     cache_hits: &mut u32,
     cache_misses: &mut u32,
+    miss: impl FnOnce(&crate::build::stat::FileStat) -> Result<String, String>,
 ) -> Result<Option<(String, crate::build::stat::FileStat)>, String> {
     let stat = fs::metadata(path)
         .as_ref()
@@ -751,8 +756,7 @@ fn source_blob(
         return Ok(None);
     }
     *cache_misses += 1;
-    object_store.store_source_file(path, crate::build::cache::RecordMode::Wait)
-        .map(|oid| Some((oid, stat)))
+    miss(&stat).map(|oid| Some((oid, stat)))
 }
 
 /// Resolve the xxh3 manifest hash of a just-linked output file, consulting
@@ -839,6 +843,31 @@ fn preserve_link(
         }
     }
     true
+}
+
+/// A file the video or image lane owns is published by that lane, but the sweep
+/// and the seal proof walk it like any other source: without a `sources` entry
+/// it reads as a new file on every build, and no build proves from the seal.
+/// A video's entry is only as strong as the video lane's whole-second rule: a
+/// same-size rewrite within one second keeps the old oid, as the lane's encode does.
+fn register_lane_source(
+    lane: &mut LaneIndex,
+    cached: Option<&crate::build::types::SourceMetadata>,
+    previous_write: u64,
+    (file, rel, video): (&Path, &str, bool),
+    site_hashes: &mut SiteHashes,
+    run: &mut AssetWalkTally,
+) {
+    run.live_source_keys.insert(rel.to_string());
+    match source_blob(file, cached, previous_write, &mut run.stats.cache_hits, &mut run.stats.cache_misses,
+        |stat| lane.hash(file, rel, stat, video))
+    {
+        Ok(Some((oid, stat))) => {
+            site_hashes.sources.insert(rel.to_string(), crate::build::types::SourceMetadata::from_stat(oid, stat));
+        }
+        Ok(None) => {}
+        Err(e) => log::info!("[background-assets] Cannot hash {rel}: {e}"),
+    }
 }
 
 /// The alias file itself is a source the sweep walks, published or not:
@@ -987,6 +1016,36 @@ struct AssetCopy {
     converter_bases: std::collections::HashSet<std::path::PathBuf>,
     html_paths: std::collections::HashSet<std::path::PathBuf>,
     prev_hashes_mtime_secs: u64,
+    lane_index: LaneIndex,
+}
+
+/// The hash index the video and image lanes read and write, opened only when
+/// the walk meets a file one of them owns.
+struct LaneIndex {
+    path: std::path::PathBuf,
+    index: Option<crate::build::cache::HashIndex>,
+    shared: std::sync::Arc<crate::build::cache::source_oids::SourceOids>,
+}
+
+impl LaneIndex {
+    /// Each lane's own lookup rule, through the hashes the walk shares with the
+    /// lanes running beside it, so a new or edited file is read once.
+    fn hash(&mut self, file: &Path, rel: &str, stat: &crate::build::stat::FileStat, video: bool) -> Result<String, String> {
+        let index = self.index.get_or_insert_with(|| crate::build::cache::HashIndex::load(&self.path));
+        self.shared.resolve_at(rel, stat, || if video {
+            crate::build::media::video::resolve_source_hash(file, rel, index)
+        } else {
+            index.resolve(file, rel)
+        }).map(|oid| oid.recorded_in(index, rel, stat, video))
+    }
+
+    fn save(&self) {
+        if let Some(index) = &self.index {
+            if let Err(e) = index.save_merging(&self.path) {
+                log::info!("[background-assets] Failed to save the hash index: {e}");
+            }
+        }
+    }
 }
 
 impl AssetCopy {
@@ -1009,6 +1068,7 @@ impl AssetCopy {
                 .and_then(|m| m.modified().ok())
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs()).unwrap_or(0),
+            lane_index: LaneIndex { path: paths.cache_hash_index(), index: None, shared: ctx.source_oids.clone() },
         }
     }
 
@@ -1096,7 +1156,7 @@ fn copy_asset_entry(
 ) {
     use crate::build::render::resolve_path_with_overrides;
     let AssetCopy { object_store, manifest_hash_memo, staged, transforms, image_config,
-        canonical_source_root, converter_bases, prev_hashes_mtime_secs, .. } = copy;
+        canonical_source_root, converter_bases, prev_hashes_mtime_secs, lane_index, .. } = copy;
     let prev_hashes_mtime_secs = *prev_hashes_mtime_secs;
     let source_root = Path::new(&ctx.source_path);
     let output_dir = &ctx.staging_dir;
@@ -1106,7 +1166,7 @@ fn copy_asset_entry(
     // A file beneath a members cascade is published only as its gated copy.
     // A link there is not published: its target would be served to everyone.
     let access = file_path.strip_prefix(source_root).ok()
-        .and_then(|rel| crate::build::scan::members::file_access(&ctx.members_policy, &logical_path(rel)));
+        .and_then(|rel| crate::build::scan::members::file_access(&ctx.members_policy, &logical_path(rel)).gated());
     if access.is_some() && file_type.is_symlink() {
         run.stats.skipped_symlinks += 1;
         return;
@@ -1152,8 +1212,8 @@ fn copy_asset_entry(
             } else {
                 run.stats.skipped_symlinks += 1;
             }
-            let blob = |path: &Path, rel: &str| source_blob(path, prev_sources.get(rel),
-                prev_hashes_mtime_secs, object_store, &mut run.stats.cache_hits, &mut run.stats.cache_misses);
+            let blob = |path: &Path, rel: &str| source_blob(path, prev_sources.get(rel), prev_hashes_mtime_secs,
+                &mut run.stats.cache_hits, &mut run.stats.cache_misses, |_| object_store.store_source_file(path, crate::build::cache::RecordMode::Wait));
             register_alias_source(file_path, source_root, site_hashes, &mut run.live_source_keys, blob);
             return;
         }
@@ -1220,6 +1280,8 @@ fn copy_asset_entry(
         &ctx.passthrough_roots,
     );
     if video_exts.contains(&ext.as_str()) && !configured_passthrough {
+        register_lane_source(lane_index, prev_sources.get(&relative_path), prev_hashes_mtime_secs,
+            (file_path, &relative_path, true), site_hashes, run);
         return;
     }
 
@@ -1236,6 +1298,8 @@ fn copy_asset_entry(
     // The encoder plan is the authority for base ownership. A later stat
     // failure or cloud transition must never give this path a second writer.
     if converter_bases.contains(Path::new(&relative_path)) {
+        register_lane_source(lane_index, prev_sources.get(&relative_path), prev_hashes_mtime_secs,
+            (file_path, &relative_path, false), site_hashes, run);
         return;
     }
 
@@ -1269,7 +1333,7 @@ fn copy_asset_entry(
     run.live_source_keys.insert(relative_path.clone());
 
     match source_blob(file_path, prev_sources.get(&relative_path), prev_hashes_mtime_secs,
-        object_store, &mut run.stats.cache_hits, &mut run.stats.cache_misses)
+        &mut run.stats.cache_hits, &mut run.stats.cache_misses, |_| object_store.store_source_file(file_path, crate::build::cache::RecordMode::Wait))
     {
         Ok(None) => return,
         Ok(Some((oid, src_stat))) => {
@@ -1403,7 +1467,8 @@ pub(crate) fn copy_deferred_assets(
         if copy.handles_source_html(entry.path()) { continue; }
         copy_asset_entry(ctx, &mut copy, entry.path(), entry.file_type(), &mut site_hashes, &mut run, reporter, asset_registry.as_deref());
     }
-    let AssetCopy { object_store, manifest_hash_memo, mut staged, prev_hashes_mtime_secs, .. } = copy;
+    let AssetCopy { object_store, manifest_hash_memo, mut staged, prev_hashes_mtime_secs, lane_index, .. } = copy;
+    lane_index.save();
     let prev_sources = &ctx.previous_hashes.sources;
     let emit = |msg| {
         if let Err(e) = tx.blocking_send(msg) {
@@ -1468,7 +1533,7 @@ pub(crate) fn copy_deferred_assets(
                 continue;
             }
             match source_blob(file_path, prev_sources.get(&source_key), prev_hashes_mtime_secs,
-                &object_store, &mut run.stats.cache_hits, &mut run.stats.cache_misses)
+                &mut run.stats.cache_hits, &mut run.stats.cache_misses, |_| object_store.store_source_file(file_path, crate::build::cache::RecordMode::Wait))
             {
                 Ok(None) => continue,
                 Ok(Some((oid, stat))) => {

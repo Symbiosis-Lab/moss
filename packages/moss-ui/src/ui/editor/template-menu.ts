@@ -60,7 +60,7 @@ export function templateRowLabel(meta: TemplateMeta): string {
  *  for the source row (a folder's home file captures as a folder template).
  *  When the page has translations, the author is asked whether to save them too. */
 export function promptSaveAsTemplate(
-  commands: Pick<TemplateCommands, 'createTemplate'> & LanguageSource,
+  commands: Pick<TemplateCommands, 'createTemplate'> & Pick<LanguageSource, 'pageTranslations'>,
   source: { absPath: string; projectRoot: string; isHome: boolean },
   at: MouseEvent,
 ): void {
@@ -79,13 +79,11 @@ export function promptSaveAsTemplate(
 }
 
 async function translationsToSave(
-  commands: LanguageSource,
+  commands: Pick<LanguageSource, 'pageTranslations'>,
   source: { absPath: string; projectRoot: string },
 ): Promise<[string, string][] | null> {
-  const langs = await commands.siteLanguages();
-  if (langs.status !== 'ok') return null;
   const rel = toRelative(source.absPath, source.projectRoot);
-  const found = existingPages(await translationSlots(rel, langs.data, commands, source.projectRoot), source.projectRoot);
+  const found = existingPages(await translationSlots(rel, commands, source.projectRoot), source.projectRoot);
   if (found.length === 0) return null;
   const names = found.map(([lang]) => langName(lang)).join(', ');
   const save = await mossConfirm(t('tree.template_translations_offer', { language: names }), {

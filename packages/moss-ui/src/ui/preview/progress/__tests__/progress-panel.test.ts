@@ -1591,7 +1591,7 @@ describe("ProgressPanel", () => {
       const cb = listenCallbacks.get("deploy-progress")![0];
       cb({ stage: "syncing", current: 0, total: 0, message: "" });
       cb({ stage: "failed", current: 0, total: 0, message: "boom" });
-      fireMossEvent({ kind: "PreviewServerFailed", payload: { message: "port busy" } });
+      fireMossEvent({ kind: "PreviewServerFailed", payload: { message: "port busy", open_in_another_app: false } });
 
       panel.setStage("ready");
       expect(panel.getPublishStage()).toBe("idle");
@@ -1613,7 +1613,7 @@ describe("ProgressPanel", () => {
       const cb = listenCallbacks.get("deploy-progress")![0];
       cb({ stage: "syncing", current: 0, total: 0, message: "" });
       cb({ stage: "failed", current: 0, total: 0, message: "boom" });
-      fireMossEvent({ kind: "PreviewServerFailed", payload: { message: "port busy" } });
+      fireMossEvent({ kind: "PreviewServerFailed", payload: { message: "port busy", open_in_another_app: false } });
       panel.setStage("ready");
 
       cb({ stage: "waiting", current: 0, total: 0, message: "" });
@@ -2911,7 +2911,7 @@ describe("ProgressPanel", () => {
 
       fireMossEvent({
         kind: "PreviewServerFailed",
-        payload: { message: "Address already in use (port 1430)" },
+        payload: { message: "Address already in use (port 1430)", open_in_another_app: false },
       });
 
       // No task row — it's a notice now.
@@ -3217,7 +3217,7 @@ describe("ProgressPanel", () => {
       // surfaceOnInterrupt() in the handler.
       fireMossEvent({
         kind: "PreviewServerFailed",
-        payload: { message: "Address already in use (port 1430)" },
+        payload: { message: "Address already in use (port 1430)", open_in_another_app: false },
       });
       expect(panel.isHidden).toBe(false);
       // No task row — broken advisory + lastFailure instead.
@@ -4470,7 +4470,7 @@ describe("buildViewModel", () => {
     // Trigger PreviewServerFailed
     fireMossEvent({
       kind: "PreviewServerFailed",
-      payload: { message: "Port 1430 in use" },
+      payload: { message: "Port 1430 in use", open_in_another_app: false },
     });
 
     const vmFailed = panel.buildViewModel();

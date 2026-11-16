@@ -39,7 +39,7 @@ Content-Location: https://img.douban.com/a.png\r\n\
     let mhtml_path = out.join("saved.mhtml");
     std::fs::write(&mhtml_path, mhtml).unwrap();
 
-    let res = import_local_file(&mhtml_path, out).await.unwrap();
+    let res = import_local_file(&mhtml_path, out, &Client::no_own_site()).await.unwrap();
     assert_eq!(res.total_pages, 1, "one note imported");
     assert_eq!(res.failed_pages, 0);
 
@@ -109,7 +109,7 @@ Content-Location: https://mmbiz.qpic.cn/invented/640?wx_fmt=jpeg\r\n\
     let mhtml_path = out.join("saved.mhtml");
     std::fs::write(&mhtml_path, mhtml).unwrap();
 
-    let res = import_local_file(&mhtml_path, out).await.unwrap();
+    let res = import_local_file(&mhtml_path, out, &Client::no_own_site()).await.unwrap();
     assert_eq!(res.total_pages, 1);
     let md_path = std::fs::read_dir(out)
         .unwrap()
@@ -140,7 +140,7 @@ async fn import_local_plain_html_no_source_omits_origin() {
     let p = out.join("essay.html");
     std::fs::write(&p, html).unwrap();
 
-    let res = import_local_file(&p, out).await.unwrap();
+    let res = import_local_file(&p, out, &Client::no_own_site()).await.unwrap();
     assert_eq!(res.total_pages, 1);
     let md = out.join("My Essay.md");
     assert!(md.exists(), "note named from <title> should exist");
@@ -157,7 +157,7 @@ async fn import_local_empty_body_errors_instead_of_empty_note() {
     let out = tmp.path();
     let p = out.join("empty.html");
     std::fs::write(&p, "<html><head><title>Nothing</title></head><body></body></html>").unwrap();
-    let res = import_local_file(&p, out).await;
+    let res = import_local_file(&p, out, &Client::no_own_site()).await;
     assert!(res.is_err(), "empty extraction should error, not write an empty note");
     assert!(
         std::fs::read_dir(out).unwrap().filter_map(|e| e.ok())

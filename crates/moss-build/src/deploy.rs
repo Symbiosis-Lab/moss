@@ -400,6 +400,8 @@ pub enum RefusalKind {
     LinksInCloud,
     LinksInFlight,
     PendingDerivations,
+    /// The last build failed, so there is no generation of it to publish.
+    BuildUnfinished,
     Removals,
     StaleContent,
     OutputCollision,
@@ -465,12 +467,17 @@ impl Refusal {
 /// would let a source stay stale indefinitely with no signal that anything
 /// needed attention.
 ///
+/// Also refused: the last build produced no generation (`BuildEnd`). The one
+/// still on offer is from the build before it, and publishing that would
+/// drop the latest edits without saying so.
+///
 /// Also refused: the build would stop serving an address the last publish
 /// served, and not because the author deleted its source —
 /// `removal_gate`. An address is a promise to every link and subscription
 /// stored elsewhere; the author keeps it working or accepts losing it
 /// (`moss deploy --accept-removals`), and the same set never asks twice.
 pub fn publish_refusal(folder_path: &str) -> Option<Refusal> {
+    use crate::system::build_records::BuildEnd;
     let records = crate::system::build_records::records();
     if let Some(projection) = records.publish_preflight(folder_path) {
         if !projection.unresolved_inputs.is_empty() {
@@ -493,6 +500,21 @@ pub fn publish_refusal(folder_path: &str) -> Option<Refusal> {
     }
     if let Some(pending) = records.pending_derivations(folder_path).filter(|n| *n > 0) {
         return Some(Refusal::new(RefusalKind::PendingDerivations, derivations_refusal_text(pending)));
+    }
+    // After the rules above, whose text names what to fix.
+    match records.build_end(folder_path) {
+        Some(BuildEnd::Failed) => return Some(Refusal::new(
+            RefusalKind::BuildUnfinished,
+            "Nothing published — the last build failed. Change a page to build again, then publish.".to_string(),
+        )),
+        Some(BuildEnd::SourcesUnread(sources)) => {
+            return Some(Refusal::new(RefusalKind::UnresolvedInputs, stale_source_refusal_text(&sources)));
+        }
+        Some(BuildEnd::Downloading) => return Some(Refusal::new(
+            RefusalKind::UnresolvedInputs,
+            "Nothing published — a file is still downloading from the cloud. Publish again once it arrives.".to_string(),
+        )),
+        Some(BuildEnd::Publishable) | None => {}
     }
     removal_gate::refusal_for(folder_path).map(|text| Refusal::new(RefusalKind::Removals, text))
 }
@@ -551,21 +573,24 @@ pub(crate) fn refusal_text(missing: &[crate::build::types::MissingReferenceOccur
     )
 }
 
-/// The refusal for links from published pages to drafts. A draft is not
-/// published, so each of these would be a dead link on the live site.
+/// The refusal for links from published pages to drafts and empty pages.
+/// Neither is published, so each of these would be a dead link on the live site.
 pub(crate) fn drafts_linked_refusal_text(links: &[crate::build::types::DraftLinkOccurrence]) -> String {
-    let head = if links.len() == 1 {
-        "1 link goes to a draft".to_string()
+    let empty = links.iter().filter(|l| l.empty).count();
+    let (one, many, fix) = if empty == links.len() {
+        ("an empty page", "empty pages", "An empty page is not published. Remove the link, or write the page")
+    } else if empty == 0 {
+        ("a draft", "drafts", "Drafts are not published. Remove the link, or take `draft: true` off the page")
     } else {
-        format!("{} links go to drafts", links.len())
+        ("a page that is not published", "pages that are not published",
+         "Drafts and empty pages are not published. Remove the link, or take `draft: true` off the page or write it")
     };
+    let head = if links.len() == 1 { format!("1 link goes to {one}") } else { format!("{} links go to {many}", links.len()) };
     let lines = removal_gate::capped_lines(links, |l| {
-        format!("`{}` links to `{}`, and `{}` says `draft: true`.", l.source_path, l.reference, l.draft_source)
+        let why = if l.empty { "has nothing in it yet" } else { "says `draft: true`" };
+        format!("`{}` links to `{}`, and `{}` {why}.", l.source_path, l.reference, l.draft_source)
     });
-    format!(
-        "Nothing published — {head}:\n{lines}Drafts are not published. Remove the link, or take \
-         `draft: true` off the page, then publish again."
-    )
+    format!("Nothing published — {head}:\n{lines}{fix}, then publish again.")
 }
 
 /// The refusal for text a render showed as a placeholder because the file was
@@ -707,6 +732,30 @@ fn publish_record_for(folder: &std::path::Path, site_id: &str) -> Option<crate::
             Some(&target),
         )
     })
+}
+
+#[cfg(test)]
+mod build_end_tests {
+    use crate::system::build_records::{records, BuildEnd};
+
+    #[test]
+    fn a_build_held_for_unread_sources_is_refused_by_name() {
+        let folder = "/tmp/a-vault-held-for-sources";
+        records().record_build_end(folder, u64::MAX, BuildEnd::SourcesUnread(vec!["about.md".into()]));
+        let refusal = super::publish_refusal(folder).expect("refused");
+        assert_eq!(refusal.kind, super::RefusalKind::UnresolvedInputs);
+        assert!(refusal.text.contains("about.md"), "{}", refusal.text);
+    }
+
+    #[test]
+    fn a_build_waiting_for_a_download_is_refused_as_waiting_not_as_failed() {
+        let folder = "/tmp/a-vault-waiting-for-a-download";
+        records().record_build_end(folder, u64::MAX, BuildEnd::Downloading);
+        let refusal = super::publish_refusal(folder).expect("refused");
+        assert_eq!(refusal.kind, super::RefusalKind::UnresolvedInputs);
+        assert!(refusal.text.contains("still downloading"), "{}", refusal.text);
+        assert!(!records().last_build_failed(folder), "a host must not rebuild into the same wait");
+    }
 }
 
 #[cfg(test)]

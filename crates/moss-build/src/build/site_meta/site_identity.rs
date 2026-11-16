@@ -61,7 +61,8 @@ pub fn manifest(id: &Identity) -> Value {
 }
 
 /// The colour and font tokens as a page in `lang_tag` shows them at its root.
-/// A site fixed to one scheme shows only that side, so it fills both. A token
+/// A site fixed to one scheme shows only that side, so it fills both. An
+/// opaque colour in any form `color_extract::colour` reads becomes hex; a token
 /// whose value the build cannot reduce to a plain value (`color-mix()`, a
 /// translucent colour, a `var()` it cannot follow) is left out, never guessed.
 pub fn tokens(registry: &moss_core::contract::tokens::Tokens, theme_css: Option<&str>, lang_tag: &str, scheme: ColorScheme) -> Value {

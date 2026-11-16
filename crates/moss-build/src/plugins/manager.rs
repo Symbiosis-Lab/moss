@@ -581,64 +581,6 @@ impl PluginManager {
         Ok(None)
     }
 
-    /// Execute syndicate capability (POSSE distribution after deployment)
-    ///
-    /// Syndicates content after deployment. Only executes plugins that are
-    /// explicitly enabled in the config's [hooks] syndicate array.
-    /// Non-critical - continues on failure with warning
-    ///
-    /// # Timeout: awaiting-aware inactivity watchdog only (no wall-clock cap)
-    ///
-    /// Syndication involves open-ended user interaction (the user writes and
-    /// publishes a draft in the Matters editor). A blanket wall-clock timeout
-    /// would kill the hook while the user is still editing. Instead we rely
-    /// solely on the awaiting-aware 60s inactivity watchdog inside
-    /// `execute_plugin_javascript`: the watchdog suspends (`continue`s) while
-    /// `is_hook_awaiting(...)` is true, and only fires when the plugin has been
-    /// genuinely silent (no progress/awaiting signals) for 60s — i.e. a real
-    /// crash, not a slow human.
-    pub async fn execute_syndicate(&self, context: &SyndicateContext) -> Result<(), String> {
-        // Get installed channels from config
-        let channels_config = super::discovery::get_channels_config(&self.project_path)
-            .unwrap_or_default();
-
-        let builtin_ids = super::registry::get_builtin_channel_ids();
-
-        // Filter plugins to only those installed as channels, skipping built-in channels
-        // (built-in channels like email are handled natively in syndicate_to_platforms)
-        let plugins: Vec<_> = self.find_plugins_by_capability(&Capability::Syndicate)
-            .into_iter()
-            .filter(|p| {
-                channels_config.is_installed(&p.manifest.name)
-                    && !builtin_ids.contains(&p.manifest.name.as_str())
-                    && copies::copy_spec(&p.manifest).is_none()
-            })
-            .collect();
-
-        if plugins.is_empty() {
-            return Ok(());
-        }
-
-        for plugin in &plugins {
-            // Serialized per plugin: each carries its OWN resolved config, so
-            // one shared JSON would hand every channel the wrong settings.
-            let plugin_context = context_for_plugin(&context.project_path, context, plugin);
-            let context_json = serde_json::to_string(&plugin_context)
-                .map_err(|e| format!("Failed to serialize syndicate context: {}", e))?;
-
-            // The inactivity watchdog inside `execute_plugin_javascript`
-            // suspends while the hook signals Awaiting (user editing in
-            // Matters), so it never kills a slow user. Syndication used to
-            // carry a 900s wall-clock cap on top; it was removed deliberately.
-            // Non-critical — continue on failure, but log the error.
-            if let Err(e) = self.execute_plugin_javascript(plugin, Capability::Syndicate.hook_name(), &context_json, AskedBy::Person).await {
-                log::warn!(target: "plugin", "Syndication hook '{}' failed: {}", plugin.manifest.name, e);
-            }
-        }
-
-        Ok(())
-    }
-
     /// Call an optional hook on the CHOSEN deploy target's plugin.
     ///
     /// Resolves through `current_deploy_target`, not `deploy_plugin()`, whose

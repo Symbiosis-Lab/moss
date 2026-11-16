@@ -124,6 +124,9 @@ pub struct DeployFlags {
     /// `--retry-copies=<channel>`: send again the copies on that channel whose
     /// last send stopped before the network answered.
     pub retry_copies: Vec<String>,
+    /// `--copies-of=<file>`: send only this page's copies this run; with
+    /// `--retry-copies`, a copy handed to the author is handed over again.
+    pub copies_of: Option<String>,
 }
 
 /// A parsed `moss deploy` command line.
@@ -168,6 +171,7 @@ impl DeployArgs {
                 a if a.starts_with("--retry-copies=") => {
                     flags.retry_copies.extend(a["--retry-copies=".len()..].split(',').map(str::trim).filter(|c| !c.is_empty()).map(str::to_string))
                 }
+                a if a.starts_with("--copies-of=") => flags.copies_of = Some(a["--copies-of=".len()..].to_string()),
                 a if a.starts_with('-') => {
                     return Err(format!("error: unknown option '{}'\n{}", a, usage()))
                 }
@@ -298,7 +302,10 @@ pub fn publish(
     if let Some(url) = report.as_ref().ok().filter(|r| r.landed()).and_then(|r| r.site_url()) {
         let print = |s: &crate::syndication::send::Sent| eprint!("{}", crate::syndication::send::render(std::slice::from_ref(s)));
         let _phase = crate::build::phase::PhaseTrace::start("after_publish");
-        crate::syndication::send::after_publish(folder, url, host_ports, &flags.retry_copies, &print).await;
+        crate::syndication::send::after_publish(folder, url, host_ports, &flags.retry_copies, flags.copies_of.as_deref(), &print).await;
+        if let Some(page) = flags.copies_of.as_deref().filter(|p| !crate::syndication::send::is_a_page(folder, p)) {
+            eprintln!("--copies-of={page} names no page of this site; no copies sent");
+        }
     }
     report
     }))
@@ -363,6 +370,8 @@ async fn send(
     crate::deploy::profile::begin_attempt();
     match route {
         DeployRoute::Prebuilt { dir } => {
+            // Nothing is built, so no members cascade applies.
+            crate::system::build_records::records().record_public_scripts(&folder.to_string_lossy(), Vec::new());
             crate::deploy::prebuilt::run_prebuilt_deploy(
                 folder,
                 dir,
@@ -443,6 +452,9 @@ pub fn report(result: Result<DeployReport, String>, folder_display: &str, json: 
             println!("{}", url);
             eprintln!("{}", published_line(folder_display, &url, files_uploaded, files_removed));
             eprint!("{}", removed_by_author(folder_display));
+            if let Some(line) = public_scripts_after_publish(folder_display) {
+                eprintln!("{line}");
+            }
             0
         }
         // The plugin's own sentence, unchanged, and nothing beside it. moss
@@ -478,6 +490,12 @@ pub fn report(result: Result<DeployReport, String>, folder_display: &str, json: 
     }
 }
 
+/// The line about scripts a members folder published to everyone, read from
+/// the build this process ran for the publish.
+fn public_scripts_after_publish(folder: &str) -> Option<String> {
+    crate::build::scan::members::public_scripts_line(crate::system::build_records::records().public_scripts(folder).as_deref())
+}
+
 /// The line a landed publish prints on stderr: which folder went where.
 fn published_line(folder: &str, url: &str, uploaded: u32, removed: u32) -> String {
     let name = crate::vault::paths::VaultRoot::resolve(folder).name().to_string();
@@ -492,8 +510,8 @@ fn a_landed_publish_names_the_folder_and_where_it_went() {
     );
 }
 
-/// The addresses the author deleted, named, for after a publish: what the
-/// bare removed count could not say. Empty when there are none. Read from the
+/// The pages taken offline, named, for after a publish: what the bare
+/// removed count could not say. Empty when there are none. Read from the
 /// build this process just ran, so a folder this process did not build says
 /// nothing.
 fn removed_by_author(folder: &str) -> String {
@@ -508,7 +526,7 @@ fn removed_by_author(folder: &str) -> String {
         return String::new();
     }
     format!(
-        "addresses you removed, no longer served:\n{}",
+        "Pages taken offline:\n{}",
         crate::deploy::removal_gate::capped_lines(&gone, crate::deploy::removal_gate::cause_line)
     )
 }
@@ -618,7 +636,7 @@ mod removed_by_author_tests {
     use crate::build::manifest::change_set::{RemovalReason, RemovedAddress};
 
     fn gone(path: &str, reason: RemovalReason, source: Option<&str>) -> RemovedAddress {
-        RemovedAddress { path: path.into(), reason, moved_to: None, source: source.map(Into::into), withdrawn_by: None }
+        RemovedAddress { path: path.into(), reason, moved_to: None, source: source.map(Into::into) }
     }
 
     /// After a publish the author reads which addresses went away because
@@ -636,7 +654,7 @@ mod removed_by_author_tests {
         );
         assert_eq!(
             removed_by_author("/report-removed"),
-            "addresses you removed, no longer served:\n  /gone/ is gone because you deleted its source (gone.md).\n"
+            "Pages taken offline:\n  /gone/ is gone because you deleted its source (gone.md).\n"
         );
         records.record_removed_addresses("/report-removed", Vec::new());
         assert_eq!(removed_by_author("/report-removed"), "");
@@ -682,6 +700,7 @@ mod removal_flag_tests {
         let flags = parse(&["site", "--retry-copies=bluesky, mastodon", "--retry-copies=x,"]).unwrap().flags;
         assert_eq!(flags.retry_copies, ["bluesky", "mastodon", "x"]);
         assert!(parse(&["site"]).unwrap().flags.retry_copies.is_empty());
+        assert_eq!(parse(&["site", "--copies-of=notes/a.md"]).unwrap().flags.copies_of.as_deref(), Some("notes/a.md"));
     }
 
     #[test]
@@ -737,14 +756,14 @@ mod dry_run_tests {
     }
 
     impl Fixture {
-        /// A one-page folder with a site and a signing key; `lost_feed` adds a
-        /// record of a publish that served `legacy-feed.xml`. The hosting
+        /// A one-page folder with a site and a signing key; `lost_page` adds a
+        /// page and a record of a publish that served it at `legacy/`. The hosting
         /// server says the key owns the site, which has never published.
-        async fn new(lost_feed: bool) -> Self {
-            Self::answered_by(lost_feed, StandIn::json(200, r#"{"generation_id":null,"deployed_at":null}"#).await)
+        async fn new(lost_page: bool) -> Self {
+            Self::answered_by(lost_page, StandIn::json(200, r#"{"generation_id":null,"deployed_at":null}"#).await)
         }
 
-        fn answered_by(lost_feed: bool, seta: StandIn) -> Self {
+        fn answered_by(lost_page: bool, seta: StandIn) -> Self {
             let env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
             let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp/hosted");
             std::fs::create_dir_all(&base).unwrap();
@@ -753,14 +772,16 @@ mod dry_run_tests {
             std::fs::create_dir_all(dir.path().join(".moss")).unwrap();
             std::fs::write(dir.path().join(".moss/state.toml"), "[deployment]\nsite_id = \"dry-test\"\n").unwrap();
             crate::identity::Identity::generate().unwrap().save(dir.path()).unwrap();
-            if lost_feed {
+            if lost_page {
+                std::fs::write(dir.path().join("kept.md"), "---\ntitle: Kept\n---\n\nStill here.\n").unwrap();
                 crate::build::manifest::published_record::save(
                     &MossPaths::new(dir.path()),
                     &PublishedSnapshot {
                         generation_id: "ours".into(),
                         target: "moss:dry-test".into(),
                         published_at: "2026-09-20T09:12:30+00:00".into(),
-                        files: [("legacy-feed.xml".to_string(), "100644:abc".to_string())].into(),
+                        files: [("legacy/index.html".to_string(), "100644:abc".to_string())].into(),
+                        source_to_output: [("kept.md".to_string(), "legacy/index.html".to_string())].into(),
                         asset_source_to_output: Some(Default::default()),
                         ..Default::default()
                     },
@@ -800,15 +821,15 @@ mod dry_run_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_json_dry_run_lists_every_move_and_the_lines_that_keep_them() {
         let fx = Fixture::new(false).await;
-        // A page that moved, beside 25 files that moved with their folder.
+        // A page that moved, beside 25 HTML pages that moved with their folder.
         std::fs::write(fx.dir.path().join("moved.md"), "---\ntitle: Moved\n---\n\nNew home.\n").unwrap();
         let mut files = std::collections::HashMap::from([("old/index.html".to_string(), "100644:abc".to_string())]);
         let mut assets = std::collections::HashMap::new();
         std::fs::create_dir_all(fx.dir.path().join("review/new")).unwrap();
         for i in 0..25 {
-            let bytes = format!("%PDF-1.4 {i}");
-            std::fs::write(fx.dir.path().join(format!("review/new/{i:02}.pdf")), &bytes).unwrap();
-            let old = format!("review/old/{i:02}.pdf");
+            let bytes = format!("<!doctype html><title>{i}</title>");
+            std::fs::write(fx.dir.path().join(format!("review/new/{i:02}.html")), &bytes).unwrap();
+            let old = format!("review/old/{i:02}.html");
             files.insert(old.clone(), crate::types::content::file_entry(&crate::build::assets::paths::compute_binary_hash(bytes.as_bytes())));
             assets.insert(old.clone(), old);
         }
@@ -839,13 +860,13 @@ mod dry_run_tests {
         assert_eq!(offline[0]["address"], "/old/");
         assert_eq!(offline[0]["moved_to"], "/moved/");
         assert!(json["change_set"].get("removed").is_none(), "one list of offline addresses, named");
-        assert!(json["transfer"]["removed_output_paths"].as_array().unwrap().iter().any(|p| p == "review/old/00.pdf"));
+        assert!(json["transfer"]["removed_output_paths"].as_array().unwrap().iter().any(|p| p == "review/old/00.html"));
         assert_eq!(json["refusal"]["kind"], "removals");
         let pending = json["pending_removals"].as_array().unwrap();
         assert_eq!(pending.len(), 26);
-        assert_eq!(pending[1]["output_path"], "review/old/00.pdf");
-        assert_eq!(pending[1]["address"], "/review/old/00.pdf");
-        assert_eq!(pending[1]["cause"], serde_json::json!({ "kind": "moved", "to": "/review/new/00.pdf" }));
+        assert_eq!(pending[1]["output_path"], "review/old/00.html");
+        assert_eq!(pending[1]["address"], "/review/old/00.html");
+        assert_eq!(pending[1]["cause"], serde_json::json!({ "kind": "moved", "to": "/review/new/00.html" }));
         assert_eq!(json["redirects_to_add"], serde_json::json!([r#""/old/" = "/moved/""#, r#""/review/old/" = "/review/new/""#]));
         assert_eq!(fx.requests(), [GENERATION]);
     }
@@ -872,12 +893,12 @@ mod dry_run_tests {
         let flags = DeployFlags { dry_run: true, ..DeployFlags::default() };
         let report = dispatch(fx.dir.path(), &DeployRoute::Hosted, &host, crate::build::PluginMode::Skip, &flags, &printing())
             .await.expect("a dry run reports, it does not fail");
-        assert!(warnings().iter().any(|w| w.contains("/legacy-feed.xml")));
+        assert!(warnings().iter().any(|w| w.contains("/legacy/")));
         let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
 
-        assert!(dry.refusal.as_ref().map(|r| r.text.as_str()).is_some_and(|r| r.contains("/legacy-feed.xml")), "{dry:?}");
+        assert!(dry.refusal.as_ref().map(|r| r.text.as_str()).is_some_and(|r| r.contains("/legacy/")), "{dry:?}");
         assert!(
-            matches!(&dry.transfer, crate::deploy::dry_run::Transfer::SinceLastPublish { removed, .. } if removed == &["legacy-feed.xml"]),
+            matches!(&dry.transfer, crate::deploy::dry_run::Transfer::SinceLastPublish { removed, .. } if removed == &["legacy/index.html"]),
             "{:?}",
             dry.transfer
         );
@@ -917,7 +938,7 @@ mod dry_run_tests {
 
         assert!(dry.refusal.is_none(), "{dry:?}");
         assert_eq!(dry.kept_as_redirect, [crate::deploy::dry_run::Kept { from: "/photo-2.webp".into(), to: "/photo-2.jpg".into() }]);
-        assert!(dry.render().contains("/photo-2.webp -> /photo-2.jpg"));
+        assert!(!dry.render().contains("photo-2"), "a picture's file is not named");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1127,6 +1148,28 @@ mod dry_run_tests {
         assert!(fx.requests().is_empty());
     }
 
+    /// The scripts a members folder publishes to everyone come from the folder
+    /// the dry run built, as a count and the first file.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dry_run_names_the_scripts_a_members_folder_publishes_to_everyone() {
+        let fx = unpublished(false).await;
+        for (rel, body) in [
+            ("maps/incidents/index.md", "---\npartial: true\ncascade: { members: subscribers }\n---\n"),
+            ("maps/incidents/detail.js", "window.regions = {};\n"),
+            ("maps/incidents/regions.mjs", "export const regions = {};\n"),
+            ("maps/incidents/levels.json", "{}"),
+            ("maps/open.js", "window.open = {};\n"),
+        ] {
+            let path = fx.dir.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        }
+        let report = fx.run(true).await.expect("a dry run reports");
+        let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
+        assert_eq!(dry.public_scripts.as_deref(), Some(&["maps/incidents/detail.js".to_string(), "maps/incidents/regions.mjs".to_string()][..]));
+        assert!(dry.render().contains("\n2 scripts in members folders are published to everyone, first maps/incidents/detail.js\n"), "{}", dry.render());
+    }
+
     /// The refusal a first publish would meet is knowable from the folder: no
     /// email is recorded for its key. Saying so sends nothing.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1255,16 +1298,16 @@ mod dry_run_tests {
             )
         };
         let refused = run(false).await.expect_err("an unexplained removal stops a plugin publish too");
-        assert!(refused.contains("/legacy-feed.xml"), "{refused}");
+        assert!(refused.contains("/legacy/"), "{refused}");
 
-        assert!(warnings().iter().any(|w| w.contains("/legacy-feed.xml")));
+        assert!(warnings().iter().any(|w| w.contains("/legacy/")));
 
         let past = run(true).await;
-        assert!(!matches!(&past, Err(e) if e.contains("legacy-feed.xml")), "accepted, so not the gate: {past:?}");
+        assert!(!matches!(&past, Err(e) if e.contains("/legacy/")), "accepted, so not the gate: {past:?}");
         assert!(warnings().is_empty(), "accepted removals must not ask for action");
         let removed = crate::system::build_records::records()
             .removed_addresses(&fx.dir.path().to_string_lossy()).unwrap();
-        assert!(removed.iter().any(|r| r.path == "legacy-feed.xml"));
+        assert!(removed.iter().any(|r| r.path == "legacy/index.html"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1327,6 +1370,49 @@ mod email_wiring_tests {
             &printing(),
         )
         .await
+    }
+
+    /// A folder with a site, a verified key and a script in a members folder.
+    fn members_folder(folder: &Folder) {
+        for (rel, body) in [
+            (".moss/config.toml", "environment = \"staging\"\n"),
+            (".moss/state.toml", "[deployment]\nsite_id = \"my-site\"\n"),
+            ("index.md", "---\ntitle: Home\n---\nHello.\n"),
+            ("maps/incidents/index.md", "---\npartial: true\ncascade: { members: subscribers }\n---\n"),
+            ("maps/incidents/detail.js", "window.regions = {};\n"),
+            ("_site/index.html", "<p>hi</p>"),
+        ] {
+            let path = folder.dir.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        }
+    }
+
+    async fn publish_on(folder: &Folder, route: DeployRoute) -> Result<DeployReport, String> {
+        let flags = DeployFlags { overwrite_newer: true, ..DeployFlags::default() };
+        dispatch(folder.dir.path(), &route, &crate::cli::host::cli_host_ports, crate::build::PluginMode::Skip, &flags, &printing()).await
+    }
+
+    /// A landed publish gives the count line for the folder as the person
+    /// typed it, and a prebuilt publish, which builds nothing, says nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_landed_publish_names_the_scripts_a_members_folder_publishes_and_never_says_not_listed() {
+        let seta = Seta::start(0, "verified").await;
+        {
+            let built = Folder::new(&seta);
+            members_folder(&built);
+            let result = publish_on(&built, DeployRoute::Hosted).await;
+            assert!(matches!(result, Ok(DeployReport::Push(PushResult::Success { .. }))), "{result:?}");
+            let typed = format!("{}/", built.dir.path().display());
+            assert_eq!(public_scripts_after_publish(&typed).as_deref(), Some("1 script in a members folder is published to everyone: maps/incidents/detail.js"));
+        }
+        // One folder at a time: each holds the process's environment lock.
+        let prebuilt = Folder::new(&seta);
+        members_folder(&prebuilt);
+        let site = prebuilt.dir.path().join("_site");
+        let result = publish_on(&prebuilt, DeployRoute::Prebuilt { dir: site }).await;
+        assert!(matches!(result, Ok(DeployReport::Push(PushResult::Success { .. }))), "{result:?}");
+        assert_eq!(public_scripts_after_publish(&prebuilt.dir.path().to_string_lossy()), None);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

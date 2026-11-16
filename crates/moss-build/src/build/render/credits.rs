@@ -194,7 +194,7 @@ pub fn external_home_link(doc: &crate::build::types::ParsedDocument, body: &crat
     let host = authority.rsplit('@').next()?;
     let host = host.rsplit_once(':').filter(|(_, port)| port.bytes().all(|b| b.is_ascii_digit())).map_or(host, |(h, _)| h);
     (!linked).then(|| format!(
-        r#"<p class="moss-external-link"><a {attr}>{}<span aria-hidden="true"> ↗</span></a></p>"#,
+        r#"<p class="moss-external-link"><a {attr}>{}<span aria-hidden="true"> ↗&#xFE0E;</span></a></p>"#,
         crate::build::features::html_escape(host.trim_start_matches("www.")),
     ))
 }

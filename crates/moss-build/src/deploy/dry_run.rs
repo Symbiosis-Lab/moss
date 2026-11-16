@@ -87,6 +87,9 @@ pub struct DryRun {
     pub copies: Vec<crate::syndication::preview::PreviewCopy>,
     /// What the server said about this folder's key and site.
     pub owner: Owner,
+    /// Scripts in a members folder that are published to everyone; `None`
+    /// when no build listed them.
+    pub public_scripts: Option<Vec<String>>,
 }
 
 impl DryRun {
@@ -110,6 +113,7 @@ impl DryRun {
             pending_removals,
             copies,
             owner,
+            public_scripts,
         } = self;
         let mut change_set = serde_json::to_value(set).expect("a change set serializes");
         if let Some(fields) = change_set.as_object_mut() {
@@ -144,6 +148,7 @@ impl DryRun {
             "prebuilt": prebuilt,
             "copies": copies,
             "owner": owner,
+            "public_scripts": public_scripts,
         })
     }
 
@@ -169,12 +174,8 @@ impl DryRun {
             out.push_str("Pages: not classified, because there is no record of an earlier publish from this folder to this target.\n");
         }
         if !set.removed.is_empty() {
-            out.push_str(&format!("Addresses going offline: {}\n", set.removed.len()));
+            out.push_str(&format!("Pages going offline: {}\n", set.removed.len()));
             out.push_str(&capped_lines_cut(&set.removed, cause_line, more_in_json));
-        }
-        if !self.kept_as_redirect.is_empty() {
-            out.push_str("Kept answering at the old address (a picture still served, or a folder redirect):\n");
-            out.push_str(&capped_lines_cut(&self.kept_as_redirect, |k| format!("{} -> {}", k.from, k.to), more_in_json));
         }
         match &self.transfer {
             Transfer::SinceLastPublish { upload, removed } => {
@@ -183,21 +184,14 @@ impl DryRun {
                     files(*upload),
                     files(removed.len() as u32)
                 ));
-                // A removed public address is already listed above; this is the rest.
-                let rest: Vec<String> = removed
-                    .iter()
-                    .filter(|p| !set.removed.iter().any(|a| &a.path == *p))
-                    .map(|p| crate::build::served_path::served_address(p))
-                    .collect();
-                if !rest.is_empty() {
-                    out.push_str(if set.removed.is_empty() { "Removed:\n" } else { "Also removed:\n" });
-                    out.push_str(&capped_lines_cut(&rest, String::clone, more_in_json));
-                }
             }
             Transfer::NoRecord => out.push_str(
                 "Transfer: not known, because there is no record of an earlier publish from this folder.\n",
             ),
             Transfer::NotCounted => out.push_str("Transfer: not counted for a deploy plugin.\n"),
+        }
+        if let Some(line) = crate::build::scan::members::public_scripts_line(self.public_scripts.as_deref()) {
+            out.push_str(&format!("{line}\n"));
         }
         if let Some(site) = &self.would_register {
             out.push_str(&format!("A first publish would register the site \"{site}\". Nothing was registered.\n"));
@@ -218,17 +212,20 @@ impl DryRun {
         }
         out.push_str("Not run: the upload itself, where a real deploy can still stop.\n");
         for c in &self.copies {
-            let what = match (&c.action, &c.error, c.form) {
-                (_, Some(e), _) => format!("not postable: {e}"),
-                (crate::syndication::plan::Action::Unavailable { reason }, ..) => format!("unavailable: {reason}"),
+            let what = match (&c.action, c.form) {
+                (crate::syndication::plan::Action::Unavailable { reason }, _) => format!("unavailable: {reason}"),
                 (crate::syndication::plan::Action::Skip { reason }, ..) => format!("not posted: {reason}"),
                 (crate::syndication::plan::Action::Adopt { url }, ..) => format!("already there: {url}"),
-                (action, None, form) => {
+                (action, form) => {
                     let verb = if matches!(action, crate::syndication::plan::Action::Update) { "would update" } else { "would post" };
-                    let sizes: Vec<String> = c.parts.iter().map(|p| match p.max_chars {
+                    let mut sizes: Vec<String> = c.parts.iter().map(|p| match p.max_chars {
                         Some(max) => format!("{}/{max}", p.chars),
                         None => p.chars.to_string(),
                     }).collect();
+                    // An article has no parts: its length is its text's.
+                    if let Some(article) = &c.article {
+                        sizes.push(crate::build::markdown::html_post::strip_html_tags(&article.html).chars().count().to_string());
+                    }
                     let pictures = if c.included_pictures == 0 && c.omitted_pictures == 0 {
                         String::new()
                     } else {
@@ -491,6 +488,7 @@ pub async fn run_dry_run(
         pending_removals: crate::system::build_records::records().pending_removals(&folder_str),
         copies: crate::syndication::preview::for_dry_run(folder, &sealed),
         owner,
+        public_scripts: crate::system::build_records::records().public_scripts(&folder_str),
     })
 }
 
@@ -530,10 +528,13 @@ pub async fn run_prebuilt_dry_run(
     let manifest = super::prebuilt::build_manifest_from_dir(dir)?;
     super::profile::count("manifest_files", manifest.len() as u64);
     let (transfer, refusal) = match super::prebuilt::removed_against_last_publish(folder, &site_id, &manifest) {
-        Some((baseline, removed)) => {
-            let refusal = (!accept_removals && !removed.is_empty())
-                .then(|| crate::deploy::Refusal::new(crate::deploy::RefusalKind::Removals, crate::deploy::removal_gate::prebuilt_refusal(&removed)));
+        // The gate refuses for a lost public address; the transfer counts
+        // every file the upload deletes, a rotated `_moss/` asset included.
+        Some((baseline, offline)) => {
+            let refusal = (!accept_removals && !offline.is_empty())
+                .then(|| crate::deploy::Refusal::new(crate::deploy::RefusalKind::Removals, crate::deploy::removal_gate::prebuilt_refusal(&offline)));
             let upload = change_set::upload_count_of(&baseline.files, &manifest) as u32;
+            let removed = change_set::removed_files_of(&baseline.files, &manifest);
             (Transfer::SinceLastPublish { upload, removed }, refusal)
         }
         None => (Transfer::NoRecord, None),
@@ -553,6 +554,8 @@ pub async fn run_prebuilt_dry_run(
         pending_removals: Vec::new(),
         copies: Vec::new(),
         owner,
+        // Nothing was built, so no members cascade applies.
+        public_scripts: Some(Vec::new()),
     })
 }
 
@@ -570,13 +573,12 @@ mod tests {
                 ..ChangeSet::default()
             }
             .with_removed(vec![RemovedAddress {
-                path: "legacy-feed.xml".into(),
+                path: "old/index.html".into(),
                 reason: RemovalReason::Unexplained,
                 moved_to: None,
-                source: None,
-                withdrawn_by: None,
+                source: Some("old.md".into()),
             }]),
-            transfer: Transfer::SinceLastPublish { upload: 2, removed: vec!["legacy-feed.xml".into(), "style.1a2b3c.css".into()] },
+            transfer: Transfer::SinceLastPublish { upload: 2, removed: vec!["old/index.html".into(), "style.1a2b3c.css".into()] },
             refusal: Some(crate::deploy::Refusal::new(crate::deploy::RefusalKind::Removals, "Nothing published — REFUSED".into())),
             would_register: None,
             would_create_key: false,
@@ -586,7 +588,29 @@ mod tests {
             pending_removals: Vec::new(),
             copies: Vec::new(),
             owner: Owner::Unchecked { reason: "this folder has no site".into() },
+            public_scripts: Some(Vec::new()),
         }
+    }
+
+    #[test]
+    fn an_article_copy_is_printed_with_the_length_of_its_text() {
+        use crate::syndication::{channel::Form, plan::Action, preview::PreviewCopy, shape::Article};
+        let mut run = small();
+        run.copies = vec![PreviewCopy {
+            source_path: "essays/autumn.md".into(),
+            channel: "matters".into(),
+            action: Action::Due,
+            form: Some(Form::Long),
+            parts: Vec::new(),
+            link_card: None,
+            article: Some(Article { title: "Autumn".into(), html: "<p>The <em>leaves</em> turn.</p>".into(), description: None, cover: None }),
+            pictures: Vec::new(),
+            omitted_pictures: 0,
+            included_pictures: 0,
+            pending_site_url: false,
+        }];
+        let text = run.render();
+        assert!(text.contains("Copy to matters: essays/autumn.md — would post as long (16 characters)\n"), "{text}");
     }
 
     /// The one page the author changed must be in the list however many pages
@@ -611,6 +635,7 @@ mod tests {
             pending_removals: Vec::new(),
             copies: Vec::new(),
             owner: Owner::Unchecked { reason: "this folder has no site".into() },
+            public_scripts: Some(Vec::new()),
         };
 
         let text = dry.render();
@@ -652,11 +677,9 @@ mod tests {
              Nothing was uploaded, no publish record was written and no acceptance was recorded.\n\
              Pages: 1 added, 0 edited, 0 deleted, 0 restyled\n\
              \x20 added    new.md\n\
-             Addresses going offline: 1\n\
-             \x20 /legacy-feed.xml is no longer produced by your site.\n\
+             Pages going offline: 1\n\
+             \x20 /old/ is still in your folder (old.md) but is no longer published.\n\
              Transfer, measured against this folder's last publish: would upload 2 files and remove 2 files.\n\
-             Also removed:\n\
-             \x20 /style.1a2b3c.css\n\
              Publishing: not asked, because this folder has no site: whether this folder's key may publish, and whether another copy published since.\n\
              Publish check: a real deploy would be refused:\n\
              Nothing published — REFUSED\n\
@@ -665,7 +688,7 @@ mod tests {
     }
 
     #[test]
-    fn a_derivative_kept_as_a_redirect_is_named_and_the_check_still_passes() {
+    fn a_derivative_kept_as_a_redirect_is_only_in_the_json_and_the_check_still_passes() {
         let dry = DryRun {
             kept_as_redirect: vec![Kept { from: "/photo-2.webp".into(), to: "/photo-2.jpg".into() }],
             pending_removals: Vec::new(),
@@ -673,32 +696,32 @@ mod tests {
             ..small()
         };
         let text = dry.render();
-        assert!(
-            text.contains("Kept answering at the old address (a picture still served, or a folder redirect):\n  /photo-2.webp -> /photo-2.jpg\n"),
-            "{text}"
-        );
+        assert!(!text.contains("photo-2"), "a picture's file is not named: {text}");
+        assert_eq!(dry.to_json()["kept"][0]["address"], "/photo-2.webp");
         assert!(text.contains("Publish check: passes.\n"), "{text}");
     }
 
     #[test]
-    fn removed_files_not_already_offline_addresses_are_listed_and_capped() {
-        let removed: Vec<String> = (0..23).map(|i| format!("old-{i:02}.css")).collect();
-        let dry = DryRun { transfer: Transfer::SinceLastPublish { upload: 0, removed }, ..small() };
-        let text = dry.render();
-        assert!(text.contains("remove 23 files.\nAlso removed:\n  /old-00.css\n  /old-01.css\n"), "{text}");
-        assert!(text.contains("  /old-19.css\n  and 3 more; `moss deploy --dry-run --json` lists every one\n"), "{text}");
-        assert!(!text.contains("old-20"), "{text}");
+    fn scripts_a_members_folder_publishes_are_counted_with_the_first_named() {
+        let dry = |scripts: &[&str]| DryRun { public_scripts: Some(scripts.iter().map(|s| s.to_string()).collect()), ..small() };
+        assert!(dry(&["maps/detail.js"]).render().contains("\n1 script in a members folder is published to everyone: maps/detail.js\n"));
+        let text = dry(&["maps/detail.js", "maps/regions.mjs", "notes/table.js"]).render();
+        assert!(text.contains("\n3 scripts in members folders are published to everyone, first maps/detail.js\n"), "{text}");
+        assert!(!text.contains("notes/table.js"), "one line, not one per file: {text}");
+        assert_eq!(dry(&["maps/detail.js", "notes/table.js"]).to_json()["public_scripts"], serde_json::json!(["maps/detail.js", "notes/table.js"]));
+        assert!(!small().render().contains("script"), "{}", small().render());
+        let unlisted = DryRun { public_scripts: None, ..small() }.render();
+        assert!(unlisted.contains("\nScripts in members folders: not listed.\n"), "{unlisted}");
     }
 
     #[test]
-    fn a_removed_page_is_listed_once_as_its_address_and_hashed_assets_as_served() {
+    fn a_removed_page_is_named_once_and_other_removed_files_only_counted() {
         let mut dry = small();
         dry.change_set.removed.push(RemovedAddress {
             path: "a/index.html".into(),
             reason: RemovalReason::Unexplained,
             moved_to: None,
             source: None,
-            withdrawn_by: None,
         });
         dry.transfer = Transfer::SinceLastPublish {
             upload: 0,
@@ -706,7 +729,7 @@ mod tests {
         };
         let text = dry.render();
         assert_eq!(text.matches("/a/").count(), 1, "{text}");
-        assert!(text.contains("Also removed:\n  /style.1a2b3c.css\n"), "{text}");
+        assert!(text.contains("remove 3 files.\n") && !text.contains("style.1a2b3c.css") && !text.contains("legacy-feed"), "{text}");
     }
 
     /// Never a promise that the deploy goes ahead.
@@ -724,6 +747,7 @@ mod tests {
             pending_removals: Vec::new(),
             copies: Vec::new(),
             owner: Owner::Unchecked { reason: "this folder has no site".into() },
+            public_scripts: Some(Vec::new()),
         };
         let text = dry.render();
         assert!(text.contains("Pages: not classified"), "{text}");
@@ -792,7 +816,6 @@ mod tests {
             assert!(dry.refusal.as_ref().map(|r| r.text.as_str()).is_some_and(|t| t.contains("/old/")), "{dry:?}");
             let text = dry.render();
             assert!(text.contains("nothing was built"), "{text}");
-            assert!(text.contains("\nRemoved:\n  /old/\n") && !text.contains("Also removed"), "{text}");
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -801,6 +824,20 @@ mod tests {
             let dry = run(&dir, true).await;
             assert!(dry.refusal.is_none(), "{dry:?}");
             assert!(matches!(&dry.transfer, Transfer::SinceLastPublish { removed, .. } if removed.len() == 1), "{dry:?}");
+        }
+
+        /// A renamed plugin copy: no address is lost, so nothing is refused,
+        /// and the old file is still one the upload removes.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_replaced_file_under_moss_is_counted_as_removed_and_not_refused() {
+            let dir = folder(
+                &[("index.html", "a"), ("_moss/plugins/booking.g.js", "g")],
+                Some(&[("index.html", "a"), ("_moss/plugins/booking.f.js", "f")]),
+            );
+            let dry = run(&dir, false).await;
+            assert!(dry.refusal.is_none(), "{dry:?}");
+            let text = dry.render();
+            assert!(text.contains("would upload 1 file and remove 1 file.\n") && !text.contains("booking.f.js"), "{text}");
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

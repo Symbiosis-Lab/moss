@@ -68,11 +68,16 @@
   --moss-editor-highlight: rgba(245, 200, 0, 0.25);
   --moss-editor-highlight-soft: rgba(245, 200, 0, 0.12);
 
+  /* A control drawn over a picture (the resize handle, the focus point): white
+     with a dark halo reads on any picture, in either theme. */
+  --moss-on-picture: #fff;
+  --moss-on-picture-halo: drop-shadow(0 0 1.5px rgba(0, 0, 0, 0.6));
+
   --moss-color-bg: #f6f7f9;
   --moss-color-surface: #eef0f3;
   --moss-color-text: #24262b;
   --moss-color-text-secondary: #555a62;
-  --moss-color-muted: #7a7f8a;
+  --moss-color-muted: #676c76; /* 4.6:1 on the light --moss-color-surface */
   --moss-color-accent: #3a7a8a;
   --moss-color-accent-hover: #2a6070;
   --moss-accent-light: rgba(58, 122, 138, 0.15);
@@ -88,7 +93,7 @@
   --moss-color-surface: #24242a;
   --moss-color-text: #c5c5cc;
   --moss-color-text-secondary: #9a9aa4;
-  --moss-color-muted: #78788a;
+  --moss-color-muted: #8a8a9c; /* 4.5:1 on the dark --moss-color-surface */
   --moss-editor-body-color: #d7dbe0; /* PROVISIONAL, see :root */
   --moss-hl-punct: #8a8490; /* see :root */
   --moss-editor-highlight: rgba(245, 200, 0, 0.3);

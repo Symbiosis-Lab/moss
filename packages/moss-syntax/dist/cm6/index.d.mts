@@ -59,17 +59,17 @@ interface ImageTarget {
   from: number;
   /** End offset of the target span in the document (exclusive). */
   to: number;
+  /** The whole embed, brackets and width included; a shortcode attribute's own span. */
+  nodeFrom: number;
+  nodeTo: number;
   /** Parsed width token (`"55%"` or named) if present, else undefined. */
   width?: string;
   /**
    * True when the path was written as a shortcode ATTRIBUTE
    * (`:::hero {image=photo.jpg}`) rather than as a markdown embed.
    *
-   * Callers that ask "is this already on screen?" must branch on it. An
-   * embed's answer is yes — live preview paints it full size, which is why
-   * the hover popover suppresses itself over one. A hero attribute's answer
-   * is no: nothing paints it but the micro-tag's ~18px thumbnail, so the
-   * hover is the only way to actually see the picture.
+   * The editor draws its picture small below the fence line; an embed's is
+   * drawn at the size the page gives it.
    */
   attr?: boolean;
 }
@@ -87,7 +87,7 @@ interface EmbedParts {
   syntax: EmbedSyntax;
   /** The asset reference text. */
   target: string;
-  /** Target span: the URL child for a markdown image, the whole node for an embed. */
+  /** Where the target is written: the URL of a markdown image, the path of a wikilink embed. */
   targetFrom: number;
   targetTo: number;
   /** Display text (the pothole for `![[a|b]]`, the alt text for `![b](a)`). */
@@ -229,8 +229,8 @@ declare function linkUnitOfEmbed(embed: TreeNode, doc: DocSlice): LinkedEmbed | 
  * image or asset embed:
  *
  *   - `![alt](url)`     → `{ target: url, from: urlFrom, to: urlTo }`
- *   - `![[file.png]]`   → `{ target: 'file.png', from: nodeFrom, to: nodeTo }`
- *   - `![[f.png|alt]]`  → `{ target: 'f.png', from: nodeFrom, to: nodeTo }`
+ *   - `![[file.png]]`   → `{ target: 'file.png', from: pathFrom, to: pathTo }`
+ *   - `![[f.png|alt]]`  → `{ target: 'f.png', from: pathFrom, to: pathTo }`
  *
  * …plus the one place an asset is named OUTSIDE an embed — a shortcode
  * attribute on an opening fence:

@@ -18,6 +18,7 @@ use std::io::Read;
 use std::time::Duration;
 
 use super::crawler::normalize_url;
+use super::fetch::Client;
 use super::scope::{is_within_scope, UrlScope};
 
 /// Hard ceiling on how many `<url>` entries a sitemap (or a chain of
@@ -77,13 +78,13 @@ pub struct SitemapDiscovery {
 pub(crate) async fn discover(
     scope: &UrlScope,
     start_url: &str,
-    user_agent: &str,
+    client: &Client,
 ) -> SitemapDiscovery {
     let Some(root) = site_root(start_url) else {
         return SitemapDiscovery::default();
     };
 
-    let robots_body = fetch_robots_txt(&root, user_agent).await;
+    let robots_body = fetch_robots_txt(&root, client).await;
     let mut seeds = robots_body.as_deref().map(parse_robots_sitemaps).unwrap_or_default();
     if seeds.is_empty() {
         seeds.push(format!("{root}/sitemap.xml"));
@@ -110,7 +111,7 @@ pub(crate) async fn discover(
         if depth > MAX_SITEMAP_INDEX_DEPTH || !visited_docs.insert(doc_url.clone()) {
             continue;
         }
-        let Ok(bytes) = super::fetch::fetch_raw_bytes(&doc_url, user_agent).await else {
+        let Ok(bytes) = super::fetch::fetch_raw_bytes(&doc_url, client).await else {
             continue;
         };
         let body = decode_sitemap_bytes(&bytes);
@@ -305,8 +306,8 @@ fn decode_sitemap_bytes(bytes: &[u8]) -> String {
 /// a site with none (or an unreachable one) returns `None`, and the caller
 /// falls back to `/sitemap.xml` and an unpaced crawl exactly as before
 /// either existed.
-async fn fetch_robots_txt(root: &str, user_agent: &str) -> Option<String> {
-    super::fetch::fetch_raw(&format!("{root}/robots.txt"), user_agent).await.ok()
+async fn fetch_robots_txt(root: &str, client: &Client) -> Option<String> {
+    super::fetch::fetch_raw(&format!("{root}/robots.txt"), client).await.ok()
 }
 
 /// Parse a `Crawl-delay:` directive out of a `robots.txt` body — not part of

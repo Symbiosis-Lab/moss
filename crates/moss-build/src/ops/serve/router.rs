@@ -176,12 +176,8 @@ pub struct ServeConfig {
     /// impl (app crate, not a call site here) overrides it to `Desktop` via
     /// struct-update syntax, the same way it already would `invoke`.
     pub kind: super::ownership::HostKind,
-    /// Forwarded to [`super::ownership::acquire_for_site_dir`]. [`Self::new`]
-    /// defaults this to `false` — a one-shot `moss build --serve` still
-    /// refuses outright on a conflict; only a `--serve --watch` caller
-    /// (`ops::run_headless_build`) opts into standing by for the existing
-    /// owner instead.
-    pub standby_on_conflict: bool,
+    /// What to do when another process serves the folder.
+    pub on_conflict: super::ownership::OnConflict,
     /// Fires on an admitted `POST /__moss/yield` — see `super::yield_route`.
     pub yield_notify: Arc<tokio::sync::Notify>,
     /// Routes an embedding host contributes. A host route wins over a site
@@ -207,7 +203,7 @@ impl ServeConfig {
             start_port,
             is_evicted: crate::build::icloud::is_evicted,
             kind: super::ownership::HostKind::Cli,
-            standby_on_conflict: false,
+            on_conflict: super::ownership::OnConflict::Refuse,
             yield_notify: Arc::new(tokio::sync::Notify::new()),
             host_routes: None,
             ui: None,
@@ -260,7 +256,7 @@ pub async fn start_server(
         invoke: invoke_ctx,
         is_evicted,
         kind,
-        standby_on_conflict,
+        on_conflict,
         yield_notify,
         host_routes,
         ..
@@ -723,7 +719,7 @@ pub async fn start_server(
         kind,
         crate::system::app_version().to_string(),
         format!("http://127.0.0.1:{port}"),
-        standby_on_conflict,
+        on_conflict,
         ui_port.map(|port| format!("http://127.0.0.1:{port}")),
     )
     .await?;
@@ -751,13 +747,13 @@ pub async fn start_server(
     // Both listeners were bound above. Hand them straight to `port::drive`'s
     // serve loop — no further chance for a foreign process to slip in.
     let serve_future = async move {
-        // Held for exactly as long as this server runs: dropped only when
-        // `drive` returns, which is after the shutdown signal fires.
-        let _owner_guard = owner_guard;
         let (preview_tx, preview_rx) = tokio::sync::oneshot::channel();
         let (ui_tx, ui_rx) = tokio::sync::oneshot::channel();
         let shutdown = async move {
             let _ = shutdown_rx.await;
+            // Released at the stop signal, before the drain: a response still
+            // being sent must not keep the next owner out.
+            drop(owner_guard);
             let _ = preview_tx.send(());
             let _ = ui_tx.send(());
         };

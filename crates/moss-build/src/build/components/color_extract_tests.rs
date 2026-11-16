@@ -576,6 +576,19 @@ fn parse_css_color_named() {
 }
 
 #[test]
+fn parse_css_color_newer_colour_spaces() {
+    assert_eq!(parse_css_color("oklch(0.665 0.19 37)"), Some((0xf0, 0x5e, 0x31)));
+    assert_eq!(parse_css_color("oklch(66.5% 47.5% 37deg)"), Some((0xf0, 0x5e, 0x31)), "percentages scale as CSS says");
+    assert_eq!(parse_css_color("oklch(0.5 0 none)"), Some((0x63, 0x63, 0x63)), "a missing hue is zero");
+    assert_eq!(parse_css_color("oklab(0.6 0.1 -0.1)"), Some((0x9f, 0x63, 0xba)));
+    assert_eq!(parse_css_color("oklab(0.8 -0.3 0.2)"), Some((0x00, 0xe8, 0x30)), "mapped into sRGB, not clipped to 00f200");
+    assert_eq!(parse_css_color("lab(52.2 40.1 59.9)"), Some((0xc6, 0x5d, 0x07)));
+    assert_eq!(parse_css_color("lch(30 120 30)"), Some((0x9d, 0x00, 0x27)), "mapped into sRGB, not clipped to c70000");
+    assert_eq!(colour("oklch(0.145 0.006 60 / .82)").map(|c| c.alpha), Some(0.82), "alpha carries through");
+    assert_eq!(parse_css_color("color(display-p3 1 0 0)"), None);
+}
+
+#[test]
 fn parse_css_color_rejects_non_colors() {
     assert_eq!(parse_css_color("transparent"), None); // deliberately absent
     assert_eq!(parse_css_color("var(--bg)"), None);

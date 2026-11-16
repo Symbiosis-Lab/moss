@@ -162,7 +162,7 @@ pub fn decide(inputs: &PlanInputs<'_>, records: &Records) -> Vec<PostPlan> {
 
     let mut plans = Vec::new();
     for post in articles {
-        let Some(channels) = post.syndicate.as_ref().filter(|c| !c.is_empty()) else { continue };
+        let Some(named) = super::Named::of_post(post, inputs.channels) else { continue };
         let Some(uid) = post.uid.clone() else { continue };
         let entry = |channel: &str, action: Action| Planned {
             source_path: post.source_path.clone(),
@@ -170,14 +170,14 @@ pub fn decide(inputs: &PlanInputs<'_>, records: &Records) -> Vec<PostPlan> {
             channel: channel.to_string(),
             action,
         };
-        let own: Vec<String> =
-            post.frontmatter.get("syndicate").and_then(|v| super::parse_choice(v).ok()).unwrap_or_default();
+        let own: Vec<String> = post.frontmatter.get("syndicate").and_then(|v| super::parse_choice(v).ok()).unwrap_or_default();
+        let own = super::Named::of(&own, inputs.channels);
         let listed = crate::build::types::syndicated_urls(post.frontmatter.get("syndicated"));
         let already_live = was_live.contains(uid.as_str()) || was_live.contains(post.url_path.as_str());
-        let facts = PostFacts { uid: &uid, own: &own, listed: &listed, already_live };
+        let facts = PostFacts { uid: &uid, own: own.ids(), listed: &listed, already_live };
 
         let mut entries = Vec::new();
-        for channel in channels {
+        for channel in named.ids() {
             // The newsletter, which the app sends itself.
             if channel == RESERVED_EMAIL {
                 continue;
@@ -192,6 +192,8 @@ pub fn decide(inputs: &PlanInputs<'_>, records: &Records) -> Vec<PostPlan> {
             let Some(action) = verdict.into_action(channel) else { continue };
             entries.push(entry(channel, action));
         }
+        // Unavailable, not skipped, so the publish says it as the dry run does.
+        entries.extend(named.shared().iter().map(|(written, reason)| entry(written, Action::Unavailable { reason: reason.clone() })));
         if !entries.is_empty() {
             plans.push(PostPlan { uid, entries });
         }

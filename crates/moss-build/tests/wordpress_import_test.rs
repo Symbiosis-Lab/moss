@@ -1,7 +1,7 @@
 //! A WordPress export through the public import seam, merged with a crawl of
 //! the site it names. The export and the site are invented.
 use std::{fs, path::Path};
-use moss_build::vault::import::{import_source, recognise_source, ImportOptions, ImportResult, SourceKind};
+use moss_build::vault::import::{import_source, import_source_in, recognise_source, ImportOptions, ImportResult, ImportSession, SourceKind};
 
 fn fixture(site: &str) -> String {
     let text = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/wordpress-export/export.xml")).unwrap();
@@ -67,7 +67,7 @@ fn an_export_alone_crawls_its_site_first_and_adds_what_the_crawl_cannot_see() {
     let out = temp.path().join("site");
     fs::create_dir(&out).unwrap();
 
-    let recognised = rt.block_on(recognise_source(export.to_str().unwrap())).unwrap();
+    let recognised = rt.block_on(recognise_source(export.to_str().unwrap(), None)).unwrap();
     assert!(matches!(recognised.kind, SourceKind::Wordpress));
     assert_eq!(recognised.title.as_deref(), Some("Lantern Studio"));
     assert_eq!(recognised.host.as_deref(), Some("127.0.0.1"));
@@ -157,4 +157,73 @@ fn an_export_over_the_size_limit_is_refused_before_it_is_read() {
     fs::OpenOptions::new().write(true).open(&export).unwrap().set_len(200 * 1024 * 1024).unwrap();
     let error = import(&rt, export.to_str().unwrap(), temp.path(), None).unwrap_err();
     assert!(error.starts_with("This WordPress export is 200 MB; moss reads exports up to 128 MB."), "{error}");
+}
+
+#[test]
+fn an_export_imported_again_writes_nothing_and_counts_each_page_the_folder_has_once() {
+    let rt = runtime();
+    let mut server = rt.block_on(mockito::Server::new_async());
+    let _mocks = rt.block_on(serve(&mut server));
+    let temp = tempfile::tempdir().unwrap();
+    let export = temp.path().join("lantern-studio.WordPress.2024-03-09.xml");
+    fs::write(&export, fixture(&server.url())).unwrap();
+    let out = temp.path().join("site");
+    fs::create_dir(&out).unwrap();
+
+    // Each run's result and the page counts a person watched during it.
+    let run = || {
+        let counts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = counts.clone();
+        let result = rt.block_on(import_source(export.to_str().unwrap(), &out, ImportOptions::default(), move |p| seen.lock().unwrap().push(p.pages_scraped))).unwrap();
+        let counts = counts.lock().unwrap().clone();
+        assert!(counts.windows(2).all(|pair| pair[0] <= pair[1]), "the count never falls: {counts:?}");
+        (result, counts)
+    };
+    let last_line = |written: usize, kept: usize| format!("Pages written: {written}; pages the folder already had, their text kept: {kept}.");
+
+    let (first, counts) = run();
+    let pages = first.scrape.total_pages;
+    assert!(pages > 3, "the three pages the site serves and what only the export holds");
+    assert_eq!(first.scrape.kept_pages, 0);
+    assert_eq!(first.report.last(), Some(&last_line(pages, 0)));
+    assert_eq!(counts.last(), Some(&pages));
+
+    let (again, counts) = run();
+    assert_eq!((again.scrape.total_pages, again.scrape.kept_pages), (0, pages));
+    assert_eq!(again.report.last(), Some(&last_line(0, pages)));
+    assert!(!again.report.iter().any(|line| line.contains("could not be reached")), "{:?}", again.report);
+    assert_eq!(counts.last(), Some(&pages), "{counts:?}");
+}
+
+/// Sources imported into one folder in one run share its record of pages:
+/// a page an earlier source wrote is neither written nor counted again, the
+/// count a crawl ends on is its result's, and a site whose pages were all
+/// written a moment ago was still reached.
+#[test]
+fn a_source_after_another_in_one_run_counts_no_page_twice_and_still_reaches_its_site() {
+    let rt = runtime();
+    let mut server = rt.block_on(mockito::Server::new_async());
+    let _mocks = rt.block_on(serve(&mut server));
+    let temp = tempfile::tempdir().unwrap();
+    let export = temp.path().join("export.xml");
+    fs::write(&export, fixture(&server.url())).unwrap();
+    let out = temp.path().join("site");
+    fs::create_dir(&out).unwrap();
+
+    let mut session = ImportSession::default();
+    let mut run = |source: &str| {
+        let ended_on = std::sync::Mutex::new(None);
+        let options = ImportOptions { recursive: true, ..Default::default() };
+        let result = rt.block_on(import_source_in(&mut session, source, &out, options, &|p| if p.complete { *ended_on.lock().unwrap() = Some(p.pages_scraped); })).unwrap();
+        assert_eq!(ended_on.into_inner().unwrap(), Some(result.scrape.total_pages + result.scrape.kept_pages), "{source}");
+        result
+    };
+    let crawled = run(&server.url());
+    assert_eq!((crawled.scrape.total_pages, crawled.scrape.kept_pages), (3, 0));
+    let again = run(&server.url());
+    assert_eq!((again.scrape.total_pages, again.scrape.kept_pages), (0, 0), "this run wrote them: not imported twice, not the folder's own");
+    let exported = run(export.to_str().unwrap());
+    assert!(!exported.report.iter().any(|line| line.contains("could not be reached")), "{:?}", exported.report);
+    assert!(exported.scrape.total_pages > 0, "what only the export holds");
+    assert_eq!(exported.scrape.kept_pages, 0);
 }

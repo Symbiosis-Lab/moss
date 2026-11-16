@@ -19,6 +19,16 @@ use std::time::{Duration, Instant};
 #[allow(dead_code)]
 pub static MOSS_HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
 
+/// The status a GET of `path` gets from the server on `port`.
+#[allow(dead_code)]
+pub fn status(port: u16, path: &str) -> u16 {
+    match ureq::get(&format!("http://localhost:{port}{path}")).call() {
+        Ok(r) => r.status(),
+        Err(ureq::Error::Status(code, _)) => code,
+        Err(e) => panic!("the server did not answer: {e}"),
+    }
+}
+
 #[allow(dead_code)]
 pub fn copy_dir_recursive(src: &Path, dst: &Path) {
     std::fs::create_dir_all(dst).unwrap_or_else(|e| panic!("create {}: {e}", dst.display()));

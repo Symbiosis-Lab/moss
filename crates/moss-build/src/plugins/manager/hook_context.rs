@@ -9,7 +9,7 @@
 
 use crate::plugins::setup::SetupContext;
 use crate::plugins::types::{
-    ConfigureDomainContext, DeployContext, Plugin, ProcessContext, SyndicateContext,
+    ConfigureDomainContext, DeployContext, Plugin, ProcessContext,
 };
 use std::collections::HashMap;
 
@@ -39,9 +39,9 @@ macro_rules! impl_hook_context {
 
 impl_hook_context!(
     DeployContext,
-    SyndicateContext,
     ConfigureDomainContext,
     crate::syndication::job::CopyJob,
+    crate::syndication::job::AccountQuery,
 );
 
 impl HookContext for ProcessContext {
@@ -363,60 +363,6 @@ mod tests {
 
         assert_eq!(plugin_context.settings.get("provider"), Some(&serde_json::json!("local")));
         assert_eq!(plugin_context.settings, plugin_context.config, "one map, two names");
-    }
-
-    /// Syndication dispatches to several channels, so each one gets its own
-    /// config rather than a single shared serialization.
-    #[test]
-    fn syndicate_context_carries_the_plugins_own_config() {
-        use tempfile::TempDir;
-
-        let temp_dir = TempDir::new().unwrap();
-        let project_path = temp_dir.path().to_str().unwrap();
-        let plugins = discover_with_installed_plugin(
-            temp_dir.path(),
-            "matters",
-            "syndicate",
-            serde_json::json!({ "add_canonical_link": true }),
-        );
-        std::fs::write(
-            temp_dir
-                .path()
-                .join(".moss")
-                .join("plugins")
-                .join("matters")
-                .join("config.toml"),
-            "add_canonical_link = false\n",
-        )
-        .unwrap();
-
-        let context = SyndicateContext {
-            project_path: project_path.to_string(),
-            moss_dir: format!("{}/.moss", project_path),
-            output_dir: format!("{}/.moss/site", project_path),
-            project_info: ProjectInfo {
-                total_files: 1,
-                homepage_file: None,
-                folder_name: None,
-                site_name: None,
-                lang: "en".into(),
-            },
-            site_files: Vec::new(),
-            articles: Vec::new(),
-            deployment: None,
-            config: HashMap::new(),
-            trigger: TriggerContext::Background,
-        };
-
-        let plugin_context =
-            context_for_plugin(project_path, &context, find_plugin(&plugins, "matters"));
-
-        assert_eq!(
-            plugin_context.config.get("add_canonical_link"),
-            Some(&serde_json::json!(false)),
-            "a persisted opt-out must reach the syndicate hook"
-        );
-        assert!(context.config.is_empty(), "the shared context must stay untouched");
     }
 
     /// A process hook receives the site's `.moss/config.toml` as `site_config`,

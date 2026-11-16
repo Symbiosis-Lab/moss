@@ -2,8 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import { initSidenotes } from "../sidenotes";
 
 // Scope: what jsdom can actually see, which is the DOM the script BUILDS —
-// not where any of it lands. Placement, the sticky sheet, the drag and the
-// dock are engine questions, proven in
+// not where any of it lands, and which taps keep or close the sheet.
+// Placement, the sticky sheet, the drag and the dock are engine questions,
+// proven in
 // tests/render-gates/site/footnote-target.spec.ts.
 //
 // The clone assertions cover the defects the earlier id-namespacing design
@@ -177,6 +178,47 @@ describe("initSidenotes", () => {
     expect(second.classList.contains("moss-footnotes-lifted")).toBe(true);
     expect(first.classList.contains("moss-footnotes-lifted")).toBe(false);
     location.hash = "";
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps the sheet up when a note's return arrow is tapped, and closes it on a tap outside", () => {
+    document.body.innerHTML = `
+      <style>.moss-sidenote { display: none; }</style>
+      <p id="text">One<sup class="moss-footnote-ref" id="fnref-1" tabindex="-1"><a href="#fn-1">1</a></sup>,
+        two<sup class="moss-footnote-ref" id="fnref-2" tabindex="-1"><a href="#fn-2">2</a></sup>.</p>
+      <section class="moss-footnotes" role="doc-endnotes"><ol>
+        <li id="fn-1" tabindex="-1"><p>First. <a class="moss-footnote-backref" href="#fnref-1">&#8617;</a></p></li>
+        <li id="fn-2" tabindex="-1"><p>Second. <a class="moss-footnote-backref" href="#fnref-2">&#8617;</a></p></li>
+      </ol></section>`;
+    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    // jsdom has no layout, so the travel is the call itself.
+    const scrolledTo: Element[] = [];
+    let marginAtScroll = "";
+    Element.prototype.scrollIntoView = function (this: HTMLElement) {
+      scrolledTo.push(this);
+      marginAtScroll = this.style.scrollMarginBottom;
+    };
+    initSidenotes();
+    const section = document.querySelector(".moss-footnotes")!;
+    const lifted = () => section.classList.contains("moss-footnotes-lifted");
+
+    document.querySelector<HTMLAnchorElement>('a[href="#fn-1"]')!.click();
+    section.querySelector<HTMLAnchorElement>('a[href="#fnref-2"]')!.click();
+    expect(lifted()).toBe(true);
+    const mark = document.getElementById("fnref-2")!;
+    expect(scrolledTo).toEqual([mark]);
+    // The sheet's height (jsdom: the 16px the peek adds to an unmeasured
+    // note) is held off the scroll, and only for the scroll.
+    expect(marginAtScroll).toBe("16px");
+    expect(mark.style.scrollMarginBottom).toBe("");
+
+    // Closing hands focus to the marker the reader travelled to, not the one
+    // that opened the sheet.
+    document.getElementById("text")!.click();
+    expect(lifted()).toBe(false);
+    expect(document.activeElement?.id).toBe("fnref-2");
+
+    delete (Element.prototype as Partial<Element>).scrollIntoView;
     vi.unstubAllGlobals();
   });
 });

@@ -15,7 +15,7 @@ use super::design::norm_url;
 use url::Url;
 
 use super::scope::UrlScope;
-use crate::vault::import::items::ImportedPages;
+use crate::vault::import::items::{ImportedPages, PageState};
 
 /// THE filename policy for everything the importer writes — one authority, so
 /// a caller cannot pick the weaker of two.
@@ -256,7 +256,7 @@ impl OutputPaths {
             let relative = match existing {
                 Some(held) => {
                     // A stub is replaced; a page is kept, and a failed fetch never covers it.
-                    if !held.placeholder { kept.insert(held.path.clone(), held.this_run); }
+                    if !held.placeholder { kept.insert(held.path.clone(), held.state == PageState::Written); }
                     held.path.clone()
                 }
                 None => available_path(desired, |candidate| {

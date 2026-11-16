@@ -53,6 +53,7 @@ import {
   srcsetUrls,
   srcsetMatches,
   stripBust,
+  withBust,
 } from "./asset-urls";
 
 /** Blueprint-grid SVG, light theme. Blueprint blue `#143c82` on paper `#f4f1ec`. */
@@ -171,7 +172,7 @@ function placeVideo(video: HTMLVideoElement, doc: Document): void {
  */
 export function restore(absPath: string, doc: Document = document): number {
   let restored = 0;
-  const bust = "?_t=" + Date.now();
+  const stamp = Date.now();
 
   doc.querySelectorAll<HTMLImageElement>(`img[${MARK}]`).forEach((img) => {
     const stashedSrc = stripBust(img.getAttribute(STASH_SRC) ?? "");
@@ -192,11 +193,11 @@ export function restore(absPath: string, doc: Document = document): number {
     for (const source of sources) {
       const ss = source.getAttribute(STASH_SRCSET);
       if (ss === null) continue;
-      source.setAttribute("srcset", bustSrcset(ss, bust));
+      source.setAttribute("srcset", bustSrcset(ss, stamp));
       source.removeAttribute(STASH_SRCSET);
     }
     if (stashedOwn !== null) {
-      img.setAttribute("srcset", bustSrcset(stashedOwn, bust));
+      img.setAttribute("srcset", bustSrcset(stashedOwn, stamp));
       img.removeAttribute(STASH_SRCSET);
     }
 
@@ -204,7 +205,7 @@ export function restore(absPath: string, doc: Document = document): number {
     img.removeAttribute(MARK);
     img.removeAttribute(STASH_SRC);
     img.removeAttribute(FAILED_URL);
-    if (stashedSrc !== "") img.src = stashedSrc + bust;
+    if (stashedSrc !== "") img.src = withBust(stashedSrc, stamp);
 
     restored++;
   });
@@ -221,7 +222,7 @@ export function restore(absPath: string, doc: Document = document): number {
     video.removeAttribute(MARK);
     video.removeAttribute(STASH_SRC);
     video.removeAttribute(STASH_POSTER);
-    video.setAttribute("src", stashedSrc + bust);
+    video.setAttribute("src", withBust(stashedSrc, stamp));
     // <video> caches its own media state — a new `src` alone does not start a
     // fetch. `load()` is what makes the arriving bytes actually play.
     video.load();

@@ -102,9 +102,9 @@ advisory_strings! {
     // Addresses the last publish served that this build does not, with no
     // deleted source to explain them. No " — " here: `groupNotices` splits on it.
     addresses_going_offline => {
-        en: "Addresses your site has served would stop working if you published now: {list}. Run `moss deploy --dry-run` to see why, then add a redirect or accept losing them.",
-        zh_hans: "如果现在发布，网站已经提供过的这些地址将失效：{list}。用 `deploy --dry-run` 查看原因，然后添加重定向，或确认接受失去它们。",
-        zh_hant: "如果現在發佈，網站已經提供過的這些位址將失效：{list}。用 `deploy --dry-run` 查看原因，然後新增重新導向，或確認接受失去它們。", de: "Adressen, die deine Website bisher ausgeliefert hat, würden nicht mehr funktionieren, wenn du jetzt veröffentlichst: {list}. Führe `moss deploy --dry-run` aus, um den Grund zu sehen, und füge dann eine Weiterleitung hinzu oder nimm den Verlust in Kauf."
+        en: "These pages would go offline if you published now: {list}. Run `moss deploy --dry-run` to see why, then add a redirect or accept it.",
+        zh_hans: "如果现在发布，这些页面将下线：{list}。用 `deploy --dry-run` 查看原因，然后添加重定向，或确认接受。",
+        zh_hant: "如果現在發佈，這些頁面將下線：{list}。用 `deploy --dry-run` 查看原因，然後新增重新導向，或確認接受。", de: "Diese Seiten würden offline gehen, wenn du jetzt veröffentlichst: {list}. Führe `moss deploy --dry-run` aus, um den Grund zu sehen, und füge dann eine Weiterleitung hinzu oder nimm es in Kauf."
     },
     // `duplicate_note_id` — the non-live half of this pair — stood here and was
     // deleted on 2026-08-30. It fired only when moss had picked correctly and

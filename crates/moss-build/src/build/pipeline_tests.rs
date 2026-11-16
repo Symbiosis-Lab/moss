@@ -325,14 +325,12 @@ fn the_stash_records_the_bytes_the_render_read_not_a_later_save() {
     let build = || build_test_with_stash(folder, None, None, None, None, &ResolvedSlots::empty(), gates).expect("build").2;
     let build_saving_during = |read: (&str, &str), page: &'static str, footer: &'static str| {
         let d = dir.clone();
-        crate::build::render::blocking::AFTER_THE_READS.with(|h| {
-            *h.borrow_mut() = Some(Box::new(move || {
-                fs::write(d.join("index.md"), page).unwrap();
-                fs::write(d.join("footer.md"), footer).unwrap();
-            }))
-        });
+        crate::build::render::blocking::AFTER_THE_READS.lock().unwrap_or_else(|e| e.into_inner()).push((dir.clone(), Box::new(move || {
+            fs::write(d.join("index.md"), page).unwrap();
+            fs::write(d.join("footer.md"), footer).unwrap();
+        })));
         let stash = build();
-        assert!(crate::build::render::blocking::AFTER_THE_READS.with(|h| h.borrow().is_none()), "the save ran inside the build");
+        assert!(crate::build::render::blocking::AFTER_THE_READS.lock().unwrap_or_else(|e| e.into_inner()).iter().all(|(folder, _)| *folder != dir), "the save ran inside the build");
         let sealed = load_previous_hashes(folder);
         for (key, map) in [("stash", &stash), ("sealed manifest", &sealed)] {
             let recorded = |src: &str| map.sources.get(src).map(|m| m.hash.clone());
@@ -1822,7 +1820,7 @@ fn test_run_video_conversion_headless_empty_videos() {
 // a fresh local AtomicBool seeded `false`; trivially false in headless.)
 
 // -------------------------------------------------------------------------
-// One outcome per video: the census, the URL, and the UiBound budget
+// One outcome per video: the census and the URL
 // -------------------------------------------------------------------------
 
 /// A vault holding `names`, with a stand-in for ffmpeg built from `script` — so
@@ -1875,18 +1873,71 @@ fn vault_with_one_unencodable_video() -> (TempDir, BackgroundContext) {
     vault_with_videos(&["videos/clip.mov"], "#!/bin/sh\nexit 1\n")
 }
 
-/// Headless services with a folder session attached, so the UiBound counter the
-/// progress bar reads is observable, and `begin_ui_bound` called `n` times the
-/// way `dispatch_video_conversions` does before spawning the worker.
-fn services_with_budget(n: u32) -> BuildServices {
+/// Headless services with a folder session attached.
+fn services_with_session() -> BuildServices {
     let mut services = BuildServices::headless();
     services.session = Some(crate::system::folder_session::FolderSession::new(
         std::path::PathBuf::from("/tmp/moss-video-outcome-test"),
     ));
-    for _ in 0..n {
-        services.begin_ui_bound();
-    }
     services
+}
+
+/// Panics when the second video starts, noting whether the folder was busy.
+struct PanicsOnSecondVideo {
+    session: std::sync::Arc<crate::system::folder_session::FolderSession>,
+    busy: std::sync::OnceLock<bool>,
+}
+
+impl crate::build::ports::reporter::BuildReporter for PanicsOnSecondVideo {
+    fn report(&self, event: &crate::build::progress::PipelineEvent) {
+        if matches!(event, crate::build::progress::PipelineEvent::BackgroundProgress { task, current: 2, .. } if task == "videos") {
+            let _ = self.busy.set(self.session.has_ui_bound());
+            panic!("the video worker failed");
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_video_that_panics_its_worker_does_not_leave_the_folder_busy() {
+    a_video_worker_that_panics_leaves_the_folder_idle(false).await;
+}
+
+/// A folder with a watcher: the encode is detached from the build's seal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_detached_video_that_panics_its_worker_does_not_leave_the_folder_busy() {
+    a_video_worker_that_panics_leaves_the_folder_idle(true).await;
+}
+
+async fn a_video_worker_that_panics_leaves_the_folder_idle(watched: bool) {
+    let (_temp, ctx) = vault_with_videos(&["videos/first.mov", "videos/second.mov"], "#!/bin/sh\nexit 1\n");
+    let folder = ctx.source_path.clone();
+    let _watcher = watched.then(|| crate::ops::watch::worker::register_counted(&folder));
+    assert_eq!(crate::ops::watch::worker::get(&folder).is_some(), watched, "premise: which dispatch arm the run takes");
+    let session = crate::system::folder_session::FolderSession::new(std::path::PathBuf::from(&ctx.source_path));
+    let failing = std::sync::Arc::new(PanicsOnSecondVideo { session: session.clone(), busy: Default::default() });
+    let mut services = BuildServices::headless();
+    services.session = Some(session.clone());
+    services.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
+    services.reporter = failing.clone();
+
+    tokio::task::spawn_blocking(move || crate::build::media::video::dispatch_video_conversions(Some(&services), ctx, None))
+        .await
+        .unwrap();
+
+    for _ in 0..2000 {
+        if failing.busy.get().is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(failing.busy.get(), Some(&true), "the worker reached its second video, and the folder is busy while its videos convert");
+    for _ in 0..400 {
+        if !session.has_ui_bound() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(!session.has_ui_bound(), "a video worker that panicked must not leave the folder busy, or every later publish waits on it");
 }
 
 /// Run the worker the way production does: on a blocking thread, inside a
@@ -1939,7 +1990,7 @@ fn drain_registered_paths(
 async fn failed_encode_ships_original_at_the_mp4_url_and_registers_it() {
     let (_temp, ctx) = vault_with_one_unencodable_video();
     let ctx = std::sync::Arc::new(ctx);
-    let services = std::sync::Arc::new(services_with_budget(1));
+    let services = std::sync::Arc::new(services_with_session());
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);
 
     run_worker(&services, &ctx, 0, Some(tx)).await;
@@ -1963,12 +2014,6 @@ async fn failed_encode_ships_original_at_the_mp4_url_and_registers_it() {
         drain_registered_paths(&mut rx),
         vec!["videos/clip.mp4".to_string()],
         "the shipped video must be in the census the manifest's video_outputs is built from"
-    );
-
-    assert!(
-        !services.has_ui_bound(),
-        "the item's UiBound permit is released on the failure path too — an unpaired \
-         begin leaves the progress bar running forever"
     );
 }
 
@@ -2002,7 +2047,7 @@ async fn superseded_mid_encode_abandons_instead_of_shipping_a_fallback() {
     let release = temp.path().join("release");
 
     let ctx = std::sync::Arc::new(ctx);
-    let services = std::sync::Arc::new(services_with_budget(2));
+    let services = std::sync::Arc::new(services_with_session());
     // A sentinel the run must not touch: the receipt belongs to the epoch that
     // superseded this one, and that count is still growing.
     services
@@ -2032,12 +2077,6 @@ async fn superseded_mid_encode_abandons_instead_of_shipping_a_fallback() {
     assert!(
         !ctx.staging_dir.join("videos/clip.mp4").exists(),
         "a superseded encode must not ship a fallback: the fresh epoch owns that output path"
-    );
-    assert!(
-        !services.has_ui_bound(),
-        "abandoning at item 0 of 2 releases BOTH permits — releasing only the current \
-         item's leaves the progress bar running forever, because there is no next \
-         iteration to notice"
     );
     assert_eq!(
         services
@@ -2485,30 +2524,6 @@ fn test_run_video_conversion_singleflight_dedup_headless() {
         "Sequential call should succeed"
     );
     assert!(!shared2, "Sequential call should execute independently");
-}
-
-#[test]
-fn test_run_video_conversion_task_tracker_with_session() {
-    // With a session attached, begin/end accumulate as expected.
-    // This documents the production wiring: BuildServices::from_app
-    // attaches a FolderSession; begin_ui_bound/end_ui_bound increment
-    // and decrement the session's counter. (Headless mode has no
-    // session, so the counter is permanently 0 — see
-    // test_build_services_headless_tracker_works.)
-    let mut services = BuildServices::headless();
-    services.session = Some(crate::system::folder_session::FolderSession::new(
-        std::path::PathBuf::from("/tmp/test"),
-    ));
-
-    for _ in 0..5 {
-        services.begin_ui_bound();
-    }
-    assert!(services.has_ui_bound());
-
-    for _ in 0..3 {
-        services.end_ui_bound();
-    }
-    assert!(services.has_ui_bound());
 }
 
 // =========================================================================
@@ -3315,7 +3330,7 @@ fn test_remove_stale_html_preserves_notebook_outputs() {
     let mut previous = SiteHashes::default();
     previous.files.extend(["index.html", "jupyter/lab/index.html", "jupyter/tree/index.html", "jupyter/stale-section/index.html"].map(|key| (key.to_string(), "hash".to_string())));
     let deleted = crate::build::media::pipeline::stale_html_keys(&previous, &blocking_keys, &notebook_outputs, &HashSet::new());
-    remove_stale_html(&dir, &deleted, &HashSet::new(), &crate::build::lifecycle::permit_for_test());
+    remove_stale_html(&dir, &crate::build::lifecycle::stale_html_for_test(&deleted), &HashSet::new());
 
     assert!(dir.join("index.html").exists(), "home kept");
     assert!(
@@ -3457,7 +3472,7 @@ fn test_remove_stale_html_deletes_orphaned_index_pages() {
     let mut previous = SiteHashes::default();
     previous.files.extend(["index.html", "文字/article/index.html", "视频/old-video/index.html", "index-2.html"].map(|key| (key.to_string(), "hash".to_string())));
     let deleted = crate::build::media::pipeline::stale_html_keys(&previous, &blocking_keys, &HashSet::new(), &HashSet::new());
-    remove_stale_html(&dir, &deleted, &HashSet::new(), &crate::build::lifecycle::permit_for_test());
+    remove_stale_html(&dir, &crate::build::lifecycle::stale_html_for_test(&deleted), &HashSet::new());
 
     assert!(dir.join("index.html").exists(), "current index.html kept");
     assert!(
@@ -3495,7 +3510,7 @@ fn test_remove_stale_html_preserves_non_html_files() {
     let mut previous = SiteHashes::default();
     previous.files.extend(["index.html", "style.css", "photo.jpg"].map(|key| (key.to_string(), "hash".to_string())));
     let deleted = crate::build::media::pipeline::stale_html_keys(&previous, &blocking_keys, &HashSet::new(), &HashSet::new());
-    remove_stale_html(&dir, &deleted, &HashSet::new(), &crate::build::lifecycle::permit_for_test());
+    remove_stale_html(&dir, &crate::build::lifecycle::stale_html_for_test(&deleted), &HashSet::new());
 
     assert!(dir.join("index.html").exists());
     assert!(dir.join("style.css").exists(), "CSS preserved");
@@ -3538,8 +3553,10 @@ fn html_deletions_spares_the_pages_the_seal_forwards_again() {
     let (_, mut stale) = crate::build::media::pipeline::html_deletions(&previous, &pending,
         &crate::types::content::ProjectStructure::default(), &folder_path, &Default::default(), &late);
     stale.sort();
-    assert_eq!(stale, ["gone.html", "old/authored.html", "old/orphan.html", "retired.html"],
-        "a forwarding page stays staged until the seal writes it again; a deleted page under the old address goes");
+    let source = |source: &str| Some(source.to_string());
+    assert_eq!(stale, [("gone.html".to_string(), None), ("old/authored.html".to_string(), source("Old/authored.html")),
+            ("old/orphan.html".to_string(), None), ("retired.html".to_string(), source("retired.html"))],
+        "a forwarding page stays staged until the seal writes it again; a deleted page under the old address goes, with its source");
 }
 
 /// A page in the cloud under a decomposed name is the composed source the
@@ -3558,7 +3575,7 @@ fn html_deletions_holds_an_evicted_page_whatever_its_spelling() {
     let (deleted, stale) = crate::build::media::pipeline::html_deletions(&previous, &PendingManifest::new(SiteHashes::default()),
         &structure, &folder_path, &Default::default(), &Default::default());
     assert!(!deleted);
-    assert_eq!(stale, Vec::<String>::new());
+    assert_eq!(stale, Vec::new());
 }
 
 #[test]
@@ -3572,7 +3589,7 @@ fn remove_stale_html_keeps_a_case_only_rename_and_removes_a_distinct_file() {
     if !insensitive {
         fs::write(dir.join("Guide.html"), "deleted page").unwrap();
     }
-    remove_stale_html(dir, &["Guide.html".to_string()], &live, &crate::build::lifecycle::permit_for_test());
+    remove_stale_html(dir, &crate::build::lifecycle::stale_html_for_test(&["Guide.html".to_string()]), &live);
     assert_eq!(fs::read_to_string(dir.join("guide.html")).unwrap(), "renamed page");
     if !insensitive {
         assert!(!dir.join("Guide.html").exists(), "a distinct file that differs only in case is still deleted");
@@ -5188,15 +5205,6 @@ fn test_image_compression_pipeline_end_to_end() {
         "hashes.json::image_outputs should contain photo2.webp, got: {:?}",
         hashes.image_outputs
     );
-
-    // Task tracker must return to zero after headless conversion.
-    // (In headless mode, has_ui_bound() is always false because no
-    // session is attached. Asserting it stays false confirms no
-    // panic / inconsistent state during conversion.)
-    assert!(
-        !services.has_ui_bound(),
-        "ui_bound counter must drain after headless build"
-    );
 }
 
 /// Regression: a no-edit republish must hit the source-metadata cache
@@ -6495,6 +6503,38 @@ fn publish(dir: &Path, sealed: &crate::build::manifest::SealedManifest) {
     ));
 }
 
+/// The page-state view over a real build: every document that makes a page
+/// is in the kept map, so a page it does not have is one the site lacks.
+#[test]
+fn every_page_a_publish_built_reads_back_as_served_or_held_back() {
+    use crate::build::manifest::{last_publish_state, PublishState};
+    let (dir, _cleanup) = create_test_dir();
+    fs::create_dir_all(dir.join("posts")).unwrap();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\nHi").unwrap();
+    fs::write(dir.join("about.md"), "---\ntitle: About\n---\nUs").unwrap();
+    fs::write(dir.join("footer.md"), "Made here").unwrap();
+    fs::write(dir.join("draft.md"), "---\ntitle: Draft\ndraft: true\n---\nSoon").unwrap();
+    fs::write(dir.join("posts/index.md"), "---\ntitle: Posts\n---\n").unwrap();
+    fs::write(dir.join("posts/a.md"), "---\ntitle: A\n---\nText").unwrap();
+    fs::write(dir.join("posts/letter.md"), "---\ntitle: Letter\nmembers: subscribers\n---\nOpen\n\n<!--members-only-->\n\nFor members").unwrap();
+    fs::write(dir.join("posts/whole.md"), "---\ntitle: Whole\nmembers: subscribers\n---\nFor members").unwrap();
+    assert_eq!(last_publish_state(&dir, "about.md"), PublishState::Unknown, "nothing is published yet");
+
+    let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+    publish(&dir, &sealed);
+    let live = crate::config::deployment::DomainDeploymentConfig { site_id: Some("site-1".into()), last_deployed_generation_id: Some(sealed.generation_id().to_string()), ..Default::default() };
+    crate::vault::deployment_state::save_domain_config(dir.to_str().unwrap(), &live).unwrap();
+    fs::write(dir.join("new.md"), "---\ntitle: New\n---\nLater").unwrap();
+
+    // A members page is served, with a public part or without one.
+    for page in ["index.md", "about.md", "posts/index.md", "posts/a.md", "posts/letter.md", "posts/whole.md"] {
+        assert_eq!(last_publish_state(&dir, page), PublishState::Served, "{page}");
+    }
+    assert_eq!(last_publish_state(&dir, "draft.md"), PublishState::HeldBack);
+    assert_eq!(last_publish_state(&dir, "new.md"), PublishState::Absent, "written after the publish");
+    assert_eq!(last_publish_state(&dir, "footer.md"), PublishState::Absent, "a slot file makes no page");
+}
+
 /// A duplicated note carries the original's uid; the copy is built under a new
 /// one, and the publish that puts it online replaces the copied uid in its file.
 #[test]
@@ -6588,6 +6628,7 @@ fn a_page_builds_under_the_uid_its_publish_recorded() {
         uids: Default::default(),
         triples: Some(vec![live]),
         asset_source_to_output: None,
+        page_stubs: Default::default(),
     };
     crate::build::manifest::published_record::save(&paths, &record).unwrap();
     build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
@@ -7460,6 +7501,7 @@ fn pages_deleted_outside_moss_leave_the_sitemap_on_the_next_build() {
     fs::create_dir_all(test_dir.join("Writings/Letters")).unwrap();
     // The marked photo gives the site a `photography/` collection page, which
     // is written after the home page, like the redirect stubs are.
+    fs::write(test_dir.join("Writings/photo.png"), "not decoded here").unwrap();
     fs::write(
         test_dir.join("Writings/essay.md"),
         "---\ntitle: Essay\ndate: 2026-01-01\n---\n\nAn essay.\n\n![A photo](photo.png)\n<!-- photography -->\n",
@@ -7700,6 +7742,7 @@ fn an_unchanged_warm_build_writes_no_page_to_the_stage() {
     // A photograph makes the build emit the photography collection page, and a
     // site id makes it emit the subscribe landing pages.
     fs::write(test_dir.join("gallery.md"), "# Gallery\n\n![Sunset](sunset.jpg)\n<!-- photography -->\n").unwrap();
+    fs::write(test_dir.join("sunset.jpg"), "not decoded here").unwrap();
     fs::create_dir_all(test_dir.join(".moss")).unwrap();
     fs::write(test_dir.join(".moss/state.toml"), "[deployment]\nsite_id = \"test-site\"\n").unwrap();
     let mut slots = ResolvedSlots::empty();
@@ -8473,6 +8516,74 @@ fn marking_a_published_page_as_a_draft_is_not_an_unexplained_removal() {
     let gone = removed.iter().find(|r| r.path == "wip/index.html").expect("the address leaves the site");
     assert_eq!(gone.reason, RemovalReason::Withheld);
     assert!(pending_removals(&removed, None).is_empty(), "{removed:?}");
+}
+
+/// A page with nothing in it is in the preview at its address and in nothing
+/// a publish sends or lists.
+#[test]
+fn an_empty_page_is_served_in_the_preview_and_left_out_of_what_publishes() {
+    let (dir, _cleanup) = create_test_dir();
+    let folder = dir.to_str().unwrap();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n").unwrap();
+    fs::create_dir_all(dir.join("fr")).unwrap();
+    fs::write(dir.join("fr/index.md"), "---\ntitle: Accueil\n---\n\nBonjour.\n").unwrap();
+    fs::write(dir.join("fr/Quiet Harbour Notes.md"), "").unwrap();
+
+    let (_, _, _, built) = build_test_promoted_or_withheld(folder).unwrap();
+    let page = built.source_to_output()["fr/Quiet Harbour Notes.md"].clone();
+    assert_eq!(page, "fr/quiet-harbour-notes/index.html");
+    let mp = crate::moss_paths::MossPaths::new(&dir);
+    assert!(mp.current_ptr().join(&page).exists(), "the preview has no page at the address");
+    assert!(built.all_files().contains_key(&page));
+    assert!(!built.files().contains_key(&page), "the publish view lists the empty page");
+    assert!(!built.published_source_to_output().contains_key("fr/Quiet Harbour Notes.md"));
+    assert!(built.published_uids().all(|(source, _)| source != "fr/Quiet Harbour Notes.md"));
+    for key in built.files().keys().filter(|k| k.ends_with(".html") || k.ends_with(".json") || k.ends_with(".xml") || k.ends_with(".txt")) {
+        let text = fs::read_to_string(mp.current_ptr().join(key)).unwrap_or_default();
+        assert!(!text.contains("quiet-harbour-notes") && !text.contains("Quiet Harbour Notes"), "published {key} names the empty page");
+    }
+    let inventory: serde_json::Value = serde_json::from_str(&fs::read_to_string(crate::build::emit::inventory::inventory_path(&dir.join(".moss"))).unwrap()).unwrap();
+    let row = inventory.as_array().unwrap().iter().find(|e| e["url_path"] == page.as_str()).expect("the list has the page");
+    let hidden: Vec<&str> = row["hidden"].as_array().unwrap().iter().filter_map(|h| h.as_str()).collect();
+    assert!(row["draft"] == false && hidden.contains(&"empty") && !hidden.contains(&"draft"), "the list calls an empty page a draft: {row}");
+}
+
+/// An empty home file would take its folder's address and keep the folder's
+/// generated index out of the publish, so it builds no page.
+#[test]
+fn an_empty_home_file_leaves_its_folders_generated_index_published() {
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n").unwrap();
+    fs::create_dir_all(dir.join("stories")).unwrap();
+    fs::write(dir.join("stories/index.md"), "").unwrap();
+    fs::write(dir.join("stories/one.md"), "---\ntitle: One\n---\n\nOne.\n").unwrap();
+
+    let (_, _, _, built) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+    assert!(!built.source_to_output().contains_key("stories/index.md"), "the empty home file built a page");
+    assert!(built.files().contains_key("stories/index.html"), "the folder's generated index is not published");
+    assert!(built.withheld().is_empty(), "{:?}", built.withheld());
+}
+
+/// A published page whose source turns up empty was not taken down by its
+/// author, so its address is a loss the publish refuses.
+#[test]
+fn a_published_page_whose_source_turns_up_empty_is_an_unexplained_removal() {
+    use crate::build::manifest::change_set::{pending_removals, removed_addresses, PublishedSnapshot, RemovalReason};
+    let (dir, _cleanup) = create_test_dir();
+    let folder = dir.to_str().unwrap();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n").unwrap();
+    fs::write(dir.join("plan.md"), "---\ntitle: Plan\n---\n\nBody.\n").unwrap();
+    let (_, _, _, live) = build_test_promoted_or_withheld(folder).unwrap();
+    let baseline = PublishedSnapshot::from_sealed(&live, "test", "2026-01-01T00:00:00Z".into());
+
+    fs::write(dir.join("plan.md"), "").unwrap();
+    let (_, _, _, emptied) = build_test_promoted_or_withheld(folder).unwrap();
+    assert!(!emptied.files().contains_key("plan/index.html"), "premise: the empty page is withheld");
+    let removed = removed_addresses(&baseline, &emptied, |src| dir.join(src).exists());
+
+    let gone = removed.iter().find(|r| r.path == "plan/index.html").expect("the address leaves the site");
+    assert_eq!(gone.reason, RemovalReason::Unexplained);
+    assert_eq!(pending_removals(&removed, None).len(), 1, "{removed:?}");
 }
 
 /// The whole route from source to the gate: a build of a published page that

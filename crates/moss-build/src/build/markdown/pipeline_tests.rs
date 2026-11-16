@@ -1090,10 +1090,7 @@ fn homepage_sections_keep_permalink_anchors_and_title_has_none() {
     );
 }
 
-/// Same body as `homepage_heading_suppresses_h2_permalink_anchor`, on an
-/// ordinary (non-home) page: the `## Section` heading keeps its permalink
-/// anchor, same as always. Proves the suppression above is specific to the
-/// home page, not a side effect of the level-2 heading itself.
+/// The same two sections on an ordinary page carry their marks too.
 #[test]
 fn ordinary_page_heading_keeps_h2_permalink_anchor() {
     let md = format!("---\n---\n## Section\n\n{}\n\n## Other\n\n{}\n", eighty_words(), eighty_words());
@@ -2687,6 +2684,36 @@ fn a_short_page_has_heading_ids_but_no_permalink_marks() {
     assert!(html.contains(r#"<h2 id="first">First"#) && html.contains(r#"<h2 id="second">Second"#), "{html}");
 }
 
+/// An id the author named is a link target they chose, so its heading carries
+/// the mark on a page too short for marks and in a `:::grid` cell. A title, a
+/// hero's heading, a derived id and a named id moss had to renumber do not,
+/// and the site's switch still turns every mark off.
+#[test]
+fn a_named_heading_id_carries_the_mark_on_a_short_page_and_in_a_grid_cell() {
+    let body = "# Top {#top}\n\n:::hero\n## Over {#over}\n:::\n\n## Work {#work}\n\nshort.\n\n## About\n\nshort.\n\n## Again {#work}\n\n:::grid 2\n### Plain\n+++\n### Named {#named}\n:::\n";
+    let html = render_body_with_heading_anchors(body, true);
+    let mark = |id: &str| format!(r##"<a class="moss-heading-anchor" href="#{id}" aria-label="Permalink to this section"></a></h"##);
+    assert!(html.contains(&mark("work")) && html.contains(&mark("named")), "{html}");
+    assert_eq!(html.matches("moss-heading-anchor").count(), 2, "{html}");
+    for id in ["top", "over", "about", "work-1", "plain"] {
+        assert!(html.contains(&format!(r#" id="{id}""#)), "{id} keeps its id: {html}");
+    }
+    assert!(!render_body_with_heading_anchors(body, false).contains("moss-heading-anchor"));
+    // A page drawn into a slot of every other page, and a render with no
+    // site settings resolved (it has not been told marks are wanted): neither
+    // has one.
+    let unresolved = crate::build::render::SiteConfig::default();
+    let slot = format!("---\nslot: before-article-end\n---\n{body}");
+    for (file, body, site) in [
+        ("signoff.md", slot.as_str(), crate::build::markdown::SiteMarkdown { heading_anchors: true, ..Default::default() }),
+        ("test.md", body, unresolved.markdown()),
+    ] {
+        let doc = process_markdown_file(file, body, "site", &HashMap::new(), false, crate::i18n::Language::En, None, site, None, None, None, PageContext::default()).expect("should parse");
+        assert!(doc.html_content.contains(r#" id="named""#), "{file}: {}", doc.html_content);
+        assert!(!doc.html_content.contains("moss-heading-anchor"), "{file}: {}", doc.html_content);
+    }
+}
+
 /// Render a page long enough for marks with an explicit `[site].heading_anchors`
 /// answer, everything else at production defaults. `## Title` (level 2), not
 /// `# Title`: a level-1 heading never gets a permalink anchor.
@@ -3659,7 +3686,7 @@ fn per_page_language_subscribe_in_zh_hans_subdir() {
         doc.html_content
     );
     assert!(
-        doc.html_content.contains("请在邮箱中确认订阅"),
+        doc.html_content.contains("请查收邮件"),
         "zh-hans confirmation copy must appear, got:\n{}",
         doc.html_content
     );
@@ -3996,6 +4023,20 @@ fn bare_trailing_pipe_renders_alt_without_a_figcaption() {
     assert!(!html.contains("figcaption"), "got: {html}");
 }
 
+/// A picture that is all of a link takes its bracket text, in either
+/// spelling, as its alt text, which names the link; the bracket text is never
+/// a caption, so the wiki spelling needs no trailing `|`.
+#[test]
+fn a_linked_picture_takes_its_bracket_text_as_alt_text() {
+    for md in ["[![Harbour from the east pier](harbour.png)](/harbour/)\n", "[![[harbour.png|Harbour from the east pier]]](/harbour/)\n"] {
+        let html = render_with_graph(md, &["harbour.png"]);
+        let (before, img) = html.split_once("<img").unwrap_or_else(|| panic!("{md}: {html}"));
+        assert!(before.contains(r#"href="/harbour/""#), "{md}: {html}");
+        assert!(img.split('>').next().unwrap().contains(r#"alt="Harbour from the east pier""#), "{md}: {html}");
+        assert!(!html.contains("figcaption"), "{md}: {html}");
+    }
+}
+
 #[test]
 fn hero_header_over_marks_only_the_opening_hero() {
     let opening = render_hero_with_graph(
@@ -4232,6 +4273,8 @@ fn parse_page_with_graph(
 ) -> crate::build::types::ParsedDocument {
     let mut b = moss_core::content_graph::ContentGraphBuilder::new();
     b.add_file("journal/a.md", "a");
+    // The picture the pages below open with: a file not in the folder is drawn as a box, not an image.
+    b.add_file("harbour.jpg", "harbour");
     let graph = b.build();
     // Production resolves folder embeds into markers before parsing the page.
     let handlers = crate::build::embed_handlers::builtin_marker_handlers(

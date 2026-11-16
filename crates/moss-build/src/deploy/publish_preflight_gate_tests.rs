@@ -136,6 +136,7 @@ fn draft_link(source: &str, reference: &str, draft: &str) -> crate::build::types
         source_path: source.into(),
         reference: reference.into(),
         draft_source: draft.into(),
+        empty: false,
         line: Some(3),
     }
 }

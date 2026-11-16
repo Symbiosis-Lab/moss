@@ -188,6 +188,30 @@ pub fn refresh_in_background() {
     });
 }
 
+/// Re-fetch on the calling thread when the cached index says what no plugin
+/// contributes, at most once a run. Answers whether it fetched.
+///
+/// Such an index was published before entries named their kinds, so a surface
+/// that offers one kind would sort every plugin moss does not ship into the
+/// wrong place until the background refresh landed and the surface was opened
+/// again. It waits for the network, for as long as the connect and read
+/// timeouts allow, so call it off the async runtime. A failed fetch leaves the
+/// cache as it was. Without this call nothing breaks: the same rows are
+/// classified one open later.
+pub fn refresh_once_if_index_names_no_kinds() -> bool {
+    static TRIED: AtomicBool = AtomicBool::new(false);
+    if !names_no_kinds(&cached_entries()) || TRIED.swap(true, Ordering::SeqCst) {
+        return false;
+    }
+    let Some(dir) = crate::infra::app_data::app_data_dir_early() else { return false };
+    publish(super::fetch::refresh(&dir).cache);
+    true
+}
+
+fn names_no_kinds(entries: &[super::index::IndexEntry]) -> bool {
+    !entries.is_empty() && entries.iter().all(|entry| entry.contributes.is_empty())
+}
+
 /// Replace the snapshot — after a refresh, or from a test.
 pub fn publish(cache: CachedRegistry) {
     if cache.revoked_is_unreadable() {
@@ -731,6 +755,24 @@ mod tests {
             r#"{{"name":"{name}","version":"{version}","entry":"index.js"}}"#
         ))
         .unwrap()
+    }
+
+    /// Only an index in which nothing names a kind is refetched: one named
+    /// kind means the registry lists them, and an entry without any is a
+    /// plugin that contributes nothing.
+    #[test]
+    fn an_index_is_refetched_only_when_no_entry_names_a_kind() {
+        let entry = |id: &str, kinds: &[&str]| -> crate::plugins::install::registry_client::index::IndexEntry {
+            serde_json::from_value(serde_json::json!({
+                "type": "plugin", "id": id, "display_name": id, "version": "1.0.0",
+                "download_url": "https://example.invalid/x.zip", "sha256": "aa",
+                "contributes": kinds,
+            }))
+            .unwrap()
+        };
+        assert!(names_no_kinds(&[entry("a", &[]), entry("b", &[])]));
+        assert!(!names_no_kinds(&[entry("a", &[]), entry("b", &["channel"])]));
+        assert!(!names_no_kinds(&[]), "nothing cached is not a stale index");
     }
 
     /// Pure — no [`SNAPSHOT`] — so unlike the test below it can be several.

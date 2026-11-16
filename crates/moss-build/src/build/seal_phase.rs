@@ -336,6 +336,25 @@ async fn run_materialize_phase(req: PendingSeal) {
     })
     .await;
     drop(promote_trace);
+    {
+        use crate::system::build_records::{records, BuildEnd};
+        let end = match &blocking_result {
+            // The newer build answers for the folder.
+            Ok((_, Ok(Promotion::Superseded))) => None,
+            Ok((_, Ok(Promotion::Promoted))) => Some(BuildEnd::Publishable),
+            Ok((sealed, Ok(Promotion::Withheld(crate::build::ship::WithholdReason::SourcesDownloading)))) => {
+                Some(BuildEnd::SourcesUnread(sealed.unresolved_inputs()))
+            }
+            Ok((_, Ok(Promotion::Withheld(
+                crate::build::ship::WithholdReason::Unverified { .. } | crate::build::ship::WithholdReason::ImplausibleLoss { .. },
+            ))))
+            | Ok((_, Err(_)))
+            | Err(_) => Some(BuildEnd::Failed),
+        };
+        if let Some(end) = end {
+            records().record_build_end(&folder_path, promotion_epoch, end);
+        }
+    }
     let (mut sealed, promotion) = match blocking_result {
         Ok(pair) => pair,
         Err(e) => {
@@ -362,7 +381,7 @@ async fn run_materialize_phase(req: PendingSeal) {
         ),
         // Said once, with its reason, by `materialize_and_promote`.
         Ok(Promotion::Withheld(_)) => {}
-        Err(_) => log::error!("run_materialize_phase: materialize failed — current_ptr stays put"),
+        Err(e) => log::error!("run_materialize_phase: materialize failed — current_ptr stays put: {e}"),
     }
     // Observed at the plain path on purpose: `build_dir()` follows the
     // handle, so it can never disagree with the start identity.
@@ -429,7 +448,7 @@ async fn run_materialize_phase(req: PendingSeal) {
         // debounces its own request (this phase already did), so it starts
         // indexing immediately rather than stacking a second idle wait on top
         // of this one. `Freshness::Now` (a process that exits when the build
-        // returns) already indexed synchronously inside the build.
+        // returns) indexed inside the build, before its seal.
         use crate::build::feeds::search_lane as lane;
         if matches!(freshness, lane::Freshness::Lane) && lane::enabled_for(&mp) {
             let want = lane::PageSet::of(&sealed.site_hashes_view().files);

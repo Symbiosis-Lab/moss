@@ -79,8 +79,11 @@ impl Site {
         fs::write(path, text).unwrap();
     }
 
-    /// One sealed build for the build under test to prove against.
+    /// A settled seal for the build under test to prove against: two builds,
+    /// since a first build's media (the share image) are new against no
+    /// manifest, and no page of a seal whose media moved is carried.
     fn sealed(&self) -> &Self {
+        build(self.root(), BuildTrigger::Unobserved);
         build(self.root(), BuildTrigger::Unobserved);
         self
     }
@@ -99,6 +102,37 @@ fn a_build_that_watched_nothing_carries_every_page_when_nothing_changed() {
     assert_eq!(count(&record, "proved_from_seal"), 1, "{record}");
     assert_eq!(count(&record, "pages_rendered"), 0, "{record}");
     assert!(count(&record, "pages_carried") > 0, "{record}");
+}
+
+/// Media the seal found other than the ones its render read (a first build's
+/// share image, a video ladder registered at the seal) leave no page to carry:
+/// the build after renders every page, and the one after that proves.
+#[test]
+fn a_build_after_media_landed_at_the_seal_renders_every_page() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let site = Site::new();
+    build(site.root(), BuildTrigger::Unobserved);
+    let record = build(site.root(), BuildTrigger::Unobserved);
+    assert!(rendered_everything(&record), "{record}");
+    let settled = build(site.root(), BuildTrigger::Unobserved);
+    assert_eq!(count(&settled, "proved_from_seal"), 1, "{settled}");
+    assert_eq!(count(&settled, "pages_rendered"), 0, "{settled}");
+}
+
+/// A video and a `.webp` source are published by their media lanes, not the
+/// asset walk, but the proof walks them like any other source.
+#[test]
+fn a_site_with_a_video_and_a_webp_source_still_proves_from_the_seal() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let site = Site::new();
+    site.write("media.md", "---\ntitle: Media\n---\n\n![Cover](cover.webp)\n\n![[clip.mp4]]\n");
+    // Wider than the deploy edge, so the encoder plan owns it rather than calling it already small.
+    image::RgbImage::from_fn(2600, 8, |x, _| image::Rgb([(x % 251) as u8, 90, 160])).save(site.root().join("cover.webp")).unwrap();
+    fs::write(site.root().join("clip.mp4"), b"not a video").unwrap();
+    site.sealed();
+    let record = build(site.root(), BuildTrigger::Unobserved);
+    assert_eq!(count(&record, "proved_from_seal"), 1, "{record}");
+    assert_eq!(count(&record, "pages_rendered"), 0, "{record}");
 }
 
 #[test]
@@ -247,13 +281,17 @@ fn another_site_url_option_keeps_the_build_full() {
     const B: &str = "https://b.example.net";
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let control = Site::new();
-    build_with(control.root(), BuildTrigger::Unobserved, Skip, Some(A));
+    for _ in 0..2 {
+        build_with(control.root(), BuildTrigger::Unobserved, Skip, Some(A));
+    }
     let record = build_with(control.root(), BuildTrigger::Unobserved, Skip, Some(A));
     assert_eq!(count(&record, "proved_from_seal"), 1, "control: {record}");
 
     for next in [Some(B), None] {
         let site = Site::new();
-        build_with(site.root(), BuildTrigger::Unobserved, Skip, Some(A));
+        for _ in 0..2 {
+            build_with(site.root(), BuildTrigger::Unobserved, Skip, Some(A));
+        }
         let record = build_with(site.root(), BuildTrigger::Unobserved, Skip, next);
         assert_eq!(count(&record, "proved_from_seal"), 0, "{next:?}: {record}");
         assert!(rendered_everything(&record), "{next:?}: {record}");
@@ -273,15 +311,48 @@ fn turning_plugins_on_keeps_the_build_full() {
     use moss_build::build::PluginMode::{Blocking, Skip};
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let control = Site::new();
-    build_with(control.root(), BuildTrigger::Unobserved, Blocking, None);
+    for _ in 0..2 {
+        build_with(control.root(), BuildTrigger::Unobserved, Blocking, None);
+    }
     let record = build_with(control.root(), BuildTrigger::Unobserved, Blocking, None);
     assert_eq!(count(&record, "proved_from_seal"), 1, "control: {record}");
 
     let site = Site::new();
-    build_with(site.root(), BuildTrigger::Unobserved, Skip, None);
+    for _ in 0..2 {
+        build_with(site.root(), BuildTrigger::Unobserved, Skip, None);
+    }
     let record = build_with(site.root(), BuildTrigger::Unobserved, Blocking, None);
     assert_eq!(count(&record, "proved_from_seal"), 0, "{record}");
     assert!(rendered_everything(&record), "{record}");
+}
+
+/// Every build of a site with a comment server records the refresh's outcome,
+/// which no page reads, so it must not count as an input.
+#[test]
+fn a_comment_refresh_that_fails_every_build_still_lets_the_next_build_prove() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    for proxy in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"] {
+        std::env::remove_var(proxy);
+    }
+    // A loopback port nothing listens on: every refresh fails at once.
+    let server = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        format!("http://{}", listener.local_addr().unwrap())
+    };
+    let site = Site::new();
+    site.write(
+        ".moss/config.toml",
+        &format!("[site]\ndomain = \"example.com\"\n\n[services.comments]\nprovider = \"artalk\"\nserver_url = \"{server}\"\n"),
+    );
+    site.sealed();
+    let state = ".moss/data/comment-sync-state.json";
+    for n in 1..=2 {
+        let record = build(site.root(), BuildTrigger::Unobserved);
+        let written = fs::read_to_string(site.root().join(state)).expect("the refresh ran and recorded its outcome");
+        assert!(written.contains("last_error") && !written.contains("\"last_error\": null"), "{written}");
+        assert_eq!(count(&record, "proved_from_seal"), 1, "build {n}, recorded {state}: {:?}: {record}", recorded_moss_input(&site, state));
+        assert_eq!(count(&record, "pages_rendered"), 0, "build {n}: {record}");
+    }
 }
 
 fn recorded_moss_input(site: &Site, rel: &str) -> Option<serde_json::Value> {

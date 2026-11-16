@@ -40,6 +40,16 @@ Test watching with a reversible edit to the actual source, observe the changed p
 
 If you separately serve an exported build, set the server root explicitly to that output and preserve its `/_moss/` asset paths. A prototype-specific rewrite can break an otherwise valid documentation build.
 
+## Starting moss from another program
+
+An editor plugin or any program that keeps a preview for a folder starts `moss build <folder> --serve --watch` and reads its output. Three rules make it a good neighbour to every other moss on the machine.
+
+One folder has one server. If something already serves the folder, a `--serve --watch` process does not fail: it prints the same line as a server of its own, `Preview server ready! Access at <address>`, with the other server's address, then waits and serves the folder itself once the other leaves. The line is printed again each time the address changes, so show the address from the newest line, not the first. Without `--watch` the command exits with code 3 and one line saying the folder is already served, and by whom when moss can confirm it.
+
+Stop what you start. Start the process with a pipe as its standard input and `MOSS_STOP_ON_STDIN_CLOSE=1` in its environment. moss then stops when that pipe closes, which the operating system does when your program ends, whether it quit, was closed or crashed. Stop it yourself as well when your own preview closes. The variable is needed because a shell job or a script starts moss with its input already closed, and moss must keep running there. An older moss ignores the variable. Leave the variable out on Windows until moss states it is supported there.
+
+Do not start a second server to get around a refusal, and do not write under `.moss/`.
+
 ## Shortcode appears as literal text
 
 Usually this means **no matching closing fence**. A fence with a name or

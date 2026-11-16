@@ -47,9 +47,10 @@ async fn a_second_serve_on_the_same_folder_is_refused_and_a_third_recovers_after
         joined(&second.stdout),
         joined(&second.stderr),
     );
+    let named = format!("already served at {} by Cli (pid {},", owner.url, first.child.id());
     assert!(
-        joined(&second.stderr).contains("already served"),
-        "the second process must name the existing owner on stderr; got:\n{}",
+        joined(&second.stderr).contains(&named),
+        "the second process must name the existing owner ({named}) on stderr; got:\n{}",
         joined(&second.stderr)
     );
 
@@ -73,11 +74,6 @@ async fn a_second_serve_on_the_same_folder_is_refused_and_a_third_recovers_after
         }
     };
     assert!(saw_dead, "find_live_owner must go None once the recorded owner is killed");
-    let record_path = moss_build::ops::serve::ownership::record_path_for_test(&site_dir);
-    assert!(
-        record_path.exists(),
-        "the stale record file must survive a crash — only a clean Drop removes it"
-    );
 
     // --- Third process: no live owner, so it must acquire and overwrite the stale record. ---
     let mut third = spawn_served_build(&site_dir, moss_home.path(), &["--no-plugins"]);

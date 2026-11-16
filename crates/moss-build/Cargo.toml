@@ -65,6 +65,8 @@ jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bun
 # on it, so it needs the type name. Version must keep matching what
 # Cargo.lock resolves via scraper (`cargo tree -d` is the check).
 ego-tree = "0.6"
+# Scales pictures with NEON, AVX2 or SSE4.1.
+fast_image_resize = "5.5"
 fast_qr = { version = "0.12", default-features = false, features = ["svg"] }
 flate2 = "1"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "tiff"] }
@@ -89,7 +91,9 @@ rayon = "1.11"
 regex = "1.12.2"
 # `crypto.subtle`'s HMAC for plugins.
 ring = "0.17"
-resvg = { version = "0.42", default-features = false, features = ["text", "system-fonts"] }
+# `memmap-fonts` (here and on usvg): without it every text layout reads each
+# candidate system font file whole into memory.
+resvg = { version = "0.42", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
 roxmltree = "0.20"
 scraper = "0.20"
 # The CSS tokenizer the site mount uses to find `url()`. Already in the tree
@@ -120,7 +124,7 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls-no-p
 rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
 url = "2.4"
 urlencoding = "2.1"
-usvg = { version = "0.42", default-features = false, features = ["text", "system-fonts"] }
+usvg = { version = "0.42", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
 uuid = { version = "1.11", features = ["v4"] }
 walkdir = "2.4"
 whatlang = "0.18.0"
@@ -182,6 +186,11 @@ block2 = "0.6"
 # symlink — inside `handle_alias_entry`, which is macOS-only (the other arm is a
 # detect-and-skip stub). Moved here from the desktop app, which no longer uses it.
 pathdiff = "0.2"
+# `ops::watch::fsevent`, moss's copy of notify's FSEvents watcher, names all
+# three. notify already depends on them at these versions.
+fsevent-sys = "4"
+crossbeam-channel = "0.5"
+bitflags = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }

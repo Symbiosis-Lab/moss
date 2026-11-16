@@ -153,9 +153,8 @@ impl PlaceMapRenderContext {
     }
 
     /// `places.<hash>.json`'s content hash, set once the caller's own
-    /// `place_map::places_data::emit_places_data` call (over the SAME
-    /// finished document set `places_data::emit` serializes to disk) has
-    /// produced it. See [`Self::explorer_places_hash`]'s own doc for why
+    /// `place_map::places_data::emit_places_data` call has produced the bytes
+    /// `places_data::emit` later writes. See [`Self::explorer_places_hash`]'s own doc for why
     /// this is a late `with_*` rather than a `new()` parameter.
     pub fn with_explorer_places_hash(mut self, hash: String) -> Self {
         self.explorer_places_hash = Some(hash);

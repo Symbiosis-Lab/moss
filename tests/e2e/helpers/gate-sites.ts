@@ -1116,6 +1116,21 @@ ${HERO_LINK_WORDS}
 
 Body text.
 `,
+    // A picture alone in its paragraph of the words (a title set as a logo)
+    // on a hero that keeps its words over the picture on a phone.
+    "logo.md": `---
+title: Hero logo
+uid: "hlg00102"
+---
+
+:::hero {image=cover.svg mobile=overlay}
+![Example logo|](mark.svg)
+
+## Example words
+:::
+
+Body text.
+`,
     "footer.md": `:::hero {image=cover.svg align=top}
 ${HERO_LINK_WORDS}
 
@@ -1399,6 +1414,25 @@ Only a few words here.
 ## Background
 
 Only a few more.
+`,
+    "named/index.md": `---
+title: A short page with named ids
+uid: "hag00105"
+---
+
+## Opening hours {#hours}
+
+Only a few words here.
+
+:::grid 2
+### The reading room on the upper floor {#reading-room}
+
+The cell's own text.
++++
+### The archive
+
+The other cell's text.
+:::
 `,
     "edge/index.md": `---
 title: Headings that fill their lines
@@ -5121,6 +5155,31 @@ title: Another Page
 ---
 
 Second page.
+`,
+  },
+};
+
+/** A page naming four files that are not in the folder: a sized picture on a
+ *  line of its own, a markdown picture on a line of its own, a picture within
+ *  a sentence, and a video. */
+export const MISSING_FILE_BOX_GATE: ScratchSiteSpec = {
+  name: "missing-file-box-gate",
+  files: {
+    "index.md": `---
+title: Missing
+---
+
+Before.
+
+![[slide-06.jpg|800x450]]
+
+![A chart](charts/gone.png)
+
+A sentence with ![[mark.png]] inside it.
+
+![[talk.mp4]]
+
+After.
 `,
   },
 };

@@ -16,8 +16,6 @@
 
 use std::path::Path;
 
-use notify::Watcher;
-
 use crate::build::cloud_readiness::storage::Unavailable;
 use crate::build::watch::scope;
 
@@ -26,10 +24,54 @@ use crate::build::watch::scope;
 // the same 2s this module used to hard-code; `Background` slows to 30s while
 // nobody is looking. The rationale for the 2s figure now lives on that method.
 
-type Debouncer = notify_debouncer_full::Debouncer<
-    notify::RecommendedWatcher,
+/// On macOS moss's copy of notify's FSEvents watcher, which can change many
+/// paths in one restart of the event stream.
+#[cfg(target_os = "macos")]
+type PlatformWatcher = super::fsevent::FsEventWatcher;
+#[cfg(not(target_os = "macos"))]
+type PlatformWatcher = notify::RecommendedWatcher;
+
+pub(crate) type Debouncer = notify_debouncer_full::Debouncer<
+    PlatformWatcher,
     notify_debouncer_full::FileIdMap,
 >;
+
+pub(crate) fn new_debouncer<F: notify_debouncer_full::DebounceEventHandler>(
+    timeout: std::time::Duration,
+    event_handler: F,
+) -> notify::Result<Debouncer> {
+    notify_debouncer_full::new_debouncer_opt(
+        timeout,
+        None, // tick_rate = timeout/4
+        event_handler,
+        notify_debouncer_full::FileIdMap::new(),
+        notify::Config::default(),
+    )
+}
+
+/// Unwatch `remove` and watch `add`, answering for each addition in order.
+///
+/// On macOS notify's `watch()` and `unwatch()` each restart the whole FSEvents
+/// stream and nothing that happens during a restart is reported, so a
+/// difference of any size goes in one restart.
+fn apply(
+    watcher: &mut PlatformWatcher,
+    remove: &[std::path::PathBuf],
+    add: &[scope::WatchTarget],
+) -> Vec<notify::Result<()>> {
+    #[cfg(target_os = "macos")]
+    {
+        watcher.update_paths(remove, add)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        use notify::Watcher;
+        for path in remove {
+            let _ = watcher.unwatch(path);
+        }
+        add.iter().map(|(path, mode)| watcher.watch(path, *mode)).collect()
+    }
+}
 
 /// Re-derive the watch set and apply the difference: watch what appeared,
 /// unwatch what vanished. Whether either amounts to a content change worth a
@@ -48,40 +90,39 @@ pub(crate) fn targets(
         }
     };
 
-    for (path, _) in watched.iter() {
-        if !desired.iter().any(|(p, _)| p == path) {
-            let _ = debouncer.watcher().unwatch(path);
-            debouncer.cache().remove_root(path);
-            log::info!(target: "moss::build::watch", "No longer watching {} — top-level entry disappeared", path.display());
-        }
-    }
+    let gone: Vec<std::path::PathBuf> = watched.iter()
+        .filter(|(path, _)| !desired.iter().any(|(p, _)| p == path))
+        .map(|(path, _)| path.clone())
+        .collect();
+    // Re-issue even for targets we believe we hold. `watched` is moss's own
+    // bookkeeping, not the kernel's: notify drops a watch behind our back on
+    // `IN_DELETE_SELF`/`IN_MOVE_SELF`, and an inotify watch on a FILE dies
+    // outright when an editor's atomic save replaces the inode
+    // (`.moss/config.toml` is exactly that shape). Both leave the path in
+    // `desired` AND in `watched`, so a diff-only reconciler would never
+    // restore it, and every later edit under it would be silently invisible
+    // for the life of the process. `watch()` is idempotent per path, so
+    // re-issuing is one cheap `inotify_add_watch` that heals it in a tick.
+    //
+    // Not on macOS: FSEvents is path-based and does not lose watches, and a
+    // change to its paths restarts the stream. See `scope::REWATCH_IS_CHEAP`.
+    let is_known = |(path, mode): &scope::WatchTarget| watched.iter().any(|(p, m)| p == path && m == mode);
+    let (issue, mut next): (Vec<scope::WatchTarget>, Vec<scope::WatchTarget>) =
+        desired.into_iter().partition(|target| scope::REWATCH_IS_CHEAP || !is_known(target));
 
+    let answers = apply(debouncer.watcher(), &gone, &issue);
+    for path in &gone {
+        debouncer.cache().remove_root(path);
+        log::info!(target: "moss::build::watch", "No longer watching {} — top-level entry disappeared", path.display());
+    }
     // Counted, not listed: the first reconcile of a large tree adds hundreds of
     // roots at once, and "moss is watching the directories it should be" is a
     // fact about the whole set, not about each one. Paths stay at DEBUG.
     let mut newly_watched = 0usize;
-    let mut next: Vec<scope::WatchTarget> = Vec::with_capacity(desired.len());
-    for (path, mode) in desired {
-        let known = watched.iter().any(|(p, m)| *p == path && *m == mode);
-        // Re-issue even for targets we believe we hold. `watched` is moss's own
-        // bookkeeping, not the kernel's: notify drops a watch behind our back on
-        // `IN_DELETE_SELF`/`IN_MOVE_SELF`, and an inotify watch on a FILE dies
-        // outright when an editor's atomic save replaces the inode
-        // (`.moss/config.toml` is exactly that shape). Both leave the path in
-        // `desired` AND in `watched`, so a diff-only reconciler would never
-        // restore it, and every later edit under it would be silently invisible
-        // for the life of the process. `watch()` is idempotent per path, so
-        // re-issuing is one cheap `inotify_add_watch` that heals it in a tick.
-        //
-        // Not on macOS, where `watch()` stops, rebuilds and restarts the entire
-        // FSEvents stream — expensive, and an event-loss window every tick.
-        // FSEvents is path-based and does not lose watches, so it needs none of
-        // this. See `scope::REWATCH_IS_CHEAP`.
-        if known && !scope::REWATCH_IS_CHEAP {
-            next.push((path, mode));
-            continue;
-        }
-        if let Err(e) = debouncer.watcher().watch(&path, mode) {
+    for (target, answer) in issue.into_iter().zip(answers) {
+        let known = is_known(&target);
+        let (path, mode) = target;
+        if let Err(e) = answer {
             // Transient — the entry may have vanished between read_dir and now.
             // The next tick retries.
             log::debug!(target: "moss::build::watch", "Not watching {}: {}", path.display(), e);

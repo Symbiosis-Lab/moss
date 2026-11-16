@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 
 use super::{context_for_plugin, PluginManager};
 use crate::plugins::types::{HookResult, Plugin, PluginManifest};
-use crate::syndication::channel::ChannelSpec;
-use crate::syndication::job::{CopyJob, Op};
+use crate::syndication::channel::{ChannelSpec, Form};
+use crate::syndication::job::{AccountQuery, CopyJob, Op};
 
 /// What a channel that takes copies declares.
 #[derive(Debug, Clone, Default)]
@@ -16,6 +16,8 @@ pub struct CopyChannel {
     /// this channel's copy rather than posted again: the manifest's `domains`
     /// (else `domain`), and the host of the setting `host_setting` names.
     pub domains: Vec<String>,
+    /// The name its network goes by, which a `syndicate:` entry may use for it.
+    pub name: Option<String>,
 }
 
 /// How a copy hook call ended.
@@ -48,14 +50,21 @@ pub fn copy_channels_of(project_path: &str, plugins: &[Plugin]) -> BTreeMap<Stri
         .iter()
         .filter(|p| installed.is_installed(&p.manifest.name))
         .filter_map(|p| {
-            let spec = copy_spec(&p.manifest)?.clone();
+            let mut spec = copy_spec(&p.manifest)?.clone();
             let declared = p.manifest.domains.clone().unwrap_or_else(|| p.manifest.domain.iter().cloned().collect());
             let mut domains: Vec<String> = declared.iter().filter_map(|d| host_of(d)).collect();
-            if let Some(key) = &spec.host_setting {
+            if spec.host_setting.is_some() || spec.long_setting.is_some() {
                 let config = super::hook_context::hook_config_for_plugin(project_path, p);
-                domains.extend(config.get(key).and_then(|v| v.as_str()).and_then(host_of));
+                if let Some(key) = &spec.host_setting {
+                    domains.extend(config.get(key).and_then(|v| v.as_str()).and_then(host_of));
+                }
+                if spec.long_setting.as_ref().is_some_and(|key| config.get(key).and_then(|v| v.as_bool()) != Some(true)) {
+                    spec.forms.retain(|form| *form != Form::Long);
+                }
             }
-            Some((p.manifest.name.clone(), CopyChannel { spec, domains }))
+            let channel = p.manifest.contributes.as_ref().and_then(|c| c.channel.as_ref());
+            let name = channel.and_then(|c| c.display_name.clone()).or_else(|| p.manifest.display_name.clone());
+            Some((p.manifest.name.clone(), CopyChannel { spec, domains, name }))
         })
         .collect()
 }
@@ -71,6 +80,20 @@ pub(crate) fn host_of(address: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
+/// The account a channel is signed in to now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Account {
+    /// The channel names no account (no `copy_account`, or an answer without
+    /// one, as when the author posts by hand); its copies are not tied to one.
+    Unsaid,
+    /// `id` binds copies; `name` is only shown.
+    Known { id: String, name: Option<String> },
+    /// The channel answered that it has no usable session; someone signs in.
+    SignedOut,
+    /// It exports `copy_account`, which failed.
+    Unknown(String),
+}
+
 impl PluginManager {
     /// Installed channels whose manifest declares a `syndication` block,
     /// keyed by channel id.
@@ -80,17 +103,39 @@ impl PluginManager {
 
     /// Call `job.channel`'s hook for `job.op`, with the channel's own config.
     pub async fn send_copy(&self, job: &CopyJob) -> CopyCall {
+        self.call_channel(&job.channel, job.op.hook(), job).await
+    }
+
+    /// Ask `channel`'s `copy_account` which account it is signed in to.
+    pub async fn copy_account(&self, channel: &str) -> Account {
+        let query = AccountQuery { channel: channel.to_string(), config: Default::default() };
+        match self.call_channel(channel, "copy_account", &query).await {
+            CopyCall::NoExport => Account::Unsaid,
+            CopyCall::Answered(r) if !r.success => Account::Unknown(r.message.unwrap_or_else(|| "copy_account failed".into())),
+            CopyCall::Answered(r) => match r.copy {
+                Some(c) if c.signed_out => Account::SignedOut,
+                Some(c) => match c.account.filter(|a| !a.is_empty()) {
+                    Some(id) => Account::Known { id, name: c.name.filter(|n| !n.is_empty()) },
+                    None => Account::Unsaid,
+                },
+                None => Account::Unsaid,
+            },
+            CopyCall::Unknown(e) => Account::Unknown(e),
+        }
+    }
+
+    async fn call_channel<C: super::hook_context::HookContext + serde::Serialize>(&self, channel: &str, hook: &str, context: &C) -> CopyCall {
         let plugin = {
             let plugins = self.plugins.read().unwrap_or_else(|e| e.into_inner());
-            plugins.iter().find(|p| p.manifest.name == job.channel).cloned()
+            plugins.iter().find(|p| p.manifest.name == channel).cloned()
         };
         let Some(plugin) = plugin else {
-            return CopyCall::Unknown(format!("the {} plugin is not loaded", job.channel));
+            return CopyCall::Unknown(format!("the {channel} plugin is not loaded"));
         };
-        let job = context_for_plugin(&self.project_path, job, &plugin);
-        match self.execute_hook_with_result(&plugin, job.op.hook(), &job).await {
+        let context = context_for_plugin(&self.project_path, context, &plugin);
+        match self.execute_hook_with_result(&plugin, hook, &context).await {
             Ok(Some(result)) => CopyCall::Answered(result),
-            Ok(None) => CopyCall::Unknown(format!("{} returned no result", job.op.hook())),
+            Ok(None) => CopyCall::Unknown(format!("{hook} returned no result")),
             // The engine reports a missing export by this exact substring.
             Err(e) if e.contains("Hook function not found") => CopyCall::NoExport,
             Err(e) => CopyCall::Unknown(e),
@@ -116,5 +161,38 @@ mod tests {
         std::fs::write(root.join(".moss/config.toml"), "[channels.social]\n").unwrap();
         let channels = crate::syndication::landing::channels(root);
         assert_eq!(channels["social"].domains, ["social.example.net"]);
+    }
+
+    #[test]
+    fn a_channel_takes_articles_only_while_its_setting_is_on() {
+        use crate::syndication::channel::Form;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let plugin = root.join(".moss/plugins/social");
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::fs::write(plugin.join("manifest.json"), serde_json::json!({
+            "name": "social", "version": "0.0.1", "display_name": "Social", "description": "", "author": "",
+            "entry": "main.bundle.js", "global_name": "SocialPlugin",
+            "contributes": {"channel": {"syndication": {"forms": ["short", "long", "teaser"], "long_setting": "articles"}}}
+        }).to_string()).unwrap();
+        std::fs::write(plugin.join("main.bundle.js"), "window.SocialPlugin = {};").unwrap();
+        std::fs::write(root.join(".moss/config.toml"), "[channels.social]\n").unwrap();
+        let forms = || crate::syndication::landing::channels(root)["social"].spec.forms.clone();
+        assert_eq!(forms(), [Form::Short, Form::Teaser], "unset is off");
+        std::fs::write(plugin.join("config.json"), r#"{"articles": false}"#).unwrap();
+        assert_eq!(forms(), [Form::Short, Form::Teaser]);
+        std::fs::write(plugin.join("config.json"), r#"{"articles": true}"#).unwrap();
+        assert_eq!(forms(), [Form::Short, Form::Long, Form::Teaser]);
+
+        // An article posted while the setting was on is left as posted once it is off.
+        use crate::syndication::{record::{CopyRecord, RemoteRef}, shape};
+        let mut posted = CopyRecord::due("u", "social", "page.md", "page/");
+        posted.form = Some(Form::Long);
+        posted.remote = Some(RemoteRef { id: "1".into(), url: "https://social.example.net/1".into() });
+        let post: crate::build::scan::article_map::ArticleInfo = serde_json::from_value(serde_json::json!({ "source_path": "page.md", "title": "Page", "content": "Body.", "url_path": "page/", "date": null })).unwrap();
+        let reshape = || shape::shape_record(&post, &crate::syndication::landing::channels(root)["social"].spec, "https://example.org", &shape::ShapeOptions::default(), &posted);
+        assert!(reshape().is_ok());
+        std::fs::write(plugin.join("config.json"), r#"{"articles": false}"#).unwrap();
+        assert_eq!(reshape().unwrap_err(), "retaining the prior version: the channel no longer accepts its original form");
     }
 }

@@ -135,8 +135,10 @@ pub fn apply_transform(transform: ShipTransform, mount: &crate::build::site_meta
 
 /// Where one entry's bytes are read from (see [`resolve_ship_source`]).
 pub(crate) enum ShipRead<'a> {
-    /// A file: the CAS blob backing a live `staged_oid`, or `stage_path` itself
-    /// when there is none (or its CAS blob has since been collected).
+    /// The CAS blob backing a live `staged_oid`, which `ObjectStore::ready_blob`
+    /// just found present and verified.
+    Blob(PathBuf),
+    /// `stage_path` itself: no live `staged_oid`, or its CAS blob is gone.
     Path(PathBuf),
     /// The bytes the build kept on the manifest. Present by construction, and
     /// nothing on disk to probe, audit or copy.
@@ -169,7 +171,7 @@ pub(crate) fn resolve_ship_source<'a>(
     if let Some(store) = object_store {
         if let Some(oid) = sealed.staged_oid(rel_path) {
             if let Some(cas_path) = store.get_path(oid) {
-                return ShipRead::Path(cas_path);
+                return ShipRead::Blob(cas_path);
             }
         }
     }
@@ -302,7 +304,7 @@ pub fn ship_phase(
         // independently-computed path here would reopen the exact race this
         // function exists to close.
         let source_path = match resolve_ship_source(rel_path, &stage_path, sealed, object_store) {
-            ShipRead::Path(path) => path,
+            ShipRead::Blob(path) | ShipRead::Path(path) => path,
             // Already in memory, and always a plain file (`register_held` takes
             // nothing else): write it and skip the presence probe and audit,
             // both of which are about a stage file this entry does not read.
@@ -672,8 +674,16 @@ pub fn materialize_and_promote(
         // the entry's CAS blob surviving a concurrent build's GC across this
         // whole call — see `CacheWriteLease` at this function's own call sites.
         let object_store = crate::build::cache::ObjectStore::for_seal(mp);
-        drifted = ship_phase(stage_dir, &gen_dir, sealed, Some(&object_store), base.as_deref())
-            .map_err(|e| format!("Failed to materialize generation {}: {}", sealed.generation_id(), e))?;
+        drifted = match ship_phase(stage_dir, &gen_dir, sealed, Some(&object_store), base.as_deref()) {
+            Ok(drifted) => drifted,
+            // A newer render owns staging and may have removed a page this
+            // generation names: its own generation is the one to promote.
+            Err(e) if !crate::build::lifecycle::is_latest_render(mp, render) => {
+                log::info!("generation {} is not promoted, a newer render has replaced what it staged: {}", sealed.generation_id(), e);
+                return Ok(Promotion::Superseded);
+            }
+            Err(e) => return Err(format!("Failed to materialize generation {}: {}", sealed.generation_id(), e)),
+        };
     } else {
         log::info!("generation {} is already on disk — promoting it without a copy", sealed.generation_id());
     }
@@ -868,7 +878,7 @@ pub(crate) fn drop_absent_outputs(
         // one path while `ship_phase` reads the other, genuinely-absent, one,
         // moving the failure a few lines down instead of preventing it.
         let ShipRead::Path(path) = resolve_ship_source(rel, &stage_path, sealed, object_store) else {
-            continue; // held bytes are present by construction
+            continue; // held bytes and a ready blob are present by construction
         };
         let (mode, _) = crate::types::content::parse_entry(entry);
         let presence = crate::build::io_utils::probe_output(&path, mode);
@@ -1615,6 +1625,27 @@ mod tests {
         assert_eq!(served_generation(&mp), sealed.generation_id());
     }
 
+    /// A generation that names a page a newer render has since removed from
+    /// staging is superseded, not failed; with no newer render it is a failure.
+    #[test]
+    fn a_generation_whose_page_a_newer_render_removed_is_superseded() {
+        let tmp = tempdir().unwrap();
+        let mp = crate::moss_paths::MossPaths::new(tmp.path());
+        let stage = mp.staging_dir();
+        std::fs::create_dir_all(&stage).unwrap();
+        std::fs::write(stage.join("index.html"), b"<h1>home</h1>").unwrap();
+        let sealed = manifest_of(&[("index.html", b"<h1>home</h1>"), ("gone/index.html", b"<h1>gone</h1>")]);
+        // A build's write lease holds the folder's record for as long as it ships.
+        let _record = crate::build::lifecycle::lock_for(&mp);
+        let (render, _) = crate::build::lifecycle::show_render(&mp, true);
+        let ship = || materialize_and_promote(&sealed, &mp, &stage, next_promotion_epoch(), Some(render), ShipVerdict::Ship);
+
+        ship().expect_err("the newest render's generation is short of a file it names");
+        crate::build::lifecycle::show_render(&mp, true);
+        assert_eq!(ship(), Ok(Promotion::Superseded));
+        assert!(!mp.current_ptr().exists());
+    }
+
     /// A marker that outlived its pointer — `retire_legacy_roots` removes a
     /// legacy `current` and leaves the marker — must not let a re-seal of the
     /// same generation skip the repoint and leave the site unserved.
@@ -2204,6 +2235,52 @@ mod tests {
             sealed.files().contains_key("asset.bin"),
             "a CAS-backed entry must survive a transiently-absent stage copy"
         );
+    }
+
+    /// A sealed manifest naming `rel` with `bytes` stored as its CAS blob, and
+    /// no stage copy.
+    fn blob_backed(store: &crate::build::cache::ObjectStore, rel: &str, bytes: &[u8]) -> (crate::build::manifest::SealedManifest, String) {
+        let oid = store.store_bytes(bytes, crate::build::cache::RecordMode::Request).unwrap();
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        let sp = crate::build::served_path::ServedPath::from_source(rel).unwrap();
+        pending.apply_message(sp.as_str().to_string(), "cafefacecafeface", HashBucket::Files, Some(oid.clone()));
+        (pending.seal(), oid)
+    }
+
+    /// Each eviction question is a stat: the blob is asked once, and the
+    /// presence pass trusts that answer rather than asking again.
+    #[test]
+    fn the_presence_pass_asks_each_blob_once() {
+        let stage = tempdir().unwrap();
+        let cache = tempdir().unwrap();
+        let store = crate::build::cache::ObjectStore::new(cache.path().to_path_buf());
+        let (mut sealed, oid) = blob_backed(&store, "asset.bin", b"stable bytes");
+        let _second_question_says_cloud = crate::build::icloud::pretend::evicted_after(&store.blob_path(&oid), 1);
+
+        let dropped = drop_absent_outputs(stage.path(), &mut sealed, Some(&store));
+
+        assert!(dropped.is_empty(), "the blob was asked about more than once: {dropped:?}");
+    }
+
+    /// Presence is asked again every build: a blob the store lost since the
+    /// last build drops its entry, whatever the remembered index says.
+    #[test]
+    fn a_blob_gone_from_the_store_since_the_last_build_is_dropped() {
+        let stage = tempdir().unwrap();
+        let cache = tempdir().unwrap();
+        let index = cache.path().join("verified.json");
+        let first = crate::build::cache::ObjectStore::new(cache.path().to_path_buf()).remembering_verified(&index);
+        let (sealed, oid) = blob_backed(&first, "asset.bin", b"stable bytes");
+        assert!(drop_absent_outputs(stage.path(), &mut sealed.clone(), Some(&first)).is_empty());
+        first.save_verified().unwrap();
+
+        std::fs::remove_file(first.blob_path(&oid)).unwrap();
+        let next = crate::build::cache::ObjectStore::new(cache.path().to_path_buf()).remembering_verified(&index);
+        let mut sealed = sealed;
+        let dropped = drop_absent_outputs(stage.path(), &mut sealed, Some(&next));
+
+        assert!(dropped.contains("asset.bin"), "{dropped:?}");
+        assert!(!sealed.files().contains_key("asset.bin"));
     }
 
     /// The property `Held` exists for: a derived output has no CAS blob, so

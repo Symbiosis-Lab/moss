@@ -95,7 +95,7 @@ export function modK(view: EditorView): boolean {
     const link = referenceSiteAt(view.state, from);
     if (link && !link.wiki) return openCardAt(view, link.from); // the link's own start, not the caret's
     const embed = embedAt(view.state, from);
-    if (embed) return openCardAt(view, embed.probe); // inside the embed's target, where the card providers look
+    if (embed) return openCardAt(view, embed.parts.targetFrom); // the start of the embed's path, where the card providers look
   }
   return false;
 }

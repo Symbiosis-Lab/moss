@@ -45,14 +45,13 @@ describe('extractImageTargets', () => {
     expect(t[0].to).toBe(15);
   });
 
-  it('extracts ![[embed]] target with whole-Image range', () => {
-    const doc = '![[embed.png]]';
+  it('extracts ![[embed]] target with the path span, and the node span beside it', () => {
+    const doc = '![[ embed.png |200]]';
     const t = extractImageTargets(state(doc));
     expect(t).toHaveLength(1);
     expect(t[0].target).toBe('embed.png');
-    // For embed wikilinks the whole Image node span is reported
-    expect(t[0].from).toBe(0);
-    expect(t[0].to).toBe(14);
+    expect(doc.slice(t[0].from, t[0].to)).toBe('embed.png');
+    expect([t[0].nodeFrom, t[0].nodeTo]).toEqual([0, doc.length]);
   });
 
   it('captures pic.jpg (not pic.jpg "title") for titled images', () => {
@@ -98,13 +97,13 @@ describe('extractImageTargets', () => {
   });
 
   it('embed inside a link → one target, spanning the EMBED not the Link', () => {
-    // The walk descends into the wrapping Link (the Image branch no longer
-    // prunes it away), and the reported span stays the embed's.
+    // The walk descends into the wrapping Link, and the reported spans stay the embed's.
     const doc = '[![[a.png]]](/u)';
     const t = extractImageTargets(state(doc));
     expect(t).toHaveLength(1);
     expect(t[0].target).toBe('a.png');
-    expect([t[0].from, t[0].to]).toEqual([1, 11]);
+    expect([t[0].from, t[0].to]).toEqual([4, 9]);
+    expect([t[0].nodeFrom, t[0].nodeTo]).toEqual([1, 11]);
   });
 
   it.each([
@@ -136,8 +135,6 @@ describe('extractImageTargets — shortcode attributes', () => {
     expect(t).toHaveLength(1);
     expect(t[0].target).toBe('assets/cover.jpg');
     expect(doc.slice(t[0].from, t[0].to)).toBe('assets/cover.jpg');
-    // The flag is what stops the hover popover suppressing itself: nothing
-    // paints a hero attribute inline, so the hover is the only way to see it.
     expect(t[0].attr).toBe(true);
   });
 

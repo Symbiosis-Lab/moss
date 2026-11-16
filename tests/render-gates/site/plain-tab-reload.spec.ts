@@ -9,11 +9,12 @@
  *
  *   npx playwright test -c playwright/plain-tab-reload.config.ts
  */
-import { test, expect, type Frame, type Page } from "@playwright/test";
+import { test, expect, type Frame, type Page, type Request } from "@playwright/test";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { gatePort } from "../../../playwright/gate-ports";
 import { scratchSiteDir } from "../../e2e/helpers/scratch-site";
+import { gotoFramed } from "../../support/framed-page";
 import { PLAIN_TAB_RELOAD } from "../../e2e/helpers/gate-sites";
 
 const BASE = `http://localhost:${gatePort("plain-tab-reload")}/`;
@@ -82,16 +83,24 @@ test("a plain tab opens an internal link in a new tab when asked to", async ({ p
 test("seven tabs of one browser all load, and each follows an edit by reloading once", async ({ context }, testInfo) => {
   const pages: Page[] = [];
   const loads: number[] = [];
+  /** The `/__moss/reload` streams asked for and not ended, in every tab still open. */
+  const streams = new Set<Request>();
+  const isStream = (r: Request) => r.url().endsWith("/__moss/reload");
+  const openStreams = () => [...streams].filter((r) => !r.frame().page().isClosed()).length;
   for (let tab = 0; tab < 7; tab++) {
     const page = await context.newPage();
     loads.push(0);
     page.on("load", () => loads[tab]++);
+    page.on("request", (r) => isStream(r) && streams.add(r));
+    page.on("requestfinished", (r) => streams.delete(r));
+    page.on("requestfailed", (r) => streams.delete(r));
     await page.goto(BASE, { timeout: 10_000 });
     pages.push(page);
   }
   const settled = async (open: number[], expected: number) => {
     await pages[open[0]].waitForTimeout(3_000);
     expect(open.map((tab) => loads[tab])).toEqual(open.map(() => expected));
+    expect(openStreams(), "streams open among the tabs").toBe(1);
   };
   const all = pages.map((_, tab) => tab);
   /** Which of the `open` tabs holds the lock the stream goes with, or -1. */
@@ -132,15 +141,7 @@ test("a framed page opens no stream and hands its gestures to its parent", async
   page.on("request", (r) => {
     if (r.url().endsWith("/__moss/reload")) streams.push(r.frame() === page.mainFrame() ? "parent" : "frame");
   });
-  // A parent on the same origin with no bridge of its own: the health answer is not HTML.
-  await page.goto(`${BASE}__moss_health/`);
-  await page.evaluate((src) => {
-    const frame = document.createElement("iframe");
-    frame.src = src;
-    document.body.append(frame);
-  }, BASE);
-  await page.frameLocator("iframe").locator("[data-viewer]").waitFor();
-  const frame = page.frames().find((f) => f !== page.mainFrame())!;
+  const frame = await gotoFramed(page, BASE);
   // Inside moss a click on a picture is the editor's, so the page's viewer stays shut.
   await frame.click("[data-viewer]");
   await expect(frame.locator("#lightbox")).not.toBeVisible();

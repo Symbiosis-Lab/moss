@@ -30,9 +30,26 @@ export function normPath(url: string): string {
   }
 }
 
-/** Strip any cache-bust `?_t=…` a previous swap or restore appended. */
+/** Strip any cache-bust `_t=…` a previous swap or restore appended. */
 export function stripBust(url: string): string {
-  return url.replace(/\?_t=\d+/g, "");
+  return url.replace(/[?&]_t=\d+/g, "");
+}
+
+/**
+ * `url` stamped to be fetched again: `_t` joins a query the URL already has
+ * (`pic.png?v=2?_t=1` would make the stamp part of `v`) and goes before any
+ * fragment.
+ */
+export function withBust(url: string, stamp: number): string {
+  const hash = url.indexOf("#");
+  const base = hash === -1 ? url : url.slice(0, hash);
+  return base + (base.includes("?") ? "&" : "?") + "_t=" + stamp + url.slice(base.length);
+}
+
+/** `src` stamped to be fetched again when it names `absPath`, else null. */
+export function refetchSrc(src: string, absPath: string, stamp: number): string | null {
+  const clean = stripBust(src);
+  return normPath(clean) === absPath ? withBust(clean, stamp) : null;
 }
 
 /**
@@ -56,12 +73,12 @@ export function srcsetMatches(srcset: string, absPath: string): boolean {
 }
 
 /**
- * Append `bust` to every candidate URL in a `srcset`, preserving descriptors.
+ * Stamp every candidate URL in a `srcset`, preserving descriptors.
  * Mutating `srcset` is what re-runs the parent `<picture>`'s source-set
  * selection, and the bust is what defeats a negatively cached 404 from the
  * window when the variant genuinely was not there yet.
  */
-export function bustSrcset(srcset: string, bust: string): string {
+export function bustSrcset(srcset: string, stamp: number): string {
   return stripBust(srcset)
     .split(",")
     .map((candidate) => {
@@ -69,8 +86,8 @@ export function bustSrcset(srcset: string, bust: string): string {
       if (trimmed === "") return "";
       const space = trimmed.search(/\s/);
       return space === -1
-        ? trimmed + bust
-        : trimmed.slice(0, space) + bust + trimmed.slice(space);
+        ? withBust(trimmed, stamp)
+        : withBust(trimmed.slice(0, space), stamp) + trimmed.slice(space);
     })
     .filter((candidate) => candidate !== "")
     .join(", ");

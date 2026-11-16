@@ -93,3 +93,32 @@ fn inline_subscribe_scope_matches_the_page_language_section() {
         "stamped form diverged from the footer renderer's output:\n{expected}"
     );
 }
+
+/// Subscribing exists only on the moss host: a site that publishes with a
+/// deploy plugin keeps its inline form pending, so published pages hide it,
+/// even with a site id left from moss hosting.
+#[test]
+fn inline_subscribe_posts_nowhere_on_a_site_a_deploy_plugin_publishes() {
+    let tmp = std::env::temp_dir().join(format!("moss_inline_elsewhere_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&tmp).unwrap();
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(tmp.clone());
+    write(&tmp, "index.md", "---\ntitle: Home\n---\n\nHi.\n\n:::subscribe\n:::\n");
+    write(&tmp, ".moss/state.toml", "[deployment]\nsite_id = \"harbor-notes\"\n");
+
+    write(&tmp, ".moss/config.toml", "[site]\ndomain = \"example.com\"\n");
+    assert!(build_sync(&tmp.to_string_lossy()).is_ok());
+    let page = read_page(&tmp.join(".moss/build.nosync/staging"), "index.html");
+    assert!(page.contains("/sites/harbor-notes/subscribe"), "on the moss host the form posts to the site: {page}");
+
+    write(&tmp, ".moss/config.toml", "[site]\ndomain = \"example.com\"\n\n[hooks]\ndeploy = \"github-pages\"\n");
+    assert!(build_sync(&tmp.to_string_lossy()).is_ok());
+    let page = read_page(&tmp.join(".moss/build.nosync/staging"), "index.html");
+    assert!(!page.contains("/sites/harbor-notes/subscribe"), "{page}");
+    assert!(page.contains(r#"data-moss-pending="true""#), "{page}");
+}

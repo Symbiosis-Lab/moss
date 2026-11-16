@@ -178,6 +178,11 @@ pub struct ParsedDocument {
     /// Draft: built for the preview, never published; hidden from every
     /// listing, feed, sitemap and nav, and marked `noindex`.
     pub draft: Option<bool>,
+    /// The source has no text and no fields. Written only by
+    /// [`mark_empty_source`](Self::mark_empty_source).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[specta(skip)]
+    pub empty_source: bool,
     /// Listed: when `Some(false)`, hidden from moss's auto-generated index
     /// surfaces (feeds/lists/sitemap) via `is_listable()`, but still a public
     /// page — indexable, share-cardable, reachable (see `is_public_page`).
@@ -910,6 +915,16 @@ impl ParsedDocument {
     }
 
     pub fn is_draft(&self) -> bool { self.draft == Some(true) }
+
+    /// Withheld from the publish by the author's own `draft: true`.
+    pub fn withheld_by_author(&self) -> bool { self.is_draft() && !self.empty_source }
+
+    /// A page with nothing in it yet is built for the preview and withheld
+    /// from the publish as a draft is, without being the author's `draft: true`.
+    pub fn mark_empty_source(&mut self) {
+        self.draft = Some(true);
+        self.empty_source = true;
+    }
 
     /// Whether this document appears on the listing surfaces that serve the
     /// whole site — the home's listings, RSS, llms.txt, the sitemap, tag

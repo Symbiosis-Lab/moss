@@ -10,6 +10,7 @@
 import { host as uiHost, type Documents } from "../../host";
 import { mossAlert } from "../../shared/ui/moss-alert";
 import { t } from "../../i18n/index";
+import { importedPagesText } from "../../shared/import-outcome";
 import { showToast, showAck, showOrUpdateToast, removeToastById } from "../../shared/ui/toast/toast-manager";
 import { runAction } from "../../shared/ui/run-action";
 import { toAbsolute, toRelative, parentDirOf, baseName, childPath, shortenKnownPaths } from '../path-domain';
@@ -80,10 +81,8 @@ export class TreeOps {
       showToast({ what: result.data.error ?? t('onboard.flow.url_invalid'), severity: 'Blocking' });
       return;
     }
-    const total = result.data.total_pages;
-    if (total > 0) {
-      showAck(t('onboard.flow.url_imported_pages', { total: String(total) }));
-    }
+    const imported = importedPagesText(result.data);
+    if (imported) showAck(imported);
   }
 
   // ── Reveal ─────────────────────────────────────────────

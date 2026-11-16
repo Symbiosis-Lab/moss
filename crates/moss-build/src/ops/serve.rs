@@ -110,12 +110,10 @@ pub type OnReady = Arc<dyn Fn(u16, Option<u16>) -> Result<(), String> + Send + S
 /// the plain loopback-only server `moss build --serve` starts.
 #[derive(Default, Clone)]
 pub struct HeadlessServe {
-    /// Forwarded to [`ownership::acquire_for_site_dir`] via [`ServeConfig`].
-    /// `ops::run_headless_build` sets it from `--watch` (standing by makes no
-    /// sense for a one-shot build that would just exit right after). A host
-    /// that sets it hands the process to standby: Ctrl-C while standing by
-    /// ends the whole process, so only a command-line host may set it.
-    pub standby_on_conflict: bool,
+    /// See [`ServeConfig::on_conflict`]. `ops::run_headless_build` sets
+    /// [`ownership::OnConflict::StandBy`] under `--watch`. Ctrl-C while
+    /// standing by ends the whole process, so only a command-line host may.
+    pub on_conflict: ownership::OnConflict,
     /// Forwarded to [`ServeConfig`]: `ops::run_headless_build` holds the same
     /// `Arc` across every call this process makes here, so a `/__moss/yield`
     /// hit on whichever server is live always wakes the one driver loop
@@ -181,7 +179,7 @@ pub async fn start_server_headless(
         invoke: invoke_ctx,
         asset_registry,
         kind: HostKind::Cli,
-        standby_on_conflict: serve.standby_on_conflict,
+        on_conflict: serve.on_conflict,
         yield_notify: serve.yield_notify,
         host_routes: serve.host_routes,
         ui: serve.ui,

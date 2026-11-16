@@ -110,6 +110,11 @@ pub struct ToastPayload {
     /// removes one.
     #[serde(default)]
     pub progress: Option<i32>,
+    /// The toast answers something the person just did (a menu command), so a
+    /// surface draws it at once instead of holding it for a waiting screen to
+    /// clear. False (the default) for a background result.
+    #[serde(default)]
+    pub user_initiated: bool,
 }
 
 /// Colored status dot for [`ToastPayload::dot`]. Yellow = pending/in-flight,
@@ -137,6 +142,7 @@ impl ToastPayload {
             id: None,
             dot: None,
             progress: None,
+            user_initiated: false,
         }
     }
 
@@ -156,6 +162,7 @@ impl ToastPayload {
             id: None,
             dot: None,
             progress: None,
+            user_initiated: false,
         }
     }
 
@@ -210,6 +217,7 @@ mod tests {
         }"#;
         let toast: ToastPayload = serde_json::from_str(json).expect("an older payload");
         assert_eq!(toast.progress, None);
+        assert!(!toast.user_initiated);
         assert_eq!(toast.actions.unwrap()[0].variant, None);
     }
 

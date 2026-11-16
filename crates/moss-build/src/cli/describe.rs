@@ -84,12 +84,6 @@ fn plugin_hooks() -> Vec<PluginHookInfo> {
             context: "DeployContext",
         },
         PluginHookInfo {
-            name: "syndicate",
-            description: "Being removed: the earlier way to cross-post, one call for every article. A channel posts through the copy hooks instead.",
-            arity: "multiple",
-            context: "SyndicateContext",
-        },
-        PluginHookInfo {
             name: "publish_copy",
             description: "Post one copy of a post to a channel's network once its page is live (contributes.channel.syndication); returns the copy's id and address.",
             arity: "multiple",
@@ -102,16 +96,16 @@ fn plugin_hooks() -> Vec<PluginHookInfo> {
             context: "CopyJob",
         },
         PluginHookInfo {
-            name: "delete_copy",
-            description: "Remove a deleted post's copy, when the author asks; optional.",
+            name: "find_copy",
+            description: "Look a copy up after a send whose outcome is unknown, or one handed off to the author; optional. Answers the copy, a `handoff` still waiting, or `absent: true`; anything else leaves it unknown, and only `absent` lets moss send again.",
             arity: "multiple",
             context: "CopyJob",
         },
         PluginHookInfo {
-            name: "find_copy",
-            description: "Look a copy up after a send whose outcome is unknown, or a draft left for the author to publish on the network; optional.",
+            name: "copy_account",
+            description: "Say which account a channel is signed in to, as `copy.account` (and `copy.name`, shown to the person), or `copy.signed_out: true` when its session or credential was read and holds none; optional. Asked once per run before a channel's copies are worked on; a copy sent from another account is left alone until that account is signed in again, and a signed-out channel's copies wait for a sign-in. A read that failed or is not available on this host is a failed call, never `signed_out`.",
             arity: "multiple",
-            context: "CopyJob",
+            context: "AccountQuery",
         },
         PluginHookInfo {
             name: "listing",
@@ -121,7 +115,7 @@ fn plugin_hooks() -> Vec<PluginHookInfo> {
         },
         PluginHookInfo {
             name: "login",
-            description: "Connect a user account for a plugin that needs one (e.g. Matters); invoked once via `connect_account`, not part of the build pipeline.",
+            description: "Sign the person in to a channel's account (contributes.channel.login: true); invoked once via `connect_account`, not part of the build pipeline.",
             arity: "multiple",
             context: "BaseContext",
         },

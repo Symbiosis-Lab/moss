@@ -818,7 +818,13 @@ pub(crate) fn source_metadata_verdict(
 pub fn path_to_relative_key(folder: &Path, abs: &Path) -> Option<String> {
     let folder_canon = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
     let abs_canon = canonical_through_missing(abs);
-    let rel = abs_canon.strip_prefix(&folder_canon).ok()?;
+    relative_key(abs_canon.strip_prefix(&folder_canon).ok()?)
+}
+
+/// The manifest key of a path already relative to the folder: plain names
+/// only, forward slashes, composed Unicode. A caller whose path is its own
+/// walk under the folder, through no link, needs no realpath first.
+pub(crate) fn relative_key(rel: &Path) -> Option<String> {
     let mut parts = Vec::new();
     for comp in rel.components() {
         use std::path::Component;
@@ -865,6 +871,7 @@ fn canonical_through_missing(abs: &Path) -> std::path::PathBuf {
 /// Returns `true` (caller must proceed with rebuild) if any of:
 ///   - the manifest is missing/corrupt (first build, or write-crash),
 ///   - any path is not in the manifest (new file, or outside the asset pipeline),
+///     unless it is definitely absent too, as a moved page's old name is,
 ///   - any path's current bytes differ from the stored `SourceMetadata`,
 ///   - any I/O error or path-outside-folder issue (fail open).
 ///
@@ -897,6 +904,8 @@ pub fn should_rebuild_for_paths(
         };
         let meta = match hashes.source_metadata_for(&rel) {
             Some(m) => m,
+            // Not built and definitely gone, as a moved page's old name is.
+            None if abs.symlink_metadata().is_err_and(|e| crate::build::icloud::is_definitely_absent(abs, &e)) => continue,
             None => return true, // unknown to manifest → fail open
         };
         match source_metadata_matches_at(meta, abs, hashes.captured_at) {
@@ -980,10 +989,12 @@ pub(crate) fn should_gate_modify_event(kind: notify::EventKind) -> bool {
 #[derive(Debug, PartialEq)]
 pub enum PumpGate {
     /// Drop the event on the pump — every path is a root agent-instruction
-    /// file, which the scan skips and which moss itself writes.
+    /// file, which the scan skips and which moss itself writes. The watcher's
+    /// whole per-event verdict (`ops::watch::event_gate`) also answers it for
+    /// an event its filters drop.
     Suppress,
-    /// Rebuild unconditionally — the kill-switch is set, or the event kind is
-    /// one the hash gate can never vouch for (`Create`/`Remove`).
+    /// Rebuild unconditionally — the event kind is one the hash gate can
+    /// never vouch for (`Create`/`Remove`), or a file it does not gate.
     Proceed,
     /// Gate-eligible `Modify`: enqueue, and let the worker run the
     /// stat+SHA-256 check (`should_rebuild_for_paths`) at admission.
@@ -997,15 +1008,11 @@ pub enum PumpGate {
 /// (`is_root_agent_config` canonicalizes, but only after a pure file-NAME
 /// match, so the common event costs the pump nothing.)
 pub fn pump_gate(kind: notify::EventKind, folder_path: &str, paths: &[PathBuf]) -> PumpGate {
-    // Precedes even the kill-switch — see `classify::is_root_agent_config`.
+    // See `classify::is_root_agent_config`.
     let root = Path::new(folder_path);
     use crate::build::scan::classify::is_root_agent_config;
     if !paths.is_empty() && paths.iter().all(|p| is_root_agent_config(root, p)) {
         return PumpGate::Suppress;
-    }
-    // Kill-switch: any set value disables the gate entirely.
-    if std::env::var("MOSS_WATCH_NO_GATE").is_ok() {
-        return PumpGate::Proceed;
     }
     if !should_gate_modify_event(kind) {
         return PumpGate::Proceed;

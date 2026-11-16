@@ -197,7 +197,7 @@ const RASTER_MIN_SHORTER_SIDE: u32 = 32;
 /// (an `O_TRUNC` open) which fails `EDEADLK` against a cloud-evicted folder.
 fn write_size_png(output_root: &Path, size: u32, png: &[u8]) -> Result<(), FaviconError> {
     let out_path = output_root.join(format!("favicon-{}.png", size));
-    crate::build::io_utils::write_output(&out_path, png).map_err(FaviconError::Io)
+    crate::build::io_utils::write_output_if_changed(&out_path, png).map(|_| ()).map_err(FaviconError::Io)
 }
 
 /// Makes the square sizes of an author-supplied PNG icon. Each size is the

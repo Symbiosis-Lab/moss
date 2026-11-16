@@ -16,6 +16,8 @@ import {
   srcsetMatches,
   srcsetUrls,
   stripBust,
+  refetchSrc,
+  withBust,
 } from "../asset-urls";
 
 describe("normPath", () => {
@@ -47,6 +49,37 @@ describe("stripBust", () => {
 
   test("does not accumulate across repeated swaps", () => {
     expect(stripBust("/a.webp?_t=1?_t=2")).toBe("/a.webp");
+  });
+
+  test("removes a bust that followed the URL's own query, and keeps the query", () => {
+    expect(stripBust("/a.webp?v=2&_t=1712345")).toBe("/a.webp?v=2");
+  });
+});
+
+describe("withBust", () => {
+  test("starts the query of a URL that has none", () => {
+    expect(withBust("/a.webp", 7)).toBe("/a.webp?_t=7");
+  });
+
+  test("joins a URL's own query as one more parameter", () => {
+    expect(withBust("/a.webp?v=2", 7)).toBe("/a.webp?v=2&_t=7");
+    expect(new URL(withBust("/a.webp?v=2", 7), "http://x").searchParams.get("v")).toBe("2");
+  });
+
+  test("goes before a fragment, and a ? inside the fragment is not a query", () => {
+    expect(withBust("/icon.svg#mark", 7)).toBe("/icon.svg?_t=7#mark");
+    expect(withBust("/icon.svg#a?b", 7)).toBe("/icon.svg?_t=7#a?b");
+  });
+});
+
+describe("refetchSrc", () => {
+  test("stamps a source that names the file, in place of an earlier stamp", () => {
+    expect(refetchSrc("/pic.png?v=2&_t=1", "/pic.png", 7)).toBe("/pic.png?v=2&_t=7");
+    expect(refetchSrc("pic.png", "/pic.png", 7)).toBe("pic.png?_t=7");
+  });
+
+  test("leaves a source that names another file", () => {
+    expect(refetchSrc("/other.png", "/pic.png", 7)).toBeNull();
   });
 });
 
@@ -104,16 +137,20 @@ describe("srcsetMatches", () => {
 
 describe("bustSrcset", () => {
   test("busts every candidate and preserves descriptors", () => {
-    expect(bustSrcset("/a.w800.webp 800w, /a.w1600.webp 1600w", "?_t=7")).toBe(
+    expect(bustSrcset("/a.w800.webp 800w, /a.w1600.webp 1600w", 7)).toBe(
       "/a.w800.webp?_t=7 800w, /a.w1600.webp?_t=7 1600w",
     );
   });
 
   test("busts a descriptorless single candidate", () => {
-    expect(bustSrcset("/a.webp", "?_t=7")).toBe("/a.webp?_t=7");
+    expect(bustSrcset("/a.webp", 7)).toBe("/a.webp?_t=7");
+  });
+
+  test("joins each candidate's own query", () => {
+    expect(bustSrcset("/a.webp?v=2 800w, /b.webp 1600w", 7)).toBe("/a.webp?v=2&_t=7 800w, /b.webp?_t=7 1600w");
   });
 
   test("replaces a prior bust instead of stacking one", () => {
-    expect(bustSrcset("/a.webp?_t=1 800w", "?_t=2")).toBe("/a.webp?_t=2 800w");
+    expect(bustSrcset("/a.webp?_t=1 800w", 2)).toBe("/a.webp?_t=2 800w");
   });
 });

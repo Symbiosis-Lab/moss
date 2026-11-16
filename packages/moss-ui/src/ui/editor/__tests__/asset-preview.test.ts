@@ -94,21 +94,23 @@ describe('renderAssetPreview (the one card, three containers)', () => {
 
 describe('buildHoverDom (unified-cache data source)', () => {
   test('not-found kind → an empty body: the card title names the file and its problem sentence says what follows', () => {
-    const dom = buildHoverDom('missing.png', envelope({ kind: 'not-found' }, null));
+    const dom = buildHoverDom(envelope({ kind: 'not-found' }, null));
     expect(dom.textContent).toBe('');
     expect(dom.querySelector('img')).toBeNull();
     expect(dom.querySelector('.asset-preview-meta')).toBeNull();
   });
 
   test('resolved image kind → the card, from env.resolved', () => {
-    const dom = buildHoverDom('photo.png', envelope({ kind: 'image' }, IMAGE_ASSET));
+    const dom = buildHoverDom(envelope({ kind: 'image' }, IMAGE_ASSET));
     expect(dom.querySelector('img')).not.toBeNull();
     expect(dom.querySelector('.asset-preview-name')!.textContent).toBe('photo.png');
   });
 
-  test('not-yet-resolved metadata does not claim a missing file', () => {
-    const dom = buildHoverDom('pending.png', undefined);
-    expect(dom.textContent).toBe('pending.png');
+  test.each([
+    ['a file not yet resolved', undefined],
+    ['a folder', envelope({ kind: 'folder-listing' }, null)],
+  ])('%s → an empty body: the target is already on the line', (_what, env) => {
+    expect(buildHoverDom(env).hasChildNodes()).toBe(false);
   });
 });
 

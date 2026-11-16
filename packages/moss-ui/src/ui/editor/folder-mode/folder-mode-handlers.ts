@@ -32,6 +32,7 @@
  */
 
 import { t } from "../../i18n/index";
+import { importedPagesText } from "../../shared/import-outcome";
 import { showToast, showAck } from "../../shared/ui/toast/toast-manager";
 import { runAction, BUSY_LABEL_ATTR } from "../../shared/ui/run-action";
 import type { FolderCardKind } from "./folder-mode";
@@ -487,8 +488,8 @@ async function importFromUrl(url: string, deps: CardHandlerDeps): Promise<void> 
   if (!result.data.success) {
     throw new Error(result.data.error ?? "import failed");
   }
-  const total = result.data.total_pages;
-  if (total === 0) {
+  const imported = importedPagesText(result.data);
+  if (imported === null) {
     // Zero-result variant: feedback is inline on the
     // re-expanded URL card, not a toast. The card re-expands with the failed
     // URL as ghost-text (placeholder) so the user can retype or click elsewhere.
@@ -514,7 +515,7 @@ async function importFromUrl(url: string, deps: CardHandlerDeps): Promise<void> 
   if (pick) {
     await deps.loadFile(pick);
   } else {
-    showAck(t('onboard.flow.url_imported_pages', { total: String(total) }));
+    showAck(imported);
   }
 }
 
@@ -623,7 +624,7 @@ export async function handleConnectPlugin(deps: CardHandlerDeps): Promise<void> 
   // ends at "open the plugins view"; the plugin install flow takes over
   // and PanelTask events arrive via `report_plugin_task_lifecycle`.
   if (!host.openPluginsView) throw new Error("this host has no plugins view");
-  const result = await host.openPluginsView("import", deps.folderPath);
+  const result = await host.openPluginsView(deps.folderPath);
   if (result.status === "error") {
     // Backstop: the IPC call should always succeed when moss is up. If
     // the emit_to fails (e.g., main webview labeled differently in a

@@ -27,20 +27,19 @@ import {
   type TemplateMeta,
 } from '../template-menu';
 import { closeActiveInputPopover } from "../../shared/ui/input-popover";
-import type { LanguageSource } from '../languages';
+import type { LanguageSource, TranslationSlot } from '../languages';
 
 const PAGE: TemplateMeta = { id: 'aaa', name: 'Blog post', kind: 'page', created_at: '2026-09-03', folder: null, langs: [] };
 const FOLDER: TemplateMeta = { id: 'bbb', name: 'Section', kind: 'folder', created_at: '2026-09-03', folder: null, langs: [] };
 
-function makeCommands(): TemplateCommands & LanguageSource {
+function makeCommands(): TemplateCommands & Pick<LanguageSource, 'pageTranslations'> {
   return {
     createTemplate: vi.fn(async () => ({ status: 'ok' as const, data: 'new-id' })),
     listTemplates: vi.fn(async () => ({ status: 'ok' as const, data: [] })),
     renameTemplate: vi.fn(async () => ({ status: 'ok' as const, data: null })),
     setTemplateFolder: vi.fn(async () => ({ status: 'ok' as const, data: null })),
     deleteTemplate: vi.fn(async () => ({ status: 'ok' as const, data: null })),
-    siteLanguages: vi.fn(async () => ({ status: 'ok' as const, data: { default_lang: 'en', trees: [] } })),
-    listDirectory: vi.fn(async () => ({ status: 'ok' as const, data: [] })),
+    pageTranslations: vi.fn(async (): Promise<{ status: 'ok'; data: TranslationSlot[] }> => ({ status: 'ok', data: [] })),
   };
 }
 
@@ -111,10 +110,7 @@ describe('promptSaveAsTemplate', () => {
 
   it('offers to save a translated page with the template, and saves it when the author agrees', async () => {
     const commands = makeCommands();
-    vi.mocked(commands.siteLanguages).mockResolvedValue({ status: 'ok', data: { default_lang: 'en', trees: ['zh-hans'] } });
-    vi.mocked(commands.listDirectory).mockImplementation(async (abs: string) => (
-      { status: 'ok', data: abs === '/site/zh-hans/work' ? [{ name: 'paper.md' }] : [] }
-    ));
+    vi.mocked(commands.pageTranslations).mockResolvedValue({ status: 'ok', data: [{ lang: 'zh-hans', rel: 'zh-hans/work/纸.md', exists: true, folder_missing: false }] });
     mockMossConfirm.mockResolvedValueOnce(true);
     promptSaveAsTemplate(commands, { absPath: '/site/work/paper.md', projectRoot: '/site', isHome: false }, at());
     popoverInput().value = 'Essay';
@@ -124,15 +120,12 @@ describe('promptSaveAsTemplate', () => {
       'Also save the 简体中文 page as its template?',
       expect.objectContaining({ confirmLabel: 'Save both' }),
     );
-    expect(commands.createTemplate).toHaveBeenCalledWith('/site/work/paper.md', 'Essay', false, [['zh-hans', '/site/zh-hans/work/paper.md']]);
+    expect(commands.createTemplate).toHaveBeenCalledWith('/site/work/paper.md', 'Essay', false, [['zh-hans', '/site/zh-hans/work/纸.md']]);
   });
 
   it('saves only the page when the author declines the translations', async () => {
     const commands = makeCommands();
-    vi.mocked(commands.siteLanguages).mockResolvedValue({ status: 'ok', data: { default_lang: 'en', trees: ['zh-hans'] } });
-    vi.mocked(commands.listDirectory).mockImplementation(async (abs: string) => (
-      { status: 'ok', data: abs === '/site/zh-hans/work' ? [{ name: 'paper.md' }] : [] }
-    ));
+    vi.mocked(commands.pageTranslations).mockResolvedValue({ status: 'ok', data: [{ lang: 'zh-hans', rel: 'zh-hans/work/纸.md', exists: true, folder_missing: false }] });
     mockMossConfirm.mockResolvedValueOnce(false);
     promptSaveAsTemplate(commands, { absPath: '/site/work/paper.md', projectRoot: '/site', isHome: false }, at());
     popoverInput().value = 'Essay';

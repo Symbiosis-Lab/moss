@@ -238,6 +238,14 @@
   transition-delay: 0.35s;
 }
 
+.moss-subscribe-form[data-moss-hosted="true"] .moss-subscribe-subscribed { display: none; }
+:root[data-moss-subscribed] .moss-subscribe-form[data-moss-hosted="true"] > :not(.moss-subscribe-subscribed) { display: none; }
+:root[data-moss-subscribed] .moss-subscribe-form[data-moss-hosted="true"] .moss-subscribe-subscribed {
+  display: block;
+  color: var(--moss-color-muted);
+  font-size: var(--moss-subscribe-status-size, 0.95rem);
+}
+
 .moss-subscribe-form[data-state="error"] .moss-btn__label { opacity: 1; }
 .moss-subscribe-form[data-state="error"] .moss-btn__spinner { opacity: 0; }
 .moss-subscribe-form[data-state="error"] .moss-subscribe-status {

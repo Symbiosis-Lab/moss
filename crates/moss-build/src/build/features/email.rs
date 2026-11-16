@@ -313,7 +313,8 @@ struct MossSubscribeCopy {
     input_label: &'static str,
     label: &'static str,
     check_email: &'static str,
-    already_subscribed: &'static str,
+    /// Shown in place of the field and button to a browser signed in to the site.
+    subscribed: &'static str,
     error: &'static str,
 }
 
@@ -323,32 +324,32 @@ fn moss_subscribe_copy(lang: Language) -> MossSubscribeCopy {
             placeholder: "your@email.com",
             input_label: "Email address",
             label: "Subscribe",
-            check_email: "Check your email to confirm.",
-            already_subscribed: "You’re already subscribed.",
+            check_email: "Check your email.",
+            subscribed: "Subscribed",
             error: "Something went wrong. Try again?",
         },
         Language::ZhHans => MossSubscribeCopy {
             placeholder: "邮箱",
             input_label: "邮箱地址",
             label: "订阅",
-            check_email: "请在邮箱中确认订阅",
-            already_subscribed: "你已订阅。",
+            check_email: "请查收邮件",
+            subscribed: "已订阅",
             error: "出错了，请重试。",
         },
         Language::ZhHant => MossSubscribeCopy {
             placeholder: "電子郵件",
             input_label: "電子郵件地址",
             label: "訂閱",
-            check_email: "請在電子郵件中確認訂閱",
-            already_subscribed: "你已訂閱。",
+            check_email: "請查收郵件",
+            subscribed: "已訂閱",
             error: "出錯了，請重試。",
         },
         Language::De => MossSubscribeCopy {
             placeholder: "ihre@email.de",
             input_label: "E-Mail-Adresse",
             label: "Abonnieren",
-            check_email: "Bitte bestätigen Sie das Abonnement in Ihrer E-Mail.",
-            already_subscribed: "Sie haben bereits abonniert.",
+            check_email: "Bitte prüfen Sie Ihre E-Mail.",
+            subscribed: "Abonniert",
             error: "Es ist ein Fehler aufgetreten. Bitte versuchen Sie es erneut.",
         },
     }
@@ -388,14 +389,14 @@ fn subscribe_form_inner(
   <div class="moss-subscribe-status" aria-live="polite">
     {envelope_svg}
     <span data-copy="check-email" hidden>{check_email}</span>
-    <span data-copy="already-subscribed" hidden>{already}</span>
     <span data-copy="error" hidden>{error}</span>
-  </div>"#,
+  </div>
+  <span class="moss-subscribe-subscribed">{subscribed}</span>"#,
         placeholder = placeholder,
         input_label = c.input_label,
         label = label,
         check_email = c.check_email,
-        already = c.already_subscribed,
+        subscribed = c.subscribed,
         error = c.error,
         envelope_svg = envelope_svg,
         check_svg = CHECK_SVG,
@@ -425,6 +426,20 @@ pub fn label_subscribe_input(form_html: &str, prompt_id: &str) -> String {
         &format!(r#"<input type="email" id="{id}-field" aria-labelledby="{id} {id}-field" name="email""#),
         1,
     )
+}
+
+/// The site id a hosted subscribe form posts with. Only a site published to
+/// the moss host has subscribing; a site with a deploy plugin gets none, so its
+/// forms are pending: the preview shows them and published pages hide them.
+pub fn subscribe_site_id(deploy: &crate::config::deployment::DomainDeploymentConfig) -> Option<&str> {
+    deploy.site_id.as_deref().filter(|_| deploy.on_moss_host())
+}
+
+/// The build note for a site whose subscribe forms are left off its published
+/// pages because a deploy plugin publishes it.
+pub fn subscribe_elsewhere_note(deploy: &crate::config::deployment::DomainDeploymentConfig) -> Option<String> {
+    let plugin = deploy.deploy_method.as_deref().filter(|m| *m != crate::config::deployment::MOSS_TARGET_ID)?;
+    Some(format!("This site publishes with `{plugin}`, and subscribing works only on moss hosting, so its published pages show no subscribe form."))
 }
 
 /// The single moss-hosted subscribe form (the `:::subscribe` shortcode shape).
@@ -594,7 +609,7 @@ fn landing_copy(
         (Language::En, SubscribeLanding::Expired) => (
             "Link expired",
             "This link has expired",
-            "Subscription links are valid for 48 hours. Please subscribe again from the site.",
+            "Subscription links are valid for 24 hours. Please subscribe again from the site.",
         ),
         (Language::De, SubscribeLanding::Confirmed) => (
             "Abonniert",
@@ -604,7 +619,7 @@ fn landing_copy(
         (Language::De, SubscribeLanding::Expired) => (
             "Link abgelaufen",
             "Dieser Link ist abgelaufen",
-            "Abonnement-Links sind 48 Stunden gültig. Bitte abonnieren Sie erneut auf der Website.",
+            "Abonnement-Links sind 24 Stunden gültig. Bitte abonnieren Sie erneut auf der Website.",
         ),
         (Language::ZhHans, SubscribeLanding::Confirmed) => (
             "已订阅",
@@ -614,7 +629,7 @@ fn landing_copy(
         (Language::ZhHans, SubscribeLanding::Expired) => (
             "链接已过期",
             "链接已过期",
-            "订阅链接有效期为四十八小时，请重新在网站上订阅。",
+            "订阅链接有效期为二十四小时，请重新在网站上订阅。",
         ),
         (Language::ZhHant, SubscribeLanding::Confirmed) => (
             "已訂閱",
@@ -624,7 +639,7 @@ fn landing_copy(
         (Language::ZhHant, SubscribeLanding::Expired) => (
             "連結已失效",
             "連結已失效",
-            "訂閱連結有效期為四十八小時，請重新在網站上訂閱。",
+            "訂閱連結有效期為二十四小時，請重新在網站上訂閱。",
         ),
     }
 }
@@ -940,7 +955,7 @@ mod tests {
         let html = render_hosted_subscribe_form(Some("test-site"), Language::ZhHans, "", None, None, "https://api.mosspub.com");
         assert!(html.contains("placeholder=\"邮箱\""));
         assert!(html.contains("订阅"));
-        assert!(html.contains("请在邮箱中确认订阅"));
+        assert!(html.contains("请查收邮件"));
     }
 
     #[test]
@@ -948,7 +963,7 @@ mod tests {
         let html = render_hosted_subscribe_form(Some("test-site"), Language::ZhHant, "", None, None, "https://api.mosspub.com");
         assert!(html.contains("placeholder=\"電子郵件\""), "Traditional should use 電子郵件, not 邮箱: {html}");
         assert!(html.contains("訂閱"), "Traditional label should be 訂閱: {html}");
-        assert!(html.contains("請在電子郵件中確認訂閱"));
+        assert!(html.contains("請查收郵件"));
     }
 
     #[test]
@@ -960,11 +975,31 @@ mod tests {
     }
 
     #[test]
+    fn subscribing_exists_only_on_the_moss_host() {
+        use crate::config::deployment::DomainDeploymentConfig;
+        let deploy = |site_id: Option<&str>, method: Option<&str>| DomainDeploymentConfig {
+            site_id: site_id.map(str::to_string),
+            deploy_method: method.map(str::to_string),
+            ..Default::default()
+        };
+        assert_eq!(subscribe_site_id(&deploy(Some("notes"), Some("moss"))), Some("notes"));
+        assert_eq!(subscribe_site_id(&deploy(None, None)), None, "unpublished: pending");
+        assert_eq!(subscribe_site_id(&deploy(Some("notes"), Some("github-pages"))), None, "a deploy plugin: no subscribing");
+        assert_eq!(subscribe_site_id(&deploy(Some("notes"), Some("server"))), None);
+        assert_eq!(subscribe_site_id(&deploy(Some(" "), Some("moss"))), None);
+
+        let note = subscribe_elsewhere_note(&deploy(Some("notes"), Some("github-pages"))).unwrap();
+        assert!(note.contains("`github-pages`") && note.contains("no subscribe form"), "{note}");
+        assert_eq!(subscribe_elsewhere_note(&deploy(Some("notes"), Some("moss"))), None);
+        assert_eq!(subscribe_elsewhere_note(&deploy(None, None)), None);
+    }
+
+    #[test]
     fn test_moss_form_status_spans_present() {
         let html = render_hosted_subscribe_form(Some("test-site"), Language::En, "", None, None, "https://api.mosspub.com");
         assert!(html.contains("data-copy=\"check-email\""));
-        assert!(html.contains("data-copy=\"already-subscribed\""));
         assert!(html.contains("data-copy=\"error\""));
+        assert!(!html.contains("already-subscribed"));
     }
 
     #[test]
@@ -1020,9 +1055,11 @@ mod tests {
     }
 
     #[test]
-    fn test_hosted_form_en_already_subscribed_uses_typographic_apostrophe() {
-        let html = subscribe_form_inner(Language::En, None, None);
-        assert!(html.contains("You\u{2019}re already subscribed."), "{html}");
+    fn test_hosted_form_carries_its_subscribed_line_in_every_language() {
+        for (lang, word) in [(Language::En, "Subscribed"), (Language::De, "Abonniert"), (Language::ZhHans, "已订阅"), (Language::ZhHant, "已訂閱")] {
+            let html = subscribe_form_inner(lang, None, None);
+            assert!(html.contains(&format!(r#"<span class="moss-subscribe-subscribed">{word}</span>"#)), "{html}");
+        }
     }
 
     #[test]

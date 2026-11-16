@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use super::converter::extract_article;
-use super::fetch::strip_query;
+use super::fetch::{strip_query, Client};
 use crate::vault::import::page::media::MediaWriter;
 use super::run::{compose_note, PageGap, ScrapeResult, ASSETS_SUBDIR};
 use crate::vault::import::page::write_note;
@@ -23,7 +23,7 @@ use super::writer::{rename_for_collision, sanitize_filename};
 /// `origin` frontmatter. This is the local-file arm of `moss import`, letting
 /// the user bring in a page they saved from a login-gated or JS-heavy site
 /// (e.g. a douban note saved via "Save Page As").
-pub(crate) async fn import_local_file(path: &Path, output_dir: &Path) -> Result<ScrapeResult, String> {
+pub(crate) async fn import_local_file(path: &Path, output_dir: &Path, client: &Client) -> Result<ScrapeResult, String> {
     // The user picked this path in a file dialog, so it is routinely inside an
     // iCloud or Drive folder and routinely evicted — a plain `fs::read` of one
     // answers `Resource deadlock avoided (os error 11)` and the import reports
@@ -95,7 +95,7 @@ pub(crate) async fn import_local_file(path: &Path, output_dir: &Path) -> Result<
     // Write embedded assets (MHTML) to disk; remote images in a plain .html
     // import are left as absolute URLs (the local path never hits the network).
     let remote_to_local = MediaWriter {
-        directory: &assets_dir, prefix: "./assets/imported/", user_agent: "", referer: None,
+        directory: &assets_dir, prefix: "./assets/imported/", client, referer: None,
     }.embedded(&article.media_urls, &embedded)?;
 
     // One file in, one file out: an empty body fails loudly here rather than
@@ -133,6 +133,7 @@ pub(crate) async fn import_local_file(path: &Path, output_dir: &Path) -> Result<
         restricted_pages: usize::from(article.members_only),
         success: true,
         total_pages: 1,
+        kept_pages: 0,
         failed_pages: 0,
         skipped_pages: 0,
         duplicate_pages: 0,

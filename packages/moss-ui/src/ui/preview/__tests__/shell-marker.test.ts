@@ -8,7 +8,7 @@
  * counterpart.
  */
 import { describe, it, expect } from "vitest";
-import { withShellMarker, stripShellMarker, SHELL_MARKER_PARAM } from "../shell-marker";
+import { withShellMarker, withoutPreviewParams, SHELL_MARKER_PARAM } from "../shell-marker";
 
 describe("withShellMarker", () => {
   it("appends the marker to a URL with no query string", () => {
@@ -79,14 +79,14 @@ describe("withShellMarker — production output shape", () => {
   });
 });
 
-describe("stripShellMarker", () => {
+describe("withoutPreviewParams", () => {
   it("removes the marker from a URL that has it", () => {
-    const result = stripShellMarker("http://localhost:1420/foo?__moss_shell=1");
+    const result = withoutPreviewParams("http://localhost:1420/foo?__moss_shell=1");
     expect(result).toBe("http://localhost:1420/foo");
   });
 
   it("preserves other query params when removing the marker", () => {
-    const result = stripShellMarker(
+    const result = withoutPreviewParams(
       "http://localhost:1420/foo?a=1&__moss_shell=1&b=2"
     );
     // Order may shift when params are re-serialized; check semantically.
@@ -96,18 +96,25 @@ describe("stripShellMarker", () => {
   });
 
   it("preserves the hash when removing the marker", () => {
-    const result = stripShellMarker("http://localhost:1420/foo?__moss_shell=1#sec");
+    const result = withoutPreviewParams("http://localhost:1420/foo?__moss_shell=1#sec");
     expect(result).toBe("http://localhost:1420/foo#sec");
+  });
+
+  it("removes the reload stamp with the marker and keeps everything else", () => {
+    expect(withoutPreviewParams("http://localhost:4832/a/?_t=1731600000000&x=2&__moss_shell=1#h")).toBe(
+      "http://localhost:4832/a/?x=2#h",
+    );
+    expect(withoutPreviewParams("http://localhost:4832/a/?_t=1731600000000")).toBe("http://localhost:4832/a/");
   });
 
   it("returns the URL unchanged if the marker is absent", () => {
     const url = "http://localhost:1420/foo?a=1";
-    expect(stripShellMarker(url)).toBe(url);
+    expect(withoutPreviewParams(url)).toBe(url);
   });
 
   it("round-trips with withShellMarker", () => {
     const original = "http://localhost:1420/posts/hello?lang=zh#anchor";
-    const round = stripShellMarker(withShellMarker(original));
+    const round = withoutPreviewParams(withShellMarker(original));
     expect(round).toBe(original);
   });
 });

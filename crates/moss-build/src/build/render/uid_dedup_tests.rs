@@ -599,6 +599,7 @@ fn a_record_with_triples_resolves_the_collision_without_the_heuristic() {
                 title: String::new(),
             }]),
             asset_source_to_output: None,
+            page_stubs: Default::default(),
         },
     )
     .unwrap();
@@ -642,6 +643,7 @@ fn a_half_updated_record_defers_instead_of_reaching_the_heuristic() {
             uids: [("posts/original.md".to_string(), "aabbccdd".to_string())].into(),
             triples: None,
             asset_source_to_output: None,
+            page_stubs: Default::default(),
         },
     )
     .unwrap();

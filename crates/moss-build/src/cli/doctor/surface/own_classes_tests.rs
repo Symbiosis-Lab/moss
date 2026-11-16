@@ -120,3 +120,19 @@ fn a_comment_opener_inside_a_selector_string_hides_no_class() {
     let names: Vec<String> = audit(dir.path(), false).own_classes.into_iter().map(|c| c.class).collect();
     assert_eq!(names, vec!["after-it", "tip-box"]);
 }
+
+#[test]
+fn a_class_on_a_typed_fence_counts_as_used() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), ".moss/theme/style.css", ".tall { x: 1 }\n.faces { x: 1 }\n.wide { x: 1 }\n.row { x: 1 }\n.inner { x: 1 }\n.banded { x: 1 }\n");
+    write(
+        dir.path(),
+        "Shelf.md",
+        "---\ntitle: Shelf\n---\n\n:::grid 2 {.tall}\nOne\n+++\nTwo\n:::\n\n:::gallery 4 {.faces}\na.png\n:::\n\n:::hero {.wide}\n# Shelf\n:::\n\n:::buttons {.row}\n[Open](/open/)\n:::\n\n::::grid 2\nOne\n+++\n:::grid 2 {.inner}\nA\n+++\nB\n:::\n::::\n\n::: {.band}\n::::grid 2 {.banded}\nA\n+++\nB\n::::\n:::\n",
+    );
+    let report = audit(dir.path(), false);
+    let used: Vec<(&str, Option<usize>)> =
+        report.own_classes.iter().map(|c| (c.class.as_str(), c.example.as_ref().map(|e| e.1))).collect();
+    // `.banded` is on line 34. The parser reports a block inside a classed div one line late.
+    assert_eq!(used, vec![("banded", Some(35)), ("faces", Some(11)), ("inner", Some(23)), ("row", Some(19)), ("tall", Some(5)), ("wide", Some(15))]);
+}

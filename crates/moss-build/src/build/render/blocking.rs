@@ -28,7 +28,6 @@ use crate::build::markdown::{process_markdown_file, resolve_duplicate_slugs_with
 use crate::build::folder_embed::{generate_children, resolve_children_config};
 use crate::build::assets::paths::{compute_binary_hash, compute_content_hash, PathResolver};
 use crate::build::context::BuildContext;
-use crate::build::manifest::change_set::Withdrawn;
 use crate::build::manifest::{HashBucket, PendingManifest};
 use crate::build::media::qr;
 use crate::build::outcome::BuildStopped;
@@ -247,6 +246,7 @@ fn page_meta_of(doc: &crate::build::types::ParsedDocument) -> crate::types::cont
         title: doc.title.clone(),
         date: doc.date.clone(),
         draft: doc.is_draft(),
+        empty_source: doc.empty_source,
         uid: doc.uid.clone(),
     }
 }
@@ -329,6 +329,7 @@ pub fn generate_blocking_content_for_build(
     instant: jiff::Timestamp,
 ) -> Result<BlockingContentOutput, BuildStopped> {
     let total_start = std::time::Instant::now();
+    let inputs_phase = PhaseTrace::start("render_inputs");
     let mut og_requests = Vec::new();
 
     // `pending` is pre-seeded with previous_hashes by the caller (PendingManifest::new).
@@ -506,7 +507,8 @@ pub fn generate_blocking_content_for_build(
     // Empty when no page in the site sets the field. Passed into
     // `process_markdown_file` so the wikilink resolver routes cross-references
     // to the external destination instead of the local archive.
-    log::debug!(target: "timing", "[render] external_url_map ({} entries): {:?}", external_url_map.len(), total_start.elapsed());
+    drop(inputs_phase);
+    let parse_setup_phase = PhaseTrace::start("render_parse_setup");
 
     // Resolved once at the pipeline's config construction and handed down (see
     // `SiteConfig::lang`); here the code becomes a `Language`, English being
@@ -516,12 +518,11 @@ pub fn generate_blocking_content_for_build(
     let site_lang: crate::i18n::Language =
         crate::i18n::Language::from_code(&site_config.lang).unwrap_or(crate::i18n::Language::En);
 
-    // Resolve site_id for the inline subscribe shortcode. Per-build (not per-file)
-    // so we read .moss/config.toml once. None means no published site → renders
-    // an empty action path which the form treats as a no-op.
+    // The site id inline `:::subscribe` forms post with, read once per build.
+    // None (unpublished, or published elsewhere) renders the pending form.
     let deploy = crate::build::site_config::get_domain_config(source_path)
         .unwrap_or_default();
-    let site_id = deploy.site_id.clone();
+    let site_id = crate::build::features::email::subscribe_site_id(&deploy).map(str::to_string);
 
     // Resolve the seta base URL once per build from the project environment.
     // Passed into `process_markdown_file` so inline `:::subscribe` shortcodes
@@ -661,6 +662,7 @@ pub fn generate_blocking_content_for_build(
 
     // `deferred_paths` travels out of the parallel markdown pass. Missing
     // media stays attached to each document and is flattened after Loop A.
+    drop(parse_setup_phase);
     let (mut documents, deferred_paths, source_records) = {
         use rayon::prelude::*;
         use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -758,7 +760,8 @@ pub fn generate_blocking_content_for_build(
                     });
                     let source_content = content?;
                     let content = members_policy.public_source(&file_info.path, &source_content);
-                    if super::empty_home::skip_empty_source(&content, &file_info.path) { return None; }
+                    let empty_page = super::empty_home::is_empty_source(&content);
+                    if empty_page && super::empty_home::skips_empty_source(&file_info.path, root_folder_name) { return None; }
                     md_read_ns.fetch_add(t_read.elapsed().as_nanos() as u64, Ordering::Relaxed);
 
                     // Runs once for the page, and once more over the whole source
@@ -862,10 +865,8 @@ pub fn generate_blocking_content_for_build(
                         authored_source: Some(&content),
                     };
 
-                    let mut doc = match process_markdown_file(&file_info.path, resolved_content, root_folder_name, &page_map, emit_source_lines, site_lang, site_id.as_deref(), markdown, Some(&event_level_image_lookup), Some(&external_url_map), Some(&content_graph), page_context) {
-                        Ok(doc) => doc,
-                        Err(_) => return None,
-                    };
+                    let mut doc = process_markdown_file(&file_info.path, resolved_content, root_folder_name, &page_map, emit_source_lines, site_lang, site_id.as_deref(), markdown, Some(&event_level_image_lookup), Some(&external_url_map), Some(&content_graph), page_context).ok()?;
+                    if empty_page { doc.mark_empty_source(); }
                     // Keep the transclusion
                     // edges the resolve phase just computed instead of dropping
                     // them on the floor. These are the ONLY page→page embed
@@ -1027,7 +1028,7 @@ pub fn generate_blocking_content_for_build(
     };
 
     #[cfg(test)]
-    if let Some(hook) = AFTER_THE_READS.with(|h| h.borrow_mut().take()) {
+    if let Some(hook) = after_the_reads(source_path_buf) {
         hook();
     }
     let folder_index = crate::build::folder_index::NoFolderIndex;
@@ -1037,6 +1038,7 @@ pub fn generate_blocking_content_for_build(
         folders: &folder_index,
         urls: &url_index,
     };
+    let evidence_phase = PhaseTrace::start("render_source_evidence");
     let mut gated_embeds = Vec::new();
     for record in &source_records {
         let doc = &mut documents[record.document_index];
@@ -1053,7 +1055,8 @@ pub fn generate_blocking_content_for_build(
         page_source_hashes.insert(record.source_path.clone(), record.source_metadata());
     }
     page_source_hashes.extend(parse_session.replayed_sources());
-    crate::build::scan::members::refuse_gated_embeds(&gated_embeds)?;
+    crate::build::scan::members::check_build(source_path, &gated_embeds, &project_structure.other_files, members_policy)?;
+    drop(evidence_phase);
     if let Some(event) = crate::build::progress::make_empty_folder_advisory(&project_structure.empty_folders) {
         reporter.report(&event);
     }
@@ -1148,6 +1151,8 @@ pub fn generate_blocking_content_for_build(
     // casing ("Writings") even though the URL slug is lowercased ("writings").
     let folder_display = folder_display_leaves(&project_structure.dirs, &dir_overrides);
     let editions: moss_core::home::Editions;
+    // Out here because the pipeline writes it after this function returns.
+    let places_data;
     let (layout_config, site_url, has_rss, show_rss_in_footer, term_index, calendar, now) = {
         // Profile the whole-corpus Reduce chain. Each pass
         // below folds OTHER pages' state into `documents`, so (unlike Loop A)
@@ -1243,18 +1248,8 @@ pub fn generate_blocking_content_for_build(
         crate::build::place_map::country_map::warn_problems(&documents);
         log::debug!(target: "timing", "[reduce] derive_terms: {:?}", reduce_start.elapsed());
 
-        // Places-explorer handshake, part 1: `places.<hash>.json`'s hash,
-        // computed now while `documents` already carries this pass's
-        // finished output — no field `place_map::places_data::emit_places_data`
-        // reads moves again below. The SAME document set `places_data::emit`
-        // (pipeline.rs, after this function returns) serializes, so the URL
-        // `render_term_map` bakes into a namespace root's figure can never
-        // name a file this build doesn't also write.
-        if let Some(ctx) = site_config.place_maps.take() {
-            let json = crate::build::place_map::places_data::emit_places_data(&documents, &ctx, site_config.math, &dir_overrides);
-            let hash = compute_content_hash(&json);
-            site_config.place_maps = Some(ctx.with_explorer_places_hash(hash).with_term_pages(&term_index));
-        }
+        // Now, while `documents` carries this pass's finished output.
+        places_data = crate::build::place_map::places_data::handshake(&mut site_config.place_maps, &documents, site_config.math, &dir_overrides, &term_index);
 
         // The canonical site URL and the calendar plan are decided before the
         // embeds, so an embedded listing can carry its folder's calendar links.
@@ -1724,10 +1719,9 @@ pub fn generate_blocking_content_for_build(
     // re-saves the facade cache, and builds the dep graph — all sized by the
     // vault, not by the edit. The partition it feeds costs 1.0ms and the one
     // page it spares costs 3.5ms. Medians of 7 rebuilds.
-    log::debug!(target: "timing", "[render] verdict computed: {:?}", total_start.elapsed());
 
     // Built once here rather than once per page. See `BuildShared`.
-    let mut shared = super::build_shared::BuildShared::new(scripts, project_structure, &dir_overrides, now);
+    let mut shared = super::build_shared::BuildShared::new(scripts, &event_level_image_lookup, now);
     shared.calendar = calendar;
     shared.theme_modules = theme_modules;
 
@@ -1751,7 +1745,7 @@ pub fn generate_blocking_content_for_build(
             },
             show_rss_in_footer, emit_source_lines, has_sidebar_layout,
             home_breadcrumb: crate::build::components::nav::home_breadcrumb_setting(&documents),
-            media_lookup: &shared.media_lookup,
+            media_lookup: shared.media_lookup,
         },
         content_graph: Some(&content_graph), dir_overrides: &dir_overrides,
         site_url: &site_url, output_dir: Some(output_dir), source_root: source_path_buf, shared: &shared,
@@ -2459,9 +2453,6 @@ pub fn generate_blocking_content_for_build(
         // cards missing their QR corner.
         qr::emit_share_qrs(&documents, &site_url, layout_config.assets.selection_tools, output_dir, pending)?;
     }
-    // What the settings leave out, so the publish gate reads a missing
-    // llms.txt, tdmrep.json or QR code as the owner's choice.
-    pending.set_withdrawn(Withdrawn::from_settings(site_config.ai, layout_config.assets.selection_tools));
     if frontmatter_scan_cache.restricts_pages(&project_structure.markdown_files) { pending.mark_restricts_pages(); }
 
     // Calendar files for event pages and for folders of them. Written whether or
@@ -2514,7 +2505,7 @@ pub fn generate_blocking_content_for_build(
     }
     // Only the moss host keeps `.moss-email/` private; any other host would
     // publish the templates.
-    let on_moss_host = crate::build::site_config::get_domain_config(source_path).unwrap_or_default().site_id.is_some();
+    let on_moss_host = deploy.on_moss_host();
     if on_moss_host { crate::build::emit::welcome_email::emit(&documents, output_dir, pending)?; }
     site_config.blocks.emit_assets(&documents, output_dir, pending)?;
     crate::plugins::contributions::public_data::emit(&site_config.public_data, output_dir, pending)?;
@@ -2591,6 +2582,7 @@ pub fn generate_blocking_content_for_build(
         page_count += 1;
     }
 
+    let records_phase = PhaseTrace::start("render_site_records");
     // What sitemap.xml lists: every page a reader is meant to land on. That is
     // every page registered by now, the home page included; then the media
     // collection pages, the pages still in the cloud, the static `.html` pages
@@ -2744,7 +2736,6 @@ pub fn generate_blocking_content_for_build(
             }
         }
     }
-    log::debug!(target: "timing", "[render] prelude: article_map+inventory+previews+subscribe: {:?}", total_start.elapsed());
 
     send_progress(
         progress_sender,
@@ -2807,7 +2798,6 @@ pub fn generate_blocking_content_for_build(
         }
         items
     };
-    log::debug!(target: "timing", "[render] prelude: video_items collected: {:?}", total_start.elapsed());
 
     // Generate media collection pages (photography, videos, experiments)
     {
@@ -2914,7 +2904,6 @@ pub fn generate_blocking_content_for_build(
         // `emit::scripts` table, gated on the same `media_pages` fact this
         // loop's `<script>` tag reads.
     }
-    log::debug!(target: "timing", "[render] prelude: media collection pages: {:?}", total_start.elapsed());
 
     // Every runtime script this build ships, from the registration table.
     // Each file's gate is the same fact its `<script>` tag reads, so a tag can
@@ -2935,7 +2924,8 @@ pub fn generate_blocking_content_for_build(
     // The diagrams' email and feed pictures, the same append-only shape.
     crate::build::emit::diagram_png::emit_diagram_pngs(&documents, output_dir, pending)
         .map_err(|e| format!("Failed to emit diagram pictures: {}", e))?;
-    log::debug!(target: "timing", "[render] prelude: scripts+math_png+diagram_png: {:?}", total_start.elapsed());
+    drop(records_phase);
+    let redirects_phase = PhaseTrace::start("render_redirects_sitemap");
 
     send_progress(
         progress_sender,
@@ -3173,7 +3163,7 @@ pub fn generate_blocking_content_for_build(
         .or_else(|| documents.first().map(|d| d.title.clone()))
         .unwrap_or_else(|| crate::i18n::t(site_lang, "untitled_site").to_string());
 
-    log::debug!(target: "timing", "[render] total: {:?}", total_start.elapsed());
+    drop(redirects_phase);
     // The background lane's work list and the math cache's sweep.
     let _phase_handoff = PhaseTrace::start("render_handoff");
 
@@ -3400,6 +3390,7 @@ pub fn generate_blocking_content_for_build(
         rung_collisions,
         carried_advisories: Vec::new(),
         members_policy: members_policy.clone(),
+        source_oids: Default::default(),
     };
 
     // Math render cache build-end hook (see `parse_cache::math_cache_finish_build`'s
@@ -3418,6 +3409,7 @@ pub fn generate_blocking_content_for_build(
             missing_references,
             term_index,
             now,
+            places_data,
         },
         background_ctx,
         // Surface the parsed page slice to the caller so
@@ -3558,7 +3550,7 @@ pub(super) fn resolve_favicon(
     // lines below never got to speak. The read above already guarded that
     // hazard for the user's favicon; the write did not.
     let (filename, relative_path, content_hash, used_default) = if let Some((name, bytes)) = user_favicon {
-        crate::build::io_utils::write_output(&favicon_dest_dir.join(&name), &bytes)
+        crate::build::io_utils::write_output_if_changed(&favicon_dest_dir.join(&name), &bytes)
             .map_err(|e| format!("Failed to write favicon: {}", e))?;
         let hash = compute_content_hash(&String::from_utf8_lossy(&bytes));
         let rel = format!("assets/{}", name);
@@ -3567,7 +3559,7 @@ pub(super) fn resolve_favicon(
         // The tab icon carries its own round ground, applied only in this
         // written copy — see `ground_default_favicon`'s doc comment for why.
         let grounded_favicon = crate::build::site_meta::favicon::ground_default_favicon(crate::build::page::shell::DEFAULT_FAVICON);
-        crate::build::io_utils::write_output(&favicon_dest_dir.join("favicon.svg"), grounded_favicon.as_bytes())
+        crate::build::io_utils::write_output_if_changed(&favicon_dest_dir.join("favicon.svg"), grounded_favicon.as_bytes())
             .map_err(|e| format!("Failed to write default favicon: {}", e))?;
         let hash = compute_content_hash(&grounded_favicon);
         (
@@ -3631,10 +3623,20 @@ pub(super) fn resolve_favicon(
     })
 }
 
+/// Each runs once, in the next build of its folder, after the render has read
+/// every page and before any source hash is registered. Keyed by folder, not
+/// thread-local: `run_pipeline` renders on the blocking pool.
 #[cfg(test)]
-thread_local! {
-    /// Runs once after the render has read every page, before any source hash is registered.
-    pub(crate) static AFTER_THE_READS: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+pub(crate) static AFTER_THE_READS: std::sync::Mutex<Vec<(std::path::PathBuf, AfterTheReads)>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+type AfterTheReads = Box<dyn FnOnce() + Send>;
+
+#[cfg(test)]
+fn after_the_reads(root: &std::path::Path) -> Option<AfterTheReads> {
+    let mut hooks = AFTER_THE_READS.lock().unwrap_or_else(|e| e.into_inner());
+    let at = hooks.iter().position(|(folder, _)| folder == root)?;
+    Some(hooks.remove(at).1)
 }
 
 #[cfg(test)]

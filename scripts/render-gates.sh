@@ -110,6 +110,7 @@ GATES_BUILD=(
   place-dot-links
   preview-parity-gate
   plain-tab-reload
+  missing-file-box
   touch-targets
   places-explorer-boot
   places-explorer-camera
@@ -130,9 +131,11 @@ GATES_BUILD=(
   content-grid
   wcag-output
   archival-footer
+  subscribed-state
   type-defaults
   diagrams
   browser-editor
+  focus-point
   series-nav
   card-min-token
 )

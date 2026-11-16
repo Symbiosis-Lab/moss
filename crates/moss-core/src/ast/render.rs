@@ -280,11 +280,12 @@ fn render_block<H: RenderHooks + ?Sized>(
             legacy_id,
             contents_end,
             contents_label,
-            numbered_from: _,
+            numbered_from,
+            named_id,
         } => {
             let mut content = String::new();
             render_inlines(hooks, &mut content, children, fnotes);
-            let marks = HeadingMarks { id: id.as_deref(), legacy_id: legacy_id.as_deref(), contents_end: *contents_end, contents_label: contents_label.as_deref(), permalinks_off: fnotes.permalinks_off() };
+            let marks = HeadingMarks { id: id.as_deref(), legacy_id: legacy_id.as_deref(), contents_end: *contents_end, contents_label: contents_label.as_deref(), permalinks_off: fnotes.permalinks_off(), named: *named_id && numbered_from.is_none() };
             hooks.render_heading(out, *level, marks, meta.source_line, &content);
             out.push('\n');
         }

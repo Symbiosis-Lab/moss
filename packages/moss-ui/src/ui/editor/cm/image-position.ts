@@ -136,20 +136,14 @@ export function segmentsWithPosition(segments: readonly string[], word: string):
 
 const WIKILINK_EMBED = /^(!\[\[[^\]|]*)((?:\|[^\]]*)?)(\]\])$/;
 const MARKDOWN_EMBED = /^(!\[[^\]|]*)((?:\|[^\]]*)?)(\]\([^)]*\))$/;
-/** Frame options after a pipe in a markdown image's address, where the build reads them as part of the file name. */
-const ADDRESS_OPTIONS = /^(\]\([^)|]*)\|([^)]*)\)$/;
 
 function splitEmbed(md: string): { head: string; segments: string[]; tail: string } | null {
   const wikilink = WIKILINK_EMBED.exec(md);
   const m = wikilink ?? MARKDOWN_EMBED.exec(md);
   if (!m) return null;
   let tail = m[3];
-  if (!wikilink) {
-    const stray = ADDRESS_OPTIONS.exec(tail);
-    if (stray && stray[2].split('|').every((s) => !s.trim() || frameTokens(s))) tail = `${stray[1]})`;
-    // Brackets that end in a pipe give the picture alt text and no caption.
-    if (/\|\s*$/.test(m[2])) tail = `|${tail}`;
-  }
+  // Brackets that end in a pipe give the picture alt text and no caption.
+  if (!wikilink && /\|\s*$/.test(m[2])) tail = `|${tail}`;
   return { head: m[1], segments: m[2].slice(1).split('|').filter((s) => s.trim()), tail };
 }
 

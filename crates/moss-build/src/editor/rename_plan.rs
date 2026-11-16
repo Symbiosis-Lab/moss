@@ -312,7 +312,7 @@ fn is_external_destination(text: &str) -> bool {
 }
 
 /// Split a reference's `?query`/`#anchor` suffix off its path (earliest of
-/// the two wins, mirroring `ast::resolve_urls::split_path_suffix`). Both
+/// the two wins). Both
 /// halves are opaque; a rewrite reattaches `suffix` verbatim.
 fn split_ref_suffix(text: &str) -> (&str, &str) {
     let q = text.find('?');

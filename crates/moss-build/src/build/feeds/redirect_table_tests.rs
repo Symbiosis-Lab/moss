@@ -175,11 +175,31 @@ fn a_declared_redirect_to_a_media_collection_page_is_kept() {
     let cfg = config(r#""/old-photos/" = "/photography/""#);
     let b = build(&[
         ("essay.md", "---\ntitle: Essay\n---\n\n![A photo](photo.png)\n<!-- photography -->\n"),
+        ("photo.png", "not decoded here"),
         (".moss/config.toml", &cfg),
     ]);
     assert!(b.has("photography/index.html"), "premise: the collection page is built");
     assert!(b.read("old-photos/index.html").contains("url=/photography/"));
     assert_eq!(b.problems, 0);
+}
+
+/// Both sources name one old address: the config's line is the one served,
+/// and a line that is reported and skipped leaves the history's entry working.
+#[test]
+fn a_declared_line_beats_the_history_for_the_same_old_address() {
+    let cfg = config(
+        r#""/old/" = "/about/"
+"/kept/" = "/nowhere/""#,
+    );
+    let b = build(&[
+        ABOUT,
+        ("contact.md", &page("Contact")),
+        (".moss/config.toml", &cfg),
+        (".moss/redirects.json", r#"{"old/": "contact/", "kept/": "contact/"}"#),
+    ]);
+    assert!(b.read("old/index.html").contains("url=/about/"));
+    assert!(b.read("kept/index.html").contains("url=/contact/"));
+    assert_eq!(b.problems, 1);
 }
 
 #[test]
@@ -463,7 +483,35 @@ fn declared_entries_come_from_the_inputs_not_from_the_file() {
     let inputs = TableInputs { declared: vec![("/old/".into(), "/about/".into())], ..Default::default() };
     emit_redirect_table(&paths, &crate::build::scan::article_map::ArticleMap::new(), &inputs, &out, &mut pending)
         .unwrap();
+    // An `.html` stub is left to the slot pass, which this test does not run.
+    crate::build::emit::slots::write_as_rendered(&out, pending.take_unwritten_pages()).unwrap();
     assert!(fs::read_to_string(out.join("old/index.html")).unwrap().contains("url=/about/"));
+}
+
+/// A stub to an author's page is recorded as that page's old address, so a
+/// publish that loses it names the page; a stub to anything else is not.
+#[test]
+fn a_stub_to_a_page_is_recorded_as_its_old_address_and_others_are_not() {
+    use crate::build::feeds::redirects::{emit_redirect_table, TableInputs};
+    let dir = tempfile::Builder::new().prefix("moss_redirect_stubs_").tempdir().unwrap();
+    let out = dir.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    let paths = crate::moss_paths::MossPaths::new(dir.path());
+    let mut pending = crate::build::manifest::PendingManifest::new(crate::types::content::SiteHashes::default());
+    for key in ["about/index.html", "scales.html", "tags/flood/index.html"] {
+        let sp = crate::build::served_path::ServedPath::from_source(key).unwrap();
+        crate::build::context::BuildContext::for_render(&out, &mut pending)
+            .emit(&sp, b"<html></html>", crate::build::manifest::HashBucket::Files)
+            .unwrap();
+    }
+    pending.register_source_mapping("about.md".into(), &crate::build::served_path::ServedPath::from_source("about/index.html").unwrap());
+    let declared = [("/old/", "/about/"), ("/chart/", "/scales.html"), ("/flood/", "/tags/flood/")];
+    let inputs = TableInputs { declared: declared.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(), ..Default::default() };
+    emit_redirect_table(&paths, &crate::build::scan::article_map::ArticleMap::new(), &inputs, &out, &mut pending)
+        .unwrap();
+    let sealed = pending.seal();
+    let stubs: Vec<_> = sealed.page_stubs().iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    assert_eq!(stubs, [("chart/index.html", "scales.html"), ("old/index.html", "about/index.html")]);
 }
 
 /// The pipeline is what hands the parsed config's entries to the build.

@@ -1154,6 +1154,50 @@ fn seta_form_injects_with_site_id_but_no_deploy_method() {
     );
 }
 
+/// A site that publishes with a deploy plugin has no subscribing, even with a
+/// site id left from moss hosting: its footer form is pending, which published
+/// pages hide.
+#[test]
+fn seta_form_is_pending_when_a_deploy_plugin_publishes_the_site() {
+    use crate::build::types::ParsedDocument;
+    use tempfile::TempDir;
+    let test_tmp = concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/test-tmp");
+    std::fs::create_dir_all(test_tmp).unwrap();
+    let temp_dir = TempDir::new_in(test_tmp).unwrap();
+    let project_path = temp_dir.path().to_str().unwrap();
+    let moss_dir = temp_dir.path().join(".moss");
+    std::fs::create_dir_all(&moss_dir).unwrap();
+    std::fs::write(
+        moss_dir.join("config.toml"),
+        &format!("schema_version = {}\n\n[channels.email]\n", crate::config::migrations::CURRENT_VERSION),
+    )
+    .unwrap();
+    let pages = vec![ParsedDocument { url_path: "index.html".to_string(), ..Default::default() }];
+    let deploy = DomainDeploymentConfig {
+        site_id: Some("my-lab".into()),
+        deploy_method: Some("github-pages".into()),
+        ..Default::default()
+    };
+    let slots = generate_native_slots(
+        &ServicesConfig::default(),
+        project_path,
+        email_installed(project_path),
+        crate::build::features::comment::MATTERS_DOMAIN_FALLBACK,
+        &HashMap::new(),
+        &pages,
+        "en",
+        None,
+        &deploy,
+        false,
+        None,
+        None,
+        None,
+    );
+    let html = slots.get_html("footer-end", "index.html").expect("the form is still drawn for the preview");
+    assert!(!html.contains("/sites/my-lab/subscribe"), "no form may post for a site published elsewhere: {html}");
+    assert!(html.contains(r#"data-moss-pending="true""#), "{html}");
+}
+
 /// site_id present → wired seta form, regardless of leftover third-party
 /// email config: a site with both a seta site_id and stale `[services.email]`
 /// content from before the 2026-06-10 redesign still gets the wired seta
@@ -1637,7 +1681,7 @@ fn colophon_slot_merge_routes_cover_through_synthesizer_when_lookup_provided() {
         None,
         &DomainDeploymentConfig::default(),
         false,
-        Some(&lookup),
+        Some(&|| &lookup),
         None, // [site] comments unset
         None, // no input ledger
     );
@@ -2202,4 +2246,50 @@ fn explorer_false_suppresses_injection_even_with_a_synthetic_root() {
     let config = site_config_with_kinds(vec![place_kind(Some(false))]);
     let index = index_with_place_root_in_use(config.term_kinds.clone());
     assert!(!crate::build::features::should_inject_places_explorer(&index, &config));
+}
+
+/// Slot resolution walks the site's media only when a review colophon draws a
+/// cover, and then once.
+#[test]
+fn slot_resolution_walks_the_media_only_for_a_review_colophon() {
+    use crate::build::media::dimensions::BUILT_ON_THIS_THREAD;
+    // `None`: no review; `Some(cover)`: a review whose article has that cover.
+    let walks = |review: Option<Option<&str>>| {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let project_path = temp_dir.path().to_str().unwrap();
+        let moss_dir = temp_dir.path().join(".moss");
+        std::fs::create_dir_all(&moss_dir).unwrap();
+        // Comments on, so resolution does not return before the slots.
+        std::fs::write(moss_dir.join("config.toml"), "[services.comments]\nprovider = \"artalk\"\n").unwrap();
+        if let Some(cover) = review {
+            let source_url = "https://neodb.social/book/sample";
+            let item = crate::build::features::review::ReviewItem {
+                source_url: source_url.into(), source: "neodb".into(), category: Some("book".into()), title: "Sample Title".into(),
+                subtitle: None, creator: None, year: None, publisher: None, pages: None, isbn: None,
+                community_rating: None, community_rating_count: None, external_urls: None,
+            };
+            crate::build::page::link_snapshot::write_kind(&moss_dir, crate::build::page::link_snapshot::Kind::Reviews, source_url, &item).unwrap();
+            let mut frontmatter = serde_json::json!({"review_of": source_url});
+            if let Some(cover) = cover {
+                frontmatter["cover"] = cover.into();
+            }
+            let map = serde_json::json!({"articles": {"posts/review.html": {"uid": "uid-review-1", "title": "My Review", "frontmatter": frontmatter}}});
+            let path = crate::moss_paths::MossPaths::new(temp_dir.path()).article_map();
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, map.to_string()).unwrap();
+        }
+        let project = crate::types::content::ProjectStructure {
+            image_files: vec![crate::types::content::MediaMetadata { path: "image/cover.jpg".to_string(), dimensions: Some((4, 3)), ..Default::default() }],
+            ..Default::default()
+        };
+        let before = BUILT_ON_THIS_THREAD.with(|n| n.get());
+        let slots = crate::build::collect_native_slots_for_documents(project_path, DomainDeploymentConfig::default(), &project, Vec::new(), false, "en", None, None);
+        let colophon = slots.get_html("after-title", "posts/review.html").unwrap_or_default();
+        assert_eq!(colophon.contains("review-colophon\""), review.is_some(), "the colophon must be drawn exactly when the review exists: {colophon}");
+        assert_eq!(colophon.contains("review-colophon-cover"), review.flatten().is_some(), "the cover must be drawn exactly when the article has one: {colophon}");
+        BUILT_ON_THIS_THREAD.with(|n| n.get()) - before
+    };
+    assert_eq!(walks(None), 0, "slot resolution walked the media with no colophon to draw");
+    assert_eq!(walks(Some(None)), 0, "a colophon with no cover walked the media");
+    assert_eq!(walks(Some(Some("image/cover.jpg"))), 1, "a colophon's cover reads one lookup, built once");
 }

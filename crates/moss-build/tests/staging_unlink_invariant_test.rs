@@ -12,7 +12,7 @@
 //!
 //! A `remove_file(` / `remove_dir_all(` / `remove_dir(` / `rename(` call in the
 //! scanned roots passes only if
-//! 1. its enclosing `fn`'s signature names `SweepPermit`;
+//! 1. its enclosing `fn`'s signature names `SweepPermit` or `StaleHtml`;
 //! 2. the enclosing `(file, fn)` is a named exemption ([`EXEMPT_FNS`]);
 //! 3. the file is `build/io_utils.rs`, the write primitive; or
 //! 4. an `// allow:unlink <reason>` marker sits on the line or one of the two
@@ -35,6 +35,11 @@ const SOURCE_ROOTS: &[&str] = &["build.rs", "build", "moss_paths.rs", "ops"];
 /// `io_stop`'s Discard unlinks a dataless staged file: it is unservable already,
 /// and the next build re-renders it.
 const EXEMPT_FNS: &[(&str, &str)] = &[("build/outcome.rs", "io_stop")];
+
+/// What a signature names to unlink: the permit, or the keys lifecycle
+/// licensed (all of them under a permit, otherwise only pages whose source is
+/// gone from disk).
+const LICENCES: &[&str] = &["SweepPermit", "StaleHtml"];
 
 const PRIMITIVE: &str = "build/io_utils.rs";
 const MARKER: &str = "allow:unlink";
@@ -122,7 +127,7 @@ fn fn_name(code: &str) -> Option<String> {
 fn scan_file(rel: &str, content: &str) -> Vec<Hit> {
     let lines: Vec<&str> = content.lines().collect();
     let in_test = cfg_test_lines(&lines);
-    // (name, signature names SweepPermit, brace depth its body opened at)
+    // (name, signature names a licence, brace depth its body opened at)
     let mut stack: Vec<(String, bool, usize)> = Vec::new();
     // A signature still being read, up to its `{` or `;`.
     let mut pending: Option<(String, String)> = None;
@@ -154,7 +159,7 @@ fn scan_file(rel: &str, content: &str) -> Vec<Hit> {
                 '{' => {
                     depth += 1;
                     if let Some((name, sig)) = pending.take() {
-                        stack.push((name, sig.contains("SweepPermit"), depth));
+                        stack.push((name, LICENCES.iter().any(|l| sig.contains(l)), depth));
                     }
                 }
                 '}' => {

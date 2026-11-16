@@ -255,7 +255,7 @@ impl TransformCache {
                 return;
             }
         };
-        let entry = |oid: String, size: u64| super::TransformEntry { validation: None, oid, size, params: params.clone() };
+        let entry = |oid: String, size: u64| super::TransformEntry { kept_for: None, validation: None, oid, size, params: params.clone() };
         let merged = self.merge(source_oid, source_size, RecordMode::Request, |rec| {
             rec.transforms.insert(transform.to_string(), entry(oid, size));
             if let Some((page_oid, page_size)) = page {
@@ -424,7 +424,7 @@ mod tests {
     }
 
     fn entry(tag: &str) -> TransformEntry {
-        TransformEntry { validation: None, oid: tag.to_string(), size: 1, params: serde_json::Value::Null }
+        TransformEntry { kept_for: None, validation: None, oid: tag.to_string(), size: 1, params: serde_json::Value::Null }
     }
 
     fn seeded(dir: &Path, entries: &[&str]) -> TransformCache {

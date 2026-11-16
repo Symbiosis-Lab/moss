@@ -37,6 +37,8 @@ pub(super) struct OutputEmit<'a> {
     pub registry: Option<&'a AssetRegistry>,
 }
 
+type HashMemo = crate::build::media::manifest_hash_memo::ManifestHashMemo;
+
 impl OutputEmit<'_> {
     /// Send `paths` to the coordinator, one `File` message each. `blocking_send`,
     /// so call it from `spawn_blocking` or a plain thread. Returns the violation
@@ -46,6 +48,24 @@ impl OutputEmit<'_> {
     /// content hash: a missing hash fails the integrity check on a first deploy
     /// and hides a re-encode behind an unchanged filename.
     pub(super) fn run(&self, paths: &[(String, Option<String>)]) -> Vec<String> {
+        self.run_with(paths, None)
+    }
+
+    /// [`run`](Self::run), taking each hash already read from the memo at
+    /// `memo_path` by oid: a blob's bytes are fixed by its oid, so a path sent
+    /// with its verified oid is not read again.
+    pub(super) fn run_remembering(&self, paths: &[(String, Option<String>)], memo_path: &Path) -> Vec<String> {
+        let hashes = HashMemo::load(memo_path);
+        let lines = self.run_with(paths, Some(&hashes));
+        if hashes.stats().1 > 0 {
+            if let Err(e) = hashes.save(memo_path) {
+                log::info!("[{}] could not save the output hash memo: {e}", self.kind.label);
+            }
+        }
+        lines
+    }
+
+    fn run_with(&self, paths: &[(String, Option<String>)], hashes: Option<&HashMemo>) -> Vec<String> {
         let Some(tx) = self.tx else { return Vec::new() };
         if paths.is_empty() {
             return Vec::new();
@@ -90,9 +110,14 @@ impl OutputEmit<'_> {
                     }
                 }
             }
+            let memo = oid.as_deref().zip(hashes);
             // Streaming hash: a kept original can be a multi-GB film.
-            let hashed = std::fs::File::open(&abs)
-                .and_then(|mut file| crate::build::assets::paths::hash_reader(&mut file, &|| {}));
+            let hashed = match memo.and_then(|(oid, hashes)| hashes.get(oid)) {
+                Some(hash) => Ok(hash),
+                None => std::fs::File::open(&abs)
+                    .and_then(|mut file| crate::build::assets::paths::hash_reader(&mut file, &|| {}))
+                    .inspect(|hash| if let Some((oid, hashes)) = memo { hashes.record(oid, hash.clone()) }),
+            };
             let hash = match hashed {
                 Ok(h) => h,
                 Err(e) if !crate::build::icloud::is_definitely_absent(&abs, &e) => {

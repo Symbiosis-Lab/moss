@@ -15,7 +15,8 @@
 //!
 //! The render pipeline uses the equivalent `documents.is_empty()` check at
 //! the call site in `blocking.rs` after markdown processing has populated
-//! the docs vector. Empty sources are skipped before they become documents.
+//! the docs vector. An empty home file is skipped before it becomes a document;
+//! any other empty source builds a page for the preview only.
 //!
 //! ## Output
 //!
@@ -67,8 +68,7 @@ pub fn synthesize_empty_homepage(
     }
 }
 
-/// Empty placeholders must be skipped before UID stamping makes them nonempty.
-fn is_empty_source(content: &str) -> bool {
+pub(super) fn is_empty_source(content: &str) -> bool {
     let Some(span) = moss_core::frontmatter::frontmatter_span(content) else {
         return content.trim().is_empty();
     };
@@ -82,10 +82,20 @@ fn is_empty_source(content: &str) -> bool {
     )
 }
 
-pub(super) fn skip_empty_source(content: &str, path: &str) -> bool {
-    let empty = is_empty_source(content);
-    if empty { crate::build::cli_output::log_note!("Skipping empty page: {path}"); }
-    empty
+/// Whether an empty source at `path` builds no page: a home file, which would
+/// take its folder's address and keep the folder's generated index out of the
+/// publish. Any other empty source builds a page for the preview only.
+pub(super) fn skips_empty_source(path: &str, root_folder_name: &str) -> bool {
+    let file = std::path::Path::new(path);
+    let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+    let parent = file.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()).unwrap_or(root_folder_name);
+    let home = moss_core::home::is_home_file(&stem, parent);
+    if home {
+        crate::build::cli_output::log_note!("Skipping empty page: {path}");
+    } else {
+        crate::build::cli_output::log_note!("Empty page, shown in the preview only: {path}");
+    }
+    home
 }
 
 #[cfg(test)]

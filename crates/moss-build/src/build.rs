@@ -574,7 +574,8 @@ fn collect_native_slots_for_documents(
     let article_map_path = crate::moss_paths::MossPaths::new(Path::new(folder_path)).article_map();
     let native_article_map = load_article_map_for_features(&article_map_path);
     let domain = cached_domain_config.domain.clone();
-    let media_lookup = crate::build::media::dimensions::MediaDimensionLookup::new(
+    // Walks every image and video, so built only when a colophon first reads it.
+    let media_lookup = std::cell::LazyCell::new(|| crate::build::media::dimensions::MediaDimensionLookup::new(
         &project_structure.image_files,
         &project_structure.video_files,
         // Feature/email path: no dir_overrides in scope here. Base slugification
@@ -583,7 +584,7 @@ fn collect_native_slots_for_documents(
         &std::collections::HashMap::new(),
         // Feature/email path: no `BuildServices` here, so no variants.
         None,
-    );
+    ));
 
     crate::build::features::generate_native_slots(
         &services_config,
@@ -596,7 +597,7 @@ fn collect_native_slots_for_documents(
         domain.as_deref(),
         &cached_domain_config,
         start_server,
-        Some(&media_lookup),
+        Some(&|| &*media_lookup),
         site_comments,
         input_evidence,
     )
@@ -880,6 +881,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                 // flip to an error state and unblock the user.
                 config.host.events.report(&progress::PipelineEvent::PreviewServerFailed {
                     message: e.clone(),
+                    open_in_another_app: crate::ops::serve::ownership::open_in_another_app(&standalone_state.current_dir).await,
                 });
                 None
             }
@@ -924,12 +926,8 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
 
     // --- SCAN ONCE at pipeline start ---
     // Build ProjectInfo + ProjectStructure once; shared by all consumers
-    // (process hooks, enhance, build). Eliminates the redundant second scan
-    // that build_inner() previously did.
+    // (process hooks, enhance, build).
     let _scan_trace = PhaseTrace::start("scan");
-    // `mut`: content-producing process hooks (e.g. Matters import) may write
-    // files into the source folder; we re-scan + rebind after the hook await
-    // so the SAME build renders them (B13). See the post-hook re-scan below.
     let scan_failure = |failure: scan::scan::ScanFailure| {
         let evidence = cloud_ledger::InputEvidence::new(config.source());
         evidence.require(config.source(), cloud_ledger::InputRole::DirectoryStructure);
@@ -952,7 +950,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
         }
         format!("Failed to scan folder: {}", failure)
     };
-    let (mut project_info, mut project_structure) = {
+    let (project_info, project_structure) = {
         let ps = scan::scan::scan_folder_with_dedup_emit_with_error(
             &folder_path,
             config.host.metadata_dedup.as_deref(),
@@ -979,8 +977,8 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // then dumping every article at once.
     //
     // Everything else still AWAITS inline:
-    //  - Blocking (moss build / publish): the SAME build must render imported
-    //    content and the enhance hook must read complete process output
+    //  - Blocking (moss build / publish): derivations and the enhance hook
+    //    must read complete process output
     //    (e.g. comment.json). The detached path preserves this via the file
     //    watcher — its final debounce batch re-runs the pipeline (enhance
     //    included) on the complete on-disk output (see the detached branch below).
@@ -1008,9 +1006,8 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     if let Some(handle) = process_hooks_handle {
         if wait_process {
             let _trace = PhaseTrace::start("process_hooks_await");
-            // Blocking build: block until the hook finishes so the SAME build
-            // re-scans + renders the imported content and the enhance hook reads
-            // complete process output.
+            // Blocking build: wait for the hook, so derivations and the enhance
+            // hook read its complete output under `.moss/`.
             let await_start = std::time::Instant::now();
             progress::announce_process_hook_wait(&config.progress, port_now());
             if let Err(e) = handle.await {
@@ -1024,11 +1021,10 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             // own detached task, and dropping a `Spawner::spawn` handle detaches
             // rather than aborts (the underlying runtime aborts only via an
             // explicit `.abort()`), so dropping it here lets the run complete. The first build below paints the
-            // shell immediately; the file watcher then renders downloaded content
-            // as it lands (a full re-scan per debounce batch), and its FINAL
-            // batch re-runs the enhance hook on the COMPLETE process output —
-            // the watcher watches the source folder recursively (plus the
-            // allowlisted `.moss/*` files), which is where process hooks write.
+            // shell immediately; the file watcher then rebuilds as the hook's
+            // output lands, and its FINAL batch re-runs the enhance hook on the
+            // COMPLETE process output — the watcher watches `.moss/data/social/`,
+            // where a build-started hook writes its comment data.
             // This preserves the invariant that made Blocking await, without
             // blocking the preview on the entire sync.
             log::info!("[diag] preview-wait: process hooks detached — preview paints now, watcher fills as sync lands");
@@ -1053,36 +1049,6 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // from, read after them: a hook may have installed one.
     let derived_site = crate::system::derive::site::DerivedSite::load(!skip_plugins, std::path::Path::new(&folder_path));
 
-    // --- RE-SCAN after content-producing process hooks ---
-    // Process hooks (e.g. the Matters import) may have written .md / asset files
-    // into the source folder. Re-scan + rebind so the SAME build renders them,
-    // instead of rendering the pre-import (empty/stale) snapshot from the scan
-    // at pipeline start (B13). This INTENTIONALLY reverts the "scan once"
-    // optimization above for the import case only — do not "re-optimize" it
-    // away. The re-scan is SILENT (no ScanEventEmitter): the live file watcher
-    // drives the editor's file tree; this scan only feeds render + language
-    // resolution. Gated to the import case where we AWAITED the hook (Blocking):
-    // the detached preview path renders pre-hook content and lets the watcher
-    // re-scan as downloaded files land, so a synchronous re-scan here would only
-    // re-render the same empty snapshot.
-    // The app supplies only the metadata dedup cache, which is an optimization —
-    // gating the whole re-scan on it made a headless build render the pre-import
-    // snapshot and left every imported page one generation behind.
-    if wait_process && !skip_plugins && !skip_process {
-        let _rescan_trace = PhaseTrace::start("scan_after_process_hooks");
-        match scan::scan::scan_folder_with_dedup_emit_with_error(
-            &folder_path,
-            config.host.metadata_dedup.as_deref(),
-            None,
-            config.defers_image_placeholders(),
-        ) {
-            Ok(ps) => {
-                project_info = ProjectInfo::from_structure(&ps, &config.root);
-                project_structure = ps;
-            }
-            Err(failure) => return Err(scan_failure(failure)),
-        }
-    }
     crate::build::template_check::warn_template_problems(Path::new(&folder_path));
 
     // Cache domain config once — reused by native process, feature slots, and build.
@@ -1236,18 +1202,20 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             let derived_owned = derived_site.clone();
             let (services, port_owned) = (services.clone(), port_owned.clone());
             let refresh = crate::build::watch::RefreshRequest { rename_pairs: config.rename_pairs.clone(), events: config.host.events.clone() };
-            // Bridge the current build.summary collector (if any) onto the
-            // spawn_blocking closure's own OS thread: spawn_blocking does not
-            // inherit task-locals, so without this, every PhaseTrace inside
-            // pipeline::run (e.g. "slot_resolution") would go unrecorded. See
-            // build/phase.rs's module doc.
-            let phase_collector_for_blocking = crate::build::phase::current_collector();
+            // spawn_blocking does not inherit task-locals: without this bridge
+            // every phase inside pipeline::run would go unrecorded.
+            let run = crate::build::phase::inherit_blocking(move || {
+                let incremental = crate::build::render::IncrementalGates::for_build(&trigger, root_owned.path(), &builder, &last_seal);
+                pipeline::run_leased(&root_owned, Some(&state_owned), reporter_owned.as_deref(), &port_owned, Some(&services), Some(slot_resolver), &ps, site_url_override, incremental, search_freshness, &cache_keys_owned, derived_owned, Some(lease), refresh, Some(last_seal.clone()))
+            });
+            let folder = folder_path.clone();
             async move {
-                tokio::task::spawn_blocking(move || {
-                    let _blocking_scope = crate::build::phase::enter_blocking_scope(phase_collector_for_blocking);
-                    let incremental = crate::build::render::IncrementalGates::for_build(&trigger, root_owned.path(), &builder, &last_seal);
-                    pipeline::run_leased(&root_owned, Some(&state_owned), reporter_owned.as_deref(), &port_owned, Some(&services), Some(slot_resolver), &ps, site_url_override, incremental, search_freshness, &cache_keys_owned, derived_owned, Some(lease), refresh, Some(last_seal.clone()))
-                }).await.map_err(|e| BuildStopped::from(format!("Build task panicked: {}", e)))?
+                let built = tokio::task::spawn_blocking(run).await.unwrap_or_else(|e| Err(BuildStopped::from(format!("Build task panicked: {}", e))));
+                built.inspect_err(|stopped| {
+                    use crate::system::build_records::BuildEnd;
+                    let end = if stopped.is_deferred() { BuildEnd::Downloading } else { BuildEnd::Failed };
+                    crate::system::build_records::records().record_build_end(&folder, build_generation, end);
+                })
             }
         };
         retry_once_after_discard(attempt).await?
@@ -1325,19 +1293,8 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // content-hash `generation_id` can never say which build is newer.
     let promotion_epoch = build_generation;
 
-    // Spawn the seal+persist side task that owns the BackgroundHandle.
-    //
-    // This fixes B1 from the build lifecycle review: previously the handle was stored
-    // in AppState and only awaited at deploy time. If the user never deployed (just
-    // rebuilt), nobody awaited the handle, nobody wrote hashes.json with deferred
-    // entries, and the next build's stale cleanup deleted generated media files.
-    //
-    // New flow: a side task increments the FolderSession's UiBound counter (so
-    // wait_for_in_flight_work gates on it), awaits await_completion(), writes
-    // the SealedManifest to hashes.json, stores it in AppState.current_sealed_manifest,
-    // then decrements the counter.
-    // Deploy hard-errors on None (no disk fallback), so the seal+persist task
-    // must populate the slot before Publish is attempted.
+    // The seal task owns the BackgroundHandle: every build awaits its workers
+    // and seals, whether or not a publish follows.
 
     let mut media_rerender_owed = false;
     if let Some(handle) = _bg_handle {
@@ -1369,11 +1326,9 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             // its UiBound counter once seal+persist completes.
             let session_opt = crate::system::folder_session::registry().get(&folder_path);
 
-            // Increment BEFORE spawning so wait_for_in_flight_work gates on this
+            // Taken BEFORE spawning so wait_for_in_flight_work gates on this
             // task starting immediately (no window where has_ui_bound() is false).
-            if let Some(ref s) = session_opt {
-                s.begin_ui_bound();
-            }
+            let sealing = session_opt.as_ref().map(|s| s.hold_ui_bound());
 
             // The host's ports ride into the 'static task as owned Arcs —
             // which is the whole point of resolving them at the entry point:
@@ -1445,8 +1400,8 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                                 build_root_identity: start_identity,
                                 // Long-lived runtime: the materialize is
                                 // debounced (`build::seal_phase`), and the
-                                // hand-off is non-blocking, so `end_ui_bound()`
-                                // below fires once the per-build half is done.
+                                // hand-off is non-blocking, so the `sealing` hold
+                                // drops once the per-build half is done.
                                 handoff: Handoff::Lane,
                             },
                         )
@@ -1455,6 +1410,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                     }
                     Err(e) => {
                         log::error!("seal+persist: background work failed: {}", e);
+                        crate::system::build_records::records().record_build_end(&folder_path_for_mat, promotion_epoch, crate::system::build_records::BuildEnd::Failed);
                         seal_ports.events.report(
                             &crate::build::progress::PipelineEvent::BackgroundProgress {
                                 task: "sealing".to_string(),
@@ -1467,12 +1423,9 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                         );
                     }
                 }
-                // Decrement so deploy's wait_for_in_flight_work can proceed.
-                // Runs AFTER cleanup so wait_for_in_flight_work gates on the
-                // cleanup step too.
-                if let Some(s) = session_opt {
-                    s.end_ui_bound();
-                }
+                // AFTER cleanup, so deploy's wait_for_in_flight_work gates on
+                // the cleanup step too.
+                drop(sealing);
             }));
         } else {
             // No app context AND the caller (CLI / build_sync / snapshot harness)
@@ -1559,6 +1512,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                 }
                 Err(e) => {
                     log::error!("seal+persist (sync): background work failed: {}", e);
+                    crate::system::build_records::records().record_build_end(&folder_path, promotion_epoch, crate::system::build_records::BuildEnd::Failed);
                 }
             }
         }
@@ -1685,6 +1639,15 @@ pub fn load_article_map_for_features(
     }
 
     result
+}
+
+/// The image and video outputs a manifest names, with their content hashes.
+/// The pages of a build read the last seal's; when the seal that follows
+/// names others, those pages may show what is no longer there.
+fn media_outputs(hashes: &crate::types::content::SiteHashes) -> std::collections::BTreeMap<&str, Option<&str>> {
+    hashes.image_outputs.iter().chain(&hashes.video_outputs)
+        .map(|path| (path.as_str(), hashes.files.get(path).map(String::as_str)))
+        .collect()
 }
 
 /// Image/video output-variant paths that are NEW-or-CHANGED in `sealed`
@@ -1846,7 +1809,7 @@ pub(crate) enum Handoff {
 /// `link_audit_tests.rs`.
 ///
 /// `FolderSession::has_ui_bound` / `wait_for_in_flight_work` can observe "no
-/// in-flight work" in the gap between a video's own `end_ui_bound()` and the
+/// in-flight work" in the gap between a video run dropping its hold and the
 /// follow-up rebuild's admission. A publish landing in that gap still cannot
 /// ship a page whose asset it promised and did not deliver, because the promise
 /// recorded here outlives the counter's timing. Those two keep their job as a
@@ -2003,7 +1966,7 @@ async fn advertise_sealed(
     // (now possibly much later, behind the debounce) is exactly what the
     // check exists to catch; `verify_ship_integrity` only warns, it never
     // fails the ship, so a wider window does not turn into a new failure mode.
-    sealed.stamp_all_ship_fingerprints(stage_dir);
+    crate::phase!("seal_stamp", { sealed.stamp_all_ship_fingerprints(stage_dir) });
     // Read the PREVIOUS on-disk manifest BEFORE the write below overwrites it,
     // so the post-seal asset diff compares the freshly-sealed view against the
     // prior build. Missing/corrupt → default (empty), so a first build treats
@@ -2056,15 +2019,15 @@ async fn advertise_sealed(
     // here because it is the only thing in this phase that needs one — see
     // `degrade::repair_staged_html` for the four sources and why their order
     // is what it is.
-    let (mut presence_verdict, rewritten) = crate::build::degrade::repair_staged_html(
+    let (mut presence_verdict, rewritten) = crate::phase!("seal_repair", { crate::build::degrade::repair_staged_html(
         mp,
         stage_dir,
         &mut sealed,
         assets.as_ref().map(|r| r.failed_keys()).unwrap_or_default(),
-    );
+    ) });
     let kept = if presence_verdict.repairs_staging() {
         let late = crate::system::build_records::records().late_redirects(folder_path);
-        crate::build::feeds::kept_addresses::keep(mp, stage_dir, &mut sealed, &late)
+        crate::phase!("seal_kept", { crate::build::feeds::kept_addresses::keep(mp, stage_dir, &mut sealed, &late) })
     } else {
         Vec::new()
     };
@@ -2126,7 +2089,7 @@ async fn advertise_sealed(
     // `sealed` is now final — every pass that can drop a manifest entry has
     // run, so a one-shot build reclaims its orphans against it.
     if let Some(permit) = &guards.final_sweep {
-        crate::build::ship::reclaim_staging_now(stage_dir, &sealed, permit);
+        crate::phase!("seal_reclaim", { crate::build::ship::reclaim_staging_now(stage_dir, &sealed, permit) });
     }
 
     // Last moment the manifest and the stage agree on what shipped — the one
@@ -2135,14 +2098,14 @@ async fn advertise_sealed(
     // still-unfulfilled promise, which `record_promise_gate` below carries to
     // `refuse_publish` — see that function's doc and `link_audit`'s module
     // docs on the publish/media race this closes.
-    record_promise_gate(stage_dir, &sealed, assets.as_ref(), folder_path);
+    crate::phase!("seal_link_audit", { record_promise_gate(stage_dir, &sealed, assets.as_ref(), folder_path) });
 
     // The addresses this build stops serving, for the publish gate. Recorded
     // on every seal, empty included, like the promise verdict above.
-    crate::system::build_records::records().record_removed_addresses(
+    crate::phase!("seal_removed", { crate::system::build_records::records().record_removed_addresses(
         folder_path,
         crate::build::manifest::backfill::removed_for_seal(mp, &sealed),
-    );
+    ) });
 
     // Persist so the next build's load_previous_hashes reads a complete
     // manifest. This is the "hashes.json incremental baseline": it needs only
@@ -2157,8 +2120,9 @@ async fn advertise_sealed(
     // withdrawal here — the debouncer is level-triggered, and an overtaken
     // tail leaves before this write, so the write that stands is the newest
     // sealed render's.
+    sealed.set_media_settled(previous_hashes.as_ref().is_some_and(|previous| media_outputs(previous) == media_outputs(sealed.site_hashes_view())));
     if verdict == crate::build::ship::ShipVerdict::Ship {
-        if let Err(e) = sealed.write_to_disk(hashes_path) {
+        if let Err(e) = crate::phase!("seal_write", { sealed.write_to_disk(hashes_path) }) {
             log::info!("advertise_sealed: failed to write hashes.json: {}", e);
         }
     }

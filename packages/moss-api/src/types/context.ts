@@ -214,21 +214,21 @@ export interface CopyRef {
 }
 
 /**
- * The one copy a channel's `publish_copy`, `update_copy`, `delete_copy` or
- * `find_copy` receives, already shaped to the limits its manifest declares
+ * The one copy a channel's `publish_copy`, `update_copy` or `find_copy`
+ * receives, already shaped to the limits its manifest declares
  * under `contributes.channel.syndication`.
  *
  * @category Copies
  */
 export interface CopyJob {
-  op: "publish" | "update" | "delete" | "find";
+  op: "publish" | "update" | "find";
   channel: string;
   /** The same on every send of this post to this channel, on every computer. */
   idempotency_key: string;
   /** The original the copy points back to; `url` is absolute, `title` empty for an untitled post. */
   post: { url: string; source_path: string; title: string; lang?: string | null; date?: string | null; tags?: string[] };
-  /** Payload fields may be absent for a delete or a lookup whose copy no longer fits. */
-  form?: "short" | "thread" | "long" | "teaser" | "handoff";
+  /** Payload fields may be absent for a lookup whose copy no longer fits. */
+  form?: "short" | "thread" | "long" | "teaser";
   parts?: CopyPart[];
   /** Upload attachments for plain copies. Long articles own images in HTML, with no duplicate attachments. */
   pictures?: CopyPicture[];
@@ -239,7 +239,7 @@ export interface CopyJob {
 
   teaser?: { title: string; description: string; url: string; cover?: string | null } | null;
   article?: { title: string; html: string; description?: string | null; cover?: string | null } | null;
-  /** The copy already on the network (for an update, delete or lookup), or the draft a hand-off left there. */
+  /** The copy already on the network (for an update or lookup), or the draft a hand-off left there. */
   previous?: (CopyRef & { parts?: CopyRef[] }) | null;
   /** The channel's resolved settings. */
   config: Record<string, unknown>;
@@ -251,6 +251,10 @@ export interface CopyJob {
  * the author posts by hand (`text` to paste at `open_url`) or a draft on the
  * network for the author to publish (empty `text`, the draft's `id`).
  *
+ * `find_copy` answers the copy, a hand-off still waiting, or `absent: true`.
+ * Any other answer, an empty one included, leaves whether the copy exists
+ * unknown, and only `absent` lets moss send it again.
+ *
  * @category Copies
  */
 export interface CopyOutcome {
@@ -259,7 +263,32 @@ export interface CopyOutcome {
   /** A thread's later parts, in order. */
   parts?: CopyRef[];
   handoff?: { text: string; open_url?: string; id?: string };
+  /** `find_copy` only: the network says there is no such copy. */
+  absent?: boolean;
+  /** `copy_account` only: the account the channel is signed in to, as an id that stays the same while it is that account. */
+  account?: string;
+  /** `copy_account` only: the account as a person knows it (`@ada`), for display; never compared. */
+  name?: string;
+  /**
+   * `copy_account` only: a definite answer that the channel has no usable session or
+   * credential (it was read and holds none, or the service refused authentication).
+   * A read that failed, or is not available on this host, is `success: false` instead.
+   */
+  signed_out?: boolean;
   refused?: { cause: "auth" | "content" | "rate" | "network" | "unknown"; message?: string };
+}
+
+/**
+ * What a channel's optional `copy_account` receives. It answers which account
+ * the channel is signed in to, in {@link CopyOutcome.account}; moss keeps it
+ * on each copy, and leaves a copy sent from another account alone.
+ *
+ * @category Copies
+ */
+export interface AccountQuery {
+  channel: string;
+  /** The channel's resolved settings. */
+  config: Record<string, unknown>;
 }
 
 /**

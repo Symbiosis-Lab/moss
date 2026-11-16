@@ -1,5 +1,5 @@
 use super::keep;
-use crate::build::manifest::change_set::{PublishedSnapshot, RemovalReason};
+use crate::build::manifest::change_set::PublishedSnapshot;
 use crate::build::manifest::{backfill, published_record, HashBucket, PendingManifest, SealedManifest};
 use crate::build::served_path::ServedPath;
 use crate::build::stat::FileStat;
@@ -48,18 +48,16 @@ fn setup() -> (tempfile::TempDir, MossPaths) {
 }
 
 #[test]
-fn a_dropped_derivative_of_a_served_picture_keeps_answering_and_the_removal_check_passes() {
+fn a_dropped_derivative_of_a_served_picture_keeps_answering() {
     let (_vault, mp) = setup();
     let stage = mp.staging_dir();
     let mut sealed = build(&stage, &[], true);
-    assert_eq!(backfill::removed_for_seal(&mp, &sealed).len(), 1, "without the redirect the publish is refused");
 
     let kept = keep(&mp, &stage, &mut sealed, &Default::default());
 
     assert_eq!(kept, [("photo-2.webp".to_string(), "photo-2.jpg".to_string())]);
     assert_eq!(std::fs::read(stage.join("photo-2.webp")).unwrap(), b"JPEG");
     assert!(sealed.files().contains_key("photo-2.webp"));
-    assert!(backfill::removed_for_seal(&mp, &sealed).is_empty());
 }
 
 #[test]
@@ -73,21 +71,14 @@ fn an_address_the_build_already_serves_is_left_alone() {
 }
 
 #[test]
-fn a_derivative_of_a_deleted_picture_is_not_kept_and_stays_the_authors_removal() {
+fn a_derivative_of_a_deleted_picture_is_not_kept_and_names_nothing() {
     let (_vault, mp) = setup();
     let stage = mp.staging_dir();
     let mut sealed = build(&stage, &[], false);
 
     assert!(keep(&mp, &stage, &mut sealed, &Default::default()).is_empty());
     assert!(!stage.join("photo-2.webp").exists());
-    let reasons: Vec<_> = backfill::removed_for_seal(&mp, &sealed).into_iter().map(|r| (r.path, r.reason)).collect();
-    assert_eq!(
-        reasons,
-        [
-            ("photo-2.jpg".to_string(), RemovalReason::AuthorRemoved),
-            ("photo-2.webp".to_string(), RemovalReason::AuthorRemoved),
-        ]
-    );
+    assert!(backfill::removed_for_seal(&mp, &sealed).is_empty(), "neither is a page");
 }
 
 fn served(paths: &[&str]) -> std::collections::HashMap<String, String> {
@@ -200,4 +191,32 @@ fn a_declared_copy_that_cannot_be_read_is_reported() {
     keep(&mp, &stage, &mut sealed, &late);
     assert!(!stage.join("old.pdf").exists());
     assert_eq!(crate::build::cli_output::take_cli_problems(), 1);
+}
+
+/// A forwarding page whose bytes are already staged is left as it is, and
+/// still registered; one whose staged bytes differ is rewritten.
+#[cfg(unix)]
+#[test]
+fn a_moved_folders_forwarding_page_is_rewritten_only_when_its_bytes_differ() {
+    use std::os::unix::fs::MetadataExt;
+    let (_vault, mp) = setup();
+    let stage = mp.staging_dir();
+    let pages: [(&str, &[u8]); 1] = [("new/a/index.html", b"A")];
+    let late = super::LateRedirects { copies: Vec::new(), folder_moves: vec![mv("old/", "new/")] };
+    let old = stage.join("old/a/index.html");
+    let mut sealed = build(&stage, &pages, true);
+    keep(&mp, &stage, &mut sealed, &late);
+    let forwarding = std::fs::read(&old).unwrap();
+    let inode = std::fs::metadata(&old).unwrap().ino();
+
+    let mut sealed = build(&stage, &pages, true);
+    keep(&mp, &stage, &mut sealed, &late);
+    assert_eq!(std::fs::metadata(&old).unwrap().ino(), inode, "identical bytes are not written again");
+    assert!(sealed.files().contains_key("old/a/index.html"), "a page left in place is still served");
+
+    std::fs::write(&old, b"stale").unwrap();
+    let mut sealed = build(&stage, &pages, true);
+    keep(&mp, &stage, &mut sealed, &late);
+    assert_eq!(std::fs::read(&old).unwrap(), forwarding);
+    assert!(sealed.files().contains_key("old/a/index.html"));
 }

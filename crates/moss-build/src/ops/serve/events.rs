@@ -243,17 +243,32 @@ fn event_stream(
     })
 }
 
+/// Cancelled when the server a stream was opened on is told to stop. The
+/// stream then ends, so the browser reconnects to whoever serves the address
+/// next.
+#[derive(Clone, Default)]
+pub(crate) struct Stopping(pub(crate) tokio_util::sync::CancellationToken);
+
+/// Pending forever for a router no server drives.
+async fn stopped(stopping: Option<axum::Extension<Stopping>>) {
+    match stopping {
+        Some(axum::Extension(Stopping(token))) => token.cancelled_owned().await,
+        None => std::future::pending().await,
+    }
+}
+
 /// `GET /__moss/reload`: one constant frame each time rebuilt bytes become
 /// servable, for a page open in a plain browser tab, which reloads on it.
 ///
 /// Token-free, unlike `/__moss/events`: the frame names no path, page or
 /// result, so it tells a page only that a rebuild happened. A frame missed
 /// while disconnected is not replayed; the page reloads when it reconnects.
-pub(crate) async fn handle_reload() -> impl axum::response::IntoResponse {
+pub(crate) async fn handle_reload(stopping: Option<axum::Extension<Stopping>>) -> impl axum::response::IntoResponse {
     let stream = futures::stream::unfold(Subscription::open(reloads().subscribe()), |mut sub| async move {
         sub.rx().changed().await.ok()?;
         Some((Ok::<_, std::convert::Infallible>(Event::default().data("reload")), sub))
-    });
+    })
+    .take_until(stopped(stopping));
     ([("x-accel-buffering", "no")], Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
@@ -269,11 +284,12 @@ pub(crate) async fn handle_reload() -> impl axum::response::IntoResponse {
 pub(crate) async fn handle_events(
     axum::Extension(session): axum::Extension<Arc<super::invoke::Session>>,
     browser: Option<axum::Extension<super::ui::auth::BrowserSession>>,
+    stopping: Option<axum::Extension<Stopping>>,
 ) -> impl axum::response::IntoResponse {
     // Subscribe BEFORE returning, so an event emitted between the request
     // arriving and the stream being polled is buffered rather than missed.
     // `setup-panel.ts` depends on exactly this ordering on the Tauri side.
-    let stream = event_stream(Subscription::open(bus().subscribe()), browser.map(|b| b.0)).take_until(session.retired().clone().cancelled_owned());
+    let stream = event_stream(Subscription::open(bus().subscribe()), browser.map(|b| b.0)).take_until(session.retired().clone().cancelled_owned()).take_until(stopped(stopping));
     // A reverse proxy that buffers responses (nginx by default) would hold events back.
     ([("x-accel-buffering", "no")], Sse::new(stream).keep_alive(KeepAlive::default()))
 }
@@ -426,11 +442,10 @@ mod removal_announcement_tests {
 
     fn lost() -> Vec<RemovedAddress> {
         vec![RemovedAddress {
-            path: "feed.xml".into(),
+            path: "old/index.html".into(),
             reason: RemovalReason::Unexplained,
             moved_to: None,
             source: None,
-            withdrawn_by: None,
         }]
     }
 
@@ -452,10 +467,10 @@ mod removal_announcement_tests {
         let changes = crate::build::manifest::change_set::ChangeSet { removed: lost(), ..Default::default() };
 
         first_host.announcer.publish_change_set(first.path(), Some(changes.clone())).await;
-        assert!(first_warnings().iter().any(|w| w.contains("/feed.xml")));
+        assert!(first_warnings().iter().any(|w| w.contains("/old/")));
         assert!(second_warnings().is_empty(), "another test's advisories must not leak in");
         second_host.announcer.publish_change_set(second.path(), Some(changes)).await;
-        assert!(second_warnings().iter().any(|w| w.contains("/feed.xml")));
+        assert!(second_warnings().iter().any(|w| w.contains("/old/")));
         assert!(first_warnings().is_empty(), "another test's advisories must not leak in");
     }
 
@@ -469,13 +484,13 @@ mod removal_announcement_tests {
         other.path = "other.xml".into();
         removed.push(other);
         records.record_removed_addresses(&key, removed.clone());
-        records.accept_unexplained_removals(&key, &["feed.xml".into()]);
+        records.accept_unexplained_removals(&key, &["old/index.html".into()]);
         let mut announced = HashSet::new();
         let event = removal_announcement(&mut announced, folder.path(), &removed).unwrap();
         let PipelineEvent::BackgroundProgress { advisories: notices, .. } = event else { panic!("expected advisory") };
         assert_eq!(notices.len(), 1);
         assert!(notices[0].what.contains("/other.xml"));
-        assert!(!notices[0].what.contains("/feed.xml"), "accepted removals must not ask for action");
+        assert!(!notices[0].what.contains("/old/"), "accepted removals must not ask for action");
         records.accept_all_pending_removals(&key);
         assert_eq!(advisories(removal_announcement(&mut announced, folder.path(), &removed).unwrap()), 0);
         assert_eq!(records.removed_addresses(&key).unwrap().len(), 2);

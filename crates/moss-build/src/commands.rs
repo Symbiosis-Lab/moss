@@ -30,6 +30,9 @@ pub mod versions;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+#[path = "commands/save_tests.rs"]
+mod save_tests;
 
 /// What a command needs from whoever runs it.
 pub trait CommandHost: Send + Sync {
@@ -64,6 +67,15 @@ pub trait CommandHost: Send + Sync {
 
     /// Moves announced by [`Self::announce_moves`] that did not happen.
     fn withdraw_moves(&self, _pairs: &[(String, String)]) {}
+
+    /// A command changed the folder's files. The host asks the folder's
+    /// rebuild worker for the build the watcher's event would ask for
+    /// (`ops::watch::hand_off` does exactly that), never builds inline, and
+    /// does nothing when no worker runs. A change of no file (a renamed
+    /// picture) is told too; `ops::watch::request_for` answers none for it.
+    /// Required, so a host with its own rebuild bookkeeping cannot skip it by
+    /// accident.
+    fn changed(&self, change: Change<'_>);
 
     /// The schema the editor checks frontmatter against. A host with a live
     /// plugin runtime answers from it; the default reads a site's installed
@@ -190,8 +202,30 @@ fn site_relative<'h>(host: &'h dyn CommandHost, path: &VaultPath) -> Result<(&'h
     Ok((root, logical_path(rel)))
 }
 
-/// Run `apply` with its page moves announced to the host first, and withdrawn
-/// if it fails.
+/// A change to the folder's files that a command made itself.
+#[derive(Debug, Clone, Copy)]
+pub enum Change<'a> {
+    /// Page moves, root-relative, announced with [`CommandHost::announce_moves`].
+    Moved(&'a [(String, String)]),
+    /// New files, absolute.
+    Created(&'a [String]),
+    /// A file the editor saved, absolute.
+    Wrote(&'a Path),
+}
+
+impl Change<'_> {
+    /// The change in a log line's words.
+    pub fn what(&self) -> &'static str {
+        match self {
+            Change::Moved(_) => "move",
+            Change::Created(_) => "new file",
+            Change::Wrote(_) => "save",
+        }
+    }
+}
+
+/// Run `apply` with its page moves announced to the host first, withdrawn if
+/// it fails, and told to the host once they are made.
 fn with_moves_announced<T>(
     host: &dyn CommandHost,
     pairs: &[(String, String)],
@@ -199,8 +233,9 @@ fn with_moves_announced<T>(
 ) -> Result<T, String> {
     host.announce_moves(pairs);
     let out = apply();
-    if out.is_err() {
-        host.withdraw_moves(pairs);
+    match out {
+        Ok(_) => host.changed(Change::Moved(pairs)),
+        Err(_) => host.withdraw_moves(pairs),
     }
     out
 }
@@ -370,6 +405,7 @@ tier! {
         read_source_text => reads::read_source_text,
         list_templates => templates::list_templates,
         site_languages => templates::site_languages,
+        page_translations => templates::page_translations,
         derivation_state => derivations::derivation_state,
     }
 }

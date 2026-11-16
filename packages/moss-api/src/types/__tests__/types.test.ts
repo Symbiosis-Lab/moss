@@ -1,6 +1,8 @@
 import { describe, it, expect, expectTypeOf } from "vitest";
 import type {
+  AccountQuery,
   CopyJob,
+  CopyOutcome,
   CopyPicture,
   ProjectInfo,
   PluginManifest,
@@ -355,6 +357,18 @@ describe("Type Definitions", () => {
   });
 });
 
+describe("copy lookup and account answers", () => {
+  it("types an explicit absence and the signed-in account through the public barrel", () => {
+    expectTypeOf<CopyOutcome["absent"]>().toEqualTypeOf<boolean | undefined>();
+    expectTypeOf<CopyOutcome["account"]>().toEqualTypeOf<string | undefined>();
+    expectTypeOf<CopyJob["form"]>().toEqualTypeOf<"short" | "thread" | "long" | "teaser" | undefined>();
+    const query: AccountQuery = { channel: "one", config: {} };
+    const absent: CopyOutcome = { absent: true };
+    const account: CopyOutcome = { account: "did:example:one" };
+    expect([query.channel, absent.absent, account.account]).toEqual(["one", true, "did:example:one"]);
+  });
+});
+
 describe("copy picture payload", () => {
   it("exports typed attachments and optional counts through the public barrel", () => {
     expectTypeOf<CopyJob["pictures"]>().toEqualTypeOf<CopyPicture[] | undefined>();
@@ -371,11 +385,9 @@ describe("copy picture payload", () => {
     const long: CopyJob = { ...job, form: "long", parts: [], pictures: [], article: { title: "Page", html: '<img src="https://example.org/photo.png" alt="A maple">' } };
     expect(long.pictures).toEqual([]);
     expect(long.included_pictures).toBe(1);
-    for (const op of ["find", "delete"] as const) {
-      const identity: CopyJob = { op, channel: job.channel, idempotency_key: job.idempotency_key, post: job.post, config: {} };
-      expect(identity.pictures).toBeUndefined();
-      expect(identity.included_pictures).toBeUndefined();
-      expect(identity.omitted_pictures).toBeUndefined();
-    }
+    const identity: CopyJob = { op: "find", channel: job.channel, idempotency_key: job.idempotency_key, post: job.post, config: {} };
+    expect(identity.pictures).toBeUndefined();
+    expect(identity.included_pictures).toBeUndefined();
+    expect(identity.omitted_pictures).toBeUndefined();
   });
 });

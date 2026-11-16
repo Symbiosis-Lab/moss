@@ -144,10 +144,9 @@ pub fn shape_with(post: &ArticleInfo, spec: &ChannelSpec, site_url: &str, opts: 
                 html.push_str(&format!("\n<p>{prefix} <a href=\"{url}\">{name}</a>{stop}</p>"));
             }
             (Form::Long, Vec::new(), None, Some(Article { title: post.title.clone(), html, description: described(post), cover: cover(post, site_url) }))
-        } else if spec.takes(Form::Teaser) || spec.takes(Form::Handoff) {
+        } else if spec.takes(Form::Teaser) {
             let (teaser, part) = teaser(post, spec, &page, site_url)?;
-            let form = if spec.takes(Form::Teaser) { Form::Teaser } else { Form::Handoff };
-            (form, vec![part], Some(teaser), None)
+            (Form::Teaser, vec![part], Some(teaser), None)
         } else {
             return Err("the whole page, including its title and link back, fits none of this channel's declared forms".into());
         }

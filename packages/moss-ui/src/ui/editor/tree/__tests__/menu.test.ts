@@ -765,11 +765,16 @@ describe('file-tree context menu — N-aware', () => {
 
   // ── "Import from URL" wires to startNativeImportTask for the right-clicked folder ─
 
-  test('"Import from URL" opens URL overlay and calls startNativeImportTask with correct folder', async () => {
+  test.each([
+    { total_pages: 3, kept_pages: 0, says: 'Imported 3 pages' },
+    { total_pages: 0, kept_pages: 3, says: 'The folder already has all 3 pages' },
+  ])('"Import from URL" imports into the right-clicked folder and says "$says"', async ({ says, ...counts }) => {
     mockImportSite.mockResolvedValue({
       status: 'ok',
-      data: { success: true, total_pages: '3', error: null },
+      data: { success: true, ...counts, error: null },
     });
+    const toasts = document.body.appendChild(document.createElement('div'));
+    toasts.id = 'moss-toast-container';
 
     await fileTree.mount(container, PROJECT_ROOT, false);
     fileTree.highlight(`${PROJECT_ROOT}/index.md`);
@@ -804,6 +809,8 @@ describe('file-tree context menu — N-aware', () => {
     expect(url).toBe('https://example.com/post');
     // Must target the ABSOLUTE path of the right-clicked folder
     expect(dir).toBe(`${PROJECT_ROOT}/posts`);
+    await vi.waitFor(() => expect(toasts.textContent).toContain(says));
+    toasts.remove();
 
     // Clean up overlay from DOM
     document.querySelector('.ctx-menu')?.remove();

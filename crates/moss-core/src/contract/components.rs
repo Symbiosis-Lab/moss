@@ -1432,7 +1432,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "1",
-        description: "Fallback rendered when a folder-list embed (`![[journal/]]`) targets a folder that does not exist or cannot be resolved. Distinct from `.moss-embed-error` (file/wikilink resolution failure) — this one is specifically the folder-listing path.",
+        description: "What stands where a page names something that is not in the folder: a folder listing (`![[journal/]]`), a transcluded page, or a picture or other media file (`Picture not found: slide.jpg`). A `div` as a block of its own, a `span` within a line of text. A missing picture or media file is seen in the preview only, since a site with one is not published.",
     },
     // -------------------------------------------------------------------
     // Hero, image, visual primitives.
@@ -1922,7 +1922,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "## Setup",
         status: Status::Emerging,
         since: "1",
-        description: "Clickable permalink appended inside an author-written body heading that carries a slug id; links to the heading's `#`-fragment. The element is EMPTY — the `#` a reader sees is drawn by `site.css` as `::after` content, so selecting a heading never copies it. Never emitted for a level-1 heading (a page's own title, not a section of it — the `id` is still there, so an existing `#title` link still resolves) or for any heading on the home page (levels 2-6 included: a reader lands there by visiting the site, not by a deep link into one of its sections). Also never emitted for a display title: the auto-injected `moss-article-title` H1, a `:::hero` overlay heading, and a `:::grid` cell heading all get none.",
+        description: "Clickable permalink appended inside an author-written body heading that carries a slug id; links to the heading's `#`-fragment. The element is EMPTY — the `#` a reader sees is drawn by `site.css` as `::after` content, so selecting a heading never copies it. A page shows the marks when at least two of its sections hold 80 words of running text, the home page like any other; a heading whose id the author named, `## Setup {#setup}`, carries one on any page. Never emitted for a level-1 heading (a page's own title, not a section of it — the `id` is still there, so an existing `#title` link still resolves), nor for a display title: the auto-injected `moss-article-title` H1 and a `:::hero` overlay heading get none, and a `:::grid` cell heading gets one only when its id is named. `[site] heading_anchors = false` turns every mark off.",
     },
     ComponentEntry {
         class: "moss-nobreak",
@@ -1998,7 +1998,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: ":::grid 2\nLeft cell\n+++\nRight cell\n:::\n",
         status: Status::Confirmed,
         since: "0",
-        description: "Generic grid container (used by profiles, link previews, etc.). Modifier classes: `profiles`, `featured`, `no-cards`, `summary`. `summary` REPLACES this container rather than decorating it: the fence emits `.moss-cards-container > .moss-cards[data-layout=\"list\"]` instead, so a `.moss-grid` never reaches the page and a column count is dropped — `scroll` is dropped the same way when both are written on one fence. v1 adds `data-width` (P9); a later release adds `data-scroll`.",
+        description: "Generic grid container. Classes on the fence that moss reads: `no-cards`, `summary`. `summary` REPLACES this container rather than decorating it: the fence emits `.moss-cards-container > .moss-cards[data-layout=\"list\"]` instead, so a `.moss-grid` never reaches the page and a column count is dropped — `scroll` is dropped the same way when both are written on one fence. v1 adds `data-width` (P9); a later release adds `data-scroll`.",
     },
     ComponentEntry {
         class: "moss-grid-card",
@@ -2034,7 +2034,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "Card instance inside `.moss-grid`. Today emits sibling classes `link-card` / `friend-card` / `no-cards`; v1 collapses to `data-kind`.",
+        description: "Card instance inside `.moss-grid`. Its variant is the `data-kind` attribute.",
     },
     ComponentEntry {
         class: "link-preview",
@@ -2397,6 +2397,17 @@ const CORE: &[ComponentEntry] = &[
         description: "Status message shown after submit (success/error).",
     },
     ComponentEntry {
+        class: "moss-subscribe-subscribed",
+        kind: "instance",
+        parent: "moss-subscribe-form",
+        data_attrs: &[],
+        example_html: r#"<span class="moss-subscribe-subscribed">Subscribed</span>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "0",
+        description: "Shown in place of the field and button while the page's root carries `data-moss-subscribed` (a browser signed in to the site); hidden otherwise.",
+    },
+    ComponentEntry {
         class: "moss-subscribe-status__icon",
         kind: "instance",
         parent: "moss-subscribe-status",
@@ -2448,7 +2459,7 @@ const CORE: &[ComponentEntry] = &[
         kind: "standalone",
         parent: "",
         data_attrs: &[],
-        example_html: r#"<p class="moss-external-link"><a href="https://archive.example.org/field/">archive.example.org<span aria-hidden="true"> ↗</span></a></p>"#,
+        example_html: r#"<p class="moss-external-link"><a href="https://archive.example.org/field/">archive.example.org<span aria-hidden="true"> ↗&#xFE0E;</span></a></p>"#,
         example_markdown: "",
         status: Status::Emerging,
         since: "0.24",

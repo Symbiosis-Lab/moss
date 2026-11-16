@@ -58,8 +58,7 @@ export const MOCK_FILES: Record<string, { frontmatter: Record<string, unknown>; 
       date: '2024-12-21',
       tags: ['纽约', '食物'],
     },
-    // The grid feeds media-density.spec.ts, which measures that a fence body's
-    // image is one line tall and STAYS one line when the caret enters it.
+    // A picture in a fence body and one outside it, for tests of how tall each is drawn.
     body: '## 冬至\n\n在纽约包饺子。\n\n:::grid\n![](dumplings.jpg)\n+++\n![](wonton.jpg)\n:::\n\n![](dumplings.jpg)\n',
   },
   '/mock/刘果/关于.md': {
@@ -256,14 +255,17 @@ export const mockCommands = {
       data: { insert, label: insert, detail: null, kind: 'page' } satisfies WikilinkCompletion,
     };
   },
-  // Link completion: a page, a file and a folder, whatever was typed.
-  wikilinkCompletions: async () => ({
+  // Link completion: a page, a file and a folder, whatever was typed; `many`
+  // answers with more pages than a list shows at once.
+  wikilinkCompletions: async (query?: string) => ({
     status: 'ok' as const,
-    data: [
-      { insert: 'notes', label: 'notes', detail: 'Notes', kind: 'page' },
-      { insert: 'cover.jpg', label: 'cover.jpg', detail: null, kind: 'asset' },
-      { insert: 'essays/', label: 'essays/', detail: null, kind: 'folder' },
-    ] satisfies WikilinkCompletion[],
+    data: (query === 'many'
+      ? Array.from({ length: 20 }, (_, i) => ({ insert: `page ${i + 1}`, label: `page ${i + 1}`, detail: null, kind: 'page' as const }))
+      : [
+        { insert: 'notes', label: 'notes', detail: 'Notes', kind: 'page' },
+        { insert: 'cover.jpg', label: 'cover.jpg', detail: null, kind: 'asset' },
+        { insert: 'essays/', label: 'essays/', detail: null, kind: 'folder' },
+      ]) satisfies WikilinkCompletion[],
   }),
   // Reference resolution — used by the image-repaint visual spec. An embed
   // target with an image extension resolves to an Image envelope (so the

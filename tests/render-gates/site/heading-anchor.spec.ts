@@ -5,7 +5,8 @@
  * a browser, and why it needs both of them.
  *
  * A page carries permalinks only when two of its sections hold 80 words each;
- * the fixture's pages are written to fire, and `/short/` to fall under it.
+ * the fixture's pages are written to fire, and `/short/` to fall under it;
+ * `/named/` is as short, with ids its author named.
  * Every `##` section of a page that fires, the home page's included, carries
  * one; a level-1 title never does. The selection tests run against `/page/`;
  * the home page is checked separately.
@@ -262,6 +263,36 @@ test.describe("heading anchor", () => {
     await expect(page.locator("h2#introduction")).toHaveCount(1);
     await expect(page.locator("h2#background")).toHaveCount(1);
     await expect(page.locator(".moss-heading-anchor")).toHaveCount(0);
+  });
+
+  test("a heading whose id the author named carries the mark on a short page, and in a grid cell stays inside its card", async ({ page }) => {
+    await page.goto("/named/");
+    await expect(page.locator("h2#hours .moss-heading-anchor")).toHaveCount(1);
+    await expect(page.locator(".moss-grid-card h3#reading-room .moss-heading-anchor")).toHaveCount(1);
+    await expect(page.locator(".moss-heading-anchor")).toHaveCount(2);
+
+    const heading = page.locator("h3#reading-room");
+    const anchor = heading.locator(".moss-heading-anchor");
+    const state = () =>
+      page.evaluate(() => {
+        const h = document.querySelector("h3#reading-room")!;
+        const card = h.closest(".moss-grid-card")!.getBoundingClientRect();
+        const mark = h.querySelector(".moss-heading-anchor")!.getBoundingClientRect();
+        return { scroll: document.documentElement.scrollWidth, inner: window.innerWidth, card, mark, height: h.getBoundingClientRect().height };
+      });
+    for (const width of [390, 1280]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.mouse.move(0, 0);
+      const rest = await state();
+      await heading.hover();
+      await expect(anchor).toHaveCSS("opacity", "1");
+      const hovered = await state();
+      expect(hovered.scroll, `${width}px: no sideways scroll`).toBeLessThanOrEqual(hovered.inner);
+      expect(hovered.height, `${width}px: hover moves no line`).toBe(rest.height);
+      expect(hovered.card.height, `${width}px: the card keeps its height`).toBe(rest.card.height);
+      expect(hovered.mark.left, `${width}px: the mark starts inside its card`).toBeGreaterThanOrEqual(hovered.card.left);
+      expect(hovered.mark.right, `${width}px: the mark ends inside its card`).toBeLessThanOrEqual(hovered.card.right);
+    }
   });
 
   test.describe("on a touch screen", () => {

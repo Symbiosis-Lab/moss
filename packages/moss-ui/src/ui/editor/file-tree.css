@@ -457,14 +457,31 @@
   opacity: 0.5;
 }
 
-/* Completed-build evidence, not progress-panel advisory state. */
+/* The last build's unresolved references. Every row over one is tinted; the
+   number is on a page, and on a folder only while it is closed. */
 .seg[data-preflight-count] > .dot::after { background: var(--moss-color-warning, #b7791f); opacity: 1; }
+.seg[data-preflight-count] > .chev { color: var(--moss-color-warning, #b7791f); }
 .tree-preflight-count {
   margin-inline-start: 5px;
   color: var(--moss-color-warning, #b7791f);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
+/* On the open page the number steps to the next problem. */
+button.tree-preflight-count {
+  appearance: none;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  min-width: 24px;
+  min-height: 24px;
+  margin-block: -4px;
+  padding: 0 4px;
+  border-radius: var(--moss-border-radius);
+  cursor: pointer;
+}
+button.tree-preflight-count:hover { background: color-mix(in srgb, currentColor 14%, transparent); }
+button.tree-preflight-count:focus-visible { outline: 2px solid var(--moss-color-accent, currentColor); outline-offset: 1px; }
 
 /* ── Sibling-group wrapper (WAI-ARIA role="group") = the connector rail host ─
  * Was display:contents (layout-transparent). It is now a REAL box so it can

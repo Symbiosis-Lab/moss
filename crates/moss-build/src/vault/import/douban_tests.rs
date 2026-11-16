@@ -2,7 +2,7 @@
 //! invented titles and text, and reserved `.example` addresses.
 
 use super::*;
-use crate::vault::import::scrape::fetch::test_server;
+use crate::vault::import::scrape::fetch::{test_server, Client};
 use serde_json::json;
 use std::io::Write;
 use zip::write::SimpleFileOptions;
@@ -35,7 +35,7 @@ async fn import(tables: Value) -> (tempfile::TempDir, TofuReport) {
     let tmp = tempfile::tempdir().unwrap();
     let zip = backup(tmp.path(), tables);
     let out = tmp.path().join("site");
-    let (_, report) = import_tofu_backup(&zip, &out).await.unwrap();
+    let (_, report) = import_tofu_backup(&zip, &out, &Client::no_own_site()).await.unwrap();
     (tmp, report)
 }
 

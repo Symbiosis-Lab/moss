@@ -24,8 +24,23 @@ describe("MossProcess", () => {
   it("spawns with the given binary, args and cwd", () => {
     const { proc, spawn } = makeProcess();
     proc.start("/bin/moss", ["build", "/v", "--serve"], "/v", {});
-    expect(spawn).toHaveBeenCalledWith("/bin/moss", ["build", "/v", "--serve"], { cwd: "/v" });
+    expect(spawn).toHaveBeenCalledWith("/bin/moss", ["build", "/v", "--serve"], expect.objectContaining({ cwd: "/v" }));
     expect(proc.running).toBe(true);
+  });
+
+  it("asks moss to stop when Obsidian is gone, except on Windows", () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    try {
+      for (const [name, asked] of [["darwin", "1"], ["linux", "1"], ["win32", undefined]] as const) {
+        Object.defineProperty(process, "platform", { value: name });
+        const { proc, spawn } = makeProcess();
+        proc.start("/bin/moss", [], "/v", {});
+        const env = spawn.mock.calls[0][2].env;
+        expect([name, env.MOSS_STOP_ON_STDIN_CLOSE, env.PATH]).toEqual([name, asked, process.env.PATH]);
+      }
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
   });
 
   it("announces the server once, from chunked stderr", () => {

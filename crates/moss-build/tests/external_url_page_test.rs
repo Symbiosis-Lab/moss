@@ -6,7 +6,7 @@ mod site;
 
 use site::Site;
 
-const OUT: &str = r#"<p class="moss-external-link"><a href="https://www.archive.example.org/field/">archive.example.org"#;
+const OUT: &str = r#"<p class="moss-external-link"><a href="https://www.archive.example.org/field/">archive.example.org<span aria-hidden="true"> ↗&#xFE0E;</span>"#;
 
 fn site() -> Site {
     Site::new(&[

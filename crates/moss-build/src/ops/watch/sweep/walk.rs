@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use crate::build::scan::classify;
 use crate::build::watch::drift;
-use crate::build::watch::path_to_relative_key;
+use crate::build::watch::relative_key;
 use crate::build::watch::scope;
 use crate::build::cloud_readiness::{StorageFailure, StorageOperation};
 
@@ -118,7 +118,9 @@ pub(crate) fn should_request(folder: &Path, path: &Path) -> bool {
 ///
 /// The walk-⊆-manifest invariant test pins this mirror against the real
 /// scan on a fixture tree.
-pub(crate) fn drift_eligible(folder: &Path, path: &Path) -> bool {
+/// `watchable` is `scope::path_is_watchable(folder, path)`, which the walk
+/// has already asked for its counters.
+pub(crate) fn drift_eligible(folder: &Path, path: &Path, watchable: bool) -> bool {
     let Ok(rel) = path.strip_prefix(folder) else {
         return false;
     };
@@ -135,7 +137,7 @@ pub(crate) fn drift_eligible(folder: &Path, path: &Path) -> bool {
     let recognized = path.extension().and_then(|e| e.to_str()).is_some_and(|ext| {
         !matches!(classify::classify_extension(&ext.to_lowercase()), classify::ScanBucket::Other)
     });
-    scope::path_is_watchable(folder, path) && (recognized || scope::path_passes_filter(folder, path))
+    watchable && (recognized || scope::path_passes_filter(folder, path))
 }
 
 /// Whether THIS pass is the one that should log "no baseline this pass" —
@@ -277,14 +279,16 @@ pub(crate) fn walk_with_error(
             out.dataless.push(effective.to_path_buf());
         }
         // Blind-folder counters; `.moss/` is moss's own, so off both sides.
-        if !effective.strip_prefix(folder).is_ok_and(|r| r.starts_with(".moss")) {
+        let in_moss = effective.strip_prefix(folder).is_ok_and(|r| r.starts_with(".moss"));
+        let watchable = !in_moss && scope::path_is_watchable(folder, effective);
+        if !in_moss {
             out.files_seen += 1;
-            if scope::path_is_watchable(folder, effective) {
-                out.files_watchable += 1;
-            }
+            out.files_watchable += usize::from(watchable);
         }
-        if drift_eligible(folder, effective) {
-            if let Some(rel) = path_to_relative_key(folder, effective) {
+        if drift_eligible(folder, effective, watchable) {
+            // Not following links, the walk yields only paths it reached
+            // under `folder` by name, so the key is that path itself.
+            if let Some(rel) = effective.strip_prefix(folder).ok().and_then(relative_key) {
                 // Carry the stat: the drift compare's fast tiers and the
                 // sticky fingerprint reuse it instead of re-stat'ing every
                 // file up to twice more per pass.

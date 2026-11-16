@@ -43,6 +43,7 @@ import {
 } from "./shell";
 import { formatVaultLocation, type VaultLocation } from "./vault-location";
 import { renderScreen } from "./overlay-slot";
+import type { OpenFailure } from "../preview-state";
 
 /** Enough silence that an escape is a mercy rather than an interruption. The
  *  button ships hidden in the markup and is revealed by a timer, so the reveal
@@ -96,8 +97,9 @@ export type ScreenContent =
   /**
    * moss could not open the site: its build failed, or the open did not
    * finish. `detail` is the error as the program said it, shown folded.
+   * `cause` is absent when the build stopped.
    */
-  | { kind: "failed"; folderName: string; detail: string };
+  | { kind: "failed"; folderName: string; detail: string; cause?: OpenFailure };
 
 /**
  * Everything a state puts on the surface.
@@ -309,22 +311,36 @@ function specFor(content: ScreenContent): ScreenSpec {
         escapeHidden: true,
       };
 
-    /** The open stopped. Same window, its reason, and the three ways on. */
+    /** The open stopped. Same window, its reason, and the ways on. */
     case "failed":
       return {
         ...BASE,
         title: t("preview.open_failed_title", { name: content.folderName }),
         meter: null,
         crossing: false,
-        hint: t("preview.open_failed_reason"),
+        hint: failedHint(content.folderName, content.cause),
         details: content.detail,
         buttons: [
           actionButton("moss-waiting-retry-open", t("preview.retry")),
-          actionButton("moss-waiting-send-logs", t("preview.send_logs")),
+          // A folder open in another app has no failure to report.
+          ...(content.cause === "other-app"
+            ? []
+            : [actionButton("moss-waiting-send-logs", t("preview.send_logs"))]),
           chooseFolderButton(),
         ],
         attr: "data-open-failed",
       };
+  }
+}
+
+function failedHint(name: string, cause?: OpenFailure): string {
+  switch (cause) {
+    case undefined:
+      return t("preview.open_failed_reason");
+    case "server":
+      return t("preview.open_failed_server");
+    case "other-app":
+      return t("preview.open_failed_other_app", { name });
   }
 }
 

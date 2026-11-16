@@ -19,6 +19,7 @@
 
 import { joinCtxGroups, type CtxMenuEntry } from "../shared/ui/ctx-menu";
 import { t } from "../i18n/index";
+import { withoutPreviewParams } from "./shell-marker";
 
 /**
  * What the bridge says an element maps to in source. `path` (site-root-
@@ -82,21 +83,6 @@ export function translateIframePoint(
   return { x: rect.left + x * scaleX, y: rect.top + y * scaleY };
 }
 
-/**
- * The local preview URL fit for a real browser tab: the page's own URL with
- * the shell marker stripped (`__moss_shell=1` exists to tell the preview
- * server "this document is shell-mounted" — a standalone tab is not).
- */
-export function localPreviewUrl(pageHref: string): string {
-  try {
-    const u = new URL(pageHref);
-    u.searchParams.delete('__moss_shell');
-    return u.href;
-  } catch {
-    return pageHref;
-  }
-}
-
 /** Result of resolving a preview URL to its copyable form. */
 export interface CopyableUrl {
   /** The text to place on the clipboard. */
@@ -114,6 +100,8 @@ export interface CopyableUrl {
  * - A same-origin URL is a dev-server address. Its path is joined to the
  *   published site URL when one is configured; otherwise the site-relative
  *   path itself is the copy (flagged so the caller can label it honestly).
+ *   The query stays, less what the preview added: a published page keeps
+ *   state there (a map's place, a form's prefill).
  */
 export function publishedUrlFor(
   rawUrl: string,
@@ -123,7 +111,7 @@ export function publishedUrlFor(
   let u: URL;
   let page: URL;
   try {
-    u = new URL(rawUrl);
+    u = new URL(withoutPreviewParams(rawUrl));
     page = new URL(pageHref);
   } catch {
     return { text: rawUrl, siteRelative: false };
@@ -131,7 +119,6 @@ export function publishedUrlFor(
   if (u.origin !== page.origin) {
     return { text: rawUrl, siteRelative: false };
   }
-  u.searchParams.delete('__moss_shell');
   const path = u.pathname + u.search + u.hash;
   if (siteUrl) {
     return { text: siteUrl.replace(/\/+$/, '') + path, siteRelative: false };
@@ -287,7 +274,7 @@ export function buildPreviewCtxEntries(
   const open: CtxMenuEntry[] = [
     {
       label: t('preview.ctx_open_in_browser'),
-      action: () => deps.openExternal(localPreviewUrl(ctx.page)),
+      action: () => deps.openExternal(withoutPreviewParams(ctx.page)),
     },
   ];
 

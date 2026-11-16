@@ -210,7 +210,7 @@ fn write_kept(
     let dst = stage_dir.join(from);
     if from.ends_with(".html") {
         let html = super::redirects::generate_redirect_html(&served_address(to));
-        crate::build::io_utils::write_output(&dst, html.as_bytes()).map_err(|e| e.to_string())?;
+        crate::build::io_utils::write_output_if_changed(&dst, html.as_bytes()).map_err(|e| e.to_string())?;
         return Ok(crate::build::ship::shipped_hash(from, mount, html.as_bytes()));
     }
     let in_folder = |rel: &str| Some(on_disk(mp.project_root(), rel)).filter(|p| p.is_file());

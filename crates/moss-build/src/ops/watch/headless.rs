@@ -117,19 +117,7 @@ pub async fn start(config: HeadlessWatchConfig) -> tokio::sync::oneshot::Sender<
             })
         })
     };
-    let attempt: RebuildAttempt = {
-        let folder = folder_path.clone();
-        let host_ports = config.host_ports.clone();
-        let plugins = config.plugins.clone();
-        Arc::new(move |req, handle| {
-            let folder = folder.clone();
-            let host_ports = host_ports.clone();
-            let plugins = plugins.clone();
-            Box::pin(async move {
-                attempt_admitted_rebuild(&folder, &host_ports, plugins, req, &handle).await
-            })
-        })
-    };
+    let attempt = rebuild_attempt(&folder_path, &config.host_ports, config.plugins);
 
     // Headless has no visibility signal (no window, no webview) — the
     // cadence-aware timers this receiver drives must never throttle, so it
@@ -170,6 +158,30 @@ pub async fn start(config: HeadlessWatchConfig) -> tokio::sync::oneshot::Sender<
     shutdown_tx
 }
 
+/// The folder's worker's admission attempt, see [`attempt_admitted_rebuild`].
+fn rebuild_attempt(folder_path: &str, host_ports: &HostPortsFactory, plugins: PluginMode) -> RebuildAttempt {
+    let (folder, host_ports) = (folder_path.to_string(), host_ports.clone());
+    Arc::new(move |req, handle| {
+        let (folder, host_ports) = (folder.clone(), host_ports.clone());
+        Box::pin(async move { attempt_admitted_rebuild(&folder, &host_ports, plugins, req, &handle).await })
+    })
+}
+
+/// Register the folder's rebuild worker before its first build, so a change
+/// moss itself makes while that build runs (a save or a rename in an editor
+/// the server already serves) has a worker to ask. Its build takes the
+/// folder's stage lock like any rebuild, so it waits out the write the first
+/// build is in. [`start`] then finds this worker instead of registering one.
+/// The first build now sees a worker: a plugin's background read is adopted
+/// and its result re-rendered by the worker, not awaited. A video's encode
+/// still holds the seal, since a headless build has no spawner to detach it
+/// on. On a tokio runtime.
+pub fn register_worker(folder_path: &str, host_ports: &HostPortsFactory, plugins: PluginMode) {
+    let folder_path = absolute_watch_root(folder_path);
+    let spawner: Arc<dyn crate::build::ports::spawner::Spawner> = Arc::new(crate::build::ports::spawner::TokioSpawner);
+    super::register_worker(&folder_path, &spawner, rebuild_attempt(&folder_path, host_ports, plugins));
+}
+
 /// Enqueue a rebuild with the folder's worker — the headless
 /// [`RebuildDispatch`]. No `rebuild_pending` bookkeeping and no publish-freeze
 /// check: both exist for the GUI's deploy quiet-wait, and a headless process
@@ -189,11 +201,6 @@ async fn request_rebuild(
         log::warn!("No rebuild worker registered for '{}' — building inline", folder_path);
         return inline_with_pump_gate(folder_path, host_ports, plugins, req).await;
     };
-    // Unlike the GUI, headless has no producer that can dispatch before this
-    // point: nothing constructs this `request_rebuild` closure (hence nothing
-    // can reach here) until `start()` registers the worker, and `start()` runs
-    // only after `run_headless_build`'s own initial `run_pipeline` returns —
-    // so no trigger can fire before the folder's first build completes.
     handle.enqueue(req);
 }
 

@@ -46,10 +46,12 @@ function browser() {
   return {
     streams,
     /** Open the page in a tab and return the spy that stands for its reload. */
-    tab({ secure = true } = {}) {
-      const win = { EventSource, BroadcastChannel, navigator: secure ? { locks } : {} } as unknown as Window & typeof globalThis;
+    tab({ secure = true, left = false } = {}) {
+      const win = { EventSource, BroadcastChannel, navigator: secure ? { locks } : {}, document: {} } as unknown as Window & typeof globalThis;
       const reload = vi.fn();
       installPlainTabReload(win, reload);
+      // A reload keeps the window and gives it another document.
+      if (left) (win as { document: object }).document = {};
       return reload;
     },
     /** The tab holding the lock goes away, and hears nothing more. */
@@ -119,5 +121,13 @@ describe("several plain tabs of one browser", () => {
     expect(streams).toHaveLength(2);
     streams[0].onmessage?.();
     expect(reloads.map((r) => r.mock.calls.length)).toEqual([1, 0]);
+  });
+
+  it("open no stream for a page that was left before its lock was refused", async () => {
+    const { streams, tab, refuseLocks } = browser();
+    refuseLocks();
+    tab({ left: true });
+    await Promise.resolve();
+    expect(streams).toHaveLength(0);
   });
 });

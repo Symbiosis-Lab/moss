@@ -54,6 +54,10 @@ pub enum EmitMessage {
         /// mutable stage path.
         oid: Option<String>,
     },
+    /// Register a group of outputs whole, with no CAS object: a sender that
+    /// cannot vouch for every file sends none, so no partial group is ever
+    /// registered (the search bundle, whose missing shards would 404).
+    FileSet { entries: Vec<(String, String)>, bucket: HashBucket },
     /// Bulk-replace `PendingManifest::inner.sources` with the change-detection
     /// cache produced by `copy_deferred_assets`. Sent once at the end of the
     /// deferred-asset walk. Captures both insertions (cache miss → fresh
@@ -116,6 +120,11 @@ impl ManifestCoordinator {
                 EmitMessage::File { rel_path, hash, bucket, oid } => {
                     self.pending.apply_message(rel_path, &hash, bucket, oid);
                 }
+                EmitMessage::FileSet { entries, bucket } => {
+                    for (rel_path, hash) in entries {
+                        self.pending.apply_message(rel_path, &hash, bucket, None);
+                    }
+                }
                 EmitMessage::SourcesReplace(sources) => {
                     self.pending.replace_sources(sources);
                 }
@@ -168,6 +177,11 @@ pub mod test_utils {
             match msg {
                 EmitMessage::File { rel_path, hash, bucket, oid } => {
                     pending.apply_message(rel_path, &hash, bucket, oid);
+                }
+                EmitMessage::FileSet { entries, bucket } => {
+                    for (rel_path, hash) in entries {
+                        pending.apply_message(rel_path, &hash, bucket, None);
+                    }
                 }
                 EmitMessage::SourcesReplace(sources) => {
                     pending.replace_sources(sources);

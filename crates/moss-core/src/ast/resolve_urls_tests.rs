@@ -15,29 +15,6 @@ fn graph_with(paths: &[&str]) -> crate::content_graph::ContentGraph {
 // -----------------------------------------------------------------
 
 #[test]
-fn markdown_link_fragment_preserved_raw_not_slugged() {
-    // Unit test of `split_path_suffix` PURITY: it splits path from
-    // suffix but never slugs — the returned suffix is byte-identical to
-    // the source. (Slugging, when it happens, is layered on top by
-    // `slug_wikilink_suffix`, exercised separately.)
-    //
-    // Design split (corrected): a MARKDOWN link (`[t](page#Heading)`) is
-    // a literal URL — its `#fragment` stays RAW by design, so authored
-    // `#L42` / hand-authored ids / external anchors survive untouched.
-    // A WIKILINK (`[[page#Heading]]`) is NOT a literal URL: its fragment
-    // IS slugged to match the rendered heading id — `resolve_link_urls`
-    // routes wikilinks through `slug_wikilink_suffix` (see the
-    // end-to-end guard `markdown_link_fragment_stays_raw_not_slugged`
-    // and the `wikilink_*_fragment_is_slugged` tests below). The earlier
-    // claim that "authoring correctness comes from editor autocomplete"
-    // was the flawed premise behind the link-path bug; wikilink slugging
-    // now happens in resolve_urls itself.
-    let (path, suffix) = split_path_suffix("page#My Heading");
-    assert_eq!(path, "page");
-    assert_eq!(suffix, Some("#My Heading")); // raw, spaces + case intact
-}
-
-#[test]
 fn resolves_standard_markdown_link_to_internal() {
     let mut doc = parse("[文字](文字.md)");
     let graph = graph_with(&["index.md", "文字/文字.md"]);
@@ -209,42 +186,6 @@ fn resolves_bare_filename_image_against_graph() {
         }
         _ => panic!("expected Paragraph or Figure, got {:?}", doc.blocks[0]),
     }
-}
-
-#[test]
-fn unresolved_bare_filename_passes_through() {
-    let mut doc = parse("![](nonexistent.jpg)");
-    let graph = graph_with(&["index.md"]);
-    let outgoing = resolve_urls(&mut doc, &graph, "articles/post.md").outgoing;
-
-    assert!(outgoing.is_empty());
-    // URL stays as raw "nonexistent.jpg" but becomes Resolved (Asset
-    // kind) so the renderer's invariant holds.
-    let mut found_image = false;
-    for block in &doc.blocks {
-        if let Block::Paragraph(children) = block {
-            for inline in children {
-                if let Inline::Image { src, .. } = inline {
-                    let Url::Resolved(r) = src else {
-                        panic!("expected Resolved, got {src:?}")
-                    };
-                    assert_eq!(r.href, "nonexistent.jpg");
-                    assert_eq!(r.kind, UrlKind::Asset);
-                    found_image = true;
-                }
-            }
-        }
-        if let Block::Figure { image, .. } = block {
-            if let Inline::Image { src, .. } = image {
-                let Url::Resolved(r) = src else {
-                    panic!("expected Resolved, got {src:?}")
-                };
-                assert_eq!(r.href, "nonexistent.jpg");
-                found_image = true;
-            }
-        }
-    }
-    assert!(found_image, "expected an Inline::Image in the parsed doc");
 }
 
 #[test]
@@ -862,6 +803,19 @@ fn image_separator_fallback_rebases_to_root() {
 }
 
 #[test]
+fn image_with_a_query_or_fragment_resolves_the_file_and_keeps_the_suffix() {
+    let graph = graph_with(&["photos/photo.jpg", "News/post.md"]);
+    for suffix in ["?v=2", "#top", "?v=2#top"] {
+        let mut url = Url::Unresolved(format!("photo.jpg{suffix}"));
+        let mut found = UrlResolution::default();
+        resolve_asset_url(&mut url, "", &graph, "News/post.md", &mut found);
+        assert!(found.diagnostics.is_empty(), "{suffix}: {:?}", found.diagnostics);
+        assert_eq!(found.outgoing.len(), 1, "{suffix}");
+        assert!(matches!(url, Url::Resolved(ref r) if r.href == format!("/photos/photo.jpg{suffix}")), "{suffix}: {url:?}");
+    }
+}
+
+#[test]
 fn image_absolute_stays_absolute() {
     // Every resolved asset reference is emitted root-absolute, a `/`-rooted
     // one included. A rooted path with no file there is searched for like any
@@ -1028,4 +982,61 @@ fn dotted_folder_link_emits_no_unresolved_diagnostic() {
     let res = resolve_urls(&mut doc, &graph, "audits/dept-b/index.md");
     assert!(res.diagnostics.is_empty(), "{:?}", res.diagnostics);
     assert_eq!(first_link_href(&doc), "moss-resolved:reports/index.md");
+}
+
+// -----------------------------------------------------------------
+// A picture whose file is not in the folder
+// -----------------------------------------------------------------
+
+/// The page's blocks after the whole resolve, as a renderer receives them.
+fn resolved(source: &str, files: &[&str]) -> Document {
+    let mut doc = parse(source);
+    let graph = graph_with(files);
+    resolve_document(&mut doc, &crate::asset_snapshot::AssetSnapshot::default(), Some(&graph), "index.md", true, &|raw| raw.to_string());
+    doc
+}
+
+fn missing_box(tag: &str, text: &str) -> String {
+    format!("<{tag} class=\"moss-embed-missing\">{text}</{tag}>")
+}
+
+#[test]
+fn a_missing_picture_is_a_box_naming_it_however_it_was_written() {
+    let doc = resolved(
+        "![[slide-06.jpg|800x450]]\n\n![](pics/gone.png)\n\n![[plain.jpg]]\n\n![A caption](far.webp)\n",
+        &["index.md"],
+    );
+    let boxes: Vec<&Block> = doc.blocks.iter().collect();
+    assert_eq!(
+        boxes,
+        [
+            &Block::Other(missing_box("div", "Picture not found: slide-06.jpg")),
+            &Block::Other(missing_box("div", "Picture not found: pics/gone.png")),
+            &Block::Other(missing_box("div", "Picture not found: plain.jpg")),
+            &Block::Other(missing_box("div", "Picture not found: far.webp")),
+        ]
+    );
+}
+
+#[test]
+fn a_missing_picture_within_a_line_or_a_list_is_boxed_where_it_stands() {
+    let doc = resolved("See ![](gone.png) here.\n\n- ![[deep.jpg|50%]]\n", &["index.md"]);
+    let Block::Paragraph(line) = &doc.blocks[0] else { panic!("{:?}", doc.blocks[0]) };
+    assert_eq!(line[1], Inline::Other(missing_box("span", "Picture not found: gone.png")));
+    let Block::List { items, .. } = &doc.blocks[1] else { panic!("{:?}", doc.blocks[1]) };
+    assert_eq!(items[0], [Block::Other(missing_box("div", "Picture not found: deep.jpg"))]);
+}
+
+#[test]
+fn a_missing_video_says_file_and_a_picture_that_is_there_is_left_alone() {
+    let doc = resolved("![[clip.mp4]]\n\n![[here.jpg|A caption]]\n", &["index.md", "here.jpg"]);
+    assert_eq!(doc.blocks[0], Block::Other(missing_box("div", "File not found: clip.mp4")));
+    assert!(matches!(doc.blocks[1], Block::Figure { .. }), "{:?}", doc.blocks[1]);
+}
+
+#[test]
+fn a_missing_picture_is_not_an_outgoing_link() {
+    let mut doc = parse("![](nonexistent.jpg)\n\nSee ![](gone.png) here.");
+    let outgoing = resolve_urls(&mut doc, &graph_with(&["index.md"]), "articles/post.md").outgoing;
+    assert!(outgoing.is_empty());
 }

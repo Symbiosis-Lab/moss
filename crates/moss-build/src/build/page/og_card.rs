@@ -791,6 +791,21 @@ mod tests {
         assert_eq!((r.w, r.h), (240.0, 240.0), "a small square was upscaled past 2x");
     }
 
+    /// White bars over a transparent ground whose hidden colour is black, on
+    /// a white card: nothing may darken. A scale that mixes the hidden black
+    /// into a half-covered edge draws a grey line down every bar.
+    #[test]
+    fn a_plate_keeps_hidden_colour_out_of_its_edges() {
+        let cover = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(1600, 900, |x, _| {
+            if (x / 97) % 2 == 0 { image::Rgba([255; 4]) } else { image::Rgba([0; 4]) }
+        }));
+        let mut card = tiny_skia::Pixmap::new(480, 270).expect("pixmap");
+        card.fill(tiny_skia::Color::WHITE);
+        draw_plate(&mut card, &cover, layout::PlateRect { x: 0.0, y: 0.0, w: 480.0, h: 270.0 }).expect("draw");
+        let darkest = card.pixels().iter().map(|p| p.red()).min();
+        assert!(darkest >= Some(250), "the plate darkened the card to {darkest:?}");
+    }
+
     /// The picture reaches the pixels, in the frame the layout named, with the
     /// title beside it rather than over it.
     #[test]

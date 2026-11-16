@@ -15,13 +15,13 @@
 import { COPY, langBucket, type Lang, type SubscribeCopy } from './i18n.js';
 import { autoHydrate, claim, inPreview, lockSlotWidth, setState } from './hosted-form.js';
 import { solveCaptcha } from './captcha.js';
+import { watchReader } from './reader.js';
 
-type StatusKey = 'check-email' | 'already-subscribed' | 'error';
+type StatusKey = 'check-email' | 'error';
 
 type SubscribeResponse = {
   subscribed?: boolean;
   confirmationSent?: boolean;
-  alreadySubscribed?: boolean;
   error?: string;
   need_captcha?: boolean;
   captcha_url?: string;
@@ -50,6 +50,8 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
   if (form.dataset.placeholderOverride !== 'true') input.placeholder = copy.placeholder;
   const labelEl = btn.querySelector<HTMLElement>('.moss-btn__label');
   if (labelEl && form.dataset.buttonOverride !== 'true') labelEl.textContent = copy.label;
+  const subscribedEl = form.querySelector<HTMLElement>('.moss-subscribe-subscribed');
+  if (subscribedEl) subscribedEl.textContent = copy.subscribed;
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -82,7 +84,13 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
       return;
     }
 
-    const jsonBody = { email, scope: form.querySelector<HTMLInputElement>('input[name="scope"]')?.value, lang };
+    // `return` brings the reader back here once the mailed link signs this browser in.
+    const jsonBody = {
+      email,
+      scope: form.querySelector<HTMLInputElement>('input[name="scope"]')?.value,
+      lang,
+      return: location.pathname + location.search + location.hash,
+    };
 
     const post = async (): Promise<[Response, SubscribeResponse]> => {
       const res = await fetch(form.action, {
@@ -106,13 +114,12 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
       }
       // A 2xx that does not say the address is subscribed (an empty or
       // unreadable body, a proxy's page) is not a subscription.
-      const subscribed = data.subscribed === true && (data.confirmationSent === true || data.alreadySubscribed === true);
-      if (!res.ok || !subscribed) {
+      if (!res.ok || data.subscribed !== true || data.confirmationSent !== true) {
         showStatus(form, 'error', copy);
         setState(form, 'error', btn);
         return;
       }
-      showStatus(form, data.alreadySubscribed ? 'already-subscribed' : 'check-email', copy);
+      showStatus(form, 'check-email', copy);
       setState(form, 'success', btn);
     } catch {
       showStatus(form, 'error', copy);
@@ -159,20 +166,14 @@ function showStatus(
   // on success, focus the status region so screen-readers announce it.
   // Guard tabIndex — the element needs a non-negative tabIndex (e.g. tabindex="-1")
   // to be programmably focusable; a plain div without one silently ignores focus().
-  if (key === 'check-email' || key === 'already-subscribed') {
+  if (key === 'check-email') {
     if (container.tabIndex >= 0) container.focus();
   }
 }
 
 function copyFor(key: StatusKey, copy: SubscribeCopy): string {
-  switch (key) {
-    case 'check-email':
-      return copy.checkEmail;
-    case 'already-subscribed':
-      return copy.alreadySubscribed;
-    case 'error':
-      return copy.error;
-  }
+  return key === 'check-email' ? copy.checkEmail : copy.error;
 }
 
 autoHydrate<HTMLFormElement>('form.moss-subscribe-form[data-moss-hosted="true"]', hydrateSubscribeForm);
+watchReader();

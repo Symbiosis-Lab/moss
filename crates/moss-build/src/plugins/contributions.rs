@@ -137,8 +137,8 @@ pub use moss_core::page::plugin_source::ContributedFrontmatter;
 
 /// A channel the plugin adds — somewhere the user's writing goes.
 ///
-/// Syndication is what a channel *is*, so it needs no flag. `login` names an
-/// export the plugin also provides, and [`ContributionReadiness`] says what
+/// Syndication is what a channel *is*, so it needs no flag. `login` says how
+/// the person signs in (an export or the sign-in page's address), and [`ContributionReadiness`] says what
 /// the user must arrange first — a channel that needs a token declares it the
 /// same way a deploy target does.
 ///
@@ -149,22 +149,22 @@ pub struct ChannelContribution {
     #[serde(default)]
     pub display_name: Option<String>,
 
-    /// The user connects an account: the plugin exports `login`, which moss
-    /// invokes via `connect_account`. This is what folds to
-    /// [`Capability::Login`], and it is deliberately not inferred from
-    /// [`ContributionReadiness::setup`] — a channel whose setup is one API
-    /// token has nothing to connect, and would otherwise get a connection
-    /// row in settings and an auto-opening login prompt for an account that
-    /// does not exist. A future version plans to read the export itself at install
-    /// time; until then the manifest says it.
+    /// The person signs in to this channel's account: `true` when the plugin
+    /// exports `login`, which moss invokes via `connect_account`, or the
+    /// address of the channel's sign-in page, which moss opens itself. Either
+    /// folds to [`Capability::Login`]. It is deliberately not inferred from
+    /// [`ContributionReadiness::setup`]: a channel whose setup is one API
+    /// token has nothing to sign in to, and would otherwise get a sign-in row
+    /// in settings and an auto-opening prompt for an account that does not
+    /// exist.
     ///
-    /// Reads `requires_login` too, the name it carried before 2026-08-30, so
-    /// an already-installed plugin keeps its connection.
-    #[serde(default, alias = "requires_login")]
-    pub login: bool,
+    /// Reads `requires_login` too, its earlier name, so an already-installed
+    /// plugin keeps its connection.
+    #[serde(default, alias = "requires_login", deserialize_with = "login_field", skip_serializing_if = "Option::is_none")]
+    pub login: Option<Login>,
 
     /// What the network can carry, for a channel that posts one copy per call
-    /// (`publish_copy`, `update_copy`, `delete_copy`). moss plans and shapes
+    /// (`publish_copy`, `update_copy`, `find_copy`). moss plans and shapes
     /// the copies; such a channel is never called through `syndicate`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub syndication: Option<crate::syndication::channel::ChannelSpec>,
@@ -172,6 +172,55 @@ pub struct ChannelContribution {
     /// What the user must have arranged before this channel works.
     #[serde(flatten)]
     pub readiness: ContributionReadiness,
+}
+
+/// How the person signs in to a channel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Login {
+    /// The plugin exports `login`, and moss runs it.
+    Export,
+    /// moss opens this `https` address (or `http` on loopback) in the action panel and asks the
+    /// channel's `copy_account` until it names an account. Such a channel
+    /// answers `copy_account` from its local session, never a billed or
+    /// network call, since it is asked every few seconds while the page is open.
+    Address(String),
+}
+
+impl Serialize for Login {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Login::Export => s.serialize_bool(true),
+            Login::Address(address) => s.serialize_str(address),
+        }
+    }
+}
+
+/// `login`: `true`, `false`, or a sign-in address.
+fn login_field<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Login>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        Flag(bool),
+        Address(String),
+    }
+    match Raw::deserialize(d)? {
+        Raw::Flag(flag) => Ok(flag.then_some(Login::Export)),
+        Raw::Address(address) => match url::Url::parse(&address) {
+            // The person types a password into this page, so plain http only for a page on this computer.
+            Ok(url) if url.has_host() && (url.scheme() == "https" || url.scheme() == "http" && on_this_computer(&url)) => Ok(Some(Login::Address(address))),
+            _ => Err(serde::de::Error::custom(format!("login: '{address}' is not an https sign-in address"))),
+        },
+    }
+}
+
+/// A loopback address or exactly `localhost`; a `*.localhost` name can resolve elsewhere.
+fn on_this_computer(url: &url::Url) -> bool {
+    match url.host() {
+        Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    }
 }
 
 /// A place the site can be published to — GitHub Pages, IPFS, an onion
@@ -550,7 +599,7 @@ impl PluginManifest {
                     contributes.channel.get_or_insert_with(Default::default);
                 }
                 Capability::Login => {
-                    contributes.channel.get_or_insert_with(Default::default).login = true;
+                    contributes.channel.get_or_insert_with(Default::default).login = Some(Login::Export);
                 }
             }
         }
@@ -732,21 +781,45 @@ impl PluginManifest {
             self.capabilities.clear();
             return;
         };
-        let mut derived = Vec::new();
-        if let Some(channel) = &contributes.channel {
-            derived.push(Capability::Syndicate);
-            if channel.login {
-                derived.push(Capability::Login);
-            }
-        }
-        if contributes.deploy_target.is_some() {
-            derived.push(Capability::Deploy);
-        }
-        if contributes.processor.is_some() {
-            derived.push(Capability::Process);
+        let mut derived = capabilities_of_kinds(contributes.kinds().iter().map(String::as_str));
+        // An export the channel also provides, not a kind of its own.
+        if contributes.channel.as_ref().is_some_and(|channel| channel.login.is_some()) {
+            derived.push(Capability::Login);
         }
         self.capabilities = derived;
     }
+}
+
+impl PluginContributes {
+    /// Every kind this declares, as a manifest spells it and as the registry's
+    /// index lists it: the keys it serializes. Which of them grant a
+    /// capability is [`capabilities_of_kinds`]'s answer alone.
+    fn kinds(&self) -> Vec<String> {
+        let Ok(serde_json::Value::Object(declared)) = serde_json::to_value(self) else {
+            return Vec::new();
+        };
+        declared.into_iter().filter(|(_, body)| !body.is_null()).map(|(kind, _)| kind).collect()
+    }
+}
+
+/// What a set of contribution kinds lets a plugin do.
+///
+/// The one place a kind's name becomes a capability. An installed manifest
+/// and a registry entry both ask it, so a plugin is offered before install
+/// where it will be found after. A kind that grants nothing is skipped.
+///
+/// `login` is not here: it is a field of the channel, which the index does
+/// not carry, so a channel that signs in is granted it only once installed.
+pub fn capabilities_of_kinds<'a>(kinds: impl IntoIterator<Item = &'a str>) -> Vec<Capability> {
+    kinds
+        .into_iter()
+        .filter_map(|kind| match kind {
+            "channel" => Some(Capability::Syndicate),
+            "deploy_target" => Some(Capability::Deploy),
+            "processor" => Some(Capability::Process),
+            _ => None,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1350,8 +1423,35 @@ mod tests {
         assert!(token_only.setup_for(&Capability::Syndicate).is_some());
     }
 
-    /// An installed plugin manifest predating 2026-08-30 spells the same fact
-    /// `requires_login`; losing it would silently drop the connection row and
+    /// A channel that names its sign-in page connects without a `login`
+    /// export; anything but an https address, or http on this computer, is refused at the door.
+    #[test]
+    fn a_sign_in_address_is_a_login() {
+        let m = PluginManifest::parse(
+            r#"{"name":"social","version":"1.0.0","entry":"main.js",
+                "contributes":{"channel":{"login":"https://social.example.net/sign-in"}}}"#,
+        )
+        .unwrap();
+        assert!(m.capabilities.contains(&Capability::Login));
+        let login = m.contributes.as_ref().and_then(|c| c.channel.as_ref()).and_then(|c| c.login.clone());
+        assert_eq!(login, Some(Login::Address("https://social.example.net/sign-in".into())));
+
+        for local in ["http://127.0.0.1:8123/sign-in", "http://localhost/sign-in", "http://[::1]/sign-in"] {
+            let manifest = format!(r#"{{"name":"social","version":"1.0.0","entry":"main.js","contributes":{{"channel":{{"login":"{local}"}}}}}}"#);
+            assert!(PluginManifest::parse(&manifest).is_ok(), "{local} must be accepted");
+        }
+        for bad in [r#""javascript:alert(1)""#, r#""sign-in""#, r#""file:///etc/passwd""#, r#""http://social.example.net/sign-in""#, r#""http://social.localhost/sign-in""#] {
+            let manifest = format!(r#"{{"name":"social","version":"1.0.0","entry":"main.js","contributes":{{"channel":{{"login":{bad}}}}}}}"#);
+            assert!(PluginManifest::parse(&manifest).is_err(), "{bad} must be refused");
+        }
+        let off = PluginManifest::parse(
+            r#"{"name":"social","version":"1.0.0","entry":"main.js","contributes":{"channel":{"login":false}}}"#,
+        )
+        .unwrap();
+        assert!(!off.capabilities.contains(&Capability::Login));
+    }
+
+    /// An older installed manifest spells the same fact `requires_login`; losing it would silently drop the connection row and
     /// the account with it.
     #[test]
     fn the_old_requires_login_spelling_still_connects() {

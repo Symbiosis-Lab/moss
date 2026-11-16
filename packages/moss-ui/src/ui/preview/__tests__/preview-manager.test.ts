@@ -86,7 +86,6 @@ const mockNavState = vi.hoisted(() => ({
   bridgeAnswer: null as ((...args: unknown[]) => unknown) | null,
 }));
 vi.mock('../navigation-manager', () => ({
-  CACHE_BUST_PARAM: '_t',
   NavigationManager: class {
     destroy() {}
     isMobilePreview() { return false; }
@@ -2211,13 +2210,14 @@ describe('PreviewManager', () => {
       expect(refreshSpy).toHaveBeenCalledTimes(1);
     });
 
-    test('updateUrlForRename converts md to html and updates URL', () => {
+    test('updateUrlForRename opens a moved folder page at its folder, not at index.html', () => {
       const loadPreviewSpy = vi.spyOn(previewManager, 'loadPreview');
-      mockIframe.src = 'http://localhost:3000/blog/old.html';
+      mockIframe.src = 'http://localhost:3000/untitled/';
 
-      (previewManager as any).updateUrlForRename('blog/new.md', stubCtx);
+      (previewManager as any).updateUrlForRename('quiet-harbour-notes/index.html', stubCtx);
+      (previewManager as any).updateUrlForRename('index.html', stubCtx);
 
-      expect(loadPreviewSpy).toHaveBeenCalledWith('http://localhost:3000/blog/new.html');
+      expect(loadPreviewSpy.mock.calls).toEqual([['http://localhost:3000/quiet-harbour-notes/'], ['http://localhost:3000/']]);
     });
 
     test('updateUrlForRename with html extension preserves extension', () => {
@@ -2234,7 +2234,7 @@ describe('PreviewManager', () => {
       const refreshSpy = vi.spyOn(previewManager, 'refresh');
       mockIframe.src = 'invalid-url';
 
-      (previewManager as any).updateUrlForRename('new.md', stubCtx);
+      (previewManager as any).updateUrlForRename('new.html', stubCtx);
 
       expect(loadPreviewSpy).not.toHaveBeenCalled();
       expect(refreshSpy).toHaveBeenCalledTimes(1);
@@ -2438,10 +2438,10 @@ describe('PreviewManager', () => {
       await previewManager.initialize();
 
       for (const cb of mossEventCallbacks) {
-        cb({ kind: 'PreviewServerFailed', payload: { message: 'Port 8080 already in use' } });
+        cb({ kind: 'PreviewServerFailed', payload: { message: 'Port 8080 already in use', open_in_another_app: true } });
       }
 
-      expect(noteSpy).toHaveBeenCalledWith('Port 8080 already in use');
+      expect(noteSpy).toHaveBeenCalledWith('Port 8080 already in use', true);
 
       // And now a portless completion is a verdict, not a guess.
       (previewManager as any).handleProgressUpdate({
@@ -2450,7 +2450,8 @@ describe('PreviewManager', () => {
       });
       expect(previewManager.getState().getStatus()).toEqual({
         type: 'error',
-        message: expect.any(String),
+        message: 'Port 8080 already in use',
+        cause: 'other-app',
         verdict: 'reported',
       });
 
@@ -2949,6 +2950,29 @@ describe('PreviewManager', () => {
       expect(mockOverlay.textContent).toContain('Failed to build: a page links to a missing file');
       mockOverlay.querySelector<HTMLButtonElement>('#moss-waiting-retry-open')!.click();
       expect(build).toHaveBeenCalledWith('/Users/test/my-blog');
+    });
+
+    test.each([
+      ['other-app', 'my-blog is open in another moss app. Close it, then try again.', false],
+      ['server', 'The preview could not start.', true],
+      [undefined, 'The build stopped before the site was ready.', true],
+    ] as const)('a start stopped by %s says so, with the server\'s own words under Details', async (cause, hint, offersLogs) => {
+      const { host } = await import("../../host");
+      const kept = host.sendLogs;
+      host.sendLogs = async () => ({ status: 'ok', data: '' });
+      try {
+        await setup();
+        (previewManager as any).folderPath = '/Users/test/my-blog';
+        const message = 'this folder is already served at http://127.0.0.1:8080 by Cli (pid 4242, moss 0.15.24)';
+
+        (previewManager as any).renderStatus({ type: 'error', message, verdict: 'reported', cause });
+
+        expect(mockOverlay.querySelector('.moss-waiting-screen__hint')!.textContent).toBe(hint);
+        expect(mockOverlay.querySelector('details')!.textContent).toContain(message);
+        expect(mockOverlay.querySelector('#moss-waiting-send-logs') !== null).toBe(offersLogs);
+      } finally {
+        host.sendLogs = kept;
+      }
     });
 
     test('a host without a launcher, a log upload or a file manager offers none of their buttons', async () => {
@@ -3769,8 +3793,8 @@ describe('PreviewManager', () => {
       mockIframe.src = 'http://localhost:8080/untitled/';
       previewManager.armNewPageWait('/untitled/');
       (previewManager as any).handleFileChangeEvent({ moved_output_paths: [['untitled/index.html', 'posts/index.html']], changed_output_files: ['posts/index.html'] });
-      expect((previewManager as any).newPageWait.pathname).toBe('/posts/index.html');
-      expect(mockIframe.src).toContain('/posts/index.html');
+      expect((previewManager as any).newPageWait.pathname).toBe('/posts/');
+      expect(mockIframe.src).toMatch(/\/posts\/(\?|$)/);
       expect(mockOverlay.classList.contains('visible')).toBe(true);
     });
 
@@ -3778,12 +3802,28 @@ describe('PreviewManager', () => {
       previewManager = new PreviewManager('moss-preview-iframe');
       (previewManager as any).folderPath = '/vault';
       previewManager.armNewPageWait('/posts/');
-      const build = vi.spyOn(previewManager, 'startBuild').mockResolvedValue(undefined);
+      let built!: () => void;
+      const build = vi.spyOn(previewManager, 'startBuild').mockReturnValue(new Promise<void>((resolve) => { built = resolve; }));
       (previewManager as any).waitingScreen.deps.retryPage();
       await Promise.resolve();
       expect(build).toHaveBeenCalledWith('/vault');
       expect((previewManager as any).newPageWait).not.toBeNull();
       expect(mockOverlay.classList.contains('visible')).toBe(true);
+      built();
+    });
+
+    test('Try again ends the wait when its build finishes without the page', async () => {
+      previewManager = new PreviewManager('moss-preview-iframe');
+      (previewManager as any).folderPath = '/vault';
+      previewManager.armNewPageWait('/posts/');
+      vi.spyOn(previewManager, 'startBuild').mockResolvedValue(undefined);
+      const load = vi.spyOn(previewManager, 'loadPreview');
+      (previewManager as any).waitingScreen.deps.retryPage();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect((previewManager as any).newPageWait).toBeNull();
+      expect(mockOverlay.classList.contains('visible')).toBe(false);
+      expect(load).toHaveBeenLastCalledWith(expect.stringContaining('/posts/'));
     });
 
     test('unrelated builds and terminal completion cannot uncover a new page', async () => {

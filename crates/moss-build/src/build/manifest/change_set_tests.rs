@@ -417,45 +417,17 @@ fn diff_hashes_is_silent_about_an_unchanged_path() {
 
 // ── Removed public addresses ──
 
-/// A file moss generates (a feed) that this build no longer produces has no
-/// source to point at, so nothing says the author wanted it gone.
+/// Files moss generates (a feed, calendar files, QR codes) that this build no
+/// longer produces are not pages the author wrote: none is a removed address.
 #[test]
-fn a_generated_file_no_longer_produced_is_unexplained() {
-    let prev = snapshot(&sealed(&[("a.md", "a/index.html", "h", b"A")], &[("feed.xml", &b"F"[..])]));
-    let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
-
-    assert_eq!(removed_of(&prev, &cur), [("feed.xml".to_string(), RemovalReason::Unexplained)]);
-}
-
-/// A calendar file has no source of its own, and the page behind it is still on
-/// disk when the author only removed `start:`. Losing it is the author's edit,
-/// not a vanished generated file.
-#[test]
-fn a_calendar_file_that_stops_being_produced_is_author_removed() {
+fn a_generated_file_no_longer_produced_is_not_a_removed_address() {
     let prev = snapshot(&sealed(
         &[("a.md", "a/index.html", "h", b"A")],
-        &[("a/event.ics", &b"E"[..]), ("calendar.ics", &b"C"[..]), ("feed.xml", &b"F"[..])],
+        &[("feed.xml", &b"F"[..]), ("a/event.ics", &b"E"[..]), ("calendar.ics", &b"C"[..]), ("qr/a.svg", &b"Q"[..])],
     ));
     let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
 
-    assert_eq!(
-        removed_of(&prev, &cur),
-        [
-            ("a/event.ics".to_string(), RemovalReason::AuthorRemoved),
-            ("calendar.ics".to_string(), RemovalReason::AuthorRemoved),
-            ("feed.xml".to_string(), RemovalReason::Unexplained),
-        ]
-    );
-}
-
-/// Only the names the calendar feature writes count. An `.ics` the author put in
-/// the folder is an ordinary file, so its removal is not the author editing `start:`.
-#[test]
-fn a_vanished_ics_file_the_calendar_feature_does_not_write_is_unexplained() {
-    let prev = snapshot(&sealed(&[("a.md", "a/index.html", "h", b"A")], &[("notes.ics", &b"N"[..])]));
-    let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
-
-    assert_eq!(removed_of(&prev, &cur), [("notes.ics".to_string(), RemovalReason::Unexplained)]);
+    assert_eq!(removed_of(&prev, &cur), []);
 }
 
 #[test]
@@ -467,26 +439,6 @@ fn a_page_whose_source_was_deleted_is_author_removed() {
     let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
 
     assert_eq!(removed_of(&prev, &cur), [("b/index.html".to_string(), RemovalReason::AuthorRemoved)]);
-}
-
-/// A page's QR code goes with the page, so deleting the page explains it; a QR
-/// code that vanishes while its page stays is still unexplained.
-#[test]
-fn a_deleted_pages_qr_code_is_author_removed_with_it() {
-    let prev = snapshot(&sealed(
-        &[("a.md", "a/index.html", "h", b"A"), ("b.md", "b/index.html", "h", b"B")],
-        &[("qr/a.svg", &b"QA"[..]), ("qr/b.svg", &b"QB"[..])],
-    ));
-    let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
-
-    assert_eq!(
-        removed_of(&prev, &cur),
-        [
-            ("b/index.html".to_string(), RemovalReason::AuthorRemoved),
-            ("qr/a.svg".to_string(), RemovalReason::Unexplained),
-            ("qr/b.svg".to_string(), RemovalReason::AuthorRemoved),
-        ]
-    );
 }
 
 /// The source is still there but its address moved and nothing answers at the
@@ -502,49 +454,56 @@ fn a_moved_page_with_no_stub_is_unexplained_and_with_a_stub_is_not_removed() {
     assert!(removed_of(&prev, &stubbed).is_empty(), "an old address the build still serves is not removed");
 }
 
+/// An author's HTML file is a page they wrote; a PDF beside it is a download.
 #[test]
-fn a_deleted_folder_file_is_author_removed() {
-    let prev = snapshot(&sealed_with_assets(&[], &[], &["docs/a.pdf"], &[]));
-    assert_eq!(
-        prev.asset_source_to_output,
-        Some(std::collections::HashMap::from([("docs/a.pdf".to_string(), "docs/a.pdf".to_string())]))
-    );
+fn a_deleted_html_file_is_author_removed_and_a_deleted_download_is_not_named() {
+    let prev = snapshot(&sealed_with_assets(&[], &[], &["docs/a.html", "docs/a.pdf"], &[]));
     let cur = sealed_with_assets(&[], &[], &[], &[]);
 
-    assert_eq!(removed_of(&prev, &cur), [("docs/a.pdf".to_string(), RemovalReason::AuthorRemoved)]);
+    assert_eq!(removed_of(&prev, &cur), [("docs/a.html".to_string(), RemovalReason::AuthorRemoved)]);
 }
 
 #[test]
-fn a_folder_file_that_still_exists_but_is_not_shipped_is_unexplained() {
-    let prev = snapshot(&sealed_with_assets(&[], &[], &["docs/a.pdf"], &[]));
-    let cur = sealed_with_assets(&[], &[], &[], &["docs/a.pdf"]);
+fn an_html_file_that_still_exists_but_is_not_shipped_is_unexplained() {
+    let prev = snapshot(&sealed_with_assets(&[], &[], &["docs/a.html"], &[]));
+    let cur = sealed_with_assets(&[], &[], &[], &["docs/a.html"]);
 
-    assert_eq!(removed_of(&prev, &cur), [("docs/a.pdf".to_string(), RemovalReason::Unexplained)]);
+    assert_eq!(removed_of(&prev, &cur), [("docs/a.html".to_string(), RemovalReason::Unexplained)]);
 }
 
-/// A record from before `asset_source_to_output` cannot say who made a file,
-/// so every non-page removal in it is unexplained.
+/// A record from before `asset_source_to_output` cannot say an HTML file was
+/// the author's, so its removal goes unnamed until the next publish records it.
 #[test]
-fn a_record_that_predates_asset_sources_explains_no_file_removal() {
-    let mut prev = snapshot(&sealed_with_assets(&[], &[], &["docs/a.pdf"], &[]));
+fn a_record_that_predates_asset_sources_names_no_html_file() {
+    let mut prev = snapshot(&sealed_with_assets(&[("a.md", "a/index.html", "h", b"A")], &[], &["docs/a.html"], &[]));
+    prev.asset_source_to_output = None;
+    let cur = sealed_with_assets(&[("a.md", "a/index.html", "h", b"A")], &[], &[], &[]);
+
+    assert_eq!(removed_of(&prev, &cur), []);
+}
+
+/// A prebuilt upload's record has no sources at all: every HTML file it
+/// served counts as a page, and nothing can explain losing one.
+#[test]
+fn a_prebuilt_records_html_files_count_as_pages_with_no_explanation() {
+    let mut prev = snapshot(&sealed_with_assets(&[], &[("old.html", b"O"), ("old.css", b"C")], &[], &[]));
     prev.asset_source_to_output = None;
     let cur = sealed_with_assets(&[], &[], &[], &[]);
 
-    assert_eq!(removed_of(&prev, &cur), [("docs/a.pdf".to_string(), RemovalReason::Unexplained)]);
+    assert_eq!(removed_of(&prev, &cur), [("old.html".to_string(), RemovalReason::Unexplained)]);
 }
 
 #[test]
-fn internal_assets_are_never_public_addresses_and_the_list_is_sorted() {
+fn internal_files_are_never_public_addresses_and_the_list_is_sorted() {
     let prev = snapshot(&sealed(
-        &[("a.md", "a/index.html", "h", b"A")],
-        &[("_moss/og/card.png", &b"x"[..]), ("z.xml", &b"z"[..]), ("b.xml", &b"b"[..])],
+        &[("a.md", "a/index.html", "h", b"A"), ("z.md", "z/index.html", "h", b"Z"), ("b.md", "b/index.html", "h", b"B")],
+        &[("_moss/og/card.png", &b"x"[..])],
     ));
     let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
 
-    let removed = removed_of(&prev, &cur);
     assert_eq!(
-        removed,
-        [("b.xml".to_string(), RemovalReason::Unexplained), ("z.xml".to_string(), RemovalReason::Unexplained)]
+        removed_of(&prev, &cur),
+        [("b/index.html".to_string(), RemovalReason::AuthorRemoved), ("z/index.html".to_string(), RemovalReason::AuthorRemoved)]
     );
 }
 
@@ -565,7 +524,7 @@ fn a_vanished_internal_sidecar_never_refuses_the_publish() {
 }
 
 #[test]
-fn a_vanished_page_or_authors_dotfile_still_refuses_beside_an_internal_sidecar() {
+fn a_vanished_page_still_refuses_beside_an_internal_sidecar_and_a_dotfile() {
     let prev = snapshot(&sealed(
         &[("a.md", "a/index.html", "h", b"A"), ("b.md", "jupyter/index.html", "h", b"B")],
         &[("jupyter/.moss-archive-sha256", &b"0"[..]), (".well-known/security.txt", &b"s"[..])],
@@ -576,7 +535,7 @@ fn a_vanished_page_or_authors_dotfile_still_refuses_beside_an_internal_sidecar()
         .into_iter()
         .map(|p| p.path)
         .collect();
-    assert_eq!(pending, [".well-known/security.txt", "jupyter/index.html"]);
+    assert_eq!(pending, ["jupyter/index.html"]);
 }
 
 /// `removed_assets` is what the desktop app has always read: every vanished
@@ -593,7 +552,7 @@ fn removed_assets_counts_every_vanished_non_page_output_including_internal_ones(
     let set = classify(Some(&prev), &cur).with_removed(removed_addresses(&prev, &cur, in_build(&cur)));
 
     assert_eq!(set.removed_assets, 2, "the removed page is a Deleted verb; the internal card still counts");
-    assert_eq!(set.removed.len(), 2, "the list holds public addresses only: the page and the feed");
+    assert_eq!(set.removed.len(), 1, "the list holds the page only");
 }
 
 #[test]
@@ -611,7 +570,7 @@ fn a_publish_removing_only_internal_files_is_not_empty() {
 fn a_set_with_only_removed_addresses_is_not_empty() {
     let set = ChangeSet {
         classified: true,
-        removed: vec![RemovedAddress { path: "feed.xml".into(), reason: RemovalReason::Unexplained, moved_to: None, source: None, withdrawn_by: None }],
+        removed: vec![RemovedAddress { path: "old/index.html".into(), reason: RemovalReason::Unexplained, moved_to: None, source: None }],
         ..ChangeSet::default()
     };
     assert!(!set.is_empty());
@@ -621,7 +580,7 @@ fn a_set_with_only_removed_addresses_is_not_empty() {
 /// unclassified one a missing own-target record yields.
 #[test]
 fn removed_addresses_ride_on_an_unclassified_set_too() {
-    let prev = snapshot(&sealed(&[], &[("feed.xml", &b"F"[..])]));
+    let prev = snapshot(&sealed(&[("a.md", "a/index.html", "h", b"A")], &[]));
     let cur = sealed(&[], &[]);
 
     let set = classify(None, &cur).with_removed(removed_addresses(&prev, &cur, in_build(&cur)));
@@ -633,9 +592,9 @@ fn removed_addresses_ride_on_an_unclassified_set_too() {
 
 #[test]
 fn removed_addresses_serialize_snake_case_and_omit_an_absent_moved_to() {
-    let bare = RemovedAddress { path: "a".into(), reason: RemovalReason::AuthorRemoved, moved_to: None, source: None, withdrawn_by: None };
+    let bare = RemovedAddress { path: "a".into(), reason: RemovalReason::AuthorRemoved, moved_to: None, source: None };
     assert_eq!(serde_json::to_value(bare).unwrap(), serde_json::json!({"path": "a", "reason": "author_removed"}));
-    let moved = RemovedAddress { path: "a/".into(), reason: RemovalReason::Unexplained, moved_to: Some("b/".into()), source: None, withdrawn_by: None };
+    let moved = RemovedAddress { path: "a/".into(), reason: RemovalReason::Unexplained, moved_to: Some("b/".into()), source: None };
     assert_eq!(
         serde_json::to_value(moved).unwrap(),
         serde_json::json!({"path": "a/", "reason": "unexplained", "moved_to": "b/"})
@@ -670,17 +629,15 @@ fn a_renamed_source_with_a_stub_at_the_old_address_is_not_removed() {
 }
 
 /// The recorded source rides on the removal, so a consumer can say "still in
-/// your folder" for a file and "no longer produced" for a generated one.
+/// your folder".
 #[test]
-fn a_removal_carries_the_recorded_source_when_there_is_one() {
-    let prev = snapshot(&sealed_with_assets(&[], &[("feed.xml", &b"F"[..])], &["docs/a.pdf"], &[]));
-    let cur = sealed_with_assets(&[], &[], &[], &["docs/a.pdf"]);
+fn a_removal_carries_the_recorded_source() {
+    let prev = snapshot(&sealed_with_assets(&[], &[], &["docs/a.html"], &[]));
+    let cur = sealed_with_assets(&[], &[], &[], &["docs/a.html"]);
 
-    let by_path: std::collections::HashMap<_, _> =
-        removed_addresses(&prev, &cur, in_build(&cur)).into_iter().map(|r| (r.path.clone(), r)).collect();
-
-    assert_eq!(by_path["docs/a.pdf"].source.as_deref(), Some("docs/a.pdf"));
-    assert_eq!(by_path["feed.xml"].source, None);
+    let removed = removed_addresses(&prev, &cur, in_build(&cur));
+    assert_eq!(removed.len(), 1);
+    assert_eq!(removed[0].source.as_deref(), Some("docs/a.html"));
 }
 
 /// A video that used to ship an adaptive ladder and now ships none (its own
@@ -698,26 +655,6 @@ fn a_ladder_dropped_from_a_video_that_is_still_published_is_not_an_unexplained_r
     let cur = sealed_with_assets(&[], &[], &["clips/demo.mp4"], &[]);
 
     assert_eq!(removed_of(&prev, &cur), []);
-}
-
-/// Only the ladder's own file names are renditions. An author's file in the
-/// same directory is still an address that went offline.
-#[test]
-fn an_authors_file_in_a_ladder_directory_is_still_a_removal() {
-    let prev = snapshot(&sealed_with_assets(&[], &[("clips/demo.hls/notes.html", &b"N"[..])], &["clips/demo.mp4"], &[]));
-    let cur = sealed_with_assets(&[], &[], &["clips/demo.mp4"], &[]);
-
-    assert_eq!(removed_of(&prev, &cur), [("clips/demo.hls/notes.html".to_string(), RemovalReason::Unexplained)]);
-}
-
-/// The ladder directory is the LAST `.hls/`: a ladder-shaped file under a
-/// nested `a.hls/b.hls/` belongs to `a.hls/b`, not to the video `a`.
-#[test]
-fn a_ladder_shaped_file_in_a_nested_hls_folder_is_still_a_removal() {
-    let prev = snapshot(&sealed_with_assets(&[], &[("a.hls/b.hls/master.m3u8", &b"M"[..])], &["a.mp4"], &[]));
-    let cur = sealed_with_assets(&[], &[], &["a.mp4"], &[]);
-
-    assert_eq!(removed_of(&prev, &cur), [("a.hls/b.hls/master.m3u8".to_string(), RemovalReason::Unexplained)]);
 }
 
 /// A video served under another extension keeps `<stem>.hls` as its ladder
@@ -777,20 +714,14 @@ fn a_derivative_this_build_still_produces_is_not_kept() {
 }
 
 /// Nothing is left to redirect to, and the author deleted the picture: the
-/// derivative goes with it, like a page's QR code.
+/// derivative goes with it, and neither is a page.
 #[test]
-fn a_derivative_of_a_deleted_picture_is_author_removed_not_kept() {
+fn a_derivative_of_a_deleted_picture_is_not_kept_or_named() {
     let prev = snapshot(&sealed_with_assets(&[], &[("photo-2.webp", b"W")], &["photo-2.jpg"], &[]));
     let cur = sealed_with_assets(&[], &[], &[], &[]);
 
     assert!(crate::build::feeds::kept_addresses::kept_derivatives(&prev, &files_of(&cur)).is_empty());
-    assert_eq!(
-        removed_of(&prev, &cur),
-        [
-            ("photo-2.jpg".to_string(), RemovalReason::AuthorRemoved),
-            ("photo-2.webp".to_string(), RemovalReason::AuthorRemoved),
-        ]
-    );
+    assert_eq!(removed_of(&prev, &cur), []);
 }
 
 /// A webp that is not cut from any recorded picture is a generated file.
@@ -799,68 +730,51 @@ fn a_webp_with_no_picture_behind_it_is_not_kept() {
     let prev = snapshot(&sealed_with_assets(&[], &[("cover.webp", b"W")], &[], &[]));
     let cur = sealed_with_assets(&[], &[], &[], &[]);
     assert!(crate::build::feeds::kept_addresses::kept_derivatives(&prev, &files_of(&cur)).is_empty());
-    assert_eq!(removed_of(&prev, &cur), [("cover.webp".to_string(), RemovalReason::Unexplained)]);
+    assert_eq!(removed_of(&prev, &cur), []);
 }
 
-/// A folder file moved with its bytes loses its recorded source, which reads
+/// An HTML file moved with its bytes loses its recorded source, which reads
 /// as a deletion. The same bytes served at an address the last publish did
 /// not serve are that file, moved: the publish asks for the redirect.
 #[test]
-fn a_moved_folder_file_is_a_move_not_a_deletion() {
-    let prev = snapshot(&sealed_with_assets(&[], &[], &["review/old/plan.pdf"], &[]));
-    let cur = sealed_with_assets(&[], &[], &["review/client/old/plan.pdf"], &[]);
+fn a_moved_html_file_is_a_move_not_a_deletion() {
+    let prev = snapshot(&sealed_with_assets(&[], &[], &["review/old/plan.html"], &[]));
+    let cur = sealed_with_assets(&[], &[], &["review/client/old/plan.html"], &[]);
 
     let removed = removed_addresses(&prev, &cur, in_build(&cur));
-    assert_eq!(removed_of(&prev, &cur), [("review/old/plan.pdf".to_string(), RemovalReason::Unexplained)]);
+    assert_eq!(removed_of(&prev, &cur), [("review/old/plan.html".to_string(), RemovalReason::Unexplained)]);
     let pending = pending_removals(&removed, None);
-    assert_eq!(pending[0].cause, RemovalCause::Moved { to: "/review/client/old/plan.pdf".to_string() });
+    assert_eq!(pending[0].cause, RemovalCause::Moved { to: "/review/client/old/plan.html".to_string() });
     let line = crate::deploy::removal_gate::pending_line(&pending[0]);
-    assert!(line.contains(r#"add "/review/old/plan.pdf" = "/review/client/old/plan.pdf" under [redirects]"#), "{line}");
-}
-
-/// A picture's derivative carries the same bytes to the new folder, so it
-/// moved too, rather than being a generated file nobody produces now.
-#[test]
-fn a_moved_pictures_derivative_moved_with_it() {
-    let prev = snapshot(&sealed_with_assets(&[], &[("old/photo.webp", b"W")], &["old/photo.png"], &[]));
-    let cur = sealed_with_assets(&[], &[("new/photo.webp", b"W")], &["new/photo.png"], &[]);
-
-    let moved: Vec<_> = removed_addresses(&prev, &cur, in_build(&cur)).into_iter().map(|r| (r.path, r.moved_to)).collect();
-    assert_eq!(
-        moved,
-        [
-            ("old/photo.png".to_string(), Some("new/photo.png".to_string())),
-            ("old/photo.webp".to_string(), Some("new/photo.webp".to_string())),
-        ]
-    );
+    assert!(line.contains(r#"add "/review/old/plan.html" = "/review/client/old/plan.html" under [redirects]"#), "{line}");
 }
 
 /// Bytes the last publish already served elsewhere are not a new home.
 #[test]
 fn a_deleted_file_whose_bytes_were_already_served_elsewhere_stays_a_deletion() {
-    let prev = snapshot(&sealed_with_assets(&[], &[], &["a.pdf", "b.pdf"], &[]));
-    let cur = sealed_with_assets(&[], &[], &["b.pdf"], &[]);
+    let prev = snapshot(&sealed_with_assets(&[], &[], &["a.html", "b.html"], &[]));
+    let cur = sealed_with_assets(&[], &[], &["b.html"], &[]);
 
-    assert_eq!(removed_of(&prev, &cur), [("a.pdf".to_string(), RemovalReason::AuthorRemoved)]);
+    assert_eq!(removed_of(&prev, &cur), [("a.html".to_string(), RemovalReason::AuthorRemoved)]);
 }
 
 /// When the bytes arrive at several addresses, the one with the same name wins.
 #[test]
 fn a_move_prefers_the_arrival_with_the_same_name() {
-    let prev = snapshot(&sealed_with_assets(&[], &[], &["old/plan.pdf"], &[]));
-    let cur = sealed_with_assets(&[], &[], &["new/copy.pdf", "new/plan.pdf"], &[]);
+    let prev = snapshot(&sealed_with_assets(&[], &[], &["old/plan.html"], &[]));
+    let cur = sealed_with_assets(&[], &[], &["new/copy.html", "new/plan.html"], &[]);
 
     let moved: Vec<_> = removed_addresses(&prev, &cur, in_build(&cur)).into_iter().map(|r| r.moved_to).collect();
-    assert_eq!(moved, [Some("new/plan.pdf".to_string())]);
+    assert_eq!(moved, [Some("new/plan.html".to_string())]);
 }
 
 /// A move is the same bytes, not the same name.
 #[test]
 fn a_new_file_with_other_bytes_is_not_where_a_deleted_one_went() {
-    let prev = snapshot(&sealed_with_assets(&[], &[], &["old/plan.pdf"], &[]));
-    let cur = sealed_with_assets(&[], &[("new/plan.pdf", b"other")], &[], &[]);
+    let prev = snapshot(&sealed_with_assets(&[], &[], &["old/plan.html"], &[]));
+    let cur = sealed_with_assets(&[], &[("new/plan.html", b"other")], &[], &[]);
 
-    assert_eq!(removed_of(&prev, &cur), [("old/plan.pdf".to_string(), RemovalReason::AuthorRemoved)]);
+    assert_eq!(removed_of(&prev, &cur), [("old/plan.html".to_string(), RemovalReason::AuthorRemoved)]);
 }
 
 /// A page's rendered bytes are not its identity: its uid is, and a page whose
@@ -887,20 +801,6 @@ fn a_vanished_form_description_never_refuses_the_publish() {
     assert!(removed.is_empty(), "{removed:?}");
     assert!(pending_removals(&removed, None).is_empty());
     assert_eq!(removed_public_paths(&prev, &cur.files()), Vec::<String>::new());
-}
-
-/// How a site's settings become the record, both directions: what a setting
-/// withdraws, and what it leaves a broken promise.
-#[test]
-fn the_settings_decide_what_is_withdrawn() {
-    use crate::build::feeds::robots::AiSettings;
-    let w = |ai, tools| Withdrawn::from_settings(ai, tools);
-    let answers_off = AiSettings::resolve(None, None, Some(false), None);
-    assert_eq!(w(answers_off, true), Withdrawn { llms_txt: true, tdmrep_json: false, qr_codes: false });
-    let answers_on = AiSettings::resolve(None, None, Some(true), None);
-    assert_eq!(w(answers_on, true), Withdrawn { llms_txt: false, tdmrep_json: false, qr_codes: false });
-    let no_switch = AiSettings::resolve(None, None, None, None);
-    assert_eq!(w(no_switch, false), Withdrawn { llms_txt: false, tdmrep_json: true, qr_codes: true });
 }
 
 /// An asset the last publish served under its disk's decomposed spelling and

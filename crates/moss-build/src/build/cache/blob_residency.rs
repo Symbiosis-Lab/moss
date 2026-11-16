@@ -33,49 +33,71 @@ impl ObjectStore {
     /// when the shared cache refuses a write.
     pub fn ready_blob(&self, oid: &str) -> Option<PathBuf> {
         if !valid_oid(oid) { return None; }
-        for path in [self.resident_local_blob(oid), Some(self.blob_path(oid))].into_iter().flatten() {
-            if crate::build::icloud::is_still_in_the_cloud(&path) {
-                continue;
-            }
-            if !crate::build::io_utils::output_present(&path) {
-                if path.exists() {
-                    log::info!("[CAS] unusable blob {} at {}, treating as missing", oid, path.display());
-                }
-                continue;
-            }
-            let Ok(metadata) = fs::metadata(&path) else { continue };
-            let before = FileStat::of(&metadata);
-            let key = path.to_string_lossy().into_owned();
-            let mut index = self.verified.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            if index.lookup(&key, &before) == Some(oid) {
-                return Some(path);
-            }
-            if let Some(previous) = self.remembered.as_deref().map(|r| &r.index).filter(|previous| previous.lookup(&key, &before) == Some(oid)) {
-                index.carry_forward(previous, &key);
-                return Some(path);
-            }
-            drop(index);
-            let recorded_at = recording_clock();
-            match Self::hash_file_once(&path) {
-                Ok(hash) if hash == oid => {
-                    let unchanged = fs::metadata(&path).ok().is_some_and(|after| FileStat::of(&after) == before);
-                    if !unchanged { continue; }
-                    let mut index = self.verified.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                    if self.remembered.is_none() && index.entries.len() >= MAX_VERIFIED_BLOBS && !index.entries.contains_key(&key) {
-                        index.entries.clear();
-                    }
-                    index.update_read_at(key, &before, hash, recorded_at);
-                    return Some(path);
-                },
-                Ok(hash) => {
-                    log::info!("[CAS] blob {} hashes to {} — removed, regenerating", oid, hash);
-                    // allow:unlink a corrupt blob in an owned CAS directory
-                    let _ = fs::remove_file(&path);
-                }
-                Err(e) => log::debug!("[CAS] cannot read blob {}: {}", oid, e),
+        let mut candidates: Vec<PathBuf> = [self.local_blob_path(oid), Some(self.blob_path(oid))].into_iter().flatten().collect();
+        // The copy a check already verified goes first, so a blob still where it was costs one stat.
+        candidates.sort_by_key(|path| !self.verified_at(path, oid));
+        candidates.into_iter().find(|path| self.holds_verified(path, oid))
+    }
+
+    /// Whether `path` holds `oid`'s bytes now. A blob verified earlier, by this
+    /// store or by the pass it remembers, is taken by its stat; any other is
+    /// hashed, and removed if its bytes are not its name.
+    pub(super) fn holds_verified(&self, path: &Path, oid: &str) -> bool {
+        use crate::build::io_utils::Presence;
+        // One lstat answers residency, eviction and the stat the index is keyed by:
+        // a blob is written by temp-and-rename, never as a link.
+        let Ok(metadata) = fs::symlink_metadata(path) else { return false };
+        match crate::build::io_utils::probe_output_stat(path, crate::types::content::MODE_FILE, Ok(metadata.clone())) {
+            Presence::Present if !metadata.file_type().is_symlink() => {}
+            // In the cloud is a miss; an empty file that is here is damage, noted below.
+            Presence::Evicted if metadata.len() != 0 => return false,
+            _ => {
+                log::info!("[CAS] unusable blob {} at {}, treating as missing", oid, path.display());
+                return false;
             }
         }
-        None
+        let before = FileStat::of(&metadata);
+        let key = path.to_string_lossy().into_owned();
+        let mut index = self.verified.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if index.lookup(&key, &before) == Some(oid) {
+            return true;
+        }
+        if let Some(previous) = self.remembered.as_deref().map(|r| &r.index).filter(|previous| previous.lookup(&key, &before) == Some(oid)) {
+            index.carry_forward(previous, &key);
+            return true;
+        }
+        drop(index);
+        let recorded_at = recording_clock();
+        match Self::hash_file_once(path) {
+            Ok(hash) if hash == oid => {
+                let unchanged = fs::metadata(path).ok().is_some_and(|after| FileStat::of(&after) == before);
+                if !unchanged { return false; }
+                let mut index = self.verified.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                if self.remembered.is_none() && index.entries.len() >= MAX_VERIFIED_BLOBS && !index.entries.contains_key(&key) {
+                    index.entries.clear();
+                }
+                index.update_read_at(key, &before, hash, recorded_at);
+                true
+            },
+            Ok(hash) => {
+                log::info!("[CAS] blob {} hashes to {} — removed, regenerating", oid, hash);
+                // allow:unlink a corrupt blob in an owned CAS directory
+                let _ = fs::remove_file(path);
+                false
+            }
+            Err(e) => {
+                log::debug!("[CAS] cannot read blob {}: {}", oid, e);
+                false
+            }
+        }
+    }
+
+    /// Whether this store, or the pass it remembers, verified `path` as `oid`.
+    fn verified_at(&self, path: &Path, oid: &str) -> bool {
+        let key = path.to_string_lossy();
+        let names = |index: &HashIndex| index.entries.get(key.as_ref()).is_some_and(|entry| entry.content_hash == oid);
+        names(&self.verified.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
+            || self.remembered.as_deref().is_some_and(|remembered| names(&remembered.index))
     }
 
     /// This store for one pass, answering a blob check from what an earlier

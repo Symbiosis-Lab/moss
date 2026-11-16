@@ -106,14 +106,6 @@ fn an_article_is_long_where_the_network_has_articles_and_a_teaser_elsewhere() {
 }
 
 #[test]
-fn a_network_with_no_api_gets_the_same_copy_as_a_handoff() {
-    let p = post("Autumn", "A long essay.\n");
-    let s = shape(&p, &spec(&[Form::Handoff], 3000), SITE).unwrap();
-    assert_eq!(s.form, Form::Handoff);
-    assert!(s.parts[0].text.ends_with(PAGE));
-}
-
-#[test]
 fn a_post_too_long_with_no_teaser_is_refused() {
     let p = post("", &"word ".repeat(100));
     assert!(shape(&p, &spec(&[Form::Short], 50), SITE).is_err());
@@ -142,9 +134,9 @@ fn the_hash_follows_the_copy_and_the_key_follows_only_the_post_and_channel() {
 fn backlinks_fit_at_the_boundary_for_every_counting_rule() {
     for counting in [Counting::Graphemes, Counting::Chars, Counting::Utf16, Counting::Weighted] {
         for link_chars in [None, Some(23)] {
-            for form in [Form::Short, Form::Handoff] {
+            for form in [Form::Short, Form::Teaser] {
                 let text = format!("秋 🍁\n\n{PAGE}");
-                let mut channel = ChannelSpec { forms: if form == Form::Handoff { vec![form] } else { vec![form, Form::Teaser] }, counting, link_chars, ..Default::default() };
+                let mut channel = ChannelSpec { forms: if form == Form::Teaser { vec![form] } else { vec![form, Form::Teaser] }, counting, link_chars, ..Default::default() };
                 let limit = channel.length(&text) as u32;
                 channel.max_chars = Some(limit);
                 let p = post("", "秋 🍁");
@@ -202,7 +194,7 @@ fn a_long_copy_ends_with_its_escaped_address_whatever_the_networks_short_limit()
 
 #[test]
 fn an_address_alone_must_fit_and_the_copy_ends_with_it() {
-    for form in [Form::Short, Form::Teaser, Form::Handoff] {
+    for form in [Form::Short, Form::Teaser] {
         let channel = spec(&[form], PAGE.len() as u32);
         let copy = shape(&post("", ""), &channel, SITE).unwrap();
         assert_eq!(copy.parts[0].text, PAGE);

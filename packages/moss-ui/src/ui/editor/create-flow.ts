@@ -181,6 +181,10 @@ export interface CreateFlowDeps {
   /** Announce a rename moss is about to issue (both sides, relative), so the
    *  watcher echo is swallowed rather than reloading a path mid-move. */
   registerPendingRename(from: string, to: string): void;
+  /** Point the preview at a page no build may have seen, by the address it
+   *  will have. A rename's own build event cannot move the preview off an
+   *  address that was never built. Relative path. */
+  showInPreview(relativePath: string): void;
   /** Rename through the tree (renameEntryWithRefs + lifecycle). Absolute paths. */
   renameEntry(oldAbs: string, newAbs: string): Promise<{ status: 'ok' } | { status: 'error'; error: string }>;
   /** Write `title:` frontmatter via the chip-bar store (Title-mode precedent). */
@@ -453,7 +457,7 @@ export class CreateFlow {
     const { dir, dirName } = this.currentTarget();
 
     const [templates, langs] = await Promise.all([this.readTemplates(), this.readLanguages()]);
-    const slots = await this.missingTranslations(langs);
+    const slots = await this.missingTranslations();
     const matching = templatesNamingFolder(dir, templates, langs);
     const pageMatches = matching.filter((m) => m.kind === 'page');
     const sole = pageMatches.length === 1 ? pageMatches[0] : null;
@@ -547,7 +551,7 @@ export class CreateFlow {
   /** The translation rows for the open page: one per language it lacks. */
   private translationRows(slots: TranslationSlot[]): CtxMenuEntry[] {
     return slots.map((s): CtxMenuEntry => ({
-      label: s.folderMissing
+      label: s.folder_missing
         ? t('create.translation_folder_row', { language: langName(s.lang) })
         : t('create.translation_row', { language: langName(s.lang) }),
       id: `translation:${s.lang}`,
@@ -556,11 +560,11 @@ export class CreateFlow {
   }
 
   /** The languages the open page lacks; none without a page or a second tree. */
-  private async missingTranslations(langs: SiteLanguagesInfo): Promise<TranslationSlot[]> {
+  private async missingTranslations(): Promise<TranslationSlot[]> {
     const root = this.deps.projectRoot();
     const rel = this.deps.currentFilePath();
     if (!root || !rel) return [];
-    const slots = await translationSlots(rel, langs, this.deps.languages, root);
+    const slots = await translationSlots(rel, this.deps.languages, root);
     return slots.filter((s) => !s.exists);
   }
 
@@ -675,6 +679,7 @@ export class CreateFlow {
       );
       if (result.status !== 'ok') return { ok: false, error: result.error };
       s.currentName = gen;
+      this.deps.showInPreview(newPath);
     }
     if (s.datePrefix) this.deps.setTitleField(newText.trim());
     this.renderStatus(s.currentName);

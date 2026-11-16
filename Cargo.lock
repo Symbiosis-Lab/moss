@@ -1081,6 +1081,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "document-features"
+version = "0.2.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4b8a88685455ed29a21542a33abd9cb6510b6b129abadabdcef0f4c55bc8f61"
+dependencies = [
+ "litrs",
+]
+
+[[package]]
 name = "dotenvy"
 version = "0.15.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1268,6 +1277,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fast_image_resize"
+version = "5.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fbc7fe45cf92b43817ff62a3723e862b85bd1d06288f63007f7645d1d2f7a060"
+dependencies = [
+ "cfg-if",
+ "document-features",
+ "num-traits",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "fast_qr"
 version = "0.12.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1387,6 +1408,7 @@ checksum = "e32eac81c1135c1df01d4e6d4233c47ba11f6a6d07f33e0bba09d18797077770"
 dependencies = [
  "fontconfig-parser",
  "log",
+ "memmap2",
  "slotmap",
  "tinyvec",
  "ttf-parser 0.21.1",
@@ -2558,6 +2580,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
+name = "litrs"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4744e383959f0db86ede514b809b1c53251889093803c05267acc7d4e7030d70"
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2841,6 +2869,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.21.7",
+ "bitflags 2.13.2",
  "block2",
  "brotli",
  "bytes",
@@ -2848,13 +2877,16 @@ dependencies = [
  "color_quant",
  "core-foundation 0.9.4",
  "core-foundation-sys",
+ "crossbeam-channel",
  "cssparser 0.31.2",
  "dirs",
  "ed25519-dalek",
  "ego-tree",
+ "fast_image_resize",
  "fast_qr",
  "filetime",
  "flate2",
+ "fsevent-sys",
  "futures",
  "hex",
  "htmd",
@@ -2932,7 +2964,7 @@ dependencies = [
 
 [[package]]
 name = "moss-cli"
-version = "0.15.24"
+version = "0.15.25"
 dependencies = [
  "base64 0.21.7",
  "dotenvy",
@@ -2948,7 +2980,7 @@ dependencies = [
 
 [[package]]
 name = "moss-core"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "basic-toml",
  "proptest",
@@ -4740,6 +4772,7 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.2.17",
  "digest 0.10.7",
+ "sha2-asm",
 ]
 
 [[package]]
@@ -4751,6 +4784,15 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.3.1",
  "digest 0.11.3",
+]
+
+[[package]]
+name = "sha2-asm"
+version = "0.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b845214d6175804686b2bd482bcffe96651bb2d1200742b712003504a2dac1ab"
+dependencies = [
+ "cc",
 ]
 
 [[package]]

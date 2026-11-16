@@ -48,7 +48,7 @@
  *
  * The marker is a server-side side-channel and should never appear in
  * URLs the user sees (address-bar display, copy-link buttons, share
- * sheets). The shell strips it via `stripShellMarker()` when reporting
+ * sheets). The shell strips it via `withoutPreviewParams()` when reporting
  * the iframe's URL externally. The bridge's `moss-navigation` postMessage
  * carries `location.href` which DOES contain the marker — strip it before
  * displaying.
@@ -88,21 +88,21 @@ export function withShellMarker(url: string): string {
   return parsed.toString();
 }
 
+/** The query key the preview sets to force a reload of the page it shows. */
+export const CACHE_BUST_PARAM = "_t";
+
 /**
- * Removes the shell marker query param from a URL, returning the URL the
- * user should see (e.g. for display in a "Copy link" button or address-bar
- * mirror). Preserves all other query params and the hash.
- *
- * Returns the input unchanged if it can't be parsed as a URL.
+ * `url` without the two query parameters the preview adds to what it loads:
+ * the address the page has anywhere else. Other parameters and the hash stay.
+ * A string that is not a URL comes back unchanged.
  */
-export function stripShellMarker(url: string): string {
+export function withoutPreviewParams(url: string): string {
   try {
     const base = typeof window !== "undefined" ? window.location.href : "http://localhost/";
     const parsed = new URL(url, base);
-    if (!parsed.searchParams.has(SHELL_MARKER_PARAM)) {
-      return url;
-    }
+    if (!parsed.searchParams.has(SHELL_MARKER_PARAM) && !parsed.searchParams.has(CACHE_BUST_PARAM)) return url;
     parsed.searchParams.delete(SHELL_MARKER_PARAM);
+    parsed.searchParams.delete(CACHE_BUST_PARAM);
     // `.toString()` for test-env compatibility (see withShellMarker note).
     return parsed.toString();
   } catch {

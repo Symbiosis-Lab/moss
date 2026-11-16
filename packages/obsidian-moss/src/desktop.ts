@@ -54,6 +54,9 @@ export class DesktopCommands {
         .onClick(() => void this.runPreview(file.path)));
     }));
 
+    // Obsidian calls no onunload when its window closes or it quits.
+    this.plugin.registerDomEvent(window, "beforeunload", () => this.mossProcess.stop());
+
     this.statusEl = this.plugin.addStatusBarItem();
     this.statusEl.addClass("mod-clickable");
     this.plugin.registerDomEvent(this.statusEl, "click", () => void this.openPreviewLeaf());

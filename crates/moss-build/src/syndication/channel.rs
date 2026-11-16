@@ -14,9 +14,9 @@ pub enum Form {
     /// The whole article, where the network has an article format.
     Long,
     /// The article's description or opening, with a link to the original.
+    /// `handoff` reads as a teaser.
+    #[serde(alias = "handoff")]
     Teaser,
-    /// No posting API: the shaped copy goes to the author to paste.
-    Handoff,
 }
 
 /// How the network measures a post's length.
@@ -68,6 +68,10 @@ pub struct ChannelSpec {
     /// self-hosted data server), whose host the channel's copies live on.
     #[serde(default)]
     pub host_setting: Option<String>,
+    /// The on/off setting without which the channel does not take `long`:
+    /// for a network whose article format only some accounts have.
+    #[serde(default)]
+    pub long_setting: Option<String>,
 }
 
 impl ChannelSpec {
@@ -80,7 +84,10 @@ impl ChannelSpec {
     }
 
     /// An article's pictures are part of its HTML: all of them go, unless the
-    /// channel states a limit.
+    /// channel states a limit. `images.max` is what a short post may attach,
+    /// read here as an article's limit too: a channel that states it for its
+    /// posts has its articles cut to the same number, until the two are
+    /// separate fields.
     pub fn max_article_images(&self) -> usize {
         self.images.as_ref().map_or(usize::MAX, |i| i.max as usize)
     }
@@ -168,5 +175,11 @@ mod tests {
         assert_eq!(spec.counting, Counting::Graphemes);
         assert_eq!(spec.max_images(), 4);
         assert!(!spec.idempotent);
+    }
+
+    #[test]
+    fn a_copy_recorded_as_a_handoff_reads_as_a_teaser() {
+        assert_eq!(serde_json::from_str::<Form>(r#""handoff""#).unwrap(), Form::Teaser);
+        assert_eq!(serde_json::to_string(&Form::Teaser).unwrap(), r#""teaser""#);
     }
 }

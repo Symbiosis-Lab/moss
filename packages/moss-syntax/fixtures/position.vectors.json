@@ -470,21 +470,6 @@
       "src": "photo.jpg",
       "object_position": "left",
       "note": "a markdown image keeps its other options"
-    },
-    {
-      "embed": "![a view|](photo.jpg|focus:69%,78%)",
-      "word": "focus:30%,40%",
-      "written": "![a view|focus:30%,40%|](photo.jpg)",
-      "src": "photo.jpg",
-      "object_position": "30% 40%",
-      "note": "options left in a markdown image's address are removed from it",
-      "alt": "a view"
-    },
-    {
-      "embed": "![a view](photo.jpg|a caption)",
-      "word": "top",
-      "written": "![a view|top](photo.jpg|a caption)",
-      "note": "other text after a pipe in the address is left alone"
     }
   ]
 }

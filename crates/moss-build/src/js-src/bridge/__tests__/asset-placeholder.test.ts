@@ -268,6 +268,17 @@ describe("place — paints the blueprint without destroying identity", () => {
 });
 
 describe("restore — swaps the real asset back in", () => {
+  test("a picture whose address has a query of its own keeps it, and is restored again by the same path", () => {
+    const img = bare("/assets/photo.webp?v=2");
+    fail(img);
+
+    expect(restore("/assets/photo.webp")).toBe(1);
+    expect(img.getAttribute("src")).toMatch(/^\/assets\/photo\.webp\?v=2&_t=\d+$/);
+    fail(img);
+    expect(restore("/assets/photo.webp")).toBe(1);
+    expect(img.getAttribute("src")).toMatch(/^\/assets\/photo\.webp\?v=2&_t=\d+$/);
+  });
+
   test("restores src, drops the marker, and cache-busts the re-fetch", () => {
     const img = bare("/assets/photo.webp");
     fail(img);

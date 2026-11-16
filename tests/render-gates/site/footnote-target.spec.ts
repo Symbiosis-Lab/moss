@@ -38,9 +38,9 @@ test.describe("footnote :target landing", () => {
     // one step too late. The route to the backref changed — the endnote
     // list no longer sits at the page's foot; it opens as the expanded
     // sheet — and its backref no longer follows the link: sidenotes.ts
-    // scrolls the marker to the middle of the window, and that is what
-    // clears the island here. `scroll-padding-top` clears it only on a plain
-    // fragment jump; removing it alone leaves this test green.
+    // scrolls the marker to the middle of the page showing above the sheet,
+    // and that is what clears the island here. `scroll-padding-top` clears it
+    // only on a plain fragment jump; removing it alone leaves this test green.
     //
     // Below the 76rem threshold, the only width where the sheet exists, and
     // narrow enough that the contents ruler has no room: from about 1100px
@@ -85,13 +85,29 @@ test.describe("footnote :target landing", () => {
       );
       refs[refs.length - 1].click();
     });
-    await page.locator(".moss-footnote-grab").click();
-    await expect(page.locator(".moss-footnotes-lifted")).toHaveCount(1);
-    await page.locator("#fn-4 .moss-footnote-backref").click();
+    // The grabber and the backref are tapped in the page for the same
+    // reason: with the sheet staying up, a harness scroll that had already
+    // brought the marker near leaves a travel of a few pixels, downward, and
+    // the island hides on that.
+    const tapInPage = (selector: string) =>
+      page.evaluate(
+        (s) => document.querySelector<HTMLElement>(s)!.click(),
+        selector,
+      );
+    const depth = await page.evaluate(() => window.scrollY);
+    await tapInPage(".moss-footnote-grab");
+    await expect
+      .poll(async () =>
+        (await page.locator(".moss-footnotes-lifted").boundingBox())!.height,
+      )
+      .toBeGreaterThan(0.6 * 720);
+    await tapInPage("#fn-4 .moss-footnote-backref");
+    await expect
+      .poll(() => page.evaluate(() => window.scrollY))
+      .toBeLessThan(depth - 100);
 
-    // The departure releases the sheet; the (smooth) travel carries the
-    // reader.
-    await expect(page.locator(".moss-footnotes-lifted")).toHaveCount(0);
+    // The sheet stays up while the (smooth) travel carries the page.
+    await expect(page.locator(".moss-footnotes-lifted")).toHaveCount(1);
     const marker = page.locator("#fnref-4");
     await expect(marker).toBeInViewport();
     // The arrival cue waits for the scroll to come to rest, then washes the
@@ -126,6 +142,64 @@ test.describe("footnote :target landing", () => {
 
     expect(markerBox!.y).toBeGreaterThan(islandBox!.y + islandBox!.height);
   });
+
+  for (const viewport of [
+    { width: 390, height: 844 },
+    // A short window leaves the narrowest band of page above the sheet.
+    { width: 390, height: 560 },
+  ]) {
+    test(`a backref keeps the sheet up and lands its marker above it, at ${viewport.width}x${viewport.height}`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await page.goto("/notes/");
+      const sheet = page.locator(".moss-footnotes-lifted");
+      /** Lift at the last marker, expand, and follow note 4's backref. */
+      const travel = async () => {
+        await page.evaluate(() => {
+          const refs = document.querySelectorAll<HTMLElement>(
+            ".moss-footnote-ref a",
+          );
+          refs[refs.length - 1].scrollIntoView({ block: "center" });
+          refs[refs.length - 1].click();
+        });
+        await page.locator(".moss-footnote-grab").click();
+        await expect
+          .poll(async () => (await sheet.boundingBox())!.height)
+          .toBeGreaterThan(0.5 * viewport.height);
+        await page.locator("#fn-4 .moss-footnote-backref").click();
+        // The wash starts once the travel has come to rest.
+        await expect(page.locator("#fnref-4")).toHaveClass(
+          /moss-footnote-landed/,
+        );
+      };
+
+      await travel();
+      await expect(sheet).toHaveCount(1);
+      const mark = (await page.locator("#fnref-4").boundingBox())!;
+      const top = (await sheet.boundingBox())!.y;
+      expect(mark.y).toBeGreaterThan(0);
+      expect(mark.y + mark.height).toBeLessThan(top);
+
+      // The two ways out still work from here: a drag down on the grabber…
+      const grab = (await page.locator(".moss-footnote-grab").boundingBox())!;
+      const x = grab.x + grab.width / 2;
+      await page.mouse.move(x, grab.y + 10);
+      await page.mouse.down();
+      // All the way down: released part-way over the grabber, a mouse also
+      // clicks it, and that click expands the sheet again.
+      await page.mouse.move(x, viewport.height + 40, { steps: 4 });
+      await page.mouse.up();
+      await expect(sheet).toHaveCount(0);
+
+      // …and a tap on the page outside the sheet.
+      await travel();
+      // In the page's side padding: the marker itself sits mid-band, and a
+      // tap on a marker is not a tap outside.
+      await page.mouse.click(4, top / 2);
+      await expect(sheet).toHaveCount(0);
+    });
+  }
 
   test("marker gets a visible background wash on backward :target navigation", async ({
     page,

@@ -48,7 +48,10 @@ export interface HostingEnvironment {
 export interface ImportOutcome {
   success: boolean;
   error?: string | null;
+  /** Pages the import wrote. */
   total_pages: number;
+  /** Pages it reached that the folder already had; an engine that does not count them leaves it out. */
+  kept_pages?: number;
 }
 
 /** What a copy into the folder landed, and what it left behind and why. */
@@ -276,8 +279,8 @@ export interface UiHost {
   startWriting?: (folder: string) => Promise<EngineResult<string>>;
   /** Imports the site at `url` into `folder`. */
   importSite?: (url: string, folder: string) => Promise<EngineResult<ImportOutcome>>;
-  /** Opens the plugins view filtered to `filter`. */
-  openPluginsView?: (filter: string, folder: string) => Promise<EngineResult<null>>;
+  /** Opens the plugins view. */
+  openPluginsView?: (folder: string) => Promise<EngineResult<null>>;
   hideComment?: CommentAction;
   unhideComment?: CommentAction;
   /** The host's queued app-level toasts, drawn by the editor while it is what the person sees. */

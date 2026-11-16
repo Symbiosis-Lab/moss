@@ -1322,6 +1322,19 @@ fn gate_passes_when_path_is_unknown_to_manifest() {
     assert!(should_rebuild_for_paths(folder.to_str().unwrap(), &[p], None));
 }
 
+/// An unknown path that is definitely gone is unchanged, as a moved page's old
+/// name is; one whose stat fails another way, here a path under a file, still
+/// rebuilds.
+#[test]
+fn an_unknown_path_is_unchanged_only_when_definitely_absent() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().canonicalize().unwrap();
+    gate_write_file(&folder, "a.txt", b"a file");
+    let (f, known) = (folder.to_str().unwrap(), crate::types::content::SiteHashes::new());
+    assert!(!should_rebuild_for_paths(f, &[folder.join("gone.md")], Some(&known)));
+    assert!(should_rebuild_for_paths(f, &[folder.join("a.txt/under-a-file.md")], Some(&known)));
+}
+
 #[test]
 fn gate_passes_when_manifest_file_absent() {
     let dir = tempfile::tempdir().unwrap();
@@ -1478,27 +1491,6 @@ fn pump_gate_does_not_hash_gate_background_passthrough_sources() {
             "{name} is finalized after the synchronous source-hash stash"
         );
     }
-}
-
-#[test]
-fn pump_gate_proceeds_when_kill_switch_set() {
-    let _guard = crate::ENV_TEST_MUTEX
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    std::env::set_var("MOSS_WATCH_NO_GATE", "1");
-    let dir = tempfile::tempdir().unwrap();
-    let folder = dir.path();
-    let verdict = pump_gate(
-        EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Content)),
-        folder.to_str().unwrap(),
-        &[folder.join("a.md")],
-    );
-    std::env::remove_var("MOSS_WATCH_NO_GATE");
-    assert_eq!(
-        verdict,
-        PumpGate::Proceed,
-        "with the gate disabled nothing may defer (a deferred check could still suppress)"
-    );
 }
 
 /// A root agent-instruction file is excluded from watch triggers regardless
@@ -3173,6 +3165,73 @@ async fn a_page_rewritten_on_disk_between_two_real_builds_is_in_modified_paths()
     let event = build_rebuild_event_with_renames(&after, &before, &[])
         .expect("an edit on disk emits a rebuild event");
     assert_eq!(event.modified_paths, Some(vec![page.to_string()]));
+}
+
+/// A save that lands after the build read the page, and before the build
+/// stashed its hashes, is built next: the stash holds the hash of the bytes
+/// the render read, so a request for the page is admitted rather than gated,
+/// and the next build shows the later text. The two texts are the same length,
+/// so only the stat and the hash can tell them apart.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_save_between_the_builds_read_and_its_stash_is_built() {
+    use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
+    std::fs::create_dir_all(&base).unwrap();
+    let tmp = tempfile::Builder::new().prefix("save-in-window-").tempdir_in(&base).unwrap();
+    let folder = tmp.path().canonicalize().unwrap();
+    std::fs::write(folder.join("index.md"), "# Home\n\nbody\n").unwrap();
+    let page = folder.join("note.md");
+    std::fs::write(&page, "# Note\n\nfirst\n").unwrap();
+
+    let root = crate::vault::paths::VaultRoot::resolve(&folder);
+    let folder_key = root.as_str().to_string();
+    let session = crate::system::folder_session::FolderSession::new(folder.clone());
+    let _record = crate::build::lifecycle::lock_for(&crate::moss_paths::MossPaths::new(&folder));
+    let build = |trigger: BuildTrigger| {
+        let mut services = crate::types::services::BuildServices::headless();
+        services.session = Some(session.clone());
+        run_pipeline(PipelineConfig {
+            root: root.clone(),
+            progress: crate::build::null_sink(),
+            plugins: PluginMode::Skip,
+            watch: false,
+            start_server: false,
+            host: crate::build::ports::host::HostPorts {
+                spawner: std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner),
+                services,
+                ..crate::build::ports::host::test_host_ports()
+            },
+            trigger,
+            exits_after_build: false,
+            site_url_override: None,
+            server_port: None,
+            admission_epoch: None,
+            live_port: None,
+            rename_pairs: Vec::new(),
+        })
+    };
+    let served = || std::fs::read_to_string(crate::moss_paths::MossPaths::new(&folder).staging_dir().join("note/index.html")).unwrap();
+    let edit = || BuildTrigger::ContentOnly(vec![page.clone()]);
+
+    build(BuildTrigger::Full).await.expect("build 1");
+    std::fs::write(&page, "# Note\n\nsecond\n").unwrap();
+    let p = page.clone();
+    crate::build::render::blocking::AFTER_THE_READS.lock().unwrap_or_else(|e| e.into_inner()).push((root.path().to_path_buf(), Box::new(move || {
+        std::fs::write(&p, "# Note\n\nthird!\n").unwrap();
+    })));
+    build(edit()).await.expect("build 2");
+    assert!(crate::build::render::blocking::AFTER_THE_READS.lock().unwrap_or_else(|e| e.into_inner()).iter().all(|(f, _)| f != root.path()), "the second save landed inside build 2");
+    assert!(served().contains("second"), "build 2 shows the text it read");
+    let stash = crate::system::build_records::records().content_hashes(&folder_key).expect("build 2 stashed its hashes");
+    let read = crate::build::render::blocking::source_metadata(None, b"# Note\n\nsecond\n").hash;
+    assert_eq!(stash.sources.get("note.md").map(|m| m.hash.clone()), Some(read), "the stash holds the hash of the bytes build 2 read");
+
+    let request = crate::ops::watch::worker::RebuildRequest { rename_pairs: Vec::new(), trigger: edit(), gate_paths: Some(vec![page.clone()]) };
+    assert!(request.gate_admits(&folder_key, "test").await, "the second save is admitted, not gated");
+    build(edit()).await.expect("build 3");
+    crate::system::build_records::records().forget_content_hashes(&folder_key);
+    assert!(served().contains("third!"), "the next build shows the second save");
 }
 
 /// A rebuild tells the preview what changed from inside the pipeline, the

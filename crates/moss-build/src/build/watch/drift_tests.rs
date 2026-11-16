@@ -462,6 +462,18 @@ fn a_pass_with_nothing_new_keeps_the_cache_without_reading_the_manifest() {
     assert_eq!(chosen.sources["a.md"].stat.inode, Some(42));
 }
 
+/// Two builds in one second share the clock but not the render: the newer
+/// build's manifest replaces the cache.
+#[test]
+fn a_build_in_the_same_second_replaces_the_cache() {
+    let mut cache = generation(Some(2000), &["a.md"]);
+    cache.render_id = Some("first".into());
+    let mut newer = generation(Some(2000), &["a.md", "new.md"]);
+    newer.render_id = Some("second".into());
+    let chosen = select_baseline(Some(&newer), Some(cache), || Some(newer.clone())).unwrap();
+    assert!(chosen.sources.contains_key("new.md"));
+}
+
 /// Once the seal has landed the manifest IS the screen: judged as is, with
 /// the previous pass's copy preferred so its stat-identity refreshes survive
 /// (dropping them re-hashes every re-materialized file every pass).

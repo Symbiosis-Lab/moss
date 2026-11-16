@@ -175,8 +175,8 @@ fn hidden_reasons(
         // because it subsumes the rest: the other flags are moot for chrome.
         reasons.push("slot".to_string());
     }
-    if doc.draft == Some(true) {
-        reasons.push("draft".to_string());
+    if doc.is_draft() {
+        reasons.push(if doc.empty_source { "empty" } else { "draft" }.to_string());
     }
     if doc.listed == Some(false) {
         reasons.push("unlisted".to_string());
@@ -226,7 +226,7 @@ pub fn build_inventory(
                     moss_core::PageKind::Folder => "folder".to_string(),
                     moss_core::PageKind::Article => "article".to_string(),
                 },
-                draft: doc.draft == Some(true),
+                draft: doc.withheld_by_author(),
                 listed: doc.listed != Some(false),
                 nav: doc.nav,
                 slot_only: doc.slot_only,

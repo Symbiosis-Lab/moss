@@ -97,12 +97,16 @@ const URL_ATTRIBUTES = ['href', 'src', 'srcset', 'poster', 'data'];
  * `changed_output_files` uses) of every URL in `elements`' attributes,
  * resolved against `pageUrl`. Off-site URLs are left out, and so is what a
  * stylesheet loads itself (`url()`, `@import`, fonts): a change to one of
- * those refreshes the page only through its stylesheet's own change.
+ * those refreshes the page only through its stylesheet's own change. So is
+ * an `alternate` link that is no stylesheet (the feed): the page loads
+ * nothing from it.
  */
 export function linkedPaths(elements: ReadonlyArray<{ attributes: Record<string, string> }>, pageUrl: string): Set<string> {
   const origin = new URL(pageUrl).origin;
   const paths = new Set<string>();
   for (const { attributes } of elements) {
+    const rel = (attributes.rel ?? '').toLowerCase().split(/\s+/);
+    if (rel.includes('alternate') && !rel.includes('stylesheet')) continue;
     for (const name of URL_ATTRIBUTES) {
       const value = attributes[name];
       if (!value) continue;

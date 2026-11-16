@@ -278,7 +278,10 @@ pub enum MossEvent {
     /// the portless completion and leaves the panel stuck at the last
     /// `BackgroundProgress` value. This event surfaces the real failure so
     /// the user sees an error instead of a hung progress bar.
-    PreviewServerFailed { message: String },
+    ///
+    /// `open_in_another_app`: another process's desktop app is serving the
+    /// folder.
+    PreviewServerFailed { message: String, open_in_another_app: bool },
     ActionPanelLoaded,
     ActionPanelOpened(ActionPanelOpened),
     ActionPanelClosed,
@@ -352,7 +355,7 @@ pub enum MossEvent {
     /// agent that wrote the page learns its edit is no longer in the file.
     OutsideEditKept { path: String, version_id: String },
     /// Ask the app shell (main webview) to open the plugin
-    /// catalog filtered to importers. Produced by the editor webview's
+    /// catalog, which rests on channels. Produced by the editor webview's
     /// "Plugin" card; consumed by `app.ts`'s `onMossEvent("OpenPluginsView", …)`
     /// listener which opens the settings modal at the `channels` section.
     ///
@@ -363,11 +366,6 @@ pub enum MossEvent {
     /// `app.emit_to("main", …)` is the supported cross-webview path.
     /// See project memory: "NEVER use `app.emit()` broadcast".
     OpenPluginsView {
-        /// Capability the catalog pre-filters to. The catalog recognizes
-        /// `"import"` (onboarding "Connect a service" card) and `"deploy"`
-        /// (deploy-target chooser); any other value falls back to the
-        /// unfiltered grid.
-        filter: String,
         /// Absolute folder path the user is onboarding — surfaced so the
         /// catalog UI can pre-fill any "install into this site" affordance
         /// without re-resolving the active project.
@@ -585,8 +583,9 @@ pub fn moss_event_for(
             MossEvent::BuildComplete(bc)
         }
         PipelineEvent::FileChanged(fc) => MossEvent::FileChanged(fc.clone()),
-        PipelineEvent::PreviewServerFailed { message } => MossEvent::PreviewServerFailed {
+        PipelineEvent::PreviewServerFailed { message, open_in_another_app } => MossEvent::PreviewServerFailed {
             message: message.clone(),
+            open_in_another_app: *open_in_another_app,
         },
         PipelineEvent::PluginProgress(progress) => MossEvent::PluginProgress(progress.clone()),
         // The shell's handler (`app.ts`) is keyed by the one plugin that can

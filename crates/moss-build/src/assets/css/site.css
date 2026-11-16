@@ -1763,6 +1763,16 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
   transition-delay: 0.35s;
 }
 
+/* --- subscribed: a browser signed in to the site sees the word in place of
+   the field and button; subscribe.ts sets the root attribute before paint --- */
+.moss-subscribe-form[data-moss-hosted="true"] .moss-subscribe-subscribed { display: none; }
+:root[data-moss-subscribed] .moss-subscribe-form[data-moss-hosted="true"] > :not(.moss-subscribe-subscribed) { display: none; }
+:root[data-moss-subscribed] .moss-subscribe-form[data-moss-hosted="true"] .moss-subscribe-subscribed {
+  display: block;
+  color: var(--moss-color-muted);
+  font-size: var(--moss-subscribe-status-size, 0.95rem);
+}
+
 /* --- error (re-uses success animation for the status row) --- */
 .moss-subscribe-form[data-state="error"] .moss-btn__label { opacity: 1; }
 .moss-subscribe-form[data-state="error"] .moss-btn__spinner { opacity: 0; }
@@ -5436,13 +5446,12 @@ code.moss-math {
 
 /* Blockquotes */
 blockquote {
-  /* Quiet grey rule (not the brand accent) so the bar reads as a typographic
-     device that recedes behind the text, matching the literary blockquote of
-     editorial references. --moss-border-medium is theme-aware (light #d1cdc4 /
-     dark #443d32); --moss-border-light nearly vanishes in the reading column,
-     so keep medium at 3px rather than widening. */
+  /* A grey rule, not the accent, so the bar recedes behind the text.
+     --moss-border-light nearly vanishes in the reading column. */
   border-inline-start: 3px solid var(--moss-border-medium);
   margin-block: var(--moss-space-lg);
+  /* Without this the browser's own 40px on each side narrows the quote. */
+  margin-inline: 0;
   padding-inline-start: var(--moss-space-lg);
   color: var(--moss-color-text-secondary);
 }
@@ -7331,6 +7340,20 @@ article a:where(:not(.moss-btn)):focus {
   margin-block-start: var(--moss-space-xl);
 }
 
+/* Something the page names that is not in the folder. */
+.moss-embed-missing {
+  margin-block: 0 var(--moss-space-md);
+  padding: var(--moss-space-sm) var(--moss-space-md);
+  border: 1px dashed var(--moss-border-medium);
+  color: var(--moss-color-muted);
+  font-size: var(--moss-size-sm);
+}
+
+span.moss-embed-missing {
+  margin-block: 0;
+  padding: 0 var(--moss-space-xs);
+}
+
 /* Body and cover start together: the first line of the body (date, kicker
    or title) and the cover share the row's block-start edge; `stretch` keeps
    that shared start edge (same as flex-start would) and additionally sizes
@@ -9172,7 +9195,7 @@ body > footer.container:has(> .moss-hero-closing) {
    hook, not a design token, so it is deliberately not in tokens.json.
 
    A theme sets these on the grid, not on the image:
-     .moss-grid.featured { --moss-grid-image-ratio: 3 / 4; }
+     .moss-grid { --moss-grid-image-ratio: 3 / 4; }
    which is what a wall of pre-designed portrait artwork needs — the default
    1:1 would crop a 3:4 poster's top and bottom off. `contain` suits artwork
    whose edges carry meaning (typographic posters); `cover` suits photography.
@@ -9493,7 +9516,8 @@ a.moss-grid-card:hover {
 }
 /* The title is whole, never clipped: its size follows the tile's width so the
    longest word fits, and a linked tile's arrow ends it. The arrow is drawn,
-   not read: its alternative text is empty. */
+   not read: its alternative text is empty. U+FE0E asks for the text glyph
+   where the face lacks the arrow and the fallback offers a colour emoji. */
 .moss-grid[data-collage] .moss-grid-card .moss-image figcaption > strong:first-child {
   display: block;
   color: var(--moss-color-text);
@@ -9504,8 +9528,8 @@ a.moss-grid-card:hover {
   text-wrap: balance;
 }
 .moss-grid[data-collage] .moss-image:has(> a) figcaption > strong:first-child::after {
-  content: "\00a0\2197";
-  content: "\00a0\2197" / "";
+  content: "\00a0\2197\FE0E";
+  content: "\00a0\2197\FE0E" / "";
   color: var(--moss-color-accent);
 }
 /* Too small for both lines, or a window under 56.25rem: the title stays, the

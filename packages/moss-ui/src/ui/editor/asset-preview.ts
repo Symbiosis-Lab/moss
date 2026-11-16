@@ -74,28 +74,21 @@ export const PREVIEW_DELAY_MS = 120;
 /**
  * Build the hover popover content from the unified-cache envelope.
  *
- * - `kind: not-found` → empty: the card's problem sentence (cm-problems.ts)
- *   says what is missing and what follows from it.
- * - Missing media metadata → the target alone; absence of metadata does not
- *   establish absence of a file.
+ * - Nothing to preview (a folder, a page, a file that is missing or not yet
+ *   resolved) → empty, so hover opens no card: the target is already on the
+ *   line, and a missing file's problem sentence (cm-problems.ts) is added to
+ *   the card by its own augmenter.
  * - otherwise → the shared preview card from `env.resolved`, in `interactive`
  *   mode (video/audio/pdf get real controls; the hover is stationary enough to
  *   use them).
  *
- * Pure over (target, envelope) — exported for tests.
+ * Pure over the envelope — exported for tests.
  */
-export function buildHoverDom(
-  target: string,
-  env: AssetReferenceEnvelope | undefined,
-): HTMLElement {
+export function buildHoverDom(env: AssetReferenceEnvelope | undefined): HTMLElement {
   const dom = document.createElement('div');
   dom.className = 'cm-asset-hover';
   const resolved = env?.resolved ?? undefined;
-  if (env?.kind.kind === 'not-found') return dom;
-  if (!resolved || typeof resolved.mime_type !== 'string') {
-    dom.textContent = target;
-    return dom;
-  }
+  if (!resolved || typeof resolved.mime_type !== 'string') return dom;
   dom.appendChild(renderAssetPreview(resolved, { interactive: true }));
   return dom;
 }

@@ -359,6 +359,10 @@ pub(super) async fn drive(
     shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
     let (broadcast_tx, _) = tokio::sync::broadcast::channel::<()>(1);
+    // The reload and event streams never end by themselves, and the drain
+    // below waits for every connection.
+    let stopping = super::events::Stopping::default();
+    let app = app.layer(axum::Extension(stopping.clone()));
     let serve = |listener: tokio::net::TcpListener, app: axum::Router| {
         let mut rx = broadcast_tx.subscribe();
         async move {
@@ -375,6 +379,7 @@ pub(super) async fn drive(
     let (serve_v4, serve_v6) = (serve(v4, app.clone()), serve(v6, app));
     let bridge = async move {
         let _ = shutdown_rx.await;
+        stopping.0.cancel();
         let _ = broadcast_tx.send(());
     };
 

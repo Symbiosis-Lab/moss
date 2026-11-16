@@ -67,6 +67,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("delete_template", json!({ "id": "t" })),
         ("set_template_folder", json!({ "id": "t", "folder": null })),
         ("site_languages", json!({})),
+        ("page_translations", json!({ "path": "a.md" })),
         ("instantiate_template", json!({ "id": "t", "targetDir": "posts", "name": "untitled.md" })),
         ("create_translation", json!({ "sourceAbs": "a.md", "lang": "zh" })),
         (
@@ -135,6 +136,8 @@ struct TestHost {
     dates: crate::editor::filesystem::PublishDateMemo,
     announced: std::sync::Mutex<Vec<(String, String)>>,
     withdrawn: std::sync::Mutex<Vec<(String, String)>>,
+    moved: std::sync::Mutex<Vec<(String, String)>>,
+    created: std::sync::Mutex<Vec<String>>,
     saved: std::sync::Mutex<Vec<String>>,
     refuses_moss_dir: bool,
 }
@@ -157,6 +160,8 @@ impl TestHost {
             dates: Default::default(),
             announced: Default::default(),
             withdrawn: Default::default(),
+            moved: Default::default(),
+            created: Default::default(),
             saved: Default::default(),
             refuses_moss_dir: false,
         }
@@ -193,6 +198,13 @@ impl CommandHost for TestHost {
     fn withdraw_moves(&self, pairs: &[(String, String)]) {
         self.withdrawn.lock().unwrap().extend_from_slice(pairs);
     }
+    fn changed(&self, change: super::Change<'_>) {
+        match change {
+            super::Change::Moved(pairs) => self.moved.lock().unwrap().extend_from_slice(pairs),
+            super::Change::Created(paths) => self.created.lock().unwrap().extend_from_slice(paths),
+            super::Change::Wrote(_) => {}
+        }
+    }
     fn served_dir(&self) -> PathBuf {
         self.root().join(".moss")
     }
@@ -208,7 +220,7 @@ impl CommandHost for TestHost {
 }
 
 /// A folder of pages: `a.md`, and `b.md` linking to it.
-fn pages() -> (tempfile::TempDir, PathBuf) {
+pub(super) fn pages() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     std::fs::create_dir(root.join(".moss")).unwrap();
@@ -219,7 +231,7 @@ fn pages() -> (tempfile::TempDir, PathBuf) {
     (dir, root)
 }
 
-async fn ok<T: serde::de::DeserializeOwned>(out: Option<CommandResult>) -> T {
+pub(super) async fn ok<T: serde::de::DeserializeOwned>(out: Option<CommandResult>) -> T {
     match out {
         Some(Ok(v)) => serde_json::from_value(v).unwrap(),
         other => panic!("expected an answer, got {other:?}"),
@@ -261,6 +273,7 @@ async fn one_dispatch_reaches_every_tier_and_a_save_goes_through_the_host() {
     assert_eq!(*host.saved.lock().unwrap(), vec![root.join("a.md").to_string_lossy().into_owned()]);
     assert!(dispatch(&host, "no_such_command", json!({})).await.is_none());
 }
+
 
 #[tokio::test]
 async fn a_loose_document_boots_with_its_folder_as_editor_root_and_no_project() {
@@ -354,6 +367,7 @@ async fn a_page_saved_as_a_template_makes_a_new_page_through_the_table() {
     assert_eq!(listed[0]["name"], json!("Post"));
     let made: String = ok(dispatch(&host, "instantiate_template", json!({ "id": id, "targetDir": ".", "name": "c.md" })).await).await;
     assert!(Path::new(&made).ends_with("c.md") && Path::new(&made).exists(), "{made}");
+    assert_eq!(*host.created.lock().unwrap(), vec![made.clone()], "the host hears the page was made");
     ok::<Value>(dispatch(&host, "delete_template", json!({ "id": id })).await).await;
     let listed: Vec<Value> = ok(dispatch(&host, "list_templates", json!({})).await).await;
     assert!(listed.is_empty());
@@ -492,6 +506,41 @@ async fn a_site_rename_rewrites_links_and_announces_the_move() {
     ok::<Value>(write::dispatch(&host, "rename_entry_with_refs", json!({ "oldPath": "a.md", "newPath": "c.md" })).await).await;
     assert!(std::fs::read_to_string(root.join("b.md")).unwrap().contains("c.md"));
     assert_eq!(*host.announced.lock().unwrap(), vec![("a.md".to_string(), "c.md".to_string())]);
+    assert_eq!(*host.moved.lock().unwrap(), *host.announced.lock().unwrap(), "the host hears the move was made");
+}
+
+#[tokio::test]
+async fn a_new_page_and_a_copy_are_handed_to_the_host_and_a_refused_one_is_not() {
+    let (_d, root) = pages();
+    let (host, new_page) = (TestHost::site(&root), |name: &str| json!({ "files": [{ "dir": root.to_string_lossy(), "name": name, "frontmatter": {} }] }));
+    let made: Vec<String> = ok(write::dispatch(&host, "create_files", new_page("untitled")).await).await;
+    let copy: String = ok(write::dispatch(&host, "duplicate_entry", json!({ "path": "a.md" })).await).await;
+    assert!(matches!(write::dispatch(&host, "create_files", new_page("a.md")).await, Some(Err(_))), "a.md exists");
+    assert_eq!(*host.created.lock().unwrap(), vec![made[0].clone(), copy]);
+}
+
+#[tokio::test]
+async fn a_translation_made_is_handed_to_the_host() {
+    let (_d, root) = pages();
+    // allow:raw_write test fixture pages in a temp folder
+    std::fs::write(root.join(".moss/config.toml"), "[site]\nlang = \"en\"\n").unwrap();
+    std::fs::create_dir(root.join("zh-hans")).unwrap();
+    // allow:raw_write test fixture pages in a temp folder
+    std::fs::write(root.join("zh-hans/index.md"), "---\ntitle: 首页\n---\n").unwrap();
+    let host = TestHost::site(&root);
+    let made: String = ok(write::dispatch(&host, "create_translation", json!({ "sourceAbs": "a.md", "lang": "zh-hans" })).await).await;
+    assert_eq!(*host.created.lock().unwrap(), vec![made]);
+}
+
+#[tokio::test]
+async fn a_renamed_picture_asks_for_no_rebuild() {
+    let (_d, root) = pages();
+    // allow:raw_write test fixture picture in a temp folder
+    std::fs::write(root.join("pic.png"), b"png").unwrap();
+    let host = TestHost::site(&root);
+    ok::<Value>(write::dispatch(&host, "rename_entry_with_refs", json!({ "oldPath": "pic.png", "newPath": "photo.png" })).await).await;
+    assert!(root.join("photo.png").exists());
+    assert!(host.moved.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -503,6 +552,7 @@ async fn undo_announces_the_reverse_move() {
     ok::<Value>(write::dispatch(&host, "undo_rename", json!({ "undoId": summary["undo_id"] })).await).await;
     assert!(root.join("a.md").exists());
     assert_eq!(host.announced.lock().unwrap().last(), Some(&("c.md".to_string(), "a.md".to_string())));
+    assert_eq!(host.moved.lock().unwrap().last(), Some(&("c.md".to_string(), "a.md".to_string())));
 }
 
 /// `decoy/x.md` makes `x.md` ambiguous, so the links cannot resolve by unique name.
@@ -558,6 +608,7 @@ async fn a_failed_loose_rename_withdraws_its_announcement() {
     assert!(root.join("a.md").exists());
     assert_eq!(*host.withdrawn.lock().unwrap(), *host.announced.lock().unwrap());
     assert!(!host.withdrawn.lock().unwrap().is_empty());
+    assert!(host.moved.lock().unwrap().is_empty(), "a move that failed asks for no rebuild");
 }
 
 /// The delete is refused at its first path (outside the folder), after the

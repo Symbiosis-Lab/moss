@@ -722,7 +722,7 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
 
 /* ── Unified dropdown ────────────────────────────────────────────────── */
 
-.omenu { position: fixed; z-index: var(--z-overlay); min-width: 260px; max-width: 380px; max-height: 380px; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; }
+.omenu { position: fixed; z-index: var(--z-overlay); min-width: 260px; max-width: 380px; max-height: var(--moss-menu-list-max); overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; }
 .omenu-search { width: 100%; border: 1px solid var(--moss-border-light); border-radius: var(--moss-menu-row-radius); padding: var(--moss-menu-row-padding); font-size: 13px; color: var(--moss-color-text); outline: none; background: transparent; font-family: inherit; margin-bottom: 4px; box-sizing: border-box; }
 .omenu-search:focus { border-color: var(--moss-color-accent); }
 .omenu-group { font-size: 10px; font-weight: 600; color: var(--moss-color-muted); text-transform: uppercase; letter-spacing: 0.5px; padding: 8px var(--moss-menu-row-pad-inline) 4px; }
@@ -1256,6 +1256,8 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
   font-family: var(--moss-font-ui, system-ui);
   box-shadow: var(--moss-elevation-2);
 }
+/* A file that is not there has nothing to preview. */
+.cm-asset-hover:empty { display: none; }
 
 /* Container 2 — CM6 completion info pane. moss styles nothing under
    .cm-tooltip today, so without this the pane inherits CM6's baseTheme chrome
@@ -1303,8 +1305,16 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
 }
 .cm-reference-card-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--moss-space-2xs, 4px);
   margin-top: var(--moss-space-xs);
+}
+/* A path longer than the card wraps inside its button. */
+.cm-reference-card-actions .moss-btn {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
 }
 
 /* ── Completion row glyphs ───────────────────────────────────────────────
@@ -1314,7 +1324,11 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
  * build generates. CM6 renders `.cm-completionIcon-<Completion.type>` and the
  * type is the row's kind, so no per-row markup is needed. The ring alone
  * would collide with the status-mark meaning "pending", so a generated row
- * also carries the word in its detail column. */
+ * also carries the word in its detail column. A row with no kind has no
+ * glyph and no box. */
+.cm-tooltip-autocomplete .cm-completionIcon:not([class*='cm-completionIcon-']) {
+  display: none;
+}
 .cm-tooltip-autocomplete .cm-completionIcon {
   width: 18px;
   height: 18px;

@@ -15,6 +15,7 @@ fn snap_for(target: &str) -> PublishedSnapshot {
         uids: HashMap::from([("a.md".to_string(), "aabbccdd".to_string())]),
         triples: None,
         asset_source_to_output: None,
+        page_stubs: Default::default(),
     }
 }
 

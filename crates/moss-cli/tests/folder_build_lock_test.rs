@@ -15,12 +15,10 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Both tests in this file call `std::env::set_var("MOSS_HOME", ...)` on
-/// THIS process (the child's own env is separate, via `Command::env`, but
-/// the test process's own `infra::folder_lock` calls need the same
-/// override) — env vars are process-global, and `cargo test` runs tests in
-/// this file in parallel by default, so without this lock one test's
-/// override can leak into the other's child process mid-run.
+/// The first test sets `MOSS_HOME` on THIS process for its own
+/// `infra::folder_lock::acquire` (a child's env is separate, via
+/// `Command::env`); env vars are process-global and tests here run in
+/// parallel, so every test in this file holds this lock.
 static MOSS_HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn copy_dir_recursive(src: &Path, dst: &Path) {
@@ -201,7 +199,7 @@ fn a_second_process_waits_for_the_folder_build_lock_the_first_process_holds() {
 /// admission's tail arrives after a newer one already promoted," reproduced
 /// deterministically rather than raced for.
 ///
-/// Verifies the persisted epoch file directly
+/// Verifies the persisted epoch file (in the folder's build output) directly
 /// (`infra::folder_lock::last_promoted_epoch`), the same public primitive
 /// `run_materialize_phase` itself reads and writes — `record_promoted_epoch` is
 /// called if and only if `materialize_and_promote` just returned
@@ -227,11 +225,6 @@ fn an_older_admission_never_overwrites_an_already_promoted_newer_one() {
     let site_root = tempfile::tempdir().expect("tempdir for the site copy");
     copy_dir_recursive(&fixture_input_dir(), site_root.path());
     let site_dir = std::fs::canonicalize(site_root.path()).expect("canonicalize the site copy");
-
-    // `Command::env` below only reaches the CHILD's environment — this
-    // process's own `last_promoted_epoch` read needs the same override set
-    // directly, exactly as the first test in this file needs it for `acquire`.
-    std::env::set_var("MOSS_HOME", moss_home.path());
 
     let run = |admission_nanos: u64| -> std::process::Output {
         Command::new(env!("CARGO_BIN_EXE_moss-cli"))

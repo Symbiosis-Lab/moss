@@ -429,6 +429,18 @@ mod drafts {
     }
 
     #[test]
+    fn a_link_to_an_empty_page_is_refused_without_calling_it_a_draft() {
+        let mut empty = page("later.md", "later/index.html", "", true);
+        empty.mark_empty_source();
+        let docs = vec![page("about.md", "about/index.html", r#"<a href="/later/">l</a>"#, false), empty];
+        let found = drafts_linked(&docs, no_source);
+        assert!(found[0].empty, "{found:?}");
+        let text = crate::deploy::drafts_linked_refusal_text(&found);
+        assert!(text.contains("an empty page") && text.contains("`later.md` has nothing in it yet"), "{text}");
+        assert!(!text.contains("draft"), "{text}");
+    }
+
+    #[test]
     fn a_draft_linking_to_a_draft_is_not_reported() {
         let docs = vec![
             page("a.md", "a/index.html", r#"<a href="/b/">b</a>"#, true),

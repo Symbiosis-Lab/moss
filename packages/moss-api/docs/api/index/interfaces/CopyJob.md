@@ -2,8 +2,8 @@
 
 # Interface: CopyJob
 
-The one copy a channel's `publish_copy`, `update_copy`, `delete_copy` or
-`find_copy` receives, already shaped to the limits its manifest declares
+The one copy a channel's `publish_copy`, `update_copy` or `find_copy`
+receives, already shaped to the limits its manifest declares
 under `contributes.channel.syndication`.
 
 ## Properties
@@ -44,10 +44,10 @@ The channel's resolved settings.
 ### form?
 
 ```ts
-optional form?: "short" | "thread" | "long" | "teaser" | "handoff";
+optional form?: "short" | "thread" | "long" | "teaser";
 ```
 
-Payload fields may be absent for a delete or a lookup whose copy no longer fits.
+Payload fields may be absent for a lookup whose copy no longer fits.
 
 ***
 
@@ -84,7 +84,7 @@ Pictures omitted by the channel's image limit.
 ### op
 
 ```ts
-op: "publish" | "update" | "delete" | "find";
+op: "publish" | "update" | "find";
 ```
 
 ***
@@ -159,7 +159,7 @@ url: string;
 optional previous?: CopyRef & object | null;
 ```
 
-The copy already on the network (for an update, delete or lookup), or the draft a hand-off left there.
+The copy already on the network (for an update or lookup), or the draft a hand-off left there.
 
 ***
 

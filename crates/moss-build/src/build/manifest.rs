@@ -75,9 +75,9 @@ use std::path::Path;
 
 pub(crate) mod preview_originals;
 pub(crate) mod publish_view;
-pub use publish_view::published_article;
+pub use publish_view::{last_publish_state, published_article, published_pages, PublishState, PublishedPages};
 #[cfg(any(test, feature = "test-fixtures"))]
-pub use publish_view::keep_articles_for_tests;
+pub use publish_view::{hold_back_for_tests, keep_articles_for_tests};
 
 use crate::build::assets::paths::{compute_binary_hash, compute_manifest_generation_id};
 use crate::types::content::{file_entry, SiteHashes};
@@ -147,9 +147,11 @@ pub struct PendingManifest {
     preview_embeds: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
     preview_uses_places: bool,
     preview_originals: std::collections::BTreeMap<String, Option<String>>,
-    withdrawn: change_set::Withdrawn,
     /// Whether a page this build rendered is restricted to members.
     restricts_pages: bool,
+    /// Redirect stub output → the page it forwards to, for each old address of
+    /// one of the author's pages.
+    page_stubs: std::collections::BTreeMap<String, String>,
     /// Paths that the blocking phase generated. Must be a subset of
     /// `(inner.files ∪ inner.image_outputs)` at seal time (the manifest invariant).
     /// Consumed by stale-HTML cleanup (C1–C4).
@@ -362,8 +364,8 @@ impl PendingManifest {
             input_evidence: None,
             preview_embeds: std::collections::BTreeMap::new(),
             preview_uses_places: false,
-            withdrawn: Default::default(),
             restricts_pages: false,
+            page_stubs: Default::default(),
             preview_originals: std::collections::BTreeMap::new(),
             blocking_keys: HashSet::new(),
             touched: HashSet::new(),
@@ -408,9 +410,9 @@ impl PendingManifest {
         self.restricts_pages = true;
     }
 
-    /// Record the generated files this build leaves out because a site setting says so.
-    pub(crate) fn set_withdrawn(&mut self, withdrawn: change_set::Withdrawn) {
-        self.withdrawn = withdrawn;
+    /// Record that `stub` is an old address of the author's page at `page`.
+    pub(crate) fn register_page_stub(&mut self, stub: &str, page: &str) {
+        self.page_stubs.insert(stub.to_string(), page.to_string());
     }
 
     /// Record that `rel_path`'s output could not be verified this build.
@@ -991,8 +993,8 @@ impl PendingManifest {
             preview_embeds: self.preview_embeds,
             preview_uses_places: self.preview_uses_places,
             preview_originals: self.preview_originals,
-            withdrawn: self.withdrawn,
             restricts_pages: self.restricts_pages,
+            page_stubs: self.page_stubs,
             blocking_keys: self.blocking_keys,
             generation_id,
             unverified: self.unverified,
@@ -1020,8 +1022,8 @@ pub struct SealedManifest {
     preview_embeds: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
     preview_uses_places: bool,
     preview_originals: std::collections::BTreeMap<String, Option<String>>,
-    withdrawn: change_set::Withdrawn,
     restricts_pages: bool,
+    page_stubs: std::collections::BTreeMap<String, String>,
     blocking_keys: HashSet<String>,
     /// Content-derived identity computed at seal time. 16 lowercase hex chars
     /// (xxh3_64 over BTreeMap-sorted `"{path}\x00{entry_value}\n"` pairs).
@@ -1069,9 +1071,10 @@ impl SealedManifest {
         self.restricts_pages
     }
 
-    /// The generated files this build left out because a site setting says so.
-    pub fn withdrawn(&self) -> change_set::Withdrawn {
-        self.withdrawn
+    /// Redirect stubs this build serves for old addresses of the author's
+    /// pages, each with the page it forwards to.
+    pub fn page_stubs(&self) -> &std::collections::BTreeMap<String, String> {
+        &self.page_stubs
     }
 
     /// Whether this selected generation has an exact route backed by the
@@ -1280,6 +1283,13 @@ impl SealedManifest {
             self.ship_sources.remove(key);
         }
         self.generation_id = compute_manifest_generation_id(&self.inner.files);
+    }
+
+    /// See [`BuildInputs::media_settled`](crate::build::inputs::BuildInputs::media_settled).
+    pub(crate) fn set_media_settled(&mut self, settled: bool) {
+        if let Some(inputs) = self.inner.build_inputs.as_mut() {
+            inputs.media_settled = settled;
+        }
     }
 
     /// Serialize `inner` as pretty JSON and write to `path`.

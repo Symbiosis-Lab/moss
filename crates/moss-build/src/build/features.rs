@@ -176,8 +176,9 @@ pub fn should_inject_places_explorer(
 /// srcset="X.webp">` emission on manifest presence — eliminating the
 /// WebP-404 failure mode for the colophon — and adds attribute-injection
 /// (`width`/`height`/`loading`/`data-placeholder-src`) at the typed-data
-/// layer. `None` is the test/fragment-rendering fallback.
-pub fn generate_native_slots(
+/// layer. It is called only when a colophon draws a cover, so a caller can
+/// build the lookup on first call. `None` is the test/fragment-rendering fallback.
+pub fn generate_native_slots<'m>(
     services: &ServicesConfig,
     project_path: &str,
     // Whether the `email` channel is installed for this project. Handed in
@@ -196,7 +197,7 @@ pub fn generate_native_slots(
     domain: Option<&str>,
     cached_deploy_config: &DomainDeploymentConfig,
     start_server: bool,
-    media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
+    media_lookup: Option<&dyn Fn() -> &'m crate::build::media::dimensions::MediaDimensionLookup>,
     // The site-wide `[site] comments` default, resolved by the caller from
     // the SAME `.moss/config.toml` parse `pipeline.rs::build_inner` already
     // did to build `render::SiteConfig` (`site_bool("comments")` at
@@ -498,6 +499,9 @@ pub fn generate_native_slots(
         // CSS+JS assets: always inject when email is in play so the inactive
         // form in preview is styled correctly.
         if should_inject_subscribe_assets(pages, email_installed) {
+            if let Some(note) = email::subscribe_elsewhere_note(deploy_config) {
+                crate::build::cli_output::log_warn_problem!("{note}");
+            }
             // CSS as a <link> (see `build::emit::feature_styles`); the
             // subscribe script stays inline. The script is ~2 KB and its
             // absence breaks the form outright, so the extra round trip buys
@@ -554,7 +558,7 @@ pub fn generate_native_slots(
         if email_installed && !has_footer_file {
             // An empty site_id reads as none, so a site with no id gets
             // the pending form, never one posting to /sites//subscribe.
-            let site_id = deploy_config.site_id.as_deref();
+            let site_id = email::subscribe_site_id(deploy_config);
             // The "default email footer" is just the :::subscribe shortcode
             // injected into footer-end: one renderer for both.
             // `form_lang` localizes the form copy in the hosting page's own

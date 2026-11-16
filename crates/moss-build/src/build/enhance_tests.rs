@@ -588,15 +588,12 @@ fn inject_slots_receipt_hashes_the_stripped_bytes_not_the_staged_ones() {
     );
 }
 
-/// The receipt of a page injection leaves alone: the blob holds its bytes, the
-/// hash is that of the SHIPPED bytes, and a hit takes both from the record — no
-/// hash is recomputed. Replaces a test that mutated the file between runs and so
-/// changed the cache key, exercising a miss both times.
-///
-/// The record is overwritten with a sentinel hash between the runs: a warm run
-/// that answered by rehashing would report the real one.
+/// The receipt of a page with no slot marker, like a redirect stub: the blob holds
+/// its bytes and the hash is that of the SHIPPED bytes. Such a page is injected
+/// live every pass: it keeps no record, and a record planted under its key is
+/// never read, so the warm run reports the real hash, not the sentinel.
 #[test]
-fn a_no_op_page_reports_its_receipt_cold_and_from_the_cache_warm() {
+fn a_page_with_no_marker_is_injected_live_and_keeps_no_record() {
     let dir = tempfile::tempdir().unwrap();
     let cache_dir = tempfile::tempdir().unwrap();
     let (objects, transforms) = slot_test_cache(cache_dir.path());
@@ -625,6 +622,7 @@ fn a_no_op_page_reports_its_receipt_cold_and_from_the_cache_warm() {
         "the hash is of what the site serves, annotations stripped"
     );
     assert_eq!(std::fs::read_to_string(dir.path().join("index.html")).unwrap(), html, "and the page is untouched");
+    assert!(cached_slot_record(&transforms, html, "index.html", &slots).is_none(), "a page with no marker keeps no record");
 
     let (source_oid, params) = slot_cache_key(html, "index.html", &slots);
     transforms.put_summary(
@@ -643,7 +641,7 @@ fn a_no_op_page_reports_its_receipt_cold_and_from_the_cache_warm() {
 
     let warm = run();
     assert_eq!(warm.len(), 1);
-    assert_eq!(warm[0].manifest_hash, "SENTINEL", "a hit must answer from the record, not rehash");
+    assert_eq!(warm[0].manifest_hash, cold[0].manifest_hash, "the page is injected live, not answered from a record");
     assert_eq!(warm[0].content_oid.as_deref(), Some(oid.as_str()));
 }
 
@@ -655,14 +653,15 @@ fn a_no_op_page_reports_its_receipt_cold_and_from_the_cache_warm() {
 /// later hit is refused and the page silently re-injects), left them all green.
 ///
 /// One page injection rewrites and one it leaves alone, since `rewritten` is the
-/// field that tells the arms apart.
+/// field that tells the arms apart. The second carries a marker no slot claims,
+/// since a page with no marker at all keeps no record.
 #[test]
 fn a_cold_pass_caches_a_record_that_matches_the_receipt_it_returned() {
     let dir = tempfile::tempdir().unwrap();
     let cache_dir = tempfile::tempdir().unwrap();
     let (objects, transforms) = slot_test_cache(cache_dir.path());
     let marked = "<html><head><!-- slot:head-end --></head><body></body></html>";
-    let plain = r#"<html><head></head><body><p data-source-line="2">no markers</p></body></html>"#;
+    let plain = r#"<html><head><!-- slot:not-a-slot --></head><body><p data-source-line="2">unclaimed marker</p></body></html>"#;
     std::fs::write(dir.path().join("marked.html"), marked).unwrap();
     std::fs::write(dir.path().join("plain.html"), plain).unwrap();
     let slots = head_end_slots("<style>h1{}</style>");
@@ -818,7 +817,8 @@ fn rebuilt_identical_slots_hit_the_injection_cache() {
     let dir = tempfile::tempdir().unwrap();
     let cache_dir = tempfile::tempdir().unwrap();
     let (objects, transforms) = slot_test_cache(cache_dir.path());
-    let html = "<html><head></head><body>no markers</body></html>";
+    // A marker no slot claims: the page is keyed, and injection leaves the stage as it was.
+    let html = "<html><head><!-- slot:not-a-slot --></head><body></body></html>";
     std::fs::write(dir.path().join("index.html"), html).unwrap();
 
     let first = slots_with_eight_keys_per_map("");
@@ -859,7 +859,8 @@ fn a_rebuild_in_the_same_process_reads_no_slot_record() {
     let dir = tempfile::tempdir().unwrap();
     let cache_dir = tempfile::tempdir().unwrap();
     let (objects, transforms) = slot_test_cache(cache_dir.path());
-    let html = "<html><head></head><body>no markers</body></html>";
+    // A marker no slot claims: the page is keyed, and injection leaves the stage as it was.
+    let html = "<html><head><!-- slot:not-a-slot --></head><body></body></html>";
     std::fs::write(dir.path().join("index.html"), html).unwrap();
     let slots = head_end_slots("<meta name=\"probe\">");
 
@@ -938,7 +939,8 @@ fn a_record_naming_a_collected_blob_is_a_miss_that_stores_it_again() {
     let dir = tempfile::tempdir().unwrap();
     let cache_dir = tempfile::tempdir().unwrap();
     let (objects, transforms) = slot_test_cache(cache_dir.path());
-    let html = "<html><head></head><body>no markers</body></html>";
+    // A marker no slot claims: the page is keyed, and injection leaves the stage as it was.
+    let html = "<html><head><!-- slot:not-a-slot --></head><body></body></html>";
     std::fs::write(dir.path().join("index.html"), html).unwrap();
     let slots = ResolvedSlots::empty();
 

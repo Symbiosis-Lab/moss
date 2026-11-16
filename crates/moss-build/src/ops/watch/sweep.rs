@@ -271,6 +271,38 @@ pub async fn unavailable_files_for(folder: &Path) -> Result<Vec<String>, String>
         .map_err(|_| "Folder sweep is unavailable".to_string())?
 }
 
+/// The rebuild the paths a pass caught ask for. The request describes only
+/// `fresh`, never the whole report, so a create or delete held back as sticky
+/// cannot make an ordinary edit structural. A create or delete builds
+/// unconditionally. Edits ask what the watcher's event for them would, so an
+/// edit a save or the watcher has already built is dropped at admission.
+///
+/// Edits build unconditionally instead when the gate cannot vouch for them:
+/// - the pass judged against a seal newer than this process's stash
+///   (`judged_at` is that baseline's clock). `select_baseline` takes such a
+///   seal as is: another moss process built it, and the gate, which reads
+///   only the stash, would drop an edit back to bytes this process built
+///   while the other build is what is served;
+/// - the watcher would drop the edit: a file its filters skip but the scan
+///   reads (a `.docx`), a root agent file, a path moss writes.
+pub(crate) fn request_for_drift(
+    folder: &Path,
+    report: &crate::build::watch::drift::DriftReport,
+    fresh: &[String],
+    judged_at: Option<u64>,
+) -> crate::ops::watch::worker::RebuildRequest {
+    use crate::build::BuildTrigger;
+    use crate::ops::watch::worker::RebuildRequest;
+    let ungated = |trigger| RebuildRequest { rename_pairs: Vec::new(), trigger, gate_paths: None };
+    let paths: Vec<std::path::PathBuf> = fresh.iter().map(|r| folder.join(r)).collect();
+    if report.any_structural(fresh) {
+        return ungated(BuildTrigger::Structural(paths));
+    }
+    let foreign_seal = walk::stashed_baseline(&folder.to_string_lossy()).is_some_and(|stash| judged_at > stash.captured_at);
+    let gated = if foreign_seal { None } else { crate::ops::watch::request_for_writes(folder, paths.clone()) };
+    gated.unwrap_or_else(|| ungated(BuildTrigger::ContentOnly(paths)))
+}
+
 #[cfg(test)]
 #[path = "sweep_tests.rs"]
 mod tests;

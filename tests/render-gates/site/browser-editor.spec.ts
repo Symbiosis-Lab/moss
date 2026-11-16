@@ -19,6 +19,8 @@
  * footer) leaves that file alone, while a double click opens the page's own
  * file at the place clicked. In a `:::grid` of the built page, a double click
  * on a column's second line puts the caret on that line, not the column's first.
+ * A single click on text in a long page washes that line in the editor and
+ * scrolls it into view; in a grid column it picks the click's own line.
  *
  * Then an event's `start` and `end` open the browser's own date and time
  * controls from the page properties, in the narrowest popover and in both
@@ -34,16 +36,38 @@
  * Then a folder's own page that lists its folder by name carries no
  * missing-file mark, while an embed of a folder that does not exist does.
  *
+ * Then a new page in a language folder, named with spaces and capitals: the
+ * preview shows it at its address before it has any text, in no listing, and
+ * after one typed word it is an ordinary page its folder lists.
+ *
+ * Then the create menu offers a page's version in another language only when
+ * it has none: a version linked by `translationKey` under another file name
+ * counts.
+ *
+ * Then a page renamed in the folder while the preview shows it: the preview
+ * follows it to the folder's address, never `index.html`, because the frame's
+ * address is what Copy page address copies.
+ *
+ * Then an edit to a dated note changes the feed the page links as
+ * `alternate`, and the preview still updates the page in place rather than
+ * reloading it, since the page loads nothing from its feed.
+ *
+ * Then the address of a page just made, which the preview loads again with a
+ * stamp on the frame's address once its first build ends: the right-click
+ * hands that address to the menu the desktop opens, whose page entry copies it
+ * without the stamp.
+ *
  * Ports: playwright/gate-ports.ts, keys `browser-editor:ui` /
  * `browser-editor:preview`. Config: playwright/browser-editor.config.ts.
  */
 import { test, expect, type Frame, type Page } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gatePort } from '../../../playwright/gate-ports';
 import { MOSS_BIN } from '../../e2e/helpers/scratch-site';
+import { buildPreviewCtxEntries, type PreviewCtxPayload } from '../../../packages/moss-ui/src/ui/preview/preview-context-menu';
 
 // Event pages, each linking to the next: the forms a person writes by hand,
 // one the build rejects, and the empty field an event template leaves.
@@ -57,6 +81,10 @@ const ONE_PAGE_PDF =
   '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n' +
   '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n';
 
+const CASE_PAGE = '---\ntitle: Case\n---\nA case.\n\n' +
+  [1, 2, 3, 4, 5, 6].map((n) => `![[slide-0${n}.jpg|800x450]]\n\n`).join('') + '![[chart.jpg]]\n\n![](here.png)\n\nThe end.\n';
+const ONE_PIXEL_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+
 let site = '';
 let home = '';
 let server: ChildProcess | undefined;
@@ -68,11 +96,15 @@ test.beforeEach(async () => {
   site = realpathSync(mkdtempSync(join(tmpdir(), 'moss-browser-editor-site-')));
   home = realpathSync(mkdtempSync(join(tmpdir(), 'moss-browser-editor-home-')));
   mkdirSync(join(home, 'moss'));
-  writeFileSync(join(site, 'index.md'), '---\ntitle: Garden\n---\nHello garden.\n\n![[doc.pdf]]\n\n[Talk](talk.md)\n\n[To the workshops](/workshops/)\n\n' +
+  writeFileSync(join(site, 'index.md'), '---\ntitle: Garden\n---\nHello garden.\n\n![[doc.pdf]]\n\n[Talk](talk.md)\n\n[To the workshops](/workshops/)\n\n[To the case](en/writing/case.md)\n\n[About](about.md)\n\n[To the Chinese pages](/zh-hans/)\n\n' +
     ':::grid 2\nBeds are dug in March.\n\nSeeds go in by April.\n+++\nWater comes from the well.\n\nThe well is closed in winter.\n:::\n');
   for (const [name, text] of Object.entries(EVENTS)) writeFileSync(join(site, name), text);
   writeFileSync(join(site, 'doc.pdf'), ONE_PAGE_PDF);
   writeFileSync(join(site, 'footer.md'), 'Tended by hand.\n');
+  // Long enough that its last lines start outside both panes.
+  writeFileSync(join(site, 'almanac.md'), '---\ntitle: Almanac\n---\n' +
+    Array.from({ length: 80 }, (_, i) => `Entry ${i + 1} of the almanac.\n\n`).join('') +
+    ':::grid 2\nFrost comes early.\n\nSnow stays late.\n+++\nCranes pass over.\n\nThe pond freezes last.\n:::\n');
   mkdirSync(join(site, 'events'));
   mkdirSync(join(site, 'Workshops'));
   writeFileSync(join(site, 'Workshops', 'index.md'), '---\ntitle: Workshops\n---\nAll workshops.\n');
@@ -80,6 +112,24 @@ test.beforeEach(async () => {
   mkdirSync(join(site, 'meetings'));
   writeFileSync(join(site, 'meetings', 'meetings.md'), '---\ntitle: Meetings\n---\nOurs:\n\n![[meetings/|style:summary]]\n\nGone:\n\n![[nowhere/|style:summary]]\n');
   writeFileSync(join(site, 'meetings', 'first.md'), '---\ntitle: First\n---\nThe first meeting.\n');
+  // A page two folders down, seven of whose pictures are not in the folder,
+  // and a second page with two.
+  mkdirSync(join(site, 'en', 'writing'), { recursive: true });
+  mkdirSync(join(site, 'drafts'));
+  writeFileSync(join(site, 'en', 'writing', 'case.md'), CASE_PAGE);
+  writeFileSync(join(site, 'en', 'writing', 'here.png'), ONE_PIXEL_PNG);
+  writeFileSync(join(site, 'en', 'writing', 'other.md'), '---\ntitle: Other\n---\nNothing missing.\n');
+  writeFileSync(join(site, 'drafts', 'd.md'), '---\ntitle: D\n---\n![](gone-a.png)\n\n![](pics/gone-b.png)\n');
+  mkdirSync(join(site, 'zh-hans'));
+  writeFileSync(join(site, 'zh-hans', 'index.md'), '---\ntitle: 花园\n---\n你好，花园。\n');
+  writeFileSync(join(site, 'about.md'), '---\ntitle: About\ntranslationKey: about\n---\nAbout the garden. [Talk](talk.md)\n');
+  writeFileSync(join(site, 'zh-hans', '关于.md'), '---\ntitle: 关于\ntranslationKey: about\n---\n关于花园。\n');
+  // A published address gives the site its feed, which every page links as
+  // `alternate`, and a dated note is in that feed.
+  mkdirSync(join(site, '.moss'));
+  writeFileSync(join(site, '.moss', 'config.toml'), '[site]\nurl = "https://garden.example.org"\n');
+  mkdirSync(join(site, 'notes'));
+  writeFileSync(join(site, 'notes', 'first-frost.md'), '---\ntitle: First frost\ndate: 2026-10-01\n---\nThe beds are covered.\n');
   // MOSS_HOME and the search root keep the binary from finding, or handing
   // the folder to, an installed desktop app.
   server = spawn(MOSS_BIN, ['edit', site, '--serve', '--no-browser', '--port', String(gatePort('browser-editor:ui'))], {
@@ -88,6 +138,8 @@ test.beforeEach(async () => {
       MOSS_HOME: join(home, 'moss'),
       MOSS_DESKTOP_SEARCH_ROOT: home,
       MOSS_PREVIEW_PORT_BASE: String(gatePort('browser-editor:preview')),
+      // The new-page test reads the rename's own request from the log.
+      MOSS_LOG_LEVEL: 'info',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -103,6 +155,16 @@ test.afterEach(async () => {
   rmSync(site, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
+
+/**
+ * Open the file tree's list from the root crumb and wait for the panel to
+ * finish growing. Its rows move while it grows, so a click made then can press
+ * one row and release on another, which the tree takes as a click on no row.
+ */
+async function openTreeRoot(editor: Frame) {
+  await editor.click('.seg.bc[data-path=""]');
+  await editor.waitForFunction(() => document.querySelector('.nav-surface')?.getAnimations().length === 0);
+}
 
 /** Sign in, wait for the home page in the preview, and open the editor beside it. */
 async function openEditor(page: Page) {
@@ -184,7 +246,7 @@ test('the browser editor boots, saves, opens a sandboxed PDF in the file viewer,
 
   await test.step('the editor follows the preview home from a page opened in the file tree', async () => {
     const openFile = () => editor.evaluate(() => decodeURIComponent(location.search));
-    await editor.click('.seg.bc[data-path=""]');
+    await openTreeRoot(editor);
     await editor.click('.seg[data-path="events"]:not(.bc)');
     await editor.click('.seg[data-path="events/reading-circle.md"]');
     await expect.poll(openFile, { timeout: 15_000 }).toContain('reading-circle.md');
@@ -205,7 +267,7 @@ test('the browser editor boots, saves, opens a sandboxed PDF in the file viewer,
     // The footer asks before it opens; answered "don't ask again" here.
     await editor.evaluate(() => localStorage.setItem('moss.specialFile.skipConfirm.footer', '1'));
     // The root crumb toggles the list: open it only when it is closed.
-    if ((await editor.locator('.seg[data-path="footer.md"]').count()) === 0) await editor.click('.seg.bc[data-path=""]');
+    if ((await editor.locator('.seg[data-path="footer.md"]').count()) === 0) await openTreeRoot(editor);
     await editor.click('.seg[data-path="footer.md"]');
     // The editor's own address names a file only when the preview follows to it, so the text is read.
     await expect(editor.locator('.cm-content')).toContainText('Tended by hand', { timeout: 15_000 });
@@ -253,6 +315,39 @@ test('the browser editor boots, saves, opens a sandboxed PDF in the file viewer,
     await page.keyboard.type('Second new page.');
     await expect.poll(() => readFileSync(join(site, 'Workshops', 'untitled 2.md'), 'utf8'), { timeout: 15_000 }).toContain('Second new page.');
   });
+});
+
+test('a click on text in the page washes its line in the editor and brings it into view', async ({ page }) => {
+  const { editor, preview } = await openEditor(page);
+  await editor.waitForSelector('.cm-content', { timeout: 30_000 });
+  if ((await editor.locator('.seg[data-path="almanac.md"]').count()) === 0) await openTreeRoot(editor);
+  await editor.click('.seg[data-path="almanac.md"]');
+  await preview.waitForFunction(() => document.body?.innerText.includes('Entry 1 of the almanac'), null, { timeout: 30_000 });
+  await expect(editor.locator('.cm-content')).toContainText('Entry 1 of the almanac', { timeout: 15_000 });
+  await page.waitForTimeout(700); // outlasts the longest hold in editor-link.ts SETTLE_MS, during which page clicks are ignored
+
+  // Every washed line, and whether the editor's own scroll area shows all of it.
+  const washed = () => editor.evaluate(() =>
+    [...document.querySelectorAll('.cm-reveal-flash')].map((line) => {
+      const at = line.getBoundingClientRect();
+      const area = line.closest('.cm-scroller')!.getBoundingClientRect();
+      return { text: line.textContent, shown: at.top >= area.top && at.bottom <= area.bottom };
+    }));
+
+  // The editor draws only the lines near its scroll position.
+  expect(await editor.locator('.cm-line:has-text("Entry 70 of the almanac.")').count(), 'the far line before the click').toBe(0);
+  await preview.locator('p:has-text("Entry 70 of the almanac.")').click();
+  await expect.poll(washed, { timeout: 10_000, message: 'the washed lines after a click on a far paragraph' })
+    .toEqual([{ text: 'Entry 70 of the almanac.', shown: true }]);
+
+  await preview.locator('p:has-text("Entry 3 of the almanac.")').click();
+  await expect.poll(washed, { timeout: 10_000, message: 'the washed lines after a click back near the top' })
+    .toEqual([{ text: 'Entry 3 of the almanac.', shown: true }]);
+
+  // Inside a grid column the click picks its own line, not the column.
+  await preview.locator('.moss-grid-card p:has-text("The pond freezes last.")').click();
+  await expect.poll(washed, { timeout: 10_000, message: 'the washed lines after a click inside a grid column' })
+    .toEqual([{ text: 'The pond freezes last.', shown: true }]);
 });
 
 test("an event's start and end open date and time controls that write what the build reads", async ({ page }, testInfo) => {
@@ -359,11 +454,261 @@ test("an event's start and end open date and time controls that write what the b
 
 test("a folder's own page listing its folder by name is not marked missing", async ({ page }) => {
   const { editor } = await openEditor(page);
-  await editor.click('.seg.bc[data-path=""]');
+  await openTreeRoot(editor);
   await editor.click('.seg[data-path="meetings"]:not(.bc)');
   await editor.click('.seg[data-path="meetings/meetings.md"]');
   const marked = (target: string) => editor.locator(`.cm-line:has-text("![[${target}/") .cm-problem--blocks`);
   // The missing folder's mark shows the resolver has answered for this page.
   await expect(marked('nowhere')).not.toHaveCount(0, { timeout: 30_000 });
   await expect(marked('meetings')).toHaveCount(0);
+});
+
+/** Follow the home page's link to the page two folders down, so the breadcrumb
+ *  re-seats on it, and wait for the build's count to reach its row. */
+async function openCasePage(page: Page) {
+  const frames = await openEditor(page);
+  const { editor, preview } = frames;
+  await editor.waitForSelector('.cm-content', { timeout: 30_000 });
+  await preview.click('a:has-text("To the case")');
+  await expect(editor.locator('.seg.bc-current .tree-preflight-count')).toHaveText('7', { timeout: 30_000 });
+  return frames;
+}
+
+/** A picture of the editor in each colour scheme, kept when `GATE_SHOTS` names a folder. */
+async function shots(page: Page, name: string, browserName: string) {
+  const dir = process.env.GATE_SHOTS;
+  if (!dir) return;
+  for (const scheme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme: scheme });
+    await page.locator('#moss-editor-frame').screenshot({ path: join(dir, `${name}-${browserName}-${scheme}.png`) });
+  }
+  await page.emulateMedia({ colorScheme: 'light' });
+}
+
+test("a page's problem count shows once, and steps through its problems", async ({ page, browserName }) => {
+  const { editor } = await openCasePage(page);
+  const count = (path: string) => editor.locator(`.seg[data-path="${path}"] .tree-preflight-count`);
+  const colour = (selector: string) => editor.locator(selector).first().evaluate((el) => getComputedStyle(el).color);
+
+  // The breadcrumb: the page's number, and no number on any folder above it;
+  // each folder's chevron wears the number's colour instead.
+  for (const folder of ['', 'en', 'en/writing']) {
+    await expect(editor.locator(`.seg.bc[data-path="${folder}"]`)).toHaveCount(1);
+    await expect(count(folder)).toHaveCount(0);
+    expect(await colour(`.seg.bc[data-path="${folder}"] > .chev`)).toBe(await colour('.seg.bc-current .tree-preflight-count'));
+  }
+  await shots(page, 'count-breadcrumb', browserName);
+
+  // The number is a button: a click, then the keyboard, each go one problem on.
+  const caretLine = () => editor.evaluate(() => {
+    const node = getSelection()?.anchorNode;
+    return (node instanceof Element ? node : node?.parentElement)?.closest('.cm-line')?.textContent ?? '';
+  });
+  const button = editor.locator('.seg.bc-current button.tree-preflight-count');
+  await expect(button).toHaveAccessibleName('7 unresolved references. Go to the next');
+  expect(await button.evaluate((el) => getComputedStyle(el).cursor)).toBe('pointer');
+  await button.click();
+  await expect.poll(caretLine).toContain('slide-01.jpg');
+  // A key that is not a modifier: WebKit shows the focus ring only after one.
+  await page.keyboard.press('ArrowRight');
+  await button.focus();
+  expect(await button.evaluate((el) => getComputedStyle(el).outlineStyle)).not.toBe('none');
+  await page.keyboard.press('Enter');
+  await expect.poll(caretLine).toContain('slide-02.jpg');
+
+  // The tree: a closed folder carries its total, an open one leaves it to its rows.
+  await editor.click('.seg.bc[data-path=""]');
+  await expect(count('drafts')).toHaveText('2');
+  await editor.locator('.seg[data-path="drafts"]').scrollIntoViewIfNeeded();
+  await shots(page, 'count-tree-closed', browserName);
+  await editor.click('.seg[data-path="drafts"] > .chev');
+  await expect(count('drafts/d.md')).toHaveText('2');
+  await expect(count('drafts')).toHaveCount(0);
+  await shots(page, 'count-tree-open', browserName);
+});
+
+test('a missing picture says what was looked for, and its card offers the ways out', async ({ page, browserName }) => {
+  const { editor } = await openCasePage(page);
+  const file = () => readFileSync(join(site, 'en', 'writing', 'case.md'), 'utf8');
+  const card = editor.locator('.cm-reference-card');
+  const actions = () => card.locator('.cm-reference-card-actions button').allTextContents();
+  const mark = (name: string) => editor.locator(`.cm-problem--blocks:has-text("${name}")`);
+
+  // Resting on the path: the reason, and nothing to press.
+  await mark('slide-03.jpg').hover();
+  await expect(card).toHaveText("No file named slide-03.jpg in your folder. The site can't be published without it.", { timeout: 10_000 });
+  await expect(card.locator('button, input')).toHaveCount(0);
+  await shots(page, 'missing-hover', browserName);
+  await page.mouse.move(0, 0);
+
+  // The card opened from the keyboard: choose a file or remove, and no widths.
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
+  await mark('slide-01.jpg').click();
+  await page.keyboard.press(`${mod}+k`);
+  await expect(card).toHaveClass(/cm-reference-card--editable/);
+  expect(await actions()).toEqual(['Choose a file…', 'Remove']);
+  // No preview frame for a file that is not there.
+  await expect(card.locator('.cm-asset-hover')).toBeHidden();
+  await shots(page, 'missing-card', browserName);
+  // The buttons' words can be read on a dark card.
+  await page.emulateMedia({ colorScheme: 'dark' });
+  const contrast = await card.locator('.cm-reference-card-actions button').first().evaluate((el) => {
+    const luminance = (rgb: string): number => {
+      const [r, g, b] = rgb.match(/[\d.]+/g)!.slice(0, 3).map((v) => {
+        const c = Number(v) / 255;
+        return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    let backdrop = 'rgb(255, 255, 255)';
+    for (let e: HTMLElement | null = el as HTMLElement; e; e = e.parentElement) {
+      // The scheme has just changed: read where each colour is going, not where it is.
+      e.style.transition = 'none';
+      const bg = getComputedStyle(e).backgroundColor;
+      if (bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') { backdrop = bg; break; }
+    }
+    const [hi, lo] = [luminance(getComputedStyle(el).color), luminance(backdrop)].sort((a, b) => b - a);
+    return (hi + 0.05) / (lo + 0.05);
+  });
+  expect(contrast, 'a card button is too faint to read in dark').toBeGreaterThanOrEqual(4.5);
+  await page.emulateMedia({ colorScheme: 'light' });
+
+  // Remove takes the line; one undo brings it back.
+  await card.locator('button:has-text("Remove")').click();
+  await expect.poll(file, { timeout: 15_000 }).not.toContain('slide-01.jpg');
+  await editor.locator('.cm-content').focus();
+  await page.keyboard.press(`${mod}+z`);
+  await expect.poll(file, { timeout: 15_000 }).toBe(CASE_PAGE);
+
+  // A click on the path starts the hover timer; the card opened right after
+  // it keeps its buttons once that timer has run out. (This host cannot write
+  // a reference form, so it offers no "Use <file>" row.)
+  await mark('chart.jpg').click();
+  await page.keyboard.press(`${mod}+k`);
+  await page.waitForTimeout(400);
+  await expect(card).toHaveClass(/cm-reference-card--editable/);
+  expect(await actions()).toEqual(['Choose a file…', 'Remove']);
+  await page.keyboard.press('Escape');
+
+  // A picture that is there keeps its widths, and the row stays inside the card.
+  await editor.locator('.cm-line', { hasText: 'here.png' }).click({ position: { x: 60, y: 10 } });
+  await page.keyboard.press(`${mod}+k`);
+  await expect(card).toHaveClass(/cm-reference-card--editable/);
+  expect(await actions()).toEqual(['Replace…', '25%', '50%', '75%', '100%', 'Reset']);
+  const row = await card.locator('.cm-reference-card-actions').evaluate((r) => ({ wide: r.scrollWidth, room: r.clientWidth }));
+  expect(row.wide, 'the buttons run past the card').toBeLessThanOrEqual(row.room);
+  await shots(page, 'found-picture-card', browserName);
+});
+
+test('a new page in a language folder shows in the preview before it has text, and is an ordinary page after one word', async ({ page }, testInfo) => {
+  const { shell, editor, preview } = await openEditor(page);
+  const openFile = () => editor.evaluate(() => decodeURIComponent(location.search));
+  const file = join(site, 'zh-hans', 'Quiet Harbour Notes.md');
+  const address = '/zh-hans/quiet-harbour-notes/';
+  const folderLists = () => preview.evaluate(async (at) => (await (await fetch('/zh-hans/')).text()).includes(at), address);
+
+  await preview.click('a:has-text("To the Chinese pages")');
+  await expect.poll(openFile, { timeout: 15_000 }).toContain('zh-hans/index.md');
+  await editor.click('#editor-create-btn');
+  await expect.poll(openFile, { timeout: 15_000 }).toContain('zh-hans/untitled.md');
+  await editor.click('#editor-heading');
+  await page.keyboard.type('Quiet Harbour Notes');
+  await page.keyboard.press('Enter');
+  await expect.poll(() => existsSync(file), { timeout: 15_000 }).toBe(true);
+  expect(readFileSync(file, 'utf8').trim(), 'the new page has no text yet').toBe('');
+
+  // Shown at its address with the site's design, the waiting screen gone, the editor still on it.
+  // Under the sweep's 20 s: the rename asks for its own build, whatever the file watcher delivers.
+  await expect.poll(() => new URL(preview.url()).pathname, { timeout: 10_000 }).toBe(address);
+  expect(output, 'the rename asked for its own build').toContain('Rebuild asked by move');
+  await expect(preview.locator('h1')).toContainText('Quiet Harbour Notes', { timeout: 30_000 });
+  await expect(shell.locator('#moss-preview-overlay')).not.toHaveClass(/visible/, { timeout: 30_000 });
+  await expect(editor.locator('body')).not.toContainText('No page to edit');
+  expect(await folderLists(), 'an empty page is in no listing').toBe(false);
+  await page.screenshot({ path: testInfo.outputPath('new-page-before-text.png') });
+
+  await editor.click('.cm-content');
+  await page.keyboard.type('Word');
+  await expect.poll(() => readFileSync(file, 'utf8'), { timeout: 15_000 }).toContain('Word');
+  await expect(preview.locator('article, main').first()).toContainText('Word', { timeout: 30_000 });
+  await expect.poll(folderLists, { timeout: 30_000, message: 'the folder lists the page once it has text' }).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('new-page-after-one-word.png') });
+});
+
+test('the create menu offers another language only for a page with no version in it', async ({ page }) => {
+  const { editor, preview } = await openEditor(page);
+  const openFile = () => editor.evaluate(() => decodeURIComponent(location.search));
+  const rows = async () => {
+    await editor.click('#editor-create-caret');
+    await editor.locator('.ctx-menu .ctx-label').first().waitFor({ timeout: 10_000 });
+    const labels = await editor.locator('.ctx-menu .ctx-label').allTextContents();
+    await page.keyboard.press('Escape');
+    return labels;
+  };
+
+  // Its Chinese version is linked by key under another file name.
+  await preview.click('a:has-text("About")');
+  await expect.poll(openFile, { timeout: 15_000 }).toContain('about.md');
+  expect(await rows()).not.toContain('简体中文 version of this page');
+
+  await preview.click('a:has-text("Talk")');
+  await expect.poll(openFile, { timeout: 15_000 }).toContain('talk.md');
+  expect(await rows()).toContain('简体中文 version of this page');
+});
+
+test('a page renamed in the folder while it is shown is followed to its folder address', async ({ page }) => {
+  const { preview } = await openEditor(page);
+  await preview.click('a:has-text("About")');
+  await expect(preview.locator('body')).toContainText('About the garden', { timeout: 30_000 });
+
+  renameSync(join(site, 'about.md'), join(site, 'about-us.md'));
+  // Past the sweep's 20 s, for a rename the file watcher delivers late.
+  await expect.poll(() => new URL(preview.url()).pathname, { timeout: 40_000 }).toMatch(/^\/about-us\//);
+  expect(new URL(preview.url()).pathname).toBe('/about-us/');
+  await expect(preview.locator('body')).toContainText('About the garden', { timeout: 30_000 });
+});
+
+test('an edit to a page in the feed updates it in place, not by a reload', async ({ page }) => {
+  const { preview } = await openEditor(page);
+  // The first build is promoted about 20 s after the server starts, and the
+  // preview refreshes for that too: the marker below is set after it.
+  await expect.poll(() => output, { timeout: 60_000, message: 'the first build promoted' }).toMatch(/promoted generation \S+ to current/);
+  await preview.evaluate(() => location.assign('/notes/first-frost/'));
+  // The home page lists the note's text too: wait for the note's own address.
+  await preview.waitForFunction(() => location.pathname === '/notes/first-frost/' && document.readyState === 'complete' && document.body.innerText.includes('The beds are covered'), null, { timeout: 30_000 });
+  await expect(preview.locator('link[rel="alternate"][href="/rss.xml"]')).toHaveCount(1);
+  // A reload makes a new window; an update in place keeps this one.
+  await preview.evaluate(() => ((window as unknown as { kept: boolean }).kept = true));
+
+  writeFileSync(join(site, 'notes', 'first-frost.md'), readFileSync(join(site, 'notes', 'first-frost.md'), 'utf8') + '\nThe well is closed.\n');
+  await preview.waitForFunction(() => document.body?.innerText.includes('The well is closed'), null, { timeout: 30_000 });
+  expect(await preview.evaluate(async () => (await (await fetch('/rss.xml')).text()).includes('The well is closed')), 'the edit changed the feed').toBe(true);
+  expect(await preview.evaluate(() => (window as unknown as { kept?: boolean }).kept), 'the page was reloaded').toBe(true);
+});
+
+test('the address copied from a page just made carries no reload stamp', async ({ page }) => {
+  const { shell, editor, preview } = await openEditor(page);
+  await preview.click('a:has-text("To the Chinese pages")');
+  await expect.poll(() => editor.evaluate(() => decodeURIComponent(location.search)), { timeout: 15_000 }).toContain('zh-hans/index.md');
+  await editor.click('#editor-create-btn');
+  // The preview waits at the new page's address and, once its first build ends, loads it again with the stamp.
+  await expect.poll(() => preview.url(), { timeout: 40_000 }).toMatch(/\/zh-hans\/untitled\/\?.*_t=/);
+  await expect(shell.locator('#moss-preview-overlay')).not.toHaveClass(/visible/, { timeout: 30_000 });
+
+  // The browser editor opens no menu of its own, so the payload is read where the desktop reads it.
+  const rightClick = shell.evaluate(() => new Promise<PreviewCtxPayload>((resolve) =>
+    window.addEventListener('message', (e) => e.data?.type === 'moss-context-menu' && resolve(e.data))));
+  await preview.click('body', { button: 'right', position: { x: 5, y: 5 } });
+
+  const copied: string[] = [];
+  const payload = await rightClick;
+  expect(payload.page).toContain('_t=');
+  const entries = buildPreviewCtxEntries(payload, {
+    siteUrl: null, canEdit: false, pageFile: null,
+    openTarget: () => {}, openStyle: () => {}, openExternal: () => {},
+    copy: (text) => copied.push(text),
+  });
+  const copyPage = entries.find((e) => 'action' in e && e.label === 'Copy page address') as { action(): void };
+  copyPage.action();
+  expect(copied).toEqual(['/zh-hans/untitled/']);
 });
