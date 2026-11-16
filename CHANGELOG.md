@@ -25,6 +25,7 @@ All notable changes to moss will be documented here.
 - In a card grid, a listing or a `:::grid` of pages, the covers of the first four cards load with the page, and the first of them is fetched at high priority. Only the first cover loaded at once, so a cover further along the first row, often the page's largest picture, waited for lazy loading. A page that opens with its own picture keeps every card cover lazy.
 - In a site folder kept in Google Drive or another cloud-synced folder, a picture encoded again on a machine where the cloud already holds its file no longer writes that file again, so the sync service does not upload it a second time. On an evicted Drive copy of a large site, a 120-second preview had re-uploaded 756 files.
 - Saving a page while pictures are being made no longer renders the whole site over and over. A build that joins pictures another build is already making now waits for them before it finishes, so on a 250-page site one edit during a picture batch renders the site 3 times instead of 13, with about a third less CPU time and 100 MB less memory.
+- A page saved while a folder's first build is running shows as soon as the preview starts watching, not after the picture batch has finished.
 
 ### New
 
