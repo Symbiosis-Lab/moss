@@ -146,11 +146,11 @@ export function closeCard(view: EditorView): void {
   if (view.state.field(cardField, false)) view.dispatch({ effects: setCard.of(null) });
 }
 
-/** A click-opened card that may host `fields`/`actions`, bypassing dwell. */
+/** A click-opened card, bypassing dwell. It hosts `fields`/`actions` unless the text is read-only: they write. */
 export function openCardAt(view: EditorView, pos: number): boolean {
   const spec = cardSpecAt(view.state, pos);
   if (!spec) return false;
-  view.dispatch({ effects: setCard.of({ pos, from: pos, to: pos, spec, editable: true }) });
+  view.dispatch({ effects: setCard.of({ pos, from: pos, to: pos, spec, editable: !view.state.readOnly }) });
   return true;
 }
 

@@ -60,6 +60,7 @@ import { getLocale, t } from "../i18n/index";
 import { applyStaticStrings } from "../i18n/apply-static-strings";
 import { installLocaleReactivity } from "../i18n/live-locale";
 import { mountInlineStatus } from './inline-status';
+import { heldFor, isHeldFor, onHoldChange, setHold, showHold } from './hold';
 import { wireEditorHeading, type HeadingController } from './editor-heading';
 import { getHeadingState, readDiagnostics, type EditorDiagnostic } from './moss-debug';
 import { forceLinting } from '@codemirror/lint';
@@ -361,8 +362,8 @@ const docStateCluster = new DocStateCluster({
   // miss because each side is defensible alone.
   undo: () => applyHistory('undo'),
   redo: () => applyHistory('redo'),
-  canUndo: () => documentHistory.canUndo(),
-  canRedo: () => documentHistory.canRedo(),
+  canUndo: () => !heldFor() && documentHistory.canUndo(),
+  canRedo: () => !heldFor() && documentHistory.canRedo(),
   // Literally the router's own predicate, so the button's mousedown suppresses
   // exactly the dismissal that would turn one click into flush-then-undo, and
   // leaves every other document-level listener its event.
@@ -419,6 +420,8 @@ function resetDocumentHistory(): void {
 }
 
 function runHistory(direction: 'undo' | 'redo'): boolean {
+  // A step the held text refuses would be dropped from the log as dead.
+  if (heldFor()) return false;
   const moved = direction === 'undo' ? documentHistory.undo() : documentHistory.redo();
   docStateCluster.sync();
   return moved;
@@ -535,11 +538,6 @@ const outsideFile = createOutsideFile({
   showFolderOf: (relPath) => showFolderOfDeleted(relPath),
 });
 const otherWriters = createKeptOutsideEdit({ currentEntryId, editor: () => cmEditor, store: () => frontmatterStore });
-// Set by setEditorCommitLock while a rename, move or undo commit is writing
-// through the file tree — see saveActiveDocument's own guard, which is the
-// actual enforcement; this flag is only the signal it reads.
-let editorCommitLocked = false;
-let bodyFocusOwed = false;
 
 /** Folder navigation uses Rust's build-independent route and never falls back to '/'. */
 async function navigatePreviewToFolder(absPath: string, awaitingBuild: boolean): Promise<void> {
@@ -905,7 +903,7 @@ async function init(): Promise<void> {
     // fileEvents is always non-null post-init; ?? undefined satisfies the optional-param type (module field is EditorFileEvents | null).
     fileTree = new FileTree(registry, fileEvents ?? undefined, {
       flushPendingSave: () => flushPendingSave(),
-      setEditorCommitLock: (locked) => setEditorCommitLock(locked),
+      setEditorCommitLock: (locked) => setHold('commit', locked),
       reloadActiveFileFromDisk: reloadExternalDocument,
     });
     fileTree.onNextProblem = () => { const view = cmEditor?.getView(); if (view) goToNextProblem(view); };
@@ -940,7 +938,7 @@ async function init(): Promise<void> {
     // Same testability rationale: lets a test drive the rename/move/undo
     // read-only lock directly, without booting the tree, to exercise
     // saveActiveDocument's guard against autosave while a commit holds the lock.
-    w.__moss_debug.setEditorCommitLock = setEditorCommitLock;
+    w.__moss_debug.setEditorCommitLock = (locked) => setHold('commit', locked);
     // Pure DOM reader of the rendered heading ({text, source, visible}) for the
     // agent-driven e2e harness. Reads #editor-heading's
     // textContent / data-heading-source / data-empty — see moss-debug.ts.
@@ -1249,20 +1247,13 @@ async function init(): Promise<void> {
   // The layout button above stays the primary exit; this only accelerates it.
   initEdgeRestore();
 
-  // Listen for preview-to-editor scroll events (line-based or heading-based)
   pendingListeners.push(
     uiHost.bus.on<{ sealed: boolean }>('editor:seal', (payload) => {
-      // The ship conductor seals the editor while publishing.
-      // - CM6 read-only: a live Compartment reconfigure (no remount).
-      // - Scrim: a translucent overlay with "Publishing your site…" caption.
-      // - File tree: locked so the user can't switch files mid-ship (R13).
+      // The ship conductor holds the folder while it publishes; the tree
+      // stays locked so the page the ship is publishing cannot change under it.
       const sealed = !!payload?.sealed;
-      // Observability (issue #5b): the seal/unseal cycle is the prime suspect for
-      // a stuck non-editable editor. Logging every RECEIVED event makes a dropped
-      // unseal (sealed=true with no following sealed=false) visible in moss.log,
-      // and records the editor's editable state — which nothing else does.
-      void logInfo(`[editor:seal] received sealed=${sealed} → editor editable=${!sealed}, hasEditor=${!!cmEditor}`);
-      cmEditor?.setReadOnly(sealed);
+      void logInfo(`[editor:seal] received sealed=${sealed}, hasEditor=${!!cmEditor}`);
+      setHold('publish', sealed);
       fileTree?.setSealed(sealed);
     }),
   );
@@ -1590,8 +1581,7 @@ async function init(): Promise<void> {
     focusBody: () => {
       const view = cmEditor?.getView();
       if (!view) return;
-      if (editorCommitLocked) bodyFocusOwed = true;
-      else view.focus();
+      view.focus();
       view.dispatch({ selection: { anchor: 0 } });
     },
     onCommit: async (newText) => {
@@ -2877,6 +2867,7 @@ async function loadFileBody(
     // the title is hidden (empty-title state) so CM6's default ArrowUp runs.
     onEscapeTop: () => headingController?.focusEnd() ?? false,
   });
+  if (heldFor()) applyHold(); // a file opened during a hold starts held
   documentBase = unsavedResume ? resumed.base : { ...baseFrom(parsedData), frontmatter: isMarkdown ? initial : {} };
   if (resumed) documentHistory.restore(resumed.log);
   if (id) parked.delete(id);
@@ -3021,7 +3012,7 @@ async function saveActiveDocument(reason: 'autosave' | 'forced' = 'autosave'): P
   // refused rather than allowed to write pre-commit content over the
   // commit's own rewrite of that same file. The lock therefore guards
   // autosave calls as well as direct input events.
-  if (editorCommitLocked && reason !== 'forced') return;
+  if (isHeldFor('commit') && reason !== 'forced') return;
   if (saveInFlight) { saveQueued = true; return saveInFlight; }
   // Defensive: clear the prior result so a run that short-circuits before any
   // write (no path / no editor) leaves lastWriteOk null — flushPendingSave then
@@ -3182,31 +3173,15 @@ async function reloadExternalDocument(): Promise<void> {
   reconcileWithDisk(parsed.data);
 }
 
-/**
- * Freeze (or unfreeze) the open CM6 buffer for the duration of a rename,
- * move or undo commit. Engaged BEFORE the file tree's own
- * `flushPendingSave()` call so read-only refuses typing for the whole commit,
- * including while that flush's own IPC is in flight, so a keystroke can
- * never arm an autosave debounce that outlives the commit and overwrites
- * its rewrite of that same file. `saveActiveDocument`'s own guard on
- * `editorCommitLocked` is the actual belt-and-suspenders enforcement — this
- * flag is what it reads. Reuses the exact Compartment reconfigure the
- * publish seal already drives (`editor:seal`'s `cmEditor.setReadOnly`) —
- * same mechanism, a different trigger.
- */
-function setEditorCommitLock(locked: boolean): void {
-  // The freeze makes the body non-editable, and a browser then moves focus to
-  // <body>. Focus held when the freeze starts, or asked for during it, is
-  // given back when it ends, unless something else took focus meanwhile.
-  if (locked) bodyFocusOwed ||= cmEditor?.getView()?.hasFocus ?? false;
-  editorCommitLocked = locked;
-  cmEditor?.setReadOnly(locked, "commit");
-  if (!locked && bodyFocusOwed) {
-    bodyFocusOwed = false;
-    const active = document.activeElement;
-    if (active === null || active === document.body) cmEditor?.getView()?.focus();
-  }
+/** The one place the hold reaches the open editor and its chrome. */
+function applyHold(): void {
+  const reason = heldFor();
+  cmEditor?.setHeld(reason !== null);
+  if (reason) chipBar?.closeAnyOverlay(); // an open pill editor or menu writes
+  docStateCluster.sync();
+  showHold(reason);
 }
+onHoldChange(applyHold);
 
 // ── Scroll Sync ─────────────────────────────────────────────────────────
 // Scroll sync is always active — there is no toggle.
@@ -3510,7 +3485,8 @@ export async function handleEditorFileDrop(paths: string[], point?: { x: number;
   const path = currentFilePath();
   // Only a host with files on disk delivers an OS drop, and copies it in.
   const copyIn = uiHost.copyIn;
-  if (!cmEditor || !path || !copyIn) return;
+  // A held folder takes no files, so none is copied in for an embed that would be refused.
+  if (!cmEditor || !path || !copyIn || heldFor()) return;
 
   // Classify each path as directory, embeddable file, or import-only file.
   // A folder is embedded as ![[name/]] after it is copied in.

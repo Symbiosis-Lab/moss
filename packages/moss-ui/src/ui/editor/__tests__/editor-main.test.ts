@@ -4003,6 +4003,40 @@ describe('editor-main file-tree lock via editor:seal', () => {
     expect(mockSetSealed).toHaveBeenCalledWith(false);
   });
 
+  test('a file opened while the folder publishes mounts held', async () => {
+    const setHeld = vi.fn();
+    MockCmEditor.mockImplementation(() => ({
+      destroy: vi.fn(),
+      getContent: vi.fn().mockReturnValue(''),
+      setContent: vi.fn(),
+      setHeld,
+      getView: vi.fn().mockReturnValue({ scrollDOM: { addEventListener: vi.fn(), prepend: vi.fn() }, focus: vi.fn() }),
+    }));
+    mockCommands.describeSourceRole.mockResolvedValue({ status: 'ok', data: { slot: null, language: null } });
+    mockCommands.parseFrontmatter.mockResolvedValue({ status: 'ok', data: { frontmatter: {}, body: '# Post' } });
+    await bootEditorMain();
+    await vi.waitFor(() => expect(listenCallbacks.has('editor:seal')).toBe(true));
+    await vi.waitFor(() => expect(mockEmit).toHaveBeenCalledWith('editor:request-page', {}));
+
+    await listenCallbacks.get('editor:seal')!({ sealed: true });
+    await listenCallbacks.get('editor:load-source')!({ sourcePath: '/Users/test/blog/post.md', isRoot: false });
+    await vi.waitFor(() => expect(setHeld).toHaveBeenCalledWith(true));
+
+    await listenCallbacks.get('editor:seal')!({ sealed: false });
+    expect(setHeld).toHaveBeenLastCalledWith(false);
+    const pills = MockChipBar.mock.results.at(-1)!.value;
+    pills.closeAnyOverlay.mockClear();
+    await listenCallbacks.get('editor:seal')!({ sealed: true });
+    expect(pills.closeAnyOverlay).toHaveBeenCalledTimes(1);
+    await listenCallbacks.get('editor:seal')!({ sealed: false });
+
+    // A rename's short hold closes it too.
+    pills.closeAnyOverlay.mockClear();
+    const debug = (window as any).__moss_debug;
+    debug.setEditorCommitLock(true);
+    expect(pills.closeAnyOverlay).toHaveBeenCalledTimes(1);
+    debug.setEditorCommitLock(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

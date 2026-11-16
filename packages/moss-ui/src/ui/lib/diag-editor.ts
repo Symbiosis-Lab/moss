@@ -298,7 +298,7 @@ const REPORT_EVERY_MS = 5000;
  * ones that mean something.
  *
  * Fires ONLY when a real CodeMirror document is mounted AND editable — a
- * legitimately read-only/sealed editor not focusing on click is expected.
+ * legitimately read-only (held) editor not focusing on click is expected.
  *
  * The listener is never removed: `container` is the editor webview's own pane,
  * which outlives everything that could tear it down.
@@ -310,7 +310,7 @@ export function installEditorFocusProbe(
 ): void {
   const onPointerDown = (ev: PointerEvent): void => {
     const view = getView();
-    if (!view || view.state.readOnly) return; // no CM6 doc, or legitimately sealed
+    if (!view || view.state.readOnly) return; // no CM6 doc, or legitimately held
     const { clientX: x, clientY: y } = ev;
     // Let the click settle, then check whether the cursor actually landed.
     setTimeout(() => {

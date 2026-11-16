@@ -6,6 +6,7 @@ import { baseName } from '../path-domain';
 import { removeToastById, showToast } from "../../shared/ui/toast/toast-manager";
 import { deepEqual } from '../document-history';
 import { changesBetween, outsideWins, type DocumentText } from '../external-merge';
+import { heldFor } from '../hold';
 import type { ChangeSet } from '@codemirror/state';
 
 /** How long the notice stays. */
@@ -32,6 +33,7 @@ export function createKeptOutsideEdit(host: KeptOutsideEditHost) {
   let notKept: string | null = null;
 
   function undo(kept: Kept): void {
+    if (heldFor()) return; // the body would be refused and the pills written
     removeToastById(TOAST_ID);
     const editor = host.editor();
     const store = host.store();

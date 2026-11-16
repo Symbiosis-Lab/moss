@@ -15,7 +15,7 @@
 // Deliberately narrow: only clicks whose TARGET is one of those background
 // boxes are forwarded. Clicks inside the contentDOM are CM6's own business,
 // and clicks on other chrome mounted in the container (insert bar, doc-state
-// cluster, heading, gutter glyphs, seal scrim) pass through untouched.
+// cluster, heading, gutter glyphs) pass through untouched.
 //
 // Pinned by packages/moss-ui/src/ui/editor/__tests__/cm-editor-deadzone.test.ts (jsdom,
 // forwarding logic) and a browser test of caret hit zones

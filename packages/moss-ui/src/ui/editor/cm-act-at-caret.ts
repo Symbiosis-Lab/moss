@@ -60,7 +60,7 @@ export function taskAt(state: EditorState, pos: number): { markerFrom: number; c
 
 /** Flip the one character between the brackets, in one transaction; false when the editor is read-only. The document keeps its length, so a caret anywhere stays exactly where it was. */
 function toggleTask(view: EditorView, task: { markerFrom: number; checked: boolean }): boolean {
-  if (view.state.readOnly) return false; // a sealed editor is not edited by a click
+  if (view.state.readOnly) return false; // a held editor is not edited by a click
   const mid = task.markerFrom + 1;
   view.dispatch({ changes: { from: mid, to: mid + 1, insert: task.checked ? ' ' : 'x' } });
   return true;

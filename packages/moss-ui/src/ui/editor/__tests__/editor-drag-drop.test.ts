@@ -50,6 +50,7 @@ const {
   };
   const MockChipBar = vi.fn().mockImplementation(() => ({
     setPageFacts: vi.fn(),
+    closeAnyOverlay: vi.fn(),
     render: vi.fn(),
     destroy: vi.fn(),
     getValues: vi.fn().mockReturnValue({}),
@@ -60,6 +61,7 @@ const {
   const mockToast = vi.fn();
   const MockCmEditor = vi.fn().mockImplementation(() => ({
     destroy: vi.fn(),
+    setHeld: vi.fn(),
     getContent: vi.fn().mockReturnValue(''),
     getView: vi.fn().mockReturnValue({
       scrollDOM: { addEventListener: vi.fn(), prepend: vi.fn() },
@@ -210,6 +212,7 @@ function resetMocks(): void {
   mockCommands.pageFacts.mockResolvedValue({ status: 'ok', data: { position: null, auto: {} } });
   MockChipBar.mockImplementation(() => ({
     setPageFacts: vi.fn(),
+    closeAnyOverlay: vi.fn(),
     render: vi.fn(),
     destroy: vi.fn(),
     getValues: vi.fn().mockReturnValue({}),
@@ -217,6 +220,7 @@ function resetMocks(): void {
   }));
   MockCmEditor.mockImplementation(() => ({
     destroy: vi.fn(),
+    setHeld: vi.fn(),
     getContent: vi.fn().mockReturnValue(''),
     getView: vi.fn().mockReturnValue({
       scrollDOM: { addEventListener: vi.fn(), prepend: vi.fn() },
@@ -551,6 +555,17 @@ describe('handleEditorFileDrop', () => {
     expect(imageCall![0]).toEqual(['/external/photo.png']);
 
     // Non-accepted files are simply dropped (no file-tree forwarding path).
+  });
+
+  test('while the folder is held, a dropped file is not copied in', async () => {
+    const mod = await initWithFile();
+    const debug = (window as unknown as { __moss_debug: { setEditorCommitLock(locked: boolean): void } }).__moss_debug;
+    debug.setEditorCommitLock(true);
+
+    await mod.handleEditorFileDrop(['/external/photo.png']);
+    expect(mockCopyIn).not.toHaveBeenCalled();
+
+    debug.setEditorCommitLock(false);
   });
 
   test('inserts the standard form, the name encoded as a Markdown destination', async () => {

@@ -86,7 +86,7 @@ export async function insertEntryEmbedsAtCoords(
   y: number,
 ): Promise<boolean> {
   const filtered = targets.filter(Boolean);
-  if (filtered.length === 0) return false;
+  if (filtered.length === 0 || view.state.readOnly) return false;
 
   // Resolve the drop position. Fall back to document end when the coords
   // are outside the editor content area (matches OS-drop behavior in
