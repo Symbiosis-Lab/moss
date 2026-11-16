@@ -922,9 +922,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         std::fs::write(root.join("index.md"), "---\ntitle: Garden\n---\n\nA quiet garden.\n").unwrap();
+        // Both acquires must name the same lock file: no parallel test may
+        // move `MOSS_HOME` in between.
+        let _home = crate::infra::home::MOSS_HOME_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let held = crate::infra::folder_lock::acquire(&root).unwrap();
         let release = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(400));
+            std::thread::sleep(Duration::from_millis(1500));
             drop(held);
         });
         run_pipeline(PipelineConfig {
