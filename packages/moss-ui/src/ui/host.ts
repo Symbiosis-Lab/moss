@@ -54,6 +54,13 @@ export interface ImportOutcome {
   kept_pages?: number;
 }
 
+/** Why an import stopped. `reported` when its progress row already said so,
+ *  which leaves a door nothing to show; otherwise the door shows `message`. */
+export interface ImportError {
+  message: string;
+  reported: boolean;
+}
+
 /** What a copy into the folder landed, and what it left behind and why. */
 export interface CopyInReport {
   copied: { final_name: string }[];
@@ -278,7 +285,7 @@ export interface UiHost {
   /** Writes an empty folder's first page; answers its absolute path. */
   startWriting?: (folder: string) => Promise<EngineResult<string>>;
   /** Imports the site at `url` into `folder`. */
-  importSite?: (url: string, folder: string) => Promise<EngineResult<ImportOutcome>>;
+  importSite?: (url: string, folder: string) => Promise<{ status: 'ok'; data: ImportOutcome } | { status: 'error'; error: ImportError }>;
   /** Opens the plugins view. */
   openPluginsView?: (folder: string) => Promise<EngineResult<null>>;
   hideComment?: CommentAction;

@@ -162,7 +162,6 @@ async fn localize(
     }
     let dir = folder.join(ASSETS_SUBDIR);
     let prefix = ASSETS_PREFIX;
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let mut remote = Vec::new();
     for (raw, address) in images {
         if assets.is_settled(&raw) { continue; }

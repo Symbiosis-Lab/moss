@@ -74,7 +74,7 @@ export class TreeOps {
     if (!importSite) return;
     const result = await importSite(url, folderAbsPath);
     if (result.status === 'error') {
-      showToast({ what: result.error, severity: 'Blocking' });
+      if (!result.error.reported) showToast({ what: result.error.message, severity: 'Blocking' });
       return;
     }
     if (!result.data.success) {

@@ -57,6 +57,79 @@ describe("ProgressPanel Job ingestion (Preview-scope Jobs)", () => {
     expect(tasks[0].label).toBe("Connecting example.test");
   });
 
+  // A slow page leaves an import silent for longer than the stale window,
+  // and the row must outlast it like a publish does.
+  it.each([
+    { kind: "import" as const, after20s: 1 },
+    { kind: "syndicate" as const, after20s: 0 },
+  ])("a running $kind row after 20 s with no tick: $after20s", ({ kind, after20s }) => {
+    vi.useFakeTimers();
+    try {
+      panel.handleJobUpdate(
+        wire({ scope: "preview", kind, state: { state: "running", fraction: null, message: "Importing from writer.example · 42 pages" } }),
+      );
+      vi.advanceTimersByTime(20_000);
+      expect(panel.getActiveTasks()).toHaveLength(after20s);
+      vi.advanceTimersByTime(600_000);
+      expect(panel.getActiveTasks()).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // An import's pages start a build of their own. Its receipt, "Built · 1 page",
+  // is finished work and false about the import still running, so the import's
+  // line outranks it; the build's stage while it runs is true and outranks the import.
+  it("a running import outranks the build's receipt, and the build's running stage outranks the import", () => {
+    const line = () => container.querySelector(".moss-status-line")?.textContent;
+    panel.setStage("compiling");
+    panel.handleJobUpdate(
+      wire({ scope: "preview", id: "7", kind: "import", state: { state: "running", fraction: null, message: "Importing from writer.example · 1 page" } }),
+    );
+    expect(line()).not.toContain("Importing");
+    panel.handleJobUpdate(
+      wire({
+        scope: "preview", id: "100", kind: "build", verb: "Built", amount: { count: 1, noun: "pages" }, elapsed_ms: 100,
+        state: { state: "succeeded", receipt: null, advisories: [] },
+      }),
+    );
+    expect(line()).toBe("Importing from writer.example · 1 page");
+  });
+
+  // A retry is the answer to the last failure's notice, so the notice goes when
+  // the retry starts; the retry's own failure is then the only one shown.
+  it("an import's failure notice lasts until the next import starts", () => {
+    const notices = () => [...container.querySelectorAll(".moss-notice-reason")].map((n) => n.textContent);
+    const failed: TaskState = {
+      state: "failed",
+      advisory: { scope: "Config", severity: "Blocking", item: null, what: "Failed to write file: Permission denied", action: "None" },
+    };
+    const importing = (id: string, state: TaskState) => panel.handleJobUpdate(wire({ scope: "preview", kind: "import", id, state }));
+    importing("A", { state: "running", fraction: null, message: "Importing from writer.example" });
+    importing("A", failed);
+    expect(notices()).toEqual(["Failed to write file: Permission denied"]);
+    importing("B", { state: "running", fraction: null, message: "Importing from writer.example" });
+    expect(notices()).toEqual([]);
+    importing("B", { state: "succeeded", receipt: null, advisories: [] });
+    expect(notices()).toEqual([]);
+    importing("C", { state: "running", fraction: null, message: "Importing from writer.example" });
+    importing("C", { ...failed, advisory: { ...failed.advisory, what: "Failed to write file: disk full" } } as TaskState);
+    expect(notices()).toEqual(["Failed to write file: disk full"]);
+  });
+
+  // A build's images and videos are sibling jobs of one kind running together:
+  // one's success is no answer to the other's failure.
+  it("a media job's failure stays when its sibling succeeds", () => {
+    const notices = () => [...container.querySelectorAll(".moss-notice-reason")].map((n) => n.textContent);
+    const media = (id: string, state: TaskState) =>
+      panel.handleJobUpdate(wire({ scope: "preview", kind: "asset_transform", id, parent: "100", state }));
+    panel.setStage("compiling");
+    media("101", { state: "failed", advisory: { scope: "File", severity: "Blocking", item: "a.png", what: "Could not read a.png", action: "None" } });
+    expect(notices()).toEqual(["Could not read a.png"]);
+    media("102", { state: "succeeded", receipt: null, advisories: [] });
+    expect(notices()).toEqual(["Could not read a.png"]);
+  });
+
   it("ignores non-Preview-scope Jobs (titlebar/inline own those)", () => {
     panel.handleJobUpdate(
       wire({

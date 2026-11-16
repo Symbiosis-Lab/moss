@@ -697,6 +697,26 @@ async fn a_nested_pages_images_and_cover_are_page_relative() {
     assert!(md.contains("![Poster](../assets/imported/"), "{md}");
 }
 
+/// An empty assets folder is a folder the build reports as holding nothing,
+/// a second message after an import that went well.
+#[tokio::test]
+async fn a_page_with_no_media_leaves_no_assets_folder() {
+    let mut server = test_server().await;
+    let _page = server
+        .mock("GET", "/plain/")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body("<html><body><article><p>Plain body, long enough to be extracted as content.</p></article></body></html>")
+        .create_async()
+        .await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let config = ScrapeConfig::new(format!("{}/plain/", server.url()), tmp.path());
+    let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+    assert_eq!(res.total_pages, 1);
+    assert!(!tmp.path().join("assets").exists(), "no media, no assets folder");
+}
+
 /// A lightbox image is both embedded and linked to itself. The media pass
 /// downloads it once; the wrapping link must point at that copy too, not stay
 /// a root-relative path to a file the folder does not serve.

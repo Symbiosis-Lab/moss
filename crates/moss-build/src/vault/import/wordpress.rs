@@ -70,7 +70,6 @@ pub(crate) async fn import(path: &Path, address: Option<&str>, folder: &Path, cl
     let (scrape, mut assets, mut pacer) = crawl.map_or_else(Default::default, |c| (c.result, c.assets, c.pacer));
 
     let dir = folder.join(ASSETS_SUBDIR);
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let media = MediaWriter { directory: &dir, prefix: ASSETS_PREFIX, client, referer: Some(base.as_str()) };
     let (landed, remote) = fetch_library(&export.items, &media, &mut assets, &mut pacer).await;
     if landed + remote > 0 {

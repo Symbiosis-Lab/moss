@@ -193,6 +193,8 @@ advisory_strings! {
     site_limit_closed_contact => { en: "Write to {contact} to hear when it reopens.", zh_hans: "如需了解何时恢复，请联系 {contact}。", zh_hant: "如需了解何時恢復，請聯絡 {contact}。", de: "Schreibe an {contact}, um zu erfahren, wann es wieder öffnet." },
     // ── Web import Job title ─────────────────────────────────────────────────
     import_from_host          => { en: "Importing from {host}",                           zh_hans: "正在从 {host} 导入",                               zh_hant: "正在從 {host} 匯入", de: "Import von {host}" },
+    import_from_host_pages_one  => { en: "Importing from {host} · 1 page",        zh_hans: "正在从 {host} 导入 · 1 页",        zh_hant: "正在從 {host} 匯入 · 1 頁",        de: "Import von {host} · 1 Seite" },
+    import_from_host_pages_many => { en: "Importing from {host} · {count} pages", zh_hans: "正在从 {host} 导入 · {count} 页", zh_hant: "正在從 {host} 匯入 · {count} 頁", de: "Import von {host} · {count} Seiten" },
 }
 
 /// Resolve an advisory/progress key to the process app language.

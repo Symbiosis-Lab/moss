@@ -973,6 +973,9 @@ async fn download_to(
             return Ok(Downloaded::TooLarge);
         }
 
+        // Made with its first file: an import with no media leaves no empty folder.
+        fs::create_dir_all(&assets_dir)
+            .map_err(|e| FetchError::message(format!("Failed to create assets directory: {e}")))?;
         let file_path = assets_dir.join(&filename);
         // allow:raw_write the author's own source content, not `.moss/build.nosync/` output — a downloaded media file
         fs::write(&file_path, &bytes)
