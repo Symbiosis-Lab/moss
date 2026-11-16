@@ -635,3 +635,42 @@ async fn a_lane_whose_index_cannot_be_published_retries_once_per_request_not_for
         "an idle lane must be parked on its channel, not spinning on a timer"
     );
 }
+
+// ── A lane-less build's index runs beside the background phase ──────────────
+
+/// The pages are read on the build thread, inside the stage-write span; the
+/// index is computed on a worker beside the media and the asset walk, and the
+/// seal still carries the bundle into the generation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_build_with_no_lane_indexes_beside_the_background_phase() {
+    use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+    let _serialize = search::lock_index_counter();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let mp = MossPaths::new(root);
+    std::fs::create_dir_all(mp.root()).unwrap();
+    std::fs::write(mp.config(), "[site]\nsearch = true\n").unwrap();
+    std::fs::write(root.join("index.md"), "---\ntitle: Garden\n---\n\n苔藓花园里的一条小路。\n").unwrap();
+    std::fs::write(root.join("notes.md"), "---\ntitle: Notes\n---\n\nGrowing seeds.\n").unwrap();
+
+    run_pipeline(PipelineConfig {
+        root: crate::vault::paths::VaultRoot::resolve(root),
+        progress: std::sync::Arc::new(crate::build::ports::reporter::NullReporter), plugins: PluginMode::Skip,
+        watch: false, start_server: false,
+        host: crate::build::ports::host::test_host_ports(),
+        trigger: BuildTrigger::Full, exits_after_build: true,
+        site_url_override: None, server_port: None, admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
+    }).await.expect("fixture builds");
+
+    let text = std::fs::read_to_string(mp.profile()).unwrap();
+    let record: serde_json::Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
+    let phases = record["phases"].as_array().unwrap();
+    let entry = |name: &str| phases.iter().find(|p| p["name"] == name).unwrap_or_else(|| panic!("missing {name}: {record}"));
+    assert!(entry("search_read").get("beside").is_none(), "the pages are read on the build thread: {record}");
+    assert_eq!(entry("search_index")["beside"], true, "the index runs beside the background phase: {record}");
+
+    let hashes: SiteHashes = serde_json::from_str(&std::fs::read_to_string(mp.hashes()).unwrap()).unwrap();
+    assert!(hashes.files.contains_key("_moss/pagefind/pagefind.js"), "the seal carries the bundle: {:?}", hashes.files.keys().collect::<Vec<_>>());
+    let generation = mp.generation_dir(&mp.current_generation_id().unwrap());
+    assert!(generation.join("_moss/pagefind/pagefind.js").is_file(), "and the generation ships it");
+}

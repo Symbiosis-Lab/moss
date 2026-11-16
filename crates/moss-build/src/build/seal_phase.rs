@@ -448,7 +448,7 @@ async fn run_materialize_phase(req: PendingSeal) {
         // debounces its own request (this phase already did), so it starts
         // indexing immediately rather than stacking a second idle wait on top
         // of this one. `Freshness::Now` (a process that exits when the build
-        // returns) already indexed synchronously inside the build.
+        // returns) indexed inside the build, before its seal.
         use crate::build::feeds::search_lane as lane;
         if matches!(freshness, lane::Freshness::Lane) && lane::enabled_for(&mp) {
             let want = lane::PageSet::of(&sealed.site_hashes_view().files);
