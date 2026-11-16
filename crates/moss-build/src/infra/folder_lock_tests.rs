@@ -186,6 +186,40 @@ fn a_waiter_on_a_removed_lock_file_holds_the_one_others_see() {
     });
 }
 
+/// A waiter keeps going however many times the file is replaced under it:
+/// each replacement is another holder finishing, so it is never a reason to
+/// give up. Here the file is replaced 40 times while one acquirer waits.
+#[cfg(unix)]
+#[test]
+fn a_waiter_outlasts_any_number_of_replaced_lock_files() {
+    with_moss_home(|_home| {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().to_path_buf();
+        let path = lock_path_named(&folder, "moderation").unwrap();
+        let open = |path: &Path| open_lock_file(path).unwrap();
+
+        let mut held = open(&path);
+        held.try_lock().unwrap();
+        let (waiting_tx, waiting_rx) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || acquire_named_noting_wait(&folder, "moderation", || waiting_tx.send(()).unwrap()));
+        waiting_rx.recv().unwrap();
+        for _ in 0..40 {
+            // Another holder takes a fresh file before the old one is released,
+            // so the waiter wakes on a file that is no longer the lock.
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            std::fs::remove_file(&path).unwrap();
+            let next = open(&path);
+            next.try_lock().unwrap();
+            drop(std::mem::replace(&mut held, next));
+        }
+        std::fs::remove_file(&path).unwrap();
+        drop(held);
+
+        let acquired = waiter.join().unwrap();
+        assert!(acquired.is_ok(), "the waiter gave up: {acquired:?}");
+    });
+}
+
 /// The promotion epoch lives in the folder's build output, so a folder that
 /// is gone leaves nothing under `~/.moss`.
 #[test]

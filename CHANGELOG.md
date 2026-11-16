@@ -12,6 +12,7 @@ All notable changes to moss will be documented here.
 - Bold text and headings are bold in a font the theme hosts as Regular and Bold only. moss asks for them at weight 480, which a browser draws in Regular when the family has no face from 401 to 500; the build now sets `--moss-font-weight-strong` and `--moss-font-heading-weight` to the family's lightest face above 500 unless the theme sets them. `--moss-font-weight-strong` is new: the weight of `strong` and `b`, a comment's author and a callout's title.
 - A captioned picture without alt text that opens in the picture viewer takes its caption as its alt text. It was named by an `aria-label` while keeping `alt=""`, which marks a picture as decorative, so accessibility checkers reported a focusable picture marked presentational.
 - In a folder whose page sets `url:`, an HTML page you delete is named before a publish, in the dry run and on the receipt, and a picture keeps its old sizes answering while it stays. moss looked for these files under the folder's own name instead of the address the folder is served at. A page deleted before the first publish with this version is not listed yet.
+- Hiding many comments at once while another hide or a sync is writing them finishes the whole list. Since 0.15.25 it could stop partway with "the file kept changing under the lock".
 
 ## [0.15.25] - 2026-11-16
 

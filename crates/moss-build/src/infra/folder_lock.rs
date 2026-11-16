@@ -26,10 +26,10 @@
 //! a lock on a different unlinked inode, unable to see each other.
 //!
 //! The file lives only while it is held. The holder unlinks it before
-//! unlocking, and [`acquire_named_noting_wait`] checks, once it holds a lock,
-//! that the path still names the file it locked, opening again if not. A
-//! waiter that was blocked on the removed file therefore moves to the new
-//! one instead of holding a lock nobody else can see. So `~/.moss/locks`
+//! unlocking, and an acquirer checks, once it holds a lock, that the path
+//! still names the file it locked, opening again if not, as often as it
+//! takes. A waiter that was blocked on the removed file therefore moves to
+//! the new one instead of holding a lock nobody else can see. So `~/.moss/locks`
 //! holds only what is held now, however many temporary folders are built.
 //! On Windows, where an open file cannot be replaced this way, the file
 //! stays.
@@ -182,57 +182,62 @@ pub fn acquire_named(folder: &Path, name: &str) -> Result<Held, String> {
 pub fn acquire_named_noting_wait(folder: &Path, name: &str, on_wait: impl FnOnce()) -> Result<Held, String> {
     let path = lock_path_named(folder, name)?;
     let mut on_wait = Some(on_wait);
-    for _ in 0..REOPENS {
-        let file = open_lock_file(&path)?;
-        match file.try_lock() {
-            Ok(()) => {}
-            Err(std::fs::TryLockError::WouldBlock) => {
-                if let Some(on_wait) = on_wait.take() {
-                    if name == "build" {
-                        log::info!("waiting for another moss process building this folder");
-                    } else {
-                        log::info!("waiting for another moss process holding the {name} lock on this folder");
-                    }
-                    on_wait();
-                }
-                let waited = std::time::Instant::now();
-                file.lock().map_err(|e| format!("lock {}: {e}", path.display()))?;
-                log::info!("waited {:?} for the {name} lock on this folder", waited.elapsed());
+    let held = hold(&path, |file| {
+        if let Some(on_wait) = on_wait.take() {
+            if name == "build" {
+                log::info!("waiting for another moss process building this folder");
+            } else {
+                log::info!("waiting for another moss process holding the {name} lock on this folder");
             }
-            Err(e) => return Err(format!("lock {}: {e}", path.display())),
+            on_wait();
         }
-        if still_named(&file, &path) {
-            return Ok(Held { file, path });
-        }
-    }
-    Err(unstable(&path))
+        let waited = std::time::Instant::now();
+        file.lock().map_err(|e| format!("lock {}: {e}", path.display()))?;
+        log::info!("waited {:?} for the {name} lock on this folder", waited.elapsed());
+        Ok(true)
+    })?;
+    Ok(held.expect("a blocking acquire always ends holding the lock"))
 }
 
 /// The lock named `name` on `folder` if nobody holds it, `None` if someone
 /// does. Never waits.
 pub fn try_acquire_named(folder: &Path, name: &str) -> Result<Option<Held>, String> {
-    let path = lock_path_named(folder, name)?;
-    for _ in 0..REOPENS {
-        let file = open_lock_file(&path)?;
-        match file.try_lock() {
-            Ok(()) => {}
-            Err(std::fs::TryLockError::WouldBlock) => return Ok(None),
-            Err(e) => return Err(format!("lock {}: {e}", path.display())),
-        }
-        if still_named(&file, &path) {
-            return Ok(Some(Held { file, path }));
-        }
-    }
-    Err(unstable(&path))
+    hold(&lock_path_named(folder, name)?, |_| Ok(false))
 }
 
-/// How many times an acquire reopens a lock file that moved under it. Each
-/// reopen means another holder released in between; a file system whose
-/// inode numbers are not stable would otherwise never stop.
-const REOPENS: usize = 16;
-
-fn unstable(path: &Path) -> String {
-    format!("lock {}: the file kept changing under the lock, so it cannot be held", path.display())
+/// Opens and locks `path` until the file it locked is still the one at
+/// `path`. When another holder has the lock, `contended` either waits for it
+/// (`true`) or gives up (`false`, so `None`).
+///
+/// There is no cap on reopening: a lock file stops being named only when
+/// its holder released it, so every reopen follows someone else's progress.
+/// A run of reopens without end can only mean a file system whose file
+/// identity is unstable: after a thousand it is logged once, and each further
+/// reopen waits 10 ms so it costs no CPU, rather than failing the lock.
+fn hold(path: &Path, mut contended: impl FnMut(&std::fs::File) -> Result<bool, String>) -> Result<Option<Held>, String> {
+    let mut reopens = 0u32;
+    loop {
+        let file = open_lock_file(path)?;
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => {
+                if !contended(&file)? {
+                    return Ok(None);
+                }
+            }
+            Err(e) => return Err(format!("lock {}: {e}", path.display())),
+        }
+        if still_named(&file, path) {
+            return Ok(Some(Held { file, path: path.to_path_buf() }));
+        }
+        reopens = reopens.saturating_add(1);
+        if reopens == 1000 {
+            log::warn!("lock {}: reopened {reopens} times, still not the file at that path", path.display());
+        }
+        if reopens >= 1000 {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
 }
 
 fn open_lock_file(path: &Path) -> Result<std::fs::File, String> {
