@@ -16,6 +16,8 @@ All notable changes to moss will be documented here.
 
 - Under `moss build --serve --watch` and in the editor, a picture added while the preview is open shows as its original until its smaller sizes are made. It showed as a broken picture until then.
 
+- The lock files that earlier versions of moss left in `~/.moss/locks`, one for every folder they ever built, are removed in the background after a build, a few hundred at a time. A machine that runs many builds could hold about a million of them.
+
 ## [0.15.25] - 2026-11-16
 
 ### Fixed

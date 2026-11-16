@@ -240,6 +240,73 @@ fn hold(path: &Path, mut contended: impl FnMut(&std::fs::File) -> Result<bool, S
     }
 }
 
+/// Remove, on a background thread, every file in `<moss_home>/locks` that no
+/// process holds. Since a released lock unlinks itself, an unheld file there
+/// is one a moss that predates that left behind, or an old `.epoch` record:
+/// litter, however many there are. A held lock fails the `flock` and stays.
+/// The directory is its own progress record, so a sweep cut off by the
+/// process exiting resumes on the next one; once the litter is gone a sweep
+/// costs one short directory read. One sweep at a time per process.
+pub fn spawn_litter_sweep() {
+    static SWEEPING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let Ok(dir) = crate::infra::home::moss_home().map(|home| home.join("locks")) else { return };
+    if SWEEPING.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        return;
+    }
+    let spawned = std::thread::Builder::new().name("moss-lock-sweep".into()).spawn(move || {
+        #[cfg(target_os = "macos")]
+        crate::infra::qos::set_background(true);
+        let removed = sweep_litter(&dir, SWEEP_BATCH, SWEEP_PAUSE);
+        if removed > 0 {
+            log::info!("removed {removed} stale lock files from {}", dir.display());
+        }
+        SWEEPING.store(false, std::sync::atomic::Ordering::Release);
+    });
+    if spawned.is_err() {
+        SWEEPING.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// Files unlinked between pauses. Each unlink is an event the file-system
+/// indexers (`fseventsd`, Spotlight) process, and a pile of a million removed
+/// in one go keeps them busy for minutes.
+const SWEEP_BATCH: usize = 256;
+const SWEEP_PAUSE: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// [`spawn_litter_sweep`]'s pass over `dir`, returning how many files it
+/// removed. Streams the directory: it never lists every name at once.
+#[cfg(unix)]
+fn sweep_litter(dir: &Path, batch: usize, pause: std::time::Duration) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|t| t.is_file()) {
+            continue;
+        }
+        let path = entry.path();
+        // allow:raw_write opens an existing lock file under ~/.moss/locks to lock it, never creates one
+        let Ok(file) = std::fs::OpenOptions::new().read(true).write(true).open(&path) else { continue };
+        if file.try_lock().is_err() || !still_named(&file, &path) {
+            continue;
+        }
+        // The release path: unlinked while held, so an acquirer that opened
+        // it meanwhile finds it gone and opens a new one.
+        drop(Held { file, path });
+        removed += 1;
+        if removed % batch == 0 {
+            std::thread::sleep(pause);
+        }
+    }
+    removed
+}
+
+/// A file stays open while it is locked on Windows, so a lock file there is
+/// never removed and there is nothing to sweep.
+#[cfg(not(unix))]
+fn sweep_litter(_dir: &Path, _batch: usize, _pause: std::time::Duration) -> usize {
+    0
+}
+
 fn open_lock_file(path: &Path) -> Result<std::fs::File, String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;

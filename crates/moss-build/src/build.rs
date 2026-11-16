@@ -2212,10 +2212,10 @@ async fn advertise_sealed(
     handed_back
 }
 
-/// Retain generations and sweep the content-addressed cache after a successful
-/// materialize. Called from `advertise_sealed`, the one seal tail on every
-/// path — the CLI's hand-copied predecessor had no retention call
-/// at all, so `moss build` used to grow `generations/` without bound.
+/// Retain generations, sweep the content-addressed cache and start the lock
+/// folder's litter sweep after a successful materialize. Called from
+/// `advertise_sealed`, the one seal tail on every path, so `moss build` keeps
+/// `generations/` bounded too.
 ///
 /// Both collectors are non-fatal: a GC failure never invalidates a build that
 /// already succeeded.
@@ -2245,6 +2245,7 @@ pub(crate) fn collect_build_store(
         log::info!("generation GC failed (non-fatal): {}", e);
     }
     store_gc::maybe_gc_cache(mp);
+    crate::infra::folder_lock::spawn_litter_sweep();
 }
 
 

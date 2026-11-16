@@ -101,13 +101,13 @@ fn pacing_lowers_a_thread_to_background_qos_while_hidden_and_restores_it() {
         assert_eq!(unsafe { libc::pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0) }, 0);
 
         gate.pace_this_thread();
-        assert_eq!(super::qos::current().0 as u32, QOS_CLASS_BACKGROUND as u32);
+        assert_eq!(crate::infra::qos::current().0 as u32, QOS_CLASS_BACKGROUND as u32);
         gate.pace_this_thread();
-        assert_eq!(super::qos::current().0 as u32, QOS_CLASS_BACKGROUND as u32);
+        assert_eq!(crate::infra::qos::current().0 as u32, QOS_CLASS_BACKGROUND as u32);
 
         tx.send_replace(Cadence::Live);
         gate.pace_this_thread();
-        assert_eq!(super::qos::current().0 as u32, QOS_CLASS_USER_INITIATED as u32);
+        assert_eq!(crate::infra::qos::current().0 as u32, QOS_CLASS_USER_INITIATED as u32);
     })
     .join()
     .unwrap();
@@ -130,7 +130,7 @@ async fn pacing_leaves_a_thread_alone_while_a_publish_is_in_flight() {
             // SAFETY: the calling thread's own QoS.
             assert_eq!(unsafe { libc::pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0) }, 0);
             gate.pace_this_thread();
-            super::qos::current().0 as u32
+            crate::infra::qos::current().0 as u32
         })
         .join()
         .unwrap())

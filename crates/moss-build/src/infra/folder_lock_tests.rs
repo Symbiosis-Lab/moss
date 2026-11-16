@@ -262,3 +262,60 @@ fn a_promoted_build_leaves_nothing_in_the_locks_folder() {
         }
     });
 }
+
+const HOLD_ENV: &str = "MOSS_TEST_HOLD_LOCK_FILE";
+const CHILD_TEST: &str = "infra::folder_lock::folder_lock_tests::child_lock_holder";
+
+/// Not a test of its own: [`the_sweep_leaves_a_lock_another_process_holds`]
+/// runs this binary again with only this test, as the process that holds the
+/// lock. It holds until it is killed.
+#[test]
+fn child_lock_holder() {
+    let Some(path) = std::env::var_os(HOLD_ENV) else { return };
+    let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).unwrap();
+    file.lock().unwrap();
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(60));
+    }
+}
+
+/// The sweep removes lock files nobody holds and leaves the one another
+/// process holds: deleting that one would let a second build take the
+/// folder while the first is still writing it.
+#[cfg(unix)]
+#[test]
+fn the_sweep_leaves_a_lock_another_process_holds() {
+    let dir = tempfile::tempdir().unwrap();
+    let held = dir.path().join("held.build");
+    let litter: Vec<_> = (0..5).map(|i| dir.path().join(format!("gone{i}.build"))).chain([dir.path().join("old.epoch")]).collect();
+    for path in &litter {
+        std::fs::write(path, "").unwrap();
+    }
+
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", CHILD_TEST, "--test-threads=1"])
+        .env(HOLD_ENV, &held)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("run this test binary again as the holding process");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let locked = std::fs::File::open(&held).is_ok_and(|f| matches!(f.try_lock(), Err(std::fs::TryLockError::WouldBlock)));
+        if locked {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "the child never took the lock; has {CHILD_TEST} moved?");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+
+    let removed = sweep_litter(dir.path(), 2, std::time::Duration::ZERO);
+    let held_survived = held.exists();
+    child.kill().unwrap();
+    child.wait().unwrap();
+
+    assert!(held_survived, "the sweep removed a lock another process holds");
+    assert_eq!(removed, litter.len());
+    let left: Vec<_> = litter.iter().filter(|p| p.exists()).collect();
+    assert!(left.is_empty(), "the sweep left unheld files: {left:?}");
+}
