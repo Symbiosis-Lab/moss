@@ -10,6 +10,7 @@
  * frame's options; any other segment (a width, a caption) is left alone.
  */
 
+import { widthFromPipe } from '@symbiosis-lab/moss-syntax/cm6';
 import { heroAttrs, type HeroAttr } from './hero-opener';
 
 export interface Point { x: number; y: number }
@@ -90,6 +91,15 @@ function tokens(segment: string): Token[] {
 function isKeyword(t: Token): boolean {
   const w = t.text.toLowerCase();
   return t.position || FIT.has(w) || ALIGN.has(w) || w.startsWith('color=');
+}
+
+/**
+ * Whether a pipe segment is a caption, as moss-core sorts it: one that is not
+ * made only of width, placement and frame words. An empty one is the caption's place.
+ */
+export function isCaptionSegment(segment: string): boolean {
+  const rest = segment.split(/\s+/).filter((w) => w && !widthFromPipe(w));
+  return rest.length > 0 ? frameTokens(rest.join(' ')) === null : segment.trim() === '';
 }
 
 /** A segment of nothing but frame keywords; anything else is a width or a caption. */

@@ -45,11 +45,15 @@ interface FocusState {
   shown: { frameLine: number; hero: boolean; picture: HeroPicture } | null;
   /** The line Escape closed; the caret has to leave it to bring the instrument back. */
   dismissed: number | null;
+  /** The line "Set focus point" asked for: its dot is drawn even where this width shows the picture whole, since wider ones crop it. */
+  asked: number | null;
   frame: Frame | null;
   overlay: Overlay | null;
 }
 
 const frameEffect = StateEffect.define<Frame>();
+/** Put the keyboard on the dot of the picture on this line once it is drawn: the preview menu's "Set focus point". */
+export const focusDotEffect = StateEffect.define<number>();
 const dismissEffect = StateEffect.define<number>();
 
 /** A picture the page shows whole has nothing to crop, so no dot. Until the page has answered, only a hero (always a crop) shows one. */
@@ -169,26 +173,28 @@ class FocusOverlay {
 
 export function focusPointExtension(opts: FocusPointOptions): Extension {
   const field = StateField.define<FocusState>({
-    create: () => ({ shown: null, dismissed: null, frame: null, overlay: null }),
+    create: () => ({ shown: null, dismissed: null, asked: null, frame: null, overlay: null }),
     update(prev, tr) {
       const parsed = syntaxTree(tr.state) !== syntaxTree(tr.startState);
       if (!tr.docChanged && !tr.selection && !tr.effects.length && !parsed) return prev;
       const at = tr.state.field(pictureAtCaretField);
       const picture = at?.picture ?? null;
-      let { dismissed, frame } = prev;
+      let { dismissed, asked, frame } = prev;
       if (picture?.line !== dismissed) dismissed = null;
+      if (picture?.line !== asked) asked = null;
       if (at?.frameLine !== frame?.line) frame = null;
       for (const e of tr.effects) {
         if (e.is(frameEffect)) frame = e.value;
         else if (e.is(dismissEffect)) dismissed = e.value;
+        else if (e.is(focusDotEffect) && e.value === picture?.line) asked = e.value;
       }
       const shown = at && picture && picture.line !== dismissed ? { frameLine: at.frameLine, hero: at.heroLine !== null, picture } : null;
       const img = shown && opts.resolveImage?.(shown.picture.target);
       const imageAspect = img && img.width && img.height ? img.width / img.height : 0;
-      const overlay = shown && img && cropped(shown.hero, imageAspect, frame)
+      const overlay = shown && img && (cropped(shown.hero, imageAspect, frame) || asked === shown.picture.line)
         ? { line: shown.picture.line, imageAspect, frameAspect: frame?.aspect ?? null, at: shown.picture.position ?? CENTER }
         : null;
-      return { shown, dismissed, frame, overlay };
+      return { shown, dismissed, asked, frame, overlay };
     },
   });
 
@@ -199,6 +205,8 @@ export function focusPointExtension(opts: FocusPointOptions): Extension {
     private live: string | null = null;
     private dirty = false;
     private gone = false;
+    /** The line whose dot takes the keyboard when it is drawn; dropped once the caret leaves that picture. */
+    private wantDot: number | null = null;
     /** The written crop the shell is holding: its line key, and the end of the picture's line, mapped through later edits. */
     private held: { line: number; to: number } | null = null;
     private readonly off: () => void;
@@ -211,6 +219,8 @@ export function focusPointExtension(opts: FocusPointOptions): Extension {
 
     update(u: ViewUpdate): void {
       if (this.held && u.docChanged) this.letGoIfMoved(u);
+      for (const tr of u.transactions) for (const e of tr.effects) if (e.is(focusDotEffect)) this.wantDot = e.value;
+      if (u.state.field(field).shown?.picture.line !== this.wantDot) this.wantDot = null;
       this.sync();
     }
 
@@ -225,6 +235,10 @@ export function focusPointExtension(opts: FocusPointOptions): Extension {
         write: (found) => {
           if (this.gone || !found?.block) this.overlay.hide();
           else this.overlay.show(found.block, found.shape);
+          if (found?.block && this.wantDot === found.shape.line) {
+            this.wantDot = null;
+            this.overlay.dot.focus();
+          }
         },
       });
     }

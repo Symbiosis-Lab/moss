@@ -397,6 +397,7 @@ tier! {
         resolve_page_source => reads::resolve_page_source,
         editor_reference_card => reads::editor_reference_card,
         wikilink_completions => reads::wikilink_completions,
+        asset_ref_for_path => reads::asset_ref_for_path,
         list_section_folders => reads::list_section_folders,
         resolve_url_for_folder => reads::resolve_url_for_folder,
         resolve_expected_url_for_file => reads::resolve_expected_url_for_file,

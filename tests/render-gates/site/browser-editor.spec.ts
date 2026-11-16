@@ -67,6 +67,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gatePort } from '../../../playwright/gate-ports';
 import { MOSS_BIN } from '../../e2e/helpers/scratch-site';
+import { png } from '../../e2e/helpers/contents-ruler-site';
 import { buildPreviewCtxEntries, type PreviewCtxPayload } from '../../../packages/moss-ui/src/ui/preview/preview-context-menu';
 
 // Event pages, each linking to the next: the forms a person writes by hand,
@@ -83,6 +84,17 @@ const ONE_PAGE_PDF =
 
 const CASE_PAGE = '---\ntitle: Case\n---\nA case.\n\n' +
   [1, 2, 3, 4, 5, 6].map((n) => `![[slide-0${n}.jpg|800x450]]\n\n`).join('') + '![[chart.jpg]]\n\n![](here.png)\n\nThe end.\n';
+// Every kind of picture the preview's menu tells apart, at known body lines:
+// a hero (fence on 1), a body picture (5), two pictures on one line (7),
+// a grid that crops its cells (10, 12, 14) and a listing card's cover (17).
+const PICTURES = ['---', 'title: Pictures', '---',
+  ':::hero {image=wide.png max-height=200px}', '# Pictures', ':::', '',
+  '![A room](room.png)', '',
+  '![Twin|](sq.png) ![Pair|](wide.png)', '',
+  ':::grid 3', '![One|](room.png)', '+++', '![Two|](wide.png)', '+++', '![Three|](room.png)', ':::', '',
+  '![[picnotes/|style:summary]]', ''].join('\n');
+const PICTURE_MENU = 'a right-click on a picture in the preview';
+
 const ONE_PIXEL_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
 
 let site = '';
@@ -91,7 +103,7 @@ let server: ChildProcess | undefined;
 let output = '';
 
 // One server a test: its sign-in link opens once.
-test.beforeEach(async () => {
+test.beforeEach(async ({}, testInfo) => {
   output = '';
   site = realpathSync(mkdtempSync(join(tmpdir(), 'moss-browser-editor-site-')));
   home = realpathSync(mkdtempSync(join(tmpdir(), 'moss-browser-editor-home-')));
@@ -122,6 +134,16 @@ test.beforeEach(async () => {
   writeFileSync(join(site, 'drafts', 'd.md'), '---\ntitle: D\n---\n![](gone-a.png)\n\n![](pics/gone-b.png)\n');
   mkdirSync(join(site, 'zh-hans'));
   writeFileSync(join(site, 'zh-hans', 'index.md'), '---\ntitle: 花园\n---\n你好，花园。\n');
+  // Only the picture menu's tests: their five rows make the open file tree
+  // tall enough that the others' editor is too short to keep a revealed line in view.
+  if (testInfo.titlePath.includes(PICTURE_MENU)) {
+    writeFileSync(join(site, 'pictures.md'), PICTURES);
+    writeFileSync(join(site, 'room.png'), png(60, 90, [150, 110, 90]));
+    writeFileSync(join(site, 'wide.png'), png(120, 60, [90, 120, 150]));
+    writeFileSync(join(site, 'sq.png'), png(60, 60, [120, 150, 90]));
+    mkdirSync(join(site, 'picnotes'));
+    writeFileSync(join(site, 'picnotes', 'first.md'), '---\ntitle: First\ncover: ../room.png\n---\nA first note.\n');
+  }
   writeFileSync(join(site, 'about.md'), '---\ntitle: About\ntranslationKey: about\n---\nAbout the garden. [Talk](talk.md)\n');
   writeFileSync(join(site, 'zh-hans', '关于.md'), '---\ntitle: 关于\ntranslationKey: about\n---\n关于花园。\n');
   // A published address gives the site its feed, which every page links as
@@ -704,11 +726,121 @@ test('the address copied from a page just made carries no reload stamp', async (
   const payload = await rightClick;
   expect(payload.page).toContain('_t=');
   const entries = buildPreviewCtxEntries(payload, {
-    siteUrl: null, canEdit: false, pageFile: null,
+    siteUrl: null, canEdit: false, pageFile: null, showInternal: false,
     openTarget: () => {}, openStyle: () => {}, openExternal: () => {},
     copy: (text) => copied.push(text),
   });
   const copyPage = entries.find((e) => 'action' in e && e.label === 'Copy page address') as { action(): void };
   copyPage.action();
   expect(copied).toEqual(['/zh-hans/untitled/']);
+});
+
+test.describe(PICTURE_MENU, () => {
+  /** The editor beside the pictures page, with the shell's clipboard and browser opener recorded. */
+  async function onPictures(page: Page) {
+    const frames = await openEditor(page);
+    await frames.shell.evaluate(() => {
+      const w = window as unknown as { __copied: string[]; __opened: string[] };
+      w.__copied = [];
+      w.__opened = [];
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => void w.__copied.push(text) } });
+      window.open = (url) => (w.__opened.push(String(url)), null);
+    });
+    await frames.preview.evaluate(() => location.assign('/pictures/'));
+    await frames.preview.waitForSelector('section.moss-hero img', { timeout: 30_000 });
+    await expect(frames.editor.locator('.cm-content')).toContainText('![A room](room.png)', { timeout: 15_000 });
+    return frames;
+  }
+
+  /** Right-click at a point of `selector` in the preview; the menu's row labels, in order. */
+  async function menuOn(f: { shell: Frame; preview: Frame }, selector: string, position = { x: 6, y: 6 }) {
+    await f.preview.locator(selector).first().click({ button: 'right', position });
+    const menu = f.shell.locator('.ctx-menu[role="menu"]');
+    await expect(menu).toBeVisible();
+    return menu.locator('.ctx-item .ctx-label').allTextContents();
+  }
+  const row = (shell: Frame, label: string) => shell.locator('.ctx-menu .ctx-item', { hasText: label }).first().click();
+  const tail = ['Copy picture address', 'Copy page address', 'Open in browser'];
+  const selectedText = (editor: Frame) => editor.evaluate(() => getSelection()?.toString() ?? '');
+  const caretLine = (editor: Frame) => editor.evaluate(() => {
+    const at = getSelection()?.anchorNode;
+    return (at instanceof Element ? at : at?.parentElement)?.closest('.cm-line')?.textContent ?? '';
+  });
+  const revealed = (editor: Frame) => editor.evaluate(() =>
+    [...document.querySelectorAll('.seg.bc, [aria-selected="true"]')].map((e) => e.getAttribute('data-path') ?? e.textContent ?? ''));
+
+  test('a body picture: each row once, each doing what it says, by keyboard too', async ({ page }) => {
+    const { shell, editor, preview } = await onPictures(page);
+    const body = 'figure.moss-image img';
+    expect(await menuOn({ shell, preview }, body)).toEqual(['Replace picture…', 'Edit description', 'Show in file list', 'Edit this page', ...tail]);
+
+    // The menu has the keyboard: arrows move through it and Escape closes it.
+    await expect(shell.locator('.ctx-menu .ctx-item').first()).toBeFocused();
+    await page.keyboard.press('ArrowDown');
+    await expect(shell.locator('.ctx-menu .ctx-item').nth(1)).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(shell.locator('.ctx-menu')).toHaveCount(0);
+
+    await menuOn({ shell, preview }, body);
+    await row(shell, 'Edit description');
+    await expect.poll(() => selectedText(editor)).toBe('A room');
+
+    await menuOn({ shell, preview }, body);
+    await row(shell, 'Edit this page');
+    await expect.poll(() => caretLine(editor)).toContain('![A room](room.png)');
+
+    await menuOn({ shell, preview }, body);
+    await row(shell, 'Show in file list');
+    await expect.poll(() => revealed(editor)).toContain('room.png');
+
+    await menuOn({ shell, preview }, body);
+    await row(shell, 'Copy picture address');
+    await menuOn({ shell, preview }, body);
+    await row(shell, 'Copy page address');
+    await menuOn({ shell, preview }, body);
+    await row(shell, 'Open in browser');
+    const recorded = await shell.evaluate(() => {
+      const w = window as unknown as { __copied: string[]; __opened: string[] };
+      return { __copied: w.__copied, __opened: w.__opened };
+    });
+    expect(recorded.__copied).toEqual([expect.stringMatching(/^\/room[^/]*\.(png|webp)$/), '/pictures/']);
+    expect(recorded.__opened).toEqual([expect.stringMatching(/\/pictures\/$/)]);
+
+    await menuOn({ shell, preview }, body);
+    const chooser = page.waitForEvent('filechooser');
+    await row(shell, 'Replace picture…');
+    await (await chooser).setFiles({ name: 'door.png', mimeType: 'image/png', buffer: png(40, 40, [60, 60, 60]) });
+    await expect(editor.locator('.cm-content')).toContainText('![A room](door.png)', { timeout: 15_000 });
+  });
+
+  test('a picture a grid crops offers its focus point, and the row puts the keyboard on it', async ({ page }) => {
+    const { shell, editor, preview } = await onPictures(page);
+    expect(await menuOn({ shell, preview }, '.moss-grid-card img')).toEqual(['Replace picture…', 'Set focus point', 'Edit description', 'Show in file list', 'Edit this page', ...tail]);
+    await row(shell, 'Set focus point');
+    await expect.poll(() => editor.evaluate(() => document.activeElement?.classList.contains('cm-focus-point-dot') ?? false), { timeout: 15_000 }).toBe(true);
+  });
+
+  test("a hero's picture: no description row, and its focus point", async ({ page }) => {
+    const { shell, editor, preview } = await onPictures(page);
+    expect(await menuOn({ shell, preview }, 'section.moss-hero')).toEqual(['Replace picture…', 'Set focus point', 'Show in file list', 'Edit this page', ...tail]);
+    await row(shell, 'Set focus point');
+    await expect.poll(() => editor.evaluate(() => document.activeElement?.classList.contains('cm-focus-point-dot') ?? false), { timeout: 15_000 }).toBe(true);
+  });
+
+  test('of two pictures on one line, the row acts on the one clicked', async ({ page }) => {
+    const { shell, editor, preview } = await onPictures(page);
+    expect(await menuOn({ shell, preview }, '.moss-gallery-item >> nth=1')).toEqual(['Replace picture…', 'Edit description', 'Show in file list', 'Edit this page', ...tail]);
+    await row(shell, 'Edit description');
+    await expect.poll(() => selectedText(editor)).toBe('Pair');
+    await menuOn({ shell, preview }, '.moss-gallery-item >> nth=0');
+    await row(shell, 'Show in file list');
+    await expect.poll(() => revealed(editor)).toContain('sq.png');
+  });
+
+  test("a listing card's cover is another page's: no picture rows, and its edit row opens that page", async ({ page }) => {
+    const { shell, editor, preview } = await onPictures(page);
+    expect(await menuOn({ shell, preview }, '.moss-card img')).toEqual(['Edit first page', 'Copy link address', ...tail]);
+    await row(shell, 'Edit first page');
+    await expect(editor.locator('.cm-content')).toContainText('A first note.', { timeout: 15_000 });
+  });
 });

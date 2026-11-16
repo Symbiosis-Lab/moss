@@ -4,7 +4,14 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Right-clicking a picture in the preview offers Replace picture…, Set focus point (where the page crops it), Edit description and Show in file list, each acting on that picture in the editor, then Edit this page at the picture's line, Copy picture address, the page's address and Open in browser. Of two pictures on one line, the one clicked is the one acted on, and a picture in a gallery is reached too. The browser editor shows the same menu.
+
 ### Fixed
+
+- Replace… on a picture works in the browser editor: the picked file is uploaded and its reference written. It used to upload the file and leave the reference as it was.
+- A right-click on a picture no longer offers the grid's settings or the theme rules that style it; the grid's row (now Columns) stays for the grid's own area, and theme rules show while internal files are shown.
 
 - In a grid listing, a folder card whose count is hidden (`children_count: false`) shows its folder's `description:` under the title, as a page's card does. It used to show the title alone.
 - A theme stylesheet brought in by `@import` has the fonts and pictures it refers to published under names that change with the file, like those in `style.css`, and `@import "fonts.css"` without `url()` is renamed the same way. Such a sheet kept pointing at the plain names, so a font replaced behind it could be answered from an old copy.

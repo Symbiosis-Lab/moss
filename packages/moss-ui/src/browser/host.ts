@@ -8,6 +8,7 @@
 import { fillHost, type Bus, type UiHost } from '../ui/host';
 import * as carrier from './carrier';
 import { pickAndUpload } from './upload';
+import { engine } from '../ui/engine';
 
 /** Rejects when the open did not happen: a blocked popup is a real failure. */
 async function openInTab(url: string): Promise<void> {
@@ -24,6 +25,10 @@ export function browserHost(bus: Bus): UiHost {
     sourceAssetBase: '/__moss/source',
     openExternal: openInTab,
     pickFiles: pickAndUpload,
+    assetRefForPath: async (absPath, fromPage) => {
+      const r = await engine.assetRefForPath(absPath, fromPage);
+      return r.status === 'ok' ? r.data : null;
+    },
   };
 }
 

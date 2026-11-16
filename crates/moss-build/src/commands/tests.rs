@@ -25,10 +25,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         ("list_tree", json!({ "path": "/ignored", "showInternal": true })),
         ("get_file_info", json!({ "filePath": "a.md" })),
-        (
-            "compute_heading_state",
-            json!({ "filePath": "a.md", "frontmatter": {}, "body": "" }),
-        ),
+        ("compute_heading_state", json!({ "filePath": "a.md", "frontmatter": {}, "body": "" })),
         ("describe_source_role", json!({ "filePath": "a.md" })),
         ("page_facts", json!({ "filePath": "a.md" })),
         ("resolve_url_for_file", json!({ "filePath": "a.md" })),
@@ -46,10 +43,8 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("resolve_page_source", json!({ "urlPath": "/posts/a/" })),
         ("set_image_width", json!({ "imageMd": "![](i.png)", "width": "wide" })),
         ("editor_reference_card", json!({ "fromFile": "b.md", "target": "a.md" })),
-        (
-            "wikilink_completions",
-            json!({ "prefix": "a", "fromFile": "b.md", "syntax": "wikilink", "page": null, "allowedKinds": null }),
-        ),
+        ("wikilink_completions", json!({ "prefix": "a", "fromFile": "b.md", "syntax": "wikilink", "page": null, "allowedKinds": null })),
+        ("asset_ref_for_path", json!({ "absPath": "/ignored/a.png", "fromPage": "b.md" })),
         ("list_section_folders", json!({})),
         ("resolve_url_for_folder", json!({ "folderPath": "posts" })),
         ("resolve_expected_url_for_file", json!({ "filePath": "a.md" })),
@@ -347,6 +342,10 @@ async fn the_editor_reads_answer_from_the_open_site() {
     .await)
     .await;
     assert!(!rows.is_empty(), "the folder's pages complete");
+    // allow:raw_write test fixture picture
+    std::fs::write(root.join("posts/door.png"), b"png").unwrap();
+    let picked: Value = ok(read("asset_ref_for_path", json!({ "absPath": root.join("posts/door.png"), "fromPage": root.join("posts/c.md") })).await).await;
+    assert_eq!(picked["insert"], json!("door.png"), "{picked}");
     let folders: Vec<String> = ok(read("list_section_folders", json!({})).await).await;
     assert_eq!(folders, ["drafts", "posts"]);
     let expected: Option<String> = ok(read("resolve_expected_url_for_file", json!({ "filePath": "a.md" })).await).await;

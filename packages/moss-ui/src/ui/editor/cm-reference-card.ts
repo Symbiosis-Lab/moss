@@ -428,13 +428,7 @@ export function assetCardProvider(
           view.dispatch({ changes: { from: target.from, to: target.to, insert: value } });
         } }],
         actions: [
-          { label: t(missing ? 'problem.choose_file' : 'reference.replace'), run: async (view) => {
-            const picked = await pickAssetRef({
-              pagePath: pickOpts.pagePath, projectRoot: pickOpts.projectRoot,
-              kinds: () => null, afterImport: undefined,
-            });
-            if (picked) view.dispatch({ changes: { from: target.from, to: target.to, insert: picked.insert } });
-          } },
+          { label: t(missing ? 'problem.choose_file' : 'reference.replace'), run: (view) => replaceAsset(view, target, pickOpts) },
           // A file that is not there has no width to set; the way out is to drop the line.
           ...(missing ? [{ label: t('problem.remove'), run: (view: EditorView) => removeEmbed(view, embed) }] : [
             ...WIDTH_PRESETS.map((pct) => ({
@@ -447,6 +441,16 @@ export function assetCardProvider(
     }
     return null;
   };
+}
+
+/** Replace…: the picked asset's reference is written over the picture's path, its brackets and options kept. */
+export async function replaceAsset(
+  view: EditorView,
+  target: { from: number; to: number },
+  opts: { pagePath: () => string; projectRoot: () => string | null },
+): Promise<void> {
+  const picked = await pickAssetRef({ pagePath: opts.pagePath, projectRoot: opts.projectRoot, kinds: () => null, afterImport: undefined });
+  if (picked) view.dispatch({ changes: { from: target.from, to: target.to, insert: picked.insert } });
 }
 
 /** Direct children of `node` named `name`, in order — a local copy of

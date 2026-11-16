@@ -281,6 +281,8 @@ path: string;
  */
 asset_type: string }
 
+export type AssetRefForPathArgs = { absPath: string; fromPage: string }
+
 /**
  * One authoritative "background asset variants have materialized" sweep,
  * emitted ONCE after a build seals (see `advertise_sealed`). Carries the set
@@ -3338,6 +3340,7 @@ export type EngineCommands = {
 	resolve_page_source: { args: PageSourceArgs; out: PageSource };
 	editor_reference_card: { args: ReferenceCardArgs; out: ReferenceCardInfo };
 	wikilink_completions: { args: WikilinkCompletionsArgs; out: WikilinkCompletion[] };
+	asset_ref_for_path: { args: AssetRefForPathArgs; out: WikilinkCompletion };
 	list_section_folders: { args: NoArgs; out: string[] };
 	resolve_url_for_folder: { args: FolderPathArgs; out: string | null };
 	resolve_expected_url_for_file: { args: FileArgs; out: string | null };
@@ -3399,6 +3402,7 @@ export const ENGINE_TIER = {
 	resolve_page_source: "session_read",
 	editor_reference_card: "session_read",
 	wikilink_completions: "session_read",
+	asset_ref_for_path: "session_read",
 	list_section_folders: "session_read",
 	resolve_url_for_folder: "session_read",
 	resolve_expected_url_for_file: "session_read",
@@ -3460,6 +3464,7 @@ export type EngineParams = {
 	resolve_page_source: [urlPath: string];
 	editor_reference_card: [fromFile: VaultPath, target: string];
 	wikilink_completions: [prefix: string, fromFile: VaultPath, syntax: LinkSyntax, page: string | null, allowedKinds: ExtKind[] | null];
+	asset_ref_for_path: [absPath: string, fromPage: string];
 	list_section_folders: [];
 	resolve_url_for_folder: [folderPath: VaultPath];
 	resolve_expected_url_for_file: [filePath: VaultPath];
@@ -3519,6 +3524,7 @@ export const ENGINE_PARAMS = {
 	resolve_page_source: ["urlPath"],
 	editor_reference_card: ["fromFile", "target"],
 	wikilink_completions: ["prefix", "fromFile", "syntax", "page", "allowedKinds"],
+	asset_ref_for_path: ["absPath", "fromPage"],
 	list_section_folders: [],
 	resolve_url_for_folder: ["folderPath"],
 	resolve_expected_url_for_file: ["filePath"],

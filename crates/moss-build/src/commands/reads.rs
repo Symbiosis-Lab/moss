@@ -308,6 +308,21 @@ pub async fn wikilink_completions(
     }
 }
 
+#[derive(serde::Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetRefForPathArgs {
+    pub abs_path: String,
+    pub from_page: String,
+}
+
+/// A picked file as the reference the page writes to it: the row the search would return.
+pub async fn asset_ref_for_path(
+    host: &dyn CommandHost,
+    a: AssetRefForPathArgs,
+) -> Result<crate::editor::completions::WikilinkCompletion, String> {
+    crate::editor::completions::asset_ref_in(host.root(), &a.abs_path, &a.from_page)
+}
+
 /// Every folder name in the site, for a field whose value names a section.
 pub async fn list_section_folders(host: &dyn CommandHost, _a: NoArgs) -> Result<Vec<String>, String> {
     use crate::editor::filesystem::{list_tree_inner_cached, TreeNode};

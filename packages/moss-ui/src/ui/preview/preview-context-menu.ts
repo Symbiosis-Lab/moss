@@ -17,9 +17,13 @@
  * preview page — that is what the user is looking at.
  */
 
-import { joinCtxGroups, type CtxMenuEntry } from "../shared/ui/ctx-menu";
+import { joinCtxGroups, openCtxMenu, type CtxMenuEntry } from "../shared/ui/ctx-menu";
 import { t } from "../i18n/index";
 import { withoutPreviewParams } from "./shell-marker";
+import type { PictureAct, PictureActRequest } from "../editor/session/editor-position";
+import { getInternalToggleState } from "../editor/internal-toggle";
+import { isRootUrlPath } from "../utils/url-path";
+import { extractDisplayPath } from "./path-utils";
 
 /**
  * What the bridge says an element maps to in source. `path` (site-root-
@@ -36,6 +40,8 @@ export interface PreviewSourceTarget {
   text?: string;
   /** The annotated element: a tag, or `tag.moss-class`. */
   element?: string;
+  /** A menu row's act on a picture reference at the target's line; absent, the row only opens there. */
+  act?: PictureActRequest;
 }
 
 /** The preview bridge's `moss-context-menu` payload. */
@@ -50,6 +56,8 @@ export interface PreviewCtxPayload {
   styles: string[];
   link: string | null;
   image: string | null;
+  /** Which of the pictures sharing the clicked picture's source line it is; null with no picture. */
+  imageIndex?: number | null;
   selection: string | null;
 }
 
@@ -142,6 +150,8 @@ export interface PreviewCtxDeps {
   openExternal(url: string): void;
   /** Open the theme stylesheet at the rule for `selector`. */
   openStyle(selector: string): void;
+  /** "Show internal files" is on: theme rules are offered. */
+  showInternal: boolean;
 }
 
 /** Last path segment, or null when there is no path. */
@@ -196,6 +206,8 @@ function editEntries(ctx: PreviewCtxPayload, deps: PreviewCtxDeps): CtxMenuEntry
   }
   const rows: CtxMenuEntry[] = [];
   ctx.targets.forEach((target, i) => {
+    // The grid's row belongs to its own area: nothing nearer than its cells was hit.
+    if (target.element === 'div.moss-grid' && !ctx.targets.slice(0, i).every((x) => x.element === 'div.moss-grid-card')) return;
     const file = target.path ?? deps.pageFile;
     const name = fileName(file);
     rows.push({
@@ -218,13 +230,44 @@ function editEntries(ctx: PreviewCtxPayload, deps: PreviewCtxDeps): CtxMenuEntry
   return rows;
 }
 
-/** The style group: one row per theme rule that styles the element. */
+/** The style group: one row per theme rule that styles the element, while internal files are shown. */
 function styleEntries(ctx: PreviewCtxPayload, deps: PreviewCtxDeps): CtxMenuEntry[] {
+  if (!deps.showInternal) return [];
   return (ctx.styles ?? []).map((selector) => ({
     label: t('preview.ctx_style_rule', { selector }),
     detail: 'style.css',
     action: () => deps.openStyle(selector),
   }));
+}
+
+/** Moss's own structures that crop the picture in them to a frame. */
+const CROPPING = new Set(['section.moss-hero', 'div.moss-grid-card']);
+
+/**
+ * The picture rows, for a picture the shown page's own source names: a body
+ * picture (its line) or a hero's (its fence). Another page's picture (a
+ * listing card's cover), a frontmatter one (a folder cover, the logo) and one
+ * the theme draws get none; their edit rows stay. "Set focus point" is offered
+ * where a moss structure crops; "Edit description" not on a hero, whose
+ * picture is an attribute with no description.
+ */
+function pictureEntries(ctx: PreviewCtxPayload, deps: PreviewCtxDeps): { rows: CtxMenuEntry[]; at: PreviewSourceTarget } | null {
+  const at = ctx.targets[0];
+  if (!ctx.image || !at || at.path) return null;
+  const hero = at.kind === 'body-range' && at.element === 'section.moss-hero';
+  if (at.kind !== 'body-line' && !hero) return null;
+  const picture = ctx.imageIndex ?? 0;
+  const row = (label: Parameters<typeof t>[0], act: PictureAct): CtxMenuEntry => ({ label: t(label), action: () => deps.openTarget({ ...at, act: { act, picture } }) });
+  const crops = ctx.targets.some((x) => CROPPING.has(x.element ?? ''));
+  return {
+    at,
+    rows: [
+      row('preview.ctx_replace_picture', 'replace'),
+      ...(crops ? [row('preview.ctx_focus_point', 'focus')] : []),
+      ...(hero ? [] : [row('preview.ctx_edit_description', 'description')]),
+      row('preview.ctx_show_in_files', 'reveal'),
+    ],
+  };
 }
 
 /**
@@ -237,7 +280,11 @@ export function buildPreviewCtxEntries(
   ctx: PreviewCtxPayload,
   deps: PreviewCtxDeps,
 ): CtxMenuEntry[] {
-  const edit = editEntries(ctx, deps);
+  const picture = pictureEntries(ctx, deps);
+  // On a picture one row edits the page, at the picture's line.
+  const edit = picture
+    ? [{ label: t('preview.ctx_edit_page'), action: () => deps.openTarget(picture.at) }]
+    : editEntries(ctx, deps);
   const style = styleEntries(ctx, deps);
 
   const copies: CtxMenuEntry[] = [];
@@ -278,5 +325,36 @@ export function buildPreviewCtxEntries(
     },
   ];
 
-  return joinCtxGroups([edit, style, copies, open]);
+  return joinCtxGroups([picture?.rows ?? [], edit, style, copies, open]);
+}
+
+/**
+ * Open the menu for a bridge payload at the pointer. The shell gives what only
+ * it can do; the link answers for the page and opens what a row names.
+ */
+export function openPreviewCtxMenu(
+  ctx: PreviewCtxPayload,
+  link: { readonly node: { sourcePath: string | null } | null; open(target: PreviewSourceTarget | null): void },
+  shell: Pick<PreviewCtxDeps, 'siteUrl' | 'copy' | 'openExternal' | 'openStyle'>,
+): void {
+  const iframe = document.getElementById('moss-preview-iframe') as HTMLIFrameElement | null;
+  const pageFile = link.node?.sourcePath ?? null;
+  const entries = buildPreviewCtxEntries(ctx, {
+    ...shell,
+    pageFile,
+    // The root's home is found on disk even before the page has answered.
+    canEdit: !!pageFile || isRootUrlPath(extractDisplayPath(ctx.page)),
+    showInternal: getInternalToggleState(),
+    openTarget: (target) => link.open(target),
+  });
+  if (!iframe || entries.length === 0) return;
+  openCtxMenu({
+    entries,
+    position: { kind: 'point', ...translateIframePoint(iframe, ctx.x, ctx.y) },
+    ariaLabel: t('preview.ctx_menu_aria'),
+    // The keyboard is in the preview's own document, which the menu's keys never reach.
+    focusFirst: true,
+    logSurface: 'preview',
+    logTarget: ctx.targets[0]?.kind,
+  });
 }

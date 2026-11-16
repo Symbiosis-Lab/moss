@@ -2773,9 +2773,7 @@ async function loadFileBody(
       if (patch.date !== undefined) chipBar?.setFieldValue('date', patch.date);
       if (patch.inferred !== undefined) chipBar?.setFieldValue('inferred', patch.inferred ?? undefined);
     },
-    onDerivedFacts: (facts) => chipBar?.setSuggestions(
-      Object.fromEntries(Object.entries(facts).filter(([, v]) => !!v)) as Record<string, string>,
-    ),
+    onDerivedFacts: (facts) => chipBar?.setSuggestions(Object.fromEntries(Object.entries(facts).filter(([, v]) => !!v)) as Record<string, string>),
     // The second editor→preview sync trigger. See onEditorCaretMove.
     onCaretMove: () => onEditorCaretMove(),
     onHistoryUpdate: (update) => {
@@ -2792,6 +2790,7 @@ async function loadFileBody(
     // project root, the same accessor shape the insert bar's media picker
     // already uses below.
     getProjectRoot: () => projectRoot,
+    revealFile: (path) => fileTree?.revealNewFile(path),
     getCurrentArticle: () => ({
       title: headingController?.saved()?.text ?? '',
       path: activeDocumentPath() ?? filePath,
