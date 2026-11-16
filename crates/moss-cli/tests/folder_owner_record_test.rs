@@ -6,7 +6,7 @@
 //! fixture and process-spawning idioms from. Shares its own process-spawning
 //! idioms with `standby_takeover_test.rs` via `served_child.rs`.
 
-#[path = "served_child.rs"]
+#[path = "it/served_child.rs"]
 mod served_child;
 
 use served_child::*;

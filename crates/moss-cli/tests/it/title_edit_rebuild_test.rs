@@ -9,8 +9,7 @@
 //! edit. The card is an output of the page render that just ran, so nothing
 //! else can be waiting on it.
 
-#[path = "served_child.rs"]
-mod served_child;
+use crate::served_child;
 
 use served_child::*;
 use std::collections::BTreeMap;

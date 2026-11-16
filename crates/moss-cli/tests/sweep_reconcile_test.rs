@@ -3,7 +3,7 @@
 //! the sweep's tick is shortened (`MOSS_TEST_SWEEP_TICK_MS`); the page is replaced
 //! the way an atomic-rename save does it, and only the sweep can notice.
 
-#[path = "served_child.rs"]
+#[path = "it/served_child.rs"]
 mod served_child;
 
 use served_child::*;

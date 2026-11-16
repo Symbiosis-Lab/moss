@@ -10,6 +10,7 @@ license.workspace = true
 rust-version.workspace = true
 description = "The open moss CLI: build a moss site headless, no webview runtime"
 publish = false
+autotests = false
 
 [lints]
 workspace = true
@@ -46,3 +47,35 @@ ureq = { version = "2", features = ["json"] }
 # lock — no new crate, no version bump.
 flate2 = "1"
 tar = "0.4"
+
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+
+[[test]]
+name = "folder_owner_record_test"
+path = "tests/folder_owner_record_test.rs"
+
+[[test]]
+name = "folder_build_lock_test"
+path = "tests/folder_build_lock_test.rs"
+
+[[test]]
+name = "sweep_reconcile_test"
+path = "tests/sweep_reconcile_test.rs"
+
+[[test]]
+name = "stdin_stop_test"
+path = "tests/stdin_stop_test.rs"
+
+[[test]]
+name = "standby_takeover_test"
+path = "tests/standby_takeover_test.rs"
+
+[[test]]
+name = "yield_test"
+path = "tests/yield_test.rs"
+
+[[test]]
+name = "yield_sweep_and_standby_sigint_test"
+path = "tests/yield_sweep_and_standby_sigint_test.rs"

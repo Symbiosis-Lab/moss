@@ -5,7 +5,7 @@
  *
  * The pages are `<main>` fixtures written by the moss-cli test
  * `picture_viewer_test`, which fails when they go stale; regenerate with
- * `SNAPSHOTS=overwrite cargo test -p moss-cli --test picture_viewer_test`.
+ * `SNAPSHOTS=overwrite cargo test -p moss-cli --test it picture_viewer_test::`.
  */
 
 import { describe, test, expect, afterAll } from "vitest";

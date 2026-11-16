@@ -6,7 +6,7 @@
 //! cover. Shares the same process-spawning idioms with both via
 //! `served_child.rs`.
 
-#[path = "served_child.rs"]
+#[path = "it/served_child.rs"]
 mod served_child;
 
 use served_child::*;

@@ -1,8 +1,7 @@
 //! Real-process proof that `build --serve --watch` tells a page with no token
 //! that it was rebuilt: an edit puts one frame on `/__moss/reload`.
 
-#[path = "served_child.rs"]
-mod served_child;
+use crate::served_child;
 
 use served_child::*;
 use std::time::Duration;

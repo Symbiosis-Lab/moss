@@ -4,7 +4,7 @@
 //! goes away. Shares its process-spawning idioms with that file via
 //! `served_child.rs`.
 
-#[path = "served_child.rs"]
+#[path = "it/served_child.rs"]
 mod served_child;
 
 use served_child::*;

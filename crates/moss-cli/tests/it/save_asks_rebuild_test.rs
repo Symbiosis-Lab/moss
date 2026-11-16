@@ -6,8 +6,7 @@
 //! canonicalizes the folder, so the save and the rebuild worker agree on it.
 #![cfg(unix)]
 
-#[path = "served_child.rs"]
-mod served_child;
+use crate::served_child;
 
 use served_child::*;
 use std::path::{Path, PathBuf};

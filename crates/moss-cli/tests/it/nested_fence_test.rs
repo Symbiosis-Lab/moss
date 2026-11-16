@@ -7,7 +7,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 /// A 1200x800 JPEG, wide enough that the build emits a webp rung beside the base.
-const PORTRAIT: &[u8] = include_bytes!("fixtures/crew-portrait.jpg");
+const PORTRAIT: &[u8] = include_bytes!("../fixtures/crew-portrait.jpg");
 
 fn write(site: &Path, rel: &str, body: &str) {
     let p = site.join(rel);

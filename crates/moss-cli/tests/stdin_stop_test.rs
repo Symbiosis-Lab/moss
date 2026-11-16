@@ -3,7 +3,7 @@
 //! stops when its standard input closes. Without the variable a closed input
 //! means nothing, since a shell job or a script starts moss that way.
 
-#[path = "served_child.rs"]
+#[path = "it/served_child.rs"]
 mod served_child;
 
 use served_child::*;

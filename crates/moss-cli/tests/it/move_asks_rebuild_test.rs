@@ -6,8 +6,7 @@
 //! the page.
 #![cfg(unix)]
 
-#[path = "served_child.rs"]
-mod served_child;
+use crate::served_child;
 
 use served_child::*;
 use std::path::PathBuf;

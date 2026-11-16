@@ -2,9 +2,8 @@
 //! reading its "Access at" line off stderr — used by `folder_owner_record_test.rs`
 //! (the refusal path) and `standby_takeover_test.rs` (the `--watch` standby
 //! path), so the two don't carry two copies of the same process-spawning
-//! idioms. Not itself a test file: brought in via `#[path] mod served_child;`
-//! rather than `tests/common/mod.rs`, since this tree never creates a
-//! `mod.rs`.
+//! idioms. Not itself a test file: a module of `tests/it`, and brought into the
+//! separate env-mutating binaries via `#[path = "it/served_child.rs"]`.
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
