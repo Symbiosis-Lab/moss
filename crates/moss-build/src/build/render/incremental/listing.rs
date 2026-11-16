@@ -356,12 +356,10 @@ pub fn own_listing_key(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Op
 pub fn groups_read_by(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Option<Vec<GroupKey>> {
     let mut keys: Vec<GroupKey> = Vec::new();
 
-    // (a) A home page — the root's or a language's own `<lang>/index.html`
-    //     — reads the listing the renderer draws on it: its tree, or the one
-    //     its `children_source` names, an edition home included.
-    if crate::build::render::lang_roots::is_language_root(&doc.url_path) {
-        keys.extend(own_listing_key(doc, documents));
-    }
+    // (a) The listing the renderer ends the page in, as `own_listing_target`
+    //     chooses it: a home's tree, or the folder a page's `children_source`
+    //     names, on a home or any other page.
+    keys.extend(own_listing_key(doc, documents));
 
     // (b) A folder index page lists its OWN folder — `render/html.rs` passes
     //     the page's own url-derived folder path, ignoring `children_source`
