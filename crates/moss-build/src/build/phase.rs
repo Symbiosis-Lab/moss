@@ -136,7 +136,13 @@ const PHASE_BUDGETS_MS: &[(&str, u64)] = &[
     ("background_asset_copy", 10_000),
     ("stage_source_html", 10_000),
     ("search_read", 2_000),
+    ("search_key", 500),
     ("search_index", 10_000),
+    // The bundle's own IO, inside `search_index` (`search_lay` also inside
+    // `search_read` when a held bundle is served).
+    ("search_publish", 2_000),
+    ("search_gc", 2_000),
+    ("search_lay", 2_000),
     ("seal_wait", 10_000),
     ("seal_persist", 10_000),
     ("seal_promote", 10_000),

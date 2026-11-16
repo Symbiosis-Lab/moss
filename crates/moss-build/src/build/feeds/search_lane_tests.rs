@@ -668,9 +668,76 @@ async fn a_build_with_no_lane_indexes_beside_the_background_phase() {
     let entry = |name: &str| phases.iter().find(|p| p["name"] == name).unwrap_or_else(|| panic!("missing {name}: {record}"));
     assert!(entry("search_read").get("beside").is_none(), "the pages are read on the build thread: {record}");
     assert_eq!(entry("search_index")["beside"], true, "the index runs beside the background phase: {record}");
+    assert_eq!(entry("search_key")["parent"], "search_read", "{record}");
+    for name in ["search_publish", "search_gc", "search_lay"] {
+        assert_eq!(entry(name)["parent"], "search_index", "the bundle's own IO is timed: {name}: {record}");
+    }
 
     let hashes: SiteHashes = serde_json::from_str(&std::fs::read_to_string(mp.hashes()).unwrap()).unwrap();
     assert!(hashes.files.contains_key("_moss/pagefind/pagefind.js"), "the seal carries the bundle: {:?}", hashes.files.keys().collect::<Vec<_>>());
     let generation = mp.generation_dir(&mp.current_generation_id().unwrap());
     assert!(generation.join("_moss/pagefind/pagefind.js").is_file(), "and the generation ships it");
+}
+
+/// A one-page edit rewrites a handful of a bundle's files. Publishing and
+/// laying it touches only those: every other file keeps its inode in the
+/// holding area and in staging, and nothing the new receipt does not name is
+/// left in the holding area.
+#[cfg(unix)]
+#[test]
+fn a_lane_less_rebuild_writes_and_lays_only_the_files_that_changed() {
+    use std::os::unix::fs::MetadataExt;
+    let _serialize = search::lock_index_counter();
+    let (_root, mp) = project(PAGE);
+    for n in 0..12 {
+        std::fs::write(mp.staging_dir().join(format!("page{n}.html")), format!("<html lang=\"en\"><body><p>Page {n} about lichen number {n}.</p></body></html>")).unwrap();
+    }
+    let mut first = PendingManifest::new(Default::default());
+    assert!(matches!(adopt_into(&mp, &mp.staging_dir(), &mut first, true, Freshness::Now), Adoption::Indexed(_)));
+    let receipt = read_receipt(&mp.index_dir()).unwrap();
+    let holding = holding_dir(&mp.index_dir(), receipt.fp());
+    let inodes = |root: &Path| -> HashMap<String, u64> {
+        receipt.files.iter().map(|(rel, _)| (rel.clone(), std::fs::metadata(root.join(rel)).unwrap().ino())).collect()
+    };
+    let staged_root = mp.staging_dir().join("_moss/pagefind");
+    let (held_before, staged_before) = (inodes(&holding), inodes(&staged_root));
+
+    std::fs::write(mp.staging_dir().join("page3.html"), "<html lang=\"en\"><body><p>Page 3 now about mosses.</p></body></html>").unwrap();
+    let mut second = PendingManifest::new(Default::default());
+    assert!(matches!(adopt_into(&mp, &mp.staging_dir(), &mut second, true, Freshness::Now), Adoption::Indexed(_)));
+
+    let after = read_receipt(&mp.index_dir()).unwrap();
+    let unchanged: Vec<&String> = after.files.iter().filter(|f| receipt.files.contains(f)).map(|(rel, _)| rel).collect();
+    assert!(unchanged.len() * 2 > after.files.len(), "most files survive a one-page edit: {} of {}", unchanged.len(), after.files.len());
+    for rel in &unchanged {
+        assert_eq!(std::fs::metadata(holding.join(rel)).unwrap().ino(), held_before[*rel], "rewritten in the holding area: {rel}");
+        assert_eq!(std::fs::metadata(staged_root.join(rel)).unwrap().ino(), staged_before[*rel], "re-laid into staging: {rel}");
+    }
+    let on_disk = walkdir::WalkDir::new(&holding).into_iter().filter_map(Result::ok).filter(|e| e.file_type().is_file()).count();
+    assert_eq!(on_disk, after.files.len(), "the holding area keeps only what the receipt names");
+    let bytes = |root: &Path| -> Vec<(String, Vec<u8>)> { after.files.iter().map(|(rel, _)| (rel.clone(), std::fs::read(root.join(rel)).unwrap())).collect() };
+    assert_eq!(bytes(&staged_root), bytes(&holding), "staging serves the bundle the receipt names");
+}
+
+/// A staged file's presence never proves which bytes it holds. A laid bundle
+/// file rewritten in place at the same size is laid again on the next
+/// adoption, because its stat no longer vouches for the copy.
+#[test]
+fn a_laid_file_rewritten_in_place_is_laid_again() {
+    let _serialize = search::lock_index_counter();
+    let (_root, mp) = project(PAGE);
+    let mut first = PendingManifest::new(Default::default());
+    assert!(matches!(adopt_into(&mp, &mp.staging_dir(), &mut first, true, Freshness::Now), Adoption::Indexed(_)));
+    let receipt = read_receipt(&mp.index_dir()).unwrap();
+    let (rel, _) = receipt.files.iter().find(|(rel, _)| rel.starts_with("fragment/")).unwrap();
+    let staged = mp.staging_dir().join("_moss/pagefind").join(rel);
+    let good = std::fs::read(&staged).unwrap();
+    let laid_at = std::fs::metadata(&staged).unwrap().modified().unwrap();
+    std::fs::write(&staged, vec![b'x'; good.len()]).unwrap();
+    crate::build::stat::FileStat::stamp_in_the_second_of(&staged, laid_at);
+
+    let mut second = PendingManifest::new(Default::default());
+    assert!(matches!(adopt_into(&mp, &mp.staging_dir(), &mut second, true, Freshness::Now), Adoption::Adopted(_)), "the same pages serve the held bundle");
+
+    assert_eq!(std::fs::read(&staged).unwrap(), good, "staging serves the receipt's bytes again");
 }

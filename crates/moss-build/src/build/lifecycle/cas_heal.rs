@@ -154,9 +154,10 @@ pub(crate) fn indexed_hash(
     hash_index.lookup_whole_second(rel_source, stat.size, stat.mtime).map(str::to_string)
 }
 
-/// Which CAS blob each staged output was last linked from, with the stat
-/// record the staged file had right after the link — a [`HashIndex`] keyed by
-/// the path relative to staging, whose content hash is the linked blob's oid,
+/// Which CAS blob each staged output was last linked from (or, for
+/// [`copy`](Self::copy), which bytes it was copied as), with the stat record
+/// the staged file had right after — a [`HashIndex`] keyed by the path
+/// relative to staging, whose content hash is the linked blob's oid,
 /// judged by the same rule as every other stat-keyed fast path
 /// ([`FileStat::vouches_for`]).
 ///
@@ -209,7 +210,12 @@ impl StagedLinks {
     /// outputs it links under `staging`, or an empty one (everything relinks
     /// once) when there is none or it cannot be read.
     pub(crate) fn load(paths: &crate::moss_paths::MossPaths, producer: &str, staging: &Path) -> Self {
-        let file = paths.cache_dir().join(format!("staged-links-{producer}.json"));
+        Self::at(paths.cache_dir().join(format!("staged-links-{producer}.json")), staging)
+    }
+
+    /// The record kept in `file`, for a producer that keeps its own beside
+    /// what it lays.
+    pub(crate) fn at(file: std::path::PathBuf, staging: &Path) -> Self {
         let previous = crate::build::cache::HashIndex::load(&file);
         Self { file, staging: staging.to_path_buf(), previous, current: crate::build::cache::HashIndex::new() }
     }
@@ -224,6 +230,26 @@ impl StagedLinks {
         staging_path: &Path,
         local: Option<&Path>,
     ) -> Placement {
+        self.place(oid, staging_path, true, || objects.link_to_inode(oid, staging_path, local))
+    }
+
+    /// Copy `source`, whose bytes hash to `hash` by the producer's own
+    /// function, into `staging_path` unless the file there is still that copy.
+    /// A stat that stops vouching re-copies rather than re-hashing: the hash
+    /// is not the CAS's.
+    pub(crate) fn copy(&mut self, source: &Path, hash: &str, staging_path: &Path) -> Placement {
+        self.place(hash, staging_path, false, || {
+            crate::build::io_utils::copy_output(source, staging_path).map(|()| None).map_err(|e| e.to_string())
+        })
+    }
+
+    fn place(
+        &mut self,
+        oid: &str,
+        staging_path: &Path,
+        renew: bool,
+        write: impl FnOnce() -> Result<Option<u64>, String>,
+    ) -> Placement {
         use crate::build::io_utils::Presence;
         let key = staging_path.strip_prefix(&self.staging).ok().map(|rel| rel.to_string_lossy().into_owned());
         let metadata = std::fs::symlink_metadata(staging_path);
@@ -231,7 +257,7 @@ impl StagedLinks {
         match crate::build::io_utils::probe_output_stat(staging_path, "100644", metadata) {
             Presence::Unverified(e) => return Placement::Unverified(e),
             Presence::Present if key.as_deref().zip(stat.as_ref()).is_some_and(|(key, stat)| {
-                self.holds_stat(key, stat, oid) || self.renews_named(key, stat, oid, staging_path)
+                self.holds_stat(key, stat, oid) || (renew && self.renews_named(key, stat, oid, staging_path))
             }) => {
                 return Placement::Held;
             }
@@ -239,7 +265,7 @@ impl StagedLinks {
         }
         // Sampled before the bytes land, like every other record's clock.
         let recorded_at = crate::build::stat::recording_clock();
-        let written_inode = match objects.link_to_inode(oid, staging_path, local) {
+        let written_inode = match write() {
             Ok(inode) => inode,
             Err(e) => return Placement::Failed(e),
         };
