@@ -97,6 +97,12 @@ pub struct FolderSession {
     /// The host's Live/Background signal, once a watch attaches one. Read
     /// through [`DerivedWorkGate`]; see `folder_session/derived_work.rs`.
     cadence: StdMutex<Option<tokio::sync::watch::Receiver<crate::ops::watch::cadence::Cadence>>>,
+    /// The variant registry a headless host's builds and preview server share
+    /// (`BuildServices::headless_for`). Each watch rebuild gets new host
+    /// ports, and the server keeps the registry it started with, so the
+    /// registry has to outlive any one build. Carried across a reopen like
+    /// `stage_write_lock`, since a running server still holds it.
+    assets: Arc<crate::types::assets::AssetRegistry>,
 }
 
 /// The page the preview currently requests. An unresolved source stays pending;
@@ -135,14 +141,18 @@ impl Drop for UiBoundHold {
 
 impl FolderSession {
     pub fn new(folder: PathBuf) -> Arc<Self> {
-        Self::with_stage_write_lock(folder, Arc::new(Mutex::new(())))
+        Self::carrying(folder, Arc::new(Mutex::new(())), Arc::default())
     }
 
-    /// As [`new`](Self::new), but reusing a `stage_write_lock` a PRIOR
-    /// session for the same folder already held, instead of minting a fresh,
-    /// unrelated one. `register_session_in_registry` is the one caller: see
-    /// the field doc for why a reopen must carry this specific lock forward.
-    fn with_stage_write_lock(folder: PathBuf, stage_write_lock: Arc<Mutex<()>>) -> Arc<Self> {
+    /// As [`new`](Self::new), but reusing the `stage_write_lock` and `assets`
+    /// a PRIOR session for the same folder already held, instead of minting
+    /// fresh, unrelated ones. `register_session_in_registry` is the one
+    /// caller: see the field docs for why a reopen must carry them forward.
+    fn carrying(
+        folder: PathBuf,
+        stage_write_lock: Arc<Mutex<()>>,
+        assets: Arc<crate::types::assets::AssetRegistry>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             folder,
             cancel: CancellationToken::new(),
@@ -152,7 +162,14 @@ impl FolderSession {
             stage_write_lock,
             unavailable: AtomicBool::new(false),
             cadence: StdMutex::new(None),
+            assets,
         })
+    }
+
+    /// See the `assets` field. The desktop GUI host does not read it yet; it
+    /// keeps a registry of its own.
+    pub fn assets(&self) -> Arc<crate::types::assets::AssetRegistry> {
+        self.assets.clone()
     }
 
     /// Replace the current page requirement. Returns whether it changed, so
@@ -417,10 +434,10 @@ pub(crate) fn register_session_in_registry(
     // (rather than each session minting its own) is what keeps that build
     // and anything admitted under the NEW session serialized against each
     // other regardless — see the field doc on `stage_write_lock`.
-    let mut reused_stage_write_lock = None;
+    let mut reused = None;
     for prior in reg.drain() {
         if prior.folder == std::path::Path::new(folder_path) {
-            reused_stage_write_lock = Some(prior.stage_write_lock.clone());
+            reused = Some((prior.stage_write_lock.clone(), prior.assets.clone()));
         }
         tokio::spawn(async move {
             let leaked = prior.shutdown(Duration::from_secs(2)).await;
@@ -434,8 +451,8 @@ pub(crate) fn register_session_in_registry(
     }
 
     // Step 2: construct the new session and insert.
-    let session = match reused_stage_write_lock {
-        Some(lock) => FolderSession::with_stage_write_lock(PathBuf::from(folder_path), lock),
+    let session = match reused {
+        Some((lock, assets)) => FolderSession::carrying(PathBuf::from(folder_path), lock, assets),
         None => FolderSession::new(PathBuf::from(folder_path)),
     };
     if let Some(prior) = reg.insert(folder_path.to_string(), session.clone()) {
@@ -518,6 +535,10 @@ mod tests {
         assert!(
             second.try_lock_stage_write().is_some(),
             "the inherited lock must still work once the prior build releases it"
+        );
+        assert!(
+            Arc::ptr_eq(&first.assets(), &second.assets()),
+            "a reopen keeps the registry a running preview server already holds"
         );
     }
 

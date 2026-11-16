@@ -128,5 +128,6 @@ mod token_emit_test;
 mod translation_pairing_by_path_test;
 mod unbuilt_link_target_test;
 mod unpaired_rename_identity_test;
+mod watch_rebuild_stand_in_test;
 mod wiki_embed_alt_only_test;
 mod layout;

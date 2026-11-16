@@ -160,9 +160,9 @@ async fn generation_original_rejects_corrupt_receipt_and_source_or_cas_escape() 
     let mut receipt: crate::build::manifest::preview_originals::Originals = serde_json::from_slice(&std::fs::read(site.receipt()).unwrap()).unwrap();
     receipt.generation = "0000000000000000".into();
     std::fs::write(site.receipt(), serde_json::to_vec(&receipt).unwrap()).unwrap();
-    assert_eq!(status(&url), 404);
+    assert_ne!(bytes(ureq::get(&url).call().unwrap()), BYTES);
     std::fs::write(site.receipt(), b"not JSON").unwrap();
-    assert_eq!(status(&url), 404);
+    assert_ne!(bytes(ureq::get(&url).call().unwrap()), BYTES);
     assert_ne!(status(&format!("http://localhost:{port}/%2e%2e/private.webp")), 200);
     let _ = shutdown.send(());
 
@@ -214,5 +214,26 @@ async fn generation_original_unreadable_known_source_is_retryable() {
     std::fs::set_permissions(source, std::fs::Permissions::from_mode(0o600)).unwrap();
     assert_eq!(pending, 503, "a read error does not disprove this generation's source identity");
     assert_eq!(bytes(ureq::get(&url).call().unwrap()), BYTES);
+    let _ = shutdown.send(());
+}
+
+/// A rebuild parks the preview on `current` while the page on screen came from
+/// a newer render; a picture only that render names is shown as its original.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_picture_current_never_held_is_served_from_the_newer_render() {
+    let site = Site::new(false);
+    let added = site.mp.project_root().join("gallery/portraits/assets/added.jpg");
+    std::fs::create_dir_all(added.parent().unwrap()).unwrap();
+    std::fs::write(&added, b"a picture added after the generation sealed").unwrap();
+    let registry = Arc::new(crate::types::assets::AssetRegistry::new());
+    let url = "gallery/portraits/assets/added.w800.webp";
+    registry.set_source_passthrough(url.into(), added.clone());
+    registry.set_pending(url.into(), Some((1600, 1000)), None);
+    let (port, _, shutdown) = start_server(ServeConfig {
+        asset_registry: Some(registry), is_evicted: |_| false,
+        ..ServeConfig::new(Arc::new(RwLock::new(site.mp.current_ptr())), 61850)
+    }).await.unwrap();
+    let response = ureq::get(&format!("http://localhost:{port}/{url}")).call().unwrap();
+    assert_eq!(bytes(response), std::fs::read(&added).unwrap());
     let _ = shutdown.send(());
 }

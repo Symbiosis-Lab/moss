@@ -14,6 +14,8 @@ All notable changes to moss will be documented here.
 - In a folder whose page sets `url:`, an HTML page you delete is named before a publish, in the dry run and on the receipt, and a picture keeps its old sizes answering while it stays. moss looked for these files under the folder's own name instead of the address the folder is served at. A page deleted before the first publish with this version is not listed yet.
 - Hiding many comments at once while another hide or a sync is writing them finishes the whole list. Since 0.15.25 it could stop partway with "the file kept changing under the lock".
 
+- Under `moss build --serve --watch` and in the editor, a picture added while the preview is open shows as its original until its smaller sizes are made. It showed as a broken picture until then.
+
 ## [0.15.25] - 2026-11-16
 
 ### Fixed
