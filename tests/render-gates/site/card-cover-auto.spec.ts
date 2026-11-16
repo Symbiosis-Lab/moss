@@ -67,18 +67,34 @@ for (const [label, viewport] of [["desktop", DESKTOP], ["phone", PHONE]] as cons
   });
 }
 
+// The guide's flex-row recipe. The card's cover and text are rows of moss's
+// grid; without `display: block`, Chromium sizes a fixed-ratio cover's row at
+// zero once the card has no grid parent, and the card is only as tall as its text.
+const FLEX_ROW = `.moss-cards { display: flex; }
+.moss-card { display: block; flex: calc(var(--item-cover-ratio, 1)) 1 0; min-inline-size: 0; }`;
+
 test("a flex row sized by --item-cover-ratio stands every cover at one height", async ({ page }) => {
   await open(page, DESKTOP, "auto");
-  await page.addStyleTag({
-    content: `.moss-cards { display: flex; }
-.moss-card { display: block; flex: calc(var(--item-cover-ratio, 1)) 1 0; min-inline-size: 0; }`,
-  });
+  await page.addStyleTag({ content: FLEX_ROW });
   const wide = await shape(cover(page, "Grid", "Wide print"));
   const tall = await shape(cover(page, "Grid", "Tall print"));
   expect(wide.ratio).toBeCloseTo(3 / 2, 1);
   expect(tall.ratio).toBeCloseTo(2 / 3, 1);
   expect(Math.abs(wide.box.height - tall.box.height), "one height").toBeLessThan(2);
   expect(wide.box.width / tall.box.width, "widths in the pictures' proportion").toBeCloseTo(9 / 4, 1);
+});
+
+test("in the flex row a fixed-ratio card holds its cover and, below it, its title", async ({ page }) => {
+  await open(page, DESKTOP);
+  await page.addStyleTag({ content: FLEX_ROW });
+  for (const title of ["Wide print", "Tall print"]) {
+    const c = cover(page, "Grid", title);
+    const s = await shape(c);
+    const t = (await c.locator("xpath=ancestor::*[contains(concat(' ', @class, ' '), ' moss-card ')][1]").locator(".moss-card-title").boundingBox())!;
+    expect(s.box.height, `${title}: the cover keeps its height`).toBeGreaterThan(100);
+    expect(t.y, `${title}: the title is below the cover`).toBeGreaterThanOrEqual(s.box.y + s.box.height - 1);
+    expect(t.y + t.height, `${title}: the card holds its title`).toBeLessThanOrEqual(s.card.y + s.card.height + 1);
+  }
 });
 
 test("auto keeps each shape in equal-row cards and their titles still line up", async ({ page }) => {
