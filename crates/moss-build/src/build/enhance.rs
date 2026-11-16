@@ -257,6 +257,9 @@ pub fn inject_slots(html: &str, slots: &ResolvedSlots, page_path: &str) -> Strin
     strip_empty_footer(result, footer_left_has_content, footer_end_has_content || edition_placed)
 }
 
+/// How every slot marker begins.
+const SLOT_MARKER_OPEN: &str = "<!-- slot:";
+
 /// Known slot markers still present in HTML that is about to ship.
 ///
 /// Every `<!-- slot:NAME -->` for a known slot MUST be resolved (replaced or
@@ -266,7 +269,7 @@ pub fn inject_slots(html: &str, slots: &ResolvedSlots, page_path: &str) -> Strin
 /// page. Used by the slot-injection pass to emit a WARN so the condition
 /// is never silent. Unknown (non-moss) `slot:` comments are ignored.
 fn residual_known_slot_markers(html: &str) -> Vec<&'static str> {
-    if !html.contains("<!-- slot:") {
+    if !html.contains(SLOT_MARKER_OPEN) {
         return Vec::new();
     }
     crate::build::slots::Slot::ALL
@@ -562,33 +565,38 @@ pub(crate) fn inject_slots_into_directory_cached(
             // distinguishable from a real failure all the way up to the cloud gate.
             None => std::fs::read_to_string(&path).map_err(|e| io_stop(root, "re-read for slot injection", &path, e))?,
         };
-        scanned += 1;
+        // A page with no slot marker (a redirect stub) is injected live and keeps
+        // no record: reading the record back costs more than the work it saves.
+        let keyed = html.contains(SLOT_MARKER_OPEN);
+        scanned += (in_stage || keyed) as usize;
 
-        let source_oid = format!(
-            "xxh3:{}",
-            crate::build::assets::paths::compute_binary_hash(html.as_bytes())
-        );
-        walk_ms += t_walk.elapsed();
-        // `ship_rev` is in the key because the record stores a hash of the
-        // SHIPPED bytes; see `ship::SHIP_TRANSFORM_REV`.
-        let mut params = serde_json::json!({
-            "page_path": page_path,
-            "slots_hash": slots_hash,
-            "ship_rev": crate::build::ship::SHIP_TRANSFORM_REV,
+        let key = keyed.then(|| {
+            let source_oid = format!("xxh3:{}", crate::build::assets::paths::compute_binary_hash(html.as_bytes()));
+            // `ship_rev` is in the key because the record stores a hash of the
+            // SHIPPED bytes; see `ship::SHIP_TRANSFORM_REV`.
+            let mut params = serde_json::json!({
+                "page_path": page_path,
+                "slots_hash": slots_hash,
+                "ship_rev": crate::build::ship::SHIP_TRANSFORM_REV,
+            });
+            // A separate key, not `shipped_key`, so a root site's records keep
+            // the key they were written under.
+            if !mount.is_root() {
+                params["mount"] = mount.as_str().into();
+            }
+            (source_oid, params)
         });
-        // A separate key, not `shipped_key`, so a root site's records keep
-        // the key they were written under.
-        if !mount.is_root() {
-            params["mount"] = mount.as_str().into();
-        }
+        walk_ms += t_walk.elapsed();
 
-        let hit = remembered.get(&page_path).filter(|(oid, _)| *oid == source_oid).map(|(_, record)| record.clone())
-            .or_else(|| transform_cache.summary::<SlotInjectRecord>(SLOT_INJECT_TRANSFORM, &source_oid, &params))
+        let hit = key.as_ref().and_then(|(source_oid, params)| {
+            remembered.get(&page_path).filter(|(oid, _)| oid == source_oid).map(|(_, record)| record.clone())
+                .or_else(|| transform_cache.summary::<SlotInjectRecord>(SLOT_INJECT_TRANSFORM, source_oid, params))
+        })
             // Its blob may have been collected since: a miss too, re-run live. A
             // receipt must never name a blob `ship_phase` would not find.
             .filter(|record| object_store.get_path(&record.content_oid).is_some());
-        let (changed, manifest_hash, content_oid, injected) = if let Some(record) = hit {
-            kept.insert(page_path.clone(), (source_oid, record.clone()));
+        let (changed, manifest_hash, content_oid, injected) = if let (Some(record), Some((source_oid, _))) = (hit, &key) {
+            kept.insert(page_path.clone(), (source_oid.clone(), record.clone()));
             if !record.residual.is_empty() {
                 residual_files += 1;
                 let residual: Vec<&str> = record.residual.iter().map(String::as_str).collect();
@@ -611,7 +619,7 @@ pub(crate) fn inject_slots_into_directory_cached(
             let content_oid = store_failures.store(object_store, injected.as_bytes());
             // Cache only what a hit can serve whole: a record without its blob would
             // have to be a miss again anyway.
-            if let Some(oid) = &content_oid {
+            if let (Some(oid), Some((source_oid, params))) = (&content_oid, key) {
                 let record = SlotInjectRecord {
                     content_oid: oid.clone(),
                     manifest_hash: manifest_hash.clone(),

@@ -483,6 +483,8 @@ fn declared_entries_come_from_the_inputs_not_from_the_file() {
     let inputs = TableInputs { declared: vec![("/old/".into(), "/about/".into())], ..Default::default() };
     emit_redirect_table(&paths, &crate::build::scan::article_map::ArticleMap::new(), &inputs, &out, &mut pending)
         .unwrap();
+    // An `.html` stub is left to the slot pass, which this test does not run.
+    crate::build::emit::slots::write_as_rendered(&out, pending.take_unwritten_pages()).unwrap();
     assert!(fs::read_to_string(out.join("old/index.html")).unwrap().contains("url=/about/"));
 }
 

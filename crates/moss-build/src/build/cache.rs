@@ -383,9 +383,8 @@ impl ObjectStore {
         };
         let dest = self.blob_path(&oid);
 
-        if crate::build::io_utils::output_present(&dest)
-            && Self::hash_file_once(&dest).is_ok_and(|hash| hash == oid)
-        {
+        // Only this base's own blob answers a write to it, never the local CAS.
+        if self.holds_verified(&dest, &oid) {
             return Ok(oid);
         }
 
