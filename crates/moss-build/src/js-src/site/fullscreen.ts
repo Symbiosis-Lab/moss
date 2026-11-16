@@ -98,13 +98,15 @@ const LIGHTBOX = `<button class="lightbox-close" aria-label="Close">&times;</but
     const captionText = (caption?.textContent || "").trim();
     const name = img.alt || captionText;
     if (!name) return null;
-    if (page) return { type: "image", src: img.src, title: captionText, alt: img.alt || name, articleUrl: page.href, caption, toPage: true };
+    if (page) return { type: "image", src: img.src, title: captionText, alt: name, articleUrl: page.href, caption, toPage: true };
     img.setAttribute("role", "button");
     img.setAttribute("aria-haspopup", "dialog");
     img.tabIndex = 0;
     img.dataset.viewer = "";
-    if (!img.alt) img.setAttribute("aria-label", name);
-    return { type: "image", src: img.src, title: captionText, alt: img.alt || name, articleUrl: "", caption };
+    // A control cannot keep `alt=""`: that marks the picture presentational,
+    // which conflicts with its role, focus and name.
+    img.alt = name;
+    return { type: "image", src: img.src, title: captionText, alt: name, articleUrl: "", caption };
   }
 
   function itemFor(trigger: HTMLElement): MediaItem | null {
