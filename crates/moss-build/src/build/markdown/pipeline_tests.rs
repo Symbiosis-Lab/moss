@@ -4360,6 +4360,10 @@ fn eager_count(html: &str) -> usize {
     html.matches(r#"loading="eager""#).count()
 }
 
+fn priority_count(html: &str) -> usize {
+    html.matches(r#"fetchpriority="high""#).count()
+}
+
 fn lookup_with_covers() -> crate::build::media::dimensions::MediaDimensionLookup {
     lookup_for(&["harbour.jpg", "a.jpg", "b.jpg"])
 }
@@ -4414,7 +4418,8 @@ fn folder_embed_after_a_paragraph_gets_the_eager_slot() {
     let doc = parse_page_with_graph("A paragraph.\n\n![[journal/|style:grid]]\n", &lookup);
     assert!(!doc.html_content.contains("lazy_cards"), "the opening embed is not lazy");
     let body = resolved_body(&doc, &lookup);
-    assert_eq!(eager_count(&body), 1, "the first cover is the page's eager image: {body}");
+    assert_eq!(priority_count(&body), 1, "the first cover holds the page's one priority fetch: {body}");
+    assert_eq!(eager_count(&body), 2, "both covers of the opening embed's first row load eagerly: {body}");
 }
 
 #[test]
@@ -4443,7 +4448,11 @@ fn only_the_first_folder_embed_of_a_page_is_eager() {
         &lookup,
     );
     let body = resolved_body(&doc, &lookup);
-    assert_eq!(eager_count(&body), 1, "two embeds, one eager cover: {body}");
+    let imgs = img_tags(&body);
+    assert_eq!(imgs.len(), 4, "two embeds of two covers: {body}");
+    assert_eq!(priority_count(&body), 1, "one priority fetch on the page: {body}");
+    assert!(imgs[..2].iter().all(|img| img.contains(r#"loading="eager""#)), "the opening embed's first row is eager: {body}");
+    assert!(imgs[2..].iter().all(|img| is_lazy(img)), "the second embed stays lazy: {body}");
 }
 
 #[test]
@@ -4474,7 +4483,8 @@ fn an_author_cannot_turn_on_the_lazy_flag_from_the_embed_options() {
         &lookup,
     );
     let body = resolved_body(&doc, &lookup);
-    assert_eq!(eager_count(&body), 1, "a typed flag must not take the slot away: {body}");
+    assert_eq!(priority_count(&body), 1, "a typed flag must not take the slot away: {body}");
+    assert_eq!(eager_count(&body), 2, "the opening embed's first row stays eager: {body}");
 }
 
 #[test]

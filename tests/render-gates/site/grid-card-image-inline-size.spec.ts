@@ -48,9 +48,9 @@ async function pressNextToEnd(page: Page) {
  * meaning whichever physical axis `writing-mode` currently maps it to. */
 async function cardImageInlineSizes(page: Page, gridSelector: string) {
   return page.$$eval(`${gridSelector} > :is(a.moss-grid-card, a.moss-card)`, async (cards) => {
-    // Every cell image here is `loading="lazy"`: the page's `load` event
-    // does not wait for it, so measuring right after `goto()` races a fetch
-    // that may not have started. `decode()` waits for the resource itself,
+    // A cell image past the first row is `loading="lazy"`: the page's `load`
+    // event does not wait for it, so measuring right after `goto()` races a
+    // fetch that may not have started. `decode()` waits for the resource itself,
     // the same fix `grid-mobile-collapse.spec.ts`'s `cardGeometry` uses.
     await Promise.all(cards.map((card) => (card.querySelector("img") as HTMLImageElement).decode()));
     return cards.map((card) => {

@@ -20,6 +20,7 @@
 use super::grid_parts::GridParts;
 use super::shortcode::{GridShortcode, Shortcode};
 use super::url::{ResolvedUrl, UrlKind};
+use crate::render::image::Loading;
 pub(super) use crate::media::{html_escape_attr as escape_attr, html_escape_text as escape_text};
 
 /// Per-node-type HTML emission hooks. All methods have default
@@ -333,7 +334,6 @@ pub trait RenderHooks {
                     let style_frag =
                         item.title.as_ref().map(|t| format!(r#"title="{}""#, crate::media::html_escape(t)));
                     let opts = crate::render::image::ImageRenderOptions {
-                        eager: false,
                         extra_attrs: style_frag.as_deref(),
                         style: media_style.as_deref(),
                         fit: display.fit,
@@ -1070,7 +1070,7 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
             // source. Hero/GalleryThumb/FolderCardCover route through their
             // own `ImageContext` variants, never this method.
             scroll_shape: true,
-            eager: self.eager_image,
+            loading: if self.eager_image { Loading::Priority } else { Loading::Lazy },
             ..Default::default()
         };
         let html = crate::render::image::synthesize_image_html(

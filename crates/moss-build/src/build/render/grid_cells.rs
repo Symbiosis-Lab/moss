@@ -45,7 +45,8 @@ use moss_core::ast::{Block, Inline, ResolvedUrl, Url, UrlKind};
 use moss_core::ast::link_card::{blocks_text, push_inlines_text};
 
 use crate::build::components::child_list::ChildItemProps;
-use crate::build::components::grid_card::{render_external_card, render_item_with_typesetting};
+use crate::build::components::grid_card::{render_external_card, render_item_with_typesetting, CoverLoading};
+use moss_core::render::image::Loading;
 use crate::build::markdown::body_plan::{BodyPlan, BodySegment, GridCellEmission, GridEmission};
 use crate::build::media::cover::detect_cover_type;
 use crate::build::page::link_meta::LinkMeta;
@@ -419,10 +420,11 @@ const PICKED_CARD_AXIS: moss_core::sort::SortAxis = moss_core::sort::SortAxis::D
 /// Skips grids the author marked `{.no-cards}` — navigation grids and
 /// mixed-content splits whose cells happen to contain internal links.
 ///
-/// The first card with a cover takes the page's one eager image, unless
-/// `eager_taken` says a hero or the opening content already holds it.
+/// The first covers load with the page and the first takes its one
+/// high-priority fetch ([`CoverLoading`]), unless `eager_taken` says a hero or
+/// the opening content already holds it.
 pub(crate) fn apply_collection_cards(plan: &mut BodyPlan, index: &BuildIndex<'_>, eager_taken: bool) {
-    let mut eager_spent = eager_taken;
+    let mut loading = CoverLoading::new(eager_taken);
     for grid in grids_mut(plan) {
         if grid.no_cards() {
             continue;
@@ -445,8 +447,12 @@ pub(crate) fn apply_collection_cards(plan: &mut BodyPlan, index: &BuildIndex<'_>
         });
         let cell_sizes = Some(grid.cell_sizes.as_str());
         for cell in &mut grid.cells {
-            if let Some((html, has_cover)) = card_markup(cell, index, &mut eager_spent, list_has_covers, cell_sizes) {
-                cell.replace(html, has_cover);
+            match card_markup(cell, index, &mut loading, list_has_covers, cell_sizes) {
+                Some((html, has_cover)) => cell.replace(html, has_cover),
+                // A cell left as written still takes its place in the row.
+                None => {
+                    loading.next(false);
+                }
             }
         }
     }
@@ -525,7 +531,7 @@ fn cover_image_href(blocks: &[Block]) -> Option<&str> {
 fn card_markup(
     cell: &GridCellEmission,
     index: &BuildIndex<'_>,
-    eager_spent: &mut bool,
+    loading: &mut CoverLoading,
     list_has_covers: bool,
     cell_sizes: Option<&str>,
 ) -> Option<(String, bool)> {
@@ -536,8 +542,6 @@ fn card_markup(
         return None;
     }
     let props = picked_card_props(&link, index)?;
-    let eager = !*eager_spent && props.cover.is_some();
-    *eager_spent |= eager;
     let html = render_item_with_typesetting(
         &props,
         index.root_path.map(std::path::Path::new),
@@ -548,7 +552,7 @@ fn card_markup(
         // lying on its side in every `:::grid` folder card (2026-09-11).
         index.typesetting,
         index.media_lookup,
-        eager,
+        loading.next(props.cover.is_some()),
         list_has_covers,
         cell_sizes,
     );
@@ -677,7 +681,7 @@ fn external_card_markup(
                 &cover_attrs,
                 true,
                 index.media_lookup,
-                false,
+                Loading::Lazy,
                 cell_sizes,
             )
         }
@@ -742,7 +746,7 @@ fn remote_cover_html(meta: Option<&LinkMeta>, alt: &str, cell_sizes: Option<&str
         &moss_core::media::parse_media_attrs(""),
         true,
         Some(&lookup),
-        false,
+        Loading::Lazy,
         cell_sizes,
     ))
 }

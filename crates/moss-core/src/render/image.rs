@@ -194,7 +194,7 @@ pub enum ImageContext<'a> {
     /// `<img src="X" alt="Y"[ STYLE] />` where `STYLE` is the inline
     /// style fragment (already escaped) threaded through
     /// [`ImageRenderOptions::extra_attrs`] by the caller. The `class` and
-    /// `eager` options are ignored — the hero `<header>` wraps and CSS
+    /// `loading` options are ignored — the hero `<header>` wraps and CSS
     /// handles loading priority.
     HeroBare,
 }
@@ -209,18 +209,34 @@ pub fn hero_is_plate(classes: &str) -> bool {
     classes.split_ascii_whitespace().any(|t| t == "plate")
 }
 
-/// Optional rendering attributes a caller may pass.
-///
-/// The defaults preserve the current regex-pass byte shape:
-/// - `loading="lazy"` unless `eager=true` (which switches to `loading="eager"
-///   fetchpriority="high"`)
-/// - No extra inline style
-/// - No extra CSS classes on the inner `<img>`
+/// When the browser fetches a picture.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Loading {
+    /// `loading="lazy"`: as it nears the viewport.
+    #[default]
+    Lazy,
+    /// `loading="eager"`: with the page, for a picture likely on the first screen.
+    Eager,
+    /// `loading="eager" fetchpriority="high"`: the page's one most important picture.
+    Priority,
+}
+
+impl Loading {
+    /// The `loading` attribute, and `fetchpriority` for the priority picture, with a leading space.
+    pub fn attrs(self) -> &'static str {
+        match self {
+            Loading::Lazy => r#" loading="lazy""#,
+            Loading::Eager => r#" loading="eager""#,
+            Loading::Priority => r#" loading="eager" fetchpriority="high""#,
+        }
+    }
+}
+
+/// Optional rendering attributes a caller may pass. The defaults give a lazy
+/// picture with no extra style or classes.
 #[derive(Debug, Default, Clone)]
 pub struct ImageRenderOptions<'a> {
-    /// Above-the-fold loading hint. When true, emits
-    /// `loading="eager" fetchpriority="high"` instead of `loading="lazy"`.
-    pub eager: bool,
+    pub loading: Loading,
     /// CSS classes to add to the inner `<img>`. Used by link-preview
     /// favicons (`link-preview-favicon`) and similar UI affordances.
     pub class: Option<&'a str>,
@@ -278,8 +294,7 @@ pub struct ImageRenderOptions<'a> {
 /// - Inline style is `background-image:url(LQIP);background-size:cover` when
 ///   the snapshot has LQIP; `background-color:#RRGGBB` when only dominant
 ///   color is available; absent when neither.
-/// - For `eager: true`: `loading="eager" fetchpriority="high"` replaces
-///   `loading="lazy"`.
+/// - [`ImageRenderOptions::loading`] sets `loading=` and `fetchpriority=`.
 pub fn synthesize_image_html(
     src: &str,
     alt: &str,
@@ -346,7 +361,7 @@ pub fn synthesize_image_html(
         // unused (the caller passes an empty snapshot via the no-
         // manifest branch); the snapshot is part of the signature only
         // for symmetry with the other contexts. `options.class` and
-        // `options.eager` are ignored — hero chrome (CSS / `<header>`)
+        // `options.loading` are ignored — hero chrome (CSS / `<header>`)
         // handles styling and loading priority.
         //
         // The inline `style=` fragment is threaded through
@@ -401,7 +416,7 @@ pub fn synthesize_image_html(
     // `auto` binds only on a lazy image, and Chromium reads an eager image's
     // `auto,` lead as `100vw` instead of skipping to the next entry.
     let sizes_value = match sizes_value.strip_prefix("auto, ") {
-        Some(rest) if options.eager => std::borrow::Cow::Owned(rest.to_owned()),
+        Some(rest) if options.loading != Loading::Lazy => std::borrow::Cow::Owned(rest.to_owned()),
         _ => sizes_value,
     };
     let inner = synthesize_inner(src, alt, assets, options, &sizes_value, scroll);
@@ -959,12 +974,6 @@ pub(crate) fn render_img_tag(
         .map(|c| format!(r#" class="{}""#, html_escape(c)))
         .unwrap_or_default();
 
-    let (loading_attr, fetchpriority_attr) = if options.eager {
-        (r#" loading="eager""#, r#" fetchpriority="high""#)
-    } else {
-        (r#" loading="lazy""#, "")
-    };
-
     let placeholder = match lookup_lqip(assets, src) {
         // An empty LQIP is the scan's "transparent" marker: no placeholder at
         // all, not even the colour below, which would show through the clear
@@ -1018,14 +1027,13 @@ pub(crate) fn render_img_tag(
     // nextjs.org/docs/app/api-reference/components/image). Shows a blurred
     // preview instantly while the actual bytes are being decoded.
     format!(
-        r#"<img{class_attr} src="{src_esc}"{srcset} width="{w}" height="{h}"{loading}{fetch}{style}{scroll} alt="{alt}"{extra} />"#,
+        r#"<img{class_attr} src="{src_esc}"{srcset} width="{w}" height="{h}"{loading}{style}{scroll} alt="{alt}"{extra} />"#,
         class_attr = class_attr,
         src_esc = html_escape(src),
         srcset = srcset_attr,
         w = width,
         h = height,
-        loading = loading_attr,
-        fetch = fetchpriority_attr,
+        loading = options.loading.attrs(),
         style = style_attr,
         scroll = scroll_attr,
         alt = html_escape(alt),

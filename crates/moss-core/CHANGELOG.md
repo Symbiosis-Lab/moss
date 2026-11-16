@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING:** `ImageRenderOptions::eager: bool` is replaced by `loading: Loading`, one of `Lazy` (the default), `Eager` and `Priority` (`loading="eager" fetchpriority="high"`). Pass `Priority` where you passed `true`. `Loading::attrs` gives the attributes.
+
 ## [0.26.0] - 2026-11-16
 
 ### Added

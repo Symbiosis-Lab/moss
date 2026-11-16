@@ -810,7 +810,7 @@ fn grid_and_summary_folder_cards_carry_the_same_count() {
         crate::i18n::Language::En,
         None,
         None,
-        false,
+        moss_core::render::image::Loading::Lazy,
         false,
         None,
     );

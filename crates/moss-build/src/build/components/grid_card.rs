@@ -17,6 +17,7 @@ use std::path::Path;
 use super::child_list::{self, event_card_links, ChildItemProps};
 use crate::i18n::{self, Language};
 use crate::build::media::cover::{self, html_escape, CoverType};
+use moss_core::render::image::Loading;
 use crate::build::page::meta::render_description_html_in_link;
 
 /// Renders a single folder card as HTML with typesetting context.
@@ -26,20 +27,16 @@ use crate::build::page::meta::render_description_html_in_link;
 /// behavior of `child_summary::render_with_sort`.
 ///
 /// `media_lookup`: optional variant manifest. When `Some`, the card's cover
-/// image is routed through `image_render::synthesize_image_html`. When
-/// `None`, falls back to the bare `<img>` shape — the legacy regex pass
-/// then retrofits attrs. Pass `Some` from any caller that has a
+/// image is routed through `image_render::synthesize_image_html`; `None`
+/// emits a bare `<img>`. Pass `Some` from any caller that has a
 /// `MediaDimensionLookup` in scope (e.g., `build/render/html.rs`).
 ///
 /// `root`: the project root, which the cover's band colour is read under
 /// (`color_extract::resolve_card_color`); `None` disables file reads, so an
 /// image cover then colours only through its `|color=` override.
 ///
-/// `eager`: when true, this card's cover gets `loading="eager"
-/// fetchpriority="high"`. Used by `render_list_with_typesetting` to mark
-/// the first card with a cover as the LCP candidate. Replaces the prior
-/// `html.insert_str(pos+5, "loading=\"eager\" ")` mutation pattern with a
-/// typed flag so the LCP decision flows through the synthesizer.
+/// `loading`: when this card's cover is fetched; a listing hands it out
+/// through [`CoverLoading`].
 ///
 /// `list_has_covers`: whether ANY card in this caller's row/list has a cover
 /// of its own. A hand-picked `:::grid` cell computes it across its own
@@ -61,7 +58,7 @@ pub fn render_item_with_typesetting(
     lang: Language,
     typesetting: Option<&str>,
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
-    eager: bool,
+    loading: Loading,
     list_has_covers: bool,
     // The `sizes=` of the `:::grid` cell the card fills; `None` in a listing.
     grid_cell_sizes: Option<&str>,
@@ -92,7 +89,7 @@ pub fn render_item_with_typesetting(
             // with a title is decorative. Without a title the link has no name,
             // and the cover supplies one.
             let cover_alt = if props.title.trim().is_empty() { "cover" } else { "" };
-            cover::render_cover_html(cover_path, ct, cover_alt, "moss-card-cover", &cover_attrs, true, media_lookup, eager, grid_cell_sizes)
+            cover::render_cover_html(cover_path, ct, cover_alt, "moss-card-cover", &cover_attrs, true, media_lookup, loading, grid_cell_sizes)
         }
         _ if list_has_covers => {
             // The description is markdown (`ChildItemProps::description`'s
@@ -222,6 +219,41 @@ pub fn render_item_with_typesetting(
     )
 }
 
+/// How many cards of a grid count as its first row on a desktop screen: a
+/// cover track is 280px or wider in a column of at most about 1200px. Lazy
+/// loading their covers would delay the page's largest paint, which is often
+/// a card in that row and not the first.
+const FIRST_ROW: usize = 4;
+
+/// Hands out the loading of a card grid's covers in reading order: a cover
+/// among the first [`FIRST_ROW`] cards loads with the page, the first such
+/// cover at high priority. A page whose opening picture already holds the one
+/// high-priority fetch passes `lazy` and every cover loads lazily.
+pub(crate) struct CoverLoading {
+    first_row_left: usize,
+    priority_left: bool,
+}
+
+impl CoverLoading {
+    pub(crate) fn new(lazy: bool) -> Self {
+        Self { first_row_left: if lazy { 0 } else { FIRST_ROW }, priority_left: !lazy }
+    }
+
+    /// The loading of the next card's cover; a card without one still takes its place in the row.
+    pub(crate) fn next(&mut self, has_cover: bool) -> Loading {
+        let in_first_row = self.first_row_left > 0;
+        self.first_row_left = self.first_row_left.saturating_sub(1);
+        match (has_cover && in_first_row, self.priority_left) {
+            (false, _) => Loading::Lazy,
+            (true, true) => {
+                self.priority_left = false;
+                Loading::Priority
+            }
+            (true, false) => Loading::Eager,
+        }
+    }
+}
+
 /// Renders a grid of folder cards as HTML with typesetting context.
 ///
 /// Passes `typesetting` through to `render_item_with_typesetting` so that
@@ -229,11 +261,7 @@ pub fn render_item_with_typesetting(
 /// and `lang.is_cjk()`.
 ///
 /// `media_lookup`: optional variant manifest. When `Some`, each card's
-/// cover image is routed through the synthesizer instead of the legacy
-/// regex pass. The first card with a cover is marked `eager=true` for
-/// LCP optimization — the typed flag replaces the post-render
-/// `html.insert_str` hack that prepended `loading="eager"` after the
-/// fact.
+/// cover image is routed through the synthesizer.
 /// `is_embed` — see `folder_embed::generate_children`'s doc comment — stamps
 /// a bare `data-embed` attribute on the `.moss-cards-container` this
 /// function builds, distinguishing a body embed from the frontmatter-
@@ -260,20 +288,13 @@ pub fn render_list_with_typesetting<C: std::borrow::Borrow<ChildItemProps>>(
     // quote slot — see `render_item`'s `list_has_covers` doc.
     let has_covers = cards.iter().any(|c| c.borrow().cover.is_some());
 
-    let mut found_first_cover = lazy_cards;
+    let mut loading = CoverLoading::new(lazy_cards);
     let items: String = cards
         .iter()
         .map(|c| {
             let c = c.borrow();
-            // Mark the first card with a cover as eager (LCP candidate).
-            // Pass the flag into the synthesizer
-            // so the eager hint is part of the emitted markup from the
-            // start — no post-render mutation needed.
-            let eager = !found_first_cover && c.cover.is_some();
-            if eager {
-                found_first_cover = true;
-            }
-            render_item_with_typesetting(c, root, lang, typesetting, media_lookup, eager, has_covers, None)
+            let loading = loading.next(c.cover.is_some());
+            render_item_with_typesetting(c, root, lang, typesetting, media_lookup, loading, has_covers, None)
         })
         .collect::<Vec<_>>()
         .join("\n");

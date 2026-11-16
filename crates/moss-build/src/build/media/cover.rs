@@ -3,6 +3,8 @@
 //! Supports image, video, and iframe cover types with automatic detection
 //! from file extensions or explicit override via frontmatter `cover_type`.
 
+use moss_core::render::image::Loading;
+
 /// The type of media used for a cover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoverType {
@@ -64,24 +66,11 @@ pub fn render_cover_html(
     css_class: &str,
     attrs: &moss_core::media::MediaAttrs,
     block_interaction: bool,
-    // Step 6 of structural-html-emission: when `Some`, the `CoverType::Image`
-    // branch routes the `<img>` through `image_render::synthesize_image_html`
-    // with `ImageContext::FolderCardCover`. The synthesizer bakes
-    // dimensions, LQIP, and the `<picture><source>` WebP wrap into the
-    // emission at synthesis time. When `None`, falls back to the prior
-    // raw `<img>` shape and the downstream regex pass retrofits the attrs
-    // — preserves behavior for test/fragment-render contexts.
-    //
-    // When `eager` is true, the synthesizer emits
-    // `loading="eager" fetchpriority="high"` instead of `loading="lazy"`.
-    // Used for LCP optimization: grid_card's render_list_with_typesetting
-    // marks the first card with a cover as eager so the browser fetches
-    // the LCP image immediately. The pre-Step-6 implementation did this
-    // via an `html.insert_str` of `loading="eager"` after the render —
-    // Step 6 moves the decision into a typed parameter on the
-    // synthesizer call.
+    // When `Some`, an image cover goes through the synthesizer
+    // (`ImageContext::FolderCardCover`), which bakes in dimensions, LQIP and
+    // the WebP `<picture>`; `None` (tests, fragments) emits a bare `<img>`.
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
-    eager: bool,
+    loading: Loading,
     // The `sizes=` of the grid cell the cover is drawn in; `None` in a listing.
     grid_cell_sizes: Option<&str>,
 ) -> String {
@@ -97,7 +86,7 @@ pub fn render_cover_html(
             if let Some(lookup) = media_lookup {
                 let style = attrs.to_inline_style();
                 let opts = moss_core::render::image::ImageRenderOptions {
-                    eager,
+                    loading,
                     style: style.as_deref(),
                     fit: attrs.fit,
                     grid_cell_sizes,
@@ -127,18 +116,8 @@ pub fn render_cover_html(
                 return format!(r#"<div class="{css_class}">{img_html}</div>"#);
             }
             let url = html_escape(url);
-            // No-manifest fallback: emit bare <img>; downstream regex adds
-            // attrs (data-placeholder-src, width, height, lazy/eager, LQIP).
-            // The eager hint is emitted here so the regex pass's
-            // `has_loading` short-circuit sees it and skips its own
-            // `loading="lazy"` injection — and `fetchpriority="high"` is
-            // added by the regex when it detects `loading="eager"`.
-            // Pre-Step-6 the LCP hint was applied via a post-render
-            // `html.insert_str("loading=\"eager\" ")` mutation in
-            // `grid_card::render_list_with_typesetting`; Step 6 moves the
-            // decision into the emitter where it belongs.
-            let eager_attr = if eager { r#" loading="eager""# } else { "" };
-            format!(r#"<div class="{css_class}"><img src="{url}" alt="{alt_escaped}"{eager_attr}{style_attr} /></div>"#)
+            let loading_attr = if loading == Loading::Lazy { "" } else { loading.attrs() };
+            format!(r#"<div class="{css_class}"><img src="{url}" alt="{alt_escaped}"{loading_attr}{style_attr} /></div>"#)
         }
         CoverType::Video => {
             let src = html_escape(&moss_core::asset_paths::to_mp4(url));
@@ -257,7 +236,7 @@ mod tests {
 
     #[test]
     fn render_image() {
-        let html = render_cover_html("photo.jpg", CoverType::Image, "A photo", "cover", &empty_attrs(), false, None, false, None);
+        let html = render_cover_html("photo.jpg", CoverType::Image, "A photo", "cover", &empty_attrs(), false, None, Loading::Lazy, None);
         assert_eq!(
             html,
             r#"<div class="cover"><img src="photo.jpg" alt="A photo" /></div>"#
@@ -266,7 +245,7 @@ mod tests {
 
     #[test]
     fn render_video() {
-        let html = render_cover_html("clip.mp4", CoverType::Video, "A clip", "cover", &empty_attrs(), false, None, false, None);
+        let html = render_cover_html("clip.mp4", CoverType::Video, "A clip", "cover", &empty_attrs(), false, None, Loading::Lazy, None);
         assert_eq!(
             html,
             r#"<div class="cover"><video src="clip.mp4" muted loop playsinline preload="metadata"></video><img src="clip.thumb.jpg" alt="A clip" class="cover-thumb" /></div>"#
@@ -275,7 +254,7 @@ mod tests {
 
     #[test]
     fn render_iframe() {
-        let html = render_cover_html("widget.html", CoverType::Iframe, "Widget", "cover", &empty_attrs(), true, None, false, None);
+        let html = render_cover_html("widget.html", CoverType::Iframe, "Widget", "cover", &empty_attrs(), true, None, Loading::Lazy, None);
         assert_eq!(
             html,
             r#"<div class="cover" style="position:relative"><iframe src="widget.html" title="Widget" loading="lazy" sandbox="allow-scripts"></iframe><div style="position:absolute;inset:0"></div></div>"#
@@ -284,7 +263,7 @@ mod tests {
 
     #[test]
     fn render_iframe_has_title_attribute() {
-        let html = render_cover_html("widget.html", CoverType::Iframe, "My Widget", "cover", &empty_attrs(), true, None, false, None);
+        let html = render_cover_html("widget.html", CoverType::Iframe, "My Widget", "cover", &empty_attrs(), true, None, Loading::Lazy, None);
         assert!(
             html.contains(r#"title="My Widget""#),
             "Iframe should have title attribute for accessibility. Got: {}",
@@ -294,7 +273,7 @@ mod tests {
 
     #[test]
     fn render_iframe_escapes_title() {
-        let html = render_cover_html("widget.html", CoverType::Iframe, "A <script> & \"test\"", "cover", &empty_attrs(), true, None, false, None);
+        let html = render_cover_html("widget.html", CoverType::Iframe, "A <script> & \"test\"", "cover", &empty_attrs(), true, None, Loading::Lazy, None);
         assert!(
             html.contains(r#"title="A &lt;script&gt; &amp; &quot;test&quot;""#),
             "Iframe title should be HTML-escaped. Got: {}",
@@ -303,27 +282,26 @@ mod tests {
     }
 
     #[test]
-    fn render_image_with_eager_loading() {
-        let html = render_cover_html("photo.jpg", CoverType::Image, "A photo", "cover", &empty_attrs(), false, None, false, None);
-        // Default: no loading or fetchpriority attributes (placeholder.rs handles these)
+    fn a_lazy_cover_without_a_manifest_carries_no_loading_attribute() {
+        let html = render_cover_html("photo.jpg", CoverType::Image, "A photo", "cover", &empty_attrs(), false, None, Loading::Lazy, None);
         assert!(!html.contains("loading="), "Default image should not have loading attr. Got: {}", html);
     }
 
     #[test]
     fn render_escapes_html_in_url() {
-        let html = render_cover_html("x.jpg?a=1&b=2", CoverType::Image, "alt", "c", &empty_attrs(), false, None, false, None);
+        let html = render_cover_html("x.jpg?a=1&b=2", CoverType::Image, "alt", "c", &empty_attrs(), false, None, Loading::Lazy, None);
         assert!(html.contains("a=1&amp;b=2"));
     }
 
     #[test]
     fn render_escapes_html_in_alt() {
-        let html = render_cover_html("x.jpg", CoverType::Image, "<script>", "c", &empty_attrs(), false, None, false, None);
+        let html = render_cover_html("x.jpg", CoverType::Image, "<script>", "c", &empty_attrs(), false, None, Loading::Lazy, None);
         assert!(html.contains("&lt;script&gt;"));
     }
 
     #[test]
     fn render_escapes_quotes_in_url() {
-        let html = render_cover_html(r#"x"y.jpg"#, CoverType::Image, "alt", "c", &empty_attrs(), false, None, false, None);
+        let html = render_cover_html(r#"x"y.jpg"#, CoverType::Image, "alt", "c", &empty_attrs(), false, None, Loading::Lazy, None);
         assert!(html.contains("x&quot;y.jpg"));
     }
 
@@ -365,7 +343,7 @@ mod tests {
             &empty_attrs(),
             false,
             Some(&lookup),
-            false,
+            Loading::Lazy,
             None,
         );
         assert!(
@@ -390,7 +368,7 @@ mod tests {
             class_names: Vec::new(),
             extra_attrs: std::collections::BTreeMap::new(),
         };
-        let html = render_cover_html("photo.jpg", CoverType::Image, "alt", "cover", &attrs, false, None, false, None);
+        let html = render_cover_html("photo.jpg", CoverType::Image, "alt", "cover", &attrs, false, None, Loading::Lazy, None);
         assert!(html.contains(r#"style="object-position:left""#), "Got: {}", html);
         assert!(html.contains(r#"<img src="photo.jpg""#));
     }
@@ -405,7 +383,7 @@ mod tests {
             class_names: Vec::new(),
             extra_attrs: std::collections::BTreeMap::new(),
         };
-        let html = render_cover_html("photo.jpg", CoverType::Image, "alt", "cover", &attrs, false, None, false, None);
+        let html = render_cover_html("photo.jpg", CoverType::Image, "alt", "cover", &attrs, false, None, Loading::Lazy, None);
         assert!(html.contains(r#"style="object-fit:contain""#), "Got: {}", html);
     }
 
@@ -419,13 +397,13 @@ mod tests {
             class_names: Vec::new(),
             extra_attrs: std::collections::BTreeMap::new(),
         };
-        let html = render_cover_html("photo.jpg", CoverType::Image, "alt", "cover", &attrs, false, None, false, None);
+        let html = render_cover_html("photo.jpg", CoverType::Image, "alt", "cover", &attrs, false, None, Loading::Lazy, None);
         assert!(html.contains(r#"style="object-fit:contain;object-position:left""#), "Got: {}", html);
     }
 
     #[test]
     fn render_image_empty_attrs_no_style() {
-        let html = render_cover_html("photo.jpg", CoverType::Image, "alt", "cover", &empty_attrs(), false, None, false, None);
+        let html = render_cover_html("photo.jpg", CoverType::Image, "alt", "cover", &empty_attrs(), false, None, Loading::Lazy, None);
         assert!(!html.contains("style="), "Empty attrs should not add style. Got: {}", html);
     }
 
@@ -439,7 +417,7 @@ mod tests {
             class_names: Vec::new(),
             extra_attrs: std::collections::BTreeMap::new(),
         };
-        let html = render_cover_html("clip.mp4", CoverType::Video, "alt", "cover", &attrs, false, None, false, None);
+        let html = render_cover_html("clip.mp4", CoverType::Video, "alt", "cover", &attrs, false, None, Loading::Lazy, None);
         assert!(html.contains(r#"<video src="clip.mp4" style="object-position:top""#), "Got: {}", html);
         // Poster thumbnail should also get the same style
         assert!(html.contains(r#"class="cover-thumb" style="object-position:top""#), "Poster thumb should get style. Got: {}", html);
@@ -455,7 +433,7 @@ mod tests {
             class_names: Vec::new(),
             extra_attrs: std::collections::BTreeMap::new(),
         };
-        let html = render_cover_html("widget.html", CoverType::Iframe, "alt", "cover", &attrs, true, None, false, None);
+        let html = render_cover_html("widget.html", CoverType::Iframe, "alt", "cover", &attrs, true, None, Loading::Lazy, None);
         // Iframe should NOT have object-fit/object-position
         assert!(!html.contains("object-fit"), "Iframe should ignore media attrs. Got: {}", html);
         assert!(!html.contains("object-position"), "Iframe should ignore media attrs. Got: {}", html);
@@ -465,7 +443,7 @@ mod tests {
 
     #[test]
     fn render_iframe_blocked() {
-        let html = render_cover_html("widget.html", CoverType::Iframe, "Widget", "cover", &empty_attrs(), true, None, false, None);
+        let html = render_cover_html("widget.html", CoverType::Iframe, "Widget", "cover", &empty_attrs(), true, None, Loading::Lazy, None);
         assert!(
             html.contains(r#"<div style="position:absolute;inset:0"></div>"#),
             "block_interaction=true should emit overlay. Got: {}", html
@@ -474,7 +452,7 @@ mod tests {
 
     #[test]
     fn render_iframe_interactive() {
-        let html = render_cover_html("widget.html", CoverType::Iframe, "Widget", "cover", &empty_attrs(), false, None, false, None);
+        let html = render_cover_html("widget.html", CoverType::Iframe, "Widget", "cover", &empty_attrs(), false, None, Loading::Lazy, None);
         assert!(
             !html.contains(r#"position:absolute"#),
             "block_interaction=false should NOT emit overlay. Got: {}", html

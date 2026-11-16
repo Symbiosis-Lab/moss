@@ -4,6 +4,7 @@
 //! Delegates cover rendering to `cover::render_cover_html` for image/video/iframe support.
 
 use crate::build::media::cover::{self, CoverType};
+use moss_core::render::image::Loading;
 
 /// Renders the folder cover layout for a folder page — or for a claimed leaf
 /// page hosting a term listing, which uses the identical layout for its own
@@ -42,8 +43,7 @@ pub fn render(
     cover_type: CoverType,
     attrs: &moss_core::media::MediaAttrs,
     // Optional variant manifest. When `Some`, the cover image is routed
-    // through `image_render::synthesize_image_html`; when `None`, the
-    // legacy regex pass adds attrs to the bare `<img>`.
+    // through `image_render::synthesize_image_html`; `None` emits a bare `<img>`.
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     // Editor preview: annotate the heading with `data-source-fm="title"` and
     // the cover media wrapper with `data-source-fm="cover"`, so a click on
@@ -53,11 +53,9 @@ pub fn render(
     match cover {
         Some(path) => {
             let alt = format!("{} cover", alt_label);
-            // Folder covers are typically the LCP candidate on folder
-            // index pages — emit eager + fetchpriority="high" when the
-            // synthesizer is in scope.
-            let eager = media_lookup.is_some();
-            let cover_html = cover::render_cover_html(path, cover_type, &alt, "moss-collection-cover", attrs, false, media_lookup, eager, None);
+            // A folder's cover is usually the largest paint of its page.
+            let loading = if media_lookup.is_some() { Loading::Priority } else { Loading::Lazy };
+            let cover_html = cover::render_cover_html(path, cover_type, &alt, "moss-collection-cover", attrs, false, media_lookup, loading, None);
             // Only the media div names `cover:` — never the whole cover-row.
             // The row also holds the title and the lede, and the resolver
             // (`el.closest('[data-source-fm]')`) checks fm BEFORE

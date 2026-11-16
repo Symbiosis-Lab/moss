@@ -13,8 +13,8 @@ use crate::build::page::meta::render_description_html_in_link;
 /// parent listing's resolved sort axis.
 ///
 /// `media_lookup`: optional variant manifest. When `Some`, the cover image
-/// is routed through `image_render::synthesize_image_html`; when `None`,
-/// the legacy regex pass picks up the bare `<img>`.
+/// is routed through `image_render::synthesize_image_html`; `None` emits a
+/// bare `<img>`.
 ///
 /// `sort_axis`: parent's resolved sort axis. Date axis surfaces
 /// `date_display`; Weight and Title omit the meta slot entirely. Task 10
@@ -176,7 +176,7 @@ pub fn render_with_sort(
     let draw = |url: &str, ct: CoverType, alt: &str| {
         let (cover_path, attrs_str) = moss_core::media::split_pipe(url);
         let cover_attrs = moss_core::media::parse_media_attrs(attrs_str);
-        cover::render_cover_html(cover_path, ct, alt, "moss-card-cover", &cover_attrs, true, media_lookup, false, None)
+        cover::render_cover_html(cover_path, ct, alt, "moss-card-cover", &cover_attrs, true, media_lookup, moss_core::render::image::Loading::Lazy, None)
     };
     let cover_inner = if let Some(first) = props.pictures.first() {
         let rest = props.pictures.iter().skip(1).map(|url| draw(url, CoverType::Image, ""));

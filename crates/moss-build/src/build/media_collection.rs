@@ -207,10 +207,8 @@ fn generate_grid_item(
     // Optional variant manifest. When `Some`, the thumbnail `<img>` is
     // routed through `image_render::synthesize_image_html` and gains
     // `data-placeholder-src`, dims, LQIP, and (for image items)
-    // `<picture><source srcset>` WebP wrap. When `None`, falls back to
-    // bare `<img loading="lazy">` and the legacy regex pass retrofits
-    // attrs — needed for the unit tests at lines 587+ that don't
-    // construct a manifest.
+    // `<picture><source srcset>` WebP wrap. `None` (tests without a
+    // manifest) emits a bare `<img loading="lazy">`.
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
 ) -> String {
     let data_type = match item.media_type {
@@ -241,8 +239,8 @@ fn generate_grid_item(
     };
 
     // Route the thumbnail `<img>` through the synthesizer when a manifest is
-    // in scope. Gallery thumbnails are below the fold (lazy-loaded), so
-    // `eager: false`. The wrapping `<figure class="media-item">` and the
+    // in scope. Gallery thumbnails are below the fold, so they keep the
+    // default lazy loading. The wrapping `<figure class="media-item">` and the
     // overlay `<div>` are emitted as raw HTML — they're container chrome,
     // not content images.
     //
@@ -596,7 +594,7 @@ mod tests {
         // a WebP variant for the thumbnail's source, the inner `<img>` MUST
         // be wrapped in `<picture><source srcset>` with the correct URL,
         // dims, and `loading="lazy"` (galleries are below-the-fold so the
-        // synthesizer's `eager: false` default is correct here).
+        // synthesizer's lazy default is correct here).
         use crate::build::media::dimensions::MediaDimensionLookup;
         use crate::types::content::MediaMetadata;
         use std::collections::HashMap;

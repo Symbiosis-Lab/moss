@@ -1297,7 +1297,7 @@ fn test_homepage_collection_cards_with_covers() {
     // proven by `<picture><source srcset="…webp">` wrapping (the unconditional
     // raster-original promise added 2026-05-20). Before ea23c7543 the
     // `process_folder_links_in_grids` path emitted a bare `<img>`; after, the
-    // cover goes through `render_item_with_typesetting(..., media_lookup, eager)`
+    // cover goes through `render_item_with_typesetting(..., media_lookup, loading)`
     // which feeds the synthesizer. `data-placeholder-src` was removed from the
     // emitter in 6f9f260e2 — iframe-bridge now matches by URL substring against
     // `src`/`srcset`, so the test asserts the surviving shape: <picture> wrap

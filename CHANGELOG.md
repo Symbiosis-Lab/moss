@@ -15,6 +15,7 @@ All notable changes to moss will be documented here.
 - Hiding many comments at once while another hide or a sync is writing them finishes the whole list. Since 0.15.25 it could stop partway with "the file kept changing under the lock".
 - Under `moss build --serve --watch` and in the editor, a picture added while the preview is open shows as its original until its smaller sizes are made. It showed as a broken picture until then.
 - The lock files that earlier versions of moss left in `~/.moss/locks`, one for every folder they ever built, are removed in the background after a build, a few hundred at a time. A machine that runs many builds could hold about a million of them.
+- In a card grid, a listing or a `:::grid` of pages, the covers of the first four cards load with the page, and the first of them is fetched at high priority. Only the first cover loaded at once, so a cover further along the first row, often the page's largest picture, waited for lazy loading. A page that opens with its own picture keeps every card cover lazy.
 
 ### New
 
