@@ -1038,6 +1038,7 @@ pub fn generate_blocking_content_for_build(
         folders: &folder_index,
         urls: &url_index,
     };
+    let evidence_phase = PhaseTrace::start("render_source_evidence");
     let mut gated_embeds = Vec::new();
     for record in &source_records {
         let doc = &mut documents[record.document_index];
@@ -1055,6 +1056,7 @@ pub fn generate_blocking_content_for_build(
     }
     page_source_hashes.extend(parse_session.replayed_sources());
     crate::build::scan::members::check_build(source_path, &gated_embeds, &project_structure.other_files, members_policy)?;
+    drop(evidence_phase);
     if let Some(event) = crate::build::progress::make_empty_folder_advisory(&project_structure.empty_folders) {
         reporter.report(&event);
     }

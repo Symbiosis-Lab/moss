@@ -1957,7 +1957,7 @@ async fn advertise_sealed(
     // (now possibly much later, behind the debounce) is exactly what the
     // check exists to catch; `verify_ship_integrity` only warns, it never
     // fails the ship, so a wider window does not turn into a new failure mode.
-    sealed.stamp_all_ship_fingerprints(stage_dir);
+    crate::phase!("seal_stamp", { sealed.stamp_all_ship_fingerprints(stage_dir) });
     // Read the PREVIOUS on-disk manifest BEFORE the write below overwrites it,
     // so the post-seal asset diff compares the freshly-sealed view against the
     // prior build. Missing/corrupt → default (empty), so a first build treats
@@ -2010,15 +2010,15 @@ async fn advertise_sealed(
     // here because it is the only thing in this phase that needs one — see
     // `degrade::repair_staged_html` for the four sources and why their order
     // is what it is.
-    let (mut presence_verdict, rewritten) = crate::build::degrade::repair_staged_html(
+    let (mut presence_verdict, rewritten) = crate::phase!("seal_repair", { crate::build::degrade::repair_staged_html(
         mp,
         stage_dir,
         &mut sealed,
         assets.as_ref().map(|r| r.failed_keys()).unwrap_or_default(),
-    );
+    ) });
     let kept = if presence_verdict.repairs_staging() {
         let late = crate::system::build_records::records().late_redirects(folder_path);
-        crate::build::feeds::kept_addresses::keep(mp, stage_dir, &mut sealed, &late)
+        crate::phase!("seal_kept", { crate::build::feeds::kept_addresses::keep(mp, stage_dir, &mut sealed, &late) })
     } else {
         Vec::new()
     };
@@ -2080,7 +2080,7 @@ async fn advertise_sealed(
     // `sealed` is now final — every pass that can drop a manifest entry has
     // run, so a one-shot build reclaims its orphans against it.
     if let Some(permit) = &guards.final_sweep {
-        crate::build::ship::reclaim_staging_now(stage_dir, &sealed, permit);
+        crate::phase!("seal_reclaim", { crate::build::ship::reclaim_staging_now(stage_dir, &sealed, permit) });
     }
 
     // Last moment the manifest and the stage agree on what shipped — the one
@@ -2089,14 +2089,14 @@ async fn advertise_sealed(
     // still-unfulfilled promise, which `record_promise_gate` below carries to
     // `refuse_publish` — see that function's doc and `link_audit`'s module
     // docs on the publish/media race this closes.
-    record_promise_gate(stage_dir, &sealed, assets.as_ref(), folder_path);
+    crate::phase!("seal_link_audit", { record_promise_gate(stage_dir, &sealed, assets.as_ref(), folder_path) });
 
     // The addresses this build stops serving, for the publish gate. Recorded
     // on every seal, empty included, like the promise verdict above.
-    crate::system::build_records::records().record_removed_addresses(
+    crate::phase!("seal_removed", { crate::system::build_records::records().record_removed_addresses(
         folder_path,
         crate::build::manifest::backfill::removed_for_seal(mp, &sealed),
-    );
+    ) });
 
     // Persist so the next build's load_previous_hashes reads a complete
     // manifest. This is the "hashes.json incremental baseline": it needs only
@@ -2112,7 +2112,7 @@ async fn advertise_sealed(
     // tail leaves before this write, so the write that stands is the newest
     // sealed render's.
     if verdict == crate::build::ship::ShipVerdict::Ship {
-        if let Err(e) = sealed.write_to_disk(hashes_path) {
+        if let Err(e) = crate::phase!("seal_write", { sealed.write_to_disk(hashes_path) }) {
             log::info!("advertise_sealed: failed to write hashes.json: {}", e);
         }
     }

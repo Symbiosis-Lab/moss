@@ -1263,7 +1263,7 @@ fn build_inner(
         .map_err(|e| format!("Failed to create staging directory: {}", e))?;
 
     // Step 2b: sweep the previous build's residue out of staging.
-    sweep_staging(&stage_dir, &previous_hashes, sweep_permit.as_ref());
+    crate::phase!("staging_sweep", { sweep_staging(&stage_dir, &previous_hashes, sweep_permit.as_ref()) });
 
     // Step 3: Build to staging directory using internal generator
     //
@@ -1402,7 +1402,7 @@ fn build_inner(
         .find(|kind| kind.is_place)
         .map(|kind| (kind.key.clone(), kind.parents.clone(), kind.explorer_enabled()))
         .and_then(|(namespace, parents, explorer)| {
-            match crate::build::place_map::PlaceMapContext::embedded() {
+            match crate::phase!("place_map_decode", { crate::build::place_map::PlaceMapContext::embedded() }) {
                 Ok(maps) => {
                     // Pure function of the pack and the gazetteer (see its
                     // own doc), so known before any document is parsed —
@@ -1410,7 +1410,7 @@ fn build_inner(
                     // `derive_terms`'s finished output and is set later, in
                     // `generate_blocking_content_for_build`.
                     let layer_plans = crate::build::place_map::layer_warp::plan_layers(&map_layers, root.path(), &gazetteer);
-                    let map_assets_hash = crate::build::emit::place_map_assets::assets_hash_with_layers(&maps, &gazetteer, &map_layers, &layer_plans);
+                    let map_assets_hash = crate::phase!("place_map_hash", { crate::build::emit::place_map_assets::assets_hash_with_layers(&maps, &gazetteer, &map_layers, &layer_plans) });
                     Some(
                         crate::build::place_map::PlaceMapRenderContext::new(
                             maps,
@@ -1867,6 +1867,7 @@ fn build_inner(
     // Places explorer world/tile base-map SVGs; see that module's doc for
     // the gate and the cache. The context carries the gazetteer, so there is
     // no second `load_gazetteer` call here.
+    let place_map_phase = crate::build::phase::PhaseTrace::start("place_map_emit");
     crate::build::emit::place_map_assets::emit_if_place_typed(
         place_maps_after_render.as_ref(),
         &paths,
@@ -1893,6 +1894,7 @@ fn build_inner(
         &stage_dir,
         &mut pending,
     );
+    drop(place_map_phase);
 
     // Seal-persist-race-404 fix: release the stage-write guard now — this
     // build's own synchronous stage-writing span (generate_blocking_content

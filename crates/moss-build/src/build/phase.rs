@@ -139,6 +139,19 @@ const PHASE_BUDGETS_MS: &[(&str, u64)] = &[
     ("seal_wait", 10_000),
     ("seal_persist", 10_000),
     ("seal_promote", 10_000),
+    // The seal's own passes, inside `seal_persist`: drop outputs whose blob is
+    // gone and repair the pages that named them, keep addresses the build no
+    // longer writes, sweep staging, the whole-site link check, the removed
+    // addresses, and the manifest's own write.
+    ("seal_stamp", 2_000),
+    ("seal_repair", 5_000),
+    ("seal_kept", 2_000),
+    ("seal_reclaim", 2_000),
+    ("seal_link_audit", 5_000),
+    ("seal_removed", 2_000),
+    ("seal_write", 2_000),
+    // Removing what the last build left in staging that its manifest no longer names.
+    ("staging_sweep", 2_000),
     // Waiting for another build's hold on the folder lock or the stage-write
     // guard. `seal_promote` starts after its waits; `build` and `seal_persist`
     // still contain theirs, so subtract `lock_wait` to read their work. The
@@ -163,6 +176,14 @@ const PHASE_BUDGETS_MS: &[(&str, u64)] = &[
     // The parse cache's session, the media size lookup and the other inputs
     // the markdown loop needs, read before it starts.
     ("render_parse_setup", 2_000),
+    // Reading every page's authored source again for missing references and
+    // members-only embeds, after the markdown loop.
+    ("render_source_evidence", 5_000),
+    // Decoding the bundled place-map pack and hashing the map assets, for a
+    // site with a place kind; writing the map files after the render.
+    ("place_map_decode", 2_000),
+    ("place_map_hash", 2_000),
+    ("place_map_emit", 2_000),
     // The article map, inventory, previews, media pages and math and diagram
     // pictures written after the home page.
     ("render_site_records", 5_000),
@@ -981,6 +1002,13 @@ mod tests {
             assert_eq!(entry("build")["parent"], "run_pipeline", "{record}");
             for name in ["config_reads", "render_inputs", "render_parse_setup", "reduce", "render_site_files", "render_site_records", "render_redirects_sitemap", "render_handoff", "slot_injection"] {
                 assert_eq!(entry(name)["parent"], "build", "{name}: {record}");
+            }
+            assert_eq!(entry("render_source_evidence")["parent"], "build", "{record}");
+            for name in ["seal_stamp", "seal_repair", "seal_reclaim", "seal_link_audit", "seal_removed", "seal_write"] {
+                assert_eq!(entry(name)["parent"], "seal_persist", "{name}: {record}");
+            }
+            if run == 2 {
+                assert_eq!(entry("staging_sweep")["parent"], "build", "{record}");
             }
             // The media lane runs beside the render, so neither it nor anything inside it divides `build`.
             assert_eq!(entry("media_prelude")["beside"], true, "{record}");
