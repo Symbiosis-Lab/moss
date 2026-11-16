@@ -13,6 +13,8 @@ release heading.
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-16
+
 ### Added
 
 - `CopyOutcome.absent`: `find_copy` answers `{ absent: true }` when the network says there is no such copy. Any other answer without the copy means moss cannot tell, and only `absent` lets it post again. An earlier moss reads it as absent too, so a plugin can answer this way now.

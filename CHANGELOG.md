@@ -4,9 +4,7 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
-### Added
-
-- A site on your own network can be imported by giving its address or its name, for example `http://192.168.1.20:2368` or `http://nas.local:2368`, and the report says it is on your network. Any other private address a page names (an image, a stylesheet, a sitemap), whether written as a number or as a name that leads to one, is not fetched, and the report lists each one under "Not fetched".
+## [0.15.25] - 2026-11-16
 
 ### Fixed
 
@@ -75,6 +73,8 @@ All notable changes to moss will be documented here.
 
 - A build of a site with many old addresses is faster when little or nothing changed: the forwarding page at each old address is no longer read back and looked up on every build.
 - A build of a site with many pictures is faster when they have not changed: each converted picture's fingerprint is remembered instead of being read again on every build.
+- A build of a site with search is faster after a small edit: only the search files the edit changed are written again, where every one of them, several hundred on a large site, was copied on each build.
+- A build after an edit checks the files it keeps from earlier builds with one look at each, where it took about four: on a large site with many pictures that part of the build takes less than half as long.
 - On a phone, the return arrow of a footnote in the open notes drawer scrolls the page to the place that cites it and leaves the drawer open, with that place in the part of the page above the drawer. It used to close the drawer. Dragging the drawer down or tapping the page still closes it.
 - Before a publish, moss names only the pages you wrote that would go offline: a markdown page, an HTML page or a notebook's page, and an old address of one of them that stops forwarding. Generated files (feeds, sitemaps, cards, QR codes, calendar files, `llms.txt`, picture and video renditions) and the folder's other files (pictures, stylesheets, scripts, downloads) are no longer named and no longer hold a publish. A file that was for members and would be open to everyone still holds it. `moss deploy --dry-run` says "Pages going offline" and counts the other removed files without naming them; its JSON `pending_removals` and `change_set.removed` hold the same pages, while `transfer.removed` still lists every file. After a publish the CLI prints "Pages taken offline:". `RemovedAddress` loses `withdrawn_by`, and `WithdrawnBy` is gone.
 - Pictures are scaled down with the processor's vector instructions: a site's first build spends about a tenth less CPU time and a tenth less memory on its pictures. A picture converted by this build differs from the same picture converted before in a few pixels; pictures already converted are kept.
@@ -104,6 +104,7 @@ All notable changes to moss will be documented here.
 - A channel's `copy_account` can answer that it is signed out (`signed_out: true`) and give the account's name (`name`); a signed-out channel's copies wait until someone signs in, and moss remembers each channel's sign-in on this computer, outside the site folder.
 - A channel plugin can make its article form depend on a setting (`long_setting` in its `syndication` block), for a network whose articles only some accounts have. With the setting off, a long page goes out in the next form the channel takes.
 - A program that starts `moss build --serve` can set `MOSS_STOP_ON_STDIN_CLOSE=1`: the preview then stops when that program closes moss's standard input or exits, however it ends. The Obsidian plugin sets it on macOS and Linux, so its preview no longer keeps running after Obsidian quits. The guide's "Starting moss from another program" has the details.
+- A site on your own network can be imported by giving its address or its name, for example `http://192.168.1.20:2368` or `http://nas.local:2368`, and the report says it is on your network. Any other private address a page names (an image, a stylesheet, a sitemap), whether written as a number or as a name that leads to one, is not fetched, and the report lists each one under "Not fetched".
 
 ### Removed
 
