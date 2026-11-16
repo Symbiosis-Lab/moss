@@ -37,6 +37,7 @@ All notable changes to moss will be documented here.
 - A page made or renamed in the browser editor in the first second after it opens is built at once. It used to wait until the folder was noticed as changed, up to 20 seconds.
 - `moss build --serve --watch` opens a folder at once while a plugin is still reading its files, and fills each page in when the read ends. It used to wait for the read.
 - With the caret on a hero's picture far down a long page, the outline of what the page keeps now appears on the picture. It was missing until the caret was moved away and back.
+- After a hero's words are dropped at start, centre or end, the box over them stays and takes the next drop. On a busy computer it could disappear until the caret was moved away and back.
 - A quotation fills the text column. The browser's own 40px margin stood on each side of it, so on a phone a quote was set in a column about 22 characters wide.
 - A deleted page stops being shown in the preview. Its address kept answering with the old page when the page was deleted within 20 seconds of the last build, or while a folder that had been open only briefly was closed.
 - In the editor's light theme, muted text (hints, counts, secondary labels) is darker and now meets the 4.5:1 contrast of WCAG AA on the page ground and on raised surfaces; it was 3.75:1.

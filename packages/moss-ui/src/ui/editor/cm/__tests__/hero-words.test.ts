@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { markdown } from '@codemirror/lang-markdown';
+import { forceParsing } from '@codemirror/language';
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { history, undo } from '@codemirror/commands';
@@ -27,9 +28,11 @@ function open(caretLine: number) {
     state: EditorState.create({ doc: DOC, extensions: [markdown({ extensions: MARKDOWN_EXTENSIONS }), history(), pictureAtCaretField, heroWordsExtension(() => 'p.md', host)] }),
     parent: document.body,
   });
+  forceParsing(view, DOC.length, 10_000);
   const goto = (n: number) => view!.dispatch({ selection: { anchor: view!.state.doc.line(n).from } });
   goto(caretLine);
-  const drop = (payload: unknown) => wire.handlers.get(HERO_ALIGN)!({ payload });
+  // An edit reparses within a time budget a loaded machine can overrun; finish that parse as the idle parser would.
+  const drop = (payload: unknown) => { wire.handlers.get(HERO_ALIGN)!({ payload }); forceParsing(view!, view!.state.doc.length, 10_000); };
   return { view, sent: wire.sent, drop, goto };
 }
 
@@ -68,6 +71,35 @@ describe('hero words instrument (editor half)', () => {
     expect(view.state.doc.line(2).text).toBe(':::hero {image=a.jpg}');
   });
 
+  test('a drop whose reparse runs out of time takes the next drop once the parse finishes', () => {
+    const { view, drop } = open(2);
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => (now += 1000));
+    wire.handlers.get(HERO_ALIGN)!({ payload: { line: 2, align: 'center' } });
+    clock.mockRestore();
+    expect(wire.sent.at(-1)).toEqual([HERO_WORDS, { path: 'p.md', line: null }]);
+    forceParsing(view, view.state.doc.length, 10_000);
+    expect(wire.sent.at(-1)).toEqual([HERO_WORDS, { path: 'p.md', line: 2 }]);
+    drop({ line: 2, align: 'start' });
+    expect(view.state.doc.line(2).text).toBe(':::hero {image=a.jpg}');
+  });
+
+  test('while the page is hidden a parse that finishes draws no box', () => {
+    const { view } = open(2);
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+    try {
+      document.dispatchEvent(new Event('visibilitychange'));
+      let now = Date.now();
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => (now += 1000));
+      view.dispatch({ changes: { from: view.state.doc.length, insert: '\nmore' } });
+      clock.mockRestore();
+      forceParsing(view, view.state.doc.length, 10_000);
+      expect(wire.sent.slice(1)).toEqual([[HERO_WORDS, { path: 'p.md', line: null }]]);
+    } finally {
+      delete (document as { hidden?: boolean }).hidden;
+    }
+  });
+
   test('an alignment the shell has no business sending is not written', () => {
     const { view, drop } = open(2);
     for (const align of ['x"}', 'end image=evil.jpg', undefined, 'END']) drop({ line: 2, align });
@@ -80,8 +112,10 @@ describe('hero words instrument (editor half)', () => {
       state: EditorState.create({ doc, extensions: [markdown({ extensions: MARKDOWN_EXTENSIONS }), pictureAtCaretField, heroWordsExtension(() => 'p.md', host)] }),
       parent: document.body,
     });
+    forceParsing(view, doc.length, 10_000);
     document.dispatchEvent(new Event('visibilitychange'));
     view.dispatch({ changes: { from: doc.length, insert: '\nmore' } });
+    forceParsing(view, view.state.doc.length, 10_000);
     expect(wire.sent.filter(([, p]) => (p as { line: unknown }).line !== null)).toEqual([]);
     view.dispatch({ selection: { anchor: 3 } });
     expect(wire.sent.at(-1)).toEqual([HERO_WORDS, { path: 'p.md', line: 1 }]);
