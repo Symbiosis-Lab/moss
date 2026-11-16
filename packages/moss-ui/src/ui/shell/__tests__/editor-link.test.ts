@@ -18,6 +18,7 @@ vi.mock("../../utils/moss-events", () => ({
 vi.mock('../../engine', () => ({ engine: { resolvePageSource: vi.fn(), describeSourceRole: vi.fn() } }));
 
 import { EditorLink, type EditorLinkHost } from '../editor-link';
+import type { PreviewSourceTarget } from '../../preview/preview-context-menu';
 import { host, inPageBus } from "../../host";
 import { eventBus, Events } from '../../context/event-bus';
 import { engine } from '../../engine';
@@ -220,6 +221,11 @@ describe('EditorLink', () => {
 
 describe('a page gesture while the editor shows another file', () => {
   const paragraph = { kind: 'body-line', line: 5 };
+  /** What the host is asked to open when the shell opens `target`. */
+  const openedBy = (l: EditorLink, h: EditorLinkHost) => (target: PreviewSourceTarget | null) => {
+    l.open(target);
+    return vi.mocked(h.openTarget).mock.lastCall?.[0];
+  };
   const gesture = (interaction: string) => post({ type: 'moss-source-target', target: paragraph, interaction });
   const revealed = () => emitted.filter(([name]) => name === 'editor:reveal-line');
 
@@ -249,36 +255,39 @@ describe('a page gesture while the editor shows another file', () => {
   });
 
   test('a menu row for the page names its file, and "edit this page" becomes that page', async () => {
-    const { l } = await onPageA();
-    expect(l.located(paragraph)).toEqual(paragraph);
-    expect(l.located(null)).toBeNull();
+    const { l, host: h } = await onPageA();
+    const opened = openedBy(l, h);
+    expect(opened(paragraph)).toEqual(paragraph);
+    expect(opened(null)).toBeNull();
     host.bus.emit('editor:file-ready', { path: 'footer.md' });
-    expect(l.located(paragraph)).toEqual({ ...paragraph, path: 'a.md' });
-    expect(l.located(null)).toEqual({ kind: 'page', path: 'a.md' });
-    expect(l.located({ kind: 'page', path: 'b.md' })).toEqual({ kind: 'page', path: 'b.md' });
+    expect(opened(paragraph)).toEqual({ ...paragraph, path: 'a.md' });
+    expect(opened(null)).toEqual({ kind: 'page', path: 'a.md' });
+    expect(opened({ kind: 'page', path: 'b.md' })).toEqual({ kind: 'page', path: 'b.md' });
     // Template chrome has no source in any file.
-    expect(l.located({ kind: 'none' })).toEqual({ kind: 'none' });
+    expect(opened({ kind: 'none' })).toEqual({ kind: 'none' });
   });
 
   test('the same file under another Unicode spelling, or a folder just switched to, is not another file', async () => {
     const made = link();
+    const opened = openedBy(made.l, made.host);
     vi.mocked(engine.resolvePageSource).mockResolvedValueOnce(answer({ source_path: '/site/B\u00fcndnis.md', is_article: true }));
     await pageSource.navigate('/a/', false);
     host.bus.emit('editor:file-ready', { path: 'Bu\u0308ndnis.md' });
-    expect(made.l.located(paragraph)).toEqual(paragraph);
+    expect(opened(paragraph)).toEqual(paragraph);
     host.bus.emit('editor:file-ready', { path: 'footer.md' });
     made.l.folderChanged();
-    expect(made.l.located(paragraph)).toEqual(paragraph);
+    expect(opened(paragraph)).toEqual(paragraph);
   });
 
   test('a closed editor is on no file: the page opens as it always did', async () => {
     let open = true;
     const made = link({ editorIsOpen: () => open });
+    const opened = openedBy(made.l, made.host);
     vi.mocked(engine.resolvePageSource).mockResolvedValueOnce(answer({ source_path: '/site/a.md', is_article: true }));
     await pageSource.navigate('/a/', false);
     host.bus.emit('editor:file-ready', { path: 'footer.md' });
     open = false;
-    expect(made.l.located(null)).toBeNull();
+    expect(opened(null)).toBeNull();
   });
 });
 

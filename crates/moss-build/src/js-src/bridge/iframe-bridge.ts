@@ -26,7 +26,7 @@ import type { ThemeSettled } from "./theme-settled";
 import { classifyClickGesture, installViewerGuard, shouldLeaveClickToPage } from "./click-vocabulary";
 import { installContextMenu } from "./context-menu";
 import { installPlainTabReload } from "./plain-tab-reload";
-import { resolveSourceTarget } from "./source-target";
+import { installSelectionSync, resolveSourceTarget } from "./source-target";
 import { installCaptureResponder } from "./capture/responder";
 
 (function () {
@@ -615,50 +615,7 @@ import { installCaptureResponder } from "./capture/responder";
 
   installContextMenu(window);
 
-  // ============================================================
-  // Selection Sync: Preview → Editor (text selection mapping)
-  // ============================================================
-  // When the user finishes selecting text, resolve the source target
-  // and include the selected text for precise in-source highlighting.
-
-  // Injected once per page load; no teardown path needed.
-  let _selectionDebounce: ReturnType<typeof setTimeout> | null = null;
-
-  document.addEventListener('selectionchange', () => {
-    // Read selection synchronously NOW — WKWebView collapses cross-origin iframe
-    // selections when focus shifts (e.g. on mouse-up). Reading inside a setTimeout
-    // would always see a collapsed selection and drop the message.
-    const sel = window.getSelection();
-    if (!sel || sel.isCollapsed || !sel.rangeCount) {
-      if (_selectionDebounce) { clearTimeout(_selectionDebounce); _selectionDebounce = null; }
-      return;
-    }
-
-    const text = sel.toString().trim();
-    if (!text || text.length > 500) {
-      if (_selectionDebounce) { clearTimeout(_selectionDebounce); _selectionDebounce = null; }
-      return;
-    }
-
-    // Capture the start element now (stable during drag) so resolveSourceTarget's
-    // DOM walk runs once when the timer fires, not on every selectionchange frame.
-    const range = sel.getRangeAt(0);
-    const startEl = range.startContainer instanceof Element
-      ? range.startContainer
-      : range.startContainer.parentElement;
-
-    if (_selectionDebounce) clearTimeout(_selectionDebounce);
-    _selectionDebounce = setTimeout(() => {
-      const target = resolveSourceTarget(startEl);
-      if (!target || target.kind === 'none') return;
-
-      window.parent.postMessage({
-        type: 'moss-source-target',
-        target: { ...target, text },
-        interaction: 'select',
-      }, '*');
-    }, 50);
-  });
+  installSelectionSync(window);
 
   // A press here is a different document: it never bubbles into the shell, and
   // blur cannot stand in once focus is already in this iframe — the state a

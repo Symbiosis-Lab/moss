@@ -49,9 +49,9 @@ export async function startShell(
     editorIsFullWidth: () => framesApi().layout() === 'full',
     folderPath: () => folder.path,
     openTarget: (target) => {
-      const at = sourceTargetPosition(target);
+      const at = target && sourceTargetPosition(target);
       // A file that still has to load takes its caret once the editor says it is ready.
-      if (target.path) {
+      if (target?.path) {
         handshake.expect(target.path, at);
         // An open editor loads by name, which reports ready even for the file it already shows.
         if (editorIsOpen()) host.bus.emit('editor:load-file', { filePath: target.path });
