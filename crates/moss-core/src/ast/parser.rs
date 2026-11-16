@@ -120,13 +120,6 @@ pub struct ParseConfig<'a> {
     /// Fence names the installed plugins own. `None` means every such fence
     /// is an unknown one.
     pub blocks: Option<&'a crate::page::block_names::BlockNames>,
-
-    /// The markdown is a page's own body, whose opening hero the caller lifts
-    /// out of the article: a wordless picture directly above the body's only
-    /// `# Heading` then parses to that hero. False for a slot file, a partial
-    /// and markdown rendered inside other content, where the picture stays
-    /// where it is written.
-    pub page_body: bool,
 }
 
 impl Default for ParseConfig<'_> {
@@ -147,7 +140,6 @@ impl Default for ParseConfig<'_> {
             // CommonMark's "newline is a space". Production opts in.
             hard_line_breaks: false,
             blocks: None,
-            page_body: false,
         }
     }
 }
@@ -307,7 +299,11 @@ fn parse_document(markdown: &str, config: &ParseConfig, heading_ids: HeadingIds)
     // shape.
     //
     // For the source-line-off path, lookup is unused.
-    let line_lookup = config.emit_source_lines.then(|| LineLookup::build(&source, config.source_line_offset));
+    let line_lookup = if config.emit_source_lines {
+        Some(LineLookup::build(&source, config.source_line_offset))
+    } else {
+        None
+    };
 
     // Context handed to every recursive parser entry. The Tag::List /
     // Tag::Table arms consult its line lookup to annotate per-item / per-row
@@ -345,7 +341,6 @@ fn parse_document(markdown: &str, config: &ParseConfig, heading_ids: HeadingIds)
     // Grid cells run the same rule from `parse_cell_to_blocks`; link cards and
     // hero overlays do not (a gallery link inside a card link nests anchors).
     if heading_ids == HeadingIds::Number {
-        super::extract_hero::promote_opening_hero(markdown, &mut blocks, config);
         super::picture_row::promote(&mut blocks);
     }
 

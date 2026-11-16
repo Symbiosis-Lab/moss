@@ -1042,7 +1042,6 @@ pub fn process_markdown_file(
         math: site.math,
         hard_line_breaks: site.hard_line_breaks,
         blocks: site.blocks.map(|plan| &plan.names),
-        page_body: !(is_slot_only || injects_into_every_page),
     };
     let mut doc = moss_core::ast::parse_with_config(&markdown_content, &parse_config);
     let (block_assets, placement_problems) = site.blocks.map(|plan| plan.place(&mut doc)).unwrap_or_default();

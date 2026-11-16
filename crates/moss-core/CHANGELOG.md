@@ -10,7 +10,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `template::existing_translation` answers which page already is a page's version in another language: the one at the mirrored path, or the one in that language's tree carrying its `translationKey`. `template::translation_key` reads a page's key.
-- `ParseConfig::page_body` (default `false`): a parse of a page's own body turns a wordless picture directly above the body's only `# Heading` into `Shortcode::Hero`, the block `:::hero` around that picture parses to; `title_outcome` and `article_title_outcome` skip that picture, and an opening `:::hero` of only a picture, when they look for the heading a body opens with. `opening_h1`, `body_opens_with_title`, `opening_heading_beyond_title` and `hero_at_top_owns_title` look past HTML comments at the top of the body.
 
 ### Changed
 

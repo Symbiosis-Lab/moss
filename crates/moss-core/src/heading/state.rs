@@ -257,36 +257,6 @@ pub(crate) fn comment_only(html: &str) -> bool {
     rest.is_empty()
 }
 
-/// The picture line of a body that opens with a hero by shape: one picture
-/// alone in its paragraph, with no words or options of its own, directly above
-/// the body's only level-1 heading, after any leading comments. It reads as if
-/// the picture were fenced in `:::hero`. A pipe on the picture (a width word
-/// such as `|body`, a placement, a caption), an italic caption line under it,
-/// prose between it and the heading, or a second level-1 heading keeps it a
-/// figure.
-pub(crate) fn banner_line(body: &str) -> Option<&str> {
-    let body = skip_leading_comments(body);
-    let mut lines = body.lines().filter(|line| !line.trim().is_empty());
-    let picture = lines.next().filter(|line| !line.starts_with([' ', '\t']))?;
-    h1_text(lines.next()?)?;
-    let media = crate::ast::extract_hero::hero_media_line_span(picture)?;
-    // A pipe in the alt carries a width word, placement or caption, and the
-    // span takes for the alt all before the first `](`, so a bracket or a
-    // backslash in it may be a link, a stray `]` or an escaped one on a line
-    // the parser reads as text. The span
-    // reads the address up to the line's last `)`, so a second picture, a
-    // quoted title or a space leaves in it what no bare address holds, and
-    // pulldown-cmark would not read a spaced address as a picture either. A
-    // wikilink target may hold spaces and parentheses; a bracket in it is a
-    // second embed.
-    let wikilink = picture.starts_with("![[");
-    let bare = !media.path.contains(|c: char| matches!(c, '[' | ']') || !wikilink && (c.is_whitespace() || matches!(c, '(' | ')' | '"')));
-    let wordless = media.is_token && media.attrs.is_empty() && !media.alt.contains(['|', '[', ']', '\\']) && bare;
-    let ext = crate::path_ext::path_extension_lower(&media.path);
-    let is_image = crate::resolve::ext_kind::reference_kind_for_ext(&ext) == crate::resolve::ext_kind::ExtKind::Image;
-    (wordless && is_image && h1_count(body) == 1).then_some(picture)
-}
-
 /// True when the body supplies a real heading: an ATX level-1 heading
 /// (`# Title`, not `##` or `#tag`) anywhere outside a code fence, including
 /// one inside a `:::hero` block. "Anywhere", not "first line": a page that
@@ -297,22 +267,6 @@ pub(crate) fn banner_line(body: &str) -> Option<&str> {
 /// rather than themselves.
 pub fn body_supplies_title(body_markdown: &str) -> bool {
     body_h1s(body_markdown).next().is_some()
-}
-
-/// How many level-1 headings a body has outside code fences: each
-/// [`body_supplies_title`] counts, and each setext one (`Title` over `===`).
-fn h1_count(body_markdown: &str) -> usize {
-    let lines: Vec<_> = unfenced_lines(body_markdown).collect();
-    let setext = lines.windows(2).filter(|pair| matches!(pair, [Some(text), Some(rule)]
-        if !text.trim().is_empty() && !is_atx_heading(text) && !rule.trim().is_empty() && rule.trim_end().chars().all(|c| c == '='))).count();
-    body_h1s(body_markdown).count() + setext
-}
-
-/// True for an ATX heading line of any level: one to six `#`, then a space,
-/// a tab or the line's end. `#tag` is text.
-fn is_atx_heading(line: &str) -> bool {
-    let rest = line.trim_start_matches('#');
-    (1..=6).contains(&(line.len() - rest.len())) && (rest.is_empty() || rest.starts_with([' ', '\t']))
 }
 
 /// The text of each ATX level-1 heading outside a code fence.
@@ -387,8 +341,7 @@ pub fn title_outcome(body_markdown: &str, body_heading_replaces_title: bool) -> 
 /// text is the same as `title` under [`same_heading_text`], or a `:::grid`
 /// whose first `# Text` line, up to the grid's first bare `:::` line, has that
 /// text (a heading moved into a cell is still the page's title). Leading blank
-/// lines are skipped, and so is an opening hero that draws no words, fenced
-/// in `:::hero` or a picture directly above the body's only `# Heading`: it
+/// lines are skipped, and so is an opening `:::hero` that draws no words: it
 /// is lifted out of the article, so the block after it opens the body.
 /// Anything else first, including a `##` heading or a different `# Text`,
 /// makes this false.
@@ -401,9 +354,7 @@ pub fn body_opens_with_title(body_markdown: &str, title: &str) -> bool {
 pub fn opening_h1(body_markdown: &str) -> Option<&str> {
     let body_markdown = skip_leading_comments(body_markdown);
     let mut lines = body_markdown.lines().filter(|line| !line.trim().is_empty()).peekable();
-    if banner_line(body_markdown).is_some() {
-        lines.next();
-    } else if lines.peek().copied().and_then(hero_fence_args).is_some() && !hero_at_top_owns_title(body_markdown) {
+    if lines.peek().copied().and_then(hero_fence_args).is_some() && !hero_at_top_owns_title(body_markdown) {
         lines.find(|l| l.trim() == ":::");
     }
     let first = lines.next();
@@ -1150,39 +1101,6 @@ mod tests {
     fn title_inside_an_opening_hero_under_a_comment_has_no_injected_title() {
         let body = "<!-- note -->\n:::hero {image=hall.jpg}\n# Custom\n:::\n\ntext";
         assert_eq!(article_title_outcome(article_inputs(body, Some("Custom")), false), TitleOutcome::None);
-    }
-
-    /// The picture above the body's only `# Heading` is that hero without the
-    /// fence. A second `# Heading`, a caption line or a width word keeps the
-    /// picture in the body, and the injected title above it.
-    #[test]
-    fn title_under_an_opening_picture_has_no_injected_title() {
-        for picture in ["![Hall](hall.jpg)", "![[hall.jpg]]", "\n![](hall.jpg)\n"] {
-            let body = format!("{picture}\n\n# Custom\n\ntext\n\n## Part\n\n```\nCode\n===\n```\n\nA rule under a blank line:\n\n===\n");
-            assert_eq!(article_title_outcome(article_inputs(&body, Some("Custom")), false), TitleOutcome::None, "{picture}");
-        }
-        for body in [
-            "![Hall](hall.jpg)\n\n# Custom\n\n# 2.\n",
-            "![Hall](hall.jpg)\n*The hall in 1884*\n\n# Custom\n",
-            "![Hall|body](hall.jpg)\n\n# Custom\n",
-            "![[hall.jpg|The hall]]\n\n# Custom\n",
-            "![Hall](hall.jpg)\n\nA line.\n\n# Custom\n",
-            "![[notes.pdf]]\n\n# Custom\n",
-            "![Hall](hall.jpg)\n\n# Custom\n\nText.\n\nPart Two\n========\n",
-            "![Hall](hall.jpg)\n\n# Custom\n\nText.\n\n#two\n===\n",
-            // Not a picture to the parser: the address holds a space, the
-            // alt a link or a stray bracket, the line a second embed.
-            "![Hall](my hall.jpg)\n\n# Custom\n",
-            "![a [b](hall.jpg)\n\n# Custom\n",
-            "![a]b](hall.jpg)\n\n# Custom\n",
-            "![a\\](hall.jpg)\n\n# Custom\n",
-            // A visible line or a code block to the parser, not a comment.
-            "<!-- a --> <!-- b\nc -->\n![Hall](hall.jpg)\n\n# Custom\n",
-            "    <!-- a -->\n![Hall](hall.jpg)\n\n# Custom\n",
-            "![[hall.jpg]] ![[lake.jpg]]\n\n# Custom\n",
-        ] {
-            assert_eq!(article_title_outcome(article_inputs(body, Some("Custom")), false), TitleOutcome::Visible, "{body}");
-        }
     }
 
     #[test]

@@ -1480,7 +1480,6 @@ fn parse_with_source_lines_assigns_1_based_line_numbers() {
         warning_line_offset: 0,
         math: false,
         hard_line_breaks: false,
-        page_body: false,
     };
     let doc = parse_with_config(md, &config);
     // Expected blocks: H1, P, H2, P (4 blocks).
@@ -1508,7 +1507,6 @@ fn source_line_offset_is_applied_additively() {
         warning_line_offset: 0,
         math: false,
         hard_line_breaks: false,
-        page_body: false,
     };
     let doc = parse_with_config(md, &config);
     assert_eq!(
@@ -1540,7 +1538,6 @@ fn source_lines_not_collapsed_across_multiline_shortcode() {
         warning_line_offset: 0,
         math: false,
         hard_line_breaks: false,
-        page_body: false,
     };
     let doc = parse_with_config(md, &config);
     // Blocks: H1 (line 1), Shortcode grid (line 3), H2 "After" (line 13).
@@ -1567,7 +1564,6 @@ fn parse_with_source_lines_lists_and_blockquotes() {
         warning_line_offset: 0,
         math: false,
         hard_line_breaks: false,
-        page_body: false,
     };
     let doc = parse_with_config(md, &config);
     assert_eq!(doc.blocks.len(), 2);
@@ -1593,7 +1589,6 @@ fn parse_with_source_lines_populates_item_lines_on_list() {
         warning_line_offset: 0,
         math: false,
         hard_line_breaks: false,
-        page_body: false,
     };
     let doc = parse_with_config(md, &config);
     assert_eq!(doc.blocks.len(), 1);
@@ -1652,7 +1647,6 @@ fn parse_with_source_lines_populates_row_lines_on_table() {
         warning_line_offset: 0,
         math: false,
         hard_line_breaks: false,
-        page_body: false,
     };
     let doc = parse_with_config(md, &config);
     assert_eq!(doc.blocks.len(), 1);
@@ -1834,7 +1828,6 @@ fn parse_with_source_lines_handles_list_after_blank_line_offset() {
         warning_line_offset: 0,
         math: false,
         hard_line_breaks: false,
-        page_body: false,
     };
     let doc = parse_with_config(md, &config);
     assert_eq!(doc.blocks.len(), 2);
@@ -1872,7 +1865,6 @@ fn parse_implicit_figure_off_leaves_image_paragraph_unpromoted() {
         warning_line_offset: 0,
         math: false,
         hard_line_breaks: false,
-        page_body: false,
     };
     let doc = parse_with_config("![alt](photo.jpg)\n", &config);
     assert_eq!(doc.blocks.len(), 1);
@@ -1981,7 +1973,6 @@ fn implicit_figure_caption_carries_link_and_math_nodes() {
         warning_line_offset: 0,
         math: true,
         hard_line_breaks: false,
-        page_body: false,
     };
     let doc = parse_with_config("![a [link](/x) and $x^2$ end](img.png)\n", &config);
     match doc.blocks.into_iter().next().expect("one block") {
@@ -2024,7 +2015,6 @@ fn implicit_figure_caption_only_math_is_a_math_node() {
         warning_line_offset: 0,
         math: true,
         hard_line_breaks: false,
-        page_body: false,
     };
     let doc = parse_with_config("![$E=mc^2$](img.png)\n", &config);
     match doc.blocks.into_iter().next().expect("one block") {

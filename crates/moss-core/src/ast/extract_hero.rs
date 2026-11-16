@@ -78,7 +78,7 @@ pub struct HeroDrawnFrom {
 /// uses `PipelineHooks::render_shortcode` with the Hero arm calling
 /// `render_hero_html_typed`).
 pub fn extract_hero(doc: &mut Document, hooks: &dyn RenderHooks) -> Option<HeroExtraction> {
-    let opening = opening_block(&doc.blocks)
+    let opening = doc.blocks.iter().position(|b| !is_comment(b))
         .filter(|&i| matches!(doc.blocks[i], Block::Shortcode(Shortcode::Hero(_))));
     // `header=over` lays the header over the opening hero only, so every hero
     // left in the body keeps the header band.
@@ -234,28 +234,6 @@ pub(crate) fn hero_body_has_overlay_content(args: &str, body: &str) -> bool {
     let lines: Vec<&str> = body.lines().collect();
     let run = hero_media_run(&lines);
     run.overlay.iter().any(|&k| !lines[k].trim().is_empty())
-}
-
-/// Replace the opening picture of a page body with the hero `:::hero` around
-/// it parses to, when the body opens with a hero by shape
-/// ([`crate::heading::state::banner_line`]). Built by [`parse_hero`] from the
-/// picture's own line, so the fenced and the plain form are one shortcode.
-pub(super) fn promote_opening_hero(markdown: &str, blocks: &mut [Block], config: &ParseConfig) {
-    if !config.page_body {
-        return;
-    }
-    let Some(line) = crate::heading::state::banner_line(markdown) else { return };
-    let lone_picture = |block: &Block| match block {
-        Block::Figure { .. } => true,
-        Block::Paragraph(inlines) => matches!(inlines.as_slice(), [Inline::Image { .. }]),
-        _ => false,
-    };
-    let Some(start) = opening_block(blocks) else { return };
-    if let [picture, Block::Heading { level: 1, .. }, ..] = &mut blocks[start..] {
-        if lone_picture(picture) {
-            *picture = Block::Shortcode(Shortcode::Hero(parse_hero("", line, config).0));
-        }
-    }
 }
 
 /// Parse a `:::hero` block in any of three syntactic forms.
@@ -788,12 +766,13 @@ pub(crate) fn hero_asset_spans(
 #[path = "extract_hero_tests.rs"]
 mod tests;
 
-/// The first block a reader sees: the one after any leading comments.
-fn opening_block(blocks: &[Block]) -> Option<usize> {
-    blocks.iter().position(|b| !is_comment(b))
-}
-
 /// A block that holds only HTML comments, which a reader never sees.
 fn is_comment(block: &Block) -> bool {
-    matches!(block, Block::Other(html) if crate::heading::state::comment_only(html))
+    let Block::Other(html) = block else { return false };
+    let mut rest = html.trim();
+    while let Some(after) = rest.strip_prefix("<!--") {
+        let Some((_, tail)) = after.split_once("-->") else { return false };
+        rest = tail.trim_start();
+    }
+    rest.is_empty()
 }
