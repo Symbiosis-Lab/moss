@@ -219,7 +219,8 @@ fn execute(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         [verb, id] if verb == "revoke" && id == "--all" => store.revoke_all(),
-        [verb, id] if verb == "revoke" && !id.starts_with('-') => store.revoke(id),
+        // An id is URL-safe base64, so one in 64 starts with `-`; only a dash word no session has is a mistyped flag.
+        [verb, id] if verb == "revoke" && (!id.starts_with('-') || store.list()?.iter().any(|s| s.id == *id)) => store.revoke(id),
         _ => Err("Usage: moss sessions [revoke <id> | revoke --all]".into()),
     }
 }
