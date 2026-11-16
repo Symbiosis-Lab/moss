@@ -1,7 +1,19 @@
 use crate::ast::{parse, Block};
 
+/// The blocks, less where each picture's line is: the fenced form counts from its fence.
 fn blocks(md: &str) -> Vec<Block> {
-    parse(md).blocks
+    fn forget_lines(blocks: &mut [Block]) {
+        for block in blocks {
+            match block {
+                Block::Shortcode(crate::ast::Shortcode::Gallery(g)) => g.items.iter_mut().for_each(|i| i.line_offset = 0),
+                Block::Shortcode(crate::ast::Shortcode::Grid(g)) => g.cells.iter_mut().for_each(|c| forget_lines(c)),
+                _ => {}
+            }
+        }
+    }
+    let mut blocks = parse(md).blocks;
+    forget_lines(&mut blocks);
+    blocks
 }
 
 /// The plain form and the fenced form must build the same block.

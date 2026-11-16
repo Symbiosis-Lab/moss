@@ -171,6 +171,14 @@ pub struct GalleryItem {
     /// `title` attribute of the `<img>`. `None` for a bare path or wikilink.
     #[serde(default)]
     pub title: Option<String>,
+    /// Lines from the block's source line to this picture's: the fence line
+    /// of a `:::gallery`, the first line of a row of pictures.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub line_offset: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 /// Where a fenced shortcode's inner content sits in the page source, so a click
@@ -799,6 +807,7 @@ mod tests {
                     alt_only: false,
                     attrs: String::new(),
                     caption: Vec::new(),
+                    line_offset: 0,
                 },
                 GalleryItem {
                     title: None,
@@ -807,6 +816,7 @@ mod tests {
                     alt_only: false,
                     attrs: "cover top".to_string(),
                     caption: Vec::new(),
+                    line_offset: 0,
                 },
             ],
             width: None,
@@ -845,6 +855,7 @@ mod tests {
                 alt_only: false,
                 attrs: "1:1 contain".to_string(),
                 caption: Vec::new(),
+                line_offset: 0,
             }],
             width: None,
             rows: false,

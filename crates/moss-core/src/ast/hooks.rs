@@ -307,6 +307,9 @@ pub trait RenderHooks {
                     };
                     out.push_str(r#"<div class="moss-gallery-item""#);
                     out.push_str(&item_style);
+                    if let Some(n) = source_line {
+                        out.push_str(&format!(r#" data-source-line="{}""#, n + item.line_offset));
+                    }
                     out.push_str(r#"><a class="moss-gallery-link" href=""#);
                     out.push_str(&escape_attr(&src_str));
                     out.push('"');
@@ -1516,6 +1519,25 @@ mod tests {
     }
 
     #[test]
+    fn gallery_items_carry_their_source_line_only_when_tracked() {
+        let item = |src: &str, line_offset| GalleryItem {
+            src: Url::resolved(src, UrlKind::Asset),
+            alt: "Alt".to_string(),
+            alt_only: false,
+            attrs: String::new(),
+            caption: Vec::new(),
+            title: None,
+            line_offset,
+        };
+        let sc = Shortcode::Gallery(GalleryShortcode { items: vec![item("a.jpg", 1), item("b.jpg", 3)], ..Default::default() });
+        let mut html = String::new();
+        DefaultHooks::new().render_shortcode(&mut html, &sc, Some(10));
+        assert!(html.contains(r#"<div class="moss-gallery-item" data-source-line="11"><a class="moss-gallery-link" href="a.jpg""#), "{html}");
+        assert!(html.contains(r#"<div class="moss-gallery-item" data-source-line="13"><a class="moss-gallery-link" href="b.jpg""#), "{html}");
+        assert!(!render_shortcode_html(&sc).contains("data-source-line"), "untracked");
+    }
+
+    #[test]
     fn gallery_caption_sits_under_the_link_not_inside_it() {
         let item = |src: &str, caption: Vec<Inline>| GalleryItem {
             src: Url::resolved(src, UrlKind::Asset),
@@ -1524,6 +1546,7 @@ mod tests {
             attrs: String::new(),
             caption,
             title: None,
+            line_offset: 0,
         };
         let link = Inline::Link {
             url: Url::resolved("../quay/", UrlKind::Internal),
@@ -1556,6 +1579,7 @@ mod tests {
             attrs: String::new(),
             caption: Vec::new(),
             title: None,
+            line_offset: 0,
         };
         let sc = Shortcode::Gallery(GalleryShortcode {
             items: vec![item("a.jpg"), item("b.jpg")],
@@ -1580,6 +1604,7 @@ mod tests {
                 alt_only: false,
                 attrs: String::new(),
                 caption: Vec::new(),
+                line_offset: 0,
             }],
             ..Default::default()
         });
@@ -1616,6 +1641,7 @@ mod tests {
                 alt_only: false,
                 attrs: String::new(),
                 caption: Vec::new(),
+                line_offset: 0,
             }],
             ..Default::default()
         });
@@ -1644,6 +1670,7 @@ mod tests {
                     alt_only: false,
                     attrs: String::new(),
                     caption: Vec::new(),
+                    line_offset: 0,
                 }],
                 ..Default::default()
             }), None);
@@ -1682,6 +1709,7 @@ mod tests {
             attrs: String::new(),
             caption: Vec::new(),
             title: None,
+            line_offset: 0,
         };
         let sc = Shortcode::Gallery(GalleryShortcode {
             rows: true,
@@ -1714,6 +1742,7 @@ mod tests {
                 attrs: String::new(),
                 caption: Vec::new(),
                 title: None,
+                line_offset: 0,
             }],
             ..Default::default()
         });
@@ -1739,6 +1768,7 @@ mod tests {
                 attrs: String::new(),
                 caption: Vec::new(),
                 title: None,
+                line_offset: 0,
             }],
             ..Default::default()
         });
@@ -1760,6 +1790,7 @@ mod tests {
                 attrs: String::new(),
                 caption: Vec::new(),
                 title: None,
+                line_offset: 0,
             }],
             ..Default::default()
         });
@@ -1780,6 +1811,7 @@ mod tests {
                 attrs: String::new(),
                 caption: Vec::new(),
                 title: None,
+                line_offset: 0,
             }],
             ..Default::default()
         });
@@ -1799,6 +1831,7 @@ mod tests {
                 attrs: String::new(),
                 caption: Vec::new(),
                 title: None,
+                line_offset: 0,
             }],
             ..Default::default()
         });
@@ -1865,6 +1898,7 @@ mod tests {
                 alt_only: false,
                 attrs: String::new(),
                 caption: Vec::new(),
+                line_offset: 0,
             }],
             ..Default::default()
         })
