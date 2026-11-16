@@ -33,23 +33,29 @@ impl ObjectStore {
     /// when the shared cache refuses a write.
     pub fn ready_blob(&self, oid: &str) -> Option<PathBuf> {
         if !valid_oid(oid) { return None; }
-        [self.resident_local_blob(oid), Some(self.blob_path(oid))].into_iter().flatten().find(|path| self.holds_verified(path, oid))
+        let mut candidates: Vec<PathBuf> = [self.local_blob_path(oid), Some(self.blob_path(oid))].into_iter().flatten().collect();
+        // The copy a check already verified goes first, so a blob still where it was costs one stat.
+        candidates.sort_by_key(|path| !self.verified_at(path, oid));
+        candidates.into_iter().find(|path| self.holds_verified(path, oid))
     }
 
     /// Whether `path` holds `oid`'s bytes now. A blob verified earlier, by this
     /// store or by the pass it remembers, is taken by its stat; any other is
     /// hashed, and removed if its bytes are not its name.
     pub(super) fn holds_verified(&self, path: &Path, oid: &str) -> bool {
-        if crate::build::icloud::is_still_in_the_cloud(path) {
-            return false;
-        }
-        if !crate::build::io_utils::output_present(path) {
-            if path.exists() {
+        use crate::build::io_utils::Presence;
+        // One lstat answers residency, eviction and the stat the index is keyed by:
+        // a blob is written by temp-and-rename, never as a link.
+        let Ok(metadata) = fs::symlink_metadata(path) else { return false };
+        match crate::build::io_utils::probe_output_stat(path, crate::types::content::MODE_FILE, Ok(metadata.clone())) {
+            Presence::Present if !metadata.file_type().is_symlink() => {}
+            // In the cloud is a miss; an empty file that is here is damage, noted below.
+            Presence::Evicted if metadata.len() != 0 => return false,
+            _ => {
                 log::info!("[CAS] unusable blob {} at {}, treating as missing", oid, path.display());
+                return false;
             }
-            return false;
         }
-        let Ok(metadata) = fs::metadata(path) else { return false };
         let before = FileStat::of(&metadata);
         let key = path.to_string_lossy().into_owned();
         let mut index = self.verified.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -84,6 +90,14 @@ impl ObjectStore {
                 false
             }
         }
+    }
+
+    /// Whether this store, or the pass it remembers, verified `path` as `oid`.
+    fn verified_at(&self, path: &Path, oid: &str) -> bool {
+        let key = path.to_string_lossy();
+        let names = |index: &HashIndex| index.entries.get(key.as_ref()).is_some_and(|entry| entry.content_hash == oid);
+        names(&self.verified.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
+            || self.remembered.as_deref().is_some_and(|remembered| names(&remembered.index))
     }
 
     /// This store for one pass, answering a blob check from what an earlier

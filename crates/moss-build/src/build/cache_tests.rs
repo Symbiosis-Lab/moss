@@ -2926,6 +2926,25 @@ fn storing_local_bytes_republishes_the_same_cloud_oid_for_every_reader() {
     assert_eq!(fs::read(dir.join("follower.json")).unwrap(), b"small json");
 }
 
+/// With a copy in both stores, the one an earlier pass verified answers: its
+/// stat vouches for it, where the other copy would be read and hashed.
+#[test]
+fn a_blob_in_both_stores_is_answered_by_the_copy_already_verified() {
+    let dir = make_test_dir("verified_copy_first");
+    let paths = crate::moss_paths::MossPaths::from_moss_dir(dir.join(".moss"));
+    let index = dir.join("verified.json");
+    let bytes = b"bytes both stores hold";
+    let oid = ObjectStore::new(paths.cache_objects()).store_bytes(bytes, RecordMode::Request).unwrap();
+    let first = ObjectStore::for_site(&paths).remembering_verified(&index);
+    let shared = first.ready_blob(&oid).expect("the shared copy is ready");
+    first.save_verified().unwrap();
+    put_object(&paths.cache_local_objects(), &oid, bytes);
+
+    let next = ObjectStore::for_site(&paths).remembering_verified(&index);
+
+    assert_eq!(next.ready_blob(&oid), Some(shared));
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn a_site_store_keeps_local_cas_bytes_when_the_shared_cache_refuses_writes() {
