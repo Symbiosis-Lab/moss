@@ -18,6 +18,16 @@ fn build(root: &Path, trigger: BuildTrigger) -> serde_json::Value {
 }
 
 fn build_with(root: &Path, trigger: BuildTrigger, plugins: moss_build::build::PluginMode, site_url: Option<&str>) -> serde_json::Value {
+    run(root, trigger, plugins, site_url, None)
+}
+
+/// A build for a folder a preview server shows: it leaves picture blurs to the
+/// background media phase instead of decoding them before the render.
+fn build_previewing(root: &Path, trigger: BuildTrigger) -> serde_json::Value {
+    run(root, trigger, moss_build::build::PluginMode::Skip, None, Some(1))
+}
+
+fn run(root: &Path, trigger: BuildTrigger, plugins: moss_build::build::PluginMode, site_url: Option<&str>, server_port: Option<u16>) -> serde_json::Value {
     use moss_build::build::{run_pipeline, PipelineConfig};
     use moss_build::cli::host::cli_host_ports;
     use moss_build::vault_root::VaultRoot;
@@ -33,7 +43,7 @@ fn build_with(root: &Path, trigger: BuildTrigger, plugins: moss_build::build::Pl
         trigger,
         exits_after_build: true,
         site_url_override: site_url.map(str::to_string),
-        server_port: None,
+        server_port,
         admission_epoch: None,
         live_port: None,
         rename_pairs: Vec::new(),
@@ -410,6 +420,38 @@ fn a_proved_build_after_staging_is_cleared_publishes_what_a_full_render_does() {
     let reference = published(full.root());
     let differing: Vec<_> = reference.keys().chain(proved.keys())
         .filter(|k| reference.get(*k) != proved.get(*k))
+        .collect();
+    assert!(differing.is_empty(), "differs from a full render: {differing:?}");
+}
+
+/// The re-render owed once pictures settle renders the pages showing them,
+/// carries the rest, and serves what a full render would.
+#[test]
+fn a_settled_picture_renders_the_pages_showing_it_and_matches_a_full_render() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let site = Site::new();
+    site.write("notes/alpha.md", "---\ntitle: Alpha\ndate: 2026-01-02\n---\n\n![A field](field.png)\n");
+    image::RgbImage::from_fn(1600, 900, |x, y| image::Rgb([(x % 251) as u8, (y % 241) as u8, 160]))
+        .save(site.root().join("notes/field.png"))
+        .unwrap();
+    let blur = "background-image:url(data:image";
+    build_previewing(site.root(), BuildTrigger::Unobserved);
+    let page = || fs::read_to_string(site.root().join(".moss/build.nosync/staging/notes/alpha/index.html")).unwrap();
+    assert!(!page().contains(blur), "the first preview render left the blur to the media phase");
+
+    let record = build_previewing(site.root(), BuildTrigger::ImagesSettled);
+    assert_eq!(count(&record, "proved_from_seal"), 1, "{record}");
+    assert!(count(&record, "pages_rendered") >= 1, "{record}");
+    assert!(count(&record, "pages_carried") > 0, "{record}");
+    assert!(page().contains(blur), "the settled blur is baked into the page showing the picture");
+    let settled = published(site.root());
+
+    let full = Site(tempfile::tempdir().unwrap());
+    copy_source(site.root(), full.root());
+    build_previewing(full.root(), BuildTrigger::Full);
+    let reference = published(full.root());
+    let differing: Vec<_> = reference.keys().chain(settled.keys())
+        .filter(|k| reference.get(*k) != settled.get(*k))
         .collect();
     assert!(differing.is_empty(), "differs from a full render: {differing:?}");
 }

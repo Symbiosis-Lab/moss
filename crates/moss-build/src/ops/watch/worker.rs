@@ -94,6 +94,10 @@ impl RebuildRequest {
         }
     }
 
+    pub fn images_settled() -> Self {
+        RebuildRequest { trigger: BuildTrigger::ImagesSettled, ..Self::full() }
+    }
+
     /// Run the deferred content-hash gate: `false` means every producing path
     /// is byte-identical to what the last build recorded, so this request may
     /// be dropped. `true` for a request that never deferred (`gate_paths:

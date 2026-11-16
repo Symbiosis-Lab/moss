@@ -224,6 +224,10 @@ pub enum BuildTrigger {
     /// they cannot. Opt-in: `Full` stays the answer for a caller that needs
     /// every page rendered, such as a publish.
     Unobserved,
+    /// Pictures the last render could not finish have settled (their blur and
+    /// colour, `media::promise`). Proved from the last seal like `Unobserved`,
+    /// which may not hold its media settled; renders the pages that show one.
+    ImagesSettled,
 }
 
 impl BuildTrigger {
@@ -233,7 +237,7 @@ impl BuildTrigger {
     pub fn is_watch_batch(&self) -> bool {
         match self {
             BuildTrigger::ContentOnly(_) | BuildTrigger::Structural(_) => true,
-            BuildTrigger::Full | BuildTrigger::Unobserved => false,
+            BuildTrigger::Full | BuildTrigger::Unobserved | BuildTrigger::ImagesSettled => false,
         }
     }
 
@@ -250,9 +254,11 @@ impl BuildTrigger {
     /// `Unobserved` absorbs an event batch, because the proof it asks for
     /// compares the whole disk with the last seal and so sees those paths too;
     /// it may absorb only triggers caused by a disk change, so every variant
-    /// is named below and a new one has to choose.
+    /// is named below and a new one has to choose. `ImagesSettled` absorbs
+    /// those and `Unobserved` alike: its proof is the same walk, and the
+    /// pictures it owes still have to render.
     pub fn merge(self, other: BuildTrigger) -> BuildTrigger {
-        use BuildTrigger::{ContentOnly, Full, Structural, Unobserved};
+        use BuildTrigger::{ContentOnly, Full, ImagesSettled, Structural, Unobserved};
         fn union(mut a: Vec<PathBuf>, b: Vec<PathBuf>) -> Vec<PathBuf> {
             for p in b {
                 if !a.contains(&p) {
@@ -263,6 +269,7 @@ impl BuildTrigger {
         }
         match (self, other) {
             (Full, _) | (_, Full) => Full,
+            (ImagesSettled, _) | (_, ImagesSettled) => ImagesSettled,
             (Unobserved, Unobserved | ContentOnly(_) | Structural(_))
             | (ContentOnly(_) | Structural(_), Unobserved) => Unobserved,
             (Structural(a), Structural(b))

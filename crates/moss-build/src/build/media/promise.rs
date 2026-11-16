@@ -316,12 +316,19 @@ pub(crate) fn trigger_media_settle_rerender(
     if !needs_rerender {
         return false;
     }
+    // Pictures alone change no page but the ones showing them, which the render
+    // verdict finds; a video output can change a page no verdict models.
+    let (request, scope) = if settled.iter().all(|a| a.asset_type == "image") {
+        (crate::ops::watch::worker::RebuildRequest::images_settled(), "the pages showing them")
+    } else {
+        (crate::ops::watch::worker::RebuildRequest::full(), "every page")
+    };
     log::info!(
-        "media settle: a video poster or a brand-new image landed for '{}' — \
-         enqueueing a full re-render so grid-card covers pick up the color band and thumbnail",
-        folder_path
+        "media settle: a video poster or a brand-new image landed for '{}' — re-rendering {} so grid-card covers pick up the color band and thumbnail",
+        folder_path,
+        scope
     );
-    worker.enqueue(crate::ops::watch::worker::RebuildRequest::full());
+    worker.enqueue(request);
     // The worker owns the re-render; a build must not also run a second pass.
     false
 }
@@ -392,11 +399,29 @@ mod media_settle_rerender_tests {
             Some(&SiteHashes::default()),
         );
 
-        assert!(
-            handle.slot_occupied(),
-            "a settled thumbnail must enqueue a follow-up rebuild"
+        assert_eq!(
+            handle.take().map(|r| r.trigger),
+            Some(crate::build::BuildTrigger::Full),
+            "a settled thumbnail must enqueue a full rebuild"
         );
         assert!(!second_pass_owed, "the worker owns the re-render, so the build must not also run a second pass");
+        worker::deregister(folder, &handle);
+    }
+
+    /// A poster settling beside a new picture can change pages the render
+    /// verdict does not model, so the batch keeps the full path.
+    #[test]
+    fn a_thumbnail_beside_a_new_image_enqueues_a_full_rebuild() {
+        let folder = "/tmp/media-settle-rerender-test-thumbnail-and-image";
+        let handle = worker::register(folder);
+
+        trigger_media_settle_rerender(
+            folder,
+            &[image("assets/new-cover.webp"), thumbnail("videos/clip.thumb.jpg")],
+            Some(&SiteHashes::default()),
+        );
+
+        assert_eq!(handle.take().map(|r| r.trigger), Some(crate::build::BuildTrigger::Full));
         worker::deregister(folder, &handle);
     }
 
@@ -429,7 +454,7 @@ mod media_settle_rerender_tests {
     /// unreadable (dataless) at the render that first referenced it, baking
     /// an empty `data-cover-color` with no client-side fix. Must enqueue.
     #[test]
-    fn a_brand_new_image_settle_enqueues_a_full_rebuild() {
+    fn a_brand_new_image_settle_enqueues_an_images_settled_rebuild() {
         let folder = "/tmp/media-settle-rerender-test-new-image";
         let handle = worker::register(folder);
 
@@ -439,9 +464,10 @@ mod media_settle_rerender_tests {
             Some(&SiteHashes::default()), // previous manifest has never seen this path
         );
 
-        assert!(
-            handle.slot_occupied(),
-            "a brand-new image settle must enqueue a follow-up rebuild"
+        assert_eq!(
+            handle.take().map(|r| r.trigger),
+            Some(crate::build::BuildTrigger::ImagesSettled),
+            "a brand-new image settle must enqueue a re-render of the pages showing it, not of every page"
         );
         worker::deregister(folder, &handle);
     }

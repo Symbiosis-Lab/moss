@@ -56,7 +56,7 @@ fn a_lone_request_keeps_its_rename_pairs_and_trigger() {
 fn merging_preserves_the_narrowest_honest_trigger() {
     let paths = |t: &BuildTrigger| match t {
         BuildTrigger::ContentOnly(p) | BuildTrigger::Structural(p) => p.clone(),
-        BuildTrigger::Full | BuildTrigger::Unobserved => vec![],
+        BuildTrigger::Full | BuildTrigger::Unobserved | BuildTrigger::ImagesSettled => vec![],
     };
 
     // Two content-only batches union their paths and STAY content-only: the
@@ -85,6 +85,21 @@ fn merging_preserves_the_narrowest_honest_trigger() {
     );
     assert_eq!(
         merge_requests(content_only("a.md"), RebuildRequest::full()).trigger,
+        BuildTrigger::Full
+    );
+
+    // The pictures a settle owes still render when an edit joins it, and its
+    // proof walks the whole disk, so it sees the edit too; `Full` still wins.
+    assert_eq!(
+        merge_requests(content_only("a.md"), RebuildRequest::images_settled()).trigger,
+        BuildTrigger::ImagesSettled
+    );
+    assert_eq!(
+        merge_requests(RebuildRequest::images_settled(), with_pairs(&[("a.md", "b.md")])).trigger,
+        BuildTrigger::ImagesSettled
+    );
+    assert_eq!(
+        merge_requests(RebuildRequest::images_settled(), RebuildRequest::full()).trigger,
         BuildTrigger::Full
     );
 }
