@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-11-16
+
 ### Added
 
 - `template::existing_translation` answers which page already is a page's version in another language: the one at the mirrored path, or the one in that language's tree carrying its `translationKey`. `template::translation_key` reads a page's key.
