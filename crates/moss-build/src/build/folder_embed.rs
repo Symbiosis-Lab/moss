@@ -663,7 +663,8 @@ pub(crate) fn generate_children(
     // render through `child_summary` and don't depend on the minimal item CSS.
     // (Grid returns earlier with its own data-layout="grid".)
     let data_layout = if style != "summary" { "minimal" } else { "list" };
-    components::cards_container(data_layout, lead, rows.is_embed, &rows.placement, html.trim())
+    let holds = components::ListHolds::of(items.iter().map(|i| i.is_collection()));
+    components::cards_container(data_layout, lead, rows.is_embed, &rows.placement, parent_axis, holds, html.trim())
 }
 
 /// How a listing draws its rows, as its embed or its folder's frontmatter set it.

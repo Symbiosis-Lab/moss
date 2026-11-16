@@ -346,6 +346,11 @@ impl ChildItemProps {
         self.child_count.is_some() && !self.count_only
     }
 
+    /// A folder or a term's card: it stands for the pages it holds.
+    pub(crate) fn is_collection(&self) -> bool {
+        self.child_count.is_some()
+    }
+
     /// A folder card's count text, or `None` for a leaf or a listing that
     /// hides the count. The one place the setting is applied.
     pub(crate) fn count_label(&self, lang: crate::i18n::Language, typesetting: Option<&str>) -> Option<String> {

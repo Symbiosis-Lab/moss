@@ -174,13 +174,15 @@ pub fn end_for_page(doc: &ParsedDocument, all_docs: &[ParsedDocument], cards: &E
             props.title = headline.clone();
         }
         // A hand-picked card names no date: the axis that says nothing about one.
-        Some(child_summary::render_with_sort(&props, doc.lang, cards.typesetting, Some(cards.media_lookup), moss_core::sort::SortAxis::Weight))
+        let html = child_summary::render_with_sort(&props, doc.lang, cards.typesetting, Some(cards.media_lookup), moss_core::sort::SortAxis::Weight);
+        Some((html, props.is_collection()))
     };
     end_html(&doc.placed_fields, doc.lang, &card)
 }
 
 /// One `<section data-field>` per placed `end` field that has a card to draw, headed by the field's label.
-fn end_html(placed: &[Placed], lang: Language, card: &dyn Fn(&FieldDecl, &PageLink) -> Option<String>) -> String {
+/// `card` draws one linked page, and says whether it stands for a collection.
+fn end_html(placed: &[Placed], lang: Language, card: &dyn Fn(&FieldDecl, &PageLink) -> Option<(String, bool)>) -> String {
     placed
         .iter()
         .filter_map(|p| {
@@ -193,10 +195,12 @@ fn end_html(placed: &[Placed], lang: Language, card: &dyn Fn(&FieldDecl, &PageLi
                 TypedValue::Pages(links) => links,
                 _ => return None,
             };
-            let cards: String = links.iter().filter_map(|link| card(decl, link)).collect::<Vec<_>>().join("\n");
+            let (cards, collections): (Vec<String>, Vec<bool>) = links.iter().filter_map(|link| card(decl, link)).unzip();
             (!cards.is_empty()).then(|| {
                 let label = html_escape(&decl.label_for(lang.as_bcp47_attr()));
-                let list = crate::build::components::cards_container("list", false, false, &Default::default(), &cards);
+                // The field's pages, in the order the author wrote them.
+                let holds = crate::build::components::ListHolds::of(collections);
+                let list = crate::build::components::cards_container("list", false, false, &Default::default(), moss_core::sort::SortAxis::Weight, holds, &cards.join("\n"));
                 format!("<section class=\"moss-field-end\" data-field=\"{}\">\n<h2 class=\"moss-field-end-label\">{label}</h2>\n{list}\n</section>\n", html_escape(&decl.name))
             })
         })

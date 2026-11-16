@@ -21,7 +21,7 @@ fn listing(folder_front: &str) -> String {
 #[test]
 fn lead_style_marks_the_listing_and_draws_summary_cards() {
     let html = listing("children_style: lead\nchildren_group: none\n");
-    assert!(html.contains(r#"<div class="moss-cards" data-layout="list" data-lead>"#), "{html}");
+    assert!(html.contains(r#"<div class="moss-cards" data-layout="list" data-lead data-list-axis="#), "{html}");
     assert!(html.contains("moss-card-description"), "cards carry the opening line: {html}");
     assert!(html.find("First Note").unwrap() < html.find("Second Note").unwrap());
 }

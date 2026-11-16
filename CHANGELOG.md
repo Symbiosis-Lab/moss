@@ -13,10 +13,12 @@ All notable changes to moss will be documented here.
 - A captioned picture without alt text that opens in the picture viewer takes its caption as its alt text. It was named by an `aria-label` while keeping `alt=""`, which marks a picture as decorative, so accessibility checkers reported a focusable picture marked presentational.
 - In a folder whose page sets `url:`, an HTML page you delete is named before a publish, in the dry run and on the receipt, and a picture keeps its old sizes answering while it stays. moss looked for these files under the folder's own name instead of the address the folder is served at. A page deleted before the first publish with this version is not listed yet.
 - Hiding many comments at once while another hide or a sync is writing them finishes the whole list. Since 0.15.25 it could stop partway with "the file kept changing under the lock".
-
 - Under `moss build --serve --watch` and in the editor, a picture added while the preview is open shows as its original until its smaller sizes are made. It showed as a broken picture until then.
-
 - The lock files that earlier versions of moss left in `~/.moss/locks`, one for every folder they ever built, are removed in the background after a build, a few hundred at a time. A machine that runs many builds could hold about a million of them.
+
+### New
+
+- Every listing says what its cards stand for: `data-list-holds` on `.moss-cards` is `entries` (pages), `collections` (folders and terms, each with a count) or `mixed`, and `data-list-axis` (its order) is now on list and summary listings too, not only on grids. A theme can style a listing of folders apart from a listing of pages.
 
 ## [0.15.25] - 2026-11-16
 

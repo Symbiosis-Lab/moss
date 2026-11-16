@@ -1026,7 +1026,7 @@ pub(super) fn render_page<'d>(
             let content = if article_list.is_empty() {
                 String::new()
             } else {
-                format!(r#"<div class="moss-cards-container"><div class="moss-cards" data-layout="minimal">{}</div></div>"#, article_list)
+                crate::build::components::cards_container("minimal", false, false, &Default::default(), moss_core::sort::SortAxis::Date, crate::build::components::ListHolds::Entries, &article_list)
             };
             (site_title.clone(), content)
         }

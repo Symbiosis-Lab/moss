@@ -278,20 +278,10 @@ pub fn render_list_with_typesetting<C: std::borrow::Borrow<ChildItemProps>>(
         .collect::<Vec<_>>()
         .join("\n");
 
-    // Wrap in `.moss-cards-container` so the CSS in Task 11 can
-    // apply `container-type: inline-size` (CSS containment queries
-    // can't sit on the grid itself without breaking layout). Inner
-    // `.moss-cards[data-layout="grid"]` carries `data-list-axis`
-    // (date/weight/title) and an optional `data-list-has-covers`
-    // flag — the CSS selects on these to pick the right
-    // `--moss-card-min` token.
-    let axis_str = match sort_axis {
-        // DateAsc presents identically to Date — same density tuning, same
-        // compact-date meta slot; only the comparator's direction differs.
-        moss_core::sort::SortAxis::Date | moss_core::sort::SortAxis::DateAsc => "date",
-        moss_core::sort::SortAxis::Weight => "weight",
-        moss_core::sort::SortAxis::Title => "title",
-    };
+    // `.moss-cards-container` carries `container-type: inline-size`, which
+    // cannot sit on the grid itself. The CSS picks `--moss-card-min` from the
+    // axis and `data-list-has-covers`.
+    let list_attrs = super::list_attrs(sort_axis, super::ListHolds::of(cards.iter().map(|c| c.borrow().is_collection())));
     let cover_attr = if has_covers { " data-list-has-covers" } else { "" };
     let container_attr = if is_embed { " data-embed" } else { "" };
     // Same emit-nothing-when-empty rule as `components::cards_container`.
@@ -299,8 +289,8 @@ pub fn render_list_with_typesetting<C: std::borrow::Borrow<ChildItemProps>>(
     let align = place.align_suffix();
 
     format!(
-        r#"<div class="moss-cards-container{}"{}{}{}><div class="moss-cards" data-layout="grid" data-list-axis="{}"{}>{}</div></div>"#,
-        align, place.data_width_attr, place.size_style_attr, container_attr, axis_str, cover_attr, items
+        r#"<div class="moss-cards-container{}"{}{}{}><div class="moss-cards" data-layout="grid"{}{}>{}</div></div>"#,
+        align, place.data_width_attr, place.size_style_attr, container_attr, list_attrs, cover_attr, items
     )
 }
 

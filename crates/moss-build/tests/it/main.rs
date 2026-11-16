@@ -61,6 +61,7 @@ mod lead_listing_test;
 mod legacy_moss_ignore_note_test;
 mod list_translations_test;
 mod listing_classes_test;
+mod listing_holds_test;
 mod listing_picture_strip_test;
 mod listing_same_date_weight_test;
 mod map_terms_test;

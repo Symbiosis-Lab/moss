@@ -239,7 +239,13 @@ const CORE: &[ComponentEntry] = &[
                 name: "data-list-axis",
                 values: &["date", "weight", "title"],
                 default: "title",
-                description: "Sort axis for the listing (mirrors the folder's `sort:` frontmatter). Drives `--moss-card-min` density tuning and decides what a page's `.moss-card-meta` slot holds. In the list and summary layouts it is filled only on the date axis and omitted on weight and title; in the grid layout a dated page shows its date on every axis. A folder's card always shows its article count, on every axis.",
+                description: "Sort axis for the listing, on every layout (mirrors the folder's `sort:` frontmatter; a typed `sort:` list and a field's hand-placed pages read `weight`, a `:::grid {.summary}` reads `date`). Drives `--moss-card-min` density tuning and decides what a page's `.moss-card-meta` slot holds. In the list and summary layouts it is filled only on the date axis and omitted on weight and title; in the grid layout a dated page shows its date on every axis. A folder's card always shows its article count, on every axis.",
+            },
+            DataAttr {
+                name: "data-list-holds",
+                values: &["entries", "collections", "mixed"],
+                default: "entries",
+                description: "What the listing's cards stand for, on every layout: `entries` (pages), `collections` (folders and terms, each drawn with a count of what it holds), or `mixed`. A folder with nothing to count is drawn as a page and counts as an entry. Use it to style a listing of folders apart from a listing of pages: `.moss-cards[data-list-holds=\"collections\"]`.",
             },
             DataAttr {
                 name: "data-list-has-covers",
@@ -255,7 +261,7 @@ const CORE: &[ComponentEntry] = &[
             },
         ],
         example_html: r#"<div class="moss-cards-container">
-  <div class="moss-cards" data-layout="grid" data-list-axis="date" data-list-has-covers>
+  <div class="moss-cards" data-layout="grid" data-list-axis="date" data-list-holds="entries" data-list-has-covers>
     <a class="moss-card" href="...">...</a>
     <a class="moss-card" href="...">...</a>
   </div>
@@ -1874,7 +1880,7 @@ const CORE: &[ComponentEntry] = &[
         kind: "standalone",
         parent: "",
         data_attrs: &[],
-        example_html: r#"<section class="moss-field-end" data-field="next"><h2 class="moss-field-end-label">next project</h2><div class="moss-cards-container"><div class="moss-cards" data-layout="list"><a href="/harbour-pavilion/" class="moss-card"><div class="moss-card-row"><div class="moss-card-body"><h3 class="moss-card-title">Can a pier be a room?</h3></div></div></a></div></div></section>"#,
+        example_html: r#"<section class="moss-field-end" data-field="next"><h2 class="moss-field-end-label">next project</h2><div class="moss-cards-container"><div class="moss-cards" data-layout="list" data-list-axis="weight" data-list-holds="entries"><a href="/harbour-pavilion/" class="moss-card"><div class="moss-card-row"><div class="moss-card-body"><h3 class="moss-card-title">Can a pier be a room?</h3></div></div></a></div></div></section>"#,
         example_markdown: "",
         status: Status::Emerging,
         since: "1",

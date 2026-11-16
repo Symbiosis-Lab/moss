@@ -349,18 +349,23 @@ pub(crate) fn apply_summary_grids(plan: &mut BodyPlan, index: &BuildIndex<'_>) {
             continue;
         }
         let mut cards: Vec<String> = Vec::with_capacity(grid.cells.len());
+        let mut collections: Vec<bool> = Vec::with_capacity(grid.cells.len());
         let mut resolved_any = false;
         for cell in &grid.cells {
             match summary_card_markup(cell, index) {
-                Some(card) => {
+                Some((card, is_collection)) => {
                     resolved_any = true;
                     cards.push(card);
+                    collections.push(is_collection);
                 }
                 // The author's own markup, unwrapped, as a flex item in the
                 // list. NOT `parts.to_html()`: that wraps it in
                 // `.moss-grid-card` chrome whose CSS is scoped to `.moss-grid`
                 // and would render unstyled here.
-                None => cards.push(cell.inner().to_string()),
+                None => {
+                    cards.push(cell.inner().to_string());
+                    collections.push(false);
+                }
             }
         }
         // Nothing resolved — a wrong link path shows the author their own
@@ -376,6 +381,8 @@ pub(crate) fn apply_summary_grids(plan: &mut BodyPlan, index: &BuildIndex<'_>) {
                 false,
                 true,
                 &Default::default(),
+                PICKED_CARD_AXIS,
+                crate::build::components::ListHolds::of(collections),
                 &cards.join("\n"),
             )
         ));
@@ -383,7 +390,8 @@ pub(crate) fn apply_summary_grids(plan: &mut BodyPlan, index: &BuildIndex<'_>) {
 }
 
 /// One summary card for a cell that names a page in this build.
-fn summary_card_markup(cell: &GridCellEmission, index: &BuildIndex<'_>) -> Option<String> {
+/// The card, and whether it stands for a collection.
+fn summary_card_markup(cell: &GridCellEmission, index: &BuildIndex<'_>) -> Option<(String, bool)> {
     let GridCell::Link(link) = classify_cell(&cell.blocks) else {
         return None;
     };
@@ -391,18 +399,20 @@ fn summary_card_markup(cell: &GridCellEmission, index: &BuildIndex<'_>) -> Optio
         return None;
     }
     let props = picked_card_props(&link, index)?;
-    Some(crate::build::components::child_summary::render_with_sort(
+    let is_collection = props.is_collection();
+    Some((crate::build::components::child_summary::render_with_sort(
         &props,
         index.lang,
         index.typesetting,
         index.media_lookup,
-        // A hand-picked block has no sort. The axis names what the META SLOT
-        // says, not how the list was ordered: `Date` surfaces the page's date,
-        // which is the fact a reader picks a piece by; `Weight`/`Title` would
-        // silently delete it from every card.
-        moss_core::sort::SortAxis::Date,
-    ))
+        PICKED_CARD_AXIS,
+    ), is_collection))
 }
+
+/// A hand-picked block has no sort. The axis names what the meta slot says,
+/// not how the list was ordered: `Date` surfaces the page's date, which is the
+/// fact a reader picks a piece by; `Weight`/`Title` would delete it from every card.
+const PICKED_CARD_AXIS: moss_core::sort::SortAxis = moss_core::sort::SortAxis::Date;
 
 /// Replace cells that link to a page in this build with that page's card.
 ///

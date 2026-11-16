@@ -1301,8 +1301,21 @@ fn a_summary_grid_wears_the_listing_wrapper() {
     let html = page.summary(":::grid {.summary}\n[Ink Study](works/ink-study/)\n:::\n");
 
     assert!(html.contains(r#"<div class="moss-cards-container" data-embed>"#), "got: {html}");
-    assert!(html.contains(r#"<div class="moss-cards" data-layout="list">"#), "got: {html}");
+    assert!(html.contains(r#"<div class="moss-cards" data-layout="list" data-list-axis="date" data-list-holds="entries">"#), "got: {html}");
     assert!(!html.contains("moss-grid"), "no grid container survives: {html}");
+}
+
+/// A picked card for a folder with pages to count makes the block a listing
+/// of collections.
+#[test]
+fn a_summary_grid_of_a_counted_folder_holds_collections() {
+    let docs = vec![
+        make_folder("Works", "works/index.html", None),
+        make_page_doc("Ink Study", "works/ink-study/index.html", "2024-03-02", "A study."),
+    ];
+    let page = Page::new("index.html", &docs);
+    let html = page.summary(":::grid {.summary}\n[Works](works/)\n:::\n");
+    assert!(html.contains(r#"data-list-holds="collections""#), "got: {html}");
 }
 
 /// A summary card is a full-measure row, so a column count means nothing — and
