@@ -2,7 +2,7 @@
 //! so it is a problem naming the page, field and name, with the nearest listed
 //! name. A listed place without coordinates is not.
 
-#[path = "support/site.rs"]
+#[path = "it/site.rs"]
 mod site;
 
 use site::Site;

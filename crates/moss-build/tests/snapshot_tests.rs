@@ -42,7 +42,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[path = "support/copy_dir.rs"]
+#[path = "it/copy_dir.rs"]
 mod copy_dir;
 use copy_dir::copy_dir_recursive;
 use walkdir::WalkDir;

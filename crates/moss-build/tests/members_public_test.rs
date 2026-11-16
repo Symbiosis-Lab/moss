@@ -3,7 +3,7 @@ use std::fs;
 use std::io::Read;
 use moss_build::build::BuildTrigger;
 
-#[path = "support/site.rs"]
+#[path = "it/site.rs"]
 mod site;
 
 const SECRET: &str = "quartz-private-sentinel-837461";

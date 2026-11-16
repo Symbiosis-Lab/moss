@@ -17,7 +17,7 @@
 
 use std::path::{Path, PathBuf};
 
-#[path = "support/copy_dir.rs"]
+#[path = "it/copy_dir.rs"]
 mod copy_dir;
 
 /// A fixed instant for every fixture file's mtime, so two independently

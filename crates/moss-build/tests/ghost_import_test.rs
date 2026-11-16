@@ -1,7 +1,8 @@
 //! Synthetic export coverage through the public native/CLI import seam.
 use std::{fs, path::Path, io::Write};
 use moss_build::vault::import::{import_source, recognise_source, ImportOptions, SourceKind};
-#[path = "support/site.rs"] mod site;
+#[path = "it/site.rs"]
+mod site;
 const PRIVATE: &str = "copper-private-body-928441";
 fn fixture() -> std::path::PathBuf { Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ghost-bundle") }
 fn copy_fixture(to: &Path) {

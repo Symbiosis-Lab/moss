@@ -1,7 +1,7 @@
 //! `[site].credit` puts the site's own line before moss's mark in the colophon:
 //! `<credit> · <mark>`. Without the key the colophon is exactly what it was.
 
-#[path = "support/site.rs"]
+#[path = "it/site.rs"]
 mod site;
 
 use site::Site;
