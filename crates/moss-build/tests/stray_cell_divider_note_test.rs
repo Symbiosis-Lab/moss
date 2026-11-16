@@ -18,7 +18,7 @@ fn a_divider_outside_grid_and_buttons_is_named() {
     let found = notes(&site);
     assert_eq!(found.len(), 1, "{:?}", site.logged);
     assert!(found[0].contains("work.md") && found[0].contains(":::grid"), "{}", found[0]);
-    assert!(site::problems().iter().all(|p| !p.contains("+++")), "a note is not a problem");
+    assert!(site.problems.iter().all(|p| !p.contains("+++")), "a note is not a problem");
 }
 
 #[test]

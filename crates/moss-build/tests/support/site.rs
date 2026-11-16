@@ -26,14 +26,16 @@ impl log::Log for Capture {
 
 static CAPTURE: Capture = Capture(Mutex::new(Vec::new()));
 static NOTES: Mutex<Vec<String>> = Mutex::new(Vec::new());
-
-pub fn notes() -> Vec<String> { NOTES.lock().unwrap().clone() }
-
 static PROBLEMS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
-/// The lines the last `build_sync` logged that count as build problems.
-pub fn problems() -> Vec<String> {
-    PROBLEMS.lock().unwrap().clone()
+/// What one build logged, read while it still held its turn: the global
+/// capture belongs to another test's build the moment the turn ends.
+pub struct Built {
+    /// Every line at warn level and above.
+    pub logged: Vec<String>,
+    pub notes: Vec<String>,
+    /// What the CLI counts as a build problem: every warning that is not a note.
+    pub problems: Vec<String>,
 }
 
 static TEST_HOME: std::sync::LazyLock<tempfile::TempDir> = std::sync::LazyLock::new(|| {
@@ -50,10 +52,10 @@ static SEQUENTIAL: Mutex<()> = Mutex::new(());
 
 /// Build `folder_path` and return what it logged at warn level and above.
 pub fn build_sync(folder_path: &str, trigger: moss_build::build::BuildTrigger) -> Result<Vec<String>, String> {
-    build_captured(folder_path, trigger).map(|(logs, _, _)| logs)
+    build_turn(folder_path, trigger).map(|built| built.logged)
 }
 
-fn build_captured(folder_path: &str, trigger: moss_build::build::BuildTrigger) -> Result<(Vec<String>, Vec<String>, Vec<String>), String> {
+pub fn build_turn(folder_path: &str, trigger: moss_build::build::BuildTrigger) -> Result<Built, String> {
     use moss_build::build::{run_pipeline, PipelineConfig, PluginMode};
     use moss_build::cli::host::cli_host_ports;
     use moss_build::vault_root::VaultRoot;
@@ -82,7 +84,11 @@ fn build_captured(folder_path: &str, trigger: moss_build::build::BuildTrigger) -
         live_port: None,
         rename_pairs: Vec::new(),
     }))?;
-    Ok((std::mem::take(&mut *CAPTURE.0.lock().unwrap()), notes(), problems()))
+    Ok(Built {
+        logged: std::mem::take(&mut *CAPTURE.0.lock().unwrap()),
+        notes: std::mem::take(&mut *NOTES.lock().unwrap()),
+        problems: std::mem::take(&mut *PROBLEMS.lock().unwrap()),
+    })
 }
 
 pub struct Site {
@@ -90,8 +96,6 @@ pub struct Site {
     /// What the first build logged at warn level and above.
     pub logged: Vec<String>,
     pub notes: Vec<String>,
-    /// The first build's problems, read while it still held its turn: the
-    /// global `problems()` is another test's the moment the turn ends.
     pub problems: Vec<String>,
 }
 
@@ -113,12 +117,17 @@ impl Site {
         for (rel, body) in files {
             site.write(rel, body);
         }
-        (site.logged, site.notes, site.problems) = build_captured(&site.root.to_string_lossy(), moss_build::build::BuildTrigger::Full).unwrap();
+        let built = build_turn(&site.root.to_string_lossy(), moss_build::build::BuildTrigger::Full).unwrap();
+        (site.logged, site.notes, site.problems) = (built.logged, built.notes, built.problems);
         site
     }
 
     pub fn rebuild(&self) -> Vec<String> {
-        build_sync(&self.root.to_string_lossy(), moss_build::build::BuildTrigger::Full)
+        self.rebuild_turn().logged
+    }
+
+    pub fn rebuild_turn(&self) -> Built {
+        build_turn(&self.root.to_string_lossy(), moss_build::build::BuildTrigger::Full)
             .unwrap_or_else(|e| panic!("build failed: {e}"))
     }
 

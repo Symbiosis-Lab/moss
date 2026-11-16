@@ -22,7 +22,7 @@ fn the_legacy_pair_gets_a_note_with_the_replacement_lines() {
     for line in [".moss/*", "!.moss/theme/", "!.moss/config.toml", "!.moss/redirects.json"] {
         assert!(found[0].contains(line), "{}", found[0]);
     }
-    assert!(site::problems().is_empty(), "a note is not a problem: {:?}", site::problems());
+    assert!(site.problems.is_empty(), "a note is not a problem: {:?}", site.problems);
     assert_eq!(std::fs::read_to_string(site.root.join(".gitignore")).unwrap(), ignore);
 }
 

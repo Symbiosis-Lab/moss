@@ -607,8 +607,7 @@ fn a_script_a_members_folder_publishes_to_everyone_is_named_and_published_unchan
     assert!(!members.notes.iter().any(|line| line.contains("map.css") || line.contains("maps/regions.js")), "{:?}", members.notes);
     assert!(!public.notes.iter().any(|line| line.contains("published to everyone")), "{:?}", public.notes);
 
-    members.rebuild();
-    assert_eq!(site::notes().iter().filter(|line| line.as_str() == NOTICE).count(), 1, "a warm rebuild names it again");
+    assert_eq!(members.rebuild_turn().notes.iter().filter(|line| line.as_str() == NOTICE).count(), 1, "a warm rebuild names it again");
 }
 
 /// The paths the notes name, each of which must be in the manifest a deploy uploads.

@@ -18,22 +18,22 @@ fn site_with_escaping_link(page_body: &str) -> std::path::PathBuf {
     root
 }
 
-fn build(root: &std::path::Path) -> Vec<String> {
-    site::build_sync(&root.to_string_lossy(), moss_build::build::BuildTrigger::Full).expect("builds")
+fn build(root: &std::path::Path) -> site::Built {
+    site::build_turn(&root.to_string_lossy(), moss_build::build::BuildTrigger::Full).expect("builds")
 }
 
 #[cfg(unix)]
 #[test]
 fn an_escaping_symlink_is_a_note_unless_a_page_links_to_it() {
     let quiet = site_with_escaping_link("Welcome.");
-    let logged = build(&quiet);
-    assert!(logged.iter().any(|l| l.contains("outside-link") && l.contains("Remove it")), "the note names the file and what to do: {logged:?}");
-    assert!(site::problems().is_empty(), "a skipped symlink must not fail --strict: {:?}", site::problems());
+    let built = build(&quiet);
+    assert!(built.logged.iter().any(|l| l.contains("outside-link") && l.contains("Remove it")), "the note names the file and what to do: {:?}", built.logged);
+    assert!(built.problems.is_empty(), "a skipped symlink must not fail --strict: {:?}", built.problems);
     let _ = fs::remove_dir_all(&quiet);
 
     let linked = site_with_escaping_link("See [the link](outside-link).");
-    let logged = build(&linked);
-    assert!(!site::problems().is_empty(), "a page linking to the skipped file still reports a problem: {logged:?}");
+    let built = build(&linked);
+    assert!(!built.problems.is_empty(), "a page linking to the skipped file still reports a problem: {:?}", built.logged);
     let _ = fs::remove_dir_all(&linked);
 }
 
@@ -54,9 +54,9 @@ fn an_escaping_finder_alias_is_a_note_too() {
     if !made {
         eprintln!("skipping test: Finder alias could not be made");
     } else {
-        let logged = build(&root);
-        assert!(logged.iter().any(|l| l.contains("Skipping alias") && l.contains("Remove it")), "{logged:?}");
-        assert!(site::problems().is_empty(), "{:?}", site::problems());
+        let built = build(&root);
+        assert!(built.logged.iter().any(|l| l.contains("Skipping alias") && l.contains("Remove it")), "{:?}", built.logged);
+        assert!(built.problems.is_empty(), "{:?}", built.problems);
     }
     let _ = fs::remove_dir_all(&root);
     let _ = fs::remove_dir_all(&outside);
