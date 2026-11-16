@@ -2798,9 +2798,8 @@ pub(crate) fn dispatch_image_conversions_at(
         // cloud-evicted file, it would strip the `<source>` of a healthy
         // variant on a synced vault.
         if !skip_paths.is_empty() {
-            emit_image_outputs_via_channel(
-                Path::new(&ctx.source_path), &tx, &skip_paths, &ctx.staging_dir, &heal_objects, &heal_suppressed, None,
-            );
+            super::output_emit::OutputEmit { kind: &IMAGE_OUTPUTS, root: Path::new(&ctx.source_path), tx: &tx, staging_dir: &ctx.staging_dir,
+                objects: &heal_objects, suppressed: &heal_suppressed, registry: None }.run_remembering(&skip_paths, &heal_paths.cache_image_output_hash_memo());
         }
 
         crate::build::phase::record_count("images_unchanged", total_items - to_dispatch.len() - joined);

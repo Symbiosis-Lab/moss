@@ -6269,6 +6269,71 @@ async fn skip_path_carry_forward_registers_the_verified_cas_oid_not_a_stale_or_f
     );
 }
 
+/// A carried variant sent with its verified oid is hashed once: the next build
+/// takes the hash from the memo by oid and does not read the staged file.
+#[tokio::test]
+async fn skip_path_takes_a_carried_variants_hash_from_the_memo_by_oid() {
+    use crate::build::coordinator::test_utils;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    make_big_jpeg(&root.join("kept.jpg"), 400, 300);
+    let moss_dir = root.join(".moss");
+    let staging = moss_dir.join("build.nosync").join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    fs::write(staging.join("kept.webp"), b"kept-bytes").unwrap();
+    let item = ImageConversionItem {
+        source_path: PathBuf::from("kept.jpg"),
+        source_oid: crate::build::cache::ObjectStore::hash_file(&root.join("kept.jpg")).unwrap(),
+        ext: "jpg".to_string(),
+        dimensions: None,
+        skip: None,
+        fingerprint: None,
+    };
+    let ctx = BackgroundContext {
+        image_items: vec![item.clone()],
+        source_path: root.to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir: moss_dir.clone(),
+        ..BackgroundContext::for_test()
+    };
+    let cfg = ImageCompressionConfig::default();
+    let fp = compute_image_item_fingerprint(&ctx.source_path, &item.source_path, &cfg).unwrap();
+    prime_disk_hash_index(&moss_dir, &item.source_path.to_string_lossy(), &fp, &item.source_oid);
+    let paths = MossPaths::from_moss_dir(moss_dir.clone());
+    let oid = prime_cached_transform(
+        &crate::build::cache::ObjectStore::for_site(&paths),
+        &crate::build::cache::TransformCache::for_site(&paths),
+        &item.source_oid,
+        "image/webp",
+        &cfg.to_params(),
+        b"kept-bytes",
+    );
+    let dispatch = |ctx: BackgroundContext| async move {
+        let (tx, rx) = test_utils::build_test_coordinator();
+        tokio::task::spawn_blocking(move || {
+            let services = BuildServices { spawner: Some(std::sync::Arc::new(OidTestInlineSpawner)), ..BuildServices::headless() };
+            dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+        })
+        .await
+        .unwrap();
+        test_utils::drain_into_sealed(rx, SiteHashes::default()).await
+    };
+
+    let first = dispatch(ctx.clone()).await;
+    let memo = crate::build::media::manifest_hash_memo::ManifestHashMemo::load(&paths.cache_image_output_hash_memo());
+    let real = crate::build::assets::paths::compute_binary_hash(b"kept-bytes");
+    assert_eq!(memo.get(&oid), Some(real.clone()), "the first read is remembered by oid");
+    assert_eq!(first.files()["kept.webp"], crate::types::content::file_entry(&real));
+
+    // A remembered hash the file does not have shows the file was not read.
+    memo.record(&oid, "0123456789abcdef".to_string());
+    memo.save(&paths.cache_image_output_hash_memo()).unwrap();
+    let second = dispatch(ctx).await;
+    assert_eq!(second.files()["kept.webp"], crate::types::content::file_entry("0123456789abcdef"));
+}
+
 /// The exact end-to-end bug a synthetic sentinel fixture (like the test
 /// above) can't reach: the on-disk hash index can already reflect a
 /// source's NEW content — e.g. from the scan phase's own metadata read,
