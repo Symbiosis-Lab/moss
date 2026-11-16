@@ -32,6 +32,12 @@ pub struct BuildInputs {
     /// rather than trusted by its stat.
     #[serde(default)]
     pub taken_at: Option<u64>,
+    /// Whether the seal found the image and video outputs the render read
+    /// from the last seal. Media that settle after the render (a variant
+    /// encoded, a video ladder registered) leave pages a later build renders
+    /// differently, so no page of that seal may be carried.
+    #[serde(default)]
+    pub media_settled: bool,
 }
 
 /// This build's `.moss/` measurement, and whether it and the environment
@@ -57,7 +63,7 @@ pub(crate) fn measure(folder: &Path, previous: Option<&BuildInputs>, options: BT
         value_hash(std::env::var(name).ok().as_deref())
     };
     let env_holds = previous.is_some_and(|p| p.env.iter().all(|(name, seen)| now(name) == *seen));
-    Measured { holds: unchanged && env_holds, record: Some(BuildInputs { moss, env: options, taken_at }) }
+    Measured { holds: unchanged && env_holds, record: Some(BuildInputs { moss, env: options, taken_at, ..Default::default() }) }
 }
 
 /// The build's own options that reach a page, hashed like a variable: the

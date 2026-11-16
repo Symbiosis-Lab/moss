@@ -118,7 +118,7 @@ pub(crate) fn shipped_references(
         }
         match resolve_ship_source(key, &stage_path, sealed, Some(object_store)) {
             ShipRead::Held(bytes) => rescan.read_bytes(Some(key), bytes),
-            ShipRead::Path(path) => match rescan.read_file(&path, Some(key)) {
+            ShipRead::Blob(path) | ShipRead::Path(path) => match rescan.read_file(&path, Some(key)) {
                 Ok(()) => {}
                 Err(e) if crate::build::icloud::is_definitely_absent(&path, &e) => {}
                 Err(_) => rescan.blind(path),

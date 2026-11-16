@@ -1641,6 +1641,15 @@ pub fn load_article_map_for_features(
     result
 }
 
+/// The image and video outputs a manifest names, with their content hashes.
+/// The pages of a build read the last seal's; when the seal that follows
+/// names others, those pages may show what is no longer there.
+fn media_outputs(hashes: &crate::types::content::SiteHashes) -> std::collections::BTreeMap<&str, Option<&str>> {
+    hashes.image_outputs.iter().chain(&hashes.video_outputs)
+        .map(|path| (path.as_str(), hashes.files.get(path).map(String::as_str)))
+        .collect()
+}
+
 /// Image/video output-variant paths that are NEW-or-CHANGED in `sealed`
 /// versus `previous`. Restricted to the image/video output buckets — the ones
 /// the preview iframe can srcset-swap; notebook outputs are excluded (no swap
@@ -2111,6 +2120,7 @@ async fn advertise_sealed(
     // withdrawal here — the debouncer is level-triggered, and an overtaken
     // tail leaves before this write, so the write that stands is the newest
     // sealed render's.
+    sealed.set_media_settled(previous_hashes.as_ref().is_some_and(|previous| media_outputs(previous) == media_outputs(sealed.site_hashes_view())));
     if verdict == crate::build::ship::ShipVerdict::Ship {
         if let Err(e) = crate::phase!("seal_write", { sealed.write_to_disk(hashes_path) }) {
             log::info!("advertise_sealed: failed to write hashes.json: {}", e);

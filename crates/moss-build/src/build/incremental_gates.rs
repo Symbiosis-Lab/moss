@@ -212,6 +212,8 @@ impl ChangeProof {
     ///
     /// - The manifest is missing or unreadable, or a different moss binary
     ///   sealed it (its templates are an input no file shows).
+    /// - The seal found image or video outputs other than the ones its render
+    ///   read ([`BuildInputs::media_settled`](crate::build::inputs::BuildInputs::media_settled)).
     /// - Its [`BuildInputs`](crate::build::inputs::BuildInputs) are missing,
     ///   or a `.moss/` file, a link card or an environment variable they
     ///   recorded moved. They name what the last build read outside the page
@@ -227,7 +229,8 @@ impl ChangeProof {
         use crate::build::watch::drift;
         use crate::ops::watch::sweep::{walk, WALK_DEADLINE};
         let Some(baseline) = seal.manifest.as_ref() else { return Self::None };
-        if baseline.builder_fingerprint.as_deref() != Some(builder) || !seal.moss.holds {
+        let media_settled = baseline.build_inputs.as_ref().is_some_and(|r| r.media_settled);
+        if baseline.builder_fingerprint.as_deref() != Some(builder) || !seal.moss.holds || !media_settled {
             return Self::None;
         }
         let deadline = std::time::Instant::now() + WALK_DEADLINE;

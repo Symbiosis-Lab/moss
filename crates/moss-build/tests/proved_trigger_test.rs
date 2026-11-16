@@ -79,8 +79,11 @@ impl Site {
         fs::write(path, text).unwrap();
     }
 
-    /// One sealed build for the build under test to prove against.
+    /// A settled seal for the build under test to prove against: two builds,
+    /// since a first build's media (the share image) are new against no
+    /// manifest, and no page of a seal whose media moved is carried.
     fn sealed(&self) -> &Self {
+        build(self.root(), BuildTrigger::Unobserved);
         build(self.root(), BuildTrigger::Unobserved);
         self
     }
@@ -99,6 +102,21 @@ fn a_build_that_watched_nothing_carries_every_page_when_nothing_changed() {
     assert_eq!(count(&record, "proved_from_seal"), 1, "{record}");
     assert_eq!(count(&record, "pages_rendered"), 0, "{record}");
     assert!(count(&record, "pages_carried") > 0, "{record}");
+}
+
+/// Media the seal found other than the ones its render read (a first build's
+/// share image, a video ladder registered at the seal) leave no page to carry:
+/// the build after renders every page, and the one after that proves.
+#[test]
+fn a_build_after_media_landed_at_the_seal_renders_every_page() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let site = Site::new();
+    build(site.root(), BuildTrigger::Unobserved);
+    let record = build(site.root(), BuildTrigger::Unobserved);
+    assert!(rendered_everything(&record), "{record}");
+    let settled = build(site.root(), BuildTrigger::Unobserved);
+    assert_eq!(count(&settled, "proved_from_seal"), 1, "{settled}");
+    assert_eq!(count(&settled, "pages_rendered"), 0, "{settled}");
 }
 
 /// A video and a `.webp` source are published by their media lanes, not the
@@ -263,13 +281,17 @@ fn another_site_url_option_keeps_the_build_full() {
     const B: &str = "https://b.example.net";
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let control = Site::new();
-    build_with(control.root(), BuildTrigger::Unobserved, Skip, Some(A));
+    for _ in 0..2 {
+        build_with(control.root(), BuildTrigger::Unobserved, Skip, Some(A));
+    }
     let record = build_with(control.root(), BuildTrigger::Unobserved, Skip, Some(A));
     assert_eq!(count(&record, "proved_from_seal"), 1, "control: {record}");
 
     for next in [Some(B), None] {
         let site = Site::new();
-        build_with(site.root(), BuildTrigger::Unobserved, Skip, Some(A));
+        for _ in 0..2 {
+            build_with(site.root(), BuildTrigger::Unobserved, Skip, Some(A));
+        }
         let record = build_with(site.root(), BuildTrigger::Unobserved, Skip, next);
         assert_eq!(count(&record, "proved_from_seal"), 0, "{next:?}: {record}");
         assert!(rendered_everything(&record), "{next:?}: {record}");
@@ -289,12 +311,16 @@ fn turning_plugins_on_keeps_the_build_full() {
     use moss_build::build::PluginMode::{Blocking, Skip};
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let control = Site::new();
-    build_with(control.root(), BuildTrigger::Unobserved, Blocking, None);
+    for _ in 0..2 {
+        build_with(control.root(), BuildTrigger::Unobserved, Blocking, None);
+    }
     let record = build_with(control.root(), BuildTrigger::Unobserved, Blocking, None);
     assert_eq!(count(&record, "proved_from_seal"), 1, "control: {record}");
 
     let site = Site::new();
-    build_with(site.root(), BuildTrigger::Unobserved, Skip, None);
+    for _ in 0..2 {
+        build_with(site.root(), BuildTrigger::Unobserved, Skip, None);
+    }
     let record = build_with(site.root(), BuildTrigger::Unobserved, Blocking, None);
     assert_eq!(count(&record, "proved_from_seal"), 0, "{record}");
     assert!(rendered_everything(&record), "{record}");

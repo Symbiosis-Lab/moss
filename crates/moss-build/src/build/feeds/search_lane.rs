@@ -223,10 +223,12 @@ fn holding_dir(index_dir: &Path, fp: PageSetFp) -> PathBuf {
     index_dir.join(fp.hex())
 }
 
-/// Records which bundle is currently laid into `staging/`, so the steady-state
-/// adoption is ~440 stats rather than ~440 copies.
-fn staged_fp_path(index_dir: &Path) -> PathBuf {
-    index_dir.join("staged.fp")
+/// What every bundle file laid into `staging/` holds, by the stat it had
+/// right after the copy, so an adoption copies only the files whose hash moved
+/// or whose stat no longer vouches: a one-page edit changes a handful of index
+/// chunks and one fragment out of ~440 files.
+fn staged_links(index_dir: &Path, stage_dir: &Path) -> crate::build::lifecycle::cas_heal::StagedLinks {
+    crate::build::lifecycle::cas_heal::StagedLinks::at(index_dir.join("staged-links.json"), stage_dir)
 }
 
 /// Write `produced`'s files into `index_dir/<fp>/`, then the receipt. Older
@@ -269,6 +271,7 @@ fn publish_bundle(
         ));
     }
 
+    let _phase = crate::build::phase::PhaseTrace::start("search_publish");
     let fp = want.fp;
     let files = &produced.files;
     let dir = holding_dir(index_dir, fp);
@@ -278,14 +281,28 @@ fn publish_bundle(
         files: Vec::with_capacity(files.len()),
         staged: staged.map(str::to_string),
     };
+    // A lane-less build publishes every bundle into the same `UNKNOWN`
+    // directory, so a file the receipt there already names with the same hash
+    // is on disk as it is. The receipt goes first, so a publish torn halfway
+    // reads back as no receipt rather than one naming bytes it no longer has.
+    let previous: HashMap<String, String> = read_receipt(index_dir)
+        .filter(|r| r.fp == receipt.fp)
+        .map(|r| r.files.into_iter().collect())
+        .unwrap_or_default();
+    let mut receipt_dropped = false;
     for file in files {
+        let hash = crate::build::assets::paths::compute_binary_hash(&file.bytes);
         let dest = dir.join(&file.rel_path);
-        crate::build::io_utils::write_output(&dest, &file.bytes)
-            .map_err(|e| format!("failed to write search bundle file {:?}: {}", dest, e))?;
-        receipt.files.push((
-            file.rel_path.clone(),
-            crate::build::assets::paths::compute_binary_hash(&file.bytes),
-        ));
+        if previous.get(&file.rel_path) != Some(&hash) || !crate::build::io_utils::output_present(&dest) {
+            if !receipt_dropped && !previous.is_empty() {
+                // allow:unlink the search index under .moss/build.nosync/index, not staging
+                let _ = std::fs::remove_file(index_dir.join("receipt.json"));
+                receipt_dropped = true;
+            }
+            crate::build::io_utils::write_output(&dest, &file.bytes)
+                .map_err(|e| format!("failed to write search bundle file {:?}: {}", dest, e))?;
+        }
+        receipt.files.push((file.rel_path.clone(), hash));
     }
     receipt.files.sort();
 
@@ -293,17 +310,26 @@ fn publish_bundle(
         .map_err(|e| format!("failed to serialize search receipt: {}", e))?;
     crate::build::io_utils::write_output(&index_dir.join("receipt.json"), &json)
         .map_err(|e| format!("failed to write search receipt: {}", e))?;
-    // The staged marker names a bundle that is no longer the receipt's, so the
-    // next adoption must re-lay every file rather than trust its stats.
-    // allow:unlink the search index under .moss/build.nosync/index, not staging
-    let _ = std::fs::remove_file(staged_fp_path(index_dir));
-    gc_holding(index_dir, fp);
+    drop(_phase);
+    gc_holding(index_dir, fp, &receipt);
     Ok(receipt)
 }
 
-/// Drop every holding directory except `keep`.
-fn gc_holding(index_dir: &Path, keep: PageSetFp) {
+/// Drop every holding directory except `keep`, and every file in it that
+/// `kept` does not name: a bundle published over an older one in the same
+/// directory leaves the older one's fragments and chunks behind.
+fn gc_holding(index_dir: &Path, keep: PageSetFp, kept: &BundleReceipt) {
+    let _phase = crate::build::phase::PhaseTrace::start("search_gc");
     let keep = keep.hex();
+    let named: HashSet<&str> = kept.files.iter().map(|(rel, _)| rel.as_str()).collect();
+    let keep_dir = index_dir.join(&keep);
+    for entry in walkdir::WalkDir::new(&keep_dir).into_iter().filter_map(Result::ok).filter(|e| e.file_type().is_file()) {
+        let rel = entry.path().strip_prefix(&keep_dir).ok().and_then(|p| p.to_str()).map(|p| p.replace('\\', "/"));
+        if rel.is_some_and(|rel| !named.contains(rel.as_str())) {
+            // allow:unlink the search index under .moss/build.nosync/index, not staging
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
     let Ok(entries) = std::fs::read_dir(index_dir) else {
         return;
     };
@@ -495,8 +521,8 @@ pub fn adopt_into(
 /// a worker whose registrations the seal drains.
 ///
 /// Costs ~440 stats (1–2 ms) in the steady state and no byte reads at all: the
-/// hashes come from the receipt, and files already laid into staging by the
-/// bundle the `staged.fp` marker names are not re-copied.
+/// hashes come from the receipt, and a file whose recorded stat still vouches
+/// that it holds the receipt's hash is not re-copied.
 pub fn begin(
     mp: &MossPaths,
     stage_dir: &Path,
@@ -574,7 +600,7 @@ fn read_staging(h: &Holding, index_dir: &Path, stage_dir: &Path, pending: &mut P
     let _phase = crate::build::phase::PhaseTrace::start("search_read");
     let t_read = std::time::Instant::now();
     let read = search::read_pages(stage_dir);
-    let key = search::corpus_key(&read.pages);
+    let key = crate::phase!("search_key", { search::corpus_key(&read.pages) });
     let held = read_receipt(index_dir).filter(|receipt| read.unreadable == 0 && receipt.staged.as_deref() == Some(key.as_str()));
     if let Some(receipt) = held {
         if receipt.files.is_empty() {
@@ -624,9 +650,9 @@ fn drop_receipt_if_still(_holding: &Holding, index_dir: &Path, diverged: &Bundle
     }
 }
 
-/// Stat every receipt entry, copy the ones staging is missing, and return them
-/// all to register. `None` if any file is missing or any copy fails — and
-/// **nothing is registered in that case**: a partial registration is the worst
+/// Stat every receipt entry, copy the ones staging does not provably hold
+/// (see `StagedLinks`), and return them all to register. `None` if any file is
+/// missing or any copy fails — and **nothing is registered in that case**: a partial registration is the worst
 /// outcome of the three, since the sweep deletes the unregistered remainder and
 /// `pagefind.js` is then left fetching shards that 404. Hence stat all, copy
 /// all, then hand back all.
@@ -636,38 +662,38 @@ fn lay(
     receipt: &BundleReceipt,
     stage_dir: &Path,
 ) -> Option<Laid> {
+    let _phase = crate::build::phase::PhaseTrace::start("search_lay");
     let holding = holding_dir(index_dir, receipt.fp());
-    let staged = std::fs::read_to_string(staged_fp_path(index_dir)).ok();
-    let refresh = staged.as_deref() != Some(receipt.fp.as_str());
-
-    let mut planned: Vec<(ServedPath, &str, PathBuf, PathBuf)> =
-        Vec::with_capacity(receipt.files.len());
+    let mut planned: Vec<(ServedPath, &str, PathBuf)> = Vec::with_capacity(receipt.files.len());
     for (rel, hash) in &receipt.files {
         let sp = ServedPath::for_search_asset(rel).ok()?;
         let src = holding.join(rel);
         if !crate::build::io_utils::output_present(&src) {
             return None;
         }
-        let dest = stage_dir.join(sp.as_str());
-        planned.push((sp, hash, src, dest));
+        planned.push((sp, hash, src));
     }
 
-    for (sp, _, src, dest) in &planned {
-        if refresh || !crate::build::io_utils::output_present(dest) {
-            if let Err(e) = crate::build::io_utils::copy_output(src, dest) {
+    use crate::build::lifecycle::cas_heal::Placement;
+    let mut links = staged_links(index_dir, stage_dir);
+    let mut laid = 0;
+    for (sp, hash, src) in &planned {
+        match links.copy(src, hash, &stage_dir.join(sp.as_str())) {
+            Placement::Held => {}
+            Placement::Linked => laid += 1,
+            Placement::Unverified(e) => {
+                log::info!(target: "search", "could not check {} in staging: {}", sp, e);
+                return None;
+            }
+            Placement::Failed(e) => {
                 log::info!(target: "search", "failed to lay {} into staging: {}", sp, e);
                 return None;
             }
         }
     }
-
-    if refresh {
-        let _ = crate::build::io_utils::write_output(
-            &staged_fp_path(index_dir),
-            receipt.fp.as_bytes(),
-        );
-    }
-    Some(Laid(planned.into_iter().map(|(sp, hash, _, _)| (sp, hash.to_string())).collect()))
+    links.save();
+    crate::build::phase::record_count("search_files_laid", laid);
+    Some(Laid(planned.into_iter().map(|(sp, hash, ..)| (sp, hash.to_string())).collect()))
 }
 
 /// Index `index_from` synchronously and publish the result. Used by the
