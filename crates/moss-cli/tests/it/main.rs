@@ -1,7 +1,7 @@
 //! The crate's integration tests, one binary: each file is a module here.
-//! The files named by a [[test]] in Cargo.toml set process-wide environment
-//! (MOSS_HOME and friends) and keep their own process. `layout` fails on a
-//! file this list misses or a name here without a file.
+//! A file that sets process-wide environment (MOSS_HOME and friends) is a
+//! top-level tests/*.rs and keeps its own process. `layout` fails on a file
+//! this list misses or a name here without a file.
 mod booking_offer_test;
 mod build_default_folder_test;
 mod build_summary_line_test;

@@ -1,7 +1,8 @@
 //! The crate's integration tests, one binary: each file is a module here.
-//! The files named by a [[test]] in Cargo.toml install a global logger, set
-//! process environment or keep their own build lock, so they keep their own
-//! process. `layout` fails on a file this list misses or a name without a file.
+//! A file that installs a global logger, sets process environment, keeps its
+//! own build lock or asserts on process-wide state is a top-level tests/*.rs
+//! and keeps its own process. `layout` fails on a file this list misses or a
+//! name without a file.
 mod accordion_callouts_test;
 mod ai_switches_test;
 mod archival_closing_picture_test;
