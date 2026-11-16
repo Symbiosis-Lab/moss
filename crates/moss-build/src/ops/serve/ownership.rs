@@ -78,15 +78,13 @@ fn record_path(folder: &Path) -> Result<PathBuf, String> {
     Ok(moss_home()?.join("servers").join(format!("{}.json", folder_id(folder))))
 }
 
-/// `<moss_home>/locks/<folder-id>.owner` — the `flock` [`acquire`] takes.
-/// Sibling to, but distinct from, `infra::folder_lock`'s `.build` lock: a
+/// The name of the `infra::folder_lock` lock [`acquire`] takes,
+/// `<moss_home>/locks/<folder-id>.owner`. Distinct from the build's lock: a
 /// build and the server reading its output are different scopes (a build
 /// can run against a folder nobody is serving, and the server keeps running
 /// long after any one build finishes), so they must not contend with each
 /// other.
-fn owner_lock_path(folder: &Path) -> Result<PathBuf, String> {
-    Ok(moss_home()?.join("locks").join(format!("{}.owner", folder_id(folder))))
-}
+const OWNER_LOCK: &str = "owner";
 
 /// The folder's owner lock is held by another process. Who that is comes from
 /// [`find_live_owner`], never from the record alone: the record on disk can
@@ -109,7 +107,7 @@ pub enum OnConflict {
 }
 
 /// Folders this PROCESS currently holds the owner lock for, as a weak
-/// reference to the open file each [`OwnerGuard`] for that folder shares.
+/// reference to the lock each [`OwnerGuard`] for that folder shares.
 ///
 /// `flock` is scoped to an open file description, not to a process: opening
 /// the SAME lock path a second time and calling `try_lock` on the
@@ -118,23 +116,22 @@ pub enum OnConflict {
 /// exists to catch — but a single process legitimately runs two servers
 /// against one vault for a moment during a lifecycle handoff. A second
 /// `acquire` for a folder THIS process already holds upgrades the weak
-/// reference and reuses the held file instead of attempting — and losing —
+/// reference and reuses the held lock instead of attempting — and losing —
 /// a second lock against itself.
-static HELD: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<std::fs::File>>>> =
+static HELD: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<crate::infra::folder_lock::Held>>>> =
     std::sync::OnceLock::new();
 
-fn held() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<std::fs::File>>> {
+fn held() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<crate::infra::folder_lock::Held>>> {
     HELD.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
 /// The held owner lock. Dropping the last guard a process holds for a folder
-/// closes the lock file, which releases the lock; the kernel does the same
-/// on a hard kill.
+/// releases the lock; the kernel does the same on a hard kill.
 #[derive(Debug)]
 pub struct OwnerGuard {
     /// `None` when ownership could not be tracked at all (home directory
     /// unresolvable, lock file unopenable) — see [`acquire`]'s fallback.
-    _lock: Option<std::sync::Arc<std::fs::File>>,
+    _lock: Option<std::sync::Arc<crate::infra::folder_lock::Held>>,
 }
 
 /// Try to become `folder`'s recorded owner, without blocking.
@@ -161,43 +158,20 @@ fn acquire_with_ui(folder: &Path, kind: HostKind, version: String, url: String, 
     let untracked = || Ok(OwnerGuard { _lock: None });
 
     let mut table = held().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let file = match table.get(&id).and_then(std::sync::Weak::upgrade) {
-        Some(file) => file,
-        None => {
-            let lock_path = match owner_lock_path(&canonical) {
-                Ok(p) => p,
-                Err(e) => {
-                    log::warn!("could not resolve the owner-lock path for {}: {e}", canonical.display());
-                    return untracked();
-                }
-            };
-            if let Some(parent) = lock_path.parent() {
-                // allow:raw_write ~/.moss/locks is machine state under moss_home, not build output
-                if let Err(e) = std::fs::create_dir_all(parent) {
-                    log::warn!("could not create {}: {e}", parent.display());
-                    return untracked();
-                }
+    let lock = match table.get(&id).and_then(std::sync::Weak::upgrade) {
+        Some(lock) => lock,
+        None => match crate::infra::folder_lock::try_acquire_named(&canonical, OWNER_LOCK) {
+            Ok(Some(lock)) => {
+                let lock = std::sync::Arc::new(lock);
+                table.insert(id, std::sync::Arc::downgrade(&lock));
+                lock
             }
-            // allow:raw_write the lock file is machine state under ~/.moss/locks, not build output
-            let file = match std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&lock_path) {
-                Ok(f) => f,
-                Err(e) => {
-                    log::warn!("could not open {}: {e}", lock_path.display());
-                    return untracked();
-                }
-            };
-            match file.try_lock() {
-                Ok(()) => {}
-                Err(std::fs::TryLockError::WouldBlock) => return Err(Held),
-                Err(e) => {
-                    log::warn!("could not lock {}: {e}", lock_path.display());
-                    return untracked();
-                }
+            Ok(None) => return Err(Held),
+            Err(e) => {
+                log::warn!("could not take the owner lock for {}: {e}", canonical.display());
+                return untracked();
             }
-            let file = std::sync::Arc::new(file);
-            table.insert(id, std::sync::Arc::downgrade(&file));
-            file
-        }
+        },
     };
     drop(table);
 
@@ -218,7 +192,7 @@ fn acquire_with_ui(folder: &Path, kind: HostKind, version: String, url: String, 
         }
         Err(e) => log::warn!("could not resolve the owner-record path for {}: {e}", canonical.display()),
     }
-    Ok(OwnerGuard { _lock: Some(file) })
+    Ok(OwnerGuard { _lock: Some(lock) })
 }
 
 fn read_record(folder: &Path) -> Option<OwnerRecord> {
@@ -546,6 +520,10 @@ mod tests {
         crate::infra::home::scratch_moss_home()
     }
 
+    fn owner_lock_path(folder: &Path) -> Result<PathBuf, String> {
+        crate::infra::folder_lock::lock_path_named(folder, OWNER_LOCK)
+    }
+
     /// Serializes the handful of tests here that set `MOSS_HOME` — the same
     /// process-global hazard `infra::home`'s own test documents.
     fn env_guard() -> std::sync::MutexGuard<'static, ()> {
@@ -597,8 +575,9 @@ mod tests {
         assert!(!on_disk.started_at.is_empty());
 
         drop(owned);
-        let next = std::fs::File::open(owner_lock_path(&canonical).unwrap()).unwrap();
-        next.try_lock().expect("dropping the guard frees the folder");
+        assert!(!owner_lock_path(&canonical).unwrap().exists(), "a released owner lock leaves no file");
+        let next = crate::infra::folder_lock::try_acquire_named(&canonical, OWNER_LOCK).unwrap();
+        assert!(next.is_some(), "dropping the guard frees the folder");
         std::env::remove_var("MOSS_HOME");
     }
 

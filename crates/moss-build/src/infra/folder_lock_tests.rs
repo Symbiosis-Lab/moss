@@ -114,7 +114,7 @@ fn a_corrupt_epoch_file_reads_as_zero() {
         let folder = tmp.path().join("site");
         std::fs::create_dir_all(&folder).unwrap();
 
-        let path = epoch_path_for(&folder).unwrap();
+        let path = epoch_path_for(&folder);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "not-a-number").unwrap();
 
@@ -139,5 +139,92 @@ fn record_promoted_epoch_round_trips() {
         // promotion ever moves this value.
         record_promoted_epoch(&folder, 100).unwrap();
         assert_eq!(last_promoted_epoch(&folder), 100);
+    });
+}
+
+/// A released lock leaves no file behind: names are per folder, and test runs
+/// alone build thousands of temporary folders a day.
+#[cfg(unix)]
+#[test]
+fn a_released_lock_leaves_no_file() {
+    with_moss_home(|_home| {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = lock_path_named(tmp.path(), "build").unwrap();
+
+        let held = acquire(tmp.path()).unwrap();
+        assert!(path.exists());
+        drop(held);
+        assert!(!path.exists(), "the released lock file is still at {path:?}");
+    });
+}
+
+/// A waiter blocked on a file its holder then removes must not come away
+/// holding that removed file, where a later acquirer cannot see it.
+#[cfg(unix)]
+#[test]
+fn a_waiter_on_a_removed_lock_file_holds_the_one_others_see() {
+    with_moss_home(|_home| {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().to_path_buf();
+        let path = lock_path_named(&folder, "build").unwrap();
+
+        let first = acquire(&folder).unwrap();
+        let (waiting_tx, waiting_rx) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            acquire_named_noting_wait(&folder, "build", || waiting_tx.send(()).unwrap()).unwrap()
+        });
+        waiting_rx.recv().unwrap();
+        drop(first);
+        let second = waiter.join().unwrap();
+
+        let third = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).unwrap();
+        assert!(
+            matches!(third.try_lock(), Err(std::fs::TryLockError::WouldBlock)),
+            "a third acquirer took the lock while the waiter held it"
+        );
+        drop(second);
+    });
+}
+
+/// The promotion epoch lives in the folder's build output, so a folder that
+/// is gone leaves nothing under `~/.moss`.
+#[test]
+fn the_promotion_epoch_lives_in_the_folder() {
+    with_moss_home(|home| {
+        let tmp = tempfile::tempdir().unwrap();
+        record_promoted_epoch(tmp.path(), 7).unwrap();
+
+        assert!(epoch_path_for(tmp.path()).starts_with(tmp.path()));
+        assert!(!home.join("locks").join(format!("{}.epoch", folder_id(tmp.path()))).exists());
+        assert_eq!(last_promoted_epoch(tmp.path()), 7);
+    });
+}
+
+/// A whole build of a folder leaves nothing for it in `~/.moss/locks`. It
+/// runs under the default home: an override held for a whole build would move
+/// the lock path under a parallel test that took its lock before.
+#[test]
+fn a_promoted_build_leaves_nothing_in_the_locks_folder() {
+    use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+    crate::infra::home::without_moss_home(|| {
+        let home = crate::infra::home::moss_home().unwrap();
+        let site = tempfile::tempdir().unwrap();
+        std::fs::write(site.path().join("index.md"), "---\ntitle: Orchard\n---\n\nPlum trees.\n").unwrap();
+        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+        rt.block_on(run_pipeline(PipelineConfig {
+            root: crate::vault::paths::VaultRoot::resolve(site.path()),
+            progress: crate::build::null_sink(), plugins: PluginMode::Skip,
+            watch: false, start_server: false,
+            host: crate::build::ports::host::test_host_ports(),
+            trigger: BuildTrigger::Full, exits_after_build: true,
+            site_url_override: None, server_port: None, admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
+        })).expect("fixture builds");
+        assert!(last_promoted_epoch(site.path()) > 0, "the build never recorded a promotion");
+        let id = folder_id(site.path());
+        let left: Vec<_> = std::fs::read_dir(home.join("locks")).into_iter().flatten().flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(&id)).map(|e| e.file_name()).collect();
+        if cfg!(unix) {
+            assert!(left.is_empty(), "the build left {left:?} in the locks folder");
+        }
     });
 }

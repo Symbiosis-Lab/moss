@@ -507,6 +507,13 @@ impl MossPaths {
         self.cache_dir().join("manifest-hash-memo.json")
     }
 
+    /// `.moss/build.nosync/cache/image-output-hash-memo.json` — the same memo for
+    /// the image variants a build carries forward. Its own file because the
+    /// image lane and the asset copy run at once and each saves its memo whole.
+    pub fn cache_image_output_hash_memo(&self) -> PathBuf {
+        self.cache_dir().join("image-output-hash-memo.json")
+    }
+
     /// `.moss/build.nosync/index/` — holding area for the search bundle.
     ///
     /// Deliberately NOT under `staging/` or a generation: the search lane runs

@@ -19,11 +19,20 @@
 //! this lock; they are ordered against that process's own builds only, by
 //! the stage-write guard.
 //!
-//! The lock file sits BESIDE `~/.moss/locks/`, one file per folder — never
+//! The lock file sits in `~/.moss/locks/`, one file per folder — never
 //! inside the folder it guards, for the same reason `deploy::stack_activity`
 //! keeps its lock a sibling of `~/.moss/stacks/<id>`: a lock file inside a
 //! directory its own holder might remove leaves two processes each holding
 //! a lock on a different unlinked inode, unable to see each other.
+//!
+//! The file lives only while it is held. The holder unlinks it before
+//! unlocking, and [`acquire_named_noting_wait`] checks, once it holds a lock,
+//! that the path still names the file it locked, opening again if not. A
+//! waiter that was blocked on the removed file therefore moves to the new
+//! one instead of holding a lock nobody else can see. So `~/.moss/locks`
+//! holds only what is held now, however many temporary folders are built.
+//! On Windows, where an open file cannot be replaced this way, the file
+//! stays.
 //!
 //! `<folder-id>` is a sha256 of the folder's canonicalized path — the same
 //! path-to-hex convention `types::content::symlink_entry` already uses for a
@@ -87,12 +96,35 @@ use std::path::{Path, PathBuf};
 #[derive(Debug)]
 pub struct Held {
     file: std::fs::File,
+    path: PathBuf,
 }
 
 impl Drop for Held {
     fn drop(&mut self) {
+        // Unlinked while still held, so no process can open it after this
+        // and hold a lock on a file the next acquirer never sees.
+        #[cfg(unix)]
+        // allow:unlink the lock file this process holds, under ~/.moss/locks
+        let _ = std::fs::remove_file(&self.path);
         let _ = self.file.unlock();
     }
+}
+
+/// Whether `path` still names the open `file`. The previous holder unlinks
+/// the lock file on release, so a lock taken on a file that is gone, or was
+/// replaced, excludes nobody.
+#[cfg(unix)]
+fn still_named(file: &std::fs::File, path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (file.metadata(), std::fs::metadata(path)) {
+        (Ok(held), Ok(named)) => held.dev() == named.dev() && held.ino() == named.ino(),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn still_named(_file: &std::fs::File, _path: &Path) -> bool {
+    true
 }
 
 /// A stable id for `folder`, the same for every spelling that names the same
@@ -149,35 +181,72 @@ pub fn acquire_named(folder: &Path, name: &str) -> Result<Held, String> {
 /// nothing is happening.
 pub fn acquire_named_noting_wait(folder: &Path, name: &str, on_wait: impl FnOnce()) -> Result<Held, String> {
     let path = lock_path_named(folder, name)?;
+    let mut on_wait = Some(on_wait);
+    for _ in 0..REOPENS {
+        let file = open_lock_file(&path)?;
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => {
+                if let Some(on_wait) = on_wait.take() {
+                    if name == "build" {
+                        log::info!("waiting for another moss process building this folder");
+                    } else {
+                        log::info!("waiting for another moss process holding the {name} lock on this folder");
+                    }
+                    on_wait();
+                }
+                let waited = std::time::Instant::now();
+                file.lock().map_err(|e| format!("lock {}: {e}", path.display()))?;
+                log::info!("waited {:?} for the {name} lock on this folder", waited.elapsed());
+            }
+            Err(e) => return Err(format!("lock {}: {e}", path.display())),
+        }
+        if still_named(&file, &path) {
+            return Ok(Held { file, path });
+        }
+    }
+    Err(unstable(&path))
+}
+
+/// The lock named `name` on `folder` if nobody holds it, `None` if someone
+/// does. Never waits.
+pub fn try_acquire_named(folder: &Path, name: &str) -> Result<Option<Held>, String> {
+    let path = lock_path_named(folder, name)?;
+    for _ in 0..REOPENS {
+        let file = open_lock_file(&path)?;
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => return Ok(None),
+            Err(e) => return Err(format!("lock {}: {e}", path.display())),
+        }
+        if still_named(&file, &path) {
+            return Ok(Some(Held { file, path }));
+        }
+    }
+    Err(unstable(&path))
+}
+
+/// How many times an acquire reopens a lock file that moved under it. Each
+/// reopen means another holder released in between; a file system whose
+/// inode numbers are not stable would otherwise never stop.
+const REOPENS: usize = 16;
+
+fn unstable(path: &Path) -> String {
+    format!("lock {}: the file kept changing under the lock, so it cannot be held", path.display())
+}
+
+fn open_lock_file(path: &Path) -> Result<std::fs::File, String> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("create {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
     }
     // allow:raw_write the lock file is machine state under ~/.moss/locks, not build output
-    let file = std::fs::OpenOptions::new()
+    std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
-        .open(&path)
-        .map_err(|e| format!("open {}: {e}", path.display()))?;
-
-    match file.try_lock() {
-        Ok(()) => {}
-        Err(std::fs::TryLockError::WouldBlock) => {
-            if name == "build" {
-                log::info!("waiting for another moss process building this folder");
-            } else {
-                log::info!("waiting for another moss process holding the {name} lock on this folder");
-            }
-            on_wait();
-            let waited = std::time::Instant::now();
-            file.lock().map_err(|e| format!("lock {}: {e}", path.display()))?;
-            log::info!("waited {:?} for the {name} lock on this folder", waited.elapsed());
-        }
-        Err(e) => return Err(format!("lock {}: {e}", path.display())),
-    }
-    Ok(Held { file })
+        .open(path)
+        .map_err(|e| format!("open {}: {e}", path.display()))
 }
 
 /// [`acquire`] from an async context: the underlying `flock` call blocks a
@@ -202,11 +271,13 @@ pub async fn acquire_async(folder: &Path) -> Option<Held> {
     }
 }
 
-/// `<moss_home>/locks/<folder-id>.epoch` — where [`last_promoted_epoch`] and
-/// [`record_promoted_epoch`] keep the last cross-process-visible promotion
-/// time for `folder`. Sibling to the lock file itself, same [`folder_id`].
-pub fn epoch_path_for(folder: &Path) -> Result<PathBuf, String> {
-    Ok(crate::infra::home::moss_home()?.join("locks").join(format!("{}.epoch", folder_id(folder))))
+/// `<folder>/.moss/build.nosync/promoted.epoch` — where [`last_promoted_epoch`]
+/// and [`record_promoted_epoch`] keep the last cross-process-visible promotion
+/// time for `folder`. It must outlive the lock, so it sits beside the `current`
+/// it describes and goes when the folder or its build output does, which is
+/// also when there is nothing left for it to protect.
+pub fn epoch_path_for(folder: &Path) -> PathBuf {
+    crate::moss_paths::MossPaths::new(folder).build_dir().join("promoted.epoch")
 }
 
 /// The last promotion time recorded for `folder`, or `0` if none has been —
@@ -220,14 +291,13 @@ pub fn epoch_path_for(folder: &Path) -> Result<PathBuf, String> {
 /// concurrent write is exactly the cross-process ordering bug it exists to
 /// close, so the exclusion has to come from outside.
 pub fn last_promoted_epoch(folder: &Path) -> u64 {
-    let Ok(path) = epoch_path_for(folder) else { return 0 };
-    std::fs::read_to_string(&path).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0)
+    std::fs::read_to_string(epoch_path_for(folder)).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0)
 }
 
 /// Record `epoch` as the last promotion time for `folder`. Same locking
 /// precondition as [`last_promoted_epoch`] — see that function's doc.
 pub fn record_promoted_epoch(folder: &Path, epoch: u64) -> Result<(), String> {
-    crate::infra::atomic_write::write_atomic(&epoch_path_for(folder)?, &epoch.to_string())
+    crate::infra::atomic_write::write_atomic(&epoch_path_for(folder), &epoch.to_string())
 }
 
 #[cfg(test)]

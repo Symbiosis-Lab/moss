@@ -32,7 +32,7 @@ use super::shortcode::{
 };
 use super::url::Url;
 use crate::resolve::md_extract::{
-    extract_md_references, line_table, AssetPathSpan, MediaLineSpan, PathContainer, RefSyntax,
+    self, extract_md_references, line_table, AssetPathSpan, MediaLineSpan, PathContainer, RefSyntax,
 };
 
 /// One extracted shortcode block, with its body parsed into a typed variant.
@@ -501,10 +501,9 @@ fn parse_cell_to_blocks(raw: &str, config: &ParseConfig) -> (Vec<Block>, Vec<Blo
             && !inner_trimmed.contains('\n');
         let is_external = crate::resolve::ext_kind::is_web_address(&url);
         if inner_is_plain_text && is_external {
-            // Re-emit as standard markdown link inside a paragraph so the
-            // host's link-preview pass owns the rendering.
-            let linkified = format!("[{}]({})", inner_trimmed, url);
-            return fragment_parts(parse_fragment_with_config(&linkified, config));
+            // Parsed as written, title included, so the host's link-preview
+            // pass owns the rendering.
+            return fragment_parts(parse_fragment_with_config(raw.trim(), config));
         }
         // A card's inner text is cut out of the cell, so its lines are not
         // tracked; the cell's own range still reaches the card.
@@ -789,7 +788,7 @@ pub(super) fn detect_compound_link(cell_text: &str) -> Option<(String, String, S
         }
     }
 
-    let url = stripped.get(close_bracket + 2..close_paren)?;
+    let url = md_extract::destination(stripped.get(close_bracket + 2..close_paren)?);
     Some((url.to_string(), inner.to_string(), trailing.to_string()))
 }
 

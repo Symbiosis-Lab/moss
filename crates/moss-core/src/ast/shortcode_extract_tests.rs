@@ -3517,3 +3517,22 @@ fn a_word_outside_the_braces_that_a_grid_or_gallery_does_not_read_is_warned_abou
         assert!(result.warnings.is_empty(), "{read}: {:?}", result.warnings);
     }
 }
+
+/// An external text cell stays a plain link, title included, for the host's
+/// preview card.
+#[test]
+fn an_external_text_cell_keeps_its_link_title() {
+    let md = "::::grid 2\n[Harbour notes](https://example.com/harbour \"Field notes\")\n+++\nright\n::::\n";
+    let result = extract_shortcodes(md);
+    let Shortcode::Grid(grid) = &result.extracted[0].shortcode else { panic!("{:?}", result.extracted) };
+    match grid.cells[0].as_slice() {
+        [Block::Paragraph(inlines)] => match inlines.as_slice() {
+            [Inline::Link { url, title, .. }] => {
+                assert_eq!(url.href(), "https://example.com/harbour");
+                assert_eq!(title.as_deref(), Some("Field notes"));
+            }
+            other => panic!("{other:?}"),
+        },
+        other => panic!("{other:?}"),
+    }
+}

@@ -1856,13 +1856,13 @@ fn build_inner(
         }
     }
 
-    // Adopt the search bundle from the lane's receipt: inside the
-    // stage-write span (it lays files into `stage_dir`) and before the seal.
-    // Mark-and-sweep — skipping it deletes `_moss/pagefind/*` off the live site.
+    // Adopt the search bundle, or read the pages a lane-less build indexes:
+    // inside the stage-write span (it lays files into `stage_dir`, and no
+    // `.html` is written after this) and before the seal. Mark-and-sweep —
+    // skipping it deletes `_moss/pagefind/*` off the live site.
     let search_paths = MossPaths::new(std::path::Path::new(folder_path));
-    let adoption = crate::build::feeds::search_lane::adopt_into(
-        &search_paths, &stage_dir, &mut pending, background_ctx.search_enabled, search_freshness);
-    log::debug!(target: "search", "search bundle: {:?}", adoption);
+    let search_job = crate::build::feeds::search_lane::begin(
+        &search_paths, &stage_dir, &mut pending, background_ctx.search_enabled, search_freshness).into_job();
 
     // Places explorer world/tile base-map SVGs; see that module's doc for
     // the gate and the cache. The context carries the gazetteer, so there is
@@ -1927,8 +1927,7 @@ fn build_inner(
     // worker and always a seal. The zero-worker branch that used to sit beside
     // this — reachable only when `deferred` was `None`, which
     // `generate_blocking_content` never produced — went with `DeferredWork`.
-    // Search dispatches no worker of its own; its bundle
-    // is adopted from a receipt above.
+    // Search adds a worker only on a lane-less build's index (below).
     // Invariant: build_inner runs inside a Tokio runtime.
     // The legacy `tokio::runtime::Handle::try_current().is_ok()` fallback to
     // a synchronous dispatch path has been removed; existing tests that
@@ -2016,6 +2015,9 @@ fn build_inner(
 
         let register_workers = |tx: tokio::sync::mpsc::Sender<crate::build::coordinator::EmitMessage>,
                             workers: &mut tokio::task::JoinSet<Result<(), crate::build::background::BuildError>>| {
+            if let Some(job) = search_job {
+                job.spawn(workers, tx.clone());
+            }
             if !og_requests.is_empty() {
                 let tx_cards = tx.clone();
                 crate::build::background::spawn_traced_worker(workers, move || {
@@ -2103,9 +2105,11 @@ fn build_inner(
                     job.run(reporter_for_derive.as_deref(), &cancel);
                 });
             }
-            // No search worker: a generation-free worker is never
-            // awaited by a seal, so the previous build's index cannot land on
-            // this build's critical path. Its output is adopted from a receipt.
+            // No lane worker: in a process that keeps building, a
+            // generation-free worker is never awaited by a seal, so the
+            // previous build's index cannot land on this build's critical
+            // path; its output is adopted from a receipt. A process that exits
+            // has no next save to delay, hence the index worker above.
 
             // tx dropped here → coordinator drains only worker clones
         };

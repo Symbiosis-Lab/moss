@@ -558,6 +558,25 @@ fn a_one_page_edit_scans_only_that_page() {
     assert_eq!(sealed.files(), full.files());
 }
 
+/// A redirect stub has no slot marker: the pass takes it from memory and looks
+/// up no record for it, and it ships the bytes it did before.
+#[test]
+fn a_redirect_stub_is_not_read_back_or_looked_up() {
+    let site = Site::new();
+    site.write("index.md", "# Home");
+    site.write("about.md", "# About");
+    site.write(".moss/data/redirects.json", r#"{"old-about/": "about/"}"#);
+    let slots = || head_end("<style>h1{}</style>");
+    let first = site.build_with_slots(CARRY, slots());
+    let stub = std::fs::read(site.stage("old-about/index.html")).expect("the redirect stub is staged");
+
+    let second = site.build_with_slots(CARRY, slots());
+    assert_eq!(scanned_by_last_pass(), 0, "nothing changed: nothing is read");
+    assert_eq!(std::fs::read(site.stage("old-about/index.html")).unwrap(), stub);
+    assert_ships_by_oid(&site, &second, "old-about/index.html");
+    assert_eq!(first.files(), second.files());
+}
+
 /// A changed slot input (the footer) reaches every page, carried or not.
 #[test]
 fn a_changed_footer_rewrites_every_page() {

@@ -322,15 +322,19 @@ pub fn emit_redirect_table(
         }
     }
     records.record_late_redirects(&folder_key, super::kept_addresses::LateRedirects { copies, folder_moves });
-    // A stub whose bytes are already staged is registered without being
-    // written again (`BuildContext::emit`).
+    // An `.html` stub goes to the slot pass in memory, like a rendered page, so
+    // no pass reads it back from the stage; the pass covers only `.html`.
     let pages: HashSet<String> = pending.source_to_output().values().cloned().collect();
     for p in planned.iter().filter(|p| p.form == Form::Stub) {
         let sp = p.from.served_path();
         let html = generate_redirect_html(&p.to.href());
-        BuildContext::for_render(output_dir, pending)
-            .emit(sp, html.as_bytes(), HashBucket::Files)
-            .map_err(|e| format!("Failed to emit redirect stub '{}': {}", sp.as_str(), e))?;
+        if sp.as_str().ends_with(".html") {
+            pending.register_unwritten_page(sp, html);
+        } else {
+            BuildContext::for_render(output_dir, pending)
+                .emit(sp, html.as_bytes(), HashBucket::Files)
+                .map_err(|e| format!("Failed to emit redirect stub '{}': {}", sp.as_str(), e))?;
+        }
         // A stub to one of the author's pages is that page's old address.
         if let table::Target::Internal(t, _) = &p.to {
             if pages.contains(t.key()) || t.is_html_file() {
@@ -451,6 +455,20 @@ pub fn save_redirects(paths: &crate::moss_paths::MossPaths, redirects: &BTreeMap
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [`emit_redirect_table`], then write the stubs it leaves to the slot pass,
+    /// which these tests do not run.
+    fn emit_and_stage(
+        paths: &crate::moss_paths::MossPaths,
+        map: &ArticleMap,
+        inputs: &TableInputs,
+        output_dir: &Path,
+        pending: &mut crate::build::manifest::PendingManifest,
+    ) -> Result<BaselineHealth, String> {
+        let health = emit_redirect_table(paths, map, inputs, output_dir, pending)?;
+        crate::build::emit::slots::write_as_rendered(output_dir, pending.take_unwritten_pages()).map_err(crate::build::outcome::BuildStopped::into_message)?;
+        Ok(health)
+    }
     use crate::build::scan::article_map::ArticleInfo;
     use std::collections::{BTreeMap, HashMap};
 
@@ -531,7 +549,7 @@ mod tests {
         }
         record.triples = Some(projection_of(&previous_map).entries);
         published_record::save(&paths, &record).unwrap();
-        emit_redirect_table(&paths, &current_map, &TableInputs { has_deployed_url: true, ..Default::default() }, &output, &mut pending).unwrap();
+        emit_and_stage(&paths, &current_map, &TableInputs { has_deployed_url: true, ..Default::default() }, &output, &mut pending).unwrap();
         let mut sealed = pending.seal();
         let late = crate::system::build_records::records().late_redirects(&paths.project_root().to_string_lossy());
         crate::build::feeds::kept_addresses::keep(&paths, &output, &mut sealed, &late);
@@ -575,7 +593,7 @@ mod tests {
         }
         let declared = [("/sources/", "/records/"), ("/frag/", "/records/#held"), ("/caps/", "/Records/")];
         let inputs = TableInputs { has_deployed_url: true, declared: declared.iter().map(|(f, t)| (f.to_string(), t.to_string())).collect(), ..Default::default() };
-        emit_redirect_table(&paths, &ArticleMap::new(), &inputs, &output, &mut pending).unwrap();
+        emit_and_stage(&paths, &ArticleMap::new(), &inputs, &output, &mut pending).unwrap();
         let mut sealed = pending.seal();
         let late = crate::system::build_records::records().late_redirects(&paths.project_root().to_string_lossy());
         crate::build::feeds::kept_addresses::keep(&paths, &output, &mut sealed, &late);
@@ -1005,7 +1023,7 @@ mod tests {
         pending.register_source_mapping("page.md".into(), &new_sp);
 
         // Call the new function.
-        emit_redirect_table(&paths, &current_map, &TableInputs::default(), &output_dir, &mut pending).unwrap();
+        emit_and_stage(&paths, &current_map, &TableInputs::default(), &output_dir, &mut pending).unwrap();
 
         // Seal and inspect.
         let sealed = pending.seal();
@@ -1042,7 +1060,7 @@ mod tests {
         let mut again = PendingManifest::new(SiteHashes::default());
         again.set_site_url("https://example.edu/~alice");
         BuildContext::for_render(&output_dir, &mut again).emit(&new_sp, b"<html>new</html>", HashBucket::Files).unwrap();
-        emit_redirect_table(&paths, &current_map, &TableInputs::default(), &output_dir, &mut again).unwrap();
+        emit_and_stage(&paths, &current_map, &TableInputs::default(), &output_dir, &mut again).unwrap();
         let mount = crate::build::site_meta::mount::Mount::of_site_url("https://example.edu/~alice");
         let shipped = file_entry(&crate::build::ship::shipped_hash(stub_key, &mount, expected_html.as_bytes()));
         assert_eq!(again.seal().files().get(stub_key), Some(&shipped), "the re-registered stub names what ships under the mount");
@@ -1118,7 +1136,7 @@ mod tests {
             .emit(&old_sp, b"<html>real page</html>", HashBucket::Files)
             .unwrap();
 
-        emit_redirect_table(&paths, &current_map, &TableInputs::default(), &output_dir, &mut pending).unwrap();
+        emit_and_stage(&paths, &current_map, &TableInputs::default(), &output_dir, &mut pending).unwrap();
 
         let sealed = pending.seal();
         let stub_key = "old/page/index.html";
@@ -1185,7 +1203,7 @@ mod tests {
         let paths = MossPaths::from_moss_dir(moss_dir);
         let mut pending = PendingManifest::new(SiteHashes::default());
         let health =
-            emit_redirect_table(&paths, &current_map, &TableInputs::default(), &output_dir, &mut pending).unwrap();
+            emit_and_stage(&paths, &current_map, &TableInputs::default(), &output_dir, &mut pending).unwrap();
 
         assert_eq!(health, BaselineHealth::Unusable(Unreadable::Corrupt));
         let sealed = pending.seal();
@@ -1256,7 +1274,7 @@ mod tests {
         let mut current_map = ArticleMap::new();
         current_map.articles.insert("new/page/".to_string(), article_info_with_uid(Some("uid-X")));
         let mut pending = PendingManifest::new(SiteHashes::default());
-        emit_redirect_table(paths, &current_map, &TableInputs::default(), output_dir, &mut pending).unwrap();
+        emit_and_stage(paths, &current_map, &TableInputs::default(), output_dir, &mut pending).unwrap();
         pending.seal().files().keys().cloned().collect()
     }
 
@@ -1334,7 +1352,7 @@ mod tests {
         );
 
         let mut pending1 = PendingManifest::new(SiteHashes::default());
-        emit_redirect_table(&paths, &current_map, &TableInputs::default(), &output_dir, &mut pending1).unwrap();
+        emit_and_stage(&paths, &current_map, &TableInputs::default(), &output_dir, &mut pending1).unwrap();
         let stub_path = output_dir.join("old/page/index.html");
         let mtime1 = std::fs::metadata(&stub_path).unwrap().modified().unwrap();
         let sealed1 = pending1.seal();
@@ -1344,7 +1362,7 @@ mod tests {
 
         // Second build in the same process, nothing redirect-relevant changed.
         let mut pending2 = PendingManifest::new(SiteHashes::default());
-        emit_redirect_table(&paths, &current_map, &TableInputs::default(), &output_dir, &mut pending2).unwrap();
+        emit_and_stage(&paths, &current_map, &TableInputs::default(), &output_dir, &mut pending2).unwrap();
         let mtime2 = std::fs::metadata(&stub_path).unwrap().modified().unwrap();
         assert_eq!(
             mtime1, mtime2,
@@ -1376,7 +1394,7 @@ mod tests {
             article_info_with_uid(Some("uid-X")),
         );
         let mut pending1 = PendingManifest::new(SiteHashes::default());
-        emit_redirect_table(&paths, &first_map, &TableInputs::default(), &output_dir, &mut pending1).unwrap();
+        emit_and_stage(&paths, &first_map, &TableInputs::default(), &output_dir, &mut pending1).unwrap();
         pending1.seal();
         let html1 = std::fs::read_to_string(&stub_path).unwrap();
         assert!(html1.contains("url=/new/page/"));
@@ -1389,7 +1407,7 @@ mod tests {
             article_info_with_uid(Some("uid-X")),
         );
         let mut pending2 = PendingManifest::new(SiteHashes::default());
-        emit_redirect_table(&paths, &second_map, &TableInputs::default(), &output_dir, &mut pending2).unwrap();
+        emit_and_stage(&paths, &second_map, &TableInputs::default(), &output_dir, &mut pending2).unwrap();
         pending2.seal();
         let html2 = std::fs::read_to_string(&stub_path).unwrap();
         assert!(

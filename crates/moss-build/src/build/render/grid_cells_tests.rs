@@ -504,6 +504,19 @@ fn a_grid_link_to_a_mixed_case_folder_finds_its_card() {
     assert!(html.contains(r#"href="/mirror/""#), "got: {html}");
 }
 
+/// A destination is read as CommonMark reads it, so spaces inside the
+/// parentheses do not keep a cell from its page's card.
+#[test]
+fn a_grid_link_with_spaces_around_its_destination_finds_its_card() {
+    let docs = vec![make_page_doc("Ink Study", "works/ink-study/index.html", "2024-03-02", "A study.")];
+    let page = Page::new("index.html", &docs);
+    for cell in ["[Ink Study]( /works/ink-study/ )", "[Ink Study](/works/ink-study/ )", "[Ink Study](/works/ink-study/ \"A title\")"] {
+        let html = page.cards(&format!(":::grid 1\n{cell}\n:::\n"));
+        assert_eq!(card_count(&html), 1, "{cell}: {html}");
+        assert!(html.contains(r#"href="/works/ink-study/""#), "{cell}: {html}");
+    }
+}
+
 #[test]
 fn a_grid_link_naming_no_document_stays_uncarded() {
     // The resolver's job on a miss is to answer "nothing", never to synthesize
