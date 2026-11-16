@@ -10,6 +10,7 @@ readme = "README.md"
 keywords = ["static-site", "markdown", "ast"]
 categories = ["text-processing"]
 publish = true
+autotests = false
 
 [lints]
 workspace = true
@@ -51,6 +52,10 @@ specta = ["dep:specta"]
 # user-provided strings (filenames, frontmatter, content); proptest is the
 # cheapest way to assert "never panics on arbitrary UTF-8" as a contract.
 proptest = "1.5"
-# components_sync_test.rs, img_contract_test.rs: recursive source-tree walk.
+# tests/it: components_sync_test.rs, img_contract_test.rs: recursive source-tree walk.
 # Same version as moss-build's own (non-dev) walkdir dependency.
 walkdir = "2.4"
+
+[[test]]
+name = "it"
+path = "tests/it/main.rs"

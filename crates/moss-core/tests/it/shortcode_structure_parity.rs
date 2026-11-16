@@ -70,7 +70,7 @@ fn summarize(blocks: &[Block]) -> Vec<ExpectedBlock> {
 #[test]
 fn build_parse_matches_shortcode_structure_corpus() {
     let corpus: Corpus =
-        serde_json::from_str(include_str!("fixtures/shortcode_structure_corpus.json"))
+        serde_json::from_str(include_str!("../fixtures/shortcode_structure_corpus.json"))
             .expect("corpus JSON parses");
     assert!(!corpus.cases.is_empty(), "corpus must not be empty");
     for case in &corpus.cases {

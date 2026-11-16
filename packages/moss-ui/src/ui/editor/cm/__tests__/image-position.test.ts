@@ -13,7 +13,7 @@ interface Vectors {
   embed_writes: { embed: string; word: string; written: string; note: string }[];
 }
 
-// moss's own answers (crates/moss-core/tests/position_vectors.rs checks the parser against this file).
+// moss's own answers (crates/moss-core/tests/it/position_vectors.rs checks the parser against this file).
 const vectors = JSON.parse(readFileSync(
   (import.meta.dirname + "/../../../../../../moss-syntax/fixtures/position.vectors.json"), 'utf8',
 )) as Vectors;

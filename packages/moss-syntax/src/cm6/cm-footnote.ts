@@ -8,7 +8,7 @@
 // A marker whose label has NO definition in the document renders LITERALLY —
 // as the characters the author typed. That is not a stylistic choice, it is
 // what the build does (pulldown-cmark, asserted by "Use [^0-9] to strip
-// non-digits" in crates/moss-core/tests/footnotes_and_strikethrough.rs), and
+// non-digits" in crates/moss-core/tests/it/footnotes_and_strikethrough.rs), and
 // it is the difference between an editor that helps and one that eats your
 // regex character classes. So this pass collects the defined labels FIRST and
 // decorates only markers that match one.

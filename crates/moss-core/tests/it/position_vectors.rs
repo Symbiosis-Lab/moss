@@ -13,7 +13,7 @@ use moss_core::media::{parse_media_attrs, AlignSide, Fit, Position};
 use serde_json::Value;
 
 fn load() -> Value {
-    let raw = include_str!("fixtures/position.vectors.json");
+    let raw = include_str!("../fixtures/position.vectors.json");
     serde_json::from_str(raw).expect("position.vectors.json is valid JSON")
 }
 
@@ -87,7 +87,7 @@ fn the_package_copy_matches() {
     );
     if let Ok(text) = std::fs::read_to_string(copy) {
         assert!(
-            text == include_str!("fixtures/position.vectors.json"),
+            text == include_str!("../fixtures/position.vectors.json"),
             "packages/moss-syntax/fixtures/position.vectors.json differs from the crate fixture; copy it over"
         );
     }

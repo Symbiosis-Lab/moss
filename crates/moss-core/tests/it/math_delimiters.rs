@@ -51,7 +51,7 @@ fn math_spans(input: &str) -> Vec<Span> {
 
 #[test]
 fn parser_agrees_with_every_golden_vector() {
-    let raw = include_str!("fixtures/math-delimiters.vectors.json");
+    let raw = include_str!("../fixtures/math-delimiters.vectors.json");
     let fixture: Vectors = serde_json::from_str(raw).expect("vectors fixture must parse");
 
     assert!(
@@ -73,7 +73,7 @@ fn parser_agrees_with_every_golden_vector() {
 /// end, so a vector can never pass while the equation is dropped downstream.
 #[test]
 fn every_vector_with_math_survives_to_rendered_html() {
-    let raw = include_str!("fixtures/math-delimiters.vectors.json");
+    let raw = include_str!("../fixtures/math-delimiters.vectors.json");
     let fixture: Vectors = serde_json::from_str(raw).expect("vectors fixture must parse");
 
     let config = moss_core::ast::ParseConfig {

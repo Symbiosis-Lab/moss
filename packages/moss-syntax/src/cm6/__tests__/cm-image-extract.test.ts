@@ -221,7 +221,7 @@ describe('extractImageTargets width', () => {
 
 /**
  * The CROSS-LANGUAGE half: the same fixture that gates the build's
- * `folder_list::parse_params` (crates/moss-core/tests/folder_embed_params.rs)
+ * `folder_list::parse_params` (crates/moss-core/tests/it/folder_embed_params.rs)
  * gates this read-side twin, so the chips the editor draws cannot claim a
  * param the build would drop. If a vector fails here, fix `parseFolderParams`
  * — never the vectors.

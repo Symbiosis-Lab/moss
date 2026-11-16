@@ -4,7 +4,7 @@
  * The decisive one is `an undefined marker is left completely alone` — it is
  * the behavior that keeps `[^0-9]` in a sentence about regexes from being
  * quietly turned into a footnote, and it mirrors what the build does
- * (crates/moss-core/tests/footnotes_and_strikethrough.rs).
+ * (crates/moss-core/tests/it/footnotes_and_strikethrough.rs).
  */
 
 import { describe, test, expect } from 'vitest';

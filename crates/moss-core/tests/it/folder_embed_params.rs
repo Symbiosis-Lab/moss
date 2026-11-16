@@ -53,7 +53,7 @@ fn axis_name(a: SortAxis) -> String {
 
 #[test]
 fn parse_params_matches_the_shared_vectors() {
-    let raw = include_str!("fixtures/folder-embed-params.vectors.json");
+    let raw = include_str!("../fixtures/folder-embed-params.vectors.json");
     let Vectors { vectors } = serde_json::from_str(raw).unwrap_or_else(|e| {
         panic!("folder-embed-params.vectors.json is not valid JSON: {e}");
     });

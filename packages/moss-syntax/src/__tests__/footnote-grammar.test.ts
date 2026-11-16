@@ -7,7 +7,7 @@
  *     registration order cannot quietly restore them;
  *   - the build-side expectations (a marker with no definition stays literal,
  *     a marker in a code span stays literal) are the ones pulldown-cmark is
- *     held to by crates/moss-core/tests/footnotes_and_strikethrough.rs.
+ *     held to by crates/moss-core/tests/it/footnotes_and_strikethrough.rs.
  */
 
 import { describe, test, expect } from 'vitest';

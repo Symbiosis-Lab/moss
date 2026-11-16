@@ -12,7 +12,7 @@ fn load_tokens_parses_w3c_format() {
     // turned every new group into a failing test: `elevation` landed in
     // 557b28c22 and this assertion was red on develop until it was read.
     let source: serde_json::Value =
-        serde_json::from_str(include_str!("../src/contract/tokens.json"))
+        serde_json::from_str(include_str!("../../src/contract/tokens.json"))
             .expect("tokens.json must parse");
     let declared: Vec<&str> = source["$order"]
         .as_array()
