@@ -182,20 +182,8 @@ pub fn acquire_named(folder: &Path, name: &str) -> Result<Held, String> {
 pub fn acquire_named_noting_wait(folder: &Path, name: &str, on_wait: impl FnOnce()) -> Result<Held, String> {
     let path = lock_path_named(folder, name)?;
     let mut on_wait = Some(on_wait);
-    loop {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("create {}: {e}", parent.display()))?;
-        }
-        // allow:raw_write the lock file is machine state under ~/.moss/locks, not build output
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&path)
-            .map_err(|e| format!("open {}: {e}", path.display()))?;
-
+    for _ in 0..REOPENS {
+        let file = open_lock_file(&path)?;
         match file.try_lock() {
             Ok(()) => {}
             Err(std::fs::TryLockError::WouldBlock) => {
@@ -217,6 +205,48 @@ pub fn acquire_named_noting_wait(folder: &Path, name: &str, on_wait: impl FnOnce
             return Ok(Held { file, path });
         }
     }
+    Err(unstable(&path))
+}
+
+/// The lock named `name` on `folder` if nobody holds it, `None` if someone
+/// does. Never waits.
+pub fn try_acquire_named(folder: &Path, name: &str) -> Result<Option<Held>, String> {
+    let path = lock_path_named(folder, name)?;
+    for _ in 0..REOPENS {
+        let file = open_lock_file(&path)?;
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => return Ok(None),
+            Err(e) => return Err(format!("lock {}: {e}", path.display())),
+        }
+        if still_named(&file, &path) {
+            return Ok(Some(Held { file, path }));
+        }
+    }
+    Err(unstable(&path))
+}
+
+/// How many times an acquire reopens a lock file that moved under it. Each
+/// reopen means another holder released in between; a file system whose
+/// inode numbers are not stable would otherwise never stop.
+const REOPENS: usize = 16;
+
+fn unstable(path: &Path) -> String {
+    format!("lock {}: the file kept changing under the lock, so it cannot be held", path.display())
+}
+
+fn open_lock_file(path: &Path) -> Result<std::fs::File, String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    }
+    // allow:raw_write the lock file is machine state under ~/.moss/locks, not build output
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .map_err(|e| format!("open {}: {e}", path.display()))
 }
 
 /// [`acquire`] from an async context: the underlying `flock` call blocks a
