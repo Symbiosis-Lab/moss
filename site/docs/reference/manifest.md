@@ -149,8 +149,6 @@ npm install @symbiosis-lab/moss-api
 | Export | Description |
 |--------|-------------|
 | `DeployContext` | Passed to deploy hooks |
-| `SyndicateContext` | Passed to syndicate hooks |
-| `EnhanceContext` | Passed to enhance hooks |
 | `HookResult` | Return type for all hooks |
 | `PluginManifest` | Manifest shape |
 

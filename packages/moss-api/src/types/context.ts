@@ -156,40 +156,6 @@ export interface SetupContext {
 }
 
 /**
- * Context for after_deploy hook (syndicator plugins)
- *
- * `trigger` is stamped by moss, same contract as
- * {@link ProcessContext.trigger}. Syndication has exactly one production
- * caller — the Publish click — so this is always `"manual_one"`; absent
- * (older moss) ⇒ treat as `"background"`.
- *
- * @category Hook contexts
- */
-export interface SyndicateContext extends BaseContext {
-  site_files: string[];
-  articles: ArticleInfo[];
-  deployment?: DeploymentInfo;
-  trigger?: TriggerContext;
-}
-
-/**
- * Article information for syndication
- *
- * @category Hook contexts
- */
-export interface ArticleInfo {
-  source_path: string;
-  title: string;
-  content: string;
-  /** Rendered HTML content (article body, no page template) */
-  html_content?: string;
-  frontmatter: Record<string, unknown>;
-  url_path: string;
-  date?: string;
-  tags: string[];
-}
-
-/**
  * One post of a copy, ready to post: plain text, with every address in it, in
  * order, for networks that mark links up.
  *

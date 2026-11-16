@@ -530,7 +530,7 @@ fn collect_native_slots_for_documents(
     }
 
     // Record the site's audiences ({scope, lang}) so every reader — the email
-    // settings command, the syndicate hook — gets EXACTLY what the build
+    // settings command — gets EXACTLY what the build
     // derived, with no re-derivation drift. Same judge
     // (`derive_language_sections`) as the subscribe form's supported_scopes, so
     // form and picker agree.

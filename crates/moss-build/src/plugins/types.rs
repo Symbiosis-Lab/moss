@@ -5,7 +5,6 @@ pub use super::contributions::{
     JobDescriptor, PluginContributes,
 };
 use super::setup::SetupVerdict;
-use crate::build::scan::article_map::ArticleInfo;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::collections::HashMap;
@@ -209,7 +208,7 @@ pub enum Capability {
     Deploy,
 
     /// POSSE distribution after deployment (multiple plugins allowed)
-    /// Hook function: `syndicate(ctx)`
+    /// Exports: `publish_copy`, `update_copy`, `find_copy`
     Syndicate,
 
     /// Plugin requires a user login to operate and exposes a standalone
@@ -319,10 +318,6 @@ pub struct PluginContext {
 
     /// Project structure information
     pub project_info: ProjectInfo,
-
-    /// Articles being processed (for syndication)
-    #[serde(default)]
-    pub articles: Vec<ArticleInfo>,
 
     /// Deployment result (populated after deployment)
     pub deployment: Option<DeploymentInfo>,

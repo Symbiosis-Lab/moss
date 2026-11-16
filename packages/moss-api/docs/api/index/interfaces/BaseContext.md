@@ -13,7 +13,6 @@ Use readPluginFile(), writePluginFile() for plugin storage.
 - [`ProcessContext`](ProcessContext.md)
 - [`DeployContext`](DeployContext.md)
 - [`ConfigureDomainContext`](ConfigureDomainContext.md)
-- [`SyndicateContext`](SyndicateContext.md)
 
 ## Properties
 

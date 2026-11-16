@@ -23,6 +23,7 @@ release heading.
 
 ### Removed
 
+- `SyndicateContext` and `ArticleInfo`, and the `syndicate(ctx)` hook they described. moss stopped calling it when channels moved to the copy exports (`publish_copy`, `update_copy`, `find_copy`, declared under `contributes.channel`), and no plugin in the registry used it. A plugin that still imports either type stops compiling; move it to the copy exports. The `syndicate` capability name stays, and means a channel.
 - The `delete_copy` channel export and `"delete"` from `CopyJob.op`. Deleting a post leaves its copies on their networks, so moss never calls `delete_copy`; a channel that exports it can drop the function.
 - `"handoff"` from `CopyJob.form`. A channel that hands copies to the author declares `teaser` and answers with `handoff`.
 
