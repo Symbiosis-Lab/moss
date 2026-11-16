@@ -1285,6 +1285,13 @@ impl SealedManifest {
         self.generation_id = compute_manifest_generation_id(&self.inner.files);
     }
 
+    /// See [`BuildInputs::media_settled`](crate::build::inputs::BuildInputs::media_settled).
+    pub(crate) fn set_media_settled(&mut self, settled: bool) {
+        if let Some(inputs) = self.inner.build_inputs.as_mut() {
+            inputs.media_settled = settled;
+        }
+    }
+
     /// Serialize `inner` as pretty JSON and write to `path`.
     ///
     /// Matches the format written by the existing pipeline
