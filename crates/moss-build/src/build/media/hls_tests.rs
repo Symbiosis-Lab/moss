@@ -409,7 +409,7 @@ fn link_members_never_leaves_the_gate_behind_a_failed_link() {
             if name == "v0.m3u8" {
                 missing_oid.clone()
             } else {
-                transforms.objects().store_bytes(format!("blob for {name}").as_bytes(), crate::build::cache::RecordMode::Request).unwrap()
+                transforms.objects().store_bytes(format!("blob for {name}").as_bytes()).unwrap()
             }
         })
         .collect();
@@ -884,7 +884,7 @@ fn a_missing_rung_invalidates_the_whole_cached_ladder() {
     // pointing at nothing is a miss for a reason this test is not about.
     let blob = dir.path().join("blob");
     std::fs::write(&blob, b"ladder file").unwrap();
-    let oid = transforms.objects().store_file(&blob, crate::build::cache::RecordMode::Request).unwrap();
+    let oid = transforms.objects().store_file(&blob).unwrap();
     let members = hls_members(&video_ladder_rungs((1920, 1080)));
     assert_eq!(members.len(), 19, "seven rungs and two renditions");
 
@@ -940,7 +940,7 @@ fn cached_ladder_hits_a_new_form_record_with_no_probe_needed() {
     let params = ladder_params(&config, &VIDEO_LADDER, &source);
     let blob = dir.path().join("blob");
     std::fs::write(&blob, b"ladder file").unwrap();
-    let oid = transforms.objects().store_file(&blob, crate::build::cache::RecordMode::Request).unwrap();
+    let oid = transforms.objects().store_file(&blob).unwrap();
     let members = hls_members(&VIDEO_LADDER);
     let mut record = TransformRecord {
         source_oid: "oid-no-probe".to_string(),
@@ -970,10 +970,10 @@ fn seed_ladder_record(transforms: &TransformCache, scratch: &Path, source_oid: &
 fn seed_sized_ladder_record(transforms: &TransformCache, scratch: &Path, source_oid: &str, params: &serde_json::Value, size: u64) -> TransformRecord {
     let blob = scratch.join("blob");
     std::fs::write(&blob, b"ladder file").unwrap();
-    let oid = transforms.objects().store_file(&blob, crate::build::cache::RecordMode::Request).unwrap();
+    let oid = transforms.objects().store_file(&blob).unwrap();
     let members = hls_members(&VIDEO_LADDER);
     let master = master_naming(&members);
-    let master_oid = transforms.objects().store_bytes(master.as_bytes(), crate::build::cache::RecordMode::Request).unwrap();
+    let master_oid = transforms.objects().store_bytes(master.as_bytes()).unwrap();
     let mut record = TransformRecord {
         source_oid: source_oid.to_string(),
         source_size: 0,
@@ -1087,7 +1087,7 @@ fn cached_ladder_ignores_a_looser_budget_that_doesnt_change_the_effective_ladder
     let params = ladder_params(&recorded_under, &VIDEO_LADDER, &source);
     let blob = dir.path().join("blob");
     std::fs::write(&blob, b"ladder file").unwrap();
-    let oid = transforms.objects().store_file(&blob, crate::build::cache::RecordMode::Request).unwrap();
+    let oid = transforms.objects().store_file(&blob).unwrap();
     let members = hls_members(&VIDEO_LADDER);
     let mut record = TransformRecord {
         source_oid: "oid-loose".to_string(),
@@ -1142,7 +1142,7 @@ fn a_shrunk_ladder_is_recorded_as_a_hit_not_a_stale_miss() {
     let stale_params = ladder_params(&stale_config, &VIDEO_LADDER, &source_facts);
     let stale_blob = dir.path().join("stale-blob");
     std::fs::write(&stale_blob, b"stale ladder file").unwrap();
-    let stale_oid = transforms.objects().store_file(&stale_blob, crate::build::cache::RecordMode::Request).unwrap();
+    let stale_oid = transforms.objects().store_file(&stale_blob).unwrap();
     let stale_members = hls_members(&video_ladder_rungs((1920, 1080)));
     assert_eq!(stale_members.len(), 19, "seven rungs and two renditions");
     let mut record = TransformRecord {
@@ -1167,7 +1167,7 @@ fn a_shrunk_ladder_is_recorded_as_a_hit_not_a_stale_miss() {
     let fresh_params = ladder_params(&config, &VIDEO_LADDER[..5], &source_facts);
     let fresh_blob = dir.path().join("fresh-blob");
     std::fs::write(&fresh_blob, b"fresh ladder file").unwrap();
-    let fresh_oid = transforms.objects().store_file(&fresh_blob, crate::build::cache::RecordMode::Request).unwrap();
+    let fresh_oid = transforms.objects().store_file(&fresh_blob).unwrap();
     let fresh_entries: Vec<(String, TransformEntry)> = fresh_members
         .iter()
         .map(|name| {
@@ -1297,7 +1297,7 @@ fn produce_ladder_re_encodes_a_legacy_record_whose_master_names_nothing() {
     let members = hls_members(&VIDEO_LADDER);
     let fabricated_oids: Vec<String> = members
         .iter()
-        .map(|name| transforms.objects().store_bytes(format!("legacy blob for {name}").as_bytes(), crate::build::cache::RecordMode::Request).unwrap())
+        .map(|name| transforms.objects().store_bytes(format!("legacy blob for {name}").as_bytes()).unwrap())
         .collect();
     let mut record = TransformRecord {
         source_oid: source_oid.to_string(),

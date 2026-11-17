@@ -509,7 +509,7 @@ mod tests {
             let img = image::load_from_memory(&std::fs::read(objects.get_path(&entry.oid).unwrap()).unwrap()).unwrap();
             let img = img.resize_exact(img.width() / scale, img.height() / scale, image::imageops::FilterType::Triangle);
             let bytes = crate::build::media::image::encode_webp(&img, 10, None).unwrap();
-            entry.oid = objects.store_bytes(&bytes, Wait).unwrap();
+            entry.oid = objects.store_bytes(&bytes).unwrap();
             entry.size = bytes.len() as u64;
             entry.params = serde_json::json!({ "quality": 10 });
             entry.kept_for = None;

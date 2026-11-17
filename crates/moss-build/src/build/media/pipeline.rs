@@ -413,7 +413,7 @@ fn maybe_inject_spa_cached(
         Some(new_hash) => {
             let injected_bytes = std::fs::read(target)
                 .map_err(|e| format!("read back {} after inject: {}", target.display(), e))?;
-            let content_oid = object_store.store_bytes(&injected_bytes, crate::build::cache::RecordMode::Request)?;
+            let content_oid = object_store.store_bytes(&injected_bytes)?;
             (
                 Some((new_hash.clone(), content_oid.clone())),
                 SpaInjectRecord {
@@ -1228,7 +1228,7 @@ fn copy_asset_entry(
                 run.stats.skipped_symlinks += 1;
             }
             let blob = |path: &Path, rel: &str| source_blob(path, prev_sources.get(rel), prev_hashes_mtime_secs,
-                &mut run.stats.cache_hits, &mut run.stats.cache_misses, |_| object_store.store_source_file(path, crate::build::cache::RecordMode::Wait));
+                &mut run.stats.cache_hits, &mut run.stats.cache_misses, |_| object_store.store_source_file(path));
             register_alias_source(file_path, source_root, site_hashes, &mut run.live_source_keys, preserved.as_ref(), blob);
             return;
         }
@@ -1348,7 +1348,7 @@ fn copy_asset_entry(
     run.live_source_keys.insert(relative_path.clone());
 
     match source_blob(file_path, prev_sources.get(&relative_path), prev_hashes_mtime_secs,
-        &mut run.stats.cache_hits, &mut run.stats.cache_misses, |_| object_store.store_source_file(file_path, crate::build::cache::RecordMode::Wait))
+        &mut run.stats.cache_hits, &mut run.stats.cache_misses, |_| object_store.store_source_file(file_path))
     {
         Ok(None) => return,
         Ok(Some((oid, src_stat))) => {
@@ -1549,7 +1549,7 @@ pub(crate) fn copy_deferred_assets(
                 continue;
             }
             match source_blob(file_path, prev_sources.get(&source_key), prev_hashes_mtime_secs,
-                &mut run.stats.cache_hits, &mut run.stats.cache_misses, |_| object_store.store_source_file(file_path, crate::build::cache::RecordMode::Wait))
+                &mut run.stats.cache_hits, &mut run.stats.cache_misses, |_| object_store.store_source_file(file_path))
             {
                 Ok(None) => continue,
                 Ok(Some((oid, stat))) => {

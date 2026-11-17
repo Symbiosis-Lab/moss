@@ -1397,7 +1397,7 @@ mod tests {
     /// year ago, its picture in the object store.
     fn seed_old_cache(moss_dir: &Path, url: &str, title: &str, cover: Option<&[u8]>) {
         let store = crate::build::cache::ObjectStore::for_site(&MossPaths::from_moss_dir(moss_dir.to_path_buf()));
-        let oid = cover.map(|b| store.store_bytes(b, crate::build::cache::RecordMode::Request).unwrap());
+        let oid = cover.map(|b| store.store_bytes(b).unwrap());
         let old = serde_json::json!({
             "url": url, "title": title, "favicon": null, "og_image": "https://old.example.test/og.png",
             "cover_oid": oid, "cover_ext": oid.as_ref().map(|_| "png"),

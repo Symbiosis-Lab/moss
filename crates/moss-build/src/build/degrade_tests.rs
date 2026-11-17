@@ -149,7 +149,7 @@ fn the_next_seal_reads_no_blob_the_last_one_verified() {
     let stage = mp.staging_dir();
     std::fs::create_dir_all(&stage).unwrap();
     let oid = crate::build::cache::ObjectStore::for_site(&mp)
-        .store_bytes(b"stable bytes", crate::build::cache::RecordMode::Request)
+        .store_bytes(b"stable bytes")
         .unwrap();
     let seal = || {
         let mut pending = PendingManifest::new(SiteHashes::default());
@@ -182,7 +182,7 @@ fn the_prune_reads_the_page_this_generation_ships_not_the_stage() {
 
     let sealed_page = r#"<picture><img src="assets/a.jpg" srcset="assets/a.webp"></picture>"#;
     let oid = crate::build::cache::ObjectStore::for_site(&mp)
-        .store_bytes(sealed_page.as_bytes(), crate::build::cache::RecordMode::Request)
+        .store_bytes(sealed_page.as_bytes())
         .unwrap();
     std::fs::write(stage.join("assets/a.webp"), b"a webp bytes").unwrap();
 
@@ -218,7 +218,7 @@ fn a_pruned_variant_is_not_stripped_from_the_next_builds_page() {
 
     let sealed_page = r#"<p>no picture</p>"#;
     let oid = crate::build::cache::ObjectStore::for_site(&mp)
-        .store_bytes(sealed_page.as_bytes(), crate::build::cache::RecordMode::Request)
+        .store_bytes(sealed_page.as_bytes())
         .unwrap();
     std::fs::write(stage.join("assets/a.webp"), b"a webp bytes").unwrap();
 
@@ -251,7 +251,7 @@ fn the_tail_scan_rereads_no_unchanged_page() {
     std::fs::create_dir_all(stage.join("twin")).unwrap();
     let page = r#"<img src="assets/a.jpg">"#;
     let store = crate::build::cache::ObjectStore::for_site(&mp);
-    let oid = store.store_bytes(page.as_bytes(), crate::build::cache::RecordMode::Request).unwrap();
+    let oid = store.store_bytes(page.as_bytes()).unwrap();
     let hash = crate::build::assets::paths::compute_binary_hash(page.as_bytes());
     let mut pending = PendingManifest::new(SiteHashes::default());
     for key in ["index.html", "twin/index.html"] {
@@ -281,7 +281,7 @@ fn a_new_process_tail_scan_reads_no_unchanged_page() {
     let page = r#"<img src="assets/a.jpg">"#;
     std::fs::write(stage.join("index.html"), page).unwrap();
     let store = crate::build::cache::ObjectStore::for_site(&mp);
-    let oid = store.store_bytes(page.as_bytes(), crate::build::cache::RecordMode::Request).unwrap();
+    let oid = store.store_bytes(page.as_bytes()).unwrap();
     let hash = crate::build::assets::paths::compute_binary_hash(page.as_bytes());
     let sealed = || {
         let mut pending = PendingManifest::new(SiteHashes::default());

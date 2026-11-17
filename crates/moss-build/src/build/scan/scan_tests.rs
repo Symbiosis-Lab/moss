@@ -1975,7 +1975,7 @@ fn a_pre_fix_media_meta_entry_is_not_reused_after_the_version_bump() {
         is_animated: false,
     };
     let json_bytes = serde_json::to_vec(&stale).unwrap();
-    let meta_oid = fx.objects.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request).unwrap();
+    let meta_oid = fx.objects.store_bytes(&json_bytes).unwrap();
     let old_entry = TransformEntry {
         kept_for: None, validation: None,
         oid: meta_oid,
@@ -2003,7 +2003,7 @@ fn a_version_5_media_meta_entry_is_not_reused() {
     let hash = "hash-of-a-previously-scanned-svg";
     let stale = CachedMediaMeta { dimensions: None, dominant_color: None, lqip_data_uri: None, is_animated: false };
     let json_bytes = serde_json::to_vec(&stale).unwrap();
-    let meta_oid = fx.objects.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request).unwrap();
+    let meta_oid = fx.objects.store_bytes(&json_bytes).unwrap();
     let old_entry = TransformEntry { kept_for: None, validation: None, oid: meta_oid, size: json_bytes.len() as u64, params: serde_json::json!({ "v": 5 }) };
     let record = TransformRecord {
         source_oid: hash.to_string(),

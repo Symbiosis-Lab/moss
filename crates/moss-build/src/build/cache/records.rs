@@ -247,7 +247,7 @@ impl TransformCache {
     ) {
         let stored = serde_json::to_vec(summary)
             .map_err(|e| e.to_string())
-            .and_then(|json| Ok((self.objects.store_bytes(&json, RecordMode::Request)?, json.len() as u64)));
+            .and_then(|json| Ok((self.objects.store_bytes(&json)?, json.len() as u64)));
         let (oid, size) = match stored {
             Ok(stored) => stored,
             Err(e) => {

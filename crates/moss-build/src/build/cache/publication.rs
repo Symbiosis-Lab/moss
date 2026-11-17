@@ -102,7 +102,7 @@ fn availability_rejected_replica_admission_is_not_pending_and_local_blob_stays_u
         let dir = tempfile::tempdir().unwrap();
         let paths = crate::moss_paths::MossPaths::new(dir.path());
         let local = ObjectStore::new(paths.cache_local_objects());
-        let oid = local.store_bytes(b"complete local asset", crate::build::cache::RecordMode::Request).unwrap();
+        let oid = local.store_bytes(b"complete local asset").unwrap();
         let source = local.blob_path(&oid);
         let job = Arc::new(BlobPublication::new(paths.cache_objects(), oid.clone(), source.clone(), crate::build::lifecycle::detached_cache_lease(&paths)));
         let dest = ObjectStore::blob_path_in(&job.root, &oid);
@@ -126,7 +126,7 @@ fn a_blob_the_cloud_holds_is_not_published_again() {
         let dir = tempfile::tempdir().unwrap();
         let paths = crate::moss_paths::MossPaths::new(dir.path());
         let local = ObjectStore::new(paths.cache_local_objects());
-        let oid = local.store_bytes(b"complete local asset", crate::build::cache::RecordMode::Request).unwrap();
+        let oid = local.store_bytes(b"complete local asset").unwrap();
         let dest = ObjectStore::blob_path_in(&paths.cache_objects(), &oid);
         std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
         std::fs::write(&dest, b"stand-in").unwrap();

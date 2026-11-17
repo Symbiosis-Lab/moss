@@ -245,7 +245,7 @@ fn regenerate_still(
             log::debug!("Generated {kind} for {}", filename);
             let mut oid_result = None;
             let mut linked = false;
-            match objects.store_file(&temp, crate::build::cache::RecordMode::Wait) {
+            match objects.store_file(&temp) {
                 Ok(oid) => {
                     match objects.link_to(&oid, output) {
                         Ok(()) => linked = true,
@@ -696,7 +696,7 @@ pub(crate) fn convert_single_video(
         // transform output. The seal/registry flow and future cache hits are
         // then identical to a real encode — rebuilds link the original
         // without re-probing.
-        stage_mp4(objects, objects.store_source_file(source_file, crate::build::cache::RecordMode::Wait), &output_mp4)
+        stage_mp4(objects, objects.store_source_file(source_file), &output_mp4)
     } else {
         // 3c. Validate converted MP4 via ffprobe before storing in CAS
         if !ffmpeg.validate_encoded_video(&temp_mp4).unwrap_or(false) {
@@ -706,7 +706,7 @@ pub(crate) fn convert_single_video(
             return VideoConversionOutcome::failed(format!("Validation failed for {}", filename));
         }
 
-        stage_mp4(objects, objects.store_file(&temp_mp4, crate::build::cache::RecordMode::Wait), &output_mp4)
+        stage_mp4(objects, objects.store_file(&temp_mp4), &output_mp4)
     };
     // allow:unlink an encode temp this call wrote under cache/tmp
     let _ = fs::remove_file(&temp_mp4);
@@ -2278,7 +2278,7 @@ pub(crate) mod tests {
         let objects = crate::build::cache::ObjectStore::new(dir.path().join("objects"));
         let encoded = dir.path().join("encoded.mp4");
         std::fs::write(&encoded, b"encoded video bytes").unwrap();
-        let store = || objects.store_file(&encoded, crate::build::cache::RecordMode::Wait);
+        let store = || objects.store_file(&encoded);
         let oid = super::stage_mp4(&objects, store(), &dir.path().join("first.mp4")).unwrap();
         let blob = objects.blob_path(&oid);
         let _cloud = crate::build::icloud::pretend::evicted_until_replaced(&blob);
@@ -2830,7 +2830,7 @@ pub(crate) mod tests {
         let source_oid = ObjectStore::hash_file(&source).unwrap();
         let entry = |bytes: &[u8], params: serde_json::Value| TransformEntry {
             kept_for: None, validation: None,
-            oid: objects.store_bytes(bytes, crate::build::cache::RecordMode::Request).unwrap(),
+            oid: objects.store_bytes(bytes).unwrap(),
             size: bytes.len() as u64,
             params,
         };
@@ -2920,7 +2920,7 @@ pub(crate) mod tests {
                 format!("video/hls/{name}"),
                 TransformEntry {
                     kept_for: None, validation: None,
-                    oid: objects.store_bytes(bytes.as_bytes(), crate::build::cache::RecordMode::Request).unwrap(),
+                    oid: objects.store_bytes(bytes.as_bytes()).unwrap(),
                     size: bytes.len() as u64,
                     params: params.clone(),
                 },
@@ -3003,7 +3003,7 @@ pub(crate) mod tests {
                 format!("video/hls/{name}"),
                 TransformEntry {
                     kept_for: None, validation: None,
-                    oid: objects.store_bytes(bytes.as_bytes(), crate::build::cache::RecordMode::Request).unwrap(),
+                    oid: objects.store_bytes(bytes.as_bytes()).unwrap(),
                     size: bytes.len() as u64,
                     params: params.clone(),
                 },
@@ -4377,7 +4377,7 @@ pub(crate) mod tests {
         let objects = crate::build::cache::ObjectStore::new(tmp.path().join("cache"));
         let blob = tmp.path().join("blob.mp4");
         std::fs::write(&blob, b"REAL-MP4-BYTES").unwrap();
-        let oid = objects.store_file(&blob, crate::build::cache::RecordMode::Wait).unwrap();
+        let oid = objects.store_file(&blob).unwrap();
         for key in ["a.mp4", "b.mp4"] {
             std::fs::write(staging.join(key), b"").unwrap();
         }
@@ -4692,10 +4692,10 @@ pub(crate) mod tests {
         if cached {
             // Both blobs are real and present, so `find_cached_output` takes
             // this as a hit — the failure has to come from staging.
-            let mp4_oid = objects.store_file(&source, crate::build::cache::RecordMode::Request).expect("store the cached mp4");
+            let mp4_oid = objects.store_file(&source).expect("store the cached mp4");
             let poster = tmp.path().join("poster.jpg");
             std::fs::write(&poster, b"not really a jpeg, just non-empty").unwrap();
-            let thumb_oid = objects.store_file(&poster, crate::build::cache::RecordMode::Request).expect("store the cached poster");
+            let thumb_oid = objects.store_file(&poster).expect("store the cached poster");
             transforms
                 .put(&TransformRecord {
                     source_oid: "oid-clip".to_string(),
@@ -4880,7 +4880,7 @@ pub(crate) mod tests {
         let thumb_params = serde_json::json!({});
 
         // A real, playable MP4 blob with no poster entry at all.
-        let mp4_oid = objects.store_file(&source, crate::build::cache::RecordMode::Request).expect("store the cached mp4");
+        let mp4_oid = objects.store_file(&source).expect("store the cached mp4");
         let original_mp4_oid = mp4_oid.clone();
         transforms
             .put(&TransformRecord {
@@ -4987,8 +4987,8 @@ pub(crate) mod tests {
 
         let thumb = tmp.path().join("thumb.jpg");
         assert_eq!(ffmpeg.generate_thumbnail(&source, &thumb, None, None), Ok(true));
-        let mp4_oid = objects.store_file(&source, crate::build::cache::RecordMode::Request).unwrap();
-        let thumb_oid = objects.store_file(&thumb, crate::build::cache::RecordMode::Request).unwrap();
+        let mp4_oid = objects.store_file(&source).unwrap();
+        let thumb_oid = objects.store_file(&thumb).unwrap();
         let record = |extra: Option<(String, TransformEntry)>| TransformRecord {
             source_oid: "oid-clip".to_string(),
             source_size: std::fs::metadata(&source).unwrap().len(),
@@ -5062,7 +5062,7 @@ pub(crate) mod tests {
         let mut oids = HashMap::new();
         let mut record = TransformRecord { source_oid: "oid-clip".to_string(), source_size: 1, transforms: HashMap::new() };
         for (name, bytes, params) in outputs {
-            let oid = objects.store_bytes(&bytes, RecordMode::Request).unwrap();
+            let oid = objects.store_bytes(&bytes).unwrap();
             let size = bytes.len() as u64;
             // Probed by an earlier build, so the web file needs no ffprobe.
             let validation = (name == "video/mp4").then_some(BlobValidation { version: VALIDATOR_VERSION, size });

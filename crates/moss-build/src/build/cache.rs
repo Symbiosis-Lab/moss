@@ -248,14 +248,14 @@ impl ObjectStore {
     /// store holds only in the cloud is not written again, which would only
     /// upload it again: the bytes go to this machine's store, which readers
     /// try first. A store with no site writes it again under the same hash.
-    pub fn store_file(&self, source: &Path, _mode: RecordMode) -> Result<String, String> {
+    pub fn store_file(&self, source: &Path) -> Result<String, String> {
         let oid = Self::hash_file(source)?;
         self.store_routed(&oid, |store| store.store_file_in_base(source, &oid))
     }
 
     /// Store a verbatim copy of a site's own source file, in this machine's
     /// store only: the file itself already travels with the folder.
-    pub fn store_source_file(&self, source: &Path, _mode: RecordMode) -> Result<String, String> {
+    pub fn store_source_file(&self, source: &Path) -> Result<String, String> {
         let oid = Self::hash_file(source)?;
         match &self.site {
             Some(site) => ObjectStore::new(site.cache_local_objects()).store_file_in_base(source, &oid),
@@ -366,7 +366,7 @@ impl ObjectStore {
     /// blob is treated the same way. This variant avoids an intermediate file
     /// when the caller already has bytes in memory — e.g., a small JSON
     /// metadata blob.
-    pub fn store_bytes(&self, data: &[u8], _mode: RecordMode) -> Result<String, String> {
+    pub fn store_bytes(&self, data: &[u8]) -> Result<String, String> {
         let oid = format!("{:x}", Sha256::digest(data));
         self.store_routed(&oid, |store| store.store_bytes_in_base(data, &oid))
     }

@@ -80,7 +80,7 @@ fn store_bytes(
     bytes: &[u8],
 ) -> Result<(), String> {
     let transforms = TransformCache::for_site(site);
-    let oid = transforms.objects().store_bytes(bytes, RecordMode::Request)?;
+    let oid = transforms.objects().store_bytes(bytes)?;
     let record = TransformEntry { kept_for: None, validation: None, oid, size: bytes.len() as u64, params: params(entry) };
     transforms
         .merge(source_oid, source_size, RecordMode::Request, |rec| {

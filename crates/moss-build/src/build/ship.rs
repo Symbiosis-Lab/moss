@@ -1716,7 +1716,7 @@ mod tests {
         let stage = mp.staging_dir();
         std::fs::create_dir_all(&stage).unwrap();
         let oid = crate::build::cache::ObjectStore::for_site(&mp)
-            .store_bytes(b"body {}", crate::build::cache::RecordMode::Request)
+            .store_bytes(b"body {}")
             .unwrap();
         let mut pending = PendingManifest::new(SiteHashes::default());
         pending.apply_message("style.css".to_string(), "deadbeefdeadbeef", HashBucket::Files, Some(oid));
@@ -2182,7 +2182,7 @@ mod tests {
         let cache = tempdir().unwrap();
 
         let object_store = crate::build::cache::ObjectStore::new(cache.path().to_path_buf());
-        let oid = object_store.store_bytes(b"X", crate::build::cache::RecordMode::Request).unwrap();
+        let oid = object_store.store_bytes(b"X").unwrap();
 
         std::fs::write(stage.path().join("style.css"), b"placeholder").unwrap();
 
@@ -2216,7 +2216,7 @@ mod tests {
         let cache = tempdir().unwrap();
 
         let object_store = crate::build::cache::ObjectStore::new(cache.path().to_path_buf());
-        let oid = object_store.store_bytes(b"stable bytes", crate::build::cache::RecordMode::Request).unwrap();
+        let oid = object_store.store_bytes(b"stable bytes").unwrap();
 
         // The stage copy existed once but is transiently gone — an eviction,
         // a mid-write, anything short of moss deciding the file is gone.
@@ -2240,7 +2240,7 @@ mod tests {
     /// A sealed manifest naming `rel` with `bytes` stored as its CAS blob, and
     /// no stage copy.
     fn blob_backed(store: &crate::build::cache::ObjectStore, rel: &str, bytes: &[u8]) -> (crate::build::manifest::SealedManifest, String) {
-        let oid = store.store_bytes(bytes, crate::build::cache::RecordMode::Request).unwrap();
+        let oid = store.store_bytes(bytes).unwrap();
         let mut pending = PendingManifest::new(SiteHashes::default());
         let sp = crate::build::served_path::ServedPath::from_source(rel).unwrap();
         pending.apply_message(sp.as_str().to_string(), "cafefacecafeface", HashBucket::Files, Some(oid.clone()));

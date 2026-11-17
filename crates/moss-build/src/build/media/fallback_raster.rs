@@ -626,7 +626,7 @@ fn produce_sized_raster(
         (source_oid.to_string(), source_size)
     } else {
         // Store the sized bytes in the CAS.
-        match objects.store_bytes(&sized_bytes, crate::build::cache::RecordMode::Wait) {
+        match objects.store_bytes(&sized_bytes) {
             Ok(o) => (o, sized_bytes.len() as u64),
             Err(e) => {
                 log::info!(

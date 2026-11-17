@@ -106,7 +106,7 @@ fn prepare_original(
     original: &Original,
     is_evicted: super::router::EvictedProbe,
 ) -> OriginalBytes {
-    use crate::build::cache::{ObjectStore, RecordMode};
+    use crate::build::cache::ObjectStore;
     if !crate::platform::fail_fast_on_this_thread() { return OriginalBytes::Pending(None); }
     // Test the local replica before the optional shared replica. Neither a
     // cloud-only cache query nor an unused author source starts a download.
@@ -158,7 +158,7 @@ fn prepare_original(
         }
         let local = ObjectStore::new(mp.cache_local_objects());
         if contained_candidate(mp.project_root(), &local.blob_path(&original.oid)).is_none() { return Ok(OriginalBytes::Invalid); }
-        let oid = local.store_file(&snapshot, RecordMode::Request).map_err(std::io::Error::other)?;
+        let oid = local.store_file(&snapshot).map_err(std::io::Error::other)?;
         match local.get_path(&oid) {
             Some(path) => Ok(OriginalBytes::Ready(path)),
             None => Ok(OriginalBytes::Pending(None)),

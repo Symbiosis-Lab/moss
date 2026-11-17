@@ -563,7 +563,7 @@ pub(crate) fn should_skip(
     // still returned immediately regardless of whether the write-back lands.
     if !source_oid.is_empty() {
         if let Ok(json_bytes) = serde_json::to_vec(&verdict) {
-            if let Ok(blob_oid) = transforms.objects().store_bytes(&json_bytes, crate::build::cache::RecordMode::Request) {
+            if let Ok(blob_oid) = transforms.objects().store_bytes(&json_bytes) {
                 let merged = transforms.merge(source_oid, file_size, crate::build::cache::RecordMode::Request, |record| {
                     record.transforms.insert(
                         FORMAT_PROBE_TRANSFORM.to_string(),
@@ -1261,7 +1261,7 @@ pub(crate) fn convert_single_image(
         };
     }
 
-    let oid = match objects.store_file(&temp_path, crate::build::cache::RecordMode::Wait) {
+    let oid = match objects.store_file(&temp_path) {
         Ok(o) => o,
         Err(e) => {
             // allow:unlink the encode temp this call wrote under cache/tmp
