@@ -7290,11 +7290,11 @@ mod og_url_tests {
             .expect("render");
             let prev = match i {
                 1 => r#"moss-series-nav-prev empty"#.to_string(),
-                _ => format!(r#"&lt;</span> <span class="moss-series-nav-text"><span class="moss-series-nav-label">Previous</span><span class="moss-series-nav-title">Part {}</span>"#, i - 1),
+                _ => format!(r#"<span class="moss-series-nav-title">Part {}</span></a>"#, i - 1),
             };
             let next = match i {
                 3 => r#"moss-series-nav-next empty"#.to_string(),
-                _ => format!(r#"<span class="moss-series-nav-label">Next</span><span class="moss-series-nav-title">Part {}</span></span> <span class="moss-series-nav-arrow">&gt;"#, i + 1),
+                _ => format!(r#"<span class="moss-series-nav-title">Part {}</span> <span class="moss-series-nav-arrow" aria-hidden="true">&gt;"#, i + 1),
             };
             assert!(html.contains(&prev), "Part {i} should have prev `{prev}`: {html}");
             assert!(html.contains(&next), "Part {i} should have next `{next}`: {html}");
@@ -7340,8 +7340,8 @@ mod og_url_tests {
         )
         .expect("render");
 
-        assert!(html.contains(r#"<a href="/letters/first/" class="moss-series-nav-link moss-series-nav-prev">"#), "{html}");
-        assert!(html.contains(r#"<a href="/letters/third/" class="moss-series-nav-link moss-series-nav-next">"#), "{html}");
+        assert!(html.contains(r#"<a href="/letters/first/" rel="prev" class="moss-series-nav-link moss-series-nav-prev">"#), "{html}");
+        assert!(html.contains(r#"<a href="/letters/third/" rel="next" class="moss-series-nav-link moss-series-nav-next">"#), "{html}");
         assert!(html.contains(r#"<a href="/letters/" class="moss-series-nav-collection">"#), "{html}");
         assert!(html.contains(r#"<link rel="prefetch" href="/letters/third/">"#), "{html}");
         assert!(html.contains("2 of 3"), "{html}");

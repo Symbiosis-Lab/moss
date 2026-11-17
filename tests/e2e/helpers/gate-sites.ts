@@ -5123,6 +5123,38 @@ weight: 3
 
 The third lesson.
 `,
+    "ke/index.md": `---
+title: 野外课
+uid: "srn00106"
+lang: zh-hans
+series: true
+sort: weight
+---
+`,
+    "ke/one.md": `---
+title: 读地形
+uid: "srn00107"
+weight: 1
+---
+
+第一课。
+`,
+    "ke/two.md": `---
+title: 用一根杆子和一段绳子目测坡度
+uid: "srn00108"
+weight: 2
+---
+
+第二课。
+`,
+    "ke/three.md": `---
+title: 测绘
+uid: "srn00109"
+weight: 3
+---
+
+第三课。
+`,
     ".moss/config.toml": `schema_version = 5
 
 [site]

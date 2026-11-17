@@ -12,7 +12,7 @@ All notable changes to moss will be documented here.
 
 - Replace… on a picture works in the browser editor: the picked file is uploaded and its reference written. It used to upload the file and leave the reference as it was.
 - A right-click on a picture no longer offers the grid's settings or the theme rules that style it; the grid's row (now Columns) stays for the grid's own area, and theme rules show while internal files are shown.
-
+- The series navigation at the foot of a page shows an arrow and the neighbouring page's title, without a "Previous" / "Next" word (上一个 / 下一个 in Chinese) above each title. A screen reader hears the direction word before the title, and the links carry `rel="prev"` and `rel="next"`. `.moss-series-nav-text` and `.moss-series-nav-label` are no longer emitted; a theme rule that targets them now matches nothing, and the build's theme check says so instead of pointing to the v1 migration page.
 - In a grid listing, a folder card whose count is hidden (`children_count: false`) shows its folder's `description:` under the title, as a page's card does. It used to show the title alone.
 - A theme stylesheet brought in by `@import` has the fonts and pictures it refers to published under names that change with the file, like those in `style.css`, and `@import "fonts.css"` without `url()` is renamed the same way. Such a sheet kept pointing at the plain names, so a font replaced behind it could be answered from an old copy.
 - Selected text is tinted with the site's accent colour. The tint was moss's green whatever accent a theme set.

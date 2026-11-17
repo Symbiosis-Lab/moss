@@ -2546,9 +2546,9 @@ const CORE: &[ComponentEntry] = &[
         data_attrs: &[],
         example_html: r#"<span class="moss-series-nav-text"><span class="moss-series-nav-label">Previous</span><span class="moss-series-nav-title">...</span></span>"#,
         example_markdown: "",
-        status: Status::Confirmed,
+        status: Status::Retired,
         since: "0",
-        description: "Wrapper stacking a series nav link's label above its title.",
+        description: "Retired: a series nav link holds its arrow and title directly.",
     },
     ComponentEntry {
         class: "moss-series-nav-label",
@@ -2557,9 +2557,9 @@ const CORE: &[ComponentEntry] = &[
         data_attrs: &[],
         example_html: r#"<span class="moss-series-nav-label">Previous</span>"#,
         example_markdown: "",
-        status: Status::Confirmed,
+        status: Status::Retired,
         since: "0",
-        description: "Visible direction label (\"Previous\" / \"Next\", localized) above a series nav link's title.",
+        description: "Retired: the direction word is visually hidden, read by screen readers only.",
     },
     ComponentEntry {
         class: "moss-series-nav-arrow",

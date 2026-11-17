@@ -1,7 +1,6 @@
 /**
- * Render gate: the series nav's direction mark sits in its label's line, with
- * a word's gap, on the first, middle and last page of a series
- * (tests/render-gates/site/series-nav.spec.ts).
+ * Render gate: the series nav paints only its arrow and title (no direction
+ * words), in English and Chinese (tests/render-gates/site/series-nav.spec.ts).
  *
  * Prereq: target/debug/moss-cli (bash scripts/build-moss-cli.sh) or MOSS_BIN.
  */

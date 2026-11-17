@@ -293,7 +293,7 @@ fn lint_retired_classes(stripped: &str, warnings: &mut Vec<String>) {
         let pattern = format!(".{}", class);
         if find_complete_class(stripped, &pattern) {
             warnings.push(format!(
-                "theme uses pre-v1 class .{}: see https://landing.mosspub.com/contract/v1/migration.html",
+                "theme uses retired class .{}: moss no longer emits it",
                 class
             ));
         }
@@ -916,8 +916,8 @@ mod tests {
         let css = format!(".{} {{ color: red; }}", retired);
         let warnings = lint_theme_css(&css, ColorScheme::Auto);
         assert_eq!(warnings.len(), 1, "warnings: {:?}", warnings);
-        assert!(warnings[0].contains("pre-v1 class"));
-        assert!(warnings[0].contains("migration.html"));
+        assert!(warnings[0].contains("retired class"));
+        assert!(warnings[0].contains("no longer emits it"));
     }
 
     /// An unknown class (not retired, not a component, not plugin-namespaced)

@@ -143,8 +143,6 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.empty` | instance | Co-class on a series-nav link with nowhere to go — the previous link on the first entry, the next link on the last. The element is still emitted so the pair keeps its layout. |
 | `.moss-series-nav-prev` | instance | Previous-page modifier on a series nav link. |
 | `.moss-series-nav-next` | instance | Next-page modifier on a series nav link. |
-| `.moss-series-nav-text` | instance | Wrapper stacking a series nav link's label above its title. |
-| `.moss-series-nav-label` | instance | Visible direction label ("Previous" / "Next", localized) above a series nav link's title. |
 | `.moss-series-nav-arrow` | instance | Arrow glyph inside a series-nav link. |
 | `.moss-series-nav-title` | instance | Title text of the destination page in a series-nav link. |
 | `.moss-series-nav-collection` | instance | Collection-listing slot in series nav (sibling pages). |
