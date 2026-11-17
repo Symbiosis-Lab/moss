@@ -698,18 +698,6 @@ body:is(.home-gate-active, .starter-picker-active) .moss-publish-button {
   height: 1px;
 }
 
-/* Only a whisper, so the fraction stays readable when no particle is near
-   enough to light this line. Matches the grid's own stroke hue. */
-.moss-waiting-screen__meter-track {
-  position: absolute;
-  inset: 0;
-  background: rgba(20, 60, 130, 0.12);
-}
-
-[data-theme="dark"] .moss-waiting-screen__meter-track {
-  background: rgba(90, 155, 255, 0.12);
-}
-
 .moss-waiting-screen__meter-fill {
   position: absolute;
   inset: 0 auto 0 0;

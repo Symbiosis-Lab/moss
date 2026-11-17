@@ -170,9 +170,11 @@ export interface ScreenFraction {
 /**
  * The meter: a run of one grid line, lit to show how far along we are.
  *
- * Every full-window state that is a WAIT draws one, determinate or not: it is
- * the lit part of the screen's axis, a real grid line. A verdict (an
- * unreachable folder, a build failure) draws none: nothing is arriving.
+ * Every full-window state that is a WAIT renders one, determinate or not, on
+ * the screen's axis, a real grid line, and lights it only once a fraction is
+ * known. The grid line marks its extent, so it draws no track: one under the
+ * fill reads as a full bar at 0. A verdict (an unreachable folder, a build
+ * failure) renders none: nothing is arriving.
  *
  * Indeterminate is not a lesser meter. A build has no honest fraction, and a
  * full green bar during one would read as "done" — the exact claim the gate is
@@ -191,7 +193,6 @@ export function meter(mode: MeterMode, fraction?: ScreenFraction): string {
       ` aria-label="${escapeHtml(t("preview.waiting_meter_label"))}"`
     : "";
   return `<div class="moss-waiting-screen__meter" data-mode="${mode}"${aria}>
-          <div class="moss-waiting-screen__meter-track"></div>
           <div class="moss-waiting-screen__meter-fill" style="width: ${fillWidth(fraction)}"></div>
         </div>`;
 }
