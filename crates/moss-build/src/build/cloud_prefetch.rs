@@ -579,6 +579,12 @@ impl Prefetcher {
         self.inner.work.notify_one();
     }
 
+    /// The task for `key` while it is queued or running.
+    #[cfg(test)]
+    pub(crate) fn running_operation(&self, key: &OperationKey) -> Option<Arc<OperationTask>> {
+        self.inner.queue.lock().ok()?.operation_pending.get(key).cloned()
+    }
+
     pub(crate) fn structural_operation(&self, key: OperationKey, attempt: Operation) -> Option<Arc<OperationTask>> {
         let mut q = self.inner.queue.lock().ok()?;
         if q.shutdown { return None; }

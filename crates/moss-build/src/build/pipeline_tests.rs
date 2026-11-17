@@ -8479,6 +8479,19 @@ fn an_author_supplied_web_manifest_wins_over_the_generated_one() {
     assert_eq!(staged(&dir, "manifest.webmanifest"), "{\"name\":\"Mine\"}");
 }
 
+/// A scan waits for the provider until the folder closes: open a session for
+/// `dir` and close it once the scan is waiting, then forget it.
+fn close_folder_during_its_scan(dir: &std::path::Path) -> std::thread::JoinHandle<()> {
+    let folder = dir.to_string_lossy().into_owned();
+    let session = crate::system::folder_session::FolderSession::new(dir.to_path_buf());
+    crate::system::folder_session::registry().insert(folder.clone(), session.clone());
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        session.cancel.cancel();
+        crate::system::folder_session::registry().remove(&folder);
+    })
+}
+
 #[test]
 fn availability_pending_source_walk_preserves_current_generation_and_baseline() {
     crate::infra::home::with_moss_home(|_| {
@@ -8502,7 +8515,9 @@ fn availability_pending_source_walk_preserves_current_generation_and_baseline() 
     let preflight = crate::system::build_records::records().publish_preflight(dir.to_str().unwrap()).unwrap();
     fs::write(dir.join("index.md"), "# newer").unwrap();
     let fault = TestFault::install(&dir, &dir, StorageOperation::RootMetadata, 1000, std::time::Duration::from_millis(20));
+    let closing = close_folder_during_its_scan(&dir);
     assert!(run_pipeline(config()).await.is_err());
+    closing.join().unwrap();
     assert_eq!(fs::read_link(paths.current_ptr()).unwrap(), current);
     assert_eq!(fs::read(paths.current_ptr().join("index.html")).unwrap(), generation);
     let pending = crate::system::build_records::records().publish_preflight(dir.to_str().unwrap()).unwrap();
@@ -8529,7 +8544,9 @@ fn availability_fatal_scan_settles_a_previous_cloud_waiting_gate() {
                 exits_after_build: true, site_url_override: None, server_port: None, admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
             };
             let fault = TestFault::install(&dir, &dir, StorageOperation::RootMetadata, 1000, std::time::Duration::from_millis(20));
+            let closing = close_folder_during_its_scan(&dir);
             assert!(run_pipeline(config()).await.is_err());
+            closing.join().unwrap();
             assert!(crate::build::cloud_readiness::take_gate(dir.to_str().unwrap()));
             crate::build::cloud_readiness::mark_gated(dir.to_str().unwrap());
             drop(fault);

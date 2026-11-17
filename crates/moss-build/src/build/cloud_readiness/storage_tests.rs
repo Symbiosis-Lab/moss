@@ -723,3 +723,29 @@ fn availability_partial_sweep_cannot_emit_a_structural_ready_receipt() {
     assert!(events.lock().unwrap().is_empty(), "bounded measurement is not complete structure");
     assert_eq!(pool.take_structural_arrivals(root.path()).wake_count(), 0);
 }
+
+#[test]
+fn availability_a_running_walk_reads_quiet_until_its_next_entry() {
+    let pool = pool();
+    let (step, steps) = std::sync::mpsc::channel::<()>();
+    let steps = Mutex::new(steps);
+    let operation: Operation = Arc::new(move || {
+        let steps = steps.lock().unwrap();
+        steps.recv().unwrap();
+        note_entry();
+        steps.recv().unwrap();
+        Ok(StorageValue::Directory { entries: Vec::new(), hidden: 0 })
+    });
+    let key = OperationKey { path: PathBuf::from("/structure/quiet"), policy: OperationPolicy::SourceWalk };
+    let task = pool.structural_operation(key.clone(), operation).unwrap();
+    wait_until(|| task.quiet_for().is_some());
+    std::thread::sleep(Duration::from_millis(1100));
+    note_entry();
+    let quiet = pool.running_operation(&key).unwrap().quiet_for().unwrap();
+    assert!(quiet >= Duration::from_secs(1), "no entry yet, and one noted off the walk's thread is not its own: {quiet:?}");
+    step.send(()).unwrap();
+    wait_until(|| task.quiet_for().is_some_and(|quiet| quiet < Duration::from_secs(1)));
+    step.send(()).unwrap();
+    wait_until(|| task.state.lock().unwrap().result.is_some());
+    assert_eq!(task.quiet_for(), None, "a finished walk is not quiet");
+}

@@ -1071,6 +1071,7 @@ fn collect_source_walk(path: &Path) -> Result<crate::build::cloud_readiness::sto
         }
     }) {
         let entry = entry.map_err(StorageFailure::from_walkdir)?;
+        crate::build::cloud_readiness::storage::note_entry();
         #[cfg(test)]
         crate::build::cloud_readiness::storage::test_probe(entry.path(), StorageOperation::WalkEntry)?;
         let metadata = if entry.file_type().is_file() {
@@ -1096,7 +1097,7 @@ pub fn scan_folder_with_dedup_emit_with_error(
     let snapshot = crate::build::cloud_readiness::storage::await_operation(
         path,
         crate::build::cloud_readiness::storage::OperationPolicy::SourceWalk,
-        crate::build::cloud_readiness::INTERACTIVE_DEADLINE,
+        crate::build::cloud_readiness::storage::UNTIL_CANCELLED,
         &|| session.as_ref().is_some_and(|s| s.cancel.is_cancelled()),
         &|| log::info!("Waiting for the source directory to become available: {}", folder_path),
         std::sync::Arc::new(move || collect_source_walk(&root)),

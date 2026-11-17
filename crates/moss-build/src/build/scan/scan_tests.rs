@@ -2934,17 +2934,66 @@ fn availability_scan_recovers_opaque_walk_as_a_complete_candidate() {
     assert_eq!(result.markdown_files.len(), 2);
 }
 
+/// The scan waits for the provider as long as it takes: three refusals outlast
+/// the 20 ms the harness gives a deadline-bound wait, and the walk still comes
+/// back whole.
 #[test]
-fn availability_scan_timeout_returns_no_partial_candidate() {
+fn availability_scan_waits_out_a_slow_provider() {
+    use crate::build::cloud_readiness::{StorageOperation, storage::TestFault};
+    let dir = tempfile::Builder::new().prefix("scan-ready-").tempdir().unwrap();
+    let child = dir.path().join("second.md");
+    fs::write(dir.path().join("first.md"), "# first").unwrap();
+    fs::write(&child, "# second").unwrap();
+    let _fault = TestFault::install(dir.path(), &child, StorageOperation::WalkEntry, 3, std::time::Duration::from_millis(20));
+    let result = scan_folder_with_dedup_emit_with_error(dir.path().to_str().unwrap(), None, None, false).unwrap();
+    assert_eq!(result.markdown_files.len(), 2);
+}
+
+/// A walk held at an entry reads as quiet to the host from its last entry, not
+/// from when the walk began.
+#[test]
+fn availability_a_held_walk_reads_quiet_since_its_last_entry() {
+    use crate::build::cloud_readiness::storage::{TestHold, walk_quiet_for};
+    let dir = tempfile::Builder::new().prefix("scan-quiet-").tempdir().unwrap();
+    let page = dir.path().join("page.md");
+    fs::write(&page, "# page").unwrap();
+    let (at_root, at_page) = (TestHold::install(dir.path(), dir.path()), TestHold::install(dir.path(), &page));
+    let folder = dir.path().to_string_lossy().into_owned();
+    let scan = std::thread::spawn(move || scan_folder_with_dedup_emit_with_error(&folder, None, None, false).map(|r| r.markdown_files.len()));
+    let quiet = || walk_quiet_for(dir.path());
+    let start = std::time::Instant::now();
+    while quiet().is_none() { assert!(start.elapsed() < std::time::Duration::from_secs(5)); std::thread::sleep(std::time::Duration::from_millis(5)); }
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    assert!(quiet().unwrap() >= std::time::Duration::from_secs(1), "held at the folder itself");
+    at_root.release();
+    let released = std::time::Instant::now();
+    while quiet().unwrap() >= std::time::Duration::from_secs(1) {
+        assert!(released.elapsed() < std::time::Duration::from_secs(1), "the page's entry moved the walk");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    at_page.release();
+    assert_eq!(scan.join().unwrap().ok(), Some(1));
+    assert_eq!(quiet(), None, "a finished walk is not quiet");
+}
+
+/// Closing the folder ends the wait, with no partial candidate.
+#[test]
+fn availability_scan_of_a_closed_folder_returns_no_partial_candidate() {
     use crate::build::cloud_readiness::{StorageOperation, storage::TestFault, Settled};
     let dir = tempfile::Builder::new().prefix("scan-ready-").tempdir().unwrap();
     let child = dir.path().join("second.md");
     fs::write(dir.path().join("first.md"), "# first").unwrap();
     fs::write(&child, "# second").unwrap();
+    let folder = dir.path().to_string_lossy().into_owned();
+    let session = crate::system::folder_session::FolderSession::new(dir.path().to_path_buf());
+    crate::system::folder_session::registry().insert(folder.clone(), session.clone());
     let _fault = TestFault::install(dir.path(), &child, StorageOperation::WalkEntry, 1000, std::time::Duration::from_millis(20));
-    let result = scan_folder_with_dedup_emit_with_error(dir.path().to_str().unwrap(), None, None, false);
+    let closer = std::thread::spawn(move || { std::thread::sleep(std::time::Duration::from_millis(100)); session.cancel.cancel(); });
+    let result = scan_folder_with_dedup_emit_with_error(&folder, None, None, false);
+    closer.join().unwrap();
+    crate::system::folder_session::registry().remove(&folder);
     let ScanFailure::Storage(error) = result.unwrap_err() else { panic!("not a contextual storage stop") };
-    assert_eq!(error.pending, Some(Settled::TimedOut));
+    assert_eq!(error.pending, Some(Settled::Cancelled));
 }
 
 /// A folder with no file beneath it (after the walk's ignore rules) is not a
