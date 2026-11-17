@@ -48,6 +48,15 @@
     }
   }
 
+  /* Subscribed: the form is one short line, so it shrinks to it and keeps to the
+     row's end at every width, ending where the button ended. Important on the
+     basis only: a theme's field-sized flex basis sits in a later layer and
+     would otherwise wrap the word off the invitation's line. */
+  :root[data-moss-subscribed] footer .moss-subscribe {
+    flex: none !important;
+    margin-inline-start: auto;
+  }
+
   .moss-subscribe-form[data-position="inline"] {
     display: flex;
     gap: var(--moss-space-sm);

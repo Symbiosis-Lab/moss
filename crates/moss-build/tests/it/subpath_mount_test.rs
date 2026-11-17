@@ -174,10 +174,12 @@ fn unmounted_urls(served: &Served) -> Vec<String> {
     out
 }
 
+/// A quoted `url()` is read whole, so a `url(#id)` inside a quoted `data:` SVG
+/// is not taken for a reference of the stylesheet's own.
 fn css_refs(css: &str) -> Vec<String> {
-    let re = regex::Regex::new(r#"url\(\s*['"]?([^'")\s]+)|@import\s+['"]([^'"]+)"#).unwrap();
+    let re = regex::Regex::new(r#"url\(\s*"([^"]*)"|url\(\s*'([^']*)'|url\(\s*([^'")\s]+)|@import\s+['"]([^'"]+)"#).unwrap();
     re.captures_iter(css)
-        .filter_map(|c| c.get(1).or(c.get(2)).map(|m| m.as_str().to_string()))
+        .filter_map(|c| c.iter().skip(1).flatten().next().map(|m| m.as_str().trim().to_string()))
         .filter(|u| !u.starts_with("data:") && !u.starts_with('#'))
         .collect()
 }

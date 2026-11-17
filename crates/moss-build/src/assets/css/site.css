@@ -1502,7 +1502,8 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
    on any one axis, and neither tracked one line of body text.
    `box-sizing: border-box` folds `.moss-input`'s border and both controls'
    padding inside that line instead of adding to it. */
-.moss-subscribe-form[data-moss-hosted="true"] .moss-input {
+.moss-subscribe-form[data-moss-hosted="true"] .moss-input,
+:root[data-moss-subscribed] .moss-subscribe-form[data-moss-hosted="true"] .moss-subscribe-subscribed {
   box-sizing: border-box;
   block-size: calc(var(--moss-reading-size, 1.125rem) * 1.75);
 }
@@ -1557,6 +1558,7 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
    selectors weigh the same, so the later one wins. */
 @media (width < 48rem), (pointer: coarse) {
   .moss-subscribe-form[data-moss-hosted="true"] .moss-input,
+  :root[data-moss-subscribed] .moss-subscribe-form[data-moss-hosted="true"] .moss-subscribe-subscribed,
   .moss-btn-slot .moss-btn {
     block-size: max(calc(var(--moss-reading-size, 1.125rem) * 1.75), 44px);
   }
@@ -1767,10 +1769,22 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
    the field and button; subscribe.ts sets the root attribute before paint --- */
 .moss-subscribe-form[data-moss-hosted="true"] .moss-subscribe-subscribed { display: none; }
 :root[data-moss-subscribed] .moss-subscribe-form[data-moss-hosted="true"] > :not(.moss-subscribe-subscribed) { display: none; }
+/* The state leads with the success circle; email.css ends it where the button ended. */
 :root[data-moss-subscribed] .moss-subscribe-form[data-moss-hosted="true"] .moss-subscribe-subscribed {
-  display: block;
-  color: var(--moss-color-muted);
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 0.45em;
+  color: var(--moss-color-text-secondary);
   font-size: var(--moss-subscribe-status-size, 0.95rem);
+}
+:root[data-moss-subscribed] .moss-subscribe-form[data-moss-hosted="true"] .moss-subscribe-subscribed::before {
+  content: "";
+  flex: none;
+  inline-size: 1.15em;
+  block-size: 1.15em;
+  background: var(--moss-color-accent);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3Cmask id='m'%3E%3Crect width='24' height='24' fill='white'/%3E%3Cpath d='M7.2 12.4l3.3 3.3 6.3-6.6' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/mask%3E%3C/defs%3E%3Ccircle cx='12' cy='12' r='12' mask='url(%23m)'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
 /* --- error (re-uses success animation for the status row) --- */
