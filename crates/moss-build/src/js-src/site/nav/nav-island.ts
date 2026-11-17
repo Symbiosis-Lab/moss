@@ -398,13 +398,11 @@ export function initNavIsland(): void {
     // The controls keep their place at the top until they start to leave view.
     if (controls) island.toggleAttribute("data-top", y < topEdge);
 
-    if (yieldToRuler()) {
-      // Where the ruler is on screen it is the page's one contents list.
-    } else if (shape === "pinned") {
+    if (shape === "pinned") {
       // On screen once the first section has reached the bar (not the
       // reading line, which a short opening passes on load), and there for
-      // the rest of the page.
-      setShown(headings[0].getBoundingClientRect().top <= scrollspyLine() + LANDING_TOLERANCE);
+      // the rest of the page, except where the ruler stands in for it.
+      if (!yieldToRuler()) setShown(headings[0].getBoundingClientRect().top <= scrollspyLine() + LANDING_TOLERANCE);
     } else if (!past) {
       setShown(false);
     } else if (y < lastY - JITTER) {
@@ -422,15 +420,25 @@ export function initNavIsland(): void {
     if (sectionsMenu && !sectionsMenu.hidden) markRows(sectionsMenu.children, index);
   }
 
-  /** Put the island away while the ruler is on screen, or wherever the page
-   *  reserves the ruler's lane; true when it did. */
+  /**
+   * While the ruler is on screen it is the page's one contents list. A pinned
+   * island, there without being asked for, is put away, as it is wherever the
+   * page reserves the ruler's lane; true when it was. A trail island keeps
+   * its bar, the way back up the site, and loses only its sections, which
+   * site.css hides while the list is on screen.
+   */
   function yieldToRuler(): boolean {
-    if ((island.dataset.ruler ?? "off") === "off") return false;
-    setShown(false);
-    return true;
+    const ruler = island.dataset.ruler ?? "off";
+    if (ruler === "off") return false;
+    if (shape === "pinned") {
+      setShown(false);
+      return true;
+    }
+    if (ruler === "on" && sectionsMenu && !sectionsMenu.hidden) closeMenus(levelsMenu ?? undefined);
+    return false;
   }
-  // Keyboard focus can bring a faded ruler up between scroll passes: the island
-  // goes at once rather than on the next scroll.
+  // Keyboard focus can bring a faded ruler up between scroll passes: it takes
+  // over at once rather than on the next scroll.
   if (typeof MutationObserver !== "undefined") {
     const mo = new MutationObserver(yieldToRuler);
     mo.observe(island, { attributes: true, attributeFilter: ["data-ruler"] });
@@ -502,8 +510,8 @@ export function initNavIsland(): void {
   // — `resize` alone catches only the first.
   //
   // The trail is observed as well as the bar: the bar keeps its width when the
-  // sections button changes its name, but the trail beside it gains or loses
-  // exactly that room.
+  // sections button hides (the ruler is up) or changes its name, but the trail
+  // beside it gains or loses exactly that room.
   if (typeof ResizeObserver !== "undefined") {
     const ro = new ResizeObserver(() => layoutTrail());
     ro.observe(bar);

@@ -23,8 +23,9 @@
  *   `body`, and this module reads only whether that is set, so the media
  *   condition has one owner and nothing here measures the margin. Where the
  *   lane is reserved the island's `data-ruler` is `lane` while the list is
- *   away, and its bar never shows. The controls stand in the lane at the foot
- *   of the window while the list is up and are hidden with it (site.css).
+ *   away, and a headerless island's bar never shows. The controls stand in
+ *   the lane at the foot of the window while the list is up and are hidden
+ *   with it (site.css).
  * - A site can switch it off with CSS (`display: none`, `visibility: hidden`);
  *   whether it is actually rendered is read on every pass, so the island
  *   comes back however it was hidden.
@@ -164,8 +165,8 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
    * One frame's reading and writing, run when the island's scrollspy reports.
    *
    * The ruler counts as on screen when it is rendered (not `hidden`, and not
-   * hidden by the site's own CSS) and not faded. The island stays put away for
-   * exactly that case, so there is one contents list at a time.
+   * hidden by the site's own CSS) and not faded. The island drops its own
+   * sections for exactly that case, so there is one contents list at a time.
    * Reads come first, then the writes.
    */
   function fade(): void {

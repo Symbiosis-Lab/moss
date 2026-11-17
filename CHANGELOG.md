@@ -4,6 +4,10 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- On a window wide enough for the contents list in the left margin, scrolling back up anywhere in a long page brings the floating bar, without its sections button while that list is on screen. The bar used to stay away until the end of the article, so it seemed to appear only at the bottom of the page.
+
 ### Changed
 
 - When moss signs in or publishes, it tells the hosting service which computer it is running on: a random key kept in moss's local app data on that computer, different for each folder, with the kind of computer (MacBook Pro, a Windows PC). Nothing is refused or asked because of it, and a CI run sends none. The privacy page says what is kept.
