@@ -1005,9 +1005,24 @@ struct AssetWalkTally {
     /// (`ShipSource::Cas`). A symlink entry or direct-copy fallback never gets
     /// one and ships from the stage path.
     staged_oids: HashMap<String, String>,
+    /// Raster originals whose fallback another machine made and the cloud still
+    /// holds, with their oids: placed after every local file, once fetched.
+    /// `None` in a pass that places everything at once.
+    cloud_held_rasters: Option<Vec<(std::path::PathBuf, String)>>,
 }
 
 impl AssetWalkTally {
+    /// In a pass that defers, hold back a raster original whose fallback the
+    /// cloud holds, its download asked for. True when held back.
+    fn defer_cloud_held_raster(&mut self, transforms: &crate::build::cache::TransformCache, file_path: &Path, oid: &str) -> bool {
+        let Some(held) = self.cloud_held_rasters.as_mut() else { return false };
+        let cloud_held = !transforms.request_cloud_held(oid, crate::build::media::fallback_raster::SIZED_RASTER_TRANSFORM).is_empty();
+        if cloud_held {
+            held.push((file_path.to_path_buf(), oid.to_string()));
+        }
+        cloud_held
+    }
+
     fn prune(&self, hashes: &mut SiteHashes) {
         hashes.files.retain(|key, _| self.live_asset_keys.contains(key) || self.live_symlinks.contains(key));
         hashes.sources.retain(|key, _| self.live_source_keys.contains(key));
@@ -1190,13 +1205,7 @@ fn copy_asset_entry(
     // (whether to dirs or files) report `is_file() == false` under the
     // walker's default `follow_links(false)`.
     if file_type.is_symlink() {
-        use crate::build::media::symlink::handle_symlink_entry;
-        let outcome = handle_symlink_entry(
-            file_path,
-            source_root,
-            canonical_source_root,
-            output_dir,
-        );
+        let outcome = crate::build::media::symlink::handle_symlink_entry(file_path, source_root, canonical_source_root, output_dir);
         if preserve_link(&outcome, site_hashes, &mut run.live_symlinks, "symlink").is_some() {
             run.stats.preserved_symlinks += 1;
         } else {
@@ -1355,7 +1364,11 @@ fn copy_asset_entry(
             // Raster originals retain their format at the optimized size.
             // Unsupported or unavailable inputs use the verbatim CAS blob;
             // warm transform records can be reused without reading the source.
-            let link_oid = if matches!(ext.as_str(), "jpg" | "jpeg" | "png") {
+            let raster = matches!(ext.as_str(), "jpg" | "jpeg" | "png");
+            if raster && run.defer_cloud_held_raster(transforms, file_path, &oid) {
+                return;
+            }
+            let link_oid = if raster {
                 crate::build::media::fallback_raster::sized_raster_oid_for_original(
                     file_path,
                     &oid,
@@ -1458,6 +1471,7 @@ pub(crate) fn copy_deferred_assets(
     reporter: &dyn crate::build::ports::reporter::BuildReporter,
     tx: mpsc::Sender<EmitMessage>,
     asset_registry: Option<std::sync::Arc<crate::types::assets::AssetRegistry>>,
+    cancelled: &dyn Fn() -> bool,
 ) -> AssetPipelineRunStats {
     use walkdir::WalkDir;
     let _phase = crate::build::phase::PhaseTrace::start("background_asset_copy");
@@ -1466,7 +1480,8 @@ pub(crate) fn copy_deferred_assets(
     let deferred_paths = MossPaths::from_moss_dir(ctx.moss_dir.clone());
     let mut site_hashes = ctx.previous_hashes.clone();
     let mut copy = html.copy;
-    let mut run = AssetWalkTally { stats: html.stats, ..Default::default() };
+    let mut run = AssetWalkTally { stats: html.stats, cloud_held_rasters: Some(Vec::new()), ..Default::default() };
+    let encodes_before = crate::build::media::encodes_on_this_thread();
     let layer_sources = crate::config::map_layers::declared_sources(source_root);
     for entry in WalkDir::new(source_root)
         .sort_by(crate::build::scan::path_collision::nfc_name_order)
@@ -1483,6 +1498,21 @@ pub(crate) fn copy_deferred_assets(
         if copy.handles_source_html(entry.path()) { continue; }
         copy_asset_entry(ctx, &mut copy, entry.path(), entry.file_type(), &mut site_hashes, &mut run, reporter, asset_registry.as_deref());
     }
+    // Their downloads were asked for as the walk met them. Only cancellation
+    // ends a wait; a fallback the provider fails to deliver is made again.
+    let held = run.cloud_held_rasters.take().unwrap_or_default();
+    for (path, oid) in &held {
+        if !copy.transforms.fetch_cloud_held(oid, crate::build::media::fallback_raster::SIZED_RASTER_TRANSFORM, cancelled) && cancelled() {
+            break;
+        }
+        match std::fs::symlink_metadata(path) {
+            Ok(meta) => copy_asset_entry(ctx, &mut copy, path, meta.file_type(), &mut site_hashes, &mut run, reporter, asset_registry.as_deref()),
+            Err(e) => log::info!("[background-assets] Cannot stat {}: {e}", path.display()),
+        }
+    }
+    let encodes = crate::build::media::encodes_on_this_thread() - encodes_before;
+    log::info!("[background-assets] {encodes} fallback rasters encoded; {} waited for from the cloud", held.len());
+    crate::build::phase::record_count("fallback_encodes", encodes);
     let AssetCopy { object_store, manifest_hash_memo, mut staged, prev_hashes_mtime_secs, lane_index, .. } = copy;
     lane_index.save();
     let prev_sources = &ctx.previous_hashes.sources;

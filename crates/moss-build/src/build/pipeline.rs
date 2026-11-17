@@ -2066,6 +2066,7 @@ fn build_inner(
             {
                 let tx_assets = tx.clone();
                 let copying = session_for_assets.as_ref().map(|s| s.hold_ui_bound());
+                let session = session_for_assets.clone();
                 crate::build::background::spawn_traced_worker(workers, move || {
                     let _copying = copying;
                     let reporter_for_assets = reporter_for_assets
@@ -2077,6 +2078,7 @@ fn build_inner(
                         reporter_for_assets,
                         tx_assets,
                         asset_registry_for_assets,
+                        &|| session.as_ref().is_some_and(|s| s.cancel.is_cancelled()),
                     );
                     // Publish the skipped-symlink count so the video worker
                     // (which emits BuildComplete) can include it in the event.

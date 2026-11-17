@@ -385,6 +385,7 @@ pub(crate) fn encode_sized_raster(
     max_edge: u32,
     jpeg_quality: u8,
 ) -> Result<Vec<u8>, String> {
+    super::count_encode();
     // Content-sniffed and allocation-capped by `media::decode::sniff_decode`
     // (same primitive the WebP decode path uses) rather than a second
     // hand-rolled copy of that open/guess/decode sequence.
@@ -511,7 +512,7 @@ pub(crate) fn sized_raster_oid_for_original(
         .flatten()
 }
 
-const SIZED_RASTER_TRANSFORM: &str = "image/sized-raster";
+pub(crate) const SIZED_RASTER_TRANSFORM: &str = "image/sized-raster";
 
 /// What one sized-raster output depends on, derived once so the cache params
 /// and the in-flight key cannot disagree.
