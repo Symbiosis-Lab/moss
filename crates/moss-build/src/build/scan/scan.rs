@@ -379,6 +379,21 @@ const MEDIA_META_TRANSFORM: &str = "media/meta";
 /// version-5 entry holds `None` for it.
 const MEDIA_META_VERSION: u32 = 6;
 
+/// Whether a `media/meta` entry written under `params` is still right for a
+/// source with this extension. A version bump fixes some kinds of source and
+/// leaves the others' entries as they were, so reading them again, and
+/// writing the same values back under the new version, would only cost every
+/// machine an upload.
+fn meta_version_holds(params: &serde_json::Value, extension: &str) -> bool {
+    let oldest = match extension.to_ascii_lowercase().as_str() {
+        "svg" => 6,
+        // 3 and 4 changed the placeholder of a picture with transparency.
+        "png" | "webp" | "gif" | "avif" | "tif" | "tiff" | "bmp" | "ico" | "heic" | "heif" => 4,
+        _ => 2,
+    };
+    params.get("v").and_then(|v| v.as_u64()).is_some_and(|v| (oldest..=u64::from(MEDIA_META_VERSION)).contains(&v))
+}
+
 /// Stat-based cache key for an image's placeholder metadata (dimensions +
 /// dominant color + LQIP), shared by the blocking scan and the background media
 /// phase so they read/write the SAME `media/meta` entry.
@@ -424,14 +439,15 @@ pub(crate) fn read_cached_meta(
     transform_cache: &TransformCache,
     objects: &ObjectStore,
     content_hash: &str,
+    extension: &str,
 ) -> Option<CachedMediaMeta> {
     let key = (transform_cache.root().to_path_buf(), content_hash.to_string());
     if let Some(meta) = MEDIA_META.get(&key) {
         return Some(meta);
     }
-    let params = serde_json::json!({ "v": MEDIA_META_VERSION });
-    let meta_oid = transform_cache.find_cached_output(content_hash, MEDIA_META_TRANSFORM, &params, crate::build::cache::RecordMode::Request)?;
-    let blob_path = objects.get_path(&meta_oid)?;
+    let record = transform_cache.get_with(content_hash, crate::build::cache::RecordMode::Request)?;
+    let entry = record.transforms.get(MEDIA_META_TRANSFORM).filter(|entry| meta_version_holds(&entry.params, extension))?;
+    let blob_path = objects.get_path(&entry.oid)?;
     let raw = std::fs::read(blob_path).ok()?;
     let meta: CachedMediaMeta = serde_json::from_slice(&raw).ok()?;
     remember_meta(key, &meta);
@@ -632,7 +648,7 @@ fn extract_media_metadata_cached(
 
     // Step 2: If we have a content hash, check the transform cache.
     if let Some(ref hash) = content_hash {
-        if let Some(cached) = read_cached_meta(transform_cache, objects, hash) {
+        if let Some(cached) = read_cached_meta(transform_cache, objects, hash, extension) {
             log::trace!("Media meta cache hit for {}", relative_path);
             return MediaMetadata {
                 path: relative_path.to_string(),
@@ -653,7 +669,7 @@ fn extract_media_metadata_cached(
     // If the file changes, stat will change and we'll re-extract.
     if is_video && content_hash.is_none() {
         let stat_key = image_meta_stat_key(relative_path, size, mtime);
-        if let Some(cached) = read_cached_meta(transform_cache, objects, &stat_key) {
+        if let Some(cached) = read_cached_meta(transform_cache, objects, &stat_key, extension) {
             log::debug!("Media meta stat-cache hit for {}", relative_path);
             return MediaMetadata {
                 path: relative_path.to_string(),
@@ -702,7 +718,7 @@ fn extract_media_metadata_cached(
     // to Step 2/Step 3 and are extracted synchronously (LQIP + color baked).
     if defer_this_image {
         let stat_key = image_meta_stat_key(relative_path, size, mtime);
-        if let Some(cached) = read_cached_meta(transform_cache, objects, &stat_key) {
+        if let Some(cached) = read_cached_meta(transform_cache, objects, &stat_key, extension) {
             log::trace!("Media meta stat-cache hit for {}", relative_path);
             return MediaMetadata {
                 path: relative_path.to_string(),

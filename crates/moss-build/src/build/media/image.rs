@@ -1156,7 +1156,7 @@ pub(crate) fn convert_single_image(
             // sniffed (see scan::extract_media_metadata_cached, Step 2c). This
             // write REPLACES that entry's blob wholesale, so carry the prior
             // value forward instead of silently resetting it to `false`.
-            let is_animated = crate::build::scan::scan::read_cached_meta(transforms, objects, key)
+            let is_animated = crate::build::scan::scan::read_cached_meta(transforms, objects, key, source_file.extension().and_then(|e| e.to_str()).unwrap_or(""))
                 .map(|prev| prev.is_animated)
                 .unwrap_or(false);
             crate::build::scan::scan::write_cached_meta(

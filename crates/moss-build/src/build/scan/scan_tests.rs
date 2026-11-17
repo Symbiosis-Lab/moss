@@ -1886,7 +1886,7 @@ fn an_evicted_image_never_has_a_non_answer_cached_under_its_hash() {
 
         assert_eq!(meta.dimensions, None, "{how}: premise: an evicted image is read as nothing");
         assert!(
-            read_cached_meta(&fx.transforms, &fx.objects, "hash-with-no-cached-metadata").is_none(),
+            read_cached_meta(&fx.transforms, &fx.objects, "hash-with-no-cached-metadata", "jpg").is_none(),
             "{how}: the scan cached dimensions: None under the hash of a file it could not read"
         );
     }
@@ -1907,14 +1907,14 @@ fn a_preview_scan_caches_nothing_under_the_stat_key_of_an_evicted_image() {
     let cloud = crate::build::icloud::pretend::evicted(&fx.png);
     fx.scan(&stat, &HashIndex::new(), &mut HashIndex::new(), true);
     assert!(
-        read_cached_meta(&fx.transforms, &fx.objects, &key).is_none(),
+        read_cached_meta(&fx.transforms, &fx.objects, &key, "jpg").is_none(),
         "the scan cached what it read of an evicted image under its stat key"
     );
 
     drop(cloud);
     fx.scan(&stat, &HashIndex::new(), &mut HashIndex::new(), true);
     assert!(
-        read_cached_meta(&fx.transforms, &fx.objects, &key).is_some(),
+        read_cached_meta(&fx.transforms, &fx.objects, &key, "jpg").is_some(),
         "control: the same scan of an image on disk caches its dimensions under the stat key"
     );
 }
@@ -1945,11 +1945,11 @@ fn a_scan_caches_nothing_under_the_stat_key_of_an_evicted_video() {
 
     let cloud = crate::build::icloud::pretend::evicted(&fx.dir.join("clip.mp4"));
     fx.scan_video(&stat);
-    assert!(read_cached_meta(&fx.transforms, &fx.objects, &key).is_none(), "the scan cached what it read of an evicted video under its stat key");
+    assert!(read_cached_meta(&fx.transforms, &fx.objects, &key, "mp4").is_none(), "the scan cached what it read of an evicted video under its stat key");
 
     drop(cloud);
     fx.scan_video(&stat);
-    assert!(read_cached_meta(&fx.transforms, &fx.objects, &key).is_some(), "control: the same scan of a video on disk caches under the stat key");
+    assert!(read_cached_meta(&fx.transforms, &fx.objects, &key, "mp4").is_some(), "control: the same scan of a video on disk caches under the stat key");
 }
 
 /// A vault built before the mislabeled-extension fix cached "no dimensions,
@@ -1990,7 +1990,7 @@ fn a_pre_fix_media_meta_entry_is_not_reused_after_the_version_bump() {
     fx.transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
 
     assert!(
-        read_cached_meta(&fx.transforms, &fx.objects, hash).is_none(),
+        read_cached_meta(&fx.transforms, &fx.objects, hash, "jpg").is_none(),
         "an entry cached under the pre-fix params must not be served as current"
     );
 }
@@ -2001,17 +2001,30 @@ fn a_pre_fix_media_meta_entry_is_not_reused_after_the_version_bump() {
 fn a_version_5_media_meta_entry_is_not_reused() {
     let fx = ScanFixture::new("stale_media_meta_v5");
     let hash = "hash-of-a-previously-scanned-svg";
-    let stale = CachedMediaMeta { dimensions: None, dominant_color: None, lqip_data_uri: None, is_animated: false };
-    let json_bytes = serde_json::to_vec(&stale).unwrap();
-    let meta_oid = fx.objects.store_bytes(&json_bytes).unwrap();
-    let old_entry = TransformEntry { kept_for: None, validation: None, oid: meta_oid, size: json_bytes.len() as u64, params: serde_json::json!({ "v": 5 }) };
-    let record = TransformRecord {
-        source_oid: hash.to_string(),
-        source_size: 1,
-        transforms: HashMap::from([(MEDIA_META_TRANSFORM.to_string(), old_entry)]),
-    };
+    seed_media_meta(&fx, hash, 5, CachedMediaMeta { dimensions: None, dominant_color: None, lqip_data_uri: None, is_animated: false });
+    assert!(read_cached_meta(&fx.transforms, &fx.objects, hash, "svg").is_none());
+}
+
+/// A version-2 entry is still right for a JPEG: every later version fixed
+/// pictures with transparency or SVGs. Reading the picture again to write the
+/// same values under the new version would cost every machine an upload. A
+/// PNG's version-2 placeholder may be opaque where the picture is not.
+#[test]
+fn a_version_2_media_meta_entry_is_kept_for_a_jpeg_only() {
+    let fx = ScanFixture::new("media_meta_v2");
+    let meta = CachedMediaMeta { dimensions: Some((4, 3)), dominant_color: Some("#112233".into()), lqip_data_uri: Some("data:image/jpeg;base64,AA".into()), is_animated: false };
+    seed_media_meta(&fx, "hash-of-a-jpeg", 2, meta.clone());
+    seed_media_meta(&fx, "hash-of-a-png", 2, meta.clone());
+    assert_eq!(read_cached_meta(&fx.transforms, &fx.objects, "hash-of-a-jpeg", "JPG"), Some(meta));
+    assert!(read_cached_meta(&fx.transforms, &fx.objects, "hash-of-a-png", "png").is_none());
+}
+
+fn seed_media_meta(fx: &ScanFixture, hash: &str, version: u32, meta: CachedMediaMeta) {
+    let json_bytes = serde_json::to_vec(&meta).unwrap();
+    let oid = fx.objects.store_bytes(&json_bytes).unwrap();
+    let entry = TransformEntry { kept_for: None, validation: None, oid, size: json_bytes.len() as u64, params: serde_json::json!({ "v": version }) };
+    let record = TransformRecord { source_oid: hash.to_string(), source_size: 1, transforms: HashMap::from([(MEDIA_META_TRANSFORM.to_string(), entry)]) };
     fx.transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
-    assert!(read_cached_meta(&fx.transforms, &fx.objects, hash).is_none());
 }
 
 // =========================================================================
