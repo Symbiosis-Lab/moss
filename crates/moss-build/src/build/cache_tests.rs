@@ -3459,6 +3459,35 @@ fn availability_owned_merge_publishes_over_a_record_still_in_the_cloud() {
     });
 }
 
+/// Another machine already recorded the same work: publishing it again would
+/// leave the record unchanged, and rewriting it anyway is an upload of the
+/// file on every machine sharing the folder.
+#[test]
+fn availability_owned_merge_leaves_a_record_that_already_holds_it_unwritten() {
+    crate::infra::home::with_moss_home(|_| {
+        use crate::build::cloud_readiness::{StorageOperation, storage::TestFault};
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::moss_paths::MossPaths::new(dir.path());
+        let cache = TransformCache::for_site(&paths);
+        let oid = "f".repeat(64);
+        let path = cache.record_path(&oid);
+        let entry = || TransformEntry { kept_for: None, validation: None, oid: "same bytes".into(), size: 1, params: serde_json::Value::Null };
+        let _managed = TestFault::install(cache.root(), &path, StorageOperation::CacheWrite, 0, std::time::Duration::from_millis(20));
+        let seed = TransformRecord { source_oid: oid.clone(), source_size: 1, transforms: [("format-probe".into(), entry())].into_iter().collect() };
+        write_record_file_for_test(&path, &seed);
+        let inode = fs::metadata(&path).unwrap().ino();
+
+        crate::build::io_utils::fault::fail_reads(&path, libc::EDEADLK, 1);
+        let _in_cloud = crate::build::icloud::pretend::evicted_until_requested(&path);
+        let merged = cache.merge(&oid, 1, RecordMode::Request, |record| { record.transforms.insert("format-probe".into(), entry()); });
+
+        assert!(merged.is_ok());
+        crate::build::cloud_readiness::storage::drain_cache_publications(&mut |_| {});
+        assert_eq!(fs::metadata(&path).unwrap().ino(), inode, "the record the cloud held is not replaced");
+    });
+}
+
 fn write_record_file_for_test(path: &std::path::Path, record: &TransformRecord) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, serde_json::to_vec(record).unwrap()).unwrap();

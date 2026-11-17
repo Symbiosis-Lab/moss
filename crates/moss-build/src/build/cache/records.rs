@@ -390,13 +390,18 @@ impl TransformCache {
                     }
                 }
             });
+            let existing = match &read { RecordRead::Present(record) => Some(record.clone()), _ => None };
             let mut record = match read {
                 RecordRead::Present(record) => record,
                 RecordRead::Absent => TransformRecord { source_oid: source_oid.clone(), source_size: 0, transforms: HashMap::new() },
                 RecordRead::Unreadable | RecordRead::Offline => return Err(read_failure.into_inner().unwrap().unwrap_or_else(|| StorageFailure::new(Some(path.clone()), StorageOperation::CacheRead, io::Error::other("existing record is unreadable; it is preserved")))),
             };
             intent.apply(&mut record);
-            write_record(&path, &record)?;
+            // Another machine may already have recorded the same work; rewriting
+            // an identical record is only an upload on every machine.
+            if existing.as_ref() != Some(&record) {
+                write_record(&path, &record)?;
+            }
             Ok(StorageValue::Published(revision))
         });
         match crate::build::cloud_readiness::storage::await_publication_revision(key, attempt, Some(latest), expected) {
