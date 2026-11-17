@@ -4,9 +4,7 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
-### Added
-
-- Right-clicking a picture in the preview offers Replace picture…, Set focus point (where the page crops it), Edit description and Show in file list, each acting on that picture in the editor, then Edit this page at the picture's line, Copy picture address, the page's address and Open in browser. Of two pictures on one line, the one clicked is the one acted on, and a picture in a gallery is reached too. The browser editor shows the same menu.
+## [0.15.26] - 2026-11-17
 
 ### Fixed
 
@@ -40,6 +38,7 @@ All notable changes to moss will be documented here.
 
 - `[members] reply_to = "desk@example.org"` in `.moss/config.toml` sends readers' replies to the site's mail (the subscribe link, the welcome letter, newsletters) to that address instead of the owner's sign-in email. On mosspub.com hosting it is handed to the host privately and appears in no published file.
 - Every listing says what its cards stand for: `data-list-holds` on `.moss-cards` is `entries` (pages), `collections` (folders and terms, each with a count) or `mixed`, and `data-list-axis` (its order) is now on list and summary listings too, not only on grids. A theme can style a listing of folders apart from a listing of pages.
+- Right-clicking a picture in the preview offers Replace picture…, Set focus point (where the page crops it), Edit description and Show in file list, each acting on that picture in the editor, then Edit this page at the picture's line, Copy picture address, the page's address and Open in browser. Of two pictures on one line, the one clicked is the one acted on, and a picture in a gallery is reached too. The browser editor shows the same menu.
 
 ### Changed
 

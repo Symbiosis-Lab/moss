@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-11-17
+
 ### Added
 
 - `wants_contents_list(blocks)` says whether a page's sections hold enough text to list: at least two sections at its shallowest heading level with 80 words each. The floating nav island follows it.
