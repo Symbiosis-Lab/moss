@@ -1,23 +1,25 @@
 //! Bold that stays bold in a font the theme hosts.
 //!
-//! moss asks for bold text and headings at a medium weight (480). A browser
-//! matching a weight from 400 to 500 looks for a face up to 500 first, then
-//! below, and only then above. A family hosted as Regular and Bold therefore
-//! draws 480 in Regular, and bold text looks like the text around it.
+//! moss asks for bold text at a medium weight (480). A browser matching a
+//! weight from 400 to 500 looks for a face up to 500 first, then below, and
+//! only then above. A family hosted as Regular and Bold therefore draws 480 in
+//! Regular, and bold text looks like the text around it.
 //!
-//! When the family leading a font token is one the theme hosts with
-//! `@font-face` and none of its faces lies from 401 to 500, the build sets the
-//! weight token that goes with it to the family's lightest face above 500. The
-//! rules are appended to the theme's stylesheet, so they take part in the
-//! cascade exactly as if the theme had written them last. A weight token the
-//! theme declares anywhere is left to the theme.
+//! When the family leading `--moss-font-body` is one the theme hosts with
+//! `@font-face` and none of its faces lies from 401 to 500, the build sets
+//! `--moss-font-weight-strong` to the family's lightest face above 500. The
+//! rule is appended to the theme's stylesheet, so it takes part in the cascade
+//! exactly as if the theme had written it last. A weight the theme declares
+//! anywhere is left to the theme.
+//!
+//! Headings keep the weight their faces draw. A heading stands apart by its
+//! size, and a theme drawn with a Regular heading was designed in that Regular.
 
 use crate::build::theme_lint::{strip_comments, style_rules, Layered};
 use crate::i18n::Language;
 
 /// A weight token and the font token whose leading family draws it.
-const WEIGHTS: [(&str, &str); 2] =
-    [("--moss-font-weight-strong", "--moss-font-body"), ("--moss-font-heading-weight", "--moss-font-heading")];
+const WEIGHTS: [(&str, &str); 1] = [("--moss-font-weight-strong", "--moss-font-body")];
 
 /// The range a medium weight is matched in before any heavier face is tried.
 const MEDIUM: std::ops::RangeInclusive<u16> = 401..=500;
@@ -129,9 +131,11 @@ mod tests {
         @font-face { font-family: 'Hosted'; font-weight: 700; src: url(b.woff2) format(\"woff2\"); }";
 
     #[test]
-    fn a_hosted_family_with_regular_and_bold_draws_bold_and_headings_in_its_bold() {
+    fn a_hosted_family_with_regular_and_bold_draws_bold_text_in_its_bold_and_headings_as_they_were() {
         let theme = format!("{TWO_WEIGHTS} :root {{ --moss-font-heading: Hosted, serif; --moss-font-body: var(--moss-font-heading); }}");
-        assert_eq!(rules(&theme), "\n:root{--moss-font-weight-strong:700;--moss-font-heading-weight:700;}\n");
+        assert_eq!(rules(&theme), "\n:root{--moss-font-weight-strong:700;}\n");
+        let heading_only = format!("{TWO_WEIGHTS} :root {{ --moss-font-heading: Hosted, serif; }}");
+        assert_eq!(rules(&heading_only), "", "a hosted heading family keeps the weight it draws");
     }
 
     #[test]
