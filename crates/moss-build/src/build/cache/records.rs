@@ -81,6 +81,16 @@ fn report_once(path: &Path, what: &str) -> bool {
     first
 }
 
+/// How long a cut-off record may be a delivery still arriving.
+const DELIVERY_GRACE: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Whether the cut-off record at `path` has not changed for [`DELIVERY_GRACE`].
+fn left_cut_off(path: &Path) -> bool {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age > DELIVERY_GRACE)
+}
+
 // Only admitted jobs keep these owners alive. Weak keys are pruned on every
 // insertion, and each owner bounds retained edits independently of native slots.
 static OWNED: LazyLock<Mutex<HashMap<PathBuf, Weak<RecordOwner>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -184,10 +194,15 @@ impl TransformCache {
         match load(&path, mode) {
             Ok(data) => match serde_json::from_str(&data) {
                 Ok(record) => RecordRead::Present(record),
-                // Empty, or ending mid-document: local writers rename a finished
-                // temp file into place, so this is a file a sync provider has not
-                // finished delivering, and another machine's full record may be
-                // behind it. Replacing it would propagate the loss.
+                // Empty, or ending mid-document. Writers and sync providers both
+                // put a finished file into place, so one that stays like this
+                // for a while is damaged and replaced on the next write.
+                Err(e) if e.is_eof() && left_cut_off(&path) => {
+                    report_once(&path, "has been empty or cut off for over a minute; it will be replaced");
+                    RecordRead::Absent
+                }
+                // A newer one may be a delivery still arriving, with another
+                // machine's full record behind it: replacing it would lose that.
                 Err(e) if e.is_eof() => {
                     report_once(&path, "is empty or cut off, probably still being delivered; it is left as it is");
                     RecordRead::Unreadable
@@ -492,8 +507,7 @@ mod tests {
         assert_ne!(std::fs::read(&path).unwrap(), b"{ not json");
     }
 
-    /// A zero-byte or cut-off file is what a sync provider leaves while it is
-    /// still delivering; local writers rename a finished temp file into place.
+    /// A fresh zero-byte or cut-off file may be a delivery still arriving.
     fn assert_kept_byte_identical(bytes: &[u8]) {
         let dir = tempfile::tempdir().unwrap();
         let c = cache(dir.path());
@@ -517,6 +531,27 @@ mod tests {
         let full = seeded(dir.path(), &["image/webp", "image/webp-w800"]);
         let text = std::fs::read(full.record_path(OID)).unwrap();
         assert_kept_byte_identical(&text[..text.len() / 2]);
+    }
+
+    /// One that has stayed zero-byte or cut off past the grace is damaged: the
+    /// next write replaces it, so the work is not redone on every build.
+    #[test]
+    fn a_record_left_empty_or_cut_off_is_replaced_by_the_next_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let full = seeded(dir.path(), &["image/webp"]);
+        let text = std::fs::read(full.record_path(OID)).unwrap();
+        for bytes in [&b""[..], &text[..text.len() / 2]] {
+            let c = cache(dir.path());
+            let path = write_record_file(&c, OID, bytes);
+            let old = std::time::SystemTime::now() - DELIVERY_GRACE - std::time::Duration::from_secs(1);
+            std::fs::File::options().write(true).open(&path).unwrap().set_modified(old).unwrap();
+            assert!(matches!(c.read(OID, RecordMode::Request), RecordRead::Absent), "{} bytes", bytes.len());
+            let merged = c.merge(OID, 7, RecordMode::Request, |r| {
+                r.transforms.insert("image/webp-w800".into(), entry("w"));
+            });
+            assert_eq!(merged, Ok(Merged::Written));
+            assert!(c.get_with(OID, RecordMode::Request).unwrap().transforms.contains_key("image/webp-w800"));
+        }
     }
 
     #[test]
