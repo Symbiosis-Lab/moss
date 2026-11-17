@@ -498,6 +498,11 @@ fn copy_source(from: &Path, to: &Path) {
             fs::create_dir_all(&dest).unwrap();
         } else if entry.file_type().is_file() {
             fs::copy(entry.path(), &dest).unwrap();
+            // Picture placeholders are cached by the source's size and mtime.
+            // `fs::copy` keeps the mtime on macOS but not on Linux, where a copy
+            // made a second later would leave the reference render unsettled.
+            let mtime = filetime::FileTime::from_last_modification_time(&entry.metadata().unwrap());
+            filetime::set_file_mtime(&dest, mtime).unwrap();
         }
     }
 }
