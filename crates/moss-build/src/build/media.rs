@@ -61,3 +61,17 @@ pub mod video;
 // image — ImageConversionOutcome is referenced by BuildServices in types.rs
 // via crate::build::media::image::ImageConversionOutcome.
 pub use image::{ImageCompressionConfig, ImageConversionItem, ImageConversionOutcome};
+
+thread_local! {
+    /// Encodes run on this thread. Read around a conversion, it tells the
+    /// outputs encoded from those fetched or found in the cache.
+    static ENCODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+pub(crate) fn count_encode() {
+    ENCODES.with(|count| count.set(count.get() + 1));
+}
+
+pub(crate) fn encodes_on_this_thread() -> usize {
+    ENCODES.with(|count| count.get())
+}

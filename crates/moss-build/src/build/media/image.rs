@@ -887,6 +887,7 @@ pub(crate) fn encode_webp(
     quality: u8,
     icc_profile: Option<&[u8]>,
 ) -> Result<Vec<u8>, String> {
+    super::count_encode();
     if icc_profile.is_some() {
         log::debug!("[image] ICC profile present but not preserved (v1 TODO)");
     }
@@ -1670,10 +1671,6 @@ impl ImageRunContext {
     }
 }
 
-/// Encode CPU seconds per source megapixel, all rungs included: a fixed prior,
-/// measured on a folder of photos at about 0.43 s a picture.
-const ENCODE_SECS_PER_MP: f64 = 0.28;
-
 /// An item's source megapixels, rounded up; unknown dimensions count as the
 /// largest possible.
 fn item_megapixels(item: &ImageConversionItem) -> u64 {
@@ -1823,6 +1820,9 @@ enum ItemStep {
     /// post-loop reduce bails before the completion event, so a tick here would
     /// advance a bar that never closes.
     Cancelled,
+    /// Handed out again once every local picture is done: its cached work is
+    /// on its way from the cloud.
+    Deferred,
 }
 
 impl ItemStep {
@@ -1932,7 +1932,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
     // worker applies its own `ItemStep` as it finishes, so images stream into
     // the preview as they land. A Mutex is fine: the push is trivial next to the
     // encode it guards. NOT rayon — jpeg-decoder nests rayon and deadlocks.
-    use std::sync::atomic::AtomicU32;
+    use std::sync::atomic::{AtomicU32, AtomicUsize};
     use std::sync::Mutex;
     let advisories: Mutex<Vec<Advisory>> = Mutex::new(Vec::new());
     // Count of images this run ACTUALLY converted (produced a webp at the served
@@ -2015,7 +2015,6 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
     // reduced after the scope exactly as before.
     {
         let n_items = ctx.items.len();
-        let next = std::sync::atomic::AtomicUsize::new(0);
         // Spawn a worker per core; the MegapixelBudget (not the thread count)
         // is what actually bounds memory, so extra workers just block on the
         // budget when huge images are in flight and pack in when they're small.
@@ -2038,17 +2037,16 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
         let mp_budget = MegapixelBudget::new(budget_mp);
         // Encodes keep running while the window is hidden, at background QoS.
         let gate = crate::system::folder_session::DerivedWorkGate::of(services.session.as_ref());
-        let fetch = crate::build::cache::FetchPlan::new(&transforms, "image/", ctx.items.iter().map(|item| (item.source_oid.as_str(), item_megapixels(item).min(budget_mp) as f64 * ENCODE_SECS_PER_MP)), n_threads);
-        let order = fetch.local_first(ctx.items.iter().map(|item| item.source_oid.as_str()));
+        let work = crate::build::cache::LocalFirst::new(n_items);
+        let encodes = AtomicUsize::new(0);
+        let cancelled = || cancel_flag.is_some_and(|f| f.load(Ordering::SeqCst));
         std::thread::scope(|scope| {
             for _ in 0..n_threads {
                 scope.spawn(|| loop {
-                    let index = next.fetch_add(1, Ordering::Relaxed);
-                    if index >= n_items {
-                        break;
-                    }
+                    let Some(ticket) = work.take() else { break };
+                    let index = ticket.index;
                     gate.pace_this_thread();
-                    let item = &ctx.items[order[index]];
+                    let item = &ctx.items[index];
                     // The whole of one image's decision. Every exit is a value,
                     // never a `return` with teardown attached — see `ItemStep`.
                     // Nothing in here pushes to the census, ticks progress or
@@ -2132,6 +2130,12 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
             item.source_oid.clone()
         };
 
+        // Work another machine made, still in the cloud here, is fetched rather
+        // than made again: asked for now, waited for after every local picture.
+        if ticket.defer_if_cloud_held(&transforms, &source_oid, "image/") {
+            return ItemStep::Deferred;
+        }
+
         // Singleflight dedup: if another task is already converting this source_oid,
         // block until it finishes and reuse its result. Only the first caller runs
         // the encoder — generalizes the video-only dedup pattern to images.
@@ -2168,9 +2172,10 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
             services.in_flight_images.do_work(&source_oid, || {
                 // Before the permit: a picture waiting for its download holds
                 // no encode capacity.
-                fetch.wait(&transforms, &source_oid, "image/", &|| cancel_flag.is_some_and(|f| f.load(Ordering::SeqCst)), &|| gate.is_closed());
+                ticket.fetch(&transforms, &source_oid, "image/", &cancelled);
                 let _permit = mp_budget.acquire(item_megapixels(item));
-                convert_single_image(
+                let before = super::encodes_on_this_thread();
+                let outcome = convert_single_image(
                     &source_file,
                     &source_oid,
                     &relative_webp,
@@ -2182,7 +2187,9 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                     cancel_flag,
                     meta_stat_key.as_deref(),
                     &ctx.rung_collisions,
-                )
+                );
+                encodes.fetch_add(super::encodes_on_this_thread() - before, Ordering::Relaxed);
+                outcome
             })
         };
 
@@ -2384,11 +2391,12 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                             item.ended(&ctx.source_path, false, &[]);
                             any_cancelled.store(true, Ordering::SeqCst);
                         }
+                        ItemStep::Deferred => {}
                     }
                 });
             }
         });
-        fetch.report(n_items);
+        work.report(encodes.into_inner());
     }
 
     // ---- Reduce the parallel accumulators ----

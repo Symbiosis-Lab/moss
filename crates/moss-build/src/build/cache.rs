@@ -47,7 +47,7 @@ mod publication;
 mod process_memo;
 mod fit;
 mod fetch;
-pub(crate) use fetch::FetchPlan;
+pub(crate) use fetch::LocalFirst;
 pub(crate) mod source_oids;
 pub(crate) use process_memo::{KeyedMemo, MemoFile, ProcessMemo, ROOTS};
 use crate::build::cloud_readiness::StorageOperation;
@@ -856,7 +856,7 @@ impl TransformCache {
 
     /// Compute the path where a transform record is stored on disk, under the
     /// same ASCII-hex fan-out as [`ObjectStore::blob_path`].
-    fn record_path(&self, source_oid: &str) -> PathBuf {
+    pub(crate) fn record_path(&self, source_oid: &str) -> PathBuf {
         let oid = source_oid.replace(':', "-"); // NTFS forbids ':' in a path component (it's the ADS separator)
         self.base
             .join(oid.get(..2).unwrap_or(oid.as_str()))

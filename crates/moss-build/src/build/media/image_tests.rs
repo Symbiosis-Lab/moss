@@ -7777,25 +7777,25 @@ async fn an_image_the_walk_hashed_this_build_is_not_read_again() {
 
 /// A picture another machine encoded, whose record and blobs are still in the
 /// cloud here, is downloaded and placed, not encoded again: an encode is not
-/// byte-identical, so encoding it again would change what is published.
+/// byte-identical, so encoding it again would change what is published. The
+/// preview's run hashes in the worker, so its items arrive with no oid.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_cloud_held_picture_is_fetched_not_encoded_again() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().to_path_buf();
-    // Large enough that the run's deadline (its estimated encode time) outlasts
-    // the download below.
-    make_big_jpeg(&root.join("photo.jpg"), 4000, 2500);
+    make_big_jpeg(&root.join("photo.jpg"), 2000, 1250);
     let moss_dir = root.join(".moss");
     let staging = moss_dir.join("build.nosync").join("staging");
     fs::create_dir_all(&staging).unwrap();
     fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
     let source_oid = crate::build::cache::ObjectStore::hash_file(&root.join("photo.jpg")).unwrap();
-    let run = |root: PathBuf, moss_dir: PathBuf, staging: PathBuf, source_oid: String| async move {
+    // The run's encode count.
+    let run = |source_oid: String| {
         let ctx = ImageRunContext {
-            items: vec![ImageConversionItem { source_path: PathBuf::from("photo.jpg"), source_oid, ext: "jpg".to_string(), dimensions: Some((4000, 2500)), skip: None, fingerprint: None }],
+            items: vec![ImageConversionItem { source_path: PathBuf::from("photo.jpg"), source_oid, ext: "jpg".to_string(), dimensions: Some((2000, 1250)), skip: None, fingerprint: None }],
             source_path: root.to_string_lossy().to_string(),
-            staging_dir: staging,
-            moss_dir,
+            staging_dir: staging.clone(),
+            moss_dir: moss_dir.clone(),
             config: ImageCompressionConfig::default(),
             dir_overrides: HashMap::new(),
             tx: None,
@@ -7804,27 +7804,27 @@ async fn a_cloud_held_picture_is_fetched_not_encoded_again() {
             suppressed: Default::default(),
             source_oids: Default::default(),
         };
-        let services = std::sync::Arc::new(BuildServices::headless());
-        tokio::task::spawn_blocking(move || { run_image_conversion(&services, &ctx); }).await.unwrap();
+        async move {
+            let services = std::sync::Arc::new(BuildServices::headless());
+            let ((), collector) = crate::build::phase::with_collector(async move {
+                tokio::task::spawn_blocking(crate::build::phase::inherit_blocking(move || { run_image_conversion(&services, &ctx); })).await.unwrap();
+            }).await;
+            let encodes = collector.lock().unwrap().counts.iter().find(|(name, _)| *name == "image_encodes").map_or(0, |(_, n)| *n);
+            encodes
+        }
     };
-    run(root.clone(), moss_dir.clone(), staging.clone(), source_oid.clone()).await;
+    assert!(run(source_oid.clone()).await >= 2, "the first run encodes the base and its rungs");
 
     let paths = crate::moss_paths::MossPaths::from_moss_dir(moss_dir.clone());
     let transforms = crate::build::cache::TransformCache::for_site(&paths);
     let objects = crate::build::cache::ObjectStore::new(paths.cache_objects());
     let Some(record) = transforms.get_with(&source_oid, crate::build::cache::RecordMode::Request) else { panic!("the first run records the picture") };
     let blobs: Vec<PathBuf> = record.transforms.iter().filter(|(kind, _)| kind.starts_with("image/")).map(|(_, e)| objects.blob_path(&e.oid)).collect();
-    assert!(blobs.len() >= 2, "the base and at least one rung");
     fs::remove_dir_all(&staging).unwrap();
     fs::create_dir_all(&staging).unwrap();
-    // An encode now fails, so a picture in staging can only have been fetched.
-    fs::write(root.join("photo.jpg"), b"not a picture any more").unwrap();
-    // The downloads arrive a moment after the run asks for them.
-    let cloud: Vec<_> = blobs.iter().map(|b| crate::build::icloud::pretend::evicted(b)).collect();
-    let arrival = std::thread::spawn(move || { std::thread::sleep(std::time::Duration::from_millis(300)); drop(cloud) });
+    // Each download arrives once it is asked for, and not before.
+    let _cloud: Vec<_> = blobs.iter().chain([&transforms.record_path(&source_oid)]).map(|path| crate::build::icloud::pretend::evicted_until_requested(path)).collect();
 
-    run(root.clone(), moss_dir.clone(), staging.clone(), source_oid.clone()).await;
-    arrival.join().unwrap();
-
+    assert_eq!(run(String::new()).await, 0, "nothing is encoded again");
     assert!(staging.join("photo.webp").exists(), "the fetched picture is placed");
 }
