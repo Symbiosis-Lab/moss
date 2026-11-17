@@ -1464,14 +1464,29 @@ fn copy_asset_entry(
     }
 }
 
+/// A walk that stopped: the coordinator learns its render must not promote.
+fn walk_superseded(tx: &mpsc::Sender<EmitMessage>, stats: AssetPipelineRunStats, encodes_before: usize) -> AssetPipelineRunStats {
+    let encodes = crate::build::media::encodes_on_this_thread() - encodes_before;
+    log::info!("[background-assets] walk stopped after {encodes} fallback rasters: a newer render or a cancel");
+    crate::build::phase::record_count("fallback_encodes", encodes);
+    if let Err(e) = tx.blocking_send(EmitMessage::WalkSuperseded) {
+        log::info!("[background-assets] Failed to send to coordinator: {e}");
+    }
+    stats
+}
+
 /// Walk remaining assets, then replace the source cache with both steps' live records.
+///
+/// `stop` is asked between entries: a cancelled session, or a newer render of
+/// the folder whose own walk does this work. A stopped walk registers nothing
+/// and tells the coordinator, so its render's generation is never promoted.
 pub(crate) fn copy_deferred_assets(
     ctx: &BackgroundContext,
     html: StagedHtml,
     reporter: &dyn crate::build::ports::reporter::BuildReporter,
     tx: mpsc::Sender<EmitMessage>,
     asset_registry: Option<std::sync::Arc<crate::types::assets::AssetRegistry>>,
-    cancelled: &dyn Fn() -> bool,
+    stop: &dyn Fn() -> bool,
 ) -> AssetPipelineRunStats {
     use walkdir::WalkDir;
     let _phase = crate::build::phase::PhaseTrace::start("background_asset_copy");
@@ -1488,6 +1503,9 @@ pub(crate) fn copy_deferred_assets(
         .into_iter()
         .filter_entry(|e| crate::build::scan::classify::left_out_with_layer_sources(e, source_root, &layer_sources).is_none())
     {
+        if stop() {
+            return walk_superseded(&tx, run.stats, encodes_before);
+        }
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
@@ -1502,8 +1520,8 @@ pub(crate) fn copy_deferred_assets(
     // ends a wait; a fallback the provider fails to deliver is made again.
     let held = run.cloud_held_rasters.take().unwrap_or_default();
     for (path, oid) in &held {
-        if !copy.transforms.fetch_cloud_held(oid, crate::build::media::fallback_raster::SIZED_RASTER_TRANSFORM, cancelled) && cancelled() {
-            break;
+        if !copy.transforms.fetch_cloud_held(oid, crate::build::media::fallback_raster::SIZED_RASTER_TRANSFORM, stop) && stop() {
+            return walk_superseded(&tx, run.stats, encodes_before);
         }
         match std::fs::symlink_metadata(path) {
             Ok(meta) => copy_asset_entry(ctx, &mut copy, path, meta.file_type(), &mut site_hashes, &mut run, reporter, asset_registry.as_deref()),

@@ -117,6 +117,16 @@ pub enum HashBucket {
 // PendingManifest
 // ---------------------------------------------------------------------------
 
+/// How far the asset walk got. A walk stops early when a newer render of the
+/// folder is admitted; it registers its assets only at the end, so such a
+/// render's generation lacks them and must never be promoted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum WalkOutcome {
+    #[default]
+    Complete,
+    Superseded,
+}
+
 /// Mutable manifest accumulator for the render and deferred-processing phases.
 ///
 /// Created from a `carry_forward` snapshot (the previous build's [`SiteHashes`]).
@@ -210,6 +220,8 @@ pub struct PendingManifest {
     /// generation carrying any of these is withheld — see
     /// `ship::ShipVerdict`.
     unverified: std::collections::BTreeMap<String, String>,
+    /// Whether the asset walk reached the end; see [`WalkOutcome`].
+    walk: WalkOutcome,
     /// The article map this render built, which its generation's publish reads
     /// (`publish_view::read_articles`).
     articles: Option<std::sync::Arc<crate::build::scan::article_map::ArticleMap>>,
@@ -310,6 +322,11 @@ pub(crate) fn is_reload_tracked_source_key(src: &str) -> bool {
 }
 
 impl PendingManifest {
+    /// The asset walk stopped before the end; this render must not promote.
+    pub(crate) fn mark_walk_superseded(&mut self) {
+        self.walk = WalkOutcome::Superseded;
+    }
+
     pub(crate) fn record_output_collisions(&mut self, messages: Vec<String>) {
         for message in &messages {
             crate::build::cli_output::log_warn_problem!("{}", message);
@@ -378,6 +395,7 @@ impl PendingManifest {
             carried_page_sources,
             page_sources: HashSet::new(),
             unverified: std::collections::BTreeMap::new(),
+            walk: WalkOutcome::Complete,
             articles: None,
             ship_sources: HashMap::new(),
             unwritten_pages: std::collections::BTreeMap::new(),
@@ -1005,6 +1023,7 @@ impl PendingManifest {
             blocking_keys: self.blocking_keys,
             generation_id,
             unverified: self.unverified,
+            walk: self.walk,
             articles: self.articles,
             ship_sources,
             late: self.late,
@@ -1040,6 +1059,7 @@ pub struct SealedManifest {
     /// Every output a producer or the presence pass could not verify, with the
     /// error — never persisted; it exists to withhold this generation.
     unverified: std::collections::BTreeMap<String, String>,
+    walk: WalkOutcome,
     /// The render's own article map, written beside the generation when it is
     /// materialized; never persisted with the manifest.
     articles: Option<std::sync::Arc<crate::build::scan::article_map::ArticleMap>>,
@@ -1148,6 +1168,11 @@ impl SealedManifest {
     /// the generation must not be promoted (`ship::ShipVerdict`).
     pub fn unverified(&self) -> &std::collections::BTreeMap<String, String> {
         &self.unverified
+    }
+
+    /// Whether this render's asset walk reached the end.
+    pub(crate) fn walk(&self) -> WalkOutcome {
+        self.walk
     }
 
     /// Record an output the presence pass could not verify. Its entry is kept:

@@ -191,7 +191,7 @@ fn build_test_with_stash(
             cancelled: _cancelled,
             home_ready: _home_ready,
             publishable: _publishable,
-            render_seq: _render_seq,
+            render: _render,
             unready_derivations: _unready,
             folder_lock: _,
             locked_at_nanos: _,
@@ -7450,7 +7450,7 @@ fn a_presence_pass_that_cannot_read_its_tree_drops_nothing_and_ships_nothing() {
         &mp,
         &stage,
         crate::build::ship::next_promotion_epoch(),
-        Some(render),
+        Some(&render),
         verdict.clone(),
     );
     fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o755)).unwrap();

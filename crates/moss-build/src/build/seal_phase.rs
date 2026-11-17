@@ -105,7 +105,7 @@ pub(crate) struct PendingSeal {
     /// `infra::folder_lock::last_promoted_epoch`, immediately before
     /// `materialize_and_promote`.
     pub locked_at_nanos: u64,
-    pub render_seq: Option<u64>,
+    pub render: Option<crate::build::lifecycle::Render>,
     pub freshness: Freshness,
     pub is_pinned: Arc<dyn Fn(&str) -> bool + Send + Sync>,
     pub session: Option<Arc<FolderSession>>,
@@ -207,7 +207,7 @@ async fn run_materialize_phase(req: PendingSeal) {
         sealed_at,
         promotion_epoch,
         locked_at_nanos,
-        render_seq,
+        render,
         freshness,
         is_pinned,
         session,
@@ -307,6 +307,7 @@ async fn run_materialize_phase(req: PendingSeal) {
     });
     #[cfg(test)]
     let _ = crate::build::ONE_SHOT_TAIL_TEST_HOOK.try_with(|hook| hook("shipping"));
+    let render_for_materialize = render.clone();
     let blocking_result = tokio::task::spawn_blocking(move || {
         #[cfg(test)]
         if let Some(delay) = materialize_test_delay {
@@ -320,7 +321,7 @@ async fn run_materialize_phase(req: PendingSeal) {
                 &mp,
                 &stage_dir,
                 promotion_epoch,
-                render_seq,
+                render_for_materialize.as_ref(),
                 verdict,
             ),
         };
@@ -371,7 +372,7 @@ async fn run_materialize_phase(req: PendingSeal) {
             sealed.generation_id(),
             sealed_as,
             promotion_epoch,
-            render_seq.map_or("none".to_string(), |r| r.to_string()),
+            render.as_ref().map_or("none".to_string(), |r| r.seq().to_string()),
             sealed.all_files().len(),
             sealed_at.elapsed().as_millis()
         ),

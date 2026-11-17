@@ -378,10 +378,10 @@ pub(crate) fn protect_current_before_rebuild(mp: &MossPaths) {
 /// Mint this render's number and, when it may be shown, point the preview at
 /// staging. Called under the stage-write lock, once per render.
 ///
-/// Returns the number and the directory to announce as served: staging for a
+/// Returns the render and the directory to announce as served: staging for a
 /// shown render; for a withheld one the cell and `shown_render` are left alone
 /// and the answer is `current`, or nothing on a vault that has never promoted.
-pub(crate) fn show_render(mp: &MossPaths, publishable: bool) -> (u64, Option<PathBuf>) {
+pub(crate) fn show_render(mp: &MossPaths, publishable: bool) -> (Render, Option<PathBuf>) {
     let staging = mp.staging_dir();
     let current = mp.current_ptr();
     let current_exists = current.exists();
@@ -389,24 +389,47 @@ pub(crate) fn show_render(mp: &MossPaths, publishable: bool) -> (u64, Option<Pat
     let mut st = record.state();
     st.next_render += 1;
     let seq = st.next_render;
-    if !publishable {
-        return (seq, current_exists.then_some(current));
-    }
-    if let Some(cell) = &st.served {
-        point(cell, &staging);
-    }
-    st.shown_render = Some(seq);
-    (seq, Some(staging))
+    let announce = if publishable {
+        if let Some(cell) = &st.served {
+            point(cell, &staging);
+        }
+        st.shown_render = Some(seq);
+        Some(staging)
+    } else {
+        current_exists.then_some(current)
+    };
+    drop(st);
+    (Render { record, seq }, announce)
 }
 
-/// Whether `render` is still the newest render admitted for this folder: the
-/// test a detached background read makes between files, so a build that
-/// superseded it is the one that asks for the rebuild. `None` (no render was
-/// minted) cannot be told apart from newest, and counts as it.
-pub(crate) fn is_latest_render(mp: &MossPaths, render: Option<u64>) -> bool {
-    match render {
-        Some(render) => lock_for(mp).state().next_render == render,
-        None => true,
+/// One render `show_render` minted. It holds its folder's record, because a
+/// record nobody holds is dropped at another folder's first lookup and its
+/// successor starts counting renders again: whoever asks about this render
+/// later (the asset walk, the derive job, the seal tail) must reach the record
+/// that counted it.
+#[derive(Clone)]
+pub(crate) struct Render {
+    record: Arc<LifecycleCell>,
+    seq: u64,
+}
+
+impl Render {
+    /// Render `seq` of `mp`'s folder without minting it, for a test that
+    /// orders renders itself.
+    #[cfg(test)]
+    pub(crate) fn numbered(mp: &MossPaths, seq: u64) -> Self {
+        Self { record: lock_for(mp), seq }
+    }
+
+    pub(crate) fn seq(&self) -> u64 {
+        self.seq
+    }
+
+    /// Whether no newer render has been admitted for this folder: the test
+    /// detached work makes between files, so a build that superseded it is
+    /// the one that does the rest.
+    pub(crate) fn is_latest(&self) -> bool {
+        self.record.state().next_render == self.seq
     }
 }
 

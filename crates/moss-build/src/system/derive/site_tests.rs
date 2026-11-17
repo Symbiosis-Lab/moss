@@ -22,18 +22,17 @@ fn fixture() -> Fixture {
 }
 
 impl Fixture {
-    fn job(&self, render: Option<u64>) -> BackgroundDerive {
+    fn job(&self, render: crate::build::lifecycle::Render) -> BackgroundDerive {
         BackgroundDerive {
             paths: MossPaths::new(self.dir.path()),
-            lifecycle_paths: MossPaths::new(self.dir.path()),
+            render,
             root: self.dir.path().to_path_buf(),
             folder: self.folder.clone(),
             jobs: vec![self.demand.clone()],
-            render,
         }
     }
 
-    fn render(&self) -> u64 {
+    fn render(&self) -> crate::build::lifecycle::Render {
         crate::build::lifecycle::show_render(&MossPaths::new(self.dir.path()), true).0
     }
 }
@@ -47,7 +46,7 @@ fn a_finished_background_read_asks_the_watcher_for_a_rebuild() {
     let f = fixture();
     let watcher = crate::ops::watch::worker::register(&f.folder);
     let render = f.render();
-    f.job(Some(render)).run(None, &never());
+    f.job(render).run(None, &never());
     let asked = watcher.slot_occupied();
     crate::ops::watch::worker::deregister(&f.folder, &watcher);
     assert!(asked);
@@ -76,7 +75,7 @@ fn a_background_read_overtaken_by_a_newer_render_still_asks_for_a_rebuild() {
         crate::build::lifecycle::show_render(&MossPaths::new(&root), true);
         true
     });
-    f.job(Some(render)).run(None, &never());
+    f.job(render).run(None, &never());
     assert!(newer.join().unwrap(), "the read's process was never seen running");
     let asked = watcher.slot_occupied();
     crate::ops::watch::worker::deregister(&f.folder, &watcher);
@@ -88,7 +87,7 @@ fn a_cancelled_background_read_asks_for_nothing() {
     let f = fixture();
     let watcher = crate::ops::watch::worker::register(&f.folder);
     let render = f.render();
-    f.job(Some(render)).run(None, &std::sync::atomic::AtomicBool::new(true));
+    f.job(render).run(None, &std::sync::atomic::AtomicBool::new(true));
     let asked = watcher.slot_occupied();
     crate::ops::watch::worker::deregister(&f.folder, &watcher);
     assert!(!asked);
@@ -107,7 +106,7 @@ fn a_cancelled_background_read_says_it_has_stopped() {
     let f = fixture();
     let render = f.render();
     let reporter = Recording::default();
-    f.job(Some(render)).run(Some(&reporter), &std::sync::atomic::AtomicBool::new(true));
+    f.job(render).run(Some(&reporter), &std::sync::atomic::AtomicBool::new(true));
     let events = reporter.0.lock().unwrap();
     let last = events.iter().rev().find_map(|e| match e {
         PipelineEvent::BackgroundProgress { task, completed, .. } if task == "derive" => Some(*completed),

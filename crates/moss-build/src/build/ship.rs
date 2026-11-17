@@ -615,12 +615,12 @@ pub fn tail_owns_shared_state(promotion: &Result<Promotion, String>) -> bool {
 /// `verdict` covers the seal's required inputs and output presence pass
 /// ([`ShipVerdict::after_presence_pass`]). A `Withhold` returns
 /// [`Promotion::Withheld`] before anything is copied.
-pub fn materialize_and_promote(
+pub(crate) fn materialize_and_promote(
     sealed: &crate::build::manifest::SealedManifest,
     mp: &crate::moss_paths::MossPaths,
     stage_dir: &std::path::Path,
     epoch: u64,
-    render: Option<u64>,
+    render: Option<&crate::build::lifecycle::Render>,
     verdict: ShipVerdict,
 ) -> Result<Promotion, String> {
     if let ShipVerdict::Withhold(reason) = verdict {
@@ -647,7 +647,7 @@ pub fn materialize_and_promote(
         }
         if reason != WithholdReason::SourcesDownloading {
             // The tree on screen is the one that could not be read.
-            crate::build::lifecycle::withdraw_render(mp, render);
+            crate::build::lifecycle::withdraw_render(mp, render.map(crate::build::lifecycle::Render::seq));
         }
         return Ok(Promotion::Withheld(reason));
     }
@@ -678,7 +678,7 @@ pub fn materialize_and_promote(
             Ok(drifted) => drifted,
             // A newer render owns staging and may have removed a page this
             // generation names: its own generation is the one to promote.
-            Err(e) if !crate::build::lifecycle::is_latest_render(mp, render) => {
+            Err(e) if !render.is_none_or(crate::build::lifecycle::Render::is_latest) => {
                 log::info!("generation {} is not promoted, a newer render has replaced what it staged: {}", sealed.generation_id(), e);
                 return Ok(Promotion::Superseded);
             }
@@ -691,7 +691,7 @@ pub fn materialize_and_promote(
         .map_err(|e| format!("Failed to write generation original identities: {e}"))?;
     sealed.write_publish_view(&mp.generations_dir())
         .map_err(|e| format!("Failed to record which pages are preview-only: {e}"))?;
-    let promoted = crate::build::lifecycle::promote(mp, epoch, render, sealed.generation_id(), copied)
+    let promoted = crate::build::lifecycle::promote(mp, epoch, render.map(crate::build::lifecycle::Render::seq), sealed.generation_id(), copied)
         .map_err(|e| format!("Failed to set current_ptr: {}", e))?;
     // A generation holding bytes its id does not describe keeps its lock file,
     // so the next seal of this id copies it again instead of reusing it.
@@ -1635,10 +1635,8 @@ mod tests {
         std::fs::create_dir_all(&stage).unwrap();
         std::fs::write(stage.join("index.html"), b"<h1>home</h1>").unwrap();
         let sealed = manifest_of(&[("index.html", b"<h1>home</h1>"), ("gone/index.html", b"<h1>gone</h1>")]);
-        // A build's write lease holds the folder's record for as long as it ships.
-        let _record = crate::build::lifecycle::lock_for(&mp);
         let (render, _) = crate::build::lifecycle::show_render(&mp, true);
-        let ship = || materialize_and_promote(&sealed, &mp, &stage, next_promotion_epoch(), Some(render), ShipVerdict::Ship);
+        let ship = || materialize_and_promote(&sealed, &mp, &stage, next_promotion_epoch(), Some(&render), ShipVerdict::Ship);
 
         ship().expect_err("the newest render's generation is short of a file it names");
         crate::build::lifecycle::show_render(&mp, true);

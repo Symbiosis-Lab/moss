@@ -1188,7 +1188,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
         })
     };
 
-    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_references, unresolved_inputs, cancelled, home_ready: _home_ready, publishable, render_seq, unready_derivations, folder_lock, locked_at_nanos } = {
+    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_references, unresolved_inputs, cancelled, home_ready: _home_ready, publishable, render, unready_derivations, folder_lock, locked_at_nanos } = {
         // One attempt: its own clones, its own `SlotResolver`.
         let attempt = || {
             let root_owned = config.root.clone();
@@ -1405,7 +1405,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                             session_opt.clone(),
                             promotion_epoch,
                             locked_at_nanos,
-                            render_seq,
+                            render,
                             seal_freshness,
                             &folder_path_for_mat,
                             SealGuards {
@@ -1428,7 +1428,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                     Err(crate::build::background::BuildError::LeftToNewerBuild) => {
                         // Like a tail that leaves to a newer sealed render: no
                         // record and no event, the newer build owes both.
-                        log::info!("seal+persist: render #{} left to a newer build waiting on the same images", render_seq.unwrap_or_default());
+                        log::info!("seal+persist: render #{} left to a newer build waiting on the same images", render.as_ref().map_or(0, crate::build::lifecycle::Render::seq));
                     }
                     Err(e) => {
                         log::error!("seal+persist: background work failed: {}", e);
@@ -1498,7 +1498,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                         session.clone(),
                         promotion_epoch,
                         locked_at_nanos,
-                        render_seq,
+                        render,
                         crate::build::feeds::search_lane::Freshness::Now,
                         &folder_path,
                         SealGuards {
@@ -1953,7 +1953,7 @@ async fn advertise_sealed(
     promotion_epoch: u64,
     locked_at_nanos: u64, // When this build took the folder lock: render order across processes, not `promotion_epoch`'s admission order.
     // The render `lifecycle::show_render` minted for this build.
-    render_seq: Option<u64>,
+    render: Option<crate::build::lifecycle::Render>,
     freshness: crate::build::feeds::search_lane::Freshness,
     // The exact key `folder_session::registry()` and `ops::watch::worker`
     // register under — passed rather than derived from `mp.project_root()`
@@ -1970,6 +1970,7 @@ async fn advertise_sealed(
     let sealed_at = std::time::Instant::now();
     // A caller hand-off never yields: its caller reads `current` next.
     let yields = guards.handoff == Handoff::Lane;
+    let render_seq = render.as_ref().map(crate::build::lifecycle::Render::seq);
     crate::build::lifecycle::note_sealed(mp, render_seq);
     // Right after seal, before any repair pass can rewrite `stage_dir`: the
     // reference point `ship_phase`'s integrity check compares against, for
@@ -2019,9 +2020,11 @@ async fn advertise_sealed(
     };
     // Tails that seal together queue on this lock. A newer sealed render's
     // tail writes everything this one would, so this one leaves, rather than
-    // wait its turn or land after it and roll it back.
-    if yields && crate::build::lifecycle::newer_render_sealed(mp, render_seq) {
-        log::info!("seal tail for render #{} left to a newer sealed render", render_seq.unwrap_or_default());
+    // wait its turn or land after it and roll it back. A render whose asset
+    // walk stopped for a newer one leaves too: its generation lacks what the
+    // walk never reached, and the preview keeps its last whole one.
+    if yields && (sealed.walk() == crate::build::manifest::WalkOutcome::Superseded || crate::build::lifecycle::newer_render_sealed(mp, render_seq)) {
+        log::info!("seal tail for render #{} left to a newer render", render_seq.unwrap_or_default());
         return None;
     }
 
@@ -2201,7 +2204,7 @@ async fn advertise_sealed(
         sealed_at,
         promotion_epoch,
         locked_at_nanos,
-        render_seq,
+        render,
         freshness,
         is_pinned,
         session: session.clone(),

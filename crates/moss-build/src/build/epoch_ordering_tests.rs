@@ -352,10 +352,15 @@ async fn a_build_that_waited_for_the_folder_build_lock_is_ordered_after_the_wait
 // ── Seal tails that a newer seal has overtaken ──────────────────────────────
 
 fn sealed_page(stage: &std::path::Path, body: &[u8]) -> crate::build::manifest::SealedManifest {
+    sealed_page_with(stage, body, |_| {})
+}
+
+fn sealed_page_with(stage: &std::path::Path, body: &[u8], shape: impl FnOnce(&mut crate::build::manifest::PendingManifest)) -> crate::build::manifest::SealedManifest {
     use crate::build::manifest::{HashBucket, PendingManifest};
     std::fs::write(stage.join("index.html"), body).unwrap();
     let mut pending = PendingManifest::new(crate::types::content::SiteHashes::default());
     pending.register(&crate::build::served_path::ServedPath::from_source("index.html").unwrap(), body, HashBucket::Files);
+    shape(&mut pending);
     pending.seal()
 }
 
@@ -382,7 +387,7 @@ async fn tail(
         Some(session.clone()),
         crate::build::ship::next_promotion_epoch(),
         render,
-        Some(render),
+        Some(crate::build::lifecycle::Render::numbered(mp, render)),
         crate::build::feeds::search_lane::Freshness::Now,
         &mp.project_root().to_string_lossy(),
         crate::build::SealGuards { handoff, ..Default::default() },
@@ -458,6 +463,38 @@ async fn a_tail_overtaken_while_it_waits_for_the_lock_writes_nothing() {
     assert!(!mp.hashes().exists(), "an overtaken tail must not write hashes.json");
     crate::build::seal_phase::settle(&mp).await;
     assert!(mp.current_generation_id().is_err(), "nor hand the lane a seal to promote");
+}
+
+/// A render whose asset walk stopped for a newer one never promotes: its
+/// generation lacks what the walk never reached. The preview keeps the last
+/// whole generation, through a newer render that is withheld too, until a
+/// render whose walk finished promotes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_render_whose_walk_was_superseded_never_promotes() {
+    let SealFixture { mp, session, .. } = &seal_fixture();
+    let lane = || crate::build::Handoff::Lane;
+    let current = || mp.current_generation_id().expect("a generation is promoted");
+    let whole = sealed_page(&mp.staging_dir(), b"<html><body>whole</body></html>");
+    let whole_gen = whole.generation_id().to_string();
+    assert!(tail(mp, session, whole, 1, lane()).await.is_none());
+    crate::build::seal_phase::settle(mp).await;
+    assert_eq!(current(), whole_gen);
+
+    let half = sealed_page_with(&mp.staging_dir(), b"<html><body>half</body></html>", |p| p.mark_walk_superseded());
+    assert!(tail(mp, session, half, 2, lane()).await.is_none());
+    crate::build::seal_phase::settle(mp).await;
+    assert_eq!(current(), whole_gen, "a half-walked render is not shown");
+
+    let withheld = sealed_page_with(&mp.staging_dir(), b"<html><body>withheld</body></html>", |p| p.mark_unverified("index.html".into(), "still in the cloud".into()));
+    let _ = tail(mp, session, withheld, 3, lane()).await;
+    crate::build::seal_phase::settle(mp).await;
+    assert_eq!(current(), whole_gen, "nor is a withheld one");
+
+    let arrived = sealed_page(&mp.staging_dir(), b"<html><body>arrived</body></html>");
+    let arrived_gen = arrived.generation_id().to_string();
+    assert!(tail(mp, session, arrived, 4, lane()).await.is_none());
+    crate::build::seal_phase::settle(mp).await;
+    assert_eq!(current(), arrived_gen, "the build after the files arrive promotes");
 }
 
 /// The one-shot arm's caller reads `current` as soon as the tail returns, so

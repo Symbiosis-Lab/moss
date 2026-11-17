@@ -155,7 +155,7 @@ async fn advertise_sealed_drops_the_cache_lease_before_collect_build_store() {
         Some(session.clone()),
         epoch,
         1,
-        Some(1),
+        Some(crate::build::lifecycle::Render::numbered(&mp, 1)),
         crate::build::feeds::search_lane::Freshness::Now,
         &folder_path,
         SealGuards {
@@ -239,7 +239,7 @@ async fn advertise_sealed_ships_held_bytes_then_hands_deploy_a_manifest_without_
         Some(session.clone()),
         crate::build::ship::next_promotion_epoch(),
         1,
-        Some(1),
+        Some(crate::build::lifecycle::Render::numbered(&mp, 1)),
         crate::build::feeds::search_lane::Freshness::Now,
         // Must equal `mp`'s own project root — see the sibling test's comment
         // on the same requirement.

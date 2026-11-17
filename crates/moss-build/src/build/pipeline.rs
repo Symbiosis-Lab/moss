@@ -884,10 +884,10 @@ pub struct PipelineRunOutput {
     /// tail separately checks complete-generation evidence before changing
     /// the durable manifest or `current` generation.
     pub publishable: bool,
-    /// The render number `lifecycle::show_render` minted for this build, which
-    /// the seal tail hands to `lifecycle::promote`. `None` for a build that
+    /// The render `lifecycle::show_render` minted for this build, which the
+    /// seal tail hands to `lifecycle::promote`. `None` for a build that
     /// stopped before it rendered.
-    pub render_seq: Option<u64>,
+    pub(crate) render: Option<crate::build::lifecycle::Render>,
     /// The derived-text blocks this render showed without text: files still
     /// being read (a publish waits them out) and files whose read failed.
     pub unready_derivations: crate::system::derive::site::UnreadyReport,
@@ -1715,7 +1715,7 @@ fn build_inner(
             // The folder is closed; nothing downstream should promote this
             // build's generation over whatever the user opens next.
             publishable: false,
-            render_seq: None,
+            render: None,
             unready_derivations: Default::default(),
             folder_lock: folder_build_lock,
             locked_at_nanos,
@@ -1781,9 +1781,9 @@ fn build_inner(
 
     // Step 5: show this render, unless this build could not read its own
     // sources: showing it is the moment the user sees this build's output.
-    let (seq, announce) = crate::build::lifecycle::show_render(&paths, publishable);
+    let (render, announce) = crate::build::lifecycle::show_render(&paths, publishable);
     drop(served_record);
-    let render_seq = Some(seq);
+    let seq = render.seq();
     // A shown render tells the preview at once what it now serves; what the
     // background writes later is the seal tail's to announce.
     if publishable {
@@ -2005,7 +2005,7 @@ fn build_inner(
 
         // Derived text the render left as a placeholder (adopt mode): read in
         // the background, then ask for a rebuild that renders it from the cache.
-        let derive_job = derived.as_ref().and_then(|d| d.take_background_job(&paths, render_seq));
+        let derive_job = derived.as_ref().and_then(|d| d.take_background_job(render.clone()));
         // The reads store into the object cache after this build's lease is
         // gone; their own keeps a cache GC off the blobs until the rebuild
         // has registered them.
@@ -2042,7 +2042,7 @@ fn build_inner(
                         svc_arc_for_image.as_deref(),
                         &ctx_for_image,
                         Some(tx_image),
-                        render_seq,
+                        Some(seq),
                     )
                 });
             }
@@ -2067,6 +2067,7 @@ fn build_inner(
                 let tx_assets = tx.clone();
                 let copying = session_for_assets.as_ref().map(|s| s.hold_ui_bound());
                 let session = session_for_assets.clone();
+                let render = render.clone();
                 crate::build::background::spawn_traced_worker(workers, move || {
                     let _copying = copying;
                     let reporter_for_assets = reporter_for_assets
@@ -2078,7 +2079,7 @@ fn build_inner(
                         reporter_for_assets,
                         tx_assets,
                         asset_registry_for_assets,
-                        &|| session.as_ref().is_some_and(|s| s.cancel.is_cancelled()),
+                        &|| session.as_ref().is_some_and(|s| s.cancel.is_cancelled()) || !render.is_latest(),
                     );
                     // Publish the skipped-symlink count so the video worker
                     // (which emits BuildComplete) can include it in the event.
@@ -2142,7 +2143,7 @@ fn build_inner(
         cancelled: false,
         home_ready,
         publishable,
-        render_seq,
+        render: Some(render),
         unready_derivations: derived.as_ref().map(|d| d.unready()).unwrap_or_default(),
         folder_lock: folder_build_lock,
         locked_at_nanos,
