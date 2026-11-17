@@ -1902,8 +1902,9 @@ pub fn generate_blocking_content_for_build(
         // before any page below reads the cache, so a card is complete on
         // this build. Only a build that exits when done fetches here: it has
         // no next build to finish a card for it, so it gets the full fetch
-        // budget; an interactive rebuild never blocks on the network (the
-        // app fetches in the background). All of `documents`, not just
+        // budget; an interactive rebuild never blocks on the network (it
+        // asks for the cards it lacks in the background once it returns,
+        // `features::sync::fetch_link_meta_in_background`). All of `documents`, not just
         // `to_render`, because the homepage and the generated indexes render
         // further down, outside that partition. URLs already fresh in the
         // cache cost nothing.
@@ -1927,9 +1928,8 @@ pub fn generate_blocking_content_for_build(
         // its files linked into today's staging even when nothing new was
         // fetched above. Cheap on a warm cache (a CAS copy, not a
         // re-encode). Reads the link-meta cache directly rather than
-        // reusing whatever the fetch above returned, so a URL fetched by
-        // the DESKTOP APP's background sync (never this `if` above) still
-        // gets its cover materialized here.
+        // reusing whatever the fetch above returned, so a URL an earlier
+        // background fetch wrote still gets its cover materialized here.
         if !external_urls_this_build.is_empty() {
             let url_refs: Vec<&str> = external_urls_this_build.iter().map(String::as_str).collect();
             let mut link_meta_cache = crate::build::page::link_meta::read_link_meta_from_cache(&url_refs, &moss_dir, Some(&input_evidence));

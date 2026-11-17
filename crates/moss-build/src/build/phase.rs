@@ -112,14 +112,14 @@ use std::time::{Duration, Instant};
 /// These are INITIAL values to tune as real-world timing data accrues.
 /// Seeds: the observed timings in this module's doc examples
 /// (scan ~312ms, process_hooks ~13.4s, native_process_spawn ~1ms) plus
-/// generous headroom for network-bound phases (link-meta prewarm, plugin
+/// generous headroom for network-bound phases (link-card fetches, plugin
 /// process-hook syncs such as the Matters import legitimately run tens of
 /// seconds).
 const PHASE_BUDGETS_MS: &[(&str, u64)] = &[
     // Whole-pipeline envelope; every sub-phase below nests inside it.
     ("run_pipeline", 120_000),
-    // Network-bound: parallel HTTP fetches of link-preview metadata.
-    ("link_meta_prewarm", 30_000),
+    // Network-bound: a build that exits fetches its link cards; the fetch stops at 60 s.
+    ("link_meta_build_fetch", 30_000),
     // Filesystem walk + metadata extraction. Observed ~312ms on a typical site.
     ("scan", 2_000),
     // Blocking await of plugin process hooks (content download/import).

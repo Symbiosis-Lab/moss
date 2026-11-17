@@ -798,14 +798,7 @@ fn a_bare_url_cell_takes_its_title_from_cached_metadata() {
         LinkMeta {
             url: "https://slykiten.com/".to_string(),
             title: Some("Sly Kitten".to_string()),
-            favicon: None,
-            og_image: None,
-            cover: None,
-            cover_served_path: None,
-            cover_width: None,
-            cover_height: None,
-            cover_lqip: None,
-            cover_color: None,
+            ..Default::default()
         },
     );
     let html = both_passes(
@@ -827,13 +820,7 @@ fn a_bare_url_cell_shows_a_cached_favicon_in_the_kicker() {
             url: "https://slykiten.com/".to_string(),
             title: None,
             favicon: Some("https://slykiten.com/favicon.ico".to_string()),
-            og_image: None,
-            cover: None,
-            cover_served_path: None,
-            cover_width: None,
-            cover_height: None,
-            cover_lqip: None,
-            cover_color: None,
+            ..Default::default()
         },
     );
     let html = both_passes(
@@ -863,14 +850,7 @@ fn an_authored_cover_image_survives_alongside_cached_metadata() {
         LinkMeta {
             url: "https://example.org/".to_string(),
             title: Some("Fetched Title".to_string()),
-            favicon: None,
-            og_image: None,
-            cover: None,
-            cover_served_path: None,
-            cover_width: None,
-            cover_height: None,
-            cover_lqip: None,
-            cover_color: None,
+            ..Default::default()
         },
     );
     let md = ":::grid 1\n[![Alt text](a.jpg)](https://example.org/)\n:::\n";
@@ -927,8 +907,8 @@ fn a_bare_url_with_no_cached_metadata_falls_back_to_the_url_itself() {
 }
 
 #[test]
-fn every_external_cell_is_reported_for_prewarm_even_with_a_manual_title() {
-    // Owner decision (2026-09): author-written link text wins the TITLE
+fn every_external_cell_is_fetched_even_with_a_manual_title() {
+    // Author-written link text wins the TITLE
     // slot only. It must not suppress the fetch itself — a manually
     // titled cell still wants its favicon and og:image cover — so both
     // external URLs are candidates here, not just the bare one. Only the

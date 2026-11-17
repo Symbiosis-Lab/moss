@@ -138,7 +138,7 @@ fn record_key(folder: &Path, link_meta: &Path, path: &Path) -> Option<String> {
     // Cards are keyed under their own directory, which `MossPaths` may
     // resolve to another spelling of the folder (a symlinked temp root).
     // Only a card (`<sha256 of the URL>.json`) is recorded, never what a build
-    // writes beside them: the prewarm list, derived covers.
+    // writes beside them: an old link list, derived covers.
     if let Ok(card) = path.strip_prefix(link_meta) {
         return is_card_name(&card.to_string_lossy()).then(|| format!("link-meta/{}", card.to_string_lossy()));
     }

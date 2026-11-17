@@ -1,4 +1,4 @@
-//! Background data sync for native features (comments, reviews).
+//! Background data sync for native features (comments, reviews, link cards).
 //!
 //! ## Why this exists
 //!
@@ -256,7 +256,6 @@ pub fn start_background_sync(
                         advisories.push(comment_sync_failure_advisory(&e));
                     }
                     refresh_reviews(&folder_path, &article_map);
-                    prewarm_link_meta(&folder_path);
                 }
                 advisories
             }
@@ -356,25 +355,58 @@ fn refresh_reviews(folder_path: &str, article_map: &HashMap<String, ArticleInfo>
     }
 }
 
-/// Link metadata prewarm for the next interactive build: refresh the cache for
-/// any external URLs the most recent build needed (persisted at
-/// .moss/build.nosync/link-meta-urls.json). Render reads from cache only — this
-/// is what makes those reads fast and keeps the build off the network. A build
-/// that exits when done fetches its own before render, so only the background
-/// sync runs this.
-fn prewarm_link_meta(folder_path: &str) {
-    let moss_dir = Path::new(folder_path).join(".moss");
-    let url_list = crate::build::page::link_meta::load_persisted_url_list(&moss_dir);
-    if !url_list.is_empty() {
-        let phase_start = Instant::now();
-        // The fetcher has its own budget; this watchdog is a belt-and-braces
-        // signal in case the bound is breached.
-        let watchdog = spawn_watchdog("link-meta prewarm", Duration::from_secs(120));
-        let url_refs: Vec<&str> = url_list.iter().map(|s| s.as_str()).collect();
-        let fetched = crate::build::page::link_meta::fetch_all_link_meta_parallel(&url_refs, &moss_dir, |_| {});
-        watchdog.cancel();
-        log::info!(target: "sync", "link-meta: prewarmed {} URLs ({} fetched, rest fresh) in {:?}", url_list.len(), fetched, phase_start.elapsed());
+/// One folder's link-card fetches in this process.
+#[derive(Default)]
+struct LinkFetches {
+    waiting: HashSet<String>,
+    /// Asked for once already: a fetch that failed wrote nothing, and is not
+    /// tried again on every rebuild while this process runs.
+    tried: HashSet<String>,
+    running: bool,
+}
+
+fn link_fetches() -> &'static Mutex<HashMap<PathBuf, LinkFetches>> {
+    use std::sync::OnceLock;
+    static FETCHES: OnceLock<Mutex<HashMap<PathBuf, LinkFetches>>> = OnceLock::new();
+    FETCHES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Fetch the link cards an interactive build showed with nothing in the folder
+/// yet, off the build's critical path. The build asks once it knows them, so a
+/// card is fetched however builds and syncs are ordered. One task per folder
+/// runs at a time and also fetches what is asked for while it runs. The entry
+/// it writes is watched, so the rebuild it starts shows the card.
+pub(crate) fn fetch_link_meta_in_background(urls: &[&str], moss_dir: &Path, spawner: &dyn crate::build::ports::spawner::Spawner) {
+    let cold = crate::build::page::link_meta::cold_urls(urls, moss_dir);
+    {
+        let mut all = link_fetches().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let fetches = all.entry(moss_dir.to_path_buf()).or_default();
+        let new: Vec<String> = cold.into_iter().filter(|url| fetches.tried.insert(url.clone())).collect();
+        fetches.waiting.extend(new);
+        if fetches.running || fetches.waiting.is_empty() {
+            return;
+        }
+        fetches.running = true;
     }
+    let moss_dir = moss_dir.to_path_buf();
+    spawner.spawn_blocking(Box::new(move || loop {
+        let batch: Vec<String> = {
+            let mut all = link_fetches().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let fetches = all.entry(moss_dir.clone()).or_default();
+            if fetches.waiting.is_empty() {
+                fetches.running = false;
+                return;
+            }
+            fetches.waiting.drain().collect()
+        };
+        let started = Instant::now();
+        // The fetcher has its own budget; this watchdog says so if it is breached.
+        let watchdog = spawn_watchdog("link-meta fetch", Duration::from_secs(120));
+        let refs: Vec<&str> = batch.iter().map(String::as_str).collect();
+        let fetched = crate::build::page::link_meta::fetch_all_link_meta_parallel(&refs, &moss_dir, |_| {});
+        watchdog.cancel();
+        log::info!(target: "sync", "link-meta: fetched {fetched} of {} cards in {:?}", batch.len(), started.elapsed());
+    }));
 }
 
 /// How long a build that exits when done waits for the comment refresh: the

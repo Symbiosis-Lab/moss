@@ -819,13 +819,6 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // This build's root identity, to compare against later phases.
     let start_identity = crate::build::lifecycle::root_identity::log_build_root(&lifecycle_paths.root().join("build.nosync"), "start", None);
 
-    // Begin a fresh link-meta URL session for this build. Render fills the
-    // session via `record_urls_for_prewarm`; we flush it just before spawning
-    // the native-process sync so sync sees this build's URL set.
-    crate::build::page::link_meta::start_build_session(
-        &Path::new(&folder_path).join(".moss"),
-    );
-
     crate::infra::moss_paths::ensure_moss_gitignore(&moss_dir_path)?;
     crate::infra::moss_paths::note_hidden_moss_files(config.source());
 
@@ -1246,6 +1239,15 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
         let skipped = build_documents.iter().filter(|d| d.slot_only).count();
         crate::build::cli_output::note_built(build_documents.len() - skipped, skipped);
     }
+    // Fetch the link cards this build showed with nothing in the folder yet.
+    // Asked here, by every interactive build: the comment sync above starts
+    // before a build knows its links, and a watch rebuild starts no sync. A
+    // build that exits fetched its cards before it rendered.
+    if !cancelled && !config.exits_after_build {
+        let urls = crate::build::render::grid_cells::external_urls_across_build(build_documents.iter());
+        let refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+        crate::build::features::sync::fetch_link_meta_in_background(&refs, &moss_dir_path, &*config.host.spawner);
+    }
     crate::build::phase::record_value("missing_references", missing_references.len());
     crate::build::phase::record_value("cancelled", cancelled as usize);
     crate::build::phase::record_value("publishable", publishable as usize);
@@ -1541,15 +1543,6 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     log::debug!(target: "timing", "[pipeline] build returned: {:?}", pipeline_build_start.elapsed());
     drop(_build_trace);
 
-    // Flush this build's link-meta URL set to disk so the next build's
-    // background sync can prewarm the cache. Atomic write, replace-not-merge —
-    // removed URLs vanish from the list (no unbounded growth).
-    let flushed = crate::build::page::link_meta::flush_build_session(
-        &Path::new(&folder_path).join(".moss"),
-    );
-    if flushed > 0 {
-        log::debug!(target: "link-meta", "flushed {} URL(s) for next-build prewarm", flushed);
-    }
 
     // Emit build-complete progress for CLI. Skipped for a `cancelled` result
     // (a folder-switch-mid-wait early return): that placeholder result's

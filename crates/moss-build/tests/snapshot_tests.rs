@@ -81,7 +81,7 @@ fn build_sync(folder_path: &str, auto_serve: bool) -> Result<String, String> {
         trigger: BuildTrigger::Full,
         // Mirrors `build_sync`'s own doc comment on `PipelineConfig::
         // exits_after_build`: this process drops its runtime right after
-        // `run_pipeline` returns, so link-meta must prewarm synchronously
+        // `run_pipeline` returns, so link cards are fetched before render
         // rather than on a background task that would be killed first.
         exits_after_build: true,
         site_url_override: None,

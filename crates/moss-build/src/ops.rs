@@ -386,7 +386,7 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
             // last seal what changed, and render everything when they cannot.
             trigger: BuildTrigger::Unobserved,
             // A serving process stays alive (it parks on ctrl-C below), so
-            // only the plain build seals inline / prewarms synchronously.
+            // only the plain build seals inline and fetches its link cards first.
             exits_after_build: !run.flags.serve,
             site_url_override: run.flags.site_url_override,
             server_port: None,

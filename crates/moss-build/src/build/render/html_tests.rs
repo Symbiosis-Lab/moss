@@ -9929,6 +9929,54 @@ mod build_time_link_meta_fetch_tests {
         let _ = server.join();
     }
 
+    /// An interactive build renders a card it has no entry for URL-only and
+    /// must ask for the fetch itself once it returns: the comment sync starts
+    /// before a build knows its links, and a watch rebuild starts none.
+    #[test]
+    fn a_watch_rebuild_asks_for_the_cards_it_lacks() {
+        let html = r#"<html><head><meta property="og:title" content="Fetched After The Build"></head></html>"#;
+        let (base, server) = spawn_test_server(html, 1, std::time::Duration::ZERO);
+
+        let test_dir = std::env::temp_dir().join(format!(
+            "moss_build_fetch_interactive_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&test_dir).unwrap();
+        let _cleanup = Cleanup(test_dir.clone());
+        let url = format!("{base}/after-build");
+        fs::write(test_dir.join("index.md"), format!(":::grid 1\n<{url}>\n:::\n")).unwrap();
+
+        // Its spawner runs a blocking task inline, so the fetch has finished when the build returns.
+        let host = crate::build::ports::host::test_host_ports();
+        let build = crate::build::run_pipeline(crate::build::PipelineConfig {
+            root: crate::vault::paths::VaultRoot::resolve(&test_dir),
+            progress: crate::build::null_sink(),
+            plugins: crate::build::PluginMode::SlotsOnly,
+            watch: false,
+            start_server: false,
+            host,
+            trigger: crate::build::BuildTrigger::Full,
+            exits_after_build: false,
+            site_url_override: None,
+            server_port: None,
+            admission_epoch: Some(crate::build::ship::next_promotion_epoch()),
+            live_port: None,
+            rename_pairs: Vec::new(),
+        });
+        tokio::runtime::Runtime::new().unwrap().block_on(build).expect("the build should succeed");
+
+        let cached = crate::build::page::link_meta::read_link_meta_from_cache(&[url.as_str()], &test_dir.join(".moss"), None);
+        assert_eq!(
+            cached[&url].title.as_deref(),
+            Some("Fetched After The Build"),
+            "the build that showed the card URL-only must have its entry fetched"
+        );
+        let _ = server.join();
+    }
+
     #[test]
     fn an_offline_build_with_an_unreachable_link_still_finishes_promptly() {
         // Bind then drop, so the port is guaranteed to refuse connections —

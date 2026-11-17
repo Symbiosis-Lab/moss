@@ -304,12 +304,8 @@ pub(crate) fn resolve_page_body(
     } else {
         let moss_dir = std::path::Path::new(root_path).join(".moss");
         let url_refs: Vec<&str> = urls_to_fetch.iter().map(|s| s.as_str()).collect();
-        // Critical-path I/O policy: render reads cache only and explicitly
-        // records URLs for the next build's background prewarm. The first build
-        // may render empty cards; the next sees populated metadata after sync
-        // has run.
-        crate::build::page::link_meta::record_urls_for_prewarm(&url_refs, &moss_dir);
-        // The build's materialize step read these URLs into the ledger already.
+        // Render reads the cache only; the build fetches what it lacks. The
+        // build's materialize step read these URLs into the ledger already.
         Some(crate::build::page::link_meta::read_link_meta_from_cache(
             &url_refs, &moss_dir, None,
         ))
