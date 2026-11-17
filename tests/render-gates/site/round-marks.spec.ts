@@ -213,6 +213,40 @@ for (const scheme of ['light', 'dark'] as const) {
           }
         }
       });
+
+      test('the search panel with no results keeps its border all the way round', async ({ page }) => {
+        await page.setContent(
+          document_(
+            scheme,
+            `<div id="panel" class="moss-search__panel" style="margin:0 auto;max-width:36rem"><div class="moss-search__field"><input id="q" class="moss-search__input" aria-label="g"></div><div class="moss-search__progress" hidden></div><div class="moss-search__seam"></div><div class="moss-search__body"><p class="moss-search__status" hidden></p><ul class="moss-search__results"></ul></div></div>`,
+          ),
+        );
+        const panel = page.locator('#panel');
+        // The ring is the same colour on the top and the bottom edge, in the middle where the seam sits.
+        const rings = async () => {
+          const shot = (await panel.screenshot()).toString('base64');
+          return page.evaluate(async (shot) => {
+            const img = new Image();
+            img.src = `data:image/png;base64,${shot}`;
+            await img.decode();
+            const ctx = document.createElement('canvas').getContext('2d')!;
+            ctx.canvas.width = img.width;
+            ctx.canvas.height = img.height;
+            ctx.drawImage(img, 0, 0);
+            const at = (y: number) => Array.from(ctx.getImageData(Math.floor(img.width / 2), y, 1, 1).data.slice(0, 3));
+            const ring = Math.round(2 * (img.width / (document.getElementById('panel')!.getBoundingClientRect().width)));
+            return { top: Array.from({ length: ring }, (_, i) => at(i)), bottom: Array.from({ length: ring }, (_, i) => at(img.height - 1 - i)) };
+          }, shot);
+        };
+        let r = await rings();
+        expect(r.bottom, 'resting: the bottom edge matches the top').toEqual(r.top.slice(0, r.bottom.length));
+        await page.locator('#q').focus();
+        await expect.poll(() => panel.evaluate((el) => getComputedStyle(el).boxShadow)).not.toBe('none');
+        r = await rings();
+        expect(r.bottom, 'focused: the 2px ring is the same on the bottom edge as on the top').toEqual(r.top);
+        await page.locator('.moss-search__results').evaluate((ul) => ul.insertAdjacentHTML('beforeend', '<li class="moss-search__row"><a class="moss-search__link" href="#">x</a></li>'));
+        await expect(page.locator('.moss-search__seam'), 'with results the seam divides them from the field').toBeVisible();
+      });
     });
   }
 }

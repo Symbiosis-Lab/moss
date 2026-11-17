@@ -217,6 +217,11 @@
   margin-inline: 18px;
   background: var(--moss-border-light);
 }
+/* With nothing under it the seam would lie on the panel's bottom border and
+   cover the inner row of the focus ring: no divider without results. */
+.moss-search__panel:not(:has(.moss-search__row, .moss-search__status:not([hidden]))) .moss-search__seam {
+  display: none;
+}
 
 /* --- Results --- */
 

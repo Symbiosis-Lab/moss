@@ -106,6 +106,10 @@ test("the search overlay seam is a neutral hairline, not an accent underline", a
   page,
 }) => {
   await page.locator(".nav-search-btn").click();
+  // The seam divides results from the field, so it shows only once a row follows it.
+  await page.locator(".moss-search__results").evaluate((ul) =>
+    ul.insertAdjacentHTML("beforeend", '<li class="moss-search__row"><a class="moss-search__link" href="#">x</a></li>'),
+  );
   const seam = page.locator(".moss-search__seam");
   await expect(seam).toBeVisible();
 
