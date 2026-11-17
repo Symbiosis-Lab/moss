@@ -28,6 +28,7 @@ All notable changes to moss will be documented here.
 - A page saved while a folder's first build is running shows as soon as the preview starts watching, not after the picture batch has finished.
 - When new pictures or picture sizes finish, as on the first open after an upgrade that adds a size or after you add a picture, only the pages showing them are rendered again, not every page: 45 pages instead of 315 on one site.
 - The search panel keeps its border all the way round when it shows no results. The line under the search box lay on the panel's bottom edge and covered the bottom of the border and of its focus ring.
+- Opening a folder whose files are still arriving from Google Drive, iCloud or another cloud service builds as soon as the files arrive. moss used to wait up to a minute after each arrival before trying again, so such an open could take several minutes.
 
 ### New
 

@@ -643,6 +643,51 @@ async fn failed_builds_back_off_exponentially() {
     worker.await.unwrap();
 }
 
+/// A build that stopped on a file still in the cloud waits for the arrival
+/// that enqueues its retry, with no timer and without counting toward the
+/// backoff: a real failure after it still starts at the base delay.
+#[tokio::test(start_paused = true)]
+async fn a_build_waiting_on_the_cloud_waits_for_an_arrival_not_a_backoff() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().to_string_lossy().into_owned();
+    let handle = register(&folder);
+    let times = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let (h, f, t) = (handle.clone(), folder.clone(), times.clone());
+    let mut step = 0usize;
+    let attempt = move |req: RebuildRequest| {
+        step += 1;
+        t.lock().unwrap().push(tokio::time::Instant::now());
+        let outcome = match step {
+            1 => {
+                crate::build::cloud_readiness::raise_gate_for_a_deferred_build(&f, 0, &[], crate::build::ports::reporter::discarding(), "a page is still in the cloud");
+                AttemptOutcome::Failed
+            }
+            2 => AttemptOutcome::Failed,
+            _ => AttemptOutcome::Completed,
+        };
+        if outcome == AttemptOutcome::Failed { h.restore(req) }
+        async move { outcome }
+    };
+    let worker = tokio::spawn(run_worker_loop(handle.clone(), attempt));
+    handle.enqueue(content_only("index.md"));
+    let attempts = |n: usize| { let t = times.clone(); async move { while t.lock().unwrap().len() < n { tokio::time::sleep(Duration::from_millis(1)).await } } };
+    attempts(1).await;
+    tokio::time::sleep(BACKOFF_CAP * 10).await;
+    assert_eq!(times.lock().unwrap().len(), 1, "no timer retries a build waiting on the cloud");
+    let arrived = tokio::time::Instant::now();
+    handle.enqueue(content_only("index.md"));
+    attempts(3).await;
+
+    let t = times.lock().unwrap().clone();
+    assert_eq!(t[1], arrived, "the arrival's enqueue retries at once");
+    assert_eq!(t[2] - t[1], BACKOFF_BASE, "a real failure after a cloud wait backs off from the base");
+
+    handle.request_shutdown();
+    worker.await.unwrap();
+    deregister(&folder, &handle);
+    crate::build::cloud_readiness::take_gate(&folder);
+}
+
 /// One success resets the backoff counter: a later failure starts again at
 /// the base delay, not where the previous streak left off.
 #[tokio::test(start_paused = true)]

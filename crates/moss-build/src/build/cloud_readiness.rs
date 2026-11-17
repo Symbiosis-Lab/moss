@@ -709,6 +709,7 @@ pub fn raise_gate_for_a_deferred_build(
     reporter: &dyn crate::build::ports::reporter::BuildReporter,
     message: &str,
 ) {
+    crate::ops::watch::worker::note_cloud_wait(folder_path);
     // The same monotonicity rule the build's own gate follows: a
     // sealed generation never becomes unsealed, so once one exists the preview
     // has something to serve and a full-window screen is never the right answer.
