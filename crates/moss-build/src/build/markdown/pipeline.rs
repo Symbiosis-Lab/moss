@@ -157,6 +157,15 @@ pub(crate) fn build_asset_snapshot(
         insert_slug(&mut snapshot.animated, path, *is_animated, dir_overrides);
     }
 
+    // Kept rung widths: keyed like `dimensions`, so emission reads them under
+    // the key its dims probe hit. Sorted (determinism, see above).
+    let mut kept_entries: Vec<(&String, &Vec<u32>)> = maps.kept_rungs.iter().collect();
+    kept_entries.sort_by(|a, b| a.0.cmp(b.0));
+    for (path, widths) in kept_entries {
+        snapshot.kept_rungs.insert(PathBuf::from(path), widths.clone());
+        insert_slug(&mut snapshot.kept_rungs, path, widths.clone(), dir_overrides);
+    }
+
     // LQIP: String → PathBuf at the boundary. Sorted (determinism, see above).
     let mut lqip_entries: Vec<(&String, &String)> = maps.lqips.iter().collect();
     lqip_entries.sort_by(|a, b| a.0.cmp(b.0));

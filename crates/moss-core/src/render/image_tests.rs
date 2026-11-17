@@ -956,6 +956,21 @@ fn ladder_srcset_emitted_for_wide_raster() {
         );
 }
 
+/// A published picture offers the rungs its deploy record keeps, under
+/// whichever spelling found its dims; a webp source alike.
+#[test]
+fn ladder_srcset_offers_a_published_pictures_kept_rungs() {
+    let mut assets = snapshot_dims("photo.jpg", 2000, 1200);
+    assets.kept_rungs.insert("photo.jpg".into(), vec![800, 1600]);
+    let html = synthesize_image_html("/photo.jpg", "alt", &assets, ImageContext::MarkdownInline, &ImageRenderOptions::default());
+    assert!(html.contains(r#"<source srcset="/photo.w800.webp 800w, /photo.w1600.webp 1600w, /photo.webp 2000w""#), "got: {html}");
+
+    let mut assets = snapshot_dims("photo.webp", 2000, 1200);
+    assets.kept_rungs.insert("photo.webp".into(), Vec::new());
+    let html = synthesize_image_html("photo.webp", "alt", &assets, ImageContext::MarkdownInline, &ImageRenderOptions::default());
+    assert!(!html.contains("srcset"), "got: {html}");
+}
+
 #[test]
 fn base_descriptor_caps_at_deploy_max_edge() {
     let assets = snapshot_dims("photo.jpg", 4000, 3000);

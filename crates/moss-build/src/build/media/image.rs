@@ -993,11 +993,10 @@ pub(crate) fn convert_single_image(
     // the pixels we already decode for the WebP encode. See
     // `scan::image_meta_stat_key` / `scan::extract_media_metadata_cached`.
     meta_stat_key: Option<&str>,
-    // Mapped path of every vault image file → its absolute vault path,
-    // threaded from registration (blocking.rs) via `ImageRunContext`. A rung
-    // URL appearing as a key is a collision: `encode_rungs` never writes to
-    // that path — the user's file wins there. See `rung_collision_map`.
-    rung_collisions: &HashMap<String, PathBuf>,
+    // The build's rung decision, threaded from registration (blocking.rs) via
+    // `ImageRunContext`: the widths this picture offers, and the rung URLs a
+    // user's own file holds, which `encode_rungs` never writes.
+    rung_plan: &super::rungs::RungPlan,
 ) -> ImageConversionOutcome {
     use crate::build::cache::TransformEntry;
 
@@ -1071,7 +1070,7 @@ pub(crate) fn convert_single_image(
             let rungs = if rungs_gated {
                 encode_rungs(
                     source_file, source_oid, relative_webp, staging_dir,
-                    objects, transforms, config, rung_collisions, None,
+                    objects, transforms, config, rung_plan, None,
                     actual_size,
                 )
             } else {
@@ -1182,7 +1181,7 @@ pub(crate) fn convert_single_image(
     // no-ladder path move `img` into `resized` exactly as before — no clone.
     let (w, h) = (img.width(), img.height());
     let ladder_len = if rungs_gated {
-        moss_core::asset_paths::ladder_rungs(w, h, false).len()
+        rung_plan.widths(relative_webp, w, h).len()
     } else {
         0
     };
@@ -1356,7 +1355,7 @@ pub(crate) fn convert_single_image(
             objects,
             transforms,
             config,
-            rung_collisions,
+            rung_plan,
             original.as_ref(),
             encoded_len,
         )
@@ -1613,13 +1612,8 @@ pub(crate) struct ImageRunContext {
     /// instead of writing to `hashes.json` via `update_image_hashes`.
     /// `None` in legacy / test paths that haven't been wired to `BackgroundHandle`.
     pub tx: Option<mpsc::Sender<EmitMessage>>,
-    /// Mapped path of EVERY vault image file → its absolute vault path,
-    /// cloned from `BackgroundContext::rung_collisions` (see the field doc
-    /// there — keys are not only rung-shaped names). The worker tests
-    /// candidate rung URLs for KEY membership before writing — the same test
-    /// registration ran — so a user's file named like a rung is never
-    /// clobbered. Never recomputed here.
-    pub rung_collisions: HashMap<String, PathBuf>,
+    /// Cloned from `BackgroundContext::rung_plan`; never recomputed here.
+    pub rung_plan: super::rungs::RungPlan,
     /// Advisories `dispatch_image_conversions` carried forward for images it
     /// skipped this round (disk-origin hit, output present) — read from
     /// the advisory cache (`image_item_advisories`), not recomputed here.
@@ -1646,7 +1640,7 @@ impl ImageRunContext {
             config,
             dir_overrides: ctx.dir_overrides.clone(),
             tx: None,
-            rung_collisions: ctx.rung_collisions.clone(),
+            rung_plan: ctx.rung_plan.clone(),
             carried_advisories: Vec::new(),
             suppressed: std::collections::HashSet::new(),
             source_oids: ctx.source_oids.clone(),
@@ -1771,16 +1765,15 @@ fn suppressed_variants_for(
 fn promised_rungs(
     item: &ImageConversionItem,
     source: &str,
-    rung_collisions: &HashMap<String, PathBuf>,
+    rung_plan: &super::rungs::RungPlan,
 ) -> Vec<(u32, String)> {
     if !moss_core::asset_paths::is_ladder_source_ext(&item.ext) {
         return Vec::new();
     }
     let Some((w, h)) = item.dimensions else { return Vec::new() };
-    moss_core::asset_paths::ladder_rungs(w, h, false)
-        .iter()
-        .map(|&rung| (rung, moss_core::asset_paths::to_webp_rung(source, rung)))
-        .filter(|(_, rel)| !rung_collisions.contains_key(rel))
+    rung_plan.widths(&moss_core::asset_paths::to_webp(source), w, h).into_iter()
+        .map(|rung| (rung, moss_core::asset_paths::to_webp_rung(source, rung)))
+        .filter(|(_, rel)| !rung_plan.collisions.contains_key(rel))
         .collect()
 }
 
@@ -2102,7 +2095,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
         // the success arm sweeps any the encode did not resolve, so a registered
         // rung never sits Pending forever behind its LQIP/passthrough
         // placeholder (honest-mirror Layer 5B stuck-Pending class).
-        let registered_rungs = || promised_rungs(item, &relative_webp, &ctx.rung_collisions);
+        let registered_rungs = || promised_rungs(item, &relative_webp, &ctx.rung_plan);
 
         // Resolve the content hash. The blocking collect deferred it (stat-match
         // only), so first paint wasn't gated on hashing hundreds of MB of images;
@@ -2170,7 +2163,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
             // (which would deadlock the budget). do_work wraps the closure in
             // catch_unwind, and the permit drops as the panic unwinds, so a
             // panicking encode cannot wedge the budget.
-            services.in_flight_images.do_work(&source_oid, || {
+            services.in_flight_images.do_work(&ctx.rung_plan.flight(&source_oid, &relative_webp), || {
                 // Before the permit: a picture waiting for its download holds
                 // no encode capacity.
                 ticket.fetch(&transforms, &source_oid, "image/", &cancelled);
@@ -2187,7 +2180,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                     &ctx.config,
                     cancel_flag,
                     meta_stat_key.as_deref(),
-                    &ctx.rung_collisions,
+                    &ctx.rung_plan,
                 );
                 encodes.fetch_add(super::encodes_on_this_thread() - before, Ordering::Relaxed);
                 outcome
@@ -2260,7 +2253,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                     for r in &outcome.rungs {
                         let rung_rel =
                             asset_paths::to_webp_rung(&relative_webp, r.width);
-                        if ctx.rung_collisions.contains_key(&rung_rel) {
+                        if ctx.rung_plan.collisions.contains_key(&rung_rel) {
                             log::debug!(
                                 "[image] rung {} collides with a user file — leaving the user's file in place",
                                 rung_rel
@@ -2687,7 +2680,7 @@ pub(crate) fn dispatch_image_conversions_at(
             // link on a target that worker is about to link.
             if let Some(mark) = fingerprint.as_ref().and_then(|fp| pending_image_mark(&ctx.source_path, &rel_source, fp)) {
                 joined_marks.push((rel_source, mark));
-                joined_keys.extend(std::iter::once(relative_webp).chain(promised_rungs(item, &mapped, &ctx.rung_collisions).into_iter().map(|(_, key)| key)));
+                joined_keys.extend(std::iter::once(relative_webp).chain(promised_rungs(item, &mapped, &ctx.rung_plan).into_iter().map(|(_, key)| key)));
                 continue;
             }
             // The skip candidate's origin: a STRICT stat comparison against the
@@ -2748,7 +2741,7 @@ pub(crate) fn dispatch_image_conversions_at(
             // disk nor healable from the store sends the image to the worker, which reuses the
             // cached base and encodes only the cold rungs. Suppressed rungs never count.
             let rung_verdicts: Vec<(String, bool, Option<String>)> = match disk_source_oid.as_deref() {
-                Some(_) if outputs_present => promised_rungs(item, &mapped, &ctx.rung_collisions)
+                Some(_) if outputs_present => promised_rungs(item, &mapped, &ctx.rung_plan)
                     .into_iter()
                     .map(|(rung, rung_rel)| {
                         let (present, oid) = heal_and_verify_variant(

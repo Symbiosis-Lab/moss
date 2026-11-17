@@ -737,6 +737,7 @@ fn remote_cover_html(meta: Option<&LinkMeta>, alt: &str, cell_sizes: Option<&str
         &[],
         &HashMap::new(),
         None,
+        &Default::default(),
     );
     Some(crate::build::media::cover::render_cover_html(
         &served_url,

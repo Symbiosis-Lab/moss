@@ -160,9 +160,10 @@ impl Stage<'_> {
             let (Placement::Held | Placement::Linked) = self.staged.link(&self.objects, oid, &self.output_dir.join(original.as_str()), Some(cover)) else { return None };
             vec![(original.clone(), HashBucket::ImageOutputs), (served(&webp), HashBucket::ImageVariants)]
         };
-        let rungs = if moss_core::asset_paths::is_ladder_source_ext(ext) { moss_core::asset_paths::ladder_rungs(width, height, false) } else { &[] };
+        // No kept widths: the render side's one-entry lookup (`grid_cells`) has none either.
+        let rungs = if moss_core::asset_paths::is_ladder_source_ext(ext) { crate::build::media::rungs::RungPlan::default().widths(&webp, width, height) } else { Vec::new() };
         let mut complete = true;
-        for w in rungs {
+        for w in &rungs {
             let path = moss_core::asset_paths::to_webp_rung(&webp, *w);
             let target_h = ((u64::from(height) * u64::from(*w) / u64::from(width)) as u32).max(1);
             let rung_need = || Some(Need::Dims(*w, target_h));
@@ -259,7 +260,7 @@ fn materialize_one(
         &ImageCompressionConfig::default(),
         None,
         None,
-        &HashMap::new(),
+        &crate::build::media::rungs::RungPlan::default(),
     );
     outcome.error.is_none().then_some(outcome.webp_oid).flatten()?;
 

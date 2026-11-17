@@ -1503,7 +1503,7 @@ fn run_converter_base(
         &cfg,
         None,
         None,
-        &std::collections::HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),

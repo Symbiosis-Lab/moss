@@ -1,4 +1,5 @@
 use super::*;
+use std::path::PathBuf;
 use crate::types::assets::AssetState;
 use crate::types::content::MediaMetadata;
 
@@ -51,7 +52,7 @@ fn rung_urls() -> Vec<String> {
 }
 
 fn promise(registry: &AssetRegistry, items: Vec<ImageConversionItem>, collisions: HashMap<String, PathBuf>) -> Vec<ImageConversionItem> {
-    promise_image_variants(Some(registry), &mut crate::build::manifest::PendingManifest::new(Default::default()), items, &vault_with("jpg"), &HashMap::new(), &collisions, "/vault")
+    promise_image_variants(Some(registry), &mut crate::build::manifest::PendingManifest::new(Default::default()), items, &vault_with("jpg"), &HashMap::new(), &crate::build::media::rungs::RungPlan { collisions, ..Default::default() }, "/vault")
 }
 
 #[test]
@@ -127,7 +128,7 @@ fn without_a_registry_the_verdict_still_keeps_the_item_from_the_encoder() {
         vec![item(Some(SkipReason::Cmyk)), item(None)],
         &vault_with("jpg"),
         &HashMap::new(),
-        &HashMap::new(),
+        &Default::default(),
         "/vault",
     );
     assert_eq!(encode.len(), 1);

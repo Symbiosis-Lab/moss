@@ -1006,7 +1006,7 @@ mod tests {
             dominant_color: None,
             lqip_data_uri: None,
         }];
-        let lookup = MediaDimensionLookup::new(&images, &[], &HashMap::new(), None);
+        let lookup = MediaDimensionLookup::new(&images, &[], &HashMap::new(), None, &Default::default());
         let html = render_colophon(&review, None, Some("/image/cover.jpg"), Some(&|| &lookup));
         assert!(
             html.contains("review-colophon-cover"),
@@ -1059,7 +1059,7 @@ mod tests {
         }];
         let mut dir_overrides = HashMap::new();
         dir_overrides.insert("图片".to_string(), "image".to_string());
-        let lookup = MediaDimensionLookup::new(&images, &[], &dir_overrides, None);
+        let lookup = MediaDimensionLookup::new(&images, &[], &dir_overrides, None, &Default::default());
         // info.cover is the resolved (ASCII) form — what article-map stores.
         let html = render_colophon(&review, None, Some("/image/cover.jpg"), Some(&|| &lookup));
         assert!(

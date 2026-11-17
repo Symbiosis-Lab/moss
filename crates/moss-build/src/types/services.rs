@@ -94,17 +94,10 @@ pub struct BackgroundContext {
     /// When non-empty, `run_notebook_processing` downloads JupyterLite assets
     /// (if not cached) and generates viewer HTML pages with JupyterLite iframes.
     pub notebook_files: Vec<FileInfo>,
-    /// Responsive-rung collision map: dir-override-mapped path of EVERY
-    /// vault image file → that file's ABSOLUTE vault path. Not restricted to
-    /// rung-shaped names — a generated rung URL "collides" exactly when it
-    /// appears as a key (e.g. a real `photo.w800.webp` beside `photo.jpg`).
-    /// Built once in blocking.rs via `build::image::rung_collision_map` and
-    /// THREADED here so the background encode worker skips writes to
-    /// collided rung paths with the SAME membership test registration used —
-    /// the worker must never recompute it (no ProjectStructure there; a
-    /// divergent set means a registered-but-never-encoded rung ⇒
-    /// sealed-deploy 404).
-    pub rung_collisions: std::collections::HashMap<String, std::path::PathBuf>,
+    /// The build's rung decision (`media::rungs::RungPlan`), built once in
+    /// blocking.rs and threaded here for the encode worker, which must never
+    /// recompute it.
+    pub rung_plan: crate::build::media::rungs::RungPlan,
     /// Advisories `dispatch_video_conversions` carried forward for videos it
     /// skipped this round (fingerprint matched or healed, output present) —
     /// read from `VideoConversionState::item_advisories`, never recomputed.
@@ -142,7 +135,7 @@ impl BackgroundContext {
             search_enabled: false,
             ffmpeg_bin_path: None,
             notebook_files: Vec::new(),
-            rung_collisions: HashMap::new(),
+            rung_plan: Default::default(),
             carried_advisories: Vec::new(),
             members_policy: Default::default(),
             source_oids: Default::default(),

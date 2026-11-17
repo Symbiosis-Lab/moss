@@ -925,7 +925,7 @@ mod tests {
             dominant_color: Some("#123456".to_string()),
             lqip_data_uri: Some("data:image/jpeg;base64,zzz".to_string()),
         };
-        let lookup = MediaDimensionLookup::new(&[meta], &[], &std::collections::HashMap::new(), None);
+        let lookup = MediaDimensionLookup::new(&[meta], &[], &std::collections::HashMap::new(), None, &Default::default());
         let args = HeroShortcode {
             overlay: vec![Block::Figure {
                 image: Inline::Image {
@@ -1115,6 +1115,7 @@ mod tests {
             &[],
             &std::collections::HashMap::new(),
             None,
+            &Default::default(),
         )
     }
 
@@ -1232,7 +1233,7 @@ mod tests {
     fn lookup_with_poster(registry: &crate::types::assets::AssetRegistry) -> crate::build::media::dimensions::MediaDimensionLookup {
         registry.set_pending("clip.poster.jpg".to_string(), None, None);
         registry.set_ready("clip.poster.jpg".to_string());
-        crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &std::collections::HashMap::new(), Some(registry))
+        crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &std::collections::HashMap::new(), Some(registry), &Default::default())
     }
 
     fn hero_html(args: &moss_core::ast::HeroShortcode, lookup: &crate::build::media::dimensions::MediaDimensionLookup) -> String {
@@ -1285,7 +1286,7 @@ mod tests {
     #[test]
     fn a_hero_names_no_poster_the_build_has_not_cut() {
         let registry = crate::types::assets::AssetRegistry::new();
-        let lookup = crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &std::collections::HashMap::new(), Some(&registry));
+        let lookup = crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &std::collections::HashMap::new(), Some(&registry), &Default::default());
         let args = moss_core::ast::HeroShortcode { image: Some(media("clip.mp4")), ..Default::default() };
         let html = hero_html(&args, &lookup);
         assert!(html.contains(r#"poster="clip.thumb.jpg""#), "got: {html}");

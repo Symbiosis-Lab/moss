@@ -625,7 +625,7 @@ fn test_render_item_cover_type_defaults_to_image() {
 /// only the first takes the high-priority fetch.
 #[test]
 fn a_grids_first_covers_load_with_the_page_and_only_the_first_at_high_priority() {
-    let lookup = crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &std::collections::HashMap::new(), None);
+    let lookup = crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &std::collections::HashMap::new(), None, &Default::default());
     let cards: Vec<ChildItemProps> = (1..=5)
         .map(|n| ChildItemProps { title: format!("Card {n}"), url: Some(format!("c{n}/")), cover: Some(format!("cover{n}.jpg")), ..blank() })
         .collect();
@@ -1026,7 +1026,7 @@ fn a_picture_cover_publishes_its_shape() {
         ..Default::default()
     };
     let flat = crate::types::content::MediaMetadata { path: "prints/flat.jpg".to_string(), dimensions: Some((0, 1000)), ..Default::default() };
-    let lookup = MediaDimensionLookup::new(&[meta, flat], &[], &std::collections::HashMap::new(), None);
+    let lookup = MediaDimensionLookup::new(&[meta, flat], &[], &std::collections::HashMap::new(), None, &Default::default());
     let card = |cover: &str| {
         let props = ChildItemProps { title: "Wave".to_string(), url: Some("wave/".to_string()), cover: Some(cover.to_string()), ..blank() };
         render_item_with_typesetting(&props, None, Language::En, None, Some(&lookup), Loading::Lazy, false, None)

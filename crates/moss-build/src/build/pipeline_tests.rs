@@ -1806,7 +1806,7 @@ fn test_run_video_conversion_headless_empty_videos() {
         moss_dir: std::path::PathBuf::from("/nonexistent/.moss"),
         start_time: std::time::Instant::now(),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
 
@@ -1862,7 +1862,7 @@ fn vault_with_videos(names: &[&str], script: &str) -> (TempDir, BackgroundContex
         start_time: std::time::Instant::now(),
         ffmpeg_bin_path: Some(fake_ffmpeg.to_string_lossy().to_string()),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
     (temp, ctx)
@@ -3733,7 +3733,7 @@ fn test_fast_path_rejects_zero_byte_canonical_files() {
         moss_dir: moss_dir.clone(),
         start_time: std::time::Instant::now(),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
 
@@ -5014,6 +5014,56 @@ fn make_big_jpeg_at(path: &std::path::Path, w: u32, h: u32) {
     let img = DynamicImage::ImageRgb8(buf);
     img.save_with_format(path, image::ImageFormat::Jpeg)
         .unwrap();
+}
+
+/// A picture the live deploy record lists keeps the rung widths it was
+/// published with: emitted, staged and recorded alike, with no rung added since.
+/// A picture the record does not list gets today's whole ladder.
+#[test]
+fn a_published_picture_keeps_its_published_rungs() {
+    assert_kept_and_fresh_rungs((2400, 1801));
+}
+
+/// The same, when the two pictures are the same bytes: they must not share one
+/// encode's rung set. Whether the two encodes overlap depends on scheduling.
+#[test]
+fn a_published_copy_and_a_new_copy_of_one_picture_keep_their_own_rungs() {
+    assert_kept_and_fresh_rungs((2400, 1800));
+}
+
+fn assert_kept_and_fresh_rungs(fresh: (u32, u32)) {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "# Pictures\n\n![kept](kept.jpg)\n\n![fresh](fresh.jpg)\n").unwrap();
+    make_big_jpeg_at(&test_dir.join("kept.jpg"), 2400, 1800);
+    make_big_jpeg_at(&test_dir.join("fresh.jpg"), fresh.0, fresh.1);
+    let paths = crate::moss_paths::MossPaths::new(&test_dir);
+    std::fs::create_dir_all(paths.deploy_records_dir()).unwrap();
+    let record = crate::build::manifest::change_set::PublishedSnapshot {
+        target: "moss:site".into(),
+        files: ["kept.jpg", "kept.webp", "kept.w800.webp", "kept.w1600.webp"].map(|f| (f.to_string(), "h".to_string())).into(),
+        ..Default::default()
+    };
+    std::fs::write(paths.deploy_records_dir().join("moss-site.json"), serde_json::to_string(&record).unwrap()).unwrap();
+
+    let services = BuildServices::headless();
+    for _ in 0..2 {
+        build_test(folder_path, None, None, None, Some(&services), &ResolvedSlots::empty()).unwrap();
+    }
+
+    let staging = test_dir.join(".moss/build.nosync/staging");
+    let html = fs::read_to_string(staging.join("index.html")).unwrap();
+    let recorded = load_previous_hashes(folder_path);
+    let rungs = |name: &str| -> [Vec<u32>; 3] {
+        let widths = |has: &dyn Fn(u32) -> bool| [800, 1200, 1600].into_iter().filter(|w| has(*w)).collect::<Vec<u32>>();
+        [
+            widths(&|w| html.contains(&format!("/{name}.w{w}.webp {w}w"))),
+            widths(&|w| staging.join(format!("{name}.w{w}.webp")).exists()),
+            widths(&|w| recorded.image_outputs.contains(&format!("{name}.w{w}.webp"))),
+        ]
+    };
+    assert_eq!(rungs("kept"), [vec![800, 1600], vec![800, 1600], vec![800, 1600]], "emitted, staged, recorded: {html}");
+    assert_eq!(rungs("fresh"), [vec![800, 1200, 1600], vec![800, 1200, 1600], vec![800, 1200, 1600]], "emitted, staged, recorded");
 }
 
 #[test]

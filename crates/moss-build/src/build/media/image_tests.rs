@@ -323,7 +323,7 @@ fn convert_single_image_happy_path() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -392,7 +392,7 @@ fn convert_single_image_webp_keeps_alpha_on_transparent_png() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -428,7 +428,7 @@ fn regenerated_cloud_variants_are_available_to_singleflight_followers() {
     let cfg = ImageCompressionConfig::default();
     let convert = || convert_single_image(
         &src, &source_oid, "photo.webp", &h.temp, &h.staging,
-        &h.objects, &h.transforms, &cfg, None, None, &HashMap::new(),
+        &h.objects, &h.transforms, &cfg, None, None, &Default::default(),
     );
     let first = convert();
     assert!(first.error.is_none(), "{:?}", first.error);
@@ -488,7 +488,7 @@ fn rung_encode_produces_exact_width_ladder_files() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -554,7 +554,7 @@ fn a_scaled_picture_keeps_hidden_colour_out_of_its_edges() {
     let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
     let outcome = convert_single_image(
         &src, &source_oid, "bars.webp", &h.temp, &h.staging, &h.objects, &h.transforms,
-        &ImageCompressionConfig::default(), None, None, &HashMap::new(),
+        &ImageCompressionConfig::default(), None, None, &Default::default(),
     );
     assert!(outcome.error.is_none(), "{:?}", outcome.error);
 
@@ -589,7 +589,7 @@ fn rung_encode_below_threshold_produces_no_rung_files() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -639,7 +639,7 @@ fn rung_encode_portrait_ladder_follows_deployed_width() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -698,7 +698,7 @@ fn rung_encode_produces_ladder_for_webp_source() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -766,7 +766,7 @@ fn rung_encode_webp_source_below_threshold_produces_no_rungs() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -818,7 +818,7 @@ fn base_webp_width_matches_deployed_width_within_one_px() {
             &cfg,
             None,
             None,
-            &HashMap::new(),
+            &Default::default(),
         );
         assert!(outcome.error.is_none(), "{w}x{hh}: {:?}", outcome.error);
 
@@ -863,7 +863,7 @@ fn elongated_base_keeps_its_short_edge_and_stays_within_webp_limits() {
             cfg,
             None,
             None,
-            &HashMap::new(),
+            &Default::default(),
         );
         assert!(outcome.error.is_none(), "{w}x{hh}: {:?}", outcome.error);
         let got = staged_webp_dims(&h.staging.join("scroll.webp"));
@@ -929,7 +929,7 @@ async fn base_failure_fails_registered_rung_promises() {
         config: ImageCompressionConfig::default(),
         dir_overrides: std::collections::HashMap::new(),
         tx: None,
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         carried_advisories: Vec::new(),
         suppressed: Default::default(),
         source_oids: Default::default(),
@@ -1010,7 +1010,7 @@ async fn base_failed_advisory_names_the_full_nested_source_path() {
         config: ImageCompressionConfig::default(),
         dir_overrides: std::collections::HashMap::new(),
         tx: None,
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         carried_advisories: Vec::new(),
         suppressed: Default::default(),
         source_oids: Default::default(),
@@ -1107,7 +1107,7 @@ async fn unhashable_source_fails_its_promises_instead_of_going_quiet() {
         config: ImageCompressionConfig::default(),
         dir_overrides: std::collections::HashMap::new(),
         tx: None,
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         carried_advisories: Vec::new(),
         suppressed: Default::default(),
         source_oids: Default::default(),
@@ -1137,7 +1137,7 @@ async fn unhashable_source_fails_its_promises_instead_of_going_quiet() {
 /// Test 5: collision — a vault file occupying a rung path survives the
 /// build byte-for-byte (the worker must NOT overwrite it) while the
 /// non-colliding rung is produced normally. Runs through the WORKER
-/// (`run_image_conversion`) so the `ImageRunContext::rung_collisions`
+/// (`run_image_conversion`) so the `ImageRunContext::rung_plan`
 /// threading is exercised, with a coordinator to prove the collided path
 /// never enters the manifest as an image variant.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1163,8 +1163,8 @@ async fn rung_collision_keeps_user_file_and_produces_other_rungs() {
     fs::write(staging.join("photo.w800.webp"), user_bytes).unwrap();
 
     let source_oid = crate::build::cache::ObjectStore::hash_file(&root.join(img_rel)).unwrap();
-    let mut rung_collisions: HashMap<String, PathBuf> = HashMap::new();
-    rung_collisions.insert("photo.w800.webp".to_string(), root.join("photo.w800.webp"));
+    let mut rung_plan = crate::build::media::rungs::RungPlan::default();
+    rung_plan.collisions.insert("photo.w800.webp".to_string(), root.join("photo.w800.webp"));
 
     let (tx, rx) = test_utils::build_test_coordinator();
     let run_ctx = ImageRunContext {
@@ -1182,7 +1182,7 @@ async fn rung_collision_keeps_user_file_and_produces_other_rungs() {
         config: ImageCompressionConfig::default(),
         dir_overrides: std::collections::HashMap::new(),
         tx: Some(tx.clone()),
-        rung_collisions,
+        rung_plan,
         carried_advisories: Vec::new(),
         suppressed: Default::default(),
         source_oids: Default::default(),
@@ -1254,7 +1254,7 @@ fn convert_single_image_caches_placeholder_meta_under_stat_key() {
         &cfg,
         None,
         Some(stat_key),
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -1308,7 +1308,7 @@ fn convert_single_image_leaves_a_complete_placeholder_entry_unwritten() {
     let record = crate::build::cache::TransformRecord { source_oid: stat_key.into(), source_size: 1, transforms: HashMap::from([("media/meta".to_string(), entry.clone())]) };
     h.transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
 
-    let outcome = convert_single_image(&src, &source_oid, "photo.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &ImageCompressionConfig::default(), None, Some(stat_key), &HashMap::new());
+    let outcome = convert_single_image(&src, &source_oid, "photo.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &ImageCompressionConfig::default(), None, Some(stat_key), &Default::default());
 
     assert!(outcome.error.is_none(), "{:?}", outcome.error);
     let after = h.transforms.get_with(stat_key, crate::build::cache::RecordMode::Request).unwrap();
@@ -1335,7 +1335,7 @@ fn convert_single_image_cache_hit() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         first.error.is_none(),
@@ -1362,7 +1362,7 @@ fn convert_single_image_cache_hit() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         second.error.is_none(),
@@ -1385,7 +1385,7 @@ fn a_picture_made_with_an_older_recipe_keeps_its_bytes() {
     make_big_jpeg(&src, 2000, 1500);
     let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
     let cfg = ImageCompressionConfig::default();
-    let convert = || convert_single_image(&src, &source_oid, "photo.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &cfg, None, None, &HashMap::new());
+    let convert = || convert_single_image(&src, &source_oid, "photo.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &cfg, None, None, &Default::default());
     let first = convert();
     assert!(first.error.is_none(), "{:?}", first.error);
     assert!(!first.rungs.is_empty(), "the fixture needs rungs");
@@ -1480,7 +1480,7 @@ fn convert_single_image_ignores_legacy_sentinel_and_writes_webp() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -1529,7 +1529,7 @@ fn convert_single_image_writes_webp_even_when_larger_than_source() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -1589,7 +1589,7 @@ fn convert_single_image_handles_mismatched_extension() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
 
     assert!(
@@ -1631,7 +1631,7 @@ fn convert_single_image_still_rejects_truly_undecodable_bytes() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
 
     assert!(
@@ -2884,7 +2884,7 @@ fn test_dispatch_image_conversions_empty_items() {
         staging_dir: std::path::PathBuf::from("/nonexistent/staging"),
         moss_dir: std::path::PathBuf::from("/nonexistent/.moss"),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
 
@@ -2925,7 +2925,7 @@ fn test_dispatch_image_conversions_with_items_produces_webp_headless() {
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
 
@@ -2983,7 +2983,7 @@ async fn an_image_that_panics_its_worker_does_not_leave_the_folder_busy() {
         staging_dir: staging,
         moss_dir,
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
     let session = crate::system::folder_session::FolderSession::new(root.to_path_buf());
@@ -3049,7 +3049,7 @@ async fn an_image_whose_worker_panicked_is_converted_by_the_next_build() {
         staging_dir: staging.clone(),
         moss_dir,
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
     let session = crate::system::folder_session::FolderSession::new(root.to_path_buf());
@@ -3125,7 +3125,7 @@ fn cached_base_of_size(root: &Path, file_dimensions: (u32, u32), scan_dimensions
         staging_dir: staging.clone(),
         moss_dir,
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
     (ctx, staging)
@@ -3361,7 +3361,7 @@ fn test_image_dispatch_applies_dir_overrides_to_served_path() {
         moss_dir: moss_dir.clone(),
         dir_overrides: overrides.clone(),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
 
@@ -3512,7 +3512,7 @@ async fn test_webp_survives_stale_cleanup_after_dispatch() {
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
 
@@ -3687,7 +3687,7 @@ async fn a_new_image_only_dispatches_the_new_one_others_survive_seal_and_stale_s
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
 
@@ -3857,7 +3857,7 @@ async fn a_skip_carried_images_advisory_rides_the_terminal_ticks_full_set() {
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
 
@@ -3986,7 +3986,7 @@ async fn a_deleted_images_advisory_still_fires_a_tick_with_nothing_to_dispatch()
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
 
@@ -4176,7 +4176,7 @@ async fn test_image_cancel_aborts_image_runner() {
         config: ImageCompressionConfig::default(),
         dir_overrides: std::collections::HashMap::new(),
         tx: None,
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         carried_advisories: Vec::new(),
         suppressed: Default::default(),
         source_oids: Default::default(),
@@ -4270,7 +4270,7 @@ async fn test_image_hashes_updated_on_cancellation() {
         config: ImageCompressionConfig::default(),
         dir_overrides: std::collections::HashMap::new(),
         tx: Some(tx.clone()),
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         carried_advisories: Vec::new(),
         suppressed: Default::default(),
         source_oids: Default::default(),
@@ -5349,7 +5349,7 @@ fn rematerialize_relinks_orphaned_staged_webp() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -5435,7 +5435,7 @@ fn rematerialize_with_record_overwrites_a_stale_staged_file_never_trusts_its_mer
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(outcome.error.is_none(), "encode failed: {:?}", outcome.error);
     let staged = h.staging.join("photo.webp");
@@ -5516,7 +5516,7 @@ fn photo_staged_and_recorded(h: &TestHarness) -> (PathBuf, String, serde_json::V
     let cfg = ImageCompressionConfig::default();
     let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
     let outcome = convert_single_image(
-        &src, &source_oid, "photo.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &cfg, None, None, &HashMap::new(),
+        &src, &source_oid, "photo.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &cfg, None, None, &Default::default(),
     );
     assert!(outcome.error.is_none(), "encode failed: {:?}", outcome.error);
     let staged = h.staging.join("photo.webp");
@@ -5550,7 +5550,7 @@ fn a_vouched_staged_variant_of_a_different_blob_is_relinked() {
     let changed_oid = crate::build::cache::ObjectStore::hash_file(&changed).unwrap();
     let outcome = convert_single_image(
         &changed, &changed_oid, "changed.webp", &h.temp, &h.staging, &h.objects, &h.transforms,
-        &ImageCompressionConfig::default(), None, None, &HashMap::new(),
+        &ImageCompressionConfig::default(), None, None, &Default::default(),
     );
     assert!(outcome.error.is_none(), "encode failed: {:?}", outcome.error);
     let expected = fs::read(h.staging.join("changed.webp")).unwrap();
@@ -5577,7 +5577,7 @@ fn a_file_renamed_over_a_fresh_link_before_its_stat_is_not_recorded() {
     let cfg = ImageCompressionConfig::default();
     let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
     let outcome = convert_single_image(
-        &src, &source_oid, "photo.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &cfg, None, None, &HashMap::new(),
+        &src, &source_oid, "photo.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &cfg, None, None, &Default::default(),
     );
     assert!(outcome.error.is_none(), "encode failed: {:?}", outcome.error);
     let staged = h.staging.join("photo.webp");
@@ -5675,7 +5675,7 @@ fn rematerialize_recovers_rung_via_rung_kind() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -5814,7 +5814,7 @@ fn self_heal_then_emit_registers_relinked_webp() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -5964,7 +5964,7 @@ fn emit_image_outputs_heals_an_evicted_staged_webp_when_the_oid_is_known() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -6048,7 +6048,7 @@ fn emit_image_outputs_heals_a_removed_staged_webp_when_the_oid_is_known() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -6188,7 +6188,7 @@ async fn ship_phase_ships_a_freshly_encoded_webp_from_cas_despite_stage_overwrit
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
     let services = BuildServices {
@@ -6271,7 +6271,7 @@ async fn run_image_conversion_always_records_a_staged_oid_for_base_and_rungs() {
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
     let services = BuildServices {
@@ -6345,7 +6345,7 @@ async fn skip_path_carry_forward_registers_the_verified_cas_oid_not_a_stale_or_f
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
     let services = BuildServices {
@@ -6523,7 +6523,7 @@ fn a_stale_staged_webp_from_an_earlier_generation_is_not_shipped_as_unchanged() 
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
     let services = BuildServices {
@@ -6615,7 +6615,7 @@ fn a_missing_output_is_dispatched_while_its_unaffected_sibling_takes_the_skip_pa
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
 
@@ -7805,7 +7805,7 @@ async fn an_image_the_walk_hashed_this_build_is_not_read_again() {
         config: ImageCompressionConfig::default(),
         dir_overrides: std::collections::HashMap::new(),
         tx: None,
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         carried_advisories: Vec::new(),
         suppressed: Default::default(),
         source_oids: Default::default(),
@@ -7843,7 +7843,7 @@ async fn a_cloud_held_picture_is_fetched_not_encoded_again() {
             config: ImageCompressionConfig::default(),
             dir_overrides: HashMap::new(),
             tx: None,
-            rung_collisions: HashMap::new(),
+            rung_plan: Default::default(),
             carried_advisories: Vec::new(),
             suppressed: Default::default(),
             source_oids: Default::default(),

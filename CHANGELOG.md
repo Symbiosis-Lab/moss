@@ -10,6 +10,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A picture already published keeps the sizes it was published with. Since 0.15.21 each build made and uploaded a new 1200-pixel-wide copy of every published picture; a picture added since the last publish still gets every size.
 - Replace… on a picture works in the browser editor: the picked file is uploaded and its reference written. It used to upload the file and leave the reference as it was.
 - A right-click on a picture no longer offers the grid's settings or the theme rules that style it; the grid's row (now Columns) stays for the grid's own area, and theme rules show while internal files are shown.
 - The series navigation at the foot of a page shows an arrow and the neighbouring page's title, without a "Previous" / "Next" word (上一个 / 下一个 in Chinese) above each title. A screen reader hears the direction word before the title, and the links carry `rel="prev"` and `rel="next"`. `.moss-series-nav-text` and `.moss-series-nav-label` are no longer emitted; a theme rule that targets them now matches nothing, and the build's theme check says so instead of pointing to the v1 migration page.

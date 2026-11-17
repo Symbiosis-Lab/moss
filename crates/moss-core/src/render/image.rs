@@ -50,7 +50,7 @@
 //! additive attrs only, for these bare-img paths.
 
 use crate::asset_paths::{
-    deployed_width, is_ladder_source_ext, is_scroll_shape, is_webp_source_ext, ladder_rungs,
+    deployed_width, is_ladder_source_ext, is_scroll_shape, is_webp_source_ext, offered_rungs,
     to_webp, to_webp_rung,
 };
 use crate::asset_snapshot::{AssetSnapshot, FALLBACK_HEIGHT, FALLBACK_WIDTH};
@@ -590,7 +590,7 @@ fn synthesize_inner(
         let img_tag = match resolve_ladder(assets, src, lookup_animated(assets, src)) {
             None => render_img_tag(src, alt, assets, options, None, scroll),
             Some((rungs, base_w)) => {
-                let srcset = build_srcset(src, src, rungs, base_w);
+                let srcset = build_srcset(src, src, &rungs, base_w);
                 render_img_tag(src, alt, assets, options, Some((&srcset, sizes_value)), scroll)
             }
         };
@@ -655,7 +655,7 @@ fn synthesize_inner(
                 img_tag,
             ),
             Some((rungs, base_w)) => {
-                let srcset = build_srcset(src, &srcset_path, rungs, base_w);
+                let srcset = build_srcset(src, &srcset_path, &rungs, base_w);
                 format!(
                     r#"<picture{}><source srcset="{}" type="image/webp" sizes="{}">{}</picture>"#,
                     picture_scroll_attr,
@@ -832,18 +832,21 @@ fn lookup_animated(assets: &AssetSnapshot, src: &str) -> bool {
 /// deployed base) and the deployed base WIDTH — or `None` when dims are unknown
 /// (snapshot miss) or the ladder is empty (small/animated source). Shared by
 /// BOTH emission paths (webp `<img srcset>` and png/jpg `<picture><source>`) so
-/// the `lookup_dims → ladder_rungs → is_empty → deployed_width` derivation
+/// the `dims → offered_rungs → is_empty → deployed_width` derivation
 /// CANNOT drift between them — and it must agree with registration/encode,
-/// which call the identical `ladder_rungs`/`deployed_width` (see the
+/// which call the identical `offered_rungs`/`deployed_width` (see the
 /// deterministic-agreement contract on [`crate::asset_paths::ladder_rungs`],
 /// including its EXIF-orientation agreement).
 fn resolve_ladder(
     assets: &AssetSnapshot,
     src: &str,
     is_animated: bool,
-) -> Option<(&'static [u32], u32)> {
-    lookup_dims(assets, src).and_then(|(w, h)| {
-        let rungs = ladder_rungs(w, h, is_animated);
+) -> Option<(Vec<u32>, u32)> {
+    // The kept widths are read under the key that found the dims, so one
+    // picture's record entry never answers for another spelling's.
+    let hit = probe_paths(src, |p| assets.dims(&p).map(|dims| (dims, assets.kept_rungs.get(&p))));
+    hit.and_then(|((w, h), kept)| {
+        let rungs = offered_rungs(w, h, is_animated, kept.map(Vec::as_slice));
         if rungs.is_empty() {
             None
         } else {

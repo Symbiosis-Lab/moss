@@ -591,6 +591,9 @@ fn collect_native_slots_for_documents(
         &std::collections::HashMap::new(),
         // Feature/email path: no `BuildServices` here, so no variants.
         None,
+        // Keyed by the same base slugification as the dims above, so a picture
+        // under an overridden folder misses both and gets no srcset at all.
+        &crate::build::media::rungs::KeptRungs::load(&crate::moss_paths::MossPaths::new(Path::new(folder_path))),
     ));
 
     crate::build::features::generate_native_slots(

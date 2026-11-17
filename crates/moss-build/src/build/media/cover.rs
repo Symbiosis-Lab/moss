@@ -332,7 +332,7 @@ mod tests {
         };
         let mut overrides = std::collections::HashMap::new();
         overrides.insert("assets/Europe - A Prophecy".to_string(), "euro".to_string());
-        let lookup = MediaDimensionLookup::new(&[meta], &[], &overrides, None);
+        let lookup = MediaDimensionLookup::new(&[meta], &[], &overrides, None, &Default::default());
 
         // The emitter resolves the cover to the OVERRIDE slug.
         let html = render_cover_html(

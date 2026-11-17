@@ -19,7 +19,7 @@ fn build_asset_snapshot_additively_indexes_output_url() {
         lqip_data_uri: Some("data:image/jpeg;base64,zzz".to_string()),
     };
     let lookup =
-        crate::build::media::dimensions::MediaDimensionLookup::new(&[meta], &[], &HashMap::new(), None);
+        crate::build::media::dimensions::MediaDimensionLookup::new(&[meta], &[], &HashMap::new(), None, &Default::default());
     let snap = lookup.asset_snapshot();
 
     // Source key is preserved (percent-decode probes still rely on it).
@@ -70,6 +70,7 @@ fn build_asset_snapshot_carries_animated_flag() {
         &[],
         &HashMap::new(),
         None,
+        &Default::default(),
     );
     let snap = lookup.asset_snapshot();
 
@@ -137,6 +138,7 @@ fn build_asset_snapshot_slug_collision_is_deterministic() {
             &[],
             &HashMap::new(),
             None,
+            &Default::default(),
         );
         let snap = lookup.asset_snapshot();
         assert_eq!(
@@ -3940,7 +3942,7 @@ fn body_image_sizes_follow_the_pages_effective_typesetting() {
         lqip_data_uri: None,
     };
     let lookup =
-        crate::build::media::dimensions::MediaDimensionLookup::new(&[meta], &[], &HashMap::new(), None);
+        crate::build::media::dimensions::MediaDimensionLookup::new(&[meta], &[], &HashMap::new(), None, &Default::default());
     let empty_map = HashMap::new();
     let render = |frontmatter: &str, site_typesetting: Option<&str>| {
         let md = format!("---\ntitle: t\n{frontmatter}---\n\n正文。\n\n![](photo.jpg)\n");
@@ -4109,7 +4111,7 @@ fn lookup_for(paths: &[&str]) -> crate::build::media::dimensions::MediaDimension
             lqip_data_uri: None,
         })
         .collect();
-    crate::build::media::dimensions::MediaDimensionLookup::new(&images, &[], &HashMap::new(), None)
+    crate::build::media::dimensions::MediaDimensionLookup::new(&images, &[], &HashMap::new(), None, &Default::default())
 }
 
 fn parse_with_lookup(

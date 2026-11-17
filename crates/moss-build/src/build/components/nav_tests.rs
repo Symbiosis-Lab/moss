@@ -3263,6 +3263,7 @@ fn site_logo_carries_the_intrinsic_size_of_a_raster_file() {
         &[],
         &std::collections::HashMap::new(),
         None,
+        &Default::default(),
     );
     let html = logo_header_html(Some(lookup.asset_snapshot()), "/mark.png");
     assert!(
@@ -3294,6 +3295,7 @@ fn svg_site_logo_carries_the_size_its_file_declares() {
         &[],
         &std::collections::HashMap::new(),
         None,
+        &Default::default(),
     );
     let html = logo_header_html(Some(lookup.asset_snapshot()), "/mark.svg");
     assert!(

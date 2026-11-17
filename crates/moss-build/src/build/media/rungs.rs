@@ -57,6 +57,84 @@ pub(super) fn kept_base(
     transforms.find_kept_entry(source_oid, "image/webp", params, crate::build::cache::RecordMode::Request, crate::build::cache::Fit::Kept(&today))
 }
 
+/// Which rungs each picture in this build offers, decided once in blocking.rs
+/// and threaded to the worker (`BackgroundContext` → `ImageRunContext`): the
+/// worker has no `ProjectStructure` and must never recompute it, since a
+/// divergent set is a registered-but-never-encoded rung, a sealed deploy with a
+/// 404ing `<picture>` candidate.
+#[derive(Debug, Clone, Default)]
+pub struct RungPlan {
+    /// See [`rung_collision_map`]: a rung URL found here is a user's own file.
+    pub collisions: HashMap<String, PathBuf>,
+    pub kept: KeptRungs,
+}
+
+impl RungPlan {
+    /// The rung widths of the picture whose base webp is served at `base_webp`,
+    /// from its oriented `w`×`h`. Every pipeline site asks this, as emission
+    /// asks `offered_rungs` with the snapshot's kept widths.
+    pub fn widths(&self, base_webp: &str, w: u32, h: u32) -> Vec<u32> {
+        moss_core::asset_paths::offered_rungs(w, h, false, self.kept.get(base_webp))
+    }
+
+    /// The singleflight key of the encode of `source_oid` at `base_webp`.
+    /// Duplicate bytes share an encode only when they offer the same rungs: a
+    /// published copy keeps its widths while a new copy gets today's ladder, and
+    /// each stages the shared outcome's rungs.
+    pub fn flight(&self, source_oid: &str, base_webp: &str) -> String {
+        match self.kept.get(base_webp) {
+            Some(kept) => format!("{source_oid} {kept:?}"),
+            None => source_oid.to_string(),
+        }
+    }
+}
+
+/// The rung widths the live deploy record lists for each published picture,
+/// keyed by its served base webp. Read from the record because that is folder
+/// state: a build cache would make the srcset depend on one machine's history.
+#[derive(Debug, Clone, Default)]
+pub struct KeptRungs(std::sync::Arc<HashMap<String, Vec<u32>>>);
+
+impl KeptRungs {
+    /// The record the removed-address check reads. No record, or an unreadable
+    /// one, keeps nothing: every picture offers today's ladder.
+    pub fn load(mp: &crate::moss_paths::MossPaths) -> Self {
+        let target = crate::build::manifest::backfill::publish_target(mp);
+        crate::build::manifest::published_record::load_address_baseline(mp, target.as_deref())
+            .map(|record| Self::from_files(record.files.keys().map(String::as_str)))
+            .unwrap_or_default()
+    }
+
+    /// From a record's served paths: every webp is a base that keeps the
+    /// widths of the `<stem>.wN.webp` files beside it.
+    pub fn from_files<'a>(files: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut kept: HashMap<String, Vec<u32>> = HashMap::new();
+        let mut rungs = Vec::new();
+        for file in files {
+            let Some(stem) = file.strip_suffix(".webp") else { continue };
+            kept.entry(file.to_string()).or_default();
+            if let Some((base, width)) = stem.rsplit_once(".w").and_then(|(base, w)| Some((base, w.parse::<u32>().ok()?))) {
+                rungs.push((format!("{base}.webp"), width));
+            }
+        }
+        for (base, width) in rungs {
+            if let Some(widths) = kept.get_mut(&base) {
+                widths.push(width);
+            }
+        }
+        for widths in kept.values_mut() {
+            widths.sort_unstable();
+        }
+        Self(std::sync::Arc::new(kept))
+    }
+
+    /// The widths kept for the picture served at `base_webp`; `None` when the
+    /// record does not list it.
+    pub fn get(&self, base_webp: &str) -> Option<&[u32]> {
+        self.0.get(base_webp).map(Vec::as_slice)
+    }
+}
+
 /// Dir-override-mapped path of every vault image file → the ABSOLUTE vault
 /// source path of that file, for detecting collisions between generated
 /// responsive-rung URLs and REAL user files.
@@ -70,14 +148,7 @@ pub(super) fn kept_base(
 /// in `.webp`, and scan collects every `.webp` vault file into
 /// `image_files`, so the key set is a complete collision domain — except
 /// passthrough-rooted files, which scan does not walk (the same
-/// pre-existing blindness the base-webp path has).
-///
-/// Shared by blocking.rs (registration skip, Task 4) and the background
-/// encode worker (write skip, Task 5). THREAD the result to the worker
-/// (`BackgroundContext` → `ImageRunContext`) — don't recompute it there:
-/// the worker has no `ProjectStructure`, and a divergent set means a
-/// registered-but-never-encoded rung, i.e. a sealed deploy with a 404ing
-/// `<picture>` candidate.
+/// pre-existing blindness the base-webp path has). It rides [`RungPlan`].
 pub(crate) fn rung_collision_map(
     project_structure: &crate::types::content::ProjectStructure,
     dir_overrides: &HashMap<String, String>,
@@ -164,7 +235,7 @@ pub(crate) fn encode_rungs(
     objects: &crate::build::cache::ObjectStore,
     transforms: &crate::build::cache::TransformCache,
     config: &ImageCompressionConfig,
-    rung_collisions: &HashMap<String, PathBuf>,
+    rung_plan: &RungPlan,
     decoded: Option<&image::DynamicImage>,
     base_webp_len: u64,
 ) -> Vec<RungOutcome> {
@@ -212,14 +283,14 @@ pub(crate) fn encode_rungs(
     // `false` literal (webp reaches here only when non-animated — should_skip
     // filters animated webp; png/jpg/jpeg are never animated here): rationale +
     // the EXIF-oriented dims agreement live on asset_paths::ladder_rungs.
-    let ladder = asset_paths::ladder_rungs(w, h, false);
+    let ladder = rung_plan.widths(relative_webp, w, h);
     let mut outcomes = Vec::with_capacity(ladder.len());
-    for &rung in ladder {
+    for rung in ladder {
         let rung_rel = asset_paths::to_webp_rung(relative_webp, rung);
         // Same membership test as registration (blocking.rs) — the user's
         // file wins at a collided path; never write there. Warn already
         // fired at registration, so debug here.
-        let write_allowed = !rung_collisions.contains_key(&rung_rel);
+        let write_allowed = !rung_plan.collisions.contains_key(&rung_rel);
         if !write_allowed {
             log::debug!(
                 "[image] rung {} collides with a user file — encoding to cache only, \

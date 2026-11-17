@@ -465,6 +465,7 @@ pub(crate) fn generate_children(
                 dir_overrides,
                 // Fallback only; the caller normally passes a registry-ful one.
                 None,
+                &Default::default(),
             );
             &owned_lookup
         }

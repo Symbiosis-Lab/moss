@@ -393,7 +393,7 @@ fn a_hero_keeps_the_pages_one_eager_image_from_its_grid_cards() {
         };
         let docs = vec![home.clone(), card.clone()];
         let overrides = HashMap::new();
-        let lookup = crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &overrides, None);
+        let lookup = crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &overrides, None, &Default::default());
         resolve_page_body(&home, &docs, None, &overrides, "", &lookup, None, crate::build::inputs::now()).to_html()
     };
     let without_hero = render(false);
@@ -410,7 +410,7 @@ fn a_card_cover_in_a_grid_declares_the_grids_cell() {
     let card = make_doc("Ink Study", "works/ink-study/index.html", Some("ink.jpg"));
     let overrides = HashMap::new();
     let ink = crate::types::content::MediaMetadata { path: "ink.jpg".to_string(), dimensions: Some((2400, 1600)), ..Default::default() };
-    let lookup = crate::build::media::dimensions::MediaDimensionLookup::new(&[ink], &[], &overrides, None);
+    let lookup = crate::build::media::dimensions::MediaDimensionLookup::new(&[ink], &[], &overrides, None, &Default::default());
     let render = |md: &str| {
         let home = ParsedDocument { body_plan: Some(plan_of(md)), body_claims_eager: true, ..make_doc("Home", "index.html", None) };
         let docs = vec![home.clone(), card.clone()];

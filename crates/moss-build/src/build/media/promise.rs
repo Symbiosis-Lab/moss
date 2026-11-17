@@ -13,7 +13,6 @@
 //! to "does this build owe a re-render".
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use crate::build::PluginMode;
 use crate::build::media::image::{ImageConversionItem, SkipReason};
@@ -25,8 +24,8 @@ use crate::types::content::ProjectStructure;
 /// build has one) and return the items the encoder should run — the ones
 /// whose bytes are here and whose verdict is "encode".
 ///
-/// `rung_collisions` is `rungs::rung_collision_map`, built once per build and
-/// also threaded to the encode worker; `vault_root` resolves each source to
+/// `rung_plan` is the build's one rung decision, also threaded to the encode
+/// worker; `vault_root` resolves each source to
 /// the absolute file the preview serves through the passthrough.
 pub(crate) fn promise_image_variants(
     registry: Option<&AssetRegistry>,
@@ -34,7 +33,7 @@ pub(crate) fn promise_image_variants(
     items: Vec<ImageConversionItem>,
     project_structure: &ProjectStructure,
     dir_overrides: &HashMap<String, String>,
-    rung_collisions: &HashMap<String, PathBuf>,
+    rung_plan: &super::rungs::RungPlan,
     vault_root: &str,
 ) -> Vec<ImageConversionItem> {
     for item in &items {
@@ -70,44 +69,44 @@ pub(crate) fn promise_image_variants(
         // The variant URLs the synthesizer has already emitted for this
         // source: the base webp and, for a ladder source, its rungs. The
         // registry key must EXACTLY equal the emitted URL: same `mapped`
-        // path + same to_webp_rung + same ladder_rungs(w, h, false) over
-        // the same scan dims. (ladder_rungs is height-aware — pass BOTH
-        // scan dims, NEVER `(w, w, false)`.) The `false` literal, the
+        // path + same to_webp_rung + same `RungPlan::widths` over the same
+        // scan dims. (The ladder is height-aware — pass BOTH scan dims,
+        // NEVER `(w, w)`.) The `false` literal, the
         // animated-flag proof, and the EXIF-oriented png/webp dims
         // agreement are documented canonically on asset_paths::ladder_rungs.
         // `is_ladder_source_ext` covers png/jpg/jpeg AND webp, so a webp
         // source registers its rung URLs here too (its base URL is the
         // source itself: to_webp(webp) == webp).
+        let rungs = match dimensions {
+            Some((w, h)) if moss_core::asset_paths::is_ladder_source_ext(&item.ext) => rung_plan.widths(&webp_path, w, h),
+            _ => Vec::new(),
+        };
         let mut variants = vec![webp_path];
-        if moss_core::asset_paths::is_ladder_source_ext(&item.ext) {
-            if let Some((w, h)) = dimensions {
-                for rung in moss_core::asset_paths::ladder_rungs(w, h, false) {
-                    let rung_url = moss_core::asset_paths::to_webp_rung(&mapped, *rung);
-                    if let Some(user_file) = rung_collisions.get(&rung_url) {
-                        log::warn!(
-                            "'{}' is named like a generated responsive variant of '{}'; keeping your file — rename '{}' to avoid the reserved '.w{}.webp' naming pattern if you meant it to be a different image",
-                            user_file.display(),
-                            item.source_path.display(),
-                            user_file.display(),
-                            rung
-                        );
-                        // Deferred-window guard: a small colliding
-                        // file may never register its own promise
-                        // (it converts to photo.w800.webp only if
-                        // IT is a convertible raster), yet the
-                        // emitted srcset references this URL before
-                        // asset copy lands the file. Passthrough
-                        // the USER'S file so the preview serves its
-                        // real bytes in that window instead of 404.
-                        if let Ok(relative) = user_file.strip_prefix(vault_root) {
-                            manifest.register_preview_original(rung_url.clone(), relative.to_string_lossy().into_owned());
-                        }
-                        if let Some(registry) = registry { registry.set_source_passthrough(rung_url, user_file.clone()); }
-                        continue;
-                    }
-                    variants.push(rung_url);
+        for rung in rungs {
+            let rung_url = moss_core::asset_paths::to_webp_rung(&mapped, rung);
+            if let Some(user_file) = rung_plan.collisions.get(&rung_url) {
+                log::warn!(
+                    "'{}' is named like a generated responsive variant of '{}'; keeping your file — rename '{}' to avoid the reserved '.w{}.webp' naming pattern if you meant it to be a different image",
+                    user_file.display(),
+                    item.source_path.display(),
+                    user_file.display(),
+                    rung
+                );
+                // Deferred-window guard: a small colliding
+                // file may never register its own promise
+                // (it converts to photo.w800.webp only if
+                // IT is a convertible raster), yet the
+                // emitted srcset references this URL before
+                // asset copy lands the file. Passthrough
+                // the USER'S file so the preview serves its
+                // real bytes in that window instead of 404.
+                if let Ok(relative) = user_file.strip_prefix(vault_root) {
+                    manifest.register_preview_original(rung_url.clone(), relative.to_string_lossy().into_owned());
                 }
+                if let Some(registry) = registry { registry.set_source_passthrough(rung_url, user_file.clone()); }
+                continue;
             }
+            variants.push(rung_url);
         }
 
         // Source passthrough: the original's own resolved URL (the inner

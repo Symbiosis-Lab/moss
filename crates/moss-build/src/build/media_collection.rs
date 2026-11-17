@@ -615,7 +615,7 @@ mod tests {
             dominant_color: None,
             lqip_data_uri: None,
         }];
-        let lookup = MediaDimensionLookup::new(&images, &[], &std::collections::HashMap::new(), None);
+        let lookup = MediaDimensionLookup::new(&images, &[], &std::collections::HashMap::new(), None, &Default::default());
         let html = generate_grid_item(&item, Some(&lookup));
         assert!(
             html.contains("<picture>"),
