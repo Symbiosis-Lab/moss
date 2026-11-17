@@ -34,16 +34,14 @@ describe("formatVaultLocation", () => {
       folderName: "blog",
       parentDisplay: "~/Documents/Sites",
     });
-    expect(location.display).toBe("~/Documents/Sites");
-    expect(location.full).toBe("~/Documents/Sites");
+    expect(location).toBe("~/Documents/Sites");
   });
 
-  it("middle-truncates the display but keeps the full string for the tooltip", () => {
+  it("middle-truncates a long path", () => {
     const parentDisplay = "~/Library/CloudStorage/GoogleDrive-someone@example.com/My Drive/Sites";
     const location = formatVaultLocation({ folderName: "blog", parentDisplay, maxLength: 24 });
-    expect(location.display.length).toBe(24);
-    expect(location.display).not.toBe(parentDisplay);
-    expect(location.full).toBe(parentDisplay);
+    expect(location.length).toBe(24);
+    expect(location).not.toBe(parentDisplay);
   });
 
   it("reads a detected cloud provider as a friendly breadcrumb, not the raw path", () => {
@@ -55,8 +53,7 @@ describe("formatVaultLocation", () => {
       parentDisplay: "~/Library/Mobile Documents/iCloud~md~obsidian/Documents",
       cloudProviderLabel: "iCloud Drive",
     });
-    expect(location.display).toBe("iCloud Drive › Obsidian Vault");
-    expect(location.full).toBe("iCloud Drive › Obsidian Vault");
+    expect(location).toBe("iCloud Drive › Obsidian Vault");
   });
 
   it("reads Google Drive the same way", () => {
@@ -65,7 +62,7 @@ describe("formatVaultLocation", () => {
       parentDisplay: "~/Library/CloudStorage/GoogleDrive-user@gmail.com/My Drive/Sites",
       cloudProviderLabel: "Google Drive",
     });
-    expect(location.display).toBe("Google Drive › blog");
+    expect(location).toBe("Google Drive › blog");
   });
 
   it("null cloud label falls back to the raw parent path", () => {
@@ -76,6 +73,6 @@ describe("formatVaultLocation", () => {
       parentDisplay: "~/Documents/Sites",
       cloudProviderLabel: null,
     });
-    expect(location.display).toBe("~/Documents/Sites");
+    expect(location).toBe("~/Documents/Sites");
   });
 });

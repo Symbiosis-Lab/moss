@@ -41,7 +41,7 @@ import {
   type MeterMode,
   type ScreenFraction,
 } from "./shell";
-import { formatVaultLocation, type VaultLocation } from "./vault-location";
+import { formatVaultLocation } from "./vault-location";
 import { renderScreen } from "./overlay-slot";
 import type { OpenFailure } from "../preview-state";
 
@@ -115,7 +115,7 @@ interface ScreenSpec {
    *  absent wherever the title itself falls back (no name yet) or where
    *  `buttons` already carries {@link revealFolderButton} (stalled,
    *  unreachable) and a second copy of it would collide on the id. */
-  location?: VaultLocation;
+  location?: string;
   /** null = a verdict rather than a wait, so no meter at all. */
   meter: MeterMode | null;
   fraction?: ScreenFraction;
@@ -182,7 +182,7 @@ export const buildOverdueAdvisoryReason = (): string =>
 function nameTitle(
   key: "preview.opening_title" | "preview.building_title",
   content: VaultLocationFields,
-): { title: string; location?: VaultLocation } {
+): { title: string; location?: string } {
   if (!content.folderName) return { title: t("preview.waiting_title") };
   return {
     title: t(key, { name: content.folderName }),

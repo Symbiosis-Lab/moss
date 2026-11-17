@@ -11,7 +11,6 @@
 // alignment is layout, not a measurement any code has to repeat.
 
 import { t } from "../../i18n/index";
-import type { VaultLocation } from "./vault-location";
 
 export function escapeHtml(str: string): string {
   return str
@@ -77,20 +76,18 @@ export function screenShell({ title, above = "", meter = "", below = "", crossin
 
 /**
  * The quiet location line, directly under the title: where the folder is
- * (`location.display` — already home-abbreviated and middle-truncated by
- * `formatVaultLocation`), the untruncated form in `data-tooltip` (never the
- * native `title=` — see the moss-ui-conventions skill), and the SAME
- * reveal button every other reason offers, moved up next to the path instead
- * of into the actions row below.
+ * (already home-abbreviated and middle-truncated by `formatVaultLocation`),
+ * and the SAME reveal button every other reason offers, moved up next to the
+ * path instead of into the actions row below.
  *
  * Never pair this with a spec whose `buttons` already includes
  * {@link revealFolderButton} — both render the same `#moss-waiting-reveal-folder`
  * id, and a duplicate id would leave one of the two inert.
  */
-export const locationLineOf = (location?: VaultLocation) =>
-  location
+export const locationLineOf = (display?: string) =>
+  display
     ? `<div class="moss-waiting-screen__location" data-location>
-        <span class="moss-waiting-screen__location-text" data-tooltip="${escapeHtml(location.full)}">${escapeHtml(location.display)}</span>
+        <span class="moss-waiting-screen__location-text">${escapeHtml(display)}</span>
         ${revealFolderButton()}
       </div>`
     : "";
