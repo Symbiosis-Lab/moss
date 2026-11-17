@@ -136,6 +136,9 @@ export function buildScratchSite(spec: ScratchSiteSpec): string {
     return awaitStamp(stampPath, stamp, tag);
   }
   try {
+    // A failed build must leave no stamp: the old one would let a gate's
+    // input check hash the last good build and skip the gate.
+    fs.rmSync(stampPath, { force: true });
     console.log(`${tag} building scratch site …`);
     // The build's own cache is keyed by file content, not by the binary, so a
     // changed binary would otherwise reuse what the old one cached (an image's

@@ -32,6 +32,7 @@
 #   bash scripts/render-gates.sh --project chromium     # only each gate's chromium project (SKIP for a gate that doesn't run this engine)
 #   bash scripts/render-gates.sh --list                 # print the selected gate names, one per line, and exit
 #   bash scripts/render-gates.sh --group nobuild --list   # same, scoped to one group
+#   bash scripts/render-gates.sh --select               # skip each gate whose inputs are byte-for-byte a green run's (scripts/render-gate-select.mjs)
 #   bash scripts/render-gates.sh --check                # every playwright/*.config.ts is classified exactly once; exit 1 and name it otherwise
 #   bash scripts/render-gates.sh comments-cascade       # one, by config name (positional args override the group)
 #   MOSS_BIN=target/release/moss-cli bash scripts/render-gates.sh   # point at a release build instead of the debug default
@@ -241,6 +242,7 @@ GROUP=""
 PROJECT=""
 DO_LIST=false
 DO_CHECK=false
+SELECT=false
 POSITIONAL=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -256,6 +258,10 @@ while [ $# -gt 0 ]; do
       ;;
     --list)
       DO_LIST=true
+      shift
+      ;;
+    --select)
+      SELECT=true
       shift
       ;;
     --check)
@@ -327,10 +333,47 @@ fi
 # A display wrapper is a Linux concern for a real windowed app; `moss-cli
 # build` opens none, so nothing here needs xvfb even on Linux CI.
 
+# Under --select, a gate runs with every Node process recording what it reads,
+# and a green run stores that input set; a gate whose set hashes the same as a
+# green run's is skipped. A built scratch site is an input, so every selected
+# build-group gate builds its sites first, GATE_BUILD_JOBS (default 4) at a
+# time: `--list` loads the config, which builds, and each site's stamp lock
+# keeps two gates from building the same site at once.
+inputs=""
+pw() {
+  if [ "$SELECT" = true ]; then
+    GATE_INPUTS_OUT="$inputs" NODE_OPTIONS="--require $PWD/tests/support/gate-inputs.cjs${NODE_OPTIONS:+ $NODE_OPTIONS}" \
+      npx playwright test "$@"
+  else
+    npx playwright test "$@"
+  fi
+}
+record_green() {
+  [ "$SELECT" = true ] || return 0
+  # A gate whose inputs cannot be stored simply runs again next time.
+  GATE_HEAD="$(git rev-parse --short=10 HEAD 2>/dev/null || true)" node scripts/render-gate-select.mjs record "$gate" "$PROJECT" "$inputs" || true
+}
+
+if [ "$SELECT" = true ]; then
+  for gate in "${GATES[@]}"; do
+    contains "$gate" ${GATES_BUILD[@]+"${GATES_BUILD[@]}"} && echo "$gate"
+  done | xargs -P "${GATE_BUILD_JOBS:-4}" -I{} sh -c 'npx playwright test -c "playwright/{}.config.ts" --list > /dev/null 2>&1' || true
+fi
+
 status=0
+ran=0
+skipped=0
 for gate in "${GATES[@]}"; do
   echo "── $gate ────────────────────────────────────────────"
   cfg="playwright/${gate}.config.ts"
+  if [ "$SELECT" = true ]; then
+    if node scripts/render-gate-select.mjs check "$gate" "$PROJECT"; then
+      skipped=$((skipped + 1))
+      continue
+    fi
+    inputs="$(mktemp -t render-gate-inputs)"
+  fi
+  ran=$((ran + 1))
   if [ -n "$PROJECT" ]; then
     # Ask Playwright for the configured project set rather than grepping the
     # config. Only its explicit missing-project diagnostic means this gate has
@@ -338,7 +381,7 @@ for gate in "${GATES[@]}"; do
     # errors must remain failures instead of becoming false skips.
     list_output=""
     if list_output="$(npx playwright test -c "$cfg" --list --project="$PROJECT" 2>&1)"; then
-      npx playwright test -c "$cfg" --project="$PROJECT" --reporter=line || status=1
+      if pw -c "$cfg" --project="$PROJECT" --reporter=line; then record_green; else status=1; fi
     else
       case "$list_output" in
         *"Error: Project(s) \"$PROJECT\" not found. Available projects:"*)
@@ -352,7 +395,9 @@ for gate in "${GATES[@]}"; do
       esac
     fi
   else
-    npx playwright test -c "$cfg" --reporter=line || status=1
+    if pw -c "$cfg" --reporter=line; then record_green; else status=1; fi
   fi
+  [ -n "$inputs" ] && rm -f "$inputs"
 done
+[ "$SELECT" = true ] && echo "── selected: ran $ran, skipped $skipped of ${#GATES[@]}"
 exit $status
