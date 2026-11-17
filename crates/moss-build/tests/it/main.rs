@@ -117,6 +117,7 @@ mod stream_listing_test;
 mod subpath_mount_test;
 mod subscribe_prompt_label_test;
 mod synced_siblings_test;
+mod synced_writes_test;
 mod syndication_line_test;
 mod term_editions_test;
 mod term_index_cards_test;
