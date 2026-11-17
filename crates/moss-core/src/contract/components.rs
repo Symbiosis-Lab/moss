@@ -429,16 +429,16 @@ const CORE: &[ComponentEntry] = &[
         data_attrs: &[
             DataAttr {
                 name: "data-cover",
-                values: &["quote"],
+                values: &["quote", "missing"],
                 default: "",
-                description: "Emitted iff this card has no cover of its own AND at least one sibling in the same listing does. Fills the slot with the page's description as text (an empty `aria-hidden` tile, with none, so the title is not printed twice) instead of the empty `.moss-card-no-cover` placeholder — a letter without a photo in a listing of photographed pieces. Absent when the whole listing is coverless (every card gets the plain placeholder there) and absent on a card that has its own cover.",
+                description: "`missing`: a link card whose picture belongs here and is not in hand (its card not fetched yet, or its picture not downloaded or encoded); the slot keeps its box with a hairline edge. Only a card known to have no picture gets `.moss-card-no-cover` and closes up. `quote`: emitted iff this card has no cover of its own AND at least one sibling in the same listing does. Fills the slot with the page's description as text (an empty `aria-hidden` tile, with none, so the title is not printed twice) instead of the empty `.moss-card-no-cover` placeholder — a letter without a photo in a listing of photographed pieces. Absent when the whole listing is coverless (every card gets the plain placeholder there) and absent on a card that has its own cover.",
             },
         ],
         example_html: r#"<div class="moss-card-cover"><img src="..." /></div>"#,
         example_markdown: "",
         status: Status::Confirmed,
         since: "1",
-        description: "Cover media slot inside `.moss-card`. Gets `.moss-card-no-cover` modifier when no image is present, or `data-cover=\"quote\"` when a sibling card in the same listing has a cover and this one doesn't.",
+        description: "Cover media slot inside `.moss-card`. Gets `.moss-card-no-cover` modifier when the card has no picture, `data-cover=\"missing\"` on a link card whose picture is not in hand, or `data-cover=\"quote\"` when a sibling card in the same listing has a cover and this one doesn't.",
     },
     ComponentEntry {
         class: "moss-marquee-track",

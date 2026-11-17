@@ -56,8 +56,9 @@ const FALLBACK_SELECTOR = "img.moss-img-fallback, video.moss-img-fallback";
 
 type Waiting = HTMLImageElement | HTMLVideoElement;
 
-/** A derived-text block still being read; the grid fills it. */
-const PENDING_SELECTOR = ".moss-derived--pending";
+/** A derived-text block still being read, or a link card's picture slot
+ *  whose picture is not in hand; the grid fills it. */
+const PENDING_SELECTOR = '.moss-derived--pending, .moss-card-cover[data-cover="missing"]';
 
 /** Visibility-gated grid on a canvas host: animates only while on-screen. */
 interface Gated {
@@ -285,7 +286,7 @@ export function installBlueprintFallback(
     subtree: true,
     childList: true,
     attributes: true,
-    attributeFilter: ["class"],
+    attributeFilter: ["class", "data-cover"],
   });
 
   return () => {

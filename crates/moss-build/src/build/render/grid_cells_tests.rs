@@ -1432,3 +1432,37 @@ fn a_folder_card_counts_in_cjk_numerals_under_vertical_typesetting() {
         "got: {horizontal}"
     );
 }
+
+/// Only a card whose fetched page names no picture closes up; a card not yet
+/// fetched, whose picture was not downloaded, or whose picture fails to
+/// render, keeps its box.
+#[test]
+fn only_a_link_card_known_to_have_no_picture_closes_up() {
+    use crate::build::page::link_meta::CardState;
+    let docs: Vec<ParsedDocument> = vec![];
+    let page = Page::new("index.html", &docs);
+    let url = "https://slykiten.com/";
+    let cover_of = |meta: LinkMeta| {
+        let map = HashMap::from([(url.to_string(), LinkMeta { url: url.to_string(), ..meta })]);
+        both_passes(":::grid 1\n<https://slykiten.com/>\n:::\n", &page, Some(&map))
+    };
+    let not_fetched = cover_of(LinkMeta { state: CardState::NotYet, ..Default::default() });
+    let no_picture = cover_of(LinkMeta { state: CardState::Fetched, ..Default::default() });
+    let not_downloaded = cover_of(LinkMeta {
+        state: CardState::Fetched,
+        og_image: Some("https://slykiten.com/cover.jpg".to_string()),
+        ..Default::default()
+    });
+    let unrenderable = cover_of(LinkMeta {
+        state: CardState::Fetched,
+        og_image: Some("https://slykiten.com/cover.jpg".to_string()),
+        cover_served_path: Some(".moss/link/cover.jpg".to_string()),
+        ..Default::default()
+    });
+    for html in [&not_fetched, &not_downloaded, &unrenderable] {
+        assert!(html.contains(moss_core::ast::link_card::MISSING_COVER), "got: {html}");
+        assert!(!html.contains("moss-card-no-cover"), "got: {html}");
+    }
+    assert!(no_picture.contains(r#"<div class="moss-card-cover moss-card-no-cover"></div>"#), "got: {no_picture}");
+    assert!(!no_picture.contains(r#"data-cover="missing""#), "got: {no_picture}");
+}

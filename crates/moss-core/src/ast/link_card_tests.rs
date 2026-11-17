@@ -44,11 +44,11 @@ fn domain_and_path_drops_query_and_fragment() {
 }
 
 #[test]
-fn no_authored_content_falls_back_to_placeholder_and_domain_path_title() {
+fn no_authored_content_keeps_the_missing_cover_slot_and_a_domain_path_title() {
     let resolved = resolved("https://example.com/story");
     let html = render_external_link_card(&resolved, &[]);
     assert!(html.contains(r#"class="moss-card" data-external target="_blank" rel="noopener""#));
-    assert!(html.contains(r#"<div class="moss-card-cover moss-card-no-cover"></div>"#));
+    assert!(html.contains(MISSING_COVER));
     assert!(html.contains(r#"<span class="moss-card-title">example.com/story</span>"#));
     assert!(html.contains(r#"<span class="moss-card-kicker">example.com</span>"#));
     // Never the retired shell.
@@ -77,15 +77,15 @@ fn authored_image_with_heading_uses_heading_as_title() {
 }
 
 #[test]
-fn text_only_whole_cell_gets_no_cover_placeholder() {
+fn text_only_whole_cell_keeps_the_missing_cover_slot() {
     // A multi-line whole-cell link with no image at all (e.g. `[Some\ntext](url)`)
     // still reaches this renderer (see shortcode_extract's compound-link
-    // detection) and must degrade to the plain placeholder, not panic on an
-    // absent cover image.
+    // detection). With no I/O it never learns the page has no picture, so the
+    // slot keeps its box rather than closing up.
     let resolved = resolved("https://example.com");
     let children = vec![Block::Paragraph(vec![Inline::Text("Some text".to_string())])];
     let html = render_external_link_card(&resolved, &children);
-    assert!(html.contains(r#"<div class="moss-card-cover moss-card-no-cover"></div>"#));
+    assert!(html.contains(MISSING_COVER));
     assert!(html.contains(r#"<span class="moss-card-title">Some text</span>"#));
 }
 

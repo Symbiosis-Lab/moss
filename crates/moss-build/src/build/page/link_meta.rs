@@ -36,6 +36,31 @@ pub struct LinkMeta {
     pub state: CardState,
 }
 
+/// What a card's picture slot holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CoverSlot {
+    /// This build serves the picture.
+    Served,
+    /// The linked page names no picture.
+    None,
+    /// A picture belongs here and this build doesn't have it: no entry yet,
+    /// or a picture not downloaded or not encoded.
+    Missing,
+}
+
+impl LinkMeta {
+    /// Only an entry whose page names no picture says there is none.
+    pub(crate) fn cover_slot(&self) -> CoverSlot {
+        if self.cover_served_path.is_some() {
+            CoverSlot::Served
+        } else if self.state == CardState::Fetched && self.og_image.is_none() {
+            CoverSlot::None
+        } else {
+            CoverSlot::Missing
+        }
+    }
+}
+
 /// Whether the folder holds a card's entry. Only a fetched entry can say a
 /// linked page has no picture; until then the card is waiting for one.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -763,10 +788,11 @@ pub(crate) fn cold_urls(urls: &[&str], moss_dir: &Path) -> Vec<String> {
     urls.iter().filter(|u| !has_card(moss_dir, u)).map(|u| (*u).to_string()).collect()
 }
 
-/// The cards of `read` with nothing in the folder yet; one the cloud holds is not one.
+/// The cards of `read` missing their picture with no entry in the folder: the
+/// ones a fetch can bring. One the cloud holds is not one.
 pub(crate) fn waiting_cards(read: &HashMap<String, LinkMeta>, moss_dir: &Path) -> Vec<String> {
-    let not_yet: Vec<&str> = read.iter().filter(|(_, m)| m.state == CardState::NotYet).map(|(u, _)| u.as_str()).collect();
-    cold_urls(&not_yet, moss_dir)
+    let missing: Vec<&str> = read.iter().filter(|(_, m)| m.cover_slot() == CoverSlot::Missing).map(|(u, _)| u.as_str()).collect();
+    cold_urls(&missing, moss_dir)
 }
 
 /// The cards the generation a manifest describes showed with no entry, kept

@@ -24,14 +24,24 @@ const CSS = fs.readFileSync(
 // block excised, rather than against a hand-written copy that would drift.
 // The block is found by its opening line and removed by brace balance.
 function withoutSupports(css) {
+  // An engine without subgrid skips the `@supports` block and applies the
+  // `@supports not` one, so drop the first and unwrap the second.
+  const block = (from) => {
+    let i = css.indexOf('{', from), depth = 0;
+    for (; i < css.length; i++) {
+      if (css[i] === '{') depth++;
+      else if (css[i] === '}' && --depth === 0) break;
+    }
+    return [css.indexOf('{', from), i];
+  };
   const open = css.indexOf('@supports (grid-template-rows: subgrid)');
   if (open === -1) throw new Error('the @supports subgrid block is gone — this gate is stale');
-  let i = css.indexOf('{', open), depth = 0;
-  for (; i < css.length; i++) {
-    if (css[i] === '{') depth++;
-    else if (css[i] === '}' && --depth === 0) break;
-  }
-  return css.slice(0, open) + css.slice(i + 1);
+  const [, close] = block(open);
+  css = css.slice(0, open) + css.slice(close + 1);
+  const not = css.indexOf('@supports not (grid-template-rows: subgrid)');
+  if (not === -1) return css;
+  const [body, end] = block(not);
+  return css.slice(0, not) + css.slice(body + 1, end) + css.slice(end + 1);
 }
 
 const TOKENS = `:root{
@@ -231,11 +241,21 @@ test.describe('fallback path (engine without subgrid)', () => {
       'ragged titles made a row uneven on the fallback path').toBeLessThanOrEqual(1);
   });
 
-  test('the placeholder is painted, so it does not read as a hole', async ({ page }) => {
+  test('the kept box is a plain tile with an edge, not a gradient that reads as a failed picture', async ({ page }) => {
     await page.setContent(listing([true, false, false], { supports: false }));
-    const bg = await page.locator('.moss-card-no-cover').first()
-      .evaluate(el => getComputedStyle(el).backgroundImage);
-    expect(bg, 'the fallback placeholder lost its gradient').toContain('linear-gradient');
+    const look = await page.locator('.moss-card-no-cover').first()
+      .evaluate(el => ({ bg: getComputedStyle(el).backgroundImage, edge: getComputedStyle(el).boxShadow }));
+    expect(look.bg, 'the kept box is painted with a gradient').toBe('none');
+    expect(look.edge, 'the kept box lost its edge').toContain('inset');
+  });
+
+  test('a listing with no picture at all has no cover boxes, on either side of the gate', async ({ page }) => {
+    for (const supports of [true, false]) {
+      await page.setContent(listing([false, false, false], { supports }));
+      const heights = await page.locator('.moss-card-cover')
+        .evaluateAll(els => els.map(el => el.getBoundingClientRect().height));
+      expect(Math.max(...heights), `a cover box with no picture, supports=${supports}`).toBe(0);
+    }
   });
 });
 
@@ -263,4 +283,25 @@ test.describe('column floor', () => {
     await page.setContent(withRoot(':root{--moss-card-min:150px} .moss-cards{--moss-card-min:420px}'));
     expect(await columns(page)).toBe(2);
   });
+});
+
+// A `:::grid` of link cards whose pages have no picture: no grey tiles, each
+// card starts at its words. One real cover in the group brings the boxes back,
+// so the row still lines up.
+test('a :::grid of cards with no picture has no cover boxes; one cover brings them back', async ({ page }) => {
+  const grid = (covered) => `<!doctype html><html><head><meta charset="utf-8">
+<style>${TOKENS}</style><style>${CSS}</style></head><body>
+<div class="moss-grid" data-columns="3">${[covered, false, false].map((c) =>
+    `<a href="#" class="moss-card" data-external>${c
+      ? '<div class="moss-card-cover"><img src="data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'4\' height=\'3\'/%3E" alt=""></div>'
+      : '<div class="moss-card-cover moss-card-no-cover"></div>'}<div class="moss-card-content"><span class="moss-card-title">Episode</span></div></a>`).join('')}
+</div></body></html>`;
+  const tiles = () => page.locator('.moss-card-no-cover')
+    .evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height));
+
+  await page.setContent(grid(false));
+  expect(Math.max(...await tiles()), 'a grey tile for a card with no picture').toBe(0);
+
+  await page.setContent(grid(true));
+  expect(Math.min(...await tiles()), 'a mixed row lost its box').toBeGreaterThan(0);
 });

@@ -108,6 +108,14 @@ pub fn push_inlines_text(out: &mut String, inlines: &[Inline]) {
     }
 }
 
+/// The picture slot of a card whose picture belongs there and is not in hand.
+/// It keeps its box; only a card known to have no picture closes up.
+pub const MISSING_COVER: &str = r#"<div class="moss-card-cover" data-cover="missing"></div>"#;
+
+/// The picture slot of a card known to have no picture: the stylesheet closes
+/// it up unless a sibling in the grid has a picture.
+pub const NO_COVER: &str = r#"<div class="moss-card-cover moss-card-no-cover"></div>"#;
+
 /// Render a whole-cell `Block::LinkCard` whose URL leaves the site, as the
 /// same `.moss-card` shell an internal collection card uses.
 ///
@@ -115,8 +123,9 @@ pub fn push_inlines_text(out: &mut String, inlines: &[Inline]) {
 /// both). When it opens with an image, that image becomes the cover —
 /// author content always wins over anything a build might otherwise fetch
 /// — rendered as a bare `<img>` (no variant pipeline: this crate has no
-/// `.moss/build` to synthesize one from). Otherwise the card falls back to
-/// the plain no-cover placeholder, same as an internal card with no cover.
+/// `.moss/build` to synthesize one from). Otherwise the slot is
+/// [`MISSING_COVER`]: with no I/O this renderer never learns that the linked
+/// page has no picture.
 /// The title is whatever text remains once the cover image is accounted
 /// for, or the URL's domain and path when the cell carried no words at all
 /// (a bare `[![alt](img)](url)`, no caption).
@@ -128,7 +137,7 @@ pub fn render_external_link_card(resolved: &ResolvedUrl, children: &[Block]) -> 
             escape_attr(href),
             escape_attr(alt)
         ),
-        None => r#"<div class="moss-card-cover moss-card-no-cover"></div>"#.to_string(),
+        None => MISSING_COVER.to_string(),
     };
     // The cover image's own block already spoke for itself above; the
     // title comes from whatever text is left (a heading or caption

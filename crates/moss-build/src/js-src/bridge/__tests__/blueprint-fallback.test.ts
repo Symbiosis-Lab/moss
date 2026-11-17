@@ -317,6 +317,21 @@ describe("blueprint-fallback: installBlueprintFallback", () => {
       stop();
     });
 
+    it("fills a link card's missing picture slot, and drops the grid when its picture comes", async () => {
+      const slot = document.createElement("div");
+      slot.className = "moss-card-cover";
+      slot.setAttribute("data-cover", "missing");
+      document.body.appendChild(slot);
+      const stop = installBlueprintFallback();
+      expect(slot.querySelector(".moss-blueprint-fallback canvas")).not.toBeNull();
+
+      // A morph keeps the slot and takes the attribute off as the picture lands.
+      slot.removeAttribute("data-cover");
+      await new Promise((r) => setTimeout(r, 0));
+      expect(slot.querySelector(".moss-blueprint-fallback")).toBeNull();
+      stop();
+    });
+
     it("leaves ready and skipped derived blocks alone", () => {
       const ready = makePending("moss-derived");
       const skipped = makePending("moss-derived moss-derived--skipped");

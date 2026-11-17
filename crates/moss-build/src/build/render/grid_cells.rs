@@ -42,14 +42,14 @@
 use std::collections::HashMap;
 
 use moss_core::ast::{Block, Inline, ResolvedUrl, Url, UrlKind};
-use moss_core::ast::link_card::{blocks_text, push_inlines_text};
+use moss_core::ast::link_card::{blocks_text, push_inlines_text, MISSING_COVER, NO_COVER};
 
 use crate::build::components::child_list::ChildItemProps;
 use crate::build::components::grid_card::{render_external_card, render_item_with_typesetting, CoverLoading};
 use moss_core::render::image::Loading;
 use crate::build::markdown::body_plan::{BodyPlan, BodySegment, GridCellEmission, GridEmission};
 use crate::build::media::cover::detect_cover_type;
-use crate::build::page::link_meta::LinkMeta;
+use crate::build::page::link_meta::{CoverSlot, LinkMeta};
 use crate::i18n::Language;
 use crate::build::types::ParsedDocument;
 
@@ -661,7 +661,6 @@ fn external_card_markup(
     } else {
         fetched_title.unwrap_or_else(|| moss_core::ast::link_card::domain_and_path(link.href))
     };
-    let mut has_cover = true;
     let cover_html = match link.cover_image {
         // Author content always wins: an authored image is never displaced
         // by a fetched og:image, even when one is cached below.
@@ -669,7 +668,7 @@ fn external_card_markup(
             let (cover_path, attrs_str) = moss_core::media::split_pipe(href);
             let cover_attrs = moss_core::media::parse_media_attrs(attrs_str);
             let cover_type = detect_cover_type(cover_path, None);
-            crate::build::media::cover::render_cover_html(
+            Some(crate::build::media::cover::render_cover_html(
                 cover_path,
                 cover_type,
                 alt,
@@ -679,13 +678,20 @@ fn external_card_markup(
                 index.media_lookup,
                 Loading::Lazy,
                 cell_sizes,
-            )
+            ))
         }
-        None => remote_cover_html(link_meta.and_then(|m| m.get(link.href)), &title, cell_sizes).unwrap_or_else(|| {
-            has_cover = false;
-            r#"<div class="moss-card-cover moss-card-no-cover"></div>"#.to_string()
-        }),
+        None => {
+            let meta = link_meta.and_then(|m| m.get(link.href));
+            match meta.map_or(CoverSlot::Missing, LinkMeta::cover_slot) {
+                CoverSlot::None => None,
+                // A served picture that fails to render still keeps its box.
+                CoverSlot::Served => remote_cover_html(meta, &title, cell_sizes).or_else(|| Some(MISSING_COVER.to_string())),
+                CoverSlot::Missing => Some(MISSING_COVER.to_string()),
+            }
+        }
     };
+    let has_cover = cover_html.is_some();
+    let cover_html = cover_html.unwrap_or_else(|| NO_COVER.to_string());
     let html = render_external_card(
         link.href,
         &title,
