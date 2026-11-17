@@ -486,7 +486,7 @@ fn cached_slot_record(
     slots: &ResolvedSlots,
 ) -> Option<SlotInjectRecord> {
     let (source_oid, params) = slot_cache_key(html, page_path, slots);
-    transforms.summary(SLOT_INJECT_TRANSFORM, &source_oid, &params)
+    slot_record(transforms, &source_oid, &params)
 }
 
 /// `jupyter/` in the stage is JupyterLite's own third-party HTML, which the pass
@@ -625,8 +625,8 @@ fn a_page_with_no_marker_is_injected_live_and_keeps_no_record() {
     assert!(cached_slot_record(&transforms, html, "index.html", &slots).is_none(), "a page with no marker keeps no record");
 
     let (source_oid, params) = slot_cache_key(html, "index.html", &slots);
-    transforms.put_summary(
-        SLOT_INJECT_TRANSFORM,
+    transforms.put_with_page(
+        SLOT_PAGE_TRANSFORM,
         &source_oid,
         html.len() as u64,
         &params,
@@ -636,7 +636,7 @@ fn a_page_with_no_marker_is_injected_live_and_keeps_no_record() {
             rewritten: false,
             residual: vec![],
         },
-        Some((&oid, html.len() as u64)),
+        (&oid, html.len() as u64),
     );
 
     let warm = run();
@@ -828,8 +828,8 @@ fn rebuilt_identical_slots_hit_the_injection_cache() {
     let (source_oid, params) = slot_cache_key(html, "index.html", &first);
 
     for build in 1..=10 {
-        transforms.put_summary(
-            SLOT_INJECT_TRANSFORM,
+        transforms.put_with_page(
+            SLOT_PAGE_TRANSFORM,
             &source_oid,
             html.len() as u64,
             &params,
@@ -839,7 +839,7 @@ fn rebuilt_identical_slots_hit_the_injection_cache() {
                 rewritten: false,
                 residual: vec![],
             },
-            Some((&oid, html.len() as u64)),
+            (&oid, html.len() as u64),
         );
         let rebuilt = slots_with_eight_keys_per_map("");
         let warm =
@@ -849,6 +849,52 @@ fn rebuilt_identical_slots_hit_the_injection_cache() {
             "build {build}: identical slot content, rebuilt from scratch, missed the cache"
         );
     }
+}
+
+/// A miss files one record whose entry is the page itself, with the summary
+/// carried in it: no summary blob beside the page's.
+#[test]
+fn a_slot_record_is_the_page_with_its_summary_and_no_blob_of_its_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_dir = tempfile::tempdir().unwrap();
+    let (objects, transforms) = slot_test_cache(cache_dir.path());
+    let html = "<html><head><!-- slot:head-end --></head><body></body></html>";
+    std::fs::write(dir.path().join("index.html"), html).unwrap();
+    let slots = head_end_slots("<meta name=\"probe\">");
+
+    let receipts = inject_staged(dir.path(), &slots, &objects, &transforms).unwrap();
+
+    let (source_oid, _) = slot_cache_key(html, "index.html", &slots);
+    let record = transforms.get_with(&source_oid, crate::build::cache::RecordMode::Request).expect("a record");
+    assert_eq!(record.transforms.keys().collect::<Vec<_>>(), vec![SLOT_PAGE_TRANSFORM]);
+    assert_eq!(Some(&record.transforms[SLOT_PAGE_TRANSFORM].oid), receipts[0].content_oid.as_ref());
+    let blobs = walkdir::WalkDir::new(cache_dir.path().join("objects")).into_iter().filter_map(Result::ok).filter(|e| e.file_type().is_file()).count();
+    assert_eq!(blobs, 1, "only the page's blob");
+}
+
+/// A record an older build filed, summary in a blob of its own, still hits, and
+/// the pass leaves it as it is: an upgrade rewrites no unchanged page's record.
+#[test]
+fn a_slot_record_from_an_older_build_hits_and_is_not_rewritten() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_dir = tempfile::tempdir().unwrap();
+    let (objects, transforms) = slot_test_cache(cache_dir.path());
+    let html = "<html><head><!-- slot:not-a-slot --></head><body></body></html>";
+    std::fs::write(dir.path().join("index.html"), html).unwrap();
+    let slots = head_end_slots("");
+    let cold = inject_staged(dir.path(), &slots, &objects, &transforms).unwrap();
+    let oid = cold[0].content_oid.clone().unwrap();
+    std::fs::remove_dir_all(cache_dir.path().join("transforms")).unwrap();
+    let (source_oid, params) = slot_cache_key(html, "index.html", &slots);
+    let legacy = SlotInjectRecord { content_oid: oid.clone(), manifest_hash: "SENTINEL".to_string(), rewritten: false, residual: vec![] };
+    transforms.put_summary(SLOT_INJECT_TRANSFORM, &source_oid, html.len() as u64, &params, &legacy, Some((&oid, html.len() as u64)));
+    let path = transforms.record_path(&source_oid);
+    let before = std::fs::read(&path).unwrap();
+
+    let warm = inject_staged(dir.path(), &head_end_slots(""), &objects, &transforms).unwrap();
+
+    assert_eq!(warm[0].manifest_hash, "SENTINEL", "the older record missed");
+    assert_eq!(std::fs::read(&path).unwrap(), before, "the older record was rewritten");
 }
 
 /// A later pass in the same process reads no record for a page whose bytes
@@ -1034,9 +1080,9 @@ fn slot_inject_record_residual_round_trips_through_the_cache() {
         rewritten: false,
         residual: vec!["footer-end".to_string()],
     };
-    transforms.put_summary(SLOT_INJECT_TRANSFORM, "xxh3:deadbeef", 4, &params, &record, Some((&record.content_oid, 4)));
+    transforms.put_with_page(SLOT_PAGE_TRANSFORM, "xxh3:deadbeef", 4, &params, &record, (&record.content_oid, 4));
 
-    let read_back: SlotInjectRecord = transforms.summary(SLOT_INJECT_TRANSFORM, "xxh3:deadbeef", &params).expect("record readable");
+    let read_back = slot_record(&transforms, "xxh3:deadbeef", &params).expect("record readable");
     assert_eq!(read_back.residual, vec!["footer-end".to_string()]);
 }
 

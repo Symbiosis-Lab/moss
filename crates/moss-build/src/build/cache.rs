@@ -1700,7 +1700,7 @@ pub(crate) fn gc(mp: &crate::moss_paths::MossPaths, _token: &crate::build::lifec
                 // A slot record is keyed on rendered bytes no later build may produce again;
                 // once the site has moved on from them the record is dead, at any age.
                 if page_sources.as_ref().is_some_and(|live| {
-                    record.transforms.contains_key(page_sources::SLOT_INJECT_TRANSFORM) && !live.contains(&record.source_oid)
+                    page_sources::is_slot_record(&record) && !live.contains(&record.source_oid)
                 }) {
                     condemned_records.push(file_path);
                     continue;

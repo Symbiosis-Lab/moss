@@ -2727,13 +2727,20 @@ fn put_slot_record(objects_dir: &Path, transforms_dir: &Path, source: &str, page
     put_object(objects_dir, page, b"page");
 }
 
+/// A fresh slot record as this version files it: the page, its summary in the entry.
+fn put_slot_page_record(objects_dir: &Path, transforms_dir: &Path, source: &str, page: &str) {
+    let entry = TransformEntry { kept_for: None, validation: None, oid: page.to_string(), size: 1, params: serde_json::json!({"key": {}, "summary": {}}) };
+    put_transform(transforms_dir, &TransformRecord { source_oid: source.to_string(), source_size: 1, transforms: [("html/slot-page".to_string(), entry)].into_iter().collect() });
+    put_object(objects_dir, page, b"page");
+}
+
 #[test]
 fn gc_condemns_a_slot_record_the_last_slot_pass_did_not_use() {
     let (mp, objects_dir, transforms_dir) = make_gc_test_dir("gc_page_sources");
     let (used, moved_on) = ("a".repeat(64), "b".repeat(64));
     let (used_page, old_page) = ("c".repeat(64), "d".repeat(64));
     put_slot_record(&objects_dir, &transforms_dir, &used, &used_page);
-    put_slot_record(&objects_dir, &transforms_dir, &moved_on, &old_page);
+    put_slot_page_record(&objects_dir, &transforms_dir, &moved_on, &old_page);
     fs::write(mp.cache_page_sources(), format!(r#"{{"index.html":"{used}"}}"#)).unwrap();
 
     let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test()).expect("readable");

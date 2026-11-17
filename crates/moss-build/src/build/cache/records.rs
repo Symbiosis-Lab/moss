@@ -283,6 +283,30 @@ impl TransformCache {
         }
     }
 
+    /// The summary [`put_with_page`](Self::put_with_page) folded into its entry for
+    /// this source, transform and parameters. A miss is `None`, as with
+    /// [`summary`](Self::summary).
+    pub(crate) fn summary_with_page<T: serde::de::DeserializeOwned>(&self, transform: &str, source_oid: &str, params: &serde_json::Value) -> Option<T> {
+        let record = self.get_with(source_oid, RecordMode::Request)?;
+        let entry = record.transforms.get(transform).filter(|entry| entry.params.get("key") == Some(params))?;
+        serde_json::from_value(entry.params.get("summary")?.clone()).ok()
+    }
+
+    /// Record a transform whose result is a page, with its summary carried in the
+    /// entry: one file per result where [`put_summary`](Self::put_summary) keeps
+    /// two. The summary sits inside `params`, which every version keeps as it
+    /// found it when it rewrites a record.
+    pub(crate) fn put_with_page<T: serde::Serialize>(&self, transform: &str, source_oid: &str, source_size: u64, params: &serde_json::Value, summary: &T, page: (&str, u64)) {
+        let summary = match serde_json::to_value(summary) {
+            Ok(summary) => summary,
+            Err(e) => return log::info!("Failed to encode the {transform} summary: {e}"),
+        };
+        let entry = super::TransformEntry { kept_for: None, validation: None, oid: page.0.to_string(), size: page.1, params: serde_json::json!({ "key": params, "summary": summary }) };
+        if let Err(e) = self.merge(source_oid, source_size, RecordMode::Request, |rec| { rec.transforms.insert(transform.to_string(), entry); }) {
+            log::info!("Failed to write {transform} transform record: {e}");
+        }
+    }
+
     /// Apply `edit` to the source's record — a fresh one of `source_size` when
     /// there is none — and write it back, keeping every entry `edit` leaves
     /// alone. An unreadable record is not written over: the work just done goes

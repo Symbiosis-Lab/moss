@@ -1,5 +1,5 @@
 //! Which rendered bytes the last build's slot pass used, per page: the source oid
-//! of each page's `html/slots` record, as the cache sweep reads it. A style save
+//! of each page's slot record, as the cache sweep reads it. A style save
 //! changes every page's HTML and files a whole new set of records, and the sweep
 //! must drop the set the site has moved on from; age alone would keep every saved
 //! style for its 90 days.
@@ -8,8 +8,18 @@ use crate::moss_paths::MossPaths;
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
-/// The transform a slot-injection record is filed under.
+/// The transform a slot-injection record was filed under, with its summary in a
+/// blob of its own. Read, never written: a record from an older build still hits.
 pub(crate) const SLOT_INJECT_TRANSFORM: &str = "html/slots";
+
+/// The transform a slot-injection record is filed under: the page, with its
+/// summary carried in the entry.
+pub(crate) const SLOT_PAGE_TRANSFORM: &str = "html/slot-page";
+
+/// Whether `record` is a slot-injection record, in either form.
+pub(crate) fn is_slot_record(record: &super::TransformRecord) -> bool {
+    [SLOT_INJECT_TRANSFORM, SLOT_PAGE_TRANSFORM].iter().any(|name| record.transforms.contains_key(*name))
+}
 
 /// Save the whole site's pages: `scanned` are the ones this pass read, and a
 /// carried page takes its entry from the last save. A carried page with no entry
