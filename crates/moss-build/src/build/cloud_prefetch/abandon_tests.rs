@@ -123,7 +123,7 @@ fn a_parked_read_that_returns_settles_once_and_can_be_asked_again() {
     provider.release();
     assert!(wait_until(Duration::from_secs(2), || p.snapshot().parked == 0));
     let snap = p.snapshot();
-    assert_eq!((snap.reads.fetched, snap.done, snap.in_flight, snap.stuck), (1, 1, 0, false));
+    assert_eq!((snap.reads.fetched, snap.done, snap.in_flight), (1, 1, 0));
     p.read(Path::new("/f/wedged"));
     assert!(wait_until(Duration::from_secs(2), || provider.asks("/f/wedged") == 2), "a settled file could not be asked again");
 }
@@ -133,7 +133,7 @@ fn while_stuck_one_probe_runs_and_a_return_restores_the_lanes() {
     let provider = Provider::new(true);
     let p = Prefetcher::with_bounds(2, provider.materializer(), quick());
     for name in ["a", "b", "c", "d", "e", "f"] { p.read_foreground(Path::new(&format!("/f/{name}"))); }
-    assert!(wait_until(Duration::from_secs(2), || p.snapshot().stuck), "premise: the provider is stuck");
+    assert!(wait_until(Duration::from_secs(2), || p.snapshot().parked == 2), "premise: the provider is stuck");
     // Both readers were given up and replaced; only one of the replacements may take a file before the probe's time.
     assert!(wait_until(Duration::from_secs(1), || provider.total() == 3));
     std::thread::sleep(quick().probe_first / 2);
@@ -223,5 +223,93 @@ fn a_stuck_folder_listing_does_not_hold_a_foreground_read() {
     assert!(wait_until(Duration::from_secs(2), || listings.load(Ordering::SeqCst) == STRUCTURAL_READERS + 1), "premise: the structural probe runs");
     p.read_foreground(Path::new("/f/page.md"));
     assert!(wait_until(Duration::from_millis(500), || provider.asks("/f/page.md") == 1), "a foreground read waited for the structural lane's probe");
+    provider.release();
+}
+
+#[test]
+fn reads_that_return_with_the_file_still_in_the_cloud_say_stuck_until_one_delivers() {
+    fn evicted(path: &Path) -> bool { !path.to_string_lossy().contains("arrives") }
+    let provider = Provider::new(false);
+    let p = Prefetcher::with_residency(2, provider.materializer(), quick(), evicted);
+    let f = Path::new("/f");
+    let _watch = p.watch(f);
+    p.read_foreground(Path::new("/f/a"));
+    p.read_foreground(Path::new("/f/b"));
+    assert!(wait_until(Duration::from_secs(2), || p.snapshot().reads.still_in_cloud == 2), "premise: both reads returned");
+    assert!(p.stuck_for(f), "reads that returned without delivering did not say the provider is not sending");
+    p.read_foreground(Path::new("/f/arrives"));
+    assert!(wait_until(Duration::from_secs(2), || p.snapshot().reads.fetched == 1), "premise: the third read delivered");
+    assert!(!p.stuck_for(f), "a delivered read did not clear it");
+}
+
+#[test]
+fn one_folders_held_reads_neither_mark_nor_are_cleared_by_another_folder() {
+    let provider = Provider::new(false);
+    let p = Prefetcher::with_bounds(2, provider.materializer(), quick());
+    let (a, b) = (Path::new("/a"), Path::new("/b"));
+    let _watching = (p.watch(a), p.watch(b));
+    p.read(Path::new("/a/wedged"));
+    assert!(wait_until(Duration::from_secs(2), || p.stuck_for(a)), "premise: folder a's read was given up");
+    assert!(!p.stuck_for(b), "folder a's held read marked folder b");
+    for name in ["one", "two", "three"] { p.read_foreground(&b.join(name)); }
+    assert!(wait_until(Duration::from_secs(3), || p.snapshot().reads.fetched == 3), "premise: folder b's reads delivered");
+    assert!(p.stuck_for(a), "folder b's deliveries cleared folder a");
+    assert!(!p.stuck_for(b));
+    provider.release();
+    assert!(wait_until(Duration::from_secs(2), || !p.stuck_for(a)), "folder a's own return did not clear it");
+}
+
+#[test]
+fn a_folder_keeps_its_verdict_until_its_last_watch_ends() {
+    let provider = Provider::new(false);
+    let p = Prefetcher::with_bounds(1, provider.materializer(), quick());
+    let a = Path::new("/a");
+    let (first, second) = (p.watch(a), p.watch(a));
+    drop(first);
+    p.read(Path::new("/a/wedged"));
+    assert!(wait_until(Duration::from_secs(2), || p.stuck_for(a)), "a folder still watched lost its verdict");
+    drop(second);
+    assert!(!p.stuck_for(a), "a folder no one watches still has a verdict");
+    provider.release();
+}
+
+#[test]
+fn a_held_listing_marks_its_folder_and_a_held_write_neither_marks_nor_clears_it() {
+    use crate::build::cloud_readiness::storage::{Operation, OperationKey, OperationPolicy, PublicationKind, StorageValue};
+    fn held(provider: &Arc<Provider>, value: fn() -> StorageValue) -> Operation {
+        let hold = Arc::clone(provider);
+        Arc::new(move || {
+            let mut held = hold.held.lock().unwrap();
+            while *held { held = hold.freed.wait(held).unwrap(); }
+            Ok(value())
+        })
+    }
+    let (listing, write) = (Provider::new(false), Provider::new(false));
+    let p = Prefetcher::with_bounds(2, listing.materializer(), quick());
+    let f = Path::new("/f");
+    let _watch = p.watch(f);
+    let key = OperationKey { path: "/f/.moss/cache/a".into(), policy: OperationPolicy::CachePublication { root: "/f/.moss/cache".into(), kind: PublicationKind::Blob } };
+    p.cache_publication(key, held(&write, || StorageValue::Published(1))).expect("queued");
+    assert!(wait_until(Duration::from_secs(2), || p.snapshot().parked == 1), "premise: the write is given up");
+    assert!(!p.stuck_for(f), "a held write said the provider is not sending");
+    let walk = OperationKey { path: "/f/dir".into(), policy: OperationPolicy::SourceWalk };
+    p.structural_operation(walk, held(&listing, || StorageValue::Directory { entries: Vec::new(), hidden: 0 })).unwrap();
+    assert!(wait_until(Duration::from_secs(2), || p.stuck_for(f)), "a held listing did not mark its folder");
+    write.release();
+    assert!(wait_until(Duration::from_secs(2), || p.snapshot().parked == 1), "premise: the write returned");
+    assert!(p.stuck_for(f), "a write's return cleared the folder's verdict");
+    listing.release();
+    assert!(wait_until(Duration::from_secs(2), || !p.stuck_for(f)), "the listing's return did not clear it");
+}
+
+#[test]
+fn a_held_read_marks_the_nearest_watched_folder_only() {
+    let provider = Provider::new(false);
+    let p = Prefetcher::with_bounds(1, provider.materializer(), quick());
+    let (outer, inner) = (Path::new("/a"), Path::new("/a/b"));
+    let _watching = (p.watch(outer), p.watch(inner));
+    p.read(Path::new("/a/b/wedged"));
+    assert!(wait_until(Duration::from_secs(2), || p.stuck_for(inner)), "a held read did not mark its folder");
+    assert!(!p.stuck_for(outer), "a nested folder's held read marked the folder around it");
     provider.release();
 }

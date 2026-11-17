@@ -347,7 +347,7 @@ fn publications_queue_beside_byte_reads_without_waiting() {
     let gate = Arc::new(Mutex::new(gate));
     let held: Operation = Arc::new(move || { let _ = gate.lock().unwrap().recv(); Ok(StorageValue::Published(0)) });
     let (m, reads) = recording();
-    let p = Prefetcher::with_lanes(3, 1, m, false, Bounds::PROVIDER);
+    let p = Prefetcher::with_lanes(3, 1, m, false, Bounds::PROVIDER, crate::build::icloud::is_evicted);
     let (key, attempt) = publication("held", held);
     p.cache_publication(key, attempt).expect("taken");
     assert!(wait_until(|| p.snapshot().in_flight == 1), "premise: the one publication reader is busy");
@@ -367,7 +367,7 @@ fn publications_run_on_their_own_readers() {
     let (release, gate) = mpsc::channel::<()>();
     let gate = Arc::new(Mutex::new(gate));
     let held: Operation = Arc::new(move || { let _ = gate.lock().unwrap().recv(); Ok(StorageValue::Published(0)) });
-    let p = Prefetcher::with_lanes(2, 4, recording().0, false, Bounds::PROVIDER);
+    let p = Prefetcher::with_lanes(2, 4, recording().0, false, Bounds::PROVIDER, crate::build::icloud::is_evicted);
     for i in 0..4 {
         let (key, _) = publication(&format!("held-{i}"), published());
         p.cache_publication(key, held.clone()).expect("taken");
@@ -398,7 +398,7 @@ fn a_record_publication_is_single_flight_and_publishes_the_newest_edit() {
             Ok(StorageValue::Published(revision))
         })
     };
-    let p = Prefetcher::with_lanes(2, 4, recording().0, false, Bounds::PROVIDER);
+    let p = Prefetcher::with_lanes(2, 4, recording().0, false, Bounds::PROVIDER, crate::build::icloud::is_evicted);
     let (key, _) = publication("one-record", published());
     let first = p.cache_publication_revision(key.clone(), attempt.clone(), Some(latest.clone())).expect("taken");
     assert!(wait_until(|| running.load(Ordering::SeqCst) == 1), "premise: the first attempt is running");
@@ -416,7 +416,7 @@ fn a_record_publication_is_single_flight_and_publishes_the_newest_edit() {
 #[test]
 fn a_publication_that_fails_for_good_is_counted_once() {
     use crate::build::cloud_readiness::{StorageFailure, StorageOperation, storage::Operation};
-    let p = Prefetcher::with_lanes(2, 1, recording().0, false, Bounds::PROVIDER);
+    let p = Prefetcher::with_lanes(2, 1, recording().0, false, Bounds::PROVIDER, crate::build::icloud::is_evicted);
     let refused: Operation = Arc::new(|| Err(StorageFailure::new(Some("/folder/.moss/cache/x".into()), StorageOperation::CacheWrite, std::io::Error::from(std::io::ErrorKind::PermissionDenied))));
     let (key, _) = publication("refused", published());
     p.cache_publication(key, refused).expect("taken");
@@ -435,7 +435,7 @@ fn quitting_drains_records_only_and_stops_at_its_cap() {
     let key = |kind: PublicationKind, name: &str| OperationKey { path: format!("/folder/.moss/cache/{name}").into(), policy: OperationPolicy::CachePublication { root: "/folder/.moss/cache".into(), kind } };
     let slow = |ms: u64| -> Operation { Arc::new(move || { std::thread::sleep(Duration::from_millis(ms)); Ok(StorageValue::Published(0)) }) };
     // One publication reader, busy with a copy; ten more copies queued ahead of the record.
-    let p = Prefetcher::with_lanes(2, 1, recording().0, false, Bounds::PROVIDER);
+    let p = Prefetcher::with_lanes(2, 1, recording().0, false, Bounds::PROVIDER, crate::build::icloud::is_evicted);
     p.cache_publication(key(PublicationKind::Blob, "running"), slow(150)).expect("taken");
     assert!(wait_until(|| p.snapshot().in_flight == 1));
     for i in 0..10 { p.cache_publication(key(PublicationKind::Blob, &format!("queued-{i}")), slow(150)).expect("taken"); }
@@ -457,7 +457,7 @@ fn quitting_drains_records_only_and_stops_at_its_cap() {
 /// A deep queue drains at the readers' pace, not at a cost that grows with its length.
 #[test]
 fn a_deep_publication_queue_drains_quickly() {
-    let p = Prefetcher::with_lanes(2, 4, recording().0, false, Bounds::PROVIDER);
+    let p = Prefetcher::with_lanes(2, 4, recording().0, false, Bounds::PROVIDER, crate::build::icloud::is_evicted);
     for i in 0..1_000 {
         let (key, attempt) = publication(&format!("{i}"), published());
         p.cache_publication(key, attempt).expect("taken");
@@ -472,7 +472,7 @@ fn a_deep_publication_queue_drains_quickly() {
 fn draining_waits_while_publications_land() {
     use crate::build::cloud_readiness::storage::Operation;
     let landed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let p = Prefetcher::with_lanes(2, 1, recording().0, false, Bounds::PROVIDER);
+    let p = Prefetcher::with_lanes(2, 1, recording().0, false, Bounds::PROVIDER, crate::build::icloud::is_evicted);
     for i in 0..4 {
         let lands = Arc::clone(&landed);
         let slow: Operation = Arc::new(move || {
@@ -497,7 +497,7 @@ fn draining_stops_once_nothing_lands_for_the_stall() {
     let (release, gate) = mpsc::channel::<()>();
     let gate = Arc::new(Mutex::new(gate));
     let stuck: Operation = Arc::new(move || { let _ = gate.lock().unwrap().recv(); Ok(StorageValue::Published(0)) });
-    let p = Prefetcher::with_lanes(2, 1, recording().0, false, Bounds::PROVIDER);
+    let p = Prefetcher::with_lanes(2, 1, recording().0, false, Bounds::PROVIDER, crate::build::icloud::is_evicted);
     let (key, attempt) = publication("stuck", stuck);
     p.cache_publication(key, attempt).expect("taken");
     let started = std::time::Instant::now();
@@ -515,7 +515,7 @@ fn closing_a_folder_drops_its_queued_publications() {
     let (release, gate) = mpsc::channel::<()>();
     let gate = Arc::new(Mutex::new(gate));
     let held: Operation = Arc::new(move || { let _ = gate.lock().unwrap().recv(); Ok(StorageValue::Published(0)) });
-    let p = Prefetcher::with_lanes(2, 1, recording().0, false, Bounds::PROVIDER);
+    let p = Prefetcher::with_lanes(2, 1, recording().0, false, Bounds::PROVIDER, crate::build::icloud::is_evicted);
     let (key, attempt) = publication("running", held);
     p.cache_publication(key, attempt).expect("taken");
     assert!(wait_until(|| p.snapshot().in_flight == 1));

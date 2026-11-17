@@ -15,6 +15,13 @@
 //! provider alive. A lane gets
 //! a replacement only while its parked threads are no more than its width, so
 //! a provider that never answers costs at most twice the pool.
+//!
+//! The probe rations threads, which every open folder shares, so it is not per
+//! folder. While one folder's provider holds its jobs, the probe is most often
+//! that folder's next job (the queue is first in, first out), and another
+//! folder's reads wait one probe interval per admission until a probe
+//! happens to be one of theirs and returns. Whether a folder's provider is
+//! sending is judged per folder, in `verdict`.
 use super::*;
 
 /// How long a pool job may hold its thread before the thread is given up.
@@ -91,9 +98,6 @@ impl Abandonment {
 
     pub fn parked(&self) -> impl Iterator<Item = &(PathBuf, Instant)> { self.parked.iter().flatten() }
 
-    /// A thread was given up and nothing has returned since.
-    pub fn stuck(&self) -> bool { self.probe.iter().any(Option::is_some) }
-
     #[cfg(test)]
     pub fn spawned(&self) -> usize { self.spawned.iter().sum() }
 
@@ -141,6 +145,7 @@ pub(super) fn reap(q: &mut Queue, inner: &Arc<Inner>, now: Instant) {
     let elapsed = |r: &Running| now.saturating_duration_since(r.started) >= r.bound;
     for path in over(&q.in_flight, |_, r| elapsed(r)) {
         let running = q.in_flight.remove(&path).expect("collected under this lock");
+        verdict::gave_up(q, &path);
         give_up(q, inner, Lane::Readers, "read", path, running);
     }
     for key in over(&q.cache_in_flight, |_, r| elapsed(r)) {
@@ -150,6 +155,7 @@ pub(super) fn reap(q: &mut Queue, inner: &Arc<Inner>, now: Instant) {
     let tasks = &q.operation_pending;
     for key in over(&q.structural_in_flight, |key, r| tasks.get(key).and_then(|task| task.quiet_for()).is_some_and(|quiet| quiet >= r.bound)) {
         let running = q.structural_in_flight.remove(&key).expect("collected under this lock");
+        verdict::gave_up(q, &key.path);
         give_up(q, inner, Lane::Structural, "folder listing", key.path, running);
     }
 }

@@ -93,7 +93,7 @@
 //! `platform::materialize_on_this_thread()` once and then do nothing else for
 //! their whole lives but execute owned file operations. A provider that stops
 //! answering costs moss threads, never the app, and the pool says so
-//! (`Snapshot::stuck`); `abandon` bounds the threads.
+//! for each folder (`verdict`); `abandon` bounds the threads.
 //!
 //! So this is not a download mechanism. It is an isolation boundary around the
 //! OS's download mechanism.
@@ -111,6 +111,8 @@ use crate::build::cloud_readiness::storage::{Operation, OperationKey, OperationT
 
 mod abandon;
 mod operations;
+mod verdict;
+pub use verdict::Watch;
 use abandon::{Lane, Running};
 pub(crate) use abandon::Bounds;
 use operations::{structural_reader_loop, finish_operation};
@@ -332,8 +334,6 @@ pub struct Snapshot {
     pub reads: ReadTally,
     /// Threads given up on a job the provider has not answered, not yet returned.
     pub parked: usize,
-    /// A thread was given up and no job has returned since: the provider is not answering.
-    pub stuck: bool,
 }
 
 /// How the byte reads that returned since startup ended. A provider that
@@ -408,6 +408,8 @@ struct Queue {
     /// frees their slot, so a snapshot never sees one both done and in flight.
     done: u64,
     reads: ReadTally,
+    /// Each watched folder's evidence that the provider is not sending.
+    verdicts: Vec<(PathBuf, verdict::Verdict)>,
     /// When a reader last took a job: a publication waiting for room waits
     /// only while the queue is moving.
     last_pop: Instant,
@@ -443,6 +445,8 @@ struct Inner {
     work: Condvar,
     structural_work: Condvar,
     materialize: Materializer,
+    /// Whether a file a read returned is still in the cloud.
+    evicted: fn(&Path) -> bool,
     settlement_emitter: Mutex<Option<crate::ops::watch::EventRelay>>,
     bytes_limit: usize,
     publication_limit: usize,
@@ -465,25 +469,31 @@ impl Prefetcher {
     /// Start the real thing: threads that opt themselves in to materialization
     /// and then read whatever they are handed.
     pub fn new() -> Self {
-        Self::with_lanes(READERS, PUBLICATION_READERS, Arc::new(materialize), true, Bounds::PROVIDER)
+        Self::with_lanes(READERS, PUBLICATION_READERS, Arc::new(materialize), true, Bounds::PROVIDER, crate::build::icloud::is_evicted)
     }
 
     /// Test seam. `opt_in` is false so a test's threads do not touch the
     /// process's I/O policy. Byte reads and publications share the `readers`.
     pub fn with_materializer(readers: usize, materialize: Materializer, opt_in: bool) -> Self {
-        Self::with_lanes(readers, 0, materialize, opt_in, Bounds::PROVIDER)
+        Self::with_lanes(readers, 0, materialize, opt_in, Bounds::PROVIDER, crate::build::icloud::is_evicted)
     }
 
     /// [`with_materializer`](Self::with_materializer) with short bounds, so a
     /// test sees a thread given up in milliseconds.
     #[cfg(test)]
     pub(crate) fn with_bounds(readers: usize, materialize: Materializer, bounds: Bounds) -> Self {
-        Self::with_lanes(readers, 0, materialize, false, bounds)
+        Self::with_lanes(readers, 0, materialize, false, bounds, crate::build::icloud::is_evicted)
+    }
+
+    /// [`with_bounds`](Self::with_bounds) with `evicted` saying which returned files stayed in the cloud.
+    #[cfg(test)]
+    pub(crate) fn with_residency(readers: usize, materialize: Materializer, bounds: Bounds, evicted: fn(&Path) -> bool) -> Self {
+        Self::with_lanes(readers, 0, materialize, false, bounds, evicted)
     }
 
     /// `readers` threads for byte reads, of which all but two may serve the
     /// background, plus `publication_readers` more that publications may use.
-    fn with_lanes(readers: usize, publication_readers: usize, materialize: Materializer, opt_in: bool, bounds: Bounds) -> Self {
+    fn with_lanes(readers: usize, publication_readers: usize, materialize: Materializer, opt_in: bool, bounds: Bounds, evicted: fn(&Path) -> bool) -> Self {
         let background = readers.saturating_sub(2).max(1);
         let inner = Arc::new(Inner {
             queue: Mutex::new(Queue {
@@ -503,6 +513,7 @@ impl Prefetcher {
                 failures: HashSet::new(),
                 done: 0,
                 reads: ReadTally::default(),
+                verdicts: Vec::new(),
                 last_pop: Instant::now(),
                 shutdown: false,
             }),
@@ -516,6 +527,7 @@ impl Prefetcher {
             publication_failures: AtomicU64::new(0),
             bounds,
             opt_in,
+            evicted,
         });
         for i in 0..readers + publication_readers { abandon::spawn(&inner, Lane::Readers, i); }
         for i in 0..STRUCTURAL_READERS { abandon::spawn(&inner, Lane::Structural, i); }
@@ -765,7 +777,7 @@ impl Prefetcher {
     pub fn snapshot(&self) -> Snapshot {
         let now = Instant::now();
         let Ok(mut q) = self.inner.queue.lock() else {
-            return Snapshot { waiting: 0, in_flight: 0, done: 0, oldest_read: None, reads: ReadTally::default(), parked: 0, stuck: false };
+            return Snapshot { waiting: 0, in_flight: 0, done: 0, oldest_read: None, reads: ReadTally::default(), parked: 0 };
         };
         abandon::reap(&mut q, &self.inner, now);
         Snapshot {
@@ -783,7 +795,6 @@ impl Prefetcher {
                 .map(|(path, started)| (path.clone(), now.saturating_duration_since(started))),
             reads: q.reads,
             parked: q.ab.parked().count(),
-            stuck: q.ab.stuck(),
         }
     }
 
@@ -921,13 +932,14 @@ fn read_bytes(inner: &Arc<Inner>, path: PathBuf) -> bool {
     }
     let result = (inner.materialize)(&path);
     if let Err(error) = &result { log::debug!("cloud: reading {} did not materialize it: {error}", path.display()); }
-    let still_in_cloud = result.is_ok() && crate::build::icloud::is_evicted(&path);
+    let still_in_cloud = result.is_ok() && (inner.evicted)(&path);
     let mut serving = true;
     if let Ok(mut q) = inner.queue.lock() {
         let given_up = q.in_flight.remove(&path).is_none();
         serving = q.ab.returned(Lane::Readers, given_up.then_some(path.as_path()));
         q.pending.remove(&path);
         q.reads.millis += started.elapsed().as_millis() as u64;
+        verdict::returned(&mut q, &path, result.is_ok().then_some(!still_in_cloud));
         match result {
             Ok(()) => {
                 q.failures.remove(&path);

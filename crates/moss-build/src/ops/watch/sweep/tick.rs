@@ -62,7 +62,6 @@ pub(crate) async fn run(
 
     let mut total_seen: usize = pending.len();
     let mut observed_arrivals: usize = 0;
-    let mut last_arrival = Instant::now();
     let mut arrivals_since_rebuild: usize = 0;
     let mut first_arrival_at: Option<Instant> = None;
     let mut stall_reported = false;
@@ -236,9 +235,7 @@ pub(crate) async fn run(
                 log::info!("cloud-sync: {} awaited file(s) were deleted upstream", deleted);
             }
             arrivals_since_rebuild += arrived + deleted + structural_wakes;
-            last_arrival = now;
             first_arrival_at.get_or_insert(now);
-            stall_reported = false;
         }
 
         // ── (3) The stat pass (every Nth tick) ─────────────────────────────
@@ -343,9 +340,7 @@ pub(crate) async fn run(
                             swallowed
                         );
                         arrivals_since_rebuild += swallowed;
-                        last_arrival = now;
                         first_arrival_at.get_or_insert(now);
-                        stall_reported = false;
                     }
                     observed_arrivals += arrived_unseen;
                     total_seen = total_seen.saturating_sub(deleted_unseen);
@@ -471,13 +466,13 @@ pub(crate) async fn run(
             // from — and waiting on one of those put a dismissal-less
             // full-window screen over a served site.
             let blocking = progress::blocking_count(&pending);
-            let stalled = blocking > 0 && now.duration_since(last_arrival) >= super::STALL_AFTER;
+            let stalled = progress::is_stalled(blocking, crate::build::cloud_readiness::downloads_stuck_for(&folder));
             if stalled && !stall_reported {
-                stall_reported = true;
                 // The operator wants the whole outstanding set, not the
                 // render-relevant slice: moss really is still fetching them.
                 progress::report_stall(pending.len());
             }
+            stall_reported = stalled;
             progress::emit_progress(reporter.as_ref(), &folder, total_seen, observed_arrivals, pending.len(), blocking, stalled, &pending);
         }
 
@@ -540,8 +535,6 @@ pub(crate) async fn run(
             // as the admitted build finishes and reports its real duration.
             last_rebuild_at = Some(Instant::now());
             last_rebuild_duration = last_rebuild_at.unwrap().duration_since(dispatched_at);
-            last_arrival = Instant::now();
-            stall_reported = false;
         }
 
         // ── (6) Folder health surfacing ──────────────────────────────────

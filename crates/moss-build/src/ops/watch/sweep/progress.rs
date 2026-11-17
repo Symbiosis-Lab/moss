@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use crate::build::ports::reporter::{BuildReporter, CloudSync};
 
-use super::{MIN_REBUILD_INTERVAL, STALL_AFTER};
+use super::MIN_REBUILD_INTERVAL;
 
 // ---------------------------------------------------------------------------
 // Rebuild pacing (carried from the cloud supervisor, semantics unchanged)
@@ -57,8 +57,7 @@ pub(crate) fn request_downloads(
     *cursor = (*cursor + count) % paths.len();
 }
 
-/// The stall WARN, with the pool snapshot that separates the three stalls a
-/// user cannot tell apart.
+/// The stall WARN, with the pool counts behind it.
 pub(crate) fn report_stall(awaiting: usize) {
     let pool = crate::build::cloud_readiness::download_snapshot();
     let oldest = match &pool.oldest_read {
@@ -68,21 +67,19 @@ pub(crate) fn report_stall(awaiting: usize) {
         None => "no reads outstanding".to_string(),
     };
     log::warn!(
-        "cloud-sync: no arrivals in {}s with {} file(s) still pending — reporting stalled \
-         (pool: {} in flight, {} queued, {} finished, {} given up{}; {})",
-        STALL_AFTER.as_secs(),
+        "cloud-sync: the provider is not answering with {} file(s) still pending \
+         (pool: {} in flight, {} queued, {} finished, {} given up; {})",
         awaiting,
         pool.in_flight,
         pool.waiting,
         pool.done,
         pool.parked,
-        if pool.stuck { ", provider not answering" } else { "" },
         oldest
     );
 }
 
-/// Report the observed cloud set. Age changes the advisory phase, never the
-/// pending count or the number observed to arrive.
+/// Report the observed cloud set. The folder's stuck verdict changes the phase,
+/// never the counts.
 pub(crate) fn emit_progress(
     reporter: &dyn BuildReporter,
     folder: &std::path::Path,
@@ -127,7 +124,12 @@ pub(crate) fn blocking_count(pending: &HashSet<PathBuf>) -> usize {
         .count()
 }
 
-/// A quiet provider is a waiting advisory, not evidence of failure.
+/// The folder is stalled when the render waits on a file and the provider is
+/// not sending this folder's files.
+pub(crate) fn is_stalled(blocking: usize, stuck: bool) -> bool {
+    blocking > 0 && stuck
+}
+
 pub(crate) fn phase_for(stalled: bool) -> &'static str {
     if stalled {
         "stalled"

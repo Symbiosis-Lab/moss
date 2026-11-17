@@ -128,6 +128,10 @@ pub enum Outcome {
 /// Ask for every file in `files` that is still in the cloud, and wait until all
 /// are local or `wait.window` passes with none arriving. `on_progress` is
 /// called with (still in the cloud, total) at the start and after each change.
+///
+/// A quiet window, not the readers' stuck verdict the preview's screen shows:
+/// the screen advises a person while moss keeps trying, but a `moss build`
+/// must end on its own, so it ends when nothing has arrived for a while.
 pub fn await_local(
     folder: &Path,
     files: Vec<PathBuf>,

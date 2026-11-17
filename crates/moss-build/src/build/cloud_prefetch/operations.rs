@@ -55,6 +55,7 @@ pub(super) fn finish_operation(inner: &Arc<Inner>, key: OperationKey, task: Arc<
             let cache = matches!(key.policy, OperationPolicy::CachePublication { .. });
             let given_up = if cache { q.cache_in_flight.remove(&key) } else { q.structural_in_flight.remove(&key) }.is_none();
             serving = q.ab.returned(if cache { Lane::Readers } else { Lane::Structural }, given_up.then_some(key.path.as_path()));
+            if !cache { verdict::returned(&mut q, &key.path, None); }
             q.done += 1;
             let mut state = task.state.lock().unwrap_or_else(|e| e.into_inner());
             let newer_revision = task.revision.as_ref().is_some_and(|latest| {

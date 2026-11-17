@@ -188,6 +188,21 @@ pub fn download_snapshot() -> crate::build::cloud_prefetch::Snapshot {
     PREFETCH.snapshot()
 }
 
+/// Judge whether the provider is sending `folder`'s files while the guard lives.
+pub(crate) fn watch_downloads(folder: &Path) -> crate::build::cloud_prefetch::Watch {
+    PREFETCH.watch(folder)
+}
+
+#[cfg(test)]
+pub(crate) fn downloads_watched(folder: &Path) -> bool {
+    PREFETCH.watched(folder)
+}
+
+/// The provider is not sending a watched folder's files: see [`crate::build::cloud_prefetch::Prefetcher::stuck_for`].
+pub(crate) fn downloads_stuck_for(folder: &Path) -> bool {
+    PREFETCH.stuck_for(folder)
+}
+
 /// The reader pool's read tally now, for [`record_download_pool`] to subtract.
 pub(crate) fn download_reads() -> crate::build::cloud_prefetch::ReadTally {
     download_snapshot().reads
