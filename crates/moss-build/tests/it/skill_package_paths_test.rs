@@ -46,9 +46,11 @@ fn is_bare_docs_path(text: &str, idx: usize) -> bool {
 }
 
 /// A token starting with `/` is a site path (`/_moss/plugins/`), served from
-/// the site rather than read from the repo.
+/// the site rather than read from the repo, and so is one inside the site's
+/// `.moss/` folder (`.moss/plugins/<name>/`).
 fn is_site_path(text: &str, idx: usize) -> bool {
-    token_before(text, idx).starts_with('/')
+    let before = token_before(text, idx);
+    before.starts_with('/') || before.ends_with(".moss/")
 }
 
 fn markdown_files(dir: &Path) -> Vec<PathBuf> {
