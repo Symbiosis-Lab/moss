@@ -56,6 +56,9 @@ impl IncrementalGates {
 /// link cards a build fetches before rendering, the comments an exiting build
 /// refreshes before its slots, and whatever a blocking process hook writes.
 /// Each lands after this measurement, so the next build renders in full once.
+/// A move the build makes itself and renders from (an older link card taken
+/// into the site folder, the redirect history) is recorded at its seal
+/// instead; see [`crate::build::inputs::restamp`].
 #[derive(Debug, Default)]
 pub struct LastSeal {
     manifest: Option<crate::types::content::SiteHashes>,

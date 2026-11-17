@@ -957,6 +957,9 @@ impl PendingManifest {
         let mut inner = self.inner;
         if let Some(inputs) = inner.build_inputs.as_mut() {
             inputs.env.extend(crate::build::inputs::env_read());
+            if let Some(evidence) = &self.input_evidence {
+                crate::build::inputs::restamp(inputs, evidence.root_path(), &evidence.moss_files_left());
+            }
         }
         let touched = self.touched;
         // A page the previous build hashed and this build neither re-read nor

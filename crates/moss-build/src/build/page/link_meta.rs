@@ -274,7 +274,7 @@ fn read_cache(moss_dir: &Path, url: &str, evidence: Option<&InputEvidence>) -> O
     let fetched = match link_snapshot::read(moss_dir, url, evidence) {
         link_snapshot::Entry::Fetched(fetched) => fetched,
         link_snapshot::Entry::InCloud => return Some(empty(url)),
-        link_snapshot::Entry::Absent => migrate_old_entry(moss_dir, url)?,
+        link_snapshot::Entry::Absent => migrate_old_entry(moss_dir, url, evidence)?,
     };
     let mut meta = LinkMeta { url: fetched.url, title: fetched.title, favicon: fetched.favicon, og_image: fetched.og_image, cover: fetched.cover, ..Default::default() };
     let derived = meta
@@ -293,9 +293,8 @@ fn read_cache(moss_dir: &Path, url: &str, evidence: Option<&InputEvidence>) -> O
 /// comes along when this machine still holds the bytes; otherwise the card has
 /// none until its entry is deleted and fetched again, since fetching here
 /// would let two machines disagree.
-fn migrate_old_entry(moss_dir: &Path, url: &str) -> Option<link_snapshot::Fetched> {
-    let old_path = cache_dir(moss_dir).join(format!("{}.json", link_snapshot::url_key(url)));
-    let old: OldEntry = serde_json::from_slice(&std::fs::read(&old_path).ok()?).ok()?;
+fn migrate_old_entry(moss_dir: &Path, url: &str, evidence: Option<&InputEvidence>) -> Option<link_snapshot::Fetched> {
+    let (old_path, old) = old_entry(moss_dir, url)?;
     let objects = crate::build::cache::ObjectStore::for_site(&MossPaths::from_moss_dir(moss_dir.to_path_buf()));
     let bytes = old.cover_oid.as_deref().and_then(|oid| std::fs::read(objects.ready_blob(oid)?).ok());
     let cover = bytes.zip(old.cover_ext.as_deref()).and_then(|(b, ext)| link_snapshot::store_cover(moss_dir, &b, ext));
@@ -303,8 +302,27 @@ fn migrate_old_entry(moss_dir: &Path, url: &str) -> Option<link_snapshot::Fetche
     if link_snapshot::write(moss_dir, &fetched).is_ok() {
         // allow:unlink the old link-meta entry under build.nosync, now in the site folder
         let _ = std::fs::remove_file(&old_path);
+        if let Some(evidence) = evidence {
+            let card = link_snapshot::card_path(moss_dir, url);
+            let cover = fetched.cover.as_deref().map(|cover| link_snapshot::cover_path(moss_dir, cover));
+            for path in [Some(card), cover, Some(old_path)].into_iter().flatten() {
+                evidence.moss_left(&path);
+            }
+        }
     }
     Some(fetched)
+}
+
+fn old_entry(moss_dir: &Path, url: &str) -> Option<(std::path::PathBuf, OldEntry)> {
+    let path = cache_dir(moss_dir).join(format!("{}.json", link_snapshot::url_key(url)));
+    let old = serde_json::from_slice(&std::fs::read(&path).ok()?).ok()?;
+    Some((path, old))
+}
+
+/// Whether a link has a card, leaving an older moss's entry where it is: the
+/// build's own read moves it, and its seal records the move.
+fn has_card(moss_dir: &Path, url: &str) -> bool {
+    !matches!(link_snapshot::read(moss_dir, url, None), link_snapshot::Entry::Absent) || old_entry(moss_dir, url).is_some()
 }
 
 /// Saves what a fetch brought back into the site folder.
@@ -660,7 +678,7 @@ fn fetch_all_link_meta_parallel_bounded(
     // Filter out URLs that are already cached — those need no fetch.
     let cold: Vec<String> = urls
         .iter()
-        .filter(|u| read_cache(moss_dir, u, None).is_none())
+        .filter(|u| !has_card(moss_dir, u))
         .map(|u| (*u).to_string())
         .collect();
 

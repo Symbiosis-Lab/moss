@@ -262,7 +262,7 @@ pub fn emit_redirect_table(
 
     match existing {
         Some(_) => {
-            if let Err(e) = save_redirects(paths, &merged) {
+            if let Err(e) = save_redirects(paths, &merged, pending.input_evidence().as_ref()) {
                 log::info!("Failed to save redirects.json: {}", e);
             }
         }
@@ -430,8 +430,13 @@ pub fn load_redirects(paths: &crate::moss_paths::MossPaths) -> Option<BTreeMap<S
 /// the "dataless is absent" rule for regenerable output does not reach it. If
 /// the sync client has evicted it, clobbering it with a map that has lost the
 /// history is worse than failing.
-pub fn save_redirects(paths: &crate::moss_paths::MossPaths, redirects: &BTreeMap<String, String>) -> Result<(), String> {
+pub fn save_redirects(
+    paths: &crate::moss_paths::MossPaths,
+    redirects: &BTreeMap<String, String>,
+    evidence: Option<&crate::build::cloud_ledger::InputEvidence>,
+) -> Result<(), String> {
     let path = paths.redirects();
+    let old_path = paths.data_dir().join("redirects.json");
     let json = serde_json::to_string_pretty(redirects)
         .map_err(|e| format!("Failed to serialize redirects: {}", e))?;
     if !std::fs::read(&path).is_ok_and(|existing| existing == json.as_bytes()) {
@@ -444,12 +449,17 @@ pub fn save_redirects(paths: &crate::moss_paths::MossPaths, redirects: &BTreeMap
             .map_err(|e| format!("Failed to write {}: {}", path.display(), e))?;
     }
     // allow:unlink .moss/data user state, never under staging
-    match std::fs::remove_file(paths.data_dir().join("redirects.json")) {
+    match std::fs::remove_file(&old_path) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            Err(format!("Failed to remove the old redirects file: {e}"))
+            return Err(format!("Failed to remove the old redirects file: {e}"));
         }
-        _ => Ok(()),
+        _ => {}
     }
+    if let Some(evidence) = evidence {
+        evidence.moss_left(&path);
+        evidence.moss_left(&old_path);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -584,7 +594,7 @@ mod tests {
         }
         published_record::save(&paths, &record).unwrap();
         let saved_by_an_older_build = ("qr/notes/a.svg".to_string(), "qr/records.svg".to_string());
-        save_redirects(&paths, &BTreeMap::from([("notes/a/".to_string(), "records/".to_string()), saved_by_an_older_build])).unwrap();
+        save_redirects(&paths, &BTreeMap::from([("notes/a/".to_string(), "records/".to_string()), saved_by_an_older_build]), None).unwrap();
         let mut pending = PendingManifest::new(SiteHashes::default());
         let page = ServedPath::from_source("records/index.html").unwrap();
         pending.register_source_mapping("records.md".into(), &page);
@@ -915,7 +925,7 @@ mod tests {
         redirects.insert("old/page/".to_string(), "new/page/".to_string());
         redirects.insert("posts/draft/".to_string(), "posts/published/".to_string());
 
-        save_redirects(&paths, &redirects).unwrap();
+        save_redirects(&paths, &redirects, None).unwrap();
         let loaded = load_redirects(&paths);
 
         assert_eq!(loaded, Some(redirects));
@@ -936,7 +946,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = crate::moss_paths::MossPaths::from_moss_dir(dir.path().join("a").join("b").join(".moss"));
 
-        save_redirects(&paths, &BTreeMap::new()).unwrap();
+        save_redirects(&paths, &BTreeMap::new(), None).unwrap();
 
         assert!(paths.redirects().exists());
     }
@@ -950,12 +960,12 @@ mod tests {
         redirects.insert("/old".to_string(), "/new".to_string());
         redirects.insert("/other".to_string(), "/target".to_string());
 
-        save_redirects(&paths, &redirects).unwrap();
+        save_redirects(&paths, &redirects, None).unwrap();
         let path = paths.redirects();
         let mtime_before = fs::metadata(&path).unwrap().modified().unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
 
-        save_redirects(&paths, &redirects).unwrap();
+        save_redirects(&paths, &redirects, None).unwrap();
         let mtime_after = fs::metadata(&path).unwrap().modified().unwrap();
         assert_eq!(mtime_before, mtime_after,
             "second save of identical map must not touch mtime");
@@ -1191,7 +1201,7 @@ mod tests {
         // that parses as neither format.
         let mut earned = BTreeMap::new();
         earned.insert("ancient/page/".to_string(), "current/page/".to_string());
-        save_redirects(&crate::moss_paths::MossPaths::from_moss_dir(moss_dir.clone()), &earned).unwrap();
+        save_redirects(&crate::moss_paths::MossPaths::from_moss_dir(moss_dir.clone()), &earned, None).unwrap();
         std::fs::write(deploy_dir.join("deployed-article-map.json"), "not json").unwrap();
 
         // uid-X moved, and this build has no way to know it.

@@ -367,7 +367,7 @@ fn a_redirect_entry_outside_the_site_counts_as_a_cli_problem() {
     redirects.insert("../old-page/".to_string(), "new-page/".to_string());
     redirects.insert("good-page/".to_string(), "new-page/".to_string());
     let paths = crate::moss_paths::MossPaths::from_moss_dir(moss_dir);
-    crate::build::feeds::redirects::save_redirects(&paths, &redirects).unwrap();
+    crate::build::feeds::redirects::save_redirects(&paths, &redirects, None).unwrap();
     let current_map = crate::build::scan::article_map::ArticleMap::new();
     let mut pending =
         crate::build::manifest::PendingManifest::new(crate::types::content::SiteHashes::default());

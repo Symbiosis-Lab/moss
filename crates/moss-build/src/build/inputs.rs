@@ -112,21 +112,7 @@ fn moss_files(folder: &Path, previous: Option<&BuildInputs>) -> Option<(BTreeMap
         if !entry.file_type().is_file() {
             continue;
         }
-        // Cards are keyed under their own directory, which `MossPaths` may
-        // resolve to another spelling of the folder (a symlinked temp root).
-        let (rel, measured) = match entry.path().strip_prefix(&link_meta) {
-            // A card (`<sha256 of the URL>.json`), never what a build writes
-            // beside them: the prewarm list, derived covers.
-            Ok(card) => (format!("link-meta/{}", card.to_string_lossy()), is_card_name(&entry.file_name().to_string_lossy())),
-            Err(_) => {
-                let rel = moss_core::slug::normalize_separators(&entry.path().strip_prefix(folder).ok()?.to_string_lossy());
-                let measured = crate::moss_paths::is_materialized_rel(&rel);
-                (rel, measured)
-            }
-        };
-        if !measured {
-            continue;
-        }
+        let Some(rel) = record_key(folder, &link_meta, entry.path()) else { continue };
         if crate::build::icloud::icloud_stub_target(entry.path()).is_some() || crate::build::icloud::is_evicted(entry.path()) {
             return None;
         }
@@ -145,6 +131,43 @@ fn moss_files(folder: &Path, previous: Option<&BuildInputs>) -> Option<(BTreeMap
     }
     unchanged &= previous.is_some_and(|p| p.moss.len() == files.len());
     Some((files, unchanged))
+}
+
+/// The key [`BuildInputs::moss`] gives a file, when it records that file.
+fn record_key(folder: &Path, link_meta: &Path, path: &Path) -> Option<String> {
+    // Cards are keyed under their own directory, which `MossPaths` may
+    // resolve to another spelling of the folder (a symlinked temp root).
+    // Only a card (`<sha256 of the URL>.json`) is recorded, never what a build
+    // writes beside them: the prewarm list, derived covers.
+    if let Ok(card) = path.strip_prefix(link_meta) {
+        return is_card_name(&card.to_string_lossy()).then(|| format!("link-meta/{}", card.to_string_lossy()));
+    }
+    let rel = moss_core::slug::normalize_separators(&path.strip_prefix(folder).ok()?.to_string_lossy());
+    crate::moss_paths::is_materialized_rel(&rel).then_some(rel)
+}
+
+/// Re-records the `.moss/` files this build wrote or removed after it was
+/// measured (a migration, the redirect history): its pages rendered from the
+/// files as it left them, so the next build may prove from them. A file that
+/// no longer holds what the build left keeps its old record, which the next
+/// build sees as moved.
+pub(crate) fn restamp(inputs: &mut BuildInputs, folder: &Path, left: &[(std::path::PathBuf, Option<String>)]) {
+    let link_meta = crate::moss_paths::MossPaths::new(folder).cache_link_meta();
+    for (path, hash) in left {
+        let Some(rel) = record_key(folder, &link_meta, path) else { continue };
+        match hash {
+            Some(hash) => {
+                let Ok(md) = std::fs::metadata(path) else { continue };
+                if crate::build::cache::ObjectStore::hash_file(path).ok().as_ref() == Some(hash) {
+                    inputs.moss.insert(rel, SourceMetadata::from_stat(hash.clone(), crate::build::stat::FileStat::of(&md)));
+                }
+            }
+            None if !path.exists() => {
+                inputs.moss.remove(&rel);
+            }
+            None => {}
+        }
+    }
 }
 
 fn is_card_name(name: &str) -> bool {
