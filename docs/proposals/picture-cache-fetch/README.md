@@ -38,7 +38,7 @@ On the real folder the copy came from, on one machine, 7,998 of 26,954 blobs and
 
 ### Never upload what the cloud already holds
 
-A cloud-only destination counts as present (`ObjectStore::holds` is already that predicate) in `store_file_in_base`, `store_bytes_in_base` and `BlobPublication::run`. An encode whose blob the shared store already holds keeps its bytes in the per-machine store (`.moss/build.nosync/cache/local-objects`), which `ready_blob` reads first. An unmanaged folder takes the same local-then-publish path a managed one already takes in `store_file`. A blob the shared store lacks is still published there.
+A cloud-only destination with a non-empty placeholder counts as present (`ObjectStore::cloud_holds`, built on `icloud::is_still_in_the_cloud`), both when a site stores a blob and in `BlobPublication::run`. A managed folder already keeps every encode in the per-machine store (`.moss/build.nosync/cache/local-objects`), which `ready_blob` reads first, and publishes it; that publication now skips a blob the cloud holds. An unmanaged folder still writes to the shared store, except when the shared copy is cloud-held: then the bytes stay in the per-machine store. The case that needs it is a site under an iCloud-synced `~/Documents` or `~/Desktop`, which the managed-folder check does not recognise. A zero-length entry holds nothing and is written over. A store with no site still writes the blob again under its hash; the only such store on a synced path is deploy history, which therefore still uploads again. A blob the shared store lacks is still published there.
 
 ### Shard folders created once
 
