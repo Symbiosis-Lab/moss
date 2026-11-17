@@ -3488,6 +3488,40 @@ fn availability_owned_merge_leaves_a_record_that_already_holds_it_unwritten() {
     });
 }
 
+/// A record in a managed folder whose next `reads` reads find it in the cloud,
+/// holding only a `format-probe` entry. Returns the guards and its inode.
+pub(crate) fn cloud_held_owned_record(cache: &TransformCache, oid: &str, reads: u32) -> (impl Drop, impl Drop, u64) {
+    use crate::build::cloud_readiness::{StorageOperation, storage::TestFault};
+    use std::os::unix::fs::MetadataExt;
+    let path = cache.record_path(oid);
+    let managed = TestFault::install(cache.root(), &path, StorageOperation::CacheWrite, 0, std::time::Duration::from_millis(20));
+    let entry = TransformEntry { kept_for: None, validation: None, oid: "probe".into(), size: 1, params: serde_json::Value::Null };
+    let seed = TransformRecord { source_oid: oid.to_string(), source_size: 1, transforms: [("format-probe".into(), entry)].into_iter().collect() };
+    write_record_file_for_test(&path, &seed);
+    let inode = fs::metadata(&path).unwrap().ino();
+    crate::build::io_utils::fault::fail_reads(&path, libc::EDEADLK, reads);
+    (managed, crate::build::icloud::pretend::evicted_until_requested(&path), inode)
+}
+
+/// Media metadata is worked out again from the source: adding it to a record
+/// the cloud holds would be an upload on every machine that opens the folder.
+#[test]
+fn media_meta_leaves_a_record_the_cloud_holds_unwritten() {
+    crate::infra::home::with_moss_home(|_| {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().unwrap();
+        let cache = TransformCache::for_site(&crate::moss_paths::MossPaths::new(dir.path()));
+        let oid = "e".repeat(64);
+        let (_managed, _in_cloud, inode) = cloud_held_owned_record(&cache, &oid, 1);
+        let meta = crate::build::cache::CachedMediaMeta { dimensions: Some((4, 3)), dominant_color: None, lqip_data_uri: None, is_animated: false };
+
+        crate::build::scan::scan::write_cached_meta(cache.objects(), &cache, &oid, 1, &meta);
+
+        crate::build::cloud_readiness::storage::drain_cache_publications(&mut |_| {});
+        assert_eq!(fs::metadata(cache.record_path(&oid)).unwrap().ino(), inode, "the record the cloud held is not replaced");
+    });
+}
+
 fn write_record_file_for_test(path: &std::path::Path, record: &TransformRecord) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, serde_json::to_vec(record).unwrap()).unwrap();

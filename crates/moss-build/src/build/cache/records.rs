@@ -18,6 +18,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub enum RecordMode {
     /// Request and carry on: an unavailable record misses; a write is refused.
     Request,
+    /// A value the build works out again from the source alone. A record the
+    /// cloud holds is not written over to add it: the caller uses the value it
+    /// worked out, and the record that arrives may already hold it.
+    Recomputable,
 }
 
 /// What reading a record found.
@@ -266,12 +270,13 @@ impl TransformCache {
 
     /// Apply `edit` to the source's record — a fresh one of `source_size` when
     /// there is none — and write it back, keeping every entry `edit` leaves
-    /// alone. An unreadable record is not written over, in either mode: the work
-    /// just done goes unrecorded and is found or redone by a later build. A
-    /// record still in the cloud is not written over either, but in a managed
-    /// folder the edit is published as a patch, which the owner merges once it
-    /// has read the whole record; without that, a provider that keeps records as
-    /// placeholders would have every build redo the same work.
+    /// alone. An unreadable record is not written over: the work just done goes
+    /// unrecorded and is found or redone by a later build. A record still in the
+    /// cloud is not written over either, but in a managed folder the edit is
+    /// published as a patch, which the owner merges once it has read the whole
+    /// record; without that, a provider that keeps records as placeholders would
+    /// have every build redo the same work. A [`RecordMode::Recomputable`] edit
+    /// is not worth that upload and is dropped.
     pub fn merge(
         &self,
         source_oid: &str,
@@ -300,7 +305,7 @@ impl TransformCache {
             read @ (RecordRead::Unreadable | RecordRead::Offline) => match &pending {
                 Some(RecordEdit::Replace(record)) => (record.clone(), None),
                 Some(RecordEdit::Delete) => (TransformRecord { source_oid: source_oid.into(), source_size, transforms: HashMap::new() }, None),
-                _ if matches!(read, RecordRead::Offline) && owner.is_some() => {
+                _ if matches!(read, RecordRead::Offline) && owner.is_some() && mode != RecordMode::Recomputable => {
                     (TransformRecord { source_oid: source_oid.to_string(), source_size, transforms: HashMap::new() }, None)
                 }
                 _ => return Ok(Merged::Kept),

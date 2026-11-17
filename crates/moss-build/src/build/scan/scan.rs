@@ -500,7 +500,7 @@ pub(crate) fn write_cached_meta(
     // Merge with existing record to preserve other transforms (video/mp4, video/thumbnail).
     // Without this, writing media/meta would overwrite the entire TransformRecord,
     // destroying previously cached video conversion results.
-    let merged = transform_cache.merge(content_hash, source_size, crate::build::cache::RecordMode::Request, |record| {
+    let merged = transform_cache.merge(content_hash, source_size, crate::build::cache::RecordMode::Recomputable, |record| {
         record.transforms.insert(MEDIA_META_TRANSFORM.to_string(), new_entry);
     });
     if let Err(e) = merged {

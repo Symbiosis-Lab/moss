@@ -1641,6 +1641,27 @@ fn should_skip_heic() {
     assert_eq!(reason, Some(SkipReason::Heic));
 }
 
+/// The probe's verdict is worked out again from the source: adding it to a
+/// record the cloud holds would be an upload on every machine.
+#[test]
+fn format_probe_leaves_a_record_the_cloud_holds_unwritten() {
+    crate::infra::home::with_moss_home(|_| {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().unwrap();
+        let cache = crate::build::cache::TransformCache::for_site(&crate::moss_paths::MossPaths::new(dir.path()));
+        let src = dir.path().join("small.jpg");
+        make_big_jpeg(&src, 32, 32);
+        let oid = "c".repeat(64);
+        // The probe reads the record once to look, then once to merge.
+        let (_managed, _in_cloud, inode) = crate::build::cache::tests::cloud_held_owned_record(&cache, &oid, 2);
+
+        should_skip(&src, "jpg", fs::metadata(&src).unwrap().len(), &ImageCompressionConfig::default(), &cache, &oid, false);
+
+        crate::build::cloud_readiness::storage::drain_cache_publications(&mut |_| {});
+        assert_eq!(fs::metadata(cache.record_path(&oid)).unwrap().ino(), inode, "the record the cloud held is not replaced");
+    });
+}
+
 #[test]
 fn should_not_skip_small_jpg_png_for_already_small() {
     // png/jpg/jpeg always get encoded — the synthesizer's

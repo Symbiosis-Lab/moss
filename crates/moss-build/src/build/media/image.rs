@@ -564,7 +564,7 @@ pub(crate) fn should_skip(
     if !source_oid.is_empty() {
         if let Ok(json_bytes) = serde_json::to_vec(&verdict) {
             if let Ok(blob_oid) = transforms.objects().store_bytes(&json_bytes) {
-                let merged = transforms.merge(source_oid, file_size, crate::build::cache::RecordMode::Request, |record| {
+                let merged = transforms.merge(source_oid, file_size, crate::build::cache::RecordMode::Recomputable, |record| {
                     record.transforms.insert(
                         FORMAT_PROBE_TRANSFORM.to_string(),
                         crate::build::cache::TransformEntry {
