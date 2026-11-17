@@ -63,6 +63,7 @@ GATES_BUILD=(
   header-hit-areas
   lightbox-github-shapes
   grid-card-no-cover
+  link-card-cover-slot
   grid-tile-scope
   nav-mobile
   nav-submenu

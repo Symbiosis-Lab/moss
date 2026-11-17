@@ -171,6 +171,7 @@ const GATE_PORT_KEYS = [
   'focus-point:ui',
   'focus-point:preview',
   'hosted-bold',
+  'link-card-cover-slot',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];
