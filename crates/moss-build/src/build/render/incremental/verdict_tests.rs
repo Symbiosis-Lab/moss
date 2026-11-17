@@ -125,6 +125,7 @@ impl Harness {
                 build_day: self.build_day,
                 render_id: self.render_id.as_deref(),
                 sealed_render_id: self.sealed_render_id.as_deref(),
+                graph: None,
             },
         )
     }
@@ -592,7 +593,7 @@ fn a_page_absent_from_the_corpus_is_never_skippable() {
 #[test]
 fn the_group_set_is_keyed_by_shape_not_by_host() {
     let docs = vault();
-    let groups = listing::ListingGroups::build(&docs, &project(), false);
+    let groups = listing::ListingGroups::build(&docs, &project(), false, &[]);
     assert!(groups
         .digest(&GroupKey {
             folder_slug: "writings".into(),
@@ -724,6 +725,54 @@ fn a_classified_label_edit_narrows_to_its_listing_host() {
     assert!(!verdict.may_skip("writings/alpha/index.md"));
     assert!(!verdict.may_skip("writings/index.md"), "the listing host must see the moved child projection");
     assert!(verdict.may_skip("writings/beta/index.md"), "an unrelated sibling must not be swept in");
+}
+
+/// A listed child's cover narrows to the child and its listing host. The
+/// edit also lands in `raw_frontmatter`, which must not read as an
+/// unclassified move beside it.
+#[test]
+fn a_childs_cover_edit_narrows_to_its_listing_host() {
+    let h = Harness::new();
+    let docs = vault();
+    h.run(&docs);
+
+    let mut edited = docs.clone();
+    let idx = edited.iter().position(|d| d.url_path == "writings/alpha/index.html").unwrap();
+    edited[idx].cover = Some("field.jpg".into());
+    edited[idx].raw_frontmatter.insert("cover".into(), serde_json::json!("field.jpg"));
+    let verdict = h.run(&edited);
+    assert_incremental(&verdict);
+    assert!(!verdict.may_skip("writings/alpha/index.md"));
+    assert!(!verdict.may_skip("writings/index.md"), "the listing card shows the cover");
+    assert!(verdict.may_skip("writings/beta/index.md"));
+}
+
+/// No reader list exists yet for a home page's cover, so it still renders the site.
+#[test]
+fn a_home_pages_cover_edit_still_forces_full() {
+    let h = Harness::new();
+    let docs = vault();
+    h.run(&docs);
+
+    let mut edited = docs.clone();
+    edited[0].cover = Some("field.jpg".into());
+    assert_full(&h.run(&edited), FullCause::SurfaceChanged);
+}
+
+/// A term card's count or picture moving renders the page that draws it and
+/// the listings of that page, not the site.
+#[test]
+fn a_term_card_move_narrows_to_its_page_and_its_listing_host() {
+    let h = Harness::new();
+    let docs = vault();
+    h.run(&docs);
+
+    let mut edited = docs.clone();
+    edited[1].term_card = Some(crate::build::types::TermCard { count: 2, ..Default::default() });
+    let verdict = h.run(&edited);
+    assert_incremental(&verdict);
+    assert!(!verdict.may_skip("writings/index.md"));
+    assert!(verdict.may_skip("writings/beta/index.md"));
 }
 
 /// `lang` is blanked out of the surface entirely (`facade::surface_debug`),

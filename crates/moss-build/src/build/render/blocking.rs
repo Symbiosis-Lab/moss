@@ -1714,6 +1714,7 @@ pub fn generate_blocking_content_for_build(
             build_day: now.date(),
             render_id: pending.render_id(),
             sealed_render_id: previous_hashes.render_id.as_deref(),
+            graph: Some(&content_graph),
         },
     );
     // The carry machinery's own price, and on a real vault the largest single

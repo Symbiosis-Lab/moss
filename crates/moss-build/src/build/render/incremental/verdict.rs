@@ -216,6 +216,9 @@ pub struct VerdictInputs<'a> {
     pub render_id: Option<&'a str>,
     /// The render of the manifest a carried page takes its entry from.
     pub sealed_render_id: Option<&'a str>,
+    /// The content graph rendering resolves page links with, so the verdict
+    /// finds the cards a page draws the way rendering does.
+    pub graph: Option<&'a moss_core::content_graph::ContentGraph>,
 }
 
 /// Name up to three of the paths behind a full-render cause, sorted so the
@@ -358,7 +361,7 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
     // out of its body is the extracted excerpt that lands in their
     // `<meta name="description">` (rung 6 of the chain in
     // `page/meta.rs::resolve_page_description_with_fallbacks`). Its other
-    // cross-page reads — `cover`, `hero_image_url`, `description`,
+    // cross-page reads — `hero_image_url`, `description`,
     // `hero_overlay_text` — are frontmatter or hoisted fields, so they are
     // already in the SURFACE and already force a full render one branch up.
     // Editing a homepage paragraph below the excerpt therefore now costs the
@@ -442,7 +445,14 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
     // Listing groups: computed unconditionally, because this build's digests
     // must be persisted for the NEXT build even when this one renders
     // everything. Sub-millisecond on the reference vault.
-    let groups = ListingGroups::build(documents, inputs.project, inputs.math);
+    let cards = card_reads(documents, inputs.graph);
+    let folder_card_reads: Vec<(String, listing::GroupKey)> = cards
+        .iter()
+        .filter(|(_, target)| target.kind == moss_core::PageKind::Folder)
+        .map(|(reader, target)| (PageKey::for_document(reader).cache_key().into_owned(), listing::folder_card_key(target)))
+        .collect();
+    let folder_card_keys: Vec<listing::GroupKey> = folder_card_reads.iter().map(|(_, key)| key.clone()).collect();
+    let groups = ListingGroups::build(documents, inputs.project, inputs.math, &folder_card_keys);
 
     let full_cause = if !inputs.policy.skip_unchanged_renders {
         Some((FullCause::SkipDisabled, None))
@@ -498,11 +508,15 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
             let dep_graph = moss_core::dep_graph::DepGraph::build(
                 path_and_links.iter().map(|(k, v)| (k.as_str(), *v)),
             )
-            .with_embed_pairs(embed_pairs);
+            .with_embed_pairs(embed_pairs)
+            .with_card_pairs(cards.iter().map(|(reader, target)| {
+                (PageKey::for_document(target).cache_key(), PageKey::for_document(reader).cache_key())
+            }));
             let mut render_set: HashSet<String> = changed.iter().cloned().collect();
             for path in &changed {
                 render_set.extend(dep_graph.backlinks(path).iter().cloned());
                 render_set.extend(dep_graph.back_embeds(path).iter().cloned());
+                render_set.extend(dep_graph.back_cards(path).iter().cloned());
             }
             // `changed` are distinct map keys and all landed in the set first.
             let by_backlink = render_set.len() - changed.len();
@@ -543,6 +557,12 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
                 };
                 if dirty {
                     render_set.insert(page_key);
+                    by_listing_group += 1;
+                }
+            }
+            // A folder's card counts the pages beneath it: its readers read that group.
+            for (reader, key) in &folder_card_reads {
+                if previous.listing_digest(key) != groups.digest(key) && render_set.insert(reader.clone()) {
                     by_listing_group += 1;
                 }
             }
@@ -637,6 +657,23 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
     verdict
 }
 
+/// Each (reader, target) where `reader` draws `target`'s card through a page
+/// field placed at `end` or a grid link cell. Both find their target only
+/// while rendering, so no outgoing link records them.
+fn card_reads<'a>(
+    documents: &'a [ParsedDocument],
+    graph: Option<&'a moss_core::content_graph::ContentGraph>,
+) -> Vec<(&'a ParsedDocument, &'a ParsedDocument)> {
+    documents
+        .iter()
+        .flat_map(|reader| {
+            crate::build::components::field_places::end_card_targets(reader, documents, graph)
+                .chain(crate::build::render::grid_cells::card_targets(reader, documents, graph))
+                .map(move |target| (reader, target))
+        })
+        .collect()
+}
+
 /// The tracked pages outside `render_set` whose previous output shows one of
 /// `images` (source paths, as `image_files` keys them).
 ///
@@ -706,14 +743,8 @@ fn global_contributions(
     for doc in documents {
         let path = crate::build::facade::PageKey::for_document(doc).cache_key().into_owned();
         let is_slot = doc.slot_only || doc.slot.is_some();
-        // `is_language_root`, not a bare `url_path == "index.html"`: every
-        // locale's own home page carries the same global-listing content
-        // (see `data-page="home"` in blocking.rs's render call, the other
-        // consumer of this same "is this doc a home" question) — missing
-        // this here left a NON-default-locale home carrying a stale global
-        // excerpt whenever a title edit elsewhere should have invalidated it.
-        let is_home =
-            crate::build::render::lang_roots::is_language_root(&doc.url_path) || doc.is_home_override;
+        // Every locale's home carries the global-listing content, not only `index.html`.
+        let is_home = crate::build::render::lang_roots::is_home(doc);
         if is_slot {
             parts.push((path.clone(), crate::build::facade::compute_page_facade(doc)));
         } else if is_home {

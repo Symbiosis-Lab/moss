@@ -194,7 +194,7 @@ fn root_key() -> GroupKey {
 }
 
 fn digest(docs: &[ParsedDocument], key: &GroupKey) -> GroupDigest {
-    ListingGroups::build(docs, &project(), false)
+    ListingGroups::build(docs, &project(), false, &[])
         .digest(key)
         .cloned()
         .unwrap_or_else(|| panic!("group {} was not built", key.id()))
@@ -372,8 +372,8 @@ fn a_new_grandchild_moves_contents_through_the_subfolder_card_alone() {
 #[test]
 fn digests_are_stable_across_two_identical_builds() {
     let docs = vault();
-    let a = ListingGroups::build(&docs, &project(), false);
-    let b = ListingGroups::build(&docs, &project(), false);
+    let a = ListingGroups::build(&docs, &project(), false, &[]);
+    let b = ListingGroups::build(&docs, &project(), false, &[]);
     assert!(a.len() > 1, "the fixture must produce more than one group");
     for k in [root_key(), key("writings"), key("deep")] {
         assert_eq!(a.digest(&k), b.digest(&k), "{}", k.id());
@@ -474,7 +474,7 @@ fn a_post_edit_dirties_only_the_home_of_its_own_language() {
         let host = docs.iter().find(|d| d.url_path == host).unwrap();
         let mut p = project();
         p.has_language_trees = true;
-        let groups = ListingGroups::build(docs, &p, false);
+        let groups = ListingGroups::build(docs, &p, false, &[]);
         groups_read_by(host, docs)
             .unwrap()
             .iter()

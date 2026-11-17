@@ -127,11 +127,13 @@ impl ListingGroups {
         self.digests
     }
 
-    /// Compute every group any listing host reads.
+    /// Digests for every group a host reads, plus `card_reads`: the groups
+    /// that folder cards drawn elsewhere count ([`folder_card_key`]).
     pub fn build(
         documents: &[ParsedDocument],
         project: &ProjectStructure,
         math: bool,
+        card_reads: &[GroupKey],
     ) -> Self {
         // One projection per document, not per (document, group) pair: the
         // projection is a function of the document and the corpus, never of
@@ -152,6 +154,9 @@ impl ListingGroups {
                     keys.entry(key.id()).or_insert(key);
                 }
             }
+        }
+        for key in card_reads {
+            keys.entry(key.id()).or_insert_with(|| key.clone());
         }
 
         let digests = keys
@@ -348,6 +353,23 @@ pub fn own_listing_key(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Op
     })
 }
 
+/// A folder page's own folder, as a group's `folder_slug` names it.
+fn own_folder_slug(folder: &ParsedDocument) -> String {
+    folder.url_path.trim_end_matches("index.html").trim_end_matches('/').to_string()
+}
+
+/// The group a folder's summary card counts, wherever that card is drawn:
+/// every listable page beneath the folder, at any depth.
+pub fn folder_card_key(folder: &ParsedDocument) -> GroupKey {
+    GroupKey {
+        folder_slug: own_folder_slug(folder),
+        depth: Depth::All,
+        scope_default_tree: false,
+        exclude_nav: false,
+        edition: folder.edition.clone(),
+    }
+}
+
 /// The groups a host reads, or `None` when its shape is not modelled.
 ///
 /// `None` means **render**. Over-approximation is the only safe default —
@@ -369,7 +391,7 @@ pub fn groups_read_by(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Opt
         && doc.url_path.ends_with("/index.html")
     {
         keys.push(GroupKey {
-            folder_slug: doc.url_path.trim_end_matches("/index.html").to_string(),
+            folder_slug: own_folder_slug(doc),
             depth: Depth::from_frontmatter(doc.children_depth.as_deref(), false),
             scope_default_tree: false,
             exclude_nav: false,

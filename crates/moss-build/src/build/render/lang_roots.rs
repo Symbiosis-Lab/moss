@@ -32,6 +32,12 @@ pub(crate) fn is_language_root(url_path: &str) -> bool {
     }
 }
 
+/// Whether `doc` is a home page: a language root, or the page elected home in
+/// place of a missing `index.md`.
+pub(crate) fn is_home(doc: &crate::build::types::ParsedDocument) -> bool {
+    is_language_root(&doc.url_path) || doc.is_home_override
+}
+
 /// The edition home a `children:` reference names by its file stem
 /// (`[[Field Notes]]` for the root home, `[[Notes]]` for `en/Notes.md`), if any.
 /// Such a listing means what that home's own listing means: its tree, with its

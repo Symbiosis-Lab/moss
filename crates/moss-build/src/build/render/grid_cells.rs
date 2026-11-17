@@ -816,7 +816,7 @@ fn resolve_cell_href(page_url_path: &str, href: &str) -> String {
 /// its own from `doc.date` alone, and a page whose date came from any other
 /// rung showed one in the listing and none here.
 fn picked_card_props(link: &CellLink<'_>, index: &BuildIndex<'_>) -> Option<ChildItemProps> {
-    let doc = find_linked_document(link, index)?;
+    let doc = find_linked_document(link.href, index.page_url_path, index.documents, index.graph)?;
     let mut props = crate::build::components::child_list::props_for_document(
         doc,
         index.documents,
@@ -837,28 +837,53 @@ fn picked_card_props(link: &CellLink<'_>, index: &BuildIndex<'_>) -> Option<Chil
 /// The page a cell's link names, or `None` when it points outside the build.
 ///
 /// Decode, anchor against the hosting page's pretty URL, then look up — the
-/// shared half of resolving a cell, used by both card shapes.
+/// shared half of resolving a cell, used by both card shapes and by
+/// [`card_targets`].
 fn find_linked_document<'a>(
-    link: &CellLink<'_>,
-    index: &BuildIndex<'a>,
+    href: &str,
+    page_url_path: &str,
+    documents: &'a [ParsedDocument],
+    graph: Option<&moss_core::content_graph::ContentGraph>,
 ) -> Option<&'a ParsedDocument> {
-    let decoded = urlencoding::decode(link.href)
+    let decoded = urlencoding::decode(href)
         .map(|s| s.to_string())
-        .unwrap_or_else(|_| link.href.to_string());
-    let anchored = resolve_cell_href(index.page_url_path, &decoded);
+        .unwrap_or_else(|_| href.to_string());
+    let anchored = resolve_cell_href(page_url_path, &decoded);
     let folder_url = if anchored.ends_with('/') || anchored.is_empty() {
         anchored
     } else {
         format!("{}/", anchored)
     };
-    find_document(&folder_url, index)
+    find_document(&folder_url, documents, graph)
+}
+
+/// The pages `doc`'s grid link cells name, found the way rendering finds them.
+/// A cell may draw the named page's card, and a `/`-rooted href leaves nothing
+/// in `outgoing_links`. Every internal link cell counts, card or not:
+/// over-reading is the safe side.
+pub(crate) fn card_targets<'a>(
+    doc: &ParsedDocument,
+    documents: &'a [ParsedDocument],
+    graph: Option<&moss_core::content_graph::ContentGraph>,
+) -> Vec<&'a ParsedDocument> {
+    let Some(plan) = &doc.body_plan else { return Vec::new() };
+    grids(plan)
+        .flat_map(|grid| &grid.cells)
+        .filter_map(|cell| match classify_cell(&cell.blocks) {
+            GridCell::Link(link) if !link.external() => find_linked_document(link.href, &doc.url_path, documents, graph),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Find the document a folder-shaped URL points at.
-fn find_document<'a>(folder_url: &str, index: &BuildIndex<'a>) -> Option<&'a ParsedDocument> {
+fn find_document<'a>(
+    folder_url: &str,
+    documents: &'a [ParsedDocument],
+    graph: Option<&moss_core::content_graph::ContentGraph>,
+) -> Option<&'a ParsedDocument> {
     let index_url = format!("{}index.html", folder_url);
-    let exact = index
-        .documents
+    let exact = documents
         .iter()
         .find(|d| d.url_path == folder_url || d.url_path == index_url);
     if exact.is_some() {
@@ -870,7 +895,7 @@ fn find_document<'a>(folder_url: &str, index: &BuildIndex<'a>) -> Option<&'a Par
     // where that folder note actually lives. Try `{folder}/index.md` first
     // (suffix matching reaches nested paths), then the bare name (stem matching
     // reaches self-named notes).
-    let graph = index.graph?;
+    let graph = graph?;
     let folder_name = folder_url.trim_end_matches('/');
     let resolved = graph
         .resolve_path(&format!("{folder_name}/index.md"), "")
@@ -881,8 +906,7 @@ fn find_document<'a>(folder_url: &str, index: &BuildIndex<'a>) -> Option<&'a Par
     // `index.html`) re-implemented three rules page_map already applied — and
     // spelled the folder in the source's case, so a mixed-case folder matched
     // nothing and the card silently vanished.
-    index
-        .documents
+    documents
         .iter()
         .find(|d| d.source_path.as_deref() == Some(resolved.as_str()))
 }

@@ -1054,3 +1054,82 @@ fn generated_language_switchers_follow_publish_draft_publish_incrementally() {
         assert_trees_byte_identical(&format!("language edition step {step}"), &incremental_root, &full_root);
     }
 }
+
+// ---- a page drawing another page's card through no link in its body -------
+
+/// `work/b.md` is drawn as a card by pages that have no link to it in their
+/// body: `next-reader.md` through a page field placed at `end`, and
+/// `grid-reader.md` through a grid cell whose link is `/`-rooted.
+/// `folder-reader.md` draws the `work/` folder's card, which counts the
+/// pages beneath it. All three find their target only while
+/// rendering. `work/other.md` keeps both pictures in use.
+fn write_card_reader_vault(root: &Path) {
+    write(root, ".moss/config.toml", "schema_version = 6\n\n[site]\nlang = \"en\"\n\n[fields.next]\ntype = \"page\"\nplace = \"end\"\n");
+    write(root, "index.md", "---\ntitle: Home\n---\n\nThe homepage.\n");
+    write_png(root, "work/first.png", [200, 40, 40]);
+    write_png(root, "work/second.png", [40, 40, 200]);
+    write(root, "work/b.md", "---\ntitle: Bee\ndate: 2026-01-05\ncover: first.png\n---\n\nThe page every reader shows.\n");
+    write(root, "work/other.md", "---\ntitle: Other\ndate: 2025-06-01\n---\n\n![](first.png)\n\n![](second.png)\n");
+    write(root, "next-reader.md", "---\ntitle: Next Reader\nnext: \"[[b]]\"\n---\n\nA page whose end field names b.\n");
+    write(root, "grid-reader.md", "---\ntitle: Grid Reader\n---\n\n:::grid\n[Bee](/work/b/)\n+++\nA plain cell.\n:::\n");
+    write(root, "folder-reader.md", "---\ntitle: Folder Reader\n---\n\n:::grid \n[Work](/work/)\n+++\nA plain cell.\n:::\n");
+}
+
+/// An edit on `work/b.md` that the verdict classifies, so the build is
+/// incremental and only the dependency edges decide who renders.
+fn card_reader_scenario(name: &str, from: &str, to: &str) {
+    let _guard = SEQUENTIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let logger = capture();
+    let tmp = tempfile::tempdir().unwrap();
+    let incremental_root = tmp.path().join("incremental");
+    let full_root = tmp.path().join("full");
+
+    write_card_reader_vault(&incremental_root);
+    let baseline = build(&incremental_root.to_string_lossy(), moss_build::build::BuildTrigger::Full);
+    assert!(baseline.is_ok(), "[{name}] {baseline:?}");
+    for reader in ["next-reader/index.html", "grid-reader/index.html"] {
+        let html = std::fs::read_to_string(staging_dir(&incremental_root).join(reader)).unwrap();
+        assert!(html.contains("first") && html.contains("Bee"), "fixture drift: {reader} does not draw b's card");
+    }
+    let folder_card = std::fs::read_to_string(staging_dir(&incremental_root).join("folder-reader/index.html")).unwrap();
+    assert!(folder_card.contains("2 articles"), "fixture drift: the folder card does not count its pages");
+    logger.lines.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
+
+    edit_frontmatter(&incremental_root, "work/b.md", from, to);
+    let changed = incremental_root.join("work/b.md");
+    let result = build(&incremental_root.to_string_lossy(), moss_build::build::BuildTrigger::ContentOnly(vec![changed]));
+    assert!(result.is_ok(), "[{name}] {result:?}");
+    let lines = logger.lines.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    assert!(
+        lines.iter().any(|l| l.contains("tracked pages") && !l.contains("skipping 0")),
+        "[{name}] the edit must take the incremental path, got: {lines:?}"
+    );
+
+    write_card_reader_vault(&full_root);
+    edit_frontmatter(&full_root, "work/b.md", from, to);
+    let full = build(&full_root.to_string_lossy(), moss_build::build::BuildTrigger::Full);
+    assert!(full.is_ok(), "[{name}] {full:?}");
+
+    assert_trees_byte_identical(name, &incremental_root, &full_root);
+}
+
+#[test]
+fn a_cover_edit_reaches_pages_that_draw_its_card_without_a_body_link() {
+    card_reader_scenario("card readers: cover", "cover: first.png", "cover: second.png");
+}
+
+#[test]
+fn a_title_edit_reaches_pages_that_draw_its_card_without_a_body_link() {
+    card_reader_scenario("card readers: title", "title: Bee", "title: Bee Renamed");
+}
+
+#[test]
+fn a_date_edit_reaches_pages_that_draw_its_card_without_a_body_link() {
+    card_reader_scenario("card readers: date", "date: 2026-01-05", "date: 2027-03-09");
+}
+
+/// A draft leaves the count on its folder's card.
+#[test]
+fn a_draft_toggle_reaches_pages_that_draw_its_folders_card() {
+    card_reader_scenario("card readers: draft", "date: 2026-01-05", "draft: true\ndate: 2026-01-05");
+}
