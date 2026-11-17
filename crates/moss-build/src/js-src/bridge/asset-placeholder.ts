@@ -1,6 +1,6 @@
 // asset-placeholder.ts — the ONE owner of "this media isn't here yet".
 //
-// An <img> or <video> that fails to load gets the blueprint grid instead of the
+// An <img> or <video> that fails to load waits on the live grid instead of the
 // browser's broken-image icon or an empty black box. That covers two situations
 // moss cannot tell apart from a load error, and deliberately does not try to:
 //
@@ -9,7 +9,7 @@
 //   2. The asset is still being produced — a background WebP encode or an
 //      ffmpeg thumbnail that lands seconds to minutes after the page paints.
 //
-// The blueprint grid is the placeholder for BOTH. Case 1 simply never resolves;
+// The waiting look is the placeholder for BOTH. Case 1 simply never resolves;
 // case 2 resolves when the bytes land. Collapsing them means no error handler
 // guesses "permanently broken" and acts on that guess irreversibly.
 //
@@ -20,15 +20,16 @@
 // <source> elements leaves a pending image that errored once stuck as a
 // blueprint grid, however many AssetReady/AssetsSettled events arrive.
 //
-// So: we paint into `img.src`, because that is the only thing that suppresses
-// the native broken-image icon in every engine (Chromium draws the icon over
-// any CSS background). But every attribute we touch is stashed first, and
+// So: we write an empty stand-in into `img.src`, because that is the only thing
+// that suppresses the native broken-image icon in every engine (Chromium draws
+// the icon over any CSS background). The grid itself is the bridge's live
+// overlay (./blueprint-fallback.ts); nothing here paints one. But every attribute we touch is stashed first, and
 // `restore()` puts all of it back. Neutralizing a <picture>'s <source> means moving its `srcset` ONTO the
 // same element as `data-moss-ph-srcset` — source-set selection skips a <source>
 // with no srcset, and the element stays in the DOM, so the undo is an attribute
 // write rather than a re-parse.
 //
-// A <video> takes the same treatment through a different attribute: the grid
+// A <video> takes the same treatment through a different attribute: the stand-in
 // goes into `poster` (a video cannot display an SVG data-URI as media) and the
 // dead `src` comes off, both stashed. The class is called `.moss-img-fallback`
 // for both.
@@ -56,13 +57,18 @@ import {
   withBust,
 } from "./asset-urls";
 
-/** Blueprint-grid SVG, light theme. Blueprint blue `#143c82` on paper `#f4f1ec`. */
-const LIGHT =
-  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cdefs%3E%3Cpattern id='g' width='10' height='10' patternUnits='userSpaceOnUse'%3E%3Cpath d='M10 0H0V10' fill='none' stroke='%23143c82' stroke-opacity='.18'/%3E%3C/pattern%3E%3C/defs%3E%3Crect width='40' height='40' fill='%23f4f1ec'/%3E%3Crect width='40' height='40' fill='url(%23g)'/%3E%3C/svg%3E";
-
-/** Blueprint-grid SVG, dark theme. */
-const DARK =
-  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cdefs%3E%3Cpattern id='g' width='10' height='10' patternUnits='userSpaceOnUse'%3E%3Cpath d='M10 0H0V10' fill='none' stroke='%235a9bff' stroke-opacity='.22'/%3E%3C/pattern%3E%3C/defs%3E%3Crect width='40' height='40' fill='%23252017'/%3E%3Crect width='40' height='40' fill='url(%23g)'/%3E%3C/svg%3E";
+/**
+ * An empty SVG in the element's own shape. It paints nothing: the live grid the
+ * preview bridge lays over it and the edge in the injected style are the whole
+ * look. It still has to be a real image, because writing it into `src` is the
+ * only thing that keeps an engine from drawing its broken-image icon, and its
+ * width and height keep the element's box when no stylesheet sizes it.
+ */
+function standIn(el: Element): string {
+  const w = Number(el.getAttribute("width")) || 400;
+  const h = Number(el.getAttribute("height")) || 300;
+  return `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 ${w} ${h}' width='${w}' height='${h}'/%3E`;
+}
 
 /** Set on a placeheld element — the idempotence guard and the restore selector. */
 const MARK = "data-moss-ph";
@@ -81,8 +87,15 @@ const STASH_POSTER = "data-moss-ph-poster";
  * both because the undo is the same operation on both.
  */
 const STASH_SRCSET = "data-moss-ph-srcset";
-/** URL the browser chose when this image failed. */
+/** URL the browser chose when this image failed; absent once retrying is pointless. */
 const FAILED_URL = "data-moss-ph-failed-url";
+/** Path the last restore swapped in. The same path failing again is final. */
+const RESTORED = "data-moss-ph-restored";
+
+/** An empty src resolves to the page itself, which answers 200 and is no picture. */
+function isPage(url: string, doc: Document): boolean {
+  try { return new URL(url, doc.baseURI).href.split("#")[0] === doc.URL.split("#")[0]; } catch { return false; }
+}
 
 /** The <source> children of an enclosing <picture>, or [] when there is none. */
 function pictureSources(img: HTMLImageElement): HTMLSourceElement[] {
@@ -92,19 +105,16 @@ function pictureSources(img: HTMLImageElement): HTMLSourceElement[] {
 }
 
 /**
- * Apply the blueprint placeholder to a failed <img> or <video>, stashing
+ * Put the stand-in on a failed <img> or <video>, stashing
  * everything needed to undo it. Idempotent: a second error on the same element
  * (the data-URI cannot fail, but a restore-then-fail cycle can) is a no-op while
  * the mark is set.
  */
-export function place(
-  el: HTMLImageElement | HTMLVideoElement,
-  doc: Document = document,
-): void {
+export function place(el: HTMLImageElement | HTMLVideoElement): void {
   if (el.hasAttribute(MARK)) return;
 
   if (el instanceof HTMLVideoElement || el.tagName === "VIDEO") {
-    placeVideo(el as HTMLVideoElement, doc);
+    placeVideo(el as HTMLVideoElement);
     return;
   }
   const img = el as HTMLImageElement;
@@ -112,7 +122,9 @@ export function place(
     pictureSources(img).flatMap((source) => srcsetUrls(source.getAttribute("srcset") ?? ""))[0] ||
     img.src;
   img.setAttribute(MARK, "1");
-  img.setAttribute(FAILED_URL, chosen);
+  if (!isPage(chosen, img.ownerDocument) && img.getAttribute(RESTORED) !== normPath(stripBust(chosen))) {
+    img.setAttribute(FAILED_URL, chosen);
+  }
 
   // Stash before touching anything.
   img.setAttribute(STASH_SRC, img.getAttribute("src") ?? "");
@@ -132,13 +144,12 @@ export function place(
   }
 
   img.classList.add("moss-img-fallback");
-  const dark = doc.documentElement.getAttribute("data-theme") === "dark";
-  img.src = dark ? DARK : LIGHT;
+  img.src = standIn(img);
 }
 
 /**
- * A <video> whose source failed: paint the grid as its `poster` and take the
- * dead `src` off the element.
+ * A <video> whose source failed: the stand-in becomes its `poster`, and the
+ * dead `src` comes off the element.
  *
  * Poster rather than `src`, because a <video> cannot display an SVG data-URI as
  * media — but it does display its poster for as long as no frame has decoded,
@@ -146,15 +157,14 @@ export function place(
  * stops the engine re-requesting a URL it already failed on, and it is the same
  * reversible move `place` makes on an <img>'s `srcset`.
  */
-function placeVideo(video: HTMLVideoElement, doc: Document): void {
+function placeVideo(video: HTMLVideoElement): void {
   video.setAttribute(MARK, "1");
   video.setAttribute(STASH_SRC, video.getAttribute("src") ?? "");
   video.setAttribute(STASH_POSTER, video.getAttribute("poster") ?? "");
   video.removeAttribute("src");
 
   video.classList.add("moss-img-fallback");
-  const dark = doc.documentElement.getAttribute("data-theme") === "dark";
-  video.setAttribute("poster", dark ? DARK : LIGHT);
+  video.setAttribute("poster", standIn(video));
 }
 
 /**
@@ -205,6 +215,7 @@ export function restore(absPath: string, doc: Document = document): number {
     img.removeAttribute(MARK);
     img.removeAttribute(STASH_SRC);
     img.removeAttribute(FAILED_URL);
+    img.setAttribute(RESTORED, absPath);
     if (stashedSrc !== "") img.src = withBust(stashedSrc, stamp);
 
     restored++;
@@ -243,54 +254,69 @@ export function install(doc: Document = document, win: Window = window): () => v
     // <audio> is deliberately absent: there is no surface to placehold, and a
     // missing one still blocks the publish (`refuse_publish`).
     if (target instanceof HTMLImageElement || target instanceof HTMLVideoElement) {
-      place(target, doc);
+      place(target);
+      arm();
     }
   };
   doc.addEventListener("error", onError, true);
 
-  // A 503 after the bounded HTTP wait does not make a browser retry an <img>.
-  // The same placeholder owner probes only visible, still-connected failures.
-  // 404 and terminal errors keep the grid; an arriving original restores the
-  // stashed URL without a new build or a page reload.
-  const terminal = new WeakMap<HTMLImageElement, string>();
-  const probing = new WeakSet<HTMLImageElement>();
+  // A browser never asks again for an <img> that failed, but in the preview a
+  // failure is usually a file on its way: a 404 for a picture asked for before
+  // the build promised it, a 503 for an original still downloading. So every
+  // placeheld picture on screen is asked again each second, four at a time,
+  // taking turns, until it answers. A 503 or a timeout rests that picture for
+  // three ticks, so slow cloud reads cannot hold every connection the engine has.
+  // A picture rests until a tick number; an unanswered probe rests until it answers.
+  const restUntil = new WeakMap<HTMLImageElement, number>();
+  let tick = 0;
   const active = new Set<AbortController>();
   let disposed = false;
   let cursor = 0;
+  // The clock runs only while a picture still waits on a visible page.
+  const waiting = `img[${MARK}][${FAILED_URL}]`;
+  let clock: number | null = null;
+  const arm = (): void => {
+    if (clock === null && !disposed && doc.visibilityState !== "hidden" && doc.querySelector(waiting)) {
+      clock = win.setInterval(retry, 1000);
+    }
+  };
+  const disarm = (): void => {
+    if (clock !== null) win.clearInterval(clock);
+    clock = null;
+  };
+  const onVisibility = (): void => (doc.visibilityState === "hidden" ? disarm() : arm());
+  doc.addEventListener("visibilitychange", onVisibility);
   const retry = (): void => {
-    if (disposed || typeof win.fetch !== "function" || doc.visibilityState === "hidden") return;
-    const images = Array.from(doc.querySelectorAll<HTMLImageElement>(`img[${MARK}]`))
-      .filter((img) => {
-        if (!img.isConnected || probing.has(img)) return false;
-        if (terminal.get(img) === img.getAttribute(FAILED_URL)) return false;
-        const box = img.getBoundingClientRect();
-        return box.bottom > 0 && box.right > 0 && box.top < win.innerHeight && box.left < win.innerWidth;
-      });
-    if (images.length === 0) return;
-    for (let offset = 0; offset < Math.min(2, images.length); offset++) {
-      const img = images[(cursor + offset) % images.length];
-      const failedUrl = img.getAttribute(FAILED_URL);
-      if (!failedUrl) continue;
-      probing.add(img);
+    if (disposed || typeof win.fetch !== "function") return;
+    if (doc.visibilityState === "hidden" || !doc.querySelector(waiting)) { disarm(); return; }
+    tick++;
+    const images = Array.from(doc.querySelectorAll<HTMLImageElement>(waiting)).filter((img) => {
+      if (!img.isConnected || (restUntil.get(img) ?? 0) > tick) return false;
+      const box = img.getBoundingClientRect();
+      // Inclusive: a box that collapsed to 0 × 0 at the page's edge is still on screen.
+      return box.bottom >= 0 && box.right >= 0 && box.top <= win.innerHeight && box.left <= win.innerWidth;
+    });
+    for (let n = 0; n < images.length && active.size < 4; n++, cursor++) {
+      const img = images[cursor % images.length];
+      const failedUrl = img.getAttribute(FAILED_URL)!;
+      restUntil.set(img, Infinity);
       const abort = new AbortController();
       active.add(abort);
       const timeout = win.setTimeout(() => abort.abort(), 4000);
       void win.fetch(failedUrl, { method: "HEAD", cache: "no-store", signal: abort.signal })
         .then((response) => {
-          if (disposed || !img.isConnected || img.getAttribute(FAILED_URL) !== failedUrl) return;
-          if (response.ok) restore(normPath(failedUrl), doc);
-          else if (response.status !== 503) terminal.set(img, failedUrl);
+          if (response.status === 503) restUntil.set(img, tick + 4);
+          if (disposed || !response.ok || !img.isConnected || img.getAttribute(FAILED_URL) !== failedUrl) return;
+          restore(normPath(failedUrl), doc);
         })
-        .catch(() => {})
+        .catch(() => { restUntil.set(img, tick + 4); })
         .finally(() => {
           win.clearTimeout(timeout);
           active.delete(abort);
-          probing.delete(img);
+          if (restUntil.get(img) === Infinity) restUntil.delete(img);
         });
     }
-    cursor += 2;
   };
-  const retryTimer = win.setInterval(retry, 10000);
 
   // The bridge calls through this handle rather than bundling a second copy of
   // the stash attribute names — two spellings of `data-moss-ph-srcset` would
@@ -304,7 +330,8 @@ export function install(doc: Document = document, win: Window = window): () => v
     for (const abort of active) abort.abort();
     active.clear();
     doc.removeEventListener("error", onError, true);
-    win.clearInterval(retryTimer);
+    disarm();
+    doc.removeEventListener("visibilitychange", onVisibility);
     delete (win as unknown as Record<string, unknown>).__mossAssetPlaceholder;
   };
 }

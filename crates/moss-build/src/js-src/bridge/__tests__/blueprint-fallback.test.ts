@@ -56,7 +56,7 @@ class MockIntersectionObserver {
 
 function makeCover(): { cover: HTMLElement; img: HTMLImageElement } {
   // Mirror the shell's post-error state: an <img> tagged `.moss-img-fallback`
-  // with the static blueprint SVG data-URI, inside a `.moss-card-cover` box.
+  // with its empty stand-in data-URI, inside a `.moss-card-cover` box.
   const cover = document.createElement("div");
   cover.className = "moss-card-cover";
   const img = document.createElement("img");
@@ -95,9 +95,10 @@ describe("blueprint-fallback: installBlueprintFallback", () => {
     // Grid started against the canvas host.
     expect(startBlueprintGridMock).toHaveBeenCalledTimes(1);
     expect(startBlueprintGridMock).toHaveBeenCalledWith(container, { canvas });
-    // The <img> stays in place (box-definer + heal-anchor) but hidden.
+    // The <img> stays in place and visible: it defines the box and carries the
+    // edge, and its stand-in is transparent, so there is nothing to hide.
     expect(img.isConnected).toBe(true);
-    expect(img.style.opacity).toBe("0");
+    expect(img.style.opacity).toBe("");
     // Overlay is absolutely positioned and does not swallow clicks meant for
     // the card link (canvas is pointer-events:none).
     expect(container!.style.position).toBe("absolute");
@@ -117,28 +118,56 @@ describe("blueprint-fallback: installBlueprintFallback", () => {
     expect(cover.querySelector(".moss-blueprint-fallback")).toBeNull();
   });
 
-  it("respects prefers-reduced-motion by leaving the static SVG untouched", () => {
-    vi.stubGlobal(
-      "matchMedia",
-      vi.fn((q: string) => ({
-        matches: q.includes("prefers-reduced-motion"),
-        media: q,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-      })),
+  it("mounts the live grid under prefers-reduced-motion too; the grid itself holds still", () => {
+    (window as unknown as { matchMedia: unknown }).matchMedia = vi.fn(
+      (q: string) => ({ matches: q.includes("prefers-reduced-motion"), media: q }),
     );
-    // matchMedia is read off `window`; stub it there too for the module.
-    (window as unknown as { matchMedia: unknown }).matchMedia =
-      globalThis.matchMedia;
+    const { cover } = makeCover();
+    const stop = installBlueprintFallback();
+    delete (window as unknown as { matchMedia?: unknown }).matchMedia;
 
+    // The grid package paints one still frame for reduced motion, so the
+    // waiting picture looks the same, at rest, and never falls back to a
+    // stretched static pattern.
+    expect(cover.querySelector(".moss-blueprint-fallback canvas")).not.toBeNull();
+    expect(startBlueprintGridMock).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it("upgrades a failed <video> the same way", () => {
+    const box = document.createElement("div");
+    const video = document.createElement("video");
+    video.className = "moss-img-fallback";
+    box.appendChild(video);
+    document.body.appendChild(box);
+    const stop = installBlueprintFallback();
+    expect(box.querySelector(".moss-blueprint-fallback canvas")).not.toBeNull();
+    expect(startBlueprintGridMock).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it("keeps the grid until the restored picture has loaded, so the box never shows empty", async () => {
     const { cover, img } = makeCover();
     const stop = installBlueprintFallback();
-
-    // No upgrade: no canvas, grid never started, img untouched.
+    Object.defineProperty(img, "complete", { value: false, configurable: true });
+    img.classList.remove("moss-img-fallback");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(cover.querySelector(".moss-blueprint-fallback")).not.toBeNull();
+    Object.defineProperty(img, "complete", { value: true, configurable: true });
+    img.dispatchEvent(new Event("load"));
     expect(cover.querySelector(".moss-blueprint-fallback")).toBeNull();
-    expect(startBlueprintGridMock).not.toHaveBeenCalled();
-    expect(img.style.opacity).toBe("");
+    expect(cleanupSpy).toHaveBeenCalledTimes(1);
+    stop();
+  });
 
+  it("drops the grid at once when the picture is already there", async () => {
+    const { cover, img } = makeCover();
+    const stop = installBlueprintFallback();
+    Object.defineProperty(img, "complete", { value: true, configurable: true });
+    img.classList.remove("moss-img-fallback");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(cover.querySelector(".moss-blueprint-fallback")).toBeNull();
+    expect(cleanupSpy).toHaveBeenCalledTimes(1);
     stop();
   });
 
@@ -285,19 +314,6 @@ describe("blueprint-fallback: installBlueprintFallback", () => {
 
       expect(block.querySelector(".moss-blueprint-fallback canvas")).not.toBeNull();
       expect(startBlueprintGridMock).toHaveBeenCalledTimes(2);
-      stop();
-    });
-
-    it("is skipped under prefers-reduced-motion", () => {
-      (window as unknown as { matchMedia: unknown }).matchMedia = vi.fn(
-        (q: string) => ({ matches: q.includes("prefers-reduced-motion"), media: q }),
-      );
-      const block = makePending();
-      const stop = installBlueprintFallback();
-      delete (window as unknown as { matchMedia?: unknown }).matchMedia;
-
-      expect(block.querySelector(".moss-blueprint-fallback")).toBeNull();
-      expect(startBlueprintGridMock).not.toHaveBeenCalled();
       stop();
     });
 

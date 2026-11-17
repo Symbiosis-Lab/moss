@@ -492,12 +492,10 @@ import { installCaptureResponder } from "./capture/responder";
   // ============================================================
   // Missing-image placeholder upgrade (preview/editor ONLY)
   // ============================================================
-  // The site shell swaps any broken <img> to a STATIC blueprint-grid SVG
-  // (class .moss-img-fallback) — that is what real visitors of the published
-  // site always see. This bridge is only in pages the preview server serves
-  // (never in published output), so here — and only here — we
-  // upgrade those static placeholders to the launcher's live, mouse-reactive
-  // blueprint grid, reusing the <img>'s exact box. See ./blueprint-fallback.ts.
+  // The placeholder in <head> gives any picture that fails an empty stand-in
+  // (class .moss-img-fallback); here the live grid is laid over its exact box.
+  // Both exist only in pages the preview server serves. See
+  // ./blueprint-fallback.ts.
   installBlueprintFallback();
 
   // Handle popstate (back/forward navigation). Wrapped: the listener must
