@@ -711,7 +711,12 @@ pub(crate) fn should_stash_hashes(publishable: bool, cancelled: bool) -> bool {
 /// returns, not read after the fact from a task that no longer exists.
 pub async fn run_pipeline(config: PipelineConfig) -> Result<String, String> {
     let pipeline_start = std::time::Instant::now();
-    let (result, collector) = crate::build::phase::with_collector(run_passes(&config)).await;
+    let (result, collector) = crate::build::phase::with_collector(async {
+        let reads_before = cloud_readiness::download_reads();
+        let result = run_passes(&config).await;
+        cloud_readiness::record_download_pool(reads_before);
+        result
+    }).await;
     crate::build::phase::log_build_summary(
         &collector,
         pipeline_start.elapsed(),

@@ -325,6 +325,33 @@ pub struct Snapshot {
     /// the sweep safe — moss cannot accumulate threads on a dead provider,
     /// because the file that ate the thread is the one it will never re-ask for.
     pub oldest_read: Option<(PathBuf, Duration)>,
+    pub reads: ReadTally,
+}
+
+/// How the byte reads that returned since startup ended. A provider that
+/// serves nothing shows as reads returning without the bytes; one that hangs
+/// shows as none returning while [`Snapshot::oldest_read`] grows.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ReadTally {
+    /// Returned with the file on disk.
+    pub fetched: u64,
+    /// Returned without an error, the file still a placeholder.
+    pub still_in_cloud: u64,
+    pub failed: u64,
+    /// Time spent in those reads, summed.
+    pub millis: u64,
+}
+
+impl ReadTally {
+    /// The reads that returned after `earlier` was taken.
+    pub fn since(self, earlier: Self) -> Self {
+        Self {
+            fetched: self.fetched.saturating_sub(earlier.fetched),
+            still_in_cloud: self.still_in_cloud.saturating_sub(earlier.still_in_cloud),
+            failed: self.failed.saturating_sub(earlier.failed),
+            millis: self.millis.saturating_sub(earlier.millis),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -371,6 +398,7 @@ struct Queue {
     /// Reads and operations finished. Counted in the same locked step that
     /// frees their slot, so a snapshot never sees one both done and in flight.
     done: u64,
+    reads: ReadTally,
     /// When a reader last took a job: a publication waiting for room waits
     /// only while the queue is moving.
     last_pop: Instant,
@@ -455,6 +483,7 @@ impl Prefetcher {
                 bytes_in_flight: 0,
                 failures: HashSet::new(),
                 done: 0,
+                reads: ReadTally::default(),
                 last_pop: Instant::now(),
                 shutdown: false,
             }),
@@ -740,8 +769,9 @@ impl Prefetcher {
                     .chain(q.cache_in_flight.iter().map(|(key, started)| (&key.path, started)))
                     .min_by_key(|(_, started)| **started)
                     .map(|(path, started)| (path.clone(), now.saturating_duration_since(*started))),
+                reads: q.reads,
             },
-            Err(_) => Snapshot { waiting: 0, in_flight: 0, done: 0, oldest_read: None },
+            Err(_) => Snapshot { waiting: 0, in_flight: 0, done: 0, oldest_read: None, reads: ReadTally::default() },
         }
     }
 
@@ -848,14 +878,20 @@ fn reader_loop(inner: &Arc<Inner>) {
                 finish_operation(inner, key, task, result);
             }
             BackgroundWork::Bytes(path) => {
+                let started = Instant::now();
                 let result = (inner.materialize)(&path);
                 if let Err(error) = &result { log::debug!("cloud: reading {} did not materialize it: {error}", path.display()); }
+                let still_in_cloud = result.is_ok() && crate::build::icloud::is_evicted(&path);
                 if let Ok(mut q) = inner.queue.lock() {
                     q.in_flight.remove(&path);
                     q.pending.remove(&path);
+                    q.reads.millis += started.elapsed().as_millis() as u64;
                     match result {
-                        Ok(()) => { q.failures.remove(&path); }
-                        Err(_) => { q.failures.insert(path); }
+                        Ok(()) => {
+                            q.failures.remove(&path);
+                            if still_in_cloud { q.reads.still_in_cloud += 1 } else { q.reads.fetched += 1 }
+                        }
+                        Err(_) => { q.failures.insert(path); q.reads.failed += 1; }
                     }
                     if background { q.bytes_in_flight -= 1; }
                     q.done += 1;
