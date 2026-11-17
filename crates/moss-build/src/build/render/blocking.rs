@@ -2504,9 +2504,9 @@ pub fn generate_blocking_content_for_build(
             .map_err(|e| format!("Failed to emit llms.txt: {}", e))?;
     }
     // Only the moss host keeps `.moss-email/` private; any other host would
-    // publish the templates.
+    // publish the templates and the Reply-to.
     let on_moss_host = deploy.on_moss_host();
-    if on_moss_host { crate::build::emit::welcome_email::emit(&documents, output_dir, pending)?; }
+    if on_moss_host { crate::build::emit::welcome_email::emit(&documents, output_dir, pending)?; crate::build::emit::members::emit_sender(&site_config.members, output_dir, pending)?; }
     site_config.blocks.emit_assets(&documents, output_dir, pending)?;
     crate::plugins::contributions::public_data::emit(&site_config.public_data, output_dir, pending)?;
     crate::build::emit::commerce::emit(&documents, site_config.forms_endpoint.as_deref(), site_config.booking.as_ref(), on_moss_host, output_dir, pending)?;

@@ -1427,3 +1427,5 @@ Set `members: subscribers` or `members: paid` in frontmatter. The public page ke
 | `members` | `public`, `subscribers`, `paid` | Public: whole body. Restricted: body before `<!--members-only-->`, or no body without a marker |
 
 A reader opens members pages by subscribing to the site; unsubscribing closes them. In `.moss/config.toml`, `[members] join = "open"` (the default) lets any reader subscribe; `join = "invite"` admits only readers already on the list, imported or added. The build publishes this choice as `{"join":"open"}` or `{"join":"invite"}` at `_moss/members.json`, where the hosting service reads it.
+
+A reader who answers the site's mail (the subscribe link, the welcome letter, a newsletter) reaches the owner's sign-in email. To send replies elsewhere, set `[members] reply_to = "desk@example.org"`: one plain address, or the build stops and names the key. On a site published to mosspub.com hosting the build writes it to `.moss-email/sender.json`, which the host keeps private, so the address is not in any published file; on any other host it is not used. A welcome letter's own `reply_to:` still wins for that letter.

@@ -1,6 +1,6 @@
 //! What a publish carries for members: who may subscribe (`open` or
-//! `invite`), read by the hosting service, and the members-only version of
-//! each gated address.
+//! `invite`) and where their replies go, read by the hosting service, and the
+//! members-only version of each gated address.
 //!
 //! The version only members may read of the address `P` is written at
 //! `_gated/P` in the published root: a page at `_gated/<path>/index.html`, a
@@ -23,6 +23,17 @@ pub fn emit(config: &MembersConfig, output: &Path, pending: &mut PendingManifest
     BuildContext::for_render(output, pending)
         .emit_held(&ServedPath::for_members_json(), bytes, HashBucket::Files)
         .map_err(|e| format!("Failed to emit {MEMBERS_PATH}: {e}"))
+}
+
+/// The site's Reply-to at `.moss-email/sender.json`, for a host that keeps
+/// `.moss-email/` private. Unset writes nothing, and the host replies to the
+/// owner's login email.
+pub fn emit_sender(config: &MembersConfig, output: &Path, pending: &mut PendingManifest) -> Result<(), String> {
+    let Some(reply_to) = &config.reply_to else { return Ok(()) };
+    let bytes = serde_json::json!({ "reply_to": reply_to }).to_string().into_bytes();
+    BuildContext::for_render(output, pending)
+        .emit_held(&ServedPath::for_email_sender(), bytes, HashBucket::Files)
+        .map_err(|e| format!("Failed to emit .moss-email/sender.json: {e}"))
 }
 
 pub use crate::build::served_path::GATED_PREFIX;

@@ -689,6 +689,8 @@ const EN = {
   'subscribers.added_no_email': 'Added without confirmation email.',
   'subscribers.cancel': 'Cancel',
   'subscribers.add_btn': 'Add',
+  'subscribers.reply_to': 'Reply-to',
+  'subscribers.reply_to_failed': 'Reply-to not saved: {error}',             // {error}
 
   // Analytics settings section
   'analytics.title': 'Analytics',
@@ -2490,6 +2492,8 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'subscribers.added_no_email': 'Ohne Bestätigungs-E-Mail hinzugefügt.',
     'subscribers.cancel': 'Abbrechen',
     'subscribers.add_btn': 'Hinzufügen',
+    'subscribers.reply_to': 'Antworten an',
+    'subscribers.reply_to_failed': 'Antwortadresse nicht gespeichert: {error}',
     'analytics.title': 'Statistiken',
     'analytics.title_unavailable': 'Statistiken nicht verfügbar',
     'analytics.unauthorized_desc': "Dieser Ordner ist bei seiner Website nicht angemeldet.",
@@ -4140,6 +4144,8 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'subscribers.added_no_email': '直接添加，无需确认邮件。',
     'subscribers.cancel': '取消',
     'subscribers.add_btn': '添加',
+    'subscribers.reply_to': '回复地址',
+    'subscribers.reply_to_failed': '回复地址未保存：{error}',
 
     'analytics.title': '流量统计',
     'analytics.title_unavailable': '流量统计不可用',
@@ -5838,6 +5844,8 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'subscribers.added_no_email': '直接新增，無需確認電子郵件。',
     'subscribers.cancel': '取消',
     'subscribers.add_btn': '新增',
+    'subscribers.reply_to': '回覆地址',
+    'subscribers.reply_to_failed': '回覆地址未儲存：{error}',
 
     'analytics.title': '流量統計',
     'analytics.title_unavailable': '流量統計不可用',
