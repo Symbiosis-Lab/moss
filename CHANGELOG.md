@@ -4,6 +4,13 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- A link card shows its page's title, description and picture the first time a folder is opened in the app. A card for a link moss had not fetched before stayed a bare address for the whole session, and was published that way, unless an earlier session had fetched it.
+- A publish fetches the link cards its pages still show as bare addresses, and rebuilds the pages that show them, before it ships. A card whose fetch was still under way after opening the folder, or had failed, was published as a bare address.
+- In the preview, a picture that wasn't ready when its page loaded appears as soon as moss has it, without a reload; one whose first request failed stayed on the placeholder until its smaller sizes were made. A picture on its way has one look in the preview, light or dark and under Reduce Motion: the moving grid over the picture's own shape, with a thin edge in the text colour. The grid stays until the picture has loaded.
+- A link card whose page has no picture takes no room for one, so the card starts at its words. A card whose picture moss hasn't fetched yet keeps the picture's place with a thin edge, and the preview's moving grid fills it until the picture arrives. Both used to show the same grey box. In a grid where other cards have pictures, a card without one keeps an empty box, now with the same edge as a waiting picture, a little stronger than before.
+
 ## [0.15.26] - 2026-11-17
 
 ### Fixed
