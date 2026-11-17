@@ -89,6 +89,7 @@ declarations that fight each other.
   Add `logo:` on a home page (the site root's, or a language edition's own)
   to put a mark before that name in the nav — on every page, every
   language; `logo:` anywhere else in the site is read by nothing.
+- **A grouping a folder can hold is a folder.** A research stream, a series or a section is a folder with its pages inside, and its `color:` and `cover:` on the folder's `index.md`. A page in two groups lives in one folder and is listed in the other with `also_in:`. Declare a term kind only for what folders cannot say, such as the people named across many folders.
 - **The filename IS the title** (Obsidian-style). `My First Essay.md` → title
   "My First Essay". The only transform is hyphens and underscores becoming
   spaces — nothing is capitalized or reworded, so `about.md` titles "about"

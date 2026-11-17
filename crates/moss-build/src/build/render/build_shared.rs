@@ -210,6 +210,9 @@ impl FolderIndexPlan {
             let empty_language = !has_children && crate::i18n::path::resolve_language_from_folder(top).is_some();
             let tree_suppressed = empty_language || translation_roots.contains(top);
             let in_passthrough = passthrough.iter().any(|root| crate::build::types::folder_within(root, &folder));
+            if authored.contains(&folder) && term_pages.contains(&folder) {
+                warn_term_address_taken(terms, &folder);
+            }
             if authored.contains(&folder) || suppressed.contains(&folder) || verbatim.contains(&folder)
                 || !(term_pages.contains(&folder) || !tree_suppressed)
             {
@@ -235,6 +238,20 @@ impl FolderIndexPlan {
         passthrough_stubs.extend(project.storage_folders.iter().map(|f| (format!("{f}/"), "/".to_string()))); // allow:served-path-url-construct (the address the listing had, the redirect source)
         Self { entries, passthrough_stubs }
     }
+}
+
+/// A page at a term's address that does not claim the term keeps the address,
+/// so the term's generated page, the one listing the pages that name it, is
+/// not written. A namespace root is no term: its folder page is meant.
+fn warn_term_address_taken(terms: &TermIndex, key: &str) {
+    let Some(display) = terms.display(key) else { return };
+    let claim = crate::build::terms::TermKey::parse(key)
+        .and_then(|term| terms.kinds().iter().find(|kind| kind.key == term.ns))
+        .and_then(|kind| kind.fields.first())
+        .map_or_else(|| "<field>_page".to_string(), |field| moss_core::terms::claim_field_key(field));
+    crate::build::cli_output::log_warn_problem!(
+        "the page at /{key}/ hides the term '{display}' and its list of pages: add `{claim}: true` to that page, or move the page"
+    );
 }
 
 /// Find colliding HTML outputs before the asset copy drops either source.

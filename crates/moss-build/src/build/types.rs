@@ -141,6 +141,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub card_cover: Option<String>,
+    /// The page wrote `cover: false`: no picture on the page or its card, not
+    /// even one a claimed term's card would borrow from a member.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub cover_opted_out: bool,
     /// A term pseudo-folder's card: its member count and the listing picture of
     /// the first member in the term page's order. Set by `terms::set_term_cards`.
     #[serde(skip)]

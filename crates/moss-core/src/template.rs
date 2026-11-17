@@ -36,9 +36,10 @@ pub enum TemplateKind {
 /// `date` the template carries is re-stamped to `now`, and every field that
 /// names THIS page rather than describes it is dropped — `uid` (the
 /// comments/redirects join key), `url` (the pinned address), every term-page
-/// claim (`schema_fields::term_claim_fields()` — `author_page` / `tag_page` /
-/// `editor_page` / `jury_page` / `place_page` today; two claimants resolve to
-/// the first `url_path`, so a copy could steal the original's term page),
+/// claim that names a term (`schema_fields::term_claim_fields()` and the
+/// site's declared `<field>_page:` keys; two claimants resolve to the first
+/// `url_path`, so a copy could steal the original's term page; `true` names
+/// none, since it claims the new page's own title, and is kept),
 /// `translationKey` (a copy
 /// makes the pair "one page's translations" and links them), `syndicated`
 /// (where the captured page was published, written by the matters plugin),
@@ -71,11 +72,13 @@ pub fn instantiate_template_frontmatter(
     // the preview waits on the path-derived URL that never arrives (seen in
     // the 2026-09-05 log: `測試獎.md` sent to /awards/writing-2/).
     frontmatter.remove("url");
-    for claim in schema_fields::term_claim_fields().chain(["translationKey", "syndicated", "origin"]) {
-        frontmatter.remove(claim);
+    for key in ["translationKey", "syndicated", "origin"] {
+        frontmatter.remove(key);
     }
-    for claim in declared_claim_keys {
-        frontmatter.remove(claim);
+    for claim in schema_fields::term_claim_fields().map(str::to_string).chain(declared_claim_keys.iter().cloned()) {
+        if frontmatter.get(&claim) != Some(&Value::Bool(true)) {
+            frontmatter.remove(&claim);
+        }
     }
     if frontmatter.contains_key("date") {
         frontmatter.insert("date".to_string(), Value::String(now.to_string()));
@@ -436,6 +439,20 @@ mod tests {
 
         assert_eq!(out.get("conductor_page"), None, "a copy would otherwise claim the captured page's person");
         assert_eq!(out.get("layout"), Some(&Value::String("article".to_string())));
+    }
+
+    #[test]
+    fn instantiate_keeps_a_claim_of_the_pages_own_title() {
+        let mut fm = HashMap::new();
+        fm.insert("stream_page".to_string(), Value::Bool(true));
+        fm.insert("tag_page".to_string(), Value::Bool(true));
+        fm.insert("author_page".to_string(), Value::String("Ada Example".to_string()));
+
+        let out = instantiate_template_frontmatter(fm, "2026-09-03", &["stream_page".to_string()]);
+
+        assert_eq!(out.get("stream_page"), Some(&Value::Bool(true)), "a new page made from the template claims its own title");
+        assert_eq!(out.get("tag_page"), Some(&Value::Bool(true)));
+        assert_eq!(out.get("author_page"), None, "a named claim stays with the captured page");
     }
 
     #[test]

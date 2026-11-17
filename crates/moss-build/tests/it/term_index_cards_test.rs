@@ -140,6 +140,35 @@ fn a_claimed_term_keeps_its_page_card_and_gains_the_count() {
 }
 
 #[test]
+fn a_claimed_term_with_cover_false_borrows_no_members_picture() {
+    let site = site::Site::new(&[]);
+    config(&site);
+    site.write("bronx.md", "---\ntitle: Bronx\nborough_page: true\ncover: false\n---\n\nThe borough.\n");
+    write_notes(&site, &[("a", "Bronx", "", Some("one")), ("b", "Queens", "", Some("two"))]);
+    site.rebuild();
+    let html = site.html("boroughs/index.html");
+    let index = cards(&html);
+    let bronx = card(&index, "Bronx");
+    assert_eq!(bronx.0, "/bronx/");
+    assert_eq!(bronx.1, None, "cover: false holds on the term's card: {bronx:?}");
+    assert!(card(&index, "Queens").1.is_some(), "an unclaimed term still takes its page's picture");
+}
+
+#[test]
+fn a_page_at_a_terms_address_that_does_not_claim_it_warns() {
+    let site = site::Site::new(&[]);
+    config(&site);
+    site.write("boroughs/Bronx.md", "---\ntitle: Bronx\n---\n\nThe borough.\n");
+    write_notes(&site, &[("a", "Bronx", "", None)]);
+    let logged = site.rebuild();
+    assert!(
+        logged.iter().any(|l| l.contains("/boroughs/bronx/") && l.contains("borough_page: true")),
+        "the dropped term page is named with the fix: {logged:?}"
+    );
+    assert!(!logged.iter().any(|l| l.contains("/boroughs/ ")), "the kind's own folder page is no term: {logged:?}");
+}
+
+#[test]
 fn an_incremental_rebuild_moves_a_card_when_a_member_changes() {
     let before = [("a", "Bronx", "", Some("first")), ("b", "Queens", "", Some("second"))];
     let after = [("a", "Bronx", "", Some("third")), ("b", "Bronx", "", Some("second"))];

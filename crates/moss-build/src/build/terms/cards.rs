@@ -1,7 +1,8 @@
 //! The card a term draws in a listing: how many listable pages carry the term,
 //! and the picture of the first of them in the order the term page lists them.
 //! A claimed term's card is its claiming page's own card; the claiming page
-//! keeps its own picture and takes the first member's only when it has none.
+//! keeps its own picture, or none after `cover: false`, and takes the first
+//! member's only when it says nothing.
 
 use std::collections::{HashMap, HashSet};
 
@@ -31,7 +32,7 @@ pub fn set_term_cards(documents: &mut [ParsedDocument], index: &TermIndex) {
             let kind_key = TermKey::parse(key).map_or(key, |term| term.ns);
             let lang = documents[target].lang.as_bcp47_attr();
             card.count_setting = index.kinds().iter().find(|kind| kind.key == kind_key).and_then(|kind| kind.count_in(lang));
-            if claimed && documents[target].listing_cover().is_some() {
+            if claimed && (documents[target].listing_cover().is_some() || documents[target].cover_opted_out) {
                 card.cover = None;
             }
             Some((target, card))

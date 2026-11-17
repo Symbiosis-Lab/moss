@@ -1600,6 +1600,7 @@ pub fn process_markdown_file(
         logo: frontmatter.logo,
         cover,
         card_cover,
+        cover_opted_out,
         term_card: None,
         cover_type: frontmatter.cover_type,
         nav,
