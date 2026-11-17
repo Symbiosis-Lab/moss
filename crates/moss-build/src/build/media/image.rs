@@ -1327,7 +1327,7 @@ pub(crate) fn convert_single_image(
         };
     }
     // ---- Step 9: merge-preserve transform record ----
-    let merged = transforms.merge(source_oid, original_size, crate::build::cache::RecordMode::Wait, |record| {
+    let merged = transforms.merge(source_oid, original_size, crate::build::cache::RecordMode::Request, |record| {
         record.transforms.insert(
             "image/webp".to_string(),
             TransformEntry {
@@ -2702,7 +2702,7 @@ pub(crate) fn dispatch_image_conversions_at(
                 .and_then(|fp| heal_index.lookup(&rel_source, &fp.stat));
             let transform_record = disk_source_oid.as_deref().and_then(|oid| {
                 crate::build::phase::record_count("image_transform_records_loaded", 1);
-                heal_transforms.get_with(oid, crate::build::cache::RecordMode::Wait)
+                heal_transforms.get_with(oid, crate::build::cache::RecordMode::Request)
             });
 
             // A disk-index hit is only proof of the SOURCE's current content —

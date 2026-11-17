@@ -13,12 +13,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Compatibility policy for cache calls. Cache reads and writes now request
-/// cloud-only entries and return promptly in both modes.
+/// How a cache call treats a record the sync provider still holds in the cloud.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordMode {
-    /// Legacy caller intent. Equivalent to `Request` for optional caches.
-    Wait,
     /// Request and carry on: an unavailable record misses; a write is refused.
     Request,
 }
@@ -497,7 +494,7 @@ mod tests {
         let c = cache(dir.path());
         let path = write_record_file(&c, OID, bytes);
         assert!(matches!(c.read(OID, RecordMode::Request), RecordRead::Unreadable));
-        let merged = c.merge(OID, 1, RecordMode::Wait, |r| {
+        let merged = c.merge(OID, 1, RecordMode::Request, |r| {
             r.transforms.insert("image/webp".into(), entry("w"));
         });
         assert_eq!(merged, Ok(Merged::Kept));
@@ -535,7 +532,7 @@ mod tests {
         let other = br#"{"version": 9, "entries": ["written by a newer moss"]}"#;
         let path = write_record_file(&c, OID, other);
         assert!(matches!(c.read(OID, RecordMode::Request), RecordRead::Unreadable));
-        assert_eq!(c.merge(OID, 1, RecordMode::Wait, |_| {}), Ok(Merged::Kept));
+        assert_eq!(c.merge(OID, 1, RecordMode::Request, |_| {}), Ok(Merged::Kept));
         assert_eq!(std::fs::read(&path).unwrap(), other);
     }
 
@@ -569,29 +566,27 @@ mod tests {
         let path = c.record_path(OID);
         let before = std::fs::read(&path).unwrap();
         crate::build::io_utils::fault::fail_reads(&path, libc::EACCES, 2);
-        assert!(c.get_with(OID, RecordMode::Wait).is_none());
-        let merged = c.merge(OID, 10, RecordMode::Wait, |r| {
+        assert!(c.get_with(OID, RecordMode::Request).is_none());
+        let merged = c.merge(OID, 10, RecordMode::Request, |r| {
             r.transforms.insert("media/meta".into(), entry("m"));
         });
         assert_eq!(merged, Ok(Merged::Kept));
         assert_eq!(std::fs::read(&path).unwrap(), before);
         // Once the refusals are used up, the same record reads normally.
-        assert!(c.get_with(OID, RecordMode::Wait).is_some());
+        assert!(c.get_with(OID, RecordMode::Request).is_some());
     }
 
-    /// A cache record is optional even when its caller asked for Wait. The
-    /// build can regenerate its work, so a cloud refusal returns at once.
+    /// A cache record is optional: the build can regenerate its work, so a
+    /// cloud refusal returns at once.
     #[cfg(target_os = "macos")]
     #[test]
-    fn record_lookup_requests_a_placeholder_without_waiting_in_either_mode() {
+    fn record_lookup_requests_a_placeholder_without_waiting() {
         let dir = tempfile::tempdir().unwrap();
         let c = seeded(dir.path(), &["image/webp"]);
         let path = c.record_path(OID);
-        for mode in [RecordMode::Wait, RecordMode::Request] {
-            crate::build::io_utils::fault::fail_reads(&path, libc::EDEADLK, 1);
-            assert!(c.get_with(OID, mode).is_none());
-            assert!(c.get_with(OID, mode).is_some(), "the next lookup can use the record");
-        }
+        crate::build::io_utils::fault::fail_reads(&path, libc::EDEADLK, 1);
+        assert!(c.get_with(OID, RecordMode::Request).is_none());
+        assert!(c.get_with(OID, RecordMode::Request).is_some(), "the next lookup can use the record");
     }
 
     #[test]

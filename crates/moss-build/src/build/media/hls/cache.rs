@@ -106,7 +106,7 @@ pub(super) fn cached_ladder(
     source_oid: &str,
     config: &VideoCompressionConfig,
 ) -> Option<(Vec<String>, Vec<String>, serde_json::Value)> {
-    let record = transforms.get_with(source_oid, crate::build::cache::RecordMode::Wait)?;
+    let record = transforms.get_with(source_oid, crate::build::cache::RecordMode::Request)?;
     record_rung_count(&record)?;
     let master = record.transforms.get(&transform_name(HLS_MASTER_NAME))?;
     let today = master.params.get("source").and_then(source_from_json).map(|source| {

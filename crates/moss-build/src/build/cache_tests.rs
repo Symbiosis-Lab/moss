@@ -476,7 +476,7 @@ fn test_find_cached_output_hit() {
     };
     cache.put(&record, crate::build::cache::RecordMode::Request).expect("put");
 
-    let result = cache.find_cached_output(&source_oid, "thumbnail", &params, crate::build::cache::RecordMode::Wait);
+    let result = cache.find_cached_output(&source_oid, "thumbnail", &params, crate::build::cache::RecordMode::Request);
     assert_eq!(result, Some(output_oid));
 }
 
@@ -517,7 +517,7 @@ fn test_find_cached_output_params_mismatch() {
     };
     cache.put(&record, crate::build::cache::RecordMode::Request).expect("put");
 
-    let result = cache.find_cached_output(&source_oid, "thumbnail", &query_params, crate::build::cache::RecordMode::Wait);
+    let result = cache.find_cached_output(&source_oid, "thumbnail", &query_params, crate::build::cache::RecordMode::Request);
     assert!(result.is_none(), "different params should not match");
 }
 
@@ -555,7 +555,7 @@ fn test_find_cached_output_blob_missing() {
     };
     cache.put(&record, crate::build::cache::RecordMode::Request).expect("put");
 
-    let result = cache.find_cached_output(&source_oid, "thumbnail", &params, crate::build::cache::RecordMode::Wait);
+    let result = cache.find_cached_output(&source_oid, "thumbnail", &params, crate::build::cache::RecordMode::Request);
     assert!(
         result.is_none(),
         "should return None when blob is missing from object store"
@@ -598,7 +598,7 @@ fn test_find_cached_output_rejects_zero_byte_blob() {
     // Verify cache hit works before eviction.
     assert!(
         cache
-            .find_cached_output(&source_oid, "video/mp4", &params, crate::build::cache::RecordMode::Wait)
+            .find_cached_output(&source_oid, "video/mp4", &params, crate::build::cache::RecordMode::Request)
             .is_some(),
         "should find cached output before eviction"
     );
@@ -608,7 +608,7 @@ fn test_find_cached_output_rejects_zero_byte_blob() {
     fs::write(&blob_path, b"").expect("truncate to simulate eviction");
 
     // After eviction, find_cached_output must return None (not a stale hit).
-    let result = cache.find_cached_output(&source_oid, "video/mp4", &params, crate::build::cache::RecordMode::Wait);
+    let result = cache.find_cached_output(&source_oid, "video/mp4", &params, crate::build::cache::RecordMode::Request);
     assert!(
         result.is_none(),
         "find_cached_output must reject 0-byte blobs (iCloud eviction)"
@@ -626,7 +626,7 @@ fn test_find_cached_output_no_record() {
     let fake_oid = "dddd".repeat(16);
     let params = serde_json::json!({"width": 200});
 
-    let result = cache.find_cached_output(&fake_oid, "thumbnail", &params, crate::build::cache::RecordMode::Wait);
+    let result = cache.find_cached_output(&fake_oid, "thumbnail", &params, crate::build::cache::RecordMode::Request);
     assert!(result.is_none(), "should return None when no record exists");
 }
 
@@ -1426,7 +1426,7 @@ fn test_metadata_cache_hit_returns_stored_meta() {
     cache.put(&record, crate::build::cache::RecordMode::Request).expect("put");
 
     // Look up → should hit.
-    let found_oid = cache.find_cached_output(&source_oid, "media/meta", &params, crate::build::cache::RecordMode::Wait);
+    let found_oid = cache.find_cached_output(&source_oid, "media/meta", &params, crate::build::cache::RecordMode::Request);
     assert_eq!(found_oid, Some(meta_oid.clone()));
 
     // Read the blob and deserialize.
@@ -1450,7 +1450,7 @@ fn test_metadata_cache_miss_triggers_extraction() {
     let params = serde_json::json!({});
 
     // No record exists → cache miss.
-    let result = cache.find_cached_output(&fake_oid, "media/meta", &params, crate::build::cache::RecordMode::Wait);
+    let result = cache.find_cached_output(&fake_oid, "media/meta", &params, crate::build::cache::RecordMode::Request);
     assert!(result.is_none(), "should miss when no record");
 }
 
@@ -1473,7 +1473,7 @@ fn test_metadata_cache_full_roundtrip() {
     );
     let params = serde_json::json!({});
     assert!(cache
-        .find_cached_output(&source_oid, "media/meta", &params, crate::build::cache::RecordMode::Wait)
+        .find_cached_output(&source_oid, "media/meta", &params, crate::build::cache::RecordMode::Request)
         .is_none());
 
     // 3. "Extract" metadata (simulate ffprobe + ffmpeg result).
@@ -1511,7 +1511,7 @@ fn test_metadata_cache_full_roundtrip() {
         dir.join("transforms"),
         ObjectStore::new(dir.join("objects")),
     );
-    let found = cache2.find_cached_output(&source_oid, "media/meta", &params, crate::build::cache::RecordMode::Wait);
+    let found = cache2.find_cached_output(&source_oid, "media/meta", &params, crate::build::cache::RecordMode::Request);
     assert_eq!(found, Some(meta_oid));
 }
 
@@ -2736,19 +2736,19 @@ fn find_cached_output_trusts_a_cloud_blob_only_when_it_hashes_to_its_oid() {
     let good = store.store_bytes(b"the bytes the oid names").expect("stored");
     cache.put(&record_with(&"1111".repeat(16), &good), crate::build::cache::RecordMode::Request).expect("record");
     let _in_cloud = crate::build::icloud::pretend::evicted_until_requested(&store.blob_path(&good));
-    assert_eq!(cache.find_cached_output(&"1111".repeat(16), "webp", &params, crate::build::cache::RecordMode::Wait), None);
+    assert_eq!(cache.find_cached_output(&"1111".repeat(16), "webp", &params, crate::build::cache::RecordMode::Request), None);
     assert_eq!(crate::build::icloud::pretend::requests_for(&store.blob_path(&good)), 0);
     drop(_in_cloud);
-    assert_eq!(cache.find_cached_output(&"1111".repeat(16), "webp", &params, crate::build::cache::RecordMode::Wait).as_deref(), Some(good.as_str()));
+    assert_eq!(cache.find_cached_output(&"1111".repeat(16), "webp", &params, crate::build::cache::RecordMode::Request).as_deref(), Some(good.as_str()));
 
     let forged = "ffff".repeat(16);
     put_object(&objects_dir, &forged, b"not what its name says");
     cache.put(&record_with(&"2222".repeat(16), &forged), crate::build::cache::RecordMode::Request).expect("record");
     let _also_in_cloud = crate::build::icloud::pretend::evicted_until_requested(&store.blob_path(&forged));
-    assert_eq!(cache.find_cached_output(&"2222".repeat(16), "webp", &params, crate::build::cache::RecordMode::Wait), None);
-    assert_eq!(cache.find_cached_output(&"2222".repeat(16), "webp", &params, crate::build::cache::RecordMode::Wait), None);
+    assert_eq!(cache.find_cached_output(&"2222".repeat(16), "webp", &params, crate::build::cache::RecordMode::Request), None);
+    assert_eq!(cache.find_cached_output(&"2222".repeat(16), "webp", &params, crate::build::cache::RecordMode::Request), None);
     drop(_also_in_cloud);
-    assert_eq!(cache.find_cached_output(&"2222".repeat(16), "webp", &params, crate::build::cache::RecordMode::Wait), None);
+    assert_eq!(cache.find_cached_output(&"2222".repeat(16), "webp", &params, crate::build::cache::RecordMode::Request), None);
     assert!(!store.blob_path(&forged).exists(), "a blob that fails its checksum is removed");
 }
 
@@ -3017,7 +3017,7 @@ fn shared_transform_record_write_is_optional_during_a_cloud_refusal() {
     let _offline = crate::build::icloud::pretend::evicted_until_requested(&paths.cache_transforms());
     let cache = TransformCache::for_site(&paths);
     let record = TransformRecord { source_oid: "a".repeat(64), source_size: 1, transforms: HashMap::new() };
-    assert!(cache.put(&record, RecordMode::Wait).is_err(), "preview skips an unavailable shared record write");
+    assert!(cache.put(&record, RecordMode::Request).is_err(), "preview skips an unavailable shared record write");
     assert_eq!(crate::build::icloud::pretend::requests_for(&paths.cache_transforms()), 0, "a record publication must never send its directory to a byte downloader");
 }
 

@@ -1356,7 +1356,7 @@ fn convert_single_image_cache_hit() {
 /// re-encode would show as another oid.
 #[test]
 fn a_picture_made_with_an_older_recipe_keeps_its_bytes() {
-    use crate::build::cache::RecordMode::Wait;
+    use crate::build::cache::RecordMode::Request;
     let h = harness();
     let src = h._tmp.path().join("photo.jpg");
     make_big_jpeg(&src, 2000, 1500);
@@ -1368,7 +1368,7 @@ fn a_picture_made_with_an_older_recipe_keeps_its_bytes() {
     assert!(!first.rungs.is_empty(), "the fixture needs rungs");
 
     let plant = |scale: f64| {
-        let mut record = h.transforms.get_with(&source_oid, Wait).unwrap();
+        let mut record = h.transforms.get_with(&source_oid, Request).unwrap();
         let mut planted = HashMap::new();
         for (name, entry) in record.transforms.iter_mut().filter(|(name, _)| name.starts_with("image/webp")) {
             let img = image::load_from_memory(&fs::read(h.objects.get_path(&entry.oid).unwrap()).unwrap()).unwrap();
@@ -1384,7 +1384,7 @@ fn a_picture_made_with_an_older_recipe_keeps_its_bytes() {
             entry.kept_for = None;
             planted.insert(name.clone(), entry.oid.clone());
         }
-        h.transforms.put(&record, Wait).unwrap();
+        h.transforms.put(&record, Request).unwrap();
         planted
     };
 
@@ -1398,7 +1398,7 @@ fn a_picture_made_with_an_older_recipe_keeps_its_bytes() {
     // The verdict is recorded, so the next build's skip path serves the kept
     // files without sending the picture to the worker again.
     let params = cfg.to_params();
-    let record = h.transforms.get_with(&source_oid, Wait);
+    let record = h.transforms.get_with(&source_oid, Request);
     let mut links = staged_links(&h);
     let skip = h._tmp.path().join("skip");
     fs::create_dir_all(&skip).unwrap();
@@ -4820,7 +4820,7 @@ fn sized_raster_oid_reuses_transform_cache() {
 /// today's pixel size, and is made again once it is not.
 #[test]
 fn kept_recipe_a_sized_raster_of_todays_size_keeps_its_bytes() {
-    use crate::build::cache::{ObjectStore, RecordMode::Wait, TransformCache};
+    use crate::build::cache::{ObjectStore, RecordMode::Request, TransformCache};
 
     let tmp = tempfile::tempdir().unwrap();
     let objects_root = tmp.path().join("objects");
@@ -4835,7 +4835,7 @@ fn kept_recipe_a_sized_raster_of_todays_size_keeps_its_bytes() {
     assert_ne!(first, source_oid, "the fixture needs a downscaled fallback");
 
     let plant = |scale: u32| {
-        let mut record = transforms.get_with(&source_oid, Wait).unwrap();
+        let mut record = transforms.get_with(&source_oid, Request).unwrap();
         let entry = record.transforms.get_mut("image/sized-raster").unwrap();
         let img = image::load_from_memory(&fs::read(objects.get_path(&first).unwrap()).unwrap()).unwrap();
         let img = img.resize_exact(img.width() / scale, img.height() / scale, image::imageops::FilterType::Triangle);
@@ -4846,7 +4846,7 @@ fn kept_recipe_a_sized_raster_of_todays_size_keeps_its_bytes() {
         entry.params = serde_json::json!({ "quality": 30 });
         entry.kept_for = None;
         let oid = entry.oid.clone();
-        transforms.put(&record, Wait).unwrap();
+        transforms.put(&record, Request).unwrap();
         oid
     };
 
@@ -5408,7 +5408,7 @@ fn rematerialize_with_record_overwrites_a_stale_staged_file_never_trusts_its_mer
 
     let params = cfg.to_params();
     let mut links = staged_links(&h);
-    let outcome = rematerialize_with_record(&h.objects, h.transforms.get_with(&source_oid, crate::build::cache::RecordMode::Wait).as_ref(), &params, crate::build::cache::Fit::Exact, &mut links, &staged, "image/webp");
+    let outcome = rematerialize_with_record(&h.objects, h.transforms.get_with(&source_oid, crate::build::cache::RecordMode::Request).as_ref(), &params, crate::build::cache::Fit::Exact, &mut links, &staged, "image/webp");
     assert!(matches!(outcome, HealOutcome::Healed { .. }), "must relink over the stale file, got {:?}", outcome);
     assert_eq!(
         fs::read(&staged).unwrap(),
@@ -5486,7 +5486,7 @@ fn photo_staged_and_recorded(h: &TestHarness) -> (PathBuf, String, serde_json::V
 /// Heal `staged` the way the next build would, and say whether it relinked.
 fn next_build_relinks(h: &TestHarness, staged: &Path, source_oid: &str, params: &serde_json::Value) -> bool {
     let mut links = staged_links(h);
-    let outcome = rematerialize_with_record(&h.objects, h.transforms.get_with(source_oid, crate::build::cache::RecordMode::Wait).as_ref(), params, crate::build::cache::Fit::Exact, &mut links, staged, "image/webp");
+    let outcome = rematerialize_with_record(&h.objects, h.transforms.get_with(source_oid, crate::build::cache::RecordMode::Request).as_ref(), params, crate::build::cache::Fit::Exact, &mut links, staged, "image/webp");
     links.save();
     matches!(outcome, HealOutcome::Healed { .. })
 }

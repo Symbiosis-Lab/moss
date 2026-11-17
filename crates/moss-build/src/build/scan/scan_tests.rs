@@ -2852,7 +2852,7 @@ fn media_metadata_is_not_written_over_a_record_that_cannot_be_read() {
     let transform_cache = TransformCache::new(dir.path().join("transforms"), objects.clone());
     let hash = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
     transform_cache
-        .merge(hash, 10, crate::build::cache::RecordMode::Wait, |record| {
+        .merge(hash, 10, crate::build::cache::RecordMode::Request, |record| {
             record.transforms.insert(
                 "image/webp".to_string(),
                 crate::build::cache::TransformEntry { kept_for: None, validation: None, oid: "w".into(), size: 1, params: serde_json::Value::Null },

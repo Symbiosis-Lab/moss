@@ -71,7 +71,7 @@ fn mutate_transform_record(
     mutate: impl FnOnce(&mut crate::build::cache::TransformRecord),
 ) {
     let source_size = fs::metadata(source_file).map(|m| m.len()).unwrap_or(0);
-    if let Err(e) = transforms.merge(source_oid, source_size, crate::build::cache::RecordMode::Wait, mutate) {
+    if let Err(e) = transforms.merge(source_oid, source_size, crate::build::cache::RecordMode::Request, mutate) {
         log::info!("Failed to write transform record: {}", e);
     }
 }
@@ -140,7 +140,7 @@ fn clear_stale_ladder(
     source_oid: &str,
     source_file: &Path,
 ) {
-    let Some(record) = transforms.get_with(source_oid, crate::build::cache::RecordMode::Wait) else {
+    let Some(record) = transforms.get_with(source_oid, crate::build::cache::RecordMode::Request) else {
         return;
     };
     if !record.transforms.keys().any(|k| k.starts_with(crate::build::media::hls::HLS_TRANSFORM_PREFIX)) {
@@ -205,7 +205,7 @@ fn validate_cached_blob(
     if validation_matches(entry, meta.len(), VALIDATOR_VERSION) { return true; }
     crate::build::phase::record_count("video_blobs_validated", 1);
     if !validate(&path) { return false; }
-    let _ = transforms.merge(source_oid, 0, crate::build::cache::RecordMode::Wait, |record| {
+    let _ = transforms.merge(source_oid, 0, crate::build::cache::RecordMode::Request, |record| {
         if let Some(current) = record.transforms.get_mut(kind).filter(|e| e.oid == entry.oid && e.params == entry.params) {
             current.validation = Some(crate::build::cache::BlobValidation { version: VALIDATOR_VERSION, size: meta.len() });
         }
@@ -506,7 +506,7 @@ pub(crate) fn convert_single_video(
     }
 
     // Step 1: Check transform cache for both MP4 and thumbnail
-    let record = transforms.get_with(source_oid, crate::build::cache::RecordMode::Wait);
+    let record = transforms.get_with(source_oid, crate::build::cache::RecordMode::Request);
     // Kept across recipes: the web file while it is within the host's per-file cap.
     let cap = u64::from(compression_config.max_size_mb) * 1024 * 1024;
     let within = || Some(crate::build::cache::Need::AtMost(cap));
@@ -4784,7 +4784,7 @@ pub(crate) mod tests {
             seed_cached_video_entries(&vault, &moss_dir, item, format!("{item} mp4").as_bytes(), format!("{item} thumb").as_bytes(), Some(format!("{item} poster").as_bytes()));
             // Validated by an earlier run, so no probe needs real video bytes.
             let source_oid = ObjectStore::hash_file(&vault.join(item)).unwrap();
-            let mut record = transforms.get_with(&source_oid, RecordMode::Wait).unwrap();
+            let mut record = transforms.get_with(&source_oid, RecordMode::Request).unwrap();
             for entry in record.transforms.values_mut() {
                 entry.validation = Some(BlobValidation { version: VALIDATOR_VERSION, size: entry.size });
             }
@@ -5029,7 +5029,7 @@ pub(crate) mod tests {
         assert_eq!(second.hero_poster_oid.as_deref(), Some(poster_oid.as_str()));
         assert!(staged.is_file());
         assert!(transforms
-            .find_cached_output("oid-clip", "video/poster", &poster_params(), crate::build::cache::RecordMode::Wait)
+            .find_cached_output("oid-clip", "video/poster", &poster_params(), crate::build::cache::RecordMode::Request)
             .is_some());
     }
 

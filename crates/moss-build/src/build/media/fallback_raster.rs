@@ -484,7 +484,7 @@ pub(crate) fn sized_raster_oid_for_original(
     }
     // ---- Cache hit? (checked BEFORE reading the source at all) ----
     if let Some((staged, target)) = staged {
-        let record = transforms.get_with(source_oid, crate::build::cache::RecordMode::Wait);
+        let record = transforms.get_with(source_oid, crate::build::cache::RecordMode::Request);
         if let Some(entry) = record.as_ref().and_then(|r| r.transforms.get(SIZED_RASTER_TRANSFORM)).filter(|e| e.params == params) {
             if staged.holds_oid(target, &entry.oid) {
                 return Some(entry.oid.clone());
@@ -495,7 +495,7 @@ pub(crate) fn sized_raster_oid_for_original(
     let today = || Some(crate::build::cache::Need::Scaled { source: super::rungs::sniffed_oriented_dims(source_file)?, bound: fallback_edge });
     let cached = || {
         let fit = crate::build::cache::Fit::Kept(&today);
-        transforms.find_kept_entry(source_oid, SIZED_RASTER_TRANSFORM, &params, crate::build::cache::RecordMode::Wait, fit).map(|e| e.oid)
+        transforms.find_kept_entry(source_oid, SIZED_RASTER_TRANSFORM, &params, crate::build::cache::RecordMode::Request, fit).map(|e| e.oid)
     };
     if let Some(hit) = cached() {
         return Some(hit);
@@ -647,7 +647,7 @@ fn produce_sized_raster(
     // a verbatim link on the next build without re-encoding.
     if !source_oid.is_empty() {
         let source_size = fs::metadata(source_file).map(|m| m.len()).unwrap_or(0);
-        let merged = transforms.merge(source_oid, source_size, crate::build::cache::RecordMode::Wait, |record| {
+        let merged = transforms.merge(source_oid, source_size, crate::build::cache::RecordMode::Request, |record| {
             record.transforms.insert(
                 SIZED_RASTER_TRANSFORM.to_string(),
                 TransformEntry {

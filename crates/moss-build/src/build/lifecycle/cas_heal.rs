@@ -117,7 +117,7 @@ fn relink_from_cache(
 ) -> HealOutcome {
     // `find_cached_output` also checks the blob is still in the store, so a
     // hit means the bytes are recoverable.
-    let Some(oid) = transforms.find_cached_output(source_oid, transform, params, crate::build::cache::RecordMode::Wait) else {
+    let Some(oid) = transforms.find_cached_output(source_oid, transform, params, crate::build::cache::RecordMode::Request) else {
         return HealOutcome::NotCached;
     };
     match objects.link_to(&oid, staging_path) {

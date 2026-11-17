@@ -54,7 +54,7 @@ pub(super) fn kept_base(
         let (w, h) = sniffed_oriented_dims(source_file)?;
         Some(crate::build::cache::Need::Scaled { source: (w, h), bound: moss_core::asset_paths::deployed_long_edge(w, h, max_edge) })
     };
-    transforms.find_kept_entry(source_oid, "image/webp", params, crate::build::cache::RecordMode::Wait, crate::build::cache::Fit::Kept(&today))
+    transforms.find_kept_entry(source_oid, "image/webp", params, crate::build::cache::RecordMode::Request, crate::build::cache::Fit::Kept(&today))
 }
 
 /// Dir-override-mapped path of every vault image file → the ABSOLUTE vault
@@ -252,7 +252,7 @@ pub(crate) fn encode_rungs(
 
         // ---- Warm path: reuse the cached rung blob. ----
         let today = || Some(crate::build::cache::Need::Dims(rung, target_h));
-        let kept = transforms.find_kept_entry(source_oid, &kind, &params, crate::build::cache::RecordMode::Wait, Fit::Kept(&today));
+        let kept = transforms.find_kept_entry(source_oid, &kind, &params, crate::build::cache::RecordMode::Request, Fit::Kept(&today));
         if let Some(cached) = kept.map(|entry| entry.oid) {
             // Cheap 0-byte guard (iCloud-eviction class); a bad blob falls
             // through to re-encode, self-healing the cache entry. The stat's
@@ -346,7 +346,7 @@ pub(crate) fn encode_rungs(
         // Merge-preserve transform record (same read-modify-write idiom as
         // the base and the sized-raster pass).
         let source_size = fs::metadata(source_file).map(|m| m.len()).unwrap_or(0);
-        let merged = transforms.merge(source_oid, source_size, crate::build::cache::RecordMode::Wait, |record| {
+        let merged = transforms.merge(source_oid, source_size, crate::build::cache::RecordMode::Request, |record| {
             record.transforms.insert(
                 kind,
                 TransformEntry {
