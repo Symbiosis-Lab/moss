@@ -763,6 +763,47 @@ pub(crate) fn cold_urls(urls: &[&str], moss_dir: &Path) -> Vec<String> {
     urls.iter().filter(|u| !has_card(moss_dir, u)).map(|u| (*u).to_string()).collect()
 }
 
+/// The cards of `read` with nothing in the folder yet; one the cloud holds is not one.
+pub(crate) fn waiting_cards(read: &HashMap<String, LinkMeta>, moss_dir: &Path) -> Vec<String> {
+    let not_yet: Vec<&str> = read.iter().filter(|(_, m)| m.state == CardState::NotYet).map(|(u, _)| u.as_str()).collect();
+    cold_urls(&not_yet, moss_dir)
+}
+
+/// The cards the generation a manifest describes showed with no entry, kept
+/// beside that manifest.
+pub(crate) fn waiting_path(hashes_path: &Path) -> std::path::PathBuf {
+    hashes_path.with_file_name("link-cards-waiting.json")
+}
+
+/// What [`settle`] found for the cards the current generation shows waiting.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Settled {
+    /// Now have an entry: the generation is stale, and a rebuild shows them.
+    pub fetched: usize,
+    /// Still have none: they publish URL-only.
+    pub waiting: usize,
+}
+
+/// Bring the link cards of the generation about to be published up to date,
+/// synchronously: fetch the ones it showed with no entry, with the full budget,
+/// including any a background fetch already gave up on. A host publishing an
+/// existing generation rebuilds when `fetched` is not zero.
+pub fn settle(mp: &MossPaths) -> Settled {
+    let listed: Vec<String> = std::fs::read(waiting_path(&mp.hashes()))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    if listed.is_empty() {
+        return Settled::default();
+    }
+    let moss_dir = mp.root();
+    let refs: Vec<&str> = listed.iter().map(String::as_str).collect();
+    fetch_all_link_meta_parallel(&refs, moss_dir, |_| {});
+    let fetched = refs.iter().filter(|u| has_card(moss_dir, u)).count();
+    log::info!(target: "link-meta", "publish: {fetched} of {} waiting link cards fetched", listed.len());
+    Settled { fetched, waiting: listed.len() - fetched }
+}
+
 /// Read the cached metadata for a set of URLs. Pure cache reader, no I/O
 /// other than disk reads of the existing cache files; never makes HTTP calls.
 ///

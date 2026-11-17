@@ -9977,6 +9977,83 @@ mod build_time_link_meta_fetch_tests {
         let _ = server.join();
     }
 
+    /// A publish taken while the build's own fetch is still out ships the
+    /// generation on hand, so it settles the cards that generation showed
+    /// waiting and rebuilds when one came in.
+    #[test]
+    fn a_publish_during_the_fetch_settles_the_cards_and_ships_them() {
+        use crate::build::ports::spawner::{Joining, Spawner, Task};
+        // Holds the background fetch, so it is still out at publish; keeps the
+        // seal tail, which writes the manifest a publish reads, for the test to run.
+        #[derive(Default)]
+        struct HoldsFetches {
+            fetches: std::sync::Mutex<Vec<Box<dyn FnOnce() + Send>>>,
+            tails: std::sync::Mutex<Vec<Task>>,
+        }
+        impl Spawner for HoldsFetches {
+            fn spawn_blocking(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+                self.fetches.lock().unwrap().push(task);
+            }
+            fn spawn(&self, task: Task) -> Joining {
+                self.tails.lock().unwrap().push(task);
+                Box::pin(async { Ok(()) })
+            }
+        }
+
+        let html = r#"<html><head><meta property="og:title" content="Settled At Publish"></head></html>"#;
+        let (base, server) = spawn_test_server(html, 1, std::time::Duration::ZERO);
+        let test_dir = std::env::temp_dir().join(format!(
+            "moss_link_card_publish_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&test_dir).unwrap();
+        let _cleanup = Cleanup(test_dir.clone());
+        let url = format!("{base}/at-publish");
+        fs::write(test_dir.join("index.md"), format!(":::grid 1\n<{url}>\n:::\n")).unwrap();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let build = |spawner: &std::sync::Arc<HoldsFetches>| {
+            let mut host = crate::build::ports::host::test_host_ports();
+            host.spawner = spawner.clone();
+            rt.block_on(crate::build::run_pipeline(crate::build::PipelineConfig {
+                root: crate::vault::paths::VaultRoot::resolve(&test_dir),
+                progress: crate::build::null_sink(),
+                plugins: crate::build::PluginMode::SlotsOnly,
+                watch: false,
+                start_server: false,
+                host,
+                trigger: crate::build::BuildTrigger::Full,
+                exits_after_build: false,
+                site_url_override: None,
+                server_port: None,
+                admission_epoch: Some(crate::build::ship::next_promotion_epoch()),
+                live_port: None,
+                rename_pairs: Vec::new(),
+            }))
+            .expect("the build should succeed");
+            let tails: Vec<Task> = spawner.tails.lock().unwrap().drain(..).collect();
+            for tail in tails {
+                rt.block_on(tail);
+            }
+        };
+        let mp = crate::moss_paths::MossPaths::new(&test_dir);
+        let index = || fs::read_to_string(mp.staging_dir().join("index.html")).unwrap();
+
+        let opened = std::sync::Arc::new(HoldsFetches::default());
+        build(&opened);
+        assert!(!opened.fetches.lock().unwrap().is_empty(), "the open's fetch must still be out");
+        assert!(!index().contains("Settled At Publish"), "the open shows the card URL-only: {}", index());
+
+        let settled = crate::build::page::link_meta::settle(&mp);
+        assert_eq!(settled, crate::build::page::link_meta::Settled { fetched: 1, waiting: 0 });
+        build(&std::sync::Arc::new(HoldsFetches::default()));
+        assert!(index().contains("Settled At Publish"), "the rebuild a publish runs must show the card: {}", index());
+        let _ = server.join();
+    }
+
     #[test]
     fn an_offline_build_with_an_unreachable_link_still_finishes_promptly() {
         // Bind then drop, so the port is guaranteed to refuse connections —

@@ -1933,6 +1933,8 @@ pub fn generate_blocking_content_for_build(
         if !external_urls_this_build.is_empty() {
             let url_refs: Vec<&str> = external_urls_this_build.iter().map(String::as_str).collect();
             let mut link_meta_cache = crate::build::page::link_meta::read_link_meta_from_cache(&url_refs, &moss_dir, Some(&input_evidence));
+            // Taken after the fetch above, so a build that exits records only the cards it could not fetch.
+            pending.note_waiting_link_cards(crate::build::page::link_meta::waiting_cards(&link_meta_cache, &moss_dir));
             let _trace = PhaseTrace::start("remote_cover_materialize");
             crate::build::media::remote_cover::materialize_remote_covers(
                 &mut link_meta_cache,

@@ -152,6 +152,8 @@ pub struct PendingManifest {
     /// Redirect stub output → the page it forwards to, for each old address of
     /// one of the author's pages.
     page_stubs: std::collections::BTreeMap<String, String>,
+    /// Link cards this build showed with no entry in the folder.
+    waiting_link_cards: std::collections::BTreeSet<String>,
     /// Paths that the blocking phase generated. Must be a subset of
     /// `(inner.files ∪ inner.image_outputs)` at seal time (the manifest invariant).
     /// Consumed by stale-HTML cleanup (C1–C4).
@@ -366,6 +368,7 @@ impl PendingManifest {
             preview_uses_places: false,
             restricts_pages: false,
             page_stubs: Default::default(),
+            waiting_link_cards: Default::default(),
             preview_originals: std::collections::BTreeMap::new(),
             blocking_keys: HashSet::new(),
             touched: HashSet::new(),
@@ -413,6 +416,11 @@ impl PendingManifest {
     /// Record that `stub` is an old address of the author's page at `page`.
     pub(crate) fn register_page_stub(&mut self, stub: &str, page: &str) {
         self.page_stubs.insert(stub.to_string(), page.to_string());
+    }
+
+    /// Record the link cards this build showed with no entry in the folder.
+    pub(crate) fn note_waiting_link_cards(&mut self, urls: Vec<String>) {
+        self.waiting_link_cards.extend(urls);
     }
 
     /// Record that `rel_path`'s output could not be verified this build.
@@ -993,6 +1001,7 @@ impl PendingManifest {
             preview_originals: self.preview_originals,
             restricts_pages: self.restricts_pages,
             page_stubs: self.page_stubs,
+            waiting_link_cards: self.waiting_link_cards,
             blocking_keys: self.blocking_keys,
             generation_id,
             unverified: self.unverified,
@@ -1022,6 +1031,7 @@ pub struct SealedManifest {
     preview_originals: std::collections::BTreeMap<String, Option<String>>,
     restricts_pages: bool,
     page_stubs: std::collections::BTreeMap<String, String>,
+    waiting_link_cards: std::collections::BTreeSet<String>,
     blocking_keys: HashSet<String>,
     /// Content-derived identity computed at seal time. 16 lowercase hex chars
     /// (xxh3_64 over BTreeMap-sorted `"{path}\x00{entry_value}\n"` pairs).
@@ -1302,6 +1312,10 @@ impl SealedManifest {
     pub fn write_to_disk(&self, path: &Path) -> std::io::Result<()> {
         let json = serde_json::to_string_pretty(&self.inner)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        // Beside the manifest and in the same step, so it describes the same generation;
+        // first, so a crash between the writes over-reports instead of leaving a stale list.
+        let waiting = serde_json::to_string(&self.waiting_link_cards).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        crate::build::io_utils::write_output(&crate::build::page::link_meta::waiting_path(path), waiting.as_bytes())?;
         crate::build::io_utils::write_output(path, json.as_bytes())
     }
 
