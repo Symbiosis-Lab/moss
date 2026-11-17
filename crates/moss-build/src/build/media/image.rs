@@ -1143,7 +1143,10 @@ pub(crate) fn convert_single_image(
     // under the rule this audit settled, must not — an author judging a photo
     // cannot tell a blurred stand-in from a badly-encoded result, so the preview
     // shows the real original instead.
-    if let Some(key) = meta_stat_key {
+    // An entry that already holds them is left as it is: rewriting it is an
+    // upload on every machine sharing the folder.
+    let prev = meta_stat_key.and_then(|key| crate::build::scan::scan::read_cached_meta(transforms, objects, key, source_file.extension().and_then(|e| e.to_str()).unwrap_or("")));
+    if let Some(key) = meta_stat_key.filter(|_| prev.as_ref().map_or(true, |prev| prev.dominant_color.is_none())) {
         // Computed INSIDE the `if let`: the cache entry is the only consumer
         // now that `on_decoded` is gone, so a caller that passes no stat key
         // (every non-scan path) would otherwise pay for a 100x100 thumbnail
@@ -1156,9 +1159,7 @@ pub(crate) fn convert_single_image(
             // sniffed (see scan::extract_media_metadata_cached, Step 2c). This
             // write REPLACES that entry's blob wholesale, so carry the prior
             // value forward instead of silently resetting it to `false`.
-            let is_animated = crate::build::scan::scan::read_cached_meta(transforms, objects, key, source_file.extension().and_then(|e| e.to_str()).unwrap_or(""))
-                .map(|prev| prev.is_animated)
-                .unwrap_or(false);
+            let is_animated = prev.map_or(false, |prev| prev.is_animated);
             crate::build::scan::scan::write_cached_meta(
                 objects,
                 transforms,

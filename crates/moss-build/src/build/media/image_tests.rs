@@ -1292,6 +1292,29 @@ fn convert_single_image_caches_placeholder_meta_under_stat_key() {
     );
 }
 
+/// A placeholder entry that already holds the colour, written by an older
+/// moss under a version still right for a JPEG, is left as it is: writing the
+/// same values back would be an upload on every machine.
+#[test]
+fn convert_single_image_leaves_a_complete_placeholder_entry_unwritten() {
+    let h = harness();
+    let src = h._tmp.path().join("photo.jpg");
+    make_big_jpeg(&src, 400, 300);
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+    let stat_key = "stat:photo.jpg:1000:2000";
+    let meta = crate::build::cache::CachedMediaMeta { dimensions: Some((400, 300)), dominant_color: Some("#010203".into()), lqip_data_uri: Some("data:image/jpeg;base64,AA".into()), is_animated: false };
+    let bytes = serde_json::to_vec(&meta).unwrap();
+    let entry = crate::build::cache::TransformEntry { kept_for: None, validation: None, oid: h.objects.store_bytes(&bytes).unwrap(), size: bytes.len() as u64, params: serde_json::json!({ "v": 4 }) };
+    let record = crate::build::cache::TransformRecord { source_oid: stat_key.into(), source_size: 1, transforms: HashMap::from([("media/meta".to_string(), entry.clone())]) };
+    h.transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
+
+    let outcome = convert_single_image(&src, &source_oid, "photo.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &ImageCompressionConfig::default(), None, Some(stat_key), &HashMap::new());
+
+    assert!(outcome.error.is_none(), "{:?}", outcome.error);
+    let after = h.transforms.get_with(stat_key, crate::build::cache::RecordMode::Request).unwrap();
+    assert_eq!(after.transforms.get("media/meta"), Some(&entry));
+}
+
 #[test]
 fn convert_single_image_cache_hit() {
     let h = harness();
