@@ -1408,6 +1408,11 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                         .await;
                         debug_assert!(handed_back.is_none(), "the lane hand-off keeps nothing for its caller");
                     }
+                    Err(crate::build::background::BuildError::LeftToNewerBuild) => {
+                        // Like a tail that leaves to a newer sealed render: no
+                        // record and no event, the newer build owes both.
+                        log::info!("seal+persist: render #{} left to a newer build waiting on the same images", render_seq.unwrap_or_default());
+                    }
                     Err(e) => {
                         log::error!("seal+persist: background work failed: {}", e);
                         crate::system::build_records::records().record_build_end(&folder_path_for_mat, promotion_epoch, crate::system::build_records::BuildEnd::Failed);

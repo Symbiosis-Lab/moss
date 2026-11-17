@@ -2427,12 +2427,98 @@ fn a_run_that_ends_late_leaves_a_newer_dispatchs_mark_on_the_same_source() {
     let cancelled = std::sync::Arc::new(seen.clone());
     let cancelled_run = mark_image_items_pending(&folder, [(path.to_string(), cancelled.clone())]);
     end_image_item(&folder, path, &cancelled, false, &[]);
-    assert!(!image_item_is_pending(&folder, path, &seen), "premise: the cancelled run ended its mark");
+    assert!(pending_image_mark(&folder, path, &seen).is_none(), "premise: the cancelled run ended its mark");
     let _newer_run = mark_image_items_pending(&folder, [(path.to_string(), std::sync::Arc::new(seen.clone()))]);
 
     drop(cancelled_run);
 
-    assert!(image_item_is_pending(&folder, path, &seen), "the run that ended late removed the mark a newer dispatch made for its own worker");
+    assert!(pending_image_mark(&folder, path, &seen).is_some(), "the run that ended late removed the mark a newer dispatch made for its own worker");
+}
+
+pub(crate) fn join_waiters(folder: &str) -> usize {
+    with_image_ledger(folder, |ledger| ledger.join_waiters.len())
+}
+
+/// A worker that panicked while holding the ledger poisons its lock. The ledger is
+/// still read after that, and a wait on a joined image must still last until its mark
+/// ends, or a joining build seals without the work it joined.
+#[test]
+fn a_wait_on_a_joined_image_outlasts_a_poisoned_ledger() {
+    let tmp = tempfile::tempdir().unwrap();
+    make_big_jpeg(&tmp.path().join("pic.jpg"), 40, 30);
+    let folder = tmp.path().to_string_lossy().into_owned();
+    let seen = compute_image_item_fingerprint(&folder, Path::new("pic.jpg"), &ImageCompressionConfig::default()).unwrap();
+    let _marks = mark_image_items_pending(&folder, [("pic.jpg".to_string(), std::sync::Arc::new(seen.clone()))]);
+    let joined = pending_image_mark(&folder, "pic.jpg", &seen).unwrap();
+    let (done_tx, done) = std::sync::mpsc::channel();
+    let waiter = {
+        let (folder, joined) = (folder.clone(), joined.clone());
+        std::thread::spawn(move || {
+            wait_for_joined_images(&folder, &[("pic.jpg".to_string(), joined)], None, false);
+            done_tx.send(()).unwrap();
+        })
+    };
+    while join_waiters(&folder) == 0 {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+
+    let other = tmp.path().join("other").to_string_lossy().into_owned();
+    let poisoner = other.clone();
+    assert!(std::thread::spawn(move || with_image_ledger(&poisoner, |_| panic!("a worker panicked holding the ledger"))).join().is_err());
+    // Wakes the waiter on the poisoned lock, its image still unfinished.
+    assert!(pending_image_mark(&other, "pic.jpg", &seen).is_none());
+
+    assert!(done.recv_timeout(std::time::Duration::from_millis(200)).is_err(), "the wait ended when the ledger was poisoned, with the joined image still unfinished");
+    end_image_item(&folder, "pic.jpg", &joined, true, &[]);
+    assert!(done.recv_timeout(std::time::Duration::from_secs(10)).is_ok(), "the wait did not end when the joined image finished");
+    waiter.join().unwrap();
+}
+
+/// A joining build waits for the worker it joined however that worker's mark ends,
+/// or its seal never comes.
+#[test]
+fn a_wait_on_a_joined_image_ends_however_its_mark_ends() {
+    for ending in ["finished", "replaced by a newer dispatch", "image left the folder", "worker panicked"] {
+        let tmp = tempfile::tempdir().unwrap();
+        make_big_jpeg(&tmp.path().join("pic.jpg"), 40, 30);
+        let folder = tmp.path().to_string_lossy().into_owned();
+        let seen = compute_image_item_fingerprint(&folder, Path::new("pic.jpg"), &ImageCompressionConfig::default()).unwrap();
+        let path = "pic.jpg".to_string();
+        let marks = mark_image_items_pending(&folder, [(path.clone(), std::sync::Arc::new(seen.clone()))]);
+        let joined = pending_image_mark(&folder, &path, &seen).expect("premise: the image is marked for a worker");
+
+        let (done_tx, done) = std::sync::mpsc::channel();
+        let waiter = {
+            let (folder, path, joined) = (folder.clone(), path.clone(), joined.clone());
+            std::thread::spawn(move || {
+                wait_for_joined_images(&folder, &[(path, joined)], None, false);
+                done_tx.send(()).unwrap();
+            })
+        };
+        while join_waiters(&folder) == 0 {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(done.try_recv().is_err(), "the wait returned while the worker it joined still had the image");
+
+        let mut newer = None;
+        match ending {
+            "finished" => end_image_item(&folder, &path, &joined, true, &[]),
+            "replaced by a newer dispatch" => newer = Some(mark_image_items_pending(&folder, [(path.clone(), std::sync::Arc::new(seen.clone()))])),
+            "image left the folder" => {
+                retain_image_item_fingerprints(&folder, &std::collections::HashSet::new());
+            }
+            _ => assert!(std::thread::spawn(move || {
+                let _marks = marks;
+                panic!("a worker panicked");
+            })
+            .join()
+            .is_err()),
+        }
+
+        assert!(done.recv_timeout(std::time::Duration::from_secs(10)).is_ok(), "the wait on a joined image did not end when its mark ended ({ending})");
+        waiter.join().unwrap();
+        drop(newer);
+    }
 }
 
 /// Write `rel_path`'s stat and content hash into the ON-DISK hash index the
@@ -2759,7 +2845,7 @@ fn test_dispatch_image_conversions_empty_items() {
     };
 
     // Pass None for services — dispatch returns early regardless.
-    dispatch_image_conversions(None, &ctx, None);
+    dispatch_image_conversions(None, &ctx, None, None).unwrap();
 }
 
 #[test]
@@ -2800,7 +2886,7 @@ fn test_dispatch_image_conversions_with_items_produces_webp_headless() {
     };
 
     let services = BuildServices::headless();
-    dispatch_image_conversions(Some(&services), &ctx, None);
+    dispatch_image_conversions(Some(&services), &ctx, None, None).unwrap();
 
     // Runner is synchronous in headless mode (event_sink is None), so by
     // the time dispatch returns, the .webp should exist.
@@ -2863,7 +2949,7 @@ async fn an_image_that_panics_its_worker_does_not_leave_the_folder_busy() {
     services.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
     services.reporter = failing.clone();
 
-    dispatch_image_conversions(Some(&services), &ctx, None);
+    dispatch_image_conversions(Some(&services), &ctx, None, None).unwrap();
 
     for _ in 0..2000 {
         if failing.busy.get().is_some() {
@@ -2929,7 +3015,7 @@ async fn an_image_whose_worker_panicked_is_converted_by_the_next_build() {
     services.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
     services.reporter = failing.clone();
 
-    dispatch_image_conversions(Some(&services), &ctx, None);
+    dispatch_image_conversions(Some(&services), &ctx, None, None).unwrap();
 
     for _ in 0..2000 {
         if failing.0.load(Ordering::SeqCst) && !session.has_ui_bound() {
@@ -2941,7 +3027,7 @@ async fn an_image_whose_worker_panicked_is_converted_by_the_next_build() {
     assert!(!staging.join("panicked-worker.webp").exists(), "premise: the worker that panicked converted nothing");
 
     // The next build of the same, unchanged image.
-    dispatch_image_conversions(Some(&BuildServices::headless()), &ctx, None);
+    dispatch_image_conversions(Some(&BuildServices::headless()), &ctx, None, None).unwrap();
 
     assert!(
         staging.join("panicked-worker.webp").exists(),
@@ -3011,7 +3097,7 @@ fn an_unchanged_image_missing_a_promised_rung_is_dispatched_to_produce_it() {
     let (ctx, staging) = unchanged_image_with_cached_base(tmp.path(), (1000, 600));
     assert_eq!(moss_core::asset_paths::ladder_rungs(1000, 600, false), &[800][..], "premise");
 
-    dispatch_image_conversions(Some(&BuildServices::headless()), &ctx, None);
+    dispatch_image_conversions(Some(&BuildServices::headless()), &ctx, None, None).unwrap();
 
     assert!(staging.join("photo.w800.webp").exists(), "the missing rung is produced");
     assert_eq!(fs::read(staging.join("photo.webp")).unwrap(), b"CACHED BASE", "the cached base is reused, not re-encoded");
@@ -3036,7 +3122,7 @@ fn a_rung_the_ladder_gained_is_written_on_the_first_warm_build() {
         b"CACHED W800",
     );
 
-    dispatch_image_conversions(Some(&BuildServices::headless()), &ctx, None);
+    dispatch_image_conversions(Some(&BuildServices::headless()), &ctx, None, None).unwrap();
 
     assert!(staging.join("photo.w1200.webp").is_file(), "the new rung is written");
     assert_eq!(fs::read(staging.join("photo.w800.webp")).unwrap(), b"CACHED W800", "the cached rung is reused");
@@ -3052,7 +3138,7 @@ fn an_unchanged_image_with_no_promised_rung_is_still_skipped() {
     let (ctx, staging) = unchanged_image_with_cached_base(tmp.path(), (700, 420));
     assert!(moss_core::asset_paths::ladder_rungs(700, 420, false).is_empty(), "premise");
 
-    dispatch_image_conversions(Some(&BuildServices::headless()), &ctx, None);
+    dispatch_image_conversions(Some(&BuildServices::headless()), &ctx, None, None).unwrap();
 
     assert!(staging.join("photo.webp").exists(), "the base is carried forward");
     assert!(!staging.join("photo.w800.webp").exists(), "skipped: the worker never ran");
@@ -3104,16 +3190,16 @@ fn a_rung_a_redispatch_did_not_produce_is_not_retried_within_the_window() {
     let svc = BuildServices::headless();
 
     block_rung(&staging);
-    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock);
+    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock, None).unwrap();
     assert!(!rung_produced(&staging), "premise: the blocked rung is not produced");
 
     unblock_rung(&staging);
     advance(&now, std::time::Duration::from_secs(9 * 60));
-    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock);
+    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock, None).unwrap();
     assert!(!rung_produced(&staging), "within the window the image is not dispatched again");
 
     advance(&now, std::time::Duration::from_secs(2 * 60));
-    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock);
+    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock, None).unwrap();
     assert!(rung_produced(&staging), "after the window it is tried again");
 }
 
@@ -3129,11 +3215,11 @@ fn a_produced_rung_clears_the_note() {
     let svc = BuildServices::headless();
 
     block_rung(&staging);
-    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock);
+    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock, None).unwrap();
     assert!(!rung_produced(&staging), "premise: the blocked rung is not produced and is noted");
 
     unblock_rung(&staging);
-    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock);
+    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock, None).unwrap();
     assert!(!rung_produced(&staging), "premise: the note holds the size back inside the window");
 
     // The size turns up while its note is fresh, and a settle sees it present.
@@ -3142,7 +3228,7 @@ fn a_produced_rung_clears_the_note() {
     redispatch_note::settle(&ctx.moss_dir, &staging, &redispatched, clock(), false);
 
     forget_rung(&ctx, &staging);
-    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock);
+    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock, None).unwrap();
     assert!(rung_produced(&staging), "missing again, it is re-dispatched immediately");
 }
 
@@ -3157,10 +3243,10 @@ async fn a_cancelled_run_notes_nothing_it_did_not_attempt() {
     let mut cancelled = BuildServices::headless();
     cancelled.session = Some(crate::system::folder_session::FolderSession::new(tmp.path().to_path_buf()));
     cancelled.session.as_ref().unwrap().cancel.cancel();
-    dispatch_image_conversions_at(Some(&cancelled), &ctx, None, &clock);
+    dispatch_image_conversions_at(Some(&cancelled), &ctx, None, &clock, None).unwrap();
     assert!(!rung_produced(&staging), "premise: the cancelled run never reached the image");
 
-    dispatch_image_conversions_at(Some(&BuildServices::headless()), &ctx, None, &clock);
+    dispatch_image_conversions_at(Some(&BuildServices::headless()), &ctx, None, &clock, None).unwrap();
     assert!(rung_produced(&staging), "no note was left, so the image is dispatched again");
 }
 
@@ -3175,10 +3261,10 @@ fn a_note_in_one_cache_root_does_not_hold_back_another() {
     let svc = BuildServices::headless();
 
     block_rung(&staging_a);
-    dispatch_image_conversions_at(Some(&svc), &ctx_a, None, &clock);
+    dispatch_image_conversions_at(Some(&svc), &ctx_a, None, &clock, None).unwrap();
     assert!(!rung_produced(&staging_a), "premise: the first site's attempt failed and was noted");
 
-    dispatch_image_conversions_at(Some(&svc), &ctx_b, None, &clock);
+    dispatch_image_conversions_at(Some(&svc), &ctx_b, None, &clock, None).unwrap();
     assert!(rung_produced(&staging_b), "the other site still regenerates its rung");
 }
 
@@ -3236,7 +3322,7 @@ fn test_image_dispatch_applies_dir_overrides_to_served_path() {
     };
 
     let services = BuildServices::headless();
-    dispatch_image_conversions(Some(&services), &ctx, None);
+    dispatch_image_conversions(Some(&services), &ctx, None, None).unwrap();
 
     // The override must remap the output path. Under overrides the .webp
     // should land at `published/images/photo.webp`, NOT at the file-tree
@@ -3402,7 +3488,8 @@ async fn test_webp_survives_stale_cleanup_after_dispatch() {
             Some(&services_for_blocking),
             &ctx_for_blocking,
             Some(tx_for_blocking),
-        );
+            None,
+        ).unwrap();
     })
     .await
     .unwrap();
@@ -3570,7 +3657,7 @@ async fn a_new_image_only_dispatches_the_new_one_others_survive_seal_and_stale_s
     // non-async thread — spawn_blocking, as in production where the
     // dispatcher runs from the blocking render phase.
     tokio::task::spawn_blocking(move || {
-        dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+        dispatch_image_conversions(Some(&services), &ctx, Some(tx), None).unwrap();
     })
     .await
     .unwrap();
@@ -3738,7 +3825,7 @@ async fn a_skip_carried_images_advisory_rides_the_terminal_ticks_full_set() {
 
     let (tx, rx) = test_utils::build_test_coordinator();
     tokio::task::spawn_blocking(move || {
-        dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+        dispatch_image_conversions(Some(&services), &ctx, Some(tx), None).unwrap();
     })
     .await
     .unwrap();
@@ -3867,7 +3954,7 @@ async fn a_deleted_images_advisory_still_fires_a_tick_with_nothing_to_dispatch()
 
     let (tx, rx) = test_utils::build_test_coordinator();
     tokio::task::spawn_blocking(move || {
-        dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+        dispatch_image_conversions(Some(&services), &ctx, Some(tx), None).unwrap();
     })
     .await
     .unwrap();
@@ -3951,7 +4038,7 @@ fn an_unreferenced_image_is_not_redispatched_until_a_page_references_it() {
         let recorder = std::sync::Arc::new(RecordingReporter::default());
         let mut services = BuildServices::headless();
         services.reporter = recorder.clone();
-        dispatch_image_conversions(Some(&services), &ctx, None);
+        dispatch_image_conversions(Some(&services), &ctx, None, None).unwrap();
         let ran = recorder
             .0
             .lock()
@@ -6067,7 +6154,7 @@ async fn ship_phase_ships_a_freshly_encoded_webp_from_cas_despite_stage_overwrit
 
     let (tx, rx) = test_utils::build_test_coordinator();
     tokio::task::spawn_blocking(move || {
-        dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+        dispatch_image_conversions(Some(&services), &ctx, Some(tx), None).unwrap();
     })
     .await
     .unwrap();
@@ -6150,7 +6237,7 @@ async fn run_image_conversion_always_records_a_staged_oid_for_base_and_rungs() {
 
     let (tx, rx) = test_utils::build_test_coordinator();
     tokio::task::spawn_blocking(move || {
-        dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+        dispatch_image_conversions(Some(&services), &ctx, Some(tx), None).unwrap();
     })
     .await
     .unwrap();
@@ -6245,7 +6332,7 @@ async fn skip_path_carry_forward_registers_the_verified_cas_oid_not_a_stale_or_f
 
     let (tx, rx) = test_utils::build_test_coordinator();
     tokio::task::spawn_blocking(move || {
-        dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+        dispatch_image_conversions(Some(&services), &ctx, Some(tx), None).unwrap();
     })
     .await
     .unwrap();
@@ -6314,7 +6401,7 @@ async fn skip_path_takes_a_carried_variants_hash_from_the_memo_by_oid() {
         let (tx, rx) = test_utils::build_test_coordinator();
         tokio::task::spawn_blocking(move || {
             let services = BuildServices { spawner: Some(std::sync::Arc::new(OidTestInlineSpawner)), ..BuildServices::headless() };
-            dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+            dispatch_image_conversions(Some(&services), &ctx, Some(tx), None).unwrap();
         })
         .await
         .unwrap();
@@ -6401,7 +6488,7 @@ fn a_stale_staged_webp_from_an_earlier_generation_is_not_shipped_as_unchanged() 
     };
 
     let (tx, _rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
-    dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+    dispatch_image_conversions(Some(&services), &ctx, Some(tx), None).unwrap();
 
     let landed = fs::read(&staged).expect("a real encode must have landed at the staging path");
     assert_ne!(
@@ -6524,7 +6611,7 @@ fn a_missing_output_is_dispatched_while_its_unaffected_sibling_takes_the_skip_pa
     );
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
-    dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+    dispatch_image_conversions(Some(&services), &ctx, Some(tx), None).unwrap();
 
     let registered: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok())
         .filter_map(|msg| match msg {
@@ -6915,6 +7002,12 @@ impl RewriteVault {
 
     /// Dispatch `items` the way a build's background phase does.
     async fn dispatch(&self, items: Vec<ImageConversionItem>, services: BuildServices) {
+        self.dispatch_task(items, services, None, None).await.unwrap().unwrap();
+    }
+
+    /// A dispatch for build `render` on a thread of its own.
+    fn dispatch_task(&self, items: Vec<ImageConversionItem>, services: BuildServices, tx: Option<mpsc::Sender<EmitMessage>>, render: Option<u64>)
+        -> tokio::task::JoinHandle<Result<(), crate::build::background::BuildError>> {
         let ctx = BackgroundContext {
             image_items: items,
             source_path: self.root.to_string_lossy().to_string(),
@@ -6922,9 +7015,21 @@ impl RewriteVault {
             moss_dir: self.moss_dir.clone(),
             ..BackgroundContext::for_test()
         };
-        tokio::task::spawn_blocking(move || dispatch_image_conversions(Some(&services), &ctx, None))
-            .await
-            .unwrap();
+        tokio::task::spawn_blocking(move || dispatch_image_conversions(Some(&services), &ctx, tx, render))
+    }
+
+    /// A dispatch that joins a worker already queued, returned once it waits for that
+    /// worker: its build's seal must hold what the worker stages. Await it after the
+    /// worker has run.
+    async fn dispatch_joining(&self, items: Vec<ImageConversionItem>, services: BuildServices, tx: Option<mpsc::Sender<EmitMessage>>, render: Option<u64>)
+        -> tokio::task::JoinHandle<Result<(), crate::build::background::BuildError>> {
+        let folder = self.root.to_string_lossy().into_owned();
+        let task = self.dispatch_task(items, services, tx, render);
+        while join_waiters(&folder) == 0 {
+            assert!(!task.is_finished(), "a dispatch that joined a running worker finished without waiting for it");
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+        task
     }
 
     /// One rebuild of the image side. `with_fingerprint_gate` runs it the way the
@@ -6974,7 +7079,7 @@ impl RewriteVault {
         };
         let recorder = std::sync::Arc::new(DispatchedCountReporter::default());
         let services = BuildServices { reporter: recorder.clone(), ..Self::app_services() };
-        tokio::task::spawn_blocking(move || dispatch_image_conversions(Some(&services), &ctx, Some(tx))).await.unwrap();
+        tokio::task::spawn_blocking(move || dispatch_image_conversions(Some(&services), &ctx, Some(tx), None).unwrap()).await.unwrap();
         let sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
         // No dispatch at all (every image carried forward) never fires the opening
         // tick — `dispatch_image_conversions` returns early instead. Zero either way.
@@ -7197,10 +7302,11 @@ async fn a_second_dispatch_before_the_worker_ran_joins_it_instead_of_spawning_an
 
     let workers = std::sync::Arc::new(HeldSpawner::default());
     vault.dispatch(vault.collect(), workers.services()).await;
-    vault.dispatch(vault.collect(), workers.services()).await;
+    let joining = vault.dispatch_joining(vault.collect(), workers.services(), None, None).await;
     assert_eq!(workers.spawned(), 1, "the second dispatch found the source unchanged since the first and spawned its own worker");
 
     workers.run_held().await;
+    joining.await.unwrap().unwrap();
     assert_ne!(vault.webp(), first, "premise: the one worker delivered the change");
     vault.dispatch(vault.collect(), workers.services()).await;
     assert_eq!(workers.spawned(), 1, "the joined worker delivered this source: nothing to queue");
@@ -7247,10 +7353,11 @@ async fn a_worker_finishing_an_image_that_has_left_the_site_does_not_vouch_for_i
 
     let workers = std::sync::Arc::new(HeldSpawner::default());
     vault.dispatch(vault.collect_of(&["pic.png", "other.png"]), workers.services()).await;
-    vault.dispatch(vault.collect_of(&["other.png"]), workers.services()).await;
+    let joining = vault.dispatch_joining(vault.collect_of(&["other.png"]), workers.services(), None, None).await;
     assert_eq!(workers.spawned(), 1, "premise: the second dispatch joined the worker for the image that stayed");
 
     workers.run_held().await;
+    joining.await.unwrap().unwrap();
 
     assert!(vouched("other.png"), "premise: the worker delivered the image that stayed");
     assert!(!vouched("pic.png"), "the worker vouched for an image the site no longer lists");
@@ -7300,10 +7407,11 @@ async fn a_dispatch_in_another_folder_leaves_this_folders_worker_to_be_joined() 
         there.dispatch(there.collect_of(&[others_image]), workers.services()).await;
         assert_eq!(workers.spawned(), 2, "premise: each folder's image went to a worker of its own");
 
-        here.dispatch(here.collect(), workers.services()).await;
+        let joining = here.dispatch_joining(here.collect(), workers.services(), None, None).await;
 
         assert_eq!(workers.spawned(), 2, "the other folder's dispatch of {others_image} ended this folder's mark, and a second worker was spawned here");
         workers.run_held().await;
+        joining.await.unwrap().unwrap();
     }
 }
 
@@ -7327,10 +7435,132 @@ async fn an_older_worker_finishing_an_image_leaves_a_newer_dispatchs_worker_to_b
     // dispatch proves it joins the newer worker through the pending-marker path.
     let index = MossPaths::from_moss_dir(vault.moss_dir.clone()).cache_hash_index();
     std::fs::remove_file(index).unwrap();
-    vault.dispatch(vault.collect(), workers.services()).await;
+    let joining = vault.dispatch_joining(vault.collect(), workers.services(), None, None).await;
 
     assert_eq!(workers.spawned(), 2, "the older worker ended the newer dispatch's marker, and a third worker was spawned");
     workers.run_held().await;
+    joining.await.unwrap().unwrap();
+}
+
+/// A build that joins a worker another build queued seals with that worker's
+/// pictures, as the build that queued it does. Sealing without them, its pages name
+/// pictures its generation lacks, and every image the worker finishes later looks new
+/// to the next seal, which asks for another full render while the batch runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_build_that_joins_a_running_worker_seals_with_what_that_worker_stages() {
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    let workers = std::sync::Arc::new(HeldSpawner::default());
+    vault.dispatch(vault.collect(), workers.services()).await;
+
+    let (tx, mut joining_build) = mpsc::channel(64);
+    let joining = vault.dispatch_joining(vault.collect(), workers.services(), Some(tx), None).await;
+    assert!(
+        matches!(joining_build.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
+        "the joining build's channel closed or registered before the worker it joined ran: its seal would not wait for that worker"
+    );
+
+    workers.run_held().await;
+    joining.await.unwrap().unwrap();
+    let mut registered = Vec::new();
+    while let Some(message) = joining_build.recv().await {
+        if let EmitMessage::File { rel_path, .. } = message {
+            registered.push(rel_path);
+        }
+    }
+    assert_eq!(registered, ["pic.webp"], "the joining build did not register the picture the worker it joined staged");
+}
+
+/// A build waiting on a joined image leaves it to a newer build that waits on it
+/// too, and does not seal: the newer one seals with the image. Rapid saves during
+/// a batch then hold one waiting build, not one per save.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_build_waiting_on_a_joined_image_leaves_it_to_a_newer_build_and_registers_nothing() {
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    let workers = std::sync::Arc::new(HeldSpawner::default());
+    vault.dispatch(vault.collect(), workers.services()).await;
+    let (tx, mut older_build) = mpsc::channel(64);
+    let mut older = vault.dispatch_joining(vault.collect(), workers.services(), Some(tx), Some(1)).await;
+
+    let (tx, mut newer_build) = mpsc::channel(64);
+    let newer = vault.dispatch_task(vault.collect(), workers.services(), Some(tx), Some(2));
+    let left = tokio::time::timeout(std::time::Duration::from_secs(10), &mut older).await;
+
+    workers.run_held().await;
+    newer.await.unwrap().unwrap();
+    let left = left.expect("the older build kept waiting on an image a newer build waits on too").unwrap();
+    assert!(matches!(left, Err(crate::build::background::BuildError::LeftToNewerBuild)), "the build that stopped waiting did not say it left: it would seal");
+    assert!(older_build.recv().await.is_none(), "the build that left registered outputs");
+    let mut registered = Vec::new();
+    while let Some(message) = newer_build.recv().await {
+        if let EmitMessage::File { rel_path, .. } = message {
+            registered.push(rel_path);
+        }
+    }
+    assert_eq!(registered, ["pic.webp"], "the newer build did not seal with the image the older one left to it");
+}
+
+/// A waiting build that sent an image to a worker of its own does not leave when a
+/// newer build waits too. That worker reports to this build (its outputs, failures
+/// and advisories), and a build that left never seals, so they would be dropped.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_waiting_build_with_an_encode_of_its_own_does_not_leave_it_to_a_newer_build() {
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    let workers = std::sync::Arc::new(HeldSpawner::default());
+    vault.dispatch(vault.collect(), workers.services()).await;
+    vault.write_named("other.png", [30, 200, 30]);
+    let (tx, mut older_build) = mpsc::channel(64);
+    let older = vault.dispatch_joining(vault.collect_of(&["pic.png", "other.png"]), workers.services(), Some(tx), Some(1)).await;
+    assert_eq!(workers.spawned(), 2, "premise: the older build sent the new image to a worker of its own");
+
+    let folder = vault.root.to_string_lossy().into_owned();
+    let newer = vault.dispatch_task(vault.collect_of(&["pic.png", "other.png"]), workers.services(), None, Some(2));
+    while join_waiters(&folder) < 2 && !older.is_finished() {
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let left = older.is_finished();
+
+    workers.run_held().await;
+    newer.await.unwrap().unwrap();
+    assert!(!left, "the older build left the image it joined although it encodes one of its own");
+    older.await.unwrap().unwrap();
+    let mut registered = Vec::new();
+    while let Some(message) = older_build.recv().await {
+        if let EmitMessage::File { rel_path, .. } = message {
+            registered.push(rel_path);
+        }
+    }
+    registered.sort();
+    assert_eq!(registered, ["other.webp", "pic.webp"], "the older build did not seal with both images");
+}
+
+/// The same for a build that joins one image and sends another, new one to a worker
+/// of its own: it seals with both.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_build_that_joins_one_image_and_dispatches_another_seals_with_both() {
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    let workers = std::sync::Arc::new(HeldSpawner::default());
+    vault.dispatch(vault.collect(), workers.services()).await;
+    vault.write_named("other.png", [30, 200, 30]);
+
+    let (tx, mut joining_build) = mpsc::channel(64);
+    let joining = vault.dispatch_joining(vault.collect_of(&["pic.png", "other.png"]), workers.services(), Some(tx), None).await;
+    assert_eq!(workers.spawned(), 2, "premise: the new image went to a worker of its own");
+
+    workers.run_held().await;
+    joining.await.unwrap().unwrap();
+    let mut registered = Vec::new();
+    while let Some(message) = joining_build.recv().await {
+        if let EmitMessage::File { rel_path, .. } = message {
+            registered.push(rel_path);
+        }
+    }
+    registered.sort();
+    assert_eq!(registered, ["other.webp", "pic.webp"], "the build registered only the image it sent to its own worker");
 }
 
 /// The third exit that leaves the old variant: the worker gets to the image and cannot

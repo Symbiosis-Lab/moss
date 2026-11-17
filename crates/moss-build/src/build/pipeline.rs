@@ -2030,8 +2030,10 @@ fn build_inner(
             // Worker 1: Image conversion.
             // dispatch_image_conversions internally spawns its own async tasks in GUI
             // mode (via tauri::async_runtime::spawn) and runs synchronously in headless
-            // mode. The worker just calls it and returns; the tx clone lives inside the
-            // internally-spawned task until run_image_conversion completes.
+            // mode; the tx clone lives inside the internally-spawned task until
+            // run_image_conversion completes. When it joined another build's worker,
+            // this worker stays until that work is done, so the seal holds it too,
+            // or leaves it to a newer build and this build does not seal.
             if !image_items_empty {
                 let ctx_for_image = background_ctx.clone();
                 let tx_image = tx.clone();
@@ -2040,8 +2042,8 @@ fn build_inner(
                         svc_arc_for_image.as_deref(),
                         &ctx_for_image,
                         Some(tx_image),
-                    );
-                    Ok(())
+                        render_seq,
+                    )
                 });
             }
 

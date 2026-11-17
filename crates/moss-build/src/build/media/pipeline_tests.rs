@@ -2565,7 +2565,7 @@ async fn planned_webp_base_registered_by_encoder_on_cold_and_warm_builds() {
         let (tx, rx) = test_utils::build_test_coordinator();
         tokio::task::spawn_blocking(move || {
             let services = crate::types::services::BuildServices::headless();
-            crate::build::media::image::dispatch_image_conversions(Some(&services), &ctx, Some(tx.clone()));
+            crate::build::media::image::dispatch_image_conversions(Some(&services), &ctx, Some(tx.clone()), None).unwrap();
             copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
         }).await.unwrap();
         let sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;

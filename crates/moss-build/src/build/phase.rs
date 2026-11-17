@@ -579,7 +579,7 @@ const BUILD_COUNTS: &[&str] = &[
     "pages_rendered", "pages_carried", "slot_html_scanned", "slot_html_rewritten",
     "background_assets_copied", "background_assets_hits", "background_assets_misses",
     "background_assets_linked", "background_assets_stat_only", "sized_raster_blob_checks",
-    "images_unchanged", "images_dispatched", "image_variants_stat_only", "image_variants_blob_checks",
+    "images_unchanged", "images_dispatched", "images_joined", "image_variants_stat_only", "image_variants_blob_checks",
     "image_transform_records_loaded", "files_sealed", "hash_index_hits_process", "hash_index_rehashed_process",
     "proved_from_seal",
 ];

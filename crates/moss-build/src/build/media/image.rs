@@ -49,7 +49,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, LazyLock, Mutex};
 use tokio::sync::mpsc;
 
 use crate::build::coordinator::EmitMessage;
@@ -1377,8 +1377,8 @@ pub(crate) fn convert_single_image(
 // the on-disk hash index / transform cache, not from this)
 // ---------------------------------------------------------------------------
 
-/// One dispatch's view of a source, for two things only: joining a worker that
-/// already has these exact bytes queued (`image_item_is_pending`), and closing
+/// One dispatch's view of a source, for two things only: joining (and waiting for)
+/// a worker that already has these exact bytes queued (`pending_image_mark`), and closing
 /// out that worker's marker when it finishes (`end_image_item`). Its whole stat
 /// record (a same-size rewrite in the same second, or a replace-via-rename,
 /// must not look like the file it replaced) plus the compression params, so a
@@ -1431,6 +1431,9 @@ struct ImageLedger {
     /// moment it stops changing. Empty for an item with nothing to say;
     /// absent for one never delivered in this process.
     advisories: HashMap<String, Vec<Advisory>>,
+    /// The render of each build blocked in [`wait_for_joined_images`] (`None`
+    /// where the build has no render number).
+    join_waiters: Vec<Option<u64>>,
 }
 
 /// `folder`'s ledger. One per folder, process-wide: two folders can hold an
@@ -1442,16 +1445,58 @@ struct ImageLedger {
 // A poisoned lock is taken anyway: `PendingImageMarks` locks it while a
 // worker's panic unwinds, where a second panic would abort the process.
 fn with_image_ledger<R>(folder: &str, f: impl FnOnce(&mut ImageLedger) -> R) -> R {
-    static IMAGE_LEDGERS: OnceLock<Mutex<HashMap<String, ImageLedger>>> = OnceLock::new();
-    let mut ledgers = IMAGE_LEDGERS.get_or_init(Mutex::default).lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    f(ledgers.entry(folder.to_string()).or_default())
+    let mut ledgers = IMAGE_LEDGERS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let result = f(ledgers.entry(folder.to_string()).or_default());
+    // Any call may have ended a mark a joined build waits on: a worker finishing
+    // it, a newer dispatch replacing it, a dispatch dropping a removed image.
+    IMAGE_LEDGER_CHANGED.notify_all();
+    result
 }
 
-/// Whether a worker a dispatch spawned has yet to finish `path`, from a source with
-/// this fingerprint. A later dispatch that finds the same source joins that worker
-/// instead of spawning another to encode the same bytes.
-pub(crate) fn image_item_is_pending(folder: &str, path: &str, fingerprint: &ImageFingerprint) -> bool {
-    with_image_ledger(folder, |ledger| ledger.pending.get(path).is_some_and(|marked| **marked == *fingerprint))
+static IMAGE_LEDGERS: LazyLock<Mutex<HashMap<String, ImageLedger>>> = LazyLock::new(Default::default);
+static IMAGE_LEDGER_CHANGED: Condvar = Condvar::new();
+
+/// The mark of a worker a dispatch spawned that has yet to finish `path`, from a
+/// source with this fingerprint. A later dispatch that finds the same source joins
+/// that worker instead of spawning another to encode the same bytes, and waits for
+/// the mark to end ([`wait_for_joined_images`]).
+pub(crate) fn pending_image_mark(folder: &str, path: &str, fingerprint: &ImageFingerprint) -> Option<Arc<ImageFingerprint>> {
+    with_image_ledger(folder, |ledger| ledger.pending.get(path).filter(|marked| ***marked == *fingerprint).cloned())
+}
+
+/// Block until no mark in `joined` is still the ledger's mark for its path, and
+/// say whether the joined work was waited out. A joining build's seal must see
+/// the outputs of the work it joined, as a dispatching build's seal does by
+/// holding its worker's channel; sealing without them promotes pages that name
+/// pictures the generation lacks. Ends however the mark ends: the item
+/// finished, failed or was cancelled, a newer dispatch replaced the mark, or the
+/// image left the folder.
+///
+/// Returns `false` without waiting it out where `may_leave`, once a build of a
+/// later render waits too: that build joined every mark of these that still
+/// stands and seals with all of them, so this one need not hold a thread, a
+/// cache lease and a manifest until then.
+pub(crate) fn wait_for_joined_images(folder: &str, joined: &[(String, Arc<ImageFingerprint>)], render: Option<u64>, may_leave: bool) -> bool {
+    let mut guard = IMAGE_LEDGERS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    guard.entry(folder.to_string()).or_default().join_waiters.push(render);
+    IMAGE_LEDGER_CHANGED.notify_all();
+    let waited_out = loop {
+        let ledger = guard.entry(folder.to_string()).or_default();
+        if !joined.iter().any(|(path, mark)| ledger.pending.get(path).is_some_and(|marked| Arc::ptr_eq(marked, mark))) {
+            break true;
+        }
+        let overtaken = may_leave && render.is_some_and(|mine| ledger.join_waiters.iter().flatten().any(|other| *other > mine));
+        if overtaken {
+            break false;
+        }
+        // Not `wait_while`: on a poisoned lock it returns with the mark still there.
+        guard = IMAGE_LEDGER_CHANGED.wait(guard).unwrap_or_else(std::sync::PoisonError::into_inner);
+    };
+    let waiters = &mut guard.entry(folder.to_string()).or_default().join_waiters;
+    if let Some(at) = waiters.iter().position(|w| *w == render) {
+        waiters.remove(at);
+    }
+    waited_out
 }
 
 /// A dispatch is about to hand these (path, fingerprint) to a worker. Before the
@@ -2542,24 +2587,27 @@ pub(crate) fn dispatch_image_conversions(
     services: Option<&BuildServices>,
     ctx: &BackgroundContext,
     tx: Option<mpsc::Sender<EmitMessage>>,
-) {
-    dispatch_image_conversions_at(services, ctx, tx, &redispatch_note::system_clock());
+    render: Option<u64>,
+) -> Result<(), crate::build::background::BuildError> {
+    dispatch_image_conversions_at(services, ctx, tx, &redispatch_note::system_clock(), render)
 }
 
 /// [`dispatch_image_conversions`] with its clock supplied, which only the
-/// re-dispatch note reads.
+/// re-dispatch note reads. `Err` when the build left the work it joined to the
+/// build of a later `render`, and must not seal.
 pub(crate) fn dispatch_image_conversions_at(
     services: Option<&BuildServices>,
     ctx: &BackgroundContext,
     tx: Option<mpsc::Sender<EmitMessage>>,
     clock: &redispatch_note::Clock,
-) {
+    render: Option<u64>,
+) -> Result<(), crate::build::background::BuildError> {
     let prelude = crate::build::phase::PhaseTrace::start("media_prelude");
     if ctx.image_items.is_empty() {
-        return;
+        return Ok(());
     }
 
-    let Some(svc) = services else { return };
+    let Some(svc) = services else { return Ok(()) };
 
     let config = ImageCompressionConfig::default();
 
@@ -2587,7 +2635,10 @@ pub(crate) fn dispatch_image_conversions_at(
         // fingerprint fallback covers it.
         let mut skip_paths: Vec<(String, Option<String>)> = Vec::new();
         let mut to_dispatch: Vec<ImageConversionItem> = Vec::new();
-        let mut joined: usize = 0;
+        // The workers this dispatch joined, and the outputs they will stage: registered
+        // once those workers are done, so this build's seal holds them.
+        let mut joined_marks: Vec<(String, Arc<ImageFingerprint>)> = Vec::new();
+        let mut joined_keys: Vec<String> = Vec::new();
         let mut current_paths: HashSet<String> = HashSet::new();
         let mut healed_count: usize = 0;
         // Sizes sent back to the worker to be produced; see `redispatch_note`.
@@ -2625,15 +2676,10 @@ pub(crate) fn dispatch_image_conversions_at(
             // Join before anything else: a worker already has these exact bytes, so
             // another would encode them twice — each with a thread pool and a
             // megapixel budget of its own — and a heal here would put this dispatch's
-            // link on a target that worker is about to link. Whatever an earlier build
-            // left staged is still carried forward.
-            if fingerprint.as_ref().is_some_and(|fp| image_item_is_pending(&ctx.source_path, &rel_source, fp)) {
-                joined += 1;
-                let keys = std::iter::once(relative_webp).chain(promised_rungs(item, &mapped, &ctx.rung_collisions).into_iter().map(|(_, key)| key));
-                skip_paths.extend(
-                    keys.filter(|key| crate::build::io_utils::output_present(&ctx.staging_dir.join(key)))
-                        .map(|key| (key, None)),
-                );
+            // link on a target that worker is about to link.
+            if let Some(mark) = fingerprint.as_ref().and_then(|fp| pending_image_mark(&ctx.source_path, &rel_source, fp)) {
+                joined_marks.push((rel_source, mark));
+                joined_keys.extend(std::iter::once(relative_webp).chain(promised_rungs(item, &mapped, &ctx.rung_collisions).into_iter().map(|(_, key)| key)));
                 continue;
             }
             // The skip candidate's origin: a STRICT stat comparison against the
@@ -2806,10 +2852,17 @@ pub(crate) fn dispatch_image_conversions_at(
                 objects: &heal_objects, suppressed: &heal_suppressed, registry: None }.run_remembering(&skip_paths, &heal_paths.cache_image_output_hash_memo());
         }
 
+        let joined = joined_marks.len();
         crate::build::phase::record_count("images_unchanged", total_items - to_dispatch.len() - joined);
         crate::build::phase::record_count("images_dispatched", to_dispatch.len());
+        crate::build::phase::record_count("images_joined", joined);
         drop(prelude);
         let joined_note = if joined > 0 { format!(", {joined} joined a conversion already running") } else { String::new() };
+        // Only a build that reports nothing under its own build job (no encode,
+        // no removed image's advisory) may leave, in a host that keeps running:
+        // a one-shot build has no newer build to leave to.
+        let may_leave = to_dispatch.is_empty() && !dropped_advisory && svc.spawner.is_some();
+        let joined_images = JoinedImages { marks: &joined_marks, keys: &joined_keys, render, may_leave };
         if to_dispatch.is_empty() {
             log::info!(
                 "Image set unchanged ({} images{}), skipping re-dispatch — re-registered carry-forward output keys",
@@ -2835,7 +2888,7 @@ pub(crate) fn dispatch_image_conversions_at(
                     advisories: carried_advisories,
                 });
             }
-            return;
+            return register_joined_images(ctx, joined_images, &tx, &heal_objects);
         }
         if to_dispatch.len() < total_items {
             log::info!(
@@ -2862,6 +2915,8 @@ pub(crate) fn dispatch_image_conversions_at(
         // `moss build` benefits from it on its very first (and only) call —
         // unlike the old in-process ledger, which had nothing to compare
         // against and so never attempted a skip in headless mode at all.
+        // The worker takes the channel; the joined registration after it needs its own.
+        let joined_tx = if joined > 0 { tx.clone() } else { None };
         let mut run_ctx = ImageRunContext::from_background(ctx, config.clone());
         run_ctx.items = to_dispatch;
         run_ctx.suppressed = heal_suppressed;
@@ -2877,7 +2932,7 @@ pub(crate) fn dispatch_image_conversions_at(
 
         // Image dispatch does not use epochs, and a newer build never cancels
         // an older build's worker: a later dispatch that finds an image already
-        // queued joins that worker instead (`image_item_is_pending` above).
+        // queued joins that worker instead (`pending_image_mark` above).
         // The only stop is the folder session's cancel token, bridged into a
         // local flag that `convert_single_image` checks before each image, so
         // an encode already underway always runs to the end.
@@ -2913,7 +2968,46 @@ pub(crate) fn dispatch_image_conversions_at(
             let cancelled = run_image_conversion(svc, &run_ctx);
             redispatch_note::settle(&run_ctx.moss_dir, &run_ctx.staging_dir, &redispatched, clock(), cancelled);
         }
+        // Last, after this build's own encodes are under way.
+        register_joined_images(ctx, joined_images, &joined_tx, &heal_objects)
     }
+}
+
+/// The workers a dispatch joined: their marks, the outputs they will stage, and
+/// whether this build may leave them to a later render's build.
+struct JoinedImages<'a> {
+    marks: &'a [(String, Arc<ImageFingerprint>)],
+    keys: &'a [String],
+    render: Option<u64>,
+    may_leave: bool,
+}
+
+/// Wait for the workers a dispatch joined, then register what they staged
+/// through this build's channel, so its seal holds them.
+///
+/// Each item's mark ends as it finishes, and its worker saves the hash index
+/// only once its whole run ends, so nothing vouches for these outputs by oid
+/// yet: they register by what is staged. One that is not staged (its encode
+/// failed or was cancelled) is left out, as from any build: it registers
+/// nothing and the seal's repair drops the page's reference to it.
+///
+/// A build that stops waiting (see [`wait_for_joined_images`]) registers
+/// nothing and answers [`BuildError::LeftToNewerBuild`](crate::build::background::BuildError::LeftToNewerBuild).
+fn register_joined_images(ctx: &BackgroundContext, joined: JoinedImages, tx: &Option<mpsc::Sender<EmitMessage>>,
+    objects: &crate::build::cache::ObjectStore) -> Result<(), crate::build::background::BuildError> {
+    if joined.marks.is_empty() {
+        return Ok(());
+    }
+    let _wait = crate::build::phase::PhaseTrace::start("image_join_wait");
+    if !wait_for_joined_images(&ctx.source_path, joined.marks, joined.render, joined.may_leave) {
+        log::info!("render #{} left the {} image(s) it joined to a newer build", joined.render.unwrap_or_default(), joined.marks.len());
+        return Err(crate::build::background::BuildError::LeftToNewerBuild);
+    }
+    let staged: Vec<(String, Option<String>)> =
+        joined.keys.iter().filter(|key| crate::build::io_utils::output_present(&ctx.staging_dir.join(key))).map(|key| (key.clone(), None)).collect();
+    super::output_emit::OutputEmit { kind: &IMAGE_OUTPUTS, root: Path::new(&ctx.source_path), tx, staging_dir: &ctx.staging_dir,
+        objects, suppressed: &Default::default(), registry: None }.run(&staged);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

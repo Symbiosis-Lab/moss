@@ -5798,6 +5798,46 @@ fn a_page_unusable_for_a_reason_outside_the_cloud_raises_no_cloud_wait() {
         "the preview shows this build, not a stale one held back for a download that does not exist");
 }
 
+/// A page that was still in the cloud is shown by the rebuild its download
+/// starts, when that build renders. A picture batch still running from an
+/// earlier build holds the build's seal, never the page: the build that joins it
+/// waits in the background, after the page is already in the preview.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_downloaded_page_shows_at_render_while_its_build_waits_on_a_joined_picture() {
+    use crate::build::media::image::{compute_image_item_fingerprint, mark_image_items_pending, tests::join_waiters, ImageCompressionConfig};
+    use crate::system::folder_session::PreviewSource;
+    let (dir, _cleanup) = create_test_dir();
+    let folder = dir.to_str().unwrap();
+    make_big_jpeg_at(&dir.join("pic.jpg"), 1600, 1200);
+    fs::write(dir.join(".article.md.icloud"), "").unwrap();
+    let mp = crate::moss_paths::MossPaths::new(&dir);
+    let state = SiteDirectoryState::new(mp.current_ptr());
+    let session = crate::system::folder_session::FolderSession::new(dir.clone());
+    session.set_preview_requirement("/article/".into(), PreviewSource::File("article.md".into())).unwrap();
+    build_test_with_focus(folder, scan_folder(folder).unwrap(), Some(&state), Some(session.clone()), None, None).unwrap();
+    assert_ne!(*state.current_dir.read().unwrap(), mp.staging_dir(), "the page is still in the cloud");
+
+    fs::remove_file(dir.join(".article.md.icloud")).unwrap();
+    fs::write(dir.join("article.md"), "# Article\n\n![](pic.jpg)\n").unwrap();
+    let ledger_key = crate::vault::paths::VaultRoot::resolve(folder).path().to_string_lossy().into_owned();
+    let fingerprint = compute_image_item_fingerprint(&ledger_key, std::path::Path::new("pic.jpg"), &ImageCompressionConfig::default()).unwrap();
+    let batch = mark_image_items_pending(&ledger_key, [("pic.jpg".to_string(), std::sync::Arc::new(fingerprint))]);
+    std::thread::scope(|scope| {
+        let rebuild = scope.spawn(|| build_test_with_focus(folder, scan_folder(folder).unwrap(), Some(&state), Some(session.clone()), None, None));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while join_waiters(&ledger_key) == 0 && !rebuild.is_finished() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let joined = join_waiters(&ledger_key) > 0;
+        let shown = state.current_dir.read().unwrap().clone();
+        drop(batch);
+        rebuild.join().unwrap().unwrap();
+        assert!(joined, "premise: the rebuild joined the running picture batch");
+        assert_eq!(shown, mp.staging_dir(), "the downloaded page is shown at render, not held behind the picture batch its build joined");
+    });
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn a_folder_page_waiting_on_its_index_is_shown_once_the_index_arrives() {
