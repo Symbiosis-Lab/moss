@@ -3768,3 +3768,32 @@ fn an_offline_record_is_asked_for_outside_a_managed_folder() {
     assert!(matches!(read, super::records::RecordRead::Offline));
     assert_eq!(crate::build::icloud::pretend::requests_for(&record), 1);
 }
+
+/// Pictures whose cache is local are worked through before cloud-held ones,
+/// so a download that never arrives delays none of them.
+#[test]
+fn a_run_works_through_local_pictures_before_cloud_held_ones() {
+    let (cache, held, blob) = cached_picture("plan_local_first");
+    let _cloud = crate::build::icloud::pretend::evicted(&blob);
+    let plan = super::FetchPlan::new(&cache, "image/", [(held.as_str(), 1.0), ("a", 1.0), ("b", 1.0)].into_iter(), 1);
+    assert_eq!(plan.local_first([held.as_str(), "a", "b"].into_iter()), vec![1, 2, 0]);
+    assert_eq!(crate::build::icloud::pretend::requests_for(&blob), 1, "asked for once, up front");
+}
+
+/// The wait ends at the run's deadline while someone is looking, and the
+/// picture counts as encoded again. With nobody looking it waits on.
+#[test]
+fn a_wait_ends_at_the_deadline_only_while_someone_is_looking() {
+    let _short = ShortWaits::new();
+    let (cache, held, blob) = cached_picture("plan_deadline");
+    let _cloud = crate::build::icloud::pretend::evicted(&blob);
+    let plan = super::FetchPlan::new(&cache, "image/", [(held.as_str(), 0.0)].into_iter(), 1);
+    let started = std::time::Instant::now();
+    plan.wait(&cache, &held, "image/", &|| false, &|| false);
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    assert_eq!(plan.counts(), (1, 0, 1));
+
+    let asked = std::cell::Cell::new(0);
+    plan.wait(&cache, &held, "image/", &|| { asked.set(asked.get() + 1); asked.get() > 3 }, &|| true);
+    assert!(asked.get() > 3, "past the deadline, only cancellation ends a wait nobody is looking at");
+}

@@ -47,6 +47,7 @@ mod publication;
 mod process_memo;
 mod fit;
 mod fetch;
+pub(crate) use fetch::FetchPlan;
 pub(crate) mod source_oids;
 pub(crate) use process_memo::{KeyedMemo, MemoFile, ProcessMemo, ROOTS};
 use crate::build::cloud_readiness::StorageOperation;

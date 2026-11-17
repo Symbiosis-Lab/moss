@@ -1670,6 +1670,16 @@ impl ImageRunContext {
     }
 }
 
+/// Encode CPU seconds per source megapixel, all rungs included: a fixed prior,
+/// measured on a folder of photos at about 0.43 s a picture.
+const ENCODE_SECS_PER_MP: f64 = 0.28;
+
+/// An item's source megapixels, rounded up; unknown dimensions count as the
+/// largest possible.
+fn item_megapixels(item: &ImageConversionItem) -> u64 {
+    item.dimensions.map_or(u64::MAX, |(w, h)| (w as u64 * h as u64).div_ceil(1_000_000))
+}
+
 /// A megapixels-in-flight budget: a counting semaphore whose unit is source
 /// megapixels, used to bound the peak memory of the parallel encode.
 ///
@@ -2028,6 +2038,8 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
         let mp_budget = MegapixelBudget::new(budget_mp);
         // Encodes keep running while the window is hidden, at background QoS.
         let gate = crate::system::folder_session::DerivedWorkGate::of(services.session.as_ref());
+        let fetch = crate::build::cache::FetchPlan::new(&transforms, "image/", ctx.items.iter().map(|item| (item.source_oid.as_str(), item_megapixels(item).min(budget_mp) as f64 * ENCODE_SECS_PER_MP)), n_threads);
+        let order = fetch.local_first(ctx.items.iter().map(|item| item.source_oid.as_str()));
         std::thread::scope(|scope| {
             for _ in 0..n_threads {
                 scope.spawn(|| loop {
@@ -2036,7 +2048,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                         break;
                     }
                     gate.pace_this_thread();
-                    let item = &ctx.items[index];
+                    let item = &ctx.items[order[index]];
                     // The whole of one image's decision. Every exit is a value,
                     // never a `return` with teardown attached — see `ItemStep`.
                     // Nothing in here pushes to the census, ticks progress or
@@ -2141,17 +2153,6 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
         });
 
         let (sf_result, was_shared) = {
-            let source_file_ref = &source_file;
-            let source_oid_ref = &source_oid;
-            let relative_webp_ref: &str = &relative_webp;
-            let temp_dir_ref = &temp_dir;
-            let staging_dir_ref = &ctx.staging_dir;
-            let objects_ref = &objects;
-            let transforms_ref = &transforms;
-            let config_ref = &ctx.config;
-            let meta_stat_key_ref = meta_stat_key.as_deref();
-            let rung_collisions_ref = &ctx.rung_collisions;
-
             // Singleflight dedups concurrent duplicate-content conversions so a
             // repeated image decodes once (waiters block on its condvar and reuse
             // the result). do_work is correct under concurrency — the earlier
@@ -2164,26 +2165,23 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
             // (which would deadlock the budget). do_work wraps the closure in
             // catch_unwind, and the permit drops as the panic unwinds, so a
             // panicking encode cannot wedge the budget.
-            let acquire_mp = item
-                .dimensions
-                .map(|(w, h)| {
-                    (w as u64).saturating_mul(h as u64).saturating_add(999_999) / 1_000_000
-                })
-                .unwrap_or(u64::MAX); // unknown dims → reserve the whole budget (run alone)
             services.in_flight_images.do_work(&source_oid, || {
-                let _permit = mp_budget.acquire(acquire_mp);
+                // Before the permit: a picture waiting for its download holds
+                // no encode capacity.
+                fetch.wait(&transforms, &source_oid, "image/", &|| cancel_flag.is_some_and(|f| f.load(Ordering::SeqCst)), &|| gate.is_closed());
+                let _permit = mp_budget.acquire(item_megapixels(item));
                 convert_single_image(
-                    source_file_ref,
-                    source_oid_ref,
-                    relative_webp_ref,
-                    temp_dir_ref,
-                    staging_dir_ref,
-                    objects_ref,
-                    transforms_ref,
-                    config_ref,
+                    &source_file,
+                    &source_oid,
+                    &relative_webp,
+                    &temp_dir,
+                    &ctx.staging_dir,
+                    &objects,
+                    &transforms,
+                    &ctx.config,
                     cancel_flag,
-                    meta_stat_key_ref,
-                    rung_collisions_ref,
+                    meta_stat_key.as_deref(),
+                    &ctx.rung_collisions,
                 )
             })
         };
@@ -2390,6 +2388,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                 });
             }
         });
+        fetch.report(n_items);
     }
 
     // ---- Reduce the parallel accumulators ----

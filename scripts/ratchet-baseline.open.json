@@ -121,7 +121,7 @@
         "crates/moss-build/src/build/markdown/pipeline.rs::process_markdown_file": 750,
         "crates/moss-build/src/build/markdown/typed_renderers.rs::render_hero_html_typed": 350,
         "crates/moss-build/src/build/media/image.rs::convert_single_image": 250,
-        "crates/moss-build/src/build/media/image.rs::run_image_conversion": 400,
+        "crates/moss-build/src/build/media/image.rs::run_image_conversion": 350,
         "crates/moss-build/src/build/media/image.rs::dispatch_image_conversions_at": 250,
         "crates/moss-build/src/build/media/video.rs::convert_single_video": 250,
         "crates/moss-build/src/build/media/video.rs::run_video_conversion": 350,
