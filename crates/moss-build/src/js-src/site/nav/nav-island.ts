@@ -162,21 +162,16 @@ export function initNavIsland(): void {
   // The trail's parts; all absent on a pinned island.
   const inTrail = <T extends Element>(selector: string): T[] => [...(trail?.querySelectorAll<T>(selector) ?? [])];
   const crumbs = inTrail<HTMLElement>("[data-island-crumb]");
-
-  // Which headings become the sections panel — and, as revised 2026-08-30,
-  // whether there is an island at all.
-  //
-  // One level only. A flat list stays scannable at a glance, and every heading
-  // moss emits already carries an `id`, so each row is a real link that works
-  // with the panel closed. Which level that is comes from the page rather than
-  // a constant: `h2` is the norm and is still what almost every page answers
-  // with — but an author who started their sections at `###`, or at `####`,
-  // has sections all the same, and hard-coding `h2` told them they had none.
-  const headings = sectionHeadings();
-
   const moreBtn = inTrail<HTMLButtonElement>(".moss-nav-island-more")[0] ?? null;
   const moreSep = inTrail<HTMLElement>("[data-trail-more-separator]")[0] ?? null;
   const sectionsBtn = island.querySelector<HTMLButtonElement>(".moss-nav-island-sections");
+  // Which headings become the sections panel. One level only: a flat list
+  // stays scannable at a glance, and every heading moss emits carries an `id`,
+  // so each row is a real link that works with the panel closed. The level is
+  // the shallowest the page uses, `h2` on almost every page. The build leaves
+  // the sections button out of a pinned island whose sections are too short to
+  // list (and the whole island out of a trail one), so no button, no sections.
+  const headings = sectionsBtn ? sectionHeadings() : [];
   const levelsMenu = island.querySelector<HTMLElement>('[data-island-menu="levels"]');
   const sectionsMenu = island.querySelector<HTMLElement>('[data-island-menu="sections"]');
   const progress = island.querySelector<HTMLElement>(".moss-nav-island-progress-fill");
@@ -265,10 +260,9 @@ export function initNavIsland(): void {
   //     more sections. Everything else it carries — the trail, the progress
   //     rule — is a second copy of something the masthead holds one
   //     scroll-to-top away; the sections panel is the only thing it alone
-  //     offers, so it is the only thing that earns a bar. Trail depth used
-  //     to rescue a heading-less page and no longer does: that spared the
-  //     rare deep essay without sections and made
-  //     every short page on every site pay for it.
+  //     offers, so it is the only thing that earns a bar. Whether those
+  //     sections hold enough text to be worth listing is the build's call
+  //     (`wants_contents_list`): a page that fails it ships no island.
   //  2. The theme's off-switch, `--moss-nav-island-display: none`. Read as a
   //     computed value rather than as a custom property so a site can disable
   //     the island from inside a media query. It is checked second because it

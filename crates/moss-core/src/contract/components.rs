@@ -3651,7 +3651,7 @@ const CORE: &[ComponentEntry] = &[
                 name: "data-header",
                 values: &["none"],
                 default: "",
-                description: "Present as `none` under `[site].header = \"none\"`. That island is the page's only chrome: it has no trail, carries the site's name and the section button, is emitted on every page, and shows from the first section heading to the end of the page instead of on scroll-up, except where the contents ruler is on screen. On a page with fewer than two sections it shows the controls alone, from the start. The controls (`.nav-icons`: search, language, theme) are its next sibling, one element placed by the island's state: at the end of the bar's place at the top of the page (`data-top`), in a column at the foot of the window under the contents ruler where the ruler is on screen (`data-ruler` `on` or `lane`), and in a slot the bar keeps free at its end otherwise.",
+                description: "Present as `none` under `[site].header = \"none\"`. That island is the page's only chrome: it has no trail, carries the site's name and the section button, is emitted on every page, and shows from the first section heading to the end of the page instead of on scroll-up, except where the contents ruler is on screen. On a page with fewer than two sections, or whose sections hold too little text to list (fewer than two hold 80 words of paragraphs, quotes and list items), it carries no section button and shows the controls alone, from the start. The controls (`.nav-icons`: search, language, theme) are its next sibling, one element placed by the island's state: at the end of the bar's place at the top of the page (`data-top`), in a column at the foot of the window under the contents ruler where the ruler is on screen (`data-ruler` `on` or `lane`), and in a slot the bar keeps free at its end otherwise.",
             },
             DataAttr {
                 name: "data-nameless",
@@ -3676,7 +3676,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Emerging,
         since: "0",
-        description: "Floating navigation island: a one-line bar, aligned to the text column, revealed on scroll-up once the masthead has left the screen. Opt-in — a site gets none until it sets `[site].floating_nav = true` (the Services-tab toggle writes that key), or `[site].header = \"none\"`, which pins it instead (see `data-header`). On a site that opted in, the markup is emitted on every page with a breadcrumb trail but only ever shows where the page has a contents table to offer: two or more section headings. `--moss-nav-island-display: none` forces it off from CSS, media query included.",
+        description: "Floating navigation island: a one-line bar, aligned to the text column, revealed on scroll-up once the masthead has left the screen. Opt-in — a site gets none until it sets `[site].floating_nav = true` (the Services-tab toggle writes that key), or `[site].header = \"none\"`, which pins it instead (see `data-header`). On a site that opted in, the markup is emitted on a page with a breadcrumb trail whose sections are worth listing, decided by the build from the page's text: at least two sections at the shallowest heading level the page uses (`##`, or `###` without one) each hold 80 words of paragraphs, quotes, callouts and list items, a CJK character counting as half a word (grids, card listings, buttons and embeds do not count). A page of two headings over a card grid and a few links gets no island. It then shows only where the rendered page has two or more of those headings. `contents: pictures` brings it regardless. `--moss-nav-island-display: none` forces it off from CSS, media query included.",
     },
     ComponentEntry {
         class: "moss-nav-island-bar",
@@ -3742,7 +3742,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Emerging,
         since: "0",
-        description: "Opens this page's section list. Always present in an emitted island, because an island only ever shows on a page with two or more sections — so the button always has something to open. The glyph is a small ruler. The site runtime adds the current section's name before it, in a box of fixed width, and hides the button while the contents ruler is on screen (not under `[site].header = \"none\"`, where the island stays and the button always names the section).",
+        description: "Opens this page's section list. Present in an emitted island unless it is a `[site].header = \"none\"` island on a page whose sections are too short to list; an island only ever shows the button on a page with two or more sections, so it always has something to open. The glyph is a small ruler. The site runtime adds the current section's name before it, in a box of fixed width, and hides the button while the contents ruler is on screen (not under `[site].header = \"none\"`, where the island stays and the button always names the section).",
     },
     ComponentEntry {
         class: "moss-nav-island-section-name",

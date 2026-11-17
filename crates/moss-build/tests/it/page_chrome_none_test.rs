@@ -6,10 +6,17 @@ use crate::site;
 
 use site::Site;
 
+// Two sections of 80 words: enough text for the floating nav island.
+macro_rules! words80 {
+    () => {
+        "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word"
+    };
+}
+
 const PAGES: [(&str, &str); 6] = [
     ("index.md", "---\ntitle: Harbour\n---\n\nHome text.\n"),
     ("events/landing.md", "---\ntitle: Open day\nchrome: none\n---\n\nCome along.\n"),
-    ("events/about.md", "---\ntitle: About\n---\n\nWho we are.\n"),
+    ("events/about.md", concat!("---\ntitle: About\n---\n\n## Who\n\n", words80!(), "\n\n## Where\n\n", words80!(), "\n")),
     ("events/index.md", "---\ntitle: Events\nchrome: none\n---\n\nWhat is on.\n"),
     ("events/plates.md", "---\ntitle: Plates\nchrome: none\ncontents: pictures\n---\n\n## One\n\nText.\n"),
     ("footer.md", "## Contact\n\nWrite to us.\n"),

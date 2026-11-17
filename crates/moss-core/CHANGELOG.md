@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `wants_contents_list(blocks)` says whether a page's sections hold enough text to list: at least two sections at its shallowest heading level with 80 words each. The floating nav island follows it.
+
 ### Changed
 
 - **BREAKING:** `ImageRenderOptions::eager: bool` is replaced by `loading: Loading`, one of `Lazy` (the default), `Eager` and `Priority` (`loading="eager" fetchpriority="high"`). Pass `Priority` where you passed `true`. `Loading::attrs` gives the attributes.

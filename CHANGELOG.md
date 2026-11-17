@@ -36,6 +36,10 @@ All notable changes to moss will be documented here.
 - `[members] reply_to = "desk@example.org"` in `.moss/config.toml` sends readers' replies to the site's mail (the subscribe link, the welcome letter, newsletters) to that address instead of the owner's sign-in email. On mosspub.com hosting it is handed to the host privately and appears in no published file.
 - Every listing says what its cards stand for: `data-list-holds` on `.moss-cards` is `entries` (pages), `collections` (folders and terms, each with a count) or `mixed`, and `data-list-axis` (its order) is now on list and summary listings too, not only on grids. A theme can style a listing of folders apart from a listing of pages.
 
+### Changed
+
+- On a site with `floating_nav = true`, a page whose sections hold little text, such as two headings over a card grid and a few links, no longer gets the floating nav island or the contents ruler. moss decides from the page's text: the island stays where at least two sections each hold 80 words of paragraphs, quotes or list items. Under `header = "none"` such a page keeps its controls without the sections button.
+
 ## [0.15.25] - 2026-11-16
 
 ### Fixed

@@ -712,6 +712,13 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub bare: bool,
+    /// The body's sections are worth the floating contents bar
+    /// (`moss_core::ast::wants_contents_list`). False on a page without a parsed
+    /// body (a generated listing), which a `floating_nav` site then draws
+    /// without the island, as the script would show none there.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub contents_list: bool,
     /// `reader_controls: false` removes the text-size control from a dated
     /// page. Set on the page or cascaded from a folder.
     #[serde(skip)]
@@ -839,6 +846,7 @@ impl ParsedDocument {
             body_claims_eager: full.body_claims_eager,
             lists_folders: full.lists_folders,
             has_own_map_embed: full.has_own_map_embed,
+            contents_list: full.contents_list,
             country_lists: full.country_lists.clone(),
             embedded_listing_urls: full.embedded_listing_urls.clone(),
             ..self.clone()

@@ -1528,8 +1528,6 @@ pub fn process_markdown_file(
             .map_err(|e| crate::build::cli_output::log_warn_problem!("[{file_path}] {e}; this page posts no copies"))
             .ok()
     });
-    let also_in = frontmatter.also_in;
-    let comments = frontmatter.comments;
     let map = frontmatter.map;
     let route = frontmatter.route.unwrap_or(false);
 
@@ -1591,6 +1589,7 @@ pub fn process_markdown_file(
         title_block: frontmatter.title_block,
         members_full: None,
         bare: frontmatter.chrome.as_deref() == Some("none"),
+        contents_list: moss_core::ast::wants_contents_list(&doc.blocks),
         reader_controls: frontmatter.reader_controls,
         card_extras: None,
         label,
@@ -1677,8 +1676,8 @@ pub fn process_markdown_file(
         breadcrumb,
         footer,
         cascade,
-        also_in,
-        comments,
+        also_in: frontmatter.also_in,
+        comments: frontmatter.comments,
         media_items,
         lang: doc_lang,
         lang_tag: doc_lang_tag,

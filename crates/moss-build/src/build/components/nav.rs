@@ -173,7 +173,7 @@ impl<'a> NavigationBuilder<'a> {
     pub fn with_header_mode(mut self, header_mode: HeaderMode) -> Self {
         self.header_mode = header_mode;
         if header_mode == HeaderMode::None {
-            self.island = island::IslandShape::Pinned;
+            self.island = island::IslandShape::Pinned { sections: true };
         }
         self
     }
@@ -203,6 +203,15 @@ impl<'a> NavigationBuilder<'a> {
     pub fn with_breadcrumb(mut self, segments: Vec<BreadcrumbSegment>, force_current_visible: bool) -> Self {
         self.breadcrumb_segments = Some(segments);
         self.breadcrumb_current_visible = force_current_visible;
+        self
+    }
+
+    /// Drop the sections button from a pinned island, for a page whose sections
+    /// are too short to list.
+    pub fn without_island_sections(mut self) -> Self {
+        if let island::IslandShape::Pinned { sections } = &mut self.island {
+            *sections = false;
+        }
         self
     }
 
