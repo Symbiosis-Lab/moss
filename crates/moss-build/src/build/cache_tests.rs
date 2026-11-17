@@ -3715,3 +3715,56 @@ fn a_rewrite_that_restores_its_mtime_in_the_recorded_ctime_second_is_not_vouched
     }
     panic!("no rewrite landed in the recorded ctime second in 50 tries");
 }
+
+/// A cache whose one picture record names one stored blob.
+fn cached_picture(name: &str) -> (TransformCache, String, PathBuf) {
+    let dir = make_test_dir(name);
+    let cache = TransformCache::new(dir.join("transforms"), ObjectStore::new(dir.join("objects")));
+    let blob_oid = cache.objects.store_bytes(b"encoded picture").unwrap();
+    let source_oid = "e".repeat(64);
+    let entry = TransformEntry { kept_for: None, validation: None, oid: blob_oid.clone(), size: 15, params: serde_json::json!({}) };
+    let record = TransformRecord { source_oid: source_oid.clone(), source_size: 1, transforms: HashMap::from([("image/webp".to_string(), entry)]) };
+    cache.put(&record, RecordMode::Request).unwrap();
+    let blob = cache.objects.blob_path(&blob_oid);
+    (cache, source_oid, blob)
+}
+
+/// A cloud-only record is fetched, then the cloud-only blob it names: the
+/// picture another machine encoded is downloaded, not encoded again.
+#[test]
+fn a_cloud_held_record_and_its_blob_are_fetched() {
+    let (cache, source_oid, blob) = cached_picture("fetch_record_then_blob");
+    let record = cache.record_path(&source_oid);
+    let _record_cloud = crate::build::icloud::pretend::evicted_until_requested(&record);
+    let _blob_cloud = crate::build::icloud::pretend::evicted_until_requested(&blob);
+    assert_eq!(cache.request_cloud_held(&source_oid, "image/"), vec![record.clone()], "the blob is unknown until the record arrives");
+    assert!(cache.fetch_cloud_held(&source_oid, "image/", &|| false));
+    assert!(crate::build::icloud::pretend::requests_for(&record) >= 1);
+    assert_eq!(crate::build::icloud::pretend::requests_for(&blob), 1);
+    assert!(cache.find_cached_output(&source_oid, "image/webp", &serde_json::json!({}), RecordMode::Request).is_some(), "a hit, with no encode");
+}
+
+/// A download that never arrives ends when the caller gives up.
+#[test]
+fn a_fetch_that_never_arrives_ends_when_given_up() {
+    let _short = ShortWaits::new();
+    let (cache, source_oid, blob) = cached_picture("fetch_never_arrives");
+    let _cloud = crate::build::icloud::pretend::evicted(&blob);
+    let asked = std::cell::Cell::new(0);
+    assert!(!cache.fetch_cloud_held(&source_oid, "image/", &|| { asked.set(asked.get() + 1); asked.get() > 2 }));
+    assert_eq!(cache.request_cloud_held(&source_oid, "other/"), Vec::<PathBuf>::new(), "only the asked-for kind is fetched");
+}
+
+/// A site's record found in the cloud is asked for in any folder, so the wait
+/// for it, or the next read, finds it local.
+#[test]
+fn an_offline_record_is_asked_for_outside_a_managed_folder() {
+    let dir = make_test_dir("offline_record_requested");
+    let cache = TransformCache::for_site(&crate::moss_paths::MossPaths::from_moss_dir(dir.join(".moss")));
+    let source_oid = "e".repeat(64);
+    let record = cache.record_path(&source_oid);
+    let _cloud = crate::build::icloud::pretend::evicted(&record);
+    let read = cache.read_via(&source_oid, RecordMode::Request, &|_, _| Err(std::io::Error::from_raw_os_error(libc::EDEADLK)));
+    assert!(matches!(read, super::records::RecordRead::Offline));
+    assert_eq!(crate::build::icloud::pretend::requests_for(&record), 1);
+}
