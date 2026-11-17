@@ -32,6 +32,7 @@ All notable changes to moss will be documented here.
 - After a reader subscribes, the form shows a check mark and the word at the button's height, ending where the button ended. The word used to float in the middle of the row.
 - The Obsidian plugin leaves a vault that is not a moss folder alone: it underlines nothing, explains and completes no fields and reads no site files until the vault's own folder holds `.moss/`. It checked every vault as if it were a site. A moss folder inside a vault, below its top level, is not checked yet.
 - A page with no `title:` is no longer reported as missing one, in the Obsidian plugin or the editor: moss takes the title from the file name.
+- A page's long copy for Substack, X, LinkedIn or Matters keeps its links working: a link to another page of the site or to a footnote leads back to the site, as its pictures already did.
 
 ### New
 

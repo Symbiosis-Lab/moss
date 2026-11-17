@@ -436,6 +436,16 @@ fn provisional_teasers_preserve_known_limits_and_form_order() {
 }
 
 #[test]
+fn an_article_copy_links_back_to_the_site() {
+    let mut p = post("", "Body");
+    p.html_content = Some("<a href=\"../walk/\">walk</a><a href=\"/tags/a/\">tag</a><a href=\"#fn-1\">1</a><a href=\"https://example.com/x\">out</a><a href=\"mailto:a@example.com\">mail</a><a href=\"//cdn.example/x\">cdn</a><a href=\"tel:+1\">call</a>".into());
+    let html = shape(&p, &spec(&[Form::Long], 300), SITE).unwrap().article.unwrap().html;
+    for href in ["https://example.org/notes/walk/", "https://example.org/tags/a/", "https://example.org/notes/2026-11-06-1432/#fn-1", "https://example.com/x", "mailto:a@example.com", "https://cdn.example/x", "tel:+1"] {
+        assert!(html.contains(&format!("href=\"{href}\"")), "{href} in {html}");
+    }
+}
+
+#[test]
 fn pictures_use_only_the_rendered_addresses_and_absent_html_has_none() {
     let mut p = post("", "![Authored](/source.jpg)");
     let mut channel = spec(&[Form::Short], 300);
