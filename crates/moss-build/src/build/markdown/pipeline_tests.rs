@@ -3888,11 +3888,9 @@ fn timestamp_date_is_not_a_build_problem() {
     );
 }
 
-/// The critical negative: `title` is the schema's one required field, and
-/// `validate_frontmatter` reports an `Error` when it is absent — but moss
-/// deliberately falls back to the filename, so most correct pages omit it.
-/// Emitting that error would fire on nearly
-/// every page and train authors to ignore the whole channel.
+/// The critical negative: moss falls back to the filename for a missing
+/// `title`, so most correct pages omit it. A missing-title warning would fire
+/// on nearly every page and train authors to ignore the whole channel.
 #[test]
 fn missing_title_does_not_warn_at_build() {
     let warnings = schema_frontmatter_warnings("post.md", &fm_of("date: '2026-08-04'"));

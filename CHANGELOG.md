@@ -30,6 +30,8 @@ All notable changes to moss will be documented here.
 - The search panel keeps its border all the way round when it shows no results. The line under the search box lay on the panel's bottom edge and covered the bottom of the border and of its focus ring.
 - Opening a folder whose files are still arriving from Google Drive, iCloud or another cloud service builds as soon as the files arrive. moss used to wait up to a minute after each arrival before trying again, so such an open could take several minutes.
 - After a reader subscribes, the form shows a check mark and the word at the button's height, ending where the button ended. The word used to float in the middle of the row.
+- The Obsidian plugin leaves a vault that is not a moss folder alone: it underlines nothing, explains and completes no fields and reads no site files until the vault's own folder holds `.moss/`. It checked every vault as if it were a site. A moss folder inside a vault, below its top level, is not checked yet.
+- A page with no `title:` is no longer reported as missing one, in the Obsidian plugin or the editor: moss takes the title from the file name.
 
 ### New
 

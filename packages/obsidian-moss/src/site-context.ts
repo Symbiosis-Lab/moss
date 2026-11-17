@@ -48,8 +48,15 @@ async function list(adapter: DataAdapter, path: string) {
   return await adapter.exists(path) ? adapter.list(path) : { files: [], folders: [] };
 }
 
-export async function readSiteContext(vault: Pick<Vault, "adapter" | "getFiles">): Promise<SiteContext> {
+/** moss's own rule: a folder is a site when it owns a `.moss/` folder. Only the vault's root is read as one. */
+async function isMossFolder(adapter: Pick<DataAdapter, "stat">): Promise<boolean> {
+  return (await adapter.stat(".moss"))?.type === "folder";
+}
+
+/** The vault's site, or null when the vault is not a moss folder and moss has nothing to say about its notes. */
+export async function readSiteContext(vault: Pick<Vault, "adapter" | "getFiles">): Promise<SiteContext | null> {
   const adapter = vault.adapter;
+  if (!await isMossFolder(adapter)) return null;
   const config = await adapter.exists(".moss/config.toml") ? await adapter.read(".moss/config.toml") : "";
   // The build serves only style.css; other sheets reach a page through its @import.
   const css = await themeCss(adapter, ".moss/theme/style.css");

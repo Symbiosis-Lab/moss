@@ -6,8 +6,10 @@ import { readSiteContext, vaultBaseHref } from "../src/site-context";
 
 initializeCore();
 
-function vault(files: Record<string, string>) {
+/** `moss` is what sits at the vault's `.moss`: moss's folder by default. */
+function vault(files: Record<string, string>, moss: "folder" | "file" | null = "folder") {
   const adapter = {
+    stat: async (path: string) => path === ".moss" && moss ? { type: moss } : null,
     exists: async (path: string) => path in files || Object.keys(files).some((key) => key.startsWith(`${path}/`)),
     read: async (path: string) => files[path] ?? "",
     list: async (path: string) => {
@@ -22,9 +24,23 @@ function vault(files: Record<string, string>) {
   return { adapter, getFiles: () => [...new Set(["note.md", "images/pic.png", ...Object.keys(files).filter((p) => !p.startsWith(".moss/"))])].map((path) => ({ path })) } as Pick<Vault, "adapter" | "getFiles">;
 }
 
+async function siteOf(site: Pick<Vault, "adapter" | "getFiles">) {
+  const context = await readSiteContext(site);
+  if (!context) throw new Error("not read as a moss folder");
+  return context;
+}
+
 describe("site context through the mobile adapter", () => {
+  it("reads nothing from a vault that is not a moss folder", async () => {
+    for (const moss of [null, "file"] as const) {
+      const site = vault({ "2026-11-17.md": "First line of a plain note." }, moss);
+      site.adapter.read = async (path: string) => { throw new Error(`read ${path}`); };
+      expect(await readSiteContext(site)).toBeNull();
+    }
+  });
+
   it("inlines the sheets style.css imports, where it imports them, once each", async () => {
-    const { theme_css } = await readSiteContext(vault({
+    const { theme_css } = await siteOf(vault({
       ".moss/theme/style.css": "/* was: @import \"parts/a.css\"; */\n@import \"parts/a.css\";\n@import url('print.css') print;\n@import url(https://fonts.example/x.css);\n@import \"l.css\" layer(base);\nbody{}",
       ".moss/theme/parts/a.css": "@import '../b.css';\n@import \"a.css\";\n.a{}",
       ".moss/theme/b.css": ".b{}",
@@ -36,7 +52,7 @@ describe("site context through the mobile adapter", () => {
   });
 
   it("reads lang, the theme's style.css alone and plugin contributions", async () => {
-    const context = await readSiteContext(vault({
+    const context = await siteOf(vault({
       ".moss/config.toml": 'lang = "wrong"\n[site]\nlang = "fr" # language\n[other]\nlang = "de"',
       ".moss/theme/style.css": "/* served-sheet */", ".moss/theme/a.css": "/* unserved-sheet */", ".moss/theme/ignored.txt": "ignored",
       ".moss/plugins/a/main.js": "", ".moss/plugins/b/main.js": "",
@@ -60,10 +76,10 @@ describe("site context through the mobile adapter", () => {
     });
   });
   it("defaults missing configuration to English with no contributions", async () => {
-    expect(await readSiteContext(vault({}))).toMatchObject({ lang: "en", theme_css: "", plugins: [], listing_styles: [] });
+    expect(await siteOf(vault({}))).toMatchObject({ lang: "en", theme_css: "", plugins: [], listing_styles: [] });
   });
   it("lets core elect the marked home and read terms and normalized language", async () => {
-    const context = await readSiteContext(vault({
+    const context = await siteOf(vault({
       "index.md": "---\nlang: de\n---",
       "welcome.md": "---\nhome: true\nlang: ' ZH-Hant '\n---",
       ".moss/config.toml": "[site]\nlang = 'invalid'\n[terms.people]\nfields = ['editor', 'title']",
@@ -81,11 +97,11 @@ describe("site context through the mobile adapter", () => {
     const reads: string[] = [];
     const read = site.adapter.read;
     site.adapter.read = async (path: string) => { reads.push(path); return read(path); };
-    await readSiteContext(site);
+    await siteOf(site);
     expect(reads.filter((path) => !path.startsWith(".moss/"))).toEqual(["Notes.MD", "index.md", "note.md"]);
   });
   it("passes malformed manifests and missing entries to core to skip", async () => {
-    const context = await readSiteContext(vault({
+    const context = await siteOf(vault({
       ".moss/config.toml": "[broken",
       ".moss/plugins/broken/manifest.json": "{",
       ".moss/plugins/missing/manifest.json": JSON.stringify({ entry: "missing.js", contributes: { listing_styles: { board: {} } } }),

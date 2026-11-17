@@ -1,8 +1,10 @@
-// E2E against a REAL Obsidian (wdio-obsidian-service). Proves the three
-// things unit tests cannot: the plugin actually loads, the frontmatter
-// diagnostics reach real editor pixels, and the preview command spawns the
-// CLI (shim), parses its output, and shows the served page in the pane.
+// E2E against a REAL Obsidian (wdio-obsidian-service). Proves what unit
+// tests cannot: the plugin loads, leaves a vault that is not a moss folder
+// untouched, shows frontmatter diagnostics in real editor pixels once the
+// vault becomes one, and the preview command spawns the CLI (shim), parses
+// its output, and shows the served page in the pane.
 import { browser, expect } from "@wdio/globals";
+import * as path from "node:path";
 import { obsidianPage } from "wdio-obsidian-service";
 
 /** Starts the preview and answers the first-build question (the shim never creates .moss/). */
@@ -10,6 +12,25 @@ async function startPreview(): Promise<void> {
   await browser.executeObsidianCommand("moss:preview");
   const proceed = browser.$(".modal button.mod-cta");
   if (await proceed.waitForExist({ timeout: 3000 }).catch(() => false)) await proceed.click();
+}
+
+/** Opens a note in source mode, so the raw frontmatter text and its decorations render. */
+async function openSource(file: string): Promise<void> {
+  await obsidianPage.openFile(file);
+  await browser.executeObsidian(async ({ app }) => {
+    const leaf = app.workspace.getMostRecentLeaf();
+    if (!leaf) return;
+    const state = leaf.getViewState();
+    state.state = { ...state.state, mode: "source", source: true };
+    await leaf.setViewState(state);
+  });
+}
+
+const stat = (file: string) => browser.executeObsidian(({ app }, file) => app.vault.adapter.stat(file), file);
+const activeDiagnostics = () => browser.$$(".workspace-leaf.mod-active [class*='moss-diag-']").length;
+
+async function screenshot(name: string): Promise<void> {
+  if (process.env.MOSS_E2E_SHOTS) await browser.saveScreenshot(path.join(process.env.MOSS_E2E_SHOTS, `${name}.png`));
 }
 
 describe("moss plugin", () => {
@@ -21,35 +42,19 @@ describe("moss plugin", () => {
     expect(loaded).toBe(true);
   });
 
-  it("shows frontmatter diagnostics in the editor", async () => {
-    await obsidianPage.openFile("bad-frontmatter.md");
-    // Force source mode so the raw frontmatter text (and its decorations)
-    // is what renders.
-    await browser.executeObsidian(({ app }) => {
-      const leaf = app.workspace.getMostRecentLeaf();
-      if (!leaf) return;
-      const state = leaf.getViewState();
-      state.state = { ...state.state, mode: "source", source: true };
-      void leaf.setViewState(state);
-    });
-
-    const unknown = browser.$(".moss-diag-hint");
-    await unknown.waitForExist({ timeout: 10000 });
-    expect(await unknown.getText()).toBe("titel");
-
-    const wrongType = browser.$("span.moss-diag-error");
-    await wrongType.waitForExist({ timeout: 10000 });
-    expect(await wrongType.getText()).toBe("draft");
-
-    // The clean note gets no decorations. Scope to the ACTIVE leaf —
-    // Obsidian keeps the previous tab's DOM alive in the background.
-    await obsidianPage.openFile("welcome.md");
-    await browser.waitUntil(
-      async () =>
-        !(await browser.$(".workspace-leaf.mod-active .moss-diag-hint").isExisting()) &&
-        (await browser.$(".workspace-leaf.mod-active .cm-content").getText()).includes("Welcome"),
-      { timeout: 10000, timeoutMsg: "diagnostics lingered in the active editor" },
-    );
+  it("checks, marks and writes nothing in a vault that is not a moss folder", async () => {
+    const notes = ["bad-frontmatter.md", "2026-11-17.md"];
+    const before = await Promise.all(notes.map(stat));
+    for (const note of notes) {
+      await openSource(note);
+      // Past layout-ready and the plugin's 250 ms context rebuild.
+      await browser.pause(2000);
+      expect(await browser.$(".workspace-leaf.mod-active .cm-content").getText()).not.toBe("");
+      expect(await activeDiagnostics()).toBe(0);
+    }
+    await screenshot("not-a-moss-folder");
+    expect(await Promise.all(notes.map(stat))).toEqual(before);
+    expect(await stat(".moss")).toBeNull();
   });
 
   it("asks before a first preview, and Cancel starts nothing", async () => {
@@ -120,5 +125,26 @@ describe("moss plugin", () => {
       timeout: 15000,
       timeoutMsg: "closing the pane left the server running",
     });
+  });
+
+  it("shows frontmatter diagnostics once the vault becomes a moss folder", async () => {
+    await obsidianPage.write(".moss/config.toml", "");
+    await openSource("bad-frontmatter.md");
+    const unknown = browser.$(".workspace-leaf.mod-active .moss-diag-hint");
+    await unknown.waitForExist({ timeout: 10000 });
+    expect(await unknown.getText()).toBe("titel");
+    const wrongType = browser.$(".workspace-leaf.mod-active span.moss-diag-error");
+    await wrongType.waitForExist({ timeout: 10000 });
+    expect(await wrongType.getText()).toBe("draft");
+    await screenshot("moss-folder");
+
+    // A note without frontmatter takes its title from the file name. Scope to
+    // the ACTIVE leaf: Obsidian keeps the previous tab's DOM alive.
+    for (const note of ["2026-11-17.md", "welcome.md"]) {
+      await openSource(note);
+      await browser.pause(1000);
+      expect(await browser.$(".workspace-leaf.mod-active .cm-content").getText()).not.toBe("");
+      expect(await activeDiagnostics()).toBe(0);
+    }
   });
 });

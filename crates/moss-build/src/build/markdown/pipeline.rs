@@ -262,20 +262,12 @@ static BUILTIN_SCHEMA: std::sync::OnceLock<moss_core::schema::ContentSchema> =
 /// bad date formats, missing required fields, unknown fields. Its only other
 /// caller is the editor (`editor/commands.rs`), which shows every diagnostic it
 /// returns. The build shows a deliberately narrower set, because a build warning
-/// that fires on correct content is worse than no warning at all:
-///
-/// - **Only fields the author actually wrote.** A diagnostic whose `path` names
-///   a key absent from the frontmatter is a missing-required-field report, and
-///   the only required field is `title` — which moss legitimately falls back to
-///   the filename for. Warning "required
-///   field 'title' is missing" would fire on most correct pages. Filtering on
-///   key presence rather than on the message text also keeps this from breaking
-///   when the wording changes.
-/// - **No bare `Hint`s.** Every unknown field is a `Hint`, and templates and
-///   plugins legitimately read their own keys — printing those would bury the
-///   real signals under one line per custom key. The actionable subset of that
-///   set is already covered by `foreign_frontmatter_warnings`, which is narrowed
-///   to a curated table.
+/// that fires on correct content is worse than no warning at all: no bare
+/// `Hint`s. Every unknown field is a `Hint`, and templates and plugins
+/// legitimately read their own keys — printing those would bury the real
+/// signals under one line per custom key. The actionable subset of that set is
+/// already covered by `foreign_frontmatter_warnings`, which is narrowed to a
+/// curated table.
 ///
 /// The editor keeps the full diagnostic set: it renders them inline against the
 /// field, where a hint costs nothing. This is about widening the build, not
@@ -295,14 +287,6 @@ fn schema_frontmatter_warnings(
         // A plugin may contribute the style, which this static schema cannot
         // know; `listing_style::apply` judges the value against the plugins.
         .filter(|d| d.path.as_deref() != Some("children_style"))
-        .filter(|d| {
-            // `path` is either a field name or `field[i]` for an array item;
-            // both map back to a top-level key the author wrote.
-            d.path.as_deref().is_some_and(|p| {
-                let base = p.split('[').next().unwrap_or(p);
-                moss_core::frontmatter::get_present(frontmatter, base).is_some()
-            })
-        })
         .map(|d| format!("[{}] frontmatter: {}", file_path, d.message))
         .collect()
 }

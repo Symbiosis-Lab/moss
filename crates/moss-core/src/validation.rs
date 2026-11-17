@@ -514,20 +514,25 @@ mod tests {
         ]);
         let diags = validate_frontmatter(&fm, &schema);
         assert!(diags.iter().all(|d| d.severity != Severity::Error), "{diags:?}");
+        let required = schema_requiring("title");
         let blank_title = make_fm(&[("title", serde_yaml::Value::Null)]);
-        assert!(validate_frontmatter(&blank_title, &schema)
+        assert!(validate_frontmatter(&blank_title, &required)
             .iter()
             .any(|d| d.message.contains("required field 'title' is missing")));
     }
 
-    #[test]
-    fn test_missing_required_title() {
-        let schema = builtin_schema();
-        let fm = make_fm(&[("date", str_val("2024-01-15"))]);
+    /// The built-in schema requires nothing; a host's own schema may.
+    fn schema_requiring(name: &str) -> ContentSchema {
+        let mut schema = builtin_schema();
+        schema.frontmatter.fields.get_mut(name).expect("built-in field").required = true;
+        schema
+    }
 
-        let diags = validate_frontmatter(&fm, &schema);
-        let missing: Vec<_> = diags
-            .iter()
+    #[test]
+    fn a_missing_required_field_is_an_error() {
+        let fm = make_fm(&[("date", str_val("2024-01-15"))]);
+        let missing: Vec<_> = validate_frontmatter(&fm, &schema_requiring("title"))
+            .into_iter()
             .filter(|d| d.severity == Severity::Error && d.message.contains("title"))
             .collect();
         assert_eq!(missing.len(), 1);
@@ -826,18 +831,8 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_frontmatter_only_required_errors() {
-        let schema = builtin_schema();
-        let fm = HashMap::new();
-
-        let diags = validate_frontmatter(&fm, &schema);
-        // Only "title" is required in the builtin schema
-        let errors: Vec<_> = diags
-            .iter()
-            .filter(|d| d.severity == Severity::Error)
-            .collect();
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].message.contains("title"));
+    fn empty_frontmatter_is_valid() {
+        assert_eq!(validate_frontmatter(&HashMap::new(), &builtin_schema()).len(), 0);
     }
 
     #[test]

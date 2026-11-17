@@ -25,6 +25,7 @@ export class MossFieldSuggest extends EditorSuggest<FieldCompletion> {
   }
 
   onTrigger(cursor: EditorPosition, editor: Editor, _file: TFile | null): EditorSuggestTriggerInfo | null {
+    if (this.getSchema().fields.size === 0) return null;
     const doc = editor.getValue();
     const before = editor.getLine(cursor.line).slice(0, cursor.ch);
     const m = /^([A-Za-z_-]+)$/.exec(before);

@@ -56,6 +56,11 @@ fn omitted_schema_uses_builtins() {
 }
 
 #[test]
+fn a_note_without_frontmatter_is_not_told_its_title_is_missing() {
+    assert_eq!(json_value(&site().check("2026-11-17.md", "First line of a plain note.\n")), json!([]));
+}
+
+#[test]
 fn check_preserves_whole_file_lines_and_editor_shape() {
     let result = json_value(&site().check("a.md", "---\ntitle: Example\ndraft: [bad]\n---\n\n[[missing]]\n\n:::grid 2\nLeft\n---\nRight\n:::"));
     let items = result.as_array().unwrap();

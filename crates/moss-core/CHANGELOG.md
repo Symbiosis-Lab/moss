@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING:** `BuiltinField::required` is removed, and the built-in schema requires no field: `title` is optional, since a page without one takes its title from the file name, so `validate_frontmatter` and `page::check_page` no longer report it missing. `FieldDefinition::required` stays for schemas a host supplies. A struct literal must drop the field.
 - **BREAKING:** `ImageRenderOptions::eager: bool` is replaced by `loading: Loading`, one of `Lazy` (the default), `Eager` and `Priority` (`loading="eager" fetchpriority="high"`). Pass `Priority` where you passed `true`. `Loading::attrs` gives the attributes.
 
 ## [0.26.0] - 2026-11-16

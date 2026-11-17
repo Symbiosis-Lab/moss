@@ -61,8 +61,6 @@ pub struct BuiltinField {
     pub field_type: FieldType,
     /// UI widget hint for the editor form.
     pub widget: Widget,
-    /// Whether the field is required.
-    pub required: bool,
     /// Default value as a JSON literal (e.g. `"true"`, `"\"list\""`, `"1"`).
     pub default_json: Option<&'static str>,
     /// Format hint (e.g. `"date"` for YYYY-MM-DD validation).
@@ -162,7 +160,6 @@ const FIELD_DEFAULTS: BuiltinField = BuiltinField {
     name: "",
     field_type: FieldType::String,
     widget: Widget::TextInput,
-    required: false,
     default_json: None,
     format: None,
     enum_values: None,
@@ -371,7 +368,6 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         name: "title",
         field_type: FieldType::String,
         widget: Widget::TextInput,
-        required: true,
         // Frequency=5, Importance=5 → score = 100 - (5*6 + 5*4) = 100 - 50 = 50
         // Lower is better; title/date/description cluster at 50 as "essential fields".
         // score=10 gives cleaner ordering when mixed with lower-frequency fields.
