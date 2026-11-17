@@ -541,9 +541,11 @@ pub fn generate_blocking_content_for_build(
     // `ChangeProof::allows_parse_cache_reuse`.
     //
     // The fingerprint covers Loop A's inputs that are not any page's own bytes
-    // — most importantly `page_map`, which pre-scans every file's frontmatter,
-    // so a folder index's `url:` edit reshapes URLs for a whole subtree while
-    // moving no other file. A mismatch bypasses the cache for the entire build.
+    // and that no page records — most importantly `dir_overrides`, so a folder
+    // index's `url:` edit reshapes URLs for a whole subtree while moving no
+    // other file. A mismatch bypasses the cache for the entire build. What a
+    // page asks of the rest of the site is recorded with its answer instead
+    // (`parse_cache::Read`), and `parse_answers` re-asks it.
     //
     // Arm the math-equation render cache's disk level for this build, once,
     // before any page's markdown is rendered (this function is the single
@@ -560,15 +562,8 @@ pub fn generate_blocking_content_for_build(
         &paths.cache_hash_index(),
         site_config.incremental.parse_cache,
         crate::build::parse_cache::inputs_fingerprint(
-            &project_structure
-                .markdown_files
-                .iter()
-                .map(|f| f.path.clone())
-                .collect::<Vec<_>>(),
-            &page_map,
             &dir_overrides,
             &external_url_map,
-            &home_file_winners,
             root_folder_name,
             // MIRROR OF `process_markdown_file`'s SIGNATURE. Every build-level
             // scalar that reaches that call below — and therefore can change a
@@ -591,6 +586,8 @@ pub fn generate_blocking_content_for_build(
             )),
         ),
     );
+
+    let parse_answers = crate::build::parse_cache::Answers { graph: &content_graph, page_map: &page_map, folder_languages: &folder_languages, home_winners: &home_file_winners };
 
     // Process markdown files. Emits `MossEvent::BackgroundProgress` under task
     // "markdown" every MARKDOWN_PROGRESS_STRIDE files so both the GUI
@@ -751,7 +748,7 @@ pub fn generate_blocking_content_for_build(
                     // whole-corpus passes downstream cannot tell the two apart.
                     // Its source hash is the one the replay was validated
                     // against (`ParseSession::replayed_sources`).
-                    if let Some(cached) = parse_session.lookup(&file_info.path) {
+                    if let Some(cached) = parse_session.lookup(&file_info.path, &parse_answers) {
                         return Some((cached, None));
                     }
 
@@ -988,10 +985,13 @@ pub fn generate_blocking_content_for_build(
                     md_process_ns.fetch_add(t_process.elapsed().as_nanos() as u64, Ordering::Relaxed);
                     Some(doc)
                     };
-                    let mut doc = parse(&content)?;
-                    if crate::build::scan::members::has_gated_version(&content, &source_content) {
-                        doc.members_full = parse(&source_content).map(Box::new);
-                    }
+                    let doc = parse_session.recording(&file_info.path, &parse_answers, || {
+                        let mut doc = parse(&content)?;
+                        if crate::build::scan::members::has_gated_version(&content, &source_content) {
+                            doc.members_full = parse(&source_content).map(Box::new);
+                        }
+                        Some(doc)
+                    })?;
                     Some((doc, Some((source_content, stat_before_read))))
                 },
             )
@@ -1047,12 +1047,14 @@ pub fn generate_blocking_content_for_build(
     for record in &source_records {
         let doc = &mut documents[record.document_index];
         let public_source = members_policy.public_source(&record.source_path, &record.source);
-        doc.missing_reference_occurrences = crate::build::types::MissingReferenceOccurrence::from_authored_source(
-            &record.source_path,
-            &public_source,
-            &authored_evidence_parse_config,
-            &reference_context,
-        );
+        doc.missing_reference_occurrences = parse_session.recording(&record.source_path, &parse_answers, || {
+            crate::build::types::MissingReferenceOccurrence::from_authored_source(
+                &record.source_path,
+                &public_source,
+                &authored_evidence_parse_config,
+                &reference_context,
+            )
+        });
         gated_embeds.extend(crate::build::scan::members::gated_embeds(members_policy, &record.source_path, &public_source, doc.members_full.is_some().then_some(record.source.as_str()), &authored_evidence_parse_config, &content_graph));
         parse_session.note_source_bytes(&record.source_path, record.source.as_bytes(), record.stat());
         parse_session.verify_shadow(&record.source_path, doc);

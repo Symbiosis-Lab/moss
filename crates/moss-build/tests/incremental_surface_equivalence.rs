@@ -1133,3 +1133,137 @@ fn a_date_edit_reaches_pages_that_draw_its_card_without_a_body_link() {
 fn a_draft_toggle_reaches_pages_that_draw_its_folders_card() {
     card_reader_scenario("card readers: draft", "date: 2026-01-05", "draft: true\ndate: 2026-01-05");
 }
+
+/// A page entering or leaving the site. `change` is applied to the
+/// incremental tree after its first build and to a fresh tree before its only
+/// one; the second build is told the `moved` paths as a structural batch, the
+/// way the watcher reports a create, delete or rename. `replays` says whether
+/// the batch lets the parse cache replay the pages it did not reach (a
+/// picture still turns the cache off for the whole build).
+fn membership_scenario(name: &str, setup: fn(&Path), change: fn(&Path), moved: &[&str], replays: bool) {
+    let _guard = SEQUENTIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let logger = capture();
+    let tmp = tempfile::tempdir().unwrap();
+    let incremental_root = tmp.path().join("incremental");
+    let full_root = tmp.path().join("full");
+
+    setup(&incremental_root);
+    let baseline = build(&incremental_root.to_string_lossy(), moss_build::build::BuildTrigger::Full);
+    assert!(baseline.is_ok(), "[{name}] {baseline:?}");
+
+    change(&incremental_root);
+    logger.lines.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
+    let moved: Vec<PathBuf> = moved.iter().map(|p| incremental_root.join(p)).collect();
+    let result = build(&incremental_root.to_string_lossy(), moss_build::build::BuildTrigger::Structural(moved));
+    assert!(result.is_ok(), "[{name}] {result:?}");
+    let lines = logger.lines.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    let replayed = lines.iter().any(|l| l.starts_with("parse cache: ") && !l.starts_with("parse cache: 0 of"));
+    assert_eq!(replayed, replays, "[{name}] parse cache replay, got: {lines:?}");
+
+    setup(&full_root);
+    change(&full_root);
+    let full = build(&full_root.to_string_lossy(), moss_build::build::BuildTrigger::Full);
+    assert!(full.is_ok(), "[{name}] {full:?}");
+
+    assert_trees_byte_identical(name, &incremental_root, &full_root);
+}
+
+fn write_card_reader_vault_with_a_dangling_link(root: &Path) {
+    write_card_reader_vault(root);
+    write(root, "linker.md", "---\ntitle: Linker\n---\n\nSee [[Arrival]] when it lands.\n");
+}
+
+/// `body-linker.md` links to `work/b.md` from its body, which the parse resolves.
+fn write_card_reader_vault_with_a_body_link(root: &Path) {
+    write_card_reader_vault(root);
+    write(root, "body-linker.md", "---\ntitle: Body Linker\n---\n\nSee [[b]] for the bee.\n");
+}
+
+#[test]
+fn a_new_page_satisfies_a_dangling_link() {
+    membership_scenario(
+        "membership: add",
+        write_card_reader_vault_with_a_dangling_link,
+        |root| write(root, "work/arrival.md", "---\ntitle: Arrival\ndate: 2026-02-01\n---\n\nIt landed.\n"),
+        &["work/arrival.md"], true,
+    );
+}
+
+/// `next-reader.md` names it in front matter, `grid-reader.md` in a grid cell,
+/// `body-linker.md` in its body, and `folder-reader.md` counts it on `work/`'s card.
+#[test]
+fn a_deleted_page_leaves_every_page_that_named_or_counted_it() {
+    membership_scenario(
+        "membership: delete",
+        write_card_reader_vault_with_a_body_link,
+        |root| std::fs::remove_file(root.join("work/b.md")).unwrap(),
+        &["work/b.md"], true,
+    );
+}
+
+/// In a folder without an index the first file by name is its home: a page
+/// added ahead of every other one in `work/` takes that election.
+#[test]
+fn a_page_added_first_by_name_in_a_folder_without_an_index() {
+    membership_scenario(
+        "membership: first by name",
+        write_card_reader_vault,
+        |root| write(root, "work/aardvark.md", "---\ntitle: Aardvark\ndate: 2026-02-01\n---\n\nFirst by name.\n"),
+        &["work/aardvark.md"], true,
+    );
+}
+
+/// A self-named folder note loses its folder's home to a new `index.md`.
+#[test]
+fn a_new_index_takes_its_folders_home_from_a_folder_note() {
+    membership_scenario(
+        "membership: new index",
+        |root| {
+            write_card_reader_vault(root);
+            write(root, "notes/notes.md", "---\ntitle: Notes\n---\n\nThe folder note.\n");
+            write(root, "notes/leaf.md", "---\ntitle: Leaf\n---\n\nSee [[notes]].\n");
+        },
+        |root| write(root, "notes/index.md", "---\ntitle: Notes Index\n---\n\nThe new home.\n"),
+        &["notes/index.md"], true,
+    );
+}
+
+#[test]
+fn a_renamed_page_leaves_its_old_name_and_takes_its_new_one() {
+    membership_scenario(
+        "membership: rename",
+        write_card_reader_vault_with_a_body_link,
+        |root| std::fs::rename(root.join("work/b.md"), root.join("work/bee.md")).unwrap(),
+        &["work/b.md", "work/bee.md"], true,
+    );
+}
+
+#[test]
+fn a_picture_added_after_a_page_named_it() {
+    membership_scenario(
+        "membership: picture",
+        |root| {
+            write_card_reader_vault(root);
+            write(root, "work/later.md", "---\ntitle: Later\n---\n\n![A view](later.png)\n");
+        },
+        |root| write_png(root, "work/later.png", [40, 160, 40]),
+        &["work/later.png"], false,
+    );
+}
+
+/// A folder whose only home was a language variant gains its plain `index.md`:
+/// the variant keeps the home's address but stops being the folder's page.
+#[test]
+fn a_new_index_turns_its_folders_language_home_into_a_variant() {
+    membership_scenario(
+        "membership: variant home",
+        |root| {
+            write_card_reader_vault(root);
+            write(root, "notes/index.zh-hans.md", "---\ntitle: 筆記\n---\n\n中文首頁。\n");
+            write(root, "notes/leaf.md", "---\ntitle: Leaf\n---\n\nA leaf.\n");
+        },
+        |root| write(root, "notes/index.md", "---\ntitle: Notes\n---\n\nThe English home.\n"),
+        &["notes/index.md"],
+        true,
+    );
+}

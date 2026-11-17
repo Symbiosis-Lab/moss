@@ -373,9 +373,10 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
     // computed by entirely separate code paths. This one is POST-parse and
     // CONTENT-based; its pre-parse, input-SHAPE-based sibling is
     // `build::parse_cache::inputs_fingerprint`, which bypasses the Loop A
-    // parse cache when `page_map`/`dir_overrides`/`external_url_map`/
-    // `home_file_winners` move. If you are bisecting a stale-page report,
-    // check both — neither one subsumes the other.
+    // parse cache when `dir_overrides`, `external_url_map` or a site scalar
+    // moves (each page's own recorded reads are its narrower sibling). If you
+    // are bisecting a stale-page report, check both — neither one subsumes
+    // the other.
     let contributions = global_contributions(documents, inputs.math);
     let global_invalidator_changed = previous.digests_moved(DigestMap::GlobalContributions, &contributions);
 
