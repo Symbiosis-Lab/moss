@@ -1239,7 +1239,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
         let skipped = build_documents.iter().filter(|d| d.slot_only).count();
         crate::build::cli_output::note_built(build_documents.len() - skipped, skipped);
     }
-    // Fetch the link cards this build showed with nothing in the folder yet.
+    // Fetch the link cards this build showed waiting.
     // Asked here, by every interactive build: the comment sync above starts
     // before a build knows its links, and a watch rebuild starts no sync. A
     // build that exits fetched its cards before it rendered.

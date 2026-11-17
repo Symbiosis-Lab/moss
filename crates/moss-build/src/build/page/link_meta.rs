@@ -328,9 +328,8 @@ fn read_cache(moss_dir: &Path, url: &str, evidence: Option<&InputEvidence>) -> O
 
 /// Moves an entry an older moss kept in `build.nosync` into the site folder,
 /// once, and removes the old one only after the move is written. Its picture
-/// comes along when this machine still holds the bytes; otherwise the card has
-/// none until its entry is deleted and fetched again, since fetching here
-/// would let two machines disagree.
+/// comes along when this machine still holds the bytes; otherwise it is
+/// downloaded again, like any picture that did not download.
 fn migrate_old_entry(moss_dir: &Path, url: &str, evidence: Option<&InputEvidence>) -> Option<link_snapshot::Fetched> {
     let (old_path, old) = old_entry(moss_dir, url)?;
     let objects = crate::build::cache::ObjectStore::for_site(&MossPaths::from_moss_dir(moss_dir.to_path_buf()));
@@ -359,8 +358,14 @@ fn old_entry(moss_dir: &Path, url: &str) -> Option<(std::path::PathBuf, OldEntry
 
 /// Whether a link has a card, leaving an older moss's entry where it is: the
 /// build's own read moves it, and its seal records the move.
-fn has_card(moss_dir: &Path, url: &str) -> bool {
-    !matches!(link_snapshot::read(moss_dir, url, None), link_snapshot::Entry::Absent) || old_entry(moss_dir, url).is_some()
+/// Whether a fetch has nothing left to bring for `url`: its entry is in the
+/// folder (or the cloud), and any picture its page names was downloaded.
+fn is_settled(moss_dir: &Path, url: &str) -> bool {
+    match link_snapshot::read(moss_dir, url, None) {
+        link_snapshot::Entry::Fetched(f) => !f.picture_failed(),
+        link_snapshot::Entry::InCloud => true,
+        link_snapshot::Entry::Absent => old_entry(moss_dir, url).is_some(),
+    }
 }
 
 /// Saves what a fetch brought back into the site folder.
@@ -541,9 +546,12 @@ fn is_unsafe_address(ip: std::net::IpAddr) -> bool {
 /// timeout given). Calling it from the build's render path freezes the
 /// pipeline; it runs only on the worker pool below.
 fn fetch_link_meta_with_timeout(url: &str, moss_dir: &Path, timeout: std::time::Duration) -> LinkMeta {
-    // 1. Check cache
+    // 1. Check cache; a picture that did not download is asked for again.
     if let Some(cached) = read_cache(moss_dir, url, None) {
-        return cached;
+        return match (cached.state, cached.og_image.as_deref(), &cached.cover) {
+            (CardState::Fetched, Some(image), None) => retry_picture(moss_dir, cached.clone(), image, timeout),
+            _ => cached,
+        };
     }
 
     // 2. Refuse an unsafe target rather than fetch it — see `is_unsafe_fetch_target`.
@@ -559,10 +567,9 @@ fn fetch_link_meta_with_timeout(url: &str, moss_dir: &Path, timeout: std::time::
             let (html, read_ok) = read_capped_body(resp.into_reader());
             if read_ok {
                 let mut meta = parse_link_meta(url, &html);
-                // Kept with the page's entry either way, so a picture that
-                // failed to download is not tried again until the entry is
-                // deleted, like the title.
-                meta.cover = meta.og_image.as_deref().and_then(|img| download_og_image(img, moss_dir, timeout));
+                if let Some(image) = meta.og_image.clone() {
+                    apply_download(&mut meta, download_og_image(&image, moss_dir, timeout));
+                }
                 save_fetched(moss_dir, &meta);
                 LinkMeta { state: CardState::Fetched, ..meta }
             } else {
@@ -596,18 +603,51 @@ const MAX_OG_IMAGE_DIMENSION: u32 = 10_000;
 /// any failure: non-image content type, oversized body, bytes that don't
 /// decode, or a target [`is_unsafe_fetch_target`] refuses — every case
 /// degrades to "no cover", never a build failure.
-fn download_og_image(image_url: &str, moss_dir: &Path, timeout: std::time::Duration) -> Option<String> {
-    if is_unsafe_fetch_target(image_url) {
-        return None;
+/// Why a picture did not download.
+#[derive(Debug, PartialEq, Eq)]
+enum PictureFailed {
+    /// Never will: the address is refused, gone (404, 410) or not a picture
+    /// moss can read.
+    Gone,
+    /// Might next time: a timeout, a connection error, a server error, any
+    /// other refusal, or a page answering in the picture's place.
+    Retry,
+}
+
+/// A stored picture becomes the card's cover; a gone one is forgotten, so the
+/// card is one with no picture.
+fn apply_download(meta: &mut LinkMeta, download: Result<String, PictureFailed>) {
+    match download {
+        Ok(cover) => meta.cover = Some(cover),
+        Err(PictureFailed::Gone) => meta.og_image = None,
+        Err(PictureFailed::Retry) => {}
     }
-    let resp = get_checked(image_url, timeout).ok()?;
-    // Cheap early exit on an explicit non-image Content-Type. Not the
-    // authoritative check — a server can omit or lie about it — but avoids
-    // downloading a body we're going to discard.
+}
+
+/// Downloads a fetched card's picture again, keeping the rest of its entry.
+/// A retry that fails leaves the entry's bytes, and so the file, untouched.
+fn retry_picture(moss_dir: &Path, mut meta: LinkMeta, image: &str, timeout: std::time::Duration) -> LinkMeta {
+    apply_download(&mut meta, download_og_image(image, moss_dir, timeout));
+    save_fetched(moss_dir, &meta);
+    meta
+}
+
+fn download_og_image(image_url: &str, moss_dir: &Path, timeout: std::time::Duration) -> Result<String, PictureFailed> {
+    use PictureFailed::{Gone, Retry};
+    if is_unsafe_fetch_target(image_url) {
+        return Err(Gone);
+    }
+    let resp = get_checked(image_url, timeout).map_err(|e| match e {
+        ureq::Error::Status(404 | 410, _) => Gone,
+        _ => Retry,
+    })?;
+    // An explicit non-image Content-Type is something answering in the
+    // picture's place, a captive portal or an error page, not word that the
+    // picture is gone; its body is not downloaded.
     if let Some(ct) = resp.header("Content-Type") {
         let ct = ct.split(';').next().unwrap_or(ct).trim();
         if !ct.is_empty() && !ct.starts_with("image/") {
-            return None;
+            return Err(Retry);
         }
     }
     let mut buf = Vec::new();
@@ -616,19 +656,19 @@ fn download_og_image(image_url: &str, moss_dir: &Path, timeout: std::time::Durat
         resp.into_reader()
             .take(MAX_OG_IMAGE_DOWNLOAD_BYTES)
             .read_to_end(&mut buf)
-            .ok()?;
+            .map_err(|_| Retry)?;
     }
     // The authoritative check: sniff the magic bytes and require moss's
     // pipeline to actually be able to decode it. `should_skip`'s CMYK/
     // animated/SVG rejections in the real conversion still apply later —
     // this only rules out "not an image at all" and a truncated download
     // (a cap mid-stream will usually fail to decode as a complete image).
-    let format = image::guess_format(&buf).ok()?;
+    let format = image::guess_format(&buf).map_err(|_| Gone)?;
     let ext = match format {
         image::ImageFormat::Jpeg => "jpg",
         image::ImageFormat::Png => "png",
         image::ImageFormat::WebP => "webp",
-        _ => return None,
+        _ => return Err(Gone),
     };
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(MAX_OG_IMAGE_DIMENSION);
@@ -636,8 +676,8 @@ fn download_og_image(image_url: &str, moss_dir: &Path, timeout: std::time::Durat
     let mut reader = image::ImageReader::new(std::io::Cursor::new(&buf));
     reader.set_format(format);
     reader.limits(limits);
-    reader.decode().ok()?;
-    link_snapshot::store_cover(moss_dir, &buf, ext)
+    reader.decode().map_err(|_| Gone)?;
+    link_snapshot::store_cover(moss_dir, &buf, ext).ok_or(Retry)
 }
 
 /// A `LinkMeta` with only its URL, for a URL that could not be fetched.
@@ -782,14 +822,14 @@ fn fetch_all_link_meta_parallel_bounded(
     completed
 }
 
-/// The URLs with nothing in the folder yet: neither fetched nor held by the
-/// cloud. Only these are fetched.
+/// The URLs a fetch can still bring something for: no entry in the folder or
+/// the cloud, or a picture that did not download. Only these are fetched.
 pub(crate) fn cold_urls(urls: &[&str], moss_dir: &Path) -> Vec<String> {
-    urls.iter().filter(|u| !has_card(moss_dir, u)).map(|u| (*u).to_string()).collect()
+    urls.iter().filter(|u| !is_settled(moss_dir, u)).map(|u| (*u).to_string()).collect()
 }
 
-/// The cards of `read` missing their picture with no entry in the folder: the
-/// ones a fetch can bring. One the cloud holds is not one.
+/// The cards of `read` missing their picture that a fetch can bring. One the
+/// cloud holds is not one.
 pub(crate) fn waiting_cards(read: &HashMap<String, LinkMeta>, moss_dir: &Path) -> Vec<String> {
     let missing: Vec<&str> = read.iter().filter(|(_, m)| m.cover_slot() == CoverSlot::Missing).map(|(u, _)| u.as_str()).collect();
     cold_urls(&missing, moss_dir)
@@ -825,7 +865,7 @@ pub fn settle(mp: &MossPaths) -> Settled {
     let moss_dir = mp.root();
     let refs: Vec<&str> = listed.iter().map(String::as_str).collect();
     fetch_all_link_meta_parallel(&refs, moss_dir, |_| {});
-    let fetched = refs.iter().filter(|u| has_card(moss_dir, u)).count();
+    let fetched = refs.iter().filter(|u| is_settled(moss_dir, u)).count();
     log::info!(target: "link-meta", "publish: {fetched} of {} waiting link cards fetched", listed.len());
     Settled { fetched, waiting: listed.len() - fetched }
 }
@@ -1041,6 +1081,54 @@ mod tests {
         let cards = read_link_meta_from_cache(&["https://no-picture.example", "https://not-fetched.example"], &tmp, None);
         assert_eq!((cards["https://no-picture.example"].state, cards["https://no-picture.example"].cover.as_deref()), (CardState::Fetched, None));
         assert_eq!(cards["https://not-fetched.example"].state, CardState::NotYet);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A card whose fetched page names a picture that did not download.
+    fn seed_failed_picture(tmp: &Path, url: &str, image: &str) {
+        save_fetched(tmp, &LinkMeta { url: url.into(), title: Some("Kept title".into()), og_image: Some(image.into()), ..Default::default() });
+    }
+
+    /// The generation showed `url` waiting, so a publish settles it.
+    fn list_waiting(tmp: &Path, url: &str) -> MossPaths {
+        let mp = MossPaths::from_moss_dir(tmp.to_path_buf());
+        let path = waiting_path(&mp.hashes());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, serde_json::to_vec(&[url]).unwrap()).unwrap();
+        mp
+    }
+
+    #[test]
+    fn a_gone_picture_closes_the_card_up_after_one_retry() {
+        let tmp = unique_tmp("gone_picture");
+        let url = "https://gone-picture.example/";
+        let (base, server) = spawn_404_server();
+        seed_failed_picture(&tmp, url, &format!("{base}/cover.png"));
+        assert!(!is_settled(&tmp, url), "a picture that did not download is waiting");
+        let settled = settle(&list_waiting(&tmp, url));
+        assert_eq!(settled, Settled { fetched: 1, waiting: 0 }, "the card changed, so the publish rebuilds");
+        let _ = server.join();
+        let card = read_cache(&tmp, url, None).unwrap();
+        assert_eq!((card.og_image.as_deref(), card.title.as_deref()), (None, Some("Kept title")));
+        assert_eq!(card.cover_slot(), CoverSlot::None);
+        // The 404 server answered once; a second retry would fail to connect and leave it waiting.
+        assert!(is_settled(&tmp, url));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_picture_that_cannot_be_reached_leaves_its_entry_as_it_was() {
+        let tmp = unique_tmp("unreachable_picture");
+        let url = "https://unreachable-picture.example/";
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
+        seed_failed_picture(&tmp, url, &format!("http://{closed}/cover.png"));
+        let card_path = link_snapshot::card_path(&tmp, url);
+        let before = (std::fs::read(&card_path).unwrap(), std::fs::metadata(&card_path).unwrap().modified().unwrap());
+        let settled = settle(&list_waiting(&tmp, url));
+        assert_eq!(settled, Settled { fetched: 0, waiting: 1 }, "nothing changed, so no rebuild");
+        let after = (std::fs::read(&card_path).unwrap(), std::fs::metadata(&card_path).unwrap().modified().unwrap());
+        assert_eq!(after, before, "the entry is not written, so no watch event rebuilds the page");
+        assert!(!is_settled(&tmp, url), "it is asked for again next time");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -1793,7 +1881,7 @@ mod tests {
         let (base, server) = spawn_byte_server(png.clone(), Some("image/png"));
         let tmp = fresh_tmp("download_og_image_ok");
         let result = download_og_image(&format!("{base}/cover.png"), &tmp, std::time::Duration::from_secs(5));
-        let cover = result.expect("a real PNG must download and decode");
+        let Ok(cover) = result else { panic!("a real PNG must download and decode: {result:?}") };
         assert!(cover.ends_with(".png"), "{cover}");
         let stored = link_snapshot::cover_path(&tmp, &cover);
         assert_eq!(std::fs::read(stored).unwrap(), png, "stored in the site folder, identical to the download");
@@ -1802,11 +1890,11 @@ mod tests {
     }
 
     #[test]
-    fn download_og_image_rejects_a_non_image_content_type() {
-        let (base, server) = spawn_byte_server(b"<html>not a real image</html>".to_vec(), Some("text/html"));
+    fn a_page_answering_for_the_picture_is_tried_again() {
+        let (base, server) = spawn_byte_server(b"<html>Sign in to the Wi-Fi</html>".to_vec(), Some("text/html"));
         let tmp = fresh_tmp("download_og_image_wrong_ct");
-        let result = download_og_image(&format!("{base}/page.html"), &tmp, std::time::Duration::from_secs(5));
-        assert!(result.is_none(), "an explicit non-image Content-Type must short-circuit before decoding");
+        let result = download_og_image(&format!("{base}/cover.png"), &tmp, std::time::Duration::from_secs(5));
+        assert_eq!(result, Err(PictureFailed::Retry), "a captive portal must not make a card forget its picture");
         let _ = server.join();
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1818,7 +1906,7 @@ mod tests {
         let (base, server) = spawn_byte_server(b"this is not image data at all".to_vec(), Some("image/jpeg"));
         let tmp = fresh_tmp("download_og_image_fake_ct");
         let result = download_og_image(&format!("{base}/fake.jpg"), &tmp, std::time::Duration::from_secs(5));
-        assert!(result.is_none(), "a lying Content-Type must not bypass the decode check");
+        assert_eq!(result, Err(PictureFailed::Gone), "a lying Content-Type must not bypass the decode check");
         let _ = server.join();
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1828,7 +1916,7 @@ mod tests {
         let (base, server) = spawn_404_server();
         let tmp = fresh_tmp("download_og_image_404");
         let result = download_og_image(&format!("{base}/missing.png"), &tmp, std::time::Duration::from_secs(5));
-        assert!(result.is_none());
+        assert_eq!(result, Err(PictureFailed::Gone), "a 404 picture is gone");
         let _ = server.join();
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1958,7 +2046,7 @@ mod tests {
             std::time::Duration::from_secs(5),
         );
         let elapsed = start.elapsed();
-        assert!(result.is_none(), "an unsafe target must never be downloaded");
+        assert_eq!(result, Err(PictureFailed::Gone), "an unsafe target must never be downloaded");
         assert!(
             elapsed < std::time::Duration::from_millis(200),
             "must reject before attempting any connection, not after timing one out: {elapsed:?}"
@@ -1996,7 +2084,7 @@ mod tests {
         let (base, server) = spawn_byte_server(bomb, Some("image/png"));
         let tmp = fresh_tmp("og_image_over_cap");
         let result = download_og_image(&format!("{base}/wide.png"), &tmp, std::time::Duration::from_secs(5));
-        assert!(result.is_none(), "a canvas over MAX_OG_IMAGE_DIMENSION must be rejected");
+        assert_eq!(result, Err(PictureFailed::Gone), "a canvas over MAX_OG_IMAGE_DIMENSION must be rejected");
         let _ = server.join();
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -2007,7 +2095,7 @@ mod tests {
         let (base, server) = spawn_byte_server(tiny_png_bytes(), Some("image/png"));
         let tmp = fresh_tmp("og_image_normal");
         let result = download_og_image(&format!("{base}/cover.png"), &tmp, std::time::Duration::from_secs(5));
-        assert!(result.is_some(), "an ordinary small image must still download");
+        assert!(result.is_ok(), "an ordinary small image must still download");
         let _ = server.join();
         let _ = std::fs::remove_dir_all(&tmp);
     }

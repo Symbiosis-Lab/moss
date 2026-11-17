@@ -35,6 +35,13 @@ pub(crate) struct Fetched {
     pub url: String,
 }
 
+impl Fetched {
+    /// The page names a picture that has not been downloaded.
+    pub(crate) fn picture_failed(&self) -> bool {
+        self.og_image.is_some() && self.cover.is_none()
+    }
+}
+
 /// The hex SHA-256 of a URL: the name of its entry here and in the old cache.
 pub(crate) fn url_key(url: &str) -> String {
     hex::encode(Sha256::digest(url.as_bytes()))

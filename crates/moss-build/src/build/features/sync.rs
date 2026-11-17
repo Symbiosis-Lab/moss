@@ -359,10 +359,27 @@ fn refresh_reviews(folder_path: &str, article_map: &HashMap<String, ArticleInfo>
 #[derive(Default)]
 struct LinkFetches {
     waiting: HashSet<String>,
-    /// Asked for once already: a fetch that failed wrote nothing, and is not
-    /// tried again on every rebuild while this process runs.
-    tried: HashSet<String>,
+    /// When each card was last asked for: a fetch that failed wrote nothing,
+    /// and is not tried again on every rebuild, only after [`RETRY_AFTER`].
+    tried: HashMap<String, Instant>,
     running: bool,
+}
+
+/// How long a card whose fetch failed waits before it is asked for again, so a
+/// session that comes back online fills its cards without a restart.
+const RETRY_AFTER: Duration = Duration::from_secs(5 * 60);
+
+/// The cold cards not asked for within [`RETRY_AFTER`] of `now`, marked asked.
+fn due(tried: &mut HashMap<String, Instant>, cold: Vec<String>, now: Instant) -> Vec<String> {
+    cold.into_iter()
+        .filter(|url| match tried.get(url) {
+            Some(&at) if now.duration_since(at) < RETRY_AFTER => false,
+            _ => {
+                tried.insert(url.clone(), now);
+                true
+            }
+        })
+        .collect()
 }
 
 fn link_fetches() -> &'static Mutex<HashMap<PathBuf, LinkFetches>> {
@@ -381,7 +398,7 @@ pub(crate) fn fetch_link_meta_in_background(urls: &[&str], moss_dir: &Path, spaw
     {
         let mut all = link_fetches().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let fetches = all.entry(moss_dir.to_path_buf()).or_default();
-        let new: Vec<String> = cold.into_iter().filter(|url| fetches.tried.insert(url.clone())).collect();
+        let new = due(&mut fetches.tried, cold, Instant::now());
         fetches.waiting.extend(new);
         if fetches.running || fetches.waiting.is_empty() {
             return;
@@ -535,6 +552,16 @@ fn spawn_watchdog(label: &'static str, budget: Duration) -> Watchdog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_card_whose_fetch_failed_is_asked_for_again_after_a_while() {
+        let mut tried = HashMap::new();
+        let t0 = Instant::now();
+        let cold = || vec!["https://offline.example/".to_string()];
+        assert_eq!(due(&mut tried, cold(), t0), cold(), "asked for the first time");
+        assert!(due(&mut tried, cold(), t0 + Duration::from_secs(60)).is_empty(), "not on every rebuild");
+        assert_eq!(due(&mut tried, cold(), t0 + RETRY_AFTER), cold(), "asked for again once the wait is over");
+    }
 
     #[test]
     fn comment_sync_failure_advisory_shape() {
