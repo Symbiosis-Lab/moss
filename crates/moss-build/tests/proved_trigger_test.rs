@@ -421,7 +421,10 @@ fn a_proved_build_after_staging_is_cleared_publishes_what_a_full_render_does() {
 }
 
 /// The re-render owed once pictures settle renders the pages showing them,
-/// carries the rest, and serves what a full render would.
+/// carries the rest, and serves what a full render would. The reference is the
+/// folder opened on another machine: its encodes arrive with it, its picture
+/// facts stay behind, so its first render has no blur and its own settle must
+/// bring it.
 #[test]
 fn a_settled_picture_renders_the_pages_showing_it_and_matches_a_full_render() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -445,6 +448,7 @@ fn a_settled_picture_renders_the_pages_showing_it_and_matches_a_full_render() {
     let full = Site(tempfile::tempdir().unwrap());
     copy_source(site.root(), full.root());
     build_previewing(full.root(), BuildTrigger::Full);
+    build_previewing(full.root(), BuildTrigger::ImagesSettled);
     let reference = published(full.root());
     let differing: Vec<_> = reference.keys().chain(settled.keys())
         .filter(|k| reference.get(*k) != settled.get(*k))
@@ -498,9 +502,8 @@ fn copy_source(from: &Path, to: &Path) {
             fs::create_dir_all(&dest).unwrap();
         } else if entry.file_type().is_file() {
             fs::copy(entry.path(), &dest).unwrap();
-            // Picture placeholders are cached by the source's size and mtime.
-            // `fs::copy` keeps the mtime on macOS but not on Linux, where a copy
-            // made a second later would leave the reference render unsettled.
+            // A sync client keeps each file's mtime; `fs::copy` does on macOS
+            // but not on Linux.
             let mtime = filetime::FileTime::from_last_modification_time(&entry.metadata().unwrap());
             filetime::set_file_mtime(&dest, mtime).unwrap();
         }

@@ -20,6 +20,8 @@ use super::classify::{classify_extension, left_out_of_site, LeftOut, ScanBucket}
 use crate::build::media::ffmpeg::FFmpegManager;
 use walkdir::WalkDir;
 use crate::build::scan::path_collision::{logical_path, nfc_name_order, on_disk};
+use sha2::Digest;
+use std::borrow::Cow;
 use std::cell::OnceCell;
 use std::path::Path;
 use std::time::Instant;
@@ -437,21 +439,34 @@ fn resolve_content_hash(
 /// Answers from [`MEDIA_META`] first.
 pub(crate) fn read_cached_meta(
     transform_cache: &TransformCache,
-    objects: &ObjectStore,
     content_hash: &str,
     extension: &str,
 ) -> Option<CachedMediaMeta> {
+    let (transform_cache, content_hash) = meta_home(transform_cache, content_hash);
+    let objects = transform_cache.objects();
     let key = (transform_cache.root().to_path_buf(), content_hash.to_string());
     if let Some(meta) = MEDIA_META.get(&key) {
         return Some(meta);
     }
-    let record = transform_cache.get_with(content_hash, crate::build::cache::RecordMode::Request)?;
+    let record = transform_cache.get_with(&content_hash, crate::build::cache::RecordMode::Request)?;
     let entry = record.transforms.get(MEDIA_META_TRANSFORM).filter(|entry| meta_version_holds(&entry.params, extension))?;
     let blob_path = objects.get_path(&entry.oid)?;
     let raw = std::fs::read(blob_path).ok()?;
     let meta: CachedMediaMeta = serde_json::from_slice(&raw).ok()?;
     remember_meta(key, &meta);
     Some(meta)
+}
+
+/// Where a media record lives. A stat key names this machine's path and mtime,
+/// so it is never true on another machine and stays out of the synced folder: it
+/// goes to the site's local store, filed under the key's hash because the path
+/// inside the key would nest the record below the store's two-level layout.
+/// Content keys hold on every machine and stay shared.
+fn meta_home<'a>(transform_cache: &'a TransformCache, key: &'a str) -> (Cow<'a, TransformCache>, Cow<'a, str>) {
+    match key.starts_with("stat:").then(|| transform_cache.machine_local()).flatten() {
+        Some(local) => (Cow::Owned(local), Cow::Owned(format!("{:x}", sha2::Sha256::digest(key.as_bytes())))),
+        None => (Cow::Borrowed(transform_cache), Cow::Borrowed(key)),
+    }
 }
 
 /// Complete media metadata (dominant color present) this process has read or
@@ -482,12 +497,13 @@ impl From<&MediaMetadata> for CachedMediaMeta {
 /// `pub(crate)` so the background media phase can enrich an image's stat-key
 /// entry with the dominant color + LQIP it computes during WebP conversion.
 pub(crate) fn write_cached_meta(
-    objects: &ObjectStore,
     transform_cache: &TransformCache,
     content_hash: &str,
     source_size: u64,
     meta: &CachedMediaMeta,
 ) {
+    let (transform_cache, content_hash) = meta_home(transform_cache, content_hash);
+    let objects = transform_cache.objects();
     remember_meta((transform_cache.root().to_path_buf(), content_hash.to_string()), meta);
     let json_bytes = match serde_json::to_vec(meta) {
         Ok(b) => b,
@@ -516,7 +532,7 @@ pub(crate) fn write_cached_meta(
     // Merge with existing record to preserve other transforms (video/mp4, video/thumbnail).
     // Without this, writing media/meta would overwrite the entire TransformRecord,
     // destroying previously cached video conversion results.
-    let merged = transform_cache.merge(content_hash, source_size, crate::build::cache::RecordMode::Recomputable, |record| {
+    let merged = transform_cache.merge(&content_hash, source_size, crate::build::cache::RecordMode::Recomputable, |record| {
         record.transforms.insert(MEDIA_META_TRANSFORM.to_string(), new_entry);
     });
     if let Err(e) = merged {
@@ -560,7 +576,6 @@ fn extract_media_metadata_cached(
     ffmpeg: Option<&FFmpegManager>,
     old_index: &HashIndex,
     new_index: &mut HashIndex,
-    objects: &ObjectStore,
     transform_cache: &TransformCache,
     metadata_dedup: Option<&crate::build::cache::Singleflight<MediaMetadata>>,
     // When true (live preview / server mode) images are resolved dimensions-only
@@ -618,7 +633,7 @@ fn extract_media_metadata_cached(
     // has one guard to get past, not one per branch below.
     let store_meta = |key: &str, meta: &MediaMetadata| {
         if !source_is_evicted {
-            write_cached_meta(objects, transform_cache, key, size, &CachedMediaMeta::from(meta));
+            write_cached_meta(transform_cache, key, size, &CachedMediaMeta::from(meta));
         }
     };
     let skip_content_read = is_video || defer_this_image || source_is_evicted;
@@ -648,7 +663,7 @@ fn extract_media_metadata_cached(
 
     // Step 2: If we have a content hash, check the transform cache.
     if let Some(ref hash) = content_hash {
-        if let Some(cached) = read_cached_meta(transform_cache, objects, hash, extension) {
+        if let Some(cached) = read_cached_meta(transform_cache, hash, extension) {
             log::trace!("Media meta cache hit for {}", relative_path);
             return MediaMetadata {
                 path: relative_path.to_string(),
@@ -669,7 +684,7 @@ fn extract_media_metadata_cached(
     // If the file changes, stat will change and we'll re-extract.
     if is_video && content_hash.is_none() {
         let stat_key = image_meta_stat_key(relative_path, size, mtime);
-        if let Some(cached) = read_cached_meta(transform_cache, objects, &stat_key, extension) {
+        if let Some(cached) = read_cached_meta(transform_cache, &stat_key, extension) {
             log::debug!("Media meta stat-cache hit for {}", relative_path);
             return MediaMetadata {
                 path: relative_path.to_string(),
@@ -718,7 +733,7 @@ fn extract_media_metadata_cached(
     // to Step 2/Step 3 and are extracted synchronously (LQIP + color baked).
     if defer_this_image {
         let stat_key = image_meta_stat_key(relative_path, size, mtime);
-        if let Some(cached) = read_cached_meta(transform_cache, objects, &stat_key, extension) {
+        if let Some(cached) = read_cached_meta(transform_cache, &stat_key, extension) {
             log::trace!("Media meta stat-cache hit for {}", relative_path);
             return MediaMetadata {
                 path: relative_path.to_string(),
@@ -778,7 +793,6 @@ fn extract_media_metadata_cached(
         let ffmpeg_bin = ffmpeg.map(|f| f.bin_path().to_string());
         // Owned clones retain site identity and local replica access after
         // this borrowed scan context leaves the singleflight closure.
-        let objects = objects.clone();
         let transform_cache = transform_cache.clone();
         let hash_clone = hash.clone();
 
@@ -795,7 +809,7 @@ fn extract_media_metadata_cached(
             );
 
             // The cloned stores preserve their site and publication ownership.
-            write_cached_meta(&objects, &transform_cache, &hash_clone, size, &CachedMediaMeta::from(&meta));
+            write_cached_meta(&transform_cache, &hash_clone, size, &CachedMediaMeta::from(&meta));
 
             meta
         });
@@ -1268,7 +1282,6 @@ pub fn scan_folder_with_dedup_emit_with_error(
                     ffmpeg.as_ref(),
                     &old_index,
                     &mut new_index,
-                    &objects,
                     &transform_cache,
                     metadata_dedup,
                     defer_placeholders,
@@ -1377,7 +1390,6 @@ pub fn scan_folder_with_dedup_emit_with_error(
                 None, // images don't need FFmpeg
                 &old_index,
                 &mut local_index,
-                &objects,
                 &transform_cache,
                 metadata_dedup,
                 defer_placeholders,
@@ -1433,7 +1445,6 @@ pub fn scan_folder_with_dedup_emit_with_error(
                 None,
                 &old_index,
                 &mut new_index,
-                &objects,
                 &transform_cache,
                 metadata_dedup,
                 defer_placeholders,

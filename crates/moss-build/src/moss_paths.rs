@@ -423,6 +423,11 @@ impl MossPaths {
         self.cache_dir().join("local-objects")
     }
 
+    /// This machine's transform records: facts keyed by its own paths and mtimes.
+    pub fn cache_local_transforms(&self) -> PathBuf {
+        self.cache_dir().join("local-transforms")
+    }
+
     /// `.moss/cache/transforms/` — source→output mappings.
     pub fn cache_transforms(&self) -> PathBuf {
         self.store_dir().join("transforms")

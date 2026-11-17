@@ -1060,6 +1060,7 @@ pub(crate) fn convert_single_image(
             if let Err(e) = objects.link_to(&cached_oid, &output_webp) {
                 log::info!("Failed to link cached WebP to staging: {}", e);
             }
+            settle_placeholder(transforms, meta_stat_key, source_file, original_size, None);
             // Rungs ride the warm path too: registered rungs must land in
             // THIS build's staging even when the base is a cache hit — on
             // the first build after upgrading to a rung-aware moss, the
@@ -1127,52 +1128,7 @@ pub(crate) fn convert_single_image(
     };
 
     // ---- Step 3b: placeholder metadata (deferred from the blocking scan) ----
-    // Compute the dominant color + LQIP ONCE from the pixels we just decoded.
-    // The blocking scan reads only the dimensions (header) and leaves color/LQIP
-    // `None`; here — for free, since we already decoded for the encode — we cache
-    // them under the scan's stat key so a later (warm) scan returns the real
-    // values. See scan::extract_media_metadata_cached.
-    //
-    // The LQIP is for the PUBLISHED page: it reaches `AssetSnapshot::lqip` and
-    // `moss_core::render::image` bakes it into the emitted HTML as a blur-up, so
-    // a visitor waiting on the network sees something immediately. It is
-    // deliberately NOT pushed into the preview's AssetRegistry. Until 2026-08-21
-    // it was, to morph the preview neutral → colored → real; that morph could
-    // never happen (the router's source passthrough already outranked it) and,
-    // under the rule this audit settled, must not — an author judging a photo
-    // cannot tell a blurred stand-in from a badly-encoded result, so the preview
-    // shows the real original instead.
-    // An entry that already holds them is left as it is: rewriting it is an
-    // upload on every machine sharing the folder.
-    let prev = meta_stat_key.and_then(|key| crate::build::scan::scan::read_cached_meta(transforms, objects, key, source_file.extension().and_then(|e| e.to_str()).unwrap_or("")));
-    if let Some(key) = meta_stat_key.filter(|_| prev.as_ref().map_or(true, |prev| prev.dominant_color.is_none())) {
-        // Computed INSIDE the `if let`: the cache entry is the only consumer
-        // now that `on_decoded` is gone, so a caller that passes no stat key
-        // (every non-scan path) would otherwise pay for a 100x100 thumbnail
-        // average plus a JPEG encode and drop both results.
-        let (dominant_color, lqip_data_uri) =
-            crate::build::scan::scan::compute_color_and_lqip_from_image(&img);
-        let dims = (img.width(), img.height());
-        {
-            // The blocking scan already wrote this stat key with `is_animated`
-            // sniffed (see scan::extract_media_metadata_cached, Step 2c). This
-            // write REPLACES that entry's blob wholesale, so carry the prior
-            // value forward instead of silently resetting it to `false`.
-            let is_animated = prev.map_or(false, |prev| prev.is_animated);
-            crate::build::scan::scan::write_cached_meta(
-                objects,
-                transforms,
-                key,
-                original_size,
-                &crate::build::cache::CachedMediaMeta {
-                    dimensions: Some(dims),
-                    dominant_color: dominant_color.clone(),
-                    lqip_data_uri: lqip_data_uri.clone(),
-                    is_animated,
-                },
-            );
-        }
-    }
+    settle_placeholder(transforms, meta_stat_key, source_file, original_size, Some(&img));
 
     // ---- Step 4: resize ----
     // The decoded ORIENTED original outlives the base resize when a ladder
@@ -1370,6 +1326,39 @@ pub(crate) fn convert_single_image(
         error: None,
         rungs,
     }
+}
+
+/// Records the colour and blur the preview scan left to this phase, under the
+/// scan's stat key, so a later scan bakes them into the page. They are for the
+/// published page only, never the preview's AssetRegistry: an author judging a
+/// photo cannot tell a blurred stand-in from a bad encode, so the preview shows
+/// the original.
+///
+/// `decoded` is the encode's pixels. A cache hit has none, and decodes only for
+/// a picture the scan recorded without them: stat records stay on the machine
+/// that made them, so every picture on a machine new to the folder is one,
+/// though its encodes arrived with the folder. With no record at all no scan is
+/// waiting (a build that is not a preview), and a hit stays decode-free.
+fn settle_placeholder(transforms: &crate::build::cache::TransformCache, meta_stat_key: Option<&str>, source_file: &Path, original_size: u64, decoded: Option<&image::DynamicImage>) {
+    let Some(key) = meta_stat_key else { return };
+    let prev = crate::build::scan::scan::read_cached_meta(transforms, key, source_file.extension().and_then(|e| e.to_str()).unwrap_or(""));
+    if prev.as_ref().is_some_and(|prev| prev.dominant_color.is_some()) {
+        return;
+    }
+    let decoded_here;
+    let img = match decoded {
+        Some(img) => img,
+        None if prev.is_some() && !crate::build::icloud::is_evicted(source_file) => {
+            let Ok(img) = decode_oriented(source_file) else { return };
+            decoded_here = img;
+            &decoded_here
+        }
+        None => return,
+    };
+    let (dominant_color, lqip_data_uri) = crate::build::scan::scan::compute_color_and_lqip_from_image(img);
+    // The scan sniffed `is_animated`; this write replaces the whole entry.
+    let meta = crate::build::cache::CachedMediaMeta { dimensions: Some((img.width(), img.height())), dominant_color, lqip_data_uri, is_animated: prev.map_or(false, |prev| prev.is_animated) };
+    crate::build::scan::scan::write_cached_meta(transforms, key, original_size, &meta);
 }
 
 // ---------------------------------------------------------------------------

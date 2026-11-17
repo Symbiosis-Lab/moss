@@ -703,6 +703,14 @@ impl TransformCache {
         Self { base: mp.cache_transforms(), objects: objects.clone() }
     }
 
+    /// The site's local records and blobs, outside the synced folder. `None` for
+    /// a store with no site. Its store has no site either, so its writes are
+    /// plain local ones.
+    pub(crate) fn machine_local(&self) -> Option<Self> {
+        let site = self.objects.site.as_ref()?;
+        Some(Self::new(site.cache_local_transforms(), ObjectStore::new(site.cache_local_objects())))
+    }
+
     /// Returns the root directory of this transform cache — typically `.moss/cache/transforms/`.
     pub fn root(&self) -> &Path {
         &self.base
@@ -1618,7 +1626,8 @@ fn last_gc_summary(objects_dir: &Path) -> String {
 ///
 /// ## Arguments
 ///
-/// - `mp` — names the store (`cache_objects`, `cache_transforms`) and the two
+/// - `mp` — names the stores (`cache_objects`, `cache_transforms`, and this
+///   machine's `cache_local_objects`, `cache_local_transforms`) and the two
 ///   per-machine mark inputs (`cache_hash_index`, `hashes`).
 ///
 /// `_token` proves no build or detached encode of this folder holds a cache
@@ -1662,9 +1671,12 @@ pub(crate) fn gc(mp: &crate::moss_paths::MossPaths, _token: &crate::build::lifec
     let page_sources = page_sources::read(&page_sources_path).map_err(|e| unreadable(&page_sources_path, e))?;
     let mut condemned_records: Vec<PathBuf> = Vec::new();
     let mut shard_dirs: Vec<PathBuf> = Vec::new();
-    // transforms/ab/cd/<source_oid>.json
-    for prefix1 in read_dir_strict(&transforms_dir).map_err(|e| unreadable(&transforms_dir, e))? {
-        let p1 = transforms_dir.join(&prefix1);
+    // <records>/ab/cd/<source_oid>.json, in the synced store and this machine's.
+    let mut first_shards = Vec::new();
+    for records_dir in [transforms_dir.clone(), mp.cache_local_transforms()] {
+        first_shards.extend(read_dir_strict(&records_dir).map_err(|e| unreadable(&records_dir, e))?.into_iter().map(|name| records_dir.join(name)));
+    }
+    for p1 in first_shards {
         if !p1.is_dir() {
             continue;
         }
@@ -1673,12 +1685,8 @@ pub(crate) fn gc(mp: &crate::moss_paths::MossPaths, _token: &crate::build::lifec
             if !p2.is_dir() {
                 continue;
             }
-            for filename in read_dir_strict(&p2).map_err(|e| unreadable(&p2, e))? {
-                let file_path = p2.join(&filename);
-                if !file_path.is_file() {
-                    continue;
-                }
-                let Some(source_oid) = filename.strip_suffix(".json") else {
+            for file_path in shard_records(&p2, &mut shard_dirs).map_err(|e| unreadable(&p2, e))? {
+                let Some(source_oid) = file_path.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".json")) else {
                     continue; // not a transform record
                 };
                 if !live_source_oids.contains(source_oid) && older_than(&file_path, RECORD_TTL) {
@@ -1818,6 +1826,24 @@ fn older_than(path: &Path, ttl: std::time::Duration) -> bool {
 
 /// Directory entries for a GC mark input: an absent directory has none, an
 /// unreadable one is an error.
+/// The record files in one shard. Older versions filed a stat-keyed record
+/// under its key's own path, below the shard (`st/at/stat-photos/a.jpg-….json`),
+/// so a directory here is walked too, and named in `dirs` deepest first for the
+/// sweep to remove once it is empty.
+fn shard_records(shard: &Path, dirs: &mut Vec<PathBuf>) -> std::io::Result<Vec<PathBuf>> {
+    let mut records = Vec::new();
+    for name in read_dir_strict(shard)? {
+        let path = shard.join(name);
+        if path.is_dir() {
+            records.extend(shard_records(&path, dirs)?);
+            dirs.push(path);
+        } else if path.is_file() {
+            records.push(path);
+        }
+    }
+    Ok(records)
+}
+
 fn read_dir_strict(dir: &Path) -> std::io::Result<Vec<String>> {
     match fs::read_dir(dir) {
         Ok(entries) => entries
