@@ -564,7 +564,10 @@ fn wait_for_operation(
     };
     let started = Instant::now();
     let mut said = false;
+    let mut reaped = started;
     loop {
+        // This waiter may be the only caller left while every pool thread is parked.
+        if reaped.elapsed() >= Duration::from_secs(1) { pool.reap(); reaped = Instant::now(); }
         let quiet = deadline > NOT_ANSWERING_AFTER && task.quiet_for().is_some_and(|quiet| quiet >= NOT_ANSWERING_AFTER);
         if quiet && !said {
             log::warn!("cloud: a folder listing has had no entry for 15 s; the provider is not answering");

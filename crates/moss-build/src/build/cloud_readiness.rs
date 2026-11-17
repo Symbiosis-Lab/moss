@@ -199,7 +199,7 @@ pub(crate) fn download_reads() -> crate::build::cloud_prefetch::ReadTally {
 pub(crate) fn record_download_pool(before: crate::build::cloud_prefetch::ReadTally) {
     let pool = download_snapshot();
     let reads = pool.reads.since(before);
-    if reads == Default::default() && pool.waiting == 0 && pool.in_flight == 0 {
+    if reads == Default::default() && pool.waiting == 0 && pool.in_flight == 0 && pool.parked == 0 {
         return;
     }
     use crate::build::phase::record_value as put;
@@ -209,6 +209,7 @@ pub(crate) fn record_download_pool(before: crate::build::cloud_prefetch::ReadTal
     put("cloud_reads_fetched", reads.fetched as usize);
     put("cloud_reads_still_in_cloud", reads.still_in_cloud as usize);
     put("cloud_reads_failed", reads.failed as usize);
+    put("cloud_parked", pool.parked);
     put("cloud_read_ms", reads.millis as usize);
 }
 

@@ -69,12 +69,14 @@ pub(crate) fn report_stall(awaiting: usize) {
     };
     log::warn!(
         "cloud-sync: no arrivals in {}s with {} file(s) still pending — reporting stalled \
-         (pool: {} in flight, {} queued, {} finished; {})",
+         (pool: {} in flight, {} queued, {} finished, {} given up{}; {})",
         STALL_AFTER.as_secs(),
         awaiting,
         pool.in_flight,
         pool.waiting,
         pool.done,
+        pool.parked,
+        if pool.stuck { ", provider not answering" } else { "" },
         oldest
     );
 }
