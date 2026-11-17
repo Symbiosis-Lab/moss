@@ -590,6 +590,12 @@ impl MossPaths {
         self.build_dir().join("current")
     }
 
+    /// Whether a sealed generation is promoted, so the preview has a site to
+    /// serve. moss never removes the pointer once it is set.
+    pub fn has_servable_generation(&self) -> bool {
+        self.current_ptr().exists()
+    }
+
     /// Atomically replace `.moss/build.nosync/current` → `generations/<gen_id>/`.
     ///
     /// Uses write-then-rename so no reader ever sees an absent `current` pointer.

@@ -1151,7 +1151,7 @@ fn build_inner(
         services.map(|s| s.cancellation.protected_outputs()).unwrap_or_default(),
     );
     crate::build::phase::record_value("parked_current", usize::from(sweep_permit.is_some()));
-    let current_ptr_exists = paths.current_ptr().exists();
+    let has_servable_generation = paths.has_servable_generation();
 
     // Step 1: Load previous hashes BEFORE building
     // CRITICAL: Must read hashes before generate_blocking_content() runs, because
@@ -1653,10 +1653,10 @@ fn build_inner(
     );
     let (html_deleted, stale_html) = crate::build::media::pipeline::html_deletions(
         &previous_hashes, &pending, project_structure, folder_path, &background_ctx.dir_overrides, &crate::system::build_records::records().late_redirects(folder_path));
-    let has_output_changes = html_deleted || !current_ptr_exists || builder_changed || !changed.is_empty() || !new.is_empty() || !deleted.is_empty();
+    let has_output_changes = html_deleted || !has_servable_generation || builder_changed || !changed.is_empty() || !new.is_empty() || !deleted.is_empty();
 
     log::debug!(target: "timing", "[build] staging: hash_compare (changed={}): {:?}", has_output_changes, build_start.elapsed());
-    if has_output_changes && current_ptr_exists {
+    if has_output_changes && has_servable_generation {
         let first = |paths: &[String]| paths.iter().take(5).cloned().collect::<Vec<_>>();
         log::debug!(
             "[build] output differs from the last build: builder {}, changed {} {:?}, new {} {:?}, deleted {} {:?}",

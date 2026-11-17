@@ -718,12 +718,7 @@ pub fn raise_gate_for_a_deferred_build(
     // without a home page", but severity is not the question the gate asks.
     // What the user gets instead is the last good site plus the download
     // counter in the titlebar, which is the honest partial state.
-    let has_a_servable_generation = crate::infra::moss_paths::MossPaths::new(
-        std::path::Path::new(folder_path),
-    )
-    .current_ptr()
-    .exists();
-    if has_a_servable_generation {
+    if crate::infra::moss_paths::MossPaths::new(std::path::Path::new(folder_path)).has_servable_generation() {
         log::info!(
             "cloud-sync: build STOPPED on a file still in the cloud, but a previous \
              generation is servable — not raising the waiting screen over it: {message}"
