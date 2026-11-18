@@ -1155,8 +1155,10 @@ pub fn process_markdown_file(
     // is a prompt to describe the image, not a defect in the build, so it goes
     // to the closing line's notes: `log_warn_problem!` would make `--strict` fail every
     // existing site that has a decorative or not-yet-described image.
+    // The suggestion ends the bracket text with `|`: a lone image's bracket
+    // text alone becomes a visible caption with `alt=""`, not alt text.
     for href in moss_core::ast::images_without_text(&doc) {
-        crate::build::cli_output::log_note!("Accessibility: image '{href}' on '{file_path}' has no alt text — write it in the brackets: ![describe the image]({href})");
+        crate::build::cli_output::log_note!("Accessibility: image '{href}' on '{file_path}' has no alt text — write it in the brackets: ![describe the image|]({href})");
     }
     if moss_core::ast::has_raw_style_block(&doc) {
         crate::build::cli_output::log_note!("Style: '{file_path}' has a <style> block, which overrides the theme (its rules sit outside the theme's cascade layers); move the rules into .moss/theme/style.css");
