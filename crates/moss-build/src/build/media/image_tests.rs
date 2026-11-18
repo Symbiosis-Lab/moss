@@ -7819,6 +7819,57 @@ async fn an_image_the_walk_hashed_this_build_is_not_read_again() {
     assert_eq!(index.lookup("cover.webp", &stat), Some("oid-from-the-walk"));
 }
 
+/// A picture encodes only once it holds a core from its folder's budget: with
+/// every core of an open folder's budget held elsewhere, the batch waits.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_picture_waits_for_a_core_from_the_folder_budget() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().to_path_buf();
+    make_big_jpeg(&root.join("photo.jpg"), 400, 300);
+    let moss_dir = root.join(".moss");
+    let staging = moss_dir.join("build.nosync").join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    let run_ctx = ImageRunContext {
+        items: vec![ImageConversionItem {
+            source_path: PathBuf::from("photo.jpg"),
+            source_oid: String::new(),
+            ext: "jpg".to_string(),
+            dimensions: Some((400, 300)),
+            skip: None,
+            fingerprint: None,
+        }],
+        source_path: root.to_string_lossy().to_string(),
+        staging_dir: staging,
+        moss_dir,
+        // Encoded, not judged already small: a small picture encodes in well
+        // under the wait below, so only the budget can hold it.
+        config: ImageCompressionConfig { min_size_kb: 0, ..Default::default() },
+        dir_overrides: std::collections::HashMap::new(),
+        tx: None,
+        rung_plan: Default::default(),
+        carried_advisories: Vec::new(),
+        suppressed: Default::default(),
+        source_oids: Default::default(),
+    };
+    let session = crate::system::folder_session::FolderSession::new(root.clone());
+    let (_tx, live) = tokio::sync::watch::channel(crate::ops::watch::cadence::Cadence::Live);
+    session.follow_cadence(live);
+    let gate = session.derived_work_gate();
+    let held: Vec<_> = (0..gate.cores())
+        .map(|_| gate.take_cores(crate::system::folder_session::Encoder::Picture, &|| false).unwrap())
+        .collect();
+
+    let mut services = BuildServices::headless();
+    services.session = Some(session);
+    let batch = tokio::task::spawn_blocking(move || run_image_conversion(&services, &run_ctx));
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert!(!batch.is_finished(), "the batch must wait for a core");
+
+    drop(held);
+    let cancelled = tokio::time::timeout(std::time::Duration::from_secs(60), batch).await.unwrap().unwrap();
+    assert!(!cancelled);
+}
+
 /// A picture another machine encoded, whose record and blobs are still in the
 /// cloud here, is downloaded and placed, not encoded again: an encode is not
 /// byte-identical, so encoding it again would change what is published. The

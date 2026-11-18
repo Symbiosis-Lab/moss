@@ -25,7 +25,7 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 mod derived_work;
-pub use derived_work::DerivedWorkGate;
+pub use derived_work::{DerivedWorkGate, Encoder};
 
 pub struct FolderSession {
     pub folder: PathBuf,
@@ -96,7 +96,7 @@ pub struct FolderSession {
     unavailable: AtomicBool,
     /// The host's Live/Background signal, once a watch attaches one. Read
     /// through [`DerivedWorkGate`]; see `folder_session/derived_work.rs`.
-    cadence: StdMutex<Option<tokio::sync::watch::Receiver<crate::ops::watch::cadence::Cadence>>>,
+    cadence: derived_work::CadenceSlot,
     /// The variant registry a headless host's builds and preview server share
     /// (`BuildServices::headless_for`). Each watch rebuild gets new host
     /// ports, and the server keeps the registry it started with, so the
@@ -161,7 +161,7 @@ impl FolderSession {
             ui_bound: AtomicU32::new(0),
             stage_write_lock,
             unavailable: AtomicBool::new(false),
-            cadence: StdMutex::new(None),
+            cadence: Default::default(),
             assets,
         })
     }

@@ -1889,11 +1889,11 @@ fn record_deliveries(
 /// ## Concurrency choice
 ///
 /// Each image is independent (decode + resize + WebP encode). The fan-out uses
-/// RAW OS THREADS, not rayon: `image::open` decodes JPEGs via jpeg-decoder,
-/// which parallelizes with rayon internally, and nesting rayon-in-rayon
-/// corrupts/deadlocks it. Concurrency is capped not by worker count but by a
-/// [`MegapixelBudget`] — the memory driver is decoded pixels in flight, so N
-/// huge images decoding at once (not N threads) is what OOMs. Each worker
+/// RAW OS THREADS, not rayon: a worker blocks on the core budget and on a
+/// [`MegapixelBudget`], and a blocked rayon worker starves every other task on
+/// its pool. The core budget (`DerivedWorkGate::cores`) bounds CPU; the
+/// megapixel budget bounds memory — decoded pixels in flight, so N huge images
+/// decoding at once (not N threads) is what OOMs. Each worker
 /// decides an [`ItemStep`] and applies it as it finishes, so images stream into
 /// the preview as they land; the accumulators are `Mutex`/atomic and reduced
 /// after the scope, and the shared `AssetRegistry`, coordinator `Sender`
@@ -1914,7 +1914,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
     // std::thread::scope fan-out), so these accumulators are thread-safe. Each
     // worker applies its own `ItemStep` as it finishes, so images stream into
     // the preview as they land. A Mutex is fine: the push is trivial next to the
-    // encode it guards. NOT rayon — jpeg-decoder nests rayon and deadlocks.
+    // encode it guards.
     use std::sync::atomic::{AtomicU32, AtomicUsize};
     use std::sync::Mutex;
     let advisories: Mutex<Vec<Advisory>> = Mutex::new(Vec::new());
@@ -1988,19 +1988,11 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
     let dir_overrides = &ctx.dir_overrides;
     let project_root = Path::new(&ctx.source_path);
 
-    // Use raw OS THREADS, not rayon. convert_single_image → image::open decodes
-    // JPEGs via jpeg-decoder, which parallelizes with rayon INTERNALLY. Driving
-    // this fan-out with rayon `par_iter` NESTS rayon on the same pool and
-    // DEADLOCKS under load — verified: a demo vault's 846 images stalled the
-    // background encode at ~220 converted, 0% CPU, every worker parked. Raw OS
-    // threads keep jpeg-decoder's rayon at top level. Mirrors the preview scan's
-    // image fan-out (build/scan/scan.rs). The Mutex/atomic accumulators are
-    // reduced after the scope exactly as before.
     {
         let n_items = ctx.items.len();
-        // Spawn a worker per core; the MegapixelBudget (not the thread count)
-        // is what actually bounds memory, so extra workers just block on the
-        // budget when huge images are in flight and pack in when they're small.
+        // A worker per core, parked on the core budget: the budget, not the
+        // thread count, decides how many encode, so a publish that starts
+        // mid-batch widens it at the next item.
         let n_threads = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4)
@@ -2156,6 +2148,9 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                 // Before the permit: a picture waiting for its download holds
                 // no encode capacity.
                 ticket.fetch(&transforms, &source_oid, "image/", &cancelled);
+                // Cores before megapixels, never the reverse. Cancelled while
+                // waiting, the converter sees the flag and returns at once.
+                let _cores = gate.take_cores(crate::system::folder_session::Encoder::Picture, &cancelled);
                 let _permit = mp_budget.acquire(item_megapixels(item));
                 let before = super::encodes_on_this_thread();
                 let outcome = convert_single_image(

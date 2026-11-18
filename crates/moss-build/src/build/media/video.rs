@@ -17,49 +17,13 @@ use crate::types::services::{BackgroundContext, BuildServices};
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::Ordering;
-use std::sync::LazyLock;
 use tokio::sync::mpsc;
-use tokio::sync::Semaphore;
 
 use crate::build::coordinator::EmitMessage;
 use crate::build::lifecycle::cas_heal::{rematerialize, HealOutcome};
 use crate::build::manifest::HashBucket;
 use crate::advisory::{Action, Advisory, Scope, Severity};
 use crate::build::progress::{format_progress_message, spawn_media_child_job, PipelineEvent};
-
-/// Max ffmpeg conversions running at once across ALL dispatch epochs and
-/// folder sessions. Each dispatch worker is sequential; overlap comes from
-/// stale epochs finishing their current encode. 2 = one fresh + one draining.
-const VIDEO_ENCODE_MAX_CONCURRENT: usize = 2;
-
-/// Global semaphore bounding concurrent video encodes. Process-global on
-/// purpose: `BuildServices` is re-constructed per dispatch, but the contention
-/// is cross-epoch (a stale worker draining its current encode overlaps the
-/// fresh one). Pattern: `DOWNLOAD_SEMAPHORE` in plugins/runtime/download.rs.
-static VIDEO_ENCODE_SEMAPHORE: LazyLock<Semaphore> =
-    LazyLock::new(|| Semaphore::new(VIDEO_ENCODE_MAX_CONCURRENT));
-
-/// Cancellation poll cadence while waiting for an encode slot.
-const PERMIT_POLL: std::time::Duration = std::time::Duration::from_millis(100);
-
-/// Poll-acquire an encode permit from a sync (spawn_blocking) thread.
-/// Returns None if `is_cancelled` fires while waiting. Never blocks the
-/// async runtime (no block_on); fairness is best-effort, fine for 2 permits.
-pub(crate) fn acquire_encode_permit<'a>(
-    sem: &'a Semaphore,
-    poll: std::time::Duration,
-    is_cancelled: &dyn Fn() -> bool,
-) -> Option<tokio::sync::SemaphorePermit<'a>> {
-    loop {
-        if is_cancelled() {
-            return None;
-        }
-        match sem.try_acquire() {
-            Ok(p) => return Some(p),
-            Err(_) => std::thread::sleep(poll),
-        }
-    }
-}
 
 /// Merge transform entries into a source's record, preserving everything else
 /// already in it — scan metadata, and outputs written by an earlier step of the
@@ -1194,6 +1158,7 @@ pub(crate) fn run_video_conversion(
     let project_root = Path::new(&ctx.source_path);
 
     use crate::build::media::ffmpeg::VideoCompressionConfig;
+    let gate = crate::system::folder_session::DerivedWorkGate::of(services.session.as_ref());
     let compression_config = match services.deploy_video_max_size_mb {
         // The plugin host's own per-file limit, so it bounds BOTH files this
         // worker can produce for one video: the progressive MP4 directly, and
@@ -1335,25 +1300,20 @@ pub(crate) fn run_video_conversion(
                 }
             };
 
-            // Bound concurrent encodes across dispatch epochs. LOCK ORDER (global,
-            // never reversed): iCloud gate -> encode permit -> singleflight -> ffmpeg.
-            // - Acquired after the cloud check: a source still downloading must not hold a slot.
-            // - Acquired BEFORE do_work: a cancelled wait must not flow through
+            // The video's share of the process's encode cores, across dispatch
+            // epochs and folders. LOCK ORDER (global, never reversed): cloud
+            // gate -> cores -> singleflight -> ffmpeg.
+            // - Taken after the cloud check: a source still downloading holds no cores.
+            // - Taken BEFORE do_work: a cancelled wait must not flow through
             //   VideoConversionOutcome.error (that path ships a fallback copy).
-            // - A singleflight waiter holds a permit while blocked: bounded waste,
-            //   no cycle — the leader took its permit before entering do_work and
-            //   never takes another.
-            let encode_permit = match acquire_encode_permit(
-                &VIDEO_ENCODE_SEMAPHORE,
-                PERMIT_POLL,
-                &superseded_or_cancelled,
-            ) {
-                Some(p) => p,
-                None => {
-                    log::info!("[epoch {}] encode-slot wait cancelled for {}", epoch, filename);
-                    break 'item abandonment(is_cancelled());
-                }
+            // - A singleflight waiter holds its cores while blocked: bounded waste,
+            //   no cycle — the leader took its cores before entering do_work and
+            //   never takes more.
+            let Some(cores) = gate.take_cores(crate::system::folder_session::Encoder::Video, &superseded_or_cancelled) else {
+                log::info!("[epoch {}] encode-slot wait cancelled for {}", epoch, filename);
+                break 'item abandonment(is_cancelled());
             };
+            let item_config = VideoCompressionConfig { encode_threads: cores.count() as u32, ..compression_config.clone() };
 
             let relative_mp4 = asset_paths::to_mp4(&mapped_source);
             let relative_thumb = asset_paths::to_thumb(&mapped_source);
@@ -1394,7 +1354,7 @@ pub(crate) fn run_video_conversion(
                         &ctx.staging_dir,
                         &objects,
                         &transforms,
-                        &compression_config,
+                        &item_config,
                         &mp4_params,
                         &thumb_params,
                         Some(&*services.processes),
@@ -1406,7 +1366,7 @@ pub(crate) fn run_video_conversion(
 
             // Release the encode slot before the fallback-copy / event-emission
             // tail — only the singleflight block needs to hold it.
-            drop(encode_permit);
+            drop(cores);
 
             if was_shared {
                 log::debug!("[epoch {}] Video {} shared result from concurrent conversion", epoch, filename);
@@ -2464,57 +2424,6 @@ pub(crate) mod tests {
             transforms.get_with(mp4_only_oid, crate::build::cache::RecordMode::Request).expect("the record must still be there"),
             seeded,
             "a record with no video/hls/ keys must come back exactly as seeded"
-        );
-    }
-
-    // ===========================================
-    // Encode-permit (bounded concurrency) tests
-    // ===========================================
-    // All against LOCAL semaphores, never the global static — parallel test
-    // threads must not interfere with each other.
-
-    #[test]
-    fn acquire_encode_permit_bounds_concurrency_to_permit_count() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::Arc;
-        let sem = Arc::new(tokio::sync::Semaphore::new(2));
-        let active = Arc::new(AtomicUsize::new(0));
-        let max_seen = Arc::new(AtomicUsize::new(0));
-        let handles: Vec<_> = (0..6)
-            .map(|_| {
-                let (sem, active, max_seen) = (sem.clone(), active.clone(), max_seen.clone());
-                std::thread::spawn(move || {
-                    let permit =
-                        acquire_encode_permit(&sem, std::time::Duration::from_millis(5), &|| false)
-                            .expect("not cancelled");
-                    let now = active.fetch_add(1, Ordering::SeqCst) + 1;
-                    max_seen.fetch_max(now, Ordering::SeqCst);
-                    std::thread::sleep(std::time::Duration::from_millis(40));
-                    active.fetch_sub(1, Ordering::SeqCst);
-                    drop(permit);
-                })
-            })
-            .collect();
-        for h in handles {
-            h.join().unwrap();
-        }
-        assert!(max_seen.load(Ordering::SeqCst) <= 2, "more than 2 concurrent holders");
-        assert_eq!(active.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn acquire_encode_permit_returns_none_when_cancelled_while_full() {
-        let sem = tokio::sync::Semaphore::new(1);
-        let _held = sem.try_acquire().expect("prime the semaphore");
-        let res = acquire_encode_permit(&sem, std::time::Duration::from_millis(1), &|| true);
-        assert!(res.is_none());
-    }
-
-    #[test]
-    fn acquire_encode_permit_is_immediate_when_free() {
-        let sem = tokio::sync::Semaphore::new(1);
-        assert!(
-            acquire_encode_permit(&sem, std::time::Duration::from_millis(1), &|| false).is_some()
         );
     }
 
@@ -4531,6 +4440,44 @@ pub(crate) mod tests {
     // defects were in the WIRING — each unit they sit in already returned the
     // right value, and the call site dropped it ("watch, rebuild, cache, atomic
     // write, path handling → Rust test + a run against a real vault").
+
+    /// A video encodes only once it holds its share of the folder's core
+    /// budget: with every core of an open folder's budget held elsewhere, it
+    /// waits.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_video_waits_for_its_share_of_the_folder_budget() {
+        let tmp = portable_tmpdir();
+        let vault = tmp.path().join("vault");
+        std::fs::create_dir_all(vault.join("videos")).unwrap();
+        std::fs::write(vault.join("videos/clip.mov"), b"bytes that are not a video").unwrap();
+        let session = crate::system::folder_session::FolderSession::new(vault.clone());
+        let (_tx, live) = tokio::sync::watch::channel(crate::ops::watch::cadence::Cadence::Live);
+        session.follow_cadence(live);
+        let gate = session.derived_work_gate();
+        let held: Vec<_> = (0..gate.cores())
+            .map(|_| gate.take_cores(crate::system::folder_session::Encoder::Picture, &|| false).unwrap())
+            .collect();
+
+        let mut svc = BuildServices::headless();
+        svc.session = Some(session);
+        let ctx = BackgroundContext {
+            video_items: vec!["videos/clip.mov".to_string()],
+            source_path: vault.display().to_string(),
+            staging_dir: tmp.path().join("stage"),
+            moss_dir: tmp.path().join(".moss"),
+            ffmpeg_bin_path: Some(tmp.path().join("no-such-ffmpeg").display().to_string()),
+            ..BackgroundContext::for_test()
+        };
+        let staging = ctx.staging_dir.clone();
+        let run = tokio::task::spawn_blocking(move || run_video_conversion(&svc, &ctx, 0, None).delivered);
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        assert!(!run.is_finished(), "the video must wait for its cores");
+        assert!(!staging.join("videos/clip.mp4").exists());
+
+        drop(held);
+        tokio::time::timeout(std::time::Duration::from_secs(60), run).await.unwrap().unwrap();
+        assert!(staging.join("videos/clip.mp4").exists(), "the fallback copy lands once the video has its cores");
+    }
 
     /// The progressive MP4 is the floor under every can't-encode path. When
     /// even the fallback copy fails, nothing at all reaches the site — and that

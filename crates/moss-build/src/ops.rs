@@ -276,7 +276,12 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
     // per-folder stage-write lock. `--serve --watch` — the one CLI shape with
     // concurrent builds — is exactly the shape that needs it (2026-08-24).
     // Dropping the binding does not remove it from the registry.
-    let _session = crate::system::folder_session::register_session(&run.folder_path);
+    let session = crate::system::folder_session::register_session(&run.folder_path);
+    // A watched folder's encodes share the folder-open core budget from the
+    // first build on, though the watch itself starts only after that build.
+    if run.flags.serve && run.flags.watch {
+        session.follow_cadence(tokio::sync::watch::channel(crate::ops::watch::cadence::Cadence::Live).1);
+    }
 
     // The admission verdict, before anything can load a plugin. Set-once for
     // the process, so it is installed here rather than by each host.
