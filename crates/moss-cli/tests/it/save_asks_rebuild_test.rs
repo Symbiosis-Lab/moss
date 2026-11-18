@@ -1,8 +1,8 @@
-//! Real-process proof that an editor save under `build --serve --watch` asks
-//! for its own rebuild instead of waiting for the file watcher to report it.
-//! The watcher is made blind (`MOSS_TEST_WATCH_BLIND`) and the sweep's tick is
-//! set far beyond the test (`MOSS_TEST_SWEEP_TICK_MS`), so only the save's own
-//! request can rebuild the page. The site is opened through a symlink; the CLI
+//! Real-process proof that an editor save or upload under `build --serve
+//! --watch` asks for its own rebuild instead of waiting for the file watcher
+//! to report it. The watcher is made blind (`MOSS_TEST_WATCH_BLIND`) and the
+//! sweep's tick is set far beyond the test (`MOSS_TEST_SWEEP_TICK_MS`), so
+//! only the write's own request can rebuild the page. The site is opened through a symlink; the CLI
 //! canonicalizes the folder, so the save and the rebuild worker agree on it.
 #![cfg(unix)]
 
@@ -14,6 +14,14 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 const PAGE: &str = "---\ntitle: Home\n---\n\nOriginal sentence.\n";
+/// A page naming a picture that is not in the folder yet.
+const ALBUM: &str = "---\ntitle: Album\n---\n\n![[harbour.png]]\n";
+const MISSING: &str = "Picture not found: harbour.png";
+const ONE_PIXEL_PNG: &[u8] = &[
+    0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, b'I', b'H', b'D', b'R', 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 0x1f, 0x15, 0xc4, 0x89,
+    0, 0, 0, 0x0d, b'I', b'D', b'A', b'T', 0x78, 0xda, 0x63, 0x64, 0x60, 0xf8, 0x5f, 0x0f, 0, 2, 0x87, 1, 0x80, 0xeb, 0x47, 0xba, 0x92,
+    0, 0, 0, 0, b'I', b'E', b'N', b'D', 0xae, 0x42, 0x60, 0x82,
+];
 
 struct Site {
     _root: tempfile::TempDir,
@@ -30,7 +38,7 @@ fn serve() -> Site {
     let site = spawn(0, "Access at");
     wait_for_line(&site.child.stderr, "seal+persist", Duration::from_secs(60))
         .unwrap_or_else(|| panic!("the first build never sealed:\n{}", joined(&site.child.stderr)));
-    assert!(site.home_page().contains("Original sentence."), "premise: the first build is served");
+    assert!(site.page("").contains("Original sentence."), "premise: the first build is served");
     site
 }
 
@@ -44,6 +52,7 @@ fn spawn(notes: usize, ready: &str) -> Site {
     std::os::unix::fs::symlink(root.path().join("real"), root.path().join("alias")).unwrap();
     let site = root.path().join("alias/site");
     std::fs::write(site.join("index.md"), PAGE).unwrap();
+    std::fs::write(site.join("album.md"), ALBUM).unwrap();
     for i in 0..notes {
         std::fs::write(site.join(format!("notes/note-{i}.md")), format!("Note {i}.\n")).unwrap();
     }
@@ -64,8 +73,29 @@ fn spawn(notes: usize, ready: &str) -> Site {
 }
 
 impl Site {
-    fn home_page(&self) -> String {
-        ureq::get(&format!("http://localhost:{}/", self.port)).call().map(|r| r.into_string().unwrap_or_default()).unwrap_or_default()
+    fn page(&self, path: &str) -> String {
+        ureq::get(&format!("http://localhost:{}/{path}", self.port)).call().map(|r| r.into_string().unwrap_or_default()).unwrap_or_default()
+    }
+
+    /// Upload the picture the album names into the folder's root, the way the
+    /// editor's file pick does.
+    fn upload_harbour(&self) {
+        let mut body = b"--moss-test\r\nContent-Disposition: form-data; name=\"file\"; filename=\"harbour.png\"\r\nContent-Type: image/png\r\n\r\n".to_vec();
+        body.extend_from_slice(ONE_PIXEL_PNG);
+        body.extend_from_slice(b"\r\n--moss-test--\r\n");
+        let reply: serde_json::Value = ureq::post(&format!("http://localhost:{}/__moss/upload", self.port))
+            .set("Content-Type", "multipart/form-data; boundary=moss-test")
+            .set("X-Moss-Token", &self.token)
+            .send_bytes(&body)
+            .unwrap_or_else(|e| panic!("the upload was refused: {e}"))
+            .into_json()
+            .unwrap();
+        assert_eq!(reply["copied"][0]["final_name"], "harbour.png", "{reply}");
+    }
+
+    /// Wait until the album draws its picture.
+    fn wait_for_harbour(&self, within: Duration) {
+        self.wait_for("album/", "its uploaded picture", within, |album| album.contains("harbour") && !album.contains(MISSING));
     }
 
     /// Save `body` over the page whose bytes hash to `expected`, the way the
@@ -92,9 +122,14 @@ impl Site {
     }
 
     fn wait_for_home(&self, text: &str, within: Duration) {
+        self.wait_for("", text, within, |home| home.contains(text));
+    }
+
+    /// Wait until the page at `path` passes `shows`; `what` names it in the failure.
+    fn wait_for(&self, path: &str, what: &str, within: Duration, shows: impl Fn(&str) -> bool) {
         let deadline = Instant::now() + within;
-        while !self.home_page().contains(text) {
-            assert!(Instant::now() < deadline, "the served page never showed {text:?} within {within:?}; stderr:\n{}", joined(&self.child.stderr));
+        while !shows(&self.page(path)) {
+            assert!(Instant::now() < deadline, "the served page never showed {what:?} within {within:?}; stderr:\n{}", joined(&self.child.stderr));
             std::thread::sleep(Duration::from_millis(50));
         }
     }
@@ -143,7 +178,7 @@ fn two_saves_50ms_apart_serve_the_second_with_at_most_two_builds() {
     site.save("Second sentence.", &first);
     site.wait_for_home("Second sentence.", Duration::from_secs(3));
     site.settle(Duration::from_secs(2));
-    assert!(site.home_page().contains("Second sentence."));
+    assert!(site.page("").contains("Second sentence."));
     let builds = site.count("build.summary", from);
     assert!((1..=2).contains(&builds), "{builds} builds for two saves; stderr:\n{}", joined(&site.child.stderr));
 }
@@ -161,4 +196,29 @@ fn a_save_made_during_the_first_build_is_built_by_its_own_request() {
     let lines = site.child.stderr.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let at = |needle: &str| lines.iter().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("no {needle:?} line:\n{}", lines.join("\n")));
     assert!(at("Rebuild asked by save") < at("build.summary"), "premise: the save was made during the first build:\n{}", lines.join("\n"));
+}
+
+/// The page named the picture before it was in the folder, so no later save
+/// asks for the build that draws it.
+#[test]
+fn an_uploaded_picture_is_drawn_with_the_watcher_blind() {
+    let site = serve();
+    assert!(site.page("album/").contains(MISSING), "premise: the album names a picture that is not there");
+    site.upload_harbour();
+    site.wait_for_harbour(Duration::from_secs(20));
+}
+
+/// A build that listed the folder before the upload cannot draw the picture,
+/// so the upload's request is built after it.
+#[test]
+fn a_picture_uploaded_during_the_first_build_is_built_by_its_own_request() {
+    let site = spawn(300, "Preview server ready on");
+    wait_for_line(&site.child.stderr, "[render] html pages", Duration::from_secs(60))
+        .unwrap_or_else(|| panic!("the first build never rendered:\n{}", joined(&site.child.stderr)));
+    site.upload_harbour();
+    site.wait_for_harbour(Duration::from_secs(20));
+
+    let lines = site.child.stderr.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let at = |needle: &str| lines.iter().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("no {needle:?} line:\n{}", lines.join("\n")));
+    assert!(at("Rebuild asked by new file") < at("build.summary"), "premise: the upload was made during the first build:\n{}", lines.join("\n"));
 }

@@ -22,6 +22,25 @@ pub async fn create_files(host: &dyn CommandHost, a: CreateFilesArgs) -> Result<
     Ok(made)
 }
 
+/// Copy files from outside the folder into `target_dir` in it; the report
+/// names what landed and what did not. A page may already name a file that
+/// lands here, and no later save asks for the build that draws it.
+///
+/// `target_dir` is joined onto the folder as written. `Path::join` lets an
+/// absolute path replace the folder and keeps `..` segments, so both reach
+/// the containment check in `prepare_copy_target` and are refused there.
+pub fn copy_in(host: &dyn CommandHost, source_paths: &[String], target_dir: &str) -> Result<crate::editor::filesystem::CopyReport, String> {
+    let joined = host.root().join(target_dir);
+    if host.refuses_moss_dir() {
+        super::refuse_moss_internal(host.root(), &joined, target_dir)?;
+    }
+    let target = crate::editor::copy_in::prepare_copy_target(host.root(), &joined.to_string_lossy())?;
+    let report = crate::editor::copy_in::copy_files_into(host.root(), source_paths, &target);
+    let landed: Vec<String> = report.copied.iter().map(|copied| copied.final_path.clone()).collect();
+    host.changed(Change::Created(&landed));
+    Ok(report)
+}
+
 #[derive(serde::Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateFolderArgs {

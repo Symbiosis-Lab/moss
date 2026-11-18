@@ -4,8 +4,9 @@
 //! handing the absolute paths it returns to the copy-into-vault core
 //! (`editor::copy_in::copy_files_into`). A browser has no native picker and no
 //! absolute paths — only an `<input type="file">` and bytes — so this route
-//! stages each uploaded part as a temp file and hands the SAME core the SAME
-//! shape of input, so naming, collision handling and the response shape are
+//! stages each uploaded part as a temp file and hands them to
+//! `commands::files::copy_in`, which runs the SAME core on the SAME shape of
+//! input, so naming, collision handling and the response shape are
 //! identical on both carriers. One core, two carriers, like
 //! `/__moss/source/*path` (see `router.rs`).
 //!
@@ -27,7 +28,7 @@
 //! * **400** — a `file` part with no filename; a filename containing a path
 //!   separator or `..`; a `dir` that resolves outside the vault (absolute or
 //!   via `..` — [`crate::editor::copy_in::prepare_copy_target`], the same
-//!   guard `copy_files_into`'s desktop caller validates its target through);
+//!   guard the desktop's copy validates its target through);
 //!   more than [`MAX_UPLOAD_PARTS`] file parts; a body that is not valid
 //!   `multipart/form-data`.
 //! * **413** — a `file` part exceeds [`MAX_UPLOAD_PART_BYTES`].
@@ -100,8 +101,6 @@ pub(crate) async fn handle_admitted_upload(
     session: Arc<super::invoke::Session>,
     request: Request<Body>,
 ) -> Response {
-    let project_root = session.vault().path().to_path_buf();
-
     let mut multipart = match Multipart::from_request(request, &()).await {
         Ok(m) => m,
         Err(rejection) => return rejection.into_response(),
@@ -154,8 +153,8 @@ pub(crate) async fn handle_admitted_upload(
 
         // Each part gets its own numbered slot so two parts sharing a
         // filename in one request cannot overwrite each other — the basename
-        // itself must stay exactly as uploaded, because `copy_files_into`
-        // reads it back off the staged path to name the result.
+        // itself must stay exactly as uploaded, because the copy reads it
+        // back off the staged path to name the result.
         let slot = staging.path().join(source_paths.len().to_string());
         // allow:raw_write a slot inside the OS-temp staging dir this request just minted, never build output
         if let Err(e) = std::fs::create_dir_all(&slot) {
@@ -202,31 +201,12 @@ pub(crate) async fn handle_admitted_upload(
         return bad_request("the upload carried no 'file' part");
     }
 
-    let dir_rel = dir_field.unwrap_or_default();
-    // `prepare_copy_target` (like every first-party path guard here) expects
-    // a path that already starts with the project root — `dir` on the wire is
-    // project-root-relative only (the same convention `invoke.rs`'s `confine`
-    // uses for its path-shaped arguments), so it is always joined onto the
-    // root, never trusted as absolute. `Path::join` replaces the base
-    // entirely when the joined path is itself absolute, so a caller-supplied
-    // absolute `dir` still ends up checked against — and rejected by — the
-    // project-root containment test below, exactly like a relative `dir` that
-    // walks out via `..`: the join is textual, not lexically normalized, so a
-    // `..` segment survives into the traversal check rather than being
-    // silently resolved away by it.
-    if let Err(e) = crate::commands::refuse_moss_internal(&project_root, &project_root.join(&dir_rel), &dir_rel) {
-        return bad_request(&e);
-    }
-    let dir_for_target = project_root.join(&dir_rel).to_string_lossy().into_owned();
-    // A missing attachment folder is created by `prepare_copy_target`.
-    let target = match crate::editor::copy_in::prepare_copy_target(&project_root, &dir_for_target) {
-        Ok(t) => t,
+    // `dir` on the wire is relative to the folder. A missing attachment
+    // folder is created by the copy.
+    let report = match crate::commands::files::copy_in(&*session, &source_paths, &dir_field.unwrap_or_default()) {
+        Ok(report) => report,
         Err(e) => return bad_request(&e),
     };
-
-    let report = crate::editor::copy_in::copy_files_into(&project_root, &source_paths, &target);
-    // `staging`'s `Drop` removes every temp file, landed or not.
-    drop(staging);
 
     let body = serde_json::to_string(&report).unwrap_or_else(|_| "{}".to_string());
     Response::builder()

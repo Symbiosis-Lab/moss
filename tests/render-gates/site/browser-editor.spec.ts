@@ -61,7 +61,8 @@
  * `browser-editor:preview`. Config: playwright/browser-editor.config.ts.
  */
 import { test, expect, type Frame, type Page } from '@playwright/test';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { crc32, deflateSync } from 'node:zlib';
 import { join } from 'node:path';
 import { png } from '../../e2e/helpers/contents-ruler-site';
 import { openEditor as openEditorFrames, useEditServe } from '../../e2e/helpers/edit-serve';
@@ -91,6 +92,34 @@ const PICTURES = ['---', 'title: Pictures', '---',
   ':::grid 3', '![One|](room.png)', '+++', '![Two|](wide.png)', '+++', '![Three|](room.png)', ':::', '',
   '![[picnotes/|style:summary]]', ''].join('\n');
 const PICTURE_MENU = 'a right-click on a picture in the preview';
+
+const PICTURE_GATE = 'a picture added, landed, replaced, renamed and moved shows in the preview each time';
+
+/** A PNG of a diagonal gradient, large enough that its encode outlasts the build after it. */
+function gradient(width: number, height: number, tint: number): Buffer {
+  const rows = Buffer.alloc((width * 3 + 1) * height);
+  for (let y = 0, at = 0; y < height; y++) {
+    rows[at++] = 0;
+    for (let x = 0; x < width; x++) {
+      rows[at++] = (x + y) & 255;
+      rows[at++] = tint;
+      rows[at++] = (x ^ y) & 255;
+    }
+  }
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type), data]);
+    const frame = Buffer.alloc(body.length + 8);
+    frame.writeUInt32BE(data.length, 0);
+    body.copy(frame, 4);
+    frame.writeUInt32BE(crc32(body), body.length + 4);
+    return frame;
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header.set([8, 2, 0, 0, 0], 8);
+  return Buffer.concat([Buffer.from('\x89PNG\r\n\x1a\n', 'latin1'), chunk('IHDR', header), chunk('IDAT', deflateSync(rows, { level: 1 })), chunk('IEND', Buffer.alloc(0))]);
+}
 
 const ONE_PIXEL_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
 
@@ -130,6 +159,11 @@ const serve = useEditServe('browser-editor', (site, testInfo) => {
     writeFileSync(join(site, 'sq.png'), png(60, 60, [120, 150, 90]));
     mkdirSync(join(site, 'picnotes'));
     writeFileSync(join(site, 'picnotes', 'first.md'), '---\ntitle: First\ncover: ../room.png\n---\nA first note.\n');
+  }
+  if (testInfo.title === PICTURE_GATE) {
+    mkdirSync(join(site, 'pictures'));
+    writeFileSync(join(site, 'pictures', 'door.png'), gradient(800, 600, 40));
+    writeFileSync(join(site, 'album.md'), '---\ntitle: Album\n---\nAn album.\n\n![Door](pictures/door.png)\n\n![Later](pictures/later.png)\n\nLast line.\n');
   }
   writeFileSync(join(site, 'about.md'), '---\ntitle: About\ntranslationKey: about\n---\nAbout the garden. [Talk](talk.md)\n');
   writeFileSync(join(site, 'zh-hans', '关于.md'), '---\ntitle: 关于\ntranslationKey: about\n---\n关于花园。\n');
@@ -683,6 +717,90 @@ test('the address copied from a page just made carries no reload stamp', async (
   const copyPage = entries.find((e) => 'action' in e && e.label === 'Copy page address') as { action(): void };
   copyPage.action();
   expect(copied).toEqual(['/zh-hans/untitled/']);
+});
+
+test(PICTURE_GATE, async ({ page }) => {
+  test.setTimeout(240_000);
+  const { editor, preview } = await openEditor(page);
+  await editor.click('.seg.bc[data-path=""]');
+  await editor.click('.seg[data-path="album.md"]');
+  await preview.waitForFunction(() => document.body?.innerText.includes('An album'), null, { timeout: 30_000 });
+  await editor.waitForSelector('.cm-line:has-text("Last line.")', { timeout: 30_000 });
+
+  const notFound: string[] = [];
+  page.on('response', (r) => {
+    if (r.status() === 404 && /harbour|quay|later/.test(r.url())) notFound.push(new URL(r.url()).pathname);
+  });
+  /**
+   * The preview's picture whose address holds `name`: its drawn size, its `<source>` count and what it loaded.
+   * Null while the preview reloads for a build that just landed: the page a person sees is replaced whole, so the next read answers.
+   */
+  const picture = (name: string) =>
+    preview.evaluate((name) => {
+      const img = [...document.querySelectorAll('img')].find((i) => (i.getAttribute('src') ?? '').includes(name));
+      if (!img) return null;
+      if (!img.complete || !img.naturalWidth) img.scrollIntoView({ block: 'center' });
+      return { width: img.naturalWidth, height: img.naturalHeight, sources: img.closest('picture')?.querySelectorAll('source').length ?? 0, loaded: img.currentSrc };
+    }, name).catch((error: Error) => {
+      if (/Execution context was destroyed/.test(error.message)) return null;
+      throw error;
+    });
+  const shown = (name: string) => expect.poll(async () => (await picture(name))?.width ?? 0, { timeout: 60_000, message: `the preview draws ${name}` }).toBeGreaterThan(0);
+
+  await test.step('a picture added to the page from the insert bar', async () => {
+    await editor.click('.cm-line:has-text("Last line.")');
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Enter');
+    await expect.poll(() => readFileSync(join(serve.site, 'album.md'), 'utf8'), { timeout: 15_000 }).toMatch(/Last line\.\n\n/);
+    const chooser = page.waitForEvent('filechooser', { timeout: 10_000 });
+    await editor.click('.insert-bar button[data-cmd="media"]');
+    await (await chooser).setFiles({ name: 'harbour.png', mimeType: 'image/png', buffer: gradient(3600, 2400, 120) });
+    await shown('harbour');
+    // A build that seals while the picture still encodes is the one that dropped the
+    // sizes, so they are read from the first paint until the encode has staged its files.
+    const encoded = () => readdirSync(join(serve.site, '.moss'), { recursive: true, encoding: 'utf8' }).some((f) => /harbour[^/]*\.webp$/.test(f));
+    for (const until = Date.now() + 120_000; ; ) {
+      const [p, done] = [await picture('harbour'), encoded()];
+      if (p) expect(p.sources, 'a build made while the picture encodes dropped its sizes').toBeGreaterThan(0);
+      if (done) break;
+      expect(Date.now(), 'the encode stages the picture').toBeLessThan(until);
+      await page.waitForTimeout(250);
+    }
+    await expect
+      .poll(async () => { const p = await picture('harbour'); return p !== null && p.sources > 0 && /\.webp/.test(p.loaded) && p.width > 0; }, { timeout: 120_000, message: 'the added picture ends with its responsive sizes' })
+      .toBe(true);
+  });
+
+  await test.step('a picture the page already names lands in its folder', async () => {
+    // Until now the page named a file that was not there.
+    notFound.splice(0, notFound.length, ...notFound.filter((path) => !path.includes('later')));
+    writeFileSync(join(serve.site, 'pictures', 'later.png'), gradient(900, 1200, 200));
+    await shown('later');
+  });
+
+  await test.step('a picture is replaced under its own name', async () => {
+    writeFileSync(join(serve.site, 'pictures', 'door.png'), gradient(600, 1200, 90));
+    await expect.poll(async () => { const p = await picture('door'); return p && p.width ? p.height / p.width : 0; }, { timeout: 60_000, message: 'the preview draws the new door' }).toBe(2);
+  });
+
+  await test.step('a picture renamed, then moved, from the file list', async () => {
+    const folder = readdirSync(serve.site, { recursive: true, encoding: 'utf8' }).find((f) => f.endsWith('harbour.png') && !f.startsWith('.moss'))!.replace(/\/?harbour\.png$/, '');
+    const levels = folder ? folder.split('/') : [];
+    for (let depth = 1; depth <= levels.length; depth++) await editor.click(`.seg[data-path="${levels.slice(0, depth).join('/')}"]:not(.bc)`);
+    const inFolder = (name: string) => (folder ? `${folder}/${name}` : name);
+    await editor.click(`.seg[data-path="${inFolder('harbour.png')}"]`, { button: 'right' });
+    await editor.locator('[role="menuitem"]:has-text("Rename"), :text-is("Rename")').first().click();
+    const name = editor.locator('input.moss-tree-rename-input');
+    await name.fill('quay');
+    await name.press('Enter');
+    await shown('quay');
+
+    await editor.locator(`.seg[data-path="${inFolder('quay.png')}"]`).dragTo(editor.locator('.seg[data-path="events"]:not(.bc)').first());
+    await shown('events/quay');
+  });
+
+  expect(notFound, 'the preview answered 404 for a picture that is in the folder').toEqual([]);
 });
 
 test.describe(PICTURE_MENU, () => {
