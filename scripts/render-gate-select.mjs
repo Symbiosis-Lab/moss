@@ -83,9 +83,12 @@ export function inputsFromLog(root, logText, mossBin = '', gate = '') {
       if (mossBin && target.includes(mossBin) && (!/ build /.test(target) || /--serve/.test(target))) add('bin', '');
       continue;
     }
+    // Node's own modules are covered by its version in environment().
+    if (target.startsWith('node:')) continue;
     const abs = path.resolve(root, target);
     const rel = path.relative(root, abs);
-    if (rel.startsWith('..') || path.isAbsolute(rel) || rel.split(path.sep).includes('node_modules')) continue;
+    const parts = rel.split(path.sep);
+    if (rel.startsWith('..') || path.isAbsolute(rel) || parts.includes('node_modules')) continue;
     if (rel.startsWith(SITES)) {
       const site = rel.slice(SITES.length).split(path.sep)[0];
       if (site && fs.existsSync(path.join(root, SITES, site, '.moss/build-stamp.json'))) {
@@ -93,6 +96,9 @@ export function inputsFromLog(root, logText, mossBin = '', gate = '') {
         continue;
       }
     }
+    // A tree walk (a Vite harness lists the root) reaches cargo's target folders, which every build rewrites. What a
+    // gate depends on there is its scratch site, folded above, and moss-cli, recorded by exec; a read still counts.
+    if (kind !== 'read' && parts.some((p, i) => p === 'target' && fs.existsSync(path.join(root, ...parts.slice(0, i), 'Cargo.toml')))) continue;
     if (kind === 'dir' && pattern && (rel + path.sep).startsWith(SPECS)) {
       add('specs', `${rel}\t${pattern}`);
       continue;

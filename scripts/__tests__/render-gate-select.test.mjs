@@ -62,6 +62,24 @@ test('the input set keeps tree files, folds a scratch site into its built tree, 
   ]);
 });
 
+test('a walk under target/ and a Node builtin are not inputs; a file read under target/ still is', () => {
+  // A Vite harness lists the whole tree, cargo's target/ included, and Node probes `node:` names it loads lazily.
+  const { root, w } = tree();
+  w('Cargo.toml', '[workspace]');
+  w('crates/core/Cargo.toml', '[package]');
+  const log = [
+    `exists\tnode:events`,
+    `dir\t${root}/docs/target`,
+    `dir\t${root}/target/debug/.fingerprint`,
+    `exists\t${root}/target/debug/deps/a.d`,
+    `dir\t${root}/target/test-tmp.old/demo`,
+    `exists\t${root}/crates/core/target/test-tmp/scratch/x`,
+    `read\t${root}/target/debug/notes.txt`,
+  ].join('\n');
+  // Only cargo's target folders, the ones beside a Cargo.toml: a docs folder named target is listed as usual.
+  assert.deepEqual(inputsFromLog(root, log), [['dir', 'docs/target'], ['read', 'target/debug/notes.txt']]);
+});
+
 test('a scratch build alone does not make the gate depend on the binary', () => {
   const { root, mossBin } = tree();
   const log = `exec\t"${mossBin}" build "${root}/target/test-tmp/demo" --no-plugins`;
