@@ -15,12 +15,12 @@ All notable changes to moss will be documented here.
 - In the preview's address bar, the arrow keys move the highlight through the suggested pages again, and Enter opens the row that is highlighted. A wheel or trackpad over the suggestions scrolls them, not the page behind.
 - When the cloud service holding a folder stops sending its files, the opening screen names it: "Google Drive isn't sending files." with "Quit Google Drive and open it again." under it (the same for Dropbox, OneDrive and Box; iCloud Drive, part of the system, gets no quit). It used to say "Downloads have stalled" whenever nothing had arrived for 90 seconds, which a slow but working download also triggered. The opening screen no longer repeats the folder's path in a tooltip; the button beside it shows the folder.
 - At 0 files the download meter on the opening screen shows nothing lit. It used to draw a line across the whole meter, which read as a full bar.
+- A build that a newer one overtakes stops making pictures' smaller copies and is not shown; the newer build makes them. Saving several times in a row ran one such pass per save at once, each on a full core, for minutes after the last build ended.
 
 ## [0.15.26] - 2026-11-17
 
 ### Fixed
 
-- A build that a newer one overtakes stops making pictures' smaller copies and is not shown; the newer build makes them. Saving several times in a row ran one such pass per save at once, each on a full core, for minutes after the last build ended.
 - A picture already published keeps the sizes it was published with. Since 0.15.21 each build made and uploaded a new 1200-pixel-wide copy of every published picture; a picture added since the last publish still gets every size.
 - Replace… on a picture works in the browser editor: the picked file is uploaded and its reference written. It used to upload the file and leave the reference as it was.
 - A right-click on a picture no longer offers the grid's settings or the theme rules that style it; the grid's row (now Columns) stays for the grid's own area, and theme rules show while internal files are shown.
