@@ -119,6 +119,8 @@ fn a_second_process_waits_for_the_folder_build_lock_the_first_process_holds() {
         .arg(&site_dir)
         .arg("--no-plugins")
         .env("MOSS_HOME", moss_home.path())
+        // An installed desktop app must not take part in this build.
+        .env("MOSS_DESKTOP_SEARCH_ROOT", moss_home.path())
         // The lock's contended-wait line logs at `info`; moss-cli's headless
         // logger defaults to `warn` and would otherwise swallow it.
         .env("MOSS_LOG_LEVEL", "info")
@@ -232,6 +234,7 @@ fn an_older_admission_never_overwrites_an_already_promoted_newer_one() {
             .arg(&site_dir)
             .arg("--no-plugins")
             .env("MOSS_HOME", moss_home.path())
+            .env("MOSS_DESKTOP_SEARCH_ROOT", moss_home.path())
             .env("MOSS_LOG_LEVEL", "info")
             .env("MOSS_TEST_ADMISSION_NANOS", admission_nanos.to_string())
             .stdin(Stdio::null())
