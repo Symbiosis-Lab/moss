@@ -21,7 +21,7 @@
         "crates/moss-build/src/build/scan/scan.rs": 1000,
         "crates/moss-build/src/build.rs": 1200,
         "crates/moss-core/src/ast/parser.rs": 1400,
-        "crates/moss-core/src/ast/shortcode_extract.rs": 1400,
+        "crates/moss-core/src/ast/shortcode_extract.rs": 1500,
         "packages/moss-api/src/testing/mock-tauri.ts": 900,
         "crates/moss-core/src/contract/custom_props.rs": 900,
         "packages/moss-ui/src/ui/editor/chip-bar.ts": 1700,

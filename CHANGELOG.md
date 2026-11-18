@@ -25,6 +25,7 @@ All notable changes to moss will be documented here.
 - A picture added to a page in the editor shows in the preview at once. When the page was saved before the copy landed, it said "Picture not found" until moss noticed the new file, up to 20 seconds later.
 - When a picture a page shows is moved or renamed, the editor no longer asks for it at the address it left. That request failed, and the picture could show as broken for a moment.
 - A picture moved or renamed in the editor's file list is shown at its new place in the preview at once. The preview kept "Picture not found" until the folder was next noticed as changed, 20 seconds or more.
+- On a page with a styled section (`:::{.band}`), clicking a block in the preview opens the editor at that block's line again, and `moss doctor` names the right line. Every block after such a section was two lines late.
 
 ### Changed
 

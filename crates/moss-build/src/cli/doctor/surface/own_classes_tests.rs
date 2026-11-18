@@ -133,6 +133,5 @@ fn a_class_on_a_typed_fence_counts_as_used() {
     let report = audit(dir.path(), false);
     let used: Vec<(&str, Option<usize>)> =
         report.own_classes.iter().map(|c| (c.class.as_str(), c.example.as_ref().map(|e| e.1))).collect();
-    // `.banded` is on line 34. The parser reports a block inside a classed div one line late.
-    assert_eq!(used, vec![("banded", Some(35)), ("faces", Some(11)), ("inner", Some(23)), ("row", Some(19)), ("tall", Some(5)), ("wide", Some(15))]);
+    assert_eq!(used, vec![("banded", Some(34)), ("faces", Some(11)), ("inner", Some(23)), ("row", Some(19)), ("tall", Some(5)), ("wide", Some(15))]);
 }

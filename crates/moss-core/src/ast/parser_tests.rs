@@ -2056,20 +2056,20 @@ fn implicit_figure_empty_alt_still_yields_no_caption() {
 
 #[test]
 fn line_lookup_offset_zero_is_line_one() {
-    let lookup = LineLookup::build("hello\nworld\n", 0);
+    let lookup = LineLookup::build("hello\nworld\n", 0, Vec::new());
     assert_eq!(lookup.line_at(0), 1);
 }
 
 #[test]
 fn line_lookup_after_first_newline_is_line_two() {
-    let lookup = LineLookup::build("hello\nworld\n", 0);
+    let lookup = LineLookup::build("hello\nworld\n", 0, Vec::new());
     // Byte 6 is the 'w' of "world", which is on line 2.
     assert_eq!(lookup.line_at(6), 2);
 }
 
 #[test]
 fn line_lookup_handles_multiline_block_starts() {
-    let lookup = LineLookup::build("line1\nline2\nline3\n", 0);
+    let lookup = LineLookup::build("line1\nline2\nline3\n", 0, Vec::new());
     // First non-newline byte of each line.
     assert_eq!(lookup.line_at(0), 1, "byte 0 → line 1");
     assert_eq!(lookup.line_at(6), 2, "byte 6 → line 2");
@@ -2078,7 +2078,7 @@ fn line_lookup_handles_multiline_block_starts() {
 
 #[test]
 fn line_lookup_empty_source() {
-    let lookup = LineLookup::build("", 0);
+    let lookup = LineLookup::build("", 0, Vec::new());
     assert_eq!(lookup.line_at(0), 1, "empty source still has line 1");
 }
 
@@ -2769,4 +2769,15 @@ fn nesting_below_the_cap_is_untouched() {
     assert_eq!(html.matches("<ul>").count(), 5, "{html}");
     let quote = parse("> > > a\n");
     assert_eq!(tree_depth(&quote.blocks), 3);
+}
+
+#[test]
+fn blocks_in_and_after_a_classed_div_report_their_own_lines() {
+    let md = "Intro\n\n::: {.band}\n::::grid 2 {.banded}\nA\n+++\nB\n::::\n:::\n\nAfter\n\n::: {.quiet accordion}\n## Open\n:::\n\nLast\n";
+    let doc = parse_with_config(md, &ParseConfig { emit_source_lines: true, ..ParseConfig::default() });
+    let lines: Vec<Option<usize>> = doc.block_meta.iter().map(|m| m.source_line).collect();
+    // Intro, <div band>, the grid, </div>, After, <div quiet>, ## Open, </div>, the accordion's end, Last.
+    let written = [1, 3, 4, 9, 11, 13, 14, 15, 15, 17];
+    assert_eq!(lines.len(), written.len(), "{:#?}", doc.blocks);
+    assert_eq!(lines, written.map(Some), "every block on the line the author wrote it");
 }
