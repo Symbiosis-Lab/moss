@@ -1344,7 +1344,8 @@ fn build_inner(
         cfg.as_ref().unwrap_or(&crate::config::ConfigFile::empty()),
         &site_lang,
     );
-    let (field_decls, field_problems) = cfg.as_ref().map(|c| c.field_decls()).unwrap_or_default();
+    let (mut field_decls, field_problems) = cfg.as_ref().map(|c| c.field_decls()).unwrap_or_default();
+    field_decls.extend(moss_core::fields::moss_decls());
     for problem in cfg.as_ref().map(|c| c.warnings()).unwrap_or_default().iter().chain(&field_problems) {
         crate::build::cli_output::log_warn_problem!("{problem}");
     }

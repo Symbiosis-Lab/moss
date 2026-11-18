@@ -14,6 +14,7 @@ pub(crate) mod path_collision;
 // (`is_excluded_dir_name`) is re-exported at this crate's own root
 // so external callers don't see the module path.
 pub mod classify;
+pub mod replies;
 pub mod page_map;
 pub mod scan;
 pub(crate) mod section_color;

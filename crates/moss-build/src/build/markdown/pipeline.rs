@@ -1587,6 +1587,7 @@ pub fn process_markdown_file(
         declared_written,
         field_errors,
         placed_fields,
+        thread: Vec::new(),
         title_block: frontmatter.title_block,
         members_full: None,
         bare: frontmatter.chrome.as_deref() == Some("none"),

@@ -700,6 +700,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub field_errors: std::collections::BTreeMap<String, String>,
+    /// The pages joined to this one by `in_reply_to`, this page among them,
+    /// root first; empty when none. Set once per build by `replies::mark_threads`.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub thread: Vec<crate::build::scan::replies::ThreadMember>,
     /// The declared fields this page draws: each declaration with a `place`
     /// and the page's valid value for it, in declaration order. Empty on a
     /// folder index. Drawn at render by `components::field_places`.
@@ -1223,7 +1228,7 @@ pub struct SiteAssets {
     pub field_places: bool,
     /// Some page has a mermaid diagram. Gates the `diagrams` stylesheet partial.
     pub diagrams: bool,
-    /// Some page draws a `style:stream` listing. Gates the `stream` stylesheet partial.
+    /// Some page draws a `style:stream` listing, a thread or a reply line. Gates the `stream` stylesheet partial.
     pub stream: bool,
     /// The site ships the search overlay: `[site].search`, resolved once by the config phase
     /// (`LayoutConfig::with_search`) and read from `LayoutConfig::assets` by
@@ -1309,7 +1314,7 @@ impl SiteAssets {
             out.hero_ends |= page.features.hero_ends;
             out.viewer |= page.features.viewer;
             out.diagrams |= page.features.diagrams;
-            out.stream |= page.features.stream;
+            out.stream |= page.features.stream || page.declared.contains_key(moss_core::fields::IN_REPLY_TO);
             out.country_map |= page.country_map.is_some();
             out.field_places |= page.features.field_places || crate::build::components::field_places::title_block_beside_picture(page);
         }

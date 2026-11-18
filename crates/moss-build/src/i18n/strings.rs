@@ -135,6 +135,10 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // Where you are in a series. Two named placeholders, not the bare `{}`
         // used elsewhere, because both numbers appear in one sentence and the
         // caller replaces them one at a time.
+        // A page's thread: the pages it continues and the pages continuing it.
+        "thread_label" => ["Thread", "Verlauf", "这一串", "這一串"],
+        "thread_more" => ["{n} more", "{n} weitere", "还有 {n} 条", "還有 {n} 條"],
+        "in_reply_to" => ["In reply to", "Antwort auf", "回复", "回覆"],
         "series_position" => ["{n} of {total}", "{n} von {total}", "第 {n} 篇，共 {total} 篇", "第 {n} 篇，共 {total} 篇"],
         // Floating nav island. All three name a control that has no
         // visible text of its own: the trail's landmark, the "…" that stands in

@@ -1248,6 +1248,8 @@ pub fn generate_blocking_content_for_build(
         // per-page reading, before the same incremental hash.
         crate::build::terms::set_card_credits(&mut documents, &site_config.term_kinds);
         crate::build::components::field_places::set_card_fields(&mut documents, &site_config.field_decls, site_config.typesetting.as_deref());
+        // A thread is part of each member's surface, so before the verdict.
+        crate::build::scan::replies::mark_threads(&mut documents, &content_graph);
         if let Some(maps) = site_config.place_maps.as_ref() {
             crate::build::terms::places::warn_unknown_places(&documents, &site_config.term_kinds, maps.gazetteer());
         }

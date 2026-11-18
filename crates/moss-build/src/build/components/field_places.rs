@@ -10,7 +10,7 @@ use crate::build::components::{child_list, child_summary};
 use crate::build::types::ParsedDocument;
 use crate::i18n::Language;
 use moss_core::content_graph::ContentGraph;
-use moss_core::fields::{in_folders, FieldDecl, FieldKind, PageFormat, PageLink, Placed, Place, TypedValue};
+use moss_core::fields::{in_folders, FieldDecl, FieldKind, LinkTarget, PageFormat, PageLink, Placed, Place, TypedValue};
 use moss_core::media::html_escape;
 use std::collections::BTreeMap;
 
@@ -172,7 +172,10 @@ fn end_links(placed: &[Placed]) -> impl Iterator<Item = (&FieldDecl, &[PageLink]
 /// names no page. A frontmatter link leaves nothing in `outgoing_links`, so
 /// this is the record that `doc` reads them.
 pub fn end_card_targets<'a>(doc: &'a ParsedDocument, all_docs: &'a [ParsedDocument], graph: Option<&'a ContentGraph>) -> impl Iterator<Item = Option<&'a ParsedDocument>> + 'a {
-    end_links(&doc.placed_fields).flat_map(|(_, links)| links).map(move |link| linked_page(doc, all_docs, graph, &link.target))
+    end_links(&doc.placed_fields)
+        .flat_map(|(_, links)| links)
+        .filter_map(|link| link.target.page())
+        .map(move |name| linked_page(doc, all_docs, graph, name))
 }
 
 /// How an `end` card is drawn: everything the shared summary card needs beyond the linked page.
@@ -189,7 +192,7 @@ pub struct EndCards<'a> {
 /// A card headlines the linked page's opening heading when it has a different one, else its title. A link that names no page of the site draws nothing.
 pub fn end_for_page(doc: &ParsedDocument, all_docs: &[ParsedDocument], cards: &EndCards<'_>) -> String {
     let card = |decl: &FieldDecl, link: &PageLink| {
-        let target = linked_page(doc, all_docs, cards.graph, &link.target)?;
+        let target = linked_page(doc, all_docs, cards.graph, link.target.page()?)?;
         let strip = Some(decl.pictures).filter(|n| *n >= 2);
         let mut props = child_list::props_for_document(target, all_docs, cards.root_path, cards.dir_overrides, cards.typesetting, cards.now, strip);
         if let Some(headline) = &target.opening_heading {
@@ -202,18 +205,28 @@ pub fn end_for_page(doc: &ParsedDocument, all_docs: &[ParsedDocument], cards: &E
     end_html(&doc.placed_fields, doc.lang, &card)
 }
 
-/// One `<section data-field>` per placed `end` field that has a card to draw, headed by the field's label.
-/// `card` draws one linked page, and says whether it stands for a collection.
+/// One `<section data-field>` per placed `end` field that has a card or an outside link to draw, headed by the field's label.
+/// `card` draws one linked page, and says whether it stands for a collection; an outside page has no card and draws as a link after them.
 fn end_html(placed: &[Placed], lang: Language, card: &dyn Fn(&FieldDecl, &PageLink) -> Option<(String, bool)>) -> String {
     end_links(placed)
         .filter_map(|(decl, links)| {
             let (cards, collections): (Vec<String>, Vec<bool>) = links.iter().filter_map(|link| card(decl, link)).unzip();
-            (!cards.is_empty()).then(|| {
+            let outside: Vec<String> = links
+                .iter()
+                .filter(|link| matches!(link.target, LinkTarget::Outside(_)))
+                .map(|link| format!("<li>{}</li>", page_link_html(link, &|_| None)))
+                .collect();
+            (!cards.is_empty() || !outside.is_empty()).then(|| {
                 let label = html_escape(&decl.label_for(lang.as_bcp47_attr()));
                 // The field's pages, in the order the author wrote them.
-                let holds = crate::build::components::ListHolds::of(collections);
-                let list = crate::build::components::cards_container("list", false, false, &Default::default(), moss_core::sort::SortAxis::Weight, holds, &cards.join("\n"));
-                format!("<section class=\"moss-field-end\" data-field=\"{}\">\n<h2 class=\"moss-field-end-label\">{label}</h2>\n{list}\n</section>\n", html_escape(&decl.name))
+                let list = if cards.is_empty() {
+                    String::new()
+                } else {
+                    let holds = crate::build::components::ListHolds::of(collections);
+                    crate::build::components::cards_container("list", false, false, &Default::default(), moss_core::sort::SortAxis::Weight, holds, &cards.join("\n")) + "\n"
+                };
+                let links = if outside.is_empty() { String::new() } else { format!("<ul class=\"moss-field-end-links\">{}</ul>\n", outside.concat()) };
+                format!("<section class=\"moss-field-end\" data-field=\"{}\">\n<h2 class=\"moss-field-end-label\">{label}</h2>\n{list}{links}</section>\n", html_escape(&decl.name))
             })
         })
         .collect()
@@ -408,15 +421,31 @@ fn inline(decl: &FieldDecl, v: &TypedValue, lang: Language, typesetting: Option<
     }
 }
 
-fn link_name(link: &PageLink) -> &str {
-    link.alias.as_deref().unwrap_or_else(|| link.target.rsplit('/').next().unwrap_or(&link.target))
+/// A page link's text: its alias, else the last segment of a page's name, or an
+/// outside address's host and path.
+pub fn link_name(link: &PageLink) -> &str {
+    if let Some(alias) = link.alias.as_deref() {
+        return alias;
+    }
+    match &link.target {
+        LinkTarget::Page(name) => name.rsplit('/').next().unwrap_or(name),
+        LinkTarget::Outside(url) => {
+            let rest = url.split_once("://").map_or(url.as_str(), |(_, rest)| rest);
+            let rest = rest.strip_prefix("www.").unwrap_or(rest);
+            rest.split(['?', '#']).next().unwrap_or(rest).trim_end_matches('/')
+        }
+    }
 }
 
-/// A page link reads as written, like a body wikilink: its alias, else the last
-/// segment of its target. It links to the page when the target resolves.
+/// A page link reads as written, like a body wikilink. It links to the page
+/// when the target resolves, and to an outside page always.
 fn page_link_html(link: &PageLink, page_href: &dyn Fn(&str) -> Option<String>) -> String {
     let name = html_escape(link_name(link));
-    match page_href(&link.target) {
+    let href = match &link.target {
+        LinkTarget::Page(target) => page_href(target),
+        LinkTarget::Outside(url) => Some(url.clone()),
+    };
+    match href {
         Some(href) => format!("<a href=\"{}\">{name}</a>", html_escape(&href)),
         None => name,
     }

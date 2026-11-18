@@ -443,6 +443,19 @@ The parish agrees[^1].
 
 The notes are numbered in the order they are cited and listed at the end of the page. With scripting, on a window at least 76rem wide, moss copies each note into the right margin beside the line that cites it, stacks notes cited close together, and hides the list at the end. If any note cannot be copied, none are hidden. Under 76rem the list at the end is the only place: tapping a marker lifts it as a sheet at the bottom of the window, showing that note (drag up to read all, press Esc, tap the article or drag down to close), and scrolling to the end puts it back in the page. Print and pages without scripting show the list. The home page, a page with `content_width: full` and a page with a sidebar have no margin and use the sheet at any width. To widen or narrow the margin column, set `--moss-sidenote-reserve` on `body` in `.moss/theme/style.css` (`body { --moss-sidenote-reserve: 24rem; }`; the default is at most `17.5rem`, and a declaration on `:root` has no effect because the sidenotes stylesheet sets the property on `body`).
 
+### Threads and replies
+
+A page that continues an earlier one, or answers a post elsewhere, says so with one line of frontmatter on the later page:
+
+```yaml
+in_reply_to: "[[2026-11-05 2210]]"                  # continues a page of this site
+in_reply_to: https://example.social/@someone/1134    # answers a post elsewhere
+```
+
+Nothing is written on the earlier page. moss finds every page joined this way and draws the thread on each of them: the pages it continues above its title, oldest first, and the pages continuing it after its body, each drawn the way a `children_style: stream` listing draws it, joined by a line. The value is one page: a wiki link, which `moss rename` keeps pointing at the page, or an `http://` or `https://` address; any other value is a build warning. An address on another site draws "In reply to" and the address above the page. The thread is marked up for IndieWeb readers: each part is an `h-entry`, and the page's `u-in-reply-to` names the page it answers. A thread written in one sitting needs none of this: write it as one page with `---` between its parts. A wiki link that names no page draws nothing.
+
+Style the thread through `.moss-thread` (`data-part="before"` above the title, `data-part="after"` after the body), its items `.moss-stream-item` and the outside line `.moss-in-reply-to`.
+
 ### Folder cascade
 
 A folder's home page can declare `cascade:` to push values to every page beneath it, so a value that every page in the folder repeats is written once. The keys cascade carries are `nav`, `breadcrumb`, `footer`, `children`, `children_style`, `children_group`, `children_depth`, `tags`, `author`, `description`, `content_width`, `title_block`, `reader_controls`, `sort`, `timezone` and `syndicate`. It also carries declared fields (see Declared fields), such as `credit_holder: "Example Museum"`. A cascaded field is checked as the page's own value would be: its type, and its `in` scope, so a page outside that scope gets nothing. The page that declares it is not included. A page that sets one of these keys or fields itself keeps its own value, and a blank one counts: to switch a cascaded key or field off for one page, set it to an empty value there, such as `description: ""`, and the page then has no value for it rather than the folder's. A blank value in a cascade is ignored, as a blank value on a page is. A nested folder's value does not replace an outer folder's, even one that does not fit: the outer folder's value wins, as for the other cascaded keys. A key that is neither a cascade key nor a declared field has no effect; the build warns once per source page and names what cascade does carry.
@@ -926,7 +939,7 @@ A page then writes plain values, such as `kind: Building`, `years: 1927/1933` or
 | `choice` | one of the values in `of` | `{ value, label }`, the label in the page's language |
 | `period` | `1927/1933` or `1927–1933`, `1927/..` for an open end, or one date | `{ start, end, open, text }`, each date as `{ value, precision, qualifier }`; `open` is true only for an interval with no end |
 | `count` | `1,382 flats` | `{ number, noun, text }`, or `{ text }` when the value is not a number followed by a noun |
-| `page`, `pages` | `"[[Page name]]"` or `"[[Page name\|text]]"` | `{ target, alias? }` per link |
+| `page`, `pages` | `"[[Page name]]"` or `"[[Page name\|text]]"`, or an `https://` address for a page elsewhere | `{ target, alias? }` per page of the site, `{ url }` per address |
 | `group` | no value of its own: it names other fields in `of` and is drawn as one element (see below) | nothing; a page that writes a value for it gets a warning |
 
 A `url` field can name the link text every value of it is drawn with, as `text = "View the item"` in its declaration (a table gives one per language, as `label` does); the link still goes to the address, and when `text` is set the address itself is not shown. A `text` on any other type is a build warning.

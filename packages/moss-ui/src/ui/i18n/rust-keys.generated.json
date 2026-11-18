@@ -35,6 +35,7 @@
     "chip.end.label",
     "chip.external_url.label",
     "chip.footer.label",
+    "chip.in_reply_to.label",
     "chip.jury.label",
     "chip.jury_page.label",
     "chip.lang.label",

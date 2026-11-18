@@ -4,6 +4,10 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
+### Added
+
+- A short note can continue an earlier one: write `in_reply_to: "[[name]]"` in its frontmatter, and every page of the thread shows the others, the earlier ones above its title and the later ones after its body. A stream listing shows a thread as one unit, folded to its first part and last two when it is longer than three. `in_reply_to` can also name a post elsewhere by its address, shown as "In reply to" above the page, and any page field now takes an address as well as a page of the site.
+
 ### Fixed
 
 - On a window wide enough for the contents list in the left margin, scrolling back up anywhere in a long page brings the floating bar, without its sections button while that list is on screen. The bar used to stay away until the end of the article, so it seemed to appear only at the bottom of the page.

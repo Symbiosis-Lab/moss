@@ -521,6 +521,17 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         ..FIELD_DEFAULTS
     },
     BuiltinField {
+        name: crate::fields::IN_REPLY_TO,
+        field_type: FieldType::String,
+        widget: Widget::WikilinkPicker,
+        // Frequency=1, Importance=3 → score = 82
+        score: 82,
+        description: "The page this one answers: \"[[name]]\" for a page of this site, or an http(s) address for a post elsewhere.",
+        label_key: "chip.in_reply_to.label",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
         name: "tag_page",
         // Same union as `author_page`, in the tags/ namespace.
         field_type: FieldType::OneOf,

@@ -96,10 +96,11 @@ pub(crate) fn split_leading_eyebrow(html: &str) -> (&str, &str) {
 /// title heading (its layout hides the title, or it has none) gets no link: the
 /// link is there to name the title it sits above. Call it after the date row
 /// and byline are spliced in, so those never have to step past the link.
+/// Returns the link it put there.
 pub(crate) fn prepend_parent_label(
     content: &mut String,
     parent: &crate::build::components::nav::BreadcrumbSegment,
-) {
+) -> Option<String> {
     if split_leading_eyebrow(content).1.starts_with("<h1 class=\"moss-article-title\"") {
         let link = format!(
             "<a class=\"moss-parent-label\" href=\"{}\">{}</a>\n",
@@ -107,7 +108,9 @@ pub(crate) fn prepend_parent_label(
             moss_core::media::html_escape(&parent.title),
         );
         content.insert_str(0, &link);
+        return Some(link);
     }
+    None
 }
 
 /// Splice an HTML fragment (e.g. the date-line + reading-prefs control)

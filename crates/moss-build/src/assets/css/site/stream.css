@@ -70,4 +70,125 @@
   text-decoration: underline;
 }
 
+
+/* A thread: in a listing one unit, on a page the pages it continues above its
+   title and the pages continuing it after its body, joined by one line with
+   a dot at each. On a page the page itself is the article between them. */
+.moss-stream-thread {
+  padding-block: var(--moss-space-lg);
+  border-block-start: 1px solid var(--moss-border-light);
+}
+
+.moss-stream-thread:first-child {
+  padding-block-start: 0;
+  border-block-start: 0;
+}
+
+.moss-stream-thread:last-child {
+  padding-block-end: 0;
+}
+
+/* The rail: an indent for the text and one line at `rail` from the edge,
+   from the first part's dot to the last, with a dot on it level with each
+   part's first line. Dot and line hang off the part's first child (its title
+   or its body), so `lh` is that line's own height; the child sits at the
+   part's top, so the part is still their containing block. */
+.moss-thread,
+.moss-stream-thread {
+  --moss-thread-indent: 1.4rem;
+  --moss-thread-rail: 6px;
+  --moss-thread-ink: var(--moss-border-strong);
+}
+
+.moss-thread[data-part="before"] {
+  margin-block-end: var(--moss-space-lg);
+}
+
+.moss-thread[data-part="after"] {
+  margin-block-start: var(--moss-space-lg);
+}
+
+.moss-thread .moss-stream-item,
+.moss-stream-thread > .moss-stream-item {
+  position: relative;
+  padding-block: 0 var(--moss-space-md);
+  padding-inline-start: var(--moss-thread-indent);
+  border-block-start: 0;
+}
+
+.moss-thread .moss-stream-item:last-child,
+.moss-stream-thread > .moss-stream-item:last-child {
+  padding-block-end: 0;
+}
+
+.moss-thread .moss-stream-item > :first-child,
+.moss-stream-thread > .moss-stream-item > :first-child {
+  margin-block-start: 0;
+}
+
+.moss-thread .moss-stream-item > :first-child::before,
+.moss-stream-thread > .moss-stream-item > :first-child::before {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  inset-inline-start: calc(var(--moss-thread-rail) - 3px);
+  inset-block-start: calc(0.5lh - 3.5px);
+  inline-size: 7px;
+  block-size: 7px;
+  border-radius: 50%;
+  background: var(--moss-thread-ink);
+}
+
+/* Each part carries the line across its own height; the first starts it at
+   its dot and the last ends it there. */
+.moss-thread .moss-stream-item > :first-child::after,
+.moss-stream-thread > .moss-stream-item > :first-child::after {
+  content: "";
+  position: absolute;
+  inset-inline-start: var(--moss-thread-rail);
+  inset-block: 0;
+  inline-size: 1px;
+  background: var(--moss-thread-ink);
+}
+
+.moss-thread .moss-stream-item:first-child > :first-child::after,
+.moss-stream-thread > .moss-stream-item:first-child > :first-child::after,
+.moss-stream-thread-more + .moss-stream-item > :first-child::after {
+  inset-block-start: 0.5lh;
+}
+
+.moss-thread .moss-stream-item:last-child > :first-child::after,
+.moss-stream-thread > .moss-stream-item:last-child > :first-child::after {
+  inset-block-end: calc(100% - 0.5lh);
+}
+
+/* The fold's dashed line runs from the first part on into the next one's
+   dot, whose own line covers what passes it. */
+.moss-stream-thread-more {
+  display: block;
+  position: relative;
+  padding-block: 0 var(--moss-space-md);
+  padding-inline-start: var(--moss-thread-indent);
+  font-size: var(--moss-size-sm);
+}
+
+.moss-stream-thread-more::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: var(--moss-thread-rail);
+  inset-block: 0 -2em;
+  border-inline-start: 1px dashed var(--moss-thread-ink);
+}
+
+.moss-thread .moss-stream-body {
+  color: var(--moss-color-text-secondary);
+}
+
+.moss-in-reply-to {
+  margin-block: 0 var(--moss-space-sm);
+  color: var(--moss-color-text-secondary);
+  font-size: var(--moss-size-xs);
+  font-variant-numeric: tabular-nums;
+}
+
 }

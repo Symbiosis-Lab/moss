@@ -447,7 +447,8 @@ mod tests {
         // (`search_engines` — a page's own noindex.)
         // (`chrome` — a page without the site's frame.)
         // (`members` — who may read a page's body.)
-        assert_eq!(schema.frontmatter.fields.len(), 75);
+        // (`in_reply_to` — the page this one answers.)
+        assert_eq!(schema.frontmatter.fields.len(), 76);
     }
 
     #[test]
