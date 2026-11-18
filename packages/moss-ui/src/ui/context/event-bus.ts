@@ -253,8 +253,6 @@ export interface PreviewUrlChangedEvent {
   urlPath: string;
   /** Absolute path to the file behind the page (its markdown source, or the source of any other served file), or null */
   sourcePath: string | null;
-  /** Whether this page is a directory listing (homepage, section index) */
-  isDir: boolean;
   /** Whether this URL corresponds to a syndicatable article */
   isArticle: boolean;
   /** URLs where this article has been syndicated (from frontmatter) */

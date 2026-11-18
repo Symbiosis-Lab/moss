@@ -26,11 +26,14 @@ All notable changes to moss will be documented here.
 - When a picture a page shows is moved or renamed, the editor no longer asks for it at the address it left. That request failed, and the picture could show as broken for a moment.
 - A picture moved or renamed in the editor's file list is shown at its new place in the preview at once. The preview kept "Picture not found" until the folder was next noticed as changed, 20 seconds or more.
 - On a page with a styled section (`:::{.band}`), clicking a block in the preview opens the editor at that block's line again, and `moss doctor` names the right line. Every block after such a section was two lines late.
+- In the plugin catalog, a channel stays where it is after you add one, so the next press lands on the channel you meant. Added channels moved to the front on each press, and a second press could remove a channel you had just passed.
+- The + under the channel pill stays a plus while the catalog is open, and the + at the end of the settings tabs says "Install plugin".
 
 ### Changed
 
 - Opening a folder in the app that hasn't changed since moss last built it shows the last build at once instead of building it again: on a site of about 400 pages the preview is ready in about a second, with half the memory. A build that runs while the app sits in the background is no longer slowed by macOS's App Nap, so the first edit after a quiet spell shows about as fast as any other.
 - In the editor, the picture's line shows the focus point's position as the dot is dragged or moved with the arrow keys. It is written to the file once, when the dot is let go, and one undo takes the whole move back.
+- A social network's button works only on an article, as the email's does; on the home page and other folder pages it is grey. A folder's channels are no longer set from its page; a `cascade: syndicate:` list in the folder page's front matter still applies to the posts under it.
 
 ## [0.15.26] - 2026-11-17
 

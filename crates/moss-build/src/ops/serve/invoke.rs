@@ -173,8 +173,7 @@ mod tests {
         for url in ["", "/"] {
             match ask(url).await {
                 Some(Ok(v)) => {
-                    assert_eq!(v["is_dir"], json!(true), "{url:?}: {v}");
-                    assert!(v["source_path"].as_str().is_some_and(|p| p.ends_with("index.md")), "{v}");
+                    assert!(v["source_path"].as_str().is_some_and(|p| p.ends_with("index.md")), "{url:?}: {v}");
                 }
                 other => panic!("expected the home page, got {other:?}"),
             }

@@ -3049,6 +3049,12 @@ body.own-titlebar.controls-trailing .moss-titlebar-traffic-light-space {
   gap: 8px;
 }
 
+/* The version row keeps its line on every answer, a failed catalog read
+   included, so the rows under it (and Remove) never move. */
+.moss-settings-version-row {
+  min-block-size: 1lh;
+}
+
 .moss-settings-version-status,
 .moss-settings-requires-status,
 .moss-settings-connection-status {

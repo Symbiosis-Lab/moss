@@ -1768,10 +1768,6 @@ export type PageSource = {
  */
 source_path: string | null; 
 /**
- * Whether this page is a directory listing (e.g., homepage, section index).
- */
-is_dir: boolean; 
-/**
  * Whether this URL corresponds to an article in the article map.
  */
 is_article: boolean; 

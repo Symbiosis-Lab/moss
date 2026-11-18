@@ -1,11 +1,9 @@
 /**
  * The plus/cross glyph toggle — a button whose "+" turns into a "✗" (and
  * back) via icon-morph.ts's two-stroke engine, rather than swapping text
- * characters or DOM subtrees. Shared so every such button (the settings
- * panel's add-channel button, the Versions surface's save toggle) has the
- * exact same behavior instead of its own copy. icon-morph.ts stays
- * opinion-free about any particular glyph (its own header comment); this file
- * is where the plus/cross specifics live.
+ * characters or DOM subtrees. Its user is the Versions surface's save
+ * toggle. icon-morph.ts stays opinion-free about any particular glyph (its
+ * own header comment); this file is where the plus/cross specifics live.
  *
  * Each caller owns its own `GlyphToggleState` (`createGlyphToggleState()`) —
  * two independent buttons must not share one running tween, or the second

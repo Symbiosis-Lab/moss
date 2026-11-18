@@ -26,7 +26,10 @@ pub struct PageSource {
     /// It is not always a page: a caller that needs one moss renders (the
     /// build's preview requirement takes only a page source) checks that itself.
     pub source_path: Option<String>,
-    /// Whether this page is a directory listing (e.g., homepage, section index).
+    /// Whether this page is a directory listing (homepage, section index). The
+    /// derive scheduler reads it; the app does not, so it is not exported.
+    #[serde(skip)]
+    #[specta(skip)]
     pub is_dir: bool,
     /// Whether this URL corresponds to an article in the article map.
     pub is_article: bool,

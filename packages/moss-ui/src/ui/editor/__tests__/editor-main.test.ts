@@ -168,7 +168,7 @@ const { mockListen, mockEmit, mockCommands, listenCallbacks, listenCallbacksArra
     // "no home file" (source_path: null) with the root-home takeover the backend
     // always computes for `/`, so the root surface decision falls to
     // root-empty / takeover unless a test overrides it.
-    resolvePageSource: vi.fn().mockResolvedValue({ status: 'ok', data: { source_path: null, is_dir: true, is_article: false, syndicated: [], takeover: { kind: 'root-home', display: 'blog', files: [{ dir: '/Users/test/blog', name: 'blog.md', frontmatter: { home: true } }] } } }),
+    resolvePageSource: vi.fn().mockResolvedValue({ status: 'ok', data: { source_path: null, is_article: false, syndicated: [], takeover: { kind: 'root-home', display: 'blog', files: [{ dir: '/Users/test/blog', name: 'blog.md', frontmatter: { home: true } }] } } }),
     getPublishPreflight: vi.fn(),
     readSourceText: vi.fn(),
     emailListSubscribers: vi.fn(),
@@ -372,7 +372,7 @@ function resetMocks(): void {
   // stub a concrete URL.
   mockCommands.resolveUrlForFolder.mockReset().mockResolvedValue({ status: 'ok', data: null });
   mockCommands.copyFilesToProject.mockReset();
-  mockCommands.resolvePageSource.mockReset().mockResolvedValue({ status: 'ok', data: { source_path: null, is_dir: true, is_article: false, syndicated: [], takeover: { kind: 'root-home', display: 'blog', files: [{ dir: '/Users/test/blog', name: 'blog.md', frontmatter: { home: true } }] } } });
+  mockCommands.resolvePageSource.mockReset().mockResolvedValue({ status: 'ok', data: { source_path: null, is_article: false, syndicated: [], takeover: { kind: 'root-home', display: 'blog', files: [{ dir: '/Users/test/blog', name: 'blog.md', frontmatter: { home: true } }] } } });
   mockGetFirstFile.mockReset().mockReturnValue(null);
   mockRefreshAndRender.mockReset().mockResolvedValue(undefined);
   mockDeepestVisibleContainerFor.mockReset().mockReturnValue(null);
@@ -1739,7 +1739,7 @@ describe('editor-main URL query parameter loading', () => {
   });
 
   test('boot on a root whose home is still coming down says it is downloading', async () => {
-    mockCommands.resolvePageSource.mockResolvedValue({ status: 'ok', data: { source_path: null, source_pending: true, is_dir: true, is_article: false, syndicated: [], takeover: null } });
+    mockCommands.resolvePageSource.mockResolvedValue({ status: 'ok', data: { source_path: null, source_pending: true, is_article: false, syndicated: [], takeover: null } });
     Object.defineProperty(window, 'location', {
       value: { ...originalLocation, search: '?is_root=1' }, writable: true, configurable: true,
     });
@@ -1751,7 +1751,7 @@ describe('editor-main URL query parameter loading', () => {
   });
 
   test('a warm open on the root resolves its home from disk with no shell answer', async () => {
-    mockCommands.resolvePageSource.mockResolvedValue({ status: 'ok', data: { source_path: '/Users/test/blog/index.md', is_dir: true, is_article: false, syndicated: [], takeover: null } });
+    mockCommands.resolvePageSource.mockResolvedValue({ status: 'ok', data: { source_path: '/Users/test/blog/index.md', is_article: false, syndicated: [], takeover: null } });
     mockCommands.parseFrontmatter.mockResolvedValue({ status: 'ok', data: { frontmatter: {}, body: '# Home' } });
     await bootEditorMain();
     await vi.waitFor(() => expect(mockEmit).toHaveBeenCalledWith('editor:request-page', {}));
@@ -3753,7 +3753,7 @@ describe('editor-main import-refresh on FileChanged', () => {
     mockGetFirstFile.mockReturnValueOnce(null).mockReturnValueOnce(null).mockReturnValue('article-one.md');
     // Source-truth resolve: no home file on disk → source_path null, so the
     // surface stays the create-home CTA (not an opened content page).
-    mockCommands.resolvePageSource.mockResolvedValue({ status: 'ok', data: { source_path: null, is_dir: true, is_article: false, syndicated: [], takeover: { kind: 'root-home', display: 'blog', files: [{ dir: '/Users/test/blog', name: 'blog.md', frontmatter: { home: true } }] } } });
+    mockCommands.resolvePageSource.mockResolvedValue({ status: 'ok', data: { source_path: null, is_article: false, syndicated: [], takeover: { kind: 'root-home', display: 'blog', files: [{ dir: '/Users/test/blog', name: 'blog.md', frontmatter: { home: true } }] } } });
 
     await bootEditorMain();
     // The FileChanged handler subscribes to 'moss-event' via onMossEvent during init.
@@ -3792,7 +3792,7 @@ describe('editor-main import-refresh on FileChanged', () => {
     //   3+. post-refresh reads → 'index.md' (folder now populated)
     mockGetFirstFile.mockReturnValueOnce(null).mockReturnValueOnce(null).mockReturnValue('index.md');
     // Home file exists on disk → resolvePageSource('/') returns its absolute path.
-    mockCommands.resolvePageSource.mockResolvedValue({ status: 'ok', data: { source_path: '/Users/test/blog/index.md', is_dir: true, is_article: false, syndicated: [], takeover: null } });
+    mockCommands.resolvePageSource.mockResolvedValue({ status: 'ok', data: { source_path: '/Users/test/blog/index.md', is_article: false, syndicated: [], takeover: null } });
     // loadFile parses the home file's frontmatter/body.
     mockCommands.parseFrontmatter.mockResolvedValue({ status: 'ok', data: { frontmatter: {}, body: 'home body' } });
 
@@ -4609,7 +4609,7 @@ describe('a failed file open is visible and never leaves the tree lying', () => 
     mockGetFirstFile.mockReturnValueOnce(null).mockReturnValueOnce(null).mockReturnValue('index.md');
     mockCommands.resolvePageSource.mockResolvedValue({
       status: 'ok',
-      data: { source_path: '/Users/test/blog/index.md', is_dir: true, is_article: false, syndicated: [], takeover: null },
+      data: { source_path: '/Users/test/blog/index.md', is_article: false, syndicated: [], takeover: null },
     });
     // The home page HAS a resolvable URL — as with the file-selected leg above,
     // the only reason the preview must not go there is the failed open.

@@ -210,40 +210,6 @@ fn leaving_a_new_post_out_writes_false_and_taking_it_back_removes_the_key() {
     assert_eq!(page_of(&dir, SOURCE), "---\ntitle: A\n---\n\nBody stays.\n");
 }
 
-#[test]
-fn a_folder_page_writes_its_own_cascade_key_and_keeps_the_others() {
-    let dir = site("---\ntitle: A\n---\n");
-    let after = set_folder(dir.path(), "notes/", "notes/index.md", "mastodon", true).unwrap();
-    assert_eq!(after, strings(&["bluesky", "mastodon"]));
-    assert_eq!(page_of(&dir, "notes/index.md"), "---\ntitle: Notes\n# why\ncascade:\n  syndicate:\n    - bluesky\n    - mastodon\n  listing: cards\n---\n");
-    assert_eq!(read_folder(dir.path(), "notes/", "notes/index.md"), Some(after));
-}
-
-#[test]
-fn a_folder_page_is_never_its_own_ancestor() {
-    let dir = site("---\ntitle: A\n---\n");
-    std::fs::write(dir.path().join("notes/index.md"), "---\ntitle: Notes\n---\n").unwrap();
-    let mut map = ArticleMap::load(&dir.path().join(".moss")).unwrap();
-    map.pages.insert("notes/".into(), "notes/index.md".into());
-    map.save(&dir.path().join(".moss")).unwrap();
-    std::fs::write(dir.path().join("notes/index.md"), "---\ntitle: Notes\ncascade:\n  syndicate: false\n---\n").unwrap();
-    assert_eq!(set_folder(dir.path(), "notes/index.html", "notes/index.md", "bluesky", true).unwrap(), strings(&["bluesky"]));
-    assert_eq!(read_folder(dir.path(), "notes/index.html", "notes/index.md"), Some(strings(&["bluesky"])));
-}
-
-#[test]
-fn clearing_a_folder_under_one_that_names_channels_writes_false() {
-    let dir = site("---\ntitle: A\n---\n");
-    std::fs::write(dir.path().join("index.md"), "---\ntitle: Home\ncascade:\n  syndicate: [mastodon]\n---\n").unwrap();
-    let mut map = ArticleMap::load(&dir.path().join(".moss")).unwrap();
-    map.pages.insert(String::new(), "index.md".into());
-    map.save(&dir.path().join(".moss")).unwrap();
-    assert_eq!(set_folder(dir.path(), "notes/", "notes/index.md", "bluesky", false).unwrap(), Vec::<String>::new());
-    assert!(page_of(&dir, "notes/index.md").contains("syndicate: false"), "removing the key would hand the folder the list above");
-    assert_eq!(read_folder(dir.path(), "notes/", "notes/index.md"), Some(vec![]));
-}
-
-
 const COPY_URL: &str = "https://bsky.app/profile/a/post/1";
 const POST: &str = "---\ntitle: A\nuid: bb22bb22\n---\n\nBody stays.\n";
 
