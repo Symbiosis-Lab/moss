@@ -80,11 +80,11 @@ export const drawStroke = (s: Stroke): string => strokeD(s.P, s.phi, s.k, s.len,
    on a circle whose centre is still swinging into place, and swings out of
    its own box.
 
-   Collapsing, length leads: straightening a 179-unit arc while it is still
-   179 units long is a bar three tiles wide, sweeping. The ring retracts to a
-   short arc at the anchor first — on R = 28.5 an 11-unit arc is already
-   nearly straight — and only then uncurves. One rule either way: never be
-   long and wrong at the same time.
+   Collapsing, length leads: straightening a whole ring while it is still a
+   circumference long is a bar several times its box, sweeping. The ring
+   retracts to a short arc at the anchor first, already nearly straight, and
+   only then uncurves. One rule either way: never be long and wrong at the
+   same time.
 
    The direction is DERIVED from the two poses, never declared by the caller.
    As an argument it was a thing every call site had to get right, and a
