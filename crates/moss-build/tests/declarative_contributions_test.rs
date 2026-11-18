@@ -109,7 +109,7 @@ fn a_block_body_gets_every_pass_ordinary_markdown_gets() {
 }
 
 #[test]
-fn the_body_stands_alone_without_the_plugin_or_with_it_disabled() {
+fn the_body_stands_alone_once_the_plugin_is_disabled() {
     let tmp = site();
     let root = tmp.path();
     write(root, "index.md", PAGE);
@@ -120,8 +120,11 @@ fn the_body_stands_alone_without_the_plugin_or_with_it_disabled() {
         assert!(html.contains("<strong>Fallback</strong>"), "{html}");
         assert!(html.contains("Second fallback."), "{html}");
     };
+    // A block is data: skipping plugin code still ships its element and script.
     build(root, PluginMode::Skip);
-    bare(&output(root, "index.html"));
+    let html = output(root, "index.html");
+    assert!(html.contains("<demo-card"), "{html}");
+    assert_eq!(html.matches("/_moss/plugins/catalog/view.js").count(), 1, "{html}");
     write(root, ".moss/plugins/catalog/config.toml", "enabled = false\n");
     build(root, PluginMode::SlotsOnly);
     bare(&output(root, "index.html"));
@@ -213,7 +216,7 @@ fn a_block_in_a_footer_loads_its_assets_on_every_page_once() {
 }
 
 #[test]
-fn public_data_is_published_under_the_plugin_and_never_without_it() {
+fn public_data_is_published_under_the_plugin_until_it_is_disabled() {
     let tmp = site();
     let root = tmp.path();
     write(root, "index.md", "# Home\n\nWelcome.\n");
@@ -226,7 +229,7 @@ fn public_data_is_published_under_the_plugin_and_never_without_it() {
     assert!(!output(root, "_moss/commerce.json").contains("catalog"), "a plugin's data stays out of the core file");
     let published = root.join(".moss/build.nosync/current/_moss/extensions/catalog.json");
     build(root, PluginMode::Skip);
-    assert!(!published.exists(), "plugins off publishes nothing");
+    assert!(published.exists(), "skipping plugin code still publishes its declared data");
     write(root, ".moss/plugins/catalog/config.toml", "enabled = false\n");
     build(root, PluginMode::SlotsOnly);
     assert!(!published.exists(), "a disabled plugin publishes nothing");

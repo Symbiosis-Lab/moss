@@ -97,6 +97,27 @@ interface PublicDataContribution {
   }>;
 }
 /**
+ * One entry of `contributes.identity`: a proof that the site's domain is the
+ * person's on a network, filled on every build from the plugin's own
+ * `[services.<plugin>]` table. `{key}` reads a declared setting; on an `acct`
+ * setting, `{key.user}` and `{key.host}` read its halves.
+ *
+ * @category Plugin manifest
+ */
+type IdentityProof = /** A file under `.well-known/`. A `.json` body is filled as JSON. */
+{
+  file: string;
+  body: string;
+}
+/** A `<link>` in every page's head. The rel is `me`. */ | {
+  link: "me";
+  href: string;
+}
+/** A `<meta>` in every page's head. The name is `fediverse:creator`. */ | {
+  meta: "fediverse:creator";
+  content: string;
+};
+/**
  * `contributes.blocks[short]`: a custom element an author places with a
  * `:::<short>` fence around ordinary markdown. No plugin code runs at build.
  *
@@ -2523,4 +2544,4 @@ declare function showToast(options: ToastOptions | string): Promise<void>;
  */
 declare function dismissToast(id: string): Promise<void>;
 //#endregion
-export { AccountQuery, AddressKind, AdvisoryAction, AdvisoryAppOp, AdvisoryProposal, AdvisoryScope, AdvisorySeverity, ArchType, ArtifactSource, BaseContext, BlockAttribute, BlockContribution, BrowserCloseReason, BrowserHandle, BrowserSignIn, CompleteMessage, ConfigureDomainContext, Cookie, CopyJob, CopyOutcome, CopyPart, CopyPicture, CopyRef, DeployAddress, DeployContext, DeploymentInfo, DerivationContribution, DnsRecord, DnsTarget, DownloadOptions, DownloadResult, ErrorMessage, EscapeSpec, ExecuteOptions, ExecuteResult, FetchOptions, FetchResult, FieldDeclaration, GetOptions, HookResult, HookToast, KeyAlgorithm, KeyInfo, LegacySetupVerdict, ListingContext, ListingResult, ListingStyleContribution, LogMessage, MultipartFilePart, MultipartPostOptions, MultipartTextField, OSType, PageRecord, PlatformInfo, PlatformKey, PluginCategory, PluginHook, PluginManifest, PluginMessage, PostOptions, ProcessContext, ProgressMessage, ProjectFileEntry, ProjectInfo, PublicDataContribution, SetupBlocker, SetupContext, SetupField, SetupForm, SetupVerdict, SiteFileInfo, SocialArticleData, SocialComment, SocialDataFile, StartTaskOptions, TOAST_DISMISS_EVENT, TOAST_EVENT, TOAST_UPDATE_EVENT, TaskHandle, TauriCore, ToastAction, ToastOptions, ToastType, ToastVariant, TriggerContext, clearPluginCookies, closeBrowser, dismissToast, downloadAsset, emitEvent, executeBinary, fetchUrl, fileExists, getKey, getPlatformInfo, getPluginCookie, getPluginEnvVar, getSecret, getTauriCore, htmlToMarkdown, httpGet, httpPost, httpPostMultipart, listFiles, listKeys, listProjectTree, listSiteFilesWithSizes, onEvent, openBrowser, openBrowserWithHtml, openSystemBrowser, pluginFileExists, readFile, readPluginFile, readSiteFile, rejectSecret, reportError, reportProgress, returnToEditor, sendMessage, setMessageContext, setPluginCookie, setSecret, showBrowserForm, showToast, signWithKey, startBrowserSignIn, startTask, writeFile, writeFileBinary, writePluginFile };
+export { AccountQuery, AddressKind, AdvisoryAction, AdvisoryAppOp, AdvisoryProposal, AdvisoryScope, AdvisorySeverity, ArchType, ArtifactSource, BaseContext, BlockAttribute, BlockContribution, BrowserCloseReason, BrowserHandle, BrowserSignIn, CompleteMessage, ConfigureDomainContext, Cookie, CopyJob, CopyOutcome, CopyPart, CopyPicture, CopyRef, DeployAddress, DeployContext, DeploymentInfo, DerivationContribution, DnsRecord, DnsTarget, DownloadOptions, DownloadResult, ErrorMessage, EscapeSpec, ExecuteOptions, ExecuteResult, FetchOptions, FetchResult, FieldDeclaration, GetOptions, HookResult, HookToast, IdentityProof, KeyAlgorithm, KeyInfo, LegacySetupVerdict, ListingContext, ListingResult, ListingStyleContribution, LogMessage, MultipartFilePart, MultipartPostOptions, MultipartTextField, OSType, PageRecord, PlatformInfo, PlatformKey, PluginCategory, PluginHook, PluginManifest, PluginMessage, PostOptions, ProcessContext, ProgressMessage, ProjectFileEntry, ProjectInfo, PublicDataContribution, SetupBlocker, SetupContext, SetupField, SetupForm, SetupVerdict, SiteFileInfo, SocialArticleData, SocialComment, SocialDataFile, StartTaskOptions, TOAST_DISMISS_EVENT, TOAST_EVENT, TOAST_UPDATE_EVENT, TaskHandle, TauriCore, ToastAction, ToastOptions, ToastType, ToastVariant, TriggerContext, clearPluginCookies, closeBrowser, dismissToast, downloadAsset, emitEvent, executeBinary, fetchUrl, fileExists, getKey, getPlatformInfo, getPluginCookie, getPluginEnvVar, getSecret, getTauriCore, htmlToMarkdown, httpGet, httpPost, httpPostMultipart, listFiles, listKeys, listProjectTree, listSiteFilesWithSizes, onEvent, openBrowser, openBrowserWithHtml, openSystemBrowser, pluginFileExists, readFile, readPluginFile, readSiteFile, rejectSecret, reportError, reportProgress, returnToEditor, sendMessage, setMessageContext, setPluginCookie, setSecret, showBrowserForm, showToast, signWithKey, startBrowserSignIn, startTask, writeFile, writeFileBinary, writePluginFile };

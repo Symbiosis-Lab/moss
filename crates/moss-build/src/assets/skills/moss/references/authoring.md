@@ -1290,6 +1290,10 @@ To show Mastodon that your site belongs to your profile there, list the profile 
 
 To use your site's domain as your Bluesky handle, set `atproto_did = "did:plc:abcdefghijklmnopqrstuvwx"` in the same table, with the account identifier Bluesky shows you when you change your handle to a domain. The build writes it to `.well-known/atproto-did`, the address Bluesky fetches to check the domain. moss skips every folder whose name starts with a dot in your source, so the file cannot be shipped by hand. A value that does not start with `did:plc:` or `did:web:` is dropped with a build warning naming `atproto_did`.
 
+A channel's plugin can write these for you: with the Bluesky plugin installed, `did = "did:plc:…"` under `[services.bluesky]` writes the same file, and with the Mastodon plugin, `account = "@ana@social.example"` under `[services.mastodon]` links every page to that profile and credits you on Mastodon's link previews of your pages (`<meta name="fediverse:creator">`; allow your domain under Mastodon's profile settings too). Where `[site]` and a plugin both name the Bluesky file, `[site]` wins and the build says so.
+
+A Nostr address (NIP-05) is not followed through a redirect: a domain whose bare address forwards to `www.` can be named only at the address that answers.
+
 ## Archival copy: dated editions and citation
 
 Turn on `archival = true` under `[site]` in `.moss/config.toml` for a site that is meant to be cited and kept. It is off when the key is unset, and a site without it builds exactly as before. The edition here is the build's own date and id, unrelated to a language edition such as `de/`. On a footer that ends on a closing picture, the edition block sits on that picture's foot, beside its credit, in the same panel or ink.

@@ -70,6 +70,9 @@ pub enum FieldType {
     /// every serialized config. `secret` rather than `password`, deliberately:
     /// `password` names a widget, this names custody.
     Secret,
+    /// An account address, `@name@host` (the shape of an `acct:` URI), drawn
+    /// as text. An identity proof may read its `.user` and `.host`.
+    Acct,
     /// A table of named sub-`fields`. Site settings only, like the two below:
     /// the plugin's own `config.toml` and a blocker's form are written flat.
     /// The names match moss-core's schema `Object` and `Array`.
@@ -82,7 +85,7 @@ pub enum FieldType {
 
 impl FieldType {
     fn is_scalar(self) -> bool {
-        matches!(self, Self::String | Self::Number | Self::Boolean)
+        matches!(self, Self::String | Self::Number | Self::Boolean | Self::Acct)
     }
 }
 

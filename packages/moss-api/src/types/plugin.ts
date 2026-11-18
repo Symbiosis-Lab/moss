@@ -97,6 +97,22 @@ export interface PublicDataContribution {
 }
 
 /**
+ * One entry of `contributes.identity`: a proof that the site's domain is the
+ * person's on a network, filled on every build from the plugin's own
+ * `[services.<plugin>]` table. `{key}` reads a declared setting; on an `acct`
+ * setting, `{key.user}` and `{key.host}` read its halves.
+ *
+ * @category Plugin manifest
+ */
+export type IdentityProof =
+  /** A file under `.well-known/`. A `.json` body is filled as JSON. */
+  | { file: string; body: string }
+  /** A `<link>` in every page's head. The rel is `me`. */
+  | { link: "me"; href: string }
+  /** A `<meta>` in every page's head. The name is `fediverse:creator`. */
+  | { meta: "fediverse:creator"; content: string };
+
+/**
  * `contributes.blocks[short]`: a custom element an author places with a
  * `:::<short>` fence around ordinary markdown. No plugin code runs at build.
  *

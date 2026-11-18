@@ -130,6 +130,7 @@ fn shape_ok(field: &Field, value: &serde_json::Value) -> Result<(), String> {
     use serde_json::Value;
     match (field.field_type, value) {
         (FieldType::String, Value::String(_)) | (FieldType::Number, Value::Number(_)) | (FieldType::Boolean, Value::Bool(_)) => Ok(()),
+        (FieldType::Acct, Value::String(s)) => super::identity::split_acct(s.trim()).map(drop).ok_or_else(|| "an account is written @name@host".to_string()),
         (FieldType::Object, Value::Object(members)) => members.iter().try_for_each(|(key, member)| {
             let declared = field.fields.iter().find(|f| f.key == *key).ok_or_else(|| format!("`{key}` is not a setting this plugin draws"))?;
             shape_ok(declared, member).map_err(|why| format!("{key}: {why}"))

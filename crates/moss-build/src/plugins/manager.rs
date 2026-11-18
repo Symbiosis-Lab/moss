@@ -1188,17 +1188,8 @@ mod tests {
                 entry: Some("main.js".to_string()),
                 capabilities: vec![Capability::Syndicate],
                 contributes: Some(PluginContributes {
-                    frontmatter: None,
-                    channel: None,
-                    deploy_target: None,
-                    processor: None,
                     jobs: Some(ContributedJobs { descriptors }),
-                    stack: None,
-                    derivations: None,
-                    listing_styles: None,
-                    blocks: None,
-                    public_data: None,
-                    site_settings: None,
+                    ..Default::default()
                 }),
                 ..Default::default()
             },

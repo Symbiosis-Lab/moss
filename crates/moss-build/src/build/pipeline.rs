@@ -1443,9 +1443,11 @@ fn build_inner(
     // `field_decls` below, so the listing gets its own copy.
     let listing_field_decls = field_decls.clone();
     // Read site-level config from .moss/config.toml [site] section
-    let declaring_plugins = crate::plugins::discovery::plugins_declaring_for_build(!services.is_some_and(|s| s.plugins_skipped), folder_path);
+    // Declarations are data, read even when plugin code is skipped, so a CI
+    // build ships what the app's build does.
+    let enabled_plugins = crate::plugins::discovery::plugins_declaring_for_build(folder_path);
     let (public_files, withheld) = crate::plugins::contributions::public_data::project(
-        &declaring_plugins,
+        &enabled_plugins,
         cfg.as_ref().unwrap_or(&crate::config::ConfigFile::empty()),
         &crate::plugins::contributions::public_data::FillContext::for_folder(folder_path),
     );
@@ -1510,7 +1512,7 @@ fn build_inner(
         site_url_override,
         declared_redirects: cfg.as_ref().map(|c| c.declared_redirects()).unwrap_or_default(),
         ai: crate::build::feeds::robots::AiSettings::from_config(cfg.as_ref()),
-        identity: crate::config::site_identity::SiteIdentity::from_config(cfg.as_ref()),
+        identity: crate::config::site_identity::SiteIdentity::from_config(cfg.as_ref(), &enabled_plugins),
         // One switch: the per-site Services-tab toggle, absent key = off
         // (graduated out of `experimental.preview_features` 2026-08-31).
         // Resolved here into the ONE value the nav button
@@ -1530,9 +1532,9 @@ fn build_inner(
         term_nav: cfg.as_ref().map(|c| c.terms_nav()).unwrap_or_default(),
         field_decls,
         forms_endpoint,
-        blocks: std::sync::Arc::new(crate::plugins::contributions::blocks::BlockPlan::from_plugins(&declaring_plugins)),
+        blocks: std::sync::Arc::new(crate::plugins::contributions::blocks::BlockPlan::from_plugins(&enabled_plugins)),
         public_data: public_files,
-        booking: core_booking(cfg.as_ref(), &declaring_plugins),
+        booking: core_booking(cfg.as_ref(), &enabled_plugins),
         members: cfg.as_ref().map(crate::config::services::MembersConfig::read).transpose()?.unwrap_or_default(),
         place_maps,
         incremental,

@@ -16,6 +16,7 @@
 pub mod abilities;
 pub mod blocks;
 pub mod derivation;
+pub mod identity;
 pub mod listing_style;
 pub mod platform;
 pub mod public_data;
@@ -101,6 +102,11 @@ pub struct PluginContributes {
     /// `[services.<plugin-id>]` table.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub site_settings: Option<site_settings::SiteSettingsContribution>,
+
+    /// Proofs that the site's domain is the person's identity on a network,
+    /// filled on every build from `[services.<plugin-id>]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<Vec<identity::Proof>>,
 }
 
 /// Job descriptors contributed by a plugin (§8).
@@ -566,6 +572,10 @@ impl PluginManifest {
         if let Some(site) = manifest.contributes.as_mut().and_then(|c| c.site_settings.as_mut()) {
             site.validate().map_err(serde_json::Error::custom)?;
             bound_author_text_in(&mut site.settings);
+        }
+        if let Some(proofs) = manifest.contributes.as_ref().and_then(|c| c.identity.as_ref()) {
+            let declared = manifest.contributes.as_ref().and_then(|c| c.site_settings.as_ref()).map_or(&[][..], |s| &s.settings[..]);
+            identity::validate(&manifest.name, proofs, declared).map_err(serde_json::Error::custom)?;
         }
         manifest.translations = translations::validated(std::mem::take(&mut manifest.translations)).map_err(serde_json::Error::custom)?;
         if let Some(derivations) = manifest.contributes.as_ref().and_then(|c| c.derivations.as_ref()) {

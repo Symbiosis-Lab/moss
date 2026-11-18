@@ -88,3 +88,104 @@ fn without_the_settings_no_link_and_no_file_are_written() {
     assert!(!site.html("index.html").contains("rel=\"me\""));
     assert!(!site.output(".well-known").exists());
 }
+
+// A plugin's `contributes.identity`, filled from its `[services.<id>]` table.
+// This harness builds with plugin hooks skipped, so each test below also
+// proves the proofs survive a build that runs no plugin code.
+
+const HANDLE_PLUGIN: &str = r#"{"name":"skyhandle","version":"1.0.0","contributes":{
+  "site_settings":{"settings":[{"key":"did","type":"string","label":"DID"}]},
+  "identity":[{"file":".well-known/atproto-did","body":"{did}"}]}}"#;
+
+const SOCIAL_PLUGIN: &str = r#"{"name":"tootle","version":"1.0.0","contributes":{
+  "site_settings":{"settings":[{"key":"account","type":"acct","label":"Account"}]},
+  "identity":[
+    {"link":"me","href":"https://{account.host}/@{account.user}"},
+    {"meta":"fediverse:creator","content":"@{account.user}@{account.host}"}]}}"#;
+
+const NAMES_PLUGIN: &str = r#"{"name":"relaynames","version":"1.0.0","contributes":{
+  "site_settings":{"settings":[{"key":"pubkey","type":"string","label":"Public key"}]},
+  "identity":[{"file":".well-known/nostr.json","body":"{\"names\":{\"_\":\"{pubkey}\"}}"}]}}"#;
+
+fn with_plugin<'a>(manifest: &'a str, name: &str) -> Vec<(String, &'a str)> {
+    vec![(format!(".moss/plugins/{name}/manifest.json"), manifest)]
+}
+
+fn site_with(config: &str, plugins: &[(&str, &str)]) -> Site {
+    let mut files: Vec<(String, &str)> = PAGES.iter().map(|(p, b)| (p.to_string(), *b)).collect();
+    for (name, manifest) in plugins {
+        files.extend(with_plugin(manifest, name));
+    }
+    let borrowed: Vec<(&str, &str)> = files.iter().map(|(p, b)| (p.as_str(), *b)).collect();
+    Site::with_config(config, &borrowed)
+}
+
+fn head_of(html: &str) -> &str {
+    &html[..html.find("</head>").expect("a head")]
+}
+
+#[test]
+fn a_plugin_file_proof_is_written_from_its_table_and_not_without_it() {
+    let site = site_with("\n[services.skyhandle]\ndid = \"did:plc:abcdefghijklmnopqrstuvwx\"\n", &[("skyhandle", HANDLE_PLUGIN)]);
+    let text = std::fs::read_to_string(site.output(".well-known/atproto-did")).expect("the plugin's proof is written");
+    assert_eq!(text, "did:plc:abcdefghijklmnopqrstuvwx");
+
+    let unset = site_with("", &[("skyhandle", HANDLE_PLUGIN)]);
+    assert!(!unset.output(".well-known/atproto-did").exists(), "no value, no proof");
+    assert!(!unset.logged.iter().any(|l| l.contains("identity")), "an unset network is not a problem: {:?}", unset.logged);
+}
+
+#[test]
+fn link_and_meta_proofs_go_into_every_head_from_an_account_address() {
+    let site = site_with("\n[services.tootle]\naccount = \"@ana@social.example\"\n", &[("tootle", SOCIAL_PLUGIN)]);
+    for page in ["index.html", "notes/index.html", "tags/harbour/index.html"] {
+        let html = site.html(page);
+        let head = head_of(&html);
+        assert!(head.contains("<link rel=\"me\" href=\"https://social.example/@ana\">"), "{page}: {head}");
+        assert!(head.contains("<meta name=\"fediverse:creator\" content=\"@ana@social.example\">"), "{page}: {head}");
+    }
+}
+
+#[test]
+fn a_hand_written_account_that_is_not_name_at_host_is_named_and_left_out() {
+    let site = site_with("\n[services.tootle]\naccount = \"ana\"\n", &[("tootle", SOCIAL_PLUGIN)]);
+    assert!(!site.html("index.html").contains("fediverse:creator"));
+    assert!(site.logged.iter().any(|l| l.contains("[services.tootle]") && l.contains("account")), "{:?}", site.logged);
+}
+
+#[test]
+fn a_json_proof_escapes_its_value_and_stays_json() {
+    let site = site_with("\n[services.relaynames]\npubkey = 'ab\"cd'\n", &[("relaynames", NAMES_PLUGIN)]);
+    let text = std::fs::read_to_string(site.output(".well-known/nostr.json")).expect("written");
+    let json: serde_json::Value = serde_json::from_str(&text).expect("still JSON");
+    assert_eq!(json["names"]["_"], "ab\"cd");
+}
+
+#[test]
+fn the_site_shorthand_wins_a_path_two_suppliers_claim_and_the_build_names_both() {
+    let config = "atproto_did = \"did:plc:fromconfigfromconfigfromco\"\n\n[services.skyhandle]\ndid = \"did:plc:frompluginfrompluginfrompl\"\n";
+    let site = site_with(config, &[("skyhandle", HANDLE_PLUGIN)]);
+    let text = std::fs::read_to_string(site.output(".well-known/atproto-did")).unwrap();
+    assert_eq!(text.trim_end(), "did:plc:fromconfigfromconfigfromco");
+    assert!(
+        site.logged.iter().any(|l| l.contains("[site].atproto_did") && l.contains("skyhandle")),
+        "{:?}",
+        site.logged
+    );
+}
+
+#[test]
+fn a_profile_in_site_me_and_a_plugin_link_to_it_give_one_link() {
+    let config = "me = \"https://social.example/@ana\"\n\n[services.tootle]\naccount = \"@ana@social.example\"\n";
+    let site = site_with(config, &[("tootle", SOCIAL_PLUGIN)]);
+    assert_eq!(me_links(&site.html("index.html")), ["https://social.example/@ana"]);
+}
+
+#[test]
+fn a_proof_that_goes_away_is_named_by_the_next_build() {
+    let site = site_with("\n[services.skyhandle]\ndid = \"did:plc:abcdefghijklmnopqrstuvwx\"\n", &[("skyhandle", HANDLE_PLUGIN)]);
+    site.write(".moss/config.toml", "schema_version = 6\n\n[site]\nlang = \"en\"\n");
+    let logged = site.rebuild();
+    assert!(!site.output(".well-known/atproto-did").exists());
+    assert!(logged.iter().any(|l| l.contains("identity: .well-known/atproto-did removed")), "{logged:?}");
+}

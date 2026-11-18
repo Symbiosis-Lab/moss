@@ -9,6 +9,8 @@ All notable changes to moss will be documented here.
 - A theme can style the link-preview card moss draws for a page with no picture: `--moss-share-card-bg`, `--moss-share-card-ink` and `--moss-share-card-muted` colour it, `--moss-share-card-picture` places a picture along its right edge, and the card uses the theme's heading face when the theme hosts it as a `.ttf` or `.otf`.
 - `header=over` works on a full-width band that opens the page (`::: {screen header=over}`) as it does on an opening hero: the site header lies over the band's pictures, its ink is read from every picture in the band, and the header passes the pointer through to the band's links. On a band that is not the page's first block it does nothing.
 - A channel signs in through its own sign-in page in your browser, and its settings page shows the account it signed in to, with Sign out. Mastodon asks which server first, already filled in with mastodon.social; nothing else is typed in.
+- A channel plugin can make your domain your identity on its network: from one setting in its `[services.<plugin>]` table, moss writes the proof on every build, a file under `.well-known/` such as Bluesky's `atproto-did`, a `rel="me"` link to your profile, or Mastodon's `fediverse:creator`. A build with `--no-plugins` writes them too, and a proof the last build served that is now gone is named in the build's output.
+- For plugin authors: `contributes.identity` declares those proofs, and an `acct` setting holds an `@name@host` address.
 
 ### Fixed
 
@@ -34,6 +36,7 @@ All notable changes to moss will be documented here.
 
 ### Changed
 
+- `moss build --no-plugins` keeps what plugins declare as data (elements, published settings, identity proofs) and skips only their code, so a CI build publishes what the app's build does.
 - Opening a folder in the app that hasn't changed since moss last built it shows the last build at once instead of building it again: on a site of about 400 pages the preview is ready in about a second, with half the memory. A build that runs while the app sits in the background is no longer slowed by macOS's App Nap, so the first edit after a quiet spell shows about as fast as any other.
 - In the editor, the picture's line shows the focus point's position as the dot is dragged or moved with the arrow keys. It is written to the file once, when the dot is let go, and one undo takes the whole move back.
 - A social network's button works only on an article, as the email's does; on the home page and other folder pages it is grey. A folder's channels are no longer set from its page; a `cascade: syndicate:` list in the folder page's front matter still applies to the posts under it.

@@ -131,6 +131,27 @@ A plugin whose settings belong to the site, and should travel with it and be rea
 - An action calls a route on one of moss's own services, signed by the folder, and opens the `https` address in the answer. moss makes the call only for plugins it ships or its registry lists.
 - `translations` at the manifest's top level, keyed by locale and then by the English text (`{ "zh": { "Currency": "币种" } }`), show the manifest's words in the reader's language; a missing entry shows the English.
 
+### Proving the site is the person's
+
+A network that lets a person's domain stand for their account (a Bluesky handle, a verified Mastodon link) checks a proof on the site. A plugin declares that proof under `contributes.identity`, and moss writes it on every build from the plugin's own `[services.<plugin>]` table, so the person writes one line, never the file:
+
+```json
+"site_settings": { "settings": [
+  { "key": "did", "type": "string", "label": "Account ID" },
+  { "key": "account", "type": "acct", "label": "Account" }
+] },
+"identity": [
+  { "file": ".well-known/atproto-did", "body": "{did}" },
+  { "link": "me", "href": "https://{account.host}/@{account.user}" },
+  { "meta": "fediverse:creator", "content": "@{account.user}@{account.host}" }
+]
+```
+
+- A proof is a `file` under `.well-known/`, a `link` or a `meta` written into the head of every page. A file is `atproto-did` or `nostr.json`, a link's rel is `me`, and a meta's name is `fediverse:creator`. Any other is refused and the manifest does not load: another file could grant an app authority over the domain (`webauthn`, `assetlinks.json`), and another rel or name could change every page (`canonical`, `robots`). A network that needs one more is added to moss by name.
+- `{key}` reads a setting the plugin declares in `site_settings`. An `acct` setting holds `@name@host`, refused in any other shape, and `{key.user}` and `{key.host}` read its two halves. Any other brace is text, so a `.json` body is written as JSON: each value goes in a string, escaped, and a body that is not JSON once filled does not load.
+- A proof whose setting is unset is not written, without a warning: the person has not set that network up. A hand-written value that cannot be written (an `acct` without a host, a control character) is left out with a warning naming the setting.
+- Proofs are data, read even by a build that runs no plugin code (`moss build --no-plugins`), so a CI deploy keeps them. A path two suppliers claim is written once, from `[site]` first and then plugins by name, with a warning naming both. When a proof the last build served is gone, the build says so (`identity: .well-known/atproto-did removed`), since that was someone's live handle.
+
 ## Setup: declare, don't build UI
 
 A contribution that needs anything from the user declares a `setup` block — moss draws all of it; a plugin never builds settings or first-publish UI. Three members, ordered by what they cost to evaluate:
