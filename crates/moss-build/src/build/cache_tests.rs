@@ -3565,7 +3565,7 @@ fn media_meta_leaves_a_record_the_cloud_holds_unwritten() {
         let (_managed, _in_cloud, inode) = cloud_held_owned_record(&cache, &oid, 1);
         let meta = crate::build::cache::CachedMediaMeta { dimensions: Some((4, 3)), dominant_color: None, lqip_data_uri: None, is_animated: false };
 
-        crate::build::scan::scan::write_cached_meta(&cache, &oid, 1, &meta);
+        crate::build::scan::scan::write_media_meta(&cache, Some(&oid), None, "", 1, &meta);
 
         crate::build::cloud_readiness::storage::drain_cache_publications(&mut |_| {});
         assert_eq!(fs::metadata(cache.record_path(&oid)).unwrap().ino(), inode, "the record the cloud held is not replaced");

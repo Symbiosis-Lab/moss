@@ -379,7 +379,7 @@ const MEDIA_META_TRANSFORM: &str = "media/meta";
 ///
 /// **5 → 6**: an SVG's size is read from its own width, height or viewBox; a
 /// version-5 entry holds `None` for it.
-const MEDIA_META_VERSION: u32 = 6;
+pub(crate) const MEDIA_META_VERSION: u32 = 6;
 
 /// Images whose dominant colour and placeholder need a pixel decode (an SVG
 /// has neither).
@@ -498,11 +498,31 @@ impl From<&MediaMetadata> for CachedMediaMeta {
     }
 }
 
-/// Store media metadata in the ObjectStore + TransformCache.
-///
-/// `pub(crate)` so the background media phase can enrich an image's stat-key
-/// entry with the dominant color + LQIP it computes during WebP conversion.
-pub(crate) fn write_cached_meta(
+/// Records what was found out about a source under its stat key, and under its
+/// content hash when the record there is missing or from a version that no longer
+/// holds for this kind of file. The content-keyed record is the only one a fresh
+/// copy of the folder can read, so whoever computes the values brings it up to
+/// date; a current one is left unwritten, so a build that computes nothing writes
+/// nothing to the synced folder.
+pub(crate) fn write_media_meta(
+    transform_cache: &TransformCache,
+    stat_key: Option<&str>,
+    content_hash: Option<&str>,
+    extension: &str,
+    source_size: u64,
+    meta: &CachedMediaMeta,
+) {
+    if let Some(key) = stat_key {
+        write_cached_meta(transform_cache, key, source_size, meta);
+    }
+    if let Some(hash) = content_hash.filter(|hash| read_cached_meta(transform_cache, hash, extension).is_none()) {
+        write_cached_meta(transform_cache, hash, source_size, meta);
+    }
+}
+
+/// Store media metadata in the ObjectStore + TransformCache. Private: every
+/// caller goes through `write_media_meta`.
+fn write_cached_meta(
     transform_cache: &TransformCache,
     content_hash: &str,
     source_size: u64,
@@ -615,14 +635,11 @@ fn extract_media_metadata_cached(
     // Use stat-based cache key instead; the file watcher will trigger a rebuild
     // when iCloud materializes the file.
     //
-    // For raster images: ALSO skip the content read on the blocking scan. Both
-    // the full-file SHA-256 AND the full pixel decode (dominant color + LQIP)
-    // are deferred to the background media phase, which already decodes every
-    // image for WebP conversion. The blocking scan reads only the dimensions
-    // (image header, ~1ms) so first paint stays independent of image count — a
-    // folder of 1000+ large photos previously spent minutes here, because a
-    // full decode is ~10× a header read and it ran sequentially per image. See
-    // the image stat-miss branch below.
+    // A local raster image is hashed like any other file: its colour and LQIP
+    // are cached under the content hash in the shared store, the one record
+    // that holds on every machine, so a fresh copy finds them here instead of
+    // rendering every page without placeholders and again once they settle.
+    // Only the pixel decode is deferred, in the stat-miss branch below.
     // Held for the whole function: an evicted source cannot answer any of the
     // questions below, and — crucially — its non-answers must not be written to
     // the stat-keyed caches. Materialization on Sonoma+ preserves size AND
@@ -637,28 +654,19 @@ fn extract_media_metadata_cached(
     }
     // The only place this scan caches what it found out about the file, so a non-answer
     // has one guard to get past, not one per branch below.
-    let store_meta = |key: &str, meta: &MediaMetadata| {
+    let store_meta = |stat_key: Option<&str>, hash: Option<&str>, meta: &MediaMetadata| {
         if !source_is_evicted {
-            write_cached_meta(transform_cache, key, size, &CachedMediaMeta::from(meta));
+            write_media_meta(transform_cache, stat_key, hash, extension, size, &CachedMediaMeta::from(meta));
         }
     };
-    let skip_content_read = is_video || defer_this_image || source_is_evicted;
-    let content_hash = if skip_content_read {
-        // Videos / images / evicted files: only use a cached hash from the
-        // index; never read file content on the blocking scan. A video and an
-        // evicted file cannot fall back to hashing (a multi-GB read; a download), so
-        // they keep the whole-second rule: a strict miss would lose the metadata
+    let content_hash = if is_video || source_is_evicted {
+        // Videos and evicted files: only a cached hash from the index; never read
+        // file content on the blocking scan (a multi-GB read; a download). They
+        // keep the whole-second rule: a strict miss would lose the metadata
         // cached under their hash. Safe because the hash only finds placeholder
         // metadata here and the hit is carried forward as recorded, so the strict
-        // lookup that names an image's encode still does not trust it. A deferred
-        // image on disk uses the full stat record: a miss costs it nothing (its
-        // stat-key metadata below) and the background worker hashes it.
-        let hit = if is_video || source_is_evicted {
-            old_index.lookup_whole_second(relative_path, size, mtime)
-        } else {
-            old_index.lookup(relative_path, stat)
-        };
-        hit.map(|h| {
+        // lookup that names an image's encode still does not trust it.
+        old_index.lookup_whole_second(relative_path, size, mtime).map(|h| {
             let hash = h.to_string();
             new_index.carry_forward(old_index, relative_path);
             hash
@@ -716,7 +724,7 @@ fn extract_media_metadata_cached(
         );
 
         // Cache under stat key so subsequent calls in this session are fast.
-        store_meta(&stat_key, &meta);
+        store_meta(Some(&stat_key), None, &meta);
         return meta;
     }
 
@@ -773,7 +781,7 @@ fn extract_media_metadata_cached(
             lqip_data_uri: None,
             is_animated: sniff_is_animated(abs_path, extension),
         };
-        store_meta(&stat_key, &meta);
+        store_meta(Some(&stat_key), None, &meta);
         return meta;
     }
 
@@ -815,7 +823,7 @@ fn extract_media_metadata_cached(
             );
 
             // The cloned stores preserve their site and publication ownership.
-            write_cached_meta(&transform_cache, &hash_clone, size, &CachedMediaMeta::from(&meta));
+            write_media_meta(&transform_cache, None, Some(&hash_clone), &extension_owned, size, &CachedMediaMeta::from(&meta));
 
             meta
         });
@@ -836,7 +844,7 @@ fn extract_media_metadata_cached(
 
     // Step 4: Store the result in the transform cache for next time.
     if let Some(hash) = &content_hash {
-        store_meta(hash, &meta);
+        store_meta(None, Some(hash), &meta);
     }
 
     meta
