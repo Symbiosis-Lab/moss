@@ -7,7 +7,7 @@
 
 import { EditorView, ViewPlugin, keymap, showTooltip, type Tooltip } from '@codemirror/view';
 import { EditorState, Extension, Facet, StateEffect, StateField } from '@codemirror/state';
-import { extractImageTargets, footnoteIndex, folderParamsFromEmbed, type ReferenceCacheRead } from '@symbiosis-lab/moss-syntax/cm6';
+import { childrenNamed, extractImageTargets, footnoteIndex, folderParamsFromEmbed, type ReferenceCacheRead } from '@symbiosis-lab/moss-syntax/cm6';
 import { syntaxTree } from '@codemirror/language';
 import { charAtPointer, hitSiteAt, navigateToReference, referenceSiteAt } from './cm-link-nav';
 import { linkTextRange, type LinkTextNode } from './cm-markdown-style';
@@ -451,24 +451,6 @@ export async function replaceAsset(
 ): Promise<void> {
   const picked = await pickAssetRef({ pagePath: opts.pagePath, projectRoot: opts.projectRoot, kinds: () => null, afterImport: undefined });
   if (picked) view.dispatch({ changes: { from: target.from, to: target.to, insert: picked.insert } });
-}
-
-/** Direct children of `node` named `name`, in order — a local copy of
- *  cm-footnote.ts's own private helper of the same name (confirmed NOT
- *  exported: moss-syntax's cm6 dist only exports `footnoteIndex` /
- *  `footnoteJumpTarget` / `footnoteDecorations` / `footnoteExtension` /
- *  `footnoteTheme` for this feature). Two owners of an identical one-line
- *  helper is cheaper than a cross-package export for a single private
- *  utility. */
-function childrenNamed(node: { cursor(): { firstChild(): boolean; nextSibling(): boolean; name: string; from: number; to: number } }, name: string): Array<{ from: number; to: number }> {
-  const out: Array<{ from: number; to: number }> = [];
-  const cur = node.cursor();
-  if (cur.firstChild()) {
-    do {
-      if (cur.name === name) out.push({ from: cur.from, to: cur.to });
-    } while (cur.nextSibling());
-  }
-  return out;
 }
 
 /** Read-only: a reference `[^1]` shows the note text; a definition's

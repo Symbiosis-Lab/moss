@@ -88,7 +88,7 @@ class FootnoteChipWidget extends WidgetType {
 }
 
 /** Direct children of `node` named `name`, in order. */
-function childrenNamed(node: any, name: string): Array<{ from: number; to: number }> {
+export function childrenNamed(node: { cursor(): { firstChild(): boolean; nextSibling(): boolean; name: string; from: number; to: number } }, name: string): Array<{ from: number; to: number }> {
   const out: Array<{ from: number; to: number }> = [];
   const cur = node.cursor();
   if (cur.firstChild()) {
