@@ -4,7 +4,7 @@
 
 use crate::site;
 
-use site::{hero_of, Site};
+use site::{hero_of, LoggedSite, Site};
 
 /// 1x1 PNG.
 const PNG: &[u8] = &[
@@ -55,6 +55,13 @@ fn site_with(hero: &str, extra: &[(&str, &str)], png: &[&str]) -> Site {
     let files = with_home(hero, extra);
     let refs: Vec<(&str, &str)> = files.iter().map(|(p, b)| (*p, b.as_str())).collect();
     build(&refs, png)
+}
+
+/// The home's hero alone, built with what it logged.
+fn logged_with(hero: &str) -> LoggedSite {
+    let files = with_home(hero, &[]);
+    let refs: Vec<(&str, &str)> = files.iter().map(|(p, b)| (*p, b.as_str())).collect();
+    LoggedSite::new(&refs)
 }
 
 #[test]
@@ -108,7 +115,7 @@ fn hero_from_with_no_fallback_renders_no_hero() {
 
 #[test]
 fn hero_from_unknown_folder_warns_and_falls_back() {
-    let site = Site::new(&[
+    let site = LoggedSite::new(&[
         ("index.md", &home(":::hero {from=\"nowhere/|when:upcoming\"}\n# Between seasons\n:::")),
         ("shows/gone.md", GONE),
     ]);
@@ -120,7 +127,7 @@ fn hero_from_unknown_folder_warns_and_falls_back() {
 
 #[test]
 fn hero_from_unknown_option_warns() {
-    let site = site_with(":::hero {from=\"shows/|when:upcoming,shuffle:yes\"}\n# Between seasons\n:::", &[], &[]);
+    let site = logged_with(":::hero {from=\"shows/|when:upcoming,shuffle:yes\"}\n# Between seasons\n:::");
     assert!(site.logged.iter().any(|l| l.contains("shuffle")), "unknown option warns: {:?}", site.logged);
     assert!(hero_of(&site.html("index.html")).contains("Sooner Show"));
 }
@@ -269,7 +276,7 @@ fn hero_from_draws_the_event_line_and_link_as_the_site_does_elsewhere() {
 #[test]
 fn hero_from_that_names_no_folder_warns_and_falls_back() {
     for spec in ["|when:upcoming", "shows", ""] {
-        let site = site_with(&format!(":::hero {{from=\"{spec}\"}}\n# Between seasons\n:::"), &[], &[]);
+        let site = logged_with(&format!(":::hero {{from=\"{spec}\"}}\n# Between seasons\n:::"));
         let hero = hero_of(&site.html("index.html"));
         assert!(hero.contains("Between seasons"), "from=\"{spec}\" falls back: {hero}");
         if !spec.is_empty() {

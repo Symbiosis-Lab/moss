@@ -3,7 +3,7 @@
 
 use crate::site;
 
-use site::Site;
+use site::{LoggedSite, Site};
 
 #[test]
 fn a_passthrough_folders_old_listing_addresses_forward_up() {
@@ -63,7 +63,7 @@ fn a_passthrough_folder_inside_a_listed_folder_forwards_to_that_listing() {
 
 #[test]
 fn a_page_inside_a_passthrough_folder_has_no_trail_link_to_a_listing_that_is_not_there() {
-    let site = Site::with_config(
+    let site = LoggedSite::with_config(
         "domain = \"example.org\"\n\n[build]\npassthrough = [\"scene\"]\n",
         &[
             ("index.md", "---\ntitle: Home\nbreadcrumb: true\n---\n\nText.\n"),

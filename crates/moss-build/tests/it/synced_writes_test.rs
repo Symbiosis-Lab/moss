@@ -9,13 +9,14 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 fn build(folder: &Path, preview: bool) {
-    use moss_build::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+    let turn = crate::site::turn();
+    use moss_build::build::{BuildTrigger, PipelineConfig, PluginMode};
     use moss_build::cli::host::cli_host_ports;
     use moss_build::vault_root::VaultRoot;
 
     let folder_path = folder.to_string_lossy().into_owned();
     let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(run_pipeline(PipelineConfig {
+    rt.block_on(crate::site::run(&turn, PipelineConfig {
         root: VaultRoot::resolve(PathBuf::from(&folder_path)),
         progress: moss_build::build::stdout_sink(),
         plugins: PluginMode::Skip,

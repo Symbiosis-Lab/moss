@@ -4,15 +4,15 @@
 
 use crate::site;
 
-use site::{hrefs_in, Site};
+use site::{hrefs_in, LoggedSite, Site};
 
 const PARTNERS: &str = "\n[terms.partners]\nfields = [\"partners\"]\ntitle = \"Partners\"\nnav = true\n";
 
-fn partner_site(extra: &[(&str, &str)]) -> Site {
+fn partner_site(extra: &[(&str, &str)]) -> LoggedSite {
     partner_site_with("", extra)
 }
 
-fn partner_site_with(site_keys: &str, extra: &[(&str, &str)]) -> Site {
+fn partner_site_with(site_keys: &str, extra: &[(&str, &str)]) -> LoggedSite {
     let mut files: Vec<(&str, &str)> = vec![
         ("index.md", "---\ntitle: Home\n---\n\nText.\n"),
         ("de/index.md", "---\ntitle: Start\n---\n\nWillkommen.\n"),
@@ -26,7 +26,7 @@ fn partner_site_with(site_keys: &str, extra: &[(&str, &str)]) -> Site {
         ),
     ];
     files.extend_from_slice(extra);
-    Site::with_config(&format!("domain = \"example.org\"\n{site_keys}{PARTNERS}"), &files)
+    LoggedSite::with_config(&format!("domain = \"example.org\"\n{site_keys}{PARTNERS}"), &files)
 }
 
 #[test]

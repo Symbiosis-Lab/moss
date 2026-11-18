@@ -5,12 +5,13 @@ use std::fs;
 use std::path::Path;
 
 fn build(folder: &Path) -> Result<String, String> {
-    use moss_build::build::{run_pipeline, PipelineConfig, PluginMode};
+    let turn = crate::site::turn();
+    use moss_build::build::{PipelineConfig, PluginMode};
     use moss_build::cli::host::cli_host_ports;
     use moss_build::vault_root::VaultRoot;
 
     let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(run_pipeline(PipelineConfig {
+    rt.block_on(crate::site::run(&turn, PipelineConfig {
         root: VaultRoot::resolve(folder),
         progress: moss_build::build::stdout_sink(),
         plugins: PluginMode::Skip,

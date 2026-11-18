@@ -160,7 +160,7 @@ fn a_page_at_a_terms_address_that_does_not_claim_it_warns() {
     config(&site);
     site.write("boroughs/Bronx.md", "---\ntitle: Bronx\n---\n\nThe borough.\n");
     write_notes(&site, &[("a", "Bronx", "", None)]);
-    let logged = site.rebuild();
+    let logged = site.rebuild_logged().logged;
     assert!(
         logged.iter().any(|l| l.contains("/boroughs/bronx/") && l.contains("borough_page: true")),
         "the dropped term page is named with the fix: {logged:?}"
@@ -300,7 +300,7 @@ fn a_term_kind_count_is_worded_per_language_and_falls_back_to_english() {
 
 #[test]
 fn a_malformed_kind_value_is_reported_once_per_build() {
-    let site = site::Site::with_config(
+    let site = site::LoggedSite::with_config(
         "\n[terms.boroughs]\nfields = [\"borough\"]\ncards = \"yes\"\n",
         &[("index.md", "---\ntitle: Home\n---\n\nHello.\n"), ("notes/a.md", "---\ntitle: A\nborough: [Hackney]\n---\n\nText.\n")],
     );

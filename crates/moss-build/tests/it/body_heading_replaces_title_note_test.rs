@@ -4,15 +4,15 @@
 
 use crate::site;
 
-use site::Site;
+use site::LoggedSite;
 
-fn notes(site: &Site) -> Vec<&String> {
+fn notes(site: &LoggedSite) -> Vec<&String> {
     site.logged.iter().filter(|l| l.contains("replaces the page title")).collect()
 }
 
 #[test]
 fn a_body_heading_that_replaces_the_page_title_is_named() {
-    let site = Site::new(&[
+    let site = LoggedSite::new(&[
         ("index.md", "---\ntitle: Example Lab\n---\n\nWelcome.\n"),
         ("research.md", "---\ntitle: Research\nnav: true\n---\n\nIntro.\n\n# Theme 1\n\nText.\n"),
     ]);
@@ -24,7 +24,7 @@ fn a_body_heading_that_replaces_the_page_title_is_named() {
 
 #[test]
 fn a_body_that_opens_with_the_title_gets_no_note() {
-    let site = Site::new(&[
+    let site = LoggedSite::new(&[
         ("index.md", "---\ntitle: Example Lab\n---\n\nWelcome.\n"),
         ("research.md", "---\ntitle: Research\nnav: true\n---\n\n# Research\n\nText.\n"),
     ]);
@@ -33,7 +33,7 @@ fn a_body_that_opens_with_the_title_gets_no_note() {
 
 #[test]
 fn an_article_outside_the_nav_keeps_its_title_and_gets_no_note() {
-    let site = Site::new(&[
+    let site = LoggedSite::new(&[
         ("index.md", "---\ntitle: Example Lab\n---\n\nWelcome.\n"),
         ("notes/trip.md", "---\ntitle: Trip\n---\n\n# Day 1\n\nText.\n"),
     ]);
@@ -42,7 +42,7 @@ fn an_article_outside_the_nav_keeps_its_title_and_gets_no_note() {
 
 #[test]
 fn a_hero_heading_on_a_page_outside_the_nav_gets_no_nav_advice() {
-    let site = Site::new(&[
+    let site = LoggedSite::new(&[
         ("index.md", "---\ntitle: Example Lab\n---\n\nWelcome.\n"),
         ("notes/trip.md", "---\ntitle: Trip\n---\n\n:::hero {image=day.png}\n# Day 1\n:::\n"),
     ]);

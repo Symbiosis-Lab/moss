@@ -241,12 +241,13 @@ fn clean_references_removes_shortcode_and_frontmatter_asset_paths() {
 
 /// The same headless build `moss build` runs; returns the staged output dir.
 fn build_staged(root: &std::path::Path) -> std::path::PathBuf {
-    use moss_build::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+    let turn = crate::site::turn();
+    use moss_build::build::{BuildTrigger, PipelineConfig, PluginMode};
     use moss_build::cli::host::cli_host_ports;
     use moss_build::vault_root::VaultRoot;
 
     let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(run_pipeline(PipelineConfig {
+    rt.block_on(crate::site::run(&turn, PipelineConfig {
         root: VaultRoot::resolve(root),
         progress: moss_build::build::stdout_sink(),
         plugins: PluginMode::Skip,

@@ -5,7 +5,7 @@
 
 use crate::site;
 
-use site::Site;
+use site::{LoggedSite, Site};
 
 const CONFIG: &str = "domain = \"example.org\"\n\n[redirects]\n\"/review/old/\" = \"/review/client/old/\"\n";
 
@@ -30,7 +30,7 @@ fn moved_folder() -> (Site, Vec<String>) {
     image::RgbImage::from_fn(96, 64, |x, y| image::Rgb([200, (x % 200) as u8, (y % 200) as u8]))
         .save(site.root.join("review/client/old/photo.png"))
         .unwrap();
-    let logged = site.rebuild();
+    let logged = site.rebuild_logged().logged;
     (site, logged)
 }
 
@@ -56,7 +56,7 @@ fn every_address_under_the_old_folder_answers_from_the_new_one() {
 /// A folder of files alone has no page, so its files move and nothing else.
 #[test]
 fn a_folder_of_files_alone_moves_its_files() {
-    let site = Site::with_config(
+    let site = LoggedSite::with_config(
         CONFIG,
         &[("index.md", "---\ntitle: Home\n---\n\nText.\n"), ("review/client/old/plan.pdf", "%PDF-1.4 plan")],
     );
@@ -69,7 +69,7 @@ fn a_folder_of_files_alone_moves_its_files() {
 /// included, without a word: the line still moves everything else.
 #[test]
 fn a_file_the_old_folder_still_serves_is_left_alone() {
-    let site = Site::with_config(
+    let site = LoggedSite::with_config(
         CONFIG,
         &[
             ("index.md", "---\ntitle: Home\n---\n\nText.\n"),
@@ -85,7 +85,7 @@ fn a_file_the_old_folder_still_serves_is_left_alone() {
 
 #[test]
 fn a_folder_redirect_to_a_folder_that_serves_nothing_is_reported() {
-    let site = Site::with_config(CONFIG, &[("index.md", "---\ntitle: Home\n---\n\nText.\n")]);
+    let site = LoggedSite::with_config(CONFIG, &[("index.md", "---\ntitle: Home\n---\n\nText.\n")]);
     assert!(site.logged.iter().any(|l| l.contains("no file is served under it")), "{:?}", site.logged);
     assert!(!site.output("review/old/index.html").exists());
 }
@@ -94,7 +94,7 @@ fn a_folder_redirect_to_a_folder_that_serves_nothing_is_reported() {
 /// is reported, as any line the site's own pages override.
 #[test]
 fn a_folder_line_that_keeps_nothing_is_reported() {
-    let site = Site::with_config(
+    let site = LoggedSite::with_config(
         "domain = \"example.org\"\n\n[redirects]\n\"/about/\" = \"/contact/\"\n",
         &[("index.md", "---\ntitle: Home\n---\n\nText.\n"), ("about.md", "# About\n"), ("contact.md", "# Contact\n")],
     );
@@ -106,7 +106,7 @@ fn a_folder_line_that_keeps_nothing_is_reported() {
 /// nothing when the new page has nothing under it, and that is not a problem.
 #[test]
 fn a_page_line_with_nothing_under_the_new_page_reports_nothing() {
-    let site = Site::with_config(
+    let site = LoggedSite::with_config(
         "domain = \"example.org\"\n\n[redirects]\n\"/old-post/\" = \"/about/\"\n",
         &[("index.md", "---\ntitle: Home\n---\n\nText.\n"), ("about.md", "# About\n")],
     );
@@ -126,7 +126,7 @@ fn a_file_redirect_serves_the_processed_picture() {
     image::RgbImage::from_fn(400, 300, |x, _| if x < 200 { image::Rgb([200, 40, 40]) } else { image::Rgb([20, 90, 160]) })
         .save(site.root.join("review/new/pic.png"))
         .unwrap();
-    let logged = site.rebuild();
+    let logged = site.rebuild_logged().logged;
     let served = std::fs::read(site.output("review/new/pic.png")).unwrap();
     let raw = std::fs::read(site.root.join("review/new/pic.png")).unwrap();
     assert!(served != raw, "premise: moss serves a processed picture");

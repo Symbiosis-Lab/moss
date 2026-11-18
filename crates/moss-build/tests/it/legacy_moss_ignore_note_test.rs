@@ -4,18 +4,18 @@
 
 use crate::site;
 
-use site::Site;
+use site::LoggedSite;
 
 const PAGE: (&str, &str) = ("index.md", "---\ntitle: Example Lab\n---\n\nWelcome.\n");
 
-fn notes(site: &Site) -> Vec<&String> {
+fn notes(site: &LoggedSite) -> Vec<&String> {
     site.logged.iter().filter(|l| l.contains("belong in version control")).collect()
 }
 
 #[test]
 fn the_legacy_pair_gets_a_note_with_the_replacement_lines() {
     let ignore = ".moss/*\n!.moss/site/\n";
-    let site = Site::new(&[PAGE, (".gitignore", ignore)]);
+    let site = LoggedSite::new(&[PAGE, (".gitignore", ignore)]);
     let found = notes(&site);
     assert_eq!(found.len(), 1, "{:?}", site.logged);
     for line in [".moss/*", "!.moss/theme/", "!.moss/config.toml", "!.moss/redirects.json"] {
@@ -28,25 +28,25 @@ fn the_legacy_pair_gets_a_note_with_the_replacement_lines() {
 #[test]
 fn a_gitignore_that_reincludes_every_tracked_path_gets_no_note() {
     let all = ".moss/*\n!.moss/deploy/\n!.moss/plugins/\n!.moss/state.toml\n!.moss/redirects.json\n!.moss/config.toml\n!.moss/theme/\n!.moss/assets/\n!.moss/places.toml\n";
-    let site = Site::new(&[PAGE, (".gitignore", all)]);
+    let site = LoggedSite::new(&[PAGE, (".gitignore", all)]);
     assert!(notes(&site).is_empty(), "{:?}", site.logged);
 }
 
 #[test]
 fn a_directory_rule_is_noted_even_with_reincludes() {
     let all = ".moss/\n!.moss/theme/\n!.moss/config.toml\n";
-    let site = Site::new(&[PAGE, (".gitignore", all)]);
+    let site = LoggedSite::new(&[PAGE, (".gitignore", all)]);
     assert_eq!(notes(&site).len(), 1, "{:?}", site.logged);
 }
 
 #[test]
 fn theme_and_config_alone_leave_redirects_hidden() {
-    let site = Site::new(&[PAGE, (".gitignore", ".moss/*\n!.moss/theme/\n!.moss/config.toml\n")]);
+    let site = LoggedSite::new(&[PAGE, (".gitignore", ".moss/*\n!.moss/theme/\n!.moss/config.toml\n")]);
     assert_eq!(notes(&site).len(), 1, "{:?}", site.logged);
 }
 
 #[test]
 fn a_site_without_a_gitignore_gets_no_note() {
-    let site = Site::new(&[PAGE]);
+    let site = LoggedSite::new(&[PAGE]);
     assert!(notes(&site).is_empty(), "{:?}", site.logged);
 }

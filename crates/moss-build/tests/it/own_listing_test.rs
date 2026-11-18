@@ -3,7 +3,7 @@
 
 use crate::site;
 
-use site::Site;
+use site::{LoggedSite, Site};
 
 fn articles() -> Vec<(&'static str, &'static str)> {
     vec![
@@ -12,14 +12,14 @@ fn articles() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-fn site_with(home: &str, posts_home: &str) -> Site {
+fn site_with(home: &str, posts_home: &str) -> LoggedSite {
     let mut files = articles();
     files.push(("index.md", home));
     files.push(("posts/index.md", posts_home));
     files.push(("posts/20260101-0900.md", "---\ntitle: Alpha Post\n---\n\nShort post.\n"));
     files.push(("posts/20260102-0900.md", "---\ntitle: Beta Post\n---\n\nShort post.\n"));
     files.push(("posts/nested/20260103-0900.md", "---\ntitle: Gamma Post\n---\n\nShort post.\n"));
-    Site::new(&files)
+    LoggedSite::new(&files)
 }
 
 const HOME: &str = "---\ntitle: Home\n---\n\nHello.\n";
@@ -185,13 +185,13 @@ mod empty_sections {
         format!("---\ntitle: Home\nchildren: false\n---\n\n{body}\n")
     }
 
-    fn site(body: &str, with_post: bool) -> Site {
+    fn site(body: &str, with_post: bool) -> LoggedSite {
         let mut files = vec![("index.md", home(body)), ("posts/index.md", "---\ntitle: Posts\n---\n\nPosts.\n".to_string())];
         if with_post {
             files.push(("posts/20260101-0900.md", "A post.\n".to_string()));
         }
         let files: Vec<(&str, &str)> = files.iter().map(|(p, b)| (*p, b.as_str())).collect();
-        Site::new(&files)
+        LoggedSite::new(&files)
     }
 
     const EMBED: &str = "Intro.\n\n## Posts\n\n![[posts/|limit:1]]\n\n## Other\n\nTail.";
