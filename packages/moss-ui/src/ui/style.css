@@ -6518,6 +6518,44 @@ body.own-titlebar.controls-trailing .moss-titlebar-traffic-light-space {
   margin-block-start: 14px;
 }
 
+/* The catalog's filter: which kind of plugin the list shows, every choice on
+   screen. The selected segment wears the settings rail's selected fill; a
+   segment whose rows are off screen and need attention wears the rail's lamp. */
+.moss-plugin-catalog-views {
+  display: flex;
+  gap: 4px;
+  margin-block-end: 16px;
+}
+.moss-plugin-catalog-view {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  block-size: 28px;
+  padding-inline: 10px;
+  border: 0;
+  border-radius: var(--moss-border-radius);
+  background: transparent;
+  color: var(--moss-color-text-secondary);
+  font: inherit;
+  font-size: var(--moss-size-sm, 13px);
+  cursor: pointer;
+  transition: background var(--moss-transition-fast), color var(--moss-transition-fast);
+}
+@media (hover: hover) {
+  .moss-plugin-catalog-view:hover {
+    background: var(--moss-active-overlay);
+    color: var(--moss-color-text);
+  }
+}
+.moss-plugin-catalog-view[aria-selected="true"] {
+  background: var(--moss-color-accent-quiet);
+  color: var(--moss-color-text);
+}
+.moss-plugin-catalog-view:focus-visible {
+  outline: none;
+  box-shadow: var(--moss-focus-ring);
+}
+
 /* The whole row is the target, 44px tall. Its icon, percent and control
    keep fixed boxes, so a percent appearing or a control morphing moves
    nothing in the row. */
@@ -6606,9 +6644,8 @@ body.own-titlebar.controls-trailing .moss-titlebar-traffic-light-space {
   block-size: 28px;
 }
 
-/* A quiet link set a group apart from what is above it: the catalog's way
-   to its other plugins, and removal on a plugin's settings page. */
-.moss-plugin-catalog-view-link,
+/* A quiet link set a group apart from what is above it: removal on a
+   plugin's settings page. */
 .moss-settings-remove-row {
   display: flex;
   align-items: center;
@@ -6617,10 +6654,7 @@ body.own-titlebar.controls-trailing .moss-titlebar-traffic-light-space {
   font-size: var(--moss-size-sm, 13px);
 }
 
-/* Above the grid on a view that is not channels: the way back, then the
-   view's name, which is the darker of the two because it is where you are.
-   The folder's trust answer sits there in the same voice. */
-.moss-plugin-catalog-view-note,
+/* The folder's trust answer, above the list, in a quieter voice. */
 .moss-folder-trust-row {
   display: flex;
   align-items: baseline;
@@ -6628,9 +6662,6 @@ body.own-titlebar.controls-trailing .moss-titlebar-traffic-light-space {
   color: var(--moss-color-text-secondary);
   font-size: var(--moss-size-sm, 13px);
   margin-bottom: var(--moss-space-xs);
-}
-.moss-plugin-catalog-view-note [aria-current] {
-  color: var(--moss-color-text);
 }
 
 /* Responsive: small windows (≤700px) */
