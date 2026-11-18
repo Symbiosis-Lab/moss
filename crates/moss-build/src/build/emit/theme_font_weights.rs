@@ -18,8 +18,10 @@
 use crate::build::theme_lint::{strip_comments, style_rules, Layered};
 use crate::i18n::Language;
 
-/// A weight token and the font token whose leading family draws it.
-const WEIGHTS: [(&str, &str); 1] = [("--moss-font-weight-strong", "--moss-font-body")];
+/// The weight token the build may set, and the font token whose leading
+/// family draws it.
+const STRONG: &str = "--moss-font-weight-strong";
+const BODY: &str = "--moss-font-body";
 
 /// The range a medium weight is matched in before any heavier face is tried.
 const MEDIUM: std::ops::RangeInclusive<u16> = 401..=500;
@@ -32,7 +34,7 @@ pub fn rules(theme_css: &str, imported: &[String]) -> String {
     let theme_css = &imported.iter().map(String::as_str).chain([theme_css]).collect::<Vec<_>>().join("\n");
     let stripped = strip_comments(theme_css);
     let faces = hosted_faces(&stripped);
-    if faces.is_empty() {
+    if faces.is_empty() || declares(&stripped, STRONG) {
         return String::new();
     }
     // A page's language can change its font tokens, so each is worked out
@@ -41,12 +43,7 @@ pub fn rules(theme_css: &str, imported: &[String]) -> String {
         .into_iter()
         .map(|lang| {
             let page = Layered::for_page(Some(theme_css), lang.as_bcp47_attr());
-            let declarations: String = WEIGHTS
-                .iter()
-                .filter(|(weight, _)| !declares(&stripped, weight))
-                .filter_map(|(weight, font)| Some(format!("{weight}:{};", derived(&page, weight, font, &faces)?)))
-                .collect();
-            (lang, declarations)
+            (lang, derived(&page, &faces).map(|weight| format!("{STRONG}:{weight};")).unwrap_or_default())
         })
         .collect();
     let Some((_, first)) = per_language.first() else { return String::new() };
@@ -60,15 +57,15 @@ pub fn rules(theme_css: &str, imported: &[String]) -> String {
         .collect()
 }
 
-/// The weight to give `weight_token` on `page`: the lightest hosted face above
-/// 500 of the family leading `font_token`, when moss's weight is a medium and
-/// that family has no medium face.
-fn derived(page: &Layered, weight_token: &str, font_token: &str, faces: &[Face]) -> Option<u16> {
-    let asked: u16 = page.values(weight_token).0?.trim().parse().ok()?;
+/// The weight to give the strong token on `page`: the lightest hosted face
+/// above 500 of the family leading the body font, when moss's weight is a
+/// medium and that family has no medium face.
+fn derived(page: &Layered, faces: &[Face]) -> Option<u16> {
+    let asked: u16 = page.values(STRONG).0?.trim().parse().ok()?;
     if !MEDIUM.contains(&asked) {
         return None;
     }
-    let stack = page.values(font_token).0?;
+    let stack = page.values(BODY).0?;
     let lead = unquoted(stack.split(',').next()?);
     let family: Vec<&Face> = faces.iter().filter(|f| f.family.eq_ignore_ascii_case(&lead)).collect();
     if family.is_empty() || family.iter().any(|f| f.lightest <= *MEDIUM.end() && f.heaviest >= *MEDIUM.start()) {
@@ -152,7 +149,7 @@ mod tests {
 
     #[test]
     fn a_weight_the_theme_sets_a_medium_face_and_a_family_that_is_not_hosted_are_left() {
-        let own = format!("{TWO_WEIGHTS} :root {{ --moss-font-body: Hosted; --moss-font-weight-strong: 400; }}");
+        let own = format!("{TWO_WEIGHTS} :root {{ --moss-font-body: Hosted; --moss-font-weight-strong: 500; }}");
         assert_eq!(rules(&own), "");
         for medium in ["font-weight: 500", "font-weight: 300 700"] {
             let theme = format!("{TWO_WEIGHTS} @font-face {{ font-family: Hosted; {medium}; src: url(m.woff2); }} :root {{ --moss-font-body: Hosted; }}");
@@ -174,7 +171,7 @@ mod tests {
     fn tokens_set_in_an_imported_stylesheet_count() {
         let fonts = format!("{TWO_WEIGHTS} :root {{ --moss-font-body: Hosted; }}");
         assert_eq!(super::rules("@import \"fonts.css\";", &[fonts.clone()]), "\n:root{--moss-font-weight-strong:700;}\n");
-        let own = format!("{fonts} :root {{ --moss-font-weight-strong: 400; }}");
+        let own = format!("{fonts} :root {{ --moss-font-weight-strong: 500; }}");
         assert_eq!(super::rules("@import \"fonts.css\";", &[own]), "", "a weight the imported sheet sets is the theme's");
     }
 
