@@ -1,6 +1,9 @@
 //! The crate's integration tests, one binary: each file is a module here.
 //! A new test file is a line below and must exist in this directory; `layout`
-//! fails on a file this list misses or a name here without a file.
+//! fails on a file this list misses or a name here without a file, and on any
+//! top-level tests/*.rs, which OWN_PROCESS would have to name.
+const OWN_PROCESS: &[&str] = &[];
+
 mod attr_value_render;
 mod components_sync_test;
 mod components_test;

@@ -1,8 +1,48 @@
 //! The crate's integration tests, one binary: each file is a module here.
 //! A file that installs a global logger, sets process environment, keeps its
-//! own build lock or asserts on process-wide state is a top-level tests/*.rs
-//! and keeps its own process. `layout` fails on a file this list misses or a
-//! name without a file.
+//! own build lock or asserts on process-wide state is a top-level tests/*.rs,
+//! keeps its own process and is named in OWN_PROCESS. `layout` fails on a file
+//! either list misses or a name without a file.
+const OWN_PROCESS: &[&str] = &[
+    "article_end_block_test",
+    "booking_step_aside_test",
+    "child_listing_repeat_note_test",
+    "colophon_credit_test",
+    "country_map_test",
+    "declarative_contributions_test",
+    "diagram_warning_test",
+    "first_picture_cover_test",
+    "folder_trust_test",
+    "ghost_import_test",
+    "hash_index_tally_test",
+    "hero_caption_links_test",
+    "image_alt_warning_test",
+    "image_display_words_test",
+    "image_inline_width_note_test",
+    "incremental_site_oracle",
+    "incremental_surface_equivalence",
+    "link_preview_setting_test",
+    "luminance_lazy_test",
+    "members_public_test",
+    "nav_external_url_test",
+    "no_plugins_problem_count_test",
+    "no_system_ca_test",
+    "passthrough_markdown_test",
+    "plugin_admission_test",
+    "plugin_install_cli_test",
+    "proved_trigger_test",
+    "registry_status_test",
+    "root_identity_log_test",
+    "root_swap_mid_build_test",
+    "section_color_test",
+    "seta_poll_log_test",
+    "shortcode_attr_warning_test",
+    "snapshot_tests",
+    "unknown_place_test",
+    "welcome_email_test",
+    "wordpress_import_test",
+];
+
 mod accordion_callouts_test;
 mod ai_switches_test;
 mod archival_closing_picture_test;
@@ -133,6 +173,8 @@ mod token_emit_test;
 mod translation_pairing_by_path_test;
 mod unbuilt_link_target_test;
 mod unpaired_rename_identity_test;
+mod url_folder_removal_test;
 mod watch_rebuild_stand_in_test;
 mod wiki_embed_alt_only_test;
+#[path = "../../../moss-core/tests/it/layout.rs"]
 mod layout;

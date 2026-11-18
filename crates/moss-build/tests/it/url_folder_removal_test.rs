@@ -4,8 +4,7 @@
 //! folder whose name is served lowercased, and a WebP picture whose old sizes
 //! keep answering while it stays.
 
-#[path = "it/site.rs"]
-mod site;
+use crate::site;
 
 use moss_build::build::manifest::change_set::{PublishedSnapshot, RemovalReason};
 use moss_build::build::manifest::published_record;
