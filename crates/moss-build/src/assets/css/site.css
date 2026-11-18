@@ -1408,6 +1408,12 @@ body > footer.container:has(> .moss-hero-closing) > .moss-colophon a {
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
   padding-block: 0.25rem 0;
 }
+/* Over the picture only the credit's own ink is known to read, so reaching
+   for the mark keeps it. */
+body > footer.container:has(> .moss-hero-closing) > .moss-colophon a:is(:hover, :focus-visible) .moss-colophon-icon {
+  --moss-mark-paint: currentColor;
+  --moss-mark-drop-paint: currentColor;
+}
 /* No darkening: the words are in ink measured on the bare picture, or on a panel. */
 .moss-hero.moss-hero-closing[data-overlay]::before {
   content: none;
@@ -2147,11 +2153,18 @@ footer.container hr::before {
   --moss-mark-paint: currentColor;
   --moss-mark-drop-paint: currentColor;
   --moss-mark-fade: 240ms;
+  /* The inks the mark shows in colour, here and in archival.css. mark.css's
+     follow the page's theme, not the band under the colophon: on a footer
+     band the theme declares, `--moss-footer-ink` is the ink that reads, so
+     both halves take it. Declared here, on the `.moss-mark` element, because
+     that is where `--moss-mark-ink` resolves. */
+  --moss-colophon-mark-ink: var(--moss-footer-ink, var(--moss-mark-ink));
+  --moss-colophon-mark-drop: var(--moss-footer-ink, var(--moss-mark-drop));
 }
 
 .moss-colophon a:is(:hover, :focus-visible) .moss-colophon-icon {
-  --moss-mark-paint: var(--moss-mark-ink);
-  --moss-mark-drop-paint: var(--moss-mark-drop);
+  --moss-mark-paint: var(--moss-colophon-mark-ink);
+  --moss-mark-drop-paint: var(--moss-colophon-mark-drop);
 }
 
 /* 1.25rem, down from 1.5rem — 20px of box showing 17px of ink, against the

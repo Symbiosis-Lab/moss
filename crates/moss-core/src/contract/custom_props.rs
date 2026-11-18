@@ -539,7 +539,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-footer-ink",
         owner: "footer.container",
         default: "var(--moss-color-muted)",
-        description: "Colour of the text, links and headings in the footer. Hover and focus keep the accent colour, and the colophon keeps its own. The footer's own text defaults to `var(--moss-color-muted)`, its authored links to `var(--moss-color-accent)` and its headings and generated link list to `var(--moss-color-text)`; setting this replaces all of them with one colour. Use it with `--moss-footer-bg` so the text stays readable on the band.",
+        description: "Colour of the text, links and headings in the footer. Hover and focus keep the accent colour; the colophon keeps its own at rest, and its mark takes this colour when reached for (and at rest on an archival copy, where the mark shows in colour). The footer's own text defaults to `var(--moss-color-muted)`, its authored links to `var(--moss-color-accent)` and its headings and generated link list to `var(--moss-color-text)`; setting this replaces all of them with one colour. Use it with `--moss-footer-bg` so the text stays readable on the band.",
     },
     CustomProp {
         name: "--moss-footer-rule",
@@ -612,6 +612,18 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         owner: "moss-mark",
         default: "0s",
         description: "How long the mark takes to change colour. The default snaps, which is what a surface that never recolours it wants. Give it a duration where the paint changes on hover or focus, so the mark fades rather than snaps — the colophon sets 240ms, the duration its wording fades out on.",
+    },
+    CustomProp {
+        name: "--moss-colophon-mark-ink",
+        owner: "moss-colophon-icon",
+        default: "var(--moss-footer-ink, var(--moss-mark-ink))",
+        description: "The colour the colophon's mark takes for its black half when it shows in colour: reached for, and at rest on an archival copy. It is the footer's ink when the theme sets one, so the mark reads on a dark footer band, and moss's own ink otherwise. A theme sets `--moss-footer-ink`, not this.",
+    },
+    CustomProp {
+        name: "--moss-colophon-mark-drop",
+        owner: "moss-colophon-icon",
+        default: "var(--moss-footer-ink, var(--moss-mark-drop))",
+        description: "The same for the mark's green: the footer's ink when the theme sets one, the ground's drop colour otherwise. A theme sets `--moss-footer-ink`, not this.",
     },
     CustomProp {
         name: "--moss-place-marker",

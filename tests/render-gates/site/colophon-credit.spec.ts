@@ -3,11 +3,13 @@
 // credit pushes the page sideways; the mark is set on the text's baseline, not
 // centred; every link in the line is at least 24px tall to hit; the middle dot
 // has the same space on both sides.
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { gatePort } from '../../../playwright/gate-ports';
 
 const longUrl = `http://localhost:${gatePort('colophon-credit:long')}/`;
 const shortUrl = `http://localhost:${gatePort('colophon-credit:short')}/`;
+const bandUrl = `http://localhost:${gatePort('colophon-credit:band')}/`;
+const archivalBandUrl = `http://localhost:${gatePort('colophon-credit:archival-band')}/`;
 
 for (const width of [1280, 390, 360, 320]) {
   test.describe(`credit at ${width}px`, () => {
@@ -74,5 +76,33 @@ for (const width of [1280, 390, 360, 320]) {
       // A wrapped dot has no neighbour on its line to measure against.
       if (m.sameLine) expect(Math.abs(m.before - m.after)).toBeLessThan(1);
     });
+  });
+}
+
+// Reached for, the mark is inked for the ground it stands on: moss's own black
+// and green on a plain light page, the footer's ink on a band the theme paints.
+for (const [site, url, ink, drop] of [
+  ['a plain page', shortUrl, 'rgb(0, 0, 0)', 'rgb(79, 112, 49)'],
+  ['a footer band', bandUrl, 'rgb(232, 236, 248)', 'rgb(232, 236, 248)'],
+] as const) {
+  test(`reached for on ${site}, the mark takes the ink that reads there`, async ({ page }) => {
+    await page.goto(url, { waitUntil: 'load' });
+    await page.hover('.moss-colophon > a');
+    await page.waitForTimeout(400); // past the mark's fade
+    expect(await markInks(page)).toEqual({ ink, drop });
+  });
+}
+
+// An archival copy shows the mark in colour at rest; on a band that colour is
+// the footer's ink, the same one the mark takes when reached for.
+test('at rest on an archival copy with a footer band, the mark takes the footer ink', async ({ page }) => {
+  await page.goto(archivalBandUrl, { waitUntil: 'load' });
+  expect(await markInks(page)).toEqual({ ink: 'rgb(232, 236, 248)', drop: 'rgb(232, 236, 248)' });
+});
+
+function markInks(page: Page) {
+  return page.evaluate(() => {
+    const mark = document.querySelector('.moss-colophon > a .moss-mark') as Element;
+    return { ink: getComputedStyle(mark).color, drop: getComputedStyle(mark.querySelector('[fill="#4f7031"]') as Element).fill };
   });
 }

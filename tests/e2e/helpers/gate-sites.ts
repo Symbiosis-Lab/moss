@@ -4295,6 +4295,29 @@ export const COLOPHON_CREDIT_LONG: ScratchSiteSpec = {
   },
 };
 
+// A theme that paints the footer as a night band: the mark, reached for, takes
+// the footer's ink rather than the light page's black.
+export const COLOPHON_CREDIT_BAND: ScratchSiteSpec = {
+  name: "colophon-credit-band-gate",
+  files: {
+    ...colophonCreditFiles,
+    ".moss/config.toml": `${CONFIG_TOML}credit = "Designed by [Example Studio](https://example.org)"\n`,
+    ".moss/theme/style.css": `:root { --moss-footer-bg: #0b1026; --moss-footer-ink: #e8ecf8; }\n`,
+  },
+};
+
+// An archival copy on the same band: the edition line shows the mark in colour
+// at rest, and that colour is the footer's ink too. No footer.md, so the
+// edition block sits directly before the colophon.
+export const COLOPHON_CREDIT_ARCHIVAL_BAND: ScratchSiteSpec = {
+  name: "colophon-credit-archival-band-gate",
+  files: {
+    "index.md": colophonCreditFiles["index.md"],
+    ".moss/config.toml": `${CONFIG_TOML}archival = true\nauthor = "Site Keeper"\n`,
+    ".moss/theme/style.css": `:root { --moss-footer-bg: #0b1026; --moss-footer-ink: #e8ecf8; }\n`,
+  },
+};
+
 // ── Facts list: hangs in the right margin only where it fits ──
 // Two sites that differ only in the theme rule that widens the content
 // column. Served by playwright/facts-margin.config.ts.

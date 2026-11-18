@@ -201,6 +201,19 @@ test('the colophon does not sit on the words', async ({ page }) => {
   expect(m.link.bottom).toBeLessThanOrEqual(m.colophon.top + 1);
 });
 
+test('reached for over the picture, the mark keeps the credit\'s colour', async ({ page }) => {
+  await page.goto('/', { waitUntil: 'load' });
+  await page.hover('footer .moss-colophon > a');
+  await page.waitForTimeout(400); // past the mark's fade
+  const m = await page.evaluate(() => {
+    const link = document.querySelector('footer .moss-colophon > a') as Element;
+    const mark = link.querySelector('.moss-mark') as Element;
+    return { link: getComputedStyle(link).color, ink: getComputedStyle(mark).color, drop: getComputedStyle(mark.querySelector('[fill="#4f7031"]') as Element).fill };
+  });
+  expect(m.ink).toBe(m.link);
+  expect(m.drop).toBe(m.link);
+});
+
 const shownPictures = (page: Page) =>
   page.evaluate(() =>
     [...document.querySelectorAll('footer .moss-hero-closing [data-hero-variant]')]

@@ -128,6 +128,8 @@ const GATE_PORT_KEYS = [
   'request-form',
   'colophon-credit:long',
   'colophon-credit:short',
+  'colophon-credit:band',
+  'colophon-credit:archival-band',
   'footer-end-space:hidden',
   'footer-end-space:default',
   'facts-margin:widened',
