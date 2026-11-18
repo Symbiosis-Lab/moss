@@ -154,11 +154,8 @@ impl PageChromeContext<'_, '_> {
         if bare { body_attrs.push_str(r#" data-chrome="none""#); }
         // The body names the mode only where the header really stays: a site
         // with no header has nothing to keep, and a header laid over the
-        // page's opening hero scrolls away with it, so the island keeps its bar.
-        let header_over = doc
-            .and_then(|d| d.hero_html.as_deref())
-            .and_then(|h| h.split('>').next())
-            .is_some_and(|open_tag| open_tag.contains(r#" data-header="over""#));
+        // page's opening hero or band scrolls away with it, so the island keeps its bar.
+        let header_over = doc.is_some_and(|d| d.header_over.is_some());
         if self.layout.header != crate::build::components::nav::HeaderMode::None && !header_over && !bare {
             if let Some(value) = self.layout.header_scroll.attr_value() {
                 body_attrs.push_str(&format!(r#" data-header-scroll="{value}""#));
@@ -223,7 +220,7 @@ impl PageChromeContext<'_, '_> {
             typesetting_attr: resolve_data_attr(doc.and_then(|d| d.typesetting.as_ref()), self.layout.typesetting.as_ref(), "typesetting", Some("horizontal")),
             comments_attr: resolve_comments_attr(doc.and_then(|d| d.comments), self.layout.comments),
             homepage_content: String::new(), latest_list: None, latest_sidebar: None,
-            page_wrapper_class: String::new(), hero_section: None,
+            page_wrapper_class: String::new(), hero_section: None, header_attrs: String::new(),
             share_cover_attr: String::new(), share_qr_attr: String::new(), main_class: String::new(),
             date: None, formatted_date: None, date_line: None, short_date: None, content: None,
             description: None, og_tags: None, twitter_tags: None, canonical_link: None,

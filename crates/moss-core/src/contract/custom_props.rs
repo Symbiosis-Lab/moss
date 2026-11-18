@@ -497,7 +497,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-header-bg",
         owner: "body > header",
         default: "transparent",
-        description: "Background of the site header's band. Unset, the header has none. A page whose opening hero says `header=over` keeps its header transparent over the photo whatever this is set to, so a theme that only sets this token never needs to know about `header=over`. Set it on `:root`, with its dark-mode pair under `:root[data-theme=\"dark\"]`.",
+        description: "Background of the site header's band. Unset, the header has none. A page whose opening hero or full-width band says `header=over` keeps its header transparent over the photo whatever this is set to, so a theme that only sets this token never needs to know about `header=over`. Set it on `:root`, with its dark-mode pair under `:root[data-theme=\"dark\"]`.",
     },
     CustomProp {
         name: "--moss-header-ink",
@@ -882,6 +882,12 @@ pub const SCOPE_ATTRS: &[ScopeAttr] = &[
         name: "data-width",
         values: &["body", "wide", "page", "screen"],
         description: "Set by block shortcodes, and by a fenced div that carries a width word (`:::{.band screen}`), to escape the text column. The width resolves through `--moss-escape`, clamped by `min(…, 100cqi)` so a narrow viewport stays safe.",
+    },
+    ScopeAttr {
+        selector: "body > header",
+        name: "data-header",
+        values: &["over"],
+        description: "Present on the site header when it lies over the block that opens the page: a hero with `header=over`, or a `screen` band written `::: {screen header=over}`. The header leaves the flow, has no band of its own and passes the pointer through except on its own controls. `data-header-ink` and `data-header-ink-night` (`light` or `dark`) name the ink the build found over the block's pictures in each theme; neither means white over a stronger wash.",
     },
     ScopeAttr {
         selector: "body",

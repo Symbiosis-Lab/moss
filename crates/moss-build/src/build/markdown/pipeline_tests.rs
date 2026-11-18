@@ -4068,18 +4068,17 @@ fn a_linked_picture_takes_its_bracket_text_as_alt_text() {
 
 #[test]
 fn hero_header_over_marks_only_the_opening_hero() {
-    let opening = render_hero_with_graph(
-        ":::hero {image=h.jpg header=over}\n# Title\n:::\n\nBody.\n",
-        &["h.jpg"],
-    );
+    let parsed = parse_with_graph(":::hero {image=h.jpg header=over}\n# Title\n:::\n\nBody.\n", &["h.jpg"]);
+    let opening = parsed.hero_html.expect("opening hero");
     assert!(opening.contains(r#"data-header="over""#), "got: {opening}");
+    assert!(parsed.header_over.is_some(), "the page's header lies over its opening hero");
 
     // A hero after other content stays in the body, where header=over does not apply.
     let later = parse_with_graph(
         "Intro.\n\n:::hero {image=h.jpg header=over}\n# Title\n:::\n",
         &["h.jpg"],
     );
-    assert!(later.hero_html.is_none(), "a later hero is not lifted out of the body");
+    assert!(later.hero_html.is_none() && later.header_over.is_none(), "a later hero is not lifted out of the body");
     assert!(later.html_content.contains("moss-hero"), "got: {}", later.html_content);
     assert!(!later.html_content.contains("data-header"), "got: {}", later.html_content);
 }
@@ -4578,4 +4577,78 @@ fn the_bindings_page_css_matches_the_standalone_stylesheet() {
     }
     let committed = std::fs::read_to_string(&path).unwrap_or_default();
     assert!(committed == css, "{} is stale; regenerate it with UPDATE_PAGE_CSS=1 cargo test -p moss-build --lib the_bindings_page_css", path.display());
+}
+
+/// A page of `md` built with `pictures` (path, grey) read from a scan, so the
+/// header's ink can be measured.
+fn parse_with_pictures(md: &str, pictures: &[(&str, u8)]) -> crate::build::types::ParsedDocument {
+    use crate::build::markdown::hero_ink::Ground;
+    use image::{DynamicImage, Rgb, RgbImage};
+    let metas: Vec<_> = pictures
+        .iter()
+        .map(|(path, _)| crate::types::content::MediaMetadata { path: path.to_string(), dimensions: Some((100, 40)), ..Default::default() })
+        .collect();
+    let grounds = pictures
+        .iter()
+        .map(|(path, grey)| (path.to_string(), Ground::from_image(&DynamicImage::ImageRgb8(RgbImage::from_pixel(100, 40, Rgb([*grey; 3]))))))
+        .collect();
+    let lookup = crate::build::media::dimensions::MediaDimensionLookup::new(&metas, &[], &HashMap::new(), None, &Default::default()).with_grounds(grounds);
+    let mut b = moss_core::content_graph::ContentGraphBuilder::new();
+    for (p, _) in pictures {
+        b.add_file(p, p.trim_end_matches(".png"));
+    }
+    let graph = b.build();
+    process_markdown_file(
+        "test.md",
+        md,
+        "site",
+        &HashMap::new(),
+        false,
+        crate::i18n::Language::En,
+        None,
+        crate::build::markdown::SiteMarkdown::default(),
+        Some(&lookup),
+        None,
+        Some(&graph),
+        PageContext::default(),
+    )
+    .expect("should parse")
+}
+
+const BAND: &str = "::: {screen header=over}\n![Harbour at dusk|](dusk.png)\n\n# A river town\n\n![The old mill|](mill.png)\n:::\n\nBody.\n";
+
+#[test]
+fn an_opening_screen_band_with_header_over_reads_its_pictures_for_the_ink() {
+    let dark = parse_with_pictures(BAND, &[("dusk.png", 30), ("mill.png", 40)]);
+    assert!(dark.html_content.contains(r#"data-header="over" data-header-ink="light" data-header-ink-night="light""#), "got: {}", dark.html_content);
+    let pale = parse_with_pictures(BAND, &[("dusk.png", 245), ("mill.png", 250)]);
+    assert!(pale.html_content.contains(r#"data-header-ink="dark""#), "got: {}", pale.html_content);
+    use crate::build::markdown::hero_ink::HeaderOver;
+    use crate::build::markdown::hero_ink::Ink;
+    assert_eq!(dark.header_over, Some(HeaderOver { ink: Some(Ink::Light), ink_night: Some(Ink::Light) }));
+    assert_eq!(pale.header_over, Some(HeaderOver { ink: Some(Ink::Dark), ink_night: Some(Ink::Dark) }));
+}
+
+#[test]
+fn a_band_over_a_dark_and_a_pale_picture_takes_neither_ink() {
+    let mixed = parse_with_pictures(BAND, &[("dusk.png", 30), ("mill.png", 245)]);
+    assert!(mixed.html_content.contains(r#"data-header="over""#), "got: {}", mixed.html_content);
+    assert!(!mixed.html_content.contains("data-header-ink"), "the wash carries white ink: {}", mixed.html_content);
+    assert_eq!(mixed.header_over, Some(Default::default()), "the header is over the band, in white over the wash");
+}
+
+#[test]
+fn header_over_stays_on_a_screen_band_only_where_it_opens_the_page() {
+    let pictures = [("dusk.png", 30), ("mill.png", 40)];
+    let later = parse_with_pictures(&format!("Intro.\n\n{BAND}"), &pictures);
+    assert!(!later.html_content.contains("data-header"), "got: {}", later.html_content);
+    assert_eq!(later.header_over, None);
+
+    let plain = parse_with_pictures(&BAND.replace(" header=over", ""), &pictures);
+    assert!(plain.html_content.contains(r#"data-width="screen""#) && !plain.html_content.contains("data-header"), "got: {}", plain.html_content);
+    assert_eq!(plain.header_over, None);
+
+    let after_hero = parse_with_pictures(&format!(":::hero {{image=dusk.png}}\n# Title\n:::\n\n{BAND}"), &pictures);
+    assert!(!after_hero.html_content.contains("data-header"), "got: {}", after_hero.html_content);
+    assert_eq!(after_hero.header_over, None);
 }

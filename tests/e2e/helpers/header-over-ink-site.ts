@@ -10,7 +10,7 @@ import type { ScratchSiteSpec } from "./scratch-site";
 import { chunk } from "./contents-ruler-site";
 
 /** A picture of one grey with a line a shade off it every 40px, both ways. */
-function lined(width: number, height: number, grey: number, line: number): Buffer {
+export function lined(width: number, height: number, grey: number, line: number): Buffer {
   const rows: Buffer[] = [];
   for (let y = 0; y < height; y++) {
     const row = Buffer.alloc(1 + width * 3, y % 40 < 2 ? line : grey);

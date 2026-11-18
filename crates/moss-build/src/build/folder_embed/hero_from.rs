@@ -30,6 +30,7 @@ struct Hero {
     hero_ends: bool,
     image_url: Option<String>,
     overlay_text: Option<String>,
+    header_over: Option<crate::build::markdown::hero_ink::HeaderOver>,
 }
 
 type DirOverrides = std::collections::HashMap<String, String>;
@@ -58,6 +59,7 @@ pub(crate) fn resolve_all(
         documents[i].hero_html = hero.html;
         documents[i].hero_image_url = hero.image_url;
         documents[i].hero_overlay_text = hero.overlay_text;
+        documents[i].header_over = hero.header_over;
     }
 }
 
@@ -81,6 +83,7 @@ fn settle(
             hero_ends: false,
             image_url: plan.fallback_image_url.clone(),
             overlay_text: plan.fallback_overlay_text.clone(),
+            header_over: doc.header_over,
         },
     }
 }
@@ -194,5 +197,6 @@ fn draw(
         Some(ends) => format!("{drawn}<template data-hero-ends=\"{ends}\">{}</template>", plan.fallback_html.as_deref().unwrap_or_default()),
         None => drawn,
     };
-    Hero { html: Some(html), hero_ends: ends.is_some(), image_url, overlay_text: description }
+    let header_over = crate::build::markdown::typed_renderers::hero_header_over(&hero, Some(media_lookup));
+    Hero { html: Some(html), hero_ends: ends.is_some(), image_url, overlay_text: description, header_over }
 }

@@ -551,6 +551,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub hero_html: Option<String>,
+    /// The site header lies over the block that opens the page (`header=over`
+    /// on its hero or `screen` band), with the ink read from its pictures.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub header_over: Option<crate::build::markdown::hero_ink::HeaderOver>,
     /// A `from=` hero, drawn once every page is known; `hero_html`,
     /// `hero_image_url` and `hero_overlay_text` start as its fallback.
     #[serde(skip)]

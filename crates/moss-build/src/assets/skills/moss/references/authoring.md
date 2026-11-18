@@ -599,6 +599,8 @@ A statement on a full-width background.
 :::
 ```
 
+`header=over` works on a `screen` band that opens the page (`::: {screen header=over}`) as it does on an opening hero: the band starts at the page top with the site header lying over it, and the build reads every picture in the band for the header's ink (white over a stronger wash unless dark or white reads on all of them). The header passes the pointer through to the band's links except on its own controls. On a band that is not the page's first block it does nothing.
+
 A page made of full-width bands sets the width once instead of on every block: `content_width: screen` (in the page's frontmatter, in a folder's `cascade:`, or as `content_width` under `[site]`) gives the page the `full` column and makes every top-level `:::grid` and fenced-div band as wide as the window, so `:::grid 2 5:7` needs no `{screen}`. A block that carries a width word of its own keeps it: `{body}` keeps one grid at the text width. Grids and bands inside another block, and a gallery, keep their width; `content_width: full` alone still only widens the column to the site maximum.
 
 **The end of every article in a folder.** A partial aimed at the `before-article-end` slot closes every article in its folder and in the folders beneath it, without a line in any of them. Saved as `letters/end.md` (any name), this ends each letter with a sign-up form and a way to keep reading:

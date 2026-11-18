@@ -64,7 +64,7 @@ pub mod visit;
 
 pub use dispatch_wikilink_embeds::{dispatch_wikilink_embeds, WikilinkDispatchResult};
 pub use document::{BlockMeta, Document};
-pub use extract_hero::{extract_hero, HeroDrawnFrom, HeroExtraction};
+pub use extract_hero::{extract_hero, is_comment, HeroDrawnFrom, HeroExtraction};
 pub use grid_parts::{card_parts, render_grid_parts, GridCellParts, GridParts};
 pub use extract_form::{FieldKind, FormField, FormShortcode};
 pub use crate::heading::anchor_rule::{shows_heading_anchors, wants_contents_list, wants_heading_anchors};

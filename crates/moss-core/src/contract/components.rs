@@ -1482,7 +1482,7 @@ const CORE: &[ComponentEntry] = &[
                 name: "data-header",
                 values: &["over"],
                 default: "",
-                description: "Emitted **only** for `:::hero {header=over}` on the hero that opens the page. The site header is laid over this hero instead of sitting in a band above it: the header is absolutely positioned with a transparent background and light text, and a soft top wash sits on the photo. Heroes further down the page ignore the option. The selector is `header:has(+ .moss-hero[data-header=\"over\"])`.",
+                description: "Emitted **only** for `:::hero {header=over}` on the hero that opens the page. The site header is laid over this hero instead of sitting in a band above it: the header is absolutely positioned with a transparent background and light text, and a soft top wash sits on the photo. Heroes further down the page ignore the option. The same attribute and its ink attributes are written on a `screen` band (`::: {screen header=over}`) that opens the page when no hero does. Either way `<header>` itself carries `data-header=\"over\"`, the hook the stylesheet selects.",
             },
             DataAttr {
                 name: "data-overlay",

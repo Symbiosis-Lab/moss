@@ -1116,6 +1116,12 @@ pub fn process_markdown_file(
     // fallback, so no empty hero box is left behind.
     let hero_drawn_from = hero_extraction.as_ref().and_then(|h| h.drawn_from.clone());
     let hero_html = hero_extraction.as_ref().map(|h| h.html.clone()).filter(|_| !hero_drawn_from.as_ref().is_some_and(|d| !d.shortcode.has_own_content()));
+    // The block that opens the page, a hero or else a `screen` band, may take the site header over it.
+    let band_over = super::hero_ink::mark_opening_band(&mut doc, hero_extraction.is_none() && !fills_footer, media_lookup);
+    let header_over = match &hero_extraction {
+        Some(h) => super::typed_renderers::hero_header_over(&h.shortcode, media_lookup).filter(|_| hero_html.is_some()),
+        None => band_over,
+    };
 
     // 4. Capture the first body image for the cover chain.
     //    LOCKED ORDER: must run AFTER `extract_hero` (constraint 3). The
@@ -1679,6 +1685,7 @@ pub fn process_markdown_file(
         translation_key: frontmatter.translation_key,
         translations: vec![],
         hero_html,
+        header_over,
         hero_from,
         body_claims_eager,
         lists_folders,

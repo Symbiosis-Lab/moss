@@ -206,6 +206,8 @@ fn surface_debug(doc: &ParsedDocument) -> String {
     // `hero_image_url` — the genuinely cross-page half, read by the homepage
     // — deliberately stays.
     stripped.hero_html = None;
+    // The header's ink is read from the same picture, and is as much the page's own.
+    stripped.header_over = None;
     // Whether this page has a contents bar is its own chrome.
     stripped.contents_list = false;
     // What this page loads is this page's own head, and its facade covers it.

@@ -1366,14 +1366,11 @@ pub(super) fn render_page<'d>(
         } else {
             None
         },
-        content: if is_article_page {
-            Some(homepage_content)
-        } else {
-            None
-        },
+        content: is_article_page.then_some(homepage_content),
         page_wrapper_class,
         // Placed outside <main> so a hero spans the full width, on any page.
         hero_section: doc.and_then(|d| d.hero_html.clone()),
+        header_attrs: doc.and_then(|d| d.header_over).map(|h| h.header_attrs()).unwrap_or_default(),
         // The cover and the QR the page itself has, published to the reader
         // runtime on `<article class="container">` so share-card.ts finds
         // neither by guessing at markup. Absent attribute = the card draws

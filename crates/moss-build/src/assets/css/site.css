@@ -2346,13 +2346,15 @@ header:has(+ .moss-hero) .main-nav {
   margin-block-end: 0;
 }
 
-/* header=over (`:::hero {header=over}` on the page's opening hero): the header
-   leaves the flow so the hero starts at the page top, under it. Its ink is
+/* header=over (`:::hero {header=over}` on the page's opening hero, or
+   `::: {screen header=over}` on an opening full-width band): the build marks
+   `<header>` itself with `data-header="over"` and the ink, and the header
+   leaves the flow so the hero or band starts at the page top, under it. Its ink is
    white unless the build found only dark ink reads on the picture's top band
    (`data-header-ink`, `-night` for the dark theme). The build measures that
    dark ink as the default `--moss-hero-tone-color`; a theme's own value is not
    re-measured. */
-header:has(+ .moss-hero[data-header="over"]) {
+header[data-header="over"] {
   --_over-ink: #ffffff;
   position: absolute;
   inset-block-start: 0;
@@ -2362,9 +2364,14 @@ header:has(+ .moss-hero[data-header="over"]) {
   background: transparent;
   border-block-end: none;
   color: var(--_over-ink);
+  /* A band holds links under the header: the header takes the pointer only on its own controls. */
+  pointer-events: none;
+}
+header[data-header="over"] :where(a, button, input, select, textarea, summary, label, [tabindex], [role], [contenteditable], .nav-links.mobile-open, .moss-nav-sub) {
+  pointer-events: auto;
 }
 
-:is(:root:not([data-theme="dark"]) header:has(+ .moss-hero[data-header-ink="dark"]), :root[data-theme="dark"] header:has(+ .moss-hero[data-header-ink-night="dark"])) {
+:is(:root:not([data-theme="dark"]) header[data-header-ink="dark"], :root[data-theme="dark"] header[data-header-ink-night="dark"]) {
   --_over-ink: var(--moss-hero-tone-color, #2c2825);
 }
 
@@ -2373,14 +2380,14 @@ header:has(+ .moss-hero[data-header="over"]) {
    The phone menu's sheet is opaque and not over the photo, so its links keep
    their own colour, as does a submenu panel, which has its own background. The open sheet is excluded by `.mobile-open`, a closing
    one by `inert`, which it carries through the fade after `.mobile-open` goes. */
-header:has(+ .moss-hero[data-header="over"]) :where(a, button, .site-name):not(.nav-links:is(.mobile-open, [inert]) *, .moss-nav-sub *) {
+header[data-header="over"] :where(a, button, .site-name):not(.nav-links:is(.mobile-open, [inert]) *, .moss-nav-sub *) {
   color: inherit;
 }
 
 /* Focus rings sit on the photo, so they take the header's ink rather than the
    accent, which can fall below contrast on an image. The opened mobile sheet
    keeps the accent ring: it is opaque, not over the photo; so does a submenu panel. */
-header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.nav-links:is(.mobile-open, [inert]) *, .moss-nav-sub *) {
+header[data-header="over"] :focus-visible:not(.nav-links:is(.mobile-open, [inert]) *, .moss-nav-sub *) {
   outline-color: var(--_over-ink);
 }
 
@@ -2388,10 +2395,11 @@ header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.nav-links:is(.m
    no brighter than 0.18 luminance; black at 60% over pure white gives 0.13, so
    where no ink was measured to read, the wash is that strong and solid over
    the 5rem band the build measures. */
-.moss-hero[data-header="over"] {
+:is(.moss-hero, article.container > [data-width="screen"])[data-header="over"] {
   --moss-hero-wash-size: 6rem;
+  position: relative;
 }
-.moss-hero[data-header="over"]::after {
+:is(.moss-hero, article.container > [data-width="screen"])[data-header="over"]::after {
   content: "";
   position: absolute;
   inset-block-start: 0;
@@ -2401,10 +2409,10 @@ header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.nav-links:is(.m
   pointer-events: none;
   z-index: 1;
 }
-:is(:root:not([data-theme="dark"]) .moss-hero[data-header-ink="light"], :root[data-theme="dark"] .moss-hero[data-header-ink-night="light"])::after {
+:is(:root:not([data-theme="dark"]) :is(.moss-hero, article.container > [data-width="screen"])[data-header-ink="light"], :root[data-theme="dark"] :is(.moss-hero, article.container > [data-width="screen"])[data-header-ink-night="light"])::after {
   background: linear-gradient(rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0));
 }
-:is(:root:not([data-theme="dark"]) .moss-hero[data-header-ink="dark"], :root[data-theme="dark"] .moss-hero[data-header-ink-night="dark"])::after {
+:is(:root:not([data-theme="dark"]) :is(.moss-hero, article.container > [data-width="screen"])[data-header-ink="dark"], :root[data-theme="dark"] :is(.moss-hero, article.container > [data-width="screen"])[data-header-ink-night="dark"])::after {
   content: none;
 }
 /* With the words at the top they start below the header, which sits in the
@@ -2421,6 +2429,17 @@ header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.nav-links:is(.m
   .moss-hero[data-header="over"][data-mobile="overlay"][data-align="top"] > .moss-hero-content {
     margin-block-start: var(--_top-clear);
   }
+}
+
+/* The page title above an opening band is the band's to replace: it stays for readers
+   and search, and leaves the flow so the band starts at the page top. */
+article.container > .moss-article-title:has(+ [data-width="screen"][data-header="over"]) {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
 }
 
 /* nav-left: single-row flex; breadcrumb segments (below) shrink with ellipsis
