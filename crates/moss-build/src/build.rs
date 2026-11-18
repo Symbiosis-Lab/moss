@@ -1966,7 +1966,7 @@ async fn advertise_sealed(
     // A caller hand-off never yields: its caller reads `current` next.
     let yields = guards.handoff == Handoff::Lane;
     let render_seq = render.as_ref().map(crate::build::lifecycle::Render::seq);
-    crate::build::lifecycle::note_sealed(mp, render_seq);
+    if let Some(render) = &render { render.note_sealed(); }
     // Right after seal, before any repair pass can rewrite `stage_dir`: the
     // reference point `ship_phase`'s integrity check compares against, for
     // every entry it will read from the mutable stage path rather than an
@@ -2018,7 +2018,7 @@ async fn advertise_sealed(
     // wait its turn or land after it and roll it back. A render whose asset
     // walk stopped for a newer one leaves too: its generation lacks what the
     // walk never reached, and the preview keeps its last whole one.
-    if yields && (sealed.walk() == crate::build::manifest::WalkOutcome::Superseded || crate::build::lifecycle::newer_render_sealed(mp, render_seq)) {
+    if yields && (sealed.walk() == crate::build::manifest::WalkOutcome::Superseded || render.as_ref().is_some_and(crate::build::lifecycle::Render::newer_sealed)) {
         log::info!("seal tail for render #{} left to a newer render", render_seq.unwrap_or_default());
         return None;
     }
@@ -2071,7 +2071,7 @@ async fn advertise_sealed(
     });
     let revealed = active_session.is_some()
         && selected_preview_ready
-        && crate::build::lifecycle::reveal_render_if_latest(mp, render_seq);
+        && render.as_ref().is_some_and(crate::build::lifecycle::Render::reveal_if_latest);
     if revealed {
         if ports.events.shell_listening()
             && crate::build::cloud_readiness::take_gate(folder_path)

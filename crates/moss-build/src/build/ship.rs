@@ -647,7 +647,7 @@ pub(crate) fn materialize_and_promote(
         }
         if reason != WithholdReason::SourcesDownloading {
             // The tree on screen is the one that could not be read.
-            crate::build::lifecycle::withdraw_render(mp, render.map(crate::build::lifecycle::Render::seq));
+            if let Some(render) = render { render.withdraw(); }
         }
         return Ok(Promotion::Withheld(reason));
     }
@@ -691,7 +691,7 @@ pub(crate) fn materialize_and_promote(
         .map_err(|e| format!("Failed to write generation original identities: {e}"))?;
     sealed.write_publish_view(&mp.generations_dir())
         .map_err(|e| format!("Failed to record which pages are preview-only: {e}"))?;
-    let promoted = crate::build::lifecycle::promote(mp, epoch, render.map(crate::build::lifecycle::Render::seq), sealed.generation_id(), copied)
+    let promoted = crate::build::lifecycle::promote(mp, epoch, render, sealed.generation_id(), copied)
         .map_err(|e| format!("Failed to set current_ptr: {}", e))?;
     // A generation holding bytes its id does not describe keeps its lock file,
     // so the next seal of this id copies it again instead of reusing it.

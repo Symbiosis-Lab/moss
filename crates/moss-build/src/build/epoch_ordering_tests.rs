@@ -449,13 +449,13 @@ async fn a_tail_overtaken_while_it_waits_for_the_lock_writes_nothing() {
     };
     // The tail notes its seal before it asks for the lock.
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        while !crate::build::lifecycle::newer_render_sealed(&mp, Some(0)) {
+        while !crate::build::lifecycle::Render::numbered(&mp, 0).newer_sealed() {
             tokio::task::yield_now().await;
         }
     })
     .await
     .expect("the tail must note its seal before it waits for the lock");
-    crate::build::lifecycle::note_sealed(&mp, Some(2));
+    crate::build::lifecycle::Render::numbered(&mp, 2).note_sealed();
     drop(held);
 
     assert!(waiting.await.unwrap());
@@ -501,7 +501,7 @@ async fn a_render_whose_walk_was_superseded_never_promotes() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_caller_hand_off_never_yields() {
     let SealFixture { mp, session, .. } = &seal_fixture();
-    crate::build::lifecycle::note_sealed(&mp, Some(9));
+    crate::build::lifecycle::Render::numbered(mp, 9).note_sealed();
     let sealed = sealed_page(&mp.staging_dir(), b"<html><body>one-shot</body></html>");
     let pending = tail(&mp, &session, sealed, 1, crate::build::Handoff::Caller).await;
     assert!(pending.is_some(), "the caller gets its seal back");
@@ -511,13 +511,12 @@ async fn the_caller_hand_off_never_yields() {
 #[test]
 fn a_render_is_overtaken_only_by_a_newer_sealed_one() {
     let SealFixture { mp, .. } = &seal_fixture();
-    crate::build::lifecycle::note_sealed(mp, None);
-    assert!(!crate::build::lifecycle::newer_render_sealed(&mp, Some(1)), "nothing has sealed");
-    crate::build::lifecycle::note_sealed(&mp, Some(3));
-    crate::build::lifecycle::note_sealed(&mp, Some(2));
-    assert!(crate::build::lifecycle::newer_render_sealed(&mp, Some(2)), "3 overtakes 2, even noted first");
-    assert!(!crate::build::lifecycle::newer_render_sealed(&mp, Some(3)), "a render does not overtake itself");
-    assert!(!crate::build::lifecycle::newer_render_sealed(&mp, None), "no render, no verdict");
+    let render = |seq| crate::build::lifecycle::Render::numbered(mp, seq);
+    assert!(!render(1).newer_sealed(), "nothing has sealed");
+    render(3).note_sealed();
+    render(2).note_sealed();
+    assert!(render(2).newer_sealed(), "3 overtakes 2, even noted first");
+    assert!(!render(3).newer_sealed(), "a render does not overtake itself");
 }
 
 /// The lane hand-off happens under the stage-write lock. A newer tail that
