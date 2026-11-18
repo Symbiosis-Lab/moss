@@ -9,8 +9,8 @@
  * paced floor cannot claim the work is finished.
  */
 
-import { describe, it, expect } from "vitest";
-import { __testing } from "../install-ring";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { InstallRing, __testing } from "../install-ring";
 
 const { strokeD, pose, lerpPose, floorAt, arcValue, CIRC } = __testing;
 
@@ -107,5 +107,30 @@ describe("the arc is the number", () => {
   it("never runs backwards, and never closes the ring on its own", () => {
     expect(arcValue(40, 30, true, 5000)).toBe(40);   // late-reporting feed
     expect(arcValue(4, 100, true, 100)).toBe(99);    // only the work may close it
+  });
+});
+
+describe("a hidden window", () => {
+  // WebKit sends no animation frames to an occluded window. A remove pressed
+  // there must still happen, and the run must still end.
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("starts the work at once and finishes without a single frame", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    vi.stubGlobal("requestAnimationFrame", () => 0);
+    const host = document.createElement("div");
+    const ring = new InstallRing(host, "minus");
+    const work = vi.fn(async () => true);
+    const labels = {
+      busy: () => "", caption: () => undefined, rest: "", failedCaption: "", failedTooltip: "",
+    };
+    let outcome: string | undefined;
+    void ring.run({ installing: false, work, labels }).then((o) => { outcome = o; });
+    expect(work).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(outcome).toBe("removed");
   });
 });

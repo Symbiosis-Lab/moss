@@ -329,11 +329,8 @@ export class InstallRing {
     const reduced = prefersReducedMotion();
     this.marks.ink(installing ? 'accent' : 'muted');
 
-    // 1 · uncurl: whatever is showing — plus, minus, or a ✗ from a failed
-    //     attempt — opens into the ring at ~0%.
-    await this.tween(pose.ring(MIN_ARC), UNCURL);
-
-    // 2 · the paced arc, running until the work resolves.
+    // The work starts with the press, not after the uncurl: the ring follows
+    // the work and never holds it back.
     //
     // A REJECTION is a failure, not an absence of a result. Without the catch
     // `ok` stays null, the loop below never reaches its exit condition, and
@@ -345,6 +342,12 @@ export class InstallRing {
     let ok: boolean | null = null;
     const settled = work().then((r) => { ok = r; }, () => { ok = false; });
 
+    // 1 · uncurl: whatever is showing — plus, minus, or a ✗ from a failed
+    //     attempt — opens into the ring at ~0%.
+    await this.tween(pose.ring(MIN_ARC), UNCURL);
+
+    // 2 · the paced arc, running until the work resolves.
+    //
     // Reduced motion skips the legibility floor too: MIN_CYCLE exists so the
     // arc has time to be READ, and there is no motion left to read.
     const minCycle = reduced ? 0 : MIN_CYCLE;

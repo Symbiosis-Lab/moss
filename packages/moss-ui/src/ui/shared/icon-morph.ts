@@ -145,11 +145,23 @@ export function tweenPose(
   }
   const t0 = performance.now();
   return new Promise<void>((res) => {
+    // Frames paint; the timer ends the tween. WebKit sends no frames to an
+    // occluded window, and a tween that waited on them would never resolve.
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      paint(lerpPose(from, to, 1));
+      res();
+    };
     const frame = () => {
-      const t = Math.min(1, (performance.now() - t0) / ms);
+      if (done) return;
+      const t = (performance.now() - t0) / ms;
+      if (t >= 1) return finish();
       paint(lerpPose(from, to, t));
-      if (t < 1) requestAnimationFrame(frame); else res();
+      requestAnimationFrame(frame);
     };
     requestAnimationFrame(frame);
+    setTimeout(finish, ms);
   });
 }
