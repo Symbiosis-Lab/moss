@@ -6602,7 +6602,9 @@ body.own-titlebar.controls-trailing .moss-titlebar-traffic-light-space {
   }
 }
 
+/* Positioned, so a mark on the icon sits on the icon. */
 .moss-plugin-catalog-icon {
+  position: relative;
   flex: none;
   inline-size: 28px;
   block-size: 28px;
