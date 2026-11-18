@@ -85,12 +85,12 @@ async fn a_watch_start_attaches_its_cadence_to_the_folder_session() {
     super::super::registry().remove(&folder);
 }
 
-/// Work already under way runs at background QoS while hidden and at utility
-/// QoS while visible; a gate with no cadence leaves the thread's class alone.
+/// Work already under way runs at background QoS while hidden and at its own
+/// class while visible, as with a gate that has no cadence.
 #[cfg(target_os = "macos")]
 #[test]
-fn pacing_runs_a_thread_at_background_qos_while_hidden_and_utility_while_visible() {
-    use libc::qos_class_t::{QOS_CLASS_BACKGROUND, QOS_CLASS_USER_INITIATED, QOS_CLASS_UTILITY};
+fn pacing_runs_a_thread_at_background_qos_while_hidden_and_at_its_own_class_while_visible() {
+    use libc::qos_class_t::{QOS_CLASS_BACKGROUND, QOS_CLASS_USER_INITIATED};
     let _latch = crate::deploy::freeze::single_flight_tests::TEST_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -107,7 +107,7 @@ fn pacing_runs_a_thread_at_background_qos_while_hidden_and_utility_while_visible
 
         tx.send_replace(Cadence::Live);
         gate.pace_this_thread();
-        assert_eq!(crate::infra::qos::current().0 as u32, QOS_CLASS_UTILITY as u32);
+        assert_eq!(crate::infra::qos::current().0 as u32, QOS_CLASS_USER_INITIATED as u32);
 
         DerivedWorkGate::default().pace_this_thread();
         assert_eq!(crate::infra::qos::current().0 as u32, QOS_CLASS_USER_INITIATED as u32);

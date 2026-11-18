@@ -73,10 +73,13 @@ impl DerivedWorkGate {
         let _ = rx.wait_for(|c| *c == Cadence::Live).await;
     }
 
-    /// Run the calling thread at utility QoS while someone may be looking,
-    /// at background QoS while nobody is, and at its own class otherwise.
-    /// For long CPU work already under way (an image batch), which a hidden
-    /// window slows rather than stops: call it before each item.
+    /// Run the calling thread at background QoS while nobody is looking, and
+    /// at its own class otherwise. For long CPU work already under way (an
+    /// image batch), which a hidden window slows rather than stops: call it
+    /// before each item. While someone may be looking the core budget alone
+    /// keeps encodes polite: a lower class moves them to the efficiency cores,
+    /// where an encode costs about half again the CPU time and the page waits
+    /// several times longer for its pictures.
     ///
     /// A publish in flight is the exception: it waits on this work (and a
     /// deploy's own rebuild runs under it), and a user action is never slowed.
@@ -91,11 +94,7 @@ impl DerivedWorkGate {
 
     #[cfg(target_os = "macos")]
     fn encode_class(&self) -> Option<libc::qos_class_t> {
-        use libc::qos_class_t::{QOS_CLASS_BACKGROUND, QOS_CLASS_UTILITY};
-        if self.cadence().is_none() || publish_in_flight() {
-            return None;
-        }
-        Some(if self.is_closed() { QOS_CLASS_BACKGROUND } else { QOS_CLASS_UTILITY })
+        (self.is_closed() && !publish_in_flight()).then_some(libc::qos_class_t::QOS_CLASS_BACKGROUND)
     }
 
     /// How many cores derived encodes may use at once, across the process: a
