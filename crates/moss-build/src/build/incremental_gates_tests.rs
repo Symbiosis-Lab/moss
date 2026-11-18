@@ -28,12 +28,15 @@ fn the_render_skip_opens_only_for_a_content_only_markdown_batch() {
     assert!(!proof(BuildTrigger::Full).allows_incremental_skip());
 }
 
-/// `Structural` must keep closing the render skip even now that it opens the
-/// parse cache: a create or a delete moves pages in and out of listings, nav
-/// and folder indexes, none of which is a page's own fingerprint.
+/// A create, delete or rename of pages may carry the rest: the verdict judges
+/// what a page entering or leaving reaches. Any other path in the batch still
+/// renders everything.
 #[test]
-fn the_render_skip_stays_shut_for_a_structural_batch() {
-    assert!(!proof(BuildTrigger::Structural(paths(&["a.md"]))).allows_incremental_skip());
+fn a_structural_batch_of_pages_opens_the_render_skip_and_nothing_else_does() {
+    assert!(proof(BuildTrigger::Structural(paths(&["a.md", "b.md"]))).allows_incremental_skip());
+    assert!(!proof(BuildTrigger::Structural(paths(&["a.md", "hero.png"]))).allows_incremental_skip());
+    assert!(!proof(BuildTrigger::Structural(paths(&["notes"]))).allows_incremental_skip());
+    assert!(!proof(BuildTrigger::Structural(vec![])).allows_incremental_skip());
 }
 
 // ── The parse cache: an extension question, not a trigger question ────────

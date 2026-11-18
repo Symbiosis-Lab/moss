@@ -857,20 +857,20 @@ fn find_linked_document<'a>(
     find_document(&folder_url, documents, graph)
 }
 
-/// The pages `doc`'s grid link cells name, found the way rendering finds them.
-/// A cell may draw the named page's card, and a `/`-rooted href leaves nothing
-/// in `outgoing_links`. Every internal link cell counts, card or not:
-/// over-reading is the safe side.
+/// The page each of `doc`'s grid link cells names, found the way rendering
+/// finds it, `None` where it names none. A cell may draw the named page's
+/// card, and a `/`-rooted href leaves nothing in `outgoing_links`. Every
+/// internal link cell counts, card or not: over-reading is the safe side.
 pub(crate) fn card_targets<'a>(
     doc: &ParsedDocument,
     documents: &'a [ParsedDocument],
     graph: Option<&moss_core::content_graph::ContentGraph>,
-) -> Vec<&'a ParsedDocument> {
+) -> Vec<Option<&'a ParsedDocument>> {
     let Some(plan) = &doc.body_plan else { return Vec::new() };
     grids(plan)
         .flat_map(|grid| &grid.cells)
         .filter_map(|cell| match classify_cell(&cell.blocks) {
-            GridCell::Link(link) if !link.external() => find_linked_document(link.href, &doc.url_path, documents, graph),
+            GridCell::Link(link) if !link.external() => Some(find_linked_document(link.href, &doc.url_path, documents, graph)),
             _ => None,
         })
         .collect()

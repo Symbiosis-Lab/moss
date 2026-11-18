@@ -168,10 +168,11 @@ fn end_links(placed: &[Placed]) -> impl Iterator<Item = (&FieldDecl, &[PageLink]
     })
 }
 
-/// The pages `doc` draws as `end` cards. A frontmatter link leaves nothing in
-/// `outgoing_links`, so this is the record that `doc` reads them.
-pub fn end_card_targets<'a>(doc: &'a ParsedDocument, all_docs: &'a [ParsedDocument], graph: Option<&'a ContentGraph>) -> impl Iterator<Item = &'a ParsedDocument> + 'a {
-    end_links(&doc.placed_fields).flat_map(|(_, links)| links).filter_map(move |link| linked_page(doc, all_docs, graph, &link.target))
+/// The page each of `doc`'s `end` links draws as a card, `None` where a link
+/// names no page. A frontmatter link leaves nothing in `outgoing_links`, so
+/// this is the record that `doc` reads them.
+pub fn end_card_targets<'a>(doc: &'a ParsedDocument, all_docs: &'a [ParsedDocument], graph: Option<&'a ContentGraph>) -> impl Iterator<Item = Option<&'a ParsedDocument>> + 'a {
+    end_links(&doc.placed_fields).flat_map(|(_, links)| links).map(move |link| linked_page(doc, all_docs, graph, &link.target))
 }
 
 /// How an `end` card is drawn: everything the shared summary card needs beyond the linked page.

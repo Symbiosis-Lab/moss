@@ -4681,8 +4681,7 @@ mod children_field_tests {
 
         let docs = vec![homepage, news_index];
 
-        // The flag should be true when any document has sidebar
-        let flag = docs.iter().any(|d| d.sidebar.is_some());
+        let flag = crate::build::render::page_chrome::has_sidebar_layout(&docs);
         assert!(
             flag,
             "has_sidebar_layout should be true when at least one doc has sidebar"
@@ -4690,7 +4689,7 @@ mod children_field_tests {
 
         // And false when none do
         let no_sidebar_docs = vec![make_doc("Test", "index.html")];
-        let no_flag = no_sidebar_docs.iter().any(|d| d.sidebar.is_some());
+        let no_flag = crate::build::render::page_chrome::has_sidebar_layout(&no_sidebar_docs);
         assert!(
             !no_flag,
             "has_sidebar_layout should be false when no doc has sidebar"

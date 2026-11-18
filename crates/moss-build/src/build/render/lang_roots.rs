@@ -236,7 +236,7 @@ pub(crate) fn site_publishes_multiple_languages(
 ///
 /// - `lang_roots`: [`site_lang_roots`]'s output. Moves when a homepage-root
 ///   doc's own `lang` changes, or a root appears/disappears (already covered
-///   by `PathSetMoved`, but hashed here too for a cheap witness).
+///   by `FolderPageMoved`, but hashed here too for a cheap witness).
 /// - `lang_multi`: [`site_publishes_multiple_languages`]'s boolean. Gates
 ///   whether the switcher's homepage-root fallback exists at all; its three
 ///   evidences (root count, an authored translation whose target disagrees

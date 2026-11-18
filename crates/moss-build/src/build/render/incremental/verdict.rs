@@ -23,8 +23,16 @@
 //!     false: every entry point except a markdown-only watch rebuild, plus the
 //!     `MOSS_NO_INCREMENTAL` kill switch.
 //!   * [`FullCause::ColdCache`] — a cold or unreadable cache; nothing to diff.
-//!   * [`FullCause::PathSetMoved`] — a page appeared or disappeared, which
-//!     moves listings, nav and folder indexes no per-page diff can model.
+//!   * [`FullCause::FolderPageMoved`] — a folder, home or generated page
+//!     appeared or disappeared. An article entering or leaving is not one:
+//!     the parse re-asked every link, and what it changes elsewhere has a
+//!     digest below (listing groups, nav, home title, breadcrumbs, global
+//!     contributions, card answers, site features) or is written onto the
+//!     reading page before fingerprints. A folder or home page also moves
+//!     breadcrumb labels and stands in for, or steps aside from, a generated
+//!     folder page, which nothing here models.
+//!   * [`FullCause::SiteFeaturesMoved`] — the set of page features the site
+//!     carries moved, so the sheets and scripts every page links did too.
 //!   * [`FullCause::SurfaceChanged`] — a page's cross-page-visible surface
 //!     moved by a field NOT in the classified set
 //!     ([`dependents::field_is_classified`]). The design's six non-graph
@@ -67,8 +75,9 @@ use super::policy::IncrementalPolicy;
 pub enum FullCause {
     SkipDisabled,
     ColdCache,
-    PathSetMoved,
+    FolderPageMoved,
     SurfaceChanged,
+    SiteFeaturesMoved,
     GlobalInvalidator,
     AssetVersionsMoved,
     ListingGlobalsMoved,
@@ -80,8 +89,9 @@ impl FullCause {
         match self {
             FullCause::SkipDisabled => "skip disabled",
             FullCause::ColdCache => "cold cache",
-            FullCause::PathSetMoved => "tracked path set moved",
+            FullCause::FolderPageMoved => "a folder, home or generated page appeared or disappeared",
             FullCause::SurfaceChanged => "a page surface moved",
+            FullCause::SiteFeaturesMoved => "the features the site's pages carry moved",
             FullCause::GlobalInvalidator => "a global-invalidator page changed",
             FullCause::AssetVersionsMoved => "asset versions moved",
             FullCause::ListingGlobalsMoved => "listing globals moved",
@@ -219,6 +229,8 @@ pub struct VerdictInputs<'a> {
     /// The content graph rendering resolves page links with, so the verdict
     /// finds the cards a page draws the way rendering does.
     pub graph: Option<&'a moss_core::content_graph::ContentGraph>,
+    /// The sheets and scripts every page's shell links this build.
+    pub site_assets: &'a crate::build::types::SiteAssets,
 }
 
 /// Name up to three of the paths behind a full-render cause, sorted so the
@@ -337,8 +349,15 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
     // a names/current width mismatch — see `moved_surface_fields`) counts as
     // unclassified too: "cannot tell you what moved" is not evidence it was
     // safe, it is the absence of the evidence this whole mechanism runs on.
+    let (entered, folder_pages_moved) = previous.membership(&current);
+    let site_features = site_features(documents, inputs.site_assets);
+    let site_features_changed = previous.digests_moved(DigestMap::SiteFeatures, &site_features);
+
+    // An entered page has no earlier surface to compare; what it reaches is
+    // judged by membership above.
     let unclassified_surface_movers: Vec<String> = surface_changed
         .iter()
+        .filter(|path| entered.binary_search(path).is_err())
         .filter(|path| {
             let Some(doc) = doc_by_path.get(path.as_str()) else { return true };
             match moved_fields_by_path.get(path.as_str()) {
@@ -446,7 +465,10 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
     // Listing groups: computed unconditionally, because this build's digests
     // must be persisted for the NEXT build even when this one renders
     // everything. Sub-millisecond on the reference vault.
-    let cards = card_reads(documents, inputs.graph);
+    let card_reads = card_reads(documents, inputs.graph);
+    let card_answers = card_answers(&card_reads);
+    let card_answers_changed = previous.digests_moved(DigestMap::CardAnswers, &card_answers);
+    let cards: Vec<_> = card_reads.iter().flat_map(|(reader, targets)| targets.iter().flatten().map(move |target| (*reader, *target))).collect();
     let folder_card_reads: Vec<(String, listing::GroupKey)> = cards
         .iter()
         .filter(|(_, target)| target.kind == moss_core::PageKind::Folder)
@@ -459,16 +481,15 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
         Some((FullCause::SkipDisabled, None))
     } else if previous.is_empty() {
         Some((FullCause::ColdCache, None))
-    } else if !previous.covers_same_paths(&current) {
-        Some((
-            FullCause::PathSetMoved,
-            name_a_few(previous.paths_symmetric_difference(&current), "page"),
-        ))
+    } else if !folder_pages_moved.is_empty() {
+        Some((FullCause::FolderPageMoved, name_a_few(folder_pages_moved.iter().map(|key| PageKey::display_cache_key(key).to_string()).collect(), "page")))
     } else if !unclassified_surface_movers.is_empty() {
         Some((
             FullCause::SurfaceChanged,
             name_surface_movers(&unclassified_surface_movers, &previous, &current),
         ))
+    } else if !site_features_changed.is_empty() {
+        Some((FullCause::SiteFeaturesMoved, None))
     } else if !global_invalidator_changed.is_empty() {
         Some((FullCause::GlobalInvalidator, name_a_few(global_invalidator_changed, "page")))
     } else if asset_versions_changed {
@@ -519,6 +540,7 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
                 render_set.extend(dep_graph.back_embeds(path).iter().cloned());
                 render_set.extend(dep_graph.back_cards(path).iter().cloned());
             }
+            render_set.extend(card_answers_changed.iter().filter(|reader| current.contains_key(*reader)).cloned());
             // `changed` are distinct map keys and all landed in the set first.
             let by_backlink = render_set.len() - changed.len();
 
@@ -590,20 +612,12 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
                 }
             }
             for path in &surface_changed {
-                let Some(doc) = doc_by_path.get(path.as_str()) else { continue };
-                if doc.kind != moss_core::PageKind::Folder {
+                let Some(doc) = doc_by_path.get(path.as_str()).filter(|d| d.kind == moss_core::PageKind::Folder) else { continue };
+                if !moved_fields_by_path.get(path.as_str()).is_some_and(|moved| moved.iter().any(|f| f == "label")) {
                     continue;
                 }
-                let Some(moved) = moved_fields_by_path.get(path.as_str()) else { continue };
-                if !moved.iter().any(|f| f == "label") {
-                    continue;
-                }
-                for extra in
-                    dependents::breadcrumb_ancestor_descendants(doc, documents, inputs.project.has_content_folders)
-                {
-                    if render_set.insert(extra) {
-                        by_dependents += 1;
-                    }
+                for extra in dependents::breadcrumb_ancestor_descendants(doc, documents, inputs.project.has_content_folders) {
+                    by_dependents += usize::from(render_set.insert(extra));
                 }
             }
 
@@ -648,7 +662,9 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
         .with_digests(DigestMap::LangGlobals, lang_globals)
         .with_digests(DigestMap::NavGlobals, nav_globals)
         .with_digests(DigestMap::HomeTitleGlobals, home_title_globals)
-        .with_digests(DigestMap::HomeBreadcrumbGlobals, home_breadcrumb_globals);
+        .with_digests(DigestMap::HomeBreadcrumbGlobals, home_breadcrumb_globals)
+        .with_digests(DigestMap::CardAnswers, card_answers)
+        .with_digests(DigestMap::SiteFeatures, site_features);
     if let Err(e) = new_cache.save(inputs.cache_path) {
         log::info!(target: "incremental", "failed to save facade cache: {e}");
     }
@@ -658,19 +674,46 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
     verdict
 }
 
-/// Each (reader, target) where `reader` draws `target`'s card through a page
-/// field placed at `end` or a grid link cell. Both find their target only
-/// while rendering, so no outgoing link records them.
+/// Each page that draws cards through a page field placed at `end` or a grid
+/// link cell, with the page each of those links names (`None` for a link that
+/// names none). Both find their target only while rendering, so no outgoing
+/// link records them.
 fn card_reads<'a>(
     documents: &'a [ParsedDocument],
     graph: Option<&'a moss_core::content_graph::ContentGraph>,
-) -> Vec<(&'a ParsedDocument, &'a ParsedDocument)> {
+) -> Vec<(&'a ParsedDocument, Vec<Option<&'a ParsedDocument>>)> {
     documents
         .iter()
-        .flat_map(|reader| {
-            crate::build::components::field_places::end_card_targets(reader, documents, graph)
+        .map(|reader| {
+            let targets = crate::build::components::field_places::end_card_targets(reader, documents, graph)
                 .chain(crate::build::render::grid_cells::card_targets(reader, documents, graph))
-                .map(move |target| (reader, target))
+                .collect();
+            (reader, targets)
+        })
+        .filter(|(_, targets): &(_, Vec<_>)| !targets.is_empty())
+        .collect()
+}
+
+/// One digest over what every page's shell reads from the whole site: the
+/// asset set, the distinct feature sets its pages carry (a feature's sheet
+/// can be linked after the asset set is fixed), and whether any page asks for
+/// the sidebar layout; see `FacadeCache::site_features`.
+fn site_features(documents: &[ParsedDocument], assets: &crate::build::types::SiteAssets) -> std::collections::BTreeMap<String, String> {
+    let sets: std::collections::BTreeSet<String> = documents.iter().map(|doc| format!("{:?}", doc.features)).collect();
+    let sidebar_layout = super::super::page_chrome::has_sidebar_layout(documents);
+    std::collections::BTreeMap::from([("features".to_string(), facade::debug_hash(&(assets, sets, sidebar_layout)))])
+}
+
+/// Per card-drawing page, a digest of which page each of its card links
+/// names. A page added, removed or renamed moves the answer of exactly the
+/// readers whose links it satisfies or breaks.
+fn card_answers(reads: &[(&ParsedDocument, Vec<Option<&ParsedDocument>>)]) -> std::collections::BTreeMap<String, String> {
+    reads
+        .iter()
+        .map(|(reader, targets)| {
+            let named: Vec<Option<std::borrow::Cow<'_, str>>> =
+                targets.iter().map(|t| t.map(|t| PageKey::for_document(t).cache_key())).collect();
+            (PageKey::for_document(reader).cache_key().into_owned(), facade::debug_hash(&named))
         })
         .collect()
 }

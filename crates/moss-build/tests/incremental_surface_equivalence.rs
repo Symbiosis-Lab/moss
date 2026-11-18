@@ -1139,8 +1139,10 @@ fn a_draft_toggle_reaches_pages_that_draw_its_folders_card() {
 /// one; the second build is told the `moved` paths as a structural batch, the
 /// way the watcher reports a create, delete or rename. `replays` says whether
 /// the batch lets the parse cache replay the pages it did not reach (a
-/// picture still turns the cache off for the whole build).
-fn membership_scenario(name: &str, setup: fn(&Path), change: fn(&Path), moved: &[&str], replays: bool) {
+/// picture still turns the cache off for the whole build), and `scoped`
+/// whether the render carries the pages nothing moved (a folder's or home's
+/// page entering or leaving still renders everything).
+fn membership_scenario(name: &str, setup: fn(&Path), change: fn(&Path), moved: &[&str], replays: bool, scoped: bool) {
     let _guard = SEQUENTIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let logger = capture();
     let tmp = tempfile::tempdir().unwrap();
@@ -1159,6 +1161,8 @@ fn membership_scenario(name: &str, setup: fn(&Path), change: fn(&Path), moved: &
     let lines = logger.lines.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
     let replayed = lines.iter().any(|l| l.starts_with("parse cache: ") && !l.starts_with("parse cache: 0 of"));
     assert_eq!(replayed, replays, "[{name}] parse cache replay, got: {lines:?}");
+    let carried = lines.iter().any(|l| l.contains("tracked pages") && !l.contains("skipping 0"));
+    assert_eq!(carried, scoped, "[{name}] render carried pages, got: {lines:?}");
 
     setup(&full_root);
     change(&full_root);
@@ -1168,14 +1172,20 @@ fn membership_scenario(name: &str, setup: fn(&Path), change: fn(&Path), moved: &
     assert_trees_byte_identical(name, &incremental_root, &full_root);
 }
 
+/// `linker.md` names a page that does not exist yet in its body, and
+/// `waiting-grid.md` in a grid cell, which finds its page only while rendering.
 fn write_card_reader_vault_with_a_dangling_link(root: &Path) {
     write_card_reader_vault(root);
     write(root, "linker.md", "---\ntitle: Linker\n---\n\nSee [[Arrival]] when it lands.\n");
+    write(root, "waiting-grid.md", "---\ntitle: Waiting Grid\n---\n\n:::grid\n[Arrival](/work/arrival/)\n+++\nA plain cell.\n:::\n");
 }
 
-/// `body-linker.md` links to `work/b.md` from its body, which the parse resolves.
+/// `work/b.md` named in a body link (`body-linker.md`), a grid cell
+/// (`grid-reader.md`) and counted on `work/`'s card (`folder-reader.md`),
+/// but in no page's front matter.
 fn write_card_reader_vault_with_a_body_link(root: &Path) {
     write_card_reader_vault(root);
+    std::fs::remove_file(root.join("next-reader.md")).unwrap();
     write(root, "body-linker.md", "---\ntitle: Body Linker\n---\n\nSee [[b]] for the bee.\n");
 }
 
@@ -1185,19 +1195,17 @@ fn a_new_page_satisfies_a_dangling_link() {
         "membership: add",
         write_card_reader_vault_with_a_dangling_link,
         |root| write(root, "work/arrival.md", "---\ntitle: Arrival\ndate: 2026-02-01\n---\n\nIt landed.\n"),
-        &["work/arrival.md"], true,
+        &["work/arrival.md"], true, true,
     );
 }
 
-/// `next-reader.md` names it in front matter, `grid-reader.md` in a grid cell,
-/// `body-linker.md` in its body, and `folder-reader.md` counts it on `work/`'s card.
 #[test]
 fn a_deleted_page_leaves_every_page_that_named_or_counted_it() {
     membership_scenario(
         "membership: delete",
         write_card_reader_vault_with_a_body_link,
         |root| std::fs::remove_file(root.join("work/b.md")).unwrap(),
-        &["work/b.md"], true,
+        &["work/b.md"], true, true,
     );
 }
 
@@ -1209,7 +1217,7 @@ fn a_page_added_first_by_name_in_a_folder_without_an_index() {
         "membership: first by name",
         write_card_reader_vault,
         |root| write(root, "work/aardvark.md", "---\ntitle: Aardvark\ndate: 2026-02-01\n---\n\nFirst by name.\n"),
-        &["work/aardvark.md"], true,
+        &["work/aardvark.md"], true, true,
     );
 }
 
@@ -1224,7 +1232,7 @@ fn a_new_index_takes_its_folders_home_from_a_folder_note() {
             write(root, "notes/leaf.md", "---\ntitle: Leaf\n---\n\nSee [[notes]].\n");
         },
         |root| write(root, "notes/index.md", "---\ntitle: Notes Index\n---\n\nThe new home.\n"),
-        &["notes/index.md"], true,
+        &["notes/index.md"], true, false,
     );
 }
 
@@ -1234,7 +1242,7 @@ fn a_renamed_page_leaves_its_old_name_and_takes_its_new_one() {
         "membership: rename",
         write_card_reader_vault_with_a_body_link,
         |root| std::fs::rename(root.join("work/b.md"), root.join("work/bee.md")).unwrap(),
-        &["work/b.md", "work/bee.md"], true,
+        &["work/b.md", "work/bee.md"], true, true,
     );
 }
 
@@ -1247,7 +1255,7 @@ fn a_picture_added_after_a_page_named_it() {
             write(root, "work/later.md", "---\ntitle: Later\n---\n\n![A view](later.png)\n");
         },
         |root| write_png(root, "work/later.png", [40, 160, 40]),
-        &["work/later.png"], false,
+        &["work/later.png"], false, false,
     );
 }
 
@@ -1265,5 +1273,384 @@ fn a_new_index_turns_its_folders_language_home_into_a_variant() {
         |root| write(root, "notes/index.md", "---\ntitle: Notes\n---\n\nThe English home.\n"),
         &["notes/index.md"],
         true,
+        false,
     );
 }
+
+/// `next-reader.md` names `work/b.md` in front matter, so its front matter
+/// reads differently once b is gone: an unclassified surface move.
+#[test]
+fn a_deleted_page_named_in_front_matter_renders_everything() {
+    membership_scenario(
+        "membership: delete named in front matter",
+        write_card_reader_vault,
+        |root| std::fs::remove_file(root.join("work/b.md")).unwrap(),
+        &["work/b.md"],
+        true,
+        false,
+    );
+}
+
+/// Two pages in `work/` carry `home: true`; the first by name is the home.
+/// Deleting it hands the home to the other, which already exists, so no
+/// generated folder page enters. The departed home's recorded kind renders
+/// everything, and so does the heir's own surface, which moves with it.
+#[test]
+fn a_deleted_home_by_marker_renders_everything() {
+    membership_scenario(
+        "membership: delete home by marker",
+        |root| {
+            write_card_reader_vault(root);
+            write(root, "work/a-front.md", "---\ntitle: Front\nhome: true\n---\n\nThe work folder.\n");
+            write(root, "work/b-front.md", "---\ntitle: Second Front\nhome: true\n---\n\nAlso the work folder.\n");
+        },
+        |root| std::fs::remove_file(root.join("work/a-front.md")).unwrap(),
+        &["work/a-front.md"],
+        true,
+        false,
+    );
+}
+
+/// The site's first footnote: its sidenote script is linked from every page.
+#[test]
+fn a_new_page_with_a_feature_no_page_had_renders_everything() {
+    membership_scenario(
+        "membership: first footnote",
+        write_card_reader_vault,
+        |root| write(root, "work/noted.md", "---\ntitle: Noted\n---\n\nA claim.[^1]\n\n[^1]: Its source.\n"),
+        &["work/noted.md"],
+        true,
+        false,
+    );
+}
+
+/// The site's first `sidebar:` page: every page's `<html>` takes the sidebar
+/// layout class while any page asks for it.
+#[test]
+fn a_new_page_asking_for_the_sidebar_layout_renders_everything() {
+    membership_scenario(
+        "membership: first sidebar page",
+        write_card_reader_vault,
+        |root| write(root, "work/side.md", "---\ntitle: Side\nsidebar: work\n---\n\nA page.\n"),
+        &["work/side.md"],
+        true,
+        false,
+    );
+}
+
+/// `children_motion` is outside `PageFeatures` but gates `marquee.js`, which
+/// every page then links; the script's hash is in the asset key whether or
+/// not it is linked, so only the asset set moves.
+#[test]
+fn a_new_page_with_the_first_marquee_renders_everything() {
+    membership_scenario(
+        "membership: first marquee",
+        write_card_reader_vault,
+        |root| write(root, "work/strip.md", "---\ntitle: Strip\nchildren_motion: marquee\n---\n\nA page.\n"),
+        &["work/strip.md"],
+        true,
+        false,
+    );
+}
+
+#[test]
+fn a_new_page_with_the_first_subscribe_block_renders_everything() {
+    membership_scenario(
+        "membership: first subscribe block",
+        write_card_reader_vault,
+        |root| write(root, "work/letters.md", "---\ntitle: Letters\n---\n\nNews by email.\n\n:::subscribe\n:::\n"),
+        &["work/letters.md"],
+        true,
+        false,
+    );
+}
+
+// ---- random edit sequences --------------------------------------------------
+//
+// Each scenario above proves one edit on a fresh cache. A sequence also
+// proves what a build persists for the next one: digests written by a full
+// render are read by the scoped build after it. Every edit kind below moves
+// something another page reads (its title in a listing or nav, its date in a
+// dated rail, its terms, its place, a card's answer, membership, a site-wide
+// feature), so every cross-page reader is exercised. After each step the
+// incremental tree must be byte-identical to a from-scratch build of a copy
+// of the same source.
+
+/// The rich fixture plus the card readers: an `end` field, a grid cell and a
+/// folder card naming `work/`, a dangling link and a grid cell waiting for
+/// `work/arrival.md`.
+fn write_sequence_vault(root: &Path) {
+    write_card_reader_vault(root);
+    write_vault(root);
+    let config = std::fs::read_to_string(root.join(".moss/config.toml")).unwrap();
+    write(root, ".moss/config.toml", &format!("{config}\n[fields.next]\ntype = \"page\"\nplace = \"end\"\n"));
+    // `work/b.md` is named only in bodies, a grid cell and a folder card, so
+    // its removal is judged page by page; a page named in front matter
+    // renders everything when it goes.
+    write(root, "next-reader.md", "---\ntitle: Next Reader\nnext: \"[[alpha]]\"\n---\n\nA page whose end field names alpha.\n");
+    write(root, "linker.md", "---\ntitle: Linker\n---\n\nSee [[Arrival]] when it lands, and [[b]] meanwhile.\n");
+    write(root, "waiting-grid.md", "---\ntitle: Waiting Grid\n---\n\n:::grid\n[Arrival](/work/arrival/)\n+++\nA plain cell.\n:::\n");
+}
+
+#[derive(Debug, Clone)]
+enum SequenceEdit {
+    Body(usize),
+    Title(usize),
+    Date(usize),
+    Tags(usize, usize),
+    Place(usize),
+    Nav(usize),
+    Footnote(usize),
+    Sidebar(usize),
+    Retarget(usize),
+    Add(usize),
+    Delete(usize),
+    Rename(usize),
+}
+
+fn sequence_edit() -> impl proptest::strategy::Strategy<Value = SequenceEdit> {
+    use proptest::prelude::*;
+    let page = 0usize..64;
+    prop_oneof![
+        1 => page.clone().prop_map(SequenceEdit::Body),
+        1 => page.clone().prop_map(SequenceEdit::Title),
+        1 => page.clone().prop_map(SequenceEdit::Date),
+        1 => (page.clone(), 0usize..3).prop_map(|(p, t)| SequenceEdit::Tags(p, t)),
+        1 => page.clone().prop_map(SequenceEdit::Place),
+        1 => page.clone().prop_map(SequenceEdit::Nav),
+        1 => page.clone().prop_map(SequenceEdit::Footnote),
+        1 => page.clone().prop_map(SequenceEdit::Sidebar),
+        1 => page.clone().prop_map(SequenceEdit::Retarget),
+        2 => page.clone().prop_map(SequenceEdit::Add),
+        2 => page.clone().prop_map(SequenceEdit::Delete),
+        2 => page.prop_map(SequenceEdit::Rename),
+    ]
+}
+
+/// The markdown pages under `root`, outside `.moss/`, sorted.
+fn pages(root: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let rel = path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+            if rel.starts_with(".moss") {
+                continue;
+            }
+            if path.is_dir() {
+                stack.push(path);
+            } else if rel.ends_with(".md") {
+                out.push(rel);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Sets (or replaces) one front-matter key, dropping the indented lines of a
+/// block value it replaces.
+fn set_field(root: &Path, rel: &str, key: &str, value: &str) {
+    let text = std::fs::read_to_string(root.join(rel)).unwrap();
+    let Some(rest) = text.strip_prefix("---\n") else {
+        return write(root, rel, &format!("---\n{key}: {value}\n---\n\n{text}"));
+    };
+    let end = rest.find("\n---").map_or(0, |i| i + 1);
+    let (front, body) = rest.split_at(end);
+    let mut lines: Vec<String> = Vec::new();
+    let mut skipping = false;
+    for line in front.lines() {
+        if skipping && (line.starts_with(' ') || line.starts_with('-')) {
+            continue;
+        }
+        skipping = line.starts_with(&format!("{key}:"));
+        if !skipping {
+            lines.push(line.to_string());
+        }
+    }
+    lines.push(format!("{key}: {value}"));
+    write(root, rel, &format!("---\n{}\n{body}", lines.join("\n")));
+}
+
+fn field_of(root: &Path, rel: &str, key: &str) -> Option<String> {
+    let text = std::fs::read_to_string(root.join(rel)).ok()?;
+    let front = text.strip_prefix("---\n")?.split("\n---").next()?;
+    front.lines().find_map(|l| l.strip_prefix(&format!("{key}:")).map(|v| v.trim().to_string()))
+}
+
+/// Applies `edit` to the site at `root`; returns the trigger a watcher would
+/// send for it.
+fn apply_edit(root: &Path, step: usize, edit: &SequenceEdit) -> moss_build::build::BuildTrigger {
+    use moss_build::build::BuildTrigger;
+    let all = pages(root);
+    let pick = |i: usize| all[i % all.len()].clone();
+    let modified = |rel: &str| BuildTrigger::ContentOnly(vec![root.join(rel)]);
+    // Three in four deletes and renames take a page other pages list, link
+    // or show on a card; the rest take any page.
+    let named = |i: usize| {
+        let pool: Vec<&str> =
+            ["work/b.md", "work/other.md", "writings/alpha.md"].into_iter().filter(|rel| root.join(rel).exists()).collect();
+        if i % 4 != 0 && !pool.is_empty() { pool[i / 4 % pool.len()].to_string() } else { pick(i) }
+    };
+    match *edit {
+        SequenceEdit::Body(i) => {
+            let rel = pick(i);
+            let text = std::fs::read_to_string(root.join(&rel)).unwrap();
+            write(root, &rel, &format!("{text}\nA paragraph added at step {step}.\n"));
+            modified(&rel)
+        }
+        SequenceEdit::Title(i) => {
+            let rel = pick(i);
+            set_field(root, &rel, "title", &format!("Retitled {step}"));
+            modified(&rel)
+        }
+        SequenceEdit::Date(i) => {
+            let rel = pick(i);
+            set_field(root, &rel, "date", &format!("2026-0{}-1{}", 1 + step % 9, i % 10));
+            modified(&rel)
+        }
+        SequenceEdit::Tags(i, t) => {
+            let rel = pick(i);
+            set_field(root, &rel, "tags", ["[craft]", "[river, craft]", "[]"][t]);
+            modified(&rel)
+        }
+        SequenceEdit::Place(i) => {
+            let rel = pick(i);
+            let place = if field_of(root, &rel, "location").is_some_and(|v| !v.is_empty()) { "[]" } else { "[Riverside]" };
+            set_field(root, &rel, "location", place);
+            modified(&rel)
+        }
+        SequenceEdit::Nav(i) => {
+            let rel = pick(i);
+            set_field(root, &rel, "nav", "true");
+            set_field(root, &rel, "weight", &format!("{}", 5 + step));
+            modified(&rel)
+        }
+        SequenceEdit::Footnote(i) => {
+            let rel = pick(i);
+            let text = std::fs::read_to_string(root.join(&rel)).unwrap();
+            write(root, &rel, &format!("{text}\nA claim.[^s{step}]\n\n[^s{step}]: Its source.\n"));
+            modified(&rel)
+        }
+        SequenceEdit::Sidebar(i) => {
+            let rel = pick(i);
+            set_field(root, &rel, "sidebar", "writings");
+            modified(&rel)
+        }
+        SequenceEdit::Retarget(i) => {
+            // Each card reader toggles between the two `work/` pages.
+            let (rel, from, to) = if i % 2 == 0 {
+                ("grid-reader.md", "/work/b/", "/work/other/")
+            } else {
+                ("next-reader.md", "[[alpha]]", "[[beta]]")
+            };
+            let Ok(text) = std::fs::read_to_string(root.join(rel)) else { return apply_edit(root, step, &SequenceEdit::Body(i)) };
+            let edited = if text.contains(from) { text.replacen(from, to, 1) } else { text.replacen(to, from, 1) };
+            write(root, rel, &edited);
+            modified(rel)
+        }
+        SequenceEdit::Add(i) => {
+            // Arrival satisfies a dangling link and a waiting grid cell; `aa`
+            // takes `work/`'s first-by-name election; the others enter a
+            // dated listing, a series and the other language.
+            let pool = ["work/arrival.md", "work/aa.md", "writings/epsilon.md", "series/part-4.md", "zh-hans/contact.md"];
+            let mut rel = pool[i % pool.len()].to_string();
+            while root.join(&rel).exists() {
+                rel = rel.replace(".md", "-x.md");
+            }
+            // Some carry what every page's shell reads: a sidebar, or a
+            // footnote (never both, so neither hides the other).
+            let (field, note) = match i % 3 {
+                0 => ("sidebar: writings\n", ""),
+                1 => ("", "[^1]\n\n[^1]: A note."),
+                _ => ("", ""),
+            };
+            write(root, &rel, &format!("---\ntitle: Added {step}\ndate: 2026-03-0{}\n{field}---\n\nAn added page.{note}\n", 1 + step % 9));
+            BuildTrigger::Structural(vec![root.join(&rel)])
+        }
+        SequenceEdit::Delete(i) => {
+            let rel = named(i);
+            std::fs::remove_file(root.join(&rel)).unwrap();
+            BuildTrigger::Structural(vec![root.join(&rel)])
+        }
+        SequenceEdit::Rename(i) => {
+            let rel = named(i);
+            let to = rel.replace(".md", &format!("-r{step}.md"));
+            std::fs::rename(root.join(&rel), root.join(&to)).unwrap();
+            BuildTrigger::Structural(vec![root.join(&rel), root.join(&to)])
+        }
+    }
+}
+
+/// Copies the site's sources (every file outside `.moss/`, and `.moss/`'s own
+/// top-level settings) with their mtimes, so a from-scratch build sees exactly
+/// what the incremental one did.
+fn copy_sources(from: &Path, to: &Path) {
+    let mut stack = vec![from.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let rel = path.strip_prefix(from).unwrap();
+            let in_moss = rel.starts_with(".moss");
+            if path.is_dir() {
+                if !in_moss {
+                    stack.push(path);
+                } else if rel == Path::new(".moss") {
+                    for setting in std::fs::read_dir(&path).unwrap() {
+                        let setting = setting.unwrap().path();
+                        if setting.is_file() {
+                            copy_with_mtime(&setting, &to.join(setting.strip_prefix(from).unwrap()));
+                        }
+                    }
+                }
+            } else {
+                copy_with_mtime(&path, &to.join(rel));
+            }
+        }
+    }
+}
+
+fn copy_with_mtime(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+    std::fs::copy(from, to).unwrap();
+    let mtime = std::fs::metadata(from).unwrap().modified().unwrap();
+    std::fs::File::options().write(true).open(to).unwrap().set_modified(mtime).unwrap();
+}
+
+fn run_sequence(edits: &[SequenceEdit]) {
+    let _guard = SEQUENTIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let tmp = tempfile::tempdir().unwrap();
+    // Both sites sit in a folder of the same name: a site whose home page
+    // was renamed away takes its folder's name.
+    let root = tmp.path().join("incremental").join("site");
+    write_sequence_vault(&root);
+    let baseline = build(&root.to_string_lossy(), moss_build::build::BuildTrigger::Full);
+    assert!(baseline.is_ok(), "baseline: {baseline:?}");
+    for (step, edit) in edits.iter().enumerate() {
+        let trigger = apply_edit(&root, step, edit);
+        let result = build(&root.to_string_lossy(), trigger);
+        assert!(result.is_ok(), "step {step} {edit:?}: {result:?}");
+        let full_root = tmp.path().join(format!("full-{step}")).join("site");
+        copy_sources(&root, &full_root);
+        let full = build(&full_root.to_string_lossy(), moss_build::build::BuildTrigger::Full);
+        assert!(full.is_ok(), "step {step} full: {full:?}");
+        assert_trees_byte_identical(&format!("step {step} of {edits:?}"), &root, &full_root);
+    }
+}
+
+proptest::proptest! {
+    // Each case is a handful of whole-site builds, so the default case count
+    // is small; `PROPTEST_CASES` raises it for a longer search.
+    #![proptest_config(proptest::test_runner::Config {
+        cases: std::env::var("PROPTEST_CASES").ok().and_then(|v| v.parse().ok()).unwrap_or(12),
+        max_shrink_iters: 32,
+        failure_persistence: None,
+        ..proptest::test_runner::Config::default()
+    })]
+    #[test]
+    fn any_sequence_of_edits_serves_what_a_full_build_serves(edits in proptest::collection::vec(sequence_edit(), 1..=4)) {
+        run_sequence(&edits);
+    }
+}
+

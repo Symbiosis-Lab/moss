@@ -126,6 +126,7 @@ impl Harness {
                 render_id: self.render_id.as_deref(),
                 sealed_render_id: self.sealed_render_id.as_deref(),
                 graph: None,
+                site_assets: &crate::build::types::SiteAssets::of(documents, None, Default::default()),
             },
         )
     }
@@ -270,7 +271,7 @@ fn generated_page_becoming_authored_forces_a_structural_full_render() {
     };
     assert_full(&h.run(&[generated]), FullCause::ColdCache);
     let verdict = h.run(&[authored]);
-    assert_full(&verdict, FullCause::PathSetMoved);
+    assert_full(&verdict, FullCause::FolderPageMoved);
     match verdict.basis() {
         VerdictBasis::Full(_, Some(witness)) => {
             assert!(witness.contains("writings/index.html"), "{witness:?}");
@@ -367,6 +368,27 @@ fn a_lede_edit_on_an_undescribed_child_re_renders_its_listing_host() {
 
 // ---- the named escape hatches -------------------------------------------
 
+/// An article entering renders itself and the listing it joins, and carries
+/// the rest; one leaving renders the listing it left.
+#[test]
+fn an_article_entering_or_leaving_renders_only_what_lists_it() {
+    let h = Harness::new();
+    h.run(&vault());
+    let mut grown = vault();
+    let gamma = doc("writings/gamma/index.html", PageKind::Article, "Gamma lede.", Some("G"));
+    grown.push(ParsedDocument { source_path: Some("writings/gamma.md".into()), ..gamma });
+    let verdict = h.run(&grown);
+    assert!(matches!(verdict.basis(), VerdictBasis::Incremental { .. }), "{:?}", verdict.basis());
+    assert!(!verdict.may_skip("writings/gamma.md"), "the new page renders");
+    assert!(!verdict.may_skip("writings/index.md"), "the listing it joins renders");
+    assert!(verdict.may_skip("writings/alpha/index.md"));
+
+    let verdict = h.run(&vault());
+    assert!(matches!(verdict.basis(), VerdictBasis::Incremental { .. }), "{:?}", verdict.basis());
+    assert!(!verdict.may_skip("writings/index.md"), "the listing it left renders");
+    assert!(verdict.may_skip("writings/beta/index.md"));
+}
+
 #[test]
 fn each_full_render_says_why() {
     // SkipDisabled — the total off switch.
@@ -375,12 +397,12 @@ fn each_full_render_says_why() {
     h.skip = false;
     assert_full(&h.run(&vault()), FullCause::SkipDisabled);
 
-    // PathSetMoved — a page appeared.
+    // FolderPageMoved — a folder's page appeared.
     let h = Harness::new();
     h.run(&vault());
     let mut grown = vault();
-    grown.push(doc("writings/gamma/index.html", PageKind::Article, "g", Some("G")));
-    assert_full(&h.run(&grown), FullCause::PathSetMoved);
+    grown.push(doc("notes/index.html", PageKind::Folder, "n", Some("N")));
+    assert_full(&h.run(&grown), FullCause::FolderPageMoved);
 
     // SurfaceChanged — a cross-page-visible field moved by an UNCLASSIFIED
     // field (`children_source`, which `field_is_classified` does not name).

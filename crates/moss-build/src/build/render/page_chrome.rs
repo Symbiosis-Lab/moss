@@ -17,6 +17,12 @@ use std::path::Path;
 
 use super::config::{resolve_data_attr, resolve_comments_attr};
 
+/// Every page's `<html>` takes the sidebar layout class while any page asks
+/// for a sidebar.
+pub(super) fn has_sidebar_layout(documents: &[ParsedDocument]) -> bool {
+    documents.iter().any(|d| d.sidebar.is_some())
+}
+
 pub(super) enum PageFamily {
     Authored,
     GeneratedFolder,

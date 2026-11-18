@@ -1455,10 +1455,10 @@ pub fn generate_blocking_content_for_build(
     //
     // Which optional partials this build ships is a site-level fact — the
     // union of every page's parse-time features with the resolved config.
-    // `site_assets` is NOT what invalidates the incremental render skip: it
-    // changes the sheet's *contents*, and `css_version` — a hash of those
-    // contents, folded into `asset_versions` below — is what the skip reads.
-    // See the note on `SiteAssets` itself.
+    // A sheet's *contents* reach the render skip through `css_version`, a hash
+    // of them folded into `asset_versions` below. Which sheets and scripts the
+    // shell links reaches it through the verdict's site-features digest, which
+    // hashes `site_assets` whole. See the note on `SiteAssets` itself.
     //
     // Whether this build will produce media collection pages. Derived here,
     // from the same pure fold the media loop uses 1,700 lines below, because
@@ -1658,9 +1658,7 @@ pub fn generate_blocking_content_for_build(
     };
 
 
-    // Compute site-wide sidebar layout flag: true when ANY document has `sidebar` set.
-    // Used by templates to adjust content width (Task 3).
-    let has_sidebar_layout = documents.iter().any(|d| d.sidebar.is_some());
+    let has_sidebar_layout = super::page_chrome::has_sidebar_layout(&documents);
 
     // Term derivation already ran above, before `expand_markers_in_documents`
     // — see that call site for why. `term_index` is in scope from here on;
@@ -1717,6 +1715,7 @@ pub fn generate_blocking_content_for_build(
             render_id: pending.render_id(),
             sealed_render_id: previous_hashes.render_id.as_deref(),
             graph: Some(&content_graph),
+            site_assets: &site_assets,
         },
     );
     // The carry machinery's own price, and on a real vault the largest single

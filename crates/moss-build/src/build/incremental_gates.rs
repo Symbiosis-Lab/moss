@@ -97,8 +97,8 @@ impl LastSeal {
 /// The trigger is the caller's fact; this is what the gates make of it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChangeProof {
-    /// The watcher's batch, and whether it created, removed or renamed a file.
-    Events { paths: Vec<PathBuf>, structural: bool },
+    /// The watcher's batch, an edit or a create, remove or rename alike.
+    Events { paths: Vec<PathBuf> },
     /// The last sealed manifest proves that nothing but markdown pages changed
     /// since; see [`ChangeProof::from_last_seal`].
     Manifest,
@@ -118,8 +118,7 @@ impl ChangeProof {
         }
         match trigger {
             BuildTrigger::Full => Self::None,
-            BuildTrigger::Structural(paths) => Self::Events { paths: paths.clone(), structural: true },
-            BuildTrigger::ContentOnly(paths) => Self::Events { paths: paths.clone(), structural: false },
+            BuildTrigger::Structural(paths) | BuildTrigger::ContentOnly(paths) => Self::Events { paths: paths.clone() },
             // A seal whose media settled after its render leaves pages a later
             // build renders differently; only the re-render those media owe may
             // prove from it.
@@ -139,10 +138,13 @@ impl ChangeProof {
     ///    `None` under it). The kill switch ships with the first skip, not
     ///    after it — it is the bisect tool for the first stale-page report.
     ///    Any value counts.
-    /// 2. The batch is content-only. Deploy and the other entry points that
-    ///    pass `Full` render everything. A `Structural` batch
-    ///    (create/remove/rename) is deliberately treated like `Full`: it moves
-    ///    pages in and out of listings, nav and folder indexes.
+    /// 2. The batch is the watcher's. Deploy and the other entry points that
+    ///    pass `Full` render everything. A `Structural` batch (create, remove,
+    ///    rename) is admitted: the parse re-asks every page's links, and the
+    ///    render verdict judges a page entering or leaving by the digests of
+    ///    what it reaches (listings, nav, folder cards, card answers), with a
+    ///    folder, home or generated page still rendering everything
+    ///    (`FullCause::FolderPageMoved`).
     /// 3. Every changed path is markdown. A `.moss/config.toml` or `.css`
     ///    edit also arrives as a plain modify, but it moves build-globals
     ///    (`css_version`, `site_url`, layout config) that are baked into
@@ -168,9 +170,9 @@ impl ChangeProof {
     /// only markdown changed and that every build-global input held.
     pub fn allows_incremental_skip(&self) -> bool {
         match self {
-            Self::Events { paths, structural: false } => !paths.is_empty() && paths.iter().all(|p| is_markdown_ext(p)),
+            Self::Events { paths, .. } => !paths.is_empty() && paths.iter().all(|p| is_markdown_ext(p)),
             Self::Manifest | Self::ImagesSettled => true,
-            Self::Events { structural: true, .. } | Self::None => false,
+            Self::None => false,
         }
     }
 
@@ -189,12 +191,7 @@ impl ChangeProof {
     /// trigger carried it. Excluding `Structural` here therefore protected
     /// nothing that was not already protected, while charging a full reparse
     /// — 6.5 s of an 11.9 s rebuild on a 226-page vault — to every batch that
-    /// was structural for a reason no markdown parse can see. The render skip
-    /// above still refuses `Structural`, and must: listings, nav and folder
-    /// indexes move on a create without any page's fingerprint moving, and no
-    /// fingerprint covers that. The render verdict's page-set comparison
-    /// (`FullCause::PathSetMoved`) is the second guard: a batch the watcher
-    /// read as content-only that did add or drop a page still renders in full.
+    /// was structural for a reason no markdown parse can see.
     ///
     /// Condition 3 is NARROWER: instead of "every changed path is markdown",
     /// it is "every changed path is markdown OR **parse-irrelevant**".
