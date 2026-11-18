@@ -23,6 +23,7 @@ mod edit_service_test;
 mod fence_warnings_test;
 mod field_end_test;
 mod folder_icon_test;
+mod folder_trust_cli_test;
 mod footer_sections_test;
 mod guide_list_test;
 mod heading_attributes_test;

@@ -1,8 +1,9 @@
-//! `moss plugin install <id> [<folder>]`: put a plugin into a site and allow it.
+//! `moss plugin install <id> [<folder>]`: put a plugin into a site.
 //!
-//! Typing the command is the consent. The approval is recorded in per-user app
-//! data, the same store the app reads, never in the site folder: trust belongs
-//! to the user, and a folder that travels must not carry it.
+//! The command records no trust. A folder's plugins run when the person trusts
+//! the folder in the app, whose answer lives in per-user app data and never in
+//! the site folder, or when a build is run with `--allow-plugins`. The line it
+//! prints says when the folder is not trusted.
 //!
 //! The catalog is fetched on every install, as a package manager does, so a
 //! version withdrawn since the last look is never installed. A catalog that
@@ -71,12 +72,11 @@ pub fn install(id: &str, folder: &Path, origin: &str, keys: &[&str]) -> Result<I
         return Err(format!("{} is not a moss site root (no site .moss folder here)", folder.display()));
     }
     let site = folder.to_string_lossy().into_owned();
-    // Without app data an approval cannot be kept, and saying "approved" for
-    // one that was not would be false.
-    let app_data = crate::infra::app_data::app_data_dir_early()
-        .ok_or("no app-data directory to keep the approval in")?;
+    let app_data = crate::infra::app_data::app_data_dir_early().ok_or("no app-data directory to keep the plugin catalog in")?;
 
-    enforce::install(Some(&app_data));
+    // Reads the folder answers and records none: the command installs code,
+    // and only the person, in the app, trusts a folder to run it.
+    enforce::install_headless(Some(&app_data), false);
     let refreshed = fetch::refresh_from(&app_data, origin, keys);
     let unreached = match &refreshed.index {
         fetch::RefreshOutcome::Updated => None,
@@ -96,12 +96,13 @@ pub fn install(id: &str, folder: &Path, origin: &str, keys: &[&str]) -> Result<I
     })?;
 
     let dir = crate::plugins::plugin_dir(&site, id);
-    enforce::approve(&dir)?;
     let version = crate::plugins::bundled::read_installed_manifest(&dir).map(|m| m.version).unwrap_or_default();
-    Ok(Installed {
-        notice,
-        line: format!("Installed {id} {version} into {site} and approved it for this user on this machine"),
-    })
+    let line = if enforce::is_trusted(&folder) {
+        format!("Installed {id} {version} into {site}")
+    } else {
+        format!("Installed {id} {version} into {site}. This folder is not trusted, so its plugins stay off until you trust it in the moss app or build with --allow-plugins")
+    };
+    Ok(Installed { notice, line })
 }
 
 fn age(fetched_at: Option<&str>) -> String {

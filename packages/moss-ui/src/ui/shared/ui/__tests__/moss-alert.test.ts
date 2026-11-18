@@ -50,6 +50,15 @@ describe("mossConfirm", () => {
     clickAction("cancel");
   });
 
+  it("shows a body line under the question only when one is given", () => {
+    void mossConfirm("Trust “Notes”?", { confirmLabel: "Trust", body: "Its plugins run code." });
+    expect(document.querySelector(".moss-modal-body")?.textContent).toBe("Its plugins run code.");
+    clickAction("cancel");
+    void mossConfirm("Delete “Notes”?", { confirmLabel: "Delete" });
+    expect(document.querySelector(".moss-modal-body")).toBeNull();
+    clickAction("cancel");
+  });
+
   it("uses the danger button style only when destructive is set", () => {
     void mossConfirm("Discard changes?", { confirmLabel: "Discard", destructive: true });
     expect(document.querySelector('[data-action="confirm"]')!.className).toContain("moss-btn-danger");

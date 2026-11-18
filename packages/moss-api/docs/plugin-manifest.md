@@ -146,7 +146,7 @@ or looked at the file and chose not to, which is a result and not an error:
 
 **The text is untrusted.** It comes out of a file someone else wrote, so moss escapes raw HTML and its own authoring syntax (`[[links]]`, `$math$`, `{shortcodes}`, `#tags`) in it. Return plain markdown: headings, lists, tables, emphasis and links survive; markup meant for moss does not, and derived text is never scanned for embeds.
 
-**The author's side.** The user has to allow the plugin before moss runs it, like any plugin, and a folder-borne plugin needs `--allow-plugins` on the command line. `moss import <folder> --allow-plugins` writes a stub beside each file in the folder and records the choice; `moss import --status` reports every folder, how many files and stubs, and the files the binary skipped; `moss expand <page>` writes embeds out as text so the page can be kept without the source file.
+**The author's side.** The user has to trust the folder before moss runs it, like any plugin, and on the command line it needs `--allow-plugins`. `moss import <folder> --allow-plugins` writes a stub beside each file in the folder and records the choice; `moss import --status` reports every folder, how many files and stubs, and the files the binary skipped; `moss expand <page>` writes embeds out as text so the page can be kept without the source file.
 
 ## Configuration
 

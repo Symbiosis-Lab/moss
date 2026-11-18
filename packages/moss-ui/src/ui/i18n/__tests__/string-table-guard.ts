@@ -86,8 +86,6 @@ const GERMAN_IDENTICAL = [
   // sample data
   'subscribers.emails_placeholder',
   // pure interpolation or punctuation: no translatable text
-  'trust.ability_line',
-  'trust.changed_version',
   'channels.verb_step_join',
   'onboard.starter.status_of',
   'audience.breakdown_segment',

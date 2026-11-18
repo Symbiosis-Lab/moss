@@ -9,8 +9,8 @@
 //!
 //! The badge in the catalog, the refusal at install and the refusal at the
 //! loader all end up here, so no two of them can disagree about whether a
-//! plugin may run or about why not. The user's consent record
-//! ([`super::approval`]) is held here too, for the same reason.
+//! plugin may run or about why not. The user's answer for each folder
+//! ([`super::trust`]) is held here too, for the same reason.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -18,26 +18,60 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock, RwLock};
 use std::time::SystemTime;
 
-use crate::plugins::contributions::abilities::{abilities, Ability};
 use crate::plugins::types::PluginManifest;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use moss_core::untrusted_text::{bounded, MAX_NAME, MAX_SENTENCE};
 
-use super::approval::{self, Approvals};
+use super::trust::{self, TrustRecord};
 use super::cache::{self, CachedRegistry, RevocationVerdict};
 
 static SNAPSHOT: RwLock<Option<CachedRegistry>> = RwLock::new(None);
 
-/// The approvals in force and the directory they were read from.
+/// The folder answers in force.
 ///
-/// `None`: consent is not enforced — every test binary, and an app with no
-/// app-data directory, where nothing is refused for want of it (the same
-/// posture as a kill list moss never fetched). `Some((None, _))`: enforced
-/// with nothing on disk — a headless build on a box with no app data, where
-/// nothing was ever approved because nothing was ever asked.
-/// `Some((Some(dir), _))`: the app's record, read from and written to `dir`.
-static CONSENT: RwLock<Option<(Option<PathBuf>, Approvals)>> = RwLock::new(None);
+/// `None`: trust is not enforced. That is every test binary that installs
+/// none, and an app with no app-data directory, where nothing is refused for
+/// want of an answer (the same posture as a kill list moss never fetched).
+static TRUST: RwLock<Option<Trust>> = RwLock::new(None);
+
+struct Trust {
+    /// Where answers are written. `None` for a headless build, which reads
+    /// the app's answers and never writes them.
+    writes_to: Option<PathBuf>,
+    record: TrustRecord,
+    /// The per-plugin approvals an earlier moss kept, and what they settled
+    /// for each folder asked about since.
+    legacy: HashMap<PathBuf, String>,
+    settled: Mutex<HashMap<PathBuf, bool>>,
+}
+
+impl Trust {
+    fn read(root: Option<&Path>, writes: bool) -> Self {
+        Trust {
+            writes_to: root.filter(|_| writes).map(Path::to_path_buf),
+            record: root.map(trust::load).unwrap_or_default(),
+            legacy: root.map(|root| trust::load_legacy(root, &std::env::temp_dir())).unwrap_or_default(),
+            settled: Mutex::default(),
+        }
+    }
+
+    /// The recorded answer; for a folder never asked, trusted when the
+    /// earlier approvals covered every plugin in it at its current code.
+    fn answer(&self, folder: &Path) -> Option<bool> {
+        self.record.answer(folder).or_else(|| self.settled_by_legacy(folder).then_some(true))
+    }
+
+    fn settled_by_legacy(&self, folder: &Path) -> bool {
+        if self.legacy.is_empty() {
+            return false;
+        }
+        let mut settled = self.settled.lock().unwrap_or_else(|e| e.into_inner());
+        *settled
+            .entry(folder.to_path_buf())
+            .or_insert_with(|| trust::legacy_covers(&self.legacy, &carried(folder)))
+    }
+}
 
 /// What [`verdict`] learned about the code in a directory, kept until that
 /// code changes.
@@ -82,13 +116,20 @@ const KILL_LIST_UNREADABLE: &str =
 /// network round-trips to learn the same thing.
 static REFRESHING: AtomicBool = AtomicBool::new(false);
 
-/// Read the cache, publish it, and become the verdict the loader asks.
+/// Read the cache under `registry_dir` and the folder answers under
+/// `trust_root`, publish both, and become the verdict the loader asks. The
+/// app writes its answers under `trust_root`.
 ///
-/// Synchronous and cheap: two small files off local disk. It must finish
+/// Synchronous and cheap: three small files off local disk. It must finish
 /// before any plugin can load, which is why it is not deferred to the refresh
 /// thread — an offline launch still enforces the last kill list moss saw.
-pub fn install(app_data_dir: Option<&Path>) {
-    put_in_force(app_data_dir);
+pub fn install(registry_dir: Option<&Path>, trust_root: Option<&Path>) {
+    if let Some(dir) = registry_dir {
+        publish(cache::load(dir));
+    }
+    if trust_root.is_some() {
+        *TRUST.write().unwrap_or_else(|e| e.into_inner()) = Some(Trust::read(trust_root, true));
+    }
     // Installed even with no cache to read. Only the kill list needs app data;
     // the version floor compares two strings this binary already knows, and
     // tying it to a directory that may not exist would switch it off for a
@@ -96,26 +137,24 @@ pub fn install(app_data_dir: Option<&Path>) {
     crate::plugins::admission::install_check(refusal);
 }
 
-/// The headless build's verdict. Reads the same cached kill list
-/// and the same approvals the app wrote — never fetches — and installs one of
-/// two checks. Without `--allow-plugins`, the full verdict: a plugin the app
-/// has not been told to allow is refused, with the two ways out in the
-/// sentence. With it, the command itself is the consent for whatever the
-/// folder carries, and only the two grounds no user may waive remain — a
-/// withdrawal and a version floor.
+/// The headless build's verdict. Reads the cached kill list and the folder
+/// answers the app wrote under `app_data` — never fetches, never writes — and
+/// installs one of two checks. Without `--allow-plugins`, the full verdict: a
+/// plugin in a folder the app was not told to trust is refused, with the two
+/// ways out in the sentence. With it, the command itself is the consent for
+/// whatever the folder carries, and only the two grounds no user may waive
+/// remain — a withdrawal and a version floor.
 ///
 /// Installed only when plugins are going to run; a `--no-plugins` build has
 /// nothing to admit, and `install_check` is set-once for the process.
-pub fn install_headless(allow_plugins: bool) {
-    let dir = crate::infra::app_data::app_data_dir_early();
-    put_in_force(dir.as_deref());
-    if dir.is_none() {
-        // No app data means no approvals were ever recorded, not that
-        // everything is approved: with `CONSENT` left `None` this build would
-        // behave as if the flag were passed, silently. Seed an empty record
-        // instead, so headless is always the enforced state.
-        *CONSENT.write().unwrap_or_else(|e| e.into_inner()) = Some((None, Approvals::default()));
+pub fn install_headless(app_data: Option<&Path>, allow_plugins: bool) {
+    if let Some(dir) = app_data {
+        publish(cache::load(dir));
     }
+    // With no app data nothing was ever trusted, which is not the same as
+    // trust going unenforced: the record is installed empty, so headless is
+    // always the enforced state.
+    *TRUST.write().unwrap_or_else(|e| e.into_inner()) = Some(Trust::read(app_data, false));
     crate::plugins::admission::install_check(if allow_plugins {
         refusal_without_consent
     } else {
@@ -123,29 +162,20 @@ pub fn install_headless(allow_plugins: bool) {
     });
 }
 
-/// Read the cache and the approvals under `app_data_dir` and publish both.
-fn put_in_force(app_data_dir: Option<&Path>) {
-    if let Some(dir) = app_data_dir {
-        publish(cache::load(dir));
-        *CONSENT.write().unwrap_or_else(|e| e.into_inner()) =
-            Some((Some(dir.to_path_buf()), approval::load(dir)));
-    }
-}
-
 /// Install the cached verdict, then refresh it off-thread.
 ///
 /// Called once at setup. The refresh is a separate thread rather than an async
 /// task because [`super::fetch`] is blocking and a slow or hostile origin must
 /// not hold up the first window.
-pub fn install_and_refresh() {
+pub fn install_and_refresh(trust_root: Option<&Path>) {
     let dir = crate::infra::app_data::app_data_dir_early();
     if dir.is_none() {
         log::warn!(
             target: "registry",
-            "no app-data directory: the plugin kill list and the user's plugin approvals cannot be read, so no plugin will be refused as withdrawn or as unapproved"
+            "no app-data directory: the plugin kill list cannot be read, so no plugin will be refused as withdrawn"
         );
     }
-    install(dir.as_deref());
+    install(dir.as_deref(), trust_root);
     refresh_in_background();
 }
 
@@ -228,12 +258,12 @@ pub fn publish(cache: CachedRegistry) {
 /// Why a plugin will not run, and which of the three reasons it is.
 ///
 /// One record rather than three `Option` fields side by side. The precedence
-/// — a withdrawal outranks a version floor, which outranks missing consent —
+/// — a withdrawal outranks a version floor, which outranks an untrusted folder —
 /// then exists once, in [`verdict`], instead of being re-derived by every
 /// screen that renders it; and the state no reader knows how to draw, two
 /// reasons set at once, cannot be built. The kind is kept because the
 /// remedies differ: a withdrawal is permanent and the plugin must go, a floor
-/// is met by updating moss, and consent is one click on the tile.
+/// is met by updating moss, and trust is the folder's answer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Refusal {
@@ -247,12 +277,12 @@ pub enum Refusal {
     /// prose here printed it twice — once in English from here, once inside
     /// the translated frame that already said the same thing.
     Incompatible { needs: String, host: String },
-    /// Neither moss nor the user put these bytes here: they came with the
-    /// folder, or were edited after they were allowed. Opening someone else's
-    /// folder must not run their code before a single screen is shown, so
-    /// the plugin waits for the user to allow it — the remedy is a click, not
-    /// an update or a removal, which is why it is its own kind.
-    Unapproved,
+    /// moss did not ship these bytes and the user has not trusted the folder
+    /// they are in. Opening someone else's folder must not run their code
+    /// before a single screen is shown, so the folder's plugins wait for its
+    /// answer — the remedy is trusting the folder, not an update or a
+    /// removal, which is why it is its own kind.
+    Untrusted,
     /// The plugin's native program is not published for this computer.
     /// Platform keys rather than a sentence, so the screen words it in the
     /// locale; [`Refusal::sentence`] is the English one-liner.
@@ -281,9 +311,7 @@ impl Refusal {
             Refusal::Incompatible { needs, host } => {
                 format!("{name} {version} needs moss {needs} or newer, and this is moss {host}")
             }
-            Refusal::Unapproved => {
-                format!("{name} {version} came with this folder and has not been allowed to run here")
-            }
+            Refusal::Untrusted => format!("{name} {version} is off until you trust this folder"),
             Refusal::Unavailable { platforms } => {
                 crate::plugins::contributions::platform::sentence(&name, platforms)
             }
@@ -300,46 +328,46 @@ impl Refusal {
 ///
 /// What vouches for the plugin decides what is asked. Bytes moss shipped are
 /// vouched for by the notarized binary they arrived in, so they are neither
-/// held to a floor nor asked for consent; anything else needs the registry's
-/// word that it is not withdrawn, a floor this moss meets, and the user's.
+/// held to a floor nor wait for the folder's answer; anything else needs the
+/// registry's word that it is not withdrawn, a floor this moss meets, and a
+/// folder the user trusts.
 pub fn verdict(manifest: &PluginManifest, plugin_dir: &Path) -> Option<Refusal> {
     verdict_when(manifest, plugin_dir, false)
 }
 
 /// [`verdict`] with consent already given (`--allow-plugins`): the
-/// same two withholding grounds, and the consent step skipped.
+/// same two withholding grounds, and the folder's answer not asked.
 fn verdict_when(manifest: &PluginManifest, plugin_dir: &Path, consent_given: bool) -> Option<Refusal> {
     let shipped = code_of(manifest, plugin_dir).is_some_and(|code| code.shipped);
     if let Some(refusal) = withheld(manifest, shipped) {
         return Some(refusal);
     }
-    (!consent_given && !vouched_for(manifest, plugin_dir)).then_some(Refusal::Unapproved)
+    (!consent_given && !vouched_for(manifest, plugin_dir)).then_some(Refusal::Untrusted)
 }
 
-/// Does anything vouch for the code now in `plugin_dir` — did moss ship these
-/// exact bytes, or has the user allowed them?
+/// Does anything vouch for the code now in `plugin_dir`: did moss ship these
+/// exact bytes, or does the user trust the folder they are in?
 ///
-/// The consent half of [`verdict`] — that one returns `Unapproved` exactly
-/// when nothing does, so the rule lives here and not in both.
+/// The trust half of [`verdict`] — that one returns `Untrusted` exactly when
+/// nothing does, so the rule lives here and not in both.
 ///
 /// Asked on its own for a row's IDENTITY, which is not the same question as
-/// whether the plugin may run. Catalog rows merge by id, so a
-/// folder that carries `.moss/plugins/github/` wears the name, description and
-/// origin moss holds for `github` over whatever bytes are actually there; the
-/// row is only honest about them once nothing vouches for them. Asked
-/// separately from [`verdict`] because that one answers with the refusal of
-/// highest precedence: a withdrawal or a version floor outranks missing
-/// consent, so a refused row can still be code nobody vouched for.
+/// whether the plugin may run. Catalog rows merge by id, so a folder that
+/// carries `.moss/plugins/github/` wears the name, description and origin
+/// moss holds for `github` over whatever bytes are actually there; the row is
+/// only honest about them once nothing vouches for them. Asked separately
+/// from [`verdict`] because that one answers with the refusal of highest
+/// precedence: a withdrawal or a version floor outranks an untrusted folder,
+/// so a refused row can still be code nobody vouched for.
 pub fn vouched_for(manifest: &PluginManifest, plugin_dir: &Path) -> bool {
-    let code = code_of(manifest, plugin_dir);
-    code.as_ref().is_some_and(|code| code.shipped)
-        || approved(plugin_dir, code.as_ref().map(|code| code.hash.as_str()))
+    code_of(manifest, plugin_dir).is_some_and(|code| code.shipped)
+        || folder_of(plugin_dir).is_some_and(|folder| is_trusted(&folder))
 }
 
 /// Are these moss's own bytes: shipped in this binary, or exactly the code
 /// moss's registry lists for this id? What a host call made on the site's
-/// behalf asks, since a user's consent to run a plugin is not consent to sign
-/// for it.
+/// behalf asks, since trusting a folder to run its plugins is not consent to
+/// sign for them.
 pub fn is_moss_own(manifest: &PluginManifest, plugin_dir: &Path) -> bool {
     code_of(manifest, plugin_dir).is_some_and(|code| code.shipped)
         || matches!(registry_status(manifest, plugin_dir), RegistryStatus::ListedExact { .. })
@@ -348,7 +376,7 @@ pub fn is_moss_own(manifest: &PluginManifest, plugin_dir: &Path) -> bool {
 /// The two grounds that refuse a plugin whatever the user has said —
 /// withdrawn, or built for a newer moss. [`verdict`] asks them first; an
 /// install asks them alone, about the manifest that came out of the archive,
-/// since nothing can be approved before it exists.
+/// since nothing on disk can be trusted before it exists.
 ///
 /// `shipped` is whether the bytes are the binary's own. Those are exempt from
 /// the floor, and from the unreadable-kill-list refusal, because the binary
@@ -379,12 +407,12 @@ pub fn refusal(manifest: &PluginManifest, plugin_dir: &Path) -> Option<String> {
     verdict(manifest, plugin_dir).map(|refusal| refusal.sentence(manifest))
 }
 
-/// [`refusal`] for a build with no window: the consent refusal names its two
-/// remedies, since there is no tile to click.
+/// [`refusal`] for a build with no window: the trust refusal names its two
+/// remedies, since there is no question to answer.
 fn refusal_headless(manifest: &PluginManifest, plugin_dir: &Path) -> Option<String> {
     verdict(manifest, plugin_dir).map(|refusal| match refusal {
-        Refusal::Unapproved => format!(
-            "{}; pass --allow-plugins to run what this folder carries, or open the folder in the moss app and allow it there",
+        Refusal::Untrusted => format!(
+            "{}; pass --allow-plugins to run what this folder carries, or open the folder in the moss app and trust it",
             refusal.sentence(manifest)
         ),
         other => other.sentence(manifest),
@@ -430,86 +458,74 @@ fn code_of(manifest: &PluginManifest, plugin_dir: &Path) -> Option<Code> {
     code
 }
 
-/// Whether the user has allowed exactly the code now in `plugin_dir`.
+/// The folder a plugin directory belongs to: the one that holds
+/// `.moss/plugins/<id>`. `None` for a directory of any other shape, which no
+/// folder answer covers.
+pub fn folder_of(plugin_dir: &Path) -> Option<PathBuf> {
+    let plugins = plugin_dir.parent()?;
+    let moss = plugins.parent()?;
+    (plugins.file_name()? == "plugins" && moss.file_name()? == ".moss").then(|| moss.parent().map(Path::to_path_buf))?
+}
+
+/// Whether the user trusts `folder`, or nothing enforces trust.
 ///
-/// Keyed by the canonical directory, so a project reached through two paths
-/// is one project; falls back to the path as given when it cannot be
-/// canonicalized, which is also what [`approve`] does, so the two agree.
-fn approved(plugin_dir: &Path, code_hash: Option<&str>) -> bool {
-    let guard = CONSENT.read().unwrap_or_else(|e| e.into_inner());
-    let Some((_, approvals)) = guard.as_ref() else { return true };
-    code_hash.is_some_and(|hash| approvals.allows(&canonical(plugin_dir), hash))
+/// Keyed by the canonical folder, so a folder reached through two paths is
+/// one folder; falls back to the path as given when it cannot be
+/// canonicalized, which is also what [`set_folder_trust`] does, so the two
+/// agree.
+pub fn is_trusted(folder: &Path) -> bool {
+    let guard = TRUST.read().unwrap_or_else(|e| e.into_inner());
+    guard.as_ref().is_none_or(|trust| trust.answer(&canonical(folder)) == Some(true))
 }
 
-/// Record the user's consent for the code now in `plugin_dir`, and put it in
-/// force at once.
-///
-/// Called by the install that put the bytes there — the user asked for them,
-/// which is the consent — and by the Allow affordance on a refused tile.
-pub fn approve(plugin_dir: &Path) -> Result<(), String> {
-    let manifest = crate::plugins::bundled::read_installed_manifest(plugin_dir)
-        .ok_or_else(|| format!("{} has no readable manifest", plugin_dir.display()))?;
-    let hash = crate::plugins::bundled::code_hash(plugin_dir, &manifest)
-        .ok_or_else(|| format!("{} has no readable entry file", plugin_dir.display()))?;
-    grant_all(vec![Grant { dir: plugin_dir.to_path_buf(), manifest, hash }])
-}
-
-/// A plugin directory and the code hash being allowed for it.
-struct Grant {
-    dir: PathBuf,
-    manifest: PluginManifest,
-    hash: String,
-}
-
-/// Record every grant under one lock and one save. The grants take effect only
-/// if the save succeeds; on failure nothing is allowed.
-fn grant_all(grants: Vec<Grant>) -> Result<(), String> {
-    if grants.is_empty() {
-        return Ok(());
-    }
-    let mut guard = CONSENT.write().unwrap_or_else(|e| e.into_inner());
-    let Some((dir, approvals)) = guard.as_mut() else {
-        // Nothing enforces consent without a store, so there is nothing to
-        // record; every test binary and a moss with no app data land here.
-        return Ok(());
+/// The user's answer for `folder`, for the app to decide whether to ask:
+/// `None` when it was never asked. A folder the earlier per-plugin approvals
+/// settle is recorded as trusted here, the first time the app asks about it,
+/// so it keeps its answer once that file is gone. `Some(true)` when nothing
+/// enforces trust.
+pub fn folder_answer(folder: &Path) -> Option<bool> {
+    let folder = canonical(folder);
+    let (recorded, answer) = {
+        let guard = TRUST.read().unwrap_or_else(|e| e.into_inner());
+        let Some(trust) = guard.as_ref() else { return Some(true) };
+        (trust.record.answer(&folder), trust.answer(&folder))
     };
-    let mut updated = approvals.clone();
-    for Grant { dir, manifest, hash } in grants {
-        record_consent(&mut updated, &dir, &manifest, hash);
+    if recorded.is_none() && answer == Some(true) {
+        if let Err(error) = set_folder_trust(&folder, true) {
+            log::warn!(target: "registry", "could not record {} as trusted: {error}", folder.display());
+        }
     }
-    if let Some(dir) = dir {
-        approval::save(dir, &updated)?;
-    }
-    *approvals = updated;
+    answer
+}
+
+/// Record the user's answer for `folder` and put it in force at once. Only
+/// the app records answers: a headless build holds a record it reads and
+/// never writes.
+pub fn set_folder_trust(folder: &Path, trusted: bool) -> Result<(), String> {
+    let mut guard = TRUST.write().unwrap_or_else(|e| e.into_inner());
+    // Nothing enforces trust without a record, so there is nothing to keep.
+    let Some(trust) = guard.as_mut() else { return Ok(()) };
+    let root = trust.writes_to.clone().ok_or("this moss reads folder answers and does not record them")?;
+    let mut record = trust.record.clone();
+    record.set(canonical(folder), trusted);
+    trust::save(&root, &record)?;
+    trust.record = record;
     Ok(())
 }
 
-/// Allow the plugins a freshly picked starter carries, each only if the copy
-/// now in `site_root/.moss/plugins/<id>` hashes to what the registry listed.
-/// Returns the ids allowed. A missing directory, an unreadable one or one
-/// whose code differs by a byte is skipped and left to the usual prompt, and
-/// if the record cannot be saved nothing counts as allowed.
-pub fn approve_starter_plugins(site_root: &Path, listed: &[super::index::StarterPlugin]) -> Vec<String> {
-    let mut grants = Vec::new();
-    for plugin in listed.iter().filter(|p| crate::plugins::install::is_usable_id(&p.id)) {
-        let dir = site_root.join(".moss").join("plugins").join(&plugin.id);
-        let Some(manifest) = crate::plugins::bundled::read_installed_manifest(&dir) else { continue };
-        match crate::plugins::bundled::code_hash(&dir, &manifest) {
-            Some(hash) if hash == plugin.code_sha256 => grants.push(Grant { dir, manifest, hash }),
-            _ => {}
-        }
-    }
-    let ids = grants
-        .iter()
-        .filter_map(|grant| grant.dir.file_name()?.to_str().map(str::to_owned))
-        .collect();
-    match grant_all(grants) {
-        Ok(()) => ids,
-        Err(error) => {
-            log::warn!(target: "registry", "could not record the starter's plugin consent: {error}");
-            Vec::new()
-        }
-    }
+/// Each plugin directory in `folder` that moss did not ship, canonical, with
+/// the hash of its code now (`None` when it cannot be read).
+pub fn carried(folder: &Path) -> Vec<(PathBuf, Option<String>)> {
+    let Ok(entries) = std::fs::read_dir(folder.join(".moss").join("plugins")) else { return Vec::new() };
+    entries
+        .flatten()
+        .map(|entry| canonical(&entry.path()))
+        .filter_map(|dir| Some((crate::plugins::bundled::read_installed_manifest(&dir)?, dir)))
+        .filter_map(|(manifest, dir)| match code_of(&manifest, &dir) {
+            Some(code) if code.shipped => None,
+            code => Some((dir, code.map(|code| code.hash))),
+        })
+        .collect()
 }
 
 /// What the registry's last accepted index says about a plugin directory.
@@ -562,54 +578,8 @@ fn registry_status_in(
     }
 }
 
-/// The record [`approve`] writes: the code's hash plus what the manifest
-/// said the plugin was, so a later change can be described against it.
-fn record_consent(approvals: &mut Approvals, plugin_dir: &Path, manifest: &PluginManifest, code_sha256: String) {
-    approvals.grant(approval::Approval {
-        dir: canonical(plugin_dir),
-        code_sha256,
-        version: Some(manifest.version.clone()),
-        abilities: Some(abilities(manifest)),
-    });
-}
-
-/// What is different about the plugin in `plugin_dir` from the one the user
-/// allowed. `None` when the directory was never allowed, when its code is
-/// still the code allowed, when no consent store is installed, or when it has
-/// no readable manifest and entry.
-pub fn change_since_approval(plugin_dir: &Path) -> Option<PluginChange> {
-    let manifest = crate::plugins::bundled::read_installed_manifest(plugin_dir)?;
-    let hash = code_of(&manifest, plugin_dir)?.hash;
-    let guard = CONSENT.read().unwrap_or_else(|e| e.into_inner());
-    let (_, approvals) = guard.as_ref()?;
-    change_in(approvals, &manifest, plugin_dir, &hash)
-}
-
-fn change_in(approvals: &Approvals, manifest: &PluginManifest, plugin_dir: &Path, hash: &str) -> Option<PluginChange> {
-    let record = approvals.record_for(&canonical(plugin_dir)).filter(|r| r.code_sha256 != hash)?;
-    Some(PluginChange {
-        approved_version: record.version.clone(),
-        version: manifest.version.clone(),
-        new_abilities: record.abilities.as_ref().map(|before| {
-            abilities(manifest).into_iter().filter(|a| !before.iter().any(|b| b.same_as(a))).collect()
-        }),
-    })
-}
-
-/// How a plugin differs from what the user allowed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
-pub struct PluginChange {
-    /// `None` for an allowance recorded before versions were kept.
-    pub approved_version: Option<String>,
-    pub version: String,
-    /// Abilities the manifest declares now that the allowance did not cover.
-    /// `None` when the allowance recorded no abilities, so none can be called
-    /// new.
-    pub new_abilities: Option<Vec<Ability>>,
-}
-
-fn canonical(plugin_dir: &Path) -> PathBuf {
-    plugin_dir.canonicalize().unwrap_or_else(|_| plugin_dir.to_path_buf())
+fn canonical(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// The refusal when a plugin needs a newer moss than this one.
@@ -911,75 +881,14 @@ mod tests {
         assert_eq!(withheld(&manifest_of("some-third-party-plugin", "1.0.0"), false), None);
     }
 
-    /// Writes a plugin directory and returns it with its parsed manifest and
-    /// the hash of the code in it.
-    fn plugin_on_disk(root: &Path, manifest_text: &str, entry: &str) -> (PathBuf, PluginManifest, String) {
-        let dir = root.join("demo");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("manifest.json"), manifest_text).unwrap();
-        std::fs::write(dir.join("index.js"), entry).unwrap();
-        let manifest = PluginManifest::parse(manifest_text).unwrap();
-        let hash = crate::plugins::bundled::code_hash(&dir, &manifest).unwrap();
-        (dir, manifest, hash)
-    }
-
-    const V1: &str = r#"{"name":"demo","version":"1.0.0","entry":"index.js","contributes":{"listing_styles":{"board":{"label":"Board"}}}}"#;
-    const V2: &str = r#"{"name":"demo","version":"1.1.0","entry":"index.js","capabilities":["deploy"],"contributes":{"listing_styles":{"board":{"label":"Board"}}}}"#;
-
-    #[test]
-    fn a_change_is_reported_only_for_an_allowed_directory_whose_code_moved() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (dir, manifest, hash) = plugin_on_disk(tmp.path(), V1, "var A = 1;");
-        let mut approvals = Approvals::default();
-        assert_eq!(change_in(&approvals, &manifest, &dir, &hash), None, "never allowed: nothing to compare");
-
-        record_consent(&mut approvals, &dir, &manifest, hash.clone());
-        assert_eq!(change_in(&approvals, &manifest, &dir, &hash), None, "same code: no change");
-
-        let (dir, v2, new_hash) = plugin_on_disk(tmp.path(), V2, "var A = 2;");
-        assert_eq!(
-            change_in(&approvals, &v2, &dir, &new_hash),
-            Some(PluginChange {
-                approved_version: Some("1.0.0".into()),
-                version: "1.1.0".into(),
-                new_abilities: Some(vec![Ability::Publishes { hook: "deploy".into() }]),
-            }),
-            "only the ability the allowance did not cover"
-        );
-    }
-
-    #[test]
-    fn a_change_to_an_allowance_with_no_record_of_abilities_calls_none_of_them_new() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (dir, _, hash) = plugin_on_disk(tmp.path(), V1, "var A = 1;");
-        let mut approvals = Approvals::default();
-        approvals.grant(approval::Approval::new(canonical(&dir), hash));
-        let (dir, v2, new_hash) = plugin_on_disk(tmp.path(), V2, "var A = 2;");
-        let change = change_in(&approvals, &v2, &dir, &new_hash).unwrap();
-        assert_eq!(change.approved_version, None);
-        assert_eq!(change.new_abilities, None);
-    }
-
-    #[test]
-    fn rewording_an_ability_is_not_a_new_ability() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (dir, manifest, hash) = plugin_on_disk(tmp.path(), V1, "var A = 1;");
-        let mut approvals = Approvals::default();
-        record_consent(&mut approvals, &dir, &manifest, hash);
-        let reworded = V1.replace(r#""label":"Board""#, r#""label":"Project board","description":"Cards""#);
-        let (dir, v2, new_hash) = plugin_on_disk(tmp.path(), &reworded, "var A = 2;");
-        let change = change_in(&approvals, &v2, &dir, &new_hash).unwrap();
-        assert_eq!(change.new_abilities, Some(vec![]));
-    }
-
-    /// A plugin the user already allowed is still recognised while a cloud app
-    /// has its files out of the folder: the hash waits for them, so it matches
-    /// the recorded consent instead of coming back `None`. Before macOS 14 an
+    /// A plugin whose files a cloud app still holds hashes to its code once
+    /// they arrive, instead of coming back `None`: the earlier approvals settle
+    /// a folder by that hash. Before macOS 14 an
     /// undownloaded file is absent from its own path with a `.name.icloud`
     /// placeholder beside it; the files arrive while the hash waits.
     #[cfg(target_os = "macos")]
     #[test]
-    fn an_allowed_plugin_with_files_still_in_the_cloud_matches_its_consent() {
+    fn a_plugin_with_files_still_in_the_cloud_hashes_to_its_code() {
         let dir = tempfile::TempDir::new().unwrap();
         let plugin_dir = dir.path().join("allowed-demo");
         std::fs::create_dir_all(&plugin_dir).unwrap();
@@ -990,11 +899,7 @@ mod tests {
         std::fs::write(&manifest_path, manifest_text).unwrap();
         std::fs::write(&entry_path, "var AllowedDemo = {};").unwrap();
 
-        let mut approvals = approval::Approvals::default();
-        approvals.grant(approval::Approval::new(
-            canonical(&plugin_dir),
-            crate::plugins::bundled::code_hash(&plugin_dir, &manifest).unwrap(),
-        ));
+        let before = crate::plugins::bundled::code_hash(&plugin_dir, &manifest).unwrap();
 
         std::fs::remove_file(&manifest_path).unwrap();
         std::fs::remove_file(&entry_path).unwrap();
@@ -1008,6 +913,6 @@ mod tests {
 
         let code = code_of(&manifest, &plugin_dir).expect("the files arrive while the hash waits");
         download.join().unwrap();
-        assert!(approvals.allows(&canonical(&plugin_dir), &code.hash));
+        assert_eq!(code.hash, before);
     }
 }

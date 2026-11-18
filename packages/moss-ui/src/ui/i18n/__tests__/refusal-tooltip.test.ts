@@ -29,9 +29,12 @@ describe('refusalTooltip for an unavailable plugin', () => {
     const cases: RefusalLike[] = [
       { kind: 'revoked', reason: 'bad' },
       { kind: 'incompatible', needs: '1.2', host: '1.0' },
-      { kind: 'unapproved' },
     ];
     for (const c of cases) expect(refusalTooltip(c, 'X')).toContain('X');
+  });
+
+  it("says the folder's remedy, not the plugin's, for a plugin in an untrusted folder", () => {
+    expect(refusalTooltip({ kind: 'untrusted' }, 'X')).toBe('Off until you trust this folder');
   });
 
   it.each(LOCALES)('names the plugin and the floor it cannot read in %s', (l) => {

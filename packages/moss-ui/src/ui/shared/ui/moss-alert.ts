@@ -34,6 +34,8 @@ export interface MossConfirmOptions {
   cancelLabel?: string;
   /** See the file header. */
   destructive?: boolean;
+  /** A line under the question, for the one consequence its words cannot carry. */
+  body?: string;
 }
 
 /**
@@ -49,6 +51,7 @@ class AlertModal extends OutcomeModal {
     private readonly confirmLabel: string,
     private readonly cancelLabel: string | null,
     private readonly destructive: boolean,
+    private readonly body: string | undefined,
     onDone: (result: boolean) => void,
   ) {
     super(onDone);
@@ -66,6 +69,12 @@ class AlertModal extends OutcomeModal {
     title.className = "moss-modal-title";
     title.textContent = this.message;
     root.appendChild(title);
+    if (this.body) {
+      const body = document.createElement("p");
+      body.className = "moss-modal-body moss-text--muted";
+      body.textContent = this.body;
+      root.appendChild(body);
+    }
 
     const actions = document.createElement("div");
     actions.className = "moss-modal-actions";
@@ -111,6 +120,7 @@ export function mossConfirm(message: string, opts: MossConfirmOptions): Promise<
       opts.confirmLabel,
       opts.cancelLabel ?? t("dialog.cancel"),
       opts.destructive ?? false,
+      opts.body,
       resolve,
     );
     modal.open();
@@ -125,7 +135,7 @@ export function mossConfirm(message: string, opts: MossConfirmOptions): Promise<
  */
 export function mossAlert(message: string, opts: { okLabel?: string } = {}): Promise<void> {
   return new Promise((resolve) => {
-    const modal = new AlertModal(message, opts.okLabel ?? t("dialog.ok"), null, false, () => resolve());
+    const modal = new AlertModal(message, opts.okLabel ?? t("dialog.ok"), null, false, undefined, () => resolve());
     modal.open();
     if (!modal.isOpen()) resolve();
   });

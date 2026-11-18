@@ -286,7 +286,7 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
     // The admission verdict, before anything can load a plugin. Set-once for
     // the process, so it is installed here rather than by each host.
     if !run.flags.no_plugins {
-        crate::plugins::install::registry_client::enforce::install_headless(run.flags.allow_plugins);
+        crate::plugins::install::registry_client::enforce::install_headless(crate::infra::app_data::app_data_dir_early().as_deref(), run.flags.allow_plugins);
     }
 
     let wait_plugins = run.flags.wait_plugins || (run.flags.serve && !run.flags.watch);

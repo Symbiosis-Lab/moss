@@ -103,15 +103,6 @@ pub fn install_into(
         let _ = fs::remove_dir_all(&staging);
     }
     outcome?;
-
-    // The user asked for these bytes, which is the consent the loader will
-    // ask about. After the swap, on the live directory, so the record names
-    // the path the loader is handed. A record that cannot be written is not a
-    // failed install: the plugin is in place, refused until the user allows
-    // it from the tile, and the log says why.
-    if let Err(e) = super::enforce::approve(&target) {
-        log::warn!(target: "registry", "{} {} installed but its approval was not recorded: {e}", entry.id, entry.version);
-    }
     Ok(entry.version.clone())
 }
 

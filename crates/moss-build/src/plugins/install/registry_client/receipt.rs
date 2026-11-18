@@ -17,7 +17,7 @@
 //! Not a trust signal. It travels with the folder, so a shared folder ships
 //! it along with the code; whether these bytes are moss's own is answered by
 //! comparing `bundled::code_hash` to `bundled::bundled_code_hash`, and whether
-//! the user allowed them is recorded in app data ([`super::approval`]).
+//! the user trusts the folder is recorded in app data ([`super::trust`]).
 //!
 //! A stack receipt is written only after bring-up is proven, beside the
 //! staged bundle, so a re-pinned artifact reaches a

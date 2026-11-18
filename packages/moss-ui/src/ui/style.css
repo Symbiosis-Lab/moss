@@ -6614,8 +6614,10 @@ body.own-titlebar.controls-trailing .moss-titlebar-traffic-light-space {
 }
 
 /* Above the grid on a view that is not channels: the way back, then the
-   view's name, which is the darker of the two because it is where you are. */
-.moss-plugin-catalog-view-note {
+   view's name, which is the darker of the two because it is where you are.
+   The folder's trust answer sits there in the same voice. */
+.moss-plugin-catalog-view-note,
+.moss-folder-trust-row {
   display: flex;
   align-items: baseline;
   gap: var(--moss-space-xs);

@@ -31,7 +31,7 @@ pub fn run(args: &[String]) -> i32 {
         eprintln!("{USAGE}");
         return 1;
     };
-    crate::plugins::install::registry_client::enforce::install_headless(allow_plugins);
+    crate::plugins::install::registry_client::enforce::install_headless(crate::infra::app_data::app_data_dir_early().as_deref(), allow_plugins);
     let cwd = std::env::current_dir().unwrap_or_default();
     match expand_in(Path::new(target.as_str()), &cwd, dry_run) {
         Ok(lines) => {
