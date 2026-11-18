@@ -405,12 +405,16 @@ impl PluginManager {
     ///
     /// # Timeout: 30s per plugin, 5min total
     pub async fn execute_process(&self, context: &ProcessContext) -> Result<(), String> {
-        // Before any hook runs, and whether or not one will: a login-capable
-        // plugin with no account bound for this folder, and the prompt not
-        // dismissed, gets ONE nudge. The shell auto-opens login on it;
-        // headless, the reporter says the plugin's content will be skipped
-        // (and counts it for `--strict`).
+        // Before any hook runs: a plugin whose process hook needs its account,
+        // with none bound for this folder and the prompt not dismissed, gets
+        // ONE nudge. The shell auto-opens its login; headless, the reporter
+        // says its content will be skipped (and counts it for `--strict`).
+        // A publish-only channel skips nothing in a build, so it asks for its
+        // account when it is used, never here.
         for plugin in self.find_plugins_by_capability(&Capability::Login) {
+            if !plugin.manifest.capabilities.contains(&Capability::Process) {
+                continue;
+            }
             let name = &plugin.manifest.name;
             if crate::plugins::discovery::plugin_needs_connection(&context.project_path, name) {
                 log::info!(target: "plugin", "[auto-open] {name} needs connection for {} — nudging the shell", context.project_path);

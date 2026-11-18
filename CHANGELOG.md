@@ -29,6 +29,7 @@ All notable changes to moss will be documented here.
 - On a page with a styled section (`:::{.band}`), clicking a block in the preview opens the editor at that block's line again, and `moss doctor` names the right line. Every block after such a section was two lines late.
 - In the plugin catalog, a channel stays where it is after you add one, so the next press lands on the channel you meant. Added channels moved to the front on each press, and a second press could remove a channel you had just passed.
 - The + under the channel pill stays a plus while the catalog is open, and the + at the end of the settings tabs says "Install plugin".
+- A channel that only posts copies, such as X, Substack or LinkedIn, no longer opens a sign-in when its folder opens while it is signed out; it asks when it posts, and in its Settings row. Opening the folder used to bring up Matters' sign-in instead, and `moss build --strict` failed with a warning that the channel's content would be skipped, though none was. A channel that brings content into the build, like Matters, still opens its own sign-in once.
 
 ### Changed
 

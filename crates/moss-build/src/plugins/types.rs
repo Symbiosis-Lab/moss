@@ -216,10 +216,8 @@ pub enum Capability {
     ///
     /// Declaring this capability causes moss to:
     ///   1. Show a connection-status row in the plugin's settings section.
-    ///   2. Emit `MattersNeedsConnection` (or a generic equivalent) when the
-    ///      folder is opened with no bound session, triggering auto-open-once.
-    ///
-    /// Currently used only by the Matters plugin.
+    ///   2. With `Process` too, emit `PluginNeedsConnection` when a build
+    ///      starts with no bound session, triggering auto-open-once.
     /// Does NOT map to a `hook_name()` (it's not a build hook).
     Login,
 }

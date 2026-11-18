@@ -1535,20 +1535,12 @@ folder_path: string } } |
  */
 { kind: "LoginBrowserFailed"; payload: { reason: LoginFailureReason } } | 
 /**
- * Matters is installed in the current project but has no valid session
- * (no `boundUserName` in config.json) and the user has not intentionally
- * dismissed the auto-open for this folder.
- * 
- * Emitted by `spawn_process_hooks` on the first background build/preview
- * run for a folder (before `execute_process` runs). The app shell
- * (`app.ts`) responds by calling `connect_account("matters")` ONCE
- * per folder session — a per-folder latch in TS prevents re-opening on
- * every incremental rebuild.
- * 
- * `project_path` lets the frontend tie the signal to the correct folder
- * and verify it hasn't been superseded by a folder switch.
+ * A plugin whose process hook needs its account has none bound for this
+ * folder, and the person has not dismissed the prompt. Emitted before
+ * the process hooks run; the app shell opens that plugin's login once
+ * per folder and plugin.
  */
-{ kind: "MattersNeedsConnection"; payload: { project_path: string } } | 
+{ kind: "PluginNeedsConnection"; payload: { project_path: string; plugin: string } } | 
 /**
  * The app UI language changed at runtime (live switch, no restart).
  * 
