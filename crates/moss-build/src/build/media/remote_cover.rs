@@ -141,7 +141,7 @@ impl Stage<'_> {
     /// placed and whether that was every rung; `None` without the original or
     /// the webp, since then there is nothing to serve.
     fn place(&mut self, oid: &str, ext: &str, cover: &Path, original: &ServedPath, (width, height): (u32, u32)) -> Option<Placed> {
-        let record = self.transforms.get_with(oid, crate::build::cache::RecordMode::Wait);
+        let record = self.transforms.get_with(oid, crate::build::cache::RecordMode::Request);
         // `for_jupyterlite_asset` is `ServedPath`'s no-validation passthrough,
         // safe here because every path is derived from the validated `original`.
         let served = |path: &str| ServedPath::for_jupyterlite_asset(Path::new(path));
@@ -160,9 +160,10 @@ impl Stage<'_> {
             let (Placement::Held | Placement::Linked) = self.staged.link(&self.objects, oid, &self.output_dir.join(original.as_str()), Some(cover)) else { return None };
             vec![(original.clone(), HashBucket::ImageOutputs), (served(&webp), HashBucket::ImageVariants)]
         };
-        let rungs = if moss_core::asset_paths::is_ladder_source_ext(ext) { moss_core::asset_paths::ladder_rungs(width, height, false) } else { &[] };
+        // No kept widths: the render side's one-entry lookup (`grid_cells`) has none either.
+        let rungs = if moss_core::asset_paths::is_ladder_source_ext(ext) { crate::build::media::rungs::RungPlan::default().widths(&webp, width, height) } else { Vec::new() };
         let mut complete = true;
-        for w in rungs {
+        for w in &rungs {
             let path = moss_core::asset_paths::to_webp_rung(&webp, *w);
             let target_h = ((u64::from(height) * u64::from(*w) / u64::from(width)) as u32).max(1);
             let rung_need = || Some(Need::Dims(*w, target_h));
@@ -259,7 +260,7 @@ fn materialize_one(
         &ImageCompressionConfig::default(),
         None,
         None,
-        &HashMap::new(),
+        &crate::build::media::rungs::RungPlan::default(),
     );
     outcome.error.is_none().then_some(outcome.webp_oid).flatten()?;
 
@@ -477,15 +478,15 @@ mod tests {
         let oid = link_meta["https://example.com/post"].cover.clone().unwrap();
         let oid = oid.split_once('.').unwrap().0;
         let transforms = TransformCache::for_site(&MossPaths::from_moss_dir(root.join(".moss")));
-        let mut record = transforms.get_with(oid, crate::build::cache::RecordMode::Wait).unwrap();
+        let mut record = transforms.get_with(oid, crate::build::cache::RecordMode::Request).unwrap();
         for entry in record.transforms.values_mut() {
             entry.params = serde_json::json!({ "quality": 1 });
         }
-        transforms.put(&record, crate::build::cache::RecordMode::Wait).unwrap();
+        transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
 
         let (encoded, files) = next_generation(&root, &mut link_meta, hashes);
         assert_eq!(encoded, 0);
-        let record = transforms.get_with(oid, crate::build::cache::RecordMode::Wait).unwrap();
+        let record = transforms.get_with(oid, crate::build::cache::RecordMode::Request).unwrap();
         assert_eq!(record.transforms["image/webp"].params, serde_json::json!({ "quality": 1 }));
         let webp = moss_core::asset_paths::to_webp(&original);
         assert_eq!(files.get(&webp), Some(&entry_on_disk(&root, &webp)));
@@ -496,7 +497,7 @@ mod tests {
     /// pixel size, and is encoded again once it is not.
     #[test]
     fn kept_recipe_a_cover_rung_of_todays_size_keeps_its_bytes() {
-        use crate::build::cache::RecordMode::Wait;
+        use crate::build::cache::RecordMode::Request;
         let (root, mut link_meta, hashes, original) = first_generation("rung_params", &image_bytes(900, 500, image::ImageFormat::Png), "png");
         let oid = link_meta["https://example.com/post"].cover.clone().unwrap();
         let oid = oid.split_once('.').unwrap().0.to_string();
@@ -504,16 +505,16 @@ mod tests {
         let (objects, transforms) = (ObjectStore::for_site(&paths), TransformCache::for_site(&paths));
         let rung = moss_core::asset_paths::to_webp_rung(&moss_core::asset_paths::to_webp(&original), 800);
         let plant = |scale: u32| {
-            let mut record = transforms.get_with(&oid, Wait).unwrap();
+            let mut record = transforms.get_with(&oid, Request).unwrap();
             let entry = record.transforms.get_mut("image/webp-w800").expect("the fixture needs an 800 rung");
             let img = image::load_from_memory(&std::fs::read(objects.get_path(&entry.oid).unwrap()).unwrap()).unwrap();
             let img = img.resize_exact(img.width() / scale, img.height() / scale, image::imageops::FilterType::Triangle);
             let bytes = crate::build::media::image::encode_webp(&img, 10, None).unwrap();
-            entry.oid = objects.store_bytes(&bytes, Wait).unwrap();
+            entry.oid = objects.store_bytes(&bytes).unwrap();
             entry.size = bytes.len() as u64;
             entry.params = serde_json::json!({ "quality": 10 });
             entry.kept_for = None;
-            transforms.put(&record, Wait).unwrap();
+            transforms.put(&record, Request).unwrap();
             bytes
         };
 

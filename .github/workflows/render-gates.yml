@@ -114,7 +114,8 @@ jobs:
   render-gates-webkit:
     name: Render gates (WebKit)
     runs-on: macos-latest
-    timeout-minutes: 45
+    # The full WebKit pass alone runs past 45 minutes on a hosted macOS runner.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v6
         with:

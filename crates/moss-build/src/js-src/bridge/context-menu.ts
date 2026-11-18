@@ -43,6 +43,12 @@ export interface PreviewContextPayload {
   link: string | null;
   /** Absolute URL of the <img> under the cursor, or null. */
   image: string | null;
+  /**
+   * Which of the pictures sharing that picture's source line or range it is,
+   * counted in page order from 0; null with no picture. Two pictures on one
+   * line are told apart by it, since a URL can repeat on a line.
+   */
+  imageIndex: number | null;
   /** Current selection text (trimmed), or null when collapsed/empty. */
   selection: string | null;
 }
@@ -79,6 +85,23 @@ export interface BuildContextOptions {
   selection: string | null | undefined;
 }
 
+const SOURCE = "[data-source-line],[data-source-range]";
+
+/** The picture's place among the pictures annotated with the same line or range in the same file. */
+function pictureIndex(img: HTMLImageElement): number {
+  const owner = img.closest(SOURCE);
+  if (!owner) return 0;
+  const key = (i: Element) => {
+    const o = i.closest(SOURCE);
+    const file = i.closest("[data-source-file]")?.getAttribute("data-source-file") ?? "";
+    // A marquee's second copy of each picture is hidden; it is counted among the copies.
+    const copy = i.closest('[aria-hidden="true"]') !== null;
+    return o ? `${file}|${o.getAttribute("data-source-line") ?? ""}|${o.getAttribute("data-source-range") ?? ""}|${copy}` : null;
+  };
+  const mine = key(img);
+  return Array.from(img.ownerDocument.querySelectorAll("img")).filter((i) => key(i) === mine).indexOf(img);
+}
+
 /**
  * Build the context payload for a right-click on `el`. Pure: no listeners,
  * no postMessage — jsdom-testable.
@@ -88,7 +111,8 @@ export function buildContextPayload(
   opts: BuildContextOptions,
 ): PreviewContextPayload {
   let link: string | null = null;
-  const anchor = el?.closest("a") ?? null;
+  // A gallery picture's link is moss's full-screen viewer, not a link the author wrote.
+  const anchor = el?.closest("a:not(.moss-gallery-link)") ?? null;
   const href = anchor?.getAttribute("href");
   if (href && isCopyableHref(href)) {
     try {
@@ -125,6 +149,7 @@ export function buildContextPayload(
     styles: themeSelectors(el),
     link,
     image,
+    imageIndex: img ? pictureIndex(img) : null,
     selection: selText.length > 0 ? selText : null,
   };
 }

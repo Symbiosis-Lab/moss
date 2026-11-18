@@ -93,7 +93,7 @@ Install `@symbiosis-lab/moss-api` for TypeScript types and utilities.
 npm install @symbiosis-lab/moss-api
 ```
 
-It exports typed context interfaces (`ProcessContext`, `GenerateContext`, `EnhanceContext`, `DeployContext`, `SyndicateContext`), the `HookResult` return type, and utilities like `reportProgress`, `reportError`, and `openBrowser`. Every context, utility, and type is documented in the [full API reference](https://github.com/Symbiosis-Lab/moss-api/tree/main/docs/api), generated from the source.
+It exports typed context interfaces (`ProcessContext`, `DeployContext`), the `HookResult` return type, and utilities like `reportProgress`, `reportError`, and `openBrowser`. Every context, utility, and type is documented in the [full API reference](https://github.com/Symbiosis-Lab/moss-api/tree/main/docs/api), generated from the source.
 
 For Rust contributors working on moss itself, the core types are published as `moss-core` on [docs.rs](https://docs.rs/moss-core).
 

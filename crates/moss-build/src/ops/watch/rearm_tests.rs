@@ -1,5 +1,6 @@
-//! Re-arming a watched folder: `start` called again while the first watcher
-//! task is still alive, then the first task shut down.
+//! Arming a watched folder: what `start` catches up on when it subscribes, and
+//! `start` called again while the first watcher task is still alive, then the
+//! first task shut down.
 
 use std::sync::{Arc, Mutex};
 
@@ -27,9 +28,16 @@ async fn arm(
     folder: &str,
     spawner: &Arc<dyn Spawner>,
 ) -> tokio::sync::oneshot::Sender<()> {
+    arm_with(folder, spawner, Arc::new(|_| Box::pin(async {}))).await
+}
+
+async fn arm_with(
+    folder: &str,
+    spawner: &Arc<dyn Spawner>,
+    dispatch: RebuildDispatch,
+) -> tokio::sync::oneshot::Sender<()> {
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let (_cadence_tx, cadence) = tokio::sync::watch::channel(Cadence::Live);
-    let dispatch: RebuildDispatch = Arc::new(|_| Box::pin(async {}));
     let attempt: RebuildAttempt =
         Arc::new(|_, _| Box::pin(async { worker::AttemptOutcome::Completed }));
     start(WatchConfig {
@@ -116,4 +124,42 @@ async fn a_watcher_task_dropped_unpolled_releases_the_worker() {
         .await
         .expect("the worker loop must be told to exit")
         .unwrap();
+}
+
+/// A page saved after the build on screen read it, but before the watcher
+/// subscribed, raised no event; arming the watcher judges it against that
+/// build's stash. A created file waits for the sweep.
+#[tokio::test]
+async fn a_page_saved_before_the_watcher_started_is_rebuilt_when_it_arms() {
+    use sha2::{Digest, Sha256};
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let folder = root.to_string_lossy().to_string();
+    let read = b"# As the build read it\n";
+    let mut shown = crate::types::content::SiteHashes::new();
+    for page in ["P.md", "Q.md"] {
+        std::fs::write(root.join(page), read).unwrap();
+        shown.sources.insert(page.into(), crate::build::types::SourceMetadata {
+            hash: format!("{:x}", Sha256::digest(read)),
+            stat: crate::build::stat::FileStat::whole_second(read.len() as u64, 0),
+        });
+    }
+    crate::system::build_records::records().record_content_hashes(&folder, shown);
+    std::fs::write(root.join("P.md"), b"# Saved before the watcher started\n").unwrap();
+    std::fs::write(root.join("R.md"), b"# Created\n").unwrap();
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let dispatch: RebuildDispatch = Arc::new(move |request| {
+        let _ = tx.send(request.trigger);
+        Box::pin(async {})
+    });
+    let spawner: Arc<dyn Spawner> = Arc::new(RecordingSpawner::default());
+    let shutdown = arm_with(&folder, &spawner, dispatch).await;
+    let found = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await;
+    let _ = shutdown.send(());
+    crate::system::build_records::records().forget_content_hashes(&folder);
+
+    let found = found.expect("the page saved before the watcher started is rebuilt when it arms");
+    assert_eq!(found, Some(crate::build::BuildTrigger::ContentOnly(vec![root.join("P.md")])));
 }

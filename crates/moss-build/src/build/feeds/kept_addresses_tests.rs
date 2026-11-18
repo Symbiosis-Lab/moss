@@ -23,7 +23,7 @@ fn publish_with_derivative(mp: &MossPaths) {
         pending.register(&ServedPath::from_source(path).unwrap(), bytes, HashBucket::Files);
     }
     let meta = SourceMetadata { hash: "h".into(), stat: FileStat::whole_second(1, 1) };
-    pending.register_page_source_hash("photo-2.jpg".into(), meta);
+    pending.replace_sources([("photo-2.jpg".to_string(), meta)].into(), [("photo-2.jpg".to_string(), "photo-2.jpg".to_string())].into());
     let snap = PublishedSnapshot::from_sealed(&pending.seal(), "moss:site-1", "2026-08-05T00:00:00Z".into());
     published_record::save(mp, &snap).unwrap();
 }

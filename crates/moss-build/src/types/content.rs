@@ -428,6 +428,11 @@ pub struct SiteHashes {
     /// Map of source path to metadata (hash + size + mtime for fast-path caching)
     #[serde(default)]
     pub sources: HashMap<String, SourceMetadata>,
+    /// Folder file source path to the address it was published at, kept only
+    /// where the two differ (a folder whose page sets `url:`, a slugged folder
+    /// name, a WebP base, a gated file): a missing entry is the source path.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub asset_outputs: HashMap<String, String>,
     /// When this manifest's hashing began, as Unix seconds — git's
     /// "racily clean" clock. A source file whose mtime lands within one
     /// timestamp-granularity epsilon of this instant could have been
@@ -639,6 +644,16 @@ impl SiteHashes {
     /// guaranteed normalized at compile time.
     pub fn insert_file_hash(&mut self, path: &crate::build::served_path::ServedPath, hash_entry: String) {
         self.files.insert(path.as_str().to_string(), hash_entry);
+    }
+
+    /// Record that the folder file `source` was published at `out`, replacing
+    /// an entry carried from a build that published it elsewhere.
+    pub fn record_output(&mut self, source: &str, out: &str) {
+        if out == source {
+            self.asset_outputs.remove(source);
+        } else {
+            self.asset_outputs.insert(source.to_string(), out.to_string());
+        }
     }
 
     /// Get changed files by comparing with previous hashes

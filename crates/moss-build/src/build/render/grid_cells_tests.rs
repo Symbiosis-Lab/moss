@@ -393,7 +393,7 @@ fn a_hero_keeps_the_pages_one_eager_image_from_its_grid_cards() {
         };
         let docs = vec![home.clone(), card.clone()];
         let overrides = HashMap::new();
-        let lookup = crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &overrides, None);
+        let lookup = crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &overrides, None, &Default::default());
         resolve_page_body(&home, &docs, None, &overrides, "", &lookup, None, crate::build::inputs::now()).to_html()
     };
     let without_hero = render(false);
@@ -410,7 +410,7 @@ fn a_card_cover_in_a_grid_declares_the_grids_cell() {
     let card = make_doc("Ink Study", "works/ink-study/index.html", Some("ink.jpg"));
     let overrides = HashMap::new();
     let ink = crate::types::content::MediaMetadata { path: "ink.jpg".to_string(), dimensions: Some((2400, 1600)), ..Default::default() };
-    let lookup = crate::build::media::dimensions::MediaDimensionLookup::new(&[ink], &[], &overrides, None);
+    let lookup = crate::build::media::dimensions::MediaDimensionLookup::new(&[ink], &[], &overrides, None, &Default::default());
     let render = |md: &str| {
         let home = ParsedDocument { body_plan: Some(plan_of(md)), body_claims_eager: true, ..make_doc("Home", "index.html", None) };
         let docs = vec![home.clone(), card.clone()];
@@ -423,15 +423,31 @@ fn a_card_cover_in_a_grid_declares_the_grids_cell() {
     assert!(collage.contains(r#"sizes="auto, (min-width: 48rem) calc(min(47.25rem, 100vw) / 2), 100vw""#), "{collage}");
 }
 
+/// The covers that load with the page are counted over the page, not per grid.
 #[test]
-fn only_the_first_covered_card_on_the_page_is_eager_however_many_grids() {
-    let docs = vec![
-        make_doc("Ink Study", "works/ink-study/index.html", Some("ink.jpg")),
-        make_doc("Brush Study", "works/brush-study/index.html", Some("brush.jpg")),
-    ];
-    let md = ":::grid 2\n[Ink Study](works/ink-study/)\n:::\n\n:::grid 2\n[Brush Study](works/brush-study/)\n:::\n";
+fn the_pages_eager_covers_are_counted_across_its_grids() {
+    let docs: Vec<ParsedDocument> = (1..=5)
+        .map(|n| make_doc(&format!("Study {n}"), &format!("works/s{n}/index.html"), Some(&format!("s{n}.jpg"))))
+        .collect();
+    let md = ":::grid 3\n[Study 1](works/s1/)\n+++\n[Study 2](works/s2/)\n+++\n[Study 3](works/s3/)\n:::\n\n:::grid 2\n[Study 4](works/s4/)\n+++\n[Study 5](works/s5/)\n:::\n";
     let html = Page::new("index.html", &docs).cards(md);
-    assert_eq!(html.matches(r#"loading="eager""#).count(), 1, "{html}");
+    assert_eq!(html.matches(r#"loading="eager""#).count(), 4, "{html}");
+    let last = &html[html.find("s5.jpg").expect("fifth cover")..];
+    assert!(!last[..last.find('>').unwrap()].contains("loading="), "{html}");
+}
+
+/// A cell that stays as written (here a link to another site) still takes its
+/// place in the row, so the fourth page card is on the second row and lazy.
+#[test]
+fn a_cell_left_as_written_takes_its_place_in_the_row() {
+    let docs: Vec<ParsedDocument> = (1..=4)
+        .map(|n| make_doc(&format!("Study {n}"), &format!("works/s{n}/index.html"), Some(&format!("s{n}.jpg"))))
+        .collect();
+    let md = ":::grid 4\n[Elsewhere](https://example.com/)\n+++\n[Study 1](works/s1/)\n+++\n[Study 2](works/s2/)\n+++\n[Study 3](works/s3/)\n+++\n[Study 4](works/s4/)\n:::\n";
+    let html = Page::new("index.html", &docs).cards(md);
+    assert_eq!(html.matches(r#"loading="eager""#).count(), 3, "{html}");
+    let last = &html[html.find("s4.jpg").expect("fourth cover")..];
+    assert!(!last[..last.find('>').unwrap()].contains("loading="), "{html}");
 }
 
 /// The ONE-renderer falsifier for the plain `:::grid` card, the twin of
@@ -455,7 +471,7 @@ fn collection_cells_render_through_the_grid_card_emitter() {
     let html = page.cards(":::grid 2\n[Ink Study](works/ink-study/)\n+++\n[Works](works/)\n:::\n");
 
     let overrides = HashMap::new();
-    let mut eager = true;
+    let mut loading = crate::build::components::grid_card::CoverLoading::new(false);
     for doc in &docs {
         let props = crate::build::components::child_list::props_for_document(
             doc, &docs, "", &overrides, None, chrono::NaiveDateTime::default(), None,
@@ -464,9 +480,7 @@ fn collection_cells_render_through_the_grid_card_emitter() {
         // other cell, coverless) must render through the quote-slot branch,
         // not the bare `.moss-card-no-cover` placeholder — see
         // `render_item`'s `list_has_covers` doc.
-        let expected = render_item_with_typesetting(&props, None, Language::En, None, None, eager, true, None);
-        // The first card with a cover carries the LCP hint; only one does here.
-        eager = false;
+        let expected = render_item_with_typesetting(&props, None, Language::En, None, None, loading.next(props.cover.is_some()), true, None);
         assert!(
             html.contains(&expected),
             "card for {} did not come from grid_card::render_item_with_typesetting\nexpected: {expected}\ngot: {html}",
@@ -1301,8 +1315,21 @@ fn a_summary_grid_wears_the_listing_wrapper() {
     let html = page.summary(":::grid {.summary}\n[Ink Study](works/ink-study/)\n:::\n");
 
     assert!(html.contains(r#"<div class="moss-cards-container" data-embed>"#), "got: {html}");
-    assert!(html.contains(r#"<div class="moss-cards" data-layout="list">"#), "got: {html}");
+    assert!(html.contains(r#"<div class="moss-cards" data-layout="list" data-list-axis="date" data-list-holds="entries">"#), "got: {html}");
     assert!(!html.contains("moss-grid"), "no grid container survives: {html}");
+}
+
+/// A picked card for a folder with pages to count makes the block a listing
+/// of collections.
+#[test]
+fn a_summary_grid_of_a_counted_folder_holds_collections() {
+    let docs = vec![
+        make_folder("Works", "works/index.html", None),
+        make_page_doc("Ink Study", "works/ink-study/index.html", "2024-03-02", "A study."),
+    ];
+    let page = Page::new("index.html", &docs);
+    let html = page.summary(":::grid {.summary}\n[Works](works/)\n:::\n");
+    assert!(html.contains(r#"data-list-holds="collections""#), "got: {html}");
 }
 
 /// A summary card is a full-measure row, so a column count means nothing — and

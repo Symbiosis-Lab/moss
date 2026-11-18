@@ -97,10 +97,17 @@ describe("any picture of a page opens in the viewer", () => {
     expect(withAlt.tabIndex).toBe(0);
     expect(withAlt.hasAttribute("aria-label")).toBe(false);
     const captionOnly = img("/b.jpg");
-    expect(captionOnly.getAttribute("aria-label")).toBe("Caption only");
+    expect(captionOnly.alt).toBe("Caption only");
+    expect(captionOnly.hasAttribute("aria-label")).toBe(false);
     captionOnly.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
     expect(lightbox().hidden).toBe(false);
     expect(shown()).toContain("/b.jpg");
+  });
+
+  test("a captioned picture without alt text passes axe once it is a button", async () => {
+    const axe = (await import("axe-core")).default;
+    const { violations } = await axe.run(img("/b.jpg").closest("figure")!);
+    expect(violations.map((v) => v.id)).toEqual([]);
   });
 
   test("Escape closes and focus goes back to the picture", () => {

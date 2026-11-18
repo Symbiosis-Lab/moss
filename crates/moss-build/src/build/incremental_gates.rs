@@ -42,7 +42,7 @@ impl IncrementalGates {
             let _trace = crate::build::phase::PhaseTrace::start("change_proof");
             ChangeProof::for_build(trigger, folder, builder, seal)
         };
-        crate::build::phase::record_value("proved_from_seal", usize::from(proof == ChangeProof::Manifest));
+        crate::build::phase::record_value("proved_from_seal", usize::from(matches!(proof, ChangeProof::Manifest | ChangeProof::ImagesSettled)));
         Self { render_skip: proof.allows_incremental_skip(), parse_cache: proof.allows_parse_cache_reuse() }
     }
 }
@@ -56,6 +56,9 @@ impl IncrementalGates {
 /// link cards a build fetches before rendering, the comments an exiting build
 /// refreshes before its slots, and whatever a blocking process hook writes.
 /// Each lands after this measurement, so the next build renders in full once.
+/// A move the build makes itself and renders from (an older link card taken
+/// into the site folder, the redirect history) is recorded at its seal
+/// instead; see [`crate::build::inputs::restamp`].
 #[derive(Debug, Default)]
 pub struct LastSeal {
     manifest: Option<crate::types::content::SiteHashes>,
@@ -77,6 +80,11 @@ impl LastSeal {
         self.moss.record.clone()
     }
 
+    /// See [`BuildInputs::media_settled`](crate::build::inputs::BuildInputs::media_settled).
+    fn media_settled(&self) -> bool {
+        self.manifest.as_ref().and_then(|m| m.build_inputs.as_ref()).is_some_and(|r| r.media_settled)
+    }
+
     /// The manifest as read, before key migration; `build_inner` migrates its
     /// own copy, so the proof and the carry judge one read.
     pub(crate) fn manifest(&self) -> Option<&crate::types::content::SiteHashes> {
@@ -94,6 +102,11 @@ pub enum ChangeProof {
     /// The last sealed manifest proves that nothing but markdown pages changed
     /// since; see [`ChangeProof::from_last_seal`].
     Manifest,
+    /// [`ChangeProof::Manifest`] for a build that renders the pictures the last
+    /// render could not finish. Their blur and colour are baked into parsed
+    /// HTML, so no parsed page is replayed; the render verdict re-renders the
+    /// pages showing a picture whose placeholder moved.
+    ImagesSettled,
     /// Nothing is known, so every page renders.
     None,
 }
@@ -107,7 +120,12 @@ impl ChangeProof {
             BuildTrigger::Full => Self::None,
             BuildTrigger::Structural(paths) => Self::Events { paths: paths.clone(), structural: true },
             BuildTrigger::ContentOnly(paths) => Self::Events { paths: paths.clone(), structural: false },
-            BuildTrigger::Unobserved => Self::from_last_seal(folder, builder, seal),
+            // A seal whose media settled after its render leaves pages a later
+            // build renders differently; only the re-render those media owe may
+            // prove from it.
+            BuildTrigger::Unobserved if seal.media_settled() && Self::only_pages_moved(folder, builder, seal) => Self::Manifest,
+            BuildTrigger::ImagesSettled if Self::only_pages_moved(folder, builder, seal) => Self::ImagesSettled,
+            BuildTrigger::Unobserved | BuildTrigger::ImagesSettled => Self::None,
         }
     }
 
@@ -151,7 +169,7 @@ impl ChangeProof {
     pub fn allows_incremental_skip(&self) -> bool {
         match self {
             Self::Events { paths, structural: false } => !paths.is_empty() && paths.iter().all(|p| is_markdown_ext(p)),
-            Self::Manifest => true,
+            Self::Manifest | Self::ImagesSettled => true,
             Self::Events { structural: true, .. } | Self::None => false,
         }
     }
@@ -201,19 +219,17 @@ impl ChangeProof {
             Self::Events { paths, .. } => !paths.is_empty()
                 && paths.iter().all(|p| is_markdown_ext(p) || is_parse_irrelevant_ext(p)),
             Self::Manifest => true,
-            Self::None => false,
+            Self::ImagesSettled | Self::None => false,
         }
     }
 
     /// What a build with no events can prove from the last sealed manifest:
     /// that only markdown pages changed since.
     ///
-    /// Every rule below falls back to [`ChangeProof::None`]:
+    /// Each rule below answers no:
     ///
     /// - The manifest is missing or unreadable, or a different moss binary
     ///   sealed it (its templates are an input no file shows).
-    /// - The seal found image or video outputs other than the ones its render
-    ///   read ([`BuildInputs::media_settled`](crate::build::inputs::BuildInputs::media_settled)).
     /// - Its [`BuildInputs`](crate::build::inputs::BuildInputs) are missing,
     ///   or a `.moss/` file, a link card or an environment variable they
     ///   recorded moved. They name what the last build read outside the page
@@ -225,26 +241,22 @@ impl ChangeProof {
     ///   unchanged here too.
     /// - Anything is still in the cloud, could not be judged, or took longer
     ///   than the sweep's own pass budget.
-    fn from_last_seal(folder: &Path, builder: &str, seal: &LastSeal) -> Self {
+    fn only_pages_moved(folder: &Path, builder: &str, seal: &LastSeal) -> bool {
         use crate::build::watch::drift;
         use crate::ops::watch::sweep::{walk, WALK_DEADLINE};
-        let Some(baseline) = seal.manifest.as_ref() else { return Self::None };
-        let media_settled = baseline.build_inputs.as_ref().is_some_and(|r| r.media_settled);
-        if baseline.builder_fingerprint.as_deref() != Some(builder) || !seal.moss.holds || !media_settled {
-            return Self::None;
+        let Some(baseline) = seal.manifest.as_ref() else { return false };
+        if baseline.builder_fingerprint.as_deref() != Some(builder) || !seal.moss.holds {
+            return false;
         }
         let deadline = std::time::Instant::now() + WALK_DEADLINE;
-        let Ok(walked) = walk::walk_with_error(folder, Some(deadline), None) else { return Self::None };
+        let Ok(walked) = walk::walk_with_error(folder, Some(deadline), None) else { return false };
         if walked.deadline_blown || !walked.dataless.is_empty() {
-            return Self::None;
+            return false;
         }
         let report = drift::detect_drift(baseline, &walked.files, &[], folder, drift::probe_missing, Some(deadline), true);
         let only_pages = report.drifted.iter()
             .all(|(rel, drift)| drift.kind == drift::DriftKind::Edited && crate::build::manifest::is_page_source_key(rel));
-        if report.deadline_blown || report.offline > 0 || !only_pages {
-            return Self::None;
-        }
-        Self::Manifest
+        !report.deadline_blown && report.offline == 0 && only_pages
     }
 }
 

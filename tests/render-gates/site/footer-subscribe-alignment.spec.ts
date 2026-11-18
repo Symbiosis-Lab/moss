@@ -113,7 +113,7 @@ const hostedForm = (lang) => {
     + '<div class="moss-subscribe-status" aria-live="polite">'
     + '<svg class="moss-subscribe-status__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l8 6 8-6" fill="none" stroke="currentColor" stroke-width="2"/></svg>'
     + `<span data-copy="check-email">${COPY[lang]}</span>`
-    + '</div></form></div>';
+    + `</div><span class="moss-subscribe-subscribed">${zh ? '已订阅' : 'Subscribed'}</span></form></div>`;
 };
 
 const donePage = (lang, { inFooter = true, vertical = false } = {}) => `<!doctype html><html lang="${lang}"><head><meta charset="utf-8">
@@ -188,4 +188,35 @@ test.describe('subscribe confirmation shares the check circle row', () => {
     expect(Math.abs(centre(circle) - centre(row)), 'same column').toBeLessThanOrEqual(3);
     expect(row.bottom, 'the message comes first down the column').toBeLessThanOrEqual(circle.top);
   });
+});
+
+// A subscribed browser sees the word in place of the field and button: it ends
+// where the button ended and stays on the invitation's line, wherever a theme
+// sized the form for its field; in a footer a theme stacks as a column it still
+// ends where the button ended.
+test.describe('subscribed state keeps the button end', () => {
+  for (const lang of ['zh-hans', 'en']) {
+    for (const width of [390, 1280]) {
+      for (const themed of [false, true, 'column']) {
+        test(`${lang} at ${width}px${themed === true ? ', field-sized theme form' : themed ? ', column footer' : ''}: the word ends at the button's end${themed === 'column' ? '' : " on the invitation's line"}`, async ({ page }) => {
+          await page.setViewportSize({ width, height: 900 });
+          await page.setContent(donePage(lang));
+          // A theme's field-sized flex basis and cap, in the layer that outranks moss's, with the row spread to its ends.
+          if (themed === 'column') await page.addStyleTag({ content: '@layer themes{footer{flex-direction:column;align-items:stretch}footer > .moss-subscribe{flex:1 1 18rem;max-width:22rem}}' });
+          else if (themed) await page.addStyleTag({ content: '@layer themes{footer{justify-content:space-between}footer > .moss-subscribe{flex:1 1 18rem;max-width:22rem;margin:0 0 48px}}' });
+          await page.locator('.footer-default').evaluate((el) => { el.textContent = 'Subscribe and hear first.'; });
+          const button = await rect(page, '.moss-subscribe-form .moss-btn');
+          await page.evaluate(() => document.documentElement.setAttribute('data-moss-subscribed', ''));
+          const word = await rect(page, '.moss-subscribe-subscribed');
+          const prompt = await rect(page, '.footer-default');
+          expect(Math.abs(word.right - button.right), "ends where the button ended").toBeLessThanOrEqual(1);
+          if (themed === 'column') {
+            // A theme's field-sized basis is a height in a column: the form must stay about one button tall, not 18rem.
+            const box = await rect(page, '.moss-subscribe');
+            expect(box.bottom - box.top, 'the form shrinks to the word').toBeLessThanOrEqual(2 * (button.bottom - button.top));
+          } else expect(Math.abs(middle(word) - middle(prompt)), "on the invitation's line").toBeLessThanOrEqual(14);
+        });
+      }
+    }
+  }
 });

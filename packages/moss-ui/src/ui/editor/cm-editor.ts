@@ -37,7 +37,7 @@ import { createReferenceResolver, type FileEventsCoordinator } from './cm-refere
 import { insertCommentAndEdit } from './cm-comment';
 import { detectFileType, type EditorFileType } from './file-types';
 import {
-  referenceCardExtension, assetCardProvider, footnoteCardProvider,
+  referenceCardExtension, assetCardProvider, replaceAsset, footnoteCardProvider,
   linkCardProvider, pageLinkCardProvider, cardProviders, cardAugmenters,
   currentArticleCardProvider, isCurrentArticleMapAt, openCardAt, withLinkControls, type CurrentArticleCardData, type CardProvider,
 } from './cm-reference-card';
@@ -50,7 +50,7 @@ import { jsonEditingExtension } from './cm-json';
 import { osDropCaret, blockDropCursor } from './cm-os-drop-caret';
 import { clearOutsideWashLater, outsideWashOf, revealFlashExtension } from './cm-reveal-flash';
 import { dropExtension, type DestinationFor } from './cm-drop';
-import { focusPointExtension, pictureAtCaretField, heroWordsExtension, sourceMarkdownExtensions } from './cm';
+import { focusPointExtension, pictureActExtension, pictureAtCaretField, heroWordsExtension, sourceMarkdownExtensions } from './cm';
 import { host as uiHost } from "../host";
 import { engine } from '../engine';
 
@@ -170,6 +170,8 @@ export interface CmEditorOptions {
    * the insert bar's media picker.
    */
   getProjectRoot?: () => string | null;
+  /** Show a file (absolute path) in the file list: the preview menu's "Show in file list". */
+  revealFile?: (path: string) => void;
   /** The page's front matter and the way to write fields back through its store ("Expand" reads and updates the inferred title, description and date). */
   getFrontmatter?: () => Record<string, unknown>;
   applyFrontmatter?: (patch: { title?: string; description?: string; date?: string; inferred?: string[] | null }) => void;
@@ -491,15 +493,20 @@ export class CmEditor {
             return spec && withLinkControls(spec, state, pos, refResolver.resolvedCache);
           };
         const pathOpts = { fromFile: () => options.getFromFile?.() ?? '' };
+        const pickOpts = { pagePath: () => options.getFromFile?.() ?? '', projectRoot: () => options.getProjectRoot?.() ?? null };
         extensions.push(
           referenceCardExtension(),
           chordTrackingExtension(),
           ...(options.getCurrentArticle ? [cardProviders.of(currentArticleCardProvider(options.getCurrentArticle))] : []),
-          cardProviders.of(assetCardProvider(refResolver.resolvedCache, {
-            pagePath: () => options.getFromFile?.() ?? '',
-            projectRoot: () => options.getProjectRoot?.() ?? null,
-            applyWidth: applyEmbedWidth,
-          })),
+          cardProviders.of(assetCardProvider(refResolver.resolvedCache, { ...pickOpts, applyWidth: applyEmbedWidth })),
+          pictureActExtension({
+            host: uiHost.bus,
+            replace: (view, picture) => replaceAsset(view, picture, pickOpts),
+            reveal: (reference) => {
+              const file = followFilePath(refResolver.resolvedCache.get(reference, true));
+              if (file) options.revealFile?.(file);
+            },
+          }),
           cardProviders.of(footnoteCardProvider),
           cardProviders.of(withControls(
             pageLinkCardProvider(refResolver.resolvedCache, engine.editorReferenceCard, pathOpts),

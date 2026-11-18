@@ -204,7 +204,7 @@ const SORT_AXES = new Set([
 *
 * Parity with the build's `parse_params` is GATED, not asserted in prose:
 * `crates/moss-core/tests/fixtures/folder-embed-params.vectors.json` is run by
-* this module's test AND by `crates/moss-core/tests/folder_embed_params.rs`.
+* this module's test AND by `crates/moss-core/tests/it/folder_embed_params.rs`.
 * **Add a vector before you add a key** — a param added on the Rust side alone
 * produces a silently missing chip rather than a red test.
 *

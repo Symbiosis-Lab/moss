@@ -531,7 +531,7 @@ pub(crate) fn produce_ladder(
         let stored: Result<Vec<String>, String> = result.and_then(|_written| {
             members
                 .iter()
-                .map(|name| objects.store_file(&scratch.join(name), crate::build::cache::RecordMode::Wait))
+                .map(|name| objects.store_file(&scratch.join(name)))
                 .collect()
         });
         // allow:unlink ladder scratch this call created under cache/tmp
@@ -624,7 +624,7 @@ pub(crate) fn heal_cached_ladder(
 ) -> Result<LadderHeal, String> {
     let Some((members, oids, params)) = cached_ladder(transforms, source_oid, config) else {
         let has_ladder_keys = transforms
-            .get_with(source_oid, crate::build::cache::RecordMode::Wait)
+            .get_with(source_oid, crate::build::cache::RecordMode::Request)
             .is_some_and(|record| record.transforms.keys().any(|k| k.starts_with(HLS_TRANSFORM_PREFIX)));
         return Ok(if has_ladder_keys { LadderHeal::NeedsDispatch } else { LadderHeal::Nothing });
     };

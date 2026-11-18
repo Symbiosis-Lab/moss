@@ -2,5 +2,6 @@ export { MARKDOWN_EXTENSIONS, sourceMarkdownExtensions } from './source-extensio
 export type { SourceMarkdownOptions } from './source-extensions';
 export { focusPointExtension } from './focus-point';
 export type { FocusPointOptions } from './focus-point';
+export { pictureActExtension } from './picture-act';
 export { pictureAtCaretField } from './picture-context';
 export { heroWordsExtension } from './hero-words';

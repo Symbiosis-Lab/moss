@@ -5,9 +5,10 @@ export class App {}
 export class Plugin {
   app: any;
   commands: any[] = [];
+  registeredExtensions: unknown[][] = [];
   constructor(app: unknown) { this.app = app; }
   async loadData() { return {}; }
-  registerEditorExtension() {}
+  registerEditorExtension(extension: unknown[]) { this.registeredExtensions.push(extension); }
   registerEditorSuggest() {}
   registerView() {}
   registerEvent() {}

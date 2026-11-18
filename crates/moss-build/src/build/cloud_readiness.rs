@@ -188,6 +188,30 @@ pub fn download_snapshot() -> crate::build::cloud_prefetch::Snapshot {
     PREFETCH.snapshot()
 }
 
+/// The reader pool's read tally now, for [`record_download_pool`] to subtract.
+pub(crate) fn download_reads() -> crate::build::cloud_prefetch::ReadTally {
+    download_snapshot().reads
+}
+
+/// Put on this build's summary line, as plain counts with no paths, the reads
+/// that returned since `before` and what is queued and in flight now, once
+/// there is any.
+pub(crate) fn record_download_pool(before: crate::build::cloud_prefetch::ReadTally) {
+    let pool = download_snapshot();
+    let reads = pool.reads.since(before);
+    if reads == Default::default() && pool.waiting == 0 && pool.in_flight == 0 {
+        return;
+    }
+    use crate::build::phase::record_value as put;
+    put("cloud_reads_waiting", pool.waiting);
+    put("cloud_reads_in_flight", pool.in_flight);
+    put("cloud_oldest_read_ms", pool.oldest_read.map_or(0, |(_, age)| age.as_millis() as usize));
+    put("cloud_reads_fetched", reads.fetched as usize);
+    put("cloud_reads_still_in_cloud", reads.still_in_cloud as usize);
+    put("cloud_reads_failed", reads.failed as usize);
+    put("cloud_read_ms", reads.millis as usize);
+}
+
 /// Concrete read errors still represented in the sweep's pending set.
 pub fn download_failures_for(folder: &Path, pending: &std::collections::HashSet<PathBuf>) -> (usize, Vec<String>) {
     PREFETCH.failures_for(folder, pending)
@@ -685,6 +709,7 @@ pub fn raise_gate_for_a_deferred_build(
     reporter: &dyn crate::build::ports::reporter::BuildReporter,
     message: &str,
 ) {
+    crate::ops::watch::worker::note_cloud_wait(folder_path);
     // The same monotonicity rule the build's own gate follows: a
     // sealed generation never becomes unsealed, so once one exists the preview
     // has something to serve and a full-window screen is never the right answer.

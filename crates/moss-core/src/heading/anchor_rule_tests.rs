@@ -109,3 +109,47 @@ fn only_paragraphs_and_quotes_count() {
     let link = format!("[{w}](https://example.com)");
     assert!(wants(&format!("## A\n\n{link}\n\n## B\n\n{link}\n")));
 }
+
+fn bar(md: &str) -> bool {
+    wants_contents_list(&parse(md).blocks)
+}
+
+#[test]
+fn two_headings_over_cards_and_a_few_links_have_no_bar() {
+    let cards = ":::grid 3\n![[a.png]]\n+++\n![[b.png]]\n+++\n![[c.png]]\n:::";
+    let links = "- [One](/one)\n- [Two](/two)\n- [Three](/three)";
+    assert!(!bar(&format!("{}\n\n## All\n\n{cards}\n\n## Elsewhere\n\n{links}\n", words(300))));
+}
+
+#[test]
+fn two_long_sections_have_a_bar_and_one_does_not() {
+    assert!(bar(&format!("## A\n\n{}\n\n## B\n\n{}\n", words(80), words(80))));
+    assert!(!bar(&format!("## A\n\n{}\n\n## B\n\n{}\n", words(80), words(79))));
+    assert!(!bar(&format!("{}\n", words(2000))));
+}
+
+#[test]
+fn list_items_count_toward_the_bar_but_not_toward_marks() {
+    let list = format!("1. {}\n2. {}\n   - {}", words(30), words(30), words(20));
+    let md = format!("## A\n\n{list}\n\n## B\n\n{list}\n");
+    assert!(bar(&md));
+    assert!(!wants(&md));
+}
+
+#[test]
+fn a_bar_section_holds_its_subsections() {
+    let md = format!("## A\n\n### a1\n\n{}\n\n### a2\n\n{}\n\n## B\n\n{}\n", words(40), words(40), words(80));
+    assert!(bar(&md));
+    assert!(!wants(&md));
+}
+
+#[test]
+fn the_bar_lists_the_shallowest_level_used() {
+    assert!(bar(&format!("### A\n\n{}\n\n### B\n\n{}\n", words(80), words(80))));
+    assert!(!bar(&format!("## Only\n\n{}\n\n### A\n\n{}\n\n### B\n\n{}\n", words(10), words(80), words(80))));
+}
+
+#[test]
+fn a_page_title_ends_a_bar_section() {
+    assert!(!bar(&format!("## A\n\n{}\n\n# Title\n\n{}\n\n## B\n\n{}\n", words(40), words(80), words(80))));
+}

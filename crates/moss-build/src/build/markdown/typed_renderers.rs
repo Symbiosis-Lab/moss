@@ -28,6 +28,8 @@
 //! `extract_domain` moved to `moss_core::ast::link_card` so the pure
 //! whole-cell renderer in `moss-core` can use it too.
 
+use moss_core::render::image::Loading;
+
 /// Format a CSS class attribute with a base class and optional extra classes.
 ///
 /// - `("moss-grid", "profiles featured")` → `class="moss-grid profiles featured"`
@@ -78,7 +80,7 @@ fn hero_href_is_video(href: &str) -> bool {
 fn hero_picture_html(
     href: &str,
     alt: &str,
-    eager: bool,
+    loading: Loading,
     extra: &str,
     display: &moss_core::media::MediaAttrs,
     assets: Option<&moss_core::asset_snapshot::AssetSnapshot>,
@@ -86,7 +88,7 @@ fn hero_picture_html(
 ) -> String {
     let style = display.to_inline_style();
     let opts = moss_core::render::image::ImageRenderOptions {
-        eager: eager && assets.is_some(),
+        loading,
         extra_attrs: (!extra.is_empty()).then_some(extra),
         style: style.as_deref(),
         fit: display.fit,
@@ -113,12 +115,8 @@ fn hero_picture_html(
 /// for callers without a source position.
 pub(crate) fn render_hero_html_typed(
     args: &moss_core::ast::HeroShortcode,
-    // Step 3 of structural-html-emission: when `Some`, the hero's inline
-    // `<img>` is synthesized via `image_render::synthesize_image_html` with
-    // `ImageContext::Hero` (and `eager: true` so the hero gets
-    // `loading="eager" fetchpriority="high"`). When `None`, falls back to
-    // the raw `<img>` emission that the regex pass picks up — preserves
-    // behavior for test/fragment-render contexts without a media manifest.
+    // When `Some`, the hero's picture is synthesized (`ImageContext::Hero`),
+    // at high priority; `None` (tests, fragments) emits a bare `<img>`.
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     // Click-to-source: when `Some(n)`, the hero's outermost `<section>`
     // carries `data-source-range="n-m"` so the editor bridge's
@@ -357,7 +355,7 @@ pub(crate) fn render_hero_html_typed(
             href,
             &args.image_alt,
             // The closing picture is the last thing on the page.
-            !closing,
+            if closing { Loading::Lazy } else { Loading::Priority },
             pair_attr("light").trim_start(),
             &attrs,
             media_assets,
@@ -371,7 +369,7 @@ pub(crate) fn render_hero_html_typed(
     let img_part = match dark_href {
         Some(dark) => format!(
             "{img_part}{}",
-            hero_picture_html(dark, "", false, pair_attr("dark").trim_start(), &attrs, media_assets, is_plate)
+            hero_picture_html(dark, "", Loading::Lazy, pair_attr("dark").trim_start(), &attrs, media_assets, is_plate)
         ),
         None => img_part,
     };
@@ -927,7 +925,7 @@ mod tests {
             dominant_color: Some("#123456".to_string()),
             lqip_data_uri: Some("data:image/jpeg;base64,zzz".to_string()),
         };
-        let lookup = MediaDimensionLookup::new(&[meta], &[], &std::collections::HashMap::new(), None);
+        let lookup = MediaDimensionLookup::new(&[meta], &[], &std::collections::HashMap::new(), None, &Default::default());
         let args = HeroShortcode {
             overlay: vec![Block::Figure {
                 image: Inline::Image {
@@ -1117,6 +1115,7 @@ mod tests {
             &[],
             &std::collections::HashMap::new(),
             None,
+            &Default::default(),
         )
     }
 
@@ -1234,7 +1233,7 @@ mod tests {
     fn lookup_with_poster(registry: &crate::types::assets::AssetRegistry) -> crate::build::media::dimensions::MediaDimensionLookup {
         registry.set_pending("clip.poster.jpg".to_string(), None, None);
         registry.set_ready("clip.poster.jpg".to_string());
-        crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &std::collections::HashMap::new(), Some(registry))
+        crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &std::collections::HashMap::new(), Some(registry), &Default::default())
     }
 
     fn hero_html(args: &moss_core::ast::HeroShortcode, lookup: &crate::build::media::dimensions::MediaDimensionLookup) -> String {
@@ -1287,7 +1286,7 @@ mod tests {
     #[test]
     fn a_hero_names_no_poster_the_build_has_not_cut() {
         let registry = crate::types::assets::AssetRegistry::new();
-        let lookup = crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &std::collections::HashMap::new(), Some(&registry));
+        let lookup = crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &std::collections::HashMap::new(), Some(&registry), &Default::default());
         let args = moss_core::ast::HeroShortcode { image: Some(media("clip.mp4")), ..Default::default() };
         let html = hero_html(&args, &lookup);
         assert!(html.contains(r#"poster="clip.thumb.jpg""#), "got: {html}");

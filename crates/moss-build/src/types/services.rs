@@ -94,17 +94,10 @@ pub struct BackgroundContext {
     /// When non-empty, `run_notebook_processing` downloads JupyterLite assets
     /// (if not cached) and generates viewer HTML pages with JupyterLite iframes.
     pub notebook_files: Vec<FileInfo>,
-    /// Responsive-rung collision map: dir-override-mapped path of EVERY
-    /// vault image file → that file's ABSOLUTE vault path. Not restricted to
-    /// rung-shaped names — a generated rung URL "collides" exactly when it
-    /// appears as a key (e.g. a real `photo.w800.webp` beside `photo.jpg`).
-    /// Built once in blocking.rs via `build::image::rung_collision_map` and
-    /// THREADED here so the background encode worker skips writes to
-    /// collided rung paths with the SAME membership test registration used —
-    /// the worker must never recompute it (no ProjectStructure there; a
-    /// divergent set means a registered-but-never-encoded rung ⇒
-    /// sealed-deploy 404).
-    pub rung_collisions: std::collections::HashMap<String, std::path::PathBuf>,
+    /// The build's rung decision (`media::rungs::RungPlan`), built once in
+    /// blocking.rs and threaded here for the encode worker, which must never
+    /// recompute it.
+    pub rung_plan: crate::build::media::rungs::RungPlan,
     /// Advisories `dispatch_video_conversions` carried forward for videos it
     /// skipped this round (fingerprint matched or healed, output present) —
     /// read from `VideoConversionState::item_advisories`, never recomputed.
@@ -142,7 +135,7 @@ impl BackgroundContext {
             search_enabled: false,
             ffmpeg_bin_path: None,
             notebook_files: Vec::new(),
-            rung_collisions: HashMap::new(),
+            rung_plan: Default::default(),
             carried_advisories: Vec::new(),
             members_policy: Default::default(),
             source_oids: Default::default(),
@@ -311,11 +304,16 @@ impl BuildServices {
     /// the watcher's admission probe. Without it a `moss build --serve --watch`
     /// runs rebuild N+1 against the same `staging/` that build N's seal tail is
     /// still materializing, with nothing serializing the two.
+    ///
+    /// The session also holds the folder's variant registry, so every build of
+    /// the folder in this process promises into the one registry the preview
+    /// server reads (see `FolderSession`'s `assets`).
     pub fn headless_for(folder_path: &str) -> Self {
-        Self {
-            session: crate::system::folder_session::registry().get(folder_path),
-            ..Self::headless()
+        let mut services = Self { session: crate::system::folder_session::registry().get(folder_path), ..Self::headless() };
+        if let Some(session) = &services.session {
+            services.assets = Some(session.assets());
         }
+        services
     }
 
     /// Construct a headless instance with no session — unit tests, and any
@@ -341,9 +339,7 @@ impl BuildServices {
             // tail's degrade pass reads `Failed` entries from here,
             // and a `None` made every headless `set_failed` a silent no-op —
             // so a variant that failed to encode shipped as a live 404 inside
-            // <picture> from `moss build` while the app degraded it. Fresh
-            // per build (the app shares one via `app.manage`), which is right
-            // for a process that builds once and exits.
+            // <picture> from `moss build` while the app degraded it.
             assets: Some(std::sync::Arc::new(AssetRegistry::new())),
             in_flight_videos: std::sync::Arc::new(crate::build::cache::Singleflight::new()),
             in_flight_images: std::sync::Arc::new(crate::build::cache::Singleflight::new()),

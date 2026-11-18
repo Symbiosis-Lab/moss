@@ -7125,7 +7125,7 @@ mod og_url_tests {
                 &SiteUrl::parse("https://example.com").unwrap(),
                 true, false, "favicon.svg", false, Some(dir.path()), &mut og_outputs,
                 source_root,
-                &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &crate::build::media::dimensions::MediaDimensionLookup::new(&project.image_files, &project.video_files, &std::collections::HashMap::new(), None), crate::build::inputs::now()),
+                &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &crate::build::media::dimensions::MediaDimensionLookup::new(&project.image_files, &project.video_files, &std::collections::HashMap::new(), None, &Default::default()), crate::build::inputs::now()),
             )
             .expect("generate_html_collect_og should succeed")
         }
@@ -7187,7 +7187,7 @@ mod og_url_tests {
                 &SiteUrl::parse("https://example.com").unwrap(),
                 true, false, "favicon.svg", false, Some(out.path()), &mut og_outputs,
                 vault.path(),
-                &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &std::collections::HashMap::new(), None), crate::build::inputs::now()),
+                &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &std::collections::HashMap::new(), None, &Default::default()), crate::build::inputs::now()),
             )
             .expect("render");
             assert!(
@@ -7221,7 +7221,7 @@ mod og_url_tests {
         let no_previous = std::collections::HashMap::new();
         let filename_covers = crate::build::page::cover::FilenameCovers::default();
 
-        let media_lookup = crate::build::media::dimensions::MediaDimensionLookup::new(&project.image_files, &project.video_files, &std::collections::HashMap::new(), None);
+        let media_lookup = crate::build::media::dimensions::MediaDimensionLookup::new(&project.image_files, &project.video_files, &std::collections::HashMap::new(), None, &Default::default());
         let shared = crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &media_lookup, crate::build::inputs::now());
         let before = BUILT_ON_THIS_THREAD.with(|n| n.get());
         // The homepage and a regular page take different branches, and each
@@ -7272,7 +7272,7 @@ mod og_url_tests {
         let project = make_project();
         let no_previous = std::collections::HashMap::new();
         let filename_covers = crate::build::page::cover::FilenameCovers::default();
-        let media_lookup = crate::build::media::dimensions::MediaDimensionLookup::new(&project.image_files, &project.video_files, &std::collections::HashMap::new(), None);
+        let media_lookup = crate::build::media::dimensions::MediaDimensionLookup::new(&project.image_files, &project.video_files, &std::collections::HashMap::new(), None, &Default::default());
         let shared = crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &media_lookup, crate::build::inputs::now());
 
         let before = SEQUENCES_ORDERED.with(|n| n.get());
@@ -7290,11 +7290,11 @@ mod og_url_tests {
             .expect("render");
             let prev = match i {
                 1 => r#"moss-series-nav-prev empty"#.to_string(),
-                _ => format!(r#"&lt;</span> <span class="moss-series-nav-text"><span class="moss-series-nav-label">Previous</span><span class="moss-series-nav-title">Part {}</span>"#, i - 1),
+                _ => format!(r#"<span class="moss-series-nav-title">Part {}</span></a>"#, i - 1),
             };
             let next = match i {
                 3 => r#"moss-series-nav-next empty"#.to_string(),
-                _ => format!(r#"<span class="moss-series-nav-label">Next</span><span class="moss-series-nav-title">Part {}</span></span> <span class="moss-series-nav-arrow">&gt;"#, i + 1),
+                _ => format!(r#"<span class="moss-series-nav-title">Part {}</span> <span class="moss-series-nav-arrow" aria-hidden="true">&gt;"#, i + 1),
             };
             assert!(html.contains(&prev), "Part {i} should have prev `{prev}`: {html}");
             assert!(html.contains(&next), "Part {i} should have next `{next}`: {html}");
@@ -7326,7 +7326,7 @@ mod og_url_tests {
         let project = make_project();
         let no_previous = std::collections::HashMap::new();
         let filename_covers = crate::build::page::cover::FilenameCovers::default();
-        let media_lookup = crate::build::media::dimensions::MediaDimensionLookup::new(&project.image_files, &project.video_files, &std::collections::HashMap::new(), None);
+        let media_lookup = crate::build::media::dimensions::MediaDimensionLookup::new(&project.image_files, &project.video_files, &std::collections::HashMap::new(), None, &Default::default());
         let shared = crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &media_lookup, crate::build::inputs::now());
         let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
         let html = generate_html_collect_og(
@@ -7340,8 +7340,8 @@ mod og_url_tests {
         )
         .expect("render");
 
-        assert!(html.contains(r#"<a href="/letters/first/" class="moss-series-nav-link moss-series-nav-prev">"#), "{html}");
-        assert!(html.contains(r#"<a href="/letters/third/" class="moss-series-nav-link moss-series-nav-next">"#), "{html}");
+        assert!(html.contains(r#"<a href="/letters/first/" rel="prev" class="moss-series-nav-link moss-series-nav-prev">"#), "{html}");
+        assert!(html.contains(r#"<a href="/letters/third/" rel="next" class="moss-series-nav-link moss-series-nav-next">"#), "{html}");
         assert!(html.contains(r#"<a href="/letters/" class="moss-series-nav-collection">"#), "{html}");
         assert!(html.contains(r#"<link rel="prefetch" href="/letters/third/">"#), "{html}");
         assert!(html.contains("2 of 3"), "{html}");
@@ -7374,7 +7374,7 @@ mod og_url_tests {
             &SiteUrl::parse("https://example.com").unwrap(),
             true, false, "favicon.png", false, Some(dir.path()), &mut og_outputs,
             std::path::Path::new(""),
-            &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &std::collections::HashMap::new(), None), crate::build::inputs::now()),
+            &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &std::collections::HashMap::new(), None, &Default::default()), crate::build::inputs::now()),
         )
         .expect("render");
 
@@ -7426,7 +7426,7 @@ mod og_url_tests {
             false,
             Some(output_root),
             &mut og_outputs,
-            std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &crate::build::media::dimensions::MediaDimensionLookup::new(&project.image_files, &project.video_files, &std::collections::HashMap::new(), None), crate::build::inputs::now()),
+            std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &crate::build::media::dimensions::MediaDimensionLookup::new(&project.image_files, &project.video_files, &std::collections::HashMap::new(), None, &Default::default()), crate::build::inputs::now()),
         )
         .expect("generate_html_collect_og should succeed");
 
@@ -7506,7 +7506,7 @@ mod og_url_tests {
             false,
             Some(output_root),
             &mut og_outputs,
-            std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &crate::build::media::dimensions::MediaDimensionLookup::new(&project.image_files, &project.video_files, &std::collections::HashMap::new(), None), crate::build::inputs::now()),
+            std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &crate::build::media::dimensions::MediaDimensionLookup::new(&project.image_files, &project.video_files, &std::collections::HashMap::new(), None, &Default::default()), crate::build::inputs::now()),
         )
         .expect("generate_html_collect_og should succeed");
 
@@ -7572,7 +7572,7 @@ mod og_url_tests {
             false,
             Some(output_root),
             &mut og_outputs,
-            std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &crate::build::media::dimensions::MediaDimensionLookup::new(&project.image_files, &project.video_files, &std::collections::HashMap::new(), None), crate::build::inputs::now()),
+            std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &crate::build::media::dimensions::MediaDimensionLookup::new(&project.image_files, &project.video_files, &std::collections::HashMap::new(), None, &Default::default()), crate::build::inputs::now()),
         )
         .expect("generate_html_collect_og should succeed");
 
@@ -7632,7 +7632,7 @@ mod og_url_tests {
                 false,
                 Some(dir.path()),
                 &mut og_outputs,
-                std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &crate::build::media::dimensions::MediaDimensionLookup::new(&project.image_files, &project.video_files, &std::collections::HashMap::new(), None), crate::build::inputs::now()),
+                std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &crate::build::media::dimensions::MediaDimensionLookup::new(&project.image_files, &project.video_files, &std::collections::HashMap::new(), None, &Default::default()), crate::build::inputs::now()),
             )
             .expect("generate_html_collect_og should succeed");
             html.lines()
@@ -7692,7 +7692,7 @@ mod og_url_tests {
             false,
             Some(output_root),
             &mut og_outputs,
-            std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &crate::build::media::dimensions::MediaDimensionLookup::new(&project.image_files, &project.video_files, &std::collections::HashMap::new(), None), crate::build::inputs::now()),
+            std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &crate::build::media::dimensions::MediaDimensionLookup::new(&project.image_files, &project.video_files, &std::collections::HashMap::new(), None, &Default::default()), crate::build::inputs::now()),
         )
         .expect("generate_html_collect_og should succeed");
 
@@ -7765,7 +7765,7 @@ mod og_url_tests {
             Some(tmp.path()),
             &mut og_outputs,
             std::path::Path::new(""),
-            &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &crate::build::media::dimensions::MediaDimensionLookup::new(&project.image_files, &project.video_files, &std::collections::HashMap::new(), None), crate::build::inputs::now()),
+            &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &crate::build::media::dimensions::MediaDimensionLookup::new(&project.image_files, &project.video_files, &std::collections::HashMap::new(), None, &Default::default()), crate::build::inputs::now()),
         )
         .expect("generate_html_collect_og should succeed");
 
@@ -7926,7 +7926,7 @@ mod listable_page_card_tests {
             Some(output_root),
             &mut og_outputs,
             std::path::Path::new(""),
-            &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &crate::build::media::dimensions::MediaDimensionLookup::new(&project.image_files, &project.video_files, &std::collections::HashMap::new(), None), crate::build::inputs::now()),
+            &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &crate::build::media::dimensions::MediaDimensionLookup::new(&project.image_files, &project.video_files, &std::collections::HashMap::new(), None, &Default::default()), crate::build::inputs::now()),
         )
         .expect("generate_html_collect_og should succeed")
     }

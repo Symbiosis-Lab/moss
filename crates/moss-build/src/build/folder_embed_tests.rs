@@ -458,7 +458,7 @@ fn body_embed_listing_follows_the_hosts_effective_typesetting() {
     let marker =
         moss_core::resolve::embed_renderer::folder_list::emit_marker("/文/", "home.md", &params);
     let media_lookup =
-        crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &dir_overrides, None);
+        crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &dir_overrides, None, &Default::default());
     let expand = |page: Option<&str>, site: Option<&str>| {
         let host = ParsedDocument {
             url_path: "index.html".to_string(),
@@ -1934,7 +1934,7 @@ fn body_embed_is_tagged_data_embed_but_the_frontmatter_listing_is_not() {
         ..Default::default()
     };
     let media_lookup =
-        crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &dir_overrides, None);
+        crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &dir_overrides, None, &Default::default());
     let mut documents = vec![host, folder.clone(), a.clone(), b.clone()];
     expand_markers_in_documents(&mut documents, &project, &dir_overrides, true, &media_lookup, None);
     assert!(
@@ -2008,7 +2008,7 @@ fn root_self_embed_resolves_from_a_page_that_is_not_the_home() {
         ..Default::default()
     };
     let media_lookup =
-        crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &dir_overrides, None);
+        crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &dir_overrides, None, &Default::default());
     let mut documents = vec![archive, home, a, b];
     expand_markers_in_documents(&mut documents, &project, &dir_overrides, true, &media_lookup, None);
 

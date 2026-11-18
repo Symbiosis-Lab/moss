@@ -19,8 +19,10 @@ pub(super) enum IslandShape {
     /// A page with `contents: pictures` but no trail (the home page): the
     /// island, which mounts the ruler, with the page's title as its only crumb.
     TitleOnly(String),
-    /// `[site].header = "none"`: the page's only chrome, with no trail.
-    Pinned,
+    /// `[site].header = "none"`: the page's only chrome, with no trail. Without
+    /// `sections` (a page with no contents list worth one) it carries no
+    /// sections button and the script shows its controls alone.
+    Pinned { sections: bool },
 }
 
 /// The `…` disclosure a folding breadcrumb trail opens, plus the separator
@@ -61,17 +63,16 @@ impl<'a> NavigationBuilder<'a> {
     /// the masthead has it and an inert icon in shipped chrome is worse than no
     /// icon.
     ///
-    /// Reached only when the site opted in with `[site].floating_nav = true`
-    /// (default off since 2026-08-30), and returns an
-    /// empty string when the page has no breadcrumb trail: the homepage
-    /// (nowhere to go "up" to) and any site that has turned breadcrumbs off.
+    /// Reached when the site opted in with `[site].floating_nav = true` and the
+    /// page's sections hold enough text to be worth listing
+    /// (`moss_core::ast::wants_contents_list`, decided from the parsed body),
+    /// or when the page asks for `contents: pictures`. Returns an empty string
+    /// when the page has no breadcrumb trail: the homepage (nowhere to go "up"
+    /// to) and any site that has turned breadcrumbs off.
     ///
-    /// Whether an emitted island ever SHOWS is decided at runtime by
-    /// `nav-island.ts`: only on a page with two or more section headings — a
-    /// real contents table. That half of the rule
-    /// lives in the script because heading depth is a rendered-DOM question it
-    /// already answers for the sections panel, and duplicating it here would
-    /// invite drift for the price of a few hundred `display: none` bytes.
+    /// The script still counts the rendered headings at the level it lists and
+    /// shows the island only from two up: the build judges the text, the
+    /// script the list it builds from the DOM.
     ///
     /// # What the emitted markup promises with JavaScript off
     ///
@@ -83,14 +84,14 @@ impl<'a> NavigationBuilder<'a> {
     /// not, because an emitted island that is never shown without a contents
     /// table is an island whose sections button always has something to open.
     pub fn generate_nav_island(&self) -> String {
-        if self.island == IslandShape::Pinned {
+        if let IslandShape::Pinned { sections } = self.island {
             // The site name, since nothing else on such a page names the
             // site. The controls (search, language, theme) follow the island
             // rather than sitting in it: the stylesheet moves them between the
             // top of the page, the foot of the contents ruler and the bar's
             // end by position alone, so they are never hidden with the bar.
             let site_name = self.site_name_link_html(&self.home_path(), &self.logo_html());
-            let bar = [site_name, self.sections_button_html()];
+            let bar = [site_name, if sections { self.sections_button_html() } else { String::new() }];
             return format!("{}{}", self.island_frame(true, &bar), self.nav_icons_html());
         }
         // `nav` header mode carries no breadcrumb trail — a home segment

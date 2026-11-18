@@ -4,6 +4,46 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
+## [0.15.26] - 2026-11-17
+
+### Fixed
+
+- A picture already published keeps the sizes it was published with. Since 0.15.21 each build made and uploaded a new 1200-pixel-wide copy of every published picture; a picture added since the last publish still gets every size.
+- Replace… on a picture works in the browser editor: the picked file is uploaded and its reference written. It used to upload the file and leave the reference as it was.
+- A right-click on a picture no longer offers the grid's settings or the theme rules that style it; the grid's row (now Columns) stays for the grid's own area, and theme rules show while internal files are shown.
+- The series navigation at the foot of a page shows an arrow and the neighbouring page's title, without a "Previous" / "Next" word (上一个 / 下一个 in Chinese) above each title. A screen reader hears the direction word before the title, and the links carry `rel="prev"` and `rel="next"`. `.moss-series-nav-text` and `.moss-series-nav-label` are no longer emitted; a theme rule that targets them now matches nothing, and the build's theme check says so instead of pointing to the v1 migration page.
+- In a grid listing, a folder card whose count is hidden (`children_count: false`) shows its folder's `description:` under the title, as a page's card does. It used to show the title alone.
+- A theme stylesheet brought in by `@import` has the fonts and pictures it refers to published under names that change with the file, like those in `style.css`, and `@import "fonts.css"` without `url()` is renamed the same way. Such a sheet kept pointing at the plain names, so a font replaced behind it could be answered from an old copy.
+- Selected text is tinted with the site's accent colour. The tint was moss's green whatever accent a theme set.
+- Bold text is bold in a font the theme hosts as Regular and Bold only. moss asks for it at weight 480, which a browser draws in Regular when the family has no face from 401 to 500; the build now sets `--moss-font-weight-strong` to the family's lightest face above 500 unless the theme sets it. Headings keep the weight they drew. `--moss-font-weight-strong` is new: the weight of `strong` and `b`, a comment's author and a callout's title.
+- A captioned picture without alt text that opens in the picture viewer takes its caption as its alt text. It was named by an `aria-label` while keeping `alt=""`, which marks a picture as decorative, so accessibility checkers reported a focusable picture marked presentational.
+- In a folder whose page sets `url:`, an HTML page you delete is named before a publish, in the dry run and on the receipt, and a picture keeps its old sizes answering while it stays. moss looked for these files under the folder's own name instead of the address the folder is served at. A page deleted before the first publish with this version is not listed yet.
+- Hiding many comments at once while another hide or a sync is writing them finishes the whole list. Since 0.15.25 it could stop partway with "the file kept changing under the lock".
+- Under `moss build --serve --watch` and in the editor, a picture added while the preview is open shows as its original until its smaller sizes are made. It showed as a broken picture until then.
+- The lock files that earlier versions of moss left in `~/.moss/locks`, one for every folder they ever built, are removed in the background after a build, a few hundred at a time. A machine that runs many builds could hold about a million of them.
+- In a card grid, a listing or a `:::grid` of pages, the covers of the first four cards load with the page, and the first of them is fetched at high priority. Only the first cover loaded at once, so a cover further along the first row, often the page's largest picture, waited for lazy loading. A page that opens with its own picture keeps every card cover lazy.
+- In a site folder kept in Google Drive or another cloud-synced folder, a picture encoded again on a machine where the cloud already holds its file no longer writes that file again, so the sync service does not upload it a second time. On an evicted Drive copy of a large site, a 120-second preview had re-uploaded 756 files.
+- In a site folder kept in Google Drive, iCloud or another cloud-synced folder, a picture whose optimized copies are still in the cloud has them downloaded instead of made again, and its metadata is not written back when nothing changed.
+- Saving a page while pictures are being made no longer renders the whole site over and over. A build that joins pictures another build is already making now waits for them before it finishes, so on a 250-page site one edit during a picture batch renders the site 3 times instead of 13, with about a third less CPU time and 100 MB less memory.
+- A page saved while a folder's first build is running shows as soon as the preview starts watching, not after the picture batch has finished.
+- When new pictures or picture sizes finish, as on the first open after an upgrade that adds a size or after you add a picture, only the pages showing them are rendered again, not every page: 45 pages instead of 315 on one site.
+- The search panel keeps its border all the way round when it shows no results. The line under the search box lay on the panel's bottom edge and covered the bottom of the border and of its focus ring.
+- Opening a folder whose files are still arriving from Google Drive, iCloud or another cloud service builds as soon as the files arrive. moss used to wait up to a minute after each arrival before trying again, so such an open could take several minutes.
+- After a reader subscribes, the form shows a check mark and the word at the button's height, ending where the button ended. The word used to float in the middle of the row.
+- The Obsidian plugin leaves a vault that is not a moss folder alone: it underlines nothing, explains and completes no fields and reads no site files until the vault's own folder holds `.moss/`. It checked every vault as if it were a site. A moss folder inside a vault, below its top level, is not checked yet.
+- A page with no `title:` is no longer reported as missing one, in the Obsidian plugin or the editor: moss takes the title from the file name.
+- A page's long copy for Substack, X, LinkedIn or Matters keeps its links working: a link to another page of the site or to a footnote leads back to the site, as its pictures already did.
+
+### New
+
+- `[members] reply_to = "desk@example.org"` in `.moss/config.toml` sends readers' replies to the site's mail (the subscribe link, the welcome letter, newsletters) to that address instead of the owner's sign-in email. On mosspub.com hosting it is handed to the host privately and appears in no published file.
+- Every listing says what its cards stand for: `data-list-holds` on `.moss-cards` is `entries` (pages), `collections` (folders and terms, each with a count) or `mixed`, and `data-list-axis` (its order) is now on list and summary listings too, not only on grids. A theme can style a listing of folders apart from a listing of pages.
+- Right-clicking a picture in the preview offers Replace picture…, Set focus point (where the page crops it), Edit description and Show in file list, each acting on that picture in the editor, then Edit this page at the picture's line, Copy picture address, the page's address and Open in browser. Of two pictures on one line, the one clicked is the one acted on, and a picture in a gallery is reached too. The browser editor shows the same menu.
+
+### Changed
+
+- On a site with `floating_nav = true`, a page whose sections hold little text, such as two headings over a card grid and a few links, no longer gets the floating nav island or the contents ruler. moss decides from the page's text: the island stays where at least two sections each hold 80 words of paragraphs, quotes or list items. Under `header = "none"` such a page keeps its controls without the sections button.
+
 ## [0.15.25] - 2026-11-16
 
 ### Fixed

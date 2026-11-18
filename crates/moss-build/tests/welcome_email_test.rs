@@ -190,3 +190,22 @@ fn removing_the_file_removes_the_output_on_the_next_build() {
     );
     drop(c);
 }
+
+const REPLY_TO_CONFIG: &str = "schema_version = 6\n\n[site]\nlang = \"en\"\n\n[members]\nreply_to = \"desk@harbor-mail.org\"\n";
+
+#[test]
+fn the_reply_to_goes_to_the_moss_host_privately() {
+    let (_c, stage) = build(&[(".moss/config.toml", REPLY_TO_CONFIG)]);
+    let sender = fs::read_to_string(stage.join(".moss-email/sender.json")).unwrap();
+    assert_eq!(sender, r#"{"reply_to":"desk@harbor-mail.org"}"#);
+    let policy = fs::read_to_string(stage.join("_moss/members.json")).unwrap();
+    assert!(!policy.contains("desk@"), "{policy}");
+}
+
+#[test]
+fn no_reply_to_or_another_host_writes_no_sender_file() {
+    let (_c, stage) = build(&[]);
+    assert!(!stage.join(".moss-email/sender.json").exists());
+    let (_c, stage) = build_with_state(&[(".moss/config.toml", REPLY_TO_CONFIG)], None);
+    assert!(!stage.join(".moss-email").exists(), "any other host would publish the address");
+}

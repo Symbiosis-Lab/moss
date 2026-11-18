@@ -167,3 +167,40 @@ export function themeSelectors(el: Element | null, sheet = themeSheet()): string
   }
   return [];
 }
+
+/**
+ * Selection sync, preview to editor: when the user finishes selecting text in
+ * the page, post its source target with the text, so the editor can select the
+ * same words.
+ *
+ * The selection is read synchronously in `selectionchange` and only the post
+ * is debounced: WKWebView collapses a cross-origin iframe's selection when
+ * focus shifts (on mouse-up), so a read inside the timer would see nothing.
+ */
+
+/** Longer selections are a copy, not a place to find in the source. */
+const MAX_TEXT = 500;
+
+export function installSelectionSync(win: Window, delayMs = 50): void {
+  let pending: ReturnType<typeof setTimeout> | null = null;
+  const cancel = () => {
+    if (pending) clearTimeout(pending);
+    pending = null;
+  };
+
+  win.document.addEventListener("selectionchange", () => {
+    const sel = win.getSelection();
+    const text = sel && !sel.isCollapsed && sel.rangeCount ? sel.toString().trim() : "";
+    if (!text || text.length > MAX_TEXT) return cancel();
+    // The start element is stable during a drag; its source is resolved once, when the timer fires.
+    const start = sel!.getRangeAt(0).startContainer;
+    const startEl = start instanceof Element ? start : start.parentElement;
+    cancel();
+    pending = setTimeout(() => {
+      pending = null;
+      const target = resolveSourceTarget(startEl);
+      if (!target || target.kind === "none") return;
+      win.parent.postMessage({ type: "moss-source-target", target: { ...target, text }, interaction: "select" }, "*");
+    }, delayMs);
+  });
+}

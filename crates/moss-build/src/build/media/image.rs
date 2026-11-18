@@ -49,7 +49,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, LazyLock, Mutex};
 use tokio::sync::mpsc;
 
 use crate::build::coordinator::EmitMessage;
@@ -114,6 +114,12 @@ pub struct ImageConversionItem {
     /// The `Arc` is the mark's identity: a later dispatch of the same unchanged
     /// source makes its own.
     pub(crate) fingerprint: Option<Arc<ImageFingerprint>>,
+}
+
+/// Where a picture's WebP base is written and served: under its folder's
+/// address, which a WebP source shares with the picture itself.
+pub(crate) fn webp_address(rel_source: &str, dir_overrides: &HashMap<String, String>) -> String {
+    moss_core::asset_paths::to_webp(&crate::build::render::resolve_path_with_overrides(rel_source, dir_overrides))
 }
 
 impl ImageConversionItem {
@@ -557,8 +563,8 @@ pub(crate) fn should_skip(
     // still returned immediately regardless of whether the write-back lands.
     if !source_oid.is_empty() {
         if let Ok(json_bytes) = serde_json::to_vec(&verdict) {
-            if let Ok(blob_oid) = transforms.objects().store_bytes(&json_bytes, crate::build::cache::RecordMode::Request) {
-                let merged = transforms.merge(source_oid, file_size, crate::build::cache::RecordMode::Request, |record| {
+            if let Ok(blob_oid) = transforms.objects().store_bytes(&json_bytes) {
+                let merged = transforms.merge(source_oid, file_size, crate::build::cache::RecordMode::Recomputable, |record| {
                     record.transforms.insert(
                         FORMAT_PROBE_TRANSFORM.to_string(),
                         crate::build::cache::TransformEntry {
@@ -881,6 +887,7 @@ pub(crate) fn encode_webp(
     quality: u8,
     icc_profile: Option<&[u8]>,
 ) -> Result<Vec<u8>, String> {
+    super::count_encode();
     if icc_profile.is_some() {
         log::debug!("[image] ICC profile present but not preserved (v1 TODO)");
     }
@@ -986,11 +993,10 @@ pub(crate) fn convert_single_image(
     // the pixels we already decode for the WebP encode. See
     // `scan::image_meta_stat_key` / `scan::extract_media_metadata_cached`.
     meta_stat_key: Option<&str>,
-    // Mapped path of every vault image file → its absolute vault path,
-    // threaded from registration (blocking.rs) via `ImageRunContext`. A rung
-    // URL appearing as a key is a collision: `encode_rungs` never writes to
-    // that path — the user's file wins there. See `rung_collision_map`.
-    rung_collisions: &HashMap<String, PathBuf>,
+    // The build's rung decision, threaded from registration (blocking.rs) via
+    // `ImageRunContext`: the widths this picture offers, and the rung URLs a
+    // user's own file holds, which `encode_rungs` never writes.
+    rung_plan: &super::rungs::RungPlan,
 ) -> ImageConversionOutcome {
     use crate::build::cache::TransformEntry;
 
@@ -1064,7 +1070,7 @@ pub(crate) fn convert_single_image(
             let rungs = if rungs_gated {
                 encode_rungs(
                     source_file, source_oid, relative_webp, staging_dir,
-                    objects, transforms, config, rung_collisions, None,
+                    objects, transforms, config, rung_plan, None,
                     actual_size,
                 )
             } else {
@@ -1136,7 +1142,10 @@ pub(crate) fn convert_single_image(
     // under the rule this audit settled, must not — an author judging a photo
     // cannot tell a blurred stand-in from a badly-encoded result, so the preview
     // shows the real original instead.
-    if let Some(key) = meta_stat_key {
+    // An entry that already holds them is left as it is: rewriting it is an
+    // upload on every machine sharing the folder.
+    let prev = meta_stat_key.and_then(|key| crate::build::scan::scan::read_cached_meta(transforms, objects, key, source_file.extension().and_then(|e| e.to_str()).unwrap_or("")));
+    if let Some(key) = meta_stat_key.filter(|_| prev.as_ref().map_or(true, |prev| prev.dominant_color.is_none())) {
         // Computed INSIDE the `if let`: the cache entry is the only consumer
         // now that `on_decoded` is gone, so a caller that passes no stat key
         // (every non-scan path) would otherwise pay for a 100x100 thumbnail
@@ -1149,9 +1158,7 @@ pub(crate) fn convert_single_image(
             // sniffed (see scan::extract_media_metadata_cached, Step 2c). This
             // write REPLACES that entry's blob wholesale, so carry the prior
             // value forward instead of silently resetting it to `false`.
-            let is_animated = crate::build::scan::scan::read_cached_meta(transforms, objects, key)
-                .map(|prev| prev.is_animated)
-                .unwrap_or(false);
+            let is_animated = prev.map_or(false, |prev| prev.is_animated);
             crate::build::scan::scan::write_cached_meta(
                 objects,
                 transforms,
@@ -1174,7 +1181,7 @@ pub(crate) fn convert_single_image(
     // no-ladder path move `img` into `resized` exactly as before — no clone.
     let (w, h) = (img.width(), img.height());
     let ladder_len = if rungs_gated {
-        moss_core::asset_paths::ladder_rungs(w, h, false).len()
+        rung_plan.widths(relative_webp, w, h).len()
     } else {
         0
     };
@@ -1255,7 +1262,7 @@ pub(crate) fn convert_single_image(
         };
     }
 
-    let oid = match objects.store_file(&temp_path, crate::build::cache::RecordMode::Wait) {
+    let oid = match objects.store_file(&temp_path) {
         Ok(o) => o,
         Err(e) => {
             // allow:unlink the encode temp this call wrote under cache/tmp
@@ -1320,7 +1327,7 @@ pub(crate) fn convert_single_image(
         };
     }
     // ---- Step 9: merge-preserve transform record ----
-    let merged = transforms.merge(source_oid, original_size, crate::build::cache::RecordMode::Wait, |record| {
+    let merged = transforms.merge(source_oid, original_size, crate::build::cache::RecordMode::Request, |record| {
         record.transforms.insert(
             "image/webp".to_string(),
             TransformEntry {
@@ -1348,7 +1355,7 @@ pub(crate) fn convert_single_image(
             objects,
             transforms,
             config,
-            rung_collisions,
+            rung_plan,
             original.as_ref(),
             encoded_len,
         )
@@ -1371,8 +1378,8 @@ pub(crate) fn convert_single_image(
 // the on-disk hash index / transform cache, not from this)
 // ---------------------------------------------------------------------------
 
-/// One dispatch's view of a source, for two things only: joining a worker that
-/// already has these exact bytes queued (`image_item_is_pending`), and closing
+/// One dispatch's view of a source, for two things only: joining (and waiting for)
+/// a worker that already has these exact bytes queued (`pending_image_mark`), and closing
 /// out that worker's marker when it finishes (`end_image_item`). Its whole stat
 /// record (a same-size rewrite in the same second, or a replace-via-rename,
 /// must not look like the file it replaced) plus the compression params, so a
@@ -1425,6 +1432,9 @@ struct ImageLedger {
     /// moment it stops changing. Empty for an item with nothing to say;
     /// absent for one never delivered in this process.
     advisories: HashMap<String, Vec<Advisory>>,
+    /// The render of each build blocked in [`wait_for_joined_images`] (`None`
+    /// where the build has no render number).
+    join_waiters: Vec<Option<u64>>,
 }
 
 /// `folder`'s ledger. One per folder, process-wide: two folders can hold an
@@ -1436,16 +1446,58 @@ struct ImageLedger {
 // A poisoned lock is taken anyway: `PendingImageMarks` locks it while a
 // worker's panic unwinds, where a second panic would abort the process.
 fn with_image_ledger<R>(folder: &str, f: impl FnOnce(&mut ImageLedger) -> R) -> R {
-    static IMAGE_LEDGERS: OnceLock<Mutex<HashMap<String, ImageLedger>>> = OnceLock::new();
-    let mut ledgers = IMAGE_LEDGERS.get_or_init(Mutex::default).lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    f(ledgers.entry(folder.to_string()).or_default())
+    let mut ledgers = IMAGE_LEDGERS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let result = f(ledgers.entry(folder.to_string()).or_default());
+    // Any call may have ended a mark a joined build waits on: a worker finishing
+    // it, a newer dispatch replacing it, a dispatch dropping a removed image.
+    IMAGE_LEDGER_CHANGED.notify_all();
+    result
 }
 
-/// Whether a worker a dispatch spawned has yet to finish `path`, from a source with
-/// this fingerprint. A later dispatch that finds the same source joins that worker
-/// instead of spawning another to encode the same bytes.
-pub(crate) fn image_item_is_pending(folder: &str, path: &str, fingerprint: &ImageFingerprint) -> bool {
-    with_image_ledger(folder, |ledger| ledger.pending.get(path).is_some_and(|marked| **marked == *fingerprint))
+static IMAGE_LEDGERS: LazyLock<Mutex<HashMap<String, ImageLedger>>> = LazyLock::new(Default::default);
+static IMAGE_LEDGER_CHANGED: Condvar = Condvar::new();
+
+/// The mark of a worker a dispatch spawned that has yet to finish `path`, from a
+/// source with this fingerprint. A later dispatch that finds the same source joins
+/// that worker instead of spawning another to encode the same bytes, and waits for
+/// the mark to end ([`wait_for_joined_images`]).
+pub(crate) fn pending_image_mark(folder: &str, path: &str, fingerprint: &ImageFingerprint) -> Option<Arc<ImageFingerprint>> {
+    with_image_ledger(folder, |ledger| ledger.pending.get(path).filter(|marked| ***marked == *fingerprint).cloned())
+}
+
+/// Block until no mark in `joined` is still the ledger's mark for its path, and
+/// say whether the joined work was waited out. A joining build's seal must see
+/// the outputs of the work it joined, as a dispatching build's seal does by
+/// holding its worker's channel; sealing without them promotes pages that name
+/// pictures the generation lacks. Ends however the mark ends: the item
+/// finished, failed or was cancelled, a newer dispatch replaced the mark, or the
+/// image left the folder.
+///
+/// Returns `false` without waiting it out where `may_leave`, once a build of a
+/// later render waits too: that build joined every mark of these that still
+/// stands and seals with all of them, so this one need not hold a thread, a
+/// cache lease and a manifest until then.
+pub(crate) fn wait_for_joined_images(folder: &str, joined: &[(String, Arc<ImageFingerprint>)], render: Option<u64>, may_leave: bool) -> bool {
+    let mut guard = IMAGE_LEDGERS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    guard.entry(folder.to_string()).or_default().join_waiters.push(render);
+    IMAGE_LEDGER_CHANGED.notify_all();
+    let waited_out = loop {
+        let ledger = guard.entry(folder.to_string()).or_default();
+        if !joined.iter().any(|(path, mark)| ledger.pending.get(path).is_some_and(|marked| Arc::ptr_eq(marked, mark))) {
+            break true;
+        }
+        let overtaken = may_leave && render.is_some_and(|mine| ledger.join_waiters.iter().flatten().any(|other| *other > mine));
+        if overtaken {
+            break false;
+        }
+        // Not `wait_while`: on a poisoned lock it returns with the mark still there.
+        guard = IMAGE_LEDGER_CHANGED.wait(guard).unwrap_or_else(std::sync::PoisonError::into_inner);
+    };
+    let waiters = &mut guard.entry(folder.to_string()).or_default().join_waiters;
+    if let Some(at) = waiters.iter().position(|w| *w == render) {
+        waiters.remove(at);
+    }
+    waited_out
 }
 
 /// A dispatch is about to hand these (path, fingerprint) to a worker. Before the
@@ -1560,13 +1612,8 @@ pub(crate) struct ImageRunContext {
     /// instead of writing to `hashes.json` via `update_image_hashes`.
     /// `None` in legacy / test paths that haven't been wired to `BackgroundHandle`.
     pub tx: Option<mpsc::Sender<EmitMessage>>,
-    /// Mapped path of EVERY vault image file → its absolute vault path,
-    /// cloned from `BackgroundContext::rung_collisions` (see the field doc
-    /// there — keys are not only rung-shaped names). The worker tests
-    /// candidate rung URLs for KEY membership before writing — the same test
-    /// registration ran — so a user's file named like a rung is never
-    /// clobbered. Never recomputed here.
-    pub rung_collisions: HashMap<String, PathBuf>,
+    /// Cloned from `BackgroundContext::rung_plan`; never recomputed here.
+    pub rung_plan: super::rungs::RungPlan,
     /// Advisories `dispatch_image_conversions` carried forward for images it
     /// skipped this round (disk-origin hit, output present) — read from
     /// the advisory cache (`image_item_advisories`), not recomputed here.
@@ -1593,7 +1640,7 @@ impl ImageRunContext {
             config,
             dir_overrides: ctx.dir_overrides.clone(),
             tx: None,
-            rung_collisions: ctx.rung_collisions.clone(),
+            rung_plan: ctx.rung_plan.clone(),
             carried_advisories: Vec::new(),
             suppressed: std::collections::HashSet::new(),
             source_oids: ctx.source_oids.clone(),
@@ -1617,6 +1664,12 @@ impl ImageRunContext {
         self.carried_advisories = advisories;
         self
     }
+}
+
+/// An item's source megapixels, rounded up; unknown dimensions count as the
+/// largest possible.
+fn item_megapixels(item: &ImageConversionItem) -> u64 {
+    item.dimensions.map_or(u64::MAX, |(w, h)| (w as u64 * h as u64).div_ceil(1_000_000))
 }
 
 /// A megapixels-in-flight budget: a counting semaphore whose unit is source
@@ -1712,16 +1765,15 @@ fn suppressed_variants_for(
 fn promised_rungs(
     item: &ImageConversionItem,
     source: &str,
-    rung_collisions: &HashMap<String, PathBuf>,
+    rung_plan: &super::rungs::RungPlan,
 ) -> Vec<(u32, String)> {
     if !moss_core::asset_paths::is_ladder_source_ext(&item.ext) {
         return Vec::new();
     }
     let Some((w, h)) = item.dimensions else { return Vec::new() };
-    moss_core::asset_paths::ladder_rungs(w, h, false)
-        .iter()
-        .map(|&rung| (rung, moss_core::asset_paths::to_webp_rung(source, rung)))
-        .filter(|(_, rel)| !rung_collisions.contains_key(rel))
+    rung_plan.widths(&moss_core::asset_paths::to_webp(source), w, h).into_iter()
+        .map(|rung| (rung, moss_core::asset_paths::to_webp_rung(source, rung)))
+        .filter(|(_, rel)| !rung_plan.collisions.contains_key(rel))
         .collect()
 }
 
@@ -1762,6 +1814,9 @@ enum ItemStep {
     /// post-loop reduce bails before the completion event, so a tick here would
     /// advance a bar that never closes.
     Cancelled,
+    /// Handed out again once every local picture is done: its cached work is
+    /// on its way from the cloud.
+    Deferred,
 }
 
 impl ItemStep {
@@ -1858,7 +1913,6 @@ fn record_deliveries(
 pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunContext) -> bool {
     use crate::build::cache::{ObjectStore, TransformCache};
     use moss_core::asset_paths;
-    use crate::build::render::resolve_path_with_overrides;
 
     let is_headless = services.reporter.is_terminal();
 
@@ -1872,7 +1926,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
     // worker applies its own `ItemStep` as it finishes, so images stream into
     // the preview as they land. A Mutex is fine: the push is trivial next to the
     // encode it guards. NOT rayon — jpeg-decoder nests rayon and deadlocks.
-    use std::sync::atomic::AtomicU32;
+    use std::sync::atomic::{AtomicU32, AtomicUsize};
     use std::sync::Mutex;
     let advisories: Mutex<Vec<Advisory>> = Mutex::new(Vec::new());
     // Count of images this run ACTUALLY converted (produced a webp at the served
@@ -1955,7 +2009,6 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
     // reduced after the scope exactly as before.
     {
         let n_items = ctx.items.len();
-        let next = std::sync::atomic::AtomicUsize::new(0);
         // Spawn a worker per core; the MegapixelBudget (not the thread count)
         // is what actually bounds memory, so extra workers just block on the
         // budget when huge images are in flight and pack in when they're small.
@@ -1978,13 +2031,14 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
         let mp_budget = MegapixelBudget::new(budget_mp);
         // Encodes keep running while the window is hidden, at background QoS.
         let gate = crate::system::folder_session::DerivedWorkGate::of(services.session.as_ref());
+        let work = crate::build::cache::LocalFirst::new(n_items);
+        let encodes = AtomicUsize::new(0);
+        let cancelled = || cancel_flag.is_some_and(|f| f.load(Ordering::SeqCst));
         std::thread::scope(|scope| {
             for _ in 0..n_threads {
                 scope.spawn(|| loop {
-                    let index = next.fetch_add(1, Ordering::Relaxed);
-                    if index >= n_items {
-                        break;
-                    }
+                    let Some(ticket) = work.take() else { break };
+                    let index = ticket.index;
                     gate.pace_this_thread();
                     let item = &ctx.items[index];
                     // The whole of one image's decision. Every exit is a value,
@@ -2035,14 +2089,13 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
 
         // Derived before the hash resolution below, not after: a hash failure
         // has to retract the promises made under these URLs.
-        let mapped_source = resolve_path_with_overrides(&rel_source_str, dir_overrides);
-        let relative_webp = asset_paths::to_webp(&mapped_source);
+        let relative_webp = webp_address(&rel_source_str, dir_overrides);
 
         // A base failure retracts the rung promises registration made for THIS item;
         // the success arm sweeps any the encode did not resolve, so a registered
         // rung never sits Pending forever behind its LQIP/passthrough
         // placeholder (honest-mirror Layer 5B stuck-Pending class).
-        let registered_rungs = || promised_rungs(item, &relative_webp, &ctx.rung_collisions);
+        let registered_rungs = || promised_rungs(item, &relative_webp, &ctx.rung_plan);
 
         // Resolve the content hash. The blocking collect deferred it (stat-match
         // only), so first paint wasn't gated on hashing hundreds of MB of images;
@@ -2071,6 +2124,12 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
             item.source_oid.clone()
         };
 
+        // Work another machine made, still in the cloud here, is fetched rather
+        // than made again: asked for now, waited for after every local picture.
+        if ticket.defer_if_cloud_held(&transforms, &source_oid, "image/") {
+            return ItemStep::Deferred;
+        }
+
         // Singleflight dedup: if another task is already converting this source_oid,
         // block until it finishes and reuse its result. Only the first caller runs
         // the encoder — generalizes the video-only dedup pattern to images.
@@ -2092,17 +2151,6 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
         });
 
         let (sf_result, was_shared) = {
-            let source_file_ref = &source_file;
-            let source_oid_ref = &source_oid;
-            let relative_webp_ref: &str = &relative_webp;
-            let temp_dir_ref = &temp_dir;
-            let staging_dir_ref = &ctx.staging_dir;
-            let objects_ref = &objects;
-            let transforms_ref = &transforms;
-            let config_ref = &ctx.config;
-            let meta_stat_key_ref = meta_stat_key.as_deref();
-            let rung_collisions_ref = &ctx.rung_collisions;
-
             // Singleflight dedups concurrent duplicate-content conversions so a
             // repeated image decodes once (waiters block on its condvar and reuse
             // the result). do_work is correct under concurrency — the earlier
@@ -2115,27 +2163,27 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
             // (which would deadlock the budget). do_work wraps the closure in
             // catch_unwind, and the permit drops as the panic unwinds, so a
             // panicking encode cannot wedge the budget.
-            let acquire_mp = item
-                .dimensions
-                .map(|(w, h)| {
-                    (w as u64).saturating_mul(h as u64).saturating_add(999_999) / 1_000_000
-                })
-                .unwrap_or(u64::MAX); // unknown dims → reserve the whole budget (run alone)
-            services.in_flight_images.do_work(&source_oid, || {
-                let _permit = mp_budget.acquire(acquire_mp);
-                convert_single_image(
-                    source_file_ref,
-                    source_oid_ref,
-                    relative_webp_ref,
-                    temp_dir_ref,
-                    staging_dir_ref,
-                    objects_ref,
-                    transforms_ref,
-                    config_ref,
+            services.in_flight_images.do_work(&ctx.rung_plan.flight(&source_oid, &relative_webp), || {
+                // Before the permit: a picture waiting for its download holds
+                // no encode capacity.
+                ticket.fetch(&transforms, &source_oid, "image/", &cancelled);
+                let _permit = mp_budget.acquire(item_megapixels(item));
+                let before = super::encodes_on_this_thread();
+                let outcome = convert_single_image(
+                    &source_file,
+                    &source_oid,
+                    &relative_webp,
+                    &temp_dir,
+                    &ctx.staging_dir,
+                    &objects,
+                    &transforms,
+                    &ctx.config,
                     cancel_flag,
-                    meta_stat_key_ref,
-                    rung_collisions_ref,
-                )
+                    meta_stat_key.as_deref(),
+                    &ctx.rung_plan,
+                );
+                encodes.fetch_add(super::encodes_on_this_thread() - before, Ordering::Relaxed);
+                outcome
             })
         };
 
@@ -2205,7 +2253,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                     for r in &outcome.rungs {
                         let rung_rel =
                             asset_paths::to_webp_rung(&relative_webp, r.width);
-                        if ctx.rung_collisions.contains_key(&rung_rel) {
+                        if ctx.rung_plan.collisions.contains_key(&rung_rel) {
                             log::debug!(
                                 "[image] rung {} collides with a user file — leaving the user's file in place",
                                 rung_rel
@@ -2337,10 +2385,12 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                             item.ended(&ctx.source_path, false, &[]);
                             any_cancelled.store(true, Ordering::SeqCst);
                         }
+                        ItemStep::Deferred => {}
                     }
                 });
             }
         });
+        work.report(encodes.into_inner());
     }
 
     // ---- Reduce the parallel accumulators ----
@@ -2538,24 +2588,27 @@ pub(crate) fn dispatch_image_conversions(
     services: Option<&BuildServices>,
     ctx: &BackgroundContext,
     tx: Option<mpsc::Sender<EmitMessage>>,
-) {
-    dispatch_image_conversions_at(services, ctx, tx, &redispatch_note::system_clock());
+    render: Option<u64>,
+) -> Result<(), crate::build::background::BuildError> {
+    dispatch_image_conversions_at(services, ctx, tx, &redispatch_note::system_clock(), render)
 }
 
 /// [`dispatch_image_conversions`] with its clock supplied, which only the
-/// re-dispatch note reads.
+/// re-dispatch note reads. `Err` when the build left the work it joined to the
+/// build of a later `render`, and must not seal.
 pub(crate) fn dispatch_image_conversions_at(
     services: Option<&BuildServices>,
     ctx: &BackgroundContext,
     tx: Option<mpsc::Sender<EmitMessage>>,
     clock: &redispatch_note::Clock,
-) {
+    render: Option<u64>,
+) -> Result<(), crate::build::background::BuildError> {
     let prelude = crate::build::phase::PhaseTrace::start("media_prelude");
     if ctx.image_items.is_empty() {
-        return;
+        return Ok(());
     }
 
-    let Some(svc) = services else { return };
+    let Some(svc) = services else { return Ok(()) };
 
     let config = ImageCompressionConfig::default();
 
@@ -2583,7 +2636,10 @@ pub(crate) fn dispatch_image_conversions_at(
         // fingerprint fallback covers it.
         let mut skip_paths: Vec<(String, Option<String>)> = Vec::new();
         let mut to_dispatch: Vec<ImageConversionItem> = Vec::new();
-        let mut joined: usize = 0;
+        // The workers this dispatch joined, and the outputs they will stage: registered
+        // once those workers are done, so this build's seal holds them.
+        let mut joined_marks: Vec<(String, Arc<ImageFingerprint>)> = Vec::new();
+        let mut joined_keys: Vec<String> = Vec::new();
         let mut current_paths: HashSet<String> = HashSet::new();
         let mut healed_count: usize = 0;
         // Sizes sent back to the worker to be produced; see `redispatch_note`.
@@ -2621,15 +2677,10 @@ pub(crate) fn dispatch_image_conversions_at(
             // Join before anything else: a worker already has these exact bytes, so
             // another would encode them twice — each with a thread pool and a
             // megapixel budget of its own — and a heal here would put this dispatch's
-            // link on a target that worker is about to link. Whatever an earlier build
-            // left staged is still carried forward.
-            if fingerprint.as_ref().is_some_and(|fp| image_item_is_pending(&ctx.source_path, &rel_source, fp)) {
-                joined += 1;
-                let keys = std::iter::once(relative_webp).chain(promised_rungs(item, &mapped, &ctx.rung_collisions).into_iter().map(|(_, key)| key));
-                skip_paths.extend(
-                    keys.filter(|key| crate::build::io_utils::output_present(&ctx.staging_dir.join(key)))
-                        .map(|key| (key, None)),
-                );
+            // link on a target that worker is about to link.
+            if let Some(mark) = fingerprint.as_ref().and_then(|fp| pending_image_mark(&ctx.source_path, &rel_source, fp)) {
+                joined_marks.push((rel_source, mark));
+                joined_keys.extend(std::iter::once(relative_webp).chain(promised_rungs(item, &mapped, &ctx.rung_plan).into_iter().map(|(_, key)| key)));
                 continue;
             }
             // The skip candidate's origin: a STRICT stat comparison against the
@@ -2645,7 +2696,7 @@ pub(crate) fn dispatch_image_conversions_at(
                 .and_then(|fp| heal_index.lookup(&rel_source, &fp.stat));
             let transform_record = disk_source_oid.as_deref().and_then(|oid| {
                 crate::build::phase::record_count("image_transform_records_loaded", 1);
-                heal_transforms.get_with(oid, crate::build::cache::RecordMode::Wait)
+                heal_transforms.get_with(oid, crate::build::cache::RecordMode::Request)
             });
 
             // A disk-index hit is only proof of the SOURCE's current content —
@@ -2690,7 +2741,7 @@ pub(crate) fn dispatch_image_conversions_at(
             // disk nor healable from the store sends the image to the worker, which reuses the
             // cached base and encodes only the cold rungs. Suppressed rungs never count.
             let rung_verdicts: Vec<(String, bool, Option<String>)> = match disk_source_oid.as_deref() {
-                Some(_) if outputs_present => promised_rungs(item, &mapped, &ctx.rung_collisions)
+                Some(_) if outputs_present => promised_rungs(item, &mapped, &ctx.rung_plan)
                     .into_iter()
                     .map(|(rung, rung_rel)| {
                         let (present, oid) = heal_and_verify_variant(
@@ -2802,10 +2853,17 @@ pub(crate) fn dispatch_image_conversions_at(
                 objects: &heal_objects, suppressed: &heal_suppressed, registry: None }.run_remembering(&skip_paths, &heal_paths.cache_image_output_hash_memo());
         }
 
+        let joined = joined_marks.len();
         crate::build::phase::record_count("images_unchanged", total_items - to_dispatch.len() - joined);
         crate::build::phase::record_count("images_dispatched", to_dispatch.len());
+        crate::build::phase::record_count("images_joined", joined);
         drop(prelude);
         let joined_note = if joined > 0 { format!(", {joined} joined a conversion already running") } else { String::new() };
+        // Only a build that reports nothing under its own build job (no encode,
+        // no removed image's advisory) may leave, in a host that keeps running:
+        // a one-shot build has no newer build to leave to.
+        let may_leave = to_dispatch.is_empty() && !dropped_advisory && svc.spawner.is_some();
+        let joined_images = JoinedImages { marks: &joined_marks, keys: &joined_keys, render, may_leave };
         if to_dispatch.is_empty() {
             log::info!(
                 "Image set unchanged ({} images{}), skipping re-dispatch — re-registered carry-forward output keys",
@@ -2831,7 +2889,7 @@ pub(crate) fn dispatch_image_conversions_at(
                     advisories: carried_advisories,
                 });
             }
-            return;
+            return register_joined_images(ctx, joined_images, &tx, &heal_objects);
         }
         if to_dispatch.len() < total_items {
             log::info!(
@@ -2858,6 +2916,8 @@ pub(crate) fn dispatch_image_conversions_at(
         // `moss build` benefits from it on its very first (and only) call —
         // unlike the old in-process ledger, which had nothing to compare
         // against and so never attempted a skip in headless mode at all.
+        // The worker takes the channel; the joined registration after it needs its own.
+        let joined_tx = if joined > 0 { tx.clone() } else { None };
         let mut run_ctx = ImageRunContext::from_background(ctx, config.clone());
         run_ctx.items = to_dispatch;
         run_ctx.suppressed = heal_suppressed;
@@ -2873,7 +2933,7 @@ pub(crate) fn dispatch_image_conversions_at(
 
         // Image dispatch does not use epochs, and a newer build never cancels
         // an older build's worker: a later dispatch that finds an image already
-        // queued joins that worker instead (`image_item_is_pending` above).
+        // queued joins that worker instead (`pending_image_mark` above).
         // The only stop is the folder session's cancel token, bridged into a
         // local flag that `convert_single_image` checks before each image, so
         // an encode already underway always runs to the end.
@@ -2909,7 +2969,46 @@ pub(crate) fn dispatch_image_conversions_at(
             let cancelled = run_image_conversion(svc, &run_ctx);
             redispatch_note::settle(&run_ctx.moss_dir, &run_ctx.staging_dir, &redispatched, clock(), cancelled);
         }
+        // Last, after this build's own encodes are under way.
+        register_joined_images(ctx, joined_images, &joined_tx, &heal_objects)
     }
+}
+
+/// The workers a dispatch joined: their marks, the outputs they will stage, and
+/// whether this build may leave them to a later render's build.
+struct JoinedImages<'a> {
+    marks: &'a [(String, Arc<ImageFingerprint>)],
+    keys: &'a [String],
+    render: Option<u64>,
+    may_leave: bool,
+}
+
+/// Wait for the workers a dispatch joined, then register what they staged
+/// through this build's channel, so its seal holds them.
+///
+/// Each item's mark ends as it finishes, and its worker saves the hash index
+/// only once its whole run ends, so nothing vouches for these outputs by oid
+/// yet: they register by what is staged. One that is not staged (its encode
+/// failed or was cancelled) is left out, as from any build: it registers
+/// nothing and the seal's repair drops the page's reference to it.
+///
+/// A build that stops waiting (see [`wait_for_joined_images`]) registers
+/// nothing and answers [`BuildError::LeftToNewerBuild`](crate::build::background::BuildError::LeftToNewerBuild).
+fn register_joined_images(ctx: &BackgroundContext, joined: JoinedImages, tx: &Option<mpsc::Sender<EmitMessage>>,
+    objects: &crate::build::cache::ObjectStore) -> Result<(), crate::build::background::BuildError> {
+    if joined.marks.is_empty() {
+        return Ok(());
+    }
+    let _wait = crate::build::phase::PhaseTrace::start("image_join_wait");
+    if !wait_for_joined_images(&ctx.source_path, joined.marks, joined.render, joined.may_leave) {
+        log::info!("render #{} left the {} image(s) it joined to a newer build", joined.render.unwrap_or_default(), joined.marks.len());
+        return Err(crate::build::background::BuildError::LeftToNewerBuild);
+    }
+    let staged: Vec<(String, Option<String>)> =
+        joined.keys.iter().filter(|key| crate::build::io_utils::output_present(&ctx.staging_dir.join(key))).map(|key| (key.clone(), None)).collect();
+    super::output_emit::OutputEmit { kind: &IMAGE_OUTPUTS, root: Path::new(&ctx.source_path), tx, staging_dir: &ctx.staging_dir,
+        objects, suppressed: &Default::default(), registry: None }.run(&staged);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

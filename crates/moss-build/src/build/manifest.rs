@@ -545,22 +545,16 @@ impl PendingManifest {
     }
 
     /// Bulk-replace the change-detection cache (`SiteHashes::sources`) with
-    /// the map produced by this build's deferred-asset walk.
+    /// the map produced by this build's deferred-asset walk, and with it the
+    /// address each of those files was published at.
     ///
     /// `sources` is **cache state**, not output state — it records
     /// `(source_path, SourceMetadata)` so the next build can skip re-hashing
     /// unchanged files. It is NOT subject to mark-and-sweep at `seal()`.
     ///
-    /// Before this method existed, `copy_deferred_assets` updated a local
-    /// clone of `site_hashes.sources` and discarded it when the function
-    /// returned. `PendingManifest::inner.sources` was therefore always
-    /// whatever the previous build left in its carry-forward, the on-disk
-    /// `hashes.json` was always one build stale, and `prev_sources` at the
-    /// start of the next build was two builds stale — defeating the cache.
-    ///
     /// Coordinator-only escape hatch (same access pattern as `apply_message`):
-    /// the only caller is `ManifestCoordinator::run_until_drained`, which
-    /// receives the bulk replacement via `EmitMessage::SourcesReplace`.
+    /// in a build, `ManifestCoordinator::run_until_drained` calls it on
+    /// `EmitMessage::SourcesReplace`; tests call it to stand in for the walk.
     ///
     /// **Page entries survive the replacement.** The walk `continue`s past
     /// markdown, so the map it sends carries no page hashes and its own
@@ -568,7 +562,8 @@ impl PendingManifest {
     /// the ones `register_page_source_hash` just wrote. Re-inserting them here
     /// keeps the fix inside the type that owns the invariant, rather than
     /// asking the asset walk to know about pages.
-    pub(crate) fn replace_sources(&mut self, sources: HashMap<String, crate::build::types::SourceMetadata>) {
+    pub(crate) fn replace_sources(&mut self, sources: HashMap<String, crate::build::types::SourceMetadata>, asset_outputs: HashMap<String, String>) {
+        self.inner.asset_outputs = asset_outputs;
         let pages: Vec<(String, crate::build::types::SourceMetadata)> = self
             .page_sources
             .iter()
@@ -962,6 +957,9 @@ impl PendingManifest {
         let mut inner = self.inner;
         if let Some(inputs) = inner.build_inputs.as_mut() {
             inputs.env.extend(crate::build::inputs::env_read());
+            if let Some(evidence) = &self.input_evidence {
+                crate::build::inputs::restamp(inputs, evidence.root_path(), &evidence.moss_files_left());
+            }
         }
         let touched = self.touched;
         // A page the previous build hashed and this build neither re-read nor
@@ -1158,6 +1156,11 @@ impl SealedManifest {
     /// change-detection cache. Both are SHA-256 hex, one hash domain.
     pub fn sources(&self) -> &HashMap<String, crate::build::types::SourceMetadata> {
         &self.inner.sources
+    }
+
+    /// Folder file source path → the address the copy step published it at.
+    pub fn asset_outputs(&self) -> &HashMap<String, String> {
+        &self.inner.asset_outputs
     }
 
     /// Source-relative path → the output path that page was rendered to.

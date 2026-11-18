@@ -271,7 +271,7 @@ fn materialize_field(bf: &BuiltinField) -> FieldDefinition {
     FieldDefinition {
         field_type: bf.field_type.clone(),
         widget: Some(bf.widget.clone()),
-        required: bf.required,
+        required: false,
         default,
         format: bf.format.map(|s| s.to_string()),
         enum_values,
@@ -403,10 +403,10 @@ mod tests {
     }
 
     #[test]
-    fn test_builtin_schema_has_required_title() {
+    fn test_builtin_title_is_optional() {
         let schema = builtin_schema();
         let title = schema.frontmatter.fields.get("title").expect("title field");
-        assert!(title.required);
+        assert!(!title.required, "a page without one takes its title from the file name");
         assert_eq!(title.field_type, FieldType::String);
         assert_eq!(title.widget, Some(Widget::TextInput));
     }

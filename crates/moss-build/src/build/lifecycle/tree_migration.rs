@@ -177,7 +177,7 @@ mod tests {
     use super::*;
 
     fn blob(dir: &Path, bytes: &[u8]) -> String {
-        ObjectStore::new(dir.to_path_buf()).store_bytes(bytes, crate::build::cache::RecordMode::Request).expect("stored")
+        ObjectStore::new(dir.to_path_buf()).store_bytes(bytes).expect("stored")
     }
 
     fn put_forged(dir: &Path, oid: &str) {

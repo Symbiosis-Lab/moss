@@ -31,8 +31,8 @@ describe('the browser host record', () => {
     resetTestHost();
   });
 
-  it('has the engine, the bus, links and file picks, and nothing desktop-only', () => {
-    expect(Object.keys(fill()).sort()).toEqual(['bus', 'engine', 'openExternal', 'pickFiles', 'sourceAssetBase']);
+  it('has the engine, the bus, links, file picks and the reference to a picked file, and nothing desktop-only', () => {
+    expect(Object.keys(fill()).sort()).toEqual(['assetRefForPath', 'bus', 'engine', 'openExternal', 'pickFiles', 'sourceAssetBase']);
   });
 
   it("finds the folder's sources behind the session, on its own origin", () => {

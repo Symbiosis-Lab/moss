@@ -85,7 +85,7 @@ pub(crate) fn site_settings() -> Vec<SiteSettingInfo> {
             name: "floating_nav",
             r#type: "bool",
             default: Some("false"),
-            description: "Show the contents ruler in the left margin on wide screens, on every page, not only pages that set `contents: open`.",
+            description: "Show the floating contents bar (on scroll-up) and, on wide screens, the contents ruler in the left margin, on every page whose sections are worth listing: at least two sections each holding 80 words of paragraphs, quotes or list items. A page of headings over cards and short link lists gets none. `contents: pictures` brings them on its own page without this.",
         },
         SiteSettingInfo {
             name: "hard_line_breaks",

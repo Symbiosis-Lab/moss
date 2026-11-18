@@ -73,6 +73,30 @@ describe("buildContextPayload", () => {
     expect(p.image).toBe("http://localhost:4832/img/a.png");
   });
 
+  it("a gallery picture's link is the viewer, not a link to copy", () => {
+    document.body.innerHTML =
+      '<div class="moss-gallery-item" data-source-line="4"><a class="moss-gallery-link" href="/a.png"><img id="t" src="/a.png"></a></div>';
+    expect(payloadFor(document.getElementById("t")).link).toBeNull();
+  });
+
+  it("counts the picture among those sharing its line, in page order, file by file", () => {
+    document.body.innerHTML = `
+      <p data-source-line="3"><img id="p0" src="/a.png"> <img id="p1" src="/a.png"></p>
+      <div class="moss-gallery" data-layout="rows">
+        <div class="moss-gallery-item" data-source-line="9"><a class="moss-gallery-link" href="/a.png"><img id="g0" src="/a.png"></a></div>
+        <div class="moss-gallery-item" data-source-line="9"><a class="moss-gallery-link" href="/b.png"><img id="g1" src="/b.png"></a></div>
+        <div class="moss-gallery-item" data-source-line="10"><a class="moss-gallery-link" href="/c.png"><img id="g2" src="/c.png"></a></div>
+        <div class="moss-gallery-item" data-source-line="9" aria-hidden="true"><img id="copy" src="/b.png"></div>
+      </div>
+      <section class="moss-hero" data-source-range="12-14"><img id="hero" src="/w.png"><h1 data-source-line="13">Hi</h1></section>
+      <a class="moss-card" data-source-file="notes/first.md"><p data-source-line="3"><img id="other" src="/c.png"></p></a>
+      <img id="theme" src="/logo.png">`;
+    const index = (id: string) => payloadFor(document.getElementById(id)).imageIndex;
+    expect(["p0", "p1", "g0", "g1", "g2", "copy", "hero", "other", "theme"].map(index)).toEqual([0, 1, 0, 1, 0, 0, 0, 0, 0]);
+    document.body.innerHTML = "<p id='t'>words</p>";
+    expect(index("t")).toBeNull();
+  });
+
   it("carries every source target under the cursor, nearest first", () => {
     document.body.innerHTML =
       '<article data-source-file="posts/a.md"><p id="t" data-source-line="7">x</p></article>';

@@ -1,7 +1,7 @@
 //! A page with `country_map:` draws its table as a map: matching, the problems
 //! an author must see, the markup, and the embed.
 
-#[path = "support/site.rs"]
+#[path = "it/site.rs"]
 mod site;
 
 use site::Site;

@@ -326,6 +326,7 @@ fn config_tables() -> Vec<ConfigTableInfo> {
         description: "Who may subscribe, which is what opens members pages. Published at /_moss/members.json for the host.",
         rules: vec![
             "`join` is open (default) or invite. Invalid values stop the build.",
+            "`reply_to` is where readers' replies to the site's mail go; unset, the owner's sign-in email. One plain address, or the build stops. Written to /.moss-email/sender.json on the moss host only, never to members.json.",
             "Members pages publish only the preview before <!--members-only-->; without a marker no body is public. Paid pages remain restricted.",
         ],
     },

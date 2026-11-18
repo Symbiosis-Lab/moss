@@ -43,6 +43,7 @@ function deps(overrides: Partial<PreviewCtxDeps> = {}): PreviewCtxDeps {
     copy: vi.fn(),
     openExternal: vi.fn(),
     openStyle: vi.fn(),
+    showInternal: false,
     ...overrides,
   };
 }
@@ -167,7 +168,7 @@ describe('buildPreviewCtxEntries', () => {
       '---',
       'Copy',
       'Copy link',
-      'Copy image address',
+      'Copy picture address',
       'Copy published URL',
       '---',
       'Open in browser',
@@ -246,21 +247,6 @@ describe('buildPreviewCtxEntries', () => {
     ]);
   });
 
-  it('a picture in a grid column: the column is not a second grid row', () => {
-    const entries = buildPreviewCtxEntries(
-      ctx({
-        targets: [
-          { kind: 'body-line', line: 10, element: 'p' },
-          { kind: 'body-range', startLine: 3, endLine: 10, element: 'div.moss-grid-card' },
-          { kind: 'body-range', startLine: 2, endLine: 22, element: 'div.moss-grid' },
-        ],
-        image: 'http://localhost:4832/pictures/room.jpg',
-      }),
-      deps({ canEdit: true, pageFile: '/site/index.md' }),
-    );
-    expect(labels(entries).slice(0, 3)).toEqual(['Edit paragraph', 'Edit block', 'Grid settings']);
-  });
-
   it('nav entry: a settings row, then the named page row that opens the page itself', () => {
     const d = deps();
     const entries = buildPreviewCtxEntries(
@@ -315,7 +301,7 @@ describe('buildPreviewCtxEntries style group', () => {
     const openStyle = vi.fn();
     const entries = buildPreviewCtxEntries(
       ctx({ styles: ['.moss-hero h1', 'h1'], targets: [{ kind: 'page', path: 'posts/a.md' }] }),
-      deps({ openStyle, pageFile: 'posts/a.md' }),
+      deps({ openStyle, pageFile: 'posts/a.md', showInternal: true }),
     );
     const rows = entries.filter((e): e is CtxMenuItem => 'action' in e && e.detail === 'style.css');
     expect(rows.map((r) => r.label)).toStrictEqual(['Style .moss-hero h1', 'Style h1']);
@@ -324,8 +310,59 @@ describe('buildPreviewCtxEntries style group', () => {
     expect(openStyle).toHaveBeenCalledWith('h1');
   });
 
+  it('offers no theme rule while internal files are hidden', () => {
+    const entries = buildPreviewCtxEntries(ctx({ styles: ['h1'], targets: [{ kind: 'page', path: 'posts/a.md' }] }), deps());
+    expect(labels(entries).some((l) => l.startsWith('Style'))).toBe(false);
+  });
+
   it('adds no style group when the element has no theme rule', () => {
     const entries = buildPreviewCtxEntries(ctx({ styles: [] }), deps());
     expect(entries.some((e) => 'detail' in e && e.detail === 'style.css')).toBe(false);
+  });
+});
+
+describe('a right-click on a picture', () => {
+  const IMAGE = 'http://localhost:4832/room.png';
+  const p = (line: number, element = 'p') => ({ kind: 'body-line', line, element });
+  const gridCell = [p(12), { kind: 'body-range', startLine: 12, endLine: 12, element: 'div.moss-grid-card' }, { kind: 'body-range', startLine: 11, endLine: 17, element: 'div.moss-grid' }];
+  const hero = { kind: 'body-range', startLine: 3, endLine: 5, element: 'section.moss-hero' };
+  const menu = (over: Partial<PreviewCtxPayload>, d = deps({ canEdit: true, pageFile: '/site/index.md' })) =>
+    buildPreviewCtxEntries(ctx({ image: IMAGE, imageIndex: 0, styles: ['article img'], ...over }), d);
+  const tail = ['---', 'Copy picture address', 'Copy page address', '---', 'Open in browser'];
+
+  it.each([
+    ['a body picture', { targets: [{ ...p(7), element: 'figure.moss-image' }] }, ['Replace picture…', 'Edit description', 'Show in file list', '---', 'Edit this page', ...tail]],
+    ['a picture a grid crops', { targets: gridCell }, ['Replace picture…', 'Set focus point', 'Edit description', 'Show in file list', '---', 'Edit this page', ...tail]],
+    ['a gallery picture', { targets: [p(9, 'div.moss-gallery-item')] }, ['Replace picture…', 'Edit description', 'Show in file list', '---', 'Edit this page', ...tail]],
+    ['a hero', { targets: [hero] }, ['Replace picture…', 'Set focus point', 'Show in file list', '---', 'Edit this page', ...tail]],
+    ["a listing card's cover", { targets: [{ kind: 'page', path: 'notes/first.md' }] }, ['Edit first page', ...tail]],
+    ["a picture in another file's text shown on the page", { targets: [{ ...p(4), path: 'footer.md' }] }, ['Edit paragraph', 'Edit footer page', ...tail]],
+    ['a folder cover from the front matter', { targets: [{ kind: 'frontmatter', field: 'cover', element: 'div.moss-collection-cover' }] }, ['Edit cover', ...tail]],
+    ['a picture the theme draws', { targets: [{ kind: 'none' }] }, tail.slice(1)],
+  ])('%s: the rows it can act on, each once, no grid or style rows', (_kind, over, expected) => {
+    const shown = labels(menu(over as Partial<PreviewCtxPayload>));
+    expect(shown).toEqual(expected);
+    const rows = shown.filter((l) => l !== '---');
+    expect(new Set(rows).size).toBe(rows.length);
+  });
+
+  it('each picture row opens the line with its act, on the picture clicked', () => {
+    const d = deps({ canEdit: true, pageFile: '/site/index.md' });
+    const entries = menu({ targets: [p(9, 'div.moss-gallery-item')], imageIndex: 1 }, d);
+    const acts = { 'Replace picture…': 'replace', 'Edit description': 'description', 'Show in file list': 'reveal' } as const;
+    for (const [label, act] of Object.entries(acts)) {
+      item(entries, label).action(click);
+      expect(d.openTarget).toHaveBeenLastCalledWith({ ...p(9, 'div.moss-gallery-item'), act: { act, picture: 1 } });
+    }
+    item(entries, 'Edit this page').action(click);
+    expect(d.openTarget).toHaveBeenLastCalledWith(p(9, 'div.moss-gallery-item'));
+    item(menu({ targets: [hero] }, d), 'Set focus point').action(click);
+    expect(d.openTarget).toHaveBeenLastCalledWith({ ...hero, act: { act: 'focus', picture: 0 } });
+  });
+
+  it("a grid's Columns row is only for its own area", () => {
+    const d = deps({ canEdit: true, pageFile: '/site/index.md' });
+    expect(labels(buildPreviewCtxEntries(ctx({ targets: gridCell.slice(1) }), d))).toContain('Columns');
+    expect(labels(buildPreviewCtxEntries(ctx({ targets: gridCell }), d))).not.toContain('Columns');
   });
 });

@@ -161,3 +161,55 @@ fn a_file_over_the_size_limit_keeps_its_plain_name() {
     assert!(out.css.contains("url(big.mp4)"), "{}", out.css);
     assert_eq!(out.files.len(), 1);
 }
+
+#[test]
+fn an_imported_stylesheet_has_its_own_urls_rewritten_before_it_is_hashed() {
+    let fonts_css = "@font-face{src:url(\"fonts/x.woff2\")}";
+    let theme = files(&[("fonts.css", fonts_css.as_bytes()), ("fonts/x.woff2", b"FONT")]);
+    let rewritten = format!("@font-face{{src:url(\"fonts/x.{}.woff2\")}}", h(b"FONT"));
+    for (written, quote) in [("@import \"fonts.css\";", "\""), ("@import 'fonts.css' screen;", "'"), ("@import url(\"fonts.css\");", "\"")] {
+        let out = run(written, &theme);
+        let hashed = format!("fonts.{}.css", h(rewritten.as_bytes()));
+        assert!(out.css.contains(&format!("{quote}{hashed}{quote}")), "{written}: {}", out.css);
+        let published: HashMap<&str, &[u8]> = out.files.iter().map(|(p, b)| (p.as_str(), b.as_slice())).collect();
+        assert_eq!(published.len(), 2, "{written}");
+        assert_eq!(published[format!("_moss/theme/{hashed}").as_str()], rewritten.as_bytes(), "{written}");
+        assert_eq!(published[format!("_moss/theme/fonts/x.{}.woff2", h(b"FONT")).as_str()], b"FONT", "{written}");
+    }
+}
+
+#[test]
+fn an_imported_stylesheets_urls_start_from_its_own_folder() {
+    let more = "a{src:url(y.woff2)}b{src:url(../fonts/x.woff2)}c{src:url(../../out.woff2)}";
+    let theme = files(&[("sub/more.css", more.as_bytes()), ("sub/y.woff2", b"Y"), ("fonts/x.woff2", b"X"), ("y.woff2", b"ROOT")]);
+    let out = run("@import \"sub/more.css\";", &theme);
+    let rewritten = format!("a{{src:url(y.{}.woff2)}}b{{src:url(../fonts/x.{}.woff2)}}c{{src:url(../../out.woff2)}}", h(b"Y"), h(b"X"));
+    assert_eq!(out.css, format!("@import \"sub/more.{}.css\";", h(rewritten.as_bytes())));
+    let mut paths: Vec<&str> = out.files.iter().map(|(p, _)| p.as_str()).collect();
+    paths.sort_unstable();
+    let mut expect = vec![
+        format!("_moss/theme/fonts/x.{}.woff2", h(b"X")),
+        format!("_moss/theme/sub/more.{}.css", h(rewritten.as_bytes())),
+        format!("_moss/theme/sub/y.{}.woff2", h(b"Y")),
+    ];
+    expect.sort_unstable();
+    assert_eq!(paths, expect);
+}
+
+#[test]
+fn stylesheets_that_import_each_other_end() {
+    let theme = files(&[("a.css", b"@import \"b.css\";"), ("b.css", b"@import \"a.css\";")]);
+    let out = run("@import \"a.css\";", &theme);
+    // b.css keeps its reference back to a.css as written.
+    let b = "@import \"a.css\";";
+    let a = format!("@import \"b.{}.css\";", h(b.as_bytes()));
+    assert_eq!(out.css, format!("@import \"a.{}.css\";", h(a.as_bytes())));
+}
+
+#[test]
+fn a_string_that_is_not_an_imports_address_is_left() {
+    let theme = files(&[("a.css", b"x"), ("b.png", b"y")]);
+    let css = "@import url(a.css) supports(content: \"b.png\");a::before{content:\"b.png\"}";
+    let out = run(css, &theme);
+    assert_eq!(out.css, format!("@import url(a.{}.css) supports(content: \"b.png\");a::before{{content:\"b.png\"}}", h(b"x")));
+}

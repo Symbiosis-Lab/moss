@@ -19,7 +19,7 @@ fn build_asset_snapshot_additively_indexes_output_url() {
         lqip_data_uri: Some("data:image/jpeg;base64,zzz".to_string()),
     };
     let lookup =
-        crate::build::media::dimensions::MediaDimensionLookup::new(&[meta], &[], &HashMap::new(), None);
+        crate::build::media::dimensions::MediaDimensionLookup::new(&[meta], &[], &HashMap::new(), None, &Default::default());
     let snap = lookup.asset_snapshot();
 
     // Source key is preserved (percent-decode probes still rely on it).
@@ -70,6 +70,7 @@ fn build_asset_snapshot_carries_animated_flag() {
         &[],
         &HashMap::new(),
         None,
+        &Default::default(),
     );
     let snap = lookup.asset_snapshot();
 
@@ -137,6 +138,7 @@ fn build_asset_snapshot_slug_collision_is_deterministic() {
             &[],
             &HashMap::new(),
             None,
+            &Default::default(),
         );
         let snap = lookup.asset_snapshot();
         assert_eq!(
@@ -3888,11 +3890,9 @@ fn timestamp_date_is_not_a_build_problem() {
     );
 }
 
-/// The critical negative: `title` is the schema's one required field, and
-/// `validate_frontmatter` reports an `Error` when it is absent — but moss
-/// deliberately falls back to the filename, so most correct pages omit it.
-/// Emitting that error would fire on nearly
-/// every page and train authors to ignore the whole channel.
+/// The critical negative: moss falls back to the filename for a missing
+/// `title`, so most correct pages omit it. A missing-title warning would fire
+/// on nearly every page and train authors to ignore the whole channel.
 #[test]
 fn missing_title_does_not_warn_at_build() {
     let warnings = schema_frontmatter_warnings("post.md", &fm_of("date: '2026-08-04'"));
@@ -3942,7 +3942,7 @@ fn body_image_sizes_follow_the_pages_effective_typesetting() {
         lqip_data_uri: None,
     };
     let lookup =
-        crate::build::media::dimensions::MediaDimensionLookup::new(&[meta], &[], &HashMap::new(), None);
+        crate::build::media::dimensions::MediaDimensionLookup::new(&[meta], &[], &HashMap::new(), None, &Default::default());
     let empty_map = HashMap::new();
     let render = |frontmatter: &str, site_typesetting: Option<&str>| {
         let md = format!("---\ntitle: t\n{frontmatter}---\n\n正文。\n\n![](photo.jpg)\n");
@@ -4111,7 +4111,7 @@ fn lookup_for(paths: &[&str]) -> crate::build::media::dimensions::MediaDimension
             lqip_data_uri: None,
         })
         .collect();
-    crate::build::media::dimensions::MediaDimensionLookup::new(&images, &[], &HashMap::new(), None)
+    crate::build::media::dimensions::MediaDimensionLookup::new(&images, &[], &HashMap::new(), None, &Default::default())
 }
 
 fn parse_with_lookup(
@@ -4360,6 +4360,10 @@ fn eager_count(html: &str) -> usize {
     html.matches(r#"loading="eager""#).count()
 }
 
+fn priority_count(html: &str) -> usize {
+    html.matches(r#"fetchpriority="high""#).count()
+}
+
 fn lookup_with_covers() -> crate::build::media::dimensions::MediaDimensionLookup {
     lookup_for(&["harbour.jpg", "a.jpg", "b.jpg"])
 }
@@ -4414,7 +4418,8 @@ fn folder_embed_after_a_paragraph_gets_the_eager_slot() {
     let doc = parse_page_with_graph("A paragraph.\n\n![[journal/|style:grid]]\n", &lookup);
     assert!(!doc.html_content.contains("lazy_cards"), "the opening embed is not lazy");
     let body = resolved_body(&doc, &lookup);
-    assert_eq!(eager_count(&body), 1, "the first cover is the page's eager image: {body}");
+    assert_eq!(priority_count(&body), 1, "the first cover holds the page's one priority fetch: {body}");
+    assert_eq!(eager_count(&body), 2, "both covers of the opening embed's first row load eagerly: {body}");
 }
 
 #[test]
@@ -4443,7 +4448,11 @@ fn only_the_first_folder_embed_of_a_page_is_eager() {
         &lookup,
     );
     let body = resolved_body(&doc, &lookup);
-    assert_eq!(eager_count(&body), 1, "two embeds, one eager cover: {body}");
+    let imgs = img_tags(&body);
+    assert_eq!(imgs.len(), 4, "two embeds of two covers: {body}");
+    assert_eq!(priority_count(&body), 1, "one priority fetch on the page: {body}");
+    assert!(imgs[..2].iter().all(|img| img.contains(r#"loading="eager""#)), "the opening embed's first row is eager: {body}");
+    assert!(imgs[2..].iter().all(|img| is_lazy(img)), "the second embed stays lazy: {body}");
 }
 
 #[test]
@@ -4474,7 +4483,8 @@ fn an_author_cannot_turn_on_the_lazy_flag_from_the_embed_options() {
         &lookup,
     );
     let body = resolved_body(&doc, &lookup);
-    assert_eq!(eager_count(&body), 1, "a typed flag must not take the slot away: {body}");
+    assert_eq!(priority_count(&body), 1, "a typed flag must not take the slot away: {body}");
+    assert_eq!(eager_count(&body), 2, "the opening embed's first row stays eager: {body}");
 }
 
 #[test]

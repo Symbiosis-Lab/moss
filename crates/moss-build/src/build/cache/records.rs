@@ -13,14 +13,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Compatibility policy for cache calls. Cache reads and writes now request
-/// cloud-only entries and return promptly in both modes.
+/// How a cache call treats a record the sync provider still holds in the cloud.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordMode {
-    /// Legacy caller intent. Equivalent to `Request` for optional caches.
-    Wait,
     /// Request and carry on: an unavailable record misses; a write is refused.
     Request,
+    /// A value the build works out again from the source alone. A record the
+    /// cloud holds is not written over to add it: the caller uses the value it
+    /// worked out, and the record that arrives may already hold it.
+    Recomputable,
 }
 
 /// What reading a record found.
@@ -207,10 +208,10 @@ impl TransformCache {
             Err(e) if crate::build::icloud::is_definitely_absent(&path, &e) => RecordRead::Absent,
             Err(e) if crate::build::icloud::is_offline_not_absent(&path, &e) => {
                 log::debug!("[cache] record {} is in the cloud: {}", path.display(), e);
-                // In a managed folder the work it records is redone and
-                // published through the owner, which reads the whole record:
-                // ask the system for it now, so that read finds it local.
-                if self.objects.site.is_some() && crate::build::cloud_readiness::storage::managed_context(&self.base) {
+                // A site's record is asked for now, in any folder, so the
+                // next read of the work it records, or a wait for it, finds
+                // it local. A store with no site keeps optional history only.
+                if self.objects.site.is_some() {
                     crate::build::cloud_readiness::request_download(&path);
                 }
                 RecordRead::Offline
@@ -247,7 +248,7 @@ impl TransformCache {
     ) {
         let stored = serde_json::to_vec(summary)
             .map_err(|e| e.to_string())
-            .and_then(|json| Ok((self.objects.store_bytes(&json, RecordMode::Request)?, json.len() as u64)));
+            .and_then(|json| Ok((self.objects.store_bytes(&json)?, json.len() as u64)));
         let (oid, size) = match stored {
             Ok(stored) => stored,
             Err(e) => {
@@ -269,12 +270,13 @@ impl TransformCache {
 
     /// Apply `edit` to the source's record — a fresh one of `source_size` when
     /// there is none — and write it back, keeping every entry `edit` leaves
-    /// alone. An unreadable record is not written over, in either mode: the work
-    /// just done goes unrecorded and is found or redone by a later build. A
-    /// record still in the cloud is not written over either, but in a managed
-    /// folder the edit is published as a patch, which the owner merges once it
-    /// has read the whole record; without that, a provider that keeps records as
-    /// placeholders would have every build redo the same work.
+    /// alone. An unreadable record is not written over: the work just done goes
+    /// unrecorded and is found or redone by a later build. A record still in the
+    /// cloud is not written over either, but in a managed folder the edit is
+    /// published as a patch, which the owner merges once it has read the whole
+    /// record; without that, a provider that keeps records as placeholders would
+    /// have every build redo the same work. A [`RecordMode::Recomputable`] edit
+    /// is not worth that upload and is dropped.
     pub fn merge(
         &self,
         source_oid: &str,
@@ -303,7 +305,7 @@ impl TransformCache {
             read @ (RecordRead::Unreadable | RecordRead::Offline) => match &pending {
                 Some(RecordEdit::Replace(record)) => (record.clone(), None),
                 Some(RecordEdit::Delete) => (TransformRecord { source_oid: source_oid.into(), source_size, transforms: HashMap::new() }, None),
-                _ if matches!(read, RecordRead::Offline) && owner.is_some() => {
+                _ if matches!(read, RecordRead::Offline) && owner.is_some() && mode != RecordMode::Recomputable => {
                     (TransformRecord { source_oid: source_oid.to_string(), source_size, transforms: HashMap::new() }, None)
                 }
                 _ => return Ok(Merged::Kept),
@@ -390,13 +392,18 @@ impl TransformCache {
                     }
                 }
             });
+            let existing = match &read { RecordRead::Present(record) => Some(record.clone()), _ => None };
             let mut record = match read {
                 RecordRead::Present(record) => record,
                 RecordRead::Absent => TransformRecord { source_oid: source_oid.clone(), source_size: 0, transforms: HashMap::new() },
                 RecordRead::Unreadable | RecordRead::Offline => return Err(read_failure.into_inner().unwrap().unwrap_or_else(|| StorageFailure::new(Some(path.clone()), StorageOperation::CacheRead, io::Error::other("existing record is unreadable; it is preserved")))),
             };
             intent.apply(&mut record);
-            write_record(&path, &record)?;
+            // Another machine may already have recorded the same work; rewriting
+            // an identical record is only an upload on every machine.
+            if existing.as_ref() != Some(&record) {
+                write_record(&path, &record)?;
+            }
             Ok(StorageValue::Published(revision))
         });
         match crate::build::cloud_readiness::storage::await_publication_revision(key, attempt, Some(latest), expected) {
@@ -492,7 +499,7 @@ mod tests {
         let c = cache(dir.path());
         let path = write_record_file(&c, OID, bytes);
         assert!(matches!(c.read(OID, RecordMode::Request), RecordRead::Unreadable));
-        let merged = c.merge(OID, 1, RecordMode::Wait, |r| {
+        let merged = c.merge(OID, 1, RecordMode::Request, |r| {
             r.transforms.insert("image/webp".into(), entry("w"));
         });
         assert_eq!(merged, Ok(Merged::Kept));
@@ -530,7 +537,7 @@ mod tests {
         let other = br#"{"version": 9, "entries": ["written by a newer moss"]}"#;
         let path = write_record_file(&c, OID, other);
         assert!(matches!(c.read(OID, RecordMode::Request), RecordRead::Unreadable));
-        assert_eq!(c.merge(OID, 1, RecordMode::Wait, |_| {}), Ok(Merged::Kept));
+        assert_eq!(c.merge(OID, 1, RecordMode::Request, |_| {}), Ok(Merged::Kept));
         assert_eq!(std::fs::read(&path).unwrap(), other);
     }
 
@@ -564,29 +571,27 @@ mod tests {
         let path = c.record_path(OID);
         let before = std::fs::read(&path).unwrap();
         crate::build::io_utils::fault::fail_reads(&path, libc::EACCES, 2);
-        assert!(c.get_with(OID, RecordMode::Wait).is_none());
-        let merged = c.merge(OID, 10, RecordMode::Wait, |r| {
+        assert!(c.get_with(OID, RecordMode::Request).is_none());
+        let merged = c.merge(OID, 10, RecordMode::Request, |r| {
             r.transforms.insert("media/meta".into(), entry("m"));
         });
         assert_eq!(merged, Ok(Merged::Kept));
         assert_eq!(std::fs::read(&path).unwrap(), before);
         // Once the refusals are used up, the same record reads normally.
-        assert!(c.get_with(OID, RecordMode::Wait).is_some());
+        assert!(c.get_with(OID, RecordMode::Request).is_some());
     }
 
-    /// A cache record is optional even when its caller asked for Wait. The
-    /// build can regenerate its work, so a cloud refusal returns at once.
+    /// A cache record is optional: the build can regenerate its work, so a
+    /// cloud refusal returns at once.
     #[cfg(target_os = "macos")]
     #[test]
-    fn record_lookup_requests_a_placeholder_without_waiting_in_either_mode() {
+    fn record_lookup_requests_a_placeholder_without_waiting() {
         let dir = tempfile::tempdir().unwrap();
         let c = seeded(dir.path(), &["image/webp"]);
         let path = c.record_path(OID);
-        for mode in [RecordMode::Wait, RecordMode::Request] {
-            crate::build::io_utils::fault::fail_reads(&path, libc::EDEADLK, 1);
-            assert!(c.get_with(OID, mode).is_none());
-            assert!(c.get_with(OID, mode).is_some(), "the next lookup can use the record");
-        }
+        crate::build::io_utils::fault::fail_reads(&path, libc::EDEADLK, 1);
+        assert!(c.get_with(OID, RecordMode::Request).is_none());
+        assert!(c.get_with(OID, RecordMode::Request).is_some(), "the next lookup can use the record");
     }
 
     #[test]

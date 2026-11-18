@@ -1806,7 +1806,7 @@ fn test_run_video_conversion_headless_empty_videos() {
         moss_dir: std::path::PathBuf::from("/nonexistent/.moss"),
         start_time: std::time::Instant::now(),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
 
@@ -1862,7 +1862,7 @@ fn vault_with_videos(names: &[&str], script: &str) -> (TempDir, BackgroundContex
         start_time: std::time::Instant::now(),
         ffmpeg_bin_path: Some(fake_ffmpeg.to_string_lossy().to_string()),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
     (temp, ctx)
@@ -3733,7 +3733,7 @@ fn test_fast_path_rejects_zero_byte_canonical_files() {
         moss_dir: moss_dir.clone(),
         start_time: std::time::Instant::now(),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
 
@@ -5016,6 +5016,56 @@ fn make_big_jpeg_at(path: &std::path::Path, w: u32, h: u32) {
         .unwrap();
 }
 
+/// A picture the live deploy record lists keeps the rung widths it was
+/// published with: emitted, staged and recorded alike, with no rung added since.
+/// A picture the record does not list gets today's whole ladder.
+#[test]
+fn a_published_picture_keeps_its_published_rungs() {
+    assert_kept_and_fresh_rungs((2400, 1801));
+}
+
+/// The same, when the two pictures are the same bytes: they must not share one
+/// encode's rung set. Whether the two encodes overlap depends on scheduling.
+#[test]
+fn a_published_copy_and_a_new_copy_of_one_picture_keep_their_own_rungs() {
+    assert_kept_and_fresh_rungs((2400, 1800));
+}
+
+fn assert_kept_and_fresh_rungs(fresh: (u32, u32)) {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "# Pictures\n\n![kept](kept.jpg)\n\n![fresh](fresh.jpg)\n").unwrap();
+    make_big_jpeg_at(&test_dir.join("kept.jpg"), 2400, 1800);
+    make_big_jpeg_at(&test_dir.join("fresh.jpg"), fresh.0, fresh.1);
+    let paths = crate::moss_paths::MossPaths::new(&test_dir);
+    std::fs::create_dir_all(paths.deploy_records_dir()).unwrap();
+    let record = crate::build::manifest::change_set::PublishedSnapshot {
+        target: "moss:site".into(),
+        files: ["kept.jpg", "kept.webp", "kept.w800.webp", "kept.w1600.webp"].map(|f| (f.to_string(), "h".to_string())).into(),
+        ..Default::default()
+    };
+    std::fs::write(paths.deploy_records_dir().join("moss-site.json"), serde_json::to_string(&record).unwrap()).unwrap();
+
+    let services = BuildServices::headless();
+    for _ in 0..2 {
+        build_test(folder_path, None, None, None, Some(&services), &ResolvedSlots::empty()).unwrap();
+    }
+
+    let staging = test_dir.join(".moss/build.nosync/staging");
+    let html = fs::read_to_string(staging.join("index.html")).unwrap();
+    let recorded = load_previous_hashes(folder_path);
+    let rungs = |name: &str| -> [Vec<u32>; 3] {
+        let widths = |has: &dyn Fn(u32) -> bool| [800, 1200, 1600].into_iter().filter(|w| has(*w)).collect::<Vec<u32>>();
+        [
+            widths(&|w| html.contains(&format!("/{name}.w{w}.webp {w}w"))),
+            widths(&|w| staging.join(format!("{name}.w{w}.webp")).exists()),
+            widths(&|w| recorded.image_outputs.contains(&format!("{name}.w{w}.webp"))),
+        ]
+    };
+    assert_eq!(rungs("kept"), [vec![800, 1600], vec![800, 1600], vec![800, 1600]], "emitted, staged, recorded: {html}");
+    assert_eq!(rungs("fresh"), [vec![800, 1200, 1600], vec![800, 1200, 1600], vec![800, 1200, 1600]], "emitted, staged, recorded");
+}
+
 #[test]
 fn test_image_compression_pipeline_end_to_end() {
     // Full pipeline:
@@ -5796,6 +5846,46 @@ fn a_page_unusable_for_a_reason_outside_the_cloud_raises_no_cloud_wait() {
     built.unwrap();
     assert_eq!(*state.current_dir.read().unwrap(), mp.staging_dir(),
         "the preview shows this build, not a stale one held back for a download that does not exist");
+}
+
+/// A page that was still in the cloud is shown by the rebuild its download
+/// starts, when that build renders. A picture batch still running from an
+/// earlier build holds the build's seal, never the page: the build that joins it
+/// waits in the background, after the page is already in the preview.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_downloaded_page_shows_at_render_while_its_build_waits_on_a_joined_picture() {
+    use crate::build::media::image::{compute_image_item_fingerprint, mark_image_items_pending, tests::join_waiters, ImageCompressionConfig};
+    use crate::system::folder_session::PreviewSource;
+    let (dir, _cleanup) = create_test_dir();
+    let folder = dir.to_str().unwrap();
+    make_big_jpeg_at(&dir.join("pic.jpg"), 1600, 1200);
+    fs::write(dir.join(".article.md.icloud"), "").unwrap();
+    let mp = crate::moss_paths::MossPaths::new(&dir);
+    let state = SiteDirectoryState::new(mp.current_ptr());
+    let session = crate::system::folder_session::FolderSession::new(dir.clone());
+    session.set_preview_requirement("/article/".into(), PreviewSource::File("article.md".into())).unwrap();
+    build_test_with_focus(folder, scan_folder(folder).unwrap(), Some(&state), Some(session.clone()), None, None).unwrap();
+    assert_ne!(*state.current_dir.read().unwrap(), mp.staging_dir(), "the page is still in the cloud");
+
+    fs::remove_file(dir.join(".article.md.icloud")).unwrap();
+    fs::write(dir.join("article.md"), "# Article\n\n![](pic.jpg)\n").unwrap();
+    let ledger_key = crate::vault::paths::VaultRoot::resolve(folder).path().to_string_lossy().into_owned();
+    let fingerprint = compute_image_item_fingerprint(&ledger_key, std::path::Path::new("pic.jpg"), &ImageCompressionConfig::default()).unwrap();
+    let batch = mark_image_items_pending(&ledger_key, [("pic.jpg".to_string(), std::sync::Arc::new(fingerprint))]);
+    std::thread::scope(|scope| {
+        let rebuild = scope.spawn(|| build_test_with_focus(folder, scan_folder(folder).unwrap(), Some(&state), Some(session.clone()), None, None));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while join_waiters(&ledger_key) == 0 && !rebuild.is_finished() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let joined = join_waiters(&ledger_key) > 0;
+        let shown = state.current_dir.read().unwrap().clone();
+        drop(batch);
+        rebuild.join().unwrap().unwrap();
+        assert!(joined, "premise: the rebuild joined the running picture batch");
+        assert_eq!(shown, mp.staging_dir(), "the downloaded page is shown at render, not held behind the picture batch its build joined");
+    });
 }
 
 #[cfg(target_os = "macos")]

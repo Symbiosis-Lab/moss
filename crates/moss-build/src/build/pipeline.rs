@@ -619,7 +619,7 @@ fn run_notebook_processing(
             // registration matches what's on disk regardless of source-folder
             // casing.
             // .unwrap(): source_path comes from the notebook scanner — known valid.
-            let ipynb_out = crate::build::served_path::ServedPath::from_source(&item_source_path).unwrap();
+            let ipynb_out = crate::build::notebook::copy_path(&item_source_path).unwrap();
             let hash = stage_copy(&source, &ipynb_out, &staging_owned)
                 .map_err(|e| format!("Failed to copy notebook: {}", e))?;
             produced.push((ipynb_out, hash));
@@ -2030,8 +2030,10 @@ fn build_inner(
             // Worker 1: Image conversion.
             // dispatch_image_conversions internally spawns its own async tasks in GUI
             // mode (via tauri::async_runtime::spawn) and runs synchronously in headless
-            // mode. The worker just calls it and returns; the tx clone lives inside the
-            // internally-spawned task until run_image_conversion completes.
+            // mode; the tx clone lives inside the internally-spawned task until
+            // run_image_conversion completes. When it joined another build's worker,
+            // this worker stays until that work is done, so the seal holds it too,
+            // or leaves it to a newer build and this build does not seal.
             if !image_items_empty {
                 let ctx_for_image = background_ctx.clone();
                 let tx_image = tx.clone();
@@ -2040,8 +2042,8 @@ fn build_inner(
                         svc_arc_for_image.as_deref(),
                         &ctx_for_image,
                         Some(tx_image),
-                    );
-                    Ok(())
+                        render_seq,
+                    )
                 });
             }
 
@@ -2064,6 +2066,7 @@ fn build_inner(
             {
                 let tx_assets = tx.clone();
                 let copying = session_for_assets.as_ref().map(|s| s.hold_ui_bound());
+                let session = session_for_assets.clone();
                 crate::build::background::spawn_traced_worker(workers, move || {
                     let _copying = copying;
                     let reporter_for_assets = reporter_for_assets
@@ -2075,6 +2078,7 @@ fn build_inner(
                         reporter_for_assets,
                         tx_assets,
                         asset_registry_for_assets,
+                        &|| session.as_ref().is_some_and(|s| s.cancel.is_cancelled()),
                     );
                     // Publish the skipped-symlink count so the video worker
                     // (which emits BuildComplete) can include it in the event.

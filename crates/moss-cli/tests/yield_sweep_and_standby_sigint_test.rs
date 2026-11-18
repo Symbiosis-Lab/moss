@@ -3,7 +3,7 @@
 //! reconciliation sweep (the new owner's sweep is the only one allowed to
 //! react), and a process standing by for an owner must answer Ctrl-C.
 
-#[path = "served_child.rs"]
+#[path = "it/served_child.rs"]
 mod served_child;
 
 use served_child::*;

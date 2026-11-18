@@ -2,7 +2,7 @@
   "_comment": [
     "Cross-language contract for the image-options words: where an image is",
     "cropped to (`position`), how it is fitted (`fit`), and which side it floats on (`align`).",
-    "Rust side: crates/moss-core/tests/position_vectors.rs requires `Position::from_keyword`",
+    "Rust side: crates/moss-core/tests/it/position_vectors.rs requires `Position::from_keyword`",
     "to give `position` for every `position_words` input, and `parse_media_attrs` to give",
     "`fit`/`position`/`align` for every `frame_segments` input.",
     "A position is a name, `{\"focus\": [x, y]}` (integers 0-100), or null for not-a-position.",

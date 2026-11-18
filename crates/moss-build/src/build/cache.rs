@@ -46,6 +46,8 @@ pub(crate) mod page_sources;
 mod publication;
 mod process_memo;
 mod fit;
+mod fetch;
+pub(crate) use fetch::LocalFirst;
 pub(crate) mod source_oids;
 pub(crate) use process_memo::{KeyedMemo, MemoFile, ProcessMemo, ROOTS};
 use crate::build::cloud_readiness::StorageOperation;
@@ -204,7 +206,7 @@ impl ObjectStore {
     }
 
     /// Move the fully written `tmp` to its content-addressed `dest`.
-    fn place_pending(&self, oid: &str, tmp: &Path, dest: &Path, _mode: RecordMode) -> Result<(), String> {
+    fn place_pending(&self, oid: &str, tmp: &Path, dest: &Path) -> Result<(), String> {
         // Publishing shared content must preserve its identity, even if the
         // source changed during a file copy or another writer arrived meanwhile.
         // Verify the local pending file once; never read a cloud placeholder.
@@ -244,40 +246,54 @@ impl ObjectStore {
     /// same pattern as git-lfs's "clean filter" — a crash can never leave
     /// a half-written blob at the final path.
     ///
-    /// An existing local blob is kept. A cloud-only entry is atomically
-    /// republished from these bytes under the same hash: successful storage
-    /// supplies a local blob, so readers do not wait on the cloud again after
-    /// regenerating an asset. Shared content is neither removed nor changed.
-    ///
-    /// `mode` says what a refusal because the shard is still in the cloud
-    /// costs: see [`RecordMode`].
-    pub fn store_file(&self, source: &Path, mode: RecordMode) -> Result<String, String> {
-        if let Some(site) = &self.site {
-            if crate::build::cloud_readiness::storage::managed_context(&self.base) {
-                let lease = crate::build::lifecycle::detached_cache_lease(site);
-                let local_store = ObjectStore::new(site.cache_local_objects());
-                let oid = local_store.store_file_in_base(source, mode)?;
-                self.replicate_local_blob(lease, &local_store.blob_path(&oid), &oid);
-                return Ok(oid);
-            }
-        }
-        match self.store_file_in_base(source, mode) {
-            Ok(oid) => Ok(oid),
-            Err(shared_error) => {
-                let Some(site) = &self.site else { return Err(shared_error) };
-                ObjectStore::new(site.cache_local_objects()).store_file_in_base(source, RecordMode::Request)
-                    .map_err(|local_error| format!("Shared CAS: {shared_error}; local CAS: {local_error}"))
-            }
-        }
+    /// An existing local blob is kept. For a site's store, a blob the shared
+    /// store holds only in the cloud is not written again, which would only
+    /// upload it again: the bytes go to this machine's store, which readers
+    /// try first. A store with no site writes it again under the same hash.
+    pub fn store_file(&self, source: &Path) -> Result<String, String> {
+        let oid = Self::hash_file(source)?;
+        self.store_routed(&oid, |store| store.store_file_in_base(source, &oid))
     }
 
     /// Store a verbatim copy of a site's own source file, in this machine's
     /// store only: the file itself already travels with the folder.
-    pub fn store_source_file(&self, source: &Path, mode: RecordMode) -> Result<String, String> {
+    pub fn store_source_file(&self, source: &Path) -> Result<String, String> {
+        let oid = Self::hash_file(source)?;
         match &self.site {
-            Some(site) => ObjectStore::new(site.cache_local_objects()).store_file_in_base(source, mode),
-            None => self.store_file_in_base(source, mode),
+            Some(site) => ObjectStore::new(site.cache_local_objects()).store_file_in_base(source, &oid),
+            None => self.store_file_in_base(source, &oid),
+        }?;
+        Ok(oid)
+    }
+
+    /// Write `oid` with `write` into the store that should hold it. In a synced
+    /// folder a site writes this machine's store and publishes from it;
+    /// elsewhere it writes the shared store, and this machine's store when the
+    /// cloud already holds the blob or the shared write fails.
+    fn store_routed(&self, oid: &str, write: impl Fn(&ObjectStore) -> Result<(), String>) -> Result<String, String> {
+        let Some(site) = &self.site else {
+            write(self)?;
+            return Ok(oid.to_string());
+        };
+        let local_store = ObjectStore::new(site.cache_local_objects());
+        if crate::build::cloud_readiness::storage::managed_context(&self.base) {
+            let lease = crate::build::lifecycle::detached_cache_lease(site);
+            write(&local_store)?;
+            self.replicate_local_blob(lease, &local_store.blob_path(oid), oid);
+        } else if Self::cloud_holds(&self.blob_path(oid)) {
+            // Writing over it would only upload it again.
+            write(&local_store)?;
+        } else if let Err(shared_error) = write(self) {
+            write(&local_store).map_err(|local_error| format!("Shared CAS: {shared_error}; local CAS: {local_error}"))?;
         }
+        Ok(oid.to_string())
+    }
+
+    /// The shared store already holds `dest`, in the cloud. A zero-length
+    /// entry holds nothing, so it is written over.
+    pub(super) fn cloud_holds(dest: &Path) -> bool {
+        crate::build::icloud::is_still_in_the_cloud(dest)
+            && fs::symlink_metadata(dest).map_or(true, |meta| meta.len() > 0)
     }
 
     fn replicate_local_blob(&self, lease: crate::build::lifecycle::DetachedCacheLease, source: &Path, oid: &str) {
@@ -288,21 +304,20 @@ impl ObjectStore {
         }
     }
 
-    fn store_file_in_base(&self, source: &Path, mode: RecordMode) -> Result<String, String> {
-        let oid = Self::hash_file(source)?;
-        let dest = self.blob_path(&oid);
+    fn store_file_in_base(&self, source: &Path, oid: &str) -> Result<(), String> {
+        let dest = self.blob_path(oid);
         let source_size = fs::metadata(source).map(|m| m.len()).unwrap_or(0);
 
-        // Reuse validated local bytes. Cloud entries are republished below;
-        // validate_blob removes a downloaded empty blob before re-storing.
+        // Reuse validated local bytes. validate_blob removes a downloaded
+        // empty blob before re-storing.
         // Best-effort: a probe that cannot tell (permission, not-a-directory,
         // an undownloaded shard) reads as absent and falls through to the
         // write, which handles its own directory failures and reports them.
         if dest.exists() && !crate::build::icloud::is_still_in_the_cloud(&dest)
-            && self.validate_blob(&oid, source_size).is_ok()
+            && self.validate_blob(oid, source_size).is_ok()
             && Self::hash_file_once(&dest).is_ok_and(|hash| hash == oid)
         {
-            return Ok(oid);
+            return Ok(());
         }
 
         // Ensure the parent directory (e.g., `base/ab/cd/`) exists.
@@ -343,49 +358,27 @@ impl ObjectStore {
             ));
         }
 
-        self.place_pending(&oid, &tmp, &dest, mode)?;
-
-        Ok(oid)
+        self.place_pending(oid, &tmp, &dest)
     }
 
     /// Store raw bytes in the object store, returning the SHA-256 OID.
     ///
     /// Like [`store_file`](Self::store_file), the write is atomic (temp +
-    /// rename) and idempotent (existing local blob is kept). A cloud-only blob
-    /// is republished from these same bytes. This variant avoids
-    /// an intermediate file when the caller already has bytes in memory —
-    /// e.g., a small JSON metadata blob. `mode` is as for `store_file`.
-    pub fn store_bytes(&self, data: &[u8], mode: RecordMode) -> Result<String, String> {
-        if let Some(site) = &self.site {
-            if crate::build::cloud_readiness::storage::managed_context(&self.base) {
-                let lease = crate::build::lifecycle::detached_cache_lease(site);
-                let local_store = ObjectStore::new(site.cache_local_objects());
-                let oid = local_store.store_bytes_in_base(data, mode)?;
-                self.replicate_local_blob(lease, &local_store.blob_path(&oid), &oid);
-                return Ok(oid);
-            }
-        }
-        match self.store_bytes_in_base(data, mode) {
-            Ok(oid) => Ok(oid),
-            Err(shared_error) => {
-                let Some(site) = &self.site else { return Err(shared_error) };
-                ObjectStore::new(site.cache_local_objects()).store_bytes_in_base(data, RecordMode::Request)
-                    .map_err(|local_error| format!("Shared CAS: {shared_error}; local CAS: {local_error}"))
-            }
-        }
+    /// rename) and idempotent (existing local blob is kept), and a cloud-only
+    /// blob is treated the same way. This variant avoids an intermediate file
+    /// when the caller already has bytes in memory — e.g., a small JSON
+    /// metadata blob.
+    pub fn store_bytes(&self, data: &[u8]) -> Result<String, String> {
+        let oid = format!("{:x}", Sha256::digest(data));
+        self.store_routed(&oid, |store| store.store_bytes_in_base(data, &oid))
     }
 
-    fn store_bytes_in_base(&self, data: &[u8], mode: RecordMode) -> Result<String, String> {
-        let oid = {
-            let mut hasher = Sha256::new();
-            hasher.update(data);
-            format!("{:x}", hasher.finalize())
-        };
-        let dest = self.blob_path(&oid);
+    fn store_bytes_in_base(&self, data: &[u8], oid: &str) -> Result<(), String> {
+        let dest = self.blob_path(oid);
 
         // Only this base's own blob answers a write to it, never the local CAS.
-        if self.holds_verified(&dest, &oid) {
-            return Ok(oid);
+        if self.holds_verified(&dest, oid) {
+            return Ok(());
         }
 
         if let Some(parent) = dest.parent() {
@@ -402,9 +395,7 @@ impl ObjectStore {
         })
         .map_err(|e| format!("Failed to write pending {}: {} ({})", tmp.display(), e, Self::shard_state(&dest)))?;
 
-        self.place_pending(&oid, &tmp, &dest, mode)?;
-
-        Ok(oid)
+        self.place_pending(oid, &tmp, &dest)
     }
 
     /// Return the on-disk path for a blob only if it is really an output.
@@ -420,8 +411,8 @@ impl ObjectStore {
     /// is removed so that [`store_file`](Self::store_file) can write fresh
     /// content, and an `Err` is returned. A blob the cloud holds is present, not
     /// corrupt: its key is its hash, so it is the same bytes on every machine,
-    /// and validation never removes it. When a store holds fresh local bytes,
-    /// it can republish that same hash atomically without changing the content.
+    /// and validation never removes it. A store with no site writes it again
+    /// under the same hash.
     ///
     /// This is the single place where blob integrity is checked and
     /// self-healing happens. Called by `store_file` (idempotency check).
@@ -865,7 +856,7 @@ impl TransformCache {
 
     /// Compute the path where a transform record is stored on disk, under the
     /// same ASCII-hex fan-out as [`ObjectStore::blob_path`].
-    fn record_path(&self, source_oid: &str) -> PathBuf {
+    pub(crate) fn record_path(&self, source_oid: &str) -> PathBuf {
         let oid = source_oid.replace(':', "-"); // NTFS forbids ':' in a path component (it's the ADS separator)
         self.base
             .join(oid.get(..2).unwrap_or(oid.as_str()))

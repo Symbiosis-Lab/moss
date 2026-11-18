@@ -30,10 +30,9 @@ impl BlobPublication {
 
     fn run(&self) -> Result<StorageValue, StorageFailure> {
         let dest = ObjectStore::blob_path_in(&self.root, &self.oid);
-        // A winner is successful only when it supplies the exact bytes. This
-        // probe runs on a native reader, so a placeholder never means Ready.
-        if crate::build::io_utils::output_present(&dest)
-            && ObjectStore::hash_file_once(&dest).is_ok_and(|hash| hash == self.oid)
+        // Already published, here or in the cloud.
+        if ObjectStore::cloud_holds(&dest)
+            || (crate::build::io_utils::output_present(&dest) && ObjectStore::hash_file_once(&dest).is_ok_and(|hash| hash == self.oid))
         {
             return Ok(StorageValue::Published(0));
         }
@@ -103,7 +102,7 @@ fn availability_rejected_replica_admission_is_not_pending_and_local_blob_stays_u
         let dir = tempfile::tempdir().unwrap();
         let paths = crate::moss_paths::MossPaths::new(dir.path());
         let local = ObjectStore::new(paths.cache_local_objects());
-        let oid = local.store_bytes(b"complete local asset", crate::build::cache::RecordMode::Request).unwrap();
+        let oid = local.store_bytes(b"complete local asset").unwrap();
         let source = local.blob_path(&oid);
         let job = Arc::new(BlobPublication::new(paths.cache_objects(), oid.clone(), source.clone(), crate::build::lifecycle::detached_cache_lease(&paths)));
         let dest = ObjectStore::blob_path_in(&job.root, &oid);
@@ -115,5 +114,25 @@ fn availability_rejected_replica_admission_is_not_pending_and_local_blob_stays_u
         *gate.0.lock().unwrap() = true;
         gate.1.notify_all();
         assert!(matches!(result, PublicationOutcome::Fatal(ref failure) if failure.io_error().is_some_and(|e| e.kind() == std::io::ErrorKind::WouldBlock)), "no admitted job means no future completion and must not be Pending");
+    });
+}
+
+/// A blob the shared store holds in the cloud is published already: a
+/// publication from this machine's copy does not write it, and upload it, again.
+#[cfg(test)]
+#[test]
+fn a_blob_the_cloud_holds_is_not_published_again() {
+    crate::infra::home::with_moss_home(|_| {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::moss_paths::MossPaths::new(dir.path());
+        let local = ObjectStore::new(paths.cache_local_objects());
+        let oid = local.store_bytes(b"complete local asset").unwrap();
+        let dest = ObjectStore::blob_path_in(&paths.cache_objects(), &oid);
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        std::fs::write(&dest, b"stand-in").unwrap();
+        let _cloud = crate::build::icloud::pretend::evicted(&dest);
+        let job = BlobPublication::new(paths.cache_objects(), oid.clone(), local.blob_path(&oid), crate::build::lifecycle::detached_cache_lease(&paths));
+        assert!(matches!(job.run(), Ok(StorageValue::Published(_))));
+        assert_eq!(std::fs::read(&dest).unwrap(), b"stand-in");
     });
 }

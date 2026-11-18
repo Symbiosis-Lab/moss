@@ -1228,7 +1228,7 @@ fn parse_gallery_body(args: &str, body: &str, config: &ParseConfig) -> (GalleryS
     let count = attrs.per_line.as_deref().or(positional_count).and_then(|v| v.parse::<u32>().ok());
     let columns = if rows || marquee { None } else { count };
     let mut items: Vec<GalleryItem> = Vec::new();
-    for line in gallery_lines(body.lines(), config).into_iter().flatten() {
+    for (index, line) in gallery_lines(body.lines(), config).into_iter().enumerate().filter_map(|(i, l)| Some((i, l?))) {
         match line {
             GalleryLine::Caption(caption) => {
                 if let Some(item) = items.last_mut() {
@@ -1247,6 +1247,8 @@ fn parse_gallery_body(args: &str, body: &str, config: &ParseConfig) -> (GalleryS
                     attrs: it.attrs,
                     caption: Vec::new(),
                     title,
+                    // The body starts on the line after the fence.
+                    line_offset: index + 1,
                 });
             }
         }

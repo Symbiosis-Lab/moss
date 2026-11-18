@@ -18,7 +18,7 @@
 //!    call site. A declared hook with an invented default is worse than an
 //!    undeclared one: an agent reasons from the wrong starting point and has no
 //!    way to tell.
-//! 3. `cargo test --test components_sync_test` — `every_escape_hatch_is_declared`
+//! 3. `cargo test -p moss-core --test it components_sync_test::` — `every_escape_hatch_is_declared`
 //!    fails on a read nothing declares, and `every_declared_custom_prop_is_read`
 //!    fails on a declaration nothing reads.
 
@@ -60,7 +60,7 @@ pub struct CustomProp {
 /// `--moss-escape` is set by `[data-width]` on any block).
 ///
 /// Enforced by `every_escape_hatch_is_declared` in this crate's own
-/// `tests/components_sync_test.rs`: a `var(--moss-*, …)` read that no
+/// `tests/it/components_sync_test.rs`: a `var(--moss-*, …)` read that no
 /// entry here declares fails the build. That test is the point of the table —
 /// a hook nothing declares is a hook no agent can find.
 pub const CUSTOM_PROPS: &[CustomProp] = &[

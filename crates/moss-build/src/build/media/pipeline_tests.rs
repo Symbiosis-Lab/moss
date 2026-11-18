@@ -27,7 +27,7 @@ pub(crate) fn stage_and_copy_assets(
     for message in html.registrations() {
         tx.blocking_send(message).unwrap();
     }
-    super::copy_deferred_assets(ctx, html, reporter, tx, asset_registry)
+    super::copy_deferred_assets(ctx, html, reporter, tx, asset_registry, &|| false)
 }
 
 /// Seal exactly what the emit channel reported, so a ship assertion is about
@@ -1503,7 +1503,7 @@ fn run_converter_base(
         &cfg,
         None,
         None,
-        &std::collections::HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -2565,7 +2565,7 @@ async fn planned_webp_base_registered_by_encoder_on_cold_and_warm_builds() {
         let (tx, rx) = test_utils::build_test_coordinator();
         tokio::task::spawn_blocking(move || {
             let services = crate::types::services::BuildServices::headless();
-            crate::build::media::image::dispatch_image_conversions(Some(&services), &ctx, Some(tx.clone()));
+            crate::build::media::image::dispatch_image_conversions(Some(&services), &ctx, Some(tx.clone()), None).unwrap();
             copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
         }).await.unwrap();
         let sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
@@ -2605,7 +2605,7 @@ fn html_evicted_between_passes_keeps_its_fresh_hash_and_oid() {
     fs::write(source.join(".guide.html.icloud"), "").unwrap();
     let (tx, mut rx) = mpsc::channel(100);
     for message in html.registrations() { tx.blocking_send(message).unwrap(); }
-    super::copy_deferred_assets(&ctx, html, reporter, tx, None);
+    super::copy_deferred_assets(&ctx, html, reporter, tx, None, &|| false);
     let mut registrations = Vec::new();
     while let Some(message) = rx.blocking_recv() {
         if let EmitMessage::File { rel_path, hash, oid, .. } = message {
@@ -2646,4 +2646,61 @@ async fn the_walk_takes_a_lanes_oid_for_a_file_it_owns() {
     for rel in ["clip.mp4", "cover.webp"] {
         assert_eq!(sealed.sources().get(rel).map(|m| m.hash.as_str()), Some(format!("lane-oid-{rel}").as_str()), "{rel}");
     }
+}
+
+/// A fallback raster another machine made, whose record is still in the cloud
+/// here, is downloaded and placed, not encoded again: an encode is not
+/// byte-identical, so encoding it again would change what is published.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cloud_held_fallback_raster_is_fetched_not_encoded_again() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let source = tmp.path().join("source");
+    let moss_dir = tmp.path().join(".moss");
+    let staging = moss_dir.join("build.nosync").join("staging");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::create_dir_all(&staging).unwrap();
+    let noise = image::ImageBuffer::from_fn(1200, 900, |x, y| image::Rgb([(x ^ y) as u8, (x * 7) as u8, (y * 13) as u8]));
+    image::DynamicImage::ImageRgb8(noise).save_with_format(source.join("photo.jpg"), image::ImageFormat::Jpeg).unwrap();
+    let ctx = BackgroundContext {
+        source_path: source.to_string_lossy().to_string(),
+        staging_dir: staging.clone(),
+        moss_dir: moss_dir.clone(),
+        ..BackgroundContext::for_test()
+    };
+    // The walk's fallback encode count.
+    let walk = || {
+        let ctx = ctx.clone();
+        async move {
+            let ((), collector) = crate::build::phase::with_collector(async move {
+                tokio::task::spawn_blocking(crate::build::phase::inherit_blocking(move || {
+                    let (tx, _rx) = crate::build::coordinator::test_utils::build_test_coordinator();
+                    copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
+                })).await.unwrap();
+            }).await;
+            let encodes = collector.lock().unwrap().counts.iter().find(|(name, _)| *name == "fallback_encodes").map_or(0, |(_, n)| *n);
+            encodes
+        }
+    };
+    assert_eq!(walk().await, 1, "the first walk makes the fallback");
+    let placed = std::fs::read(staging.join("photo.jpg")).unwrap();
+
+    let paths = crate::moss_paths::MossPaths::from_moss_dir(moss_dir.clone());
+    let transforms = crate::build::cache::TransformCache::for_site(&paths);
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&source.join("photo.jpg")).unwrap();
+    let record = transforms.record_path(&source_oid);
+    std::fs::remove_dir_all(&staging).unwrap();
+    std::fs::create_dir_all(&staging).unwrap();
+    // The record is not here, and lands a while after the walk first meets the picture.
+    let delivered = tmp.path().join("delivered.json");
+    std::fs::rename(&record, &delivered).unwrap();
+    let in_cloud = crate::build::icloud::pretend::evicted(&record);
+    let arrival = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        std::fs::rename(&delivered, &record).unwrap();
+        drop(in_cloud);
+    });
+
+    assert_eq!(walk().await, 0, "nothing is encoded again");
+    arrival.join().unwrap();
+    assert_eq!(std::fs::read(staging.join("photo.jpg")).unwrap(), placed, "the fetched fallback is placed");
 }

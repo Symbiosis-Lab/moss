@@ -25,7 +25,11 @@ pub(super) fn article_html(post: &ArticleInfo, site: &str, opts: &ShapeOptions, 
     let page = page_url(site, &post.url_path);
     let mut count = 0;
     let html = lol_html::rewrite_str(&html, lol_html::RewriteStrSettings {
-        element_content_handlers: vec![lol_html::element!("img", |el| {
+        element_content_handlers: vec![lol_html::element!("a[href]", |el| {
+            // A link to another page, a footnote or a heading leaves the site with the copy.
+            if let Some(href) = el.get_attribute("href") { el.set_attribute("href", &absolute(&href, &page, site))?; }
+            Ok(())
+        }), lol_html::element!("img", |el| {
             if let Some(src) = el.get_attribute("src") {
                 let alt = el.get_attribute("alt").unwrap_or_default();
                 let math_path = src.split_once("/_moss/math/").map(|(_, rest)| format!("_moss/math/{rest}"));

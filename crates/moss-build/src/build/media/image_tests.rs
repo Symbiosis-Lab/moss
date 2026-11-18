@@ -323,7 +323,7 @@ fn convert_single_image_happy_path() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -392,7 +392,7 @@ fn convert_single_image_webp_keeps_alpha_on_transparent_png() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -428,7 +428,7 @@ fn regenerated_cloud_variants_are_available_to_singleflight_followers() {
     let cfg = ImageCompressionConfig::default();
     let convert = || convert_single_image(
         &src, &source_oid, "photo.webp", &h.temp, &h.staging,
-        &h.objects, &h.transforms, &cfg, None, None, &HashMap::new(),
+        &h.objects, &h.transforms, &cfg, None, None, &Default::default(),
     );
     let first = convert();
     assert!(first.error.is_none(), "{:?}", first.error);
@@ -488,7 +488,7 @@ fn rung_encode_produces_exact_width_ladder_files() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -554,7 +554,7 @@ fn a_scaled_picture_keeps_hidden_colour_out_of_its_edges() {
     let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
     let outcome = convert_single_image(
         &src, &source_oid, "bars.webp", &h.temp, &h.staging, &h.objects, &h.transforms,
-        &ImageCompressionConfig::default(), None, None, &HashMap::new(),
+        &ImageCompressionConfig::default(), None, None, &Default::default(),
     );
     assert!(outcome.error.is_none(), "{:?}", outcome.error);
 
@@ -589,7 +589,7 @@ fn rung_encode_below_threshold_produces_no_rung_files() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -639,7 +639,7 @@ fn rung_encode_portrait_ladder_follows_deployed_width() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -698,7 +698,7 @@ fn rung_encode_produces_ladder_for_webp_source() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -766,7 +766,7 @@ fn rung_encode_webp_source_below_threshold_produces_no_rungs() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -818,7 +818,7 @@ fn base_webp_width_matches_deployed_width_within_one_px() {
             &cfg,
             None,
             None,
-            &HashMap::new(),
+            &Default::default(),
         );
         assert!(outcome.error.is_none(), "{w}x{hh}: {:?}", outcome.error);
 
@@ -863,7 +863,7 @@ fn elongated_base_keeps_its_short_edge_and_stays_within_webp_limits() {
             cfg,
             None,
             None,
-            &HashMap::new(),
+            &Default::default(),
         );
         assert!(outcome.error.is_none(), "{w}x{hh}: {:?}", outcome.error);
         let got = staged_webp_dims(&h.staging.join("scroll.webp"));
@@ -929,7 +929,7 @@ async fn base_failure_fails_registered_rung_promises() {
         config: ImageCompressionConfig::default(),
         dir_overrides: std::collections::HashMap::new(),
         tx: None,
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         carried_advisories: Vec::new(),
         suppressed: Default::default(),
         source_oids: Default::default(),
@@ -1010,7 +1010,7 @@ async fn base_failed_advisory_names_the_full_nested_source_path() {
         config: ImageCompressionConfig::default(),
         dir_overrides: std::collections::HashMap::new(),
         tx: None,
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         carried_advisories: Vec::new(),
         suppressed: Default::default(),
         source_oids: Default::default(),
@@ -1107,7 +1107,7 @@ async fn unhashable_source_fails_its_promises_instead_of_going_quiet() {
         config: ImageCompressionConfig::default(),
         dir_overrides: std::collections::HashMap::new(),
         tx: None,
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         carried_advisories: Vec::new(),
         suppressed: Default::default(),
         source_oids: Default::default(),
@@ -1137,7 +1137,7 @@ async fn unhashable_source_fails_its_promises_instead_of_going_quiet() {
 /// Test 5: collision — a vault file occupying a rung path survives the
 /// build byte-for-byte (the worker must NOT overwrite it) while the
 /// non-colliding rung is produced normally. Runs through the WORKER
-/// (`run_image_conversion`) so the `ImageRunContext::rung_collisions`
+/// (`run_image_conversion`) so the `ImageRunContext::rung_plan`
 /// threading is exercised, with a coordinator to prove the collided path
 /// never enters the manifest as an image variant.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1163,8 +1163,8 @@ async fn rung_collision_keeps_user_file_and_produces_other_rungs() {
     fs::write(staging.join("photo.w800.webp"), user_bytes).unwrap();
 
     let source_oid = crate::build::cache::ObjectStore::hash_file(&root.join(img_rel)).unwrap();
-    let mut rung_collisions: HashMap<String, PathBuf> = HashMap::new();
-    rung_collisions.insert("photo.w800.webp".to_string(), root.join("photo.w800.webp"));
+    let mut rung_plan = crate::build::media::rungs::RungPlan::default();
+    rung_plan.collisions.insert("photo.w800.webp".to_string(), root.join("photo.w800.webp"));
 
     let (tx, rx) = test_utils::build_test_coordinator();
     let run_ctx = ImageRunContext {
@@ -1182,7 +1182,7 @@ async fn rung_collision_keeps_user_file_and_produces_other_rungs() {
         config: ImageCompressionConfig::default(),
         dir_overrides: std::collections::HashMap::new(),
         tx: Some(tx.clone()),
-        rung_collisions,
+        rung_plan,
         carried_advisories: Vec::new(),
         suppressed: Default::default(),
         source_oids: Default::default(),
@@ -1254,7 +1254,7 @@ fn convert_single_image_caches_placeholder_meta_under_stat_key() {
         &cfg,
         None,
         Some(stat_key),
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -1292,6 +1292,29 @@ fn convert_single_image_caches_placeholder_meta_under_stat_key() {
     );
 }
 
+/// A placeholder entry that already holds the colour, written by an older
+/// moss under a version still right for a JPEG, is left as it is: writing the
+/// same values back would be an upload on every machine.
+#[test]
+fn convert_single_image_leaves_a_complete_placeholder_entry_unwritten() {
+    let h = harness();
+    let src = h._tmp.path().join("photo.jpg");
+    make_big_jpeg(&src, 400, 300);
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+    let stat_key = "stat:photo.jpg:1000:2000";
+    let meta = crate::build::cache::CachedMediaMeta { dimensions: Some((400, 300)), dominant_color: Some("#010203".into()), lqip_data_uri: Some("data:image/jpeg;base64,AA".into()), is_animated: false };
+    let bytes = serde_json::to_vec(&meta).unwrap();
+    let entry = crate::build::cache::TransformEntry { kept_for: None, validation: None, oid: h.objects.store_bytes(&bytes).unwrap(), size: bytes.len() as u64, params: serde_json::json!({ "v": 4 }) };
+    let record = crate::build::cache::TransformRecord { source_oid: stat_key.into(), source_size: 1, transforms: HashMap::from([("media/meta".to_string(), entry.clone())]) };
+    h.transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
+
+    let outcome = convert_single_image(&src, &source_oid, "photo.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &ImageCompressionConfig::default(), None, Some(stat_key), &Default::default());
+
+    assert!(outcome.error.is_none(), "{:?}", outcome.error);
+    let after = h.transforms.get_with(stat_key, crate::build::cache::RecordMode::Request).unwrap();
+    assert_eq!(after.transforms.get("media/meta"), Some(&entry));
+}
+
 #[test]
 fn convert_single_image_cache_hit() {
     let h = harness();
@@ -1312,7 +1335,7 @@ fn convert_single_image_cache_hit() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         first.error.is_none(),
@@ -1339,7 +1362,7 @@ fn convert_single_image_cache_hit() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         second.error.is_none(),
@@ -1356,19 +1379,19 @@ fn convert_single_image_cache_hit() {
 /// re-encode would show as another oid.
 #[test]
 fn a_picture_made_with_an_older_recipe_keeps_its_bytes() {
-    use crate::build::cache::RecordMode::Wait;
+    use crate::build::cache::RecordMode::Request;
     let h = harness();
     let src = h._tmp.path().join("photo.jpg");
     make_big_jpeg(&src, 2000, 1500);
     let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
     let cfg = ImageCompressionConfig::default();
-    let convert = || convert_single_image(&src, &source_oid, "photo.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &cfg, None, None, &HashMap::new());
+    let convert = || convert_single_image(&src, &source_oid, "photo.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &cfg, None, None, &Default::default());
     let first = convert();
     assert!(first.error.is_none(), "{:?}", first.error);
     assert!(!first.rungs.is_empty(), "the fixture needs rungs");
 
     let plant = |scale: f64| {
-        let mut record = h.transforms.get_with(&source_oid, Wait).unwrap();
+        let mut record = h.transforms.get_with(&source_oid, Request).unwrap();
         let mut planted = HashMap::new();
         for (name, entry) in record.transforms.iter_mut().filter(|(name, _)| name.starts_with("image/webp")) {
             let img = image::load_from_memory(&fs::read(h.objects.get_path(&entry.oid).unwrap()).unwrap()).unwrap();
@@ -1378,13 +1401,13 @@ fn a_picture_made_with_an_older_recipe_keeps_its_bytes() {
                 img
             };
             let bytes = encode_webp(&img, 10, None).unwrap();
-            entry.oid = h.objects.store_bytes(&bytes, Wait).unwrap();
+            entry.oid = h.objects.store_bytes(&bytes).unwrap();
             entry.size = bytes.len() as u64;
             entry.params = serde_json::json!({ "quality": 79 });
             entry.kept_for = None;
             planted.insert(name.clone(), entry.oid.clone());
         }
-        h.transforms.put(&record, Wait).unwrap();
+        h.transforms.put(&record, Request).unwrap();
         planted
     };
 
@@ -1398,7 +1421,7 @@ fn a_picture_made_with_an_older_recipe_keeps_its_bytes() {
     // The verdict is recorded, so the next build's skip path serves the kept
     // files without sending the picture to the worker again.
     let params = cfg.to_params();
-    let record = h.transforms.get_with(&source_oid, Wait);
+    let record = h.transforms.get_with(&source_oid, Request);
     let mut links = staged_links(&h);
     let skip = h._tmp.path().join("skip");
     fs::create_dir_all(&skip).unwrap();
@@ -1457,7 +1480,7 @@ fn convert_single_image_ignores_legacy_sentinel_and_writes_webp() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -1506,7 +1529,7 @@ fn convert_single_image_writes_webp_even_when_larger_than_source() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -1566,7 +1589,7 @@ fn convert_single_image_handles_mismatched_extension() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
 
     assert!(
@@ -1608,7 +1631,7 @@ fn convert_single_image_still_rejects_truly_undecodable_bytes() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
 
     assert!(
@@ -1639,6 +1662,27 @@ fn should_skip_heic() {
     let cfg = ImageCompressionConfig::default();
     let reason = should_skip(&src, "heic", 100, &cfg, &h.transforms, "fake_oid", false);
     assert_eq!(reason, Some(SkipReason::Heic));
+}
+
+/// The probe's verdict is worked out again from the source: adding it to a
+/// record the cloud holds would be an upload on every machine.
+#[test]
+fn format_probe_leaves_a_record_the_cloud_holds_unwritten() {
+    crate::infra::home::with_moss_home(|_| {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().unwrap();
+        let cache = crate::build::cache::TransformCache::for_site(&crate::moss_paths::MossPaths::new(dir.path()));
+        let src = dir.path().join("small.jpg");
+        make_big_jpeg(&src, 32, 32);
+        let oid = "c".repeat(64);
+        // The probe reads the record once to look, then once to merge.
+        let (_managed, _in_cloud, inode) = crate::build::cache::tests::cloud_held_owned_record(&cache, &oid, 2);
+
+        should_skip(&src, "jpg", fs::metadata(&src).unwrap().len(), &ImageCompressionConfig::default(), &cache, &oid, false);
+
+        crate::build::cloud_readiness::storage::drain_cache_publications(&mut |_| {});
+        assert_eq!(fs::metadata(cache.record_path(&oid)).unwrap().ino(), inode, "the record the cloud held is not replaced");
+    });
 }
 
 #[test]
@@ -2337,7 +2381,7 @@ fn a_stale_pre_fix_format_probe_entry_is_not_reused_after_the_version_bump() {
 
     let stale_verdict: Option<SkipReason> = None;
     let json_bytes = serde_json::to_vec(&stale_verdict).unwrap();
-    let blob_oid = h.objects.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request).unwrap();
+    let blob_oid = h.objects.store_bytes(&json_bytes).unwrap();
     let old_params = serde_json::json!({
         "min_size_kb": cfg.min_size_kb,
         "max_edge": cfg.max_edge,
@@ -2427,12 +2471,98 @@ fn a_run_that_ends_late_leaves_a_newer_dispatchs_mark_on_the_same_source() {
     let cancelled = std::sync::Arc::new(seen.clone());
     let cancelled_run = mark_image_items_pending(&folder, [(path.to_string(), cancelled.clone())]);
     end_image_item(&folder, path, &cancelled, false, &[]);
-    assert!(!image_item_is_pending(&folder, path, &seen), "premise: the cancelled run ended its mark");
+    assert!(pending_image_mark(&folder, path, &seen).is_none(), "premise: the cancelled run ended its mark");
     let _newer_run = mark_image_items_pending(&folder, [(path.to_string(), std::sync::Arc::new(seen.clone()))]);
 
     drop(cancelled_run);
 
-    assert!(image_item_is_pending(&folder, path, &seen), "the run that ended late removed the mark a newer dispatch made for its own worker");
+    assert!(pending_image_mark(&folder, path, &seen).is_some(), "the run that ended late removed the mark a newer dispatch made for its own worker");
+}
+
+pub(crate) fn join_waiters(folder: &str) -> usize {
+    with_image_ledger(folder, |ledger| ledger.join_waiters.len())
+}
+
+/// A worker that panicked while holding the ledger poisons its lock. The ledger is
+/// still read after that, and a wait on a joined image must still last until its mark
+/// ends, or a joining build seals without the work it joined.
+#[test]
+fn a_wait_on_a_joined_image_outlasts_a_poisoned_ledger() {
+    let tmp = tempfile::tempdir().unwrap();
+    make_big_jpeg(&tmp.path().join("pic.jpg"), 40, 30);
+    let folder = tmp.path().to_string_lossy().into_owned();
+    let seen = compute_image_item_fingerprint(&folder, Path::new("pic.jpg"), &ImageCompressionConfig::default()).unwrap();
+    let _marks = mark_image_items_pending(&folder, [("pic.jpg".to_string(), std::sync::Arc::new(seen.clone()))]);
+    let joined = pending_image_mark(&folder, "pic.jpg", &seen).unwrap();
+    let (done_tx, done) = std::sync::mpsc::channel();
+    let waiter = {
+        let (folder, joined) = (folder.clone(), joined.clone());
+        std::thread::spawn(move || {
+            wait_for_joined_images(&folder, &[("pic.jpg".to_string(), joined)], None, false);
+            done_tx.send(()).unwrap();
+        })
+    };
+    while join_waiters(&folder) == 0 {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+
+    let other = tmp.path().join("other").to_string_lossy().into_owned();
+    let poisoner = other.clone();
+    assert!(std::thread::spawn(move || with_image_ledger(&poisoner, |_| panic!("a worker panicked holding the ledger"))).join().is_err());
+    // Wakes the waiter on the poisoned lock, its image still unfinished.
+    assert!(pending_image_mark(&other, "pic.jpg", &seen).is_none());
+
+    assert!(done.recv_timeout(std::time::Duration::from_millis(200)).is_err(), "the wait ended when the ledger was poisoned, with the joined image still unfinished");
+    end_image_item(&folder, "pic.jpg", &joined, true, &[]);
+    assert!(done.recv_timeout(std::time::Duration::from_secs(10)).is_ok(), "the wait did not end when the joined image finished");
+    waiter.join().unwrap();
+}
+
+/// A joining build waits for the worker it joined however that worker's mark ends,
+/// or its seal never comes.
+#[test]
+fn a_wait_on_a_joined_image_ends_however_its_mark_ends() {
+    for ending in ["finished", "replaced by a newer dispatch", "image left the folder", "worker panicked"] {
+        let tmp = tempfile::tempdir().unwrap();
+        make_big_jpeg(&tmp.path().join("pic.jpg"), 40, 30);
+        let folder = tmp.path().to_string_lossy().into_owned();
+        let seen = compute_image_item_fingerprint(&folder, Path::new("pic.jpg"), &ImageCompressionConfig::default()).unwrap();
+        let path = "pic.jpg".to_string();
+        let marks = mark_image_items_pending(&folder, [(path.clone(), std::sync::Arc::new(seen.clone()))]);
+        let joined = pending_image_mark(&folder, &path, &seen).expect("premise: the image is marked for a worker");
+
+        let (done_tx, done) = std::sync::mpsc::channel();
+        let waiter = {
+            let (folder, path, joined) = (folder.clone(), path.clone(), joined.clone());
+            std::thread::spawn(move || {
+                wait_for_joined_images(&folder, &[(path, joined)], None, false);
+                done_tx.send(()).unwrap();
+            })
+        };
+        while join_waiters(&folder) == 0 {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(done.try_recv().is_err(), "the wait returned while the worker it joined still had the image");
+
+        let mut newer = None;
+        match ending {
+            "finished" => end_image_item(&folder, &path, &joined, true, &[]),
+            "replaced by a newer dispatch" => newer = Some(mark_image_items_pending(&folder, [(path.clone(), std::sync::Arc::new(seen.clone()))])),
+            "image left the folder" => {
+                retain_image_item_fingerprints(&folder, &std::collections::HashSet::new());
+            }
+            _ => assert!(std::thread::spawn(move || {
+                let _marks = marks;
+                panic!("a worker panicked");
+            })
+            .join()
+            .is_err()),
+        }
+
+        assert!(done.recv_timeout(std::time::Duration::from_secs(10)).is_ok(), "the wait on a joined image did not end when its mark ended ({ending})");
+        waiter.join().unwrap();
+        drop(newer);
+    }
 }
 
 /// Write `rel_path`'s stat and content hash into the ON-DISK hash index the
@@ -2466,7 +2596,7 @@ fn prime_cached_transform(
     params: &serde_json::Value,
     webp_bytes: &[u8],
 ) -> String {
-    let blob_oid = objects.store_bytes(webp_bytes, crate::build::cache::RecordMode::Request).expect("test blob store");
+    let blob_oid = objects.store_bytes(webp_bytes).expect("test blob store");
     let mut record = transforms.get_with(source_oid, crate::build::cache::RecordMode::Request).unwrap_or(crate::build::cache::TransformRecord {
         source_oid: source_oid.to_string(),
         source_size: 0,
@@ -2754,12 +2884,12 @@ fn test_dispatch_image_conversions_empty_items() {
         staging_dir: std::path::PathBuf::from("/nonexistent/staging"),
         moss_dir: std::path::PathBuf::from("/nonexistent/.moss"),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
 
     // Pass None for services — dispatch returns early regardless.
-    dispatch_image_conversions(None, &ctx, None);
+    dispatch_image_conversions(None, &ctx, None, None).unwrap();
 }
 
 #[test]
@@ -2795,12 +2925,12 @@ fn test_dispatch_image_conversions_with_items_produces_webp_headless() {
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
 
     let services = BuildServices::headless();
-    dispatch_image_conversions(Some(&services), &ctx, None);
+    dispatch_image_conversions(Some(&services), &ctx, None, None).unwrap();
 
     // Runner is synchronous in headless mode (event_sink is None), so by
     // the time dispatch returns, the .webp should exist.
@@ -2853,7 +2983,7 @@ async fn an_image_that_panics_its_worker_does_not_leave_the_folder_busy() {
         staging_dir: staging,
         moss_dir,
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
     let session = crate::system::folder_session::FolderSession::new(root.to_path_buf());
@@ -2863,7 +2993,7 @@ async fn an_image_that_panics_its_worker_does_not_leave_the_folder_busy() {
     services.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
     services.reporter = failing.clone();
 
-    dispatch_image_conversions(Some(&services), &ctx, None);
+    dispatch_image_conversions(Some(&services), &ctx, None, None).unwrap();
 
     for _ in 0..2000 {
         if failing.busy.get().is_some() {
@@ -2919,7 +3049,7 @@ async fn an_image_whose_worker_panicked_is_converted_by_the_next_build() {
         staging_dir: staging.clone(),
         moss_dir,
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
     let session = crate::system::folder_session::FolderSession::new(root.to_path_buf());
@@ -2929,7 +3059,7 @@ async fn an_image_whose_worker_panicked_is_converted_by_the_next_build() {
     services.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
     services.reporter = failing.clone();
 
-    dispatch_image_conversions(Some(&services), &ctx, None);
+    dispatch_image_conversions(Some(&services), &ctx, None, None).unwrap();
 
     for _ in 0..2000 {
         if failing.0.load(Ordering::SeqCst) && !session.has_ui_bound() {
@@ -2941,7 +3071,7 @@ async fn an_image_whose_worker_panicked_is_converted_by_the_next_build() {
     assert!(!staging.join("panicked-worker.webp").exists(), "premise: the worker that panicked converted nothing");
 
     // The next build of the same, unchanged image.
-    dispatch_image_conversions(Some(&BuildServices::headless()), &ctx, None);
+    dispatch_image_conversions(Some(&BuildServices::headless()), &ctx, None, None).unwrap();
 
     assert!(
         staging.join("panicked-worker.webp").exists(),
@@ -2995,7 +3125,7 @@ fn cached_base_of_size(root: &Path, file_dimensions: (u32, u32), scan_dimensions
         staging_dir: staging.clone(),
         moss_dir,
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
     (ctx, staging)
@@ -3011,7 +3141,7 @@ fn an_unchanged_image_missing_a_promised_rung_is_dispatched_to_produce_it() {
     let (ctx, staging) = unchanged_image_with_cached_base(tmp.path(), (1000, 600));
     assert_eq!(moss_core::asset_paths::ladder_rungs(1000, 600, false), &[800][..], "premise");
 
-    dispatch_image_conversions(Some(&BuildServices::headless()), &ctx, None);
+    dispatch_image_conversions(Some(&BuildServices::headless()), &ctx, None, None).unwrap();
 
     assert!(staging.join("photo.w800.webp").exists(), "the missing rung is produced");
     assert_eq!(fs::read(staging.join("photo.webp")).unwrap(), b"CACHED BASE", "the cached base is reused, not re-encoded");
@@ -3036,7 +3166,7 @@ fn a_rung_the_ladder_gained_is_written_on_the_first_warm_build() {
         b"CACHED W800",
     );
 
-    dispatch_image_conversions(Some(&BuildServices::headless()), &ctx, None);
+    dispatch_image_conversions(Some(&BuildServices::headless()), &ctx, None, None).unwrap();
 
     assert!(staging.join("photo.w1200.webp").is_file(), "the new rung is written");
     assert_eq!(fs::read(staging.join("photo.w800.webp")).unwrap(), b"CACHED W800", "the cached rung is reused");
@@ -3052,7 +3182,7 @@ fn an_unchanged_image_with_no_promised_rung_is_still_skipped() {
     let (ctx, staging) = unchanged_image_with_cached_base(tmp.path(), (700, 420));
     assert!(moss_core::asset_paths::ladder_rungs(700, 420, false).is_empty(), "premise");
 
-    dispatch_image_conversions(Some(&BuildServices::headless()), &ctx, None);
+    dispatch_image_conversions(Some(&BuildServices::headless()), &ctx, None, None).unwrap();
 
     assert!(staging.join("photo.webp").exists(), "the base is carried forward");
     assert!(!staging.join("photo.w800.webp").exists(), "skipped: the worker never ran");
@@ -3104,16 +3234,16 @@ fn a_rung_a_redispatch_did_not_produce_is_not_retried_within_the_window() {
     let svc = BuildServices::headless();
 
     block_rung(&staging);
-    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock);
+    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock, None).unwrap();
     assert!(!rung_produced(&staging), "premise: the blocked rung is not produced");
 
     unblock_rung(&staging);
     advance(&now, std::time::Duration::from_secs(9 * 60));
-    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock);
+    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock, None).unwrap();
     assert!(!rung_produced(&staging), "within the window the image is not dispatched again");
 
     advance(&now, std::time::Duration::from_secs(2 * 60));
-    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock);
+    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock, None).unwrap();
     assert!(rung_produced(&staging), "after the window it is tried again");
 }
 
@@ -3129,11 +3259,11 @@ fn a_produced_rung_clears_the_note() {
     let svc = BuildServices::headless();
 
     block_rung(&staging);
-    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock);
+    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock, None).unwrap();
     assert!(!rung_produced(&staging), "premise: the blocked rung is not produced and is noted");
 
     unblock_rung(&staging);
-    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock);
+    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock, None).unwrap();
     assert!(!rung_produced(&staging), "premise: the note holds the size back inside the window");
 
     // The size turns up while its note is fresh, and a settle sees it present.
@@ -3142,7 +3272,7 @@ fn a_produced_rung_clears_the_note() {
     redispatch_note::settle(&ctx.moss_dir, &staging, &redispatched, clock(), false);
 
     forget_rung(&ctx, &staging);
-    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock);
+    dispatch_image_conversions_at(Some(&svc), &ctx, None, &clock, None).unwrap();
     assert!(rung_produced(&staging), "missing again, it is re-dispatched immediately");
 }
 
@@ -3157,10 +3287,10 @@ async fn a_cancelled_run_notes_nothing_it_did_not_attempt() {
     let mut cancelled = BuildServices::headless();
     cancelled.session = Some(crate::system::folder_session::FolderSession::new(tmp.path().to_path_buf()));
     cancelled.session.as_ref().unwrap().cancel.cancel();
-    dispatch_image_conversions_at(Some(&cancelled), &ctx, None, &clock);
+    dispatch_image_conversions_at(Some(&cancelled), &ctx, None, &clock, None).unwrap();
     assert!(!rung_produced(&staging), "premise: the cancelled run never reached the image");
 
-    dispatch_image_conversions_at(Some(&BuildServices::headless()), &ctx, None, &clock);
+    dispatch_image_conversions_at(Some(&BuildServices::headless()), &ctx, None, &clock, None).unwrap();
     assert!(rung_produced(&staging), "no note was left, so the image is dispatched again");
 }
 
@@ -3175,10 +3305,10 @@ fn a_note_in_one_cache_root_does_not_hold_back_another() {
     let svc = BuildServices::headless();
 
     block_rung(&staging_a);
-    dispatch_image_conversions_at(Some(&svc), &ctx_a, None, &clock);
+    dispatch_image_conversions_at(Some(&svc), &ctx_a, None, &clock, None).unwrap();
     assert!(!rung_produced(&staging_a), "premise: the first site's attempt failed and was noted");
 
-    dispatch_image_conversions_at(Some(&svc), &ctx_b, None, &clock);
+    dispatch_image_conversions_at(Some(&svc), &ctx_b, None, &clock, None).unwrap();
     assert!(rung_produced(&staging_b), "the other site still regenerates its rung");
 }
 
@@ -3231,12 +3361,12 @@ fn test_image_dispatch_applies_dir_overrides_to_served_path() {
         moss_dir: moss_dir.clone(),
         dir_overrides: overrides.clone(),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
 
     let services = BuildServices::headless();
-    dispatch_image_conversions(Some(&services), &ctx, None);
+    dispatch_image_conversions(Some(&services), &ctx, None, None).unwrap();
 
     // The override must remap the output path. Under overrides the .webp
     // should land at `published/images/photo.webp`, NOT at the file-tree
@@ -3382,7 +3512,7 @@ async fn test_webp_survives_stale_cleanup_after_dispatch() {
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
 
@@ -3402,7 +3532,8 @@ async fn test_webp_survives_stale_cleanup_after_dispatch() {
             Some(&services_for_blocking),
             &ctx_for_blocking,
             Some(tx_for_blocking),
-        );
+            None,
+        ).unwrap();
     })
     .await
     .unwrap();
@@ -3556,7 +3687,7 @@ async fn a_new_image_only_dispatches_the_new_one_others_survive_seal_and_stale_s
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
 
@@ -3570,7 +3701,7 @@ async fn a_new_image_only_dispatches_the_new_one_others_survive_seal_and_stale_s
     // non-async thread — spawn_blocking, as in production where the
     // dispatcher runs from the blocking render phase.
     tokio::task::spawn_blocking(move || {
-        dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+        dispatch_image_conversions(Some(&services), &ctx, Some(tx), None).unwrap();
     })
     .await
     .unwrap();
@@ -3726,7 +3857,7 @@ async fn a_skip_carried_images_advisory_rides_the_terminal_ticks_full_set() {
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
 
@@ -3738,7 +3869,7 @@ async fn a_skip_carried_images_advisory_rides_the_terminal_ticks_full_set() {
 
     let (tx, rx) = test_utils::build_test_coordinator();
     tokio::task::spawn_blocking(move || {
-        dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+        dispatch_image_conversions(Some(&services), &ctx, Some(tx), None).unwrap();
     })
     .await
     .unwrap();
@@ -3855,7 +3986,7 @@ async fn a_deleted_images_advisory_still_fires_a_tick_with_nothing_to_dispatch()
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
 
@@ -3867,7 +3998,7 @@ async fn a_deleted_images_advisory_still_fires_a_tick_with_nothing_to_dispatch()
 
     let (tx, rx) = test_utils::build_test_coordinator();
     tokio::task::spawn_blocking(move || {
-        dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+        dispatch_image_conversions(Some(&services), &ctx, Some(tx), None).unwrap();
     })
     .await
     .unwrap();
@@ -3951,7 +4082,7 @@ fn an_unreferenced_image_is_not_redispatched_until_a_page_references_it() {
         let recorder = std::sync::Arc::new(RecordingReporter::default());
         let mut services = BuildServices::headless();
         services.reporter = recorder.clone();
-        dispatch_image_conversions(Some(&services), &ctx, None);
+        dispatch_image_conversions(Some(&services), &ctx, None, None).unwrap();
         let ran = recorder
             .0
             .lock()
@@ -4045,7 +4176,7 @@ async fn test_image_cancel_aborts_image_runner() {
         config: ImageCompressionConfig::default(),
         dir_overrides: std::collections::HashMap::new(),
         tx: None,
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         carried_advisories: Vec::new(),
         suppressed: Default::default(),
         source_oids: Default::default(),
@@ -4139,7 +4270,7 @@ async fn test_image_hashes_updated_on_cancellation() {
         config: ImageCompressionConfig::default(),
         dir_overrides: std::collections::HashMap::new(),
         tx: Some(tx.clone()),
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         carried_advisories: Vec::new(),
         suppressed: Default::default(),
         source_oids: Default::default(),
@@ -4733,7 +4864,7 @@ fn sized_raster_oid_reuses_transform_cache() {
 /// today's pixel size, and is made again once it is not.
 #[test]
 fn kept_recipe_a_sized_raster_of_todays_size_keeps_its_bytes() {
-    use crate::build::cache::{ObjectStore, RecordMode::Wait, TransformCache};
+    use crate::build::cache::{ObjectStore, RecordMode::Request, TransformCache};
 
     let tmp = tempfile::tempdir().unwrap();
     let objects_root = tmp.path().join("objects");
@@ -4741,25 +4872,25 @@ fn kept_recipe_a_sized_raster_of_todays_size_keeps_its_bytes() {
     let transforms = TransformCache::new(tmp.path().join("transforms"), ObjectStore::new(objects_root));
     let src = tmp.path().join("big.jpg");
     make_detailed_jpeg(&src, 2400, 1800);
-    let source_oid = objects.store_file(&src, crate::build::cache::RecordMode::Request).unwrap();
+    let source_oid = objects.store_file(&src).unwrap();
     let cfg = ImageCompressionConfig::default();
     let size = || sized_raster_oid_for_original(&src, &source_oid, &objects, &transforms, &cfg, SIZED_JPEG_QUALITY, None).unwrap();
     let first = size();
     assert_ne!(first, source_oid, "the fixture needs a downscaled fallback");
 
     let plant = |scale: u32| {
-        let mut record = transforms.get_with(&source_oid, Wait).unwrap();
+        let mut record = transforms.get_with(&source_oid, Request).unwrap();
         let entry = record.transforms.get_mut("image/sized-raster").unwrap();
         let img = image::load_from_memory(&fs::read(objects.get_path(&first).unwrap()).unwrap()).unwrap();
         let img = img.resize_exact(img.width() / scale, img.height() / scale, image::imageops::FilterType::Triangle);
         let mut bytes = Vec::new();
         image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 30).encode_image(&img.to_rgb8()).unwrap();
-        entry.oid = objects.store_bytes(&bytes, Wait).unwrap();
+        entry.oid = objects.store_bytes(&bytes).unwrap();
         entry.size = bytes.len() as u64;
         entry.params = serde_json::json!({ "quality": 30 });
         entry.kept_for = None;
         let oid = entry.oid.clone();
-        transforms.put(&record, Wait).unwrap();
+        transforms.put(&record, Request).unwrap();
         oid
     };
 
@@ -4783,7 +4914,7 @@ fn concurrent_sized_raster_calls_share_one_encode() {
     let transforms = TransformCache::new(tmp.path().join("transforms"), ObjectStore::new(objects_root));
     let src = tmp.path().join("photo.jpg");
     make_detailed_jpeg(&src, 1600, 1200);
-    let source_oid = objects.store_file(&src, crate::build::cache::RecordMode::Request).unwrap();
+    let source_oid = objects.store_file(&src).unwrap();
     let cfg = ImageCompressionConfig::default();
     let encodes = || TEST_HOOK_ENCODED_SOURCES.lock().unwrap().iter().filter(|p| **p == src).count();
     let size = || sized_raster_oid_for_original(&src, &source_oid, &objects, &transforms, &cfg, SIZED_JPEG_QUALITY, None);
@@ -4841,7 +4972,7 @@ fn sized_raster_oid_keeps_source_when_reencode_not_smaller() {
     // (store_file, pipeline.rs) — the keep-smaller decision points the
     // transform at this source oid, so its blob must exist for the cached
     // verbatim decision to resolve on the next build.
-    let source_oid = objects.store_file(&src, crate::build::cache::RecordMode::Request).unwrap();
+    let source_oid = objects.store_file(&src).unwrap();
     let cfg = ImageCompressionConfig::default();
 
     let out = sized_raster_oid_for_original(
@@ -4923,7 +5054,7 @@ fn sized_raster_oid_shrinks_an_opaque_photographic_png() {
     let src = tmp.path().join("photo.png");
     make_photographic_png(&src, 1200, 900);
     let src_len = fs::metadata(&src).unwrap().len();
-    let source_oid = objects.store_file(&src, crate::build::cache::RecordMode::Request).unwrap();
+    let source_oid = objects.store_file(&src).unwrap();
     let cfg = ImageCompressionConfig::default();
 
     let oid = sized_raster_oid_for_original(
@@ -5052,7 +5183,7 @@ fn sized_raster_oid_keeps_png_verbatim_when_palette_cannot_beat_it() {
     DynamicImage::ImageRgb8(buf)
         .save_with_format(&src, image::ImageFormat::Png)
         .unwrap();
-    let source_oid = objects.store_file(&src, crate::build::cache::RecordMode::Request).unwrap();
+    let source_oid = objects.store_file(&src).unwrap();
     let cfg = ImageCompressionConfig::default();
 
     let out = sized_raster_oid_for_original(
@@ -5095,7 +5226,7 @@ fn sized_raster_oid_caps_the_fallback_at_fallback_max_edge() {
     // (pre-B1) cap would have left this untouched at 1800px.
     let src = tmp.path().join("wide.jpg");
     make_detailed_jpeg(&src, 1800, 1200);
-    let source_oid = objects.store_file(&src, crate::build::cache::RecordMode::Request).unwrap();
+    let source_oid = objects.store_file(&src).unwrap();
     let cfg = ImageCompressionConfig::default();
 
     let oid = sized_raster_oid_for_original(
@@ -5218,7 +5349,7 @@ fn rematerialize_relinks_orphaned_staged_webp() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -5304,7 +5435,7 @@ fn rematerialize_with_record_overwrites_a_stale_staged_file_never_trusts_its_mer
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(outcome.error.is_none(), "encode failed: {:?}", outcome.error);
     let staged = h.staging.join("photo.webp");
@@ -5321,7 +5452,7 @@ fn rematerialize_with_record_overwrites_a_stale_staged_file_never_trusts_its_mer
 
     let params = cfg.to_params();
     let mut links = staged_links(&h);
-    let outcome = rematerialize_with_record(&h.objects, h.transforms.get_with(&source_oid, crate::build::cache::RecordMode::Wait).as_ref(), &params, crate::build::cache::Fit::Exact, &mut links, &staged, "image/webp");
+    let outcome = rematerialize_with_record(&h.objects, h.transforms.get_with(&source_oid, crate::build::cache::RecordMode::Request).as_ref(), &params, crate::build::cache::Fit::Exact, &mut links, &staged, "image/webp");
     assert!(matches!(outcome, HealOutcome::Healed { .. }), "must relink over the stale file, got {:?}", outcome);
     assert_eq!(
         fs::read(&staged).unwrap(),
@@ -5344,7 +5475,7 @@ fn a_staged_record_without_ctime_precision_is_rehashed_before_relinking() {
 
     for rewritten in [false, true] {
         let h = harness();
-        let oid = h.objects.store_bytes(b"valid bytes", crate::build::cache::RecordMode::Request).unwrap();
+        let oid = h.objects.store_bytes(b"valid bytes").unwrap();
         let path = h.staging.join("asset.bin");
         let saved = MossPaths::from_moss_dir(h._tmp.path().join(".moss")).cache_dir().join("staged-links-test.json");
         let mut first = staged_links(&h);
@@ -5385,7 +5516,7 @@ fn photo_staged_and_recorded(h: &TestHarness) -> (PathBuf, String, serde_json::V
     let cfg = ImageCompressionConfig::default();
     let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
     let outcome = convert_single_image(
-        &src, &source_oid, "photo.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &cfg, None, None, &HashMap::new(),
+        &src, &source_oid, "photo.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &cfg, None, None, &Default::default(),
     );
     assert!(outcome.error.is_none(), "encode failed: {:?}", outcome.error);
     let staged = h.staging.join("photo.webp");
@@ -5399,7 +5530,7 @@ fn photo_staged_and_recorded(h: &TestHarness) -> (PathBuf, String, serde_json::V
 /// Heal `staged` the way the next build would, and say whether it relinked.
 fn next_build_relinks(h: &TestHarness, staged: &Path, source_oid: &str, params: &serde_json::Value) -> bool {
     let mut links = staged_links(h);
-    let outcome = rematerialize_with_record(&h.objects, h.transforms.get_with(source_oid, crate::build::cache::RecordMode::Wait).as_ref(), params, crate::build::cache::Fit::Exact, &mut links, staged, "image/webp");
+    let outcome = rematerialize_with_record(&h.objects, h.transforms.get_with(source_oid, crate::build::cache::RecordMode::Request).as_ref(), params, crate::build::cache::Fit::Exact, &mut links, staged, "image/webp");
     links.save();
     matches!(outcome, HealOutcome::Healed { .. })
 }
@@ -5419,7 +5550,7 @@ fn a_vouched_staged_variant_of_a_different_blob_is_relinked() {
     let changed_oid = crate::build::cache::ObjectStore::hash_file(&changed).unwrap();
     let outcome = convert_single_image(
         &changed, &changed_oid, "changed.webp", &h.temp, &h.staging, &h.objects, &h.transforms,
-        &ImageCompressionConfig::default(), None, None, &HashMap::new(),
+        &ImageCompressionConfig::default(), None, None, &Default::default(),
     );
     assert!(outcome.error.is_none(), "encode failed: {:?}", outcome.error);
     let expected = fs::read(h.staging.join("changed.webp")).unwrap();
@@ -5446,7 +5577,7 @@ fn a_file_renamed_over_a_fresh_link_before_its_stat_is_not_recorded() {
     let cfg = ImageCompressionConfig::default();
     let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
     let outcome = convert_single_image(
-        &src, &source_oid, "photo.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &cfg, None, None, &HashMap::new(),
+        &src, &source_oid, "photo.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &cfg, None, None, &Default::default(),
     );
     assert!(outcome.error.is_none(), "encode failed: {:?}", outcome.error);
     let staged = h.staging.join("photo.webp");
@@ -5544,7 +5675,7 @@ fn rematerialize_recovers_rung_via_rung_kind() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -5683,7 +5814,7 @@ fn self_heal_then_emit_registers_relinked_webp() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -5833,7 +5964,7 @@ fn emit_image_outputs_heals_an_evicted_staged_webp_when_the_oid_is_known() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -5917,7 +6048,7 @@ fn emit_image_outputs_heals_a_removed_staged_webp_when_the_oid_is_known() {
         &cfg,
         None,
         None,
-        &HashMap::new(),
+        &Default::default(),
     );
     assert!(
         outcome.error.is_none(),
@@ -6057,7 +6188,7 @@ async fn ship_phase_ships_a_freshly_encoded_webp_from_cas_despite_stage_overwrit
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
     let services = BuildServices {
@@ -6067,7 +6198,7 @@ async fn ship_phase_ships_a_freshly_encoded_webp_from_cas_despite_stage_overwrit
 
     let (tx, rx) = test_utils::build_test_coordinator();
     tokio::task::spawn_blocking(move || {
-        dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+        dispatch_image_conversions(Some(&services), &ctx, Some(tx), None).unwrap();
     })
     .await
     .unwrap();
@@ -6140,7 +6271,7 @@ async fn run_image_conversion_always_records_a_staged_oid_for_base_and_rungs() {
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
     let services = BuildServices {
@@ -6150,7 +6281,7 @@ async fn run_image_conversion_always_records_a_staged_oid_for_base_and_rungs() {
 
     let (tx, rx) = test_utils::build_test_coordinator();
     tokio::task::spawn_blocking(move || {
-        dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+        dispatch_image_conversions(Some(&services), &ctx, Some(tx), None).unwrap();
     })
     .await
     .unwrap();
@@ -6214,7 +6345,7 @@ async fn skip_path_carry_forward_registers_the_verified_cas_oid_not_a_stale_or_f
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
     let services = BuildServices {
@@ -6245,7 +6376,7 @@ async fn skip_path_carry_forward_registers_the_verified_cas_oid_not_a_stale_or_f
 
     let (tx, rx) = test_utils::build_test_coordinator();
     tokio::task::spawn_blocking(move || {
-        dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+        dispatch_image_conversions(Some(&services), &ctx, Some(tx), None).unwrap();
     })
     .await
     .unwrap();
@@ -6314,7 +6445,7 @@ async fn skip_path_takes_a_carried_variants_hash_from_the_memo_by_oid() {
         let (tx, rx) = test_utils::build_test_coordinator();
         tokio::task::spawn_blocking(move || {
             let services = BuildServices { spawner: Some(std::sync::Arc::new(OidTestInlineSpawner)), ..BuildServices::headless() };
-            dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+            dispatch_image_conversions(Some(&services), &ctx, Some(tx), None).unwrap();
         })
         .await
         .unwrap();
@@ -6392,7 +6523,7 @@ fn a_stale_staged_webp_from_an_earlier_generation_is_not_shipped_as_unchanged() 
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
     let services = BuildServices {
@@ -6401,7 +6532,7 @@ fn a_stale_staged_webp_from_an_earlier_generation_is_not_shipped_as_unchanged() 
     };
 
     let (tx, _rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
-    dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+    dispatch_image_conversions(Some(&services), &ctx, Some(tx), None).unwrap();
 
     let landed = fs::read(&staged).expect("a real encode must have landed at the staging path");
     assert_ne!(
@@ -6484,7 +6615,7 @@ fn a_missing_output_is_dispatched_while_its_unaffected_sibling_takes_the_skip_pa
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
         notebook_files: vec![],
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         ..BackgroundContext::for_test()
     };
 
@@ -6524,7 +6655,7 @@ fn a_missing_output_is_dispatched_while_its_unaffected_sibling_takes_the_skip_pa
     );
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
-    dispatch_image_conversions(Some(&services), &ctx, Some(tx));
+    dispatch_image_conversions(Some(&services), &ctx, Some(tx), None).unwrap();
 
     let registered: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok())
         .filter_map(|msg| match msg {
@@ -6915,6 +7046,12 @@ impl RewriteVault {
 
     /// Dispatch `items` the way a build's background phase does.
     async fn dispatch(&self, items: Vec<ImageConversionItem>, services: BuildServices) {
+        self.dispatch_task(items, services, None, None).await.unwrap().unwrap();
+    }
+
+    /// A dispatch for build `render` on a thread of its own.
+    fn dispatch_task(&self, items: Vec<ImageConversionItem>, services: BuildServices, tx: Option<mpsc::Sender<EmitMessage>>, render: Option<u64>)
+        -> tokio::task::JoinHandle<Result<(), crate::build::background::BuildError>> {
         let ctx = BackgroundContext {
             image_items: items,
             source_path: self.root.to_string_lossy().to_string(),
@@ -6922,9 +7059,21 @@ impl RewriteVault {
             moss_dir: self.moss_dir.clone(),
             ..BackgroundContext::for_test()
         };
-        tokio::task::spawn_blocking(move || dispatch_image_conversions(Some(&services), &ctx, None))
-            .await
-            .unwrap();
+        tokio::task::spawn_blocking(move || dispatch_image_conversions(Some(&services), &ctx, tx, render))
+    }
+
+    /// A dispatch that joins a worker already queued, returned once it waits for that
+    /// worker: its build's seal must hold what the worker stages. Await it after the
+    /// worker has run.
+    async fn dispatch_joining(&self, items: Vec<ImageConversionItem>, services: BuildServices, tx: Option<mpsc::Sender<EmitMessage>>, render: Option<u64>)
+        -> tokio::task::JoinHandle<Result<(), crate::build::background::BuildError>> {
+        let folder = self.root.to_string_lossy().into_owned();
+        let task = self.dispatch_task(items, services, tx, render);
+        while join_waiters(&folder) == 0 {
+            assert!(!task.is_finished(), "a dispatch that joined a running worker finished without waiting for it");
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+        task
     }
 
     /// One rebuild of the image side. `with_fingerprint_gate` runs it the way the
@@ -6974,7 +7123,7 @@ impl RewriteVault {
         };
         let recorder = std::sync::Arc::new(DispatchedCountReporter::default());
         let services = BuildServices { reporter: recorder.clone(), ..Self::app_services() };
-        tokio::task::spawn_blocking(move || dispatch_image_conversions(Some(&services), &ctx, Some(tx))).await.unwrap();
+        tokio::task::spawn_blocking(move || dispatch_image_conversions(Some(&services), &ctx, Some(tx), None).unwrap()).await.unwrap();
         let sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
         // No dispatch at all (every image carried forward) never fires the opening
         // tick — `dispatch_image_conversions` returns early instead. Zero either way.
@@ -7197,10 +7346,11 @@ async fn a_second_dispatch_before_the_worker_ran_joins_it_instead_of_spawning_an
 
     let workers = std::sync::Arc::new(HeldSpawner::default());
     vault.dispatch(vault.collect(), workers.services()).await;
-    vault.dispatch(vault.collect(), workers.services()).await;
+    let joining = vault.dispatch_joining(vault.collect(), workers.services(), None, None).await;
     assert_eq!(workers.spawned(), 1, "the second dispatch found the source unchanged since the first and spawned its own worker");
 
     workers.run_held().await;
+    joining.await.unwrap().unwrap();
     assert_ne!(vault.webp(), first, "premise: the one worker delivered the change");
     vault.dispatch(vault.collect(), workers.services()).await;
     assert_eq!(workers.spawned(), 1, "the joined worker delivered this source: nothing to queue");
@@ -7247,10 +7397,11 @@ async fn a_worker_finishing_an_image_that_has_left_the_site_does_not_vouch_for_i
 
     let workers = std::sync::Arc::new(HeldSpawner::default());
     vault.dispatch(vault.collect_of(&["pic.png", "other.png"]), workers.services()).await;
-    vault.dispatch(vault.collect_of(&["other.png"]), workers.services()).await;
+    let joining = vault.dispatch_joining(vault.collect_of(&["other.png"]), workers.services(), None, None).await;
     assert_eq!(workers.spawned(), 1, "premise: the second dispatch joined the worker for the image that stayed");
 
     workers.run_held().await;
+    joining.await.unwrap().unwrap();
 
     assert!(vouched("other.png"), "premise: the worker delivered the image that stayed");
     assert!(!vouched("pic.png"), "the worker vouched for an image the site no longer lists");
@@ -7300,10 +7451,11 @@ async fn a_dispatch_in_another_folder_leaves_this_folders_worker_to_be_joined() 
         there.dispatch(there.collect_of(&[others_image]), workers.services()).await;
         assert_eq!(workers.spawned(), 2, "premise: each folder's image went to a worker of its own");
 
-        here.dispatch(here.collect(), workers.services()).await;
+        let joining = here.dispatch_joining(here.collect(), workers.services(), None, None).await;
 
         assert_eq!(workers.spawned(), 2, "the other folder's dispatch of {others_image} ended this folder's mark, and a second worker was spawned here");
         workers.run_held().await;
+        joining.await.unwrap().unwrap();
     }
 }
 
@@ -7327,10 +7479,132 @@ async fn an_older_worker_finishing_an_image_leaves_a_newer_dispatchs_worker_to_b
     // dispatch proves it joins the newer worker through the pending-marker path.
     let index = MossPaths::from_moss_dir(vault.moss_dir.clone()).cache_hash_index();
     std::fs::remove_file(index).unwrap();
-    vault.dispatch(vault.collect(), workers.services()).await;
+    let joining = vault.dispatch_joining(vault.collect(), workers.services(), None, None).await;
 
     assert_eq!(workers.spawned(), 2, "the older worker ended the newer dispatch's marker, and a third worker was spawned");
     workers.run_held().await;
+    joining.await.unwrap().unwrap();
+}
+
+/// A build that joins a worker another build queued seals with that worker's
+/// pictures, as the build that queued it does. Sealing without them, its pages name
+/// pictures its generation lacks, and every image the worker finishes later looks new
+/// to the next seal, which asks for another full render while the batch runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_build_that_joins_a_running_worker_seals_with_what_that_worker_stages() {
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    let workers = std::sync::Arc::new(HeldSpawner::default());
+    vault.dispatch(vault.collect(), workers.services()).await;
+
+    let (tx, mut joining_build) = mpsc::channel(64);
+    let joining = vault.dispatch_joining(vault.collect(), workers.services(), Some(tx), None).await;
+    assert!(
+        matches!(joining_build.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
+        "the joining build's channel closed or registered before the worker it joined ran: its seal would not wait for that worker"
+    );
+
+    workers.run_held().await;
+    joining.await.unwrap().unwrap();
+    let mut registered = Vec::new();
+    while let Some(message) = joining_build.recv().await {
+        if let EmitMessage::File { rel_path, .. } = message {
+            registered.push(rel_path);
+        }
+    }
+    assert_eq!(registered, ["pic.webp"], "the joining build did not register the picture the worker it joined staged");
+}
+
+/// A build waiting on a joined image leaves it to a newer build that waits on it
+/// too, and does not seal: the newer one seals with the image. Rapid saves during
+/// a batch then hold one waiting build, not one per save.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_build_waiting_on_a_joined_image_leaves_it_to_a_newer_build_and_registers_nothing() {
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    let workers = std::sync::Arc::new(HeldSpawner::default());
+    vault.dispatch(vault.collect(), workers.services()).await;
+    let (tx, mut older_build) = mpsc::channel(64);
+    let mut older = vault.dispatch_joining(vault.collect(), workers.services(), Some(tx), Some(1)).await;
+
+    let (tx, mut newer_build) = mpsc::channel(64);
+    let newer = vault.dispatch_task(vault.collect(), workers.services(), Some(tx), Some(2));
+    let left = tokio::time::timeout(std::time::Duration::from_secs(10), &mut older).await;
+
+    workers.run_held().await;
+    newer.await.unwrap().unwrap();
+    let left = left.expect("the older build kept waiting on an image a newer build waits on too").unwrap();
+    assert!(matches!(left, Err(crate::build::background::BuildError::LeftToNewerBuild)), "the build that stopped waiting did not say it left: it would seal");
+    assert!(older_build.recv().await.is_none(), "the build that left registered outputs");
+    let mut registered = Vec::new();
+    while let Some(message) = newer_build.recv().await {
+        if let EmitMessage::File { rel_path, .. } = message {
+            registered.push(rel_path);
+        }
+    }
+    assert_eq!(registered, ["pic.webp"], "the newer build did not seal with the image the older one left to it");
+}
+
+/// A waiting build that sent an image to a worker of its own does not leave when a
+/// newer build waits too. That worker reports to this build (its outputs, failures
+/// and advisories), and a build that left never seals, so they would be dropped.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_waiting_build_with_an_encode_of_its_own_does_not_leave_it_to_a_newer_build() {
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    let workers = std::sync::Arc::new(HeldSpawner::default());
+    vault.dispatch(vault.collect(), workers.services()).await;
+    vault.write_named("other.png", [30, 200, 30]);
+    let (tx, mut older_build) = mpsc::channel(64);
+    let older = vault.dispatch_joining(vault.collect_of(&["pic.png", "other.png"]), workers.services(), Some(tx), Some(1)).await;
+    assert_eq!(workers.spawned(), 2, "premise: the older build sent the new image to a worker of its own");
+
+    let folder = vault.root.to_string_lossy().into_owned();
+    let newer = vault.dispatch_task(vault.collect_of(&["pic.png", "other.png"]), workers.services(), None, Some(2));
+    while join_waiters(&folder) < 2 && !older.is_finished() {
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let left = older.is_finished();
+
+    workers.run_held().await;
+    newer.await.unwrap().unwrap();
+    assert!(!left, "the older build left the image it joined although it encodes one of its own");
+    older.await.unwrap().unwrap();
+    let mut registered = Vec::new();
+    while let Some(message) = older_build.recv().await {
+        if let EmitMessage::File { rel_path, .. } = message {
+            registered.push(rel_path);
+        }
+    }
+    registered.sort();
+    assert_eq!(registered, ["other.webp", "pic.webp"], "the older build did not seal with both images");
+}
+
+/// The same for a build that joins one image and sends another, new one to a worker
+/// of its own: it seals with both.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_build_that_joins_one_image_and_dispatches_another_seals_with_both() {
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    let workers = std::sync::Arc::new(HeldSpawner::default());
+    vault.dispatch(vault.collect(), workers.services()).await;
+    vault.write_named("other.png", [30, 200, 30]);
+
+    let (tx, mut joining_build) = mpsc::channel(64);
+    let joining = vault.dispatch_joining(vault.collect_of(&["pic.png", "other.png"]), workers.services(), Some(tx), None).await;
+    assert_eq!(workers.spawned(), 2, "premise: the new image went to a worker of its own");
+
+    workers.run_held().await;
+    joining.await.unwrap().unwrap();
+    let mut registered = Vec::new();
+    while let Some(message) = joining_build.recv().await {
+        if let EmitMessage::File { rel_path, .. } = message {
+            registered.push(rel_path);
+        }
+    }
+    registered.sort();
+    assert_eq!(registered, ["other.webp", "pic.webp"], "the build registered only the image it sent to its own worker");
 }
 
 /// The third exit that leaves the old variant: the worker gets to the image and cannot
@@ -7531,7 +7805,7 @@ async fn an_image_the_walk_hashed_this_build_is_not_read_again() {
         config: ImageCompressionConfig::default(),
         dir_overrides: std::collections::HashMap::new(),
         tx: None,
-        rung_collisions: Default::default(),
+        rung_plan: Default::default(),
         carried_advisories: Vec::new(),
         suppressed: Default::default(),
         source_oids: Default::default(),
@@ -7543,4 +7817,58 @@ async fn an_image_the_walk_hashed_this_build_is_not_read_again() {
 
     let index = crate::build::cache::HashIndex::load(&crate::moss_paths::MossPaths::from_moss_dir(moss_dir).cache_hash_index());
     assert_eq!(index.lookup("cover.webp", &stat), Some("oid-from-the-walk"));
+}
+
+/// A picture another machine encoded, whose record and blobs are still in the
+/// cloud here, is downloaded and placed, not encoded again: an encode is not
+/// byte-identical, so encoding it again would change what is published. The
+/// preview's run hashes in the worker, so its items arrive with no oid.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cloud_held_picture_is_fetched_not_encoded_again() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().to_path_buf();
+    make_big_jpeg(&root.join("photo.jpg"), 2000, 1250);
+    let moss_dir = root.join(".moss");
+    let staging = moss_dir.join("build.nosync").join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&root.join("photo.jpg")).unwrap();
+    // The run's encode count.
+    let run = |source_oid: String| {
+        let ctx = ImageRunContext {
+            items: vec![ImageConversionItem { source_path: PathBuf::from("photo.jpg"), source_oid, ext: "jpg".to_string(), dimensions: Some((2000, 1250)), skip: None, fingerprint: None }],
+            source_path: root.to_string_lossy().to_string(),
+            staging_dir: staging.clone(),
+            moss_dir: moss_dir.clone(),
+            config: ImageCompressionConfig::default(),
+            dir_overrides: HashMap::new(),
+            tx: None,
+            rung_plan: Default::default(),
+            carried_advisories: Vec::new(),
+            suppressed: Default::default(),
+            source_oids: Default::default(),
+        };
+        async move {
+            let services = std::sync::Arc::new(BuildServices::headless());
+            let ((), collector) = crate::build::phase::with_collector(async move {
+                tokio::task::spawn_blocking(crate::build::phase::inherit_blocking(move || { run_image_conversion(&services, &ctx); })).await.unwrap();
+            }).await;
+            let encodes = collector.lock().unwrap().counts.iter().find(|(name, _)| *name == "image_encodes").map_or(0, |(_, n)| *n);
+            encodes
+        }
+    };
+    assert!(run(source_oid.clone()).await >= 2, "the first run encodes the base and its rungs");
+
+    let paths = crate::moss_paths::MossPaths::from_moss_dir(moss_dir.clone());
+    let transforms = crate::build::cache::TransformCache::for_site(&paths);
+    let objects = crate::build::cache::ObjectStore::new(paths.cache_objects());
+    let Some(record) = transforms.get_with(&source_oid, crate::build::cache::RecordMode::Request) else { panic!("the first run records the picture") };
+    let blobs: Vec<PathBuf> = record.transforms.iter().filter(|(kind, _)| kind.starts_with("image/")).map(|(_, e)| objects.blob_path(&e.oid)).collect();
+    fs::remove_dir_all(&staging).unwrap();
+    fs::create_dir_all(&staging).unwrap();
+    // Each download arrives once it is asked for, and not before.
+    let _cloud: Vec<_> = blobs.iter().chain([&transforms.record_path(&source_oid)]).map(|path| crate::build::icloud::pretend::evicted_until_requested(path)).collect();
+
+    assert_eq!(run(String::new()).await, 0, "nothing is encoded again");
+    assert!(staging.join("photo.webp").exists(), "the fetched picture is placed");
 }

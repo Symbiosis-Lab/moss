@@ -313,16 +313,16 @@ fn end_paragraph(text: &mut String) {
 
 /// A link's address as a reader elsewhere can follow it.
 pub(super) fn absolute(dest: &str, page_url: &str, site_url: &str) -> String {
-    if dest.contains("://") || dest.starts_with("mailto:") {
+    // An address with its own scheme (https, mailto, tel) is kept as the author wrote it.
+    if url::Url::parse(dest).is_ok() {
         return dest.to_string();
     }
-    if let Some(rest) = dest.strip_prefix('/') {
+    if let Some(rest) = dest.strip_prefix('/').filter(|rest| !rest.starts_with('/')) {
         return format!("{}/{rest}", site_url.trim_end_matches('/'));
     }
-    if dest.starts_with('#') {
-        return format!("{page_url}{dest}");
-    }
-    format!("{}/{}", page_url.trim_end_matches('/'), dest)
+    // Resolved as a browser would: `../other/`, `#fn-1`, `//host/x`.
+    url::Url::parse(page_url).and_then(|page| page.join(dest)).map(String::from)
+        .unwrap_or_else(|_| format!("{}/{}", page_url.trim_end_matches('/'), dest))
 }
 
 /// The teaser and link: the title, the description (or the opening, cut at the

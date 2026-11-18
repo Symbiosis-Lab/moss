@@ -4,7 +4,7 @@
  *
  * The `renderShortcodeAttrValue` block is the TS half of a cross-language
  * contract: it reads the SAME golden vectors that
- * `crates/moss-core/tests/attr_value_render.rs` feeds to the real `parse_attrs`
+ * `crates/moss-core/tests/it/attr_value_render.rs` feeds to the real `parse_attrs`
  * grammar. If both sides pass, what the editor writes into `{image=…}` is
  * provably what the build reads back.
  *

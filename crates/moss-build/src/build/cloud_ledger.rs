@@ -43,11 +43,25 @@ pub struct InputEntry {
 pub struct InputEvidence {
     root: PathBuf,
     entries: Arc<Mutex<BTreeMap<String, InputEntry>>>,
+    /// `.moss/` files this build wrote or removed, each with the hash it left
+    /// (`None`: removed); see [`crate::build::inputs::restamp`].
+    moss_left: Arc<Mutex<Vec<(PathBuf, Option<String>)>>>,
 }
 
 impl InputEvidence {
     pub fn new(root: &Path) -> Self {
-        Self { root: root.to_path_buf(), entries: Arc::default() }
+        Self { root: root.to_path_buf(), ..Self::default() }
+    }
+
+    /// This build has just written or removed `path`, a `.moss/` file it
+    /// renders from as it now stands.
+    pub(crate) fn moss_left(&self, path: &Path) {
+        let hash = crate::build::cache::ObjectStore::hash_file(path).ok();
+        self.moss_left.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((path.to_path_buf(), hash));
+    }
+
+    pub(crate) fn moss_files_left(&self) -> Vec<(PathBuf, Option<String>)> {
+        self.moss_left.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
 
     pub fn root_path(&self) -> &Path { &self.root }

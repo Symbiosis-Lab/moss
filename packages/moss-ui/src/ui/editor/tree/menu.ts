@@ -434,9 +434,9 @@ export class TreeMenu {
   // ── URL Import Overlay ─────────────────────────────────────────────
 
   /**
-   * URL-input popover that kicks off `startNativeImportTask` targeting
-   * `folderAbsPath`. Progress routes to the action panel via the native PanelTask (same path
-   * as the home-card URL card in folder-mode-handlers.ts).
+   * URL-input popover that imports into `folderAbsPath`. The host's import
+   * task draws progress and any failure it reports in the progress panel;
+   * `runUrlImport` toasts only what the task did not.
    */
   private showUrlImportOverlay(folderAbsPath: string, e: MouseEvent): void {
     openInputPopover({

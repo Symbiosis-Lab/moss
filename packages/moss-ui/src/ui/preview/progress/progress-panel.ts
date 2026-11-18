@@ -1078,7 +1078,7 @@ export class ProgressPanel {
   }
 
 
-  upsertTask(task: ProgressTask, opts?: { skipArrival?: boolean }): void {
+  upsertTask(task: ProgressTask, opts?: { skipArrival?: boolean; quiet?: boolean }): void {
     // Stamp a monotonic update time for tiebreak in buildViewModel.
     this.tasks.set(task.id, { ...task, lastUpdatedAt: Date.now() });
     // Auto-show when a CONSEQUENTIAL task ARRIVES (deploy progress, dns:check,
@@ -1113,18 +1113,18 @@ export class ProgressPanel {
     }
 
     // Reset stale timer — auto-remove if no further updates
-    // Deploy tasks get a longer timeout (bulk uploads can take minutes)
     const existingTimer = this.staleTimers.get(task.id);
     if (existingTimer) clearTimeout(existingTimer);
     // Publish work is quiet, not dead: the Rust side emits one event per
     // transition, so the window must cover the longest *silent* step — a
     // rebuild, an upload over a slow network, a commit. `deploy:` is the Rust
     // task, `plugin:<name>:<hook>` the plugin hook running the same waits.
+    // A caller that knows its work goes quiet the same way says so (`quiet`).
     const publish =
       task.id.startsWith("deploy:") ||
       (task.id.startsWith("plugin:") &&
         ProgressPanel.PUBLISH_HOOKS.has(task.id.slice(task.id.lastIndexOf(":") + 1)));
-    const timeout = publish ? 600_000 : ProgressPanel.STALE_TIMEOUT_MS;
+    const timeout = publish || opts?.quiet ? 600_000 : ProgressPanel.STALE_TIMEOUT_MS;
     this.staleTimers.set(
       task.id,
       setTimeout(() => this.removeTask(task.id), timeout),
@@ -1197,6 +1197,11 @@ export class ProgressPanel {
     // titlebar/inline renderers ignore it — that must NOT suppress its panel).
     const ambient = wire.parent != null;
     const parentId = wire.parent != null ? `job:${wire.parent}` : undefined;
+    // A failure notice is keyed by the work, so a new attempt replaces the last
+    // one's. A top-level job's work is its kind, one per window; children run
+    // beside same-kind siblings and the next build start sweeps them, so each
+    // keeps its own.
+    const failureKey = parentId ? id : `job:${wire.kind}`;
 
     // The top-level Build Job is the receipt HEADER, not a
     // task row. It anchors the nesting of every media child + the fine-grained
@@ -1210,6 +1215,7 @@ export class ProgressPanel {
     switch (state.state) {
       case "running": {
         this.awaitingJobs.delete(id);
+        if (this.deleteAdvisory(failureKey)) this.renderPanel();
         // The primary publish bar (driven by the kept `deploy-progress` stage
         // stream) OWNS the live progress of a publish. When it is engaged
         // (`currentPublishStage !== "idle"`), a Preview Job (the Deploy Job)
@@ -1231,7 +1237,7 @@ export class ProgressPanel {
           source: "moss",
           ambient,
           parentId,
-        });
+        }, { quiet: wire.kind === "import" });
         break;
       }
       case "awaiting": {
@@ -1263,6 +1269,7 @@ export class ProgressPanel {
       }
       case "succeeded": {
         this.awaitingJobs.delete(id);
+        if (this.deleteAdvisory(failureKey)) this.renderPanel();
         // Keep routine success quiet: an AMBIENT media sub-job (a child
         // under the Build parent) that succeeded with NO advisory leaves no row —
         // the content sharpening in place is the feedback. Its advisories (if any)
@@ -1316,10 +1323,9 @@ export class ProgressPanel {
       }
       case "failed": {
         this.awaitingJobs.delete(id);
-        // NEW wiring (i): store the Job's failure as an advisory so groupNotices
-        // surfaces a broken notice (Blocking → broken tier). Previously the panel
-        // only upserted a task row; the notice rail was blind to Job failures.
-        this.advisories.set(id, {
+        // The Job's failure is an advisory, so groupNotices surfaces a broken
+        // notice (Blocking → broken tier).
+        this.advisories.set(failureKey, {
           task: "job",
           item: null,
           reason: state.advisory.what,
@@ -2402,51 +2408,42 @@ export class ProgressPanel {
       return { kind: "running", verb: reading.label };
     }
 
-    // Completion receipt — checked BEFORE the active build stage because the
-    // receipt fires (via BuildComplete/Job Succeeded) while the stage is still
-    // "compiling" (stage doesn't become "ready" until the next ProgressUpdate).
-    // Receipt wins over the "still running" stage label so "Built · N pages"
-    // appears immediately at the moment of completion.
+    // Work in progress outranks a finished receipt, and the build's own stage
+    // outranks a job: it is true now and the preview is about to change. The
+    // receipt fires while the stage still reads "compiling" (it becomes "ready"
+    // only at the next ProgressUpdate), so a receipt marks that stage as done.
+    // A job running past the build ("Importing · 12 pages") is then the line,
+    // since "Built · 1 page" would say something false about it.
     const receipt = this.completionReceiptText();
+    const stageLabel = this.activePrimaryLabel();
+    if (receipt == null && stageLabel.text !== "") {
+      return { kind: "running", verb: stageLabel.text };
+    }
+    const job = this.runningJob();
+    if (job !== null) {
+      return { kind: "running", verb: job.label };
+    }
     if (receipt != null) {
       return { kind: "receipt", text: receipt };
     }
 
-    // Active build stage
-    const stageLabel = this.activePrimaryLabel();
-    if (stageLabel.text !== "") {
-      return { kind: "running", verb: stageLabel.text };
-    }
-
-    // Wiring (iii): active running `job:*`/`plugin:*`/`bg:*` tasks in the
-    // lowest running tier — fires when build is idle (no stage label) and no
-    // receipt. `bg:*` tasks are included: without them, a bgTaskRowDecision row
-    // sat in `this.tasks` (satisfying hasContent(), so the seam un-hid) but
-    // never reached the status line the panel shows on hover — the
-    // hairline-hover render gate caught the seam opening onto empty content.
-    // Pick the most-recently-updated (tiebreak) task from the running set.
-    let bestTask: ProgressTask | null = null;
-    let bestUpdatedAt = -1;
-    for (const t of this.tasks.values()) {
-      // Must be running (not done = progress 100, not awaiting)
-      if (t.progress === 100) continue;
-      // Must not be awaiting
-      if (this.awaitingJobs.has(t.id)) continue;
-      // Must be a job:*, plugin:* or bg:* task (the running tier covers these)
-      if (!t.id.startsWith("job:") && !t.id.startsWith("plugin:") && !t.id.startsWith("bg:")) continue;
-      // Must have a label
-      if (!t.label) continue;
-      const updatedAt = t.lastUpdatedAt ?? 0;
-      if (updatedAt > bestUpdatedAt) {
-        bestUpdatedAt = updatedAt;
-        bestTask = t;
-      }
-    }
-    if (bestTask !== null) {
-      return { kind: "running", verb: bestTask.label };
-    }
-
     return { kind: "none" };
+  }
+
+  /**
+   * The running tier: active `job:*`/`plugin:*`/`bg:*` tasks that are not
+   * awaiting and have a label, most recently updated first. `bg:*` is included
+   * because a bgTaskRowDecision row satisfies hasContent(), so the seam opens
+   * and would otherwise open onto an empty line.
+   */
+  private runningJob(): ProgressTask | null {
+    let best: ProgressTask | null = null;
+    for (const t of this.tasks.values()) {
+      if (t.progress === 100 || this.awaitingJobs.has(t.id) || !t.label) continue;
+      if (!t.id.startsWith("job:") && !t.id.startsWith("plugin:") && !t.id.startsWith("bg:")) continue;
+      if (best === null || (t.lastUpdatedAt ?? 0) > (best.lastUpdatedAt ?? 0)) best = t;
+    }
+    return best;
   }
 
   /**

@@ -170,6 +170,7 @@ const GATE_PORT_KEYS = [
   'missing-file-box',
   'focus-point:ui',
   'focus-point:preview',
+  'hosted-bold',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

@@ -224,6 +224,10 @@ pub enum BuildTrigger {
     /// they cannot. Opt-in: `Full` stays the answer for a caller that needs
     /// every page rendered, such as a publish.
     Unobserved,
+    /// Pictures the last render could not finish have settled (their blur and
+    /// colour, `media::promise`). Proved from the last seal like `Unobserved`,
+    /// which may not hold its media settled; renders the pages that show one.
+    ImagesSettled,
 }
 
 impl BuildTrigger {
@@ -233,7 +237,7 @@ impl BuildTrigger {
     pub fn is_watch_batch(&self) -> bool {
         match self {
             BuildTrigger::ContentOnly(_) | BuildTrigger::Structural(_) => true,
-            BuildTrigger::Full | BuildTrigger::Unobserved => false,
+            BuildTrigger::Full | BuildTrigger::Unobserved | BuildTrigger::ImagesSettled => false,
         }
     }
 
@@ -250,9 +254,11 @@ impl BuildTrigger {
     /// `Unobserved` absorbs an event batch, because the proof it asks for
     /// compares the whole disk with the last seal and so sees those paths too;
     /// it may absorb only triggers caused by a disk change, so every variant
-    /// is named below and a new one has to choose.
+    /// is named below and a new one has to choose. `ImagesSettled` absorbs
+    /// those and `Unobserved` alike: its proof is the same walk, and the
+    /// pictures it owes still have to render.
     pub fn merge(self, other: BuildTrigger) -> BuildTrigger {
-        use BuildTrigger::{ContentOnly, Full, Structural, Unobserved};
+        use BuildTrigger::{ContentOnly, Full, ImagesSettled, Structural, Unobserved};
         fn union(mut a: Vec<PathBuf>, b: Vec<PathBuf>) -> Vec<PathBuf> {
             for p in b {
                 if !a.contains(&p) {
@@ -263,6 +269,7 @@ impl BuildTrigger {
         }
         match (self, other) {
             (Full, _) | (_, Full) => Full,
+            (ImagesSettled, _) | (_, ImagesSettled) => ImagesSettled,
             (Unobserved, Unobserved | ContentOnly(_) | Structural(_))
             | (ContentOnly(_) | Structural(_), Unobserved) => Unobserved,
             (Structural(a), Structural(b))
@@ -530,7 +537,7 @@ fn collect_native_slots_for_documents(
     }
 
     // Record the site's audiences ({scope, lang}) so every reader — the email
-    // settings command, the syndicate hook — gets EXACTLY what the build
+    // settings command — gets EXACTLY what the build
     // derived, with no re-derivation drift. Same judge
     // (`derive_language_sections`) as the subscribe form's supported_scopes, so
     // form and picker agree.
@@ -584,6 +591,9 @@ fn collect_native_slots_for_documents(
         &std::collections::HashMap::new(),
         // Feature/email path: no `BuildServices` here, so no variants.
         None,
+        // Keyed by the same base slugification as the dims above, so a picture
+        // under an overridden folder misses both and gets no srcset at all.
+        &crate::build::media::rungs::KeptRungs::load(&crate::moss_paths::MossPaths::new(Path::new(folder_path))),
     ));
 
     crate::build::features::generate_native_slots(
@@ -704,7 +714,12 @@ pub(crate) fn should_stash_hashes(publishable: bool, cancelled: bool) -> bool {
 /// returns, not read after the fact from a task that no longer exists.
 pub async fn run_pipeline(config: PipelineConfig) -> Result<String, String> {
     let pipeline_start = std::time::Instant::now();
-    let (result, collector) = crate::build::phase::with_collector(run_passes(&config)).await;
+    let (result, collector) = crate::build::phase::with_collector(async {
+        let reads_before = cloud_readiness::download_reads();
+        let result = run_passes(&config).await;
+        cloud_readiness::record_download_pool(reads_before);
+        result
+    }).await;
     crate::build::phase::log_build_summary(
         &collector,
         pipeline_start.elapsed(),
@@ -1407,6 +1422,11 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                         )
                         .await;
                         debug_assert!(handed_back.is_none(), "the lane hand-off keeps nothing for its caller");
+                    }
+                    Err(crate::build::background::BuildError::LeftToNewerBuild) => {
+                        // Like a tail that leaves to a newer sealed render: no
+                        // record and no event, the newer build owes both.
+                        log::info!("seal+persist: render #{} left to a newer build waiting on the same images", render_seq.unwrap_or_default());
                     }
                     Err(e) => {
                         log::error!("seal+persist: background work failed: {}", e);
@@ -2212,10 +2232,10 @@ async fn advertise_sealed(
     handed_back
 }
 
-/// Retain generations and sweep the content-addressed cache after a successful
-/// materialize. Called from `advertise_sealed`, the one seal tail on every
-/// path — the CLI's hand-copied predecessor had no retention call
-/// at all, so `moss build` used to grow `generations/` without bound.
+/// Retain generations, sweep the content-addressed cache and start the lock
+/// folder's litter sweep after a successful materialize. Called from
+/// `advertise_sealed`, the one seal tail on every path, so `moss build` keeps
+/// `generations/` bounded too.
 ///
 /// Both collectors are non-fatal: a GC failure never invalidates a build that
 /// already succeeded.
@@ -2245,6 +2265,7 @@ pub(crate) fn collect_build_store(
         log::info!("generation GC failed (non-fatal): {}", e);
     }
     store_gc::maybe_gc_cache(mp);
+    crate::infra::folder_lock::spawn_litter_sweep();
 }
 
 

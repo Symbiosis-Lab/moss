@@ -52,6 +52,9 @@ pub(crate) struct MediaMaps {
     /// `dimensions`, so `build_asset_snapshot` can index it under the identical
     /// source key (and additive output-URL slug key).
     pub(crate) animated: HashMap<String, bool>,
+    /// Map from an image's source path to the rung widths the live deploy
+    /// record keeps for it (`media::rungs::KeptRungs`); absent when unpublished.
+    pub(crate) kept_rungs: HashMap<String, Vec<u32>>,
 }
 
 /// Lookup table for media dimensions and colors, keyed by path.
@@ -130,6 +133,10 @@ impl MediaDimensionLookup {
         // the fragment renderers in `html.rs`); it is NOT a default, which is
         // why it is a required argument rather than an `Option` with one.
         registry: Option<&crate::types::assets::AssetRegistry>,
+        // The widths each published picture keeps, from the deploy record.
+        // Required for the same reason as `registry`: a lookup that drops them
+        // emits a rung no encode makes.
+        kept: &crate::build::media::rungs::KeptRungs,
     ) -> Self {
         #[cfg(test)]
         BUILT_ON_THIS_THREAD.with(|n| n.set(n.get() + 1));
@@ -138,6 +145,12 @@ impl MediaDimensionLookup {
         let mut sources = HashMap::new();
         let mut lqips = HashMap::new();
         let mut animated = HashMap::new();
+        let mut kept_rungs = HashMap::new();
+        for meta in images {
+            if let Some(widths) = kept.get(&crate::build::media::image::webp_address(&meta.path, dir_overrides)) {
+                kept_rungs.insert(meta.path.clone(), widths.to_vec());
+            }
+        }
 
         for meta in images.iter().chain(videos.iter()) {
             if let Some((w, h)) = meta.dimensions {
@@ -198,6 +211,7 @@ impl MediaDimensionLookup {
         index_by_output_url(&mut sources, dir_overrides);
         index_by_output_url(&mut lqips, dir_overrides);
         index_by_output_url(&mut animated, dir_overrides);
+        index_by_output_url(&mut kept_rungs, dir_overrides);
 
         let maps = MediaMaps {
             dimensions,
@@ -205,6 +219,7 @@ impl MediaDimensionLookup {
             sources,
             lqips,
             animated,
+            kept_rungs,
         };
         let snapshot =
             crate::build::markdown::pipeline::build_asset_snapshot(&maps, registry, dir_overrides);
@@ -513,7 +528,7 @@ mod tests {
 
     #[test]
     fn get_cover_color_muted_returns_desaturated_color() {
-        let mut lookup = MediaDimensionLookup::new(&[], &[], &HashMap::new(), None);
+        let mut lookup = MediaDimensionLookup::new(&[], &[], &HashMap::new(), None, &Default::default());
         lookup.maps.colors.insert("assets/hero.jpg".to_string(), "#0088CC".to_string());
         let color = lookup.get_cover_color_muted("assets/hero.jpg")
             .expect("should produce a color");
@@ -522,7 +537,7 @@ mod tests {
 
     #[test]
     fn get_cover_color_muted_returns_none_for_unknown_path() {
-        let lookup = MediaDimensionLookup::new(&[], &[], &HashMap::new(), None);
+        let lookup = MediaDimensionLookup::new(&[], &[], &HashMap::new(), None, &Default::default());
         assert!(lookup.get_cover_color_muted("missing.jpg").is_none());
     }
 
@@ -532,7 +547,7 @@ mod tests {
     /// regression the encoding fix would otherwise have introduced.
     #[test]
     fn cover_color_lookup_decodes_a_percent_encoded_url() {
-        let mut lookup = MediaDimensionLookup::new(&[], &[], &HashMap::new(), None);
+        let mut lookup = MediaDimensionLookup::new(&[], &[], &HashMap::new(), None, &Default::default());
         lookup.maps.colors.insert("評選/封面.jpg".to_string(), "#0088CC".to_string());
         let encoded = "/%E8%A9%95%E9%81%B8/%E5%B0%81%E9%9D%A2.jpg";
         assert!(lookup.get_cover_color(encoded).is_some(), "encoded URL must hit the cache");
@@ -542,7 +557,7 @@ mod tests {
     /// Decoding must not break the plain-ASCII callers that were already working.
     #[test]
     fn cover_color_lookup_still_accepts_an_unencoded_key() {
-        let mut lookup = MediaDimensionLookup::new(&[], &[], &HashMap::new(), None);
+        let mut lookup = MediaDimensionLookup::new(&[], &[], &HashMap::new(), None, &Default::default());
         lookup.maps.colors.insert("assets/hero.jpg".to_string(), "#0088CC".to_string());
         assert!(lookup.get_cover_color("/assets/hero.jpg").is_some());
         assert!(lookup.get_cover_color("assets/hero.jpg").is_some());
@@ -558,7 +573,7 @@ mod tests {
     /// consecutive generations in `--item-cover-color` and nothing else.
     #[test]
     fn covers_sharing_a_stem_never_borrow_each_others_color() {
-        let mut lookup = MediaDimensionLookup::new(&[], &[], &HashMap::new(), None);
+        let mut lookup = MediaDimensionLookup::new(&[], &[], &HashMap::new(), None, &Default::default());
         for (dir, hex) in [("kayla", "#0088CC"), ("liweixi", "#CC4400"), ("gold", "#22AA22")] {
             lookup
                 .maps
@@ -589,7 +604,7 @@ mod tests {
     /// scoping it to one directory is what was missing, not the fallback itself.
     #[test]
     fn a_stem_match_still_resolves_within_one_directory() {
-        let mut lookup = MediaDimensionLookup::new(&[], &[], &HashMap::new(), None);
+        let mut lookup = MediaDimensionLookup::new(&[], &[], &HashMap::new(), None, &Default::default());
         lookup.maps.colors.insert("posts/assets/clip.mov".to_string(), "#0088CC".to_string());
         assert_eq!(
             lookup.get_dominant_color("posts/assets/clip.mp4"),
@@ -620,7 +635,7 @@ mod tests {
             lqip_data_uri: Some("data:image/webp;base64,AAAA".to_string()),
             ..Default::default()
         };
-        let lookup = MediaDimensionLookup::new(&[meta], &[], &overrides, None);
+        let lookup = MediaDimensionLookup::new(&[meta], &[], &overrides, None, &Default::default());
 
         assert!(lookup
             .asset_snapshot()
@@ -658,13 +673,13 @@ mod tests {
             registry.set_pending(format!("clip.hls/{member}"), None, None);
         }
 
-        let with = MediaDimensionLookup::new(&[meta.clone()], &[], &HashMap::new(), Some(&registry));
+        let with = MediaDimensionLookup::new(&[meta.clone()], &[], &HashMap::new(), Some(&registry), &Default::default());
         assert!(
             with.asset_snapshot().has_hls_for_source(&Path::new("/clip.mp4").to_path_buf()),
             "a registry holding a master playlist must reach the snapshot"
         );
 
-        let without = MediaDimensionLookup::new(&[meta], &[], &HashMap::new(), None);
+        let without = MediaDimensionLookup::new(&[meta], &[], &HashMap::new(), None, &Default::default());
         assert!(
             !without.asset_snapshot().has_hls_for_source(&Path::new("/clip.mp4").to_path_buf()),
             "no registry, no variants — the absence must be honest, not a stale carry-over"
@@ -703,7 +718,7 @@ mod tests {
         };
         let logo_color = crate::build::scan::scan::extract_color_and_lqip(&logo).0;
         let images = [meta("logo.png", &logo), meta("photo.jpg", &photo)];
-        let lookup = MediaDimensionLookup::new(&images, &[], &HashMap::new(), None);
+        let lookup = MediaDimensionLookup::new(&images, &[], &HashMap::new(), None, &Default::default());
         std::fs::remove_dir_all(&dir).ok();
 
         assert!(logo_color.is_some(), "the scan still computes a colour for a transparent image");

@@ -154,7 +154,7 @@ details[open] > .comments-toggle {
 }
 
 .comment-author {
-  font-weight: 480;
+  font-weight: var(--moss-font-weight-strong, 480);
   font-size: var(--moss-size-sm, 1rem);
   color: var(--moss-color-text, #2c2825);
   text-decoration: none;
@@ -296,7 +296,7 @@ a.comment-author:hover {
   color: var(--moss-color-accent, #2d5a2d);
   font-family: inherit;
   font-size: var(--moss-size-sm, 1rem);
-  font-weight: 480;
+  font-weight: var(--moss-font-weight-strong, 480);
   transition: background 0.15s ease, color 0.15s ease;
 }
 
@@ -433,7 +433,7 @@ a.comment-author:hover {
 }
 .comment-reply-indicator strong {
   color: var(--moss-color-text, #2c2825);
-  font-weight: 480;
+  font-weight: var(--moss-font-weight-strong, 480);
 }
 .comment-reply-cancel {
   background: none;

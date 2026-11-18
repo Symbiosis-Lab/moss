@@ -528,7 +528,9 @@ pub enum Opening<'a> {
 ///
 /// A folder embed takes the slot even when none of its cards has a cover. The
 /// page then has no eager image, which costs nothing: a lazy cover only gives
-/// up a head start.
+/// up a head start. The slot is the page's one `fetchpriority="high"` picture.
+/// When the opening embed holds it, its first row of covers (up to four) loads
+/// eagerly without priority; every other listing is lazy.
 pub fn opening_content(blocks: &[Block]) -> Option<Opening<'_>> {
     let mut text_blocks = 0;
     for (index, block) in blocks.iter().enumerate() {

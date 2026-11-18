@@ -320,6 +320,16 @@ describe("initNavIsland — the island of a site with no header", () => {
     expect(sectionsBtn().hidden).toBe(true);
   });
 
+  test("without the sections button (sections too short to list) it shows the controls alone", () => {
+    const noButton = PINNED.replace(/<button type="button" class="moss-nav-island-sections"[^>]*><\/button>/, "");
+    document.body.innerHTML = `${noButton}<main><h2 id="a">One</h2><h2 id="b">Two</h2></main>`;
+    placeHeadings([600, 1400]);
+    initNavIsland();
+    expect(island().dataset.shown).toBe("true");
+    expect(island().inert).toBe(false);
+    expect(document.querySelector('[data-island-menu="sections"]')!.children.length).toBe(0);
+  });
+
   test("it appears when the first section reaches the reading line and then stays", async () => {
     document.body.innerHTML = `${PINNED}<main><h2 id="a">One</h2><h2 id="b">Two</h2></main>`;
     placeHeadings([600, 1400]);

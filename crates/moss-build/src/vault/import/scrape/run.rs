@@ -10,7 +10,6 @@
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::collections::HashMap;
-use std::fs;
 use std::path::Path;
 use std::sync::LazyLock;
 use tokio::sync::Semaphore;
@@ -352,8 +351,6 @@ pub(crate) async fn scrape_into(
     }
 
     let assets_dir = out_dir.join(ASSETS_SUBDIR);
-    fs::create_dir_all(&assets_dir)
-        .map_err(|e| format!("Failed to create assets directory: {}", e))?;
 
     // The site's own declared page list — read before the link-following
     // walk starts, so an unlinked page is queued regardless and, seeded

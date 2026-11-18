@@ -119,3 +119,12 @@ it.each([
     expect(suggestions.map((field) => field.name)).not.toContain("title");
   }
 });
+
+it("suggests nothing, and asks the core nothing, outside a moss folder", () => {
+  const editor = {
+    getValue: () => { throw new Error("read the note"); },
+    getLine: () => "ti",
+  } as unknown as Editor;
+  const suggest = new MossFieldSuggest({ app: {} } as MossPlugin, () => ({ fields: new Map() }));
+  expect(suggest.onTrigger({ line: 1, ch: 2 }, editor, null)).toBeNull();
+});

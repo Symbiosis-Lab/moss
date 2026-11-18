@@ -1,7 +1,7 @@
 {
   "_comment": [
     "Cross-language contract for RENDERING a shortcode attr value.",
-    "Rust side: crates/moss-core/tests/attr_value_render.rs feeds `rendered` to",
+    "Rust side: crates/moss-core/tests/it/attr_value_render.rs feeds `rendered` to",
     "the real `parse_attrs` grammar and requires the value back out as `raw`.",
     "TS side: packages/moss-syntax/src/__tests__/completion-core.test.ts requires",
     "`renderShortcodeAttrValue(raw) === rendered`.",

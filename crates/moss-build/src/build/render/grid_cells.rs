@@ -45,7 +45,8 @@ use moss_core::ast::{Block, Inline, ResolvedUrl, Url, UrlKind};
 use moss_core::ast::link_card::{blocks_text, push_inlines_text};
 
 use crate::build::components::child_list::ChildItemProps;
-use crate::build::components::grid_card::{render_external_card, render_item_with_typesetting};
+use crate::build::components::grid_card::{render_external_card, render_item_with_typesetting, CoverLoading};
+use moss_core::render::image::Loading;
 use crate::build::markdown::body_plan::{BodyPlan, BodySegment, GridCellEmission, GridEmission};
 use crate::build::media::cover::detect_cover_type;
 use crate::build::page::link_meta::LinkMeta;
@@ -349,18 +350,23 @@ pub(crate) fn apply_summary_grids(plan: &mut BodyPlan, index: &BuildIndex<'_>) {
             continue;
         }
         let mut cards: Vec<String> = Vec::with_capacity(grid.cells.len());
+        let mut collections: Vec<bool> = Vec::with_capacity(grid.cells.len());
         let mut resolved_any = false;
         for cell in &grid.cells {
             match summary_card_markup(cell, index) {
-                Some(card) => {
+                Some((card, is_collection)) => {
                     resolved_any = true;
                     cards.push(card);
+                    collections.push(is_collection);
                 }
                 // The author's own markup, unwrapped, as a flex item in the
                 // list. NOT `parts.to_html()`: that wraps it in
                 // `.moss-grid-card` chrome whose CSS is scoped to `.moss-grid`
                 // and would render unstyled here.
-                None => cards.push(cell.inner().to_string()),
+                None => {
+                    cards.push(cell.inner().to_string());
+                    collections.push(false);
+                }
             }
         }
         // Nothing resolved — a wrong link path shows the author their own
@@ -376,6 +382,8 @@ pub(crate) fn apply_summary_grids(plan: &mut BodyPlan, index: &BuildIndex<'_>) {
                 false,
                 true,
                 &Default::default(),
+                PICKED_CARD_AXIS,
+                crate::build::components::ListHolds::of(collections),
                 &cards.join("\n"),
             )
         ));
@@ -383,7 +391,8 @@ pub(crate) fn apply_summary_grids(plan: &mut BodyPlan, index: &BuildIndex<'_>) {
 }
 
 /// One summary card for a cell that names a page in this build.
-fn summary_card_markup(cell: &GridCellEmission, index: &BuildIndex<'_>) -> Option<String> {
+/// The card, and whether it stands for a collection.
+fn summary_card_markup(cell: &GridCellEmission, index: &BuildIndex<'_>) -> Option<(String, bool)> {
     let GridCell::Link(link) = classify_cell(&cell.blocks) else {
         return None;
     };
@@ -391,28 +400,31 @@ fn summary_card_markup(cell: &GridCellEmission, index: &BuildIndex<'_>) -> Optio
         return None;
     }
     let props = picked_card_props(&link, index)?;
-    Some(crate::build::components::child_summary::render_with_sort(
+    let is_collection = props.is_collection();
+    Some((crate::build::components::child_summary::render_with_sort(
         &props,
         index.lang,
         index.typesetting,
         index.media_lookup,
-        // A hand-picked block has no sort. The axis names what the META SLOT
-        // says, not how the list was ordered: `Date` surfaces the page's date,
-        // which is the fact a reader picks a piece by; `Weight`/`Title` would
-        // silently delete it from every card.
-        moss_core::sort::SortAxis::Date,
-    ))
+        PICKED_CARD_AXIS,
+    ), is_collection))
 }
+
+/// A hand-picked block has no sort. The axis names what the meta slot says,
+/// not how the list was ordered: `Date` surfaces the page's date, which is the
+/// fact a reader picks a piece by; `Weight`/`Title` would delete it from every card.
+const PICKED_CARD_AXIS: moss_core::sort::SortAxis = moss_core::sort::SortAxis::Date;
 
 /// Replace cells that link to a page in this build with that page's card.
 ///
 /// Skips grids the author marked `{.no-cards}` — navigation grids and
 /// mixed-content splits whose cells happen to contain internal links.
 ///
-/// The first card with a cover takes the page's one eager image, unless
-/// `eager_taken` says a hero or the opening content already holds it.
+/// The first covers load with the page and the first takes its one
+/// high-priority fetch ([`CoverLoading`]), unless `eager_taken` says a hero or
+/// the opening content already holds it.
 pub(crate) fn apply_collection_cards(plan: &mut BodyPlan, index: &BuildIndex<'_>, eager_taken: bool) {
-    let mut eager_spent = eager_taken;
+    let mut loading = CoverLoading::new(eager_taken);
     for grid in grids_mut(plan) {
         if grid.no_cards() {
             continue;
@@ -435,8 +447,12 @@ pub(crate) fn apply_collection_cards(plan: &mut BodyPlan, index: &BuildIndex<'_>
         });
         let cell_sizes = Some(grid.cell_sizes.as_str());
         for cell in &mut grid.cells {
-            if let Some((html, has_cover)) = card_markup(cell, index, &mut eager_spent, list_has_covers, cell_sizes) {
-                cell.replace(html, has_cover);
+            match card_markup(cell, index, &mut loading, list_has_covers, cell_sizes) {
+                Some((html, has_cover)) => cell.replace(html, has_cover),
+                // A cell left as written still takes its place in the row.
+                None => {
+                    loading.next(false);
+                }
             }
         }
     }
@@ -515,7 +531,7 @@ fn cover_image_href(blocks: &[Block]) -> Option<&str> {
 fn card_markup(
     cell: &GridCellEmission,
     index: &BuildIndex<'_>,
-    eager_spent: &mut bool,
+    loading: &mut CoverLoading,
     list_has_covers: bool,
     cell_sizes: Option<&str>,
 ) -> Option<(String, bool)> {
@@ -526,8 +542,6 @@ fn card_markup(
         return None;
     }
     let props = picked_card_props(&link, index)?;
-    let eager = !*eager_spent && props.cover.is_some();
-    *eager_spent |= eager;
     let html = render_item_with_typesetting(
         &props,
         index.root_path.map(std::path::Path::new),
@@ -538,7 +552,7 @@ fn card_markup(
         // lying on its side in every `:::grid` folder card (2026-09-11).
         index.typesetting,
         index.media_lookup,
-        eager,
+        loading.next(props.cover.is_some()),
         list_has_covers,
         cell_sizes,
     );
@@ -667,7 +681,7 @@ fn external_card_markup(
                 &cover_attrs,
                 true,
                 index.media_lookup,
-                false,
+                Loading::Lazy,
                 cell_sizes,
             )
         }
@@ -723,6 +737,7 @@ fn remote_cover_html(meta: Option<&LinkMeta>, alt: &str, cell_sizes: Option<&str
         &[],
         &HashMap::new(),
         None,
+        &Default::default(),
     );
     Some(crate::build::media::cover::render_cover_html(
         &served_url,
@@ -732,7 +747,7 @@ fn remote_cover_html(meta: Option<&LinkMeta>, alt: &str, cell_sizes: Option<&str
         &moss_core::media::parse_media_attrs(""),
         true,
         Some(&lookup),
-        false,
+        Loading::Lazy,
         cell_sizes,
     ))
 }

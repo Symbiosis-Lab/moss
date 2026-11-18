@@ -39,11 +39,11 @@ use crate::i18n::numerals::to_chinese_numeral;
 /// ```html
 /// <nav class="moss-series-nav">
 ///   <div class="moss-series-nav-links">
-///     <a href="prev.html" class="moss-series-nav-link moss-series-nav-prev">
-///       <span class="moss-series-nav-arrow">&lt;</span> <span class="moss-series-nav-text"><span class="moss-series-nav-label">Previous</span><span class="moss-series-nav-title">Title</span></span>
+///     <a href="prev.html" rel="prev" class="moss-series-nav-link moss-series-nav-prev">
+///       <span class="moss-series-nav-arrow" aria-hidden="true">&lt;</span> <span class="visually-hidden">Previous</span> <span class="moss-series-nav-title">Title</span>
 ///     </a>
-///     <a href="next.html" class="moss-series-nav-link moss-series-nav-next">
-///       <span class="moss-series-nav-text"><span class="moss-series-nav-label">Next</span><span class="moss-series-nav-title">Title</span></span> <span class="moss-series-nav-arrow">&gt;</span>
+///     <a href="next.html" rel="next" class="moss-series-nav-link moss-series-nav-next">
+///       <span class="visually-hidden">Next</span> <span class="moss-series-nav-title">Title</span> <span class="moss-series-nav-arrow" aria-hidden="true">&gt;</span>
 ///     </a>
 ///   </div>
 ///   <div class="moss-series-nav-collection-row">
@@ -71,34 +71,8 @@ pub fn render(
     }
 
     // Row 1: Navigation links
-    // Arrow and title are separate spans so arrow doesn't wrap with multi-line titles
-    // The label says which way the link goes; the arrow alone does not, and a
-    // screen reader reads the title with no direction.
-    let prev_label = html_escape(crate::i18n::t(lang, "previous"));
-    let next_label = html_escape(crate::i18n::t(lang, "next"));
-    let prev_link = prev
-        .map(|(title, url)| {
-            // Prev: arrow before title (← Title)
-            format!(
-                r#"<a href="{}" class="moss-series-nav-link moss-series-nav-prev"><span class="moss-series-nav-arrow">&lt;</span> <span class="moss-series-nav-text"><span class="moss-series-nav-label">{}</span><span class="moss-series-nav-title">{}</span></span></a>"#,
-                html_escape(url),
-                prev_label,
-                html_escape(title)
-            )
-        })
-        .unwrap_or_else(|| r#"<span class="moss-series-nav-link moss-series-nav-prev empty"></span>"#.to_string());
-
-    let next_link = next
-        .map(|(title, url)| {
-            // Next: title before arrow (Title →)
-            format!(
-                r#"<a href="{}" class="moss-series-nav-link moss-series-nav-next"><span class="moss-series-nav-text"><span class="moss-series-nav-label">{}</span><span class="moss-series-nav-title">{}</span></span> <span class="moss-series-nav-arrow">&gt;</span></a>"#,
-                html_escape(url),
-                next_label,
-                html_escape(title)
-            )
-        })
-        .unwrap_or_else(|| r#"<span class="moss-series-nav-link moss-series-nav-next empty"></span>"#.to_string());
+    let prev_link = neighbour_link("prev", prev, lang);
+    let next_link = neighbour_link("next", next, lang);
 
     // Row 2: Folder link (centered), and — when the caller knows it — where in
     // the folder this page sits. Two arrows say what comes before and after;
@@ -158,6 +132,26 @@ pub fn render(
 {}"#,
         prev_link, next_link, folder_row, prefetch
     )
+}
+
+/// One previous/next link, or an empty placeholder that keeps the row's layout.
+///
+/// Arrow and title are separate spans so the arrow doesn't wrap with a
+/// multi-line title. Arrow and placement show the direction; a screen reader
+/// hears it from the hidden word instead of the arrow glyph.
+fn neighbour_link(rel: &str, neighbour: Option<(&str, &str)>, lang: crate::i18n::Language) -> String {
+    let Some((title, url)) = neighbour else {
+        return format!(r#"<span class="moss-series-nav-link moss-series-nav-{rel} empty"></span>"#);
+    };
+    let (key, glyph) = if rel == "prev" { ("previous", "&lt;") } else { ("next", "&gt;") };
+    let arrow = format!(r#"<span class="moss-series-nav-arrow" aria-hidden="true">{glyph}</span>"#);
+    let text = format!(
+        r#"<span class="visually-hidden">{}</span> <span class="moss-series-nav-title">{}</span>"#,
+        html_escape(crate::i18n::t(lang, key)),
+        html_escape(title)
+    );
+    let body = if rel == "prev" { format!("{arrow} {text}") } else { format!("{text} {arrow}") };
+    format!(r#"<a href="{}" rel="{rel}" class="moss-series-nav-link moss-series-nav-{rel}">{body}</a>"#, html_escape(url))
 }
 
 #[cfg(test)]

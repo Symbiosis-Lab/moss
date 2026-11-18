@@ -42,8 +42,8 @@ export interface EditorLinkHost {
   editorIsOpen(): boolean;
   editorIsFullWidth(): boolean;
   folderPath(): string | null;
-  /** Open the editor at a source target; another file's target names its `path`. */
-  openTarget(target: PreviewSourceTarget): void;
+  /** Open the editor at a source target (another file's names its `path`), or on the previewed page for null. */
+  openTarget(target: PreviewSourceTarget | null): void;
   openContextMenu(ctx: PreviewCtxPayload): void;
 }
 
@@ -198,12 +198,17 @@ export class EditorLink {
     return { sourcePath: page?.sourcePath ?? null, isRoot: isRootUrlPath(urlPath), takeover: page?.takeover ?? null };
   }
 
+  /** Open the editor at a target from the preview: a place in the previewed page, another file's, or the page itself (null). */
+  open(target: PreviewSourceTarget | null): void {
+    this.host.openTarget(this.located(target));
+  }
+
   /**
    * A target with no `path` is a place in the previewed page, and `null` is the
    * page itself. While the open editor shows another file, name the page's
    * file, so the target opens it instead of landing in the file on screen.
    */
-  located(target: PreviewSourceTarget | null): PreviewSourceTarget | null {
+  private located(target: PreviewSourceTarget | null): PreviewSourceTarget | null {
     const page = this.node?.sourcePath;
     if (target?.path || target?.kind === 'none' || !page || this.editorFile === null || !this.host.editorIsOpen()) return target;
     const path = toRelative(page, this.host.folderPath() ?? '');

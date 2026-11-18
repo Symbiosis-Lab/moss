@@ -224,6 +224,35 @@ pub fn ensure_worker(
     })
 }
 
+/// The rebuild for page sources edited after the build the screen shows read
+/// them, judged against that build's stash. A save landing before the watcher
+/// subscribed raises no event, and the sweep judges only against a seal, which
+/// on a folder's first build waits for its picture batch. Creates and deletes
+/// stay with the sweep.
+async fn edits_since_shown(folder: std::path::PathBuf) -> Option<worker::RebuildRequest> {
+    use crate::build::watch::drift;
+    let stash = sweep::walk::stashed_baseline(&folder.to_string_lossy())?;
+    tokio::task::spawn_blocking(move || {
+        let deadline = std::time::Instant::now() + sweep::WALK_DEADLINE;
+        let walked = sweep::walk::walk_with_error(&folder, Some(deadline), None).ok()?;
+        let report = drift::detect_drift(&stash, &walked.files, &[], &folder, drift::probe_missing, Some(deadline), false);
+        let edited: Vec<String> = report
+            .drifted
+            .iter()
+            .filter(|(rel, d)| d.kind == drift::DriftKind::Edited && crate::build::manifest::is_page_source_key(rel))
+            .map(|(rel, _)| rel.clone())
+            .collect();
+        if edited.is_empty() {
+            return None;
+        }
+        log::info!("Rebuild triggered by {} page(s) saved before the watcher started (e.g. {:?})", edited.len(), edited[0]);
+        Some(sweep::request_for_drift(&folder, &report, &edited, stash.captured_at))
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 /// Start file watching for live development mode.
 ///
 /// Monitors the source folder for content file changes and triggers silent
@@ -357,6 +386,9 @@ pub async fn start(config: WatchConfig) {
                 folder_path,
                 watched.len()
             );
+            if let Some(found) = edits_since_shown(root.to_path_buf()).await {
+                dispatch(found).await;
+            }
 
             // Because the root is not watched recursively, a NEW top-level entry
             // is not covered by any existing subscription. Reconcile the set on a

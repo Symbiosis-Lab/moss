@@ -772,3 +772,25 @@ fn a_real_error_stops_the_read_and_is_reported() {
     let err = drain_to_eof(&mut Failing).expect_err("a real error is reported");
     assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
 }
+
+#[test]
+fn returned_reads_are_told_apart_by_whether_the_bytes_arrived() {
+    let dir = tempfile::tempdir().unwrap();
+    let (fetched, unserved, refused) = (dir.path().join("fetched.md"), dir.path().join("unserved.md"), dir.path().join("refused.md"));
+    for path in [&fetched, &unserved, &refused] { std::fs::write(path, "x").unwrap(); }
+    let _still_in_cloud = crate::build::icloud::pretend::evicted(&unserved);
+    let failing = refused.clone();
+    let m: Materializer = Arc::new(move |p: &Path| if p == failing { Err(std::io::Error::other("provider refused")) } else { Ok(()) });
+    let p = Prefetcher::with_materializer(1, m, false);
+    for path in [&fetched, &unserved, &refused] { p.read(path); }
+    assert!(wait_until(|| p.snapshot().done == 3));
+    let reads = p.snapshot().reads;
+    assert_eq!((reads.fetched, reads.still_in_cloud, reads.failed), (1, 1, 1));
+}
+
+#[test]
+fn a_read_tally_since_an_earlier_one_counts_only_the_reads_after_it() {
+    let earlier = ReadTally { fetched: 3, still_in_cloud: 1, failed: 0, millis: 900 };
+    let now = ReadTally { fetched: 5, still_in_cloud: 1, failed: 2, millis: 1500 };
+    assert_eq!(now.since(earlier), ReadTally { fetched: 2, still_in_cloud: 0, failed: 2, millis: 600 });
+}

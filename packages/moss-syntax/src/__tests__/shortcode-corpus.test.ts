@@ -6,7 +6,7 @@
  * (`scanShortcodeBlocks`) and asserts the extracted structure — names +
  * nesting + grid cell counts — matches the corpus.
  *
- * Its Rust twin, crates/moss-core/tests/shortcode_structure_parity.rs, asserts
+ * Its Rust twin, crates/moss-core/tests/it/shortcode_structure_parity.rs, asserts
  * the BUILD parser (`moss_core::ast::parse`) matches the SAME corpus. Two
  * gates, one source of truth: the shared syntax layer cannot silently drift
  * from the build (the `+++` divider / nested `::::buttons` rendering bugs)

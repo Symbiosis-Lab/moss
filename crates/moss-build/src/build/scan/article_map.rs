@@ -510,7 +510,7 @@ pub fn build_article_map(
         // `editor::resolve::links::resolve_url_for_file_inner` handed the preview a
         // `/footer/` that was never emitted (404), and
         // `editor::commands::resolve_page_source` reported `is_article: true`,
-        // which arms the syndicate path in `plugins::syndicate`.
+        // which arms the copy path for a page that is not a post.
         if doc.slot_only {
             continue;
         }

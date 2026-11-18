@@ -328,6 +328,13 @@ pub fn extract_notebook_title(ipynb_json: &str) -> Option<String> {
     None
 }
 
+/// Where a notebook's own `.ipynb` is served: at its source path.
+pub(crate) fn copy_path(
+    notebook_source_path: &str,
+) -> Result<crate::build::served_path::ServedPath, crate::build::served_path::ServedPathError> {
+    crate::build::served_path::ServedPath::from_source(notebook_source_path)
+}
+
 /// Where a notebook's viewer page is served: beside its `.ipynb`, as `.html`.
 pub(crate) fn viewer_path(
     notebook_source_path: &str,

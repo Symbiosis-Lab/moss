@@ -533,6 +533,7 @@ pub fn format_build_summary(
     let trigger = match trigger {
         BuildTrigger::Full => "trigger=full".to_string(),
         BuildTrigger::Unobserved => "trigger=unobserved".to_string(),
+        BuildTrigger::ImagesSettled => "trigger=images-settled".to_string(),
         BuildTrigger::Structural(paths) => format!("trigger=structural changed={}", paths.len()),
         BuildTrigger::ContentOnly(paths) => format!("trigger=content changed={}", paths.len()),
     };
@@ -579,7 +580,7 @@ const BUILD_COUNTS: &[&str] = &[
     "pages_rendered", "pages_carried", "slot_html_scanned", "slot_html_rewritten",
     "background_assets_copied", "background_assets_hits", "background_assets_misses",
     "background_assets_linked", "background_assets_stat_only", "sized_raster_blob_checks",
-    "images_unchanged", "images_dispatched", "image_variants_stat_only", "image_variants_blob_checks",
+    "images_unchanged", "images_dispatched", "images_joined", "image_variants_stat_only", "image_variants_blob_checks",
     "image_transform_records_loaded", "files_sealed", "hash_index_hits_process", "hash_index_rehashed_process",
     "proved_from_seal",
 ];
@@ -623,6 +624,7 @@ fn build_record(t: &BuildTelemetry, total: Duration, outcome: &str, trigger: &cr
     let (kind, changed) = match trigger {
         BuildTrigger::Full => ("full", 0),
         BuildTrigger::Unobserved => ("unobserved", 0),
+        BuildTrigger::ImagesSettled => ("images-settled", 0),
         BuildTrigger::Structural(paths) => ("structural", paths.len()),
         BuildTrigger::ContentOnly(paths) => ("content", paths.len()),
     };

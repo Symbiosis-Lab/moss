@@ -393,7 +393,7 @@ pub fn emit_with_layers(
             .map_err(|e| format!("Failed to emit place-map asset '{name}': {e}"))?;
         // Cache persistence may request a cloud-only folder and refuse this
         // attempt. The rendered bytes still belong to this complete build.
-        let cached = objects.store_bytes(bytes, crate::build::cache::RecordMode::Request)
+        let cached = objects.store_bytes(bytes)
             .and_then(|oid| {
                 transforms.merge(&cache_key, 0, crate::build::cache::RecordMode::Request, |record| {
                     record.transforms.insert(

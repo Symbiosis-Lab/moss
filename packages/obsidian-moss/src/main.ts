@@ -1,3 +1,4 @@
+import type { Extension } from "@codemirror/state";
 import { Events, MarkdownView, Notice, Platform, Plugin } from "obsidian";
 import { contextChanged, frontmatterExtension } from "./cm-frontmatter";
 import { initializeCore, MossSite } from "./core";
@@ -9,6 +10,8 @@ import { readSiteContext } from "./site-context";
 import { shortcodeExtension } from "./syntax/cm-shortcode";
 import type { DesktopCommands } from "./desktop";
 
+const NO_SITE = { files: [], lang: "en" };
+
 export default class MossPlugin extends Plugin {
   settings: MossSettings = { ...DEFAULT_SETTINGS };
   schema: MossSchema = { fields: new Map() };
@@ -17,18 +20,18 @@ export default class MossPlugin extends Plugin {
   private rebuildTimer?: ReturnType<typeof setTimeout>;
   private generation = 0;
   private disposed = false;
+  private readonly aids = [frontmatterExtension(() => this.schema, () => this.site), shortcodeExtension()];
+  /** The registered editor extensions: the aids in a moss folder, none elsewhere. */
+  private editorAids: Extension[] = [];
 
   async onload(): Promise<void> {
     const saved = ((await this.loadData()) ?? {}) as Partial<MossSettings>;
     this.settings = { binaryPath: saved.binaryPath ?? DEFAULT_SETTINGS.binaryPath };
     initializeCore();
-    this.site = new MossSite(JSON.stringify({ files: [], lang: "en" }));
-    this.schema = siteSchema(this.site);
+    this.site = new MossSite(JSON.stringify(NO_SITE));
     await this.rebuildContext();
     if (this.disposed) return;
-    this.registerEditorExtension([
-      frontmatterExtension(() => this.schema, () => this.site), shortcodeExtension(),
-    ]);
+    this.registerEditorExtension(this.editorAids);
     this.registerEditorSuggest(new MossFieldSuggest(this, () => this.schema));
     this.registerView(PAGE_PREVIEW_VIEW_TYPE, (leaf) => new PagePreviewView(leaf, this));
     for (const event of ["create", "delete", "rename"] as const) {
@@ -77,10 +80,12 @@ export default class MossPlugin extends Plugin {
     try {
       const context = await readSiteContext(this.app.vault);
       if (this.disposed || generation !== this.generation) return;
-      const site = new MossSite(JSON.stringify(context));
+      const site = new MossSite(JSON.stringify(context ?? NO_SITE));
       this.site.free();
       this.site = site;
-      this.schema = siteSchema(site);
+      this.schema = context ? siteSchema(site) : { fields: new Map() };
+      this.editorAids.splice(0, Infinity, ...(context ? this.aids : []));
+      this.app.workspace.updateOptions();
       this.app.workspace.iterateAllLeaves((leaf) => {
         if (leaf.view instanceof MarkdownView) {
           // Obsidian exposes the CM view on Editor at runtime, outside its public types.

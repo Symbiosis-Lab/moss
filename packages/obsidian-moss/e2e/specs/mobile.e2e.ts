@@ -11,7 +11,8 @@ describe("moss on mobile", () => {
     expect(loaded).toBe(true);
   });
 
-  it("decorates invalid frontmatter", async () => {
+  it("decorates invalid frontmatter in a moss folder", async () => {
+    await obsidianPage.write(".moss/config.toml", "");
     await obsidianPage.openFile("bad-frontmatter.md");
     await browser.executeObsidian(async ({ app }) => {
       const leaf = app.workspace.getMostRecentLeaf();

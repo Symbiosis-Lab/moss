@@ -135,7 +135,7 @@ pub fn generate_html(
         emit_source_lines, favicon_filename, false, output_dir,
         None,
         source_root,
-        &BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &crate::build::media::dimensions::MediaDimensionLookup::new(&project.image_files, &project.video_files, dir_overrides, None), crate::build::inputs::now()),
+        &BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &crate::build::media::dimensions::MediaDimensionLookup::new(&project.image_files, &project.video_files, dir_overrides, None, &Default::default()), crate::build::inputs::now()),
     )
 }
 
@@ -1026,7 +1026,7 @@ pub(super) fn render_page<'d>(
             let content = if article_list.is_empty() {
                 String::new()
             } else {
-                format!(r#"<div class="moss-cards-container"><div class="moss-cards" data-layout="minimal">{}</div></div>"#, article_list)
+                crate::build::components::cards_container("minimal", false, false, &Default::default(), moss_core::sort::SortAxis::Date, crate::build::components::ListHolds::Entries, &article_list)
             };
             (site_title.clone(), content)
         }

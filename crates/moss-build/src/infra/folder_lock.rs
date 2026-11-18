@@ -26,10 +26,10 @@
 //! a lock on a different unlinked inode, unable to see each other.
 //!
 //! The file lives only while it is held. The holder unlinks it before
-//! unlocking, and [`acquire_named_noting_wait`] checks, once it holds a lock,
-//! that the path still names the file it locked, opening again if not. A
-//! waiter that was blocked on the removed file therefore moves to the new
-//! one instead of holding a lock nobody else can see. So `~/.moss/locks`
+//! unlocking, and an acquirer checks, once it holds a lock, that the path
+//! still names the file it locked, opening again if not, as often as it
+//! takes. A waiter that was blocked on the removed file therefore moves to
+//! the new one instead of holding a lock nobody else can see. So `~/.moss/locks`
 //! holds only what is held now, however many temporary folders are built.
 //! On Windows, where an open file cannot be replaced this way, the file
 //! stays.
@@ -182,57 +182,129 @@ pub fn acquire_named(folder: &Path, name: &str) -> Result<Held, String> {
 pub fn acquire_named_noting_wait(folder: &Path, name: &str, on_wait: impl FnOnce()) -> Result<Held, String> {
     let path = lock_path_named(folder, name)?;
     let mut on_wait = Some(on_wait);
-    for _ in 0..REOPENS {
-        let file = open_lock_file(&path)?;
-        match file.try_lock() {
-            Ok(()) => {}
-            Err(std::fs::TryLockError::WouldBlock) => {
-                if let Some(on_wait) = on_wait.take() {
-                    if name == "build" {
-                        log::info!("waiting for another moss process building this folder");
-                    } else {
-                        log::info!("waiting for another moss process holding the {name} lock on this folder");
-                    }
-                    on_wait();
-                }
-                let waited = std::time::Instant::now();
-                file.lock().map_err(|e| format!("lock {}: {e}", path.display()))?;
-                log::info!("waited {:?} for the {name} lock on this folder", waited.elapsed());
+    let held = hold(&path, |file| {
+        if let Some(on_wait) = on_wait.take() {
+            if name == "build" {
+                log::info!("waiting for another moss process building this folder");
+            } else {
+                log::info!("waiting for another moss process holding the {name} lock on this folder");
             }
-            Err(e) => return Err(format!("lock {}: {e}", path.display())),
+            on_wait();
         }
-        if still_named(&file, &path) {
-            return Ok(Held { file, path });
-        }
-    }
-    Err(unstable(&path))
+        let waited = std::time::Instant::now();
+        file.lock().map_err(|e| format!("lock {}: {e}", path.display()))?;
+        log::info!("waited {:?} for the {name} lock on this folder", waited.elapsed());
+        Ok(true)
+    })?;
+    Ok(held.expect("a blocking acquire always ends holding the lock"))
 }
 
 /// The lock named `name` on `folder` if nobody holds it, `None` if someone
 /// does. Never waits.
 pub fn try_acquire_named(folder: &Path, name: &str) -> Result<Option<Held>, String> {
-    let path = lock_path_named(folder, name)?;
-    for _ in 0..REOPENS {
-        let file = open_lock_file(&path)?;
-        match file.try_lock() {
-            Ok(()) => {}
-            Err(std::fs::TryLockError::WouldBlock) => return Ok(None),
-            Err(e) => return Err(format!("lock {}: {e}", path.display())),
-        }
-        if still_named(&file, &path) {
-            return Ok(Some(Held { file, path }));
-        }
-    }
-    Err(unstable(&path))
+    hold(&lock_path_named(folder, name)?, |_| Ok(false))
 }
 
-/// How many times an acquire reopens a lock file that moved under it. Each
-/// reopen means another holder released in between; a file system whose
-/// inode numbers are not stable would otherwise never stop.
-const REOPENS: usize = 16;
+/// Opens and locks `path` until the file it locked is still the one at
+/// `path`. When another holder has the lock, `contended` either waits for it
+/// (`true`) or gives up (`false`, so `None`).
+///
+/// There is no cap on reopening: a lock file stops being named only when
+/// its holder released it, so every reopen follows someone else's progress.
+/// A run of reopens without end can only mean a file system whose file
+/// identity is unstable: after a thousand it is logged once, and each further
+/// reopen waits 10 ms so it costs no CPU, rather than failing the lock.
+fn hold(path: &Path, mut contended: impl FnMut(&std::fs::File) -> Result<bool, String>) -> Result<Option<Held>, String> {
+    let mut reopens = 0u32;
+    loop {
+        let file = open_lock_file(path)?;
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => {
+                if !contended(&file)? {
+                    return Ok(None);
+                }
+            }
+            Err(e) => return Err(format!("lock {}: {e}", path.display())),
+        }
+        if still_named(&file, path) {
+            return Ok(Some(Held { file, path: path.to_path_buf() }));
+        }
+        reopens = reopens.saturating_add(1);
+        if reopens == 1000 {
+            log::warn!("lock {}: reopened {reopens} times, still not the file at that path", path.display());
+        }
+        if reopens >= 1000 {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+}
 
-fn unstable(path: &Path) -> String {
-    format!("lock {}: the file kept changing under the lock, so it cannot be held", path.display())
+/// Remove, on a background thread, every file in `<moss_home>/locks` that no
+/// process holds. Since a released lock unlinks itself, an unheld file there
+/// is one a moss that predates that left behind, or an old `.epoch` record:
+/// litter, however many there are. A held lock fails the `flock` and stays.
+/// The directory is its own progress record, so a sweep cut off by the
+/// process exiting resumes on the next one; once the litter is gone a sweep
+/// costs one short directory read. One sweep at a time per process.
+pub fn spawn_litter_sweep() {
+    static SWEEPING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let Ok(dir) = crate::infra::home::moss_home().map(|home| home.join("locks")) else { return };
+    if SWEEPING.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        return;
+    }
+    let spawned = std::thread::Builder::new().name("moss-lock-sweep".into()).spawn(move || {
+        #[cfg(target_os = "macos")]
+        crate::infra::qos::set_background(true);
+        let removed = sweep_litter(&dir, SWEEP_BATCH, SWEEP_PAUSE);
+        if removed > 0 {
+            log::info!("removed {removed} stale lock files from {}", dir.display());
+        }
+        SWEEPING.store(false, std::sync::atomic::Ordering::Release);
+    });
+    if spawned.is_err() {
+        SWEEPING.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// Files unlinked between pauses. Each unlink is an event the file-system
+/// indexers (`fseventsd`, Spotlight) process, and a pile of a million removed
+/// in one go keeps them busy for minutes.
+const SWEEP_BATCH: usize = 256;
+const SWEEP_PAUSE: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// [`spawn_litter_sweep`]'s pass over `dir`, returning how many files it
+/// removed. Streams the directory: it never lists every name at once.
+#[cfg(unix)]
+fn sweep_litter(dir: &Path, batch: usize, pause: std::time::Duration) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|t| t.is_file()) {
+            continue;
+        }
+        let path = entry.path();
+        // allow:raw_write opens an existing lock file under ~/.moss/locks to lock it, never creates one
+        let Ok(file) = std::fs::OpenOptions::new().read(true).write(true).open(&path) else { continue };
+        if file.try_lock().is_err() || !still_named(&file, &path) {
+            continue;
+        }
+        // The release path: unlinked while held, so an acquirer that opened
+        // it meanwhile finds it gone and opens a new one.
+        drop(Held { file, path });
+        removed += 1;
+        if removed % batch == 0 {
+            std::thread::sleep(pause);
+        }
+    }
+    removed
+}
+
+/// A file stays open while it is locked on Windows, so a lock file there is
+/// never removed and there is nothing to sweep.
+#[cfg(not(unix))]
+fn sweep_litter(_dir: &Path, _batch: usize, _pause: std::time::Duration) -> usize {
+    0
 }
 
 fn open_lock_file(path: &Path) -> Result<std::fs::File, String> {

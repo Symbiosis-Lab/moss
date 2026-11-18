@@ -51,6 +51,7 @@ GATES_BUILD=(
   no-important-cascade
   dark-layer-order
   heading-weight
+  hosted-bold
   reading-scale-order
   pre-paint-dark
   ui-accent-seam

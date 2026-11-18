@@ -817,6 +817,39 @@ describe('file-tree context menu — N-aware', () => {
     document.querySelector('input[type="url"]')?.closest('div')?.remove();
   });
 
+  // One signal per failure: the progress row speaks for what the import's task
+  // reported, so the tree toasts only a refusal that came before any task.
+  test.each([
+    { reported: false, toasts: ['This address came from a link. Type it to import it.'] },
+    { reported: true, toasts: [] },
+  ])('"Import from URL" toasts a failure only when no task reported it (reported: $reported)', async ({ reported, toasts }) => {
+    const message = 'This address came from a link. Type it to import it.';
+    mockImportSite.mockClear();
+    mockImportSite.mockResolvedValue({ status: 'error', error: { message, reported } });
+    const shelf = document.body.appendChild(document.createElement('div'));
+    shelf.id = 'moss-toast-container';
+
+    await fileTree.mount(container, PROJECT_ROOT, false);
+    fileTree.highlight(`${PROJECT_ROOT}/index.md`);
+    enterDirMode(fileTree);
+    const postsSeg = Array.from(container.querySelectorAll<HTMLElement>('.seg:not(.leaf):not(.bc)'))
+      .find(el => el.dataset.path === 'posts');
+    postsSeg!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 100, clientY: 200 }));
+    findMenuItem('Import from URL')!.click();
+    const urlInput = document.querySelector('input[type="url"]') as HTMLInputElement;
+    urlInput.value = 'https://example.com/post';
+    urlInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+
+    await vi.waitFor(() => expect(mockImportSite).toHaveBeenCalledTimes(1));
+    await vi.advanceTimersByTimeAsync(30);
+    const shown = Array.from(shelf.querySelectorAll('.moss-toast'))
+      .map(el => el.textContent?.trim() ?? '');
+    expect(shown.filter(text => text.includes(message)).length).toBe(toasts.length);
+    shelf.remove();
+    document.querySelector('.ctx-menu')?.remove();
+    document.querySelector('input[type="url"]')?.closest('div')?.remove();
+  });
+
   test('unmount() mid-overlay removes the URL overlay AND its document listeners', async () => {
     await fileTree.mount(container, PROJECT_ROOT, false);
     fileTree.highlight(`${PROJECT_ROOT}/index.md`);

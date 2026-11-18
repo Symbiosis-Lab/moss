@@ -53,20 +53,66 @@ pub(crate) fn cards_container(
     lead: bool,
     is_embed: bool,
     placement: &moss_core::media::Placement,
+    axis: moss_core::sort::SortAxis,
+    holds: ListHolds,
     inner: &str,
 ) -> String {
     let place = moss_core::render::placement::placement_attrs(placement);
     let align = place.align_suffix();
     format!(
-        "<div class=\"moss-cards-container{}\"{}{}{}><div class=\"moss-cards\" data-layout=\"{}\"{}>{}</div></div>",
+        "<div class=\"moss-cards-container{}\"{}{}{}><div class=\"moss-cards\" data-layout=\"{}\"{}{}>{}</div></div>",
         align,
         place.data_width_attr,
         place.size_style_attr,
         if is_embed { " data-embed" } else { "" },
         layout,
         if lead { " data-lead" } else { "" },
+        list_attrs(axis, holds),
         inner,
     )
+}
+
+/// What a listing's cards stand for: pages, collections (a folder or a
+/// term, drawn with a count of what it holds), or both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ListHolds {
+    Entries,
+    Collections,
+    Mixed,
+}
+
+impl ListHolds {
+    /// From each card in turn: whether it stands for a collection.
+    pub(crate) fn of(collections: impl IntoIterator<Item = bool>) -> Self {
+        let (mut any_collection, mut any_entry) = (false, false);
+        for is_collection in collections {
+            if is_collection { any_collection = true } else { any_entry = true }
+        }
+        match (any_collection, any_entry) {
+            (true, true) => ListHolds::Mixed,
+            (true, false) => ListHolds::Collections,
+            (false, _) => ListHolds::Entries,
+        }
+    }
+}
+
+/// The attributes every listing wrapper carries, so a theme can tell its
+/// listings apart by fact: the order (`data-list-axis`) and what the cards
+/// stand for (`data-list-holds`).
+pub(crate) fn list_attrs(axis: moss_core::sort::SortAxis, holds: ListHolds) -> String {
+    use moss_core::sort::SortAxis;
+    let axis = match axis {
+        // DateAsc presents as Date: only the comparator's direction differs.
+        SortAxis::Date | SortAxis::DateAsc => "date",
+        SortAxis::Weight => "weight",
+        SortAxis::Title => "title",
+    };
+    let holds = match holds {
+        ListHolds::Entries => "entries",
+        ListHolds::Collections => "collections",
+        ListHolds::Mixed => "mixed",
+    };
+    format!(r#" data-list-axis="{axis}" data-list-holds="{holds}""#)
 }
 
 // Re-export commonly used items

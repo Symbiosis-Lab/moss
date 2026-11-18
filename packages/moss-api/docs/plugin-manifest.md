@@ -51,12 +51,12 @@ your first publish costs a version bump.
 
 ## What the plugin does
 
-`capabilities` lists what your plugin does. Three of the four map to an exported function of the same name; `login` does not, which is easy to get wrong.
+`capabilities` lists what your plugin does. `deploy` and `process` map to an exported function of the same name; `syndicate` and `login` do not, which is easy to get wrong.
 
 | Capability | Hook | What the user sees |
 |---|---|---|
 | `deploy` | `deploy(ctx)` | a row in the deploy-target dropdown |
-| `syndicate` | `syndicate(ctx)` | a channel that publishes after a deploy |
+| `syndicate` | `publish_copy(job)`, `update_copy(job)`, `find_copy(job)` | a channel that posts copies of pages |
 | `process` | `process(ctx)` | nothing directly — runs at scan time |
 | `login` | none | a connection row in the plugin's settings. moss calls your `login` export out of band via `connect_account`, not as a build hook |
 

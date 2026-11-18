@@ -94,6 +94,10 @@ impl RebuildRequest {
         }
     }
 
+    pub fn images_settled() -> Self {
+        RebuildRequest { trigger: BuildTrigger::ImagesSettled, ..Self::full() }
+    }
+
     /// Run the deferred content-hash gate: `false` means every producing path
     /// is byte-identical to what the last build recorded, so this request may
     /// be dropped. `true` for a request that never deferred (`gate_paths:
@@ -231,6 +235,9 @@ pub struct WorkerHandle {
     /// (milliseconds), leaving the floor to do all the pacing. Observability
     /// only, like `building` — never a coordination mechanism.
     last_completed: Mutex<Option<(std::time::Instant, Duration)>>,
+    /// The attempt in flight stopped on a file still in the cloud. Cleared
+    /// before each attempt, so it only ever describes the current one.
+    cloud_wait: std::sync::atomic::AtomicBool,
 }
 
 impl WorkerHandle {
@@ -244,6 +251,7 @@ impl WorkerHandle {
             shutdown: std::sync::atomic::AtomicBool::new(false),
             watchers: std::sync::atomic::AtomicUsize::new(0),
             last_completed: Mutex::new(None),
+            cloud_wait: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -422,7 +430,8 @@ pub enum AttemptOutcome {
     LockBusy,
     /// The build ran and failed. Retry after [`backoff_delay`], or earlier
     /// when a new change event lands in the slot (its enqueue pokes) — a
-    /// failing site must not spin, a fixed site must rebuild promptly.
+    /// failing site must not spin, a fixed site must rebuild promptly. A build
+    /// that stopped on a file still in the cloud waits for that enqueue only.
     Failed,
 }
 
@@ -453,7 +462,7 @@ impl LockWait {
 ///
 /// `attempt` receives a dequeued request and reports an [`AttemptOutcome`];
 /// the loop owns the retry policy: park on `Parked`, timer-retry on
-/// `LockBusy`, exponential backoff on `Failed` (one counter, reset on the
+/// `LockBusy`, exponential backoff on `Failed` unless it waits on the cloud (one counter, reset on the
 /// next `Completed` — design doc, Piece 2, "Failed-build backoff"). Every
 /// wait also completes on a poke, so no deferral outlives a new trigger.
 pub async fn run_worker_loop<Fut>(
@@ -484,6 +493,7 @@ pub async fn run_worker_loop<Fut>(
                 // (a double-restore, if the attempt restored before
                 // panicking, merges harmlessly), and let backoff absorb it.
                 let backup = req.clone();
+                handle.cloud_wait.store(false, Ordering::SeqCst);
                 let started = std::time::Instant::now();
                 let outcome = match std::panic::AssertUnwindSafe(attempt(req))
                     .catch_unwind()
@@ -512,6 +522,11 @@ pub async fn run_worker_loop<Fut>(
                     AttemptOutcome::LockBusy => {
                         wait_for_wake_or(&handle, LOCK_RETRY_TICK, seq_at_dequeue).await
                     }
+                    // A provider still sending files is not a failing build: the
+                    // arrival the sweep sees enqueues the retry.
+                    AttemptOutcome::Failed if handle.cloud_wait.load(Ordering::SeqCst) => {
+                        wait_for_wake(&handle, seq_at_dequeue).await
+                    }
                     AttemptOutcome::Failed => {
                         consecutive_failures = consecutive_failures.saturating_add(1);
                         let delay = backoff_delay(consecutive_failures);
@@ -526,6 +541,13 @@ pub async fn run_worker_loop<Fut>(
                 }
             }
         }
+    }
+}
+
+/// Wait for a FRESH producer wake, as [`wait_for_wake_or`] does, with no timer.
+async fn wait_for_wake(handle: &WorkerHandle, seq_at_dequeue: u64) {
+    while handle.wake_seq() == seq_at_dequeue && !handle.shutdown_requested() {
+        handle.work.notified().await;
     }
 }
 
@@ -703,6 +725,14 @@ pub fn attach(folder: &str) -> Option<WatcherSlot> {
     let handle = map.get(folder)?.clone();
     handle.watchers.fetch_add(1, Ordering::SeqCst);
     Some(WatcherSlot { folder: folder.to_string(), handle })
+}
+
+/// Tell `folder`'s worker that the build it is running stopped on a file still
+/// in the cloud, so the failure it reports is retried without backing off.
+pub(crate) fn note_cloud_wait(folder: &str) {
+    if let Some(handle) = get(folder) {
+        handle.cloud_wait.store(true, Ordering::SeqCst);
+    }
 }
 
 /// The slot for `folder`, if a watcher (and thus a worker) is running for it.

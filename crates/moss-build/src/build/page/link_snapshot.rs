@@ -63,6 +63,11 @@ fn entry_path(moss_dir: &Path, kind: Kind, url: &str) -> PathBuf {
     dir(moss_dir, kind).join(format!("{}.json", url_key(url)))
 }
 
+/// Where a link's card lives.
+pub(crate) fn card_path(moss_dir: &Path, url: &str) -> PathBuf {
+    entry_path(moss_dir, Kind::Links, url)
+}
+
 /// Where a `cover` name's bytes live.
 pub(crate) fn cover_path(moss_dir: &Path, cover: &str) -> PathBuf {
     links_dir(moss_dir).join("covers").join(cover)

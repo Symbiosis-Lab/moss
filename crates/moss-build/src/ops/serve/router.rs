@@ -65,14 +65,6 @@ fn dress(r: crate::editor::source_asset::SourceAssetResponse) -> Response {
     response.body(Body::from(r.body)).expect("status and headers come from the core and are valid")
 }
 
-fn plain_404() -> Response {
-    Response::builder()
-        .status(404)
-        .header("Content-Type", "text/plain; charset=utf-8")
-        .body(Body::from("Not Found"))
-        .expect("static 404 response is always valid")
-}
-
 /// A page for a request `ServeDir` could not answer because the file's bytes
 /// are still in the cloud. `None` for every other failure — the caller then
 /// passes `ServeDir`'s own response through unchanged.
@@ -466,10 +458,10 @@ pub async fn start_server(
                     let normalized = urlencoding::decode(encoded)
                         .map(|s| s.into_owned())
                         .unwrap_or_else(|_| encoded.to_string());
-                    // A withheld rebuild can replace the process registry
-                    // while `current` still serves an older page. Resolve a
-                    // missing image from that selected generation before
-                    // considering the new attempt's Failed/Pending state.
+                    // While `current` serves an older page, a missing image is
+                    // answered from that generation first. What it cannot
+                    // answer falls through to the registry: the page on screen
+                    // may come from a newer render whose pictures it never held.
                     let valid_image = is_image_variant_url(&normalized)
                         .then(|| crate::build::served_path::ServedPath::from_source(&normalized).ok())
                         .flatten().filter(|served| served.as_str() == normalized);
@@ -491,11 +483,9 @@ pub async fn start_server(
                             return image_original::serve_original(output, request, is_evicted)
                                 .await.unwrap_or_else(pending_image_response);
                         }
-                        return plain_404();
                     }
 
-                    // Only the selected staging render can use this build's
-                    // registry. It serves original images while they arrive
+                    // The registry serves original images while they arrive
                     // and keeps video placeholders during processing.
                     if let Some(ref reg) = registry {
                         // SOURCE PASSTHROUGH (instant sharp preview).

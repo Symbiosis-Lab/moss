@@ -2624,6 +2624,22 @@ fn grid_cells_carry_their_range_and_inner_lines() {
     assert!(html.contains(r#"<div class="moss-grid-card" data-source-range="8-8"><p data-source-line="8">right"#), "{html}");
 }
 
+fn gallery_line_offsets(md: &str) -> Vec<usize> {
+    parse(md).blocks.iter().flat_map(|block| match block {
+        Block::Shortcode(crate::ast::shortcode::Shortcode::Gallery(g)) => g.items.iter().map(|i| i.line_offset).collect(),
+        _ => Vec::new(),
+    }).collect()
+}
+
+#[test]
+fn gallery_items_record_the_line_of_their_picture() {
+    // Counted from the fence; a caption line and a blank line still count.
+    assert_eq!(gallery_line_offsets(":::gallery 2\n![One](a.png)\n*Under one*\n\n![Two](b.png)\n:::\n"), vec![1, 4]);
+    // Counted from the row's first line; two pictures on one line share it.
+    assert_eq!(gallery_line_offsets("![One](a.png) ![Two](b.png)\n![Three](c.png)\n"), vec![0, 0, 1]);
+    assert_eq!(gallery_line_offsets("![[a.png]]\n![[b.png]]\n"), vec![0, 1]);
+}
+
 #[test]
 fn fragments_are_unannotated_when_tracking_is_off() {
     let html = crate::ast::render::render_document(

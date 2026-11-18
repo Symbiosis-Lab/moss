@@ -367,10 +367,14 @@ fn deployed_scaled_dim(dim: u32, bound: u32, long_edge: u32) -> u32 {
     ((u64::from(dim) * u64::from(bound) / u64::from(long_edge)) as u32).max(1)
 }
 
-/// Which ladder rungs exist for a source of `natural_w`×`natural_h` px.
+/// Which ladder rungs the shape of a source of `natural_w`×`natural_h` px allows.
+///
+/// Every rung SET is decided by [`offered_rungs`], which narrows this to the
+/// widths a published picture already serves. The five sites below call that;
+/// the one shape-only caller of this function is named after them.
 ///
 /// DETERMINISTIC-AGREEMENT CONTRACT — the ladder-DERIVATION census: the
-/// `ladder_rungs(` production callers. Keep this
+/// [`offered_rungs`] production callers. Keep this
 /// list current; every set-agreement site derives ladder membership from the
 /// same scan-derived inputs. These answer "which rung WIDTHS exist?"; the
 /// separate participation GATE ("does this extension take part at all?") is the
@@ -394,15 +398,16 @@ fn deployed_scaled_dim(dim: u32, bound: u32, long_edge: u32) -> u32 {
 ///    (`dispatch_image_conversions`, build/media/image.rs) rematerializes each
 ///    rung it recomputes here.
 ///
-/// One further `ladder_rungs(` caller is NOT a set-agreement member:
+/// The one direct `ladder_rungs(` caller, the shape-only predicate, is NOT a set-agreement member:
 /// `should_skip`'s AlreadySmall carve-out (build/media/image.rs) consults only
 /// `ladder_rungs(..).is_empty()` — a "carries any rung?" boolean that keeps a
 /// small rung-bearing webp from skipping re-encode — so it never emits,
 /// registers, encodes, or sweeps a rung SET and cannot disagree on membership.
 ///
-/// A rung is emitted in HTML iff it is registered iff it is encoded. Never
-/// add an input here that one of these sites cannot supply (e.g. encode
-/// outcomes, cache state) — that is the parallel-oracle bug class.
+/// A rung is emitted in HTML iff it is registered iff it is encoded. The set is
+/// decided once from the shape and the live deploy record; no build-cache
+/// input. Never add an input that one of these sites cannot supply (e.g.
+/// encode outcomes, cache state) — that is the parallel-oracle bug class.
 ///
 /// EXIF-ORIENTATION AGREEMENT (canonical; the pipeline sites back-reference
 /// here). The "same scan-derived dims on every site" premise holds
@@ -500,6 +505,20 @@ pub fn ladder_rungs(natural_w: u32, natural_h: u32, is_animated: bool) -> &'stat
     let base = deployed_width(natural_w, natural_h);
     let n = LADDER.iter().take_while(|&&w| w < base).count();
     &LADDER[..n]
+}
+
+/// The rung widths a picture offers: the [`ladder_rungs`] its shape allows,
+/// narrowed to `kept` when the live deploy record lists the picture. A
+/// published picture keeps the widths it was published with, so a step added to
+/// [`LADDER`] later never re-encodes and re-uploads it; `kept` of `None` (never
+/// published, or no record) is today's ladder. The one rung-set decision: see
+/// the census on [`ladder_rungs`].
+pub fn offered_rungs(natural_w: u32, natural_h: u32, is_animated: bool, kept: Option<&[u32]>) -> Vec<u32> {
+    let shape = ladder_rungs(natural_w, natural_h, is_animated);
+    match kept {
+        None => shape.to_vec(),
+        Some(kept) => shape.iter().copied().filter(|w| kept.contains(w)).collect(),
+    }
 }
 
 /// Whether the ladder stops short of a source `width` wide: its widest step
@@ -1720,6 +1739,15 @@ mod tests {
         assert_eq!(ladder_rungs(801, 600, false), &[800][..]);
         assert_eq!(ladder_rungs(800, 600, false), &[] as &[u32]);
         assert_eq!(ladder_rungs(0, 0, false), &[] as &[u32]);
+    }
+
+    #[test]
+    fn offered_rungs_keep_a_published_pictures_widths() {
+        assert_eq!(offered_rungs(2000, 1200, false, None), vec![800, 1200, 1600]);
+        assert_eq!(offered_rungs(2000, 1200, false, Some(&[800, 1600])), vec![800, 1600]);
+        assert_eq!(offered_rungs(2000, 1200, false, Some(&[])), Vec::<u32>::new());
+        // A width the shape no longer allows is not offered: never a rung as wide as the base.
+        assert_eq!(offered_rungs(1300, 900, false, Some(&[800, 1600])), vec![800]);
     }
 
     #[test]

@@ -462,6 +462,12 @@ impl ServedPath {
         Ok(ServedPath(format!(".moss-email/welcome.{edition}.json")))
     }
 
+    /// The site's own sender settings (its Reply-to), read by the hosting
+    /// server for every mail to the site's readers.
+    pub fn for_email_sender() -> Self {
+        ServedPath(".moss-email/sender.json".to_string())
+    }
+
     /// One file of the published source copy, `_moss/source/<rel>`, at the
     /// author's own relative path: not slugged, because the copy is read by
     /// path and its README names files as the author wrote them.

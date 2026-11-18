@@ -8,7 +8,9 @@
 //! This rewrites each `url()` in `.moss/theme/style.css` that names a file
 //! inside the theme folder to `name.<hash>.ext` (the author's relative path
 //! and quoting are kept), and hands back the bytes to publish at
-//! `/_moss/theme/<folders>/<stem>.<16 hex>.<ext>`. The plain copies under
+//! `/_moss/theme/<folders>/<stem>.<16 hex>.<ext>`. A stylesheet brought in by
+//! `@import` is rewritten the same way and hashed afterwards, so a font
+//! changed behind an import renames every sheet on the way to it. The plain copies under
 //! `/_moss/theme/…` are still written by the asset mirror: pages and authored
 //! HTML may point at them. The hash is the same xxh3 the stylesheet's own name
 //! uses (`compute_binary_hash`), and the stylesheet is hashed AFTER this
@@ -33,6 +35,8 @@ const MAX_HASHED_FILE_BYTES: u64 = 5 * 1024 * 1024;
 pub struct ThemeCss {
     pub css: String,
     pub files: Vec<(ServedPath, Vec<u8>)>,
+    /// The stylesheets `css` imports from the theme folder, as written.
+    pub imported: Vec<String>,
 }
 
 impl ThemeCss {
@@ -62,7 +66,7 @@ pub fn for_site(css: &str, source_root: &Path, evidence: &crate::build::cloud_le
     use crate::build::cloud_readiness::{probe_input, Found};
     let theme_dir = crate::moss_paths::MossPaths::new(source_root).theme_dir();
     let real_theme = theme_dir.canonicalize().ok();
-    let themed = rewrite(css, |rel| {
+    let mut themed = rewrite(css, |rel| {
         let path = theme_dir.join(rel);
         // The plain copy step does not follow symlinks; neither does this, or
         // a link pointing outside the folder would publish its target.
@@ -83,6 +87,8 @@ pub fn for_site(css: &str, source_root: &Path, evidence: &crate::build::cloud_le
             Err(_) => None,
         }
     });
+    let derived = super::theme_font_weights::rules(css, &themed.imported);
+    themed.css.push_str(&derived);
     // The stylesheet's recorded source hash is the rewritten sheet's (see the
     // render pass), so the ledger's read of the file advances with it.
     if themed.css != css {
@@ -93,109 +99,148 @@ pub fn for_site(css: &str, source_root: &Path, evidence: &crate::build::cloud_le
 
 /// Rewrite every in-scope reference in `css`. `read` returns the bytes of a
 /// theme-relative file (`fonts/a.woff2`), or `None` to leave the reference as
-/// written.
-pub fn rewrite(css: &str, mut read: impl FnMut(&str) -> Option<Vec<u8>>) -> ThemeCss {
-    let b = css.as_bytes();
-    let mut out = String::with_capacity(css.len());
-    let mut copied = 0;
-    let mut i = 0;
-    let mut image_set_end = 0;
-    let mut by_rel: BTreeMap<String, Option<String>> = BTreeMap::new();
-    let mut files: Vec<(ServedPath, Vec<u8>)> = Vec::new();
-    let mut reference = |raw: &str| -> Option<String> {
-        rewrite_reference(raw, &mut read, &mut by_rel, &mut files)
-    };
-
-    while i < b.len() {
-        match b[i] {
-            b'/' if b.get(i + 1) == Some(&b'*') => i = comment_end(b, i),
-            q @ (b'"' | b'\'') => {
-                let end = string_end(b, i, q);
-                if i < image_set_end && end < b.len() {
-                    if let Some(new) = reference(&css[i + 1..end]) {
-                        out.push_str(&css[copied..i + 1]);
-                        out.push_str(&new);
-                        copied = end;
-                    }
-                }
-                i = (end + 1).min(b.len());
-            }
-            _ if starts_with_ci(b, i, b"url(") && !ident_before(b, i, true) => {
-                let mut j = i + 4;
-                while j < b.len() && b[j].is_ascii_whitespace() {
-                    j += 1;
-                }
-                let (start, end) = match b.get(j) {
-                    Some(&q @ (b'"' | b'\'')) => (j + 1, string_end(b, j, q)),
-                    _ => (j, css[j..].find(')').map_or(b.len(), |p| j + p)),
-                };
-                if end >= b.len() {
-                    break;
-                }
-                // Unquoted: trailing space before `)` is not part of the name.
-                let inner = if matches!(b[j], b'"' | b'\'') { &css[start..end] } else { css[start..end].trim_end() };
-                if let Some(new) = reference(inner) {
-                    out.push_str(&css[copied..start]);
-                    out.push_str(&new);
-                    copied = start + inner.len();
-                }
-                i = (end + 1).min(b.len());
-            }
-            _ if starts_with_ci(b, i, b"image-set(") && !ident_before(b, i, false) => {
-                image_set_end = paren_end(b, i + 9);
-                i += 10;
-            }
-            _ => i += 1,
-        }
-    }
-    out.push_str(&css[copied..]);
-    ThemeCss { css: out, files }
+/// written. A stylesheet it points at (`@import`) is rewritten the same way
+/// before it is hashed, its own references read from its own folder.
+pub fn rewrite(css: &str, read: impl FnMut(&str) -> Option<Vec<u8>>) -> ThemeCss {
+    let mut rewriter = Rewriter { read, by_rel: BTreeMap::new(), files: Vec::new(), open: Vec::new(), imported: Vec::new() };
+    let css = rewriter.sheet(css, "");
+    ThemeCss { css, files: rewriter.files, imported: rewriter.imported }
 }
 
-fn rewrite_reference(
-    raw: &str,
-    read: &mut impl FnMut(&str) -> Option<Vec<u8>>,
-    by_rel: &mut BTreeMap<String, Option<String>>,
-    files: &mut Vec<(ServedPath, Vec<u8>)>,
-) -> Option<String> {
-    let raw = raw.trim();
-    if raw.is_empty() || raw.starts_with(['/', '#']) || raw.contains(['\\', '(', ')']) || has_scheme(raw) {
-        return None;
-    }
-    let cut = raw.find(['?', '#']).unwrap_or(raw.len());
-    let (written, suffix) = raw.split_at(cut);
-    // An encoded separator would be carried into the new name as a path.
-    let lower = written.to_ascii_lowercase();
-    if lower.contains("%2f") || lower.contains("%5c") {
-        return None;
-    }
-    let decoded = percent_encoding::percent_decode_str(written).decode_utf8().ok()?;
-    let rel = normalize(&decoded)?;
-    // The entry stylesheet and script are emitted by the render pass under
-    // their own hashed names.
-    if rel == "style.css" || rel == "script.js" {
-        return None;
-    }
-    let written_base = written.rsplit('/').next()?;
-    let (dir, name) = rel.rsplit_once('/').unwrap_or(("", &rel));
-    // Both spellings need an extension to put the hash before.
-    let (written_stem, written_ext) = split_ext(written_base)?;
-    let (stem, ext) = split_ext(name)?;
-    let hash = match by_rel.get(&rel) {
-        Some(known) => known.clone()?,
-        None => {
-            let resolved = read(&rel).and_then(|bytes| {
-                let hash = compute_binary_hash(&bytes);
-                let hashed = format!("{stem}.{hash}{ext}");
-                let hashed_rel = if dir.is_empty() { hashed } else { format!("{dir}/{hashed}") };
-                files.push((ServedPath::for_theme_asset(&hashed_rel).ok()?, bytes));
-                Some(hash)
-            });
-            by_rel.insert(rel.clone(), resolved.clone());
-            resolved?
+struct Rewriter<R> {
+    read: R,
+    /// Theme-relative path to its hash, or `None` for one left as written.
+    by_rel: BTreeMap<String, Option<String>>,
+    files: Vec<(ServedPath, Vec<u8>)>,
+    /// The imported stylesheets being rewritten, outermost first.
+    open: Vec<String>,
+    imported: Vec<String>,
+}
+
+impl<R: FnMut(&str) -> Option<Vec<u8>>> Rewriter<R> {
+    /// `css` with its references rewritten; `dir` is the theme-relative folder
+    /// the sheet sits in, which its relative references start from.
+    fn sheet(&mut self, css: &str, dir: &str) -> String {
+        let b = css.as_bytes();
+        let mut out = String::with_capacity(css.len());
+        let mut copied = 0;
+        let mut i = 0;
+        // A bare string before this index names a file: inside `image-set()`,
+        // or straight after `@import`.
+        let mut strings_name_files_until = 0;
+
+        while i < b.len() {
+            match b[i] {
+                b'/' if b.get(i + 1) == Some(&b'*') => i = comment_end(b, i),
+                q @ (b'"' | b'\'') => {
+                    let end = string_end(b, i, q);
+                    if i < strings_name_files_until && end < b.len() {
+                        if let Some(new) = self.reference(&css[i + 1..end], dir) {
+                            out.push_str(&css[copied..i + 1]);
+                            out.push_str(&new);
+                            copied = end;
+                        }
+                    }
+                    i = (end + 1).min(b.len());
+                }
+                _ if starts_with_ci(b, i, b"url(") && !ident_before(b, i, true) => {
+                    let mut j = i + 4;
+                    while j < b.len() && b[j].is_ascii_whitespace() {
+                        j += 1;
+                    }
+                    let (start, end) = match b.get(j) {
+                        Some(&q @ (b'"' | b'\'')) => (j + 1, string_end(b, j, q)),
+                        _ => (j, css[j..].find(')').map_or(b.len(), |p| j + p)),
+                    };
+                    if end >= b.len() {
+                        break;
+                    }
+                    // Unquoted: trailing space before `)` is not part of the name.
+                    let inner = if matches!(b[j], b'"' | b'\'') { &css[start..end] } else { css[start..end].trim_end() };
+                    if let Some(new) = self.reference(inner, dir) {
+                        out.push_str(&css[copied..start]);
+                        out.push_str(&new);
+                        copied = start + inner.len();
+                    }
+                    i = (end + 1).min(b.len());
+                }
+                _ if starts_with_ci(b, i, b"image-set(") && !ident_before(b, i, false) => {
+                    strings_name_files_until = paren_end(b, i + 9);
+                    i += 10;
+                }
+                _ if starts_with_ci(b, i, b"@import") => {
+                    i += 7;
+                    while i < b.len() && b[i].is_ascii_whitespace() {
+                        i += 1;
+                    }
+                    strings_name_files_until = strings_name_files_until.max(i + 1);
+                }
+                _ => i += 1,
+            }
         }
-    };
-    Some(format!("{}{written_stem}.{hash}{written_ext}{suffix}", &written[..written.len() - written_base.len()]))
+        out.push_str(&css[copied..]);
+        out
+    }
+
+    /// The bytes to publish for the theme file `rel`: a stylesheet's are its
+    /// rewritten text, anything else's are the file's own. `None` leaves the
+    /// reference as written, as does a stylesheet that imports itself.
+    fn published_bytes(&mut self, rel: &str, dir: &str, ext: &str) -> Option<Vec<u8>> {
+        let bytes = (self.read)(rel)?;
+        if !ext.eq_ignore_ascii_case(".css") {
+            return Some(bytes);
+        }
+        if self.open.iter().any(|o| o == rel) {
+            return None;
+        }
+        let Ok(css) = String::from_utf8(bytes) else { return None };
+        self.open.push(rel.to_string());
+        let rewritten = self.sheet(&css, dir);
+        self.open.pop();
+        self.imported.push(css);
+        Some(rewritten.into_bytes())
+    }
+
+    fn reference(&mut self, raw: &str, sheet_dir: &str) -> Option<String> {
+        let raw = raw.trim();
+        if raw.is_empty() || raw.starts_with(['/', '#']) || raw.contains(['\\', '(', ')']) || has_scheme(raw) {
+            return None;
+        }
+        let cut = raw.find(['?', '#']).unwrap_or(raw.len());
+        let (written, suffix) = raw.split_at(cut);
+        // An encoded separator would be carried into the new name as a path.
+        let lower = written.to_ascii_lowercase();
+        if lower.contains("%2f") || lower.contains("%5c") {
+            return None;
+        }
+        let decoded = percent_encoding::percent_decode_str(written).decode_utf8().ok()?;
+        let rel = normalize(&format!("{sheet_dir}/{decoded}"))?;
+        // The entry stylesheet and script are emitted by the render pass under
+        // their own hashed names.
+        if rel == "style.css" || rel == "script.js" {
+            return None;
+        }
+        let written_base = written.rsplit('/').next()?;
+        let (dir, name) = rel.rsplit_once('/').unwrap_or(("", &rel));
+        // Both spellings need an extension to put the hash before.
+        let (written_stem, written_ext) = split_ext(written_base)?;
+        let (stem, ext) = split_ext(name)?;
+        let hash = match self.by_rel.get(&rel) {
+            Some(known) => known.clone()?,
+            None => {
+                let resolved = self.published_bytes(&rel, dir, ext).and_then(|bytes| {
+                    let hash = compute_binary_hash(&bytes);
+                    let hashed = format!("{stem}.{hash}{ext}");
+                    let hashed_rel = if dir.is_empty() { hashed } else { format!("{dir}/{hashed}") };
+                    self.files.push((ServedPath::for_theme_asset(&hashed_rel).ok()?, bytes));
+                    Some(hash)
+                });
+                self.by_rel.insert(rel.clone(), resolved.clone());
+                resolved?
+            }
+        };
+        Some(format!("{}{written_stem}.{hash}{written_ext}{suffix}", &written[..written.len() - written_base.len()]))
+    }
 }
 
 /// `("a", ".png")` for `a.png`; `None` without an extension or for `.hidden`.
@@ -241,7 +286,6 @@ fn ident_before(b: &[u8], i: usize, dash_counts: bool) -> bool {
     i > 0 && (b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_' || (dash_counts && b[i - 1] == b'-'))
 }
 
-/// Index of the closing quote of the string opened at `start`, or the end.
 /// Index of the `)` matching the `(` at `open`, or the end.
 fn paren_end(b: &[u8], open: usize) -> usize {
     let mut depth = 0;

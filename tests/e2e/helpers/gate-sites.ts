@@ -17,8 +17,11 @@
  * `scripts/render-gates.sh`. The app/editor/preview gates, and a few site
  * gates not yet wired anywhere, stay in the private desktop repo.
  */
+import * as fs from "node:fs";
+import * as path from "node:path";
 import {
   ScratchSiteSpec,
+  WORKTREE,
   findLinkHref,
   requireLinkHref,
   syntheticBusyImage,
@@ -76,6 +79,7 @@ About page.
     ".moss/config.toml": CONFIG_TOML,
     ".moss/theme/style.css": `:root {
   --moss-color-bg: #abcdef;
+  --moss-color-accent: #183058;
 }
 
 .main-nav a {
@@ -188,6 +192,51 @@ Body text beneath the auto-injected article title.
     ".moss/config.toml": CONFIG_TOML,
     ".moss/theme/style.css": `:root {
   --moss-font-heading-weight: 440;
+}
+`,
+  },
+};
+
+// ── Bold in a hosted two-weight family ───────────────────────────────────────
+// The theme hosts a Regular and a Bold for its text and for its titles and sets
+// no weight. The four files are one small font: the gate reads which face each
+// engine loaded, not how it looks. The faces sit in an imported stylesheet,
+// where a theme with many of them keeps them.
+// Served by playwright/hosted-bold.config.ts.
+const HOSTED_FACE = fs.readFileSync(
+  path.join(WORKTREE, "crates/moss-build/src/assets/fonts/LongCang-colophon.woff2"),
+);
+export const HOSTED_BOLD_GATE: ScratchSiteSpec = {
+  name: "hosted-bold-gate",
+  files: {
+    "index.md": `---
+title: Hosted Bold Test
+uid: "hb001a"
+---
+
+Welcome.
+`,
+    "hosted.md": `---
+title: 青苔
+uid: "hb002a"
+---
+
+青苔 and **青苔**.
+`,
+    ".moss/config.toml": CONFIG_TOML,
+    ".moss/theme/text-400.woff2": HOSTED_FACE,
+    ".moss/theme/text-700.woff2": HOSTED_FACE,
+    ".moss/theme/title-400.woff2": HOSTED_FACE,
+    ".moss/theme/title-700.woff2": HOSTED_FACE,
+    ".moss/theme/fonts.css": `@font-face { font-family: "Hosted Text"; font-weight: 400; src: url("text-400.woff2") format("woff2"); }
+@font-face { font-family: "Hosted Text"; font-weight: 700; src: url("text-700.woff2") format("woff2"); }
+@font-face { font-family: "Hosted Title"; font-weight: 400; src: url("title-400.woff2") format("woff2"); }
+@font-face { font-family: "Hosted Title"; font-weight: 700; src: url("title-700.woff2") format("woff2"); }
+`,
+    ".moss/theme/style.css": `@import "fonts.css";
+:root {
+  --moss-font-body: "Hosted Text", sans-serif;
+  --moss-font-heading: "Hosted Title", serif;
 }
 `,
   },
@@ -5073,6 +5122,38 @@ weight: 3
 ---
 
 The third lesson.
+`,
+    "ke/index.md": `---
+title: 野外课
+uid: "srn00106"
+lang: zh-hans
+series: true
+sort: weight
+---
+`,
+    "ke/one.md": `---
+title: 读地形
+uid: "srn00107"
+weight: 1
+---
+
+第一课。
+`,
+    "ke/two.md": `---
+title: 用一根杆子和一段绳子目测坡度
+uid: "srn00108"
+weight: 2
+---
+
+第二课。
+`,
+    "ke/three.md": `---
+title: 测绘
+uid: "srn00109"
+weight: 3
+---
+
+第三课。
 `,
     ".moss/config.toml": `schema_version = 5
 

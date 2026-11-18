@@ -22,7 +22,7 @@
  * ── The build contract ──────────────────────────────────────────────────
  * This grammar must agree with pulldown-cmark, and the agreement that matters
  * most is a NEGATIVE one, asserted on the Rust side in
- * `crates/moss-core/tests/footnotes_and_strikethrough.rs`:
+ * `crates/moss-core/tests/it/footnotes_and_strikethrough.rs`:
  *
  *   - A marker with no matching definition renders LITERALLY. `Use [^0-9] to
  *     strip non-digits.` ships as `[^0-9]`, not as a footnote. So this

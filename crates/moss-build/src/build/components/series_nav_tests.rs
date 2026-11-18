@@ -175,71 +175,30 @@ fn position_uses_chinese_numerals_under_vertical_cjk_typesetting() {
     );
 }
 
-/// Arrows alone do not say which neighbour is which, and a screen reader
-/// reads the title with no direction; each link carries its own visible label.
+/// Arrow and placement show the direction, so the words "Previous" / "Next"
+/// are never painted: each lives only in the link's visually hidden span,
+/// where a screen reader hears it before the title.
 #[test]
-fn direction_labels_are_rendered_in_english() {
-    let html = render(
-        "My Series",
-        "index.html",
-        Some(("Prev Title", "/p/")),
-        Some(("Next Title", "/n/")),
-        None,
-        Language::En,
-        None,
-    );
-    assert!(
-        html.contains(r#"<span class="moss-series-nav-label">Previous</span>"#),
-        "Got: {}",
-        html
-    );
-    assert!(
-        html.contains(r#"<span class="moss-series-nav-label">Next</span>"#),
-        "Got: {}",
-        html
-    );
-}
-
-/// The direction labels use the page's language, not English.
-#[test]
-fn direction_labels_are_localized() {
-    let hans = render(
-        "作品",
-        "index.html",
-        Some(("上篇", "/p/")),
-        Some(("下篇", "/n/")),
-        None,
-        Language::ZhHans,
-        None,
-    );
-    assert!(
-        hans.contains(r#"<span class="moss-series-nav-label">上一个</span>"#),
-        "Got: {}",
-        hans
-    );
-    assert!(
-        hans.contains(r#"<span class="moss-series-nav-label">下一个</span>"#),
-        "Got: {}",
-        hans
-    );
-
-    let hant = render(
-        "作品",
-        "index.html",
-        Some(("上篇", "/p/")),
-        Some(("下篇", "/n/")),
-        None,
-        Language::ZhHant,
-        None,
-    );
-    assert!(
-        hant.contains(r#"<span class="moss-series-nav-label">上一個</span>"#),
-        "Got: {}",
-        hant
-    );
-    assert!(
-        hant.contains(r#"<span class="moss-series-nav-label">下一個</span>"#),
-        "Got: {}",
-        hant
-    );
+fn direction_words_are_hidden_from_sight_but_not_from_screen_readers() {
+    for (lang, prev_word, next_word) in [
+        (Language::En, "Previous", "Next"),
+        (Language::ZhHans, "上一个", "下一个"),
+        (Language::ZhHant, "上一個", "下一個"),
+    ] {
+        let html = render("作品", "index.html", Some(("甲", "/p/")), Some(("乙", "/n/")), None, lang, None);
+        for (rel, word) in [("prev", prev_word), ("next", next_word)] {
+            assert!(html.contains(&format!(r#"rel="{rel}""#)), "{lang:?}: Got: {html}");
+            assert!(
+                html.contains(&format!(r#"<span class="visually-hidden">{word}</span> <span class="moss-series-nav-title">"#)),
+                "{lang:?}: `{word}` should be the hidden word read before the title. Got: {html}"
+            );
+        }
+        let painted = html
+            .replace(&format!(r#"<span class="visually-hidden">{prev_word}</span>"#), "")
+            .replace(&format!(r#"<span class="visually-hidden">{next_word}</span>"#), "");
+        for word in [prev_word, next_word] {
+            assert!(!painted.contains(word), "{lang:?}: `{word}` is painted. Got: {html}");
+        }
+        assert_eq!(html.matches(r#"class="moss-series-nav-arrow" aria-hidden="true""#).count(), 2, "{lang:?}: Got: {html}");
+    }
 }

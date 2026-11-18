@@ -49,3 +49,21 @@ test("user CSS in @layer themes wins, for tokens and for plain selectors", async
     ".main-nav a must take the user's non-token rule over any moss base/layout rule",
   ).toBe(EXPECTED_NAV_COLOR);
 });
+
+// A theme that changes the accent gets its selection tint with it. The probe
+// is painted with the expected mix, so each engine compares its own spelling
+// of the colour.
+test("selected text is tinted with the theme's accent", async ({ page }) => {
+  await page.goto("./", { waitUntil: "domcontentloaded" });
+  const { selection, expected } = await page.evaluate(() => {
+    const probe = document.createElement("i");
+    probe.style.background = "color-mix(in srgb, #183058 15%, transparent)";
+    document.body.append(probe);
+    const paragraph = document.querySelector("article p") ?? document.body;
+    return {
+      selection: getComputedStyle(paragraph, "::selection").backgroundColor,
+      expected: getComputedStyle(probe).backgroundColor,
+    };
+  });
+  expect(selection).toBe(expected);
+});

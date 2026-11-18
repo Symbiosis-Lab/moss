@@ -78,6 +78,8 @@ impl PageChromeContext<'_, '_> {
         let bare = doc.is_some_and(|d| d.bare);
         // The contents lane's list is the island's, which a bare page has not.
         let contents_pictures = !bare && doc.and_then(|d| d.raw_frontmatter.get("contents")).and_then(|v| v.as_str()) == Some("pictures");
+        // Sections too short to navigate: no floating bar (`contents: pictures` asks for one).
+        let contents_list = contents_pictures || doc.is_some_and(|d| d.contents_list);
         let site_title = self.site_title(doc);
         let ui_lang = doc.map(|d| d.lang).unwrap_or(self.site_lang);
         let page_lang_tag = doc.and_then(|d| d.lang_tag.clone())
@@ -119,6 +121,7 @@ impl PageChromeContext<'_, '_> {
                 &page_lang_tag, &d.translations, &roots, multi,
             );
             if contents_pictures { nav = nav.with_island_only(&d.title); }
+            if !contents_list { nav = nav.without_island_sections(); }
             nav = nav.with_translations(ui_lang, &page_lang_tag, links);
         }
         // Gated like the canonical link: a relative hreflang misleads
@@ -184,7 +187,7 @@ impl PageChromeContext<'_, '_> {
             colophon_credit: self.layout.colophon_credit.clone(),
             // A bare page keeps only the controls, loose where a headerless
             // site's island would put them at the top of the page.
-            nav_island: if bare { nav.nav_icons_html() } else if self.layout.floating_nav || contents_pictures || self.layout.header == crate::build::components::nav::HeaderMode::None { nav.generate_nav_island() } else { String::new() },
+            nav_island: if bare { nav.nav_icons_html() } else if (self.layout.floating_nav && contents_list) || contents_pictures || self.layout.header == crate::build::components::nav::HeaderMode::None { nav.generate_nav_island() } else { String::new() },
             footer: (!bare).then(|| nav.generate_footer(self.show_rss_in_footer)),
             favicon: Some(paths.favicon_link()),
             apple_touch_icon: paths.apple_touch_icon_link(),

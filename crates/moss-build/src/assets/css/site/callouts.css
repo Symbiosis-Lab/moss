@@ -59,7 +59,7 @@
    hue and clears WCAG 4.5:1 for every type in both themes — and for a colour a
    theme sets itself, since the text colour flips with the theme. */
 .callout-title {
-  font-weight: 480;
+  font-weight: var(--moss-font-weight-strong);
   color: color-mix(in srgb, var(--callout-color) 45%, var(--moss-color-text));
   margin-bottom: var(--moss-space-xs);
   line-height: 1.4;

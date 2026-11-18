@@ -180,8 +180,10 @@ async fn a_platform_default_icon_writes_no_favicon() {
 
     assert!(tmp.path().join("footer.md").exists(), "the chrome pass ran");
 
+    // A folder with nothing to hold is not made at all.
     let favicons: Vec<_> = std::fs::read_dir(tmp.path().join("assets"))
-        .unwrap()
+        .into_iter()
+        .flatten()
         .flatten()
         .filter(|e| e.file_name().to_string_lossy().starts_with("favicon"))
         .collect();

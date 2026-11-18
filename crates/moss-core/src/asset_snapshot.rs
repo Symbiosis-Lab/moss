@@ -66,6 +66,12 @@ pub struct AssetSnapshot {
     ///
     /// [`is_animated`]: AssetSnapshot::is_animated
     pub animated: HashMap<PathBuf, bool>,
+
+    /// The rung widths the live deploy record lists for a published picture,
+    /// keyed exactly like `dimensions`. A missing key is a picture never
+    /// published: it offers today's whole ladder
+    /// (`asset_paths::offered_rungs`).
+    pub kept_rungs: HashMap<PathBuf, Vec<u32>>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

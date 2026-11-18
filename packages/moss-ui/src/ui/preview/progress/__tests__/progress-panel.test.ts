@@ -1524,6 +1524,21 @@ describe("ProgressPanel", () => {
       expect(panel.isHidden).toBe(false);
     });
 
+    // While the publish bar is engaged a deploy Job has no row, so clearing its
+    // last failure must redraw the panel by itself.
+    it("a retried deploy takes the last deploy's failure notice off the panel", () => {
+      const reasons = () => [...container.querySelectorAll(".moss-notice-reason")].map((n) => n.textContent);
+      const deploy = (id: string, state: any) => panel.handleJobUpdate({
+        id, window_id: "main", scope: "preview", kind: "deploy", tone: "ambient", title: null, fade_after_ms: null,
+        started_at_ms: 0, verb: null, amount: null, elapsed_ms: null, parent: null, state,
+      });
+      listenCallbacks.get("deploy-progress")![0]({ stage: "syncing", current: 0, total: 0, message: "" });
+      deploy("A", { state: "failed", advisory: { scope: "Config", severity: "Blocking", item: null, what: "Upload refused", action: "None" } });
+      expect(reasons()).toContain("Upload refused");
+      deploy("B", { state: "running", fraction: null, message: null });
+      expect(reasons()).not.toContain("Upload refused");
+    });
+
     it("failed→waiting re-publish resets stage and clears failed status", () => {
       // Spec "Critical": after a failed publish the user presses Publish again.
       // The fresh DeployWaitingForBuild / deploy-progress{waiting} must reset

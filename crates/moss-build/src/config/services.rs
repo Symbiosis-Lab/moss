@@ -281,6 +281,10 @@ mod forms_tests {
 pub struct MembersConfig {
     #[serde(default)]
     pub join: MemberJoin,
+    /// Where readers' replies to the site's mail go; unset, the owner's login
+    /// email. Private: never in the public `members.json`.
+    #[serde(default, skip_serializing)]
+    pub reply_to: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
@@ -293,8 +297,52 @@ pub enum MemberJoin {
 
 impl MembersConfig {
     pub fn read(config: &crate::config::ConfigFile) -> Result<Self, String> {
-        config.section(&["members"]).map_or(Ok(Self::default()), |table| {
+        let mut members: Self = config.section(&["members"]).map_or(Ok(Self::default()), |table| {
             table.clone().try_into().map_err(|e| format!("[members]: {e}"))
-        })
+        })?;
+        members.reply_to = members.reply_to.map(|a| a.trim().to_string()).filter(|a| !a.is_empty());
+        if let Some(address) = &members.reply_to {
+            if !is_plain_address(address) {
+                return Err(format!("[members] reply_to: \"{address}\" is not one email address, such as \"desk@example.org\""));
+            }
+        }
+        Ok(members)
+    }
+}
+
+/// One `name@domain.tld`, the only shape a mail header takes from it as is.
+fn is_plain_address(address: &str) -> bool {
+    let Some((local, domain)) = address.split_once('@') else { return false };
+    let part = |s: &str| !s.is_empty() && !s.chars().any(|c| c.is_whitespace() || c.is_control() || "@<>()[],;:\"\\".contains(c));
+    address.len() <= 254 && part(local) && part(domain) && domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
+}
+
+#[cfg(test)]
+mod members_tests {
+    use super::MembersConfig;
+
+    fn read(toml_src: &str) -> Result<MembersConfig, String> {
+        MembersConfig::read(&crate::config::ConfigFile::parse(toml_src).unwrap())
+    }
+
+    #[test]
+    fn reply_to_is_one_address_trimmed_and_blank_is_unset() {
+        assert_eq!(read("[members]\nreply_to = \" desk@harbor-mail.org \"\n").unwrap().reply_to.as_deref(), Some("desk@harbor-mail.org"));
+        assert_eq!(read("[members]\nreply_to = \"\"\n").unwrap().reply_to, None);
+        assert_eq!(read("").unwrap().reply_to, None);
+    }
+
+    #[test]
+    fn reply_to_that_is_not_one_plain_address_stops_the_build() {
+        for bad in ["desk", "Desk <desk@harbor-mail.org>", "a@harbor-mail.org, b@harbor-mail.org", "a@harbor-mail.org\\r\\nBcc: x@y.org", "a@b@harbor-mail.org", "desk@localhost"] {
+            let err = read(&format!("[members]\nreply_to = \"{bad}\"\n")).unwrap_err();
+            assert!(err.starts_with("[members] reply_to:"), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn reply_to_never_reaches_the_public_policy() {
+        let members = read("[members]\njoin = \"invite\"\nreply_to = \"desk@harbor-mail.org\"\n").unwrap();
+        assert_eq!(serde_json::to_string(&members).unwrap(), r#"{"join":"invite"}"#);
     }
 }

@@ -1,18 +1,10 @@
 //! `[site].credit` puts the site's own line before moss's mark in the colophon:
 //! `<credit> · <mark>`. Without the key the colophon is exactly what it was.
 
-#[path = "support/site.rs"]
+#[path = "it/site.rs"]
 mod site;
 
-use site::{problems, Site};
-use std::sync::{Mutex, MutexGuard};
-
-/// The problem list is global to the test binary, so a test that reads it holds this from build to read.
-static SERIAL: Mutex<()> = Mutex::new(());
-
-fn serial() -> MutexGuard<'static, ()> {
-    SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
+use site::Site;
 
 const PAGES: [(&str, &str); 2] = [
     ("index.md", "---\ntitle: Harbour\n---\n\nBody text.\n"),
@@ -39,7 +31,6 @@ fn stylesheet(site: &Site) -> String {
 
 #[test]
 fn without_the_key_the_colophon_is_what_it_was() {
-    let _turn = serial();
     let site = Site::new(&PAGES);
     let html = site.html("index.html");
     assert!(colophon_of(&html).contains(">\n        <a href=\"https://mosspub.com\""), "the link follows the opening tag as before: {}", colophon_of(&html));
@@ -49,7 +40,6 @@ fn without_the_key_the_colophon_is_what_it_was() {
 
 #[test]
 fn the_credit_stands_before_the_mark_and_the_link_keeps_its_name() {
-    let _turn = serial();
     let site = Site::with_config(CREDIT, &PAGES);
     let colophon = colophon_of(&site.html("index.html")).to_string();
     let credit_at = colophon.find("<span class=\"moss-colophon-credit\">Designed by <a").expect(&colophon);
@@ -59,12 +49,11 @@ fn the_credit_stands_before_the_mark_and_the_link_keeps_its_name() {
     assert!(credit_at < mark_at, "{colophon}");
     assert!(colophon.contains("aria-label=\"Published with moss\""), "{colophon}");
     assert!(stylesheet(&site).contains("moss-colophon-credit"), "the credit rules ship with a credit");
-    assert!(problems().is_empty(), "{:?}", problems());
+    assert!(site.problems.is_empty(), "{:?}", site.problems);
 }
 
 #[test]
 fn the_credit_is_escaped_like_other_text() {
-    let _turn = serial();
     let site = Site::with_config("credit = \"Fish & Chips Studio\"\n", &PAGES);
     let colophon = colophon_of(&site.html("index.html")).to_string();
     assert!(colophon.contains("Fish &amp; Chips Studio"), "{colophon}");
@@ -72,9 +61,8 @@ fn the_credit_is_escaped_like_other_text() {
 
 #[test]
 fn block_markdown_is_a_build_problem_naming_the_key_and_leaves_the_colophon_alone() {
-    let _turn = serial();
     let site = Site::with_config("credit = \"# Big\"\n", &PAGES);
-    let problems = problems();
+    let problems = &site.problems;
     assert!(problems.iter().any(|p| p.contains("[site].credit")), "{problems:?}");
     let html = site.html("index.html");
     assert!(!html.contains("moss-colophon-credit") && !html.contains("<h1>Big"), "{}", colophon_of(&html));
@@ -83,12 +71,11 @@ fn block_markdown_is_a_build_problem_naming_the_key_and_leaves_the_colophon_alon
 
 #[test]
 fn colophon_false_leaves_out_the_credit_too_and_says_so_without_failing_strict() {
-    let _turn = serial();
     let site = Site::with_config(&format!("colophon = false\n{CREDIT}"), &PAGES);
     let html = site.html("index.html");
     assert!(!html.contains("moss-colophon") && !html.contains("Example Studio"), "{html}");
     assert!(site.logged.iter().any(|l| l.contains("[site].credit is not shown")), "{:?}", site.logged);
-    assert!(problems().is_empty(), "a note, not a problem: {:?}", problems());
+    assert!(site.problems.is_empty(), "a note, not a problem: {:?}", site.problems);
 }
 
 mod closing_picture {
@@ -122,7 +109,6 @@ mod closing_picture {
 
     #[test]
     fn the_credit_sits_in_the_colophon_after_the_picture() {
-        let _turn = serial();
         let footer = foot_of(CREDIT);
         assert!(footer.find("moss-hero-closing").unwrap() < footer.find("moss-colophon-credit").unwrap(), "{footer}");
         assert!(footer.find("moss-colophon-credit").unwrap() < footer.find("https://mosspub.com").unwrap(), "{footer}");
@@ -130,7 +116,6 @@ mod closing_picture {
 
     #[test]
     fn a_credit_widens_the_measured_row_on_a_phone_where_it_may_wrap() {
-        let _turn = serial();
         let attr = |footer: &str| footer.split(" data-foot=\"").nth(1).and_then(|r| r.split('"').next()).map(str::to_string);
         let without = foot_of("");
         assert_eq!(attr(&without).as_deref(), Some("light"), "the colophon row lies on dark ground: {without}");
@@ -141,11 +126,10 @@ mod closing_picture {
 
 #[test]
 fn raw_html_in_the_credit_is_shown_as_text_and_unsafe_links_are_dropped_with_a_problem() {
-    let _turn = serial();
     let site = Site::with_config("credit = \"Hi <script>alert(1)</script> [x](javascript:alert(1)) [y](https://example.org)\"\n", &PAGES);
     let colophon = colophon_of(&site.html("index.html")).to_string();
     assert!(!colophon.contains("<script") && colophon.contains("&lt;script&gt;"), "{colophon}");
     assert!(!colophon.contains("javascript:"), "{colophon}");
     assert!(colophon.contains("href=\"https://example.org\">y</a>"), "{colophon}");
-    assert!(problems().iter().any(|p| p.contains("[site].credit") && p.contains("javascript:")), "{:?}", problems());
+    assert!(site.problems.iter().any(|p| p.contains("[site].credit") && p.contains("javascript:")), "{:?}", site.problems);
 }

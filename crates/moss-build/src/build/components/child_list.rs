@@ -346,6 +346,11 @@ impl ChildItemProps {
         self.child_count.is_some() && !self.count_only
     }
 
+    /// A folder or a term's card: it stands for the pages it holds.
+    pub(crate) fn is_collection(&self) -> bool {
+        self.child_count.is_some()
+    }
+
     /// A folder card's count text, or `None` for a leaf or a listing that
     /// hides the count. The one place the setting is applied.
     pub(crate) fn count_label(&self, lang: crate::i18n::Language, typesetting: Option<&str>) -> Option<String> {
@@ -443,9 +448,9 @@ fn with_event_place(time_html: &str, place: Option<&str>) -> String {
 /// module's own `render_child` all call it instead of deciding count-vs-date
 /// on their own.
 ///
-/// `count_label` is `None` for a leaf (no count at all) and `Some` for a
-/// folder (always shown, with or without a date of its own) — a folder's
-/// place only ever shows beside ITS OWN date, never beside a bare count.
+/// `count_label` is `Some` when the card shows a count (with or without a
+/// date of its own) — a folder's place only ever shows beside ITS OWN date,
+/// never beside a bare count.
 /// `credits` is a leaf's listed names; a folder never shows them, so the
 /// count arm ignores it.
 pub(crate) fn meta_text(

@@ -623,11 +623,15 @@ pub fn generate_blocking_content_for_build(
         crate::build::media::hls::register_existing_ladders(output_dir, reg);
         crate::build::media::video::register_existing_posters(output_dir, reg);
     }
+    // The widths each published picture keeps, read once: emission here and
+    // the rung plan below must agree on every picture's rung set.
+    let kept_rungs = crate::build::media::rungs::KeptRungs::load(&paths);
     let event_level_image_lookup = crate::build::media::dimensions::MediaDimensionLookup::new(
         &project_structure.image_files,
         &project_structure.video_files,
         &dir_overrides,
         services.and_then(|s| s.assets.as_deref()),
+        &kept_rungs,
     )
     .with_page_ground(page_ground)
     .with_root(source_path_buf.to_path_buf());
@@ -2504,9 +2508,9 @@ pub fn generate_blocking_content_for_build(
             .map_err(|e| format!("Failed to emit llms.txt: {}", e))?;
     }
     // Only the moss host keeps `.moss-email/` private; any other host would
-    // publish the templates.
+    // publish the templates and the Reply-to.
     let on_moss_host = deploy.on_moss_host();
-    if on_moss_host { crate::build::emit::welcome_email::emit(&documents, output_dir, pending)?; }
+    if on_moss_host { crate::build::emit::welcome_email::emit(&documents, output_dir, pending)?; crate::build::emit::members::emit_sender(&site_config.members, output_dir, pending)?; }
     site_config.blocks.emit_assets(&documents, output_dir, pending)?;
     crate::plugins::contributions::public_data::emit(&site_config.public_data, output_dir, pending)?;
     crate::build::emit::commerce::emit(&documents, site_config.forms_endpoint.as_deref(), site_config.booking.as_ref(), on_moss_host, output_dir, pending)?;
@@ -3308,7 +3312,7 @@ pub fn generate_blocking_content_for_build(
     // `source_oid` cheaply (stat-match hit) without re-hashing the file.
     // Also returns the rung-collision map (built from ProjectStructure,
     // which the background worker doesn't have) for BackgroundContext.
-    let (image_items, rung_collisions) = {
+    let (image_items, rung_plan) = {
         use crate::build::cache::{HashIndex, TransformCache};
         use crate::build::image::{collect_images_for_conversion, ImageCompressionConfig};
 
@@ -3339,18 +3343,9 @@ pub fn generate_blocking_content_for_build(
         // ServeDir/deploy serves the user's actual file
         // (wrong-image-but-200, warned below). Render-side emission is NOT
         // suppressed: render cannot see collisions and must not
-        // (deterministic-agreement contract).
-        //
-        // Hoisted ABOVE the services gate: the map also rides
-        // `BackgroundContext` to the encode worker, which must respect
-        // collisions in HEADLESS builds too (no services/registry there) —
-        // recomputing it in the worker is forbidden (no ProjectStructure;
-        // divergence ⇒ registered-but-never-encoded rung ⇒ sealed-deploy
-        // 404).
-        let rung_collisions = crate::build::media::rungs::rung_collision_map(
-            project_structure,
-            &dir_overrides,
-        );
+        // (deterministic-agreement contract). Above the services gate: the
+        // plan rides `BackgroundContext` to the worker in headless builds too.
+        let rung_plan = crate::build::media::rungs::RungPlan { collisions: crate::build::media::rungs::rung_collision_map(project_structure, &dir_overrides), kept: kept_rungs.clone() };
 
         // Every variant URL the synthesizer will emit is promised before first
         // paint, and a source this build cannot encode is settled instead:
@@ -3361,11 +3356,11 @@ pub fn generate_blocking_content_for_build(
             items,
             project_structure,
             &dir_overrides,
-            &rung_collisions,
+            &rung_plan,
             source_path,
         );
 
-        (items, rung_collisions)
+        (items, rung_plan)
     };
 
     // Create BackgroundContext with video items for async processing.
@@ -3387,7 +3382,7 @@ pub fn generate_blocking_content_for_build(
         search_enabled: layout_config.assets.search,
         ffmpeg_bin_path: project_structure.ffmpeg_bin_path.clone(),
         notebook_files: project_structure.notebook_files.clone(),
-        rung_collisions,
+        rung_plan,
         carried_advisories: Vec::new(),
         members_policy: members_policy.clone(),
         source_oids: Default::default(),

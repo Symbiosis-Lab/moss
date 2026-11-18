@@ -210,7 +210,7 @@ fn eager_swaps_loading_attr_and_adds_fetchpriority() {
         &s,
         ImageContext::Hero { plate: false },
         &ImageRenderOptions {
-            eager: true,
+            loading: Loading::Priority,
             ..Default::default()
         },
     );
@@ -336,7 +336,7 @@ fn extra_attrs_passed_through_verbatim() {
         &s,
         ImageContext::Hero { plate: false },
         &ImageRenderOptions {
-            eager: true,
+            loading: Loading::Priority,
             extra_attrs: Some(r#"data-cover-fit="cover""#),
             ..Default::default()
         },
@@ -371,7 +371,7 @@ fn the_placeholder_and_the_display_style_share_one_attribute() {
         &s,
         ImageContext::Hero { plate: false },
         &ImageRenderOptions {
-            eager: true,
+            loading: Loading::Priority,
             style: Some("object-fit:cover;object-position:50% 50%"),
             fit: Some(crate::media::Fit::Cover),
             ..Default::default()
@@ -956,6 +956,21 @@ fn ladder_srcset_emitted_for_wide_raster() {
         );
 }
 
+/// A published picture offers the rungs its deploy record keeps, under
+/// whichever spelling found its dims; a webp source alike.
+#[test]
+fn ladder_srcset_offers_a_published_pictures_kept_rungs() {
+    let mut assets = snapshot_dims("photo.jpg", 2000, 1200);
+    assets.kept_rungs.insert("photo.jpg".into(), vec![800, 1600]);
+    let html = synthesize_image_html("/photo.jpg", "alt", &assets, ImageContext::MarkdownInline, &ImageRenderOptions::default());
+    assert!(html.contains(r#"<source srcset="/photo.w800.webp 800w, /photo.w1600.webp 1600w, /photo.webp 2000w""#), "got: {html}");
+
+    let mut assets = snapshot_dims("photo.webp", 2000, 1200);
+    assets.kept_rungs.insert("photo.webp".into(), Vec::new());
+    let html = synthesize_image_html("photo.webp", "alt", &assets, ImageContext::MarkdownInline, &ImageRenderOptions::default());
+    assert!(!html.contains("srcset"), "got: {html}");
+}
+
 #[test]
 fn base_descriptor_caps_at_deploy_max_edge() {
     let assets = snapshot_dims("photo.jpg", 4000, 3000);
@@ -1063,19 +1078,20 @@ fn an_eager_image_drops_the_auto_lead() {
     // Chromium reads an eager image's `auto,` lead as `100vw` rather than
     // skipping to the next entry, so the first card fetched a viewport-wide rung.
     let assets = snapshot_dims("cover.jpg", 2000, 1200);
-    let render = |eager| {
+    let render = |loading| {
         synthesize_image_html(
             "cover.jpg",
             "",
             &assets,
             ImageContext::FolderCardCover,
-            &ImageRenderOptions { eager, ..ImageRenderOptions::default() },
+            &ImageRenderOptions { loading, ..ImageRenderOptions::default() },
         )
     };
-    let eager = render(true);
+    let eager = render(Loading::Eager);
     assert!(eager.contains(r#"loading="eager""#), "got: {eager}");
+    assert!(!eager.contains("fetchpriority"), "got: {eager}");
     assert!(eager.contains(r#"sizes="(min-width: 48rem) 24rem, 100vw""#), "got: {eager}");
-    let lazy = render(false);
+    let lazy = render(Loading::Lazy);
     assert!(lazy.contains(r#"sizes="auto, (min-width: 48rem) 24rem, 100vw""#), "got: {lazy}");
 }
 

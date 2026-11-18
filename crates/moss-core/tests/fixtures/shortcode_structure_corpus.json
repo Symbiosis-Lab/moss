@@ -2,7 +2,7 @@
   "_comment": [
     "Shared shortcode-structure parity corpus — the SINGLE source of truth for",
     "what block structure each markdown input has. Consumed by TWO enforced gates:",
-    "  • Rust  crates/moss-core/tests/shortcode_structure_parity.rs  (the BUILD parser, moss_core::ast::parse)",
+    "  • Rust  crates/moss-core/tests/it/shortcode_structure_parity.rs  (the BUILD parser, moss_core::ast::parse)",
     "  • TS    packages/moss-syntax/src/__tests__/shortcode-corpus.test.ts  (the shared text scanner, scanShortcodeBlocks; the Lezer grammar is tied to it by scan.test.ts's cross-check)",
     "Both must match this corpus, so the editor live-view parse can never drift from",
     "the build without a red test. Structural facts only (names + nesting + grid cell",

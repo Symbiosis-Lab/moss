@@ -20,6 +20,7 @@ Each proposal is a folder here: a `README.md` with the design, and its screens b
 | [A position ruler for a row along an ordered axis](position-ruler/README.md) | Proposed |
 | [Duplicate stores in a synced folder: heal them, and stop making them](synced-store-duplicates/README.md) | Shipped |
 | [Keep what a build reads downloaded, in a cloud site folder](keep-site-downloaded/README.md) | Proposed |
+| [Fetch a cached picture before encoding it again, in a cloud site folder](picture-cache-fetch/README.md) | Proposed |
 | [Comment moderation that survives a new site key](moderation-key-continuity/README.md) | In progress |
 | [Plugin listing styles in body embeds](plugin-styles-in-embeds/README.md) | Proposed |
 | [A hero that stays while the page rises over it](fixed-hero/README.md) | Proposed |

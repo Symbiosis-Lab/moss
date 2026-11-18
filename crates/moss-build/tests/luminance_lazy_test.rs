@@ -2,7 +2,7 @@
 //! then: a site of ordinary images holds none. This file holds one test so the
 //! process-wide count is its own.
 
-#[path = "support/site.rs"]
+#[path = "it/site.rs"]
 mod site;
 
 use moss_build::build::markdown::hero_ink::grounds_built;

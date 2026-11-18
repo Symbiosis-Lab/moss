@@ -13,7 +13,6 @@
 //! to "does this build owe a re-render".
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use crate::build::PluginMode;
 use crate::build::media::image::{ImageConversionItem, SkipReason};
@@ -25,8 +24,8 @@ use crate::types::content::ProjectStructure;
 /// build has one) and return the items the encoder should run — the ones
 /// whose bytes are here and whose verdict is "encode".
 ///
-/// `rung_collisions` is `rungs::rung_collision_map`, built once per build and
-/// also threaded to the encode worker; `vault_root` resolves each source to
+/// `rung_plan` is the build's one rung decision, also threaded to the encode
+/// worker; `vault_root` resolves each source to
 /// the absolute file the preview serves through the passthrough.
 pub(crate) fn promise_image_variants(
     registry: Option<&AssetRegistry>,
@@ -34,7 +33,7 @@ pub(crate) fn promise_image_variants(
     items: Vec<ImageConversionItem>,
     project_structure: &ProjectStructure,
     dir_overrides: &HashMap<String, String>,
-    rung_collisions: &HashMap<String, PathBuf>,
+    rung_plan: &super::rungs::RungPlan,
     vault_root: &str,
 ) -> Vec<ImageConversionItem> {
     for item in &items {
@@ -70,44 +69,44 @@ pub(crate) fn promise_image_variants(
         // The variant URLs the synthesizer has already emitted for this
         // source: the base webp and, for a ladder source, its rungs. The
         // registry key must EXACTLY equal the emitted URL: same `mapped`
-        // path + same to_webp_rung + same ladder_rungs(w, h, false) over
-        // the same scan dims. (ladder_rungs is height-aware — pass BOTH
-        // scan dims, NEVER `(w, w, false)`.) The `false` literal, the
+        // path + same to_webp_rung + same `RungPlan::widths` over the same
+        // scan dims. (The ladder is height-aware — pass BOTH scan dims,
+        // NEVER `(w, w)`.) The `false` literal, the
         // animated-flag proof, and the EXIF-oriented png/webp dims
         // agreement are documented canonically on asset_paths::ladder_rungs.
         // `is_ladder_source_ext` covers png/jpg/jpeg AND webp, so a webp
         // source registers its rung URLs here too (its base URL is the
         // source itself: to_webp(webp) == webp).
+        let rungs = match dimensions {
+            Some((w, h)) if moss_core::asset_paths::is_ladder_source_ext(&item.ext) => rung_plan.widths(&webp_path, w, h),
+            _ => Vec::new(),
+        };
         let mut variants = vec![webp_path];
-        if moss_core::asset_paths::is_ladder_source_ext(&item.ext) {
-            if let Some((w, h)) = dimensions {
-                for rung in moss_core::asset_paths::ladder_rungs(w, h, false) {
-                    let rung_url = moss_core::asset_paths::to_webp_rung(&mapped, *rung);
-                    if let Some(user_file) = rung_collisions.get(&rung_url) {
-                        log::warn!(
-                            "'{}' is named like a generated responsive variant of '{}'; keeping your file — rename '{}' to avoid the reserved '.w{}.webp' naming pattern if you meant it to be a different image",
-                            user_file.display(),
-                            item.source_path.display(),
-                            user_file.display(),
-                            rung
-                        );
-                        // Deferred-window guard: a small colliding
-                        // file may never register its own promise
-                        // (it converts to photo.w800.webp only if
-                        // IT is a convertible raster), yet the
-                        // emitted srcset references this URL before
-                        // asset copy lands the file. Passthrough
-                        // the USER'S file so the preview serves its
-                        // real bytes in that window instead of 404.
-                        if let Ok(relative) = user_file.strip_prefix(vault_root) {
-                            manifest.register_preview_original(rung_url.clone(), relative.to_string_lossy().into_owned());
-                        }
-                        if let Some(registry) = registry { registry.set_source_passthrough(rung_url, user_file.clone()); }
-                        continue;
-                    }
-                    variants.push(rung_url);
+        for rung in rungs {
+            let rung_url = moss_core::asset_paths::to_webp_rung(&mapped, rung);
+            if let Some(user_file) = rung_plan.collisions.get(&rung_url) {
+                log::warn!(
+                    "'{}' is named like a generated responsive variant of '{}'; keeping your file — rename '{}' to avoid the reserved '.w{}.webp' naming pattern if you meant it to be a different image",
+                    user_file.display(),
+                    item.source_path.display(),
+                    user_file.display(),
+                    rung
+                );
+                // Deferred-window guard: a small colliding
+                // file may never register its own promise
+                // (it converts to photo.w800.webp only if
+                // IT is a convertible raster), yet the
+                // emitted srcset references this URL before
+                // asset copy lands the file. Passthrough
+                // the USER'S file so the preview serves its
+                // real bytes in that window instead of 404.
+                if let Ok(relative) = user_file.strip_prefix(vault_root) {
+                    manifest.register_preview_original(rung_url.clone(), relative.to_string_lossy().into_owned());
                 }
+                if let Some(registry) = registry { registry.set_source_passthrough(rung_url, user_file.clone()); }
+                continue;
             }
+            variants.push(rung_url);
         }
 
         // Source passthrough: the original's own resolved URL (the inner
@@ -316,12 +315,19 @@ pub(crate) fn trigger_media_settle_rerender(
     if !needs_rerender {
         return false;
     }
+    // Pictures alone change no page but the ones showing them, which the render
+    // verdict finds; a video output can change a page no verdict models.
+    let (request, scope) = if settled.iter().all(|a| a.asset_type == "image") {
+        (crate::ops::watch::worker::RebuildRequest::images_settled(), "the pages showing them")
+    } else {
+        (crate::ops::watch::worker::RebuildRequest::full(), "every page")
+    };
     log::info!(
-        "media settle: a video poster or a brand-new image landed for '{}' — \
-         enqueueing a full re-render so grid-card covers pick up the color band and thumbnail",
-        folder_path
+        "media settle: a video poster or a brand-new image landed for '{}' — re-rendering {} so grid-card covers pick up the color band and thumbnail",
+        folder_path,
+        scope
     );
-    worker.enqueue(crate::ops::watch::worker::RebuildRequest::full());
+    worker.enqueue(request);
     // The worker owns the re-render; a build must not also run a second pass.
     false
 }
@@ -392,11 +398,29 @@ mod media_settle_rerender_tests {
             Some(&SiteHashes::default()),
         );
 
-        assert!(
-            handle.slot_occupied(),
-            "a settled thumbnail must enqueue a follow-up rebuild"
+        assert_eq!(
+            handle.take().map(|r| r.trigger),
+            Some(crate::build::BuildTrigger::Full),
+            "a settled thumbnail must enqueue a full rebuild"
         );
         assert!(!second_pass_owed, "the worker owns the re-render, so the build must not also run a second pass");
+        worker::deregister(folder, &handle);
+    }
+
+    /// A poster settling beside a new picture can change pages the render
+    /// verdict does not model, so the batch keeps the full path.
+    #[test]
+    fn a_thumbnail_beside_a_new_image_enqueues_a_full_rebuild() {
+        let folder = "/tmp/media-settle-rerender-test-thumbnail-and-image";
+        let handle = worker::register(folder);
+
+        trigger_media_settle_rerender(
+            folder,
+            &[image("assets/new-cover.webp"), thumbnail("videos/clip.thumb.jpg")],
+            Some(&SiteHashes::default()),
+        );
+
+        assert_eq!(handle.take().map(|r| r.trigger), Some(crate::build::BuildTrigger::Full));
         worker::deregister(folder, &handle);
     }
 
@@ -429,7 +453,7 @@ mod media_settle_rerender_tests {
     /// unreadable (dataless) at the render that first referenced it, baking
     /// an empty `data-cover-color` with no client-side fix. Must enqueue.
     #[test]
-    fn a_brand_new_image_settle_enqueues_a_full_rebuild() {
+    fn a_brand_new_image_settle_enqueues_an_images_settled_rebuild() {
         let folder = "/tmp/media-settle-rerender-test-new-image";
         let handle = worker::register(folder);
 
@@ -439,9 +463,10 @@ mod media_settle_rerender_tests {
             Some(&SiteHashes::default()), // previous manifest has never seen this path
         );
 
-        assert!(
-            handle.slot_occupied(),
-            "a brand-new image settle must enqueue a follow-up rebuild"
+        assert_eq!(
+            handle.take().map(|r| r.trigger),
+            Some(crate::build::BuildTrigger::ImagesSettled),
+            "a brand-new image settle must enqueue a re-render of the pages showing it, not of every page"
         );
         worker::deregister(folder, &handle);
     }

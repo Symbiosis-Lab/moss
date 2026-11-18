@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-11-17
+
+### Added
+
+- `wants_contents_list(blocks)` says whether a page's sections hold enough text to list: at least two sections at its shallowest heading level with 80 words each. The floating nav island follows it.
+- `asset_paths::offered_rungs` decides a picture's rung widths: the `ladder_rungs` its shape allows, narrowed to the widths a host says it already published. `synthesize_image_html` reads those widths from the new `AssetSnapshot::kept_rungs`, keyed like `dimensions`; a picture with no entry gets the whole ladder, as before.
+
+### Changed
+
+- **BREAKING:** `BuiltinField::required` is removed, and the built-in schema requires no field: `title` is optional, since a page without one takes its title from the file name, so `validate_frontmatter` and `page::check_page` no longer report it missing. `FieldDefinition::required` stays for schemas a host supplies. A struct literal must drop the field.
+- **BREAKING:** `AssetSnapshot` has a new public field, `kept_rungs`, so a struct literal must name it or end in `..Default::default()`.
+- **BREAKING:** `ImageRenderOptions::eager: bool` is replaced by `loading: Loading`, one of `Lazy` (the default), `Eager` and `Priority` (`loading="eager" fetchpriority="high"`). Pass `Priority` where you passed `true`. `Loading::attrs` gives the attributes.
+
 ## [0.26.0] - 2026-11-16
 
 ### Added

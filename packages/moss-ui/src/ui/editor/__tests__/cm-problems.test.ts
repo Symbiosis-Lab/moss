@@ -35,12 +35,19 @@ function inputs(cache: ReferenceCacheRead, over: Partial<ProblemInputs> = {}): P
   return { resolvedCache: cache, refForPath: async () => null, projectRoot: () => '/site', ...over };
 }
 
-function stateWith(doc: string, cache: ReferenceCacheRead, opts: { anchor?: number; over?: Partial<ProblemInputs> } = {}): EditorState {
-  return EditorState.create({
+/** The state with its parse finished, unless `partial`: the first parse is time-boxed, so a slow runner stops short of the end. */
+function stateWith(doc: string, cache: ReferenceCacheRead, opts: { anchor?: number; over?: Partial<ProblemInputs>; partial?: boolean } = {}): EditorState {
+  const state = EditorState.create({
     doc,
     selection: { anchor: opts.anchor ?? doc.length },
     extensions: [markdown({ extensions: [wikilinkConfig] }), problemsExtension(inputs(cache, opts.over))],
   });
+  if (opts.partial || syntaxTreeAvailable(state, doc.length)) return state;
+  const view = new EditorView({ state, parent: document.body });
+  for (let i = 0; i < 50 && !syntaxTreeAvailable(view.state, doc.length); i++) forceParsing(view, doc.length, 2000);
+  const parsed = view.state;
+  view.destroy();
+  return parsed;
 }
 
 /** The marks the field draws: the marked text and its consequence. */
@@ -176,7 +183,7 @@ describe('a large document', () => {
     // Far past the initial time-budgeted parse; asserted so a faster machine cannot mask the premise.
     const doc = 'lorem ipsum dolor sit amet, consectetur adipiscing elit.\n\n'.repeat(600) + '[tail](/authors/ma/)\n';
     const cache = cacheOf([['/authors/ma/', false, env('moved', { url: '/people/ma/' })]]);
-    const view = new EditorView({ state: stateWith(doc, cache, { anchor: 0 }), parent: document.body });
+    const view = new EditorView({ state: stateWith(doc, cache, { anchor: 0, partial: true }), parent: document.body });
     expect(syntaxTreeAvailable(view.state, doc.length)).toBe(false);
     expect(marks(view.state)).toEqual([]);
     for (let i = 0; i < 50 && !syntaxTreeAvailable(view.state, doc.length); i++) forceParsing(view, doc.length, 2000);

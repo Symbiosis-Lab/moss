@@ -34,11 +34,13 @@ fn picture_row(inlines: &[Inline]) -> Option<GalleryShortcode> {
     let (mut line_pictures, mut above, mut caption) = (0, 0, Vec::new());
     // What the current line holds: nothing, pictures, or an italic caption.
     let (mut on_line, mut caption_line) = (false, false);
+    // Lines from the paragraph's first, which every picture on it records.
+    let mut line = 0;
     for inline in inlines {
         match inline {
             Inline::Image { .. } if caption_line => return None,
             Inline::Image { .. } => {
-                items.push(item(inline)?);
+                items.push(GalleryItem { line_offset: line, ..item(inline)? });
                 line_pictures += 1;
                 on_line = true;
             }
@@ -59,10 +61,14 @@ fn picture_row(inlines: &[Inline]) -> Option<GalleryShortcode> {
                 }
                 (on_line, caption_line) = (true, true);
             }
-            Inline::LineBreak => (on_line, caption_line, above, line_pictures) = (false, false, line_pictures, 0),
+            Inline::LineBreak => {
+                (on_line, caption_line, above, line_pictures) = (false, false, line_pictures, 0);
+                line += 1;
+            }
             Inline::Text(s) if s.trim().is_empty() => {
                 if s.contains('\n') {
                     (on_line, caption_line, above, line_pictures) = (false, false, line_pictures, 0);
+                    line += s.matches('\n').count();
                 }
             }
             _ => return None,
@@ -100,6 +106,7 @@ fn item(image: &Inline) -> Option<GalleryItem> {
         attrs: words.display,
         caption: Vec::new(),
         title: title.clone(),
+        line_offset: 0,
     })
 }
 

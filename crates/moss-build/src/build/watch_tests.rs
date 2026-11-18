@@ -4294,6 +4294,7 @@ fn an_atomic_save_of_a_known_page_is_a_content_edit() {
         BuildTrigger::Structural(_) => "structural",
         BuildTrigger::Full => "full",
         BuildTrigger::Unobserved => "unobserved",
+        BuildTrigger::ImagesSettled => "images-settled",
     };
     let renamed_over = || event(EventKind::Modify(ModifyKind::Name(RenameMode::Any)), &["a.md"]);
     assert_eq!(kind(renamed_over(), Some(&baseline)), "content");

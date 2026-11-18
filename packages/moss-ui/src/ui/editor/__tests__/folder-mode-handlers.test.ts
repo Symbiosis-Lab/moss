@@ -181,17 +181,14 @@ describe("handleImportUrl", () => {
     );
   });
 
-  it("does NOT toast from the catch handler when startNativeImportTask returns status: 'error' (the PanelTask subscriber owns the error toast)", async () => {
-    // One event, one home: a scrape failure inside
-    // start_native_import_task fires handle.failed(e, false) → a single
-    // persistent blocking error toast via task-toast-subscriber. The frontend
-    // catch handler must NOT toast again (that was the old double-signal).
-    // The subscriber is not mounted in jsdom, so the only observable here is
-    // the absence of a handler toast + the restored input UI.
-    importSite.mockResolvedValue({
-      status: "error",
-      error: "network unreachable",
-    });
+  // One signal per failure: the progress row speaks for a failure the import's
+  // task reported, the card for one that stopped it before any task.
+  it.each([
+    { name: "a failure the task reported", answer: { status: "error", error: { message: "network unreachable", reported: true } }, says: null },
+    { name: "a refusal before any task", answer: { status: "error", error: { message: "Enter a website address or choose a file.", reported: false } }, says: "Enter a website address or choose a file." },
+    { name: "an import that reached nothing", answer: { status: "ok", data: { success: false, total_pages: 0, kept_pages: 0, error: "robots.txt disallows" } }, says: "robots.txt disallows" },
+  ])("on $name, the card shows exactly what no other surface does", async ({ answer, says }) => {
+    importSite.mockResolvedValue(answer);
     const host = makeHost();
     await handleImportUrl({
       folderPath: "/site",
@@ -207,45 +204,9 @@ describe("handleImportUrl", () => {
       .querySelector<HTMLButtonElement>("[data-folder-mode-url-submit]")!
       .click();
     await new Promise((r) => setTimeout(r, 30));
-    // No double-signal: the catch handler does not emit an "Import failed" toast.
-    expect(showToast).not.toHaveBeenCalledWith(
-      { what: expect.stringContaining("Import failed"), severity: "Blocking" },
-    );
-    // Input is still re-enabled so the user can retry.
-    expect(input.disabled).toBe(false);
-  });
-
-  it("does NOT toast from the catch handler when startNativeImportTask returns data.success === false", async () => {
-    // Same rule (one event, one home) for the logical-failure path: no catch-handler toast;
-    // the import task lifecycle owns the error surface. Input is re-enabled.
-    importSite.mockResolvedValue({
-      status: "ok",
-      data: {
-        success: false,
-        total_pages: 0,
-        kept_pages: 0,
-        failed_pages: 0,
-        error: "robots.txt disallows",
-      },
-    });
-    const host = makeHost();
-    await handleImportUrl({
-      folderPath: "/site",
-      folderName: "site",
-      loadFile: vi.fn(),
-      host,
-    });
-    const input = host.querySelector<HTMLInputElement>(
-      "[data-folder-mode-url-input]",
-    )!;
-    input.value = "https://example.com";
-    host
-      .querySelector<HTMLButtonElement>("[data-folder-mode-url-submit]")!
-      .click();
-    await new Promise((r) => setTimeout(r, 30));
-    expect(showToast).not.toHaveBeenCalledWith(
-      { what: expect.stringContaining("Import failed"), severity: "Blocking" },
-    );
+    const errorEl = host.querySelector<HTMLElement>("[data-folder-mode-url-error]")!;
+    expect(errorEl.hidden ? null : errorEl.textContent).toBe(says);
+    expect(showToast).not.toHaveBeenCalled();
     expect(input.disabled).toBe(false);
   });
 

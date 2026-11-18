@@ -192,6 +192,9 @@ pub enum BuildError {
     JoinError(tokio::task::JoinError),
     Worker(String),
     Io(std::io::Error),
+    /// The build stopped waiting on image work it joined: a newer build waits
+    /// on the same work and seals with it. It must not seal; nothing failed.
+    LeftToNewerBuild,
 }
 
 impl std::fmt::Display for BuildError {
@@ -200,6 +203,7 @@ impl std::fmt::Display for BuildError {
             Self::JoinError(e) => write!(f, "worker task panicked: {}", e),
             Self::Worker(s) => write!(f, "worker failed: {}", s),
             Self::Io(e) => write!(f, "{}", e),
+            Self::LeftToNewerBuild => write!(f, "left its joined image work to a newer build"),
         }
     }
 }
@@ -208,7 +212,7 @@ impl std::error::Error for BuildError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::JoinError(e) => Some(e),
-            Self::Worker(_) => None,
+            Self::Worker(_) | Self::LeftToNewerBuild => None,
             Self::Io(e) => Some(e),
         }
     }
@@ -371,9 +375,9 @@ impl BackgroundHandle {
             res.map_err(BuildError::from)??;
         }
         // The coordinator seal is the TRUE post-join barrier: in GUI mode the media
-        // dispatch worker returns immediately after spawning the actual conversion
-        // into a DETACHED `spawn_blocking` that keeps a `tx` clone, so the JoinSet
-        // join above does NOT wait for the conversion. The coordinator's recv loop
+        // dispatch worker returns after spawning its own conversion into a DETACHED
+        // `spawn_blocking` that keeps a `tx` clone, so the JoinSet join above does
+        // NOT wait for that conversion (only for another build's work it joined). The coordinator's recv loop
         // only returns None once every `tx` clone (including the detached ones) has
         // dropped — i.e. once all conversions have finished and lazily minted the
         // parent. So await the seal BEFORE terminalizing.

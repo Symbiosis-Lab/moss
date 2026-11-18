@@ -10,8 +10,6 @@ import type {
   BaseContext,
   ProcessContext,
   DeployContext,
-  SyndicateContext,
-  ArticleInfo,
   DeploymentInfo,
   HookResult,
   PluginMessage,
@@ -149,61 +147,16 @@ describe("Type Definitions", () => {
       };
       expect(ctxWithoutDomain.domain).toBeUndefined();
     });
-
-    it("accepts SyndicateContext with articles and optional deployment", () => {
-      const ctx: SyndicateContext = {
-        project_info: baseProjectInfo,
-        config: {},
-        site_files: ["index.html"],
-        articles: [
-          {
-            source_path: "/project/posts/hello.md",
-            title: "Hello World",
-            content: "# Hello\n\nContent here",
-            frontmatter: { draft: false },
-            url_path: "/posts/hello.html",
-            date: "2024-01-01",
-            tags: ["intro", "blog"],
-          },
-        ],
-        deployment: {
-          method: "github-pages",
-          url: "https://example.github.io",
-          deployed_at: "2024-01-01T12:00:00Z",
-          metadata: { branch: "gh-pages" },
-        },
-      };
-      expect(ctx.articles).toHaveLength(1);
-      expect(ctx.articles[0].title).toBe("Hello World");
-      expect(ctx.deployment?.method).toBe("github-pages");
-    });
   });
 
-  describe("ArticleInfo", () => {
-    it("accepts ArticleInfo with all fields", () => {
-      const article: ArticleInfo = {
-        source_path: "/posts/hello.md",
-        title: "Hello World",
-        content: "# Hello",
-        frontmatter: { tags: ["test"] },
-        url_path: "/posts/hello.html",
-        date: "2024-01-01",
-        tags: ["test"],
-      };
-      expect(article.title).toBe("Hello World");
-      expect(article.date).toBe("2024-01-01");
-    });
-
-    it("accepts ArticleInfo without optional date", () => {
-      const article: ArticleInfo = {
-        source_path: "/pages/about.md",
-        title: "About",
-        content: "About us",
-        frontmatter: {},
-        url_path: "/about.html",
-        tags: [],
-      };
-      expect(article.date).toBeUndefined();
+  describe("removed syndication hook", () => {
+    // `npm run typecheck` fails on an unused @ts-expect-error when a type returns
+    it("no longer exports SyndicateContext or ArticleInfo", () => {
+      // @ts-expect-error removed from the public API
+      type Gone = import("../../index.js").SyndicateContext;
+      // @ts-expect-error removed from the public API
+      type AlsoGone = import("../../index.js").ArticleInfo;
+      expectTypeOf<[Gone, AlsoGone]>().toEqualTypeOf<[any, any]>();
     });
   });
 

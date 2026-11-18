@@ -1139,7 +1139,7 @@ mod tests {
             .map(|(path, img)| MediaMetadata { path: path.to_string(), dimensions: Some((img.width(), img.height())), ..Default::default() })
             .collect();
         let grounds = pictures.iter().map(|(path, img)| (path.to_string(), Ground::from_image(img))).collect();
-        MediaDimensionLookup::new(&images, &[], &Default::default(), None).with_grounds(grounds)
+        MediaDimensionLookup::new(&images, &[], &Default::default(), None, &Default::default()).with_grounds(grounds)
     }
 
     #[test]
@@ -1376,7 +1376,7 @@ mod tests {
             ..Default::default()
         };
         let overrides = std::collections::HashMap::from([("評選".to_string(), "awards".to_string())]);
-        let lookup = MediaDimensionLookup::new(&[meta], &[], &overrides, None).with_grounds(vec![("評選/art.png".to_string(), Ground::from_image(&img))]);
+        let lookup = MediaDimensionLookup::new(&[meta], &[], &overrides, None, &Default::default()).with_grounds(vec![("評選/art.png".to_string(), Ground::from_image(&img))]);
         let attrs = ink_attributes(Some(&lookup), "/awards/art.png", None, plain(Some("top"), Backing::Auto, false));
         assert!(attrs.contains("data-words="), "{attrs}");
     }
@@ -1388,7 +1388,7 @@ mod tests {
             dimensions: Some((160, 70)),
             ..Default::default()
         };
-        let lookup = MediaDimensionLookup::new(&[meta], &[], &Default::default(), None).with_grounds(vec![("評選/art.png".to_string(), Ground::from_image(&banded(SKY, GROUND, 0.7)))]);
+        let lookup = MediaDimensionLookup::new(&[meta], &[], &Default::default(), None, &Default::default()).with_grounds(vec![("評選/art.png".to_string(), Ground::from_image(&banded(SKY, GROUND, 0.7)))]);
         let attrs = ink_attributes(Some(&lookup), "/%E8%A9%95%E9%81%B8/art.png", None, plain(None, Backing::Never, false));
         assert!(attrs.contains("data-words="), "{attrs}");
     }

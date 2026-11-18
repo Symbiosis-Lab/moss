@@ -37,7 +37,7 @@ import { showToast, showAck } from "../../shared/ui/toast/toast-manager";
 import { runAction, BUSY_LABEL_ATTR } from "../../shared/ui/run-action";
 import type { FolderCardKind } from "./folder-mode";
 import { mountFolderMode, onFolderModeUnmount } from "./folder-mode";
-import { host } from "../../host";
+import { host, type ImportError } from "../../host";
 import { engine } from "../../engine";
 
 // ── Public surface ─────────────────────────────────────────────────────
@@ -246,10 +246,8 @@ function teardownUrlCardListeners(): void {
  *   - inline `.moss-folder-mode__url-error` row for an invalid URL
  *
  * The other three cards stay visible the whole time (no full-grid swap),
- * matching A's expand-in-place behavior. KEEPS B's backend path:
- * `importFromUrl` calls `start_native_import_task` (routes progress to the import panel)
- * + the zero-result ghost-text re-render + `pickLandingFile` (NOT A's
- * `startScraping`, which lacks ghost-text / landing-file behavior).
+ * matching A's expand-in-place behavior. The import itself is
+ * `importFromUrl` below.
  *
  * Data attributes (`-input`, `-submit`, `-back`) are preserved so the
  * onboarding e2e suite can drive the form.
@@ -391,12 +389,11 @@ function wireUrlCard(card: HTMLElement, deps: CardHandlerDeps): void {
     submit.textContent = t('onboard.flow.url_starting');
     try {
       await importFromUrl(url, deps);
-    } catch {
-      // One event, one home: import runs through a native PanelTask
-      // (start_native_import_task). A scrape failure fires
-      // handle.failed(e, /*recoverable=*/false) → a single persistent Blocking
-      // error toast via task-toast-subscriber. Do NOT toast again here, or the same
-      // failure double-signals. We only restore the card's input UI.
+    } catch (error) {
+      // One signal per failure: the progress row says what the import's task
+      // reported, the card says what stopped it before there was one.
+      const failure = error as Partial<ImportError>;
+      if (failure.reported === false && failure.message) showError(failure.message);
       input.disabled = false;
       submit.disabled = false;
       submit.textContent = t('onboard.flow.import_btn');
@@ -459,11 +456,9 @@ function wireUrlCard(card: HTMLElement, deps: CardHandlerDeps): void {
 }
 
 /**
- * Calls `start_native_import_task` which drives `scrape_to_folder`
- * and routes progress to the import panel via a native PanelTask on
- * (ActionPanel, Import, Ambient). Zero-result is inline on the card.
- * On completion, opens the most-recently-dated imported post; if zero
- * files materialized, re-expands the URL card with ghost-text.
+ * Imports through the host, whose task draws progress in the progress panel.
+ * A failure the task did not report, and a zero-page result, show on the
+ * card; on success it opens the most recently dated imported post.
  */
 async function importFromUrl(url: string, deps: CardHandlerDeps): Promise<void> {
   const hostname = (() => {
@@ -474,19 +469,13 @@ async function importFromUrl(url: string, deps: CardHandlerDeps): Promise<void> 
     }
   })();
 
-  // Import progress routes to the import panel via a native PanelTask on
-  // (ActionPanel, Import, Ambient) — the breadcrumb hairline is the
-  // home for project work.
-  // start_native_import_task spawns the task, drives scrape_to_folder,
-  // and emits Running→Succeeded/Failed lifecycle events that the hairline
-  // subscriber already handles.
+  // The host's import task draws its progress, and a failure it reports, in
+  // the progress panel; this card speaks only for what came before the task.
   if (!host.importSite) throw new Error("this host cannot import a site");
   const result = await host.importSite(url, deps.folderPath);
-  if (result.status === "error") {
-    throw new Error(result.error);
-  }
+  if (result.status === "error") throw result.error;
   if (!result.data.success) {
-    throw new Error(result.data.error ?? "import failed");
+    throw { message: result.data.error ?? t('onboard.flow.url_invalid'), reported: false } satisfies ImportError;
   }
   const imported = importedPagesText(result.data);
   if (imported === null) {

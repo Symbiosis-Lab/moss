@@ -440,7 +440,7 @@ struct StoreFailures {
 impl StoreFailures {
     /// `store_bytes`, with `None` for a page the store could not take.
     fn store(&mut self, object_store: &crate::build::cache::ObjectStore, bytes: &[u8]) -> Option<String> {
-        match object_store.store_bytes(bytes, crate::build::cache::RecordMode::Request) {
+        match object_store.store_bytes(bytes) {
             Ok(oid) => Some(oid),
             Err(reason) => {
                 self.pages += 1;

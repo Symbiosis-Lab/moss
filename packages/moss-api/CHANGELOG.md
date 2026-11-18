@@ -13,6 +13,12 @@ release heading.
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-11-17
+
+### Removed
+
+- `SyndicateContext` and `ArticleInfo`, and the `syndicate(ctx)` hook they described. moss stopped calling it when channels moved to the copy exports (`publish_copy`, `update_copy`, `find_copy`, declared under `contributes.channel`), and no plugin in the registry used it. A plugin that still imports either type stops compiling; move it to the copy exports. The `syndicate` capability name stays, and means a channel.
+
 ## [0.19.0] - 2026-11-16
 
 ### Added
