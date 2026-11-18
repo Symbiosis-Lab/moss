@@ -3062,6 +3062,14 @@ body.own-titlebar.controls-trailing .moss-titlebar-traffic-light-space {
   color: var(--moss-color-text-secondary);
 }
 
+/* The one question a channel asks before its sign-in page opens (Mastodon's server). */
+.moss-settings-connection-question {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 /* Settings field spacing (extends .moss-field from primitives) */
 .moss-field {
   margin-bottom: 16px;

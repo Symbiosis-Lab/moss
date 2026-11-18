@@ -116,7 +116,8 @@ pub fn install_text_codec(ctx: &Ctx<'_>) -> Result<()> {
 }
 
 /// crypto.randomUUID, and the part of `crypto.subtle` plugins sign requests
-/// with: `importKey("raw", …)` of an HMAC key and `sign("HMAC", …)`, shaped as
+/// with: `importKey("raw", …)` of an HMAC key, `sign("HMAC", …)`, and
+/// `digest`, which an OAuth sign-in's code challenge needs; shaped as
 /// the Web Crypto API is in browsers, Node and Deno, so the same plugin code
 /// runs in moss and under a test runner.
 ///
@@ -160,9 +161,14 @@ pub fn install_crypto<'js>(ctx: &Ctx<'js>) -> Result<()> {
         let tag = ring::hmac::sign(key, data.as_ref());
         Ok(rquickjs::TypedArray::<u8>::new(ctx, tag.as_ref().to_vec())?.into_value())
     })?;
+    let digest = rquickjs::Function::new(ctx.clone(), |ctx: Ctx<'js>, hash: String, data: rquickjs::TypedArray<'js, u8>| -> Result<rquickjs::Value<'js>> {
+        let Some((_, hmac)) = HMAC_HASHES.iter().find(|(name, _)| *name == hash) else { return Ok(rquickjs::Value::new_null(ctx)) };
+        let sum = ring::digest::digest(hmac.digest_algorithm(), data.as_ref());
+        Ok(rquickjs::TypedArray::<u8>::new(ctx, sum.as_ref().to_vec())?.into_value())
+    })?;
     let install: rquickjs::Function = ctx.eval(SUBTLE_JS)?;
     let hashes: Vec<&str> = HMAC_HASHES.iter().map(|(name, _)| *name).collect();
-    install.call::<_, ()>((import, sign, hashes))?;
+    install.call::<_, ()>((import, sign, hashes, digest))?;
     Ok(())
 }
 
@@ -177,11 +183,11 @@ const HMAC_HASHES: [(&str, ring::hmac::Algorithm); 4] = [
     ("SHA-512", ring::hmac::HMAC_SHA512),
 ];
 
-/// Wraps the host's HMAC in the Web Crypto shapes. A key object shows its
-/// type, algorithm and usages; what it signs and whether it may sign are the
-/// host's, so changing those fields changes nothing. Errors carry the Web
+/// Wraps the host's HMAC and digest in the Web Crypto shapes. A key object
+/// shows its type, algorithm and usages; what it signs and whether it may sign
+/// are the host's, so changing those fields changes nothing. Errors carry the Web
 /// Crypto names on a plain Error, as the runtime has no DOMException.
-const SUBTLE_JS: &str = r#"(importHmac, signHmac, HASHES) => {
+const SUBTLE_JS: &str = r#"(importHmac, signHmac, HASHES, digestOf) => {
   // Taken now, before any plugin code runs, so replacing them later cannot
   // redirect which index a key object stands for.
   const keys = new WeakMap();
@@ -232,6 +238,11 @@ const SUBTLE_JS: &str = r#"(importHmac, signHmac, HASHES) => {
       const tag = nameOf(algorithm) === "HMAC" && typeof id === "number" ? signHmac(id, bytes(data)) : null;
       if (tag === null) throw error("InvalidAccessError", "the key is not an HMAC key that may sign");
       return tag.buffer;
+    },
+    async digest(algorithm, data) {
+      const sum = digestOf(nameOf(algorithm), bytes(data));
+      if (sum === null) throw error("NotSupportedError", `unsupported digest ${nameOf(algorithm)}`);
+      return sum.buffer;
     },
   };
   Object.defineProperty(globalThis.crypto, "subtle", { value: subtle, enumerable: true });
@@ -468,6 +479,19 @@ mod tests {
             [await tag("SHA-1"), await tag({ name: "SHA-256" })].join(" ")
         "#).await;
         assert_eq!(tags, "effcdf6ae5eb2fa2d27416d5f184df9c259a7c79 5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn subtle_digests_as_the_standard_vectors_do() {
+        // FIPS 180-2's "abc", and an unsupported name refused by its Web Crypto error name.
+        let out = with_crypto(r#"
+            const hex = (b) => [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("");
+            const abc = new TextEncoder().encode("..abc").subarray(2);
+            let refused = "";
+            try { await crypto.subtle.digest("MD5", abc); } catch (e) { refused = e.name; }
+            [hex(await crypto.subtle.digest("SHA-256", abc)), hex(await crypto.subtle.digest({ name: "sha-1" }, abc)), refused].join(" ")
+        "#).await;
+        assert_eq!(out, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad a9993e364706816aba3e25717850c26c9cd0d89d NotSupportedError");
     }
 
     /// Code in the plugin's own realm that replaces the intrinsics the shim

@@ -1864,12 +1864,17 @@ const EN = {
 
   // [plugin settings — connection status row]
   // Shown for login-capable plugins in their settings section.
-  // "plugin.connection.connected" contains a {user} placeholder for the bound @handle.
-  // "Matters" is a brand token → allowlisted in no-untranslated-leakage.test.ts.
-  'plugin.connection.connected': 'Connected as @{user}',     // "Connected as @{user}" (with {user} placeholder)
-  'plugin.connection.connect': 'Connect to Matters',       // Button label: "Connect to Matters"
-  'plugin.connection.connecting': 'Connecting…',    // Busy label while connect_account runs
-  'plugin.connection.connect_failed': "Couldn't connect to Matters: {error}", // {error}; connect failed toast
+  // {name} is the channel's own name; {user} the account as the channel names it.
+  'plugin.connection.connected': 'Signed in as {user}',
+  'plugin.connection.signed_in': 'Signed in',
+  'plugin.connection.connect': 'Sign in to {name}',
+  'plugin.connection.connecting': 'Signing in…',
+  'plugin.connection.connect_failed': "Couldn't sign in to {name}: {error}",
+  'plugin.connection.signed_out': 'Signed out',
+  'plugin.connection.sign_in_again': 'Sign in again',
+  'plugin.connection.sign_out': 'Sign out',
+  'plugin.connection.sign_out_failed': "Couldn't sign out of {name}: {error}",
+  'plugin.connection.continue': 'Continue',
 
   // [plugin settings — version row]
   // What is installed, and the offer to take what the catalog publishes. The
@@ -3519,10 +3524,16 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'login.failure.tls_error': 'Die Verbindung zu matters.town konnte nicht gesichert werden.',
     'login.failure.loaded_blank': 'Die Seite wurde geladen, wirkt aber leer.',
     'login.failure.retry': 'Erneut versuchen',
-    'plugin.connection.connected': 'Verbunden als @{user}',
-    'plugin.connection.connect': 'Mit Matters verbinden',
-    'plugin.connection.connecting': 'Wird verbunden …',
-    'plugin.connection.connect_failed': 'Verbindung mit Matters fehlgeschlagen: {error}',
+    'plugin.connection.connected': 'Angemeldet als {user}',
+    'plugin.connection.signed_in': 'Angemeldet',
+    'plugin.connection.connect': 'Bei {name} anmelden',
+    'plugin.connection.connecting': 'Wird angemeldet …',
+    'plugin.connection.connect_failed': 'Anmeldung bei {name} fehlgeschlagen: {error}',
+    'plugin.connection.signed_out': 'Abgemeldet',
+    'plugin.connection.sign_in_again': 'Erneut anmelden',
+    'plugin.connection.sign_out': 'Abmelden',
+    'plugin.connection.sign_out_failed': 'Abmeldung von {name} fehlgeschlagen: {error}',
+    'plugin.connection.continue': 'Weiter',
     'plugin.version.installed': 'Version {version}',
     'plugin.version.update': 'Auf {version} aktualisieren',
     'plugin.remove_failed': '{name} konnte nicht entfernt werden',
@@ -5215,10 +5226,16 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'login.failure.retry': '重试',
 
     // [plugin settings — connection status row]
-    'plugin.connection.connected': '已连接账号 @{user}',
-    'plugin.connection.connect': '连接到 Matters',
-    'plugin.connection.connecting': '连接中…',
-    'plugin.connection.connect_failed': '没能连接到 Matters：{error}',
+    'plugin.connection.connected': '已登录：{user}',
+    'plugin.connection.signed_in': '已登录',
+    'plugin.connection.connect': '登录 {name}',
+    'plugin.connection.connecting': '登录中…',
+    'plugin.connection.connect_failed': '没能登录 {name}：{error}',
+    'plugin.connection.signed_out': '已退出登录',
+    'plugin.connection.sign_in_again': '重新登录',
+    'plugin.connection.sign_out': '退出登录',
+    'plugin.connection.sign_out_failed': '没能退出 {name}：{error}',
+    'plugin.connection.continue': '继续',
     'plugin.version.installed': '版本 {version}',
     'plugin.version.update': '更新到 {version}',
     'plugin.remove_failed': '无法移除 {name}',
@@ -6913,10 +6930,16 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'login.failure.retry': '重試',
 
     // [plugin settings — connection status row]
-    'plugin.connection.connected': '已連接帳號 @{user}',
-    'plugin.connection.connect': '連接到 Matters',
-    'plugin.connection.connecting': '連接中…',
-    'plugin.connection.connect_failed': '沒能連接到 Matters：{error}',
+    'plugin.connection.connected': '已登入：{user}',
+    'plugin.connection.signed_in': '已登入',
+    'plugin.connection.connect': '登入 {name}',
+    'plugin.connection.connecting': '登入中…',
+    'plugin.connection.connect_failed': '沒能登入 {name}：{error}',
+    'plugin.connection.signed_out': '已登出',
+    'plugin.connection.sign_in_again': '重新登入',
+    'plugin.connection.sign_out': '登出',
+    'plugin.connection.sign_out_failed': '沒能登出 {name}：{error}',
+    'plugin.connection.continue': '繼續',
     'plugin.version.installed': '版本 {version}',
     'plugin.version.update': '更新到 {version}',
     'plugin.remove_failed': '無法移除 {name}',

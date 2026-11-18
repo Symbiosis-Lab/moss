@@ -1222,6 +1222,34 @@ if (result) {
 }
 ```
 
+***
+
+### startBrowserSignIn()
+
+```ts
+function startBrowserSignIn(): Promise<BrowserSignIn>;
+```
+
+Start a sign-in that finishes in the person's own browser, where they are
+usually signed in already: the OAuth flow RFC 8252 asks native apps to use.
+moss listens on this computer for the provider's redirect, once; starting
+another sign-in ends this one.
+
+Only in the moss app; elsewhere it rejects with "Sign in from the moss app".
+
+#### Returns
+
+`Promise`\<[`BrowserSignIn`](interfaces/BrowserSignIn.md)\>
+
+#### Example
+
+```typescript
+const signIn = await startBrowserSignIn();
+const reply = await signIn.open(`${server}/oauth/authorize?redirect_uri=${encodeURIComponent(signIn.redirectUri)}&state=${state}&...`);
+if (reply.get("state") !== state) throw new Error("the sign-in did not come from this request");
+const code = reply.get("code");
+```
+
 ## Toast
 
 ### ~~ToastType~~

@@ -8,6 +8,7 @@ All notable changes to moss will be documented here.
 
 - A theme can style the link-preview card moss draws for a page with no picture: `--moss-share-card-bg`, `--moss-share-card-ink` and `--moss-share-card-muted` colour it, `--moss-share-card-picture` places a picture along its right edge, and the card uses the theme's heading face when the theme hosts it as a `.ttf` or `.otf`.
 - `header=over` works on a full-width band that opens the page (`::: {screen header=over}`) as it does on an opening hero: the site header lies over the band's pictures, its ink is read from every picture in the band, and the header passes the pointer through to the band's links. On a band that is not the page's first block it does nothing.
+- A channel signs in through its own sign-in page in your browser, and its settings page shows the account it signed in to, with Sign out. Mastodon asks which server first, already filled in with mastodon.social; nothing else is typed in.
 
 ### Fixed
 

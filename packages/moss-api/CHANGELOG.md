@@ -13,6 +13,10 @@ release heading.
 
 ## [Unreleased]
 
+### Added
+
+- `startBrowserSignIn()`: a channel's `login` signs in through the person's own browser. It gives the loopback `redirectUri` to register, and `open(authorizeUrl)` opens the provider's page and resolves with the redirect's query. Only in the moss app.
+
 ## [0.20.0] - 2026-11-17
 
 ### Removed

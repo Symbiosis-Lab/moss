@@ -455,6 +455,34 @@ async function openSystemBrowser(url) {
 	await getTauriCore().invoke("open_system_browser", { url });
 }
 /**
+* Start a sign-in that finishes in the person's own browser, where they are
+* usually signed in already: the OAuth flow RFC 8252 asks native apps to use.
+* moss listens on this computer for the provider's redirect, once; starting
+* another sign-in ends this one.
+*
+* Only in the moss app; elsewhere it rejects with "Sign in from the moss app".
+*
+* @example
+* ```typescript
+* const signIn = await startBrowserSignIn();
+* const reply = await signIn.open(`${server}/oauth/authorize?redirect_uri=${encodeURIComponent(signIn.redirectUri)}&state=${state}&...`);
+* if (reply.get("state") !== state) throw new Error("the sign-in did not come from this request");
+* const code = reply.get("code");
+* ```
+* @category Browser
+*/
+async function startBrowserSignIn() {
+	const core = getTauriCore();
+	const { redirectUri } = await core.invoke("browser_sign_in_start", {});
+	return {
+		redirectUri,
+		async open(authorizeUrl) {
+			const { params } = await core.invoke("browser_sign_in_wait", { url: authorizeUrl });
+			return new URLSearchParams(params);
+		}
+	};
+}
+/**
 * Open the action panel with dynamic HTML content
 *
 * Automatically injects a bridge script that exposes `window.mossApi` with:
@@ -1719,4 +1747,4 @@ async function dismissToast(id) {
 }
 
 //#endregion
-export { TOAST_DISMISS_EVENT, TOAST_EVENT, TOAST_UPDATE_EVENT, clearPluginCookies, closeBrowser, dismissToast, downloadAsset, emitEvent, executeBinary, fetchUrl, fileExists, getKey, getPlatformInfo, getPluginCookie, getPluginEnvVar, getSecret, getTauriCore, htmlToMarkdown, httpGet, httpPost, httpPostMultipart, listFiles, listKeys, listProjectTree, listSiteFilesWithSizes, onEvent, openBrowser, openBrowserWithHtml, openSystemBrowser, pluginFileExists, readFile, readPluginFile, readSiteFile, rejectSecret, reportError, reportProgress, returnToEditor, sendMessage, setMessageContext, setPluginCookie, setSecret, showBrowserForm, showToast, signWithKey, startTask, writeFile, writeFileBinary, writePluginFile };
+export { TOAST_DISMISS_EVENT, TOAST_EVENT, TOAST_UPDATE_EVENT, clearPluginCookies, closeBrowser, dismissToast, downloadAsset, emitEvent, executeBinary, fetchUrl, fileExists, getKey, getPlatformInfo, getPluginCookie, getPluginEnvVar, getSecret, getTauriCore, htmlToMarkdown, httpGet, httpPost, httpPostMultipart, listFiles, listKeys, listProjectTree, listSiteFilesWithSizes, onEvent, openBrowser, openBrowserWithHtml, openSystemBrowser, pluginFileExists, readFile, readPluginFile, readSiteFile, rejectSecret, reportError, reportProgress, returnToEditor, sendMessage, setMessageContext, setPluginCookie, setSecret, showBrowserForm, showToast, signWithKey, startBrowserSignIn, startTask, writeFile, writeFileBinary, writePluginFile };

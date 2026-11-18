@@ -548,8 +548,8 @@ impl PluginManager {
         plugin: &Plugin,
         hook_name: &str,
         context_json: &str,
-    ) -> Result<(), String> {
-        self.execute_plugin_javascript(plugin, hook_name, context_json, AskedBy::Person).await.map(|_| ())
+    ) -> Result<Option<HookResult>, String> {
+        self.execute_plugin_javascript(plugin, hook_name, context_json, AskedBy::Person).await
     }
 
 

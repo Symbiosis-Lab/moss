@@ -85,6 +85,15 @@ impl SignIns {
         }
         crate::infra::atomic_write::write_json_atomic(&self.path(channel)?, &next)
     }
+
+    /// The person signed out of `channel` on this computer: no record, so the
+    /// channel reads as never signed in.
+    pub fn forget(&self, channel: &str) -> Result<(), String> {
+        match std::fs::remove_file(self.path(channel)?) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("could not forget the {channel} sign-in: {e}")),
+            _ => Ok(()),
+        }
+    }
 }
 
 fn now() -> String {
@@ -97,6 +106,16 @@ mod tests {
 
     fn known(id: &str, name: Option<&str>) -> Account {
         Account::Known { id: id.into(), name: name.map(str::to_string) }
+    }
+
+    #[test]
+    fn signing_out_forgets_the_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SignIns::in_app_data(dir.path());
+        store.forget("acct").unwrap();
+        store.record("acct", &known("acct:1", Some("@ada"))).unwrap();
+        store.forget("acct").unwrap();
+        assert_eq!(store.get("acct"), None);
     }
 
     #[test]
