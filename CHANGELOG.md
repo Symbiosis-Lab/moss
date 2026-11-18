@@ -22,10 +22,14 @@ All notable changes to moss will be documented here.
 - At 0 files the download meter on the opening screen shows nothing lit. It used to draw a line across the whole meter, which read as a full bar.
 - A build that a newer one overtakes stops making pictures' smaller copies and is not shown; the newer build makes them. Saving several times in a row ran one such pass per save at once, each on a full core, for minutes after the last build ended.
 - A page whose first paragraph ends a line with a backslash (a markdown line break) no longer shows the backslash in its automatic description.
+- A picture added to a page in the editor shows in the preview at once. When the page was saved before the copy landed, it said "Picture not found" until moss noticed the new file, up to 20 seconds later.
+- When a picture a page shows is moved or renamed, the editor no longer asks for it at the address it left. That request failed, and the picture could show as broken for a moment.
+- A picture moved or renamed in the editor's file list is shown at its new place in the preview at once. The preview kept "Picture not found" until the folder was next noticed as changed, 20 seconds or more.
 
 ### Changed
 
 - Opening a folder in the app that hasn't changed since moss last built it shows the last build at once instead of building it again: on a site of about 400 pages the preview is ready in about a second, with half the memory. A build that runs while the app sits in the background is no longer slowed by macOS's App Nap, so the first edit after a quiet spell shows about as fast as any other.
+- In the editor, the picture's line shows the focus point's position as the dot is dragged or moved with the arrow keys. It is written to the file once, when the dot is let go, and one undo takes the whole move back.
 
 ## [0.15.26] - 2026-11-17
 
@@ -98,9 +102,6 @@ All notable changes to moss will be documented here.
 - `moss doctor --surface` counts a class written on a grid, gallery, hero or buttons fence (`:::grid 2 {.tall}`) as used in pages. It called such a class "used nowhere".
 - Publishing after a build that failed is refused: "Nothing published — the last build failed. Change a page to build again, then publish." When a build failed, its background work failed, or its output could not be written or read back, a publish used to send the site as the build before it left it, without the latest edits and without saying so. A build stopped on a file still downloading from the cloud is refused the same way until the file arrives. `moss deploy --dry-run --json` reports it as `build_unfinished`.
 - An edit to a post in the site's feed updates the editor's preview in place. It used to reload the whole page.
-- A picture added to a page in the editor shows in the preview at once. When the page was saved before the copy landed, it said "Picture not found" until moss noticed the new file, up to 20 seconds later.
-- When a picture a page shows is moved or renamed, the editor no longer asks for it at the address it left. That request failed, and the picture could show as broken for a moment.
-- A picture moved or renamed in the editor's file list is shown at its new place in the preview at once. The preview kept "Picture not found" until the folder was next noticed as changed, 20 seconds or more.
 - A page made or renamed in the browser editor in the first second after it opens is built at once. It used to wait until the folder was noticed as changed, up to 20 seconds.
 - `moss build --serve --watch` opens a folder at once while a plugin is still reading its files, and fills each page in when the read ends. It used to wait for the read.
 - With the caret on a hero's picture far down a long page, the outline of what the page keeps now appears on the picture. It was missing until the caret was moved away and back.
@@ -146,7 +147,6 @@ All notable changes to moss will be documented here.
 - Pictures are scaled down with the processor's vector instructions: a site's first build spends about a tenth less CPU time and a tenth less memory on its pictures. A picture converted by this build differs from the same picture converted before in a few pixels; pictures already converted are kept.
 - After a moss update that changes how pictures or videos are converted, an unchanged picture or video keeps the file it already has while that file still fits the page, so the next publish uploads it again only when it must. Every picture and video ladder used to be converted again and uploaded with new bytes at the same address.
 - In the editor, a picture inside a `:::` block and a hero's picture are drawn small below their line at all times, so the text no longer moves when the caret reaches a picture's line. The focus point is a dot on that picture, with an outline of what the page keeps; it replaces the second picture and the line of instruction that appeared under the line. Drag the dot, or press ⌥⏎ (Alt+Enter) on the line and move it with the arrow keys (Shift for steps of 10). A hero written with a bare path (`:::hero cover.jpg`) is drawn without a dot; write it as `image=` to set its focus point.
-- In the editor, the picture's line shows the focus point's position as the dot is dragged or moved with the arrow keys. It is written to the file once, when the dot is let go, and one undo takes the whole move back.
 - Resting the pointer on a picture drawn in the editor, or on its path, no longer opens a card repeating the picture. ⌘K on an embedded picture's line still opens the card with its fields.
 - In the editor, dragging the dot no longer repairs a picture line whose focus point was left in its address (`(photo.jpg|focus:20%,62%)`): that line names no file, so no picture is drawn for it. Move `|focus:20%,62%` from the address into the brackets by hand.
 - A copy whose send was cut off is posted again only when its network says outright that there is no such copy. A channel plugin that answered "nothing found" now leaves the copy waiting, as it does when the network cannot be asked, until `moss deploy --retry-copies=<channel>`; the channel's next release answers in the new way.
