@@ -1363,8 +1363,6 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             // registered variants into it, cloned so the 'static spawned task
             // can pass it to advertise_sealed's degrade step.
             let assets_for_seal = assets_for_advertise.clone();
-            let seal_freshness =
-                crate::build::feeds::search_lane::Freshness::of(config.exits_after_build);
             // Held for the tail's life so a folder switch cannot evict this
             // folder's lifecycle record (and its promotion epoch) under it.
             let lifecycle_record = crate::build::lifecycle::lock_for(&mp);
@@ -1406,7 +1404,6 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                             promotion_epoch,
                             locked_at_nanos,
                             render,
-                            seal_freshness,
                             &folder_path_for_mat,
                             SealGuards {
                                 // Detached: the app or a `--serve --watch`
@@ -1499,7 +1496,6 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                         promotion_epoch,
                         locked_at_nanos,
                         render,
-                        crate::build::feeds::search_lane::Freshness::Now,
                         &folder_path,
                         SealGuards {
                             // Inline arm: per the comment above, the caller
@@ -1954,7 +1950,6 @@ async fn advertise_sealed(
     locked_at_nanos: u64, // When this build took the folder lock: render order across processes, not `promotion_epoch`'s admission order.
     // The render `lifecycle::show_render` minted for this build.
     render: Option<crate::build::lifecycle::Render>,
-    freshness: crate::build::feeds::search_lane::Freshness,
     // The exact key `folder_session::registry()` and `ops::watch::worker`
     // register under — passed rather than derived from `mp.project_root()`
     // so a `MossPaths` normalization can never drift the two apart. See the
@@ -2205,7 +2200,6 @@ async fn advertise_sealed(
         promotion_epoch,
         locked_at_nanos,
         render,
-        freshness,
         is_pinned,
         session: session.clone(),
         cache_lease: guards.cache_lease,

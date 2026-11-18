@@ -224,6 +224,178 @@ async fn settle_forces_a_synchronous_seal_before_generation_id_is_read() {
     );
 }
 
+impl Vault {
+    /// A vault with `[site].search` on.
+    fn searchable() -> Self {
+        let vault = Self::new();
+        std::fs::create_dir_all(vault.mp.config().parent().unwrap()).unwrap();
+        std::fs::write(vault.mp.config(), "[site]\nsearch = true\n").unwrap();
+        vault
+    }
+}
+
+/// Whether any fragment of the bundle the receipt names holds `word`.
+fn bundle_finds(mp: &crate::moss_paths::MossPaths, word: &str) -> bool {
+    use std::io::Read;
+    let receipt: serde_json::Value = serde_json::from_slice(&std::fs::read(mp.index_receipt()).unwrap()).unwrap();
+    let held = mp.index_dir().join(receipt["fp"].as_str().unwrap());
+    receipt["files"].as_array().unwrap().iter().filter_map(|f| f[0].as_str()).filter(|rel| rel.ends_with(".pf_fragment")).any(|rel| {
+        let mut json = String::new();
+        flate2::read::GzDecoder::new(&std::fs::read(held.join(rel)).unwrap()[..]).read_to_string(&mut json).unwrap();
+        json.contains(word)
+    })
+}
+
+/// Edits in a watch session index nothing: the index is built when search or
+/// a publish reads it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn watch_builds_never_index_search_on_their_own() {
+    let vault = Vault::searchable();
+    let _serialize = crate::build::feeds::search::lock_index_counter();
+    let before = crate::build::feeds::search::index_build_count();
+    for word in ["v1", "v2", "v3"] {
+        std::fs::write(vault.folder.join("index.md"), format!("---\ntitle: Home\n---\n\n{word}\n")).unwrap();
+        vault.build().await;
+        vault.drained().await;
+        crate::build::seal_phase::settle(&vault.mp).await;
+    }
+    assert!(vault.mp.current_generation_id().is_ok(), "the edits promoted");
+    for _ in 0..40 {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(crate::build::feeds::search::index_build_count(), before, "a promote indexed search");
+    }
+}
+
+/// A search opened before an edit's debounced promote finds the edit: the
+/// settle flushes the pending seal before it indexes `current`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_search_read_before_the_promote_finds_the_edit() {
+    let vault = Vault::searchable();
+    let _serialize = crate::build::feeds::search::lock_index_counter();
+    vault.build().await;
+    vault.drained().await;
+    crate::build::seal_phase::settle(&vault.mp).await;
+    std::fs::write(vault.folder.join("index.md"), "---\ntitle: Home\n---\n\nlichenword\n").unwrap();
+    vault.build().await;
+    vault.drained().await;
+
+    assert!(crate::build::feeds::search_lane::settle(&vault.mp, true).await, "the read indexed");
+    assert!(bundle_finds(&vault.mp, "lichenword"), "the bundle covers the edit, not the page before it");
+}
+
+/// A search read after an edit publishes a bundle the edit's build never
+/// adopted, so a publish settling after it must still see `current` shipping
+/// the old one and rebuild; once a build adopts it, there is nothing to ship.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_publish_after_a_search_read_still_ships_the_fresh_bundle() {
+    use crate::build::feeds::search_lane::settle;
+    let vault = Vault::searchable();
+    let _serialize = crate::build::feeds::search::lock_index_counter();
+    vault.build().await;
+    vault.drained().await;
+    settle(&vault.mp, true).await;
+    vault.build().await;
+    vault.drained().await;
+    assert!(!settle(&vault.mp, true).await, "the build adopted the bundle, so current ships it");
+
+    std::fs::write(vault.folder.join("index.md"), "---\ntitle: Home\n---\n\nlichenword\n").unwrap();
+    vault.build().await;
+    vault.drained().await;
+    assert!(settle(&vault.mp, true).await, "the search read");
+    assert!(settle(&vault.mp, true).await, "a publish after the read: current still ships the bundle before it");
+
+    vault.build().await;
+    vault.drained().await;
+    assert!(!settle(&vault.mp, true).await, "the rebuild adopted the fresh bundle");
+}
+
+/// The preview's search mount settles before it answers, and answers from the
+/// bundle that settle published, so the entry the panel loads after an edit
+/// covers the edit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_search_mount_settles_and_serves_the_held_bundle() {
+    let vault = Vault::searchable();
+    let _serialize = crate::build::feeds::search::lock_index_counter();
+    vault.build().await;
+    vault.drained().await;
+    crate::build::seal_phase::settle(&vault.mp).await;
+    std::fs::write(vault.folder.join("index.md"), "---\ntitle: Home\n---\n\nlichenword\n").unwrap();
+    vault.build().await;
+    vault.drained().await;
+
+    let (port, _, shutdown) = crate::ops::serve::start_server(crate::ops::serve::ServeConfig::new(vault.served.clone(), 59600))
+        .await
+        .expect("server starts");
+    let url = format!("http://localhost:{port}/_moss/pagefind/pagefind-entry.json");
+    let body = tokio::task::spawn_blocking(move || {
+        ureq::get(&url).timeout(std::time::Duration::from_secs(20)).call().map(|r| r.into_string().unwrap())
+    })
+    .await
+    .unwrap()
+    .expect("the entry is served");
+    let _ = shutdown.send(());
+
+    assert!(bundle_finds(&vault.mp, "lichenword"), "the read settled the index");
+    let held = crate::build::feeds::search_lane::held_file(&vault.mp, "pagefind-entry.json").expect("the receipt names the entry");
+    assert_eq!(body, std::fs::read_to_string(held).unwrap(), "the entry comes from the holding dir");
+}
+
+/// The entry the search mount serves for one request on `port`.
+async fn search_entry(port: u16) -> Result<String, String> {
+    let url = format!("http://localhost:{port}/_moss/pagefind/pagefind-entry.json");
+    tokio::task::spawn_blocking(move || {
+        ureq::get(&url).timeout(std::time::Duration::from_secs(20)).call().map(|r| r.into_string().unwrap()).map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap()
+}
+
+/// A search opened while a build runs waits for it, and its seal, and answers
+/// with a bundle that covers the edit that build carried.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_search_while_a_build_runs_waits_for_it_and_finds_the_edit() {
+    let vault = Vault::searchable();
+    let _serialize = crate::build::feeds::search::lock_index_counter();
+    vault.build().await;
+    vault.drained().await;
+    crate::build::feeds::search_lane::settle(&vault.mp, true).await;
+
+    let (port, _, shutdown) = crate::ops::serve::start_server(crate::ops::serve::ServeConfig::new(vault.served.clone(), 59610))
+        .await
+        .expect("server starts");
+    let building = vault.session.hold_ui_bound();
+    let read = tokio::spawn(search_entry(port));
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    vault.edit("lichenword");
+    vault.build().await;
+    drop(building);
+    let body = read.await.unwrap().expect("the entry is served");
+    let _ = shutdown.send(());
+
+    assert!(bundle_finds(&vault.mp, "lichenword"));
+    let held = crate::build::feeds::search_lane::held_file(&vault.mp, "pagefind-entry.json").unwrap();
+    assert_eq!(body, std::fs::read_to_string(held).unwrap(), "the answer is the bundle with the edit");
+}
+
+/// The first search of a session, during a picture batch, has no bundle to
+/// answer with at once, so it waits for one rather than failing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_first_search_during_a_picture_batch_still_gets_an_index() {
+    let vault = Vault::searchable();
+    let _serialize = crate::build::feeds::search::lock_index_counter();
+    vault.build().await;
+    vault.drained().await;
+
+    let (port, _, shutdown) = crate::ops::serve::start_server(crate::ops::serve::ServeConfig::new(vault.served.clone(), 59620))
+        .await
+        .expect("server starts");
+    let _converting = vault.session.hold_converting();
+    let body = search_entry(port).await;
+    let _ = shutdown.send(());
+
+    assert!(body.is_ok(), "the search mount answered {body:?}");
+}
+
 /// A local stylesheet can reach staging only in the deferred asset-copy
 /// worker. The first preview projection must wait; once the merged seal has
 /// its bytes, the matching render may be revealed and promoted.
@@ -497,19 +669,16 @@ async fn a_hidden_window_holds_the_seal_behind_the_gate_and_settle_still_runs_it
     assert!(vault.mp.current_generation_id().is_ok(), "settle must materialize whatever the gate says");
 }
 
-/// Once the window is visible again, the held seal runs and its own tail asks
-/// search for exactly one index of the generation it promoted.
+/// Once the window is visible again, the held seal runs, and nothing indexes
+/// search: the index waits for a reader.
 ///
 /// On a current-thread runtime so the 20 s idle window can be skipped on the
 /// paused clock; the builds themselves run on real time.
 #[tokio::test(flavor = "current_thread")]
-async fn the_flush_on_live_runs_the_held_seal_then_one_index() {
-    use crate::build::feeds::search_lane::PageSet;
+async fn the_flush_on_live_runs_the_held_seal_and_indexes_nothing() {
     use crate::ops::watch::cadence::Cadence;
+    let vault = Vault::searchable();
     let _serialize = crate::build::feeds::search::lock_index_counter();
-    let vault = Vault::new();
-    std::fs::create_dir_all(vault.mp.root()).unwrap();
-    std::fs::write(vault.mp.config(), "[site]\nsearch = true\n").unwrap();
     let (cadence, rx) = tokio::sync::watch::channel(Cadence::Background);
     vault.session.follow_cadence(rx);
 
@@ -521,28 +690,17 @@ async fn the_flush_on_live_runs_the_held_seal_then_one_index() {
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     assert!(vault.generations().is_empty(), "a hidden window must hold the seal past its idle window");
 
-    let hashes: crate::types::content::SiteHashes =
-        serde_json::from_str(&std::fs::read_to_string(vault.mp.hashes()).unwrap()).unwrap();
-    let want = format!("{:?}", PageSet::of(&hashes.files).fp);
-    let receipt_fp = || {
-        std::fs::read_to_string(vault.mp.index_receipt())
-            .ok()
-            .and_then(|raw| serde_json::from_str::<crate::build::feeds::search_lane::BundleReceipt>(&raw).ok())
-            .and_then(|r| u64::from_str_radix(&r.fp, 16).ok())
-            .map(|fp| format!("PageSetFp({fp})"))
-    };
     let before = crate::build::feeds::search::index_build_count();
     cadence.send_replace(Cadence::Live);
     for _ in 0..500 {
-        if receipt_fp().as_deref() == Some(want.as_str()) {
+        if !vault.generations().is_empty() {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     assert_eq!(vault.generations().len(), 1, "Live must materialize the held seal");
-    assert_eq!(receipt_fp().as_deref(), Some(want.as_str()), "and index the generation it promoted");
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    assert_eq!(crate::build::feeds::search::index_build_count() - before, 1, "exactly once");
+    assert_eq!(crate::build::feeds::search::index_build_count(), before, "a promote indexed search");
 }
 
 /// A first publish to a new host compares against nothing of its own. The

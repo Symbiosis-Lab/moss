@@ -1,6 +1,5 @@
 use super::*;
 
-use std::time::Duration;
 
 use crate::build::manifest::PendingManifest;
 use crate::moss_paths::MossPaths;
@@ -30,9 +29,16 @@ fn bundle_keys(pending: &PendingManifest) -> Vec<String> {
     keys
 }
 
-/// Adopt as an app build does: a lane will index the frozen generation later.
+/// Adopt as a watch-session build does: a reader settles the index later.
 fn adopt(mp: &MossPaths, pending: &mut PendingManifest) -> Adoption {
-    adopt_into(mp, &mp.staging_dir(), pending, true, Freshness::Lane)
+    adopt_into(mp, &mp.staging_dir(), pending, true, Freshness::OnRead)
+}
+
+/// Publish a bundle of the staged pages, as a settle does, then adopt it.
+fn settle_and_adopt(mp: &MossPaths, pending: &mut PendingManifest) -> Adoption {
+    let produced = search::build_search_index(&mp.staging_dir()).unwrap();
+    with_holding(&mp.index_dir(), |h| publish_bundle(h, &mp.index_dir(), PageSet::UNKNOWN, None, &produced)).unwrap();
+    adopt(mp, pending)
 }
 
 // ── The gate ────────────────────────────────────────────────────────────────
@@ -44,7 +50,7 @@ fn disabled_search_registers_nothing_and_indexes_nothing() {
     let (_root, mp) = project(PAGE);
     let mut pending = PendingManifest::new(Default::default());
 
-    let outcome = adopt_into(&mp, &mp.staging_dir(), &mut pending, false, Freshness::Lane);
+    let outcome = adopt_into(&mp, &mp.staging_dir(), &mut pending, false, Freshness::OnRead);
 
     assert_eq!(outcome, Adoption::Disabled);
     assert!(bundle_keys(&pending).is_empty());
@@ -52,41 +58,20 @@ fn disabled_search_registers_nothing_and_indexes_nothing() {
     assert!(!mp.staging_dir().join("_moss/pagefind").exists());
 }
 
-// ── Nothing to adopt (the rule's first hole) ─────────────────────────────────
+// ── Nothing to adopt ────────────────────────────────────────────────────────
 
-/// The first build after search is enabled has no receipt to adopt. Registering
-/// nothing would be a silent bug rather than a slow path: mark-and-sweep would
-/// prune the bucket, `remove_stale_files` would delete the bundle, and — the
-/// part that reaches users — a no-op republish would have the deploy diff read
-/// the index as *removed* and delete it off the live site. Under the old ticket
-/// scheme a newer worker was always queued; under adoption none is. So this
-/// must fall through to a synchronous index.
+/// A build with no receipt indexes nothing: the index is built when search or
+/// a publish reads it, and both settle before they do.
 #[test]
-fn a_first_build_with_no_receipt_indexes_synchronously_and_registers() {
+fn a_build_with_no_receipt_registers_nothing_and_indexes_nothing() {
     let _serialize = search::lock_index_counter();
     let (_root, mp) = project(PAGE);
     let mut pending = PendingManifest::new(Default::default());
+    let before = search::index_build_count();
 
-    let outcome = adopt(&mp, &mut pending);
-
-    let n = match outcome {
-        Adoption::Indexed(n) => n,
-        other => panic!("expected a synchronous index, got {:?}", other),
-    };
-    assert!(n > 0);
-    let keys = bundle_keys(&pending);
-    assert!(
-        keys.iter().any(|k| k == "_moss/pagefind/pagefind.js"),
-        "bundle entrypoint missing from the manifest: {:?}",
-        keys
-    );
-    for key in &keys {
-        assert!(
-            mp.staging_dir().join(key).is_file(),
-            "{key} registered but not laid into staging"
-        );
-    }
-    assert!(mp.index_receipt().is_file(), "a receipt must be published");
+    assert_eq!(adopt(&mp, &mut pending), Adoption::Unindexed);
+    assert!(bundle_keys(&pending).is_empty());
+    assert_eq!(search::index_build_count(), before);
 }
 
 // ── Steady state ────────────────────────────────────────────────────────────
@@ -99,7 +84,7 @@ fn later_builds_adopt_the_same_path_set_without_reindexing() {
     let _serialize = search::lock_index_counter();
     let (_root, mp) = project(PAGE);
     let mut first = PendingManifest::new(Default::default());
-    adopt(&mp, &mut first);
+    settle_and_adopt(&mp, &mut first);
     let expected = bundle_keys(&first);
     assert!(!expected.is_empty());
 
@@ -129,7 +114,7 @@ fn adoption_relays_files_that_staging_no_longer_has() {
     let _serialize = search::lock_index_counter();
     let (_root, mp) = project(PAGE);
     let mut first = PendingManifest::new(Default::default());
-    adopt(&mp, &mut first);
+    settle_and_adopt(&mp, &mut first);
     std::fs::remove_dir_all(mp.staging_dir().join("_moss/pagefind")).unwrap();
 
     let mut second = PendingManifest::new(Default::default());
@@ -146,14 +131,14 @@ fn adoption_relays_files_that_staging_no_longer_has() {
 
 // ── Freshness: a process nothing runs after ─────────────────────────────────
 
-/// `lane::request` is issued only from the app-context seal tail. A CLI
-/// `moss build` (or `build_sync`, or the snapshot harness) therefore has no
-/// lane, and adopting its own earlier receipt verbatim froze the index at
-/// whatever the *first* such build produced: add a page and it was never
-/// searchable, delete one and search still returned it. `Freshness::Now` says
-/// "nothing indexes after me", so every such build indexes.
+/// Only a preview read or a publish settles the index. A CLI `moss build` (or
+/// `build_sync`, or the snapshot harness) has neither after it, and adopting
+/// its own earlier receipt verbatim would freeze the index at whatever the
+/// *first* such build produced: add a page and it is never searchable, delete
+/// one and search still returns it. `Freshness::Now` says "nothing indexes
+/// after me", so every such build indexes.
 #[test]
-fn a_build_with_no_lane_reindexes_rather_than_adopting_its_own_stale_receipt() {
+fn a_one_shot_build_reindexes_rather_than_adopting_its_own_stale_receipt() {
     let _serialize = search::lock_index_counter();
     let (_root, mp) = project(PAGE);
     let mut first = PendingManifest::new(Default::default());
@@ -175,7 +160,7 @@ fn a_build_with_no_lane_reindexes_rather_than_adopting_its_own_stale_receipt() {
     assert_eq!(
         search::index_build_count() - before,
         1,
-        "a build with no lane behind it must index its own output"
+        "a build with no reader after it must index its own output"
     );
     assert_eq!(
         read_receipt(&mp.index_dir()).unwrap().pages,
@@ -184,19 +169,19 @@ fn a_build_with_no_lane_reindexes_rather_than_adopting_its_own_stale_receipt() {
     );
 }
 
-/// The other half: a lane-less build over the same staged pages would index them
-/// into the same bytes, so it serves the bundle it holds. A bundle the lane
+/// The other half: a one-shot build over the same staged pages would index them
+/// into the same bytes, so it serves the bundle it holds. A bundle a settle
 /// indexed from a generation is never taken for one.
 #[test]
-fn a_build_with_no_lane_serves_the_bundle_it_indexed_from_the_same_pages() {
+fn a_one_shot_build_serves_the_bundle_it_indexed_from_the_same_pages() {
     let _serialize = search::lock_index_counter();
     let (_root, mp) = project(PAGE);
-    let mut lane = PendingManifest::new(Default::default());
-    adopt(&mp, &mut lane);
+    let mut settled = PendingManifest::new(Default::default());
+    settle_and_adopt(&mp, &mut settled);
     let mut first = PendingManifest::new(Default::default());
     let before = search::index_build_count();
     assert!(matches!(adopt_into(&mp, &mp.staging_dir(), &mut first, true, Freshness::Now), Adoption::Indexed(_)));
-    assert_eq!(search::index_build_count() - before, 1, "a lane receipt is not a lane-less build's own");
+    assert_eq!(search::index_build_count() - before, 1, "a settle's receipt is not a one-shot build's own");
 
     let mut second = PendingManifest::new(Default::default());
     let outcome = adopt_into(&mp, &mp.staging_dir(), &mut second, true, Freshness::Now);
@@ -211,14 +196,14 @@ fn a_build_with_no_lane_serves_the_bundle_it_indexed_from_the_same_pages() {
 
 /// An external delete or a cloud eviction of the holding area leaves a receipt
 /// naming files that are gone. Registering them would put a path in the
-/// manifest that is not on disk. Register nothing, drop the receipt — and the
-/// next build takes the synchronous path, so it self-heals in one cycle.
+/// manifest that is not on disk. Register nothing and drop the receipt; the
+/// next settle re-indexes.
 #[test]
 fn a_receipt_whose_files_are_gone_registers_nothing_and_is_dropped() {
     let _serialize = search::lock_index_counter();
     let (_root, mp) = project(PAGE);
     let mut first = PendingManifest::new(Default::default());
-    adopt(&mp, &mut first);
+    settle_and_adopt(&mp, &mut first);
     let receipt = read_receipt(&mp.index_dir()).expect("receipt published");
     std::fs::remove_dir_all(holding_dir(&mp.index_dir(), receipt.fp())).unwrap();
 
@@ -234,8 +219,8 @@ fn a_receipt_whose_files_are_gone_registers_nothing_and_is_dropped() {
 
     let mut third = PendingManifest::new(Default::default());
     assert!(
-        matches!(adopt(&mp, &mut third), Adoption::Indexed(_)),
-        "divergence must self-heal on the next build"
+        adopt(&mp, &mut third) == Adoption::Unindexed,
+        "with the receipt dropped, the next settle re-indexes"
     );
 }
 
@@ -249,7 +234,7 @@ fn a_copy_that_fails_partway_registers_nothing() {
     let _serialize = search::lock_index_counter();
     let (_root, mp) = project(PAGE);
     let mut first = PendingManifest::new(Default::default());
-    adopt(&mp, &mut first);
+    settle_and_adopt(&mp, &mut first);
     let receipt = read_receipt(&mp.index_dir()).expect("receipt published");
     assert!(receipt.files.len() > 1, "need several files to fail partway");
 
@@ -277,11 +262,11 @@ fn a_copy_that_fails_partway_registers_nothing() {
 fn the_divergence_branch_does_not_delete_a_receipt_it_never_read() {
     let (_root, mp) = project(PAGE);
     let index_dir = mp.index_dir();
-    let fresh = BundleReceipt { fp: "beef".into(), pages: 1, files: vec![], staged: None };
+    let fresh = BundleReceipt { fp: "beef".into(), pages: 1, left_out: 0, files: vec![], staged: None };
     std::fs::create_dir_all(&index_dir).unwrap();
     std::fs::write(mp.index_receipt(), serde_json::to_vec(&fresh).unwrap()).unwrap();
 
-    let stale = BundleReceipt { fp: "dead".into(), pages: 1, files: vec![], staged: None };
+    let stale = BundleReceipt { fp: "dead".into(), pages: 1, left_out: 0, files: vec![], staged: None };
     with_holding(&index_dir, |h| drop_receipt_if_still(h, &index_dir, &stale));
 
     assert_eq!(
@@ -297,8 +282,8 @@ fn the_divergence_branch_does_not_delete_a_receipt_it_never_read() {
 /// fingerprint of the **complete** page set, and nothing in the indexer's
 /// return value proves the bundle covers it — an iCloud-evicted page, a GC'd
 /// generation and an empty site all arrive as "0 pages". Stamped with a real
-/// fingerprint, an empty bundle is absorbing: the lane skips every later
-/// request for that page set, `settle_for_publish`'s `intact` test is vacuously
+/// fingerprint, an empty bundle is absorbing: every later settle skips that
+/// page set, its `intact` test is vacuously
 /// true over an empty file list, adoption registers nothing, and the deploy
 /// diff deletes the search index off the live site. Refuse the stamp instead.
 #[test]
@@ -375,8 +360,8 @@ fn a_refused_publish_leaves_the_previous_bundle_adoptable() {
 }
 
 /// A page set with nothing to index publishes an *empty* receipt rather than
-/// none. Without it the fallback would re-run a whole index on every build of a
-/// site that has no indexable content, forever. This is the one case where an
+/// none. Without it every settle of a site that has no indexable content would
+/// re-run a whole index. This is the one case where an
 /// empty bundle is authoritative, and the receipt records the measurement that
 /// makes it so.
 #[test]
@@ -387,7 +372,7 @@ fn an_unindexable_site_publishes_an_empty_receipt_instead_of_reindexing() {
     mp.ensure_dirs().unwrap();
 
     let mut first = PendingManifest::new(Default::default());
-    assert_eq!(adopt(&mp, &mut first), Adoption::Empty);
+    assert_eq!(settle_and_adopt(&mp, &mut first), Adoption::Empty);
     assert_eq!(read_receipt(&mp.index_dir()).unwrap().pages, 0);
 
     let before = search::index_build_count();
@@ -396,7 +381,7 @@ fn an_unindexable_site_publishes_an_empty_receipt_instead_of_reindexing() {
     assert_eq!(
         search::index_build_count(),
         before,
-        "an empty receipt must stop the fallback from re-indexing every build"
+        "an empty receipt is adopted, never re-indexed"
     );
     assert!(bundle_keys(&second).is_empty());
 }
@@ -426,7 +411,7 @@ fn the_page_set_counts_and_fingerprints_html_entries_only() {
 
 /// Same content, same fingerprint, regardless of `HashMap` iteration order —
 /// the property `compute_manifest_generation_id` needed a `BTreeMap` for, and
-/// the reason a lane keyed on it can skip a no-op save.
+/// the reason a settle keyed on it can skip a no-op save.
 #[test]
 fn the_page_set_fingerprint_is_order_independent() {
     let mut a = HashMap::new();
@@ -442,25 +427,48 @@ fn the_page_set_fingerprint_is_order_independent() {
 
 // ── The publish sync point ──────────────────────────────────────────────────
 
-/// `settle_for_publish` must be free when the lane has already published a
-/// receipt for exactly the page set on disk — otherwise every publish would
-/// pay for a re-index and a rebuild it does not need.
-#[test]
-fn settle_is_a_no_op_when_the_receipt_already_covers_the_published_page_set() {
-    let _serialize = search::lock_index_counter();
-    let (_root, mp) = project(PAGE);
-    // Publish a bundle stamped with the fingerprint of the manifest on disk.
+/// A bundle published for a one-page set, and `hashes.json` for that page,
+/// naming the bundle's files too when `seal_the_bundle`.
+fn sealed_with_a_covering_receipt(mp: &MossPaths, seal_the_bundle: bool) {
     let mut hashes = crate::types::content::SiteHashes::default();
     hashes.files.insert("index.html".to_string(), "100644:abc".to_string());
-    std::fs::write(mp.hashes(), serde_json::to_string(&hashes).unwrap()).unwrap();
     let want = PageSet::of(&hashes.files);
     let produced = search::build_search_index(&mp.staging_dir()).unwrap();
-    with_holding(&mp.index_dir(), |h| publish_bundle(h, &mp.index_dir(), want, None, &produced))
-        .unwrap();
+    let receipt = with_holding(&mp.index_dir(), |h| publish_bundle(h, &mp.index_dir(), want, None, &produced)).unwrap();
+    if seal_the_bundle {
+        for (rel, hash) in &receipt.files {
+            let sp = ServedPath::for_search_asset(rel).unwrap();
+            hashes.files.insert(sp.as_str().to_string(), crate::types::content::file_entry(hash));
+        }
+    }
+    std::fs::write(mp.hashes(), serde_json::to_string(&hashes).unwrap()).unwrap();
+}
+
+/// A settle must be free when the receipt covers the page set `current` holds
+/// and `current` already ships its bundle — otherwise every publish would pay
+/// for a re-index and a rebuild it does not need.
+#[test]
+fn settle_is_a_no_op_when_current_ships_the_covering_bundle() {
+    let _serialize = search::lock_index_counter();
+    let (_root, mp) = project(PAGE);
+    sealed_with_a_covering_receipt(&mp, true);
 
     let before = search::index_build_count();
-    assert!(!settle_for_publish(&mp, true), "a fresh index must not force a rebuild");
+    assert!(!settle_index(&mp), "a fresh, shipped index must not force a rebuild");
     assert_eq!(search::index_build_count(), before);
+}
+
+/// A search read since the last build published a covering bundle that build
+/// never adopted: a publish must rebuild to ship it, without indexing again.
+#[test]
+fn settle_asks_for_a_rebuild_when_current_ships_another_bundle() {
+    let _serialize = search::lock_index_counter();
+    let (_root, mp) = project(PAGE);
+    sealed_with_a_covering_receipt(&mp, false);
+
+    let before = search::index_build_count();
+    assert!(settle_index(&mp), "current does not ship the receipt's bundle");
+    assert_eq!(search::index_build_count(), before, "the receipt already covers the page set");
 }
 
 /// …and must re-index (and say so) when it does not. A publish that shipped the
@@ -471,7 +479,7 @@ fn settle_reindexes_when_the_receipt_is_for_an_older_page_set() {
     let _serialize = search::lock_index_counter();
     let (_root, mp) = project(PAGE);
     let mut pending = PendingManifest::new(Default::default());
-    adopt(&mp, &mut pending); // receipt stamped UNKNOWN
+    settle_and_adopt(&mp, &mut pending); // receipt stamped UNKNOWN
     // `current` must resolve for the settle to have something to index.
     let gen = mp.generation_dir("test");
     std::fs::create_dir_all(&gen).unwrap();
@@ -482,12 +490,36 @@ fn settle_reindexes_when_the_receipt_is_for_an_older_page_set() {
     hashes.files.insert("index.html".to_string(), "100644:abc".to_string());
     std::fs::write(mp.hashes(), serde_json::to_string(&hashes).unwrap()).unwrap();
 
-    assert!(settle_for_publish(&mp, true), "a stale index must force a rebuild");
+    assert!(settle_index(&mp), "a stale index must force a rebuild");
     assert_eq!(
         read_receipt(&mp.index_dir()).unwrap().fp(),
         PageSetFp::of(&hashes.files),
         "settle must leave a receipt for the page set being published"
     );
+}
+
+/// A page set with a page the indexer leaves out on purpose (here the
+/// not-found page) is covered by the bundle that left it out: a second settle
+/// of the same generation must not index again.
+#[test]
+fn a_second_settle_of_a_page_set_with_a_page_left_out_indexes_nothing() {
+    let _serialize = search::lock_index_counter();
+    let (_root, mp) = project(PAGE);
+    let gen = mp.generation_dir("g");
+    std::fs::create_dir_all(&gen).unwrap();
+    std::fs::write(gen.join("index.html"), PAGE).unwrap();
+    std::fs::write(gen.join(crate::build::served_path::NOT_FOUND_FILE), PAGE).unwrap();
+    mp.set_current_ptr("g").unwrap();
+    let mut hashes = crate::types::content::SiteHashes::default();
+    for page in ["index.html", crate::build::served_path::NOT_FOUND_FILE] {
+        hashes.files.insert(page.to_string(), "100644:abc".to_string());
+    }
+    std::fs::write(mp.hashes(), serde_json::to_string(&hashes).unwrap()).unwrap();
+
+    settle_index(&mp);
+    let before = search::index_build_count();
+    settle_index(&mp);
+    assert_eq!(search::index_build_count(), before, "the first settle's bundle covers this page set");
 }
 
 /// An empty bundle must not satisfy a page set that has pages. `all` over an
@@ -505,6 +537,7 @@ fn settle_does_not_accept_an_empty_bundle_for_a_page_set_that_has_pages() {
     let empty = BundleReceipt {
         fp: PageSetFp::of(&hashes.files).hex(),
         pages: 0,
+        left_out: 0,
         files: vec![],
         staged: None,
     };
@@ -516,10 +549,76 @@ fn settle_does_not_accept_an_empty_bundle_for_a_page_set_that_has_pages() {
     std::fs::write(gen.join("index.html"), PAGE).unwrap();
     mp.set_current_ptr("g").unwrap();
 
-    assert!(settle_for_publish(&mp, true), "an empty bundle must not pass for a real page set");
+    assert!(settle_index(&mp), "an empty bundle must not pass for a real page set");
     let after = read_receipt(&mp.index_dir()).unwrap();
     assert_eq!(after.pages, 1);
     assert!(!after.files.is_empty());
+}
+
+/// An edit's build must not wait out a search's index. `begin` takes the
+/// holding lock on every build, so a settle may hold it only to read the
+/// receipt and to publish, never across the index.
+#[test]
+fn a_build_adopts_while_a_settle_indexes() {
+    let _serialize = search::lock_index_counter();
+    let (_root, mp) = project(PAGE);
+    let gen = mp.generation_dir("g");
+    std::fs::create_dir_all(&gen).unwrap();
+    std::fs::write(gen.join("index.html"), PAGE).unwrap();
+    mp.set_current_ptr("g").unwrap();
+    let mut hashes = crate::types::content::SiteHashes::default();
+    hashes.files.insert("index.html".to_string(), "100644:abc".to_string());
+    std::fs::write(mp.hashes(), serde_json::to_string(&hashes).unwrap()).unwrap();
+
+    let adopted_mid_index = Arc::new(Mutex::new(None));
+    let (build, record) = (mp.clone(), Arc::clone(&adopted_mid_index));
+    *WHILE_INDEXING.lock().unwrap() = Some(Box::new(move || {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut pending = PendingManifest::new(Default::default());
+            let _ = tx.send(adopt(&build, &mut pending));
+        });
+        *record.lock().unwrap() = rx.recv_timeout(std::time::Duration::from_secs(5)).ok();
+    }));
+
+    assert!(settle_index(&mp));
+    assert_eq!(
+        *adopted_mid_index.lock().unwrap(),
+        Some(Adoption::Unindexed),
+        "a build's adoption waited for the settle's index"
+    );
+    assert_eq!(read_receipt(&mp.index_dir()).unwrap().fp(), PageSetFp::of(&hashes.files));
+}
+
+/// The settle indexes with no lock against a promote. A promote to another
+/// generation with as many pages, after the manifest is read, must publish
+/// nothing: a bundle of either generation's bytes under the page set read
+/// before it would later "cover" that page set again (an edit undone) and
+/// ship with pages it does not index.
+#[test]
+fn a_promote_between_the_manifest_read_and_the_page_read_publishes_nothing() {
+    let _serialize = search::lock_index_counter();
+    let (_root, mp) = project(PAGE);
+    let mut hashes = crate::types::content::SiteHashes::default();
+    hashes.files.insert("index.html".to_string(), "100644:abc".to_string());
+    for (id, page) in [("a", PAGE), ("b", "<html lang=\"en\"><body><h1>Lichen</h1></body></html>")] {
+        let gen = mp.generation_dir(id);
+        std::fs::create_dir_all(&gen).unwrap();
+        std::fs::write(gen.join("index.html"), page).unwrap();
+    }
+    mp.set_current_ptr("a").unwrap();
+    std::fs::write(mp.hashes(), serde_json::to_string(&hashes).unwrap()).unwrap();
+
+    let promote = mp.clone();
+    *WHILE_INDEXING.lock().unwrap() = Some(Box::new(move || {
+        let mut b = crate::types::content::SiteHashes::default();
+        b.files.insert("index.html".to_string(), "100644:def".to_string());
+        promote.set_current_ptr("b").unwrap();
+        std::fs::write(promote.hashes(), serde_json::to_string(&b).unwrap()).unwrap();
+    }));
+
+    assert!(!settle_index(&mp), "nothing was indexed for a publish to ship");
+    assert!(read_receipt(&mp.index_dir()).is_none(), "a bundle was published for a page set current no longer holds");
 }
 
 /// Search off: no read, no index, no forced rebuild.
@@ -528,121 +627,18 @@ fn settle_is_inert_when_search_is_disabled() {
     let _serialize = search::lock_index_counter();
     let (_root, mp) = project(PAGE);
     let before = search::index_build_count();
-    assert!(!settle_for_publish(&mp, false));
+    let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    assert!(!runtime.block_on(settle(&mp, false)));
     assert_eq!(search::index_build_count(), before);
 }
 
-// ── The lane ────────────────────────────────────────────────────────────────
-
-/// Poll `condition` on real time until it is true or `timeout` elapses.
-/// `request`'s worker does real (if small) work on the blocking pool, so
-/// these tests wait on that outcome rather than sleeping a fixed guess —
-/// unlike the debounce timing itself, which moved to the seal
-/// (`build::debounce`) and is tested there on a paused clock.
-async fn wait_for(timeout: Duration, mut condition: impl FnMut() -> bool) {
-    let start = std::time::Instant::now();
-    while !condition() {
-        assert!(start.elapsed() < timeout, "condition did not become true within {:?}", timeout);
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-}
-
-/// A burst of saves must collapse to one index, and a request for a page set
-/// that is already published must run none at all — the no-op save case the
-/// whole of Finding 3 is about. No debounce wait is needed here any more: the
-/// eight `request` calls run back-to-back, synchronously, before the tokio
-/// scheduler ever gets to run the lane's freshly spawned task, so they still
-/// collapse to the one value its watch channel holds by the time it looks.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_burst_of_requests_indexes_once_and_a_no_op_save_indexes_not_at_all() {
-    let _serialize = search::lock_index_counter();
-    let (_root, mp) = project(PAGE);
-    let gen = mp.generation_dir("g1");
-    std::fs::create_dir_all(&gen).unwrap();
-    std::fs::write(gen.join("index.html"), PAGE).unwrap();
-    let want = PageSet { fp: PageSetFp(0xfeed), pages: 1 };
-
-    let before = search::index_build_count();
-    for _ in 0..8 {
-        request(&mp, "g1", want);
-    }
-    assert!(is_indexing(&mp, "g1"), "the lane's generation must be pinned against GC");
-
-    wait_for(Duration::from_secs(5), || mp.index_receipt().exists()).await;
-    assert_eq!(
-        search::index_build_count() - before,
-        1,
-        "eight requests for one page set must run one index"
-    );
-    let receipt = read_receipt(&mp.index_dir()).expect("the lane published a receipt");
-    assert_eq!(receipt.fp(), want.fp);
-    assert_eq!(receipt.pages, 1);
-    assert!(!receipt.files.is_empty());
-
-    // The no-op save: same page set, already published.
-    let before = search::index_build_count();
-    request(&mp, "g1", want);
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!(
-        search::index_build_count(),
-        before,
-        "a request for the published page set must run zero work"
-    );
-
-    // A newer generation releases the older one: the pin exists to stop GC
-    // deleting a tree the lane is about to read, not to retain it forever.
-    let gen2 = mp.generation_dir("g2");
-    std::fs::create_dir_all(&gen2).unwrap();
-    std::fs::write(gen2.join("index.html"), PAGE).unwrap();
-    request(&mp, "g2", PageSet { fp: PageSetFp(0xf00d), pages: 1 });
-    wait_for(Duration::from_secs(5), || is_indexing(&mp, "g2") && !is_indexing(&mp, "g1")).await;
-}
-
-/// The lane must **park** between requests. An earlier shape always broke out
-/// of its debounce on a timer and re-read the same request, which on a
-/// healthy folder was a wakeup plus a ~440-entry JSON parse every 2 s for the
-/// life of the app — and on a folder whose index kept failing, a whole-corpus
-/// pagefind run every ~7 s forever. Both are invisible to a test that counts
-/// index builds, so this counts passes; the failing-index half is covered by
-/// the request below, whose generation does not exist.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_lane_whose_index_cannot_be_published_retries_once_per_request_not_forever() {
-    let _serialize = search::lock_index_counter();
-    let (_root, mp) = project(PAGE);
-    // A generation the GC already removed: the walk finds nothing, and the
-    // coverage guard refuses to stamp an empty bundle on a one-page set.
-    let want = PageSet { fp: PageSetFp(0xbeef), pages: 1 };
-
-    let builds = search::index_build_count();
-    request(&mp, "gone", want);
-    wait_for(Duration::from_secs(5), || search::index_build_count() > builds).await;
-
-    assert_eq!(
-        search::index_build_count() - builds,
-        1,
-        "one request must produce one attempt, not a retry loop"
-    );
-    assert!(
-        !mp.index_receipt().exists(),
-        "an index that covered no pages must not be published as authoritative"
-    );
-
-    let passes = lane_passes();
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(
-        lane_passes(),
-        passes,
-        "an idle lane must be parked on its channel, not spinning on a timer"
-    );
-}
-
-// ── A lane-less build's index runs beside the background phase ──────────────
+// ── A one-shot build's index runs beside the background phase ──────────────
 
 /// The pages are read on the build thread, inside the stage-write span; the
 /// index is computed on a worker beside the media and the asset walk, and the
 /// seal still carries the bundle into the generation.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_build_with_no_lane_indexes_beside_the_background_phase() {
+async fn a_one_shot_build_indexes_beside_the_background_phase() {
     use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
     let _serialize = search::lock_index_counter();
     let dir = tempfile::tempdir().unwrap();
@@ -685,7 +681,7 @@ async fn a_build_with_no_lane_indexes_beside_the_background_phase() {
 /// left in the holding area.
 #[cfg(unix)]
 #[test]
-fn a_lane_less_rebuild_writes_and_lays_only_the_files_that_changed() {
+fn a_one_shot_rebuild_writes_and_lays_only_the_files_that_changed() {
     use std::os::unix::fs::MetadataExt;
     let _serialize = search::lock_index_counter();
     let (_root, mp) = project(PAGE);

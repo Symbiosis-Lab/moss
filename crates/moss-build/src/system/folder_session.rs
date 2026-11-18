@@ -48,6 +48,9 @@ pub struct FolderSession {
     /// genuinely-old site-sized work by a 300 s settle timer — an I1
     /// violation. The freeze removes the premise; do not reintroduce them.
     ui_bound: AtomicU32,
+    /// The part of `ui_bound` that is a picture or video batch: busy for
+    /// seconds to minutes, where a build or a seal is busy for about one.
+    converting: AtomicU32,
     /// Serializes access to the folder's mutable `.moss/build.nosync/staging/`
     /// directory between (a) a build's synchronous stage-writing span
     /// (`generate_blocking_content` through notebook processing, in
@@ -139,6 +142,15 @@ impl Drop for UiBoundHold {
     }
 }
 
+/// See [`FolderSession::hold_converting`].
+pub struct ConvertingHold(UiBoundHold);
+
+impl Drop for ConvertingHold {
+    fn drop(&mut self) {
+        (self.0).0.converting.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 impl FolderSession {
     pub fn new(folder: PathBuf) -> Arc<Self> {
         Self::carrying(folder, Arc::new(Mutex::new(())), Arc::default())
@@ -159,6 +171,7 @@ impl FolderSession {
             preview_requirement: StdMutex::new(None),
             tasks: Mutex::new(JoinSet::new()),
             ui_bound: AtomicU32::new(0),
+            converting: AtomicU32::new(0),
             stage_write_lock,
             unavailable: AtomicBool::new(false),
             cadence: Default::default(),
@@ -245,6 +258,17 @@ impl FolderSession {
 
     pub fn has_ui_bound(&self) -> bool {
         self.ui_bound.load(Ordering::SeqCst) > 0
+    }
+
+    /// [`hold_ui_bound`](Self::hold_ui_bound) for a picture or video batch,
+    /// which [`is_converting`](Self::is_converting) also reports.
+    pub fn hold_converting(self: &Arc<Self>) -> ConvertingHold {
+        self.converting.fetch_add(1, Ordering::SeqCst);
+        ConvertingHold(self.hold_ui_bound())
+    }
+
+    pub fn is_converting(&self) -> bool {
+        self.converting.load(Ordering::SeqCst) > 0
     }
 
     /// Flip the "project unavailable" verdict; returns the previous value so

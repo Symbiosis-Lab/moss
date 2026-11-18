@@ -56,6 +56,55 @@ pub(super) async fn source_asset_route(
     dress(serve_source_asset(vault.path(), &path, query.as_deref()).await)
 }
 
+/// A file under the search mount, from the bundle the last settle published.
+///
+/// The search panel loads `pagefind.js`, then the entry, on its first search
+/// after a page load or a morph, and that load settles the index first, so the
+/// search finds the edit on screen. A build or a seal still running (about a
+/// second) is waited out, since the edit only reaches the seal's lane when it
+/// ends. A picture or video batch is not: the newest bundle answers at once and
+/// the settle runs behind it, so a search never waits on pictures. With no
+/// bundle yet there is nothing to answer with, and the settle is awaited.
+async fn search_bundle_file(current_dir: &std::path::Path, normalized: &str) -> Option<std::path::PathBuf> {
+    use crate::build::feeds::search_lane;
+    let rel = normalized.strip_prefix(crate::build::served_path::ServedPath::search_mount_url().trim_start_matches('/'))?;
+    let vault = crate::vault::paths::VaultRoot::find_containing(current_dir)?;
+    let mp = crate::moss_paths::MossPaths::new(vault.path());
+    if matches!(rel, "pagefind.js" | "pagefind-entry.json") && search_lane::enabled_for(&mp) {
+        let session = crate::system::folder_session::registry().get(&vault.path().to_string_lossy());
+        let settling = mp.clone();
+        let settle = async move { search_lane::settle(&settling, true).await };
+        let converting = || session.as_ref().is_some_and(|s| s.is_converting());
+        if converting() && search_lane::held_file(&mp, rel).is_some() {
+            tokio::spawn(settle);
+        } else {
+            let started = std::time::Instant::now();
+            while session.as_ref().is_some_and(|s| s.has_ui_bound()) && !converting() && started.elapsed() < SEARCH_WAITS_FOR_A_BUILD {
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+            settle.await;
+        }
+    }
+    search_lane::held_file(&mp, rel)
+}
+
+/// How long a search waits for a running build before indexing what is
+/// current: longer than a full render of a large site, short of a hung tab.
+const SEARCH_WAITS_FOR_A_BUILD: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The file at `normalized`: the search mount from the newest bundle, the rest
+/// from the served tree.
+async fn serve_file(
+    current_dir: &std::path::Path,
+    normalized: &str,
+    request: Request<Body>,
+) -> Result<Response<tower_http::services::fs::ServeFileSystemResponseBody>, std::convert::Infallible> {
+    match search_bundle_file(current_dir, normalized).await {
+        Some(held) => ServeFile::new(held).oneshot(request).await,
+        None => ServeDir::new(current_dir).oneshot(request).await,
+    }
+}
+
 /// The source-asset core's answer as an axum response, with every header the core names.
 fn dress(r: crate::editor::source_asset::SourceAssetResponse) -> Response {
     let mut response = Response::builder().status(r.status);
@@ -606,9 +655,7 @@ pub async fn start_server(
                     parts.headers.remove(http::header::IF_NONE_MATCH);
                     let request = Request::from_parts(parts, body);
 
-                    // Serve the file from the current directory
-                    let service = ServeDir::new(&current_dir);
-                    match service.oneshot(request).await {
+                    match serve_file(&current_dir, &normalized, request).await {
                         Ok(response) => {
                             if response.status() == http::StatusCode::NOT_FOUND {
                                 super::log_preview_404(&current_dir, &path);

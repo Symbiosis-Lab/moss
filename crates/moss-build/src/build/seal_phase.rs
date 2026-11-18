@@ -39,8 +39,8 @@
 //! syndication/plugin read of `read_site_file` (which resolves under
 //! `current_ptr()`; see `plugins/project_files.rs`'s own note on why it does
 //! not need a separate fix — it runs behind the same publish gate `settle`
-//! already covers). The search bundle's publish synchronization is documented
-//! on [`search_lane::settle_for_publish`](super::feeds::search_lane::settle_for_publish).
+//! already covers). The search bundle is settled the same way before it is
+//! read: [`search_lane::settle`](super::feeds::search_lane::settle) calls this first.
 //!
 //! Ending a folder session drops its lane: `FolderSession::shutdown` calls
 //! [`evict`]. A caller that ends a session settles it first (the desktop
@@ -52,14 +52,13 @@ use std::path::Path;
 use std::sync::{Arc, LazyLock};
 
 use crate::build::debounce::{HandlerFuture, Lanes};
-use crate::build::feeds::search_lane::Freshness;
 use crate::build::manifest::SealedManifest;
 use crate::build::ship::ShipVerdict;
 use crate::moss_paths::MossPaths;
 use crate::system::folder_session::{DerivedWorkGate, FolderSession};
 
-/// Quiet period a sealed generation must survive before it materializes. Same
-/// value as the search lane's own (pre-extraction) window — long enough that
+/// Quiet period a sealed generation must survive before it materializes. Long
+/// enough that
 /// a 5–13 s autosave cadence collapses to one materialize per typing pause.
 pub const IDLE: std::time::Duration = std::time::Duration::from_secs(20);
 
@@ -106,7 +105,6 @@ pub(crate) struct PendingSeal {
     /// `materialize_and_promote`.
     pub locked_at_nanos: u64,
     pub render: Option<crate::build::lifecycle::Render>,
-    pub freshness: Freshness,
     pub is_pinned: Arc<dyn Fn(&str) -> bool + Send + Sync>,
     pub session: Option<Arc<FolderSession>>,
     pub cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
@@ -208,7 +206,6 @@ async fn run_materialize_phase(req: PendingSeal) {
         promotion_epoch,
         locked_at_nanos,
         render,
-        freshness,
         is_pinned,
         session,
         cache_lease,
@@ -437,24 +434,13 @@ async fn run_materialize_phase(req: PendingSeal) {
         let pinned: std::collections::HashSet<String> =
             crate::build::store_gc::list_generations(&mp.generations_dir())
                 .into_iter()
-                .filter(|g| is_pinned(g) || crate::build::feeds::search_lane::is_indexing(&mp, g))
+                .filter(|g| is_pinned(g))
                 .collect();
         let _ = tokio::task::spawn_blocking(move || {
             let mp = MossPaths::new(&project_root);
             crate::build::collect_build_store(&mp, &gen_id, &pinned);
         })
         .await;
-        // Hand the FROZEN generation to the search lane — staging is wrong,
-        // the next build rewrites it. Nothing here awaits: the lane no longer
-        // debounces its own request (this phase already did), so it starts
-        // indexing immediately rather than stacking a second idle wait on top
-        // of this one. `Freshness::Now` (a process that exits when the build
-        // returns) indexed inside the build, before its seal.
-        use crate::build::feeds::search_lane as lane;
-        if matches!(freshness, lane::Freshness::Lane) && lane::enabled_for(&mp) {
-            let want = lane::PageSet::of(&sealed.site_hashes_view().files);
-            lane::request(&mp, sealed.generation_id(), want);
-        }
     }
 
     // Release the stage-write guard now — everything below (advertising the

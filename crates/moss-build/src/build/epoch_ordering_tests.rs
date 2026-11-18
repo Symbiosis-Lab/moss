@@ -388,7 +388,6 @@ async fn tail(
         crate::build::ship::next_promotion_epoch(),
         render,
         Some(crate::build::lifecycle::Render::numbered(mp, render)),
-        crate::build::feeds::search_lane::Freshness::Now,
         &mp.project_root().to_string_lossy(),
         crate::build::SealGuards { handoff, ..Default::default() },
     )

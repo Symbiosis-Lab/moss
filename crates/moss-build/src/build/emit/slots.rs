@@ -98,8 +98,8 @@ pub fn apply_to_stage_and_manifest(
     // keeps its markers only until the first pass that fills them, so the pages
     // the pass rewrites are the ones this build just rendered.
     for receipt in pass.receipts {
-        // A stage path no page of this build could have (`_moss/...` bundles the
-        // search lane laid down last time) is simply not one.
+        // A stage path no page of this build could have (`_moss/...` bundles a
+        // search settle laid down last time) is simply not one.
         let Ok(sp) = crate::build::served_path::ServedPath::from_output(&receipt.page_path) else {
             continue;
         };

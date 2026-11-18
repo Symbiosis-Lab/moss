@@ -1,61 +1,43 @@
-//! The search lane: a generation-free worker, adopted from a receipt.
+//! The search bundle: built when something reads it, adopted from a receipt.
 //!
-//! Pagefind's cost scales with **corpus size**, not with this build's delta —
-//! ~5.2 s on a 386-page vault, on every save, including the ones whose own
-//! verdict is `changed=0 -> SUPPRESS`. It used to be dispatched into the
-//! build's worker `JoinSet`; the seal awaited every worker, then took the
-//! per-folder stage-write mutex, which the *next* build takes before doing any
-//! work — so the next save's latency was a function of the previous build's
-//! slowest background worker.
-//!
-//! The rule, for a process that keeps building: **a generation-free worker
-//! may never be a manifest registrant, and no seal may await one.** A process
-//! that exits after its build has no next save to delay, and its seal always
-//! waited on search, so there the index runs on a worker the seal joins
-//! ([`SearchJob`]). Otherwise:
+//! Pagefind's cost scales with **corpus size**, not with a build's delta:
+//! about 1.2 s wall and 4 CPU s on a 361-page site, on every index. So a build
+//! that keeps a process alive never indexes. Each of the two readers of the
+//! index settles it when it reads ([`settle`]): the preview's search mount,
+//! when the panel loads `pagefind.js`, and a publish of an existing preview.
+//! Settling flushes a pending seal, then indexes the frozen `current`
+//! generation if the receipt does not already cover its page set:
 //!
 //! ```text
-//!   build N  ──seal (already debounced)──► generation N frozen ──request(fp_N)──►  lane
-//!                                                                                    │ index generations/<N>/
-//!                                                               ▼
-//!                                          .moss/build.nosync/index/<fp_N>/  +  receipt.json
-//!   build N+1 ──adopt_into(receipt)──► staging + PendingManifest
+//!   search opened / publish ──settle──► seal flushed, current = latest render
+//!                                         │ index current/ (unless the receipt covers it)
+//!                                         ▼
+//!                       .moss/build.nosync/index/<fp>/  +  receipt.json
+//!   next build ──adopt_into(receipt)──► staging + PendingManifest
 //! ```
+//!
+//! A process that exits after its build ([`Freshness::Now`]) has no later
+//! reader to settle for it, so it indexes its staged pages on a worker the
+//! seal joins ([`SearchJob`]).
 //!
 //! # What must not change, and does not
 //!
 //! `PendingManifest` is mark-and-sweep: `seal()` prunes each output bucket to
 //! the paths this build touched, and `remove_stale_files` deletes every staging
-//! file the sealed manifest omits. `_moss/pagefind/**` gets no exemption —
-//! this rule rejects that as the first hole in a total invariant — so a build
-//! that skipped re-registering would have the deploy diff read the bundle as
-//! *removed* and delete it off the live site. Hence [`adopt_into`] runs on
+//! file the sealed manifest omits. `_moss/pagefind/**` gets no exemption, so a
+//! build that skipped re-registering would have the deploy diff read the bundle
+//! as *removed* and delete it off the live site. Hence [`adopt_into`] runs on
 //! **every** build, inside the build's own stage-write span, registering the
-//! receipt's `(path, hash)` entries with zero byte reads. Only the registrant
-//! changed.
+//! receipt's `(path, hash)` entries with zero byte reads.
 //!
-//! # Which tree the lane indexes
+//! # Which tree is indexed
 //!
 //! The **frozen generation**, never `staging/`: staging is what the next build
-//! rewrites, the generation is ship-transformed (`data-source-line` stripped,
-//! so preview search matches deploy search), and it is immutable once
-//! `materialize_and_promote` has shipped into it.
-//!
-//! # Staleness budget
-//!
-//! The lane itself no longer debounces — [`request`] is called only from the
-//! seal's own debounced tail (`build::debounce`, `build.rs`'s
-//! `seal_debounce` instance), which already collapses a burst of autosaves to
-//! one seal after its own idle window. A second idle wait here would only add
-//! a further delay on top of that one without removing any real work — the
-//! search lane's old `IDLE`/`MAX_DEFER` (2 s, then 20 s) governed how often
-//! the LANE re-indexed a generation that materialized on every save; now a
-//! generation to index shows up at most once per debounced seal, already
-//! rate-limited. So the lane indexes the moment [`request`] hands it a
-//! generation, and preview search lags the vault by roughly the seal's own
-//! debounce (`build::debounce::IDLE`/`MAX_DEFER`) plus `index_time`. Nothing
-//! else consumes the lane directly. For publishing an existing preview, see
-//! [`settle_for_publish`].
+//! rewrites, and the generation is ship-transformed (`data-source-line`
+//! stripped, so preview search matches deploy search). The preview serves the
+//! mount from the receipt's holding dir ([`held_file`]), so what a search reads
+//! is the bundle the last settle published, not the copy a build adopted
+//! before it.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -84,8 +66,8 @@ pub struct PageSetFp(u64);
 impl PageSetFp {
     /// The fingerprint of a page set nobody has computed. Never equal to a real
     /// one in practice, so a bundle stamped with it is always superseded by the
-    /// next real index — which is exactly what the synchronous fallback in
-    /// [`adopt_into`] wants, having indexed `staging/` rather than a generation.
+    /// next real index, which is what a one-shot build's bundle wants, having
+    /// indexed `staging/` rather than a generation.
     pub const UNKNOWN: PageSetFp = PageSetFp(0);
 
     /// Fold a manifest's HTML entries. `files` is `SiteHashes::files`.
@@ -150,7 +132,7 @@ impl PageSet {
 // BundleReceipt
 // ---------------------------------------------------------------------------
 
-/// What the lane last published: which page set it indexed, and the
+/// What the last settle published: which page set it indexed, and the
 /// `(bundle-relative path, content hash)` pairs of every file it produced.
 /// Written **after** every bundle file is on disk, so a torn publish reads back
 /// as "no receipt" rather than as a bundle whose files are half there.
@@ -168,10 +150,14 @@ pub struct BundleReceipt {
     /// can tell an empty site from an unreadable one.
     #[serde(default)]
     pub pages: usize,
+    /// Pages in the page set the indexer leaves out on purpose (redirect stubs,
+    /// the not-found page), so `pages + left_out` is the page set it covers.
+    #[serde(default)]
+    pub left_out: usize,
     /// `(path within the bundle, xxh3 content hash)`.
     pub files: Vec<(String, String)>,
-    /// [`search::corpus_key`] of the staged pages a lane-less build indexed;
-    /// `None` on a bundle the lane indexed from a generation.
+    /// [`search::corpus_key`] of the staged pages a one-shot build indexed;
+    /// `None` on a bundle a settle indexed from a generation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub staged: Option<String>,
 }
@@ -194,27 +180,38 @@ fn read_receipt(index_dir: &Path) -> Option<BundleReceipt> {
 /// Token proving its holder owns the holding area for one folder.
 ///
 /// Every function that mutates `.moss/build.nosync/index/` — or reads the receipt and
-/// then acts on it — takes one. Without it the lane and a build interleave: the
-/// lane's [`gc_holding`] deletes `<fpA>/` while a build is halfway through
+/// then acts on it — takes one. Without it a settle and a build interleave: the
+/// settle's [`gc_holding`] deletes `<fpA>/` while a build is halfway through
 /// copying it into staging, the build then registers nothing *and* deletes the
-/// receipt the lane just wrote for `<fpB>`, and the sweep takes the bundle off
+/// receipt the settle just wrote for `<fpB>`, and the sweep takes the bundle off
 /// the live site — the mark-and-sweep hole this rule closes, from the other side.
 ///
 /// Not a substitute for the build's stage-write guard, which orders builds
-/// against each other; this orders the *lane* against a build. The lane never
+/// against each other; this orders a *settle* against a build. A settle never
 /// takes the stage-write lock, so the pair cannot deadlock.
 pub struct Holding(());
 
-static HOLDING_LOCKS: LazyLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+/// A folder's two locks. `holding` orders a settle against a build, which
+/// takes it in [`begin`]. `settle` lets one settle run at a time, so the
+/// router's concurrent reads of the mount index a page set once; no build
+/// takes it, and the index runs under it, so a build never waits out an index.
+#[derive(Default)]
+struct FolderLocks {
+    holding: Mutex<()>,
+    settle: Mutex<()>,
+}
+
+static FOLDER_LOCKS: LazyLock<Mutex<HashMap<PathBuf, Arc<FolderLocks>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn folder_locks(index_dir: &Path) -> Arc<FolderLocks> {
+    let mut locks = FOLDER_LOCKS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    Arc::clone(locks.entry(index_dir.to_path_buf()).or_default())
+}
 
 /// Run `f` with the holding area for `index_dir` exclusively held.
 fn with_holding<T>(index_dir: &Path, f: impl FnOnce(&Holding) -> T) -> T {
-    let lock = {
-        let mut locks = HOLDING_LOCKS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        Arc::clone(locks.entry(index_dir.to_path_buf()).or_default())
-    };
-    let _guard = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let locks = folder_locks(index_dir);
+    let _guard = locks.holding.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     f(&Holding(()))
 }
 
@@ -239,9 +236,8 @@ fn staged_links(index_dir: &Path, stage_dir: &Path) -> crate::build::lifecycle::
 ///
 /// **A bundle is stamped with `want.fp` only if it demonstrably covers
 /// `want`.** A short bundle under a complete page set's fingerprint is not a
-/// degraded result but an *absorbing* one: `run_lane` skips every later request
-/// carrying that fp, [`settle_for_publish`]'s `intact` test is vacuously true
-/// over an empty file list, and [`adopt_into`] registers nothing — so the sweep
+/// degraded result but an *absorbing* one: [`settle`]'s `intact` test is
+/// vacuously true over an empty file list, and [`adopt_into`] registers nothing — so the sweep
 /// takes the bundle out of staging and the deploy diff deletes the index off
 /// the live site, with nothing scheduled to re-index.
 ///
@@ -251,7 +247,7 @@ fn staged_links(index_dir: &Path, stage_dir: &Path) -> crate::build::lifecycle::
 /// pages, indistinguishable from "this site has no indexable content".
 ///
 /// A refusal is an ordinary transient failure: no receipt is written, so the
-/// previous good bundle stays adopted and the next request re-indexes.
+/// previous good bundle stays adopted and the next settle re-indexes.
 fn publish_bundle(
     _holding: &Holding,
     index_dir: &Path,
@@ -278,10 +274,11 @@ fn publish_bundle(
     let mut receipt = BundleReceipt {
         fp: fp.hex(),
         pages: produced.pages,
+        left_out: produced.left_out,
         files: Vec::with_capacity(files.len()),
         staged: staged.map(str::to_string),
     };
-    // A lane-less build publishes every bundle into the same `UNKNOWN`
+    // A one-shot build publishes every bundle into the same `UNKNOWN`
     // directory, so a file the receipt there already names with the same hash
     // is on disk as it is. The receipt goes first, so a publish torn halfway
     // reads back as no receipt rather than one naming bytes it no longer has.
@@ -358,11 +355,14 @@ pub enum Adoption {
     Disabled,
     /// The receipt's files were verified on disk and registered.
     Adopted(usize),
-    /// No receipt existed (search just enabled, or `.moss/build.nosync/index` was
-    /// deleted). Indexed synchronously so this build still ships a search box.
+    /// A one-shot build indexed its staged pages.
     Indexed(usize),
-    /// The receipt named files that are not on disk. Registered nothing,
-    /// dropped the receipt; the next build takes the `Indexed` path.
+    /// No receipt yet: nothing has read search since it was enabled, or
+    /// `.moss/build.nosync/index` was deleted. Registered nothing; the next
+    /// [`settle`] indexes.
+    Unindexed,
+    /// The receipt named files that are not on disk. Registered nothing and
+    /// dropped the receipt; the next [`settle`] re-indexes.
     Diverged,
     /// A receipt exists and says this page set has no indexable content.
     Empty,
@@ -380,18 +380,17 @@ pub fn enabled_for(mp: &MossPaths) -> bool {
         .unwrap_or(false)
 }
 
-/// Whether a lane will ever run for this build.
+/// Whether anything will settle the index after this build.
 ///
-/// The staleness budget is a promise about the *edit loop*, payable only
-/// because a next build is coming. A process that exits when the build returns
-/// — CLI `moss build`, `build_sync`, the snapshot harness — spawns no lane and
-/// calls [`request`] from no seal, so a receipt adopted verbatim would freeze
-/// the index at whatever the *first* such build produced: add a page and it is
-/// never searchable, delete one and search still returns it.
+/// A process that exits when the build returns (CLI `moss build`,
+/// `build_sync`, the snapshot harness) has no later reader to settle for it, so
+/// a receipt adopted verbatim would freeze the index at whatever the *first*
+/// such build produced: add a page and it is never searchable, delete one and
+/// search still returns it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Freshness {
-    /// A seal will hand the frozen generation to the lane. Adopt the receipt.
-    Lane,
+    /// A reader settles the index when it needs it. Adopt the receipt.
+    OnRead,
     /// Nothing will index after this build. Index the staged pages now, unless
     /// the bundle held from the last such build was indexed from the same ones.
     Now,
@@ -401,11 +400,11 @@ impl Freshness {
     /// `exits_after_build` is the whole of the question: that flag is exactly
     /// "this process drops its runtime when the build returns".
     pub fn of(exits_after_build: bool) -> Self {
-        if exits_after_build { Self::Now } else { Self::Lane }
+        if exits_after_build { Self::Now } else { Self::OnRead }
     }
 }
 
-/// What [`begin`] leaves the caller: a finished adoption, or a lane-less
+/// What [`begin`] leaves the caller: a finished adoption, or a one-shot
 /// build's index still to compute.
 pub enum Begun {
     Done(Adoption),
@@ -426,7 +425,7 @@ impl Begun {
     }
 }
 
-/// A lane-less build's index, its pages already read.
+/// A one-shot build's index, its pages already read.
 ///
 /// The read happens inside the build's stage-write span, after the last
 /// `.html` write into staging, so the snapshot is this build's whole output.
@@ -471,8 +470,8 @@ impl SearchJob {
         let _phase = crate::build::phase::PhaseTrace::start("search_index");
         let SearchJob { index_dir, stage_dir, read, key, t_read } = self;
         with_holding(&index_dir, |h| {
-            let published = search::index_pages(read, t_read, &|| false)
-                .and_then(|produced| publish_bundle(h, &index_dir, PageSet::UNKNOWN, Some(&key), &produced.unwrap_or_default()));
+            let published = search::index_pages(read, t_read)
+                .and_then(|produced| publish_bundle(h, &index_dir, PageSet::UNKNOWN, Some(&key), &produced));
             lay_indexed(h, &index_dir, &stage_dir, published)
         })
     }
@@ -534,7 +533,7 @@ pub fn begin(
         return Begun::Done(Adoption::Disabled);
     }
     let index_dir = mp.index_dir();
-    // Held across read-receipt → lay → drop-receipt, so the lane cannot GC the
+    // Held across read-receipt → lay → drop-receipt, so a settle cannot GC the
     // holding directory this call is reading, nor have its brand-new receipt
     // deleted by the divergence branch below.
     with_holding(&index_dir, |h| {
@@ -547,22 +546,7 @@ pub fn begin(
 
 fn adopt_receipt(h: &Holding, index_dir: &Path, stage_dir: &Path, pending: &mut PendingManifest) -> Adoption {
     let Some(receipt) = read_receipt(index_dir) else {
-        // Nothing to adopt. Registering nothing here would let this build's
-        // own sweep delete a bundle that no *future* build is scheduled to
-        // rebuild — under the old ticket scheme a newer worker was queued
-        // by construction, and under adoption none is. So fall through to a
-        // synchronous index ("nothing to adopt").
-        //
-        // It indexes `staging/`, not a generation, and that is deliberate:
-        // this build's own HTML is complete and, under the stage-write
-        // guard the caller holds, nothing else is writing it. The
-        // generation for it does not exist yet — it is materialized from
-        // the manifest this call is registering into. The receipt is
-        // stamped `UNKNOWN` so the lane re-indexes the real,
-        // ship-transformed generation as soon as it is frozen.
-        let (adoption, laid) = lay_indexed(h, index_dir, stage_dir, index_now(h, index_dir, stage_dir, PageSet::UNKNOWN));
-        laid.register(pending);
-        return adoption;
+        return Adoption::Unindexed;
     };
 
     if receipt.files.is_empty() {
@@ -578,7 +562,7 @@ fn adopt_receipt(h: &Holding, index_dir: &Path, stage_dir: &Path, pending: &mut 
             // Receipt/disk divergence: an external delete, or the holding
             // area evicted by a cloud provider. Registering a path that is
             // not on disk is the deploy error `manifest.rs` documents, so
-            // register nothing and drop the receipt — the next build
+            // register nothing and drop the receipt; the next settle
             // re-indexes.
             drop_receipt_if_still(h, index_dir, &receipt);
             log::info!(
@@ -591,10 +575,10 @@ fn adopt_receipt(h: &Holding, index_dir: &Path, stage_dir: &Path, pending: &mut 
     }
 }
 
-/// What a lane-less build ([`Freshness::Now`]) does with search: serve the
+/// What a one-shot build ([`Freshness::Now`]) does with search: serve the
 /// bundle it holds when [`search::corpus_key`] says that bundle was indexed from
 /// exactly the pages staging holds now, and hand back a [`SearchJob`] over the
-/// pages it read otherwise. A bundle the lane indexed carries no key, so it is
+/// pages it read otherwise. A bundle a settle indexed carries no key, so it is
 /// never taken for one.
 fn read_staging(h: &Holding, index_dir: &Path, stage_dir: &Path, pending: &mut PendingManifest) -> Begun {
     let _phase = crate::build::phase::PhaseTrace::start("search_read");
@@ -696,219 +680,44 @@ fn lay(
     Some(Laid(planned.into_iter().map(|(sp, hash, ..)| (sp, hash.to_string())).collect()))
 }
 
-/// Index `index_from` synchronously and publish the result. Used by the
-/// nothing-to-adopt fallback and by [`settle_for_publish`] — the two places
-/// where waiting is the correct answer.
-fn index_now(
-    holding: &Holding,
-    index_dir: &Path,
-    index_from: &Path,
-    want: PageSet,
-) -> Result<BundleReceipt, String> {
-    let produced = search::build_search_index(index_from)?;
-    publish_bundle(holding, index_dir, want, None, &produced)
-}
-
 // ---------------------------------------------------------------------------
-// The lane
+// Settling: the index is built when something reads it
 // ---------------------------------------------------------------------------
 
-/// One indexing request: the frozen generation to read and the page set it
-/// represents.
-#[derive(Debug, Clone)]
-struct LaneRequest {
-    root: PathBuf,
-    index_dir: PathBuf,
-    gen_id: String,
-    gen_dir: PathBuf,
-    want: PageSet,
-}
-
-/// One lane per open folder, keyed by `.moss` directory. The `watch` channel is
-/// **level**-triggered: a request that arrives while the lane is busy is not a
-/// queued item to be drained but the new current value, so a burst of saves
-/// collapses to one index without any ticket bookkeeping.
-static LANES: LazyLock<Mutex<HashMap<PathBuf, tokio::sync::watch::Sender<LaneRequest>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-/// Generations the lane has been asked to read and has not finished with, per
-/// folder. Consulted by `gc_old_generations`.
-static IN_FLIGHT: LazyLock<Mutex<HashMap<PathBuf, HashSet<String>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-/// Times any lane has evaluated a request. The **only** observable of the idle
-/// spin an earlier shape had: a lane re-reading the same request every `IDLE`
-/// runs no index, so nothing that counts index builds can see it.
-static LANE_PASSES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
-/// How many requests any lane in this process has evaluated.
-pub fn lane_passes() -> usize {
-    LANE_PASSES.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-/// True while the lane still needs `gen_id` — it is either the outstanding
-/// request or the one being indexed right now. The outstanding one stays
-/// pinned until a newer request replaces it; that is the generation the newest
-/// build just promoted, which GC pins anyway.
+/// Bring the index up to date with the folder's latest render, and report
+/// whether `current` ships a bundle other than the receipt's.
 ///
-/// The seal hands the lane a directory and then GC runs on its own schedule:
-/// five newer generations inside the lane's `IDLE`+index window (ordinary
-/// continuous editing) and `remove_dir_all` takes the tree out from under it.
-/// The coverage guard in [`publish_bundle`] makes that *safe* — a zero-page
-/// walk is refused rather than published — but safe still costs a wasted pass
-/// and a stale index until the next edit. Pinning makes it not happen.
-pub fn is_indexing(mp: &MossPaths, gen_id: &str) -> bool {
-    IN_FLIGHT
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .get(mp.root())
-        .is_some_and(|set| set.contains(gen_id))
-}
-
-/// Ask the lane to index the generation `gen_id`, whose page set is `want`.
+/// A pending seal is materialized first (`seal_phase::settle`), so `current`
+/// and its `hashes.json` hold the render on screen rather than the one before
+/// its debounced promote. Then, unless the receipt already covers `current`'s
+/// page set, this indexes `current` and publishes the bundle.
 ///
-/// Called from the seal tail once the generation has been promoted — the first
-/// moment the tree is both complete and immutable. Cheap and non-blocking: it
-/// publishes a value and returns.
-///
-/// No-op outside a tokio runtime (unit tests that build a manifest by hand),
-/// which is what keeps the lane from being a hidden dependency of every caller.
-pub fn request(mp: &MossPaths, gen_id: &str, want: PageSet) {
-    if tokio::runtime::Handle::try_current().is_err() {
-        return;
-    }
-    let key = mp.root().to_path_buf();
-    let req = LaneRequest {
-        root: key.clone(),
-        index_dir: mp.index_dir(),
-        gen_id: gen_id.to_string(),
-        gen_dir: mp.generation_dir(gen_id),
-        want,
-    };
-    IN_FLIGHT
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .entry(key.clone())
-        .or_default()
-        .insert(gen_id.to_string());
-
-    let mut lanes = LANES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(tx) = lanes.get(&key) {
-        // `send` fails only if the lane task is gone; fall through and respawn.
-        if tx.send(req.clone()).is_ok() {
-            return;
-        }
-    }
-    let (tx, rx) = tokio::sync::watch::channel(req);
-    lanes.insert(key, tx);
-    tokio::spawn(run_lane(rx));
-}
-
-/// The lane loop. Level-triggered and skips entirely when the requested page
-/// set is the one already published — every no-op save, and where the ~5.2 s
-/// goes. **No debounce of its own** — see the module doc's "Staleness
-/// budget": the seal that calls [`request`] is already debounced, so a
-/// generation to index shows up here already rate-limited, and adding a
-/// second idle wait would only stack a further delay on top.
-///
-/// **It parks between requests.** Every pass is driven by a value it has not
-/// seen before; nothing runs a timer in the idle state. An earlier shape
-/// re-evaluated the last request every 2 s — a wakeup plus a ~440-entry JSON
-/// parse for the life of the app, and on a folder whose index kept failing, a
-/// whole-corpus pagefind run every ~7 s forever.
-async fn run_lane(mut rx: tokio::sync::watch::Receiver<LaneRequest>) {
-    // The channel is created carrying the first request, and `changed()` only
-    // reports *later* sends, so the first pass is seeded from the current value.
-    let mut next = Some(rx.borrow_and_update().clone());
-    loop {
-        LANE_PASSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let req = match next.take() {
-            Some(req) => req,
-            None => {
-                // Idle. No timer, no receipt read — just parked on the channel.
-                if rx.changed().await.is_err() {
-                    return; // every sender dropped: the folder closed
-                }
-                rx.borrow_and_update().clone()
-            }
-        };
-
-        if read_receipt(&req.index_dir).map(|r| r.fp()) != Some(req.want.fp) {
-            index_one(&req, rx.clone()).await;
-        }
-
-        // Release every pin except the request still outstanding (if any): this
-        // pass is done with its generation, and the next one re-pins its own.
-        let outstanding = rx.borrow().gen_id.clone();
-        if let Some(set) = IN_FLIGHT
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get_mut(&req.root)
-        {
-            set.retain(|g| *g == outstanding);
-        }
-    }
-}
-
-/// Index one request on the blocking pool and log what happened.
-async fn index_one(req: &LaneRequest, watcher: tokio::sync::watch::Receiver<LaneRequest>) {
-    let wanted = req.want;
-    let for_worker = req.clone();
-    let outcome = tokio::task::spawn_blocking(move || {
-        // Cooperative cancellation: a newer page set has been requested, so
-        // the bundle this pass would publish is already superseded.
-        let cancelled = || watcher.borrow().want.fp != wanted.fp;
-        search::build_search_index_cancellable(&for_worker.gen_dir, &cancelled).and_then(
-            |produced| match produced {
-                Some(produced) => with_holding(&for_worker.index_dir, |h| {
-                    publish_bundle(h, &for_worker.index_dir, wanted, None, &produced)
-                })
-                .map(Some),
-                None => Ok(None),
-            },
-        )
-    })
-    .await;
-
-    match outcome {
-        Ok(Ok(Some(receipt))) => log::info!(
-            target: "search",
-            "search index: {} file{} published for page set {} ({} pages)",
-            receipt.files.len(),
-            if receipt.files.len() == 1 { "" } else { "s" },
-            receipt.fp,
-            receipt.pages,
-        ),
-        Ok(Ok(None)) => {
-            log::debug!(target: "search", "search index superseded before the gzip pass")
-        }
-        Ok(Err(e)) => log::info!(target: "search", "search index not generated: {}", e),
-        Err(e) => log::info!(target: "search", "search index worker failed: {}", e),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Publish path
-// ---------------------------------------------------------------------------
-
-/// Bring the index up to date with the generation on `current`, synchronously.
-///
-/// Returns `true` when the bundle moved — i.e. the sealed manifest a publish is
-/// about to upload names a *stale* index and the caller must rebuild before
-/// pushing. Returns `false` (the common case) when the lane has already
-/// published a receipt for this exact page set, which is what makes this a
-/// no-cost check on an idle vault.
-///
-/// For hosts publishing an existing preview generation: settle pending
-/// materialization first, then rebuild if this returns `true`. CLI deploys
-/// already build with `Freshness::Now` and do not need this extra index pass.
-pub fn settle_for_publish(mp: &MossPaths, enabled: bool) -> bool {
+/// Two callers read the index, and each settles before it does: the preview's
+/// search mount ([`held_file`]'s caller in `ops/serve/router.rs`) and a publish
+/// of an existing preview, which rebuilds when this returns `true` so the
+/// manifest it uploads names the fresh bundle. The answer is about `current`,
+/// not about this call: a search read since the last build published a bundle
+/// that build never adopted. A one-shot build indexes inside
+/// the build instead ([`Freshness::Now`]).
+pub async fn settle(mp: &MossPaths, enabled: bool) -> bool {
     if !enabled {
         return false;
     }
+    crate::build::seal_phase::settle(mp).await;
+    let mp = mp.clone();
+    tokio::task::spawn_blocking(move || settle_index(&mp)).await.unwrap_or(false)
+}
+
+fn settle_index(mp: &MossPaths) -> bool {
     let index_dir = mp.index_dir();
+    let locks = folder_locks(&index_dir);
+    let _one_settle = locks.settle.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Resolved before the manifest is read: no lock holds a promote off, so
+    // `index_current` checks after its read that `current` still names this
+    // generation, or the bytes it indexed may not be the page set read below.
+    let generation = resolve_current(mp);
     // `hashes.json` is the persisted sealed manifest of the generation on
-    // `current`, so its HTML entries are exactly the page set a publish ships.
+    // `current`, so its HTML entries are exactly the page set `current` holds.
     // That pairing is why `advertise_sealed` must not persist a *superseded*
     // seal's manifest: this function would then fingerprint one generation's
     // page set and index another's bytes.
@@ -918,39 +727,98 @@ pub fn settle_for_publish(mp: &MossPaths, enabled: bool) -> bool {
         .unwrap_or_default();
     let want = PageSet::of(&hashes.files);
 
-    with_holding(&index_dir, |h| {
-        if let Some(receipt) = read_receipt(&index_dir) {
+    let covering = |_: &Holding| {
+        read_receipt(&index_dir).filter(|receipt| {
             let holding = holding_dir(&index_dir, receipt.fp());
             // `all` over an empty list is vacuously true, so a bundle covering
             // no pages must not be allowed to satisfy a page set that has them.
-            let intact = receipt.pages >= want.pages
-                && receipt.files.iter().all(|(rel, _)| holding.join(rel).is_file());
-            if receipt.fp() == want.fp && intact {
-                return false;
-            }
-        }
+            receipt.fp() == want.fp
+                && receipt.pages + receipt.left_out >= want.pages
+                && receipt.files.iter().all(|(rel, _)| holding.join(rel).is_file())
+        })
+    };
+    match with_holding(&index_dir, covering).or_else(|| index_current(mp, &generation, want, covering)) {
+        Some(receipt) => !ships(&hashes, &receipt),
+        // Publishing or searching without a fresh index beats neither.
+        None => false,
+    }
+}
 
-        // Resolve `current` before handing it to the indexer: it is a symlink,
-        // and the directory walk does not descend through one.
-        let generation =
-            std::fs::canonicalize(mp.current_ptr()).unwrap_or_else(|_| mp.current_ptr());
-        match index_now(h, &index_dir, &generation, want) {
-            Ok(receipt) => {
-                log::info!(
-                    target: "search",
-                    "publish: re-indexed {} bundle file{} for the generation being published",
-                    receipt.files.len(),
-                    if receipt.files.len() == 1 { "" } else { "s" },
-                );
-                true
-            }
-            Err(e) => {
-                // Publishing without search beats not publishing.
-                log::info!(target: "search", "publish: search index not generated: {}", e);
-                false
-            }
+/// Runs where [`settle_index`] starts the indexer, so a test can act while an
+/// index is in flight.
+#[cfg(test)]
+static WHILE_INDEXING: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
+
+/// `current` resolved: it is a symlink, and the indexer's directory walk does
+/// not descend through one.
+fn resolve_current(mp: &MossPaths) -> PathBuf {
+    std::fs::canonicalize(mp.current_ptr()).unwrap_or_else(|_| mp.current_ptr())
+}
+
+/// Index `generation` with the holding area free, then publish the bundle for
+/// `want` unless `covering` finds one already there. Nothing pins the
+/// generation: the indexer reads every page into memory before it segments
+/// and indexes, so the tree only has to outlive that read, and a read that a
+/// promote's GC cut short is refused by [`publish_bundle`]. A promote that
+/// left the read whole still took `want` off these bytes, so that read is
+/// refused too, as transient: the next settle indexes the new generation.
+fn index_current(
+    mp: &MossPaths,
+    generation: &Path,
+    want: PageSet,
+    covering: impl FnOnce(&Holding) -> Option<BundleReceipt>,
+) -> Option<BundleReceipt> {
+    let index_dir = mp.index_dir();
+    #[cfg(test)]
+    if let Some(hook) = WHILE_INDEXING.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+        hook();
+    }
+    let _phase = crate::build::phase::PhaseTrace::start("search_index");
+    let t_read = std::time::Instant::now();
+    let read = search::read_pages(generation);
+    if resolve_current(mp) != generation {
+        log::info!(target: "search", "search index not generated: a promote moved current during the read");
+        return None;
+    }
+    let published = search::index_pages(read, t_read).and_then(|produced| {
+        with_holding(&index_dir, |h| covering(h).map_or_else(|| publish_bundle(h, &index_dir, want, None, &produced), Ok))
+    });
+    match published {
+        Ok(receipt) => {
+            log::info!(
+                target: "search",
+                "search index: {} bundle file{} published for page set {} ({} pages)",
+                receipt.files.len(),
+                if receipt.files.len() == 1 { "" } else { "s" },
+                receipt.fp,
+                receipt.pages,
+            );
+            Some(receipt)
         }
-    })
+        Err(e) => {
+            log::info!(target: "search", "search index not generated: {}", e);
+            None
+        }
+    }
+}
+
+/// Whether the sealed manifest names exactly the receipt's bundle files.
+fn ships(hashes: &SiteHashes, receipt: &BundleReceipt) -> bool {
+    let shipped = hashes.files.keys().filter(|key| ServedPath::is_search_asset(key)).count();
+    shipped == receipt.files.len()
+        && receipt.files.iter().all(|(rel, hash)| {
+            ServedPath::for_search_asset(rel)
+                .is_ok_and(|sp| hashes.files.get(sp.as_str()) == Some(&crate::types::content::file_entry(hash)))
+        })
+}
+
+/// The file at `rel` (a path under the search mount) in the bundle the
+/// receipt names, if it is there. The preview serves the mount from here, so
+/// the entry file and the chunks it names come from one bundle, the newest.
+pub fn held_file(mp: &MossPaths, rel: &str) -> Option<PathBuf> {
+    let index_dir = mp.index_dir();
+    let receipt = read_receipt(&index_dir)?;
+    receipt.files.iter().any(|(named, _)| named == rel).then(|| holding_dir(&index_dir, receipt.fp()).join(rel))
 }
 
 #[cfg(test)]

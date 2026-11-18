@@ -42,7 +42,7 @@
 //!
 //! **Not covered**, so nobody assumes otherwise: video (needs FFmpeg, which the build
 //! downloads when absent — not hermetic), notebooks (`resolve_asset_directory` reads
-//! the real `~/.moss/assets`), the search lane, and config-change overlaps. The two
+//! the real `~/.moss/assets`), the search index, and config-change overlaps. The two
 //! `nb/analysis.*` keys an earlier scratch harness saw diverge on the `site/` docs
 //! are unexplained by this harness and out of its scope.
 

@@ -1856,7 +1856,7 @@ fn build_inner(
         }
     }
 
-    // Adopt the search bundle, or read the pages a lane-less build indexes:
+    // Adopt the search bundle, or read the pages a one-shot build indexes:
     // inside the stage-write span (it lays files into `stage_dir`, and no
     // `.html` is written after this) and before the seal. Mark-and-sweep —
     // skipping it deletes `_moss/pagefind/*` off the live site.

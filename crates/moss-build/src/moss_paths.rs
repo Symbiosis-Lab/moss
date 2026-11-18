@@ -49,7 +49,7 @@
 //!     ├── current -> generations/<gen-id>/  Symlink to active generation
 //!     ├── staging/          In-progress build (atomic swap target)
 //!     ├── index/            Search-bundle holding area, OUTSIDE the swept tree
-//!     │   ├── receipt.json  What the lane last published
+//!     │   ├── receipt.json  What the last index covered
 //!     │   └── <page-set-fp>/  One bundle per indexed page set
 //!     ├── hashes.json       File hash manifest for change detection
 //!     ├── article-map.json  Content index (all pages with metadata)
@@ -170,6 +170,7 @@ use std::path::{Path, PathBuf};
 /// // Identity
 /// assert_eq!(paths.identity_secret(), moss.join("identity").join("secret-key"));
 /// ```
+#[derive(Clone)]
 pub struct MossPaths {
     root: PathBuf,
 }
@@ -521,18 +522,19 @@ impl MossPaths {
 
     /// `.moss/build.nosync/index/` — holding area for the search bundle.
     ///
-    /// Deliberately NOT under `staging/` or a generation: the search lane runs
-    /// on its own schedule, so its output must survive `remove_stale_files`,
+    /// Deliberately NOT under `staging/` or a generation: the index is built
+    /// when search or a publish reads it, not by a build, so its output must
+    /// survive `remove_stale_files`,
     /// which deletes every staging file the sealed manifest does not list. The
     /// bundle reaches staging (and the manifest) by *adoption* — every build
-    /// copies the receipt's files in and registers them — never by the lane
+    /// copies the receipt's files in and registers them — never by the indexer
     /// writing into the swept tree behind the manifest's back.
     pub fn index_dir(&self) -> PathBuf {
         self.build_dir().join("index")
     }
 
-    /// `.moss/build.nosync/index/receipt.json` — the page-set fingerprint the lane
-    /// last indexed plus the `(path, hash)` pairs of every file it produced.
+    /// `.moss/build.nosync/index/receipt.json` — the page-set fingerprint last
+    /// indexed plus the `(path, hash)` pairs of every file it produced.
     /// Written last, so a torn publish reads as "no receipt" rather than as a
     /// bundle whose files are half on disk.
     pub fn index_receipt(&self) -> PathBuf {

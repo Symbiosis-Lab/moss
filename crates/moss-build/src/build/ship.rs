@@ -581,7 +581,7 @@ impl ShipVerdict {
 /// its own view; an older tail writing over either leaves them disagreeing.
 /// Before the promotion guard the two rolled back together — stale, but
 /// mutually consistent — so this rule is a direct consequence of the guard.
-/// `search_lane::settle_for_publish` is what makes the disagreement reach a
+/// `search_lane::settle` is what makes the disagreement reach a
 /// user: it fingerprints the page set from `hashes.json` and indexes the bytes
 /// under `current`, so a mismatched pair publishes a bundle stamped with a page
 /// set it does not cover.
@@ -1503,7 +1503,7 @@ mod tests {
     /// `hashes.json` and `staging/` are shared across a folder's builds, unlike
     /// a generation directory. A superseded tail persisting its own manifest
     /// left the file describing generation N while `current` served N+1 — and
-    /// `settle_for_publish` reads exactly that pair, so it would fingerprint
+    /// `search_lane::settle` reads exactly that pair, so it would fingerprint
     /// N's page set and index N+1's bytes, publishing a receipt that lies about
     /// which pages its bundle covers. The sweep half is worse: N's view would
     /// delete N+1's new files out of the shared staging tree.

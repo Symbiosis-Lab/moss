@@ -2913,7 +2913,7 @@ pub(crate) fn dispatch_image_conversions_at(
         };
 
         let total = run_ctx.items.len() as u32;
-        let converting = svc.session.as_ref().map(|s| s.hold_ui_bound());
+        let converting = svc.session.as_ref().map(|s| s.hold_converting());
 
         // Image dispatch does not use epochs, and a newer build never cancels
         // an older build's worker: a later dispatch that finds an image already

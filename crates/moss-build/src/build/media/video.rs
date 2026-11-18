@@ -2132,7 +2132,7 @@ pub(crate) fn dispatch_video_conversions(
             // the spawn and the task starting would otherwise find the folder
             // idle and exit early.
             let total = background_ctx.video_items.len() as u32;
-            let converting = svc.session.as_ref().map(|s| s.hold_ui_bound());
+            let converting = svc.session.as_ref().map(|s| s.hold_converting());
 
             // Field-wise Arc::clone: the same counters, tokens and parent cell,
             // reached from the spawned task. See `BuildServices`'s own doc.
@@ -2203,7 +2203,7 @@ pub(crate) fn dispatch_video_conversions(
             }
         } else {
             // Headless mode: run synchronously with epoch=0
-            let _converting = svc.session.as_ref().map(|s| s.hold_ui_bound());
+            let _converting = svc.session.as_ref().map(|s| s.hold_converting());
             log::info!(
                 "Running headless video conversion for {} videos",
                 background_ctx.video_items.len()
