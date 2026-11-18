@@ -132,7 +132,7 @@ async fn settle_already_live(
 /// post the back catalogue.
 fn sources_moved(folder: &Path, sealed: &SealedManifest, target: &str) -> bool {
     crate::build::manifest::published_record::load_for(&MossPaths::new(folder), Some(target))
-        .is_some_and(|record| !crate::build::manifest::change_set::classify(Some(&record), sealed).pages.is_empty())
+        .is_some_and(|record| !crate::build::manifest::change_set::classify(Some(&record), sealed.site_hashes_view()).pages.is_empty())
 }
 
 /// Implementation of the deploy work. **Do not call directly** — call

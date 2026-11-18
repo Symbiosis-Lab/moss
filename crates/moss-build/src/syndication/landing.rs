@@ -27,7 +27,7 @@ impl Before {
             return None;
         }
         let previous = published_record::load_for(mp, target);
-        let edited = change_set::classify(previous.as_ref(), sealed)
+        let edited = change_set::classify(previous.as_ref(), sealed.site_hashes_view())
             .pages
             .into_iter()
             .filter(|p| p.verb == change_set::PageVerb::Edited)

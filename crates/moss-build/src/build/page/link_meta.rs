@@ -356,10 +356,9 @@ fn old_entry(moss_dir: &Path, url: &str) -> Option<(std::path::PathBuf, OldEntry
     Some((path, old))
 }
 
-/// Whether a link has a card, leaving an older moss's entry where it is: the
-/// build's own read moves it, and its seal records the move.
 /// Whether a fetch has nothing left to bring for `url`: its entry is in the
-/// folder (or the cloud), and any picture its page names was downloaded.
+/// folder (or the cloud), and any picture its page names was downloaded. An
+/// older moss's entry counts and stays where it is; the build's read moves it.
 fn is_settled(moss_dir: &Path, url: &str) -> bool {
     match link_snapshot::read(moss_dir, url, None) {
         link_snapshot::Entry::Fetched(f) => !f.picture_failed(),
@@ -850,24 +849,24 @@ pub struct Settled {
     pub waiting: usize,
 }
 
-/// Bring the link cards of the generation about to be published up to date,
-/// synchronously: fetch the ones it showed with no entry, with the full budget,
-/// including any a background fetch already gave up on. A host publishing an
-/// existing generation rebuilds when `fetched` is not zero.
-pub fn settle(mp: &MossPaths) -> Settled {
-    let listed: Vec<String> = std::fs::read(waiting_path(&mp.hashes()))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default();
+/// Bring the link cards of the current generation up to date, synchronously:
+/// fetch the ones it showed with no entry, with the full budget, including any
+/// a background fetch already gave up on. When `fetched` is not zero the
+/// generation is stale: a publish rebuilds it, and a build does not end at its
+/// entry. `None` when the list is absent or unreadable, so which cards are
+/// waiting is not known.
+pub fn settle(mp: &MossPaths) -> Option<Settled> {
+    let listed: Vec<String> = serde_json::from_slice(&std::fs::read(waiting_path(&mp.hashes())).ok()?).ok()?;
     if listed.is_empty() {
-        return Settled::default();
+        return Some(Settled::default());
     }
     let moss_dir = mp.root();
     let refs: Vec<&str> = listed.iter().map(String::as_str).collect();
-    fetch_all_link_meta_parallel(&refs, moss_dir, |_| {});
+    // A slow site can hold this up to the full budget; say why.
+    fetch_all_link_meta_parallel(&refs, moss_dir, |cold| crate::build::cli_output::eprint_status_line(format_args!("Fetching {cold} link previews…")));
     let fetched = refs.iter().filter(|u| is_settled(moss_dir, u)).count();
-    log::info!(target: "link-meta", "publish: {fetched} of {} waiting link cards fetched", listed.len());
-    Settled { fetched, waiting: listed.len() - fetched }
+    log::info!(target: "link-meta", "{fetched} of {} waiting link cards fetched", listed.len());
+    Some(Settled { fetched, waiting: listed.len() - fetched })
 }
 
 /// Read the cached metadata for a set of URLs. Pure cache reader, no I/O
@@ -1106,7 +1105,7 @@ mod tests {
         seed_failed_picture(&tmp, url, &format!("{base}/cover.png"));
         assert!(!is_settled(&tmp, url), "a picture that did not download is waiting");
         let settled = settle(&list_waiting(&tmp, url));
-        assert_eq!(settled, Settled { fetched: 1, waiting: 0 }, "the card changed, so the publish rebuilds");
+        assert_eq!(settled, Some(Settled { fetched: 1, waiting: 0 }), "the card changed, so the publish rebuilds");
         let _ = server.join();
         let card = read_cache(&tmp, url, None).unwrap();
         assert_eq!((card.og_image.as_deref(), card.title.as_deref()), (None, Some("Kept title")));
@@ -1125,7 +1124,7 @@ mod tests {
         let card_path = link_snapshot::card_path(&tmp, url);
         let before = (std::fs::read(&card_path).unwrap(), std::fs::metadata(&card_path).unwrap().modified().unwrap());
         let settled = settle(&list_waiting(&tmp, url));
-        assert_eq!(settled, Settled { fetched: 0, waiting: 1 }, "nothing changed, so no rebuild");
+        assert_eq!(settled, Some(Settled { fetched: 0, waiting: 1 }), "nothing changed, so no rebuild");
         let after = (std::fs::read(&card_path).unwrap(), std::fs::metadata(&card_path).unwrap().modified().unwrap());
         assert_eq!(after, before, "the entry is not written, so no watch event rebuilds the page");
         assert!(!is_settled(&tmp, url), "it is asked for again next time");

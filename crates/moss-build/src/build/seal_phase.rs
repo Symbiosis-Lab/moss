@@ -455,14 +455,12 @@ async fn run_materialize_phase(req: PendingSeal) {
     // describe a publish at all.
     use crate::build::manifest::backfill::{self, SealVerdict};
     let backfill_verdict =
-        backfill::for_seal(&mp, backfill::tail_speaks(&sealed, mat_ok, owns_shared)).await;
+        backfill::for_seal(&mp, backfill::tail_speaks(&sealed, mat_ok, owns_shared).map(SealedManifest::site_hashes_view)).await;
     // Computed once per build by `advertise_sealed`, which always runs first.
-    let removed = backfill_verdict
-        .as_ref()
-        .map(|_| crate::system::build_records::records().removed_addresses(&folder_path).unwrap_or_default());
+    let removed = crate::system::build_records::records().removed_addresses(&folder_path).unwrap_or_default();
     let server_ask = match (&backfill_verdict, &ports.server_diff) {
-        (Some(SealVerdict::AskServer), Some(_)) => {
-            Some((sealed.files().into_owned(), sealed.generation_id().to_string()))
+        (Some(SealVerdict::AskServer), Some(port)) => {
+            Some((port, sealed.files().into_owned(), sealed.generation_id().to_string()))
         }
         _ => None,
     };
@@ -478,16 +476,8 @@ async fn run_materialize_phase(req: PendingSeal) {
     // nothing to say does neither, and does not CLEAR: the manifest just
     // advertised (if any) is still publishable and the standing stash
     // describes it.
-    let change_set = match backfill_verdict {
-        None => None,
-        Some(SealVerdict::Ready(set)) => Some(set),
-        Some(SealVerdict::AskServer) => Some(match (&ports.server_diff, server_ask) {
-            (Some(port), Some((files, gen_id))) => backfill::from_server(port, files, gen_id).await,
-            _ => Default::default(),
-        }),
-    };
-    // The removed addresses ride on whichever set resulted, classified or not.
-    let change_set = change_set.zip(removed).map(|(set, removed)| set.with_removed(removed));
+    // The removed addresses ride on whichever set results, classified or not.
+    let change_set = backfill::settle(backfill_verdict, server_ask, removed).await;
     announcer.publish_change_set(mp.project_root(), change_set).await;
 
     // Emit the "Sealed" progress tick (mat_ok-gated) — the counterpart of the

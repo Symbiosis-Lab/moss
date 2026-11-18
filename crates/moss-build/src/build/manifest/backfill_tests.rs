@@ -205,7 +205,7 @@ async fn with_no_publish_record_a_seal_reports_the_backfilled_count() {
     );
 
     let current = sealed_of(&[("index.html", b"new home"), ("fresh/index.html", b"added page")]);
-    let set = match for_seal(&mp, Some(&current)).await {
+    let set = match for_seal(&mp, Some(current.site_hashes_view())).await {
         Some(SealVerdict::Ready(set)) => set,
         _ => panic!("a materialized seal with a generation on disk answers locally"),
     };
@@ -231,7 +231,7 @@ async fn a_pruned_or_absent_generation_degrades_to_ask_server_then_blank() {
     for mp in [&pruned_mp, &no_pointer_mp] {
         assert!(published_files(mp).is_none());
         assert!(
-            matches!(for_seal(mp, Some(&current)).await, Some(SealVerdict::AskServer)),
+            matches!(for_seal(mp, Some(current.site_hashes_view())).await, Some(SealVerdict::AskServer)),
             "both local sources empty defers to the server, never a partial count"
         );
     }
@@ -257,7 +257,7 @@ async fn a_publish_record_wins_over_the_generation_on_disk() {
     .unwrap();
 
     let current = sealed_of(&[("index.html", b"new home")]);
-    let set = match for_seal(&mp, Some(&current)).await {
+    let set = match for_seal(&mp, Some(current.site_hashes_view())).await {
         Some(SealVerdict::Ready(set)) => set,
         _ => panic!("a record on disk answers locally"),
     };
@@ -296,7 +296,7 @@ async fn the_server_diff_is_the_last_resort_and_is_asked_once_per_generation() {
     };
 
     assert!(
-        matches!(for_seal(&mp, Some(&current)).await, Some(SealVerdict::AskServer)),
+        matches!(for_seal(&mp, Some(current.site_hashes_view())).await, Some(SealVerdict::AskServer)),
         "no record and no tree defers to the server"
     );
 
@@ -348,5 +348,5 @@ fn generated_files_and_pictures_are_never_removed_addresses() {
     last.replace_sources([(own.to_string(), meta)].into(), [(own.to_string(), own.to_string())].into());
     published_record::save(&mp, &PublishedSnapshot::from_sealed(&last.seal(), "moss:site-1", "2026-11-05T00:00:00Z".into())).unwrap();
     let now = PendingManifest::new(SiteHashes::default());
-    assert_eq!(removed_for_seal(&mp, &now.seal()), vec![]);
+    assert_eq!(removed_for_seal(&mp, now.seal().site_hashes_view()), vec![]);
 }

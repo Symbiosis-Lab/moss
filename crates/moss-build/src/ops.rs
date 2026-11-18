@@ -389,7 +389,9 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
             host,
             // Nothing was watched before this build: the gates prove from the
             // last seal what changed, and render everything when they cannot.
-            trigger: BuildTrigger::Unobserved,
+            // `--strict` renders everything, since it fails on problems only a
+            // render reports.
+            trigger: if run.flags.strict { BuildTrigger::Full } else { BuildTrigger::Unobserved },
             // A serving process stays alive (it parks on ctrl-C below), so
             // only the plain build seals inline and fetches its link cards first.
             exits_after_build: !run.flags.serve,

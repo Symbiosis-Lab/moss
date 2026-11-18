@@ -23,6 +23,10 @@ All notable changes to moss will be documented here.
 - A build that a newer one overtakes stops making pictures' smaller copies and is not shown; the newer build makes them. Saving several times in a row ran one such pass per save at once, each on a full core, for minutes after the last build ended.
 - A page whose first paragraph ends a line with a backslash (a markdown line break) no longer shows the backslash in its automatic description.
 
+### Changed
+
+- Opening a folder in the app that hasn't changed since moss last built it shows the last build at once instead of building it again: on a site of about 400 pages the preview is ready in about a second, with half the memory. A build that runs while the app sits in the background is no longer slowed by macOS's App Nap, so the first edit after a quiet spell shows about as fast as any other.
+
 ## [0.15.26] - 2026-11-17
 
 ### Fixed

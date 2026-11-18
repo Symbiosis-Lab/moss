@@ -9,6 +9,7 @@
 //! render may have replaced while the generation uploaded.
 
 use super::SealedManifest;
+use crate::types::content::SiteHashes;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -20,7 +21,7 @@ pub(crate) fn articles_path(generations: &Path, generation: &str) -> PathBuf {
     generations.join(format!(".{generation}.articles.json"))
 }
 
-impl SealedManifest {
+impl SiteHashes {
     /// The output-path → mode-tagged-hash entries that are published: every
     /// built file except the HTML of a `draft: true` or empty page. Every publish path (the
     /// upload, the change set, the sitemap-adjacent counts) reads this view.
@@ -28,10 +29,10 @@ impl SealedManifest {
     pub fn files(&self) -> std::borrow::Cow<'_, HashMap<String, String>> {
         let withheld = self.withheld();
         if withheld.is_empty() {
-            return std::borrow::Cow::Borrowed(&self.inner.files);
+            return std::borrow::Cow::Borrowed(&self.files);
         }
         std::borrow::Cow::Owned(
-            self.inner.files.iter()
+            self.files.iter()
                 .filter(|(key, _)| !withheld.contains(key.as_str()))
                 .map(|(key, entry)| (key.clone(), entry.clone()))
                 .collect(),
@@ -41,7 +42,7 @@ impl SealedManifest {
     /// Everything the generation holds, drafts included. Preview serves it and
     /// the generation directory is copied from it; nothing that publishes may.
     pub fn all_files(&self) -> &HashMap<String, String> {
-        &self.inner.files
+        &self.files
     }
 
     /// [`source_to_output`][Self::source_to_output] without the drafts: the page
@@ -49,10 +50,10 @@ impl SealedManifest {
     pub fn published_source_to_output(&self) -> std::borrow::Cow<'_, HashMap<String, String>> {
         let withheld = self.withheld();
         if withheld.is_empty() {
-            return std::borrow::Cow::Borrowed(&self.inner.source_to_output);
+            return std::borrow::Cow::Borrowed(&self.source_to_output);
         }
         std::borrow::Cow::Owned(
-            self.inner.source_to_output.iter()
+            self.source_to_output.iter()
                 .filter(|(_, out)| !withheld.contains(out.as_str()))
                 .map(|(src, out)| (src.clone(), out.clone()))
                 .collect(),
@@ -63,7 +64,7 @@ impl SealedManifest {
     /// stamps into frontmatter.
     pub fn published_uids(&self) -> impl Iterator<Item = (&str, &crate::types::content::PageMeta)> + '_ {
         let published = self.published_source_to_output();
-        self.inner.page_meta.iter()
+        self.page_meta.iter()
             .filter(move |(source, _)| published.contains_key(*source))
             .map(|(source, meta)| (source.as_str(), meta))
     }
@@ -82,11 +83,20 @@ impl SealedManifest {
     }
 
     fn outputs_where(&self, keep: impl Fn(&crate::types::content::PageMeta) -> bool) -> HashSet<&str> {
-        self.inner.page_meta.iter()
+        self.page_meta.iter()
             .filter(|(_, meta)| keep(meta))
-            .filter_map(|(source, _)| self.inner.source_to_output.get(source).map(String::as_str))
+            .filter_map(|(source, _)| self.source_to_output.get(source).map(String::as_str))
             .collect()
     }
+}
+
+impl SealedManifest {
+    pub fn files(&self) -> std::borrow::Cow<'_, HashMap<String, String>> { self.inner.files() }
+    pub fn all_files(&self) -> &HashMap<String, String> { self.inner.all_files() }
+    pub fn published_source_to_output(&self) -> std::borrow::Cow<'_, HashMap<String, String>> { self.inner.published_source_to_output() }
+    pub fn published_uids(&self) -> impl Iterator<Item = (&str, &crate::types::content::PageMeta)> + '_ { self.inner.published_uids() }
+    pub fn withheld(&self) -> HashSet<&str> { self.inner.withheld() }
+    pub fn withheld_by_author(&self) -> HashSet<&str> { self.inner.withheld_by_author() }
 
     pub(crate) fn write_publish_view(&self, generations: &Path) -> std::io::Result<()> {
         let withheld: BTreeSet<&str> = self.withheld().into_iter().collect();

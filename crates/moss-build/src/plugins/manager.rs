@@ -289,6 +289,12 @@ impl PluginManager {
             .cloned()
     }
 
+    /// Whether a plugin here runs a process hook, which brings content in
+    /// before a build reads the folder.
+    pub fn has_process_hooks(&self) -> bool {
+        !self.find_plugins_by_capability(&Capability::Process).is_empty()
+    }
+
     /// Find all plugins with a specific capability
     fn find_plugins_by_capability(&self, capability: &Capability) -> Vec<Plugin> {
         self.plugins

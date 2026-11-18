@@ -127,7 +127,7 @@ fn a_manifest_proof_opens_both_gates_even_when_nothing_changed() {
 #[test]
 fn an_unobserved_build_with_no_seal_renders_everything() {
     let dir = tempfile::tempdir().unwrap();
-    let seal = LastSeal::read(dir.path(), Default::default());
+    let seal = LastSeal::read(dir.path(), Default::default(), true);
     assert_eq!(ChangeProof::for_build(&BuildTrigger::Unobserved, dir.path(), "b", &seal), ChangeProof::None);
 }
 
@@ -139,4 +139,41 @@ fn only_a_watch_batch_is_a_watch_batch() {
     assert!(!BuildTrigger::Full.is_watch_batch());
     assert!(BuildTrigger::ContentOnly(paths(&["a.md"])).is_watch_batch());
     assert!(BuildTrigger::Structural(paths(&["a.md"])).is_watch_batch());
+}
+
+// ── The stop at the entry ─────────────────────────────────────────────────
+
+/// What the passes that read from outside the folder wrote decides the stop:
+/// they write into rows `BuildInputs` measures, and the check measures again
+/// after them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_stop_measures_again_after_the_passes_that_read_from_outside() {
+    use crate::build::{run_pipeline, PipelineConfig, PluginMode};
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    std::fs::write(root.join("index.md"), "---\ntitle: Garden\n---\n\nA quiet garden.\n").unwrap();
+    std::fs::create_dir_all(root.join(".moss/data")).unwrap();
+    std::fs::write(root.join(".moss/data/comments.json"), "[]").unwrap();
+    // Twice: a first build writes rows of `.moss/` after measuring it, and its
+    // media are new against no manifest, so only the second seal is settled.
+    for _ in 0..2 {
+        run_pipeline(PipelineConfig {
+            root: crate::vault::paths::VaultRoot::resolve(&root),
+            progress: std::sync::Arc::new(crate::build::ports::reporter::NullReporter), plugins: PluginMode::Skip,
+            watch: false, start_server: false,
+            host: crate::build::ports::host::test_host_ports(),
+            trigger: BuildTrigger::Full, exits_after_build: true,
+            site_url_override: None, server_port: None, admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
+        }).await.expect("fixture builds");
+    }
+    let builder = crate::plugins::fingerprint::builder_fingerprint();
+    let options = || crate::build::inputs::options(None, true);
+    let check = |fetch: &dyn Fn() -> Option<bool>| AtEntry::check(&root, &builder, &mut LastSeal::read(&root, options(), true), options(), fetch);
+    assert_eq!(check(&|| Some(false)), AtEntry::Unchanged);
+    assert_eq!(check(&|| None), AtEntry::Build { comments_refreshed: false }, "which cards are missing is not known");
+    let new_comment = || {
+        std::fs::write(root.join(".moss/data/comments.json"), "[{\"body\": \"Hello\"}]").unwrap();
+        Some(true)
+    };
+    assert_eq!(check(&new_comment), AtEntry::Build { comments_refreshed: true });
 }

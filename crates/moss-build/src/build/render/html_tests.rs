@@ -10047,7 +10047,7 @@ mod build_time_link_meta_fetch_tests {
         assert!(!index().contains("Settled At Publish"), "the open shows the card URL-only: {}", index());
 
         let settled = crate::build::page::link_meta::settle(&mp);
-        assert_eq!(settled, crate::build::page::link_meta::Settled { fetched: 1, waiting: 0 });
+        assert_eq!(settled, Some(crate::build::page::link_meta::Settled { fetched: 1, waiting: 0 }));
         build(&std::sync::Arc::new(HoldsFetches::default()));
         assert!(index().contains("Settled At Publish"), "the rebuild a publish runs must show the card: {}", index());
         let _ = server.join();

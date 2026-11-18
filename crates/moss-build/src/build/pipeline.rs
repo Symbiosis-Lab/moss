@@ -1569,6 +1569,9 @@ fn build_inner(
     let color_scheme = site_config.color_scheme;
     let (mut site_result, mut background_ctx, documents, carry_verification) = generate_blocking_content_for_build(root, project_structure, &stage_dir, services, progress_sender, emit_source_lines, site_config, &mut pending, exits_after_build, true, build_instant)?;
     let build_now = site_result.now;
+    let build_day = crate::build::inputs::BuildDay { date: build_now.date(), zone: crate::build::inputs::site_zone(&documents).map(str::to_string) };
+    let reused = (incremental.render_skip || incremental.parse_cache).then_some(previous_hashes.build_inputs.as_ref());
+    pending.set_render_facts(build_day, crate::build::inputs::complete(&project_structure.image_files, exits_after_build, reused));
     log::debug!(target: "timing", "[build] staging: generate_blocking_content: {:?}", build_start.elapsed());
 
     // Places-explorer data file (`_moss/places.<hash>.json`): the bytes the
@@ -2173,6 +2176,26 @@ pub(crate) fn send_progress(
             is_empty: empty,
         });
     }
+}
+
+/// Show the sealed render again without rendering it, for a serving build that
+/// stops because nothing changed since the seal. Staging still holds that
+/// render, proven as the carry proves a page: every entry the seal names is
+/// present. What remains is sweeping what it does not name, pointing the
+/// preview at staging, and recording that `current` holds this render, so the
+/// next build may sweep. `None` when an entry is missing or no sweep is
+/// permitted; the caller then builds, which repairs both.
+pub(crate) fn reveal_sealed_staging(paths: &MossPaths, sealed: &SiteHashes, generation: &str, encode_outputs: std::collections::HashSet<String>) -> Option<u64> {
+    let stage_dir = paths.staging_dir();
+    if !sealed.files.keys().all(|key| crate::build::io_utils::output_present(&stage_dir.join(key))) {
+        return None;
+    }
+    // The stopping build holds its own cache lease, as every build does.
+    let permit = crate::build::lifecycle::park_for_rebuild(paths, true, encode_outputs)?;
+    crate::phase!("staging_sweep", { sweep_staging(&stage_dir, sealed, Some(&permit)) });
+    let (render, _) = crate::build::lifecycle::show_render(paths, true);
+    crate::build::lifecycle::promote(paths, crate::build::ship::next_promotion_epoch(), Some(&render), generation, false).ok()?;
+    Some(render.seq())
 }
 
 /// Unlink whatever the previous build's manifest does not name: variants the

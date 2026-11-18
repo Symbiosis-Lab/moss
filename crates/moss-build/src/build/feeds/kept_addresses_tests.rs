@@ -78,7 +78,7 @@ fn a_derivative_of_a_deleted_picture_is_not_kept_and_names_nothing() {
 
     assert!(keep(&mp, &stage, &mut sealed, &Default::default()).is_empty());
     assert!(!stage.join("photo-2.webp").exists());
-    assert!(backfill::removed_for_seal(&mp, &sealed).is_empty(), "neither is a page");
+    assert!(backfill::removed_for_seal(&mp, sealed.site_hashes_view()).is_empty(), "neither is a page");
 }
 
 fn served(paths: &[&str]) -> std::collections::HashMap<String, String> {

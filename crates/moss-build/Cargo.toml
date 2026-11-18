@@ -177,7 +177,7 @@ brotli = "8"
 core-foundation = "0.9"
 core-foundation-sys = "0.8"
 objc2 = { version = "0.6", features = ["relax-sign-encoding"] }
-objc2-foundation = { version = "0.3", features = ["NSFileManager", "NSFileCoordinator", "NSURL", "NSString", "NSError", "NSNotification", "NSOperation", "NSArray", "NSSet", "NSData", "NSDate", "NSRunLoop", "block2"] }
+objc2-foundation = { version = "0.3", features = ["NSFileManager", "NSFileCoordinator", "NSURL", "NSString", "NSError", "NSNotification", "NSOperation", "NSArray", "NSSet", "NSData", "NSDate", "NSRunLoop", "NSProcessInfo", "block2"] }
 # The `block2` in objc2-foundation's feature list above is a feature flag, not
 # this crate — it only makes objc2-foundation's block-taking APIs available.
 # `file_coordination` names `block2::RcBlock` itself, so it needs the dep.

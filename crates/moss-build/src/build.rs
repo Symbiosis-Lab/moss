@@ -713,6 +713,7 @@ pub(crate) fn should_stash_hashes(publishable: bool, cancelled: bool) -> bool {
 /// `PHASE_TIMINGS`-equivalent state must be gone by the time this fn
 /// returns, not read after the fact from a task that no longer exists.
 pub async fn run_pipeline(config: PipelineConfig) -> Result<String, String> {
+    let _activity = crate::platform::begin_build();
     let pipeline_start = std::time::Instant::now();
     let (result, collector) = crate::build::phase::with_collector(async {
         let reads_before = cloud_readiness::download_reads();
@@ -796,7 +797,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // migration of the build tree, a process hook) moves the next build's
     // record, which costs that build one full render, never a stale page.
     let options = crate::build::inputs::options(config.site_url_override.as_deref(), matches!(pass.plugins, PluginMode::Skip));
-    let last_seal = std::sync::Arc::new(incremental_gates::LastSeal::read(config.source(), options));
+    let mut last_seal = incremental_gates::LastSeal::read(config.source(), options.clone(), config.exits_after_build && !config.defers_image_placeholders());
 
     // Derive the .moss dir — always present, used as the preview-server dedup key.
     let moss_dir_path = config.source().join(".moss");
@@ -931,6 +932,14 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             );
         }
     }
+
+    // Below the server launch: a serving build that stops has already put the
+    // sealed generation on screen.
+    let at_entry = match incremental_gates::stop_at_entry(config, pass, &mut last_seal, options, port_now()).await {
+        Ok(outcome) => return Ok(outcome),
+        Err(at_entry) => at_entry,
+    };
+    let last_seal = std::sync::Arc::new(last_seal);
 
     // --- SCAN ONCE at pipeline start ---
     // Build ProjectInfo + ProjectStructure once; shared by all consumers
@@ -1156,7 +1165,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // having gone three months with no implementation in any plugin, bundled
     // or WIP.
     let listing_host = (!skip_plugins).then(|| crate::build::emit::listing_style::ListingHost::new(&config.host.plugins, &folder_path));
-    let refresh_comments_first = config.exits_after_build && !skip_process;
+    let refresh_comments_first = config.exits_after_build && !skip_process && at_entry == incremental_gates::AtEntry::Build { comments_refreshed: false };
     let make_slot_resolver = |folder_path_for_slots: String,
                               cached_domain_config_for_slots: crate::config::deployment::DomainDeploymentConfig,
                               project_structure_for_slots: ProjectStructure|
@@ -1961,6 +1970,9 @@ async fn advertise_sealed(
     // returned `PendingSeal` for the materialize phase to read or drop.
     guards: SealGuards,
 ) -> Option<crate::build::seal_phase::PendingSeal> {
+    // The seal's per-build half, which a detached tail runs after `run_pipeline`
+    // has returned; the lane's materialize and promotion stay paced.
+    let _activity = crate::platform::begin_build();
     let _phase = crate::build::phase::PhaseTrace::start("seal_persist");
     let sealed_at = std::time::Instant::now();
     // A caller hand-off never yields: its caller reads `current` next.
@@ -2115,7 +2127,7 @@ async fn advertise_sealed(
     // on every seal, empty included, like the promise verdict above.
     crate::phase!("seal_removed", { crate::system::build_records::records().record_removed_addresses(
         folder_path,
-        crate::build::manifest::backfill::removed_for_seal(mp, &sealed),
+        crate::build::manifest::backfill::removed_for_seal(mp, sealed.site_hashes_view()),
     ) });
 
     // Persist so the next build's load_previous_hashes reads a complete

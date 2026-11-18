@@ -5,6 +5,8 @@
 //!
 //! Only `build::cloud_prefetch`'s workers may call the materializers — see
 //! each module's header for why (coordination can hang a thread indefinitely).
+//!
+//! Also the activity that keeps a build out of App Nap ([`activity`]).
 #[cfg(target_os = "macos")]
 pub mod file_coordination;
 #[cfg(target_os = "macos")]
@@ -13,6 +15,16 @@ pub mod iopolicy;
 pub mod folder_icon;
 #[cfg(target_os = "macos")]
 pub mod download_request;
+#[cfg(target_os = "macos")]
+pub(crate) mod activity;
+
+/// Hold for the life of a build, so the OS does not throttle it. See [`activity`].
+#[cfg(target_os = "macos")]
+pub(crate) use activity::begin_build;
+
+/// Only macOS naps a hidden app's build.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn begin_build() {}
 
 /// Ask the system to download a cloud placeholder, without waiting for it. See
 /// [`download_request`]. Any thread may call it.

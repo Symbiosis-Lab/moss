@@ -691,6 +691,15 @@ impl PendingManifest {
         });
     }
 
+    /// What the render was as of: its day, and whether its output is
+    /// complete; see [`BuildInputs`](crate::build::inputs::BuildInputs).
+    pub(crate) fn set_render_facts(&mut self, day: crate::build::inputs::BuildDay, complete: bool) {
+        if let Some(inputs) = self.inner.build_inputs.as_mut() {
+            inputs.day = Some(day);
+            inputs.complete = complete;
+        }
+    }
+
     /// Set the plugin and builder fingerprints on the pending manifest. These
     /// flow through to the `SealedManifest::write_to_disk` output so the next
     /// build's `load_previous_hashes` can detect plugin/builder changes.

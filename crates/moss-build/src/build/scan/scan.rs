@@ -381,6 +381,12 @@ const MEDIA_META_TRANSFORM: &str = "media/meta";
 /// version-5 entry holds `None` for it.
 const MEDIA_META_VERSION: u32 = 6;
 
+/// Images whose dominant colour and placeholder need a pixel decode (an SVG
+/// has neither).
+pub(crate) fn is_raster_image(extension: &str) -> bool {
+    matches!(extension, "jpg" | "jpeg" | "png" | "gif" | "webp" | "avif")
+}
+
 /// Whether a `media/meta` entry written under `params` is still right for a
 /// source with this extension. A version bump fixes some kinds of source and
 /// leaves the others' entries as they were, so reading them again, and
@@ -593,7 +599,7 @@ fn extract_media_metadata_cached(
     // We only DEFER these (dimensions-only + stat-key) in preview/server mode;
     // in build/deploy mode `defer_this_image` is false and images take the full
     // synchronous extract below, exactly as before this optimization.
-    let is_image = matches!(extension, "jpg" | "jpeg" | "png" | "gif" | "webp" | "avif");
+    let is_image = is_raster_image(extension);
     let defer_this_image = is_image && defer_placeholders;
 
     // Step 1: Resolve content hash.
@@ -1378,8 +1384,6 @@ pub fn scan_folder_with_dedup_emit_with_error(
         // nests rayon → corruption). Today image 0.24 can't decode SVG so it's
         // inert, but keep the parallel path structurally decode-free: process
         // SVG (and any future non-raster) SERIALLY, into the same indexed slots.
-        let is_raster =
-            |ext: &str| matches!(ext, "jpg" | "jpeg" | "png" | "gif" | "webp" | "avif");
         let extract_one = |e: &ImageEntry| -> (MediaMetadata, HashIndex) {
             let mut local_index = HashIndex::new();
             let meta = extract_media_metadata_cached(
@@ -1410,7 +1414,7 @@ pub fn scan_folder_with_dedup_emit_with_error(
                         break;
                     }
                     let e = &image_entries[i];
-                    if !is_raster(&e.extension) {
+                    if !is_raster_image(&e.extension) {
                         continue; // non-raster handled serially below
                     }
                     *results[i].lock().unwrap() = Some(extract_one(e));
@@ -1419,7 +1423,7 @@ pub fn scan_folder_with_dedup_emit_with_error(
         });
         // Serial pass for non-raster (SVG) entries — decode-free guarantee.
         for (i, e) in image_entries.iter().enumerate() {
-            if is_raster(&e.extension) {
+            if is_raster_image(&e.extension) {
                 continue;
             }
             *results[i].lock().unwrap() = Some(extract_one(e));

@@ -232,6 +232,32 @@ impl Vault {
         std::fs::write(vault.mp.config(), "[site]\nsearch = true\n").unwrap();
         vault
     }
+
+    /// The app's folder open: a build with no events that opens a preview
+    /// and keeps its process. Returns its message.
+    async fn open(&self) -> String {
+        let mut host = self.host();
+        host.launch_server = Some(Arc::new(|_, _| Box::pin(async { Ok(47_312) })));
+        let message = run_pipeline(PipelineConfig {
+            root: crate::vault::paths::VaultRoot::resolve(&self.folder),
+            progress: crate::build::null_sink(),
+            plugins: PluginMode::Skip,
+            watch: false,
+            start_server: true,
+            host,
+            trigger: BuildTrigger::Unobserved,
+            exits_after_build: false,
+            site_url_override: None,
+            server_port: None,
+            admission_epoch: None,
+            live_port: None,
+            rename_pairs: Vec::new(),
+        })
+        .await
+        .expect("open");
+        self.drained().await;
+        message
+    }
 }
 
 /// Whether any fragment of the bundle the receipt names holds `word`.
@@ -348,6 +374,35 @@ async fn search_entry(port: u16) -> Result<String, String> {
     })
     .await
     .unwrap()
+}
+
+/// A search read after a session's last edit publishes a bundle no build has
+/// adopted, so staging still holds the bundle before it, and an open that
+/// stops builds nothing that would adopt it. The search mount answers from
+/// the receipt's bundle all the same.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stopped_open_searches_the_bundle_the_last_search_read_published() {
+    use crate::build::feeds::search_lane::{held_file, settle};
+    let vault = Vault::searchable();
+    let _serialize = crate::build::feeds::search::lock_index_counter();
+    vault.open().await;
+    settle(&vault.mp, true).await;
+    vault.edit("lichenword");
+    vault.open().await;
+    assert!(settle(&vault.mp, true).await, "the search read indexed the edit");
+
+    assert!(vault.open().await.starts_with("Unchanged since the last build."), "the open stopped");
+    let (port, _, shutdown) = crate::ops::serve::start_server(crate::ops::serve::ServeConfig::new(vault.served.clone(), 59630))
+        .await
+        .expect("server starts");
+    let body = search_entry(port).await;
+    let _ = shutdown.send(());
+
+    let entry = "pagefind-entry.json";
+    let held = std::fs::read_to_string(held_file(&vault.mp, entry).expect("the receipt names the entry")).unwrap();
+    let staged = std::fs::read_to_string(vault.mp.staging_dir().join("_moss/pagefind").join(entry)).unwrap();
+    assert_ne!(staged, held, "staging holds the bundle before the search read");
+    assert_eq!(body.expect("the entry is served"), held);
 }
 
 /// A search opened while a build runs waits for it, and its seal, and answers

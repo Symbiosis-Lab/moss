@@ -257,3 +257,49 @@ async fn advertise_sealed_ships_held_bytes_then_hands_deploy_a_manifest_without_
     assert_eq!(adopted.held_bytes("sitemap.xml"), None, "the adopted manifest must not keep the bytes it just shipped");
     assert!(adopted.files().contains_key("sitemap.xml"), "releasing bytes must not drop the entry");
 }
+
+/// The seal's per-build half runs after a detached tail's `run_pipeline` has
+/// returned, so it holds its own activity: App Nap would otherwise throttle it.
+/// The test holds the stage lock so the half waits inside its span.
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_seals_per_build_half_holds_its_own_activity() {
+    let (_tmp, mp, sealed) = fixture();
+    let session = FolderSession::new(mp.project_root().to_path_buf());
+    let stage_lock = session.try_lock_stage_write().expect("nothing else holds the stage lock");
+    let ports = seal_ports();
+    let folder_path = mp.project_root().to_string_lossy().to_string();
+    let (hashes_path, stage) = (mp.hashes(), mp.staging_dir());
+
+    let seal = advertise_sealed(
+        &ports,
+        &mp,
+        &hashes_path,
+        &stage,
+        sealed,
+        None,
+        std::sync::Arc::new(|_: &str| false),
+        Some(session.clone()),
+        crate::build::ship::next_promotion_epoch(),
+        1,
+        Some(crate::build::lifecycle::Render::numbered(&mp, 1)),
+        &folder_path,
+        SealGuards { final_sweep: None, ..Default::default() },
+    );
+    let probe = async {
+        let mut held = 0;
+        for _ in 0..100 {
+            held = crate::platform::activity::HELD.with(|held| held.get());
+            if held > 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        drop(stage_lock);
+        held
+    };
+    let (_, held) = crate::platform::activity::HELD
+        .scope(std::cell::Cell::new(0), async { tokio::join!(seal, probe) })
+        .await;
+    assert!(held >= 1, "no activity held while the seal's per-build half waited for the stage lock");
+}
