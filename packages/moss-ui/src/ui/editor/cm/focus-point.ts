@@ -239,8 +239,8 @@ export function focusPointExtension(opts: FocusPointOptions): Extension {
     private live: string | null = null;
     private dirty = false;
     private gone = false;
-    /** The line whose dot takes the keyboard when it is drawn; dropped once the caret leaves that picture. */
-    private wantDot: number | null = null;
+    /** "Set focus point" arrived: the dot on the field's `asked` line takes the keyboard once, when it is drawn. */
+    private takeDot = false;
     /** The written crop the shell is holding: its line key, and the end of the picture's line, mapped through later edits. */
     private held: { line: number; to: number } | null = null;
     private readonly off: () => void;
@@ -253,8 +253,7 @@ export function focusPointExtension(opts: FocusPointOptions): Extension {
 
     update(u: ViewUpdate): void {
       if (this.held && u.docChanged) this.letGoIfMoved(u);
-      for (const tr of u.transactions) for (const e of tr.effects) if (e.is(focusDotEffect)) this.wantDot = e.value;
-      if (u.state.field(field).shown?.picture.line !== this.wantDot) this.wantDot = null;
+      if (u.transactions.some((tr) => tr.effects.some((e) => e.is(focusDotEffect)))) this.takeDot = true;
       this.sync();
     }
 
@@ -269,8 +268,8 @@ export function focusPointExtension(opts: FocusPointOptions): Extension {
         write: (found) => {
           if (this.gone || !found?.block) this.overlay.hide();
           else this.overlay.show(found.block, found.shape);
-          if (found?.block && this.wantDot === found.shape.line) {
-            this.wantDot = null;
+          if (found?.block && this.takeDot && this.view.state.field(field).asked === found.shape.line) {
+            this.takeDot = false;
             this.overlay.dot.focus();
           }
         },
