@@ -13,14 +13,14 @@ fn a_decomposed_file_name_is_published_composed() {
         ("files/cre\u{300}me.csv", "item,price\ntart,4\n"),
     ]);
     // The published folder, and its listing rather than a lookup: a Mac disk
-    // finds either spelling.
+    // finds either spelling. A folder of files alone gets no page.
     let published = site.root.join(".moss/build.nosync/current/files");
     let mut names: Vec<String> = std::fs::read_dir(&published)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     names.sort();
-    assert_eq!(names, vec!["cr\u{e8}me.csv".to_string(), "index.html".to_string()]);
+    assert_eq!(names, vec!["cr\u{e8}me.csv".to_string()]);
     assert_eq!(std::fs::read_to_string(published.join("cr\u{e8}me.csv")).unwrap(), "item,price\ntart,4\n");
 }
 

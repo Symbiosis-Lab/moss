@@ -53,15 +53,15 @@ fn every_address_under_the_old_folder_answers_from_the_new_one() {
     assert!(redirect_lines(&logged).is_empty(), "{logged:?}");
 }
 
-/// A folder of files alone gets the listing moss writes for it, and both move.
+/// A folder of files alone has no page, so its files move and nothing else.
 #[test]
-fn a_folder_of_files_alone_moves_with_its_listing() {
+fn a_folder_of_files_alone_moves_its_files() {
     let site = Site::with_config(
         CONFIG,
         &[("index.md", "---\ntitle: Home\n---\n\nText.\n"), ("review/client/old/plan.pdf", "%PDF-1.4 plan")],
     );
     assert_eq!(std::fs::read(site.output("review/old/plan.pdf")).unwrap(), b"%PDF-1.4 plan");
-    assert!(forwards(&site, "review/old/index.html", "/review/client/old/"));
+    assert!(!site.output("review/old/index.html").exists());
     assert!(redirect_lines(&site.logged).is_empty(), "{:?}", site.logged);
 }
 

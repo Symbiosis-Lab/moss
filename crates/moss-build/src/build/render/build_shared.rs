@@ -6,7 +6,7 @@
 //! and on an image-heavy site rebuilding it per page was most of the cost of
 //! re-rendering every page after a nav edit.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use crate::build::assets::theme_modules::ThemeModules;
@@ -106,22 +106,18 @@ impl FolderIndexPlan {
         input_evidence: &crate::build::cloud_ledger::InputEvidence,
         make_document: impl Fn(&str) -> ParsedDocument,
     ) -> Self {
-        // The boolean records a document descendant, rather than retaining
-        // child indices that listing selection would have to recompute anyway.
-        let mut candidates: BTreeMap<String, bool> = BTreeMap::new();
-        for doc in documents.iter().filter(|d| !d.slot_only && d.url_path != "index.html") {
+        // A folder is a candidate when a page sits somewhere beneath it, or
+        // when it is a term's page. A folder of files alone has nothing to
+        // list. A listed partial counts: it is a row in its folder's listing.
+        let mut candidates: BTreeSet<String> = BTreeSet::new();
+        for doc in documents.iter().filter(|d| (!d.slot_only || d.is_pageless_entry()) && d.url_path != "index.html") {
             let parts: Vec<&str> = doc.url_path.split('/').collect();
             for depth in 1..parts.len().saturating_sub(1) {
-                candidates.insert(parts[..depth].join("/"), true);
+                candidates.insert(parts[..depth].join("/"));
             }
         }
-        for (_, key) in folder_index_keys(&project.dirs, dir_overrides) {
-            candidates.entry(key).or_insert(false);
-        }
         let term_pages: HashSet<String> = terms.synthetic_folder_keys().into_iter().collect();
-        for key in &term_pages {
-            candidates.entry(key.clone()).or_insert(false);
-        }
+        candidates.extend(term_pages.iter().cloned());
 
         // A pending authored index or a directory whose only pages are
         // pending must not be replaced by a finished synthetic page.
@@ -199,22 +195,20 @@ impl FolderIndexPlan {
             .filter_map(|d| d.url_path.strip_suffix("/index.html"))
             .filter(|root| !root.contains('/'))
             .collect();
-        // Preserve the served set: indexless language trees with descendants
-        // have an index; empty language directories and authored translation
-        // trees do not acquire generated indexes. A term page is a page of
-        // its edition, never a folder index of the tree it sits in.
+        // Authored translation trees do not acquire generated indexes. A term
+        // page is a page of its edition, never a folder index of the tree it
+        // sits in.
         let mut folders: Vec<String> = Vec::new();
         let mut withheld: Vec<String> = Vec::new();
-        for (folder, has_children) in candidates {
+        for folder in candidates {
             let top = folder.split('/').next().unwrap_or(&folder);
-            let empty_language = !has_children && crate::i18n::path::resolve_language_from_folder(top).is_some();
-            let tree_suppressed = empty_language || translation_roots.contains(top);
+            let in_translation = translation_roots.contains(top);
             let in_passthrough = passthrough.iter().any(|root| crate::build::types::folder_within(root, &folder));
             if authored.contains(&folder) && term_pages.contains(&folder) {
                 warn_term_address_taken(terms, &folder);
             }
             if authored.contains(&folder) || suppressed.contains(&folder) || verbatim.contains(&folder)
-                || !(term_pages.contains(&folder) || !tree_suppressed)
+                || (in_translation && !term_pages.contains(&folder))
             {
                 continue;
             }

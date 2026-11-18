@@ -8862,7 +8862,6 @@ mod hidden_from_search_engines {
             "rooms/acme-k3x9/second-round/index.html",
             "rooms/acme-k3x9/second-round/notes/index.html",
             "rooms/acme-k3x9/sketches/index.html",
-            "rooms/acme-k3x9/pics/index.html",
             "quietk3x9/index.html",
             "notes/quiet/index.html",
         ] {

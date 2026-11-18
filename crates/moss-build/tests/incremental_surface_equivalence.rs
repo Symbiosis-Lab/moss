@@ -895,8 +895,9 @@ fn generated_folder_index_carries_with_its_qr_and_rerenders_for_child_excerpt_ch
     // its pre-render bytes are compared with post-slot output, too.
     let verify_root = tmp.path().join("verify");
     write(&verify_root, "index.md", "---\ntitle: Home\n---\n\nHome page.\n");
-    // A folder holding only a file gets a generated index page; an empty one gets none.
-    write(&verify_root, "files/note.txt", "notes");
+    // A row with no page of its own gives its folder a generated index, the
+    // one page here that is neither changed nor authored.
+    write(&verify_root, "files/note.md", "---\ntitle: Note\npartial: true\nlisted: true\n---\n");
     let verify_baseline = build_with_site_url(
         &verify_root.to_string_lossy(),
         moss_build::build::BuildTrigger::Full,

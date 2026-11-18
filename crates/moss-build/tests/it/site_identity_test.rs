@@ -12,6 +12,15 @@ const PAGES: [(&str, &str); 2] = [
 
 const ME: &str = "me = [\"https://social.example/@ana\", \"https://bsky.example/profile/ana.example\"]\n";
 
+#[test]
+fn a_folder_holding_only_a_file_serves_the_file_and_no_page() {
+    let mut files = PAGES.to_vec();
+    files.push(("oauth/client.json", "{}"));
+    let site = Site::with_config("", &files);
+    assert!(site.output("oauth/client.json").exists(), "the folder's file is served");
+    assert!(!site.output("oauth/index.html").exists(), "a folder with no page beneath it gets no page");
+}
+
 fn me_links(html: &str) -> Vec<&str> {
     let head = &html[..html.find("</head>").expect("a head")];
     head.split("<link rel=\"me\" href=\"").skip(1).filter_map(|p| p.split('"').next()).collect()

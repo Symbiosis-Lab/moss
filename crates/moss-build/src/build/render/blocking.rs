@@ -2213,12 +2213,9 @@ pub fn generate_blocking_content_for_build(
                     project_structure,
                 );
 
-            // NOTE: an empty `folder_docs` is not skipped here. The scan lists
-            // only folders holding a file, so a folder reaching this loop with no
-            // documents holds something else (an image, say) and keeps its page.
-            // `generate_children` returns "" for an empty slice, so the page
-            // degrades to a title-only listing with full nav/chrome. Doc-derived
-            // folders always have ≥1 child.
+            // An empty `folder_docs` is not skipped: the plan admits only a
+            // folder with a page somewhere beneath it, or a term page, so an
+            // empty slice here is a folder whose pages sit deeper down.
 
             let auto_url_path = format!("{}/index.html", folder);
             let folder_doc = &documents[entry.document_index];
