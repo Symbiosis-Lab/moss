@@ -213,6 +213,8 @@ export class PreviewScrollbar {
   };
 
   private onChromeWheel = (e: WheelEvent): void => {
+    // A menu hanging from the titlebar (the address bar's suggestions) scrolls itself.
+    if (e.target instanceof Element && e.target.closest('.moss-menu')) return;
     // Convert deltaY into a scrollTop delta.
     // (Line/page modes are rare; treat them as approximate pixel deltas.)
     let delta = e.deltaY;

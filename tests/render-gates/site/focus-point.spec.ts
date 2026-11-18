@@ -12,13 +12,10 @@
  * editor is photographed there in the light and dark schemes.
  */
 import { test, expect, type Frame, type Page } from '@playwright/test';
-import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { deflateSync } from 'node:zlib';
-import { gatePort } from '../../../playwright/gate-ports';
-import { MOSS_BIN } from '../../e2e/helpers/scratch-site';
+import { openEditor as openEditorFrames, useEditServe } from '../../e2e/helpers/edit-serve';
 
 const EMBED = '![A room|](room.png)';
 // The hero's picture is in a folder of its own, so it is found by the editor's resolver and not by sitting beside the page.
@@ -58,55 +55,16 @@ function png(width: number, height: number): Buffer {
   return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', head), chunk('IDAT', deflateSync(rows)), chunk('IEND', Buffer.alloc(0))]);
 }
 
-let site = '';
-let home = '';
-let server: ChildProcess | undefined;
-let output = '';
-
-test.beforeEach(async () => {
-  output = '';
-  site = realpathSync(mkdtempSync(join(tmpdir(), 'moss-focus-point-site-')));
-  home = realpathSync(mkdtempSync(join(tmpdir(), 'moss-focus-point-home-')));
-  mkdirSync(join(home, 'moss'));
+const serve = useEditServe('focus-point', (site) => {
   writeFileSync(join(site, 'index.md'), PAGE);
   writeFileSync(join(site, 'room.png'), png(600, 900));
   mkdirSync(join(site, 'art'));
   writeFileSync(join(site, 'art', 'room.png'), png(600, 900));
-  server = spawn(MOSS_BIN, ['edit', site, '--serve', '--no-browser', '--port', String(gatePort('focus-point:ui'))], {
-    env: {
-      ...process.env,
-      MOSS_HOME: join(home, 'moss'),
-      MOSS_DESKTOP_SEARCH_ROOT: home,
-      MOSS_PREVIEW_PORT_BASE: String(gatePort('focus-point:preview')),
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  server.stdout?.on('data', (b) => (output += b));
-  server.stderr?.on('data', (b) => (output += b));
-});
-
-test.afterEach(async () => {
-  if (server && server.exitCode === null) {
-    server.kill('SIGTERM');
-    await new Promise((r) => server!.once('exit', r));
-  }
-  rmSync(site, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
 });
 
 async function openEditor(page: Page, { width = 2400, pictures = 2 } = {}): Promise<{ editor: Frame; preview: Frame }> {
   // The default is wide enough that the preview lays the page out for a desktop: at phone width a hero shows its picture whole, and a picture shown whole has no dot.
-  await page.setViewportSize({ width, height: 1300 });
-  await expect.poll(() => output.match(/Edit at (\S+)/)?.[1], { timeout: 60_000, message: `the sign-in link; server said:\n${output}` }).toBeTruthy();
-  await page.goto(output.match(/Edit at (\S+)/)![1]);
-  await page.waitForURL((u) => u.pathname === '/', { timeout: 15_000 });
-  const frameOf = async (id: string) => (await (await page.waitForSelector(`#${id}`, { state: 'attached', timeout: 15_000 })).contentFrame())!;
-  const shell = await frameOf('moss-shell-frame');
-  const editor = await frameOf('moss-editor-frame');
-  const preview = (await (await shell.waitForSelector('#moss-preview-iframe', { state: 'attached', timeout: 15_000 })).contentFrame())!;
-  await preview.waitForFunction(() => document.body?.innerText.includes('Opening words'), null, { timeout: 30_000 });
-  await shell.click('#moss-edit-button');
-  await expect(page.locator('#moss-frames')).toHaveAttribute('data-editor', 'split', { timeout: 10_000 });
+  const { editor, preview } = await openEditorFrames(page, serve, 'Opening words', { width, height: 1300 });
   await editor.waitForSelector('.cm-content', { timeout: 30_000 });
   // Every picture is drawn and sized before anything is measured.
   await expect.poll(() => editor.evaluate(() => [...document.querySelectorAll<HTMLImageElement>('.cm-lp-image-row img')].filter((i) => i.complete && i.naturalWidth > 0).length), { timeout: 30_000 }).toBe(pictures);
@@ -162,7 +120,7 @@ test('placing the caret on a picture moves no line, and the dot carries no words
 
 for (const width of [900, 2400]) {
   test(`the caret moves no line through a six-picture grid in a ${width}px window`, async ({ page }) => {
-    writeFileSync(join(site, 'index.md'), GALLERY);
+    writeFileSync(join(serve.site, 'index.md'), GALLERY);
     const { editor, preview } = await openEditor(page, { width, pictures: 6 });
     // The page answers for each picture's frame, so it has to be the gallery, not the page the site started with. A frame is read from the layout, so a picture below the fold need not have loaded.
     await expect.poll(() => pagePictures(preview).then((p) => p.length), { timeout: 60_000 }).toBe(6);
@@ -187,8 +145,8 @@ test('dragging the dot writes a position the build reads, and the picture stays 
   await shoot(page, 'dragging', browserName);
   await page.mouse.up();
 
-  await expect.poll(() => readFileSync(join(site, 'index.md'), 'utf8'), { timeout: 15_000 }).toMatch(/!\[A room\|focus:\d+%,\d+%\|\]\(room\.png\)/);
-  const written = /focus:(\d+)%,(\d+)%/.exec(readFileSync(join(site, 'index.md'), 'utf8'))!;
+  await expect.poll(() => readFileSync(join(serve.site, 'index.md'), 'utf8'), { timeout: 15_000 }).toMatch(/!\[A room\|focus:\d+%,\d+%\|\]\(room\.png\)/);
+  const written = /focus:(\d+)%,(\d+)%/.exec(readFileSync(join(serve.site, 'index.md'), 'utf8'))!;
   await expect.poll(() => pagePictures(preview), { timeout: 60_000 }).toContainEqual({ loaded: true, crop: `${written[1]}% ${written[2]}%` });
   // The rebuilt page has had time to replace the picture: both are still there, and loaded.
   await page.waitForTimeout(1500);
@@ -208,7 +166,7 @@ test('the keyboard reaches the dot, moves it, and writes on leaving it', async (
   for (let i = 0; i < 3; i++) await page.keyboard.press('Shift+ArrowLeft');
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
-  await expect.poll(() => readFileSync(join(site, 'index.md'), 'utf8'), { timeout: 15_000 }).toContain(':::hero {image="art/room.png|focus:20%,51%" max-height=240px}');
+  await expect.poll(() => readFileSync(join(serve.site, 'index.md'), 'utf8'), { timeout: 15_000 }).toContain(':::hero {image="art/room.png|focus:20%,51%" max-height=240px}');
 });
 
 for (const text of [EMBED, HERO]) {

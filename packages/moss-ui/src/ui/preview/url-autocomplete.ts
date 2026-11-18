@@ -206,19 +206,15 @@ export class UrlAutocomplete {
   private updateHighlight(): void {
     if (!this.dropdownElement) return;
 
+    // `aria-selected` is the one mark: the shared menu row draws its highlight from it.
     const items = this.dropdownElement.querySelectorAll('.moss-url-autocomplete-item');
     items.forEach((item, index) => {
-      if (index === this.highlightedIndex) {
-        item.classList.add('moss-url-autocomplete-item--highlighted');
-        // Update aria-activedescendant
-        if (this.inputElement) {
-          this.inputElement.setAttribute('aria-activedescendant', item.id);
-        }
-        // Scroll into view if needed (optional chaining for test environments)
-        item.scrollIntoView?.({ block: 'nearest' });
-      } else {
-        item.classList.remove('moss-url-autocomplete-item--highlighted');
-      }
+      const highlighted = index === this.highlightedIndex;
+      item.setAttribute('aria-selected', String(highlighted));
+      if (!highlighted) return;
+      this.inputElement?.setAttribute('aria-activedescendant', item.id);
+      // Optional for test environments without layout.
+      item.scrollIntoView?.({ block: 'nearest' });
     });
   }
 
@@ -286,7 +282,7 @@ export class UrlAutocomplete {
 
         return `
           <div
-            class="moss-url-autocomplete-item moss-menu-row ${isHighlighted ? 'moss-url-autocomplete-item--highlighted' : ''}"
+            class="moss-url-autocomplete-item moss-menu-row"
             role="option"
             id="${itemId}"
             aria-selected="${isHighlighted}"

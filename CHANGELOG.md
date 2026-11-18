@@ -12,6 +12,7 @@ All notable changes to moss will be documented here.
 - A link card whose page has no picture takes no room for one, so the card starts at its words. A card whose picture moss hasn't fetched yet keeps the picture's place with a thin edge, and the preview's moving grid fills it until the picture arrives. Both used to show the same grey box. In a grid where other cards have pictures, a card without one keeps an empty box, now with the same edge as a waiting picture, a little stronger than before.
 - A link card whose picture did not download gets it later. A picture that timed out, or whose server failed, is asked for again by the next publish and, while the folder is open, every five minutes; the card keeps its title and its box meanwhile. A picture that is gone, or is not a picture, leaves a card with no picture, which closes up. Such a card used to keep an empty box until its link was fetched again from scratch.
 - A page embedded in another (`![[Data]]`) shows its own embeds there too: a CSV table, a note, a folder listing. They were drawn on the embedded page itself but showed as plain links on the page that embeds it, and the build reported nothing.
+- In the preview's address bar, the arrow keys move the highlight through the suggested pages again, and Enter opens the row that is highlighted. A wheel or trackpad over the suggestions scrolls them, not the page behind.
 
 ## [0.15.26] - 2026-11-17
 

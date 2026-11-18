@@ -394,7 +394,7 @@ describe('UrlAutocomplete', () => {
       autocomplete = new UrlAutocomplete(container, defaultOptions);
       await vi.runAllTimersAsync();
 
-      const highlighted = container.querySelector('.moss-url-autocomplete-item--highlighted');
+      const highlighted = container.querySelector('.moss-url-autocomplete-item[aria-selected="true"]');
       expect(highlighted).toBeTruthy();
     });
 
@@ -406,15 +406,15 @@ describe('UrlAutocomplete', () => {
       const items = container.querySelectorAll('.moss-url-autocomplete-item');
 
       // First item should be highlighted initially
-      expect(items[0].classList.contains('moss-url-autocomplete-item--highlighted')).toBe(true);
+      expect(items[0].getAttribute('aria-selected')).toBe('true');
 
       // Press ArrowDown
       input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
       await vi.runAllTimersAsync();
 
       // Second item should be highlighted
-      expect(items[0].classList.contains('moss-url-autocomplete-item--highlighted')).toBe(false);
-      expect(items[1].classList.contains('moss-url-autocomplete-item--highlighted')).toBe(true);
+      expect(items[0].getAttribute('aria-selected')).toBe('false');
+      expect(items[1].getAttribute('aria-selected')).toBe('true');
     });
 
     it('should move highlight up with ArrowUp', async () => {
@@ -433,7 +433,7 @@ describe('UrlAutocomplete', () => {
       await vi.runAllTimersAsync();
 
       const items = container.querySelectorAll('.moss-url-autocomplete-item');
-      expect(items[1].classList.contains('moss-url-autocomplete-item--highlighted')).toBe(true);
+      expect(items[1].getAttribute('aria-selected')).toBe('true');
     });
 
     it('should wrap around at bottom', async () => {
@@ -450,7 +450,7 @@ describe('UrlAutocomplete', () => {
 
       // Should wrap to first item
       const items = container.querySelectorAll('.moss-url-autocomplete-item');
-      expect(items[0].classList.contains('moss-url-autocomplete-item--highlighted')).toBe(true);
+      expect(items[0].getAttribute('aria-selected')).toBe('true');
     });
 
     it('should select highlighted item on Enter', async () => {
@@ -486,7 +486,7 @@ describe('UrlAutocomplete', () => {
       items[2].dispatchEvent(new MouseEvent('mouseenter'));
       await vi.runAllTimersAsync();
 
-      expect(items[2].classList.contains('moss-url-autocomplete-item--highlighted')).toBe(true);
+      expect(items[2].getAttribute('aria-selected')).toBe('true');
     });
 
     it('should select item on click', async () => {
