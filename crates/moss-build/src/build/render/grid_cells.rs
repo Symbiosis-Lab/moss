@@ -111,12 +111,6 @@ pub(crate) struct CellLink<'a> {
 }
 
 impl CellLink<'_> {
-    /// Links that leave the site. `AssetNewtab` counts: it is an internal file
-    /// opened in a new tab, and the old scanner treated it the same way.
-    fn external(&self) -> bool {
-        matches!(self.kind, UrlKind::External | UrlKind::AssetNewtab)
-    }
-
     /// True when the author wrote a bare URL (or no text at all), which is the
     /// signal that the preview title should come from fetched metadata rather
     /// than from the link text.
@@ -130,7 +124,7 @@ impl CellLink<'_> {
     /// such a card would throw away. The one check both card-generating
     /// passes ([`card_markup`], [`summary_card_markup`]) share.
     fn ineligible_for_a_generated_card(&self) -> bool {
-        self.external() || self.cover_image.is_some()
+        self.kind.opens_new_tab() || self.cover_image.is_some()
     }
 }
 
@@ -438,7 +432,7 @@ pub(crate) fn apply_collection_cards(plan: &mut BodyPlan, index: &BuildIndex<'_>
             let GridCell::Link(link) = classify_cell(&cell.blocks) else {
                 return false;
             };
-            !link.external()
+            !link.kind.opens_new_tab()
                 && picked_card_props(&link, index).is_some_and(|p| p.cover.is_some())
         });
         let cell_sizes = Some(grid.cell_sizes.as_str());
@@ -573,7 +567,7 @@ pub(crate) fn external_urls_needing_fetch(plan: &BodyPlan) -> Vec<String> {
     for grid in grids(plan) {
         for cell in &grid.cells {
             if let GridCell::Link(link) = classify_cell(&cell.blocks) {
-                if link.external() {
+                if link.kind.opens_new_tab() {
                     urls.push(link.href.to_string());
                 }
             }
@@ -634,7 +628,7 @@ fn external_card_markup(
     let GridCell::Link(link) = classify_cell(&cell.blocks) else {
         return None;
     };
-    if !link.external() {
+    if !link.kind.opens_new_tab() {
         // Every non-external cell that reaches here is non-whole-cell (a
         // `leading_link` paragraph, never a `Block::LinkCard`), so its own
         // `Inline::Link` already rendered an `<a>` around the cell's
@@ -870,7 +864,7 @@ pub(crate) fn card_targets<'a>(
     grids(plan)
         .flat_map(|grid| &grid.cells)
         .filter_map(|cell| match classify_cell(&cell.blocks) {
-            GridCell::Link(link) if !link.external() => Some(find_linked_document(link.href, &doc.url_path, documents, graph)),
+            GridCell::Link(link) if !link.kind.opens_new_tab() => Some(find_linked_document(link.href, &doc.url_path, documents, graph)),
             _ => None,
         })
         .collect()

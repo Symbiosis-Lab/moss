@@ -676,7 +676,7 @@ A site whose readers sign up through a form on another service (a survey tool, a
 :::
 ```
 
-moss draws it as the site's main button, in a page and in the footer (`body > footer > .moss-buttons > .moss-btn`). It is an ordinary link, so nothing loads from the other service until a reader follows it. Do not embed the other service's form: its frame and scripts load for every reader of every page that carries it, and it takes none of the theme's look.
+moss draws it as the site's main button, in a page and in the footer (`body > footer > .moss-buttons > .moss-btn`). It is an ordinary link, so nothing loads from the other service until a reader follows it, and a button to another site opens in a new tab and tells a screen reader so, in the page's language. Do not embed the other service's form: its frame and scripts load for every reader of every page that carries it, and it takes none of the theme's look.
 
 ### Copies on other sites
 

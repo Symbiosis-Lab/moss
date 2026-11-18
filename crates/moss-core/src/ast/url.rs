@@ -95,6 +95,14 @@ pub enum UrlKind {
     Tel,
 }
 
+impl UrlKind {
+    /// Whether a link of this kind opens in a new tab: it leaves the site, or
+    /// it is a file the browser shows outside the page (HTML, PDF).
+    pub fn opens_new_tab(self) -> bool {
+        matches!(self, UrlKind::External | UrlKind::AssetNewtab)
+    }
+}
+
 impl Url {
     /// Construct an unresolved URL from author input.
     pub fn unresolved(input: impl Into<String>) -> Self {

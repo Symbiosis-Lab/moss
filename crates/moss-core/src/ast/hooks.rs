@@ -66,7 +66,7 @@ pub trait RenderHooks {
         // production resolved-URL kind classification still drives the
         // class injection for inline links that pre-date the flag).
         let want_wikilink_class = is_wikilink || matches!(url.kind, UrlKind::Wikilink);
-        let want_newtab = matches!(url.kind, UrlKind::AssetNewtab | UrlKind::External);
+        let want_newtab = url.kind.opens_new_tab();
         out.push_str(r#"<a"#);
         if want_wikilink_class {
             out.push_str(r#" class="wikilink""#);
@@ -324,7 +324,8 @@ pub trait RenderHooks {
                     if item.alt.is_empty() && !copy {
                         out.push_str(r#" aria-label=""#);
                         let label = self
-                            .gallery_link_template()
+                            .strings()
+                            .gallery_link_template
                             .replace("{n}", &(index + 1).to_string())
                             .replace("{m}", &total.to_string());
                         out.push_str(&escape_attr(&label));
@@ -444,11 +445,17 @@ pub trait RenderHooks {
                     out.push_str(r#"" data-track=""#);
                     out.push_str(&escape_attr(&track));
                     out.push_str(r#"""#);
-                    if matches!(resolved.kind, crate::ast::url::UrlKind::AssetNewtab) {
+                    let new_tab = resolved.kind.opens_new_tab();
+                    if new_tab {
                         out.push_str(r#" target="_blank" rel="noopener""#);
                     }
                     out.push('>');
                     out.push_str(&escape_text(&item.text));
+                    if new_tab {
+                        out.push_str(r#"<span class="visually-hidden">"#);
+                        out.push_str(&escape_text(self.strings().new_tab_hint));
+                        out.push_str("</span>");
+                    }
                     out.push_str("</a>");
                 }
                 out.push_str("</div>");
@@ -687,12 +694,10 @@ pub trait RenderHooks {
         "Permalink to this section"
     }
 
-    /// The localized accessible name for a gallery image's link when its alt
-    /// text is empty, with `{n}` (1-based position) and `{m}` (total).
-    /// Resolved by moss-build like `permalink_section_label`; the default
-    /// keeps English.
-    fn gallery_link_template(&self) -> &str {
-        GALLERY_LINK_TEMPLATE_EN
+    /// The words the shortcode arms write in the page's language. Resolved
+    /// by moss-build like `permalink_section_label`; the default keeps English.
+    fn strings(&self) -> HookStrings<'_> {
+        HookStrings::EN
     }
 
     /// Emit `<h1>...</h1>` (or h2/h3/...) for a heading.
@@ -833,8 +838,8 @@ pub struct DefaultHooks<'a> {
     vertical: bool,
     /// See [`DefaultHooks::hero_words`].
     hero_words: bool,
-    /// Overrides [`RenderHooks::gallery_link_template`] when set.
-    gallery_link_template: Option<&'a str>,
+    /// Returned by [`RenderHooks::strings`].
+    strings: HookStrings<'a>,
     /// Body images emitted by [`RenderHooks::render_image`] load eagerly
     /// (`loading="eager" fetchpriority="high"`). Set per call by the caller
     /// that knows the image is the page's opening one; see
@@ -896,10 +901,10 @@ impl<'a> DefaultHooks<'a> {
         self
     }
 
-    /// The caller's hooks delegate the `Gallery` arm here, so its localized
-    /// label template has to be handed over or the label falls back to English.
-    pub fn with_gallery_link_template(mut self, template: &'a str) -> Self {
-        self.gallery_link_template = Some(template);
+    /// A caller that delegates shortcode arms here hands over its page's
+    /// words, or they fall back to English.
+    pub fn with_strings(mut self, strings: HookStrings<'a>) -> Self {
+        self.strings = strings;
         self
     }
 
@@ -961,7 +966,28 @@ impl<'a> DefaultHooks<'a> {
     }
 }
 
-const GALLERY_LINK_TEMPLATE_EN: &str = "Open image {n} of {m}";
+/// The words the shortcode arms write, in one page language.
+#[derive(Debug, Clone, Copy)]
+pub struct HookStrings<'a> {
+    /// A gallery image link's accessible name when its alt text is empty,
+    /// with `{n}` (1-based position) and `{m}` (total).
+    pub gallery_link_template: &'a str,
+    /// Screen-reader text after a button that opens in a new tab.
+    pub new_tab_hint: &'a str,
+}
+
+impl HookStrings<'static> {
+    pub const EN: Self = HookStrings {
+        gallery_link_template: "Open image {n} of {m}",
+        new_tab_hint: " (opens in a new tab)",
+    };
+}
+
+impl Default for HookStrings<'_> {
+    fn default() -> Self {
+        HookStrings::EN
+    }
+}
 
 impl<'a> RenderHooks for DefaultHooks<'a> {
     fn subscribe_form_html(&self, args: &crate::ast::shortcode::SubscribeShortcode) -> Option<String> {
@@ -972,8 +998,8 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
         self.request_form.map(|render| (render.0)(args))
     }
 
-    fn gallery_link_template(&self) -> &str {
-        self.gallery_link_template.unwrap_or(GALLERY_LINK_TEMPLATE_EN)
+    fn strings(&self) -> HookStrings<'_> {
+        self.strings
     }
 
     fn gallery_assets(&self) -> Option<&crate::asset_snapshot::AssetSnapshot> {

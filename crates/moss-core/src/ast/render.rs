@@ -756,8 +756,7 @@ fn render_block<H: RenderHooks + ?Sized>(
                     return;
                 }
             };
-            use super::url::UrlKind;
-            let is_external = matches!(resolved.kind, UrlKind::External | UrlKind::AssetNewtab);
+            let is_external = resolved.kind.opens_new_tab();
             if is_external {
                 // The owner's "one card kind" decision: an external whole-
                 // cell link becomes a `.moss-card`, same as an internal

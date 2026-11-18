@@ -180,7 +180,7 @@ fn a_bare_link_cell_is_a_whole_cell_link() {
     assert_eq!(link.href, "writings/");
     assert_eq!(link.text, "Writings");
     assert!(link.whole_cell, "a lone link is the whole cell");
-    assert!(!link.external());
+    assert!(!link.kind.opens_new_tab());
 }
 
 #[test]
@@ -193,7 +193,7 @@ fn a_link_with_a_soft_wrapped_description_is_a_link_cell() {
     assert_eq!(link.href, "https://mdn.dev");
     assert_eq!(link.text, "MDN");
     assert!(!link.whole_cell, "the description is outside the link");
-    assert!(link.external());
+    assert!(link.kind.opens_new_tab());
 }
 
 #[test]

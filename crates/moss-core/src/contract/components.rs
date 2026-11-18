@@ -2187,7 +2187,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "Generic button primitive. Role on `data-role` (v1).",
+        description: "Generic button primitive. Role on `data-role` (v1). A `:::buttons` link that leaves the site carries `target=\"_blank\" rel=\"noopener\"` and ends in a `.visually-hidden` span saying, in the page's language, that it opens in a new tab.",
     },
     ComponentEntry {
         class: "moss-btn__label",

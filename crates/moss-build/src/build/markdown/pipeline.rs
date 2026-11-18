@@ -2232,7 +2232,7 @@ impl<'a> PipelineHooks<'a> {
             None => moss_core::ast::DefaultHooks::new(),
         }
         .vertical(self.vertical)
-        .with_gallery_link_template(crate::i18n::t(self.lang, "gallery_open_image"))
+        .with_strings(crate::i18n::hook_strings(self.lang))
     }
 
 }
@@ -2248,8 +2248,8 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
         self.permalink_section_label
     }
 
-    fn gallery_link_template(&self) -> &str {
-        crate::i18n::t(self.lang, "gallery_open_image")
+    fn strings(&self) -> moss_core::ast::HookStrings<'_> {
+        crate::i18n::hook_strings(self.lang)
     }
 
     fn heading_anchors(&self, level: u8) -> moss_core::ast::HeadingAnchors {
@@ -2274,6 +2274,7 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
         let subscribe = |a: &moss_core::ast::SubscribeShortcode| self.render_subscribe_form(a);
         let form = |f: &moss_core::ast::FormShortcode| self.render_request_form(f);
         let hooks = moss_core::ast::DefaultHooks::card_titles(self.assets, self.heading_anchors.then_some(self.permalink_section_label))
+            .with_strings(crate::i18n::hook_strings(self.lang))
             .with_subscribe_form(moss_core::ast::SubscribeFormFn(&subscribe))
             .with_request_form(moss_core::ast::RequestFormFn(&form));
         moss_core::ast::render_grid_parts(&hooks, args, source_line)
@@ -2380,10 +2381,9 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
                 out.push_str(&self.render_grid_parts(args, source_line).to_html());
             }
             moss_core::ast::Shortcode::Buttons(_) | moss_core::ast::Shortcode::Gallery(_) => {
-                // Delegate to DefaultHooks. For Buttons, this is a pure
-                // byte-for-byte handoff. For Gallery, with a snapshot in
-                // scope the synth path emits
-                // the canonical `<picture><source srcset=*.webp>` shape with
+                // DefaultHooks carrying the page's words and, for Gallery,
+                // the asset snapshot: with one the synth path emits the
+                // `<picture><source srcset=*.webp>` shape with
                 // dims/LQIP/loading="lazy"; without one, the bare-`<img>`
                 // shape.
                 let inner = self.asset_bound_hooks();

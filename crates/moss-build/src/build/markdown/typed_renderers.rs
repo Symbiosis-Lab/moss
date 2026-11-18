@@ -548,7 +548,7 @@ pub(crate) fn render_hero_html_typed(
         // Overlay URLs were already resolved by `resolve_shortcode_urls`, and
         // the snapshot hooks route inline images through the synthesizer.
         let mut html_content = String::new();
-        let hooks = moss_core::ast::DefaultHooks::hero_words(media_assets);
+        let hooks = moss_core::ast::DefaultHooks::hero_words(media_assets).with_strings(crate::i18n::hook_strings(lang));
         moss_core::ast::render::render_blocks_with_meta(
             &hooks,
             &mut html_content,

@@ -115,7 +115,7 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.moss-gallery-caption` | instance | The visible caption of a gallery item: the italic line under the image in `:::gallery`, inline markdown so it may hold a link. It sits under the image link, never inside it, and the full-screen viewer shows it, links and credit included, as the large view's caption. An item without the line has none, and `:::gallery rows` keeps the caption under its item. Under a line of several pictures in running text, the italic line captions the whole row and follows the gallery. |
 | `.moss-gallery-link` | instance | The link around a gallery image. With scripting it opens the image in the full-screen viewer (the same one as the media collection pages), stepping through the page's pictures, the gallery's included, with the arrow keys; without scripting it opens the full-size image. `href` is the full image and `data-title` is its caption. |
 | `.moss-buttons` | container | Container for a row of `.moss-btn` buttons. v1: the inverted variant is on `data-style="inverted"`. |
-| `.moss-btn` | standalone | Generic button primitive. Role on `data-role` (v1). |
+| `.moss-btn` | standalone | Generic button primitive. Role on `data-role` (v1). A `:::buttons` link that leaves the site carries `target="_blank" rel="noopener"` and ends in a `.visually-hidden` span saying, in the page's language, that it opens in a new tab. |
 | `.moss-btn__label` | instance | Label span inside `.moss-btn`. |
 | `.moss-btn__check` | instance | Success checkmark slot inside `.moss-btn`. |
 | `.moss-btn__spinner` | instance | Loading spinner slot inside `.moss-btn`. |

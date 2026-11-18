@@ -73,6 +73,14 @@ pub fn diagram_type_name(lang: Language, kind: &str) -> &'static str {
     }
 }
 
+/// The words moss-core's shortcode arms write, in `lang`.
+pub fn hook_strings(lang: Language) -> moss_core::ast::HookStrings<'static> {
+    moss_core::ast::HookStrings {
+        gallery_link_template: t(lang, "gallery_open_image"),
+        new_tab_hint: t(lang, "opens_new_tab"),
+    }
+}
+
 pub fn t(lang: Language, key: &str) -> &'static str {
     let [en, de, zh_hans, zh_hant] = match key {
         // Month names (full)
@@ -245,6 +253,7 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         "play_motion" => ["Play motion", "Bewegung abspielen", "播放动态", "播放動態"],
         // Gallery image link name; {n} is the 1-based position, {m} the total.
         "gallery_open_image" => ["Open image {n} of {m}", "Bild {n} von {m} öffnen", "打开第 {n} 张图片，共 {m} 张", "開啟第 {n} 張圖片，共 {m} 張"],
+        "opens_new_tab" => [" (opens in a new tab)", " (öffnet in neuem Tab)", "（在新标签页中打开）", "（在新分頁開啟）"],
         "view_in_article" => ["View in article", "Im Artikel ansehen", "在文章中查看", "在文章中查看"],
         "open_its_page" => ["Open its page", "Seite öffnen", "打开其页面", "開啟其頁面"],
 

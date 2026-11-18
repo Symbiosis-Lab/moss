@@ -1453,6 +1453,35 @@ fn moss_resolved_link_to_html_asset_depth_table() {
     }
 }
 
+/// A button to another site opens in a new tab, like a text link, and says
+/// so to a screen reader in the page's language, in a hero or a grid cell
+/// too; a button within the site does neither.
+#[test]
+fn a_button_to_another_site_opens_in_a_new_tab_and_says_so() {
+    let row = ":::buttons\n[訂閱](https://forms.example.org/s/abc)\n+++\n[關於](/about)\n:::";
+    let md = format!("---\ntitle: 頁尾\n---\n\n::::hero\n## 訂閱我們\n{row}\n::::\n\n這是一個繁體中文的頁面，有兩個按鈕。\n\n{row}\n\n:::grid 2\n{row}\n+++\n說明\n:::\n");
+    let doc = process_markdown_file(
+        "footer.md",
+        &md,
+        "site",
+        &HashMap::new(),
+        false,
+        Language::ZhHant,
+        None,
+        crate::build::markdown::SiteMarkdown::default(),
+        None,
+        None,
+        None,
+        PageContext::default(),
+    )
+    .expect("should parse");
+    let html = format!("{}{}", doc.hero_html.as_deref().unwrap_or_default(), doc.html_content);
+    let off_site = r#"href="https://forms.example.org/s/abc" class="moss-btn" data-role="primary" data-track="訂閱" target="_blank" rel="noopener">訂閱<span class="visually-hidden">（在新分頁開啟）</span></a>"#;
+    assert_eq!(html.matches(off_site).count(), 3, "every off-site button, page language hint: {html}");
+    let on_site = html.split(r#"data-track="關於""#).nth(1).expect("the on-site button renders");
+    assert!(on_site.starts_with(">關於</a>"), "an on-site button stays in the tab: {html}");
+}
+
 /// Asset links (non-page-map targets) open in a new tab so the reader
 /// doesn't lose their place when clicking through to a tool/PDF/etc.
 #[test]
