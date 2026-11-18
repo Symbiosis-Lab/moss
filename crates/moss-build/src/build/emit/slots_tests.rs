@@ -364,6 +364,50 @@ fn a_page_re_registered_after_the_slot_pass_loses_the_passes_oid() {
     assert_eq!(pending.seal().staged_oid("page.html"), None);
 }
 
+/// A page left in place over a newer render's stage bytes takes its entry from
+/// the pass's read of the stage, and the pass records the render it finished.
+#[test]
+fn a_reread_page_takes_its_entry_from_the_stage() {
+    use crate::build::manifest::{PendingManifest, StageBytes};
+    use crate::build::served_path::ServedPath;
+
+    let tmp = TempDir::new().unwrap();
+    let paths = MossPaths::new(tmp.path());
+    let stage = paths.staging_dir();
+    std::fs::create_dir_all(&stage).unwrap();
+    std::fs::write(stage.join("page.html"), "<html>newer render</html>").unwrap();
+
+    let mut pending = PendingManifest::new(crate::types::content::SiteHashes::default());
+    pending.register_carried_page(&ServedPath::from_source("page.html").unwrap(), "0123456789abcdef", StageBytes::Newer);
+    apply_to_stage_and_manifest(&paths, &stage, &ResolvedSlots::empty(), &mut pending, None).expect("slot pass");
+
+    assert_eq!(super::staged_render(&paths).as_deref(), pending.render_id());
+    assert_eq!(pending.seal().files()["page.html"], entry_for("page.html", b"<html>newer render</html>"));
+}
+
+/// A re-read page with nothing on the stage has no bytes to take an entry from:
+/// the build stops for one more run rather than seal the older entry, and no
+/// render is recorded.
+#[test]
+fn a_reread_page_gone_from_the_stage_stops_the_build() {
+    use crate::build::manifest::{PendingManifest, StageBytes};
+    use crate::build::served_path::ServedPath;
+
+    let tmp = TempDir::new().unwrap();
+    let paths = MossPaths::new(tmp.path());
+    let stage = paths.staging_dir();
+    std::fs::create_dir_all(&stage).unwrap();
+    let mut finished = PendingManifest::new(crate::types::content::SiteHashes::default());
+    apply_to_stage_and_manifest(&paths, &stage, &ResolvedSlots::empty(), &mut finished, None).expect("slot pass");
+    assert!(super::staged_render(&paths).is_some());
+
+    let mut pending = PendingManifest::new(crate::types::content::SiteHashes::default());
+    pending.register_carried_page(&ServedPath::from_source("page.html").unwrap(), "0123456789abcdef", StageBytes::Newer);
+    let stopped = apply_to_stage_and_manifest(&paths, &stage, &ResolvedSlots::empty(), &mut pending, None).unwrap_err();
+    assert!(stopped.is_discarded(), "the pipeline builds once more rather than show an error");
+    assert_eq!(super::staged_render(&paths), None, "a pass that did not end leaves no render on record");
+}
+
 /// The pipeline snapshots the manifest after injection, including when CAS
 /// storage fails and shipping must read the stage instead.
 #[test]

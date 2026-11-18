@@ -772,6 +772,12 @@ impl FacadeCache {
         self.unsealed_pages.clone()
     }
 
+    /// True when the stage holds this cache's render: its slot pass ended and
+    /// none has started since.
+    pub fn staged_its_render(&self, staged_render_id: Option<&str>) -> bool {
+        self.render_id.is_some() && self.render_id.as_deref() == staged_render_id
+    }
+
     /// True when this cache holds nothing — a cold or unreadable cache, which
     /// every caller must treat as "render everything."
     pub fn is_empty(&self) -> bool {

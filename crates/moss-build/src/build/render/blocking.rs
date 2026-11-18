@@ -1701,6 +1701,7 @@ pub fn generate_blocking_content_for_build(
     // The computation itself lives in `render/incremental/verdict.rs`: it was
     // produced here, logged here, and consumed by exactly one `partition`
     // fifty lines below, so nothing else in the build could learn it.
+    let staged_render = crate::build::emit::slots::staged_render(&paths);
     let verdict = crate::build::render::incremental::verdict::compute(
         &documents,
         &crate::build::render::incremental::verdict::VerdictInputs {
@@ -1717,6 +1718,7 @@ pub fn generate_blocking_content_for_build(
             build_day: now.date(),
             render_id: pending.render_id(),
             sealed_render_id: previous_hashes.render_id.as_deref(),
+            staged_render_id: staged_render.as_deref(),
             graph: Some(&content_graph),
             site_assets: &site_assets,
         },
@@ -1780,18 +1782,22 @@ pub fn generate_blocking_content_for_build(
     let homepage_index_sp = ServedPath::from_source("index.html").unwrap();
     // An authored homepage is written by the asset copy: nothing is rendered or carried there.
     let authored_home = owned_by_documents.contains(homepage_index_sp.as_str());
+    // A page this build may leave on the stage, with the proof it is still there.
+    let carry_proof = |doc: &ParsedDocument| {
+        crate::build::render::incremental::CarryProof::for_document(
+            doc,
+            &verdict,
+            &previous_hashes,
+            output_dir,
+            &site_url,
+            layout_config.assets.selection_tools,
+        )
+    };
     let homepage_carry_proof = documents
         .iter()
         .find(|d| d.url_path == "index.html" && !authored_home)
         .and_then(|doc| {
-            crate::build::render::incremental::CarryProof::for_document(
-                doc,
-                &verdict,
-                &previous_hashes,
-                output_dir,
-                &site_url,
-                layout_config.assets.selection_tools,
-            )
+            carry_proof(doc)
         });
     let homepage_carried = homepage_carry_proof.is_some();
 
@@ -1869,14 +1875,7 @@ pub fn generate_blocking_content_for_build(
                     || owned_by_documents.contains(&doc.url_path))
             })
             .fold((Vec::new(), Vec::new()), |(mut render, mut carry), doc| {
-                match crate::build::render::incremental::CarryProof::for_document(
-                    doc,
-                    &verdict,
-                    &previous_hashes,
-                    output_dir,
-                    &site_url,
-                    layout_config.assets.selection_tools,
-                ) {
+                match carry_proof(doc) {
                     Some(proof) => carry.push((doc, proof)),
                     None => render.push(doc),
                 }
@@ -2224,14 +2223,7 @@ pub fn generate_blocking_content_for_build(
             let auto_url_path = format!("{}/index.html", folder);
             let folder_doc = &documents[entry.document_index];
             let mut verification_snapshot = None;
-            if let Some(proof) = crate::build::render::incremental::CarryProof::for_document(
-                folder_doc,
-                &verdict,
-                &previous_hashes,
-                output_dir,
-                &site_url,
-                layout_config.assets.selection_tools,
-            ) {
+            if let Some(proof) = carry_proof(folder_doc) {
                 if carry_verification.is_some() {
                     verification_snapshot =
                         crate::build::render::incremental::CarryVerification::read_previous(

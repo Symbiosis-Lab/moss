@@ -223,6 +223,17 @@ impl Overlap {
         std::fs::write(path, body).unwrap();
     }
 
+    fn pages_rendered_by_last_build(&self) -> u64 {
+        let profile = std::fs::read_to_string(self.mp.profile()).unwrap();
+        let record: serde_json::Value = profile
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|record| record["kind"] == "build")
+            .last()
+            .expect("a build record");
+        record["counts"]["pages_rendered"].as_u64().unwrap()
+    }
+
     fn generations(&self) -> BTreeSet<String> {
         crate::build::store_gc::list_generations(&self.mp.generations_dir()).into_iter().collect()
     }
@@ -353,6 +364,8 @@ struct Outcome {
     /// Keys whose manifest entry differs between A and B, or that only one has: what
     /// B's edit actually changed, whatever shipped.
     drift: BTreeSet<String>,
+    /// The pages B rendered rather than left on the stage.
+    b_rendered: u64,
 }
 
 async fn overlap(edit: &Edit) -> Outcome {
@@ -368,6 +381,7 @@ async fn overlap(edit: &Edit) -> Outcome {
     (edit.apply)(&vault);
     let b = vault.build_holding_its_tail((edit.trigger)()).await;
     until_background_work_is_done().await;
+    let b_rendered = vault.pages_rendered_by_last_build();
 
     // Ordering: both builds have rendered and neither tail has run. Nothing reached
     // `generations/` since build 0, `current` has not moved, and the stage already
@@ -401,7 +415,7 @@ async fn overlap(edit: &Edit) -> Outcome {
         .map(|(key, _)| key.clone())
         .chain(b_sealed.files().keys().filter(|key| !a_sealed.files().contains_key(*key)).cloned())
         .collect();
-    Outcome { vault, a: a_sealed, diverging, b_diverging, drift }
+    Outcome { vault, a: a_sealed, diverging, b_diverging, drift, b_rendered }
 }
 
 fn set(keys: &[&str]) -> BTreeSet<String> {
@@ -559,6 +573,72 @@ async fn an_edit_undone_during_an_overlap_diverges_nowhere() {
 
     assert!(o.drift.contains("notes/index.html"), "B's undo must change the page from A's: {:?}", o.drift);
     assert_nothing_diverges(&o);
+}
+
+/// B edits a page A did not touch, while A's generation is still unshipped.
+fn edit_post_b(mark: &'static str) -> impl Fn(&Overlap) {
+    move |v| v.write("posts/b.md", &POST_B.replace("body.", mark))
+}
+
+/// The pages the same edit of `posts/b.md` renders with every generation shipped.
+async fn rendered_by_a_sealed_post_b_edit(vault: &Overlap) -> u64 {
+    edit_post_b("body. SEALED")(vault);
+    vault.run(md_only("posts/b.md"), true).await;
+    vault.pages_rendered_by_last_build()
+}
+
+/// A's pages are on the stage under A's finished slot pass, so B leaves them there
+/// and renders only what its own edit needs, as it would with A shipped.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_overlapping_edit_renders_only_what_it_changes() {
+    let o = overlap(&Edit {
+        apply: |v| edit_post_b("body. B-MARK")(v),
+        trigger: || md_only("posts/b.md"),
+        on_stage: Some(("posts/b/index.html", "B-MARK")),
+    })
+    .await;
+
+    assert_nothing_diverges(&o);
+    assert_eq!(o.b_rendered, rendered_by_a_sealed_post_b_edit(&o.vault).await);
+}
+
+/// A slot pass that started and never ended leaves the stage holding no one
+/// render's pages, so B renders A's again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn after_a_slot_pass_that_never_ended_the_overlapping_edit_renders_the_earlier_pages() {
+    let o = overlap(&Edit {
+        apply: |v| {
+            let record = v.mp.cache_dir().join("slot-pass.json");
+            let mut json: serde_json::Value = serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+            assert!(json["render"].is_string(), "A's pass ended and recorded its render");
+            json["render"] = serde_json::Value::Null;
+            std::fs::write(&record, serde_json::to_vec(&json).unwrap()).unwrap();
+            edit_post_b("body. B-MARK")(v);
+        },
+        trigger: || md_only("posts/b.md"),
+        on_stage: Some(("posts/b/index.html", "B-MARK")),
+    })
+    .await;
+
+    assert_nothing_diverges(&o);
+    assert!(o.b_rendered > rendered_by_a_sealed_post_b_edit(&o.vault).await);
+}
+
+/// A page of A's that left the stage is rendered again, not left missing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_earlier_page_gone_from_the_stage_is_rendered_by_the_overlapping_edit() {
+    let o = overlap(&Edit {
+        apply: |v| {
+            std::fs::remove_file(v.mp.staging_dir().join("notes/index.html")).unwrap();
+            edit_post_b("body. B-MARK")(v);
+        },
+        trigger: || md_only("posts/b.md"),
+        on_stage: Some(("notes/index.html", "A-EDIT")),
+    })
+    .await;
+
+    assert_nothing_diverges(&o);
+    assert!(o.b_rendered > rendered_by_a_sealed_post_b_edit(&o.vault).await);
 }
 
 /// Which edit moves which derived file — the fixture's calibration; see

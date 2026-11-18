@@ -82,6 +82,7 @@ struct Harness {
     globals_salt: bool,
     render_id: Option<String>,
     sealed_render_id: Option<String>,
+    staged_render_id: Option<String>,
     build_day: chrono::NaiveDate,
 }
 
@@ -101,6 +102,7 @@ impl Harness {
             build_day: chrono::NaiveDate::from_ymd_opt(2026, 3, 14).unwrap(),
             render_id: None,
             sealed_render_id: None,
+            staged_render_id: None,
         }
     }
 
@@ -125,6 +127,7 @@ impl Harness {
                 build_day: self.build_day,
                 render_id: self.render_id.as_deref(),
                 sealed_render_id: self.sealed_render_id.as_deref(),
+                staged_render_id: self.staged_render_id.as_deref(),
                 graph: None,
                 site_assets: &crate::build::types::SiteAssets::of(documents, None, Default::default()),
             },
@@ -331,10 +334,22 @@ fn a_page_rendered_since_the_sealed_manifest_is_not_carried() {
         VerdictBasis::Incremental { changed, by_unsealed, .. } => assert_eq!((*changed, *by_unsealed), (0, 1)),
         other => panic!("expected an incremental verdict, got {other:?}"),
     }
+    assert!(!b.rereads_document(&edited[2]), "a page rendered again is not re-read");
+
+    // B again, now that A's slot pass has ended: the stage holds A's final bytes.
+    h.staged_render_id = Some("b".into());
+    h.render_id = Some("b2".into());
+    let b2 = h.run(&edited);
+    assert!(b2.may_skip("writings/alpha/index.md") && b2.rereads_document(&edited[2]), "B's page is re-read from the stage");
+    assert!(b2.may_skip("writings/beta/index.md") && !b2.rereads_document(&edited[3]), "a sealed page is carried as sealed");
+    match b2.basis() {
+        VerdictBasis::Incremental { by_unsealed, .. } => assert_eq!(*by_unsealed, 0),
+        other => panic!("expected an incremental verdict, got {other:?}"),
+    }
 
     // B's generation ships: its manifest describes the stage again.
     h.render_id = Some("c".into());
-    h.sealed_render_id = Some("b".into());
+    h.sealed_render_id = Some("b2".into());
     let c = h.run(&edited);
     for d in &edited {
         let src = d.source_path.as_deref().unwrap();

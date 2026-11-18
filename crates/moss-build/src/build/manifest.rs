@@ -127,6 +127,16 @@ pub(crate) enum WalkOutcome {
     Superseded,
 }
 
+/// What the stage holds for a page a carry proof left in place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StageBytes {
+    /// The bytes the previous manifest's entry describes.
+    Sealed,
+    /// A newer render's final bytes: the slot pass reads them, and its receipt
+    /// replaces the entry.
+    Newer,
+}
+
 /// Mutable manifest accumulator for the render and deferred-processing phases.
 ///
 /// Created from a `carry_forward` snapshot (the previous build's [`SiteHashes`]).
@@ -253,10 +263,9 @@ pub struct PendingManifest {
     /// registration of the same path drops its entry, since that writer put its
     /// own bytes in the stage.
     unwritten_pages: std::collections::BTreeMap<String, String>,
-    /// Pages registered with the previous build's entry by a carry proof and not
-    /// registered again since: their bytes in the stage are the previous build's
-    /// final ones. See [`carried_pages`][Self::carried_pages].
-    carried_pages: HashSet<String>,
+    /// Pages registered by a carry proof and not registered again since, by what
+    /// their stage bytes are. See [`carried_pages`][Self::carried_pages].
+    carried_pages: std::collections::BTreeMap<String, StageBytes>,
     /// `Some` once the preview serves this render
     /// ([`note_shown`][Self::note_shown]): the keys registered after that with
     /// an entry other than the one they had, which are the bytes that landed
@@ -399,7 +408,7 @@ impl PendingManifest {
             articles: None,
             ship_sources: HashMap::new(),
             unwritten_pages: std::collections::BTreeMap::new(),
-            carried_pages: HashSet::new(),
+            carried_pages: Default::default(),
         }
     }
 
@@ -527,19 +536,25 @@ impl PendingManifest {
     }
 
     /// [`register_hashed`][Self::register_hashed] a page the render left in place,
-    /// remembering that its stage bytes are the previous build's.
-    pub(crate) fn register_carried_page(&mut self, rel_path: &crate::build::served_path::ServedPath, hash: &str) {
+    /// remembering what its stage bytes are.
+    pub(crate) fn register_carried_page(&mut self, rel_path: &crate::build::served_path::ServedPath, hash: &str, stage: StageBytes) {
         self.register_hashed(rel_path, hash, HashBucket::Files);
-        self.carried_pages.insert(rel_path.as_str().to_string());
+        self.carried_pages.insert(rel_path.as_str().to_string(), stage);
     }
 
-    /// Carried pages and the manifest entry each holds, for the slot pass to
-    /// vouch for without reading them.
+    /// Carried pages whose stage bytes `hash` describes, with that entry, for the
+    /// slot pass to vouch for without reading them.
     pub(crate) fn carried_pages(&self) -> std::collections::BTreeMap<String, String> {
         self.carried_pages
             .iter()
-            .filter_map(|path| Some((path.clone(), self.inner.files.get(path)?.clone())))
+            .filter(|(_, stage)| **stage == StageBytes::Sealed)
+            .filter_map(|(path, _)| Some((path.clone(), self.inner.files.get(path)?.clone())))
             .collect()
+    }
+
+    /// Carried pages of [`StageBytes::Newer`] no receipt has replaced the entry of.
+    pub(crate) fn rereads_left(&self) -> impl Iterator<Item = &String> {
+        self.carried_pages.iter().filter(|(_, stage)| **stage == StageBytes::Newer).map(|(path, _)| path)
     }
 
     pub(crate) fn take_unwritten_pages(&mut self) -> std::collections::BTreeMap<String, String> {

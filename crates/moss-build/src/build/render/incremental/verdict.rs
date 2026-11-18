@@ -140,6 +140,9 @@ pub enum VerdictBasis {
 #[derive(Debug, Clone)]
 pub struct RenderVerdict {
     skip: HashSet<String>,
+    /// Skipped pages whose stage bytes are a render newer than the manifest:
+    /// the slot pass re-reads them for their entry.
+    reread: HashSet<String>,
     basis: VerdictBasis,
 }
 
@@ -163,6 +166,12 @@ impl RenderVerdict {
         !doc.reads_child_bodies()
             && self.skip
             .contains(crate::build::facade::PageKey::for_document(doc).cache_key().as_ref())
+    }
+
+    /// True when this document's page is skipped but its manifest entry must
+    /// come from the stage, which a render after the manifest wrote.
+    pub fn rereads_document(&self, doc: &ParsedDocument) -> bool {
+        self.reread.contains(crate::build::facade::PageKey::for_document(doc).cache_key().as_ref())
     }
 
     pub fn basis(&self) -> &VerdictBasis {
@@ -196,8 +205,10 @@ impl RenderVerdict {
                 "{tracked} tracked pages, {changed} changed ({surface_changed} by surface), \
                  +{by_backlink} by backlink/embed, +{by_listing_group} by listing group \
                  ({groups} groups), +{by_dependents} by surface dependents, \
-                 +{by_image_placeholder} by image placeholder, +{by_unsealed} not yet sealed, skipping {}",
+                 +{by_image_placeholder} by image placeholder, +{by_unsealed} not yet sealed, skipping {} \
+                 ({} re-read from the stage)",
                 self.skip.len(),
+                self.reread.len(),
             ),
         }
     }
@@ -226,6 +237,8 @@ pub struct VerdictInputs<'a> {
     pub render_id: Option<&'a str>,
     /// The render of the manifest a carried page takes its entry from.
     pub sealed_render_id: Option<&'a str>,
+    /// The render whose final bytes the stage holds, once its slot pass ended.
+    pub staged_render_id: Option<&'a str>,
     /// The content graph rendering resolves page links with, so the verdict
     /// finds the cards a page draws the way rendering does.
     pub graph: Option<&'a moss_core::content_graph::ContentGraph>,
@@ -503,8 +516,9 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
     };
 
     let unsealed = previous.unsealed_pages_since(inputs.sealed_render_id);
-    let (skip, basis) = match full_cause {
-        Some((cause, witness)) => (HashSet::new(), VerdictBasis::Full(cause, witness)),
+    let stage_is_cached_render = previous.staged_its_render(inputs.staged_render_id);
+    let (skip, reread, basis) = match full_cause {
+        Some((cause, witness)) => (HashSet::new(), HashSet::new(), VerdictBasis::Full(cause, witness)),
         None => {
             let path_and_links: Vec<(String, &[moss_core::resolve::OutgoingLink])> = documents
                 .iter()
@@ -630,10 +644,14 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
             let by_image_placeholder = shows_one.len();
             render_set.extend(shows_one);
 
-            // A carried page registers `hashes.json`'s entry for bytes the stage
-            // holds, so a page a newer render left there is rendered again.
+            // `hashes.json` does not describe a page a newer render left on the
+            // stage. When that render's slot pass finished, the stage holds its
+            // final bytes and the next pass re-reads them for the entry;
+            // otherwise the page is rendered again.
             let unchanged: Vec<&String> = current.keys().filter(|p| !render_set.contains(*p)).collect();
-            let skip: HashSet<String> = unchanged.iter().filter(|p| !unsealed.contains(**p)).map(|p| (*p).clone()).collect();
+            let (newer, mut skip): (HashSet<String>, HashSet<String>) =
+                unchanged.iter().map(|p| (*p).clone()).partition(|p| unsealed.contains(p));
+            let reread = if stage_is_cached_render { skip.extend(newer.iter().cloned()); newer } else { HashSet::new() };
             let by_unsealed = unchanged.len() - skip.len();
             let basis = VerdictBasis::Incremental {
                 tracked: current.len(),
@@ -646,7 +664,7 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
                 by_image_placeholder,
                 by_unsealed,
             };
-            (skip, basis)
+            (skip, reread, basis)
         }
     };
 
@@ -669,7 +687,7 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
         log::info!(target: "incremental", "failed to save facade cache: {e}");
     }
 
-    let verdict = RenderVerdict { skip, basis };
+    let verdict = RenderVerdict { skip, reread, basis };
     verdict.log();
     verdict
 }
