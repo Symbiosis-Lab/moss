@@ -60,6 +60,8 @@ const PINS: &[Pin] = &[
     pin("body > footer > p:has(+ .moss-subscribe)", &[], &["a room by the harbour"]),
     pin("body > footer > .moss-grid", &[], &["Prices"]),
     pin("body > footer > .moss-grid + p", &[], &["mailto:mail@example.org"]),
+    // The button to a sign-up form on another service.
+    pin("body > footer > .moss-buttons > .moss-btn", &[], &["forms.example/s/harbor-letter"]),
     // Two links on consecutive lines; the paragraph holding one link stays out.
     pin("p.moss-links:has(> br)", &[SHAPES], &["Book the hall"]),
     // The people page opens with a hero too.
@@ -208,6 +210,10 @@ const FOOTER_MD: &str = "Example Hall, a room by the harbour.
 :::
 
 [mail@example.org](mailto:mail@example.org) © Example
+
+:::buttons
+[Join the list](https://forms.example/s/harbor-letter)
+:::
 ";
 
 fn work(title: &str, cover: &str) -> String {

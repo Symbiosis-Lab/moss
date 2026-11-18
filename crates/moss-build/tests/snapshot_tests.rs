@@ -35,9 +35,8 @@
 //! ### Env-var discipline
 //!
 //! A `[channels.email]` config in a fixture just adds the subscribe form +
-//! email CSS to the output — no build path performs network fetches
-//! (`fetch_buttondown_username` has no production caller), so snapshot
-//! tests stay deterministic and offline.
+//! email CSS to the output — no build path performs network fetches, so
+//! snapshot tests stay deterministic and offline.
 
 use std::fs;
 use std::path::{Path, PathBuf};
