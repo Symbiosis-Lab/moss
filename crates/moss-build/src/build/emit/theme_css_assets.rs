@@ -63,30 +63,9 @@ impl ThemeCss {
 /// filesystem that ignores case a reference spelled in a different case than
 /// the file (`Fonts/A.woff2` for `fonts/a.woff2`) also keeps its written address.
 pub fn for_site(css: &str, source_root: &Path, evidence: &crate::build::cloud_ledger::InputEvidence) -> ThemeCss {
-    use crate::build::cloud_readiness::{probe_input, Found};
     let theme_dir = crate::moss_paths::MossPaths::new(source_root).theme_dir();
     let real_theme = theme_dir.canonicalize().ok();
-    let mut themed = rewrite(css, |rel| {
-        let path = theme_dir.join(rel);
-        // The plain copy step does not follow symlinks; neither does this, or
-        // a link pointing outside the folder would publish its target.
-        let meta = std::fs::symlink_metadata(&path).ok()?;
-        if !meta.is_file() || meta.len() > MAX_HASHED_FILE_BYTES {
-            return None;
-        }
-        if path.canonicalize().ok()? != real_theme.as_ref()?.join(rel) {
-            return None;
-        }
-        match probe_input(&path) {
-            Ok(Found::Bytes(bytes)) => Some(bytes),
-            Ok(Found::InCloud) => {
-                evidence.require(&path, crate::build::cloud_ledger::InputRole::Theme);
-                evidence.pending(&path);
-                None
-            }
-            Err(_) => None,
-        }
-    });
+    let mut themed = rewrite(css, |rel| read_theme_file(&theme_dir, real_theme.as_deref(), rel, evidence));
     let derived = super::theme_font_weights::rules(css, &themed.imported);
     themed.css.push_str(&derived);
     // The stylesheet's recorded source hash is the rewritten sheet's (see the
@@ -95,6 +74,38 @@ pub fn for_site(css: &str, source_root: &Path, evidence: &crate::build::cloud_le
         evidence.owned_rewrite(&theme_dir.join("style.css"), css.as_bytes(), themed.css.as_bytes());
     }
     themed
+}
+
+/// `rel` inside `theme_dir` (canonical: `real_theme`), as the build may read a
+/// theme file: a regular file within the size cap that resolves inside the
+/// folder at exactly that path. The plain copy step does not follow symlinks;
+/// neither does this, or a link pointing outside the folder would publish its
+/// target. A file still in the cloud is recorded as pending, so the finished
+/// build waits for it.
+pub(crate) fn read_theme_file(
+    theme_dir: &Path,
+    real_theme: Option<&Path>,
+    rel: &str,
+    evidence: &crate::build::cloud_ledger::InputEvidence,
+) -> Option<Vec<u8>> {
+    use crate::build::cloud_readiness::{probe_input, Found};
+    let path = theme_dir.join(rel);
+    let meta = std::fs::symlink_metadata(&path).ok()?;
+    if !meta.is_file() || meta.len() > MAX_HASHED_FILE_BYTES {
+        return None;
+    }
+    if path.canonicalize().ok()? != real_theme?.join(rel) {
+        return None;
+    }
+    match probe_input(&path) {
+        Ok(Found::Bytes(bytes)) => Some(bytes),
+        Ok(Found::InCloud) => {
+            evidence.require(&path, crate::build::cloud_ledger::InputRole::Theme);
+            evidence.pending(&path);
+            None
+        }
+        Err(_) => None,
+    }
 }
 
 /// Rewrite every in-scope reference in `css`. `read` returns the bytes of a
@@ -250,7 +261,7 @@ fn split_ext(name: &str) -> Option<(&str, &str)> {
 }
 
 /// `a/./b/../c` to `a/c`; `None` when it climbs out of the folder.
-fn normalize(path: &str) -> Option<String> {
+pub(crate) fn normalize(path: &str) -> Option<String> {
     let mut parts: Vec<&str> = Vec::new();
     for seg in path.split('/') {
         match seg {

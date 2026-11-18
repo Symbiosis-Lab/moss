@@ -103,6 +103,7 @@ mod selection_tools_test;
 mod serve_pointer_owner_invariant_test;
 mod served_path_inventory_test;
 mod shadowed_index_md_test;
+mod share_card_theme_test;
 mod share_image_pick_test;
 mod site;
 mod site_archival_test;

@@ -2676,3 +2676,16 @@ fn the_excerpt_parses_the_page_again_only_when_its_lead_cites_a_note() {
         .collect();
     assert_eq!(parses, [0, 1, 1, 1, 1, 1, 1, 0]);
 }
+
+/// A first paragraph whose lines end in a markdown hard break (`**Name**\`)
+/// reads as one run of words, with no backslash left in it.
+#[test]
+fn a_hard_break_backslash_does_not_reach_the_description() {
+    let content = "**Ada Example**\\\nCurator of the garden archive.\n";
+    assert_eq!(extract_description(content, true), "Ada Example Curator of the garden archive.");
+    assert_eq!(
+        extract_description_markdown(content, true),
+        "**Ada Example** Curator of the garden archive.",
+    );
+    assert_eq!(extract_description("A path ends in \\\\\nthen text.\n", true), "A path ends in \\\\ then text.");
+}

@@ -6,6 +6,7 @@
 //! decoded picture. Caching, hashing, writing and manifest registration live
 //! in the parent module.
 
+use super::theme::CardPicture;
 use super::{CardInputs, CardError};
 use moss_core::media::xml_escape;
 use std::path::Path;
@@ -206,22 +207,54 @@ fn site_name_line(inputs: &CardInputs, budget: f32) -> Option<String> {
 /// spine rather than as a stripe. Stated once here instead of implied by four
 /// copies of the same two rects.
 fn card_svg(inputs: &CardInputs, body: &str) -> String {
-    let spine = if inputs.vertical {
-        r#"width="1200" height="12""#
-    } else {
-        r#"width="12" height="630""#
+    let size = if inputs.vertical { r#"width="1200" height="12""# } else { r#"width="12" height="630""# };
+    // A theme's picture takes the edge the spine would stand on.
+    let spine = match theme_strip(inputs) {
+        Some(_) => String::new(),
+        None => format!("\n  <rect x=\"0\" y=\"0\" {size} fill=\"{}\"/>", inputs.accent_color),
     };
     format!(
         r##"<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
-  <rect width="1200" height="630" fill="{bg}"/>
-  <rect x="0" y="0" {spine} fill="{accent}"/>
+  <rect width="1200" height="630" fill="{bg}"/>{spine}
   {body}
 </svg>"##,
         bg = inputs.bg_color,
-        accent = inputs.accent_color,
-        spine = spine,
-        body = body,
     )
+}
+
+/// The theme's picture and where it sits: full height at the inline end of a
+/// horizontal title card. A plate card and a vertical card keep their own layouts.
+pub(super) fn theme_strip<'a>(inputs: &'a CardInputs) -> Option<(&'a CardPicture, PlateRect)> {
+    if inputs.vertical || inputs.plate.is_some() {
+        return None;
+    }
+    let picture = inputs.theme.as_deref()?.picture.as_ref()?;
+    let w = picture.width() as f32;
+    Some((picture, PlateRect { x: 1200.0 - w, y: 0.0, w, h: 630.0 }))
+}
+
+/// The em budgets of the title and site-name lines: the whole text column, or
+/// what the theme's picture leaves of it (80px margins either side).
+fn line_budgets(inputs: &CardInputs) -> (f32, f32) {
+    match theme_strip(inputs) {
+        Some((_, strip)) => {
+            let column = 1200.0 - strip.w - 160.0;
+            (column / 72.0, column / 32.0)
+        }
+        None => (TITLE_LINE_EM, SITE_NAME_EM),
+    }
+}
+
+/// The face every run names and the site name's paint: the theme's heading
+/// face and muted colour, else Inter and the ink at 65%.
+fn paint(inputs: &CardInputs) -> (String, String) {
+    let theme = inputs.theme.as_deref();
+    let face = theme.and_then(|t| t.heading.as_ref()).map_or_else(|| "Inter".to_string(), |f| xml_escape(&f.family));
+    let name = match theme.and_then(|t| t.muted.as_deref()) {
+        Some(muted) => format!(r#"fill="{muted}""#),
+        None => format!(r#"fill="{}" opacity="0.65""#, inputs.fg_color),
+    };
+    (face, name)
 }
 
 pub(super) fn build_svg(inputs: &CardInputs, plate: Option<PlateRect>) -> String {
@@ -234,7 +267,9 @@ pub(super) fn build_svg(inputs: &CardInputs, plate: Option<PlateRect>) -> String
 }
 
 fn build_horizontal_svg(inputs: &CardInputs) -> String {
-    let title_tspans: String = layout_title(inputs.title, TITLE_LINE_EM)
+    let (face, name_paint) = paint(inputs);
+    let (title_em, name_em) = line_budgets(inputs);
+    let title_tspans: String = layout_title(inputs.title, title_em)
         .iter()
         .enumerate()
         .map(|(i, line)| {
@@ -245,13 +280,13 @@ fn build_horizontal_svg(inputs: &CardInputs) -> String {
             )
         })
         .collect();
-    let site_name = site_name_line(inputs, SITE_NAME_EM).map_or_else(String::new, |n| {
-        format!(r##"<text x="80" y="540" font-family="Inter" font-size="32" fill="{fg}" opacity="0.65"><tspan>{n}</tspan></text>"##, fg = inputs.fg_color, n = n)
+    let site_name = site_name_line(inputs, name_em).map_or_else(String::new, |n| {
+        format!(r##"<text x="80" y="540" font-family="{face}" font-size="32" {name_paint}><tspan>{n}</tspan></text>"##, n = n)
     });
     card_svg(
         inputs,
         &format!(
-            r##"<text x="80" y="280" font-family="Inter" font-size="72" font-weight="700" fill="{fg}">{title_tspans}</text>
+            r##"<text x="80" y="280" font-family="{face}" font-size="72" font-weight="700" fill="{fg}">{title_tspans}</text>
   {site_name}"##,
             fg = inputs.fg_color,
             title_tspans = title_tspans,
@@ -281,6 +316,7 @@ fn build_horizontal_svg(inputs: &CardInputs) -> String {
 /// on the page. No `vert` feature substitution, so 「」 keep their horizontal
 /// forms; a title is short enough for that to pass.
 fn build_vertical_svg(inputs: &CardInputs) -> String {
+    let (face, name_paint) = paint(inputs);
     let lines = layout_title(inputs.title, TITLE_COLUMN_EM);
     let name = site_name_line(inputs, SITE_NAME_COLUMN_EM);
     // One column per title line plus the site-name column when there is one,
@@ -294,7 +330,7 @@ fn build_vertical_svg(inputs: &CardInputs) -> String {
         .enumerate()
         .map(|(i, line)| {
             format!(
-                r##"<text x="{:.0}" y="84" writing-mode="tb" font-family="Inter" font-size="72" font-weight="700" fill="{}">{}</text>
+                r##"<text x="{:.0}" y="84" writing-mode="tb" font-family="{face}" font-size="72" font-weight="700" fill="{}">{}</text>
   "##,
                 col_x(i),
                 inputs.fg_color,
@@ -304,8 +340,8 @@ fn build_vertical_svg(inputs: &CardInputs) -> String {
         .collect();
     let site_name = name.map_or_else(String::new, |n| {
         format!(
-            r##"<text x="{x:.0}" y="560" writing-mode="tb" text-anchor="end" font-family="Inter" font-size="32" fill="{fg}" opacity="0.65">{n}</text>"##,
-            x = col_x(lines.len()), fg = inputs.fg_color, n = n
+            r##"<text x="{x:.0}" y="560" writing-mode="tb" text-anchor="end" font-family="{face}" font-size="32" {name_paint}>{n}</text>"##,
+            x = col_x(lines.len()), n = n
         )
     });
     card_svg(inputs, &format!("{title_columns}{site_name}"))
@@ -315,6 +351,7 @@ fn build_vertical_svg(inputs: &CardInputs) -> String {
 /// site's ground, the title standing top-to-bottom at the right of it, the
 /// site name in a shorter column beside the title. A museum label.
 fn build_vertical_plate_svg(inputs: &CardInputs, rect: PlateRect) -> String {
+    let (face, name_paint) = paint(inputs);
     let lines = layout_title(inputs.title, PLATE_TITLE_COLUMN_EM);
     let col_x = |k: usize| PLATE_V_TITLE_X - PLATE_V_PITCH * k as f32;
     let title_columns: String = lines
@@ -322,7 +359,7 @@ fn build_vertical_plate_svg(inputs: &CardInputs, rect: PlateRect) -> String {
         .enumerate()
         .map(|(i, line)| {
             format!(
-                r##"<text x="{:.0}" y="64" writing-mode="tb" font-family="Inter" font-size="60" font-weight="700" fill="{}">{}</text>
+                r##"<text x="{:.0}" y="64" writing-mode="tb" font-family="{face}" font-size="60" font-weight="700" fill="{}">{}</text>
   "##,
                 col_x(i),
                 inputs.fg_color,
@@ -332,8 +369,8 @@ fn build_vertical_plate_svg(inputs: &CardInputs, rect: PlateRect) -> String {
         .collect();
     let site_name = site_name_line(inputs, SITE_NAME_COLUMN_EM).map_or_else(String::new, |n| {
         format!(
-            r##"<text x="{x:.0}" y="566" writing-mode="tb" text-anchor="end" font-family="Inter" font-size="28" fill="{fg}" opacity="0.65">{n}</text>"##,
-            x = col_x(lines.len()), fg = inputs.fg_color, n = n
+            r##"<text x="{x:.0}" y="566" writing-mode="tb" text-anchor="end" font-family="{face}" font-size="28" {name_paint}>{n}</text>"##,
+            x = col_x(lines.len()), n = n
         )
     });
     card_svg(
@@ -348,6 +385,7 @@ fn build_vertical_plate_svg(inputs: &CardInputs, rect: PlateRect) -> String {
 /// The plate card for a horizontally set page: picture above, title and site
 /// name along the foot.
 fn build_horizontal_plate_svg(inputs: &CardInputs, rect: PlateRect) -> String {
+    let (face, name_paint) = paint(inputs);
     let lines = layout_title(inputs.title, PLATE_TITLE_LINE_EM);
     // Last baseline fixed at 522 so a one-line and a two-line title share a
     // foot; the second line grows upward into the picture's air, not down
@@ -365,13 +403,13 @@ fn build_horizontal_plate_svg(inputs: &CardInputs, rect: PlateRect) -> String {
         })
         .collect();
     let site_name = site_name_line(inputs, SITE_NAME_EM).map_or_else(String::new, |n| {
-        format!(r##"<text x="80" y="578" font-family="Inter" font-size="28" fill="{fg}" opacity="0.65"><tspan>{n}</tspan></text>"##, fg = inputs.fg_color, n = n)
+        format!(r##"<text x="80" y="578" font-family="{face}" font-size="28" {name_paint}><tspan>{n}</tspan></text>"##, n = n)
     });
     card_svg(
         inputs,
         &format!(
             r##"{frame}
-  <text x="80" y="{first_y:.0}" font-family="Inter" font-size="52" font-weight="700" fill="{fg}">{title_tspans}</text>
+  <text x="80" y="{first_y:.0}" font-family="{face}" font-size="52" font-weight="700" fill="{fg}">{title_tspans}</text>
   {site_name}"##,
             fg = inputs.fg_color,
             frame = plate_frame(rect, inputs.fg_color),
@@ -403,7 +441,12 @@ pub(super) fn draw_plate(
     rect: PlateRect,
 ) -> Result<(), CardError> {
     let (w, h) = (rect.w.round().max(1.0) as u32, rect.h.round().max(1.0) as u32);
-    let scaled = crate::build::media::scale::scale_exact(img, w, h).into_rgba8();
+    // The theme's picture is held at its strip's size already.
+    let scaled = if (img.width(), img.height()) == (w, h) {
+        img.to_rgba8()
+    } else {
+        crate::build::media::scale::scale_exact(img, w, h).into_rgba8()
+    };
     let mut plate = tiny_skia::Pixmap::new(w, h)
         .ok_or_else(|| CardError::Encode("plate pixmap allocation failed".into()))?;
     // tiny-skia stores PREMULTIPLIED RGBA; `image` stores straight alpha.

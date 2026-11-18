@@ -392,6 +392,30 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "`object-fit` for grid images. `contain` letterboxes onto the surface colour instead of cropping — the right choice for typographic work, where a crop costs words rather than scenery.",
     },
     CustomProp {
+        name: "--moss-share-card-bg",
+        owner: ":root",
+        default: "#faf8f5",
+        description: "Ground of the card moss draws for a link preview when a page has no picture of its own. Read by the build, not by a stylesheet, from the theme's `:root`; any opaque colour. Set it when the card should not be moss's paper, for example a dark site's night.",
+    },
+    CustomProp {
+        name: "--moss-share-card-ink",
+        owner: ":root",
+        default: "#1a1816",
+        description: "Title colour of the link-preview card. Read by the build from the theme's `:root`.",
+    },
+    CustomProp {
+        name: "--moss-share-card-muted",
+        owner: ":root",
+        default: "the ink at 65%",
+        description: "Site-name colour of the link-preview card. Read by the build from the theme's `:root`. The card's face is the lead family of `--moss-font-heading` when the theme hosts it as a `.ttf` or `.otf` (a `.ttf` of the same name beside a `.woff2` counts); otherwise Inter, and the build says which file to add.",
+    },
+    CustomProp {
+        name: "--moss-share-card-picture",
+        owner: ":root",
+        default: "none",
+        description: "A picture in `.moss/theme/` (`url(\"card.jpg\")`) filling the link-preview card's full height at its inline end, as wide as its shape at 630px, at most 540px (cropped about its middle beyond that). A horizontal title card only; a page's own picture still makes its own card.",
+    },
+    CustomProp {
         name: "--moss-card-cover-ratio",
         owner: "moss-card-cover",
         default: "4 / 3",

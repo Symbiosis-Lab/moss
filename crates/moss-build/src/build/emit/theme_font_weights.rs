@@ -77,25 +77,28 @@ fn derived(page: &Layered, weight_token: &str, font_token: &str, faces: &[Face])
     family.iter().map(|f| f.lightest).filter(|w| w > MEDIUM.end()).min()
 }
 
-/// One `@font-face` rule that loads a file: its family and the weights it covers.
-struct Face {
-    family: String,
-    lightest: u16,
-    heaviest: u16,
+/// One `@font-face` rule that loads a file: its family, the weights it covers
+/// and its `src` list.
+pub(crate) struct Face {
+    pub family: String,
+    pub lightest: u16,
+    pub heaviest: u16,
+    pub src: String,
 }
 
-fn hosted_faces(stripped: &str) -> Vec<Face> {
+pub(crate) fn hosted_faces(stripped: &str) -> Vec<Face> {
     style_rules(stripped)
         .into_iter()
         .filter(|rule| rule.prelude.trim().eq_ignore_ascii_case("@font-face"))
         .filter_map(|rule| {
             let declarations = rule.declarations();
             let value = |name: &str| declarations.iter().rev().find(|(p, _)| p == name).map(|(_, v)| v.as_str());
-            if !value("src")?.to_ascii_lowercase().contains("url(") {
+            let src = value("src")?;
+            if !src.to_ascii_lowercase().contains("url(") {
                 return None;
             }
             let (lightest, heaviest) = weight_range(value("font-weight").unwrap_or("400"))?;
-            Some(Face { family: unquoted(value("font-family")?), lightest, heaviest })
+            Some(Face { family: unquoted(value("font-family")?), lightest, heaviest, src: src.to_string() })
         })
         .collect()
 }
@@ -113,7 +116,7 @@ fn weight_range(value: &str) -> Option<(u16, u16)> {
     Some((lightest.min(heaviest), lightest.max(heaviest)))
 }
 
-fn unquoted(name: &str) -> String {
+pub(crate) fn unquoted(name: &str) -> String {
     name.trim().trim_matches(['"', '\'']).trim().to_string()
 }
 

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `CUSTOM_PROPS` declares `--moss-share-card-bg`, `--moss-share-card-ink`, `--moss-share-card-muted` and `--moss-share-card-picture`, which the build reads from a theme's `:root` to draw its link-preview card.
+
 ## [0.27.0] - 2026-11-17
 
 ### Added

@@ -4,6 +4,10 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
+### Added
+
+- A theme can style the link-preview card moss draws for a page with no picture: `--moss-share-card-bg`, `--moss-share-card-ink` and `--moss-share-card-muted` colour it, `--moss-share-card-picture` places a picture along its right edge, and the card uses the theme's heading face when the theme hosts it as a `.ttf` or `.otf`.
+
 ### Fixed
 
 - A link card shows its page's title, description and picture the first time a folder is opened in the app. A card for a link moss had not fetched before stayed a bare address for the whole session, and was published that way, unless an earlier session had fetched it.
@@ -16,6 +20,7 @@ All notable changes to moss will be documented here.
 - When the cloud service holding a folder stops sending its files, the opening screen names it: "Google Drive isn't sending files." with "Quit Google Drive and open it again." under it (the same for Dropbox, OneDrive and Box; iCloud Drive, part of the system, gets no quit). It used to say "Downloads have stalled" whenever nothing had arrived for 90 seconds, which a slow but working download also triggered. The opening screen no longer repeats the folder's path in a tooltip; the button beside it shows the folder.
 - At 0 files the download meter on the opening screen shows nothing lit. It used to draw a line across the whole meter, which read as a full bar.
 - A build that a newer one overtakes stops making pictures' smaller copies and is not shown; the newer build makes them. Saving several times in a row ran one such pass per save at once, each on a full core, for minutes after the last build ended.
+- A page whose first paragraph ends a line with a backslash (a markdown line break) no longer shows the backslash in its automatic description.
 
 ## [0.15.26] - 2026-11-17
 

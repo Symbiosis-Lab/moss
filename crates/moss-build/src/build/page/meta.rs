@@ -680,6 +680,17 @@ fn count_excerpt_parse() {
     EXCERPT_PARSES.with(|n| n.set(n.get() + 1));
 }
 
+/// `line` without a trailing hard-break backslash. The lines of a paragraph are
+/// joined with a space, so the break would otherwise survive as `Name\ text`;
+/// an escaped backslash (`\\`) at the end is text and stays.
+fn without_hard_break(line: &str) -> &str {
+    let trimmed = line.trim_end();
+    match trimmed.strip_suffix('\\') {
+        Some(rest) if rest.bytes().rev().take_while(|&b| b == b'\\').count() % 2 == 0 => rest,
+        _ => line,
+    }
+}
+
 /// Group `redacted`'s lines into paragraphs and pick the excerpt from them,
 /// with the number of leading lines the pick read.
 fn select_excerpt(
@@ -768,7 +779,7 @@ fn select_excerpt(
             } else {
                 stripped
             };
-            current_lines.push(stripped);
+            current_lines.push(without_hard_break(stripped));
         }
     }
     if !current_lines.is_empty() {

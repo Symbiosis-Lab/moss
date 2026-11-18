@@ -136,18 +136,24 @@ pub fn resolve(
         && output_dir.is_some()
         && og_outputs.is_some()
         && !card_title.is_empty();
+    let theme = og_outputs.as_deref().and_then(|sink| sink.theme().cloned());
+    // A theme colour is a hex string the token reader produced, so it passes
+    // the card's own colour check; an unset one is moss's own.
+    let paper = theme.as_ref().and_then(|t| t.bg.as_deref()).unwrap_or(DEFAULT_OG_BG);
+    let ink = theme.as_ref().and_then(|t| t.ink.as_deref()).unwrap_or(DEFAULT_OG_FG);
     let mut render_card = |plate: Option<CardPlate>| {
         let inputs = CardInputs {
             title: card_title,
             site_name: site_title,
-            bg_color: DEFAULT_OG_BG,
-            fg_color: DEFAULT_OG_FG,
+            bg_color: paper,
+            fg_color: ink,
             accent_color: DEFAULT_OG_ACCENT,
             // Orders the card's CJK glyph-fallback chain: a Traditional
             // page must not be set in a Simplified (or Korean) face.
             lang: ui_lang,
             vertical: vertical_typesetting,
             plate,
+            theme: theme.clone(),
         };
         let sink = og_outputs.as_mut().expect("guarded by can_render_card");
         match sink.render(&inputs, output_dir.unwrap()) {

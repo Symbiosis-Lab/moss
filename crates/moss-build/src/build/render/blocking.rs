@@ -1535,6 +1535,9 @@ pub fn generate_blocking_content_for_build(
     let theme_css = user_css_content.as_deref().map(|content| {
         crate::build::emit::theme_css_assets::for_site(content, source_path_buf, &input_evidence)
     });
+    // Read when the first page is rendered, so a build that carries every page reads no theme file.
+    let card_theme = std::sync::LazyLock::new(|| crate::build::page::og_card::theme::CardTheme::of_site(user_css_content.as_deref(), source_path_buf, &input_evidence));
+    let new_og_sink = || crate::build::page::og_card::OgSink::for_build(defer_title_cards, &previous_hashes.files, &filename_covers, std::sync::Arc::clone(&card_theme));
     let user_css_version = user_css_content.as_ref().zip(theme_css.as_ref()).map(|(content, themed)| {
         // Warn when theme references pre-v1 (Retired) class
         // vocabulary. Non-fatal; one warning per retired class found.
@@ -1968,11 +1971,7 @@ pub fn generate_blocking_content_for_build(
                 let url_sp = ServedPath::from_source(&doc.url_path)
                     .map_err(|e| format!("Failed to construct article URL path: {}", e))?;
                 let output_file_path = output_dir.join(url_sp.as_str());
-                let mut og_outputs = if defer_title_cards {
-                    crate::build::page::og_card::OgSink::deferred(&previous_hashes.files, &filename_covers)
-                } else {
-                    crate::build::page::og_card::OgSink::new(&previous_hashes.files, &filename_covers)
-                };
+                let mut og_outputs = new_og_sink();
                 // `is_homepage` used to be hardcoded false here, so only the
                 // site-default-locale home (rendered separately below, never
                 // reaching this generic loop) carried `data-page="home"` —
@@ -2552,11 +2551,7 @@ pub fn generate_blocking_content_for_build(
             homepage_carry_proof.as_ref().expect("homepage carry has proof").register_all(pending);
         } else if !authored_home {
             let _phase_home = PhaseTrace::start("render_homepage");
-            let mut homepage_og_outputs = if defer_title_cards {
-                crate::build::page::og_card::OgSink::deferred(&previous_hashes.files, &filename_covers)
-            } else {
-                crate::build::page::og_card::OgSink::new(&previous_hashes.files, &filename_covers)
-            };
+            let mut homepage_og_outputs = new_og_sink();
             let index_html = render_page(&render_context,
                 homepage_doc, homepage_doc.is_some(), Some(&mut homepage_og_outputs),
             )?;
