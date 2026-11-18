@@ -65,4 +65,5 @@ mod term_editions_test;
 mod title_edit_rebuild_test;
 mod unresolved_embed_strict_test;
 mod unwritten_site_exit_test;
+mod watch_during_picture_batch_test;
 mod layout;

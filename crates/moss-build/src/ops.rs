@@ -10,7 +10,7 @@ pub mod watch;
 
 use std::sync::Arc;
 
-use crate::build::cli_output::{finish_cli_build, install_headless_logger, preflight_cli_build};
+use crate::build::cli_output::{finish_cli_build, install_headless_logger, preflight_cli_build, wait_for_background_tasks};
 use crate::build::{run_pipeline, BuildTrigger, HostPorts, HostStore, PipelineConfig, PluginMode};
 use crate::cli_eprintln;
 use crate::vault::paths::VaultRoot;
@@ -374,6 +374,8 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
             None
         };
 
+        let exits_after_build = !run.flags.serve;
+
         // Before the first build: the server it starts serves the editor
         // while it is still sealing.
         if run.flags.serve && run.flags.watch {
@@ -394,7 +396,7 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
             trigger: if run.flags.strict { BuildTrigger::Full } else { BuildTrigger::Unobserved },
             // A serving process stays alive (it parks on ctrl-C below), so
             // only the plain build seals inline and fetches its link cards first.
-            exits_after_build: !run.flags.serve,
+            exits_after_build,
             site_url_override: run.flags.site_url_override,
             server_port: None,
             live_port: None,
@@ -429,8 +431,15 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
 
                 // The build that exits writes its site before the pipeline
                 // returns, so the record is final here.
-                let unwritten = !run.flags.serve && crate::system::build_records::records().last_build_failed(&run.folder_path);
-                let problems = finish_cli_build(&msg, &run.folder_path, run.flags.strict, unwritten).await;
+                let unwritten = exits_after_build && crate::system::build_records::records().last_build_failed(&run.folder_path);
+                let problems = finish_cli_build(&msg, &run.folder_path, run.flags.strict, unwritten);
+                if exits_after_build {
+                    wait_for_background_tasks(&run.folder_path).await;
+                } else {
+                    // Still says when the pictures are done, without holding the watcher back.
+                    let folder = run.folder_path.clone();
+                    tokio::spawn(async move { wait_for_background_tasks(&folder).await });
+                }
 
                 // Held until a replacement is started (yield) or dropped for
                 // good (ctrl-c): dropping the sender stops the watch. Rebuild
