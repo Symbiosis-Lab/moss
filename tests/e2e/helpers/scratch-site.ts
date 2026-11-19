@@ -145,15 +145,15 @@ export function buildScratchSite(spec: ScratchSiteSpec): string {
     // measurements, say) and a gate could not go red for a change in how they
     // are computed.
     fs.rmSync(path.join(siteDir, ".moss/cache"), { recursive: true, force: true });
-    execSync(`"${MOSS_BIN}" build "${siteDir}" --no-plugins`, {
+    const report = execSync(`"${MOSS_BIN}" build "${siteDir}" --no-plugins --json`, {
       cwd: siteDir,
-      stdio: "pipe",
+      stdio: ["ignore", "pipe", "pipe"],
       timeout: 120_000,
       env: buildEnv(spec, siteDir),
     });
-    const builtDir = findBuiltDir(siteDir);
+    const builtDir: string | undefined = JSON.parse(report.toString("utf8")).output;
     if (!builtDir) {
-      throw new Error(`${tag} no build output under ${siteDir}/.moss/build/ after a build`);
+      throw new Error(`${tag} the build of ${siteDir} named no output: ${report}`);
     }
     if (spec.probe) {
       const indexHtml = fs.readFileSync(path.join(builtDir, "index.html"), "utf8");
@@ -371,22 +371,3 @@ function writeOrRemove(filePath: string, content: string | Buffer | null): void 
   fs.writeFileSync(filePath, content, "utf8");
 }
 
-/**
- * `.moss/build.nosync/current` is a symlink re-pointed at a new
- * `generations/<id>/` every build. `staging/` is the fallback for a build
- * that did not ship. Per-machine output moved from `.moss/build` to
- * `.moss/build.nosync` (moss_paths.rs's `build_dir()`) while this helper
- * still pointed at the old name, so every GATES_BUILD gate failed
- * `no build output` on a fresh scratch site — there was never a legacy
- * `.moss/build` to migrate from in the first place. See moss_paths.rs's
- * `current_ptr`/`staging_dir` for the paths this mirrors.
- */
-function findBuiltDir(siteDir: string): string | null {
-  const currentLink = path.join(siteDir, ".moss/build.nosync/current");
-  if (fs.existsSync(currentLink)) {
-    const target = fs.realpathSync(currentLink);
-    if (fs.statSync(target).isDirectory()) return target;
-  }
-  const staging = path.join(siteDir, ".moss/build.nosync/staging");
-  return fs.existsSync(staging) ? staging : null;
-}

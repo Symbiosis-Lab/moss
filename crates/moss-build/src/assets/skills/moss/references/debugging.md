@@ -26,11 +26,11 @@ If the problem disappears, a plugin is the cause. There is no CLI switch for one
 moss build <folder> --serve
 ```
 
-Builds the site and serves it on port 8080, or the next free port if 8080 is taken — read the port from the build output rather than assuming it, or you may be inspecting a different moss instance's site. The search starts at the port in the `MOSS_PREVIEW_PORT_BASE` environment variable when it is set (a value that is not a valid port number prints a warning and falls back to 8080), then tries each higher port in turn, up to 100 ports, until one is free on both IPv4 and IPv6 loopback; `--serve` has no `--port` flag, so set that variable to move the start. Inspect the built HTML under `.moss/build.nosync/current/` (the active frozen generation). Useful for headless or automated checks without opening the GUI preview. The `.css` files under its `_moss/` are minified build output — don't read or edit them; use `moss describe --css <selector>` instead.
+Builds the site and serves it on port 8080, or the next free port if 8080 is taken — read the port from the build output rather than assuming it, or you may be inspecting a different moss instance's site. The search starts at the port in the `MOSS_PREVIEW_PORT_BASE` environment variable when it is set (a value that is not a valid port number prints a warning and falls back to 8080), then tries each higher port in turn, up to 100 ports, until one is free on both IPv4 and IPv6 loopback; `--serve` has no `--port` flag, so set that variable to move the start. Inspect the built HTML in the folder `moss build <folder> --json` names as `output`. Useful for headless or automated checks without opening the GUI preview. The `.css` files under its `_moss/` are minified build output — don't read or edit them; use `moss describe --css <selector>` instead.
 
 ## Diffing a build before and after a change
 
-`.moss/build.nosync/current/` is a symlink, not the only copy: every sealed build lands in its own `generations/<gen-id>/` directory under `.moss/build.nosync/`, and by default the newest 3 are kept (`[build].keep_generations`, floor 2) rather than only the latest — read `.moss/build.nosync/current.generation` (or `readlink .moss/build.nosync/current`) for the id before rebuilding, then diff that generation's directory against the new `current/` once the rebuild finishes. No need to copy anything aside first — the old generation is still on disk. On APFS and other copy-on-write file systems a kept generation shares its files with the others, so `du` counts each generation at full size while the disk barely changes; measure with `df` before and after a build, never by deleting generations by hand.
+Every sealed build lands in its own generation directory, and by default the newest 3 are kept (`[build].keep_generations`, floor 2), not only the latest. Note the `output` that `moss build <folder> --json` names, rebuild, and diff it against the new `output`; the old generation is still on disk, so nothing needs copying aside first. On APFS and other copy-on-write file systems a kept generation shares its files with the others, so `du` counts each generation at full size while the disk barely changes; measure with `df` before and after a build, never by deleting generations by hand.
 
 ## Verify a preview before handing it off
 
@@ -79,7 +79,7 @@ So a block that came out as an unstyled div is a name problem, not a fence
 problem. If you have lost the build log, grep the output instead:
 
 ```
-grep -ro 'moss-unknown-shortcode[^>]*' .moss/build.nosync/current/
+grep -ro 'moss-unknown-shortcode[^>]*' "$(moss build . --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["output"])')"
 ```
 
 `data-name` is the name moss did not recognize. For the valid names, run

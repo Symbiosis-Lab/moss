@@ -14,6 +14,7 @@ const OWN_PROCESS: &[&str] = &[
 
 mod booking_offer_test;
 mod build_default_folder_test;
+mod build_json_output_test;
 mod build_summary_line_test;
 mod closed_output_pipe_test;
 mod comment_refresh_test;

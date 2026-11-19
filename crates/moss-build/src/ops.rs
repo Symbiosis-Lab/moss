@@ -99,6 +99,9 @@ pub struct BuildFlags {
     /// reading; the flag never changes what moss *writes*, only how it
     /// reports on what it wrote.
     pub strict: bool,
+    /// `--json`: stdout carries one JSON object when the build ends, with
+    /// `output`, the generation it wrote. One-shot builds only.
+    pub json: bool,
     /// `--wait-plugins`: force `PluginMode::Blocking` when plugins run. Also forced by `serve && !watch`: detaching the process hook is
     /// only safe if something later renders what it writes — under `--serve`
     /// alone no watcher will, so the site would serve pre-import content
@@ -165,6 +168,7 @@ impl BuildArgs {
                 "--serve" => flags.serve = true,
                 "--watch" => flags.watch = true,
                 "--strict" => flags.strict = true,
+                "--json" => flags.json = true,
                 "--wait-plugins" => flags.wait_plugins = true,
                 "--no-plugins" => flags.no_plugins = true,
                 "--allow-plugins" => flags.allow_plugins = true,
@@ -194,6 +198,9 @@ impl BuildArgs {
                 usage()
             ));
         }
+        if flags.json && flags.serve {
+            return Err(format!("error: --json reports a build that ends; drop --serve\n{}", usage()));
+        }
         let folder = match folder {
             Some(folder) => folder.to_string(),
             None => {
@@ -203,6 +210,36 @@ impl BuildArgs {
         };
         Ok(BuildArgs { folder, flags })
     }
+}
+
+/// The last line of a build that ends: the generation it wrote, for a person
+/// on stderr and, under `--json`, as `{"output": ...}` on stdout.
+fn report_output(folder: &str, json: bool, unwritten: bool, code: i32) -> i32 {
+    let paths = crate::moss_paths::MossPaths::new(std::path::Path::new(folder));
+    let output = paths.current_generation_id().ok().filter(|_| !unwritten).map(|id| paths.generation_dir(&id));
+    match (output, json) {
+        (Some(output), true) => {
+            println!("{}", serde_json::json!({ "output": output }));
+            code
+        }
+        (Some(output), false) => {
+            cli_eprintln!("Output: {}", output.display());
+            code
+        }
+        (None, true) => {
+            println!("{}", crate::cli::list::json_error("the build wrote no site"));
+            1
+        }
+        (None, false) => code,
+    }
+}
+
+fn report_failure(error: &impl std::fmt::Display, json: bool) -> i32 {
+    cli_eprintln!("Build failed: {}", error);
+    if json {
+        println!("{}", crate::cli::list::json_error(&format!("Build failed: {error}")));
+    }
+    if error.to_string().starts_with("this folder is already served") { serve::ownership::ALREADY_SERVED_EXIT_CODE } else { 1 }
 }
 
 /// The usage line both binaries print, from the shared command table, so it
@@ -484,12 +521,10 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
                     }
                 }
 
-                i32::from(unwritten || (run.flags.strict && problems > 0))
+                let code = i32::from(unwritten || (run.flags.strict && problems > 0));
+                if exits_after_build { report_output(&run.folder_path, run.flags.json, unwritten, code) } else { code }
             }
-            Err(e) => {
-                cli_eprintln!("Build failed: {}", e);
-                if e.starts_with("this folder is already served") { serve::ownership::ALREADY_SERVED_EXIT_CODE } else { 1 }
-            }
+            Err(e) => report_failure(&e, run.flags.json),
         }
     });
     use crate::build::cloud_readiness::storage::{cache_publication_counts, drain_cache_publications};
@@ -518,6 +553,13 @@ mod build_args_tests {
             err.contains("--watch needs --serve: moss build site --watch --serve"),
             "error must name the exact corrected command, got: {err}"
         );
+    }
+
+    #[test]
+    fn json_is_for_a_build_that_ends() {
+        assert!(BuildArgs::parse(&args(&["site", "--json"])).unwrap().flags.json);
+        let err = BuildArgs::parse(&args(&["site", "--json", "--serve"])).unwrap_err();
+        assert!(err.contains("drop --serve"), "{err}");
     }
 
     #[test]

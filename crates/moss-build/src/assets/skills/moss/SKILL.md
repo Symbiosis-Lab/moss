@@ -34,7 +34,7 @@ both erode legibility.
 serves, printing the URL it bound — read that, do not assume a port. (8080 is
 only the first one tried; a foreign dev server holding it means moss lands
 elsewhere, and a hardcoded `localhost:8080` would audit someone else's site.)
-Inspect built HTML under `.moss/build.nosync/current/` (the active frozen generation);
+Inspect built HTML in the folder `moss build <folder> --json` names as `output`;
 the `.css` files under its `_moss/` are minified build output — use
 `moss describe --css <selector>` instead of reading them.
 
@@ -350,7 +350,7 @@ model (dark mode, quiet chrome, `@layer` rules), see
 - **Handing a site to another account:** `moss site transfer <folder> --to <email>` mails that address one link; accepting it moves the site to their account (its address, files, subscribers and history stay), and this folder's key can no longer publish it. When this same folder should keep publishing as the new owner, add `--keep-publishing`: the receiver can then also take this folder's key, on its own button, and the folder publishes as them from then on; it is refused when the key has also published another site of the sender's. Run it with `--dry-run` first; `--cancel` withdraws a pending transfer. A site billed through Stripe, or with a domain bought through moss linked, is refused. Ask the human for the address first: it sends a real email.
 - **Site built by another generator:** `moss deploy <folder> --prebuilt=_site`
   skips `moss build` and uploads that directory as-is.
-- **Any other host:** set the site's address under `[site]` in `.moss/config.toml` (`url = "https://example.com/"`; `--site-url=` overrides it for one build), run `moss build <folder>`, then upload `.moss/build.nosync/current/` yourself, after deleting the pages marked `draft: true`, which are built there for the preview (`moss list` shows which they are). The address is required there because canonical URLs, `og:image`, the sitemap, and RSS are all absolute and otherwise derive from mosspub.com deployment state, which any other host never sets. A site served under a path gives the whole address (`url = "https://example.edu/~alice/"`): the build puts every link, picture, stylesheet and script it ships under `/~alice/`, so the output is uploaded as that folder's contents. A link starting with `/` is a page of this site; a page of another site on the same host (`/~bob/`) is linked by its full address. Flag details: `moss describe --json`.
+- **Any other host:** set the site's address under `[site]` in `.moss/config.toml` (`url = "https://example.com/"`; `--site-url=` overrides it for one build), run `moss build <folder> --json`, then upload the folder it names as `output` yourself, after deleting the pages marked `draft: true`, which are built there for the preview (`moss list` shows which they are). The address is required there because canonical URLs, `og:image`, the sitemap, and RSS are all absolute and otherwise derive from mosspub.com deployment state, which any other host never sets. A site served under a path gives the whole address (`url = "https://example.edu/~alice/"`): the build puts every link, picture, stylesheet and script it ships under `/~alice/`, so the output is uploaded as that folder's contents. A link starting with `/` is a page of this site; a page of another site on the same host (`/~bob/`) is linked by its full address. Flag details: `moss describe --json`.
 
 ## Harvest, don't unilaterally invent
 
