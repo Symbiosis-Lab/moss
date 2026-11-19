@@ -484,11 +484,9 @@ impl MossPaths {
     }
 
     /// `.moss/build.nosync/cache/folder-lang.json` — per-folder inferred language,
-    /// keyed by folder path, alongside the file-set fingerprint it
-    /// was inferred from. A folder whose file set is unchanged since the
-    /// last build reuses its stored language rather than re-inferring from
-    /// content — an edit to one file's body must never move the folder's
-    /// language, only adding/removing a file may.
+    /// keyed by folder path, beside the stat of each file it was inferred from.
+    /// A pure cache: it is reused only while those stats vouch for the same
+    /// bytes, so losing it costs one inference pass and never changes a page.
     pub fn cache_folder_lang(&self) -> PathBuf {
         self.cache_dir().join("folder-lang.json")
     }

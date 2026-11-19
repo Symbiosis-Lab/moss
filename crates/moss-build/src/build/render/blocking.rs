@@ -482,9 +482,9 @@ pub fn generate_blocking_content_for_build(
 
     // Per-folder language for folders with no naming convention —
     // declared in the folder's index, else inferred — computed ONCE here (not
-    // per page below) and keyed to each folder's file SET so an edited body
-    // never moves it; only adding/removing a file, or declaring, does. See
-    // `scan::page_map::folder_lang` for the stability mechanism.
+    // per page below), one vote over each folder's files; the record only
+    // saves re-reading a folder whose files are unchanged. See
+    // `scan::page_map::folder_lang`.
     let folder_lang_cache_path = paths.cache_folder_lang();
     let mut folder_lang_cache = FolderLangCache::load(&folder_lang_cache_path);
     // Its declaration rung reads `frontmatter_scan_cache`, which the page-map

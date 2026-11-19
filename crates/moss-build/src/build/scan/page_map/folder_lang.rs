@@ -14,48 +14,53 @@
 //! — it's to run it once per FOLDER, over the folder's whole file set,
 //! instead of once per PAGE, over one file's bytes.
 //!
-//! ## The stability invariant
+//! ## The record is only a cache
 //!
-//! Editing one file's body must never change what this module returns for
-//! its folder — only adding or removing a file in that folder may, or the
-//! author DECLARING the folder's language in its index (see
-//! [`declared_folder_lang`], which is read on every build precisely because a
-//! declaration is not a body and must not wait for a membership change). That
-//! is enforced structurally, not by chance: [`resolve_folder_languages`]
-//! persists each folder's last-inferred language ALONGSIDE the sorted list
-//! of file paths it was inferred from ([`FolderLangCache`], mirroring
-//! [`super::frontmatter_cache::FrontmatterScanCache`]'s persistence
-//! pattern). A rebuild that finds the same file set for a folder reuses the
-//! stored language without reading any body at all; a body is read again only
-//! when the SET changed. (A declaration is not a body and must not wait for a
-//! membership change, so it is consulted every build — but it comes from the
-//! frontmatter-scan cache the page-map pass has already filled, not from a
-//! fresh read per folder.)
+//! A folder's language is a function of its files' current bytes (and the
+//! author's declaration in its index, see [`declared_folder_lang`]), so a lost
+//! or copied record never changes a page: it costs one inference pass. The
+//! record ([`FolderLangCache`]) keeps each folder's verdict beside the stat of
+//! every file it was read from, and a rebuild reuses the verdict only while
+//! every one of those stats still vouches for the same bytes
+//! ([`FileStat::vouches_for`], the rule the frontmatter-scan cache uses). Any
+//! edit, addition or removal re-reads the folder. One vote over the whole
+//! folder is what keeps a typo fix from moving its language, not the record.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::build::scan::path_collision::on_disk;
+use crate::build::stat::{recording_clock, stat_then, FileStat};
 use crate::i18n::{detect, filename::parse_filename_stem, path::ancestor_lang_from_path, Language};
 
-/// One folder's cached inference result, plus the file-set identity it was
-/// computed against.
+/// One folder's cached inference result, plus the bytes it was computed from.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct FolderLangEntry {
-    /// Sorted source paths of every markdown file this folder contained
-    /// when last inferred. The identity a rebuild compares against — NOT
-    /// content, NOT mtimes: only membership can move this folder's
-    /// language.
-    files: Vec<String>,
+    /// Every markdown file the vote read, sorted by path, with its stat taken
+    /// before the read.
+    files: Vec<(String, FileStat)>,
+    /// When the files were read: the clock [`FileStat::vouches_for`] needs.
+    recorded_at: Option<u64>,
     /// `Language::code()`, or `None` when no file in the folder yielded a
     /// confident detection (the folder contributes nothing; callers fall
-    /// through to the site default same as an un-inferrable single page
-    /// used to).
+    /// through to the site default).
     lang: Option<String>,
 }
 
-/// Persisted `.moss/build.nosync/cache/folder-lang.json`. See the module doc for
-/// why membership, not content, is the cache key.
+impl FolderLangEntry {
+    /// Whether `files` (sorted by path) are still exactly the files, and the
+    /// bytes, this verdict was read from.
+    fn vouches_for(&self, files: &[&crate::types::content::FileInfo], locate: &dyn Fn(&str) -> PathBuf) -> bool {
+        self.files.len() == files.len()
+            && self.files.iter().zip(files).all(|((path, recorded), f)| {
+                *path == f.path
+                    && std::fs::metadata(locate(path))
+                        .is_ok_and(|md| recorded.vouches_for(&FileStat::of(&md), self.recorded_at))
+            })
+    }
+}
+
+/// Persisted `.moss/build.nosync/cache/folder-lang.json`.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct FolderLangCache {
     pub(super) entries: HashMap<String, FolderLangEntry>,
@@ -156,27 +161,35 @@ pub(super) fn resolve_folder_languages_with(
             Declaration::None => {}
         }
 
-        let mut current_files: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
-        current_files.sort();
+        let mut files = files;
+        files.sort_by(|a, b| a.path.cmp(&b.path));
 
         // Access can change without a file entering or leaving the folder, so
         // a folder holding members pages is inferred afresh and never cached.
         let has_members = files.iter().any(|f| declarations.is_members(&f.path));
-        let unchanged = !has_members && cache.entries.get(&folder).is_some_and(|e| e.files == current_files);
+        let unchanged = !has_members && cache.entries.get(&folder).is_some_and(|e| e.vouches_for(&files, locate));
 
         let lang = if unchanged {
             cache.entries[&folder].lang.as_deref().and_then(Language::from_code)
         } else {
-            let bodies: Vec<String> = files
-                .iter()
-                .filter_map(|f| {
-                    let abs_path = locate(&f.path);
-                    if is_evicted(&abs_path) {
-                        return None;
+            let recorded_at = recording_clock();
+            let mut read_whole = true;
+            let mut stats = Vec::with_capacity(files.len());
+            let mut bodies = Vec::with_capacity(files.len());
+            for f in &files {
+                let abs_path = locate(&f.path);
+                if is_evicted(&abs_path) {
+                    read_whole = false;
+                    continue;
+                }
+                match stat_then(&abs_path, |p| std::fs::read_to_string(p)) {
+                    (Some(stat), Ok(c)) => {
+                        stats.push((f.path.clone(), stat));
+                        bodies.push(detect::strip_frontmatter(&declarations.members_policy.public_source(&f.path, &c)));
                     }
-                    std::fs::read_to_string(&abs_path).ok().map(|c| detect::strip_frontmatter(&declarations.members_policy.public_source(&f.path, &c)))
-                })
-                .collect();
+                    _ => read_whole = false,
+                }
+            }
             let refs: Vec<&str> = bodies.iter().map(String::as_str).collect();
             // The vote itself answers "was there evidence at all" — `None`
             // when no file in the folder was long enough to vote or none that
@@ -189,15 +202,13 @@ pub(super) fn resolve_folder_languages_with(
             // which the old `unwrap_or(En)` would have called English.
             let inferred = detect::site_language_vote(&refs);
 
-            if has_members {
+            // A vote missing a file is not this folder's answer, only today's.
+            if has_members || !read_whole {
                 cache.entries.remove(&folder);
             } else {
                 cache.entries.insert(
                     folder.clone(),
-                    FolderLangEntry {
-                        files: current_files,
-                        lang: inferred.map(|l| l.code().to_string()),
-                    },
+                    FolderLangEntry { files: stats, recorded_at, lang: inferred.map(|l| l.code().to_string()) },
                 );
             }
             inferred
@@ -227,14 +238,9 @@ pub(super) fn resolve_folder_languages_with(
 /// its pages fall through to the site default (the same ceiling `<html lang>`
 /// has, and tracked with it).
 ///
-/// Read on every build rather than through the FILE-SET cache: that cache
-/// exists so that editing a body cannot move a folder's language, and a `lang:`
-/// in the folder's index is not a body — it is the author saying what the
-/// folder is. It comes from the frontmatter-scan cache, which the page-map pass
-/// has already filled for every file by the time this runs, so "every build"
-/// costs a map lookup rather than a file read. It used to cost one read+parse
-/// per folder: 118 of them on a 251-file vault, on every rebuild including a
-/// one-file edit.
+/// Read on every build from the frontmatter-scan cache, which the page-map
+/// pass has already filled for every file, so it costs a map lookup rather
+/// than a file read per folder.
 fn declared_folder_lang(
     files: &[&crate::types::content::FileInfo],
     declarations: &super::frontmatter_cache::FrontmatterScanCache,
@@ -301,12 +307,9 @@ mod tests {
         FileInfo { path: path.to_string(), file_type: "md".to_string(), size: 0, modified: None }
     }
 
-    /// The invariant this module exists to hold: editing a folder's ONE
-    /// file's body — even a realistic long-form article's real bytes, whose
-    /// markup-heavy shape is exactly what used to flip the per-page
-    /// detector — must not move the folder's resolved language, because a
-    /// rebuild with the same file SET reuses the cached verdict without
-    /// re-reading content at all.
+    /// A markup-heavy edit to a long article, the shape that used to flip a
+    /// per-page detector, does not move the folder's language: the edit is
+    /// re-read and the folder's one vote still lands on the same answer.
     #[test]
     fn editing_a_realistic_article_does_not_move_its_folder_language() {
         let dir = tempfile::tempdir().unwrap();
@@ -336,6 +339,52 @@ mod tests {
             Some(&Language::ZhHant),
             "a body edit with an unchanged file set must not move the folder's resolved language"
         );
+    }
+
+    /// The record is only a cache: once a file's bytes change, the answer
+    /// with the record is the answer without it, which is today's content.
+    #[test]
+    fn a_rewritten_file_gets_the_answer_an_empty_record_gives() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("letters");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("letter.md"), SYNTHETIC_TRAD_CHINESE_ARTICLE_BODY).unwrap();
+        let files = vec![file("letters/letter.md")];
+
+        let mut cache = FolderLangCache::default();
+        assert_eq!(resolve(&files, dir.path(), &mut cache).get("letters"), Some(&Language::ZhHant));
+
+        std::fs::write(
+            folder.join("letter.md"),
+            "This letter was rewritten in English. It describes the rainy season, the long walk to \
+             school along the river, and the friends who waited under the bridge until the storm passed.",
+        )
+        .unwrap();
+        let with_record = resolve(&files, dir.path(), &mut cache);
+        let without_record = resolve(&files, dir.path(), &mut FolderLangCache::default());
+        assert_eq!(without_record.get("letters"), Some(&Language::En));
+        assert_eq!(with_record, without_record, "a kept record must not hold a language the files no longer have");
+    }
+
+    /// A vote that could not read every file is not remembered, so the next
+    /// build, with the file downloaded, answers from all of them.
+    #[test]
+    fn a_folder_with_an_evicted_file_is_not_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("half")).unwrap();
+        std::fs::write(dir.path().join("half/a.md"), "This is a short English note about the weather today.").unwrap();
+        std::fs::write(dir.path().join("half/b.md"), "Another English note, this time about gardening.").unwrap();
+        let files = vec![file("half/a.md"), file("half/b.md")];
+        let scanned = super::super::frontmatter_cache::FrontmatterScanCache::scanned_for_test(&files, dir.path());
+        let locate = |p: &str| dir.path().join(p);
+        let evicted = |p: &Path| p.ends_with("b.md");
+
+        let mut cache = FolderLangCache::default();
+        resolve_folder_languages_with(&files, &locate, &evicted, &mut cache, &scanned);
+        assert!(cache.entries.is_empty(), "a partial read must not be recorded");
+
+        resolve_folder_languages_with(&files, &locate, &|_| false, &mut cache, &scanned);
+        assert!(cache.entries.contains_key("half"), "a whole read is recorded");
     }
 
     /// The declaration rung, and the reason it sits outside the cache: an
@@ -436,9 +485,7 @@ mod tests {
         );
     }
 
-    /// Adding or removing a file IS allowed to change the folder's
-    /// language — the mechanism isn't accidentally frozen forever, only
-    /// stable against a body edit with the file set held constant.
+    /// Adding a file that changes the folder's majority moves its language.
     #[test]
     fn adding_a_file_changes_the_folder_language() {
         let dir = tempfile::tempdir().unwrap();
