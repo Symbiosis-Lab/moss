@@ -20,8 +20,7 @@ pub fn generate_json_feed(documents: &[ParsedDocument], site_title: &str, site_u
         .enumerate()
         .map(|(index, article)| {
             let url = article_url(site_url, &article.url_path);
-            let html = item_html(article, index, &mut scopes, site_url, str::to_string);
-            item(article, &url, absolute_html(&html, &url, site_url), site_url)
+            item(article, &url, item_html(article, index, &mut scopes, site_url, str::to_string), site_url)
         })
         .collect();
     let feed_url = article_url(site_url, crate::build::served_path::ServedPath::for_json_feed().as_str());
@@ -64,36 +63,6 @@ fn item(article: &ParsedDocument, url: &str, content_html: String, site_url: &st
 fn rfc3339(date: &str) -> Option<String> {
     let d = crate::build::components::date::parse_partial_date(date)?;
     Some(format!("{:04}-{:02}-{:02}T00:00:00Z", d.year, d.month.unwrap_or(1), d.day.unwrap_or(1)))
-}
-
-/// Links and pictures as a reader elsewhere follows them. A fragment link
-/// stays relative, so it still jumps within the item. `srcset` and `<source>`
-/// go, since their candidates are relative and `src` already names the picture.
-fn absolute_html(html: &str, page: &str, site: &str) -> String {
-    lol_html::rewrite_str(html, lol_html::RewriteStrSettings {
-        element_content_handlers: vec![
-            lol_html::element!("a[href]", |el| {
-                if let Some(href) = el.get_attribute("href").filter(|h| !h.starts_with('#')) {
-                    el.set_attribute("href", &absolute(&href, page, site))?;
-                }
-                Ok(())
-            }),
-            lol_html::element!("img", |el| {
-                if let Some(src) = el.get_attribute("src") {
-                    el.set_attribute("src", &absolute(&src, page, site))?;
-                }
-                el.remove_attribute("srcset");
-                el.remove_attribute("sizes");
-                Ok(())
-            }),
-            lol_html::element!("source", |el| {
-                el.remove();
-                Ok(())
-            }),
-        ],
-        ..Default::default()
-    })
-    .unwrap_or_else(|_| html.to_string())
 }
 
 #[cfg(test)]

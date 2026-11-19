@@ -89,10 +89,8 @@ fn add_utm_to_internal_links(html: &str, site_url: &str) -> String {
 
         // Find the closing quote
         if let Some((url, after_quote)) = after_href.split_once('"') {
-            let is_internal = url.starts_with("./")
-                || url.starts_with("../")
-                || (url.starts_with('/') && !url.starts_with("//"))
-                || url.starts_with(site_url);
+            // Links arrive absolute (`for_readers`), so the site's own start with its address.
+            let is_internal = url.starts_with(site_url);
 
             if is_internal && !url.contains("utm_source=") {
                 let separator = if url.contains('?') { "&" } else { "?" };
@@ -146,9 +144,54 @@ pub(crate) fn item_html(
     links: impl Fn(&str) -> String,
 ) -> String {
     let body = crate::build::feeds::calendar::strip_links_paragraphs(&article.html_content);
-    let html = links(&scopes.scope(&body, &article.url_path, index));
+    let page = article_url(site_url, &article.url_path);
+    let html = links(for_readers(&scopes.scope(&body, &article.url_path, index), &page, site_url).trim_start());
     let html = crate::build::emit::math_png::swap_math_svgs_for_email_imgs(&html, site_url);
     crate::build::emit::diagram_png::swap_diagram_figures_for_feed_imgs(&html, site_url)
+}
+
+/// The body as a reader elsewhere sees it. The title goes, since every reader
+/// shows the item's own, and so do the editor's `data-source-*` attributes.
+/// Links and pictures become absolute; a fragment link stays relative, so it
+/// still jumps within the item. `srcset` and `<source>` go, since their
+/// candidates are relative and `src` already names the picture.
+fn for_readers(html: &str, page: &str, site: &str) -> String {
+    lol_html::rewrite_str(html, lol_html::RewriteStrSettings {
+        element_content_handlers: vec![
+            lol_html::element!("h1.moss-article-title", |el| {
+                el.remove();
+                Ok(())
+            }),
+            lol_html::element!("*", |el| {
+                let editor: Vec<String> =
+                    el.attributes().iter().map(|a| a.name()).filter(|n| n.starts_with("data-source")).collect();
+                for name in editor {
+                    el.remove_attribute(&name);
+                }
+                Ok(())
+            }),
+            lol_html::element!("a[href]", |el| {
+                if let Some(href) = el.get_attribute("href").filter(|h| !h.starts_with('#')) {
+                    el.set_attribute("href", &crate::syndication::shape::absolute(&href, page, site))?;
+                }
+                Ok(())
+            }),
+            lol_html::element!("img", |el| {
+                if let Some(src) = el.get_attribute("src") {
+                    el.set_attribute("src", &crate::syndication::shape::absolute(&src, page, site))?;
+                }
+                el.remove_attribute("srcset");
+                el.remove_attribute("sizes");
+                Ok(())
+            }),
+            lol_html::element!("source", |el| {
+                el.remove();
+                Ok(())
+            }),
+        ],
+        ..Default::default()
+    })
+    .unwrap_or_else(|_| html.to_string())
 }
 
 /// Generates an RSS 2.0 feed XML string from articles.
@@ -290,6 +333,21 @@ mod tests {
             kind: PageKind::Article,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn both_feeds_carry_the_body_a_reader_sees() {
+        let html = r#"<h1 class="moss-article-title" data-source-fm="title">Spring</h1>
+<p data-source-line="2">See <a href="../other/">other</a>.</p><img src="bank.webp" alt="Bank">"#;
+        let docs = vec![create_test_document("Spring", Some("2026-03-01"), "notes/spring/index.html", html)];
+        let rss = generate_rss_feed(&docs, "A site", "https://example.org", None, None);
+        let json = crate::build::feeds::json_feed::generate_json_feed(&docs, "A site", "https://example.org", "en");
+        for feed in [&rss, &json] {
+            assert!(!feed.contains("data-source"), "{feed}");
+            assert!(!feed.contains("moss-article-title"), "{feed}");
+            assert!(feed.contains("https://example.org/notes/spring/bank.webp"), "{feed}");
+        }
+        assert!(rss.contains(r#"href="https://example.org/notes/other/?utm_source=rss&utm_medium=feed""#), "{rss}");
     }
 
     #[test]
@@ -915,9 +973,9 @@ mod tests {
 
         let rss = generate_rss_feed(&docs, "My Blog", "https://example.com", None, None);
 
-        // Internal relative link should get UTM params
+        // An internal link becomes absolute and gets UTM params
         assert!(
-            rss.contains("../other-post/?utm_source=rss&utm_medium=feed"),
+            rss.contains("https://example.com/other-post/?utm_source=rss&utm_medium=feed"),
             "Internal link should have UTM. RSS:\n{}",
             rss
         );
