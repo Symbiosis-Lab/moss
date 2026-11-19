@@ -10,7 +10,7 @@ it("stops a running preview when the Obsidian window unloads", () => {
   const statusEl = { addClass() {}, toggle() {}, setText() {} };
   const plugin = {
     app: { workspace: { on: () => ({}) } },
-    addSettingTab() {}, registerView() {}, addCommand() {}, addRibbonIcon() {}, registerEvent() {},
+    addSettingTab() {}, registerView() {}, addCommand() {}, addRibbonIcon() {}, registerEvent() {}, registerEditorExtension() {},
     addStatusBarItem: () => statusEl,
     registerDomEvent(_target: unknown, type: string, handler: () => void) { if (type !== "click") handlers[type] = handler; },
   };

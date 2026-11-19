@@ -20,6 +20,7 @@ it("imports main and loads on mobile with Electron and every Node module forbidd
     } }],
   });
   vi.useFakeTimers();
+  const vaultName = { marked: false, classList: { toggle(_name: string, on: boolean) { vaultName.marked = on; } } };
   const nativeRequire = createRequire(import.meta.url);
   const forbidden = new Set(builtinModules.flatMap((name) => [name, `node:${name}`]));
   const sandbox = {
@@ -29,6 +30,8 @@ it("imports main and loads on mobile with Electron and every Node module forbidd
       if (name === "electron" || name.startsWith("node:") || forbidden.has(name)) throw new Error(`Forbidden import: ${name}`);
       return name === "obsidian" ? obsidian : nativeRequire(name);
     },
+    document: { querySelectorAll: (selector: string) => selector.includes("vault-name") ? [vaultName] : [] },
+    MutationObserver: class { observe() {} disconnect() {} },
     console, TextEncoder, TextDecoder, WebAssembly, Uint8Array, atob, setTimeout, clearTimeout,
   };
   runInNewContext(bundled.outputFiles[0].text, sandbox);
@@ -44,9 +47,10 @@ it("imports main and loads on mobile with Electron and every Node module forbidd
           : path in hidden ? { type: "file" } : null,
       },
       getFiles: () => files,
+      getAllLoadedFiles: () => [{ path: "/", children: [] }, { path: "notes", children: [] }, ...files],
       on: (name: string, callback: (...args: unknown[]) => void) => { events[name] = callback; return {}; },
     },
-    workspace: { iterateAllLeaves() {}, onLayoutReady() {}, detachLeavesOfType() {}, updateOptions() {} },
+    workspace: { iterateAllLeaves() {}, onLayoutReady() {}, detachLeavesOfType() {}, updateOptions() {}, on() {}, getLeavesOfType: () => [] },
   };
   const plugin = new sandbox.module.exports.default(app);
   await plugin.onload();
@@ -56,10 +60,13 @@ it("imports main and loads on mobile with Electron and every Node module forbidd
   const [aids] = plugin.registeredExtensions;
   expect(aids).toEqual([]);
   expect(plugin.schema.fields.size).toBe(0);
+  expect(vaultName.marked).toBe(false);
   hidden[".moss/config.toml"] = "";
   events.raw(".moss/config.toml");
   await vi.advanceTimersByTimeAsync(250);
   expect(aids).toHaveLength(2);
+  // The vault is the moss folder, so its name carries the mark.
+  expect(vaultName.marked).toBe(true);
   expect(plugin.schema.fields.has("title")).toBe(true);
   expect(plugin.site.check("page.md", "[[new]]")).toContain("unresolved link");
   files.push({ path: "new.md" });

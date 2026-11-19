@@ -1,3 +1,4 @@
+import { IframeRPC } from "@symbiosis-lab/moss-ui/ui/preview/iframe-rpc";
 import { ItemView, ViewStateResult, WorkspaceLeaf } from "obsidian";
 
 export const MOSS_PREVIEW_VIEW_TYPE = "moss-preview";
@@ -13,6 +14,8 @@ export class MossPreviewView extends ItemView {
   private iframe: HTMLIFrameElement | null = null;
   private messageEl: HTMLElement | null = null;
   private folder: string | null = null;
+  /** Talks to moss's own script in the previewed page. */
+  private bridge: IframeRPC | null = null;
 
   /** `onClosed` lets the plugin stop the server this pane was showing. */
   constructor(
@@ -30,11 +33,13 @@ export class MossPreviewView extends ItemView {
     return `Preview: ${this.folder ?? this.app.vault.getName()}`;
   }
 
-  /** The folder the pane previews names its tab; Obsidian redraws the tab after this. */
+  /** The folder the pane previews names its tab and its header. */
   async setState(state: unknown, result: ViewStateResult): Promise<void> {
     const folder = (state as { folder?: unknown } | null)?.folder;
     if (typeof folder === "string") this.folder = folder;
     await super.setState(state, result);
+    // Obsidian redraws the tab after this but not the header's title, which its own views set through `titleEl` (not in the typings).
+    (this as { titleEl?: HTMLElement }).titleEl?.setText(this.getDisplayText());
   }
 
   getState(): Record<string, unknown> {
@@ -54,7 +59,7 @@ export class MossPreviewView extends ItemView {
   }
 
   async onClose(): Promise<void> {
-    this.iframe = null;
+    this.dropFrame();
     this.messageEl = null;
     this.contentEl.empty();
     this.onClosed();
@@ -71,10 +76,24 @@ export class MossPreviewView extends ItemView {
         cls: "moss-preview-iframe",
       });
       this.iframe.setAttribute("title", "moss site preview");
+      this.bridge = new IframeRPC(this.iframe);
     }
     if (this.iframe.src !== url) {
       this.iframe.src = url;
     }
+  }
+
+  /** Takes a rebuild into the page where it stands; a page that cannot (its scripts changed) loads again. */
+  async update(): Promise<void> {
+    const { iframe, bridge } = this;
+    if (!iframe || !bridge || (await bridge.morph()).applied) return;
+    if (this.iframe === iframe) iframe.src = iframe.src;
+  }
+
+  /** Brings a line of the note into view in the page, unless it already is. */
+  scrollToLine(line: number): void {
+    // The last argument leaves the page alone while that line is on screen. A page without the bridge has no answer.
+    this.bridge?.call("scrollToSourceLine", line, false, false, true).catch(() => {});
   }
 
   /** The current iframe URL, or null before the server is up. */
@@ -82,12 +101,16 @@ export class MossPreviewView extends ItemView {
     return this.iframe?.src ?? null;
   }
 
+  private dropFrame(): void {
+    this.bridge?.destroy();
+    this.bridge = null;
+    this.iframe?.remove();
+    this.iframe = null;
+  }
+
   /** Replace the pane content with a status/error message. */
   showMessage(text: string): void {
-    if (this.iframe) {
-      this.iframe.remove();
-      this.iframe = null;
-    }
+    this.dropFrame();
     if (!this.messageEl) {
       this.messageEl = this.contentEl.createDiv({ cls: "moss-preview-message" });
     }

@@ -1698,6 +1698,42 @@ fn a_directory_url_is_resolved_to_its_index_before_the_cloud_check() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn page_route_redirects_a_source_file_to_its_page_and_tells_nothing_else() {
+    let vault = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let site_dir = vault.path().join(".moss/build.nosync/current");
+    std::fs::create_dir_all(site_dir.join("posts/hello")).unwrap();
+    std::fs::write(site_dir.join("posts/hello/index.html"), b"<h1>Hello</h1>").unwrap();
+    std::fs::create_dir_all(vault.path().join("posts")).unwrap();
+    std::fs::write(vault.path().join("posts/hello.md"), b"# Hello").unwrap();
+    std::fs::write(vault.path().join("posts/unbuilt.md"), b"# Not built").unwrap();
+
+    let state = Arc::new(std::sync::RwLock::new(site_dir));
+    let (port, _, shutdown_tx) = start_server(ServeConfig { ..ServeConfig::new(state.clone(), 58640) })
+        .await
+        .expect("Server should start");
+    let agent = ureq::AgentBuilder::new().redirects(0).timeout(std::time::Duration::from_secs(5)).build();
+    let ask = |path: &str| match agent.get(&format!("http://localhost:{port}/__moss/page/{path}")).call() {
+        Ok(r) => (r.status(), r.header("location").map(str::to_string), r.into_string().unwrap_or_default()),
+        Err(ureq::Error::Status(code, r)) => (code, None, r.into_string().unwrap_or_default()),
+        Err(e) => panic!("page route did not answer: {e}"),
+    };
+
+    assert_eq!(ask("posts/hello.md"), (307, Some("/posts/hello/".to_string()), String::new()));
+    // A source file that exists but has no built page answers exactly as a file that does not exist.
+    let missing = ask("posts/nothing.md");
+    assert_eq!(missing.0, 404);
+    assert_eq!(ask("posts/unbuilt.md"), missing);
+    // An HTTP client resolves `..` (even `%2E%2E`) before sending, so a path
+    // that leaves the folder is handed to the handler directly.
+    for outside in ["posts/../posts/hello.md", "/etc/hosts.md"] {
+        let r = super::page_for_source_route(state.clone(), outside.to_string()).await;
+        assert_eq!(r.status(), http::StatusCode::NOT_FOUND, "{outside}");
+    }
+
+    let _ = shutdown_tx.send(());
+}
+
 /// One assertion for the invariant that `/__moss/source/` serves the VAULT's
 /// bytes, never the build output's file at the same path. (A built rung stands
 /// in only for an admitted raster source; see `editor::source_asset`.)

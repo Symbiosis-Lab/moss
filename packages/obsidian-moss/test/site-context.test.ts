@@ -2,7 +2,7 @@ import type { ContentSchema } from "@symbiosis-lab/moss-ui";
 import { initializeCore, MossSite } from "../src/core";
 import type { DataAdapter, Vault } from "obsidian";
 import { describe, expect, it } from "vitest";
-import { readSiteContext, vaultBaseHref } from "../src/site-context";
+import { ownsMoss, readSiteContext, vaultBaseHref } from "../src/site-context";
 
 initializeCore();
 
@@ -114,5 +114,22 @@ describe("site context through the mobile adapter", () => {
   it("removes the entire nested file path and cache query from a resource URL", () => {
     expect(vaultBaseHref({ getResourcePath: () => "capacitor://localhost/vault/folder/my%20note.md?mtime=123" }, "folder/my note.md"))
       .toBe("capacitor://localhost/vault/");
+  });
+});
+
+describe("ownsMoss", () => {
+  const adapter = (base: string) => ({ getBasePath: () => base, stat: async (path: string) => path.endsWith(".moss") ? { type: "folder" } : null }) as never;
+
+  it("reads a folder with .moss as a moss folder, but not the home folder, whose .moss is moss's own store", async () => {
+    const home = process.env.HOME;
+    process.env.HOME = "/home/ada";
+    try {
+      expect(await ownsMoss(adapter("/home/ada/vault"), "/")).toBe(true);
+      expect(await ownsMoss(adapter("/home/ada/vault"), "garden")).toBe(true);
+      expect(await ownsMoss(adapter("/home/ada"), "/")).toBe(false);
+      expect(await ownsMoss(adapter("/home"), "ada")).toBe(false);
+    } finally {
+      process.env.HOME = home;
+    }
   });
 });

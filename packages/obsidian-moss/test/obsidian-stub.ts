@@ -12,6 +12,7 @@ export class Plugin {
   registerEditorSuggest() {}
   registerView() {}
   registerEvent() {}
+  register() {}
   addCommand(command: unknown) { this.commands.push(command); }
   addRibbonIcon() { return {}; }
 }

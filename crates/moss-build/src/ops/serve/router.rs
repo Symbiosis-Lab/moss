@@ -54,6 +54,28 @@ pub(super) async fn source_asset_route(
     dress(serve_source_asset(vault.path(), &path, query.as_deref()).await)
 }
 
+/// `/__moss/page/<source path>` redirects to the page that source file builds
+/// to, so a host that embeds the preview can follow the file its editor has
+/// open without knowing how moss names pages. A page's address is not secret
+/// (the page itself is served without a token), so this route takes none. A
+/// path that leaves the folder, a file with no page and a page not built yet
+/// all get the same bare 404.
+pub(super) async fn page_for_source_route(
+    site_dir_state: Arc<std::sync::RwLock<std::path::PathBuf>>,
+    path: String,
+) -> Response {
+    let inside_folder = std::path::Path::new(&path).components().all(|c| matches!(c, std::path::Component::Normal(_)));
+    let page = site_dir_state.read().ok().map(|d| d.clone()).filter(|_| inside_folder).and_then(|site_dir| {
+        let vault = crate::moss_paths::served_folder(&site_dir)?;
+        crate::editor::resolve::links::resolve_url_for_file_inner(&path, vault.path(), &site_dir).ok()?
+    });
+    use axum::response::IntoResponse;
+    match page {
+        Some(url) => axum::response::Redirect::temporary(&url).into_response(),
+        None => http::StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
 /// A file under the search mount, from the bundle the last settle published.
 ///
 /// The search panel loads `pagefind.js`, then the entry, on its first search
@@ -346,12 +368,14 @@ pub async fn start_server(
             )
             .route(
                 "/__moss/source/*path",
-                get(move |axum::extract::Path(p): axum::extract::Path<String>,
-                          axum::extract::RawQuery(query): axum::extract::RawQuery| {
-                    let site_dir = state_for_source.clone();
-                    async move { source_asset_route(site_dir, p, query).await }
+                get(move |axum::extract::Path(p): axum::extract::Path<String>, axum::extract::RawQuery(query): axum::extract::RawQuery| {
+                    source_asset_route(state_for_source.clone(), p, query)
                 }),
             )
+            .route("/__moss/page/*path", get({
+                let site_dir = state.clone();
+                move |axum::extract::Path(p): axum::extract::Path<String>| page_for_source_route(site_dir.clone(), p)
+            }))
             // Preview-only comment stub: receives the comment form POST and
             // returns an Artalk-shaped success without real-server traffic.
             // Registered before .fallback() so a user file cannot shadow it.
