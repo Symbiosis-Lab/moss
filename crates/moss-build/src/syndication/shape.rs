@@ -36,6 +36,9 @@ pub struct Article {
     /// Absolute, like a teaser's.
     #[serde(default)]
     pub cover: Option<String>,
+    /// `html` as an editor is given it, split at its pictures.
+    #[serde(default)]
+    pub blocks: Vec<super::pictures::Block>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,7 +146,7 @@ pub fn shape_with(post: &ArticleInfo, spec: &ChannelSpec, site_url: &str, opts: 
                 let (prefix, stop) = footer(lang.as_deref().unwrap_or(""));
                 html.push_str(&format!("\n<p>{prefix} <a href=\"{url}\">{name}</a>{stop}</p>"));
             }
-            (Form::Long, Vec::new(), None, Some(Article { title: post.title.clone(), html, description: described(post), cover: cover(post, site_url) }))
+            (Form::Long, Vec::new(), None, Some(Article { title: post.title.clone(), blocks: super::pictures::blocks(&html, &post.title), html, description: described(post), cover: cover(post, site_url) }))
         } else if spec.takes(Form::Teaser) {
             let (teaser, part) = teaser(post, spec, &page, site_url)?;
             (Form::Teaser, vec![part], Some(teaser), None)

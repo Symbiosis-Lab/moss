@@ -945,6 +945,27 @@ Reason why the browser window was closed
 
 ***
 
+### EditorFillPart
+
+```ts
+type EditorFillPart = 
+  | {
+  html: string;
+}
+  | {
+  picture: {
+     base64: string;
+     name: string;
+     type: string;
+     url: string;
+  };
+};
+```
+
+A run of the article, or a picture given as its bytes, for [fillEditor](#filleditor).
+
+***
+
 ### closeBrowser()
 
 ```ts
@@ -956,6 +977,39 @@ Close the action panel
 #### Returns
 
 `Promise`\<`void`\>
+
+***
+
+### fillEditor()
+
+```ts
+function fillEditor(fill): Promise<EditorFillAnswer>;
+```
+
+Put an article into the network's editor that this plugin opened in the
+panel, as the author would paste it: moss runs its own script there with
+this data, never the plugin's code, and only on a page of one of the
+plugin's declared domains.
+
+Only in the moss app; elsewhere it rejects.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `fill` | [`EditorFill`](interfaces/EditorFill.md) |
+
+#### Returns
+
+`Promise`\<[`EditorFillAnswer`](interfaces/EditorFillAnswer.md)\>
+
+#### Example
+
+```typescript
+await openBrowser("https://network.example/editor/new");
+const answer = await fillEditor({ editor: { body: ".editor" }, title, parts });
+if (answer.result !== "filled") showCopyPage();
+```
 
 ***
 
@@ -1805,14 +1859,22 @@ Messages that plugins can send to moss
 
 ## Copies
 
-| Interface | Description |
-| ------ | ------ |
-| [AccountQuery](interfaces/AccountQuery.md) | What a channel's optional `copy_account` receives. It answers which account the channel is signed in to, in [CopyOutcome.account](interfaces/CopyOutcome.md#account); moss keeps it on each copy, and leaves a copy sent from another account alone. |
-| [CopyJob](interfaces/CopyJob.md) | The one copy a channel's `publish_copy`, `update_copy` or `find_copy` receives, already shaped to the limits its manifest declares under `contributes.channel.syndication`. |
-| [CopyOutcome](interfaces/CopyOutcome.md) | A copy hook's answer, in [HookResult.copy](interfaces/HookResult.md#copy): the copy's id and address; or, with `success: false`, why the network refused; or a hand-off, a copy the author posts by hand (`text` to paste at `open_url`) or a draft on the network for the author to publish (empty `text`, the draft's `id`). |
-| [CopyPart](interfaces/CopyPart.md) | One post of a copy, ready to post: plain text, with every address in it, in order, for networks that mark links up. |
-| [CopyPicture](interfaces/CopyPicture.md) | A picture for the channel to upload with a plain-text copy. |
-| [CopyRef](interfaces/CopyRef.md) | A copy's id and address on its network. |
+### ArticleBlock
+
+```ts
+type ArticleBlock = 
+  | {
+  html: string;
+}
+  | {
+  picture: {
+     alt: string;
+     url: string;
+  };
+};
+```
+
+One piece of a long article: a run of HTML, or a picture (absolute `url`) between runs.
 
 ## Keys
 

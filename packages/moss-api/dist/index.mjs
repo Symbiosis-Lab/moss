@@ -330,6 +330,35 @@ async function startTask(label, options = {}) {
 }
 
 //#endregion
+//#region src/utils/context.ts
+/**
+* Get the internal plugin context
+*
+* This is used internally by moss-api utilities to resolve paths
+* and plugin identity. Plugins should not call this directly.
+*
+* @returns The current plugin execution context
+* @throws Error if called outside of a plugin hook execution
+*
+* @internal
+*/
+function getInternalContext() {
+	const context = window.__MOSS_INTERNAL_CONTEXT__;
+	if (!context) throw new Error("This function must be called from within a plugin hook. Ensure you're calling this from process(), generate(), deploy(), or syndicate().");
+	return context;
+}
+/**
+* Check if we're currently inside a plugin hook execution
+*
+* @returns true if inside a hook, false otherwise
+*
+* @internal
+*/
+function hasContext() {
+	return window.__MOSS_INTERNAL_CONTEXT__ !== void 0;
+}
+
+//#endregion
 //#region src/utils/browser.ts
 /**
 * Browser utilities for plugins
@@ -647,34 +676,28 @@ async function showBrowserForm(html, options) {
 	}
 	return resultPromise;
 }
-
-//#endregion
-//#region src/utils/context.ts
 /**
-* Get the internal plugin context
+* Put an article into the network's editor that this plugin opened in the
+* panel, as the author would paste it: moss runs its own script there with
+* this data, never the plugin's code, and only on a page of one of the
+* plugin's declared domains.
 *
-* This is used internally by moss-api utilities to resolve paths
-* and plugin identity. Plugins should not call this directly.
+* Only in the moss app; elsewhere it rejects.
 *
-* @returns The current plugin execution context
-* @throws Error if called outside of a plugin hook execution
-*
-* @internal
+* @example
+* ```typescript
+* await openBrowser("https://network.example/editor/new");
+* const answer = await fillEditor({ editor: { body: ".editor" }, title, parts });
+* if (answer.result !== "filled") showCopyPage();
+* ```
+* @category Browser
 */
-function getInternalContext() {
-	const context = window.__MOSS_INTERNAL_CONTEXT__;
-	if (!context) throw new Error("This function must be called from within a plugin hook. Ensure you're calling this from process(), generate(), deploy(), or syndicate().");
-	return context;
-}
-/**
-* Check if we're currently inside a plugin hook execution
-*
-* @returns true if inside a hook, false otherwise
-*
-* @internal
-*/
-function hasContext() {
-	return window.__MOSS_INTERNAL_CONTEXT__ !== void 0;
+async function fillEditor(fill) {
+	if (!hasContext()) throw new Error("fillEditor runs only inside a plugin hook");
+	return getTauriCore().invoke("fill_browser_panel", {
+		pluginName: getInternalContext().plugin_name,
+		fill
+	});
 }
 
 //#endregion
@@ -1747,4 +1770,4 @@ async function dismissToast(id) {
 }
 
 //#endregion
-export { TOAST_DISMISS_EVENT, TOAST_EVENT, TOAST_UPDATE_EVENT, clearPluginCookies, closeBrowser, dismissToast, downloadAsset, emitEvent, executeBinary, fetchUrl, fileExists, getKey, getPlatformInfo, getPluginCookie, getPluginEnvVar, getSecret, getTauriCore, htmlToMarkdown, httpGet, httpPost, httpPostMultipart, listFiles, listKeys, listProjectTree, listSiteFilesWithSizes, onEvent, openBrowser, openBrowserWithHtml, openSystemBrowser, pluginFileExists, readFile, readPluginFile, readSiteFile, rejectSecret, reportError, reportProgress, returnToEditor, sendMessage, setMessageContext, setPluginCookie, setSecret, showBrowserForm, showToast, signWithKey, startBrowserSignIn, startTask, writeFile, writeFileBinary, writePluginFile };
+export { TOAST_DISMISS_EVENT, TOAST_EVENT, TOAST_UPDATE_EVENT, clearPluginCookies, closeBrowser, dismissToast, downloadAsset, emitEvent, executeBinary, fetchUrl, fileExists, fillEditor, getKey, getPlatformInfo, getPluginCookie, getPluginEnvVar, getSecret, getTauriCore, htmlToMarkdown, httpGet, httpPost, httpPostMultipart, listFiles, listKeys, listProjectTree, listSiteFilesWithSizes, onEvent, openBrowser, openBrowserWithHtml, openSystemBrowser, pluginFileExists, readFile, readPluginFile, readSiteFile, rejectSecret, reportError, reportProgress, returnToEditor, sendMessage, setMessageContext, setPluginCookie, setSecret, showBrowserForm, showToast, signWithKey, startBrowserSignIn, startTask, writeFile, writeFileBinary, writePluginFile };

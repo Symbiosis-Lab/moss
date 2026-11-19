@@ -180,6 +180,13 @@ export interface CopyRef {
 }
 
 /**
+ * One piece of a long article: a run of HTML, or a picture (absolute `url`) between runs.
+ *
+ * @category Copies
+ */
+export type ArticleBlock = { html: string } | { picture: { url: string; alt: string } };
+
+/**
  * The one copy a channel's `publish_copy`, `update_copy` or `find_copy`
  * receives, already shaped to the limits its manifest declares
  * under `contributes.channel.syndication`.
@@ -204,7 +211,18 @@ export interface CopyJob {
   omitted_pictures?: number;
 
   teaser?: { title: string; description: string; url: string; cover?: string | null } | null;
-  article?: { title: string; html: string; description?: string | null; cover?: string | null } | null;
+  article?: {
+    title: string;
+    html: string;
+    description?: string | null;
+    cover?: string | null;
+    /**
+     * `html` as an editor is given it, split at its pictures in reading order:
+     * head elements, a leading h1 repeating the title and footnote back-links
+     * removed, embeds as links, a heading over the notes. Formula pictures stay inline.
+     */
+    blocks?: ArticleBlock[];
+  } | null;
   /** The copy already on the network (for an update or lookup), or the draft a hand-off left there. */
   previous?: (CopyRef & { parts?: CopyRef[] }) | null;
   /** The channel's resolved settings. */

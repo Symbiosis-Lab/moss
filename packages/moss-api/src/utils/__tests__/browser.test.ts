@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   openBrowser,
   closeBrowser,
+  fillEditor,
   openBrowserWithHtml,
   showBrowserForm,
   startBrowserSignIn,
@@ -112,6 +113,22 @@ describe("Browser Utilities", () => {
       await expect(openBrowser("https://example.com")).rejects.toThrow(
         "Tauri core not available"
       );
+    });
+  });
+
+  describe("fillEditor", () => {
+    it("hands the fill to moss as data and answers what the editor took", async () => {
+      const answer = { result: "filled", placed: 1, missing: [], url: "https://network.example/edit/1" };
+      mockInvoke.mockResolvedValueOnce(answer);
+      const fill = { editor: { body: ".editor", title: "#title" }, title: "Autumn", parts: [{ html: "<p>a</p>" }], rules: { headings: "two-levels" as const } };
+      (window as unknown as { __MOSS_INTERNAL_CONTEXT__: unknown }).__MOSS_INTERNAL_CONTEXT__ = { plugin_name: "substack", project_path: "/site", moss_dir: "/site/.moss" };
+      await expect(fillEditor(fill)).resolves.toEqual(answer);
+      expect(mockInvoke).toHaveBeenCalledWith("fill_browser_panel", { pluginName: "substack", fill });
+    });
+
+    it("refuses outside a plugin hook, where moss cannot tell whose domains to check", async () => {
+      await expect(fillEditor({ editor: { body: ".editor" }, parts: [] })).rejects.toThrow("plugin hook");
+      expect(mockInvoke).not.toHaveBeenCalled();
     });
   });
 

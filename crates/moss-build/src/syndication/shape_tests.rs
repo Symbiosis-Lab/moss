@@ -189,7 +189,9 @@ fn a_long_copy_ends_with_its_escaped_address_whatever_the_networks_short_limit()
     let expected = "<p>html</p>\n<p>Originally published on <a href=\"https://example.org/essay/?a=1&amp;b=&quot;two&quot;\">example.org</a>.</p>";
     let copy = shape(&p, &spec(&[Form::Long, Form::Teaser], 10), SITE).unwrap();
     assert_eq!(copy.form, Form::Long);
-    assert_eq!(copy.article.unwrap().html, expected);
+    let article = copy.article.unwrap();
+    assert_eq!(article.html, expected);
+    assert_eq!(article.blocks, vec![super::super::pictures::Block::Html { html: expected.into() }], "an editor is given the same article");
 }
 
 #[test]
