@@ -566,6 +566,7 @@ const EN = {
   'site.attachments.error_empty_path': 'Enter a folder path.',
   /** The two refusals mirrored from Rust's validate_attachment_folder. */
   'site.attachments.error_absolute': 'Use a folder inside your site — not one starting with / or a drive letter.',
+  'site.attachments.error_outside_site': 'Choose a folder inside your site.',
   'site.attachments.error_dotdot': 'A folder here cannot contain "..".',
   /** A save the backend refused; {err} carries its reason. */
   'site.attachments.save_failed': "Couldn't save this setting: {err}",
@@ -2358,6 +2359,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'site.attachments.error_empty_name': 'Gib einen Ordnernamen ein.',
     'site.attachments.error_empty_path': 'Gib einen Ordnerpfad ein.',
     'site.attachments.error_absolute': 'Verwende einen Ordner innerhalb deiner Website – nicht einen, der mit / oder einem Laufwerksbuchstaben beginnt.',
+    'site.attachments.error_outside_site': 'Wähle einen Ordner innerhalb deiner Website.',
     'site.attachments.error_dotdot': 'Ein Ordner hier darf nicht „..“ enthalten.',
     'site.attachments.save_failed': 'Diese Einstellung konnte nicht gespeichert werden: {err}',
     'services.comments_helper': 'Verwalte Kommentare direkt in der Vorschau deiner Website – fahre über einen Kommentar, um ihn auszublenden.',
@@ -3970,6 +3972,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'site.attachments.error_empty_name': '请填写文件夹名称。',
     'site.attachments.error_empty_path': '请填写文件夹路径。',
     'site.attachments.error_absolute': '请填写站点内的文件夹，不能以 / 或盘符开头。',
+    'site.attachments.error_outside_site': '请选择站点内的文件夹。',
     'site.attachments.error_dotdot': '这里的文件夹不能包含“..”。',
     'site.attachments.save_failed': '无法保存该设置：{err}',
     'services.comments_helper': '直接在网站预览中管理留言：将鼠标悬停在任意留言上即可隐藏。',
@@ -5636,6 +5639,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'site.attachments.error_empty_name': '請填寫資料夾名稱。',
     'site.attachments.error_empty_path': '請填寫資料夾路徑。',
     'site.attachments.error_absolute': '請填寫站點內的資料夾，不能以 / 或磁碟機代號開頭。',
+    'site.attachments.error_outside_site': '請選擇站點內的資料夾。',
     'site.attachments.error_dotdot': '這裡的資料夾不能包含「..」。',
     'site.attachments.save_failed': '無法儲存這項設定：{err}',
     'services.comments_helper': '直接在網站預覽中管理留言：將游標移到任一則留言上即可隱藏。',
