@@ -123,12 +123,21 @@ fn refuse_a_real_root_in_tests(root: &Path) {
     );
 }
 
-/// Cargo puts every test binary, unit and integration, in `target/<profile>/deps`.
 fn in_test_binary() -> bool {
-    std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent()?.file_name().map(|name| name == "deps"))
-        .unwrap_or(false)
+    std::env::current_exe().is_ok_and(|exe| is_test_binary_path(&exe))
+}
+
+/// Cargo runs every test binary, unit and integration, from
+/// `<profile>/deps/`, or under its newer build-dir layout from
+/// `<profile>/build/<package>/<hash>/out/`. A binary a person runs is
+/// copied up to `<profile>/` or installed elsewhere, so it is neither.
+fn is_test_binary_path(exe: &Path) -> bool {
+    let mut dirs = exe.ancestors().skip(1).map(|dir| dir.file_name().unwrap_or_default());
+    match dirs.next() {
+        Some(parent) if parent == "deps" => true,
+        Some(parent) if parent == "out" => dirs.nth(2).is_some_and(|dir| dir == "build"),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -155,6 +164,15 @@ mod tests {
 
         fs::write(tmp.path().join(FILE), "{not json").unwrap();
         assert_eq!(load(tmp.path()), TrustRecord::default(), "unreadable is empty, not an error");
+    }
+
+    #[test]
+    fn a_test_binary_is_known_in_both_cargo_layouts_and_a_shipped_one_is_not() {
+        assert!(is_test_binary_path(Path::new("/w/target/debug/deps/moss_build-0123abcd")));
+        assert!(is_test_binary_path(Path::new("/w/target/debug/build/moss-build/0123abcd/out/moss_build-0123abcd")));
+        assert!(!is_test_binary_path(Path::new("/w/target/debug/moss")));
+        assert!(!is_test_binary_path(Path::new("/Applications/moss.app/Contents/MacOS/moss")));
+        assert!(!is_test_binary_path(Path::new("/w/out/moss")));
     }
 
     #[test]
