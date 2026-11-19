@@ -119,3 +119,56 @@ fn a_build_without_this_machines_cache_publishes_the_same_pages() {
     }
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// A comment refresh's outcome is this computer's: a refresh that brings no
+/// new comments (here the server never answers) writes nothing the folder
+/// syncs, however often it is tried.
+#[test]
+fn a_comment_refresh_that_changes_no_comment_writes_nothing_to_the_synced_folder() {
+    let dir = site("comment_refresh");
+    let server = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        format!("http://{}", listener.local_addr().unwrap())
+    };
+    fs::create_dir_all(dir.join(".moss")).unwrap();
+    // A dated page, so the article map names one for the refresh to ask about.
+    fs::write(dir.join("notes.md"), "---\ntitle: Notes\ndate: 2026-01-02\n---\n\nA note.\n").unwrap();
+    fs::write(
+        dir.join(".moss/config.toml"),
+        format!("[site]\ndomain = \"example.com\"\n\n[services.comments]\nprovider = \"artalk\"\nserver_url = \"{server}\"\n"),
+    )
+    .unwrap();
+    settle(&dir, false);
+    let first = synced(&dir);
+    build(&dir, false);
+    assert_eq!(written(&first, &synced(&dir)), Vec::<String>::new());
+    let state = moss_build::build::features::sync::load_comment_sync_state(dir.to_str().unwrap());
+    assert!(state.last_error.is_some(), "the refresh ran and recorded its outcome on this computer");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The agent guidance in `.moss/agents/` as another computer's moss wrote it,
+/// naming that computer's binary: a build here leaves it as it is, so two
+/// computers building one folder stop trading the line.
+#[test]
+fn a_build_leaves_the_agent_guidance_another_computer_wrote() {
+    let dir = site("agent_guidance");
+    settle(&dir, false);
+    let guidance = dir.join(".moss/agents/SKILL.md");
+    let ours = fs::read_to_string(&guidance).expect("a build writes the neutral guidance");
+    let (front, rest) = ours.split_once("<!-- moss:agent-guidance v").unwrap();
+    let (version, rest) = rest.split_once(' ').unwrap();
+    let body = rest.split_once("-->\n").unwrap().1;
+    let after_binding: String = body.split_inclusive('\n').skip_while(|l| l.starts_with("> ")).collect();
+    let theirs_rest = format!(
+        "{front}> Run moss as `/Users/someone-else/dev/moss/target/debug/moss`.\n> Every `moss …` command below means that binary.\n{after_binding}"
+    );
+    let stamp = format!("<!-- moss:agent-guidance v{version} h:{:016x} -->", xxhash_rust::xxh3::xxh3_64(theirs_rest.as_bytes()));
+    let theirs = format!("{front}{stamp}\n{}", theirs_rest.strip_prefix(front).unwrap());
+    fs::write(&guidance, &theirs).unwrap();
+    let first = synced(&dir);
+    build(&dir, false);
+    assert_eq!(written(&first, &synced(&dir)), Vec::<String>::new());
+    assert_eq!(fs::read_to_string(&guidance).unwrap(), theirs);
+    let _ = fs::remove_dir_all(&dir);
+}

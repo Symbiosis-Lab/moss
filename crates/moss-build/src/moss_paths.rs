@@ -889,11 +889,11 @@ pub const MOSS_PATH_RULES: &[MossPathRule] = &[
     // reading an evicted one as empty turns a merge into an erase
     // (`feeds::redirects`).
     r_negatable(".moss/data/", true, CloudPolicy::Synced, false, true),
-    // The comment refresh's last outcome, rewritten on every attempt and read
-    // by no page. Not materialized, so a build does not count it as an input
-    // and the next build can still prove nothing changed; an evicted copy
-    // reads as "never refreshed", which only words a note. `data/*` already
-    // ignores it.
+    // Where an older moss kept the comment refresh's last outcome (this one
+    // keeps it on the computer). An older moss on another computer still
+    // rewrites it on every attempt, so it is not materialized: a build does not
+    // count it as an input and can still prove nothing changed. `data/*`
+    // already ignores it.
     r(".moss/data/comment-sync-state.json", false, CloudPolicy::Synced, false, false),
     // What the last publish put live: one record per target, holding the page
     // hashes the change set is computed from and the note ID that was live at

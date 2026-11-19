@@ -424,7 +424,8 @@ fn turning_plugins_on_keeps_the_build_full() {
 }
 
 /// Every build of a site with a comment server records the refresh's outcome,
-/// which no page reads, so it must not count as an input.
+/// which no page reads. An older moss on another computer still rewrites it in
+/// the folder on every attempt, so that file must not count as an input.
 #[test]
 fn a_comment_refresh_that_fails_every_build_still_lets_the_next_build_prove() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -444,9 +445,10 @@ fn a_comment_refresh_that_fails_every_build_still_lets_the_next_build_prove() {
     site.sealed();
     let state = ".moss/data/comment-sync-state.json";
     for n in 1..=2 {
+        site.write(state, &format!(r#"{{"last_success_at": null, "last_attempt_at": {n}.0, "last_error": null}}"#));
         let record = build(site.root(), BuildTrigger::Unobserved);
-        let written = fs::read_to_string(site.root().join(state)).expect("the refresh ran and recorded its outcome");
-        assert!(written.contains("last_error") && !written.contains("\"last_error\": null"), "{written}");
+        let recorded = moss_build::build::features::sync::load_comment_sync_state(site.root().to_str().unwrap());
+        assert!(recorded.last_error.is_some(), "the refresh ran and recorded its outcome");
         assert!(unchanged(&record), "build {n}, recorded {state}: {:?}: {record}", recorded_moss_input(&site, state));
     }
 }
