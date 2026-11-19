@@ -5,7 +5,7 @@
 //! and a picture for the card's inline end (`--moss-share-card-picture`). Every part
 //! is optional; a theme that sets none of them gets the card moss always drew.
 
-use crate::build::cli_output::log_warn_problem;
+use crate::build::cli_output::log_note;
 use crate::build::emit::theme_css_assets::{normalize, read_theme_file};
 use crate::build::emit::theme_font_weights::{hosted_faces, unquoted};
 use crate::build::theme_lint::{strip_comments, Layered};
@@ -120,7 +120,7 @@ fn heading_face(stripped: &str, stack: &str, read: &mut dyn FnMut(&str) -> Optio
         }
     }
     if let Some(file) = wanted {
-        log_warn_problem!("Link previews use Inter, not \"{lead}\": add .moss/theme/{file} beside its web font");
+        log_note!("Link previews use Inter, not \"{lead}\": add .moss/theme/{file} beside its web font");
     }
     None
 }
@@ -271,8 +271,11 @@ mod tests {
 
     #[test]
     fn without_a_ttf_or_otf_the_card_keeps_inter() {
+        crate::build::cli_output::take_cli_problems();
         let theme = theme_with(FACE_CSS, &[("fonts/intro.woff2", vec![0; 64])]);
         assert!(theme.heading.is_none());
+        // The card still draws, in Inter: advice, not a problem `--strict` fails on.
+        assert_eq!(crate::build::cli_output::take_cli_problems(), 0);
         assert!(svg_of(&inputs(theme)).contains(r#"font-family="Inter""#));
         let garbage = theme_with(FACE_CSS, &[("fonts/intro.ttf", vec![1; 64])]);
         assert!(garbage.heading.is_none(), "bytes that are not a font are not a face");
