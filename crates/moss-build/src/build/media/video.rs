@@ -4445,7 +4445,9 @@ pub(crate) mod tests {
     /// budget: with every core of an open folder's budget held elsewhere, it
     /// waits.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::await_holding_lock)] // A publish anywhere in the process widens the budget to every core.
     async fn a_video_waits_for_its_share_of_the_folder_budget() {
+        let _latch = crate::deploy::freeze::single_flight_tests::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = portable_tmpdir();
         let vault = tmp.path().join("vault");
         std::fs::create_dir_all(vault.join("videos")).unwrap();

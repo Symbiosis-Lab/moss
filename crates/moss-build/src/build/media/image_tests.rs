@@ -7822,7 +7822,9 @@ async fn an_image_the_walk_hashed_this_build_is_not_read_again() {
 /// A picture encodes only once it holds a core from its folder's budget: with
 /// every core of an open folder's budget held elsewhere, the batch waits.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::await_holding_lock)] // A publish anywhere in the process widens the budget to every core.
 async fn a_picture_waits_for_a_core_from_the_folder_budget() {
+    let _latch = crate::deploy::freeze::single_flight_tests::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().to_path_buf();
     make_big_jpeg(&root.join("photo.jpg"), 400, 300);
