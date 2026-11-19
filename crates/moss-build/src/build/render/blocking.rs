@@ -1272,6 +1272,8 @@ pub fn generate_blocking_content_for_build(
         // it against a fresh resolution and rebuilds when they disagree. Before
         // anything else registers: a stylesheet's hash depends on its mount.
         pending.set_site_url(site_url.as_str());
+        let config = crate::build::site_config::read_project_config(source_path);
+        pending.record_output_collisions(config.ok().and_then(|c| c.site_address_conflict()).into_iter().collect());
         let calendar = crate::build::feeds::calendar::CalendarPlan::build(&documents, project_structure, &site_url);
 
         // A listing row names its page's language, so every page has its tag before any listing is drawn.
@@ -1688,6 +1690,7 @@ pub fn generate_blocking_content_for_build(
     // every pseudo-folder document exists.
     crate::build::terms::set_term_cards(&mut documents, &term_index);
     pending.record_output_collisions(super::build_shared::verbatim_collisions(&documents, project_structure, &dir_overrides));
+    pending.record_output_collisions(project_structure.path_collisions.clone());
     let owned_by_documents = super::build_shared::withhold_shadowed_bodies(&mut documents, project_structure, &dir_overrides);
     // The resolved set now contains both authored and synthetic folders.
     // Stamp every explorer root once so its facade includes the shared places

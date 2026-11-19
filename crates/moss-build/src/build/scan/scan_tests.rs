@@ -3112,33 +3112,48 @@ fn a_folder_is_walked_in_composed_name_order() {
     assert_eq!(order, sorted);
 }
 
+/// Every path the scan kept, in all of its lists.
+fn kept_paths(found: &ProjectStructure) -> Vec<String> {
+    let files = [&found.markdown_files, &found.html_files, &found.notebook_files, &found.other_files];
+    let media = found.image_files.iter().chain(&found.video_files).map(|f| f.path.clone());
+    files.into_iter().flatten().map(|f| f.path.clone()).chain(media).collect()
+}
+
 /// A folder holding two files whose names differ only by case, or by how an
-/// accented letter is encoded, is refused by the scan every build starts with.
+/// accented letter is encoded, builds with the first of them and a problem
+/// naming both, the same on every machine.
 #[test]
 #[cfg_attr(target_os = "macos", ignore = "an APFS volume cannot hold both names of a pair")]
-fn the_scan_refuses_a_folder_holding_a_colliding_pair() {
+fn the_scan_keeps_one_file_of_a_colliding_pair_and_names_both() {
     let pairs = [("Photo.png", "photo.png"), ("caf\u{e9}.png", "cafe\u{301}.png"), ("caf\u{e9}.md", "cafe\u{301}.md"), ("caf\u{e9}.txt", "cafe\u{301}.txt")];
     for (first, second) in pairs {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("index.md"), "# Home\n").unwrap();
         fs::write(dir.path().join(first), b"one").unwrap();
         fs::write(dir.path().join(second), b"two").unwrap();
-        let refusal = crate::build::scan_folder(dir.path().to_str().unwrap()).unwrap_err();
-        assert!(refusal.contains("differ only by letter case"), "{refusal}");
+        let found = crate::build::scan_folder(dir.path().to_str().unwrap()).unwrap();
+        let problems = found.path_collisions.join(" ");
+        assert!(problems.contains("differ only by letter case") && problems.contains(&format!("leaves out `{second}`")), "{problems}");
+        let kept = kept_paths(&found);
+        assert_eq!(kept.iter().filter(|p| p.to_lowercase() == first.to_lowercase()).count(), 1, "{kept:?}");
+        assert!(!kept.iter().any(|p| p == second), "{kept:?}");
     }
 }
 
 /// Two pictures that would both be published as one WebP, or two videos as
-/// one ladder, are refused on every disk, since both names fit on each.
+/// one ladder, build with the first of them and a problem naming both.
 #[test]
-fn the_scan_refuses_two_sources_published_under_one_name() {
+fn the_scan_keeps_one_of_two_sources_published_under_one_name() {
     for (first, second, name) in [("photo.jpg", "photo.png", "photo.webp"), ("clip.mov", "clip.mp4", "clip.mp4")] {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("index.md"), "# Home\n").unwrap();
         fs::write(dir.path().join(first), b"one").unwrap();
         fs::write(dir.path().join(second), b"two").unwrap();
-        let refusal = crate::build::scan_folder(dir.path().to_str().unwrap()).unwrap_err();
-        assert!(refusal.contains(&format!("rename `{first}` or `{second}`, which are both published as `{name}`")), "{refusal}");
+        let found = crate::build::scan_folder(dir.path().to_str().unwrap()).unwrap();
+        let problems = found.path_collisions.join(" ");
+        assert!(problems.contains(&format!("rename `{first}` or `{second}`, which are both published as `{name}`")), "{problems}");
+        let kept = kept_paths(&found);
+        assert!(kept.iter().any(|p| p == first) && !kept.iter().any(|p| p == second), "{kept:?}");
     }
 }
 

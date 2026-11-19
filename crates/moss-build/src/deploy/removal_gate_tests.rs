@@ -529,3 +529,28 @@ async fn output_collisions_refuse_hosted_push() {
 async fn output_collisions_refuse_plugin_push() {
     collision_push(true).await;
 }
+
+/// A folder 0.15.21 refused to build, two pictures published as one WebP
+/// and a `url` and `domain` naming different hosts, now builds with one of
+/// each pair, and every build of it, the second included, refuses publish
+/// naming both.
+#[tokio::test]
+async fn a_folder_with_colliding_names_builds_and_refuses_publish() {
+    let folder = tempfile::tempdir().unwrap();
+    std::fs::create_dir(folder.path().join(".moss")).unwrap();
+    std::fs::write(folder.path().join(".moss/config.toml"), "[site]\nurl = \"https://example.org/\"\ndomain = \"example.net\"\n").unwrap();
+    std::fs::write(folder.path().join("index.md"), "---\ntitle: Home\n---\n\n![[photo.jpg]]\n").unwrap();
+    for (name, rgb) in [("photo.jpg", [200, 30, 30]), ("photo.png", [30, 30, 200])] {
+        ::image::RgbImage::from_pixel(8, 8, ::image::Rgb(rgb)).save(folder.path().join(name)).unwrap();
+    }
+    let root = crate::vault::paths::VaultRoot::resolve(folder.path());
+    for build in ["first", "second"] {
+        let sealed = crate::deploy::one_shot::require_sealed(
+            crate::deploy::one_shot::build_and_seal(&root, crate::cli::host::cli_host_ports(root.as_str()), crate::build::PluginMode::Skip, false).await.unwrap(),
+        ).unwrap();
+        let refusal = super::removal_gate::refuse_output_collisions(&sealed).unwrap_err();
+        assert!(refusal.contains("leaves out `photo.png`") && refusal.contains("rename `photo.jpg` or `photo.png`"), "{build}: {refusal}");
+        assert!(refusal.contains("[site] url") && refusal.contains("[site] domain"), "{build}: {refusal}");
+        assert!(sealed.files().keys().any(|path| path.ends_with("photo.webp")), "{build}: the kept picture is published");
+    }
+}

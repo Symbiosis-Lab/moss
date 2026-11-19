@@ -1169,7 +1169,7 @@ pub fn scan_folder_with_dedup_emit_with_error(
     let mut evicted_count: usize = 0;
     let mut evicted_paths: Vec<std::path::PathBuf> = Vec::new();
     let mut found_count: usize = 0;
-    let mut spellings = crate::build::scan::path_collision::Spellings::default();
+    let spellings = crate::build::scan::path_collision::Spellings::of(path, entries.iter().filter(|(e, _)| e.file_type().is_file()).map(|(e, _)| e.path()));
 
     let scan_walk_start = std::time::Instant::now();
 
@@ -1208,7 +1208,7 @@ pub fn scan_folder_with_dedup_emit_with_error(
             evicted_paths.push(real);
         }
         // Reads by this key go through `path_collision::on_disk`.
-        let relative_path = spellings.logical(file_path.strip_prefix(path).unwrap_or(file_path));
+        let Some(relative_path) = spellings.logical(file_path, file_path.strip_prefix(path).unwrap_or(file_path)) else { continue };
 
         let metadata = metadata.as_ref().expect("file metadata is collected with the complete walk");
 
@@ -1614,7 +1614,7 @@ pub fn scan_folder_with_dedup_emit_with_error(
         !app_only || kept.iter().any(|k| k.starts_with(&format!("{d}/")))
     });
 
-    let structure = ProjectStructure {
+    let mut structure = ProjectStructure {
         root_path: folder_path.to_string(),
         markdown_files,
         html_files,
@@ -1634,8 +1634,9 @@ pub fn scan_folder_with_dedup_emit_with_error(
         dirs,
         empty_folders,
         storage_folders,
+        path_collisions: Vec::new(),
     };
-    crate::build::scan::path_collision::refuse_colliding_files(&structure, &spellings).map_err(ScanFailure::Message)?;
+    structure.path_collisions = crate::build::scan::path_collision::leave_out_colliding_files(&mut structure, &spellings);
     Ok(structure)
 }
 

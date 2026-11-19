@@ -153,23 +153,27 @@ impl ConfigFile {
 
     /// The site's one authored address: `[site].url`, path included, or, in a
     /// folder written before `url` existed, `[site].domain` read as
-    /// `https://<domain>/`. Both set with different hosts is refused, naming
-    /// both keys, rather than one silently winning.
+    /// `https://<domain>/`. When both are set, `url` wins, and
+    /// [`site_address_conflict`](Self::site_address_conflict) names the pair.
     pub fn site_address(&self) -> Result<Option<String>, String> {
         let url = self.site_str("url").map(str::trim).filter(|s| !s.is_empty());
         let domain = self.site_str("domain").map(str::trim).filter(|s| !s.is_empty());
         let Some(url) = url else {
             return Ok(domain.map(|d| format!("https://{d}/")));
         };
-        let parsed = crate::build::site_url::SiteUrl::parse(url)
-            .map_err(|e| format!("[site] url in .moss/config.toml: {e}"))?;
-        if let Some(domain) = domain.filter(|d| !parsed.host_name().eq_ignore_ascii_case(d)) {
-            return Err(format!(
-                "[site] url = \"{url}\" and [site] domain = \"{domain}\" in .moss/config.toml name different hosts; \
-                 keep url, which replaces domain, and delete domain"
-            ));
-        }
+        crate::build::site_url::SiteUrl::parse(url).map_err(|e| format!("[site] url in .moss/config.toml: {e}"))?;
         Ok(Some(url.to_string()))
+    }
+
+    /// The problem for `[site] url` and `[site] domain` naming different
+    /// hosts, which refuses publish.
+    pub fn site_address_conflict(&self) -> Option<String> {
+        let url = self.site_str("url").map(str::trim)?;
+        let domain = self.site_str("domain").map(str::trim).filter(|s| !s.is_empty())?;
+        let parsed = crate::build::site_url::SiteUrl::parse(url).ok()?;
+        (!parsed.host_name().eq_ignore_ascii_case(domain)).then(|| format!(
+            "[site] url = \"{url}\" and [site] domain = \"{domain}\" in .moss/config.toml name different hosts. This build uses url. To publish, delete domain, which url replaces."
+        ))
     }
 
     /// A list-of-strings field under `[site]`, e.g. `me`; one string is a

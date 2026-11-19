@@ -14,6 +14,7 @@ All notable changes to moss will be documented here.
 
 ### Changed
 
+- A folder holding two files whose names differ only by letter case or accent encoding, two pictures or videos that would publish under one name, or a `[site] url` and `[site] domain` naming different hosts builds again, as it did before 0.15.21. The build keeps one file of each pair, the same on every computer, and `url` over `domain`, and counts a problem naming both, so publishing stays refused until one is renamed or removed.
 - When moss signs in or publishes, it tells the hosting service which computer it is running on: a random key kept in moss's local app data on that computer, different for each folder, with the kind of computer (MacBook Pro, a Windows PC). Nothing is refused or asked because of it, and a CI run sends none. The privacy page says what is kept.
 
 ## [0.15.27] - 2026-11-19
