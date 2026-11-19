@@ -35,8 +35,9 @@
           link.href = release.macos;
           link.title = window.__landingI18n?.t('macTitle') || 'Download moss for macOS (universal DMG)';
         } else {
-          link.title = window.__landingI18n?.t(platform === 'windows' ? 'windowsAria' : 'linuxAria') || `${label} desktop app — Coming soon`;
-          link.setAttribute('aria-label', window.__landingI18n?.t(platform === 'windows' ? 'windowsAria' : 'linuxAria') || `${label} desktop app, Coming soon`);
+          const name = window.__landingI18n?.t(platform === 'windows' ? 'windowsAria' : 'linuxAria') || `${label} desktop app coming soon; install the command line below`;
+          link.title = name;
+          link.setAttribute('aria-label', name);
         }
       }
     }
