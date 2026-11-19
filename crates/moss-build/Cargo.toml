@@ -95,7 +95,7 @@ ring = "0.17"
 # candidate system font file whole into memory.
 resvg = { version = "0.42", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
 roxmltree = "0.20"
-scraper = "0.20"
+scraper = { version = "0.20", features = ["deterministic"] }
 # The CSS tokenizer the site mount uses to find `url()`. Already in the tree
 # through scraper; the version must keep matching what Cargo.lock resolves
 # for it (`cargo tree -d` is the check).
