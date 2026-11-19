@@ -228,14 +228,35 @@ export function withRootSize(markup: string, pixelWidth: number, pixelHeight: nu
  * baseMarkup`'s own doc for the cost that was measured costing.
  */
 export async function rasterize(baseMarkup: string, pixelWidth: number, pixelHeight: number): Promise<Raster> {
-  const sized = withRootSize(baseMarkup, pixelWidth, pixelHeight);
-  const url = URL.createObjectURL(new Blob([sized], { type: "image/svg+xml" }));
-  const source = new Image();
-  source.decoding = "async";
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.round(pixelWidth));
   canvas.height = Math.max(1, Math.round(pixelHeight));
   canvas.setAttribute("aria-hidden", "true");
+  await drawSvg(canvas, baseMarkup, pixelWidth, pixelHeight);
+  // The browser may drop a large canvas's backing under memory pressure and
+  // hand back a blank one on restore. Decode again rather than keep the
+  // decoded bitmap alive, which would add to that pressure; `preventDefault`
+  // is what lets the context come back.
+  let released = false;
+  canvas.addEventListener("contextlost", (event) => event.preventDefault());
+  canvas.addEventListener("contextrestored", () => {
+    if (!released) void drawSvg(canvas, baseMarkup, pixelWidth, pixelHeight).catch(() => {});
+  });
+  return {
+    el: canvas,
+    release: () => {
+      released = true;
+      canvas.width = 0;
+      canvas.height = 0;
+    },
+  };
+}
+
+async function drawSvg(canvas: HTMLCanvasElement, baseMarkup: string, pixelWidth: number, pixelHeight: number): Promise<void> {
+  const sized = withRootSize(baseMarkup, pixelWidth, pixelHeight);
+  const url = URL.createObjectURL(new Blob([sized], { type: "image/svg+xml" }));
+  const source = new Image();
+  source.decoding = "async";
   try {
     source.src = url;
     await source.decode();
@@ -245,13 +266,6 @@ export async function rasterize(baseMarkup: string, pixelWidth: number, pixelHei
   } finally {
     URL.revokeObjectURL(url);
   }
-  return {
-    el: canvas,
-    release: () => {
-      canvas.width = 0;
-      canvas.height = 0;
-    },
-  };
 }
 
 /** The element a caller actually shows: a decoded raster, or (see `rasterizeOrFallback`) the live SVG itself. */
