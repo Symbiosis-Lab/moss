@@ -713,6 +713,7 @@ pub(crate) fn should_stash_hashes(publishable: bool, cancelled: bool) -> bool {
 /// `PHASE_TIMINGS`-equivalent state must be gone by the time this fn
 /// returns, not read after the fact from a task that no longer exists.
 pub async fn run_pipeline(config: PipelineConfig) -> Result<String, String> {
+    let _activity = crate::platform::begin_build();
     let pipeline_start = std::time::Instant::now();
     let (result, collector) = crate::build::phase::with_collector(async {
         let reads_before = cloud_readiness::download_reads();
@@ -796,7 +797,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // migration of the build tree, a process hook) moves the next build's
     // record, which costs that build one full render, never a stale page.
     let options = crate::build::inputs::options(config.site_url_override.as_deref(), matches!(pass.plugins, PluginMode::Skip));
-    let last_seal = std::sync::Arc::new(incremental_gates::LastSeal::read(config.source(), options));
+    let mut last_seal = incremental_gates::LastSeal::read(config.source(), options.clone(), config.exits_after_build && !config.defers_image_placeholders());
 
     // Derive the .moss dir — always present, used as the preview-server dedup key.
     let moss_dir_path = config.source().join(".moss");
@@ -818,13 +819,6 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     crate::build::lifecycle::open_build_root_handle(&lifecycle_paths);
     // This build's root identity, to compare against later phases.
     let start_identity = crate::build::lifecycle::root_identity::log_build_root(&lifecycle_paths.root().join("build.nosync"), "start", None);
-
-    // Begin a fresh link-meta URL session for this build. Render fills the
-    // session via `record_urls_for_prewarm`; we flush it just before spawning
-    // the native-process sync so sync sees this build's URL set.
-    crate::build::page::link_meta::start_build_session(
-        &Path::new(&folder_path).join(".moss"),
-    );
 
     crate::infra::moss_paths::ensure_moss_gitignore(&moss_dir_path)?;
     crate::infra::moss_paths::note_hidden_moss_files(config.source());
@@ -938,6 +932,14 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             );
         }
     }
+
+    // Below the server launch: a serving build that stops has already put the
+    // sealed generation on screen.
+    let at_entry = match incremental_gates::stop_at_entry(config, pass, &mut last_seal, options, port_now()).await {
+        Ok(outcome) => return Ok(outcome),
+        Err(at_entry) => at_entry,
+    };
+    let last_seal = std::sync::Arc::new(last_seal);
 
     // --- SCAN ONCE at pipeline start ---
     // Build ProjectInfo + ProjectStructure once; shared by all consumers
@@ -1163,7 +1165,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // having gone three months with no implementation in any plugin, bundled
     // or WIP.
     let listing_host = (!skip_plugins).then(|| crate::build::emit::listing_style::ListingHost::new(&config.host.plugins, &folder_path));
-    let refresh_comments_first = config.exits_after_build && !skip_process;
+    let refresh_comments_first = config.exits_after_build && !skip_process && at_entry == incremental_gates::AtEntry::Build { comments_refreshed: false };
     let make_slot_resolver = |folder_path_for_slots: String,
                               cached_domain_config_for_slots: crate::config::deployment::DomainDeploymentConfig,
                               project_structure_for_slots: ProjectStructure|
@@ -1195,7 +1197,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
         })
     };
 
-    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_references, unresolved_inputs, cancelled, home_ready: _home_ready, publishable, render_seq, unready_derivations, folder_lock, locked_at_nanos } = {
+    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_references, unresolved_inputs, cancelled, home_ready: _home_ready, publishable, render, unready_derivations, folder_lock, locked_at_nanos } = {
         // One attempt: its own clones, its own `SlotResolver`.
         let attempt = || {
             let root_owned = config.root.clone();
@@ -1245,6 +1247,15 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
         // file, `footer.md`): it has no page of its own, so it is not a page.
         let skipped = build_documents.iter().filter(|d| d.slot_only).count();
         crate::build::cli_output::note_built(build_documents.len() - skipped, skipped);
+    }
+    // Fetch the link cards this build showed waiting.
+    // Asked here, by every interactive build: the comment sync above starts
+    // before a build knows its links, and a watch rebuild starts no sync. A
+    // build that exits fetched its cards before it rendered.
+    if !cancelled && !config.exits_after_build {
+        let urls = crate::build::render::grid_cells::external_urls_across_build(build_documents.iter());
+        let refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+        crate::build::features::sync::fetch_link_meta_in_background(&refs, &moss_dir_path, &*config.host.spawner);
     }
     crate::build::phase::record_value("missing_references", missing_references.len());
     crate::build::phase::record_value("cancelled", cancelled as usize);
@@ -1361,8 +1372,6 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             // registered variants into it, cloned so the 'static spawned task
             // can pass it to advertise_sealed's degrade step.
             let assets_for_seal = assets_for_advertise.clone();
-            let seal_freshness =
-                crate::build::feeds::search_lane::Freshness::of(config.exits_after_build);
             // Held for the tail's life so a folder switch cannot evict this
             // folder's lifecycle record (and its promotion epoch) under it.
             let lifecycle_record = crate::build::lifecycle::lock_for(&mp);
@@ -1403,8 +1412,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                             session_opt.clone(),
                             promotion_epoch,
                             locked_at_nanos,
-                            render_seq,
-                            seal_freshness,
+                            render,
                             &folder_path_for_mat,
                             SealGuards {
                                 // Detached: the app or a `--serve --watch`
@@ -1426,7 +1434,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                     Err(crate::build::background::BuildError::LeftToNewerBuild) => {
                         // Like a tail that leaves to a newer sealed render: no
                         // record and no event, the newer build owes both.
-                        log::info!("seal+persist: render #{} left to a newer build waiting on the same images", render_seq.unwrap_or_default());
+                        log::info!("seal+persist: render #{} left to a newer build waiting on the same images", render.as_ref().map_or(0, crate::build::lifecycle::Render::seq));
                     }
                     Err(e) => {
                         log::error!("seal+persist: background work failed: {}", e);
@@ -1496,8 +1504,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                         session.clone(),
                         promotion_epoch,
                         locked_at_nanos,
-                        render_seq,
-                        crate::build::feeds::search_lane::Freshness::Now,
+                        render,
                         &folder_path,
                         SealGuards {
                             // Inline arm: per the comment above, the caller
@@ -1541,15 +1548,6 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     log::debug!(target: "timing", "[pipeline] build returned: {:?}", pipeline_build_start.elapsed());
     drop(_build_trace);
 
-    // Flush this build's link-meta URL set to disk so the next build's
-    // background sync can prewarm the cache. Atomic write, replace-not-merge —
-    // removed URLs vanish from the list (no unbounded growth).
-    let flushed = crate::build::page::link_meta::flush_build_session(
-        &Path::new(&folder_path).join(".moss"),
-    );
-    if flushed > 0 {
-        log::debug!(target: "link-meta", "flushed {} URL(s) for next-build prewarm", flushed);
-    }
 
     // Emit build-complete progress for CLI. Skipped for a `cancelled` result
     // (a folder-switch-mid-wait early return): that placeholder result's
@@ -1960,8 +1958,7 @@ async fn advertise_sealed(
     promotion_epoch: u64,
     locked_at_nanos: u64, // When this build took the folder lock: render order across processes, not `promotion_epoch`'s admission order.
     // The render `lifecycle::show_render` minted for this build.
-    render_seq: Option<u64>,
-    freshness: crate::build::feeds::search_lane::Freshness,
+    render: Option<crate::build::lifecycle::Render>,
     // The exact key `folder_session::registry()` and `ops::watch::worker`
     // register under — passed rather than derived from `mp.project_root()`
     // so a `MossPaths` normalization can never drift the two apart. See the
@@ -1973,11 +1970,15 @@ async fn advertise_sealed(
     // returned `PendingSeal` for the materialize phase to read or drop.
     guards: SealGuards,
 ) -> Option<crate::build::seal_phase::PendingSeal> {
+    // The seal's per-build half, which a detached tail runs after `run_pipeline`
+    // has returned; the lane's materialize and promotion stay paced.
+    let _activity = crate::platform::begin_build();
     let _phase = crate::build::phase::PhaseTrace::start("seal_persist");
     let sealed_at = std::time::Instant::now();
     // A caller hand-off never yields: its caller reads `current` next.
     let yields = guards.handoff == Handoff::Lane;
-    crate::build::lifecycle::note_sealed(mp, render_seq);
+    let render_seq = render.as_ref().map(crate::build::lifecycle::Render::seq);
+    if let Some(render) = &render { render.note_sealed(); }
     // Right after seal, before any repair pass can rewrite `stage_dir`: the
     // reference point `ship_phase`'s integrity check compares against, for
     // every entry it will read from the mutable stage path rather than an
@@ -2026,9 +2027,11 @@ async fn advertise_sealed(
     };
     // Tails that seal together queue on this lock. A newer sealed render's
     // tail writes everything this one would, so this one leaves, rather than
-    // wait its turn or land after it and roll it back.
-    if yields && crate::build::lifecycle::newer_render_sealed(mp, render_seq) {
-        log::info!("seal tail for render #{} left to a newer sealed render", render_seq.unwrap_or_default());
+    // wait its turn or land after it and roll it back. A render whose asset
+    // walk stopped for a newer one leaves too: its generation lacks what the
+    // walk never reached, and the preview keeps its last whole one.
+    if yields && (sealed.walk() == crate::build::manifest::WalkOutcome::Superseded || render.as_ref().is_some_and(crate::build::lifecycle::Render::newer_sealed)) {
+        log::info!("seal tail for render #{} left to a newer render", render_seq.unwrap_or_default());
         return None;
     }
 
@@ -2080,7 +2083,7 @@ async fn advertise_sealed(
     });
     let revealed = active_session.is_some()
         && selected_preview_ready
-        && crate::build::lifecycle::reveal_render_if_latest(mp, render_seq);
+        && render.as_ref().is_some_and(crate::build::lifecycle::Render::reveal_if_latest);
     if revealed {
         if ports.events.shell_listening()
             && crate::build::cloud_readiness::take_gate(folder_path)
@@ -2124,7 +2127,7 @@ async fn advertise_sealed(
     // on every seal, empty included, like the promise verdict above.
     crate::phase!("seal_removed", { crate::system::build_records::records().record_removed_addresses(
         folder_path,
-        crate::build::manifest::backfill::removed_for_seal(mp, &sealed),
+        crate::build::manifest::backfill::removed_for_seal(mp, sealed.site_hashes_view()),
     ) });
 
     // Persist so the next build's load_previous_hashes reads a complete
@@ -2208,8 +2211,7 @@ async fn advertise_sealed(
         sealed_at,
         promotion_epoch,
         locked_at_nanos,
-        render_seq,
-        freshness,
+        render,
         is_pinned,
         session: session.clone(),
         cache_lease: guards.cache_lease,

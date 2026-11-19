@@ -610,8 +610,23 @@ async fn dispatch_command_core(
         }
         "open_system_browser" => {
             let app = need_app(&host, "open_system_browser")?;
-            app.open_system_browser(req_str(&args, "url")?).await?;
+            let url = crate::plugins::runtime::browser_sign_in::check_browser_address(&req_str(&args, "url")?)?;
+            app.open_system_browser(url.into()).await?;
             Ok("null".into())
+        }
+        // Without an app nothing can open the browser and wait for it to come back.
+        "browser_sign_in_start" => {
+            need_app(&host, "browser_sign_in_start").map_err(|_| "Sign in from the moss app".to_string())?;
+            let plugin = caller_plugin(&host, "browser_sign_in_start")?;
+            reply_json(&serde_json::json!({ "redirectUri": crate::plugins::runtime::browser_sign_in::start(&plugin).await? }))
+        }
+        "browser_sign_in_wait" => {
+            let app = need_app(&host, "browser_sign_in_wait").map_err(|_| "Sign in from the moss app".to_string())?;
+            let plugin = caller_plugin(&host, "browser_sign_in_wait")?;
+            // The person is in their browser: the watchdog waits for them, as for any question moss asks.
+            let _waiting = host.state.hooks.begin_person_wait(&plugin);
+            let params = crate::plugins::runtime::browser_sign_in::wait(&plugin, &req_str(&args, "url")?, |url| app.open_system_browser(url)).await?;
+            reply_json(&serde_json::json!({ "params": params }))
         }
         // Bridged 2026-08-28: a Tauri command since onboarding, but never an
         // engine arm, so every plugin call since QuickJS became the default
@@ -1519,6 +1534,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn every_sdk_command_is_bridged() {
         const SDK_COMMANDS: &[&str] = &[
+            "browser_sign_in_start",
+            "browser_sign_in_wait",
             "clear_plugin_cookies",
             "close_action_panel",
             "download_asset",
@@ -1636,9 +1653,13 @@ mod tests {
     }
 
     /// Stands in for the desktop seam and records the `url` that
-    /// `open_action_panel` receives: `None` for "no page", `Some` for a page.
+    /// `open_action_panel` receives (`None` for "no page", `Some` for a page)
+    /// and what the system browser was asked to open.
     #[derive(Default)]
-    struct PanelRecorder(std::sync::Mutex<Option<Option<String>>>);
+    struct PanelRecorder {
+        panel: std::sync::Mutex<Option<Option<String>>>,
+        browser: std::sync::Mutex<Vec<String>>,
+    }
 
     #[async_trait::async_trait]
     impl crate::engine::app_host::AppHost for PanelRecorder {
@@ -1646,17 +1667,50 @@ mod tests {
         async fn set_plugin_cookies(&self, _: &str, _: &str, _: serde_json::Value) -> std::result::Result<(), String> { unreachable!() }
         async fn clear_plugin_cookies(&self, _: &str, _: &str) -> std::result::Result<(), String> { unreachable!() }
         async fn open_action_panel(&self, url: Option<String>, _: Option<String>, _: bool, _: Option<String>) -> std::result::Result<(), String> {
-            *self.0.lock().unwrap() = Some(url);
+            *self.panel.lock().unwrap() = Some(url);
             Ok(())
         }
         async fn set_action_panel_html(&self, _: String, _: Option<String>, _: Option<String>) -> std::result::Result<(), String> { unreachable!() }
         async fn close_action_panel(&self) -> std::result::Result<(), String> { unreachable!() }
-        async fn open_system_browser(&self, _: String) -> std::result::Result<(), String> { unreachable!() }
+        async fn open_system_browser(&self, url: String) -> std::result::Result<(), String> {
+            self.browser.lock().unwrap().push(url);
+            Ok(())
+        }
         async fn return_to_editor(&self) -> std::result::Result<(), String> { unreachable!() }
         async fn prompt_credential(&self, _: &str, _: &str, _: &str, _: Option<String>) -> std::result::Result<Option<String>, String> { unreachable!() }
         fn listen(&self, _: String, _: Box<dyn Fn(&str) + Send + Sync + 'static>) -> crate::engine::app_host::ListenerId { unreachable!() }
         fn unlisten(&self, _: crate::engine::app_host::ListenerId) { unreachable!() }
         fn emit_plugin_event(&self, _: &str, _: Option<String>) { unreachable!() }
+    }
+
+    async fn browser_call(desk: &PanelRecorder, cmd: &str, args: serde_json::Value) -> std::result::Result<String, String> {
+        let state = HostState::standalone();
+        let host = EngineHost { app: Some(desk), state: &state, project_path: "/tmp/none", plugin: Some("mastodon"), asked_by: None, declared: None };
+        dispatch_command_core(host, cmd, &args.to_string()).await
+    }
+
+    /// A plugin can hand the system browser a web page and nothing else, on
+    /// both ways in: the plain open and the sign-in.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_system_browser_opens_only_web_pages() {
+        let desk = PanelRecorder::default();
+        for refused in ["file:///etc/passwd", "javascript:alert(1)", "moss://open?path=/"] {
+            assert!(browser_call(&desk, "open_system_browser", serde_json::json!({ "url": refused })).await.is_err(), "{refused}");
+            browser_call(&desk, "browser_sign_in_start", serde_json::json!({})).await.unwrap();
+            let waited = browser_call(&desk, "browser_sign_in_wait", serde_json::json!({ "url": refused })).await;
+            assert!(waited.is_err(), "{refused}");
+        }
+        assert!(desk.browser.lock().unwrap().is_empty(), "nothing may reach the browser: {:?}", desk.browser.lock().unwrap());
+        browser_call(&desk, "open_system_browser", serde_json::json!({ "url": "https://example.com/a" })).await.unwrap();
+        assert_eq!(*desk.browser.lock().unwrap(), vec!["https://example.com/a".to_string()]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn signing_in_needs_the_app() {
+        for cmd in ["browser_sign_in_start", "browser_sign_in_wait"] {
+            let err = dispatch_command_test_stub("/tmp/none", Some("mastodon"), cmd, r#"{"url":"https://example.com"}"#).await.unwrap_err();
+            assert_eq!(err, "Sign in from the moss app");
+        }
     }
 
     /// Runs a plugin bundle whose only action is one `open_action_panel` invoke
@@ -1693,7 +1747,7 @@ mod tests {
             .await
             .expect("bundle must run");
         engine.shutdown().await;
-        let got = desk.0.lock().unwrap().clone();
+        let got = desk.panel.lock().unwrap().clone();
         got
     }
 
@@ -1724,7 +1778,7 @@ mod tests {
             .await
             .expect_err("a numeric url must be refused");
         assert!(err.contains("must be a string or null"), "got: {err}");
-        assert_eq!(*desk.0.lock().unwrap(), None, "the panel must not open");
+        assert_eq!(*desk.panel.lock().unwrap(), None, "the panel must not open");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

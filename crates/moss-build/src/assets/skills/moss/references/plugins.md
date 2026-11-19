@@ -131,6 +131,27 @@ A plugin whose settings belong to the site, and should travel with it and be rea
 - An action calls a route on one of moss's own services, signed by the folder, and opens the `https` address in the answer. moss makes the call only for plugins it ships or its registry lists.
 - `translations` at the manifest's top level, keyed by locale and then by the English text (`{ "zh": { "Currency": "币种" } }`), show the manifest's words in the reader's language; a missing entry shows the English.
 
+### Proving the site is the person's
+
+A network that lets a person's domain stand for their account (a Bluesky handle, a verified Mastodon link) checks a proof on the site. A plugin declares that proof under `contributes.identity`, and moss writes it on every build from the plugin's own `[services.<plugin>]` table, so the person writes one line, never the file:
+
+```json
+"site_settings": { "settings": [
+  { "key": "did", "type": "string", "label": "Account ID" },
+  { "key": "account", "type": "acct", "label": "Account" }
+] },
+"identity": [
+  { "file": ".well-known/atproto-did", "body": "{did}" },
+  { "link": "me", "href": "https://{account.host}/@{account.user}" },
+  { "meta": "fediverse:creator", "content": "@{account.user}@{account.host}" }
+]
+```
+
+- A proof is a `file` under `.well-known/`, a `link` or a `meta` written into the head of every page. A file is `atproto-did` or `nostr.json`, a link's rel is `me`, and a meta's name is `fediverse:creator`. Any other is refused and the manifest does not load: another file could grant an app authority over the domain (`webauthn`, `assetlinks.json`), and another rel or name could change every page (`canonical`, `robots`). A network that needs one more is added to moss by name.
+- `{key}` reads a setting the plugin declares in `site_settings`. An `acct` setting holds `@name@host`, refused in any other shape, and `{key.user}` and `{key.host}` read its two halves. Any other brace is text, so a `.json` body is written as JSON: each value goes in a string, escaped, and a body that is not JSON once filled does not load.
+- A proof whose setting is unset is not written, without a warning: the person has not set that network up. A hand-written value that cannot be written (an `acct` without a host, a control character) is left out with a warning naming the setting.
+- Proofs are data, read even by a build that runs no plugin code (`moss build --no-plugins`), so a CI deploy keeps them. A path two suppliers claim is written once, from `[site]` first and then plugins by name, with a warning naming both. When a proof the last build served is gone, the build says so (`identity: .well-known/atproto-did removed`), since that was someone's live handle.
+
 ## Setup: declare, don't build UI
 
 A contribution that needs anything from the user declares a `setup` block — moss draws all of it; a plugin never builds settings or first-publish UI. Three members, ordered by what they cost to evaluate:
@@ -158,10 +179,10 @@ The old spellings — `config_schema` and the other `config_*` maps, `setup.cred
 
 ## Distribution
 
-**How a user gets a plugin: `moss plugin install <id> [<folder>]`.** It puts the plugin into the site and allows it, either from moss's plugin registry or, for a plugin moss ships, by copying it out of moss. In the app, the plugin installer and the first-publish flow install plugins too. The registry is moss's own and its catalog is fetched on every install, so a plugin you write reaches a user's site by being added to that registry, not by publishing it somewhere for users to fetch.
+**How a user gets a plugin: `moss plugin install <id> [<folder>]`.** It puts the plugin into the site, either from moss's plugin registry or, for a plugin moss ships, by copying it out of moss. In the app, the plugin installer and the first-publish flow install plugins too. The registry is moss's own and its catalog is fetched on every install, so a plugin you write reaches a user's site by being added to that registry, not by publishing it somewhere for users to fetch.
 
 A plugin whose manifest says `"preview": true` is unfinished: moss's plugin catalog hides it and `moss plugin install` refuses it until the user turns on **Preview features** in moss's Settings (without the app, by adding `"experimental": {"preview_features": true}` to `app-config.json` in moss's app-data folder, which the refusal names). A copy already in a site keeps running either way.
 
-**Trying a plugin before it is in the registry.** Copy the built plugin (its `manifest.json`, the file its `entry` names, its icon) into `<site>/.moss/plugins/<name>/`, where `<name>` is the manifest's `name`. moss does not run code that arrived with a folder until someone allows it on that computer: in the app the plugin's tile says it came with the folder, and one click allows it; from the command line, pass `--allow-plugins` to `moss build` or `moss deploy`. The permission is kept outside the folder and names the exact code, so every computer that opens the folder asks once, and again when the bundle changes. A plugin whose `min_moss_version` is above the running moss is refused whatever was allowed. The settings it declares under `setup.settings` are read from `.moss/plugins/<name>/config.toml`, one `key = value` line each; those under `contributes.site_settings` live in `.moss/config.toml`, as above. `moss deploy <folder> --dry-run --allow-plugins` shows what each channel would be sent without sending it.
+**Trying a plugin before it is in the registry.** Copy the built plugin (its `manifest.json`, the file its `entry` names, its icon) into `<site>/.moss/plugins/<name>/`, where `<name>` is the manifest's `name`. moss runs a folder's plugins only once the folder is trusted on that computer: the app asks "Trust this folder?" the first time it opens a folder with plugins, and from the command line `--allow-plugins` on `moss build` or `moss deploy` is the consent. `moss plugin install` records no trust and says so. The answer is kept outside the folder, so every computer that opens it asks once; after that, a plugin added or changed in a trusted folder runs without asking. A plugin whose `min_moss_version` is above the running moss, or one the registry withdrew, is refused whatever the answer. The settings it declares under `setup.settings` are read from `.moss/plugins/<name>/config.toml`, one `key = value` line each; those under `contributes.site_settings` live in `.moss/config.toml`, as above. `moss deploy <folder> --dry-run --allow-plugins` shows what each channel would be sent without sending it.
 
 The packages are also published to npm as `@symbiosis-lab/moss-plugin-*`, but moss does not install from npm. There is no scaffolding command: copy an existing plugin and adapt it.

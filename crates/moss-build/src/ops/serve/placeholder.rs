@@ -48,14 +48,8 @@ pub(super) fn is_image_variant_url(path: &str) -> bool {
 /// a multi-byte UTF-8 codepoint (e.g., a CJK path in the source file name).
 /// `chars().take(80)` walks codepoints and never splits one.
 ///
-/// Visual: a static blueprint-grid pattern (the same motif as the desktop
-/// app's animated canvas background component
-/// and the `.moss-img-fallback` CSS class in `site.css`, both grid lines in
-/// blueprint blue `#143c82`) rather than a flat pink rect — this is moss's
-/// own "asset failed" state, not a generic missing-image placeholder, so it
-/// keeps a legible warning message in a distinguishing red, layered over the
-/// grid. The pattern is a single small `<path>` tiled by the SVG renderer's
-/// `<pattern>` element — no per-request cost beyond the flat-rect it replaces.
+/// Visual: the warning words in red on plain paper, with no grid. The grid
+/// means "on its way", and a failed encode is not coming.
 fn generate_failed_svg(error: &str) -> String {
     let short_chars: String = error.chars().take(80).collect();
     let short = if short_chars.chars().count() < error.chars().count() {
@@ -65,7 +59,7 @@ fn generate_failed_svg(error: &str) -> String {
     };
     let escaped = moss_core::media::html_escape_text(&short);
     format!(
-        r##"<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600"><defs><pattern id="moss-grid" width="18" height="18" patternUnits="userSpaceOnUse"><path d="M18 0H0V18" fill="none" stroke="#143c82" stroke-opacity="0.16"/></pattern></defs><rect width="100%" height="100%" fill="#f4f1ec"/><rect width="100%" height="100%" fill="url(#moss-grid)"/><g transform="translate(400 280)"><text text-anchor="middle" font-family="system-ui,sans-serif" font-size="28" fill="#a33">⚠ asset failed</text><text y="42" text-anchor="middle" font-family="system-ui,sans-serif" font-size="15" fill="#7a2b2b">{}</text></g></svg>"##,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600"><rect width="100%" height="100%" fill="#f4f1ec"/><g transform="translate(400 280)"><text text-anchor="middle" font-family="system-ui,sans-serif" font-size="28" fill="#a33">⚠ asset failed</text><text y="42" text-anchor="middle" font-family="system-ui,sans-serif" font-size="15" fill="#7a2b2b">{}</text></g></svg>"##,
         escaped
     )
 }
@@ -215,23 +209,14 @@ mod tests {
         assert!(svg.contains("fill="));
     }
 
-    // ---- generate_failed_svg: blueprint-grid visual + message handling ----
+    // ---- generate_failed_svg: visual + message handling ----
 
     #[test]
-    fn generate_failed_svg_uses_blueprint_grid_pattern() {
-        // Reskinned to the same blueprint-blue grid motif as
-        // blueprint-grid.ts / .moss-img-fallback, not a flat pink rect.
+    fn generate_failed_svg_draws_no_grid() {
+        // The grid means a picture is on its way; a failed one is not.
         let svg = generate_failed_svg("decode error");
-        assert!(
-            svg.contains("<pattern") && svg.contains("#143c82"),
-            "expected a blueprint-grid pattern def, got: {}",
-            svg
-        );
-        assert!(
-            !svg.contains("#fbeaea"),
-            "old flat pink background should be gone, got: {}",
-            svg
-        );
+        assert!(!svg.contains("<pattern"), "a failed tile drew a grid: {}", svg);
+        assert!(svg.contains("asset failed"), "the warning is gone: {}", svg);
     }
 
     #[test]

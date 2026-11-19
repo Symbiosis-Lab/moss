@@ -456,8 +456,8 @@ pub async fn run_dry_run(
         match published_record::load_for(&mp, target.as_deref()) {
             Some(record) => {
                 Transfer::SinceLastPublish {
-                    upload: change_set::upload_count(&record.files, &sealed) as u32,
-                    removed: change_set::removed_files(&record.files, &sealed),
+                    upload: change_set::upload_count(&record.files, sealed.site_hashes_view()) as u32,
+                    removed: change_set::removed_files(&record.files, sealed.site_hashes_view()),
                 }
             }
             None => Transfer::NoRecord,

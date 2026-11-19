@@ -223,7 +223,7 @@ pub fn breadcrumb_ancestor_descendants(
 /// `FullCause::SurfaceChanged` despite `nav_globals` correctly narrowing the
 /// named `weight` field right next to it.
 const TYPED_FRONTMATTER_KEYS: &[&str] =
-    &["nav", "draft", "weight", "label", "title", "breadcrumb", "date", "series"];
+    &["nav", "draft", "weight", "label", "title", "breadcrumb", "date", "series", "cover"];
 
 /// Remove [`TYPED_FRONTMATTER_KEYS`] from a page's raw-frontmatter map before
 /// it is hashed into the surface. Called from `facade::surface_debug` only —
@@ -250,12 +250,21 @@ pub fn strip_typed_frontmatter_keys(raw: &mut std::collections::BTreeMap<String,
 /// prev/next block through no digest at all — only a listed CHILD's `series`
 /// (its own opt-out) is covered, via the group-digest loop's blanket
 /// inclusion of every non-blanked field (`listing::project_child`).
+/// `cover` reaches other pages through listing cards (the same projection),
+/// folder embeds and term cards (both written onto the reading page before
+/// fingerprints) and the cards a grid cell or an `end` field draws
+/// (`verdict::card_readers_of`). A located page's cover also reaches the
+/// places data, whose hash the explorer embed carries into its page before
+/// fingerprints. No reader list exists yet for a home page's cover, so it
+/// stays on the full render.
+/// `term_card` is drawn by its own page and by the listings of it.
 pub fn field_is_classified(doc: &ParsedDocument, field: &str) -> bool {
     match field {
         "nav" | "draft" | "slot_only" | "is_root_level" | "clean_stem" => true,
         "label" | "weight" => doc.footer != Some(true),
-        "title" | "breadcrumb" | "date" => true,
+        "title" | "breadcrumb" | "date" | "term_card" => true,
         "series" => doc.kind != moss_core::PageKind::Folder,
+        "cover" => !crate::build::render::lang_roots::is_home(doc),
         _ => false,
     }
 }

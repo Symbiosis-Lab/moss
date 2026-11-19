@@ -162,13 +162,11 @@ pub fn scan_installed_plugins(project_path: &str) -> Result<InstalledPlugins, St
     Ok(found)
 }
 
-/// The installed plugins whose declarations may reach a page: none when plugins
-/// are off for this build, and never one its settings disable, since discovery
-/// itself treats every installed plugin as active.
-pub fn plugins_declaring_for_build(plugins_on: bool, project_path: &str) -> Vec<Plugin> {
-    if !plugins_on {
-        return Vec::new();
-    }
+/// The installed plugins whose declarations may reach a page, never one its
+/// settings disable, since discovery itself treats every installed plugin as
+/// active. The build decides which declarations a build that skips plugin
+/// hooks still reads.
+pub fn plugins_declaring_for_build(project_path: &str) -> Vec<Plugin> {
     let Ok(installed) = scan_installed_plugins(project_path) else { return Vec::new() };
     installed.loaded.into_iter().filter(|p| {
         get_plugin_config(project_path, &p.manifest.name)

@@ -723,3 +723,51 @@ fn availability_partial_sweep_cannot_emit_a_structural_ready_receipt() {
     assert!(events.lock().unwrap().is_empty(), "bounded measurement is not complete structure");
     assert_eq!(pool.take_structural_arrivals(root.path()).wake_count(), 0);
 }
+
+#[test]
+fn availability_a_running_walk_reads_quiet_until_its_next_entry() {
+    let pool = pool();
+    let (step, steps) = std::sync::mpsc::channel::<()>();
+    let steps = Mutex::new(steps);
+    let operation: Operation = Arc::new(move || {
+        let steps = steps.lock().unwrap();
+        steps.recv().unwrap();
+        note_entry();
+        steps.recv().unwrap();
+        Ok(StorageValue::Directory { entries: Vec::new(), hidden: 0 })
+    });
+    let key = OperationKey { path: PathBuf::from("/structure/quiet"), policy: OperationPolicy::SourceWalk };
+    let task = pool.structural_operation(key.clone(), operation).unwrap();
+    wait_until(|| task.quiet_for().is_some());
+    std::thread::sleep(Duration::from_millis(1100));
+    note_entry();
+    let quiet = pool.running_operation(&key).unwrap().quiet_for().unwrap();
+    assert!(quiet >= Duration::from_secs(1), "no entry yet, and one noted off the walk's thread is not its own: {quiet:?}");
+    step.send(()).unwrap();
+    wait_until(|| task.quiet_for().is_some_and(|quiet| quiet < Duration::from_secs(1)));
+    step.send(()).unwrap();
+    wait_until(|| task.state.lock().unwrap().result.is_some());
+    assert_eq!(task.quiet_for(), None, "a finished walk is not quiet");
+}
+
+#[test]
+fn availability_a_waiter_alone_gives_up_a_fully_parked_pool() {
+    let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+    let held = |gate: &Arc<(Mutex<bool>, std::sync::Condvar)>| { let gate = gate.clone(); move || {
+        let mut released = gate.0.lock().unwrap();
+        while !*released { released = gate.1.wait(released).unwrap(); }
+    } };
+    let (bytes, structure) = (held(&gate), held(&gate));
+    // A byte read is never given up here, so no reader comes back to notice the structural lane.
+    let bounds = crate::build::cloud_prefetch::Bounds { bytes: Duration::from_secs(600), structural_quiet: Duration::from_millis(100), idle_check: Duration::from_millis(20), ..crate::build::cloud_prefetch::Bounds::PROVIDER };
+    let pool = crate::build::cloud_prefetch::Prefetcher::with_bounds(1, Arc::new(move |_| { bytes(); Ok(()) }), bounds);
+    pool.read_foreground(Path::new("/byte/held"));
+    let parked: Operation = Arc::new(move || { structure(); Ok(StorageValue::Directory { entries: Vec::new(), hidden: 0 }) });
+    for i in 0..2 { pool.structural_operation(OperationKey { path: format!("/held/{i}").into(), policy: OperationPolicy::SourceWalk }, parked.clone()).unwrap(); }
+    wait_until(|| pool.snapshot().in_flight == 3);
+    let answers: Operation = Arc::new(|| Ok(StorageValue::Directory { entries: Vec::new(), hidden: 0 }));
+    let result = wait_for_operation(&pool, Path::new("/answers"), OperationPolicy::SourceWalk, Duration::from_secs(5), &|| false, &|| {}, answers, Arc::new(refused(Path::new("/answers"), StorageOperation::ReadDirOpen)));
+    *gate.0.lock().unwrap() = true;
+    gate.1.notify_all();
+    assert!(result.is_ok(), "every pool thread was parked and the waiter never gave one up");
+}

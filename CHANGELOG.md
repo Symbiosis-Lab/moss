@@ -4,6 +4,47 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
+## [0.15.27] - 2026-11-19
+
+### Fixed
+
+- A folder that holds only files, such as pictures, downloads or a JSON file another service reads, no longer gets a blank page with the folder's name and a sitemap entry. Its files are served as before; a folder gets a page once a page sits somewhere beneath it.
+- A link card shows its page's title, description and picture the first time a folder is opened in the app. A card for a link moss had not fetched before stayed a bare address for the whole session, and was published that way, unless an earlier session had fetched it.
+- A publish fetches the link cards its pages still show as bare addresses, and rebuilds the pages that show them, before it ships. A card whose fetch was still under way after opening the folder, or had failed, was published as a bare address.
+- In the preview, a picture that wasn't ready when its page loaded appears as soon as moss has it, without a reload; one whose first request failed stayed on the placeholder until its smaller sizes were made. A picture on its way has one look in the preview, light or dark and under Reduce Motion: the moving grid over the picture's own shape, with a thin edge in the text colour. The grid stays until the picture has loaded.
+- A link card whose page has no picture takes no room for one, so the card starts at its words. A card whose picture moss hasn't fetched yet keeps the picture's place with a thin edge, and the preview's moving grid fills it until the picture arrives. Both used to show the same grey box. In a grid where other cards have pictures, a card without one keeps an empty box, now with the same edge as a waiting picture, a little stronger than before.
+- A link card whose picture did not download gets it later. A picture that timed out, or whose server failed, is asked for again by the next publish and, while the folder is open, every five minutes; the card keeps its title and its box meanwhile. A picture that is gone, or is not a picture, leaves a card with no picture, which closes up. Such a card used to keep an empty box until its link was fetched again from scratch.
+- A page embedded in another (`![[Data]]`) shows its own embeds there too: a CSV table, a note, a folder listing. They were drawn on the embedded page itself but showed as plain links on the page that embeds it, and the build reported nothing.
+- In the preview's address bar, the arrow keys move the highlight through the suggested pages again, and Enter opens the row that is highlighted. A wheel or trackpad over the suggestions scrolls them, not the page behind.
+- When the cloud service holding a folder stops sending its files, the opening screen names it: "Google Drive isn't sending files." with "Quit Google Drive and open it again." under it (the same for Dropbox, OneDrive and Box; iCloud Drive, part of the system, gets no quit). It used to say "Downloads have stalled" whenever nothing had arrived for 90 seconds, which a slow but working download also triggered. The opening screen no longer repeats the folder's path in a tooltip; the button beside it shows the folder.
+- At 0 files the download meter on the opening screen shows nothing lit. It used to draw a line across the whole meter, which read as a full bar.
+- A build that a newer one overtakes stops making pictures' smaller copies and is not shown; the newer build makes them. Saving several times in a row ran one such pass per save at once, each on a full core, for minutes after the last build ended.
+- A page whose first paragraph ends a line with a backslash (a markdown line break) no longer shows the backslash in its automatic description.
+- A picture added to a page in the editor shows in the preview at once. When the page was saved before the copy landed, it said "Picture not found" until moss noticed the new file, up to 20 seconds later.
+- When a picture a page shows is moved or renamed, the editor no longer asks for it at the address it left. That request failed, and the picture could show as broken for a moment.
+- A picture moved or renamed in the editor's file list is shown at its new place in the preview at once. The preview kept "Picture not found" until the folder was next noticed as changed, 20 seconds or more.
+- On a page with a styled section (`:::{.band}`), clicking a block in the preview opens the editor at that block's line again, and `moss doctor` names the right line. Every block after such a section was two lines late.
+- In the plugin catalog, a channel stays where it is after you add one, so the next press lands on the channel you meant. Added channels moved to the front on each press, and a second press could remove a channel you had just passed.
+- The + under the channel pill stays a plus while the catalog is open, and the + at the end of the settings tabs says "Install plugin".
+- A channel that only posts copies, such as X, Substack or LinkedIn, no longer opens a sign-in when its folder opens while it is signed out; it asks when it posts, and in its Settings row. Opening the folder used to bring up Matters' sign-in instead, and `moss build --strict` failed with a warning that the channel's content would be skipped, though none was. A channel that brings content into the build, like Matters, still opens its own sign-in once.
+- When a picture has no alt text, the build's note suggests `![describe the image|](pic.jpg)`, the form that writes alt text. It suggested `![describe the image](pic.jpg)`, which on a picture alone on its line becomes a visible caption with empty alt text.
+
+### New
+
+- A theme can style the link-preview card moss draws for a page with no picture: `--moss-share-card-bg`, `--moss-share-card-ink` and `--moss-share-card-muted` colour it, `--moss-share-card-picture` places a picture along its right edge, and the card uses the theme's heading face when the theme hosts it as a `.ttf` or `.otf`.
+- `header=over` works on a full-width band that opens the page (`::: {screen header=over}`) as it does on an opening hero: the site header lies over the band's pictures, its ink is read from every picture in the band, and the header passes the pointer through to the band's links. On a band that is not the page's first block it does nothing.
+- A channel signs in through its own sign-in page in your browser, and its settings page shows the account it signed in to, with Sign out. Mastodon asks which server first, already filled in with mastodon.social; nothing else is typed in.
+- A channel plugin can make your domain your identity on its network: from one setting in its `[services.<plugin>]` table, moss writes the proof on every build, a file under `.well-known/` such as Bluesky's `atproto-did`, a `rel="me"` link to your profile, or Mastodon's `fediverse:creator`. A build with `--no-plugins` writes them too, and a proof the last build served that is now gone is named in the build's output.
+- For plugin authors: `contributes.identity` declares those proofs, and an `acct` setting holds an `@name@host` address.
+
+### Changed
+
+- A folder's plugins are trusted once, for the folder. The first time a folder carrying plugins moss didn't ship is opened, one question asks "Trust <folder>?": Trust runs every plugin in it, now and later, and Open without plugins leaves them off, with a "Plugins off" chip, the channel rail and Settings → Plugins as the ways back. Plugins used to be approved one by one, and could ask again after any edit to their code. The answer is kept on the computer, never in the folder, so a folder passed on carries no trust with it; `moss build` reads the answers the app recorded, and `--allow-plugins` still runs a folder's plugins without one. Code moss ships, or whose exact bytes the plugin registry lists, needs no trust.
+- `moss build --no-plugins` keeps what plugins declare as data (elements, published settings, identity proofs) and skips only their code, so a CI build publishes what the app's build does.
+- Opening a folder in the app that hasn't changed since moss last built it shows the last build at once instead of building it again: on a site of about 400 pages the preview is ready in about a second, with half the memory. A build that runs while the app sits in the background is no longer slowed by macOS's App Nap, so the first edit after a quiet spell shows about as fast as any other.
+- In the editor, the picture's line shows the focus point's position as the dot is dragged or moved with the arrow keys. It is written to the file once, when the dot is let go, and one undo takes the whole move back.
+- A social network's button works only on an article, as the email's does; on the home page and other folder pages it is grey. A folder's channels are no longer set from its page; a `cascade: syndicate:` list in the folder page's front matter still applies to the posts under it.
+
 ## [0.15.26] - 2026-11-17
 
 ### Fixed

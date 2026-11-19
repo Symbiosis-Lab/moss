@@ -1,9 +1,7 @@
-//! Email newsletter feature: renders subscribe form in footer.
-//!
-//! Currently supports Buttondown only. The subscribe form posts directly
-//! to Buttondown's embed API — no client-side JS needed.
+//! Email newsletter feature: the moss-hosted subscribe form, its page scopes
+//! and the confirmation landing pages.
 
-use super::{html_escape, inactive_label, CHECK_SVG};
+use super::{html_escape, CHECK_SVG};
 use crate::build::assets::paths::PathResolver;
 use crate::i18n::Language;
 
@@ -217,90 +215,6 @@ pub fn read_site_languages(project_root: &std::path::Path) -> Option<Vec<EmailAu
     let path = crate::moss_paths::MossPaths::new(project_root).build_dir().join("site-languages.json");
     let raw = std::fs::read_to_string(path).ok()?;
     serde_json::from_str::<Vec<EmailAudience>>(&raw).ok().filter(|list| !list.is_empty())
-}
-
-/// Render the Buttondown subscribe form HTML for the footer.
-///
-/// No production caller yet; reserved for third-party providers' render path.
-///
-/// When `active` is false, adds `moss-service-inactive` class and an
-/// `aria-label` naming the inactive state. Not `title=`: the inactive
-/// element is `pointer-events: none` in preview and `display: none` on
-/// the published site, so a native tooltip could never show — the state
-/// only needs to reach the accessibility tree.
-pub fn render_subscribe_form(username: &str, lang: Language, active: bool) -> String {
-    let class = if active {
-        "moss-subscribe-form".to_string()
-    } else {
-        "moss-subscribe-form moss-service-inactive".to_string()
-    };
-    let title_attr = if active {
-        String::new()
-    } else {
-        format!(" aria-label=\"{}\"", inactive_label(lang))
-    };
-    format!(
-        "<form action=\"https://buttondown.com/api/emails/embed-subscribe/{}\" method=\"post\" class=\"{}\" data-position=\"footer\"{}>\
-            <input type=\"email\" name=\"email\" autocomplete=\"email\" class=\"moss-input\" placeholder=\"{}\" required />\
-            <input type=\"hidden\" value=\"1\" name=\"embed\" />\
-            <button type=\"submit\" class=\"moss-btn\">{}</button>\
-        </form>",
-        html_escape(username),
-        class,
-        title_attr,
-        email_placeholder(lang),
-        subscribe_label(lang),
-    )
-}
-
-/// Get the placeholder text for the email input (Buttondown form).
-fn email_placeholder(lang: Language) -> &'static str {
-    match lang {
-        Language::En => "email",
-        Language::ZhHans => "邮箱",
-        Language::ZhHant => "電子郵件",
-        Language::De => "E-Mail-Adresse",
-    }
-}
-
-/// Get the submit button text (Buttondown form).
-fn subscribe_label(lang: Language) -> &'static str {
-    match lang {
-        Language::En => "Subscribe",
-        Language::ZhHans => "订阅",
-        Language::ZhHant => "訂閱",
-        Language::De => "Abonnieren",
-    }
-}
-
-/// Fetch the Buttondown newsletter username from the API.
-///
-/// No production caller: the build path does not fetch. Kept, with its
-/// bounded-timeout test, for the Settings-time acquisition, which persists the username into `[services.email]`.
-pub fn fetch_buttondown_username(api_key: &str) -> Option<String> {
-    let base = std::env::var("MOSS_BUTTONDOWN_API_BASE")
-        .unwrap_or_else(|_| "https://api.buttondown.com".to_string());
-    let url = format!("{}/v1/newsletters", base);
-    // Bound TCP connect time so an unreachable host can't tie up the build.
-    // Both the connect timeout and overall timeout apply.
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(std::time::Duration::from_secs(3))
-        .timeout(std::time::Duration::from_secs(10))
-        .build();
-    let resp = agent
-        .get(&url)
-        .set("Authorization", &format!("Token {}", api_key))
-        .call()
-        .ok()?;
-    let json: serde_json::Value = resp.into_json().ok()?;
-    // Try results array first (paginated response), then root object
-    json.get("results")
-        .and_then(|r| r.as_array())
-        .and_then(|a| a.first())
-        .or(Some(&json))
-        .and_then(|obj| obj.get("username"))
-        .and_then(|u| u.as_str())
-        .map(|s| s.to_string())
 }
 
 /// Copy set for the moss-hosted subscribe form.
@@ -811,101 +725,6 @@ mod tests {
         assert!(html.contains("&quot;&gt;&lt;script&gt;"));
     }
 
-    #[test]
-    fn test_render_form_contains_action_url() {
-        let html = render_subscribe_form("mynewsletter", Language::ZhHans, true);
-        assert!(html.contains("https://buttondown.com/api/emails/embed-subscribe/mynewsletter"));
-    }
-
-    #[test]
-    fn test_render_form_contains_email_input() {
-        let html = render_subscribe_form("mynewsletter", Language::ZhHans, true);
-        assert!(html.contains("type=\"email\""));
-        assert!(html.contains("name=\"email\""));
-        assert!(html.contains("class=\"moss-input\""));
-        assert!(html.contains("required"));
-    }
-
-    #[test]
-    fn test_render_form_contains_hidden_embed() {
-        let html = render_subscribe_form("mynewsletter", Language::ZhHans, true);
-        assert!(html.contains("type=\"hidden\""));
-        assert!(html.contains("name=\"embed\""));
-        assert!(html.contains("value=\"1\""));
-    }
-
-    #[test]
-    fn test_render_form_contains_submit_button() {
-        let html = render_subscribe_form("mynewsletter", Language::ZhHans, true);
-        assert!(html.contains("type=\"submit\""));
-        assert!(html.contains("class=\"moss-btn\""));
-    }
-
-    #[test]
-    fn test_render_form_zh_labels() {
-        let html = render_subscribe_form("mynewsletter", Language::ZhHans, true);
-        assert!(html.contains("placeholder=\"邮箱\""));
-        assert!(html.contains("订阅"));
-    }
-
-    #[test]
-    fn test_render_form_en_labels() {
-        let html = render_subscribe_form("testuser", Language::En, true);
-        assert!(html.contains("placeholder=\"email\""));
-        assert!(html.contains("Subscribe"));
-    }
-
-    #[test]
-    fn test_render_form_structure() {
-        let html = render_subscribe_form("mynewsletter", Language::ZhHans, true);
-        assert!(html.contains("class=\"moss-subscribe-form\""));
-        assert!(html.contains("data-position=\"footer\""));
-        assert!(html.starts_with("<form"));
-        assert!(html.ends_with("</form>"));
-    }
-
-    #[test]
-    fn test_render_form_inactive_has_class_and_label() {
-        let html = render_subscribe_form("mynewsletter", Language::En, false);
-        assert!(html.contains("moss-service-inactive"), "Inactive form should have moss-service-inactive class");
-        assert!(html.contains("aria-label=\"Available after publishing\""), "Inactive form should name its state");
-    }
-
-    #[test]
-    fn test_render_form_inactive_zh_label() {
-        let html = render_subscribe_form("mynewsletter", Language::ZhHans, false);
-        assert!(html.contains("moss-service-inactive"));
-        assert!(html.contains("aria-label=\"发布后启用\""));
-    }
-
-    #[test]
-    fn test_render_form_active_no_inactive_class() {
-        let html = render_subscribe_form("mynewsletter", Language::En, true);
-        assert!(!html.contains("moss-service-inactive"), "Active form should NOT have inactive class");
-    }
-
-    #[test]
-    fn test_email_placeholder_zh() {
-        assert_eq!(email_placeholder(Language::ZhHans), "邮箱");
-        assert_eq!(email_placeholder(Language::ZhHant), "電子郵件");
-    }
-
-    #[test]
-    fn test_email_placeholder_en() {
-        assert_eq!(email_placeholder(Language::En), "email");
-    }
-
-    #[test]
-    fn test_subscribe_label_zh() {
-        assert_eq!(subscribe_label(Language::ZhHans), "订阅");
-        assert_eq!(subscribe_label(Language::ZhHant), "訂閱");
-    }
-
-    #[test]
-    fn test_subscribe_label_en() {
-        assert_eq!(subscribe_label(Language::En), "Subscribe");
-    }
-
     // --- Moss-hosted subscribe form ---
 
     #[test]
@@ -1121,8 +940,6 @@ mod tests {
     fn test_subscribe_email_inputs_offer_the_readers_address() {
         let inner = subscribe_form_inner(Language::En, None, None);
         assert!(inner.contains(r#"name="email" autocomplete="email""#), "inner: {inner}");
-        let footer = render_subscribe_form("mynewsletter", Language::En, true);
-        assert!(footer.contains(r#"name="email" autocomplete="email""#), "footer: {footer}");
     }
 
     #[test]
@@ -1245,22 +1062,6 @@ mod tests {
         let html = render_hosted_subscribe_form(Some("test-site"), Language::ZhHans, "", None, None, "https://api.mosspub.com");
         assert!(html.contains("订阅"),
             "must use zh-hans default button label: {html}");
-    }
-
-    #[test]
-    fn test_fetch_buttondown_username_bounded_on_unreachable() {
-        // RFC 5737 TEST-NET-1 — guaranteed non-routable.
-        let _env_guard = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        let start = std::time::Instant::now();
-        std::env::set_var("MOSS_BUTTONDOWN_API_BASE", "http://192.0.2.1");
-        let result = fetch_buttondown_username("dummy-key");
-        std::env::remove_var("MOSS_BUTTONDOWN_API_BASE");
-        let elapsed = start.elapsed();
-        assert!(result.is_none());
-        assert!(
-            elapsed < std::time::Duration::from_secs(5),
-            "must fail fast (regression for an unreachable host hanging the build): took {:?}", elapsed
-        );
     }
 
 }

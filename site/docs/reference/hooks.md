@@ -78,9 +78,13 @@ Signs the person in to a channel's account (e.g. Matters). Not a build-pipeline 
 
 How it is known that a channel is signed in: its `copy_account` answer. `copy.account` (with `copy.name`, shown to the person) means signed in; `copy.signed_out: true` means its session or credential was read and holds none, or the service refused authentication. A read that failed, or that is not available where moss runs (the webview's cookies exist only in the desktop app, not in a terminal), is `success: false`, never `signed_out`, so it leaves the recorded sign-in as it was. moss records each definite answer per channel on this computer, outside the site folder.
 
+An OAuth channel signs in through the person's default browser, where they are usually signed in already: `startBrowserSignIn()` from `@symbiosis-lab/moss-api` listens once on `127.0.0.1` and gives the redirect address to register, and its `open(authorizeUrl)` opens the provider's page and resolves with the redirect's query. The plugin checks `state` and exchanges the code; `crypto.subtle.digest` makes the PKCE challenge. moss opens only `https` addresses (and `http` to a loopback address) in the browser. A sign-in ends after ten minutes, when the person presses Cancel, when the channel starts another, or in a terminal at once ("Sign in from the moss app"). A token the sign-in earns is a setting with `"type": "secret", "hidden": true`, which signing out removes.
+
+When the sign-in needs one thing it cannot find out by itself, such as the server a Mastodon account is on, the channel declares it as a `string` setting with `"at_sign_in": true` and a `default`. The settings form never draws it; the sign-in asks it first, pre-filled, and the answer reaches `login` in its context's `config`. The plugin keeps what it needs of it.
+
 Use for: authenticating with a remote platform before `process` or a copy hook can act on the user's behalf.
 
-**Context:** `BaseContext` — `project_info` and the plugin's resolved `config`.
+**Context:** `BaseContext` — `project_info` and the plugin's resolved `config`, with any `at_sign_in` answers on top.
 
 ## Plugin runtime
 

@@ -117,6 +117,26 @@ pub enum HashBucket {
 // PendingManifest
 // ---------------------------------------------------------------------------
 
+/// How far the asset walk got. A walk stops early when a newer render of the
+/// folder is admitted; it registers its assets only at the end, so such a
+/// render's generation lacks them and must never be promoted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum WalkOutcome {
+    #[default]
+    Complete,
+    Superseded,
+}
+
+/// What the stage holds for a page a carry proof left in place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StageBytes {
+    /// The bytes the previous manifest's entry describes.
+    Sealed,
+    /// A newer render's final bytes: the slot pass reads them, and its receipt
+    /// replaces the entry.
+    Newer,
+}
+
 /// Mutable manifest accumulator for the render and deferred-processing phases.
 ///
 /// Created from a `carry_forward` snapshot (the previous build's [`SiteHashes`]).
@@ -152,6 +172,8 @@ pub struct PendingManifest {
     /// Redirect stub output → the page it forwards to, for each old address of
     /// one of the author's pages.
     page_stubs: std::collections::BTreeMap<String, String>,
+    /// Link cards this build showed with no entry in the folder.
+    waiting_link_cards: std::collections::BTreeSet<String>,
     /// Paths that the blocking phase generated. Must be a subset of
     /// `(inner.files ∪ inner.image_outputs)` at seal time (the manifest invariant).
     /// Consumed by stale-HTML cleanup (C1–C4).
@@ -208,6 +230,8 @@ pub struct PendingManifest {
     /// generation carrying any of these is withheld — see
     /// `ship::ShipVerdict`.
     unverified: std::collections::BTreeMap<String, String>,
+    /// Whether the asset walk reached the end; see [`WalkOutcome`].
+    walk: WalkOutcome,
     /// The article map this render built, which its generation's publish reads
     /// (`publish_view::read_articles`).
     articles: Option<std::sync::Arc<crate::build::scan::article_map::ArticleMap>>,
@@ -239,10 +263,9 @@ pub struct PendingManifest {
     /// registration of the same path drops its entry, since that writer put its
     /// own bytes in the stage.
     unwritten_pages: std::collections::BTreeMap<String, String>,
-    /// Pages registered with the previous build's entry by a carry proof and not
-    /// registered again since: their bytes in the stage are the previous build's
-    /// final ones. See [`carried_pages`][Self::carried_pages].
-    carried_pages: HashSet<String>,
+    /// Pages registered by a carry proof and not registered again since, by what
+    /// their stage bytes are. See [`carried_pages`][Self::carried_pages].
+    carried_pages: std::collections::BTreeMap<String, StageBytes>,
     /// `Some` once the preview serves this render
     /// ([`note_shown`][Self::note_shown]): the keys registered after that with
     /// an entry other than the one they had, which are the bytes that landed
@@ -308,6 +331,11 @@ pub(crate) fn is_reload_tracked_source_key(src: &str) -> bool {
 }
 
 impl PendingManifest {
+    /// The asset walk stopped before the end; this render must not promote.
+    pub(crate) fn mark_walk_superseded(&mut self) {
+        self.walk = WalkOutcome::Superseded;
+    }
+
     pub(crate) fn record_output_collisions(&mut self, messages: Vec<String>) {
         for message in &messages {
             crate::build::cli_output::log_warn_problem!("{}", message);
@@ -366,6 +394,7 @@ impl PendingManifest {
             preview_uses_places: false,
             restricts_pages: false,
             page_stubs: Default::default(),
+            waiting_link_cards: Default::default(),
             preview_originals: std::collections::BTreeMap::new(),
             blocking_keys: HashSet::new(),
             touched: HashSet::new(),
@@ -375,10 +404,11 @@ impl PendingManifest {
             carried_page_sources,
             page_sources: HashSet::new(),
             unverified: std::collections::BTreeMap::new(),
+            walk: WalkOutcome::Complete,
             articles: None,
             ship_sources: HashMap::new(),
             unwritten_pages: std::collections::BTreeMap::new(),
-            carried_pages: HashSet::new(),
+            carried_pages: Default::default(),
         }
     }
 
@@ -413,6 +443,11 @@ impl PendingManifest {
     /// Record that `stub` is an old address of the author's page at `page`.
     pub(crate) fn register_page_stub(&mut self, stub: &str, page: &str) {
         self.page_stubs.insert(stub.to_string(), page.to_string());
+    }
+
+    /// Record the link cards this build showed with no entry in the folder.
+    pub(crate) fn note_waiting_link_cards(&mut self, urls: Vec<String>) {
+        self.waiting_link_cards.extend(urls);
     }
 
     /// Record that `rel_path`'s output could not be verified this build.
@@ -501,19 +536,25 @@ impl PendingManifest {
     }
 
     /// [`register_hashed`][Self::register_hashed] a page the render left in place,
-    /// remembering that its stage bytes are the previous build's.
-    pub(crate) fn register_carried_page(&mut self, rel_path: &crate::build::served_path::ServedPath, hash: &str) {
+    /// remembering what its stage bytes are.
+    pub(crate) fn register_carried_page(&mut self, rel_path: &crate::build::served_path::ServedPath, hash: &str, stage: StageBytes) {
         self.register_hashed(rel_path, hash, HashBucket::Files);
-        self.carried_pages.insert(rel_path.as_str().to_string());
+        self.carried_pages.insert(rel_path.as_str().to_string(), stage);
     }
 
-    /// Carried pages and the manifest entry each holds, for the slot pass to
-    /// vouch for without reading them.
+    /// Carried pages whose stage bytes `hash` describes, with that entry, for the
+    /// slot pass to vouch for without reading them.
     pub(crate) fn carried_pages(&self) -> std::collections::BTreeMap<String, String> {
         self.carried_pages
             .iter()
-            .filter_map(|path| Some((path.clone(), self.inner.files.get(path)?.clone())))
+            .filter(|(_, stage)| **stage == StageBytes::Sealed)
+            .filter_map(|(path, _)| Some((path.clone(), self.inner.files.get(path)?.clone())))
             .collect()
+    }
+
+    /// Carried pages of [`StageBytes::Newer`] no receipt has replaced the entry of.
+    pub(crate) fn rereads_left(&self) -> impl Iterator<Item = &String> {
+        self.carried_pages.iter().filter(|(_, stage)| **stage == StageBytes::Newer).map(|(path, _)| path)
     }
 
     pub(crate) fn take_unwritten_pages(&mut self) -> std::collections::BTreeMap<String, String> {
@@ -663,6 +704,15 @@ impl PendingManifest {
             inputs.env = carried_env.unwrap_or_default().into_iter().chain(options).collect();
             inputs
         });
+    }
+
+    /// What the render was as of: its day, and whether its output is
+    /// complete; see [`BuildInputs`](crate::build::inputs::BuildInputs).
+    pub(crate) fn set_render_facts(&mut self, day: crate::build::inputs::BuildDay, complete: bool) {
+        if let Some(inputs) = self.inner.build_inputs.as_mut() {
+            inputs.day = Some(day);
+            inputs.complete = complete;
+        }
     }
 
     /// Set the plugin and builder fingerprints on the pending manifest. These
@@ -993,9 +1043,11 @@ impl PendingManifest {
             preview_originals: self.preview_originals,
             restricts_pages: self.restricts_pages,
             page_stubs: self.page_stubs,
+            waiting_link_cards: self.waiting_link_cards,
             blocking_keys: self.blocking_keys,
             generation_id,
             unverified: self.unverified,
+            walk: self.walk,
             articles: self.articles,
             ship_sources,
             late: self.late,
@@ -1022,6 +1074,7 @@ pub struct SealedManifest {
     preview_originals: std::collections::BTreeMap<String, Option<String>>,
     restricts_pages: bool,
     page_stubs: std::collections::BTreeMap<String, String>,
+    waiting_link_cards: std::collections::BTreeSet<String>,
     blocking_keys: HashSet<String>,
     /// Content-derived identity computed at seal time. 16 lowercase hex chars
     /// (xxh3_64 over BTreeMap-sorted `"{path}\x00{entry_value}\n"` pairs).
@@ -1030,6 +1083,7 @@ pub struct SealedManifest {
     /// Every output a producer or the presence pass could not verify, with the
     /// error — never persisted; it exists to withhold this generation.
     unverified: std::collections::BTreeMap<String, String>,
+    walk: WalkOutcome,
     /// The render's own article map, written beside the generation when it is
     /// materialized; never persisted with the manifest.
     articles: Option<std::sync::Arc<crate::build::scan::article_map::ArticleMap>>,
@@ -1138,6 +1192,11 @@ impl SealedManifest {
     /// the generation must not be promoted (`ship::ShipVerdict`).
     pub fn unverified(&self) -> &std::collections::BTreeMap<String, String> {
         &self.unverified
+    }
+
+    /// Whether this render's asset walk reached the end.
+    pub(crate) fn walk(&self) -> WalkOutcome {
+        self.walk
     }
 
     /// Record an output the presence pass could not verify. Its entry is kept:
@@ -1302,6 +1361,10 @@ impl SealedManifest {
     pub fn write_to_disk(&self, path: &Path) -> std::io::Result<()> {
         let json = serde_json::to_string_pretty(&self.inner)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        // Beside the manifest and in the same step, so it describes the same generation;
+        // first, so a crash between the writes over-reports instead of leaving a stale list.
+        let waiting = serde_json::to_string(&self.waiting_link_cards).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        crate::build::io_utils::write_output(&crate::build::page::link_meta::waiting_path(path), waiting.as_bytes())?;
         crate::build::io_utils::write_output(path, json.as_bytes())
     }
 

@@ -541,9 +541,11 @@ pub fn generate_blocking_content_for_build(
     // `ChangeProof::allows_parse_cache_reuse`.
     //
     // The fingerprint covers Loop A's inputs that are not any page's own bytes
-    // — most importantly `page_map`, which pre-scans every file's frontmatter,
-    // so a folder index's `url:` edit reshapes URLs for a whole subtree while
-    // moving no other file. A mismatch bypasses the cache for the entire build.
+    // and that no page records — most importantly `dir_overrides`, so a folder
+    // index's `url:` edit reshapes URLs for a whole subtree while moving no
+    // other file. A mismatch bypasses the cache for the entire build. What a
+    // page asks of the rest of the site is recorded with its answer instead
+    // (`parse_cache::Read`), and `parse_answers` re-asks it.
     //
     // Arm the math-equation render cache's disk level for this build, once,
     // before any page's markdown is rendered (this function is the single
@@ -560,15 +562,8 @@ pub fn generate_blocking_content_for_build(
         &paths.cache_hash_index(),
         site_config.incremental.parse_cache,
         crate::build::parse_cache::inputs_fingerprint(
-            &project_structure
-                .markdown_files
-                .iter()
-                .map(|f| f.path.clone())
-                .collect::<Vec<_>>(),
-            &page_map,
             &dir_overrides,
             &external_url_map,
-            &home_file_winners,
             root_folder_name,
             // MIRROR OF `process_markdown_file`'s SIGNATURE. Every build-level
             // scalar that reaches that call below — and therefore can change a
@@ -591,6 +586,8 @@ pub fn generate_blocking_content_for_build(
             )),
         ),
     );
+
+    let parse_answers = crate::build::parse_cache::Answers { graph: &content_graph, page_map: &page_map, folder_languages: &folder_languages, home_winners: &home_file_winners };
 
     // Process markdown files. Emits `MossEvent::BackgroundProgress` under task
     // "markdown" every MARKDOWN_PROGRESS_STRIDE files so both the GUI
@@ -751,7 +748,7 @@ pub fn generate_blocking_content_for_build(
                     // whole-corpus passes downstream cannot tell the two apart.
                     // Its source hash is the one the replay was validated
                     // against (`ParseSession::replayed_sources`).
-                    if let Some(cached) = parse_session.lookup(&file_info.path) {
+                    if let Some(cached) = parse_session.lookup(&file_info.path, &parse_answers) {
                         return Some((cached, None));
                     }
 
@@ -988,10 +985,13 @@ pub fn generate_blocking_content_for_build(
                     md_process_ns.fetch_add(t_process.elapsed().as_nanos() as u64, Ordering::Relaxed);
                     Some(doc)
                     };
-                    let mut doc = parse(&content)?;
-                    if crate::build::scan::members::has_gated_version(&content, &source_content) {
-                        doc.members_full = parse(&source_content).map(Box::new);
-                    }
+                    let doc = parse_session.recording(&file_info.path, &parse_answers, || {
+                        let mut doc = parse(&content)?;
+                        if crate::build::scan::members::has_gated_version(&content, &source_content) {
+                            doc.members_full = parse(&source_content).map(Box::new);
+                        }
+                        Some(doc)
+                    })?;
                     Some((doc, Some((source_content, stat_before_read))))
                 },
             )
@@ -1047,12 +1047,14 @@ pub fn generate_blocking_content_for_build(
     for record in &source_records {
         let doc = &mut documents[record.document_index];
         let public_source = members_policy.public_source(&record.source_path, &record.source);
-        doc.missing_reference_occurrences = crate::build::types::MissingReferenceOccurrence::from_authored_source(
-            &record.source_path,
-            &public_source,
-            &authored_evidence_parse_config,
-            &reference_context,
-        );
+        doc.missing_reference_occurrences = parse_session.recording(&record.source_path, &parse_answers, || {
+            crate::build::types::MissingReferenceOccurrence::from_authored_source(
+                &record.source_path,
+                &public_source,
+                &authored_evidence_parse_config,
+                &reference_context,
+            )
+        });
         gated_embeds.extend(crate::build::scan::members::gated_embeds(members_policy, &record.source_path, &public_source, doc.members_full.is_some().then_some(record.source.as_str()), &authored_evidence_parse_config, &content_graph));
         parse_session.note_source_bytes(&record.source_path, record.source.as_bytes(), record.stat());
         parse_session.verify_shadow(&record.source_path, doc);
@@ -1453,10 +1455,10 @@ pub fn generate_blocking_content_for_build(
     //
     // Which optional partials this build ships is a site-level fact — the
     // union of every page's parse-time features with the resolved config.
-    // `site_assets` is NOT what invalidates the incremental render skip: it
-    // changes the sheet's *contents*, and `css_version` — a hash of those
-    // contents, folded into `asset_versions` below — is what the skip reads.
-    // See the note on `SiteAssets` itself.
+    // A sheet's *contents* reach the render skip through `css_version`, a hash
+    // of them folded into `asset_versions` below. Which sheets and scripts the
+    // shell links reaches it through the verdict's site-features digest, which
+    // hashes `site_assets` whole. See the note on `SiteAssets` itself.
     //
     // Whether this build will produce media collection pages. Derived here,
     // from the same pure fold the media loop uses 1,700 lines below, because
@@ -1533,6 +1535,9 @@ pub fn generate_blocking_content_for_build(
     let theme_css = user_css_content.as_deref().map(|content| {
         crate::build::emit::theme_css_assets::for_site(content, source_path_buf, &input_evidence)
     });
+    // Read when the first page is rendered, so a build that carries every page reads no theme file.
+    let card_theme = std::sync::LazyLock::new(|| crate::build::page::og_card::theme::CardTheme::of_site(user_css_content.as_deref(), source_path_buf, &input_evidence));
+    let new_og_sink = || crate::build::page::og_card::OgSink::for_build(defer_title_cards, &previous_hashes.files, &filename_covers, std::sync::Arc::clone(&card_theme));
     let user_css_version = user_css_content.as_ref().zip(theme_css.as_ref()).map(|(content, themed)| {
         // Warn when theme references pre-v1 (Retired) class
         // vocabulary. Non-fatal; one warning per retired class found.
@@ -1656,9 +1661,7 @@ pub fn generate_blocking_content_for_build(
     };
 
 
-    // Compute site-wide sidebar layout flag: true when ANY document has `sidebar` set.
-    // Used by templates to adjust content width (Task 3).
-    let has_sidebar_layout = documents.iter().any(|d| d.sidebar.is_some());
+    let has_sidebar_layout = super::page_chrome::has_sidebar_layout(&documents);
 
     // Term derivation already ran above, before `expand_markers_in_documents`
     // — see that call site for why. `term_index` is in scope from here on;
@@ -1698,6 +1701,7 @@ pub fn generate_blocking_content_for_build(
     // The computation itself lives in `render/incremental/verdict.rs`: it was
     // produced here, logged here, and consumed by exactly one `partition`
     // fifty lines below, so nothing else in the build could learn it.
+    let staged_render = crate::build::emit::slots::staged_render(&paths);
     let verdict = crate::build::render::incremental::verdict::compute(
         &documents,
         &crate::build::render::incremental::verdict::VerdictInputs {
@@ -1714,6 +1718,9 @@ pub fn generate_blocking_content_for_build(
             build_day: now.date(),
             render_id: pending.render_id(),
             sealed_render_id: previous_hashes.render_id.as_deref(),
+            staged_render_id: staged_render.as_deref(),
+            graph: Some(&content_graph),
+            site_assets: &site_assets,
         },
     );
     // The carry machinery's own price, and on a real vault the largest single
@@ -1775,18 +1782,22 @@ pub fn generate_blocking_content_for_build(
     let homepage_index_sp = ServedPath::from_source("index.html").unwrap();
     // An authored homepage is written by the asset copy: nothing is rendered or carried there.
     let authored_home = owned_by_documents.contains(homepage_index_sp.as_str());
+    // A page this build may leave on the stage, with the proof it is still there.
+    let carry_proof = |doc: &ParsedDocument| {
+        crate::build::render::incremental::CarryProof::for_document(
+            doc,
+            &verdict,
+            &previous_hashes,
+            output_dir,
+            &site_url,
+            layout_config.assets.selection_tools,
+        )
+    };
     let homepage_carry_proof = documents
         .iter()
         .find(|d| d.url_path == "index.html" && !authored_home)
         .and_then(|doc| {
-            crate::build::render::incremental::CarryProof::for_document(
-                doc,
-                &verdict,
-                &previous_hashes,
-                output_dir,
-                &site_url,
-                layout_config.assets.selection_tools,
-            )
+            carry_proof(doc)
         });
     let homepage_carried = homepage_carry_proof.is_some();
 
@@ -1864,14 +1875,7 @@ pub fn generate_blocking_content_for_build(
                     || owned_by_documents.contains(&doc.url_path))
             })
             .fold((Vec::new(), Vec::new()), |(mut render, mut carry), doc| {
-                match crate::build::render::incremental::CarryProof::for_document(
-                    doc,
-                    &verdict,
-                    &previous_hashes,
-                    output_dir,
-                    &site_url,
-                    layout_config.assets.selection_tools,
-                ) {
+                match carry_proof(doc) {
                     Some(proof) => carry.push((doc, proof)),
                     None => render.push(doc),
                 }
@@ -1902,8 +1906,9 @@ pub fn generate_blocking_content_for_build(
         // before any page below reads the cache, so a card is complete on
         // this build. Only a build that exits when done fetches here: it has
         // no next build to finish a card for it, so it gets the full fetch
-        // budget; an interactive rebuild never blocks on the network (the
-        // app fetches in the background). All of `documents`, not just
+        // budget; an interactive rebuild never blocks on the network (it
+        // asks for the cards it lacks in the background once it returns,
+        // `features::sync::fetch_link_meta_in_background`). All of `documents`, not just
         // `to_render`, because the homepage and the generated indexes render
         // further down, outside that partition. URLs already fresh in the
         // cache cost nothing.
@@ -1927,12 +1932,13 @@ pub fn generate_blocking_content_for_build(
         // its files linked into today's staging even when nothing new was
         // fetched above. Cheap on a warm cache (a CAS copy, not a
         // re-encode). Reads the link-meta cache directly rather than
-        // reusing whatever the fetch above returned, so a URL fetched by
-        // the DESKTOP APP's background sync (never this `if` above) still
-        // gets its cover materialized here.
+        // reusing whatever the fetch above returned, so a URL an earlier
+        // background fetch wrote still gets its cover materialized here.
         if !external_urls_this_build.is_empty() {
             let url_refs: Vec<&str> = external_urls_this_build.iter().map(String::as_str).collect();
             let mut link_meta_cache = crate::build::page::link_meta::read_link_meta_from_cache(&url_refs, &moss_dir, Some(&input_evidence));
+            // Taken after the fetch above, so a build that exits records only the cards it could not fetch.
+            pending.note_waiting_link_cards(crate::build::page::link_meta::waiting_cards(&link_meta_cache, &moss_dir));
             let _trace = PhaseTrace::start("remote_cover_materialize");
             crate::build::media::remote_cover::materialize_remote_covers(
                 &mut link_meta_cache,
@@ -1964,11 +1970,7 @@ pub fn generate_blocking_content_for_build(
                 let url_sp = ServedPath::from_source(&doc.url_path)
                     .map_err(|e| format!("Failed to construct article URL path: {}", e))?;
                 let output_file_path = output_dir.join(url_sp.as_str());
-                let mut og_outputs = if defer_title_cards {
-                    crate::build::page::og_card::OgSink::deferred(&previous_hashes.files, &filename_covers)
-                } else {
-                    crate::build::page::og_card::OgSink::new(&previous_hashes.files, &filename_covers)
-                };
+                let mut og_outputs = new_og_sink();
                 // `is_homepage` used to be hardcoded false here, so only the
                 // site-default-locale home (rendered separately below, never
                 // reaching this generic loop) carried `data-page="home"` —
@@ -2211,24 +2213,14 @@ pub fn generate_blocking_content_for_build(
                     project_structure,
                 );
 
-            // NOTE: an empty `folder_docs` is not skipped here. The scan lists
-            // only folders holding a file, so a folder reaching this loop with no
-            // documents holds something else (an image, say) and keeps its page.
-            // `generate_children` returns "" for an empty slice, so the page
-            // degrades to a title-only listing with full nav/chrome. Doc-derived
-            // folders always have ≥1 child.
+            // An empty `folder_docs` is not skipped: the plan admits only a
+            // folder with a page somewhere beneath it, or a term page, so an
+            // empty slice here is a folder whose pages sit deeper down.
 
             let auto_url_path = format!("{}/index.html", folder);
             let folder_doc = &documents[entry.document_index];
             let mut verification_snapshot = None;
-            if let Some(proof) = crate::build::render::incremental::CarryProof::for_document(
-                folder_doc,
-                &verdict,
-                &previous_hashes,
-                output_dir,
-                &site_url,
-                layout_config.assets.selection_tools,
-            ) {
+            if let Some(proof) = carry_proof(folder_doc) {
                 if carry_verification.is_some() {
                     verification_snapshot =
                         crate::build::render::incremental::CarryVerification::read_previous(
@@ -2463,7 +2455,7 @@ pub fn generate_blocking_content_for_build(
     // not the site has a deployed address, so a preview serves the links the
     // pages carry.
     shared.calendar.emit(output_dir, pending)?;
-    emit_atproto_did(&site_config.identity, output_dir, pending)?;
+    site_config.identity.emit(&previous_hashes, output_dir, pending)?;
     log::debug!(target: "timing", "[render] prelude: rss+sitemap+robots+qr: {:?}", total_start.elapsed());
 
     // Search indexing (Pagefind) does NOT run here. Pagefind walks rendered
@@ -2548,11 +2540,7 @@ pub fn generate_blocking_content_for_build(
             homepage_carry_proof.as_ref().expect("homepage carry has proof").register_all(pending);
         } else if !authored_home {
             let _phase_home = PhaseTrace::start("render_homepage");
-            let mut homepage_og_outputs = if defer_title_cards {
-                crate::build::page::og_card::OgSink::deferred(&previous_hashes.files, &filename_covers)
-            } else {
-                crate::build::page::og_card::OgSink::new(&previous_hashes.files, &filename_covers)
-            };
+            let mut homepage_og_outputs = new_og_sink();
             let index_html = render_page(&render_context,
                 homepage_doc, homepage_doc.is_some(), Some(&mut homepage_og_outputs),
             )?;
@@ -3435,19 +3423,6 @@ pub(super) struct ResolvedFavicon {
     /// every size in `SIZES` for an SVG favicon, the sizes that fit a supplied
     /// PNG, or none. The pages link exactly these.
     pub raster_sizes: Vec<u32>,
-}
-
-/// Writes the file an AT Protocol handle check reads, when the site names its DID.
-fn emit_atproto_did(
-    identity: &crate::config::site_identity::SiteIdentity,
-    output_dir: &Path,
-    pending: &mut PendingManifest,
-) -> Result<(), String> {
-    let Some(did) = identity.atproto_did() else { return Ok(()) };
-    let path = ServedPath::for_atproto_did();
-    BuildContext::for_render(output_dir, pending)
-        .emit(&path, format!("{did}\n").as_bytes(), HashBucket::Files)
-        .map_err(|e| format!("Failed to emit {}: {}", path.as_str(), e))
 }
 
 /// Registers the favicon PNGs that `resolve_favicon` wrote in the build's

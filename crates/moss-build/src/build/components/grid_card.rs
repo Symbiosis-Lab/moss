@@ -101,7 +101,7 @@ pub fn render_item_with_typesetting(
                 quote.map(|d| format!("<p>{}</p>", render_description_html_in_link(d))).unwrap_or_default(),
             )
         }
-        _ => r#"<div class="moss-card-cover moss-card-no-cover"></div>"#.to_string(),
+        _ => moss_core::ast::link_card::NO_COVER.to_string(),
     };
 
     // One shared ladder for every cover type: `|color=` override →

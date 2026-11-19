@@ -532,14 +532,14 @@ async fn a_translation_made_is_handed_to_the_host() {
 }
 
 #[tokio::test]
-async fn a_renamed_picture_asks_for_no_rebuild() {
+async fn a_renamed_picture_is_told_to_the_host() {
     let (_d, root) = pages();
     // allow:raw_write test fixture picture in a temp folder
     std::fs::write(root.join("pic.png"), b"png").unwrap();
     let host = TestHost::site(&root);
     ok::<Value>(write::dispatch(&host, "rename_entry_with_refs", json!({ "oldPath": "pic.png", "newPath": "photo.png" })).await).await;
     assert!(root.join("photo.png").exists());
-    assert!(host.moved.lock().unwrap().is_empty());
+    assert_eq!(*host.moved.lock().unwrap(), vec![("pic.png".to_string(), "photo.png".to_string())]);
 }
 
 #[tokio::test]

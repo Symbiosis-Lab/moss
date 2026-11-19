@@ -169,7 +169,7 @@ fn a_prebuilt_publish_records_its_tree_and_keeps_the_note_ids() {
         panic!("the note IDs last seen live must survive a prebuilt publish")
     };
     assert_eq!(live.urls_by_uid().get("aabbccdd"), Some(&"kept/"));
-    let next = crate::build::manifest::change_set::classify(Some(&record), &manifest);
+    let next = crate::build::manifest::change_set::classify(Some(&record), manifest.site_hashes_view());
     assert!(next.classified && next.added == 1 && next.edited == 0 && next.deleted == 0, "{next:?}");
 }
 
@@ -453,7 +453,7 @@ async fn a_landing_writes_each_published_pages_uid_and_nothing_else() {
     let now: Vec<(String, String)> = ["index.md", "posts/a.md", "posts/held.md", "posts/bare.md"].iter().map(|p| (p.to_string(), read(vault.path(), p))).collect();
     let now: Vec<(&str, &str)> = now.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
     let next_build = stamped_vault(&now, &[], &[], &["index.md", "posts/a.md", "posts/held.md", "posts/bare.md"]).1;
-    let left = crate::build::manifest::change_set::classify(Some(&record), &next_build);
+    let left = crate::build::manifest::change_set::classify(Some(&record), next_build.site_hashes_view());
     assert!(left.pages.is_empty(), "the stamp is not a change to publish: {:?}", left.pages);
 }
 

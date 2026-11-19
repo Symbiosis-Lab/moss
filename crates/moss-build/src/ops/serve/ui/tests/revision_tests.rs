@@ -146,7 +146,9 @@ async fn revoked_stream_cannot_deliver_queued_event() {
     let mut request = f.request("GET", "/__moss/events", json!(null));
     request.headers_mut().insert("cookie", cookie.parse().unwrap());
     let mut body = f.send(request).await.into_body();
-    assert!(tokio::time::timeout(std::time::Duration::from_millis(10), body.frame()).await.is_err());
+    // Open, not silent: the event bus is process-wide, so a sibling test's build may already have sent a frame.
+    let opened = tokio::time::timeout(std::time::Duration::from_millis(10), body.frame()).await;
+    assert!(!matches!(opened, Ok(None)), "the stream ended before the revocation");
     SignInLink::new(f.session_path.clone(), &f.site).unwrap().revoke_session(&id).unwrap();
     super::super::super::events::publish_named("revocation-test", json!({}));
     assert!(tokio::time::timeout(std::time::Duration::from_secs(1), body.frame()).await.unwrap().is_none());

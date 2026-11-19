@@ -56,9 +56,10 @@
 //! | returns an error | entry removed | **yes**, on a later pass |
 //! | never returns (wedge) | entry stays forever | **no** — `read()` suppresses it |
 //!
-//! So the file that ate a thread is exactly the file moss will never ask for
-//! again. A dead provider costs at most [`READERS`] threads total, no matter
-//! how many sweeps run — the retry loop cannot compound the damage.
+//! So the file that ate a thread is exactly the file moss will not ask for
+//! again while that read lives, and the retry loop cannot compound the damage.
+//! The thread itself is given up once the read outlives its bound; `abandon`
+//! says what that costs.
 //!
 //! # Then why does this module exist at all?
 //!
@@ -90,9 +91,9 @@
 //!
 //! Those threads are this module. They call
 //! `platform::materialize_on_this_thread()` once and then do nothing else for
-//! their whole lives but execute owned file operations. A provider that stops answering costs moss one
-//! thread per wedged file and nothing else — and when they are all gone, no
-//! progress is possible by any means, which the supervisor reports as a stall.
+//! their whole lives but execute owned file operations. A provider that stops
+//! answering costs moss threads, never the app, and the pool says so
+//! for each folder (`verdict`); `abandon` bounds the threads.
 //!
 //! So this is not a download mechanism. It is an isolation boundary around the
 //! OS's download mechanism.
@@ -108,15 +109,21 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use crate::build::cloud_readiness::storage::{Operation, OperationKey, OperationTask, OperationOwner, OperationPolicy};
 
+mod abandon;
 mod operations;
+mod verdict;
+pub use verdict::Watch;
+use abandon::{Lane, Running};
+pub(crate) use abandon::Bounds;
 use operations::{structural_reader_loop, finish_operation};
 
 /// How many reads moss will have outstanding at once.
 ///
-/// Chosen as a **blast radius**: the number of threads moss can lose to a
-/// provider that stops answering and still function. Losing all eight is a
-/// bounded, reportable condition; an unbounded pool would be a thread leak with
-/// no verdict at the end of it.
+/// Chosen as a **blast radius**: a read the provider holds past its bound has
+/// its thread given up and replaced once, so moss loses at most this many more
+/// threads to a provider that stops answering. That is a bounded, reportable
+/// condition; an unbounded pool would be a thread leak with no verdict at the
+/// end of it.
 ///
 /// It does also bound throughput, and pretending otherwise would be wrong: only
 /// eight files can be materializing at a time, and at the 13–16 s per-file floor
@@ -315,17 +322,18 @@ pub struct Snapshot {
     /// reportable. `in_flight` alone cannot distinguish eight files downloading
     /// healthily (observed floor is 13–16 s each, even for a few hundred bytes)
     /// from eight reads that have made no observable progress. Age is a
-    /// diagnostic, not proof of failure; the path names the file, which in the vault this
-    /// design came from was the single `.moss/identity/secret-key` that took
-    /// the whole app down.
+    /// diagnostic, not proof of failure; the path names the file. A job whose
+    /// thread was given up still counts here, since that is the file the stall
+    /// is about.
     ///
-    /// A wedged file is also, by construction, never handed over again: it
-    /// stays in `pending` because its read never returns, so `read()` suppresses
-    /// every later attempt. That is what makes the unbounded re-hand-off from
-    /// the sweep safe — moss cannot accumulate threads on a dead provider,
-    /// because the file that ate the thread is the one it will never re-ask for.
+    /// A wedged file is also, by construction, not handed over again while its
+    /// read lives: it stays in `pending`, so `read()` suppresses every later
+    /// attempt. That is what makes the unbounded re-hand-off from the sweep
+    /// safe: the file that ate a thread is the one moss will not re-ask for.
     pub oldest_read: Option<(PathBuf, Duration)>,
     pub reads: ReadTally,
+    /// Threads given up on a job the provider has not answered, not yet returned.
+    pub parked: usize,
 }
 
 /// How the byte reads that returned since startup ended. A provider that
@@ -372,8 +380,8 @@ enum BackgroundWork {
 struct Queue {
     structural: VecDeque<(OperationKey, Arc<OperationTask>, Instant)>,
     operation_pending: HashMap<OperationKey, Arc<OperationTask>>,
-    structural_in_flight: HashMap<OperationKey, Instant>,
-    cache_in_flight: HashMap<OperationKey, Instant>,
+    structural_in_flight: HashMap<OperationKey, Running>,
+    cache_in_flight: HashMap<OperationKey, Running>,
     structural_arrivals: HashMap<OperationKey, OperationOwner>,
     capacity_waiters: HashMap<PathBuf, OperationOwner>,
     editor_intents: VecDeque<(OperationKey, OperationOwner)>,
@@ -391,14 +399,17 @@ struct Queue {
     /// Reads currently outstanding, and when each started. Keyed rather than
     /// counted so a stall can name the file and its age — see
     /// [`Snapshot::oldest_read`].
-    in_flight: HashMap<PathBuf, Instant>,
-    bytes_in_flight: usize,
+    in_flight: HashMap<PathBuf, Running>,
+    /// Threads given up on a provider that stopped answering, and the probe.
+    ab: abandon::Abandonment,
     /// Active concrete read failures, pruned by the folder’s next sweep.
     failures: HashSet<PathBuf>,
     /// Reads and operations finished. Counted in the same locked step that
     /// frees their slot, so a snapshot never sees one both done and in flight.
     done: u64,
     reads: ReadTally,
+    /// Each watched folder's evidence that the provider is not sending.
+    verdicts: Vec<(PathBuf, verdict::Verdict)>,
     /// When a reader last took a job: a publication waiting for room waits
     /// only while the queue is moving.
     last_pop: Instant,
@@ -434,6 +445,8 @@ struct Inner {
     work: Condvar,
     structural_work: Condvar,
     materialize: Materializer,
+    /// Whether a file a read returned is still in the cloud.
+    evicted: fn(&Path) -> bool,
     settlement_emitter: Mutex<Option<crate::ops::watch::EventRelay>>,
     bytes_limit: usize,
     publication_limit: usize,
@@ -441,6 +454,9 @@ struct Inner {
     admission: usize,
     /// This pool's share of [`PUBLICATION_FAILURES`].
     publication_failures: AtomicU64,
+    bounds: Bounds,
+    /// Threads opt in to materialization; false in tests.
+    opt_in: bool,
 }
 
 /// A fixed set of expendable workers for byte reads and owned native file
@@ -453,18 +469,31 @@ impl Prefetcher {
     /// Start the real thing: threads that opt themselves in to materialization
     /// and then read whatever they are handed.
     pub fn new() -> Self {
-        Self::with_lanes(READERS, PUBLICATION_READERS, Arc::new(materialize), true)
+        Self::with_lanes(READERS, PUBLICATION_READERS, Arc::new(materialize), true, Bounds::PROVIDER, crate::build::icloud::is_evicted)
     }
 
     /// Test seam. `opt_in` is false so a test's threads do not touch the
     /// process's I/O policy. Byte reads and publications share the `readers`.
     pub fn with_materializer(readers: usize, materialize: Materializer, opt_in: bool) -> Self {
-        Self::with_lanes(readers, 0, materialize, opt_in)
+        Self::with_lanes(readers, 0, materialize, opt_in, Bounds::PROVIDER, crate::build::icloud::is_evicted)
+    }
+
+    /// [`with_materializer`](Self::with_materializer) with short bounds, so a
+    /// test sees a thread given up in milliseconds.
+    #[cfg(test)]
+    pub(crate) fn with_bounds(readers: usize, materialize: Materializer, bounds: Bounds) -> Self {
+        Self::with_lanes(readers, 0, materialize, false, bounds, crate::build::icloud::is_evicted)
+    }
+
+    /// [`with_bounds`](Self::with_bounds) with `evicted` saying which returned files stayed in the cloud.
+    #[cfg(test)]
+    pub(crate) fn with_residency(readers: usize, materialize: Materializer, bounds: Bounds, evicted: fn(&Path) -> bool) -> Self {
+        Self::with_lanes(readers, 0, materialize, false, bounds, evicted)
     }
 
     /// `readers` threads for byte reads, of which all but two may serve the
     /// background, plus `publication_readers` more that publications may use.
-    fn with_lanes(readers: usize, publication_readers: usize, materialize: Materializer, opt_in: bool) -> Self {
+    fn with_lanes(readers: usize, publication_readers: usize, materialize: Materializer, opt_in: bool, bounds: Bounds, evicted: fn(&Path) -> bool) -> Self {
         let background = readers.saturating_sub(2).max(1);
         let inner = Arc::new(Inner {
             queue: Mutex::new(Queue {
@@ -480,10 +509,11 @@ impl Prefetcher {
                 foreground: VecDeque::new(),
                 pending: HashSet::new(),
                 in_flight: HashMap::new(),
-                bytes_in_flight: 0,
+                ab: abandon::Abandonment::new(readers + publication_readers, STRUCTURAL_READERS),
                 failures: HashSet::new(),
                 done: 0,
                 reads: ReadTally::default(),
+                verdicts: Vec::new(),
                 last_pop: Instant::now(),
                 shutdown: false,
             }),
@@ -495,34 +525,12 @@ impl Prefetcher {
             publication_limit: if publication_readers == 0 { background } else { publication_readers },
             admission: if publication_readers == 0 { BACKGROUND_WAITING } else { PUBLICATION_WAITING },
             publication_failures: AtomicU64::new(0),
+            bounds,
+            opt_in,
+            evicted,
         });
-        for i in 0..readers + publication_readers {
-            let inner = Arc::clone(&inner);
-            // Deliberately not retained for `join`: a thread blocked in the
-            // kernel on a provider that has stopped answering cannot be
-            // interrupted, so joining at shutdown would hang the quit. These
-            // are daemons — the process exits and takes them with it. That is
-            // the whole point of them being separate threads.
-            let _ = std::thread::Builder::new()
-                .name(format!("moss-cloud-{i}"))
-                .spawn(move || {
-                    if opt_in {
-                        crate::platform::materialize_on_this_thread();
-                    }
-                    ON_READER.with(|on| on.set(true));
-                    reader_loop(&inner);
-                });
-        }
-        for i in 0..STRUCTURAL_READERS {
-            let inner = Arc::clone(&inner);
-            let _ = std::thread::Builder::new()
-                .name(format!("moss-cloud-structure-{i}"))
-                .spawn(move || {
-                    if opt_in { crate::platform::materialize_on_this_thread(); }
-                    ON_READER.with(|on| on.set(true));
-                    structural_reader_loop(&inner);
-                });
-        }
+        for i in 0..readers + publication_readers { abandon::spawn(&inner, Lane::Readers, i); }
+        for i in 0..STRUCTURAL_READERS { abandon::spawn(&inner, Lane::Structural, i); }
         Self { inner }
     }
 
@@ -553,6 +561,7 @@ impl Prefetcher {
         if q.shutdown {
             return;
         }
+        abandon::reap(&mut q, &self.inner, Instant::now());
         if q.pending.contains(path) {
             if foreground {
                 if let Some(index) = q.bytes.iter().position(|p| p == path) {
@@ -579,9 +588,16 @@ impl Prefetcher {
         self.inner.work.notify_one();
     }
 
+    /// The task for `key` while it is queued or running.
+    #[cfg(test)]
+    pub(crate) fn running_operation(&self, key: &OperationKey) -> Option<Arc<OperationTask>> {
+        self.inner.queue.lock().ok()?.operation_pending.get(key).cloned()
+    }
+
     pub(crate) fn structural_operation(&self, key: OperationKey, attempt: Operation) -> Option<Arc<OperationTask>> {
         let mut q = self.inner.queue.lock().ok()?;
         if q.shutdown { return None; }
+        abandon::reap(&mut q, &self.inner, Instant::now());
         if let Some(task) = q.operation_pending.get(&key) {
             let task = task.clone();
             let mut state = task.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -643,6 +659,7 @@ impl Prefetcher {
         let mut q = self.inner.queue.lock().ok()?;
         loop {
             if q.shutdown { return None; }
+            abandon::reap(&mut q, &self.inner, Instant::now());
             if let Some(task) = q.operation_pending.get(&key) { return Some(task.clone()); }
             if q.publications.len() < self.inner.admission { break; }
             let until = end.min(q.last_pop + stall);
@@ -697,13 +714,15 @@ impl Prefetcher {
     /// [`drain_publications`](Self::drain_publications) for the publications
     /// `wanted` names only, ending at `cap` as well as at the stall.
     pub(crate) fn drain_where(&self, stall: Duration, cap: Option<Duration>, wanted: &dyn Fn(&OperationKey) -> bool, every: Duration, progress: &mut dyn FnMut(usize)) -> usize {
-        let pending = |q: &Queue| q.cache_in_flight.keys().filter(|key| wanted(key)).count() + q.publications.iter().filter(|(key, _, _)| wanted(key)).count();
+        // Queued, running, retrying and given-up publications alike.
+        let pending = |q: &Queue| q.operation_pending.keys().filter(|key| matches!(key.policy, OperationPolicy::CachePublication { .. }) && wanted(key)).count();
         let mut q = self.inner.queue.lock().unwrap_or_else(|e| e.into_inner());
         let started = Instant::now();
         let end = cap.map(|cap| started + cap);
         let (mut left, mut landed_at, mut said_at) = (pending(&q), started, started);
         loop {
             let now = Instant::now();
+            abandon::reap(&mut q, &self.inner, now);
             if left == 0 || now >= landed_at + stall || end.is_some_and(|end| now >= end) { return left; }
             if now >= said_at + every { progress(left); said_at = now; }
             // Every finished job notifies `work`.
@@ -757,22 +776,36 @@ impl Prefetcher {
     /// Queue depth and in-flight count, for the stall diagnosis.
     pub fn snapshot(&self) -> Snapshot {
         let now = Instant::now();
-        match self.inner.queue.lock() {
-            Ok(q) => Snapshot {
-                waiting: q.bytes.len() + q.publications.len() + q.foreground.len() + q.structural.len(),
-                in_flight: q.in_flight.len() + q.structural_in_flight.len() + q.cache_in_flight.len(),
-                done: q.done,
-                oldest_read: q
-                    .in_flight
-                    .iter()
-                    .chain(q.structural_in_flight.iter().map(|(key, started)| (&key.path, started)))
-                    .chain(q.cache_in_flight.iter().map(|(key, started)| (&key.path, started)))
-                    .min_by_key(|(_, started)| **started)
-                    .map(|(path, started)| (path.clone(), now.saturating_duration_since(*started))),
-                reads: q.reads,
-            },
-            Err(_) => Snapshot { waiting: 0, in_flight: 0, done: 0, oldest_read: None, reads: ReadTally::default() },
+        let Ok(mut q) = self.inner.queue.lock() else {
+            return Snapshot { waiting: 0, in_flight: 0, done: 0, oldest_read: None, reads: ReadTally::default(), parked: 0 };
+        };
+        abandon::reap(&mut q, &self.inner, now);
+        Snapshot {
+            waiting: q.bytes.len() + q.publications.len() + q.foreground.len() + q.structural.len(),
+            in_flight: q.in_flight.len() + q.structural_in_flight.len() + q.cache_in_flight.len(),
+            done: q.done,
+            oldest_read: q
+                .in_flight
+                .iter()
+                .map(|(path, running)| (path, running.started))
+                .chain(q.structural_in_flight.iter().map(|(key, running)| (&key.path, running.started)))
+                .chain(q.cache_in_flight.iter().map(|(key, running)| (&key.path, running.started)))
+                .chain(q.ab.parked().map(|(path, started)| (path, *started)))
+                .min_by_key(|(_, started)| *started)
+                .map(|(path, started)| (path.clone(), now.saturating_duration_since(started))),
+            reads: q.reads,
+            parked: q.ab.parked().count(),
         }
+    }
+
+    /// Give up the threads past their bound. For a caller that polls and has no other reason to enter the pool.
+    pub(crate) fn reap(&self) {
+        if let Ok(mut q) = self.inner.queue.lock() { abandon::reap(&mut q, &self.inner, Instant::now()); }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn threads_started(&self) -> usize {
+        self.inner.queue.lock().unwrap().ab.spawned()
     }
 
     /// Concrete errors among the sweep's current pending set. Names are a
@@ -839,67 +872,85 @@ impl Drop for Prefetcher {
 }
 
 fn reader_loop(inner: &Arc<Inner>) {
+    let bounds = inner.bounds;
     loop {
-        let (work, background) = {
+        let work = {
             let mut q = match inner.queue.lock() { Ok(q) => q, Err(_) => return };
-            loop {
+            let work = loop {
                 if q.shutdown { return; }
-                if let Some(path) = q.foreground.pop_front() {
-                    q.in_flight.insert(path.clone(), Instant::now());
-                    break (BackgroundWork::Bytes(path), false);
-                }
                 let now = Instant::now();
-                if q.bytes_in_flight < inner.bytes_limit {
-                    if let Some(path) = q.bytes.pop_front() {
-                        q.in_flight.insert(path.clone(), now);
-                        q.bytes_in_flight += 1;
-                        break (BackgroundWork::Bytes(path), true);
+                abandon::reap(&mut q, inner, now);
+                let mut wake = q.ab.gate(Lane::Readers, now);
+                if wake.is_none() {
+                    if let Some(path) = q.foreground.pop_front() {
+                        q.in_flight.insert(path.clone(), Running::new(now, bounds.bytes));
+                        break BackgroundWork::Bytes(path);
                     }
+                    if q.in_flight.values().filter(|running| running.background).count() < inner.bytes_limit {
+                        if let Some(path) = q.bytes.pop_front() {
+                            q.in_flight.insert(path.clone(), Running { background: true, ..Running::new(now, bounds.bytes) });
+                            break BackgroundWork::Bytes(path);
+                        }
+                    }
+                    let publishing = q.cache_in_flight.len() < inner.publication_limit;
+                    if publishing && q.publications.front().is_some_and(|(_, _, ready_at)| *ready_at <= now) {
+                        let (key, task, at) = q.publications.pop_front().unwrap();
+                        // A publication may be waiting for this room.
+                        q.last_pop = now;
+                        inner.work.notify_all();
+                        q.cache_in_flight.insert(key.clone(), Running::new(now, bounds.publication));
+                        break BackgroundWork::Publication(key, task, at);
+                    }
+                    wake = publishing.then(|| q.publications.front().map(|(_, _, at)| *at)).flatten();
                 }
-                let publishing = q.cache_in_flight.len() < inner.publication_limit;
-                if publishing && q.publications.front().is_some_and(|(_, _, ready_at)| *ready_at <= now) {
-                    let (key, task, at) = q.publications.pop_front().unwrap();
-                    // A publication may be waiting for this room.
-                    q.last_pop = now;
-                    inner.work.notify_all();
-                    q.cache_in_flight.insert(key.clone(), now);
-                    break (BackgroundWork::Publication(key, task, at), true);
-                }
-                let delay = publishing.then(|| q.publications.front().map(|(_, _, at)| at.saturating_duration_since(now))).flatten();
-                q = match delay {
-                    Some(delay) => match inner.work.wait_timeout(q, delay) { Ok((q, _)) => q, Err(_) => return },
-                    None => match inner.work.wait(q) { Ok(q) => q, Err(_) => return },
-                };
-            }
+                let until = wake.map_or(now + bounds.idle_check, |at| at.min(now + bounds.idle_check));
+                q = match inner.work.wait_timeout(q, until.saturating_duration_since(now)) { Ok((q, _)) => q, Err(_) => return };
+            };
+            q.ab.took(Lane::Readers, Instant::now(), &bounds);
+            work
         };
-        match work {
+        let serving = match work {
             BackgroundWork::Publication(key, task, _) => {
                 let result = task.run();
-                finish_operation(inner, key, task, result);
+                finish_operation(inner, key, task, result)
             }
-            BackgroundWork::Bytes(path) => {
-                let started = Instant::now();
-                let result = (inner.materialize)(&path);
-                if let Err(error) = &result { log::debug!("cloud: reading {} did not materialize it: {error}", path.display()); }
-                let still_in_cloud = result.is_ok() && crate::build::icloud::is_evicted(&path);
-                if let Ok(mut q) = inner.queue.lock() {
-                    q.in_flight.remove(&path);
-                    q.pending.remove(&path);
-                    q.reads.millis += started.elapsed().as_millis() as u64;
-                    match result {
-                        Ok(()) => {
-                            q.failures.remove(&path);
-                            if still_in_cloud { q.reads.still_in_cloud += 1 } else { q.reads.fetched += 1 }
-                        }
-                        Err(_) => { q.failures.insert(path); q.reads.failed += 1; }
-                    }
-                    if background { q.bytes_in_flight -= 1; }
-                    q.done += 1;
-                }
-                inner.work.notify_all();
-            }
+            BackgroundWork::Bytes(path) => read_bytes(inner, path),
+        };
+        if !serving { return; }
+    }
+}
+
+/// One byte read on this thread, settled when it returns. Whether the thread serves on.
+fn read_bytes(inner: &Arc<Inner>, path: PathBuf) -> bool {
+    let started = Instant::now();
+    // The bound grows with the file. This stat is the thread's own, so a provider
+    // that holds it leaves the base bound in force.
+    if let Ok(meta) = std::fs::symlink_metadata(&path) {
+        if let Ok(mut q) = inner.queue.lock() {
+            if let Some(running) = q.in_flight.get_mut(&path) { running.bound = inner.bounds.for_bytes(meta.len()); }
         }
     }
+    let result = (inner.materialize)(&path);
+    if let Err(error) = &result { log::debug!("cloud: reading {} did not materialize it: {error}", path.display()); }
+    let still_in_cloud = result.is_ok() && (inner.evicted)(&path);
+    let mut serving = true;
+    if let Ok(mut q) = inner.queue.lock() {
+        let given_up = q.in_flight.remove(&path).is_none();
+        serving = q.ab.returned(Lane::Readers, given_up.then_some(path.as_path()));
+        q.pending.remove(&path);
+        q.reads.millis += started.elapsed().as_millis() as u64;
+        verdict::returned(&mut q, &path, result.is_ok().then_some(!still_in_cloud));
+        match result {
+            Ok(()) => {
+                q.failures.remove(&path);
+                if still_in_cloud { q.reads.still_in_cloud += 1 } else { q.reads.fetched += 1 }
+            }
+            Err(_) => { q.failures.insert(path); q.reads.failed += 1; }
+        }
+        q.done += 1;
+    }
+    inner.work.notify_all();
+    serving
 }
 
 #[cfg(test)]

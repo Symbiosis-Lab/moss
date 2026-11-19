@@ -20,7 +20,7 @@
 // - **The crossing glow means something is moving.** A stalled download, an
 //   unreachable folder and a failure suppress it; every live wait shows it.
 
-import { cloudWaitSpec, type WaitingProvider } from "./cloud-wait";
+import { cloudWaitSpec, stalledLines, type WaitingProvider } from "./cloud-wait";
 import { markStartup } from "../../log";
 import { t } from "../../i18n/index";
 import {
@@ -41,7 +41,7 @@ import {
   type MeterMode,
   type ScreenFraction,
 } from "./shell";
-import { formatVaultLocation, type VaultLocation } from "./vault-location";
+import { formatVaultLocation } from "./vault-location";
 import { renderScreen } from "./overlay-slot";
 import type { OpenFailure } from "../preview-state";
 
@@ -115,7 +115,7 @@ interface ScreenSpec {
    *  absent wherever the title itself falls back (no name yet) or where
    *  `buttons` already carries {@link revealFolderButton} (stalled,
    *  unreachable) and a second copy of it would collide on the id. */
-  location?: VaultLocation;
+  location?: string;
   /** null = a verdict rather than a wait, so no meter at all. */
   meter: MeterMode | null;
   fraction?: ScreenFraction;
@@ -182,7 +182,7 @@ export const buildOverdueAdvisoryReason = (): string =>
 function nameTitle(
   key: "preview.opening_title" | "preview.building_title",
   content: VaultLocationFields,
-): { title: string; location?: VaultLocation } {
+): { title: string; location?: string } {
   if (!content.folderName) return { title: t("preview.waiting_title") };
   return {
     title: t(key, { name: content.folderName }),
@@ -236,18 +236,17 @@ function specFor(content: ScreenContent): ScreenSpec {
       };
 
     /**
-     * Nothing has arrived for a while. Says so, rather than animating a
-     * download that isn't happening.
+     * The provider is holding a read and nothing has come back. Names it and
+     * the one thing to do, rather than animating a download that isn't happening.
      *
-     * No "Retry" button: the supervisor is already retrying on a backoff, so a
-     * Retry that did nothing but re-render would be a button that lies.
+     * No "Retry" button: moss keeps asking, so a Retry that did nothing but
+     * re-render would be a button that lies.
      */
     case "stalled":
       return {
         ...BASE,
-        title: t("preview.waiting_stalled"),
+        ...stalledLines(content.provider),
         crossing: false,
-        hint: t("preview.waiting_stalled_hint"),
         buttons: [revealFolderButton(), chooseFolderButton()],
         ...cloudWaitSpec(content.downloaded, content.total, true, content.provider),
       };

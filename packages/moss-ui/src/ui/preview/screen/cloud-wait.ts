@@ -29,9 +29,10 @@
 // There is likewise no timed-out variant. A deadline would be a guess — a
 // download can resume at minute four.
 //
-// `stalled` is an observation, not a verdict: the supervisor has seen nothing
-// arrive across the whole pending set for 90 seconds. It keeps trying, and an
-// arrival takes the screen straight back to `downloading`.
+// `stalled` is the cloud readers' evidence that the provider is not sending:
+// it has held a read past its bound, or every read since the last delivered
+// file came back with the file still in the cloud. A delivered file takes the
+// screen straight back to `downloading`.
 //
 // ## Why the meter looks like that
 //
@@ -207,6 +208,18 @@ function pinTip(provider?: WaitingProvider): string {
   return t("preview.waiting_pin_tip", { action, provider: name });
 }
 
+/** The stalled screen's title and hint: who is not sending, and what to do about it. */
+export function stalledLines(provider?: WaitingProvider): { title: string; hint: string } {
+  const name = providerName(provider);
+  if (!name) return { title: t("preview.waiting_stalled_unnamed"), hint: "" };
+  // Every named provider but iCloud Drive, which is part of the system, is an app a person can quit.
+  const quit = !!provider?.id && provider.id !== "icloud" && Object.hasOwn(PROVIDER_NAME, provider.id);
+  return {
+    title: t("preview.waiting_stalled", { provider: name }),
+    hint: quit ? t("preview.waiting_stalled_hint", { provider: name }) : "",
+  };
+}
+
 /**
  * What a cloud wait puts on the shared surface: how the meter reads, the
  * fraction to draw it with, the sentence under it, and the tip.
@@ -231,14 +244,6 @@ export function cloudWaitSpec(
   };
 }
 
-/**
- * The corner panel's version of the stalled notice, for when the site is
- * already up and the full-window screen is not in play.
- *
- * Lives here so both surfaces read from one wording. The `" — "` is the
- * delimiter `groupNotices` splits an advisory reason on to get title + detail;
- * it is consumed by that split and never rendered.
- */
 /**
  * Concrete read failures: the count covers every failure, while names are a
  * bounded sample. A later supervisor snapshot clears this notice on recovery.

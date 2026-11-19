@@ -1629,6 +1629,7 @@ fn make_test_vars(has_sidebar_layout: bool) -> ShellVars {
         body_attrs: String::new(),
         page_wrapper_class: String::new(),
         hero_section: None,
+        header_attrs: String::new(),
         share_cover_attr: String::new(),
         share_qr_attr: String::new(),
         main_class: String::new(),

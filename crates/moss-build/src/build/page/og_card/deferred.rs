@@ -21,6 +21,7 @@ pub struct CardRequest {
     accent_color: String,
     lang: crate::i18n::Language,
     vertical: bool,
+    theme: Option<std::sync::Arc<super::theme::CardTheme>>,
 }
 
 impl CardRequest {
@@ -34,6 +35,7 @@ impl CardRequest {
             accent_color: inputs.accent_color.into(),
             lang: inputs.lang,
             vertical: inputs.vertical,
+            theme: inputs.theme.clone(),
         }
     }
 
@@ -42,7 +44,7 @@ impl CardRequest {
             title: &self.title, site_name: &self.site_name,
             bg_color: &self.bg_color, fg_color: &self.fg_color,
             accent_color: &self.accent_color, lang: self.lang,
-            vertical: self.vertical, plate: None,
+            vertical: self.vertical, plate: None, theme: self.theme.clone(),
         }
     }
 }
@@ -92,14 +94,14 @@ mod tests {
         CardInputs {
             title: "Empty garden", site_name: "Garden", bg_color: "#faf8f5",
             fg_color: "#1a1816", accent_color: "#d97706",
-            lang: crate::i18n::Language::En, vertical: false, plate: None,
+            lang: crate::i18n::Language::En, vertical: false, plate: None, theme: None,
         }
     }
 
     fn planned(root: &Path) -> (ServedPath, Vec<CardRequest>) {
         let previous = HashMap::new();
         let covers = crate::build::page::cover::FilenameCovers::default();
-        let mut sink = super::super::OgSink::deferred(&previous, &covers);
+        let mut sink = super::super::OgSink::for_build(true, &previous, &covers, Default::default());
         let path = sink.render(&inputs(), root).unwrap().clone();
         let (cards, requests) = sink.into_parts();
         assert!(cards.is_empty(), "foreground must not render PNG bytes");

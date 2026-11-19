@@ -17,6 +17,7 @@
  * `scripts/render-gates.sh`. The app/editor/preview gates, and a few site
  * gates not yet wired anywhere, stay in the private desktop repo.
  */
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
@@ -2885,6 +2886,61 @@ Body three.
   },
 };
 
+// ── A link card's picture slot: closed only when there is no picture ────────
+// Three external cards, by what the site folder knows of them: no entry yet,
+// an entry whose page names no picture, and an entry whose picture did not
+// download. The entries are written where a fetch keeps them; the `.invalid`
+// hosts never answer, so the build fetches nothing. Each card stands alone in
+// a grid, then all three share a plain grid and an equal-rows grid.
+// Served by playwright/link-card-cover-slot.config.ts.
+function linkCardEntry(url: string, title: string, ogImage: string | null): [string, string] {
+  const key = createHash("sha256").update(url).digest("hex");
+  const entry = { cover: null, favicon: null, og_image: ogImage, title, url };
+  return [`.moss/data/social/links/${key}.json`, JSON.stringify(entry, null, 2) + "\n"];
+}
+
+const NOT_FETCHED = "https://not-fetched.invalid/";
+const NO_PICTURE = "https://no-picture.invalid/";
+const NOT_DOWNLOADED = "https://not-downloaded.invalid/";
+const COVER_SLOT_CELLS = `<${NOT_FETCHED}>\n+++\n<${NO_PICTURE}>\n+++\n<${NOT_DOWNLOADED}>`;
+
+export const LINK_CARD_COVER_SLOT_GATE: ScratchSiteSpec = {
+  name: "link-card-cover-slot-gate",
+  files: {
+    "index.md": `---
+title: Cover Slots
+uid: "lcs00101"
+---
+
+:::grid 1
+<${NOT_FETCHED}>
+:::
+
+:::grid 1
+<${NO_PICTURE}>
+:::
+
+:::grid 1
+<${NOT_DOWNLOADED}>
+:::
+
+:::grid 3
+${COVER_SLOT_CELLS}
+:::
+
+:::grid 3 {rows=equal}
+${COVER_SLOT_CELLS}
+:::
+`,
+    ...Object.fromEntries([
+      linkCardEntry(NO_PICTURE, "No Picture", null),
+      linkCardEntry(NOT_DOWNLOADED, "Not Downloaded", `${NOT_DOWNLOADED}cover.jpg`),
+    ]),
+    ".moss/config.toml": CONFIG_TOML,
+    ".moss/theme/style.css": null,
+  },
+};
+
 // ── A listing embedded in a :::grid cell keeps its own look ─────────────────
 // Grid tile chrome (rounded clip, surface fill) belongs to the grid's own
 // cells. A folder listing embedded INSIDE a cell is not a tile, so its rows
@@ -4236,6 +4292,29 @@ export const COLOPHON_CREDIT_LONG: ScratchSiteSpec = {
   files: {
     ...colophonCreditFiles,
     ".moss/config.toml": `${CONFIG_TOML}credit = "${"W".repeat(40)}"\n`,
+  },
+};
+
+// A theme that paints the footer as a night band: the mark, reached for, takes
+// the footer's ink rather than the light page's black.
+export const COLOPHON_CREDIT_BAND: ScratchSiteSpec = {
+  name: "colophon-credit-band-gate",
+  files: {
+    ...colophonCreditFiles,
+    ".moss/config.toml": `${CONFIG_TOML}credit = "Designed by [Example Studio](https://example.org)"\n`,
+    ".moss/theme/style.css": `:root { --moss-footer-bg: #0b1026; --moss-footer-ink: #e8ecf8; }\n`,
+  },
+};
+
+// An archival copy on the same band: the edition line shows the mark in colour
+// at rest, and that colour is the footer's ink too. No footer.md, so the
+// edition block sits directly before the colophon.
+export const COLOPHON_CREDIT_ARCHIVAL_BAND: ScratchSiteSpec = {
+  name: "colophon-credit-archival-band-gate",
+  files: {
+    "index.md": colophonCreditFiles["index.md"],
+    ".moss/config.toml": `${CONFIG_TOML}archival = true\nauthor = "Site Keeper"\n`,
+    ".moss/theme/style.css": `:root { --moss-footer-bg: #0b1026; --moss-footer-ink: #e8ecf8; }\n`,
   },
 };
 

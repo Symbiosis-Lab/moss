@@ -242,7 +242,7 @@ pub(crate) fn stale_content(
         .filter(|r| r.trigger == Trigger::Publish && target.as_ref().is_none_or(|t| &r.target == t)).collect();
     let mut stale = std::collections::BTreeMap::new();
     let Some(latest) = publishes.last() else { return stale };
-    for (src, hash) in crate::build::manifest::change_set::page_source_hashes(sealed) {
+    for (src, hash) in crate::build::manifest::change_set::page_source_hashes(sealed.site_hashes_view()) {
         let Some(previous) = latest.entries.get(&src) else { continue };
         if previous.hash == hash { continue; }
         let mtime = sealed.sources().get(&src).and_then(|m| m.stat.mtime_nanos.map(|n| (m.stat.mtime, n)));

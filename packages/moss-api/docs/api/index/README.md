@@ -1222,6 +1222,34 @@ if (result) {
 }
 ```
 
+***
+
+### startBrowserSignIn()
+
+```ts
+function startBrowserSignIn(): Promise<BrowserSignIn>;
+```
+
+Start a sign-in that finishes in the person's own browser, where they are
+usually signed in already: the OAuth flow RFC 8252 asks native apps to use.
+moss listens on this computer for the provider's redirect, once; starting
+another sign-in ends this one.
+
+Only in the moss app; elsewhere it rejects with "Sign in from the moss app".
+
+#### Returns
+
+`Promise`\<[`BrowserSignIn`](interfaces/BrowserSignIn.md)\>
+
+#### Example
+
+```typescript
+const signIn = await startBrowserSignIn();
+const reply = await signIn.open(`${server}/oauth/authorize?redirect_uri=${encodeURIComponent(signIn.redirectUri)}&state=${state}&...`);
+if (reply.get("state") !== state) throw new Error("the sign-in did not come from this request");
+const code = reply.get("code");
+```
+
 ## Toast
 
 ### ~~ToastType~~
@@ -1680,6 +1708,70 @@ type ArtifactSource =
 
 A pinned binary source, as a stack declares it. A `download` source must
 carry a `sha256`.
+
+***
+
+### IdentityProof
+
+```ts
+type IdentityProof = 
+  | {
+  body: string;
+  file: string;
+}
+  | {
+  href: string;
+  link: "me";
+}
+  | {
+  content: string;
+  meta: "fediverse:creator";
+};
+```
+
+One entry of `contributes.identity`: a proof that the site's domain is the
+person's on a network, filled on every build from the plugin's own
+`[services.<plugin>]` table. `{key}` reads a declared setting; on an `acct`
+setting, `{key.user}` and `{key.host}` read its halves.
+
+#### Union Members
+
+##### Type Literal
+
+```ts
+{
+  body: string;
+  file: string;
+}
+```
+
+A file under `.well-known/`. A `.json` body is filled as JSON.
+
+***
+
+##### Type Literal
+
+```ts
+{
+  href: string;
+  link: "me";
+}
+```
+
+A `<link>` in every page's head. The rel is `me`.
+
+***
+
+##### Type Literal
+
+```ts
+{
+  content: string;
+  meta: "fediverse:creator";
+}
+```
+
+A `<meta>` in every page's head. The name is `fediverse:creator`.
 
 ***
 

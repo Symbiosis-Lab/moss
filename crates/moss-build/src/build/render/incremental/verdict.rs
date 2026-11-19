@@ -23,8 +23,16 @@
 //!     false: every entry point except a markdown-only watch rebuild, plus the
 //!     `MOSS_NO_INCREMENTAL` kill switch.
 //!   * [`FullCause::ColdCache`] — a cold or unreadable cache; nothing to diff.
-//!   * [`FullCause::PathSetMoved`] — a page appeared or disappeared, which
-//!     moves listings, nav and folder indexes no per-page diff can model.
+//!   * [`FullCause::FolderPageMoved`] — a folder, home or generated page
+//!     appeared or disappeared. An article entering or leaving is not one:
+//!     the parse re-asked every link, and what it changes elsewhere has a
+//!     digest below (listing groups, nav, home title, breadcrumbs, global
+//!     contributions, card answers, site features) or is written onto the
+//!     reading page before fingerprints. A folder or home page also moves
+//!     breadcrumb labels and stands in for, or steps aside from, a generated
+//!     folder page, which nothing here models.
+//!   * [`FullCause::SiteFeaturesMoved`] — the set of page features the site
+//!     carries moved, so the sheets and scripts every page links did too.
 //!   * [`FullCause::SurfaceChanged`] — a page's cross-page-visible surface
 //!     moved by a field NOT in the classified set
 //!     ([`dependents::field_is_classified`]). The design's six non-graph
@@ -67,8 +75,9 @@ use super::policy::IncrementalPolicy;
 pub enum FullCause {
     SkipDisabled,
     ColdCache,
-    PathSetMoved,
+    FolderPageMoved,
     SurfaceChanged,
+    SiteFeaturesMoved,
     GlobalInvalidator,
     AssetVersionsMoved,
     ListingGlobalsMoved,
@@ -80,8 +89,9 @@ impl FullCause {
         match self {
             FullCause::SkipDisabled => "skip disabled",
             FullCause::ColdCache => "cold cache",
-            FullCause::PathSetMoved => "tracked path set moved",
+            FullCause::FolderPageMoved => "a folder, home or generated page appeared or disappeared",
             FullCause::SurfaceChanged => "a page surface moved",
+            FullCause::SiteFeaturesMoved => "the features the site's pages carry moved",
             FullCause::GlobalInvalidator => "a global-invalidator page changed",
             FullCause::AssetVersionsMoved => "asset versions moved",
             FullCause::ListingGlobalsMoved => "listing globals moved",
@@ -130,6 +140,9 @@ pub enum VerdictBasis {
 #[derive(Debug, Clone)]
 pub struct RenderVerdict {
     skip: HashSet<String>,
+    /// Skipped pages whose stage bytes are a render newer than the manifest:
+    /// the slot pass re-reads them for their entry.
+    reread: HashSet<String>,
     basis: VerdictBasis,
 }
 
@@ -153,6 +166,12 @@ impl RenderVerdict {
         !doc.reads_child_bodies()
             && self.skip
             .contains(crate::build::facade::PageKey::for_document(doc).cache_key().as_ref())
+    }
+
+    /// True when this document's page is skipped but its manifest entry must
+    /// come from the stage, which a render after the manifest wrote.
+    pub fn rereads_document(&self, doc: &ParsedDocument) -> bool {
+        self.reread.contains(crate::build::facade::PageKey::for_document(doc).cache_key().as_ref())
     }
 
     pub fn basis(&self) -> &VerdictBasis {
@@ -186,8 +205,10 @@ impl RenderVerdict {
                 "{tracked} tracked pages, {changed} changed ({surface_changed} by surface), \
                  +{by_backlink} by backlink/embed, +{by_listing_group} by listing group \
                  ({groups} groups), +{by_dependents} by surface dependents, \
-                 +{by_image_placeholder} by image placeholder, +{by_unsealed} not yet sealed, skipping {}",
+                 +{by_image_placeholder} by image placeholder, +{by_unsealed} not yet sealed, skipping {} \
+                 ({} re-read from the stage)",
                 self.skip.len(),
+                self.reread.len(),
             ),
         }
     }
@@ -216,6 +237,13 @@ pub struct VerdictInputs<'a> {
     pub render_id: Option<&'a str>,
     /// The render of the manifest a carried page takes its entry from.
     pub sealed_render_id: Option<&'a str>,
+    /// The render whose final bytes the stage holds, once its slot pass ended.
+    pub staged_render_id: Option<&'a str>,
+    /// The content graph rendering resolves page links with, so the verdict
+    /// finds the cards a page draws the way rendering does.
+    pub graph: Option<&'a moss_core::content_graph::ContentGraph>,
+    /// The sheets and scripts every page's shell links this build.
+    pub site_assets: &'a crate::build::types::SiteAssets,
 }
 
 /// Name up to three of the paths behind a full-render cause, sorted so the
@@ -334,8 +362,15 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
     // a names/current width mismatch — see `moved_surface_fields`) counts as
     // unclassified too: "cannot tell you what moved" is not evidence it was
     // safe, it is the absence of the evidence this whole mechanism runs on.
+    let (entered, folder_pages_moved) = previous.membership(&current);
+    let site_features = site_features(documents, inputs.site_assets);
+    let site_features_changed = previous.digests_moved(DigestMap::SiteFeatures, &site_features);
+
+    // An entered page has no earlier surface to compare; what it reaches is
+    // judged by membership above.
     let unclassified_surface_movers: Vec<String> = surface_changed
         .iter()
+        .filter(|path| entered.binary_search(path).is_err())
         .filter(|path| {
             let Some(doc) = doc_by_path.get(path.as_str()) else { return true };
             match moved_fields_by_path.get(path.as_str()) {
@@ -358,7 +393,7 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
     // out of its body is the extracted excerpt that lands in their
     // `<meta name="description">` (rung 6 of the chain in
     // `page/meta.rs::resolve_page_description_with_fallbacks`). Its other
-    // cross-page reads — `cover`, `hero_image_url`, `description`,
+    // cross-page reads — `hero_image_url`, `description`,
     // `hero_overlay_text` — are frontmatter or hoisted fields, so they are
     // already in the SURFACE and already force a full render one branch up.
     // Editing a homepage paragraph below the excerpt therefore now costs the
@@ -370,9 +405,10 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
     // computed by entirely separate code paths. This one is POST-parse and
     // CONTENT-based; its pre-parse, input-SHAPE-based sibling is
     // `build::parse_cache::inputs_fingerprint`, which bypasses the Loop A
-    // parse cache when `page_map`/`dir_overrides`/`external_url_map`/
-    // `home_file_winners` move. If you are bisecting a stale-page report,
-    // check both — neither one subsumes the other.
+    // parse cache when `dir_overrides`, `external_url_map` or a site scalar
+    // moves (each page's own recorded reads are its narrower sibling). If you
+    // are bisecting a stale-page report, check both — neither one subsumes
+    // the other.
     let contributions = global_contributions(documents, inputs.math);
     let global_invalidator_changed = previous.digests_moved(DigestMap::GlobalContributions, &contributions);
 
@@ -442,22 +478,31 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
     // Listing groups: computed unconditionally, because this build's digests
     // must be persisted for the NEXT build even when this one renders
     // everything. Sub-millisecond on the reference vault.
-    let groups = ListingGroups::build(documents, inputs.project, inputs.math);
+    let card_reads = card_reads(documents, inputs.graph);
+    let card_answers = card_answers(&card_reads);
+    let card_answers_changed = previous.digests_moved(DigestMap::CardAnswers, &card_answers);
+    let cards: Vec<_> = card_reads.iter().flat_map(|(reader, targets)| targets.iter().flatten().map(move |target| (*reader, *target))).collect();
+    let folder_card_reads: Vec<(String, listing::GroupKey)> = cards
+        .iter()
+        .filter(|(_, target)| target.kind == moss_core::PageKind::Folder)
+        .map(|(reader, target)| (PageKey::for_document(reader).cache_key().into_owned(), listing::folder_card_key(target)))
+        .collect();
+    let folder_card_keys: Vec<listing::GroupKey> = folder_card_reads.iter().map(|(_, key)| key.clone()).collect();
+    let groups = ListingGroups::build(documents, inputs.project, inputs.math, &folder_card_keys);
 
     let full_cause = if !inputs.policy.skip_unchanged_renders {
         Some((FullCause::SkipDisabled, None))
     } else if previous.is_empty() {
         Some((FullCause::ColdCache, None))
-    } else if !previous.covers_same_paths(&current) {
-        Some((
-            FullCause::PathSetMoved,
-            name_a_few(previous.paths_symmetric_difference(&current), "page"),
-        ))
+    } else if !folder_pages_moved.is_empty() {
+        Some((FullCause::FolderPageMoved, name_a_few(folder_pages_moved.iter().map(|key| PageKey::display_cache_key(key).to_string()).collect(), "page")))
     } else if !unclassified_surface_movers.is_empty() {
         Some((
             FullCause::SurfaceChanged,
             name_surface_movers(&unclassified_surface_movers, &previous, &current),
         ))
+    } else if !site_features_changed.is_empty() {
+        Some((FullCause::SiteFeaturesMoved, None))
     } else if !global_invalidator_changed.is_empty() {
         Some((FullCause::GlobalInvalidator, name_a_few(global_invalidator_changed, "page")))
     } else if asset_versions_changed {
@@ -471,8 +516,9 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
     };
 
     let unsealed = previous.unsealed_pages_since(inputs.sealed_render_id);
-    let (skip, basis) = match full_cause {
-        Some((cause, witness)) => (HashSet::new(), VerdictBasis::Full(cause, witness)),
+    let stage_is_cached_render = previous.staged_its_render(inputs.staged_render_id);
+    let (skip, reread, basis) = match full_cause {
+        Some((cause, witness)) => (HashSet::new(), HashSet::new(), VerdictBasis::Full(cause, witness)),
         None => {
             let path_and_links: Vec<(String, &[moss_core::resolve::OutgoingLink])> = documents
                 .iter()
@@ -498,12 +544,17 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
             let dep_graph = moss_core::dep_graph::DepGraph::build(
                 path_and_links.iter().map(|(k, v)| (k.as_str(), *v)),
             )
-            .with_embed_pairs(embed_pairs);
+            .with_embed_pairs(embed_pairs)
+            .with_card_pairs(cards.iter().map(|(reader, target)| {
+                (PageKey::for_document(target).cache_key(), PageKey::for_document(reader).cache_key())
+            }));
             let mut render_set: HashSet<String> = changed.iter().cloned().collect();
             for path in &changed {
                 render_set.extend(dep_graph.backlinks(path).iter().cloned());
                 render_set.extend(dep_graph.back_embeds(path).iter().cloned());
+                render_set.extend(dep_graph.back_cards(path).iter().cloned());
             }
+            render_set.extend(card_answers_changed.iter().filter(|reader| current.contains_key(*reader)).cloned());
             // `changed` are distinct map keys and all landed in the set first.
             let by_backlink = render_set.len() - changed.len();
 
@@ -546,6 +597,12 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
                     by_listing_group += 1;
                 }
             }
+            // A folder's card counts the pages beneath it: its readers read that group.
+            for (reader, key) in &folder_card_reads {
+                if previous.listing_digest(key) != groups.digest(key) && render_set.insert(reader.clone()) {
+                    by_listing_group += 1;
+                }
+            }
 
             // The two channels with no pre-existing digest to fall through
             // into: a classified nav/title/breadcrumb-enable move widens to
@@ -569,20 +626,12 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
                 }
             }
             for path in &surface_changed {
-                let Some(doc) = doc_by_path.get(path.as_str()) else { continue };
-                if doc.kind != moss_core::PageKind::Folder {
+                let Some(doc) = doc_by_path.get(path.as_str()).filter(|d| d.kind == moss_core::PageKind::Folder) else { continue };
+                if !moved_fields_by_path.get(path.as_str()).is_some_and(|moved| moved.iter().any(|f| f == "label")) {
                     continue;
                 }
-                let Some(moved) = moved_fields_by_path.get(path.as_str()) else { continue };
-                if !moved.iter().any(|f| f == "label") {
-                    continue;
-                }
-                for extra in
-                    dependents::breadcrumb_ancestor_descendants(doc, documents, inputs.project.has_content_folders)
-                {
-                    if render_set.insert(extra) {
-                        by_dependents += 1;
-                    }
+                for extra in dependents::breadcrumb_ancestor_descendants(doc, documents, inputs.project.has_content_folders) {
+                    by_dependents += usize::from(render_set.insert(extra));
                 }
             }
 
@@ -595,10 +644,14 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
             let by_image_placeholder = shows_one.len();
             render_set.extend(shows_one);
 
-            // A carried page registers `hashes.json`'s entry for bytes the stage
-            // holds, so a page a newer render left there is rendered again.
+            // `hashes.json` does not describe a page a newer render left on the
+            // stage. When that render's slot pass finished, the stage holds its
+            // final bytes and the next pass re-reads them for the entry;
+            // otherwise the page is rendered again.
             let unchanged: Vec<&String> = current.keys().filter(|p| !render_set.contains(*p)).collect();
-            let skip: HashSet<String> = unchanged.iter().filter(|p| !unsealed.contains(**p)).map(|p| (*p).clone()).collect();
+            let (newer, mut skip): (HashSet<String>, HashSet<String>) =
+                unchanged.iter().map(|p| (*p).clone()).partition(|p| unsealed.contains(p));
+            let reread = if stage_is_cached_render { skip.extend(newer.iter().cloned()); newer } else { HashSet::new() };
             let by_unsealed = unchanged.len() - skip.len();
             let basis = VerdictBasis::Incremental {
                 tracked: current.len(),
@@ -611,7 +664,7 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
                 by_image_placeholder,
                 by_unsealed,
             };
-            (skip, basis)
+            (skip, reread, basis)
         }
     };
 
@@ -627,14 +680,60 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
         .with_digests(DigestMap::LangGlobals, lang_globals)
         .with_digests(DigestMap::NavGlobals, nav_globals)
         .with_digests(DigestMap::HomeTitleGlobals, home_title_globals)
-        .with_digests(DigestMap::HomeBreadcrumbGlobals, home_breadcrumb_globals);
+        .with_digests(DigestMap::HomeBreadcrumbGlobals, home_breadcrumb_globals)
+        .with_digests(DigestMap::CardAnswers, card_answers)
+        .with_digests(DigestMap::SiteFeatures, site_features);
     if let Err(e) = new_cache.save(inputs.cache_path) {
         log::info!(target: "incremental", "failed to save facade cache: {e}");
     }
 
-    let verdict = RenderVerdict { skip, basis };
+    let verdict = RenderVerdict { skip, reread, basis };
     verdict.log();
     verdict
+}
+
+/// Each page that draws cards through a page field placed at `end` or a grid
+/// link cell, with the page each of those links names (`None` for a link that
+/// names none). Both find their target only while rendering, so no outgoing
+/// link records them.
+fn card_reads<'a>(
+    documents: &'a [ParsedDocument],
+    graph: Option<&'a moss_core::content_graph::ContentGraph>,
+) -> Vec<(&'a ParsedDocument, Vec<Option<&'a ParsedDocument>>)> {
+    documents
+        .iter()
+        .map(|reader| {
+            let targets = crate::build::components::field_places::end_card_targets(reader, documents, graph)
+                .chain(crate::build::render::grid_cells::card_targets(reader, documents, graph))
+                .collect();
+            (reader, targets)
+        })
+        .filter(|(_, targets): &(_, Vec<_>)| !targets.is_empty())
+        .collect()
+}
+
+/// One digest over what every page's shell reads from the whole site: the
+/// asset set, the distinct feature sets its pages carry (a feature's sheet
+/// can be linked after the asset set is fixed), and whether any page asks for
+/// the sidebar layout; see `FacadeCache::site_features`.
+fn site_features(documents: &[ParsedDocument], assets: &crate::build::types::SiteAssets) -> std::collections::BTreeMap<String, String> {
+    let sets: std::collections::BTreeSet<String> = documents.iter().map(|doc| format!("{:?}", doc.features)).collect();
+    let sidebar_layout = super::super::page_chrome::has_sidebar_layout(documents);
+    std::collections::BTreeMap::from([("features".to_string(), facade::debug_hash(&(assets, sets, sidebar_layout)))])
+}
+
+/// Per card-drawing page, a digest of which page each of its card links
+/// names. A page added, removed or renamed moves the answer of exactly the
+/// readers whose links it satisfies or breaks.
+fn card_answers(reads: &[(&ParsedDocument, Vec<Option<&ParsedDocument>>)]) -> std::collections::BTreeMap<String, String> {
+    reads
+        .iter()
+        .map(|(reader, targets)| {
+            let named: Vec<Option<std::borrow::Cow<'_, str>>> =
+                targets.iter().map(|t| t.map(|t| PageKey::for_document(t).cache_key())).collect();
+            (PageKey::for_document(reader).cache_key().into_owned(), facade::debug_hash(&named))
+        })
+        .collect()
 }
 
 /// The tracked pages outside `render_set` whose previous output shows one of
@@ -706,14 +805,8 @@ fn global_contributions(
     for doc in documents {
         let path = crate::build::facade::PageKey::for_document(doc).cache_key().into_owned();
         let is_slot = doc.slot_only || doc.slot.is_some();
-        // `is_language_root`, not a bare `url_path == "index.html"`: every
-        // locale's own home page carries the same global-listing content
-        // (see `data-page="home"` in blocking.rs's render call, the other
-        // consumer of this same "is this doc a home" question) — missing
-        // this here left a NON-default-locale home carrying a stale global
-        // excerpt whenever a title edit elsewhere should have invalidated it.
-        let is_home =
-            crate::build::render::lang_roots::is_language_root(&doc.url_path) || doc.is_home_override;
+        // Every locale's home carries the global-listing content, not only `index.html`.
+        let is_home = crate::build::render::lang_roots::is_home(doc);
         if is_slot {
             parts.push((path.clone(), crate::build::facade::compute_page_facade(doc)));
         } else if is_home {

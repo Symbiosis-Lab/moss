@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- `childrenNamed` (`cm6`): the direct children of a syntax node with a given name, in order, as the footnote extension reads a footnote's label and marks.
 - `parseWikilinkPhase` (`completion-core`) gains a `'width'` `CompletionPhase` variant: a `|` typed inside an OPEN embed target (`![[cover.png|5`) is a width percentage, not free-text alias. A non-embed wikilink's `|alias` is unaffected — aliases stay the `wikilink` phase.
 
 ### Removed

@@ -32,6 +32,12 @@ pub(crate) fn is_language_root(url_path: &str) -> bool {
     }
 }
 
+/// Whether `doc` is a home page: a language root, or the page elected home in
+/// place of a missing `index.md`.
+pub(crate) fn is_home(doc: &crate::build::types::ParsedDocument) -> bool {
+    is_language_root(&doc.url_path) || doc.is_home_override
+}
+
 /// The edition home a `children:` reference names by its file stem
 /// (`[[Field Notes]]` for the root home, `[[Notes]]` for `en/Notes.md`), if any.
 /// Such a listing means what that home's own listing means: its tree, with its
@@ -230,7 +236,7 @@ pub(crate) fn site_publishes_multiple_languages(
 ///
 /// - `lang_roots`: [`site_lang_roots`]'s output. Moves when a homepage-root
 ///   doc's own `lang` changes, or a root appears/disappears (already covered
-///   by `PathSetMoved`, but hashed here too for a cheap witness).
+///   by `FolderPageMoved`, but hashed here too for a cheap witness).
 /// - `lang_multi`: [`site_publishes_multiple_languages`]'s boolean. Gates
 ///   whether the switcher's homepage-root fallback exists at all; its three
 ///   evidences (root count, an authored translation whose target disagrees

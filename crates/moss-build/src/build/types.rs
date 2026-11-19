@@ -141,6 +141,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub card_cover: Option<String>,
+    /// The page wrote `cover: false`: no picture on the page or its card, not
+    /// even one a claimed term's card would borrow from a member.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub cover_opted_out: bool,
     /// A term pseudo-folder's card: its member count and the listing picture of
     /// the first member in the term page's order. Set by `terms::set_term_cards`.
     #[serde(skip)]
@@ -546,6 +551,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub hero_html: Option<String>,
+    /// The site header lies over the block that opens the page (`header=over`
+    /// on its hero or `screen` band), with the ink read from its pictures.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub header_over: Option<crate::build::markdown::hero_ink::HeaderOver>,
     /// A `from=` hero, drawn once every page is known; `hero_html`,
     /// `hero_image_url` and `hero_overlay_text` start as its fallback.
     #[serde(skip)]

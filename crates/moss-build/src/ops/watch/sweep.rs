@@ -132,8 +132,6 @@ pub(crate) const HEARTBEAT_EVERY: Duration = Duration::from_secs(300);
 /// look quiet between bursts at any sampling rate). See `should_rebuild`.
 pub(crate) const MIN_REBUILD_INTERVAL: Duration = Duration::from_secs(8);
 
-/// Silence across the whole pending set before the user is told.
-pub(crate) const STALL_AFTER: Duration = Duration::from_secs(90);
 
 /// The tick the loop actually sleeps. `MOSS_TEST_SWEEP_TICK_MS` is a test seam: it
 /// shortens the tick and makes every tick a walk, so a process-level test sees
@@ -177,6 +175,8 @@ fn sweeps() -> std::sync::MutexGuard<'static, HashMap<String, ClaimInfo>> {
 struct Claim {
     key: String,
     gen: u64,
+    /// The cloud readers judge this folder's provider while the sweep runs.
+    _watch: crate::build::cloud_prefetch::Watch,
 }
 
 impl Drop for Claim {
@@ -237,7 +237,7 @@ pub async fn start(session: Arc<FolderSession>, host: SweepHost) {
             unavailable_tx,
         });
     }
-    let claim = Claim { key, gen };
+    let claim = Claim { key, gen, _watch: crate::build::cloud_readiness::watch_downloads(&session.folder) };
     let fut = {
         let session = session.clone();
         async move {

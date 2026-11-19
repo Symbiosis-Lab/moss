@@ -39,6 +39,17 @@ pub fn apply_to_stage_and_manifest(
     // that is the first moment the stage holds post-injection bytes.
     carry_verification: Option<CarryVerification>,
 ) -> Result<(), BuildStopped> {
+    // A carried page holds the previous pass's output only if that pass ran with
+    // these same slots and shipping transform; otherwise every page is re-read.
+    let slots_hash = crate::build::enhance::resolved_slots_hash(slots);
+    let mount = pending.mount();
+    let key = format!("{slots_hash}:{}", crate::build::ship::shipped_key(&mount));
+    let mut record = PassRecord::load(paths);
+    let same_pass = record.key == key;
+    // Until this pass ends, the stage holds no one render's pages.
+    if record.render.take().is_some() {
+        record.save(paths);
+    }
     let object_store = crate::build::cache::ObjectStore::for_slot_pass(paths);
     let transform_cache = crate::build::cache::TransformCache::over(paths, &object_store);
     // Emit the feature stylesheets the resolved slots link to, BEFORE the
@@ -50,13 +61,6 @@ pub fn apply_to_stage_and_manifest(
     // The record of which blob each staged page was linked from, so a page
     // whose stage file already holds its final bytes is not written again.
     let mut staged = crate::build::lifecycle::cas_heal::StagedLinks::load(paths, "pages", stage_dir);
-    // A carried page holds the previous pass's output only if that pass ran with
-    // these same slots and shipping transform; otherwise every page is re-read.
-    let slots_hash = crate::build::enhance::resolved_slots_hash(slots);
-    let mount = pending.mount();
-    let pass_key = format!("{slots_hash}:{}", crate::build::ship::shipped_key(&mount));
-    let pass_record = paths.cache_dir().join("slot-pass.json");
-    let same_pass = std::fs::read_to_string(&pass_record).is_ok_and(|previous| previous == pass_key);
     let carried = if same_pass { pending.carried_pages() } else { Default::default() };
     let pass = crate::build::enhance::inject_slots_into_directory_cached(
         paths.project_root(),
@@ -76,7 +80,8 @@ pub fn apply_to_stage_and_manifest(
     // Before `staged.save()`: a crash between the two must leave links that no
     // longer vouch, never a record claiming slots the staged pages were not filled with.
     if !same_pass {
-        let _ = std::fs::write(&pass_record, &pass_key); // allow:raw_write per-machine cache record, never staging
+        record.key = key;
+        record.save(paths);
     }
     staged.save();
     if let Err(e) = object_store.save_verified_keeping_unchecked() {
@@ -98,13 +103,19 @@ pub fn apply_to_stage_and_manifest(
     // keeps its markers only until the first pass that fills them, so the pages
     // the pass rewrites are the ones this build just rendered.
     for receipt in pass.receipts {
-        // A stage path no page of this build could have (`_moss/...` bundles the
-        // search lane laid down last time) is simply not one.
+        // A stage path no page of this build could have (`_moss/...` bundles a
+        // search settle laid down last time) is simply not one.
         let Ok(sp) = crate::build::served_path::ServedPath::from_output(&receipt.page_path) else {
             continue;
         };
         pending.attach_final_bytes(&sp, &receipt.manifest_hash, receipt.content_oid);
     }
+    // The build that runs again finds the page missing and renders it.
+    if let Some(page) = pending.rereads_left().next() {
+        return Err(BuildStopped::discarded(format!("{page} left the stage before the slot pass read it")));
+    }
+    record.render = pending.render_id().map(str::to_string);
+    record.save(paths);
 
     // Comparing any earlier compares the render phase's PRE-injection bytes
     // against the previous build's POST-injection bytes, which reports a
@@ -114,6 +125,41 @@ pub fn apply_to_stage_and_manifest(
     }
 
     Ok(())
+}
+
+/// What the last slot pass left on the stage, per machine.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct PassRecord {
+    /// The slots and shipping transform the pass filled pages with.
+    key: String,
+    /// The render whose final bytes every stage page holds: set when a pass
+    /// ends, cleared before the next one first writes to the stage.
+    render: Option<String>,
+}
+
+impl PassRecord {
+    fn path(paths: &MossPaths) -> std::path::PathBuf {
+        paths.cache_dir().join("slot-pass.json")
+    }
+
+    fn load(paths: &MossPaths) -> Self {
+        std::fs::read(Self::path(paths))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+
+    fn save(&self, paths: &MossPaths) {
+        if let Ok(json) = serde_json::to_vec(self) {
+            let _ = std::fs::write(Self::path(paths), json); // allow:raw_write per-machine cache record, never staging
+        }
+    }
+}
+
+/// The render the last slot pass wrote the stage for, if it ended and no pass
+/// has started since.
+pub(crate) fn staged_render(paths: &MossPaths) -> Option<String> {
+    PassRecord::load(paths).render
 }
 
 /// Write rendered pages to the stage as rendered, slot markers and all: what

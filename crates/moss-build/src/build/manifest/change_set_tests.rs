@@ -70,7 +70,7 @@ fn in_build(cur: &crate::build::manifest::SealedManifest) -> impl Fn(&str) -> bo
 }
 
 fn removed_of(prev: &PublishedSnapshot, cur: &crate::build::manifest::SealedManifest) -> Vec<(String, RemovalReason)> {
-    removed_addresses(prev, cur, in_build(cur)).into_iter().map(|r| (r.path, r.reason)).collect()
+    removed_addresses(prev, cur.site_hashes_view(), in_build(cur)).into_iter().map(|r| (r.path, r.reason)).collect()
 }
 
 fn snapshot(m: &crate::build::manifest::SealedManifest) -> PublishedSnapshot {
@@ -89,7 +89,7 @@ fn added_when_source_is_new() {
         &[],
     );
 
-    let set = classify(Some(&prev), &cur);
+    let set = classify(Some(&prev), cur.site_hashes_view());
 
     assert_eq!(set.added, 1);
     assert_eq!(verb_of(&set, "b.md"), Some(PageVerb::Added));
@@ -104,7 +104,7 @@ fn deleted_when_source_gone_from_source_to_output() {
     ));
     let cur = sealed(&[("a.md", "a/index.html", "h-a", b"A")], &[]);
 
-    let set = classify(Some(&prev), &cur);
+    let set = classify(Some(&prev), cur.site_hashes_view());
 
     assert_eq!(set.deleted, 1);
     assert_eq!(verb_of(&set, "b.md"), Some(PageVerb::Deleted));
@@ -116,7 +116,7 @@ fn edited_when_source_hash_moved() {
     let prev = snapshot(&sealed(&[("a.md", "a/index.html", "old", b"A")], &[]));
     let cur = sealed(&[("a.md", "a/index.html", "new", b"A2")], &[]);
 
-    let set = classify(Some(&prev), &cur);
+    let set = classify(Some(&prev), cur.site_hashes_view());
 
     assert_eq!(set.edited, 1);
     assert_eq!(verb_of(&set, "a.md"), Some(PageVerb::Edited));
@@ -128,7 +128,7 @@ fn restyled_when_source_hash_stable_but_output_moved() {
     let prev = snapshot(&sealed(&[("a.md", "a/index.html", "h-a", b"<p>old theme</p>")], &[]));
     let cur = sealed(&[("a.md", "a/index.html", "h-a", b"<p>new theme</p>")], &[]);
 
-    let set = classify(Some(&prev), &cur);
+    let set = classify(Some(&prev), cur.site_hashes_view());
 
     assert_eq!(set.restyled, 1);
     assert_eq!(verb_of(&set, "a.md"), Some(PageVerb::Restyled));
@@ -140,7 +140,7 @@ fn unchanged_page_appears_in_no_verb() {
     let prev = snapshot(&sealed(&[("a.md", "a/index.html", "h-a", b"A")], &[]));
     let cur = sealed(&[("a.md", "a/index.html", "h-a", b"A")], &[]);
 
-    let set = classify(Some(&prev), &cur);
+    let set = classify(Some(&prev), cur.site_hashes_view());
 
     assert!(set.classified);
     assert!(set.pages.is_empty(), "an unchanged page is absent, not zero-weighted");
@@ -157,7 +157,7 @@ fn absent_previous_snapshot_yields_classified_false_and_zero_verbs() {
         &[("feed.xml", b"<rss/>")],
     );
 
-    let set = classify(None, &cur);
+    let set = classify(None, cur.site_hashes_view());
 
     assert!(!set.classified);
     assert_eq!((set.added, set.edited, set.deleted, set.restyled, set.assets), (0, 0, 0, 0, 0));
@@ -189,7 +189,7 @@ fn a_published_file_set_yields_flat_counts_and_still_no_verbs() {
         &[("feed.xml", b"<rss/>")],
     );
 
-    let set = flat_against(&previous, &current);
+    let set = flat_against(&previous, current.site_hashes_view());
 
     assert!(!set.classified, "a file set carries no authorship information");
     assert_eq!(set.flat_upload, 2, "the edited page and the never-published feed");
@@ -208,8 +208,8 @@ fn a_published_file_set_names_the_files_it_no_longer_produces() {
     let previous = previous.files().clone();
     let current = sealed(&[("s.md", "stays/index.html", "h-s", b"S")], &[("style.bbbb.css", b"new")]);
 
-    assert_eq!(removed_files(&previous, &current), vec!["gone/index.html", "style.aaaa.css"]);
-    assert_eq!(upload_count(&previous, &current), 1);
+    assert_eq!(removed_files(&previous, current.site_hashes_view()), vec!["gone/index.html", "style.aaaa.css"]);
+    assert_eq!(upload_count(&previous, current.site_hashes_view()), 1);
 }
 
 /// Outputs with no page behind them are counted, not enumerated — and only
@@ -231,7 +231,7 @@ fn unmapped_output_files_count_as_assets_not_pages() {
         ],
     );
 
-    let set = classify(Some(&prev), &cur);
+    let set = classify(Some(&prev), cur.site_hashes_view());
 
     assert_eq!(set.assets, 2, "one changed variant + one new variant, not all four outputs");
     assert!(set.pages.is_empty(), "assets are never pages");
@@ -266,7 +266,7 @@ fn carried_page_missing_source_hash_is_never_edited_or_deleted() {
     let cur = pending.seal();
     assert!(cur.sources().is_empty(), "the gap this test is about");
 
-    let set = classify(Some(&prev), &cur);
+    let set = classify(Some(&prev), cur.site_hashes_view());
 
     assert_eq!(set.edited, 0, "a hash gap must never read as an author edit");
     assert_eq!(set.deleted, 0, "a hash gap must never read as a deletion");
@@ -299,7 +299,7 @@ fn config_change_is_restyled_not_edited() {
     ];
 
     let prev = snapshot(&sealed(&pages_before, &[]));
-    let set = classify(Some(&prev), &sealed(&pages_after, &[]));
+    let set = classify(Some(&prev), sealed(&pages_after, &[]).site_hashes_view());
 
     assert_eq!(set.edited, 1, "only the page whose SOURCE moved is an edit");
     assert_eq!(verb_of(&set, "c.md"), Some(PageVerb::Edited));
@@ -332,7 +332,7 @@ fn deletion_is_reported_even_when_the_page_was_never_hashed() {
     // The author deletes gone.md.
     let cur = sealed(&[("keep.md", "keep/index.html", "h-k", b"K")], &[]);
 
-    let set = classify(Some(&prev), &cur);
+    let set = classify(Some(&prev), cur.site_hashes_view());
 
     assert_eq!(set.deleted, 1, "the removed page must be reported");
     assert_eq!(verb_of(&set, "gone.md"), Some(PageVerb::Deleted));
@@ -352,7 +352,7 @@ fn removed_assets_are_counted_so_a_removal_only_publish_is_not_empty() {
     // Same page, byte-identical; the variant is gone.
     let cur = sealed(&[("a.md", "a/index.html", "h-a", b"A")], &[("feed.xml", &b"F"[..])]);
 
-    let set = classify(Some(&prev), &cur);
+    let set = classify(Some(&prev), cur.site_hashes_view());
 
     assert_eq!((set.added, set.edited, set.deleted, set.restyled), (0, 0, 0, 0));
     assert_eq!(set.assets, 0, "nothing in the current output changed");
@@ -364,7 +364,7 @@ fn removed_assets_are_counted_so_a_removal_only_publish_is_not_empty() {
 /// change. `is_empty()` must not turn an absence of data into a claim.
 #[test]
 fn an_unclassified_change_set_is_unknown_not_empty() {
-    let set = classify(None, &sealed(&[("a.md", "a/index.html", "h-a", b"A")], &[]));
+    let set = classify(None, sealed(&[("a.md", "a/index.html", "h-a", b"A")], &[]).site_hashes_view());
 
     assert!(!set.classified);
     assert!(!set.is_empty(), "unclassified is unknown, never 'nothing will change'");
@@ -515,10 +515,10 @@ fn a_vanished_internal_sidecar_never_refuses_the_publish() {
     ));
     let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
 
-    let removed = removed_addresses(&prev, &cur, in_build(&cur));
+    let removed = removed_addresses(&prev, cur.site_hashes_view(), in_build(&cur));
     assert!(pending_removals(&removed, None).is_empty(), "{removed:?}");
     assert_eq!(removed_public_paths(&prev, &cur.files()), Vec::<String>::new());
-    assert_eq!(classify(Some(&prev), &cur).removed_assets, 2, "still counted as removed output");
+    assert_eq!(classify(Some(&prev), cur.site_hashes_view()).removed_assets, 2, "still counted as removed output");
 }
 
 #[test]
@@ -529,7 +529,7 @@ fn a_vanished_page_still_refuses_beside_an_internal_sidecar_and_a_dotfile() {
     ));
     let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
 
-    let pending: Vec<String> = pending_removals(&removed_addresses(&prev, &cur, |_| true), None)
+    let pending: Vec<String> = pending_removals(&removed_addresses(&prev, cur.site_hashes_view(), |_| true), None)
         .into_iter()
         .map(|p| p.path)
         .collect();
@@ -547,7 +547,7 @@ fn removed_assets_counts_every_vanished_non_page_output_including_internal_ones(
     ));
     let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
 
-    let set = classify(Some(&prev), &cur).with_removed(removed_addresses(&prev, &cur, in_build(&cur)));
+    let set = classify(Some(&prev), cur.site_hashes_view()).with_removed(removed_addresses(&prev, cur.site_hashes_view(), in_build(&cur)));
 
     assert_eq!(set.removed_assets, 2, "the removed page is a Deleted verb; the internal card still counts");
     assert_eq!(set.removed.len(), 1, "the list holds the page only");
@@ -558,7 +558,7 @@ fn a_publish_removing_only_internal_files_is_not_empty() {
     let prev = snapshot(&sealed(&[("a.md", "a/index.html", "h", b"A")], &[("_moss/og/c.png", &b"I"[..])]));
     let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
 
-    let set = classify(Some(&prev), &cur).with_removed(removed_addresses(&prev, &cur, in_build(&cur)));
+    let set = classify(Some(&prev), cur.site_hashes_view()).with_removed(removed_addresses(&prev, cur.site_hashes_view(), in_build(&cur)));
 
     assert!(set.removed.is_empty());
     assert!(!set.is_empty(), "a deleted file is still something to publish");
@@ -581,7 +581,7 @@ fn removed_addresses_ride_on_an_unclassified_set_too() {
     let prev = snapshot(&sealed(&[("a.md", "a/index.html", "h", b"A")], &[]));
     let cur = sealed(&[], &[]);
 
-    let set = classify(None, &cur).with_removed(removed_addresses(&prev, &cur, in_build(&cur)));
+    let set = classify(None, cur.site_hashes_view()).with_removed(removed_addresses(&prev, cur.site_hashes_view(), in_build(&cur)));
 
     assert!(!set.classified);
     assert_eq!(set.removed.len(), 1);
@@ -606,7 +606,7 @@ fn a_moved_page_with_no_stub_records_where_it_went() {
     let prev = snapshot(&sealed(&[("a.md", "a/index.html", "h", b"A")], &[]));
     let cur = sealed(&[("a.md", "b/index.html", "h", b"A")], &[]);
 
-    let removed = removed_addresses(&prev, &cur, in_build(&cur));
+    let removed = removed_addresses(&prev, cur.site_hashes_view(), in_build(&cur));
 
     assert_eq!(removed.len(), 1);
     assert_eq!(removed[0].moved_to.as_deref(), Some("b/index.html"));
@@ -633,7 +633,7 @@ fn a_removal_carries_the_recorded_source() {
     let prev = snapshot(&sealed_with_assets(&[], &[], &["docs/a.html"], &[]));
     let cur = sealed_with_assets(&[], &[], &[], &["docs/a.html"]);
 
-    let removed = removed_addresses(&prev, &cur, in_build(&cur));
+    let removed = removed_addresses(&prev, cur.site_hashes_view(), in_build(&cur));
     assert_eq!(removed.len(), 1);
     assert_eq!(removed[0].source.as_deref(), Some("docs/a.html"));
 }
@@ -739,7 +739,7 @@ fn a_moved_html_file_is_a_move_not_a_deletion() {
     let prev = snapshot(&sealed_with_assets(&[], &[], &["review/old/plan.html"], &[]));
     let cur = sealed_with_assets(&[], &[], &["review/client/old/plan.html"], &[]);
 
-    let removed = removed_addresses(&prev, &cur, in_build(&cur));
+    let removed = removed_addresses(&prev, cur.site_hashes_view(), in_build(&cur));
     assert_eq!(removed_of(&prev, &cur), [("review/old/plan.html".to_string(), RemovalReason::Unexplained)]);
     let pending = pending_removals(&removed, None);
     assert_eq!(pending[0].cause, RemovalCause::Moved { to: "/review/client/old/plan.html".to_string() });
@@ -762,7 +762,7 @@ fn a_move_prefers_the_arrival_with_the_same_name() {
     let prev = snapshot(&sealed_with_assets(&[], &[], &["old/plan.html"], &[]));
     let cur = sealed_with_assets(&[], &[], &["new/copy.html", "new/plan.html"], &[]);
 
-    let moved: Vec<_> = removed_addresses(&prev, &cur, in_build(&cur)).into_iter().map(|r| r.moved_to).collect();
+    let moved: Vec<_> = removed_addresses(&prev, cur.site_hashes_view(), in_build(&cur)).into_iter().map(|r| r.moved_to).collect();
     assert_eq!(moved, [Some("new/plan.html".to_string())]);
 }
 
@@ -795,7 +795,7 @@ fn a_vanished_form_description_never_refuses_the_publish() {
     ));
     let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
 
-    let removed = removed_addresses(&prev, &cur, in_build(&cur));
+    let removed = removed_addresses(&prev, cur.site_hashes_view(), in_build(&cur));
     assert!(removed.is_empty(), "{removed:?}");
     assert!(pending_removals(&removed, None).is_empty());
     assert_eq!(removed_public_paths(&prev, &cur.files()), Vec::<String>::new());
@@ -828,6 +828,6 @@ fn becoming_members_only_is_not_a_removal_and_becoming_public_is_opened() {
         removed_of(&snapshot(&gated), &open),
         [("a/index.html".to_string(), RemovalReason::Opened), ("map/rows.csv".to_string(), RemovalReason::Opened)]
     );
-    assert_eq!(pending_removals(&removed_addresses(&snapshot(&gated), &open, |_| true), None).len(), 2);
+    assert_eq!(pending_removals(&removed_addresses(&snapshot(&gated), open.site_hashes_view(), |_| true), None).len(), 2);
     assert_eq!(removed_of(&snapshot(&gated), &gated), []);
 }

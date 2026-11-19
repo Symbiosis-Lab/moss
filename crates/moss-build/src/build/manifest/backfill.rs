@@ -72,6 +72,7 @@ use std::sync::{LazyLock, Mutex};
 
 use super::change_set::{self, ChangeSet};
 use super::{published_record, SealedManifest};
+use crate::types::content::SiteHashes;
 use crate::build::ports::host::ServerDiff;
 use crate::build::assets::paths::compute_binary_hash_file;
 use crate::moss_paths::MossPaths;
@@ -139,7 +140,7 @@ pub enum SealVerdict {
 /// generation, which on a large vault is thousands of reads.
 pub async fn for_seal(
     mp: &MossPaths,
-    describable: Option<&SealedManifest>,
+    describable: Option<&SiteHashes>,
 ) -> Option<SealVerdict> {
     let sealed = describable?;
     let target = publish_target(mp);
@@ -158,6 +159,20 @@ pub async fn for_seal(
     })
 }
 
+/// The change set a [`for_seal`] verdict becomes, carrying `removed`:
+/// `AskServer` is asked of `ask`'s port when there is one, else the blank
+/// default. `None` passes through: the caller has nothing to say.
+pub async fn settle(verdict: Option<SealVerdict>, ask: Option<(&ServerDiff, FileSet, String)>, removed: Vec<change_set::RemovedAddress>) -> Option<ChangeSet> {
+    let set = match verdict? {
+        SealVerdict::Ready(set) => set,
+        SealVerdict::AskServer => match ask {
+            Some((port, files, gen_id)) => from_server(port, files, gen_id).await,
+            None => ChangeSet::default(),
+        },
+    };
+    Some(set.with_removed(removed))
+}
+
 pub(crate) fn publish_target(mp: &MossPaths) -> Option<String> {
     crate::build::site_config::get_domain_config(&mp.project_root().to_string_lossy())
         .ok()
@@ -168,7 +183,7 @@ pub(crate) fn publish_target(mp: &MossPaths) -> Option<String> {
 /// publish on any target. Separate from [`for_seal`] because the verdict there
 /// is target-strict, and this must reach every verdict, including the
 /// unclassified one and the ask-the-server path.
-pub fn removed_for_seal(mp: &MossPaths, sealed: &SealedManifest) -> Vec<change_set::RemovedAddress> {
+pub fn removed_for_seal(mp: &MossPaths, sealed: &SiteHashes) -> Vec<change_set::RemovedAddress> {
     let Some(baseline) = published_record::load_address_baseline(mp, publish_target(mp).as_deref()) else {
         return Vec::new();
     };

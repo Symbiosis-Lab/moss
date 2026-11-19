@@ -694,12 +694,12 @@ fn event_gate(root: &Path, kind: notify::EventKind, paths: &[std::path::PathBuf]
 }
 
 /// The rebuild a change moss made asks for: what the watcher's event for it
-/// asks, and for a move the pairs the preview follows a renamed page by.
+/// asks, and for a move the page pairs the preview follows a renamed page by.
 /// `folder` is the built folder. A change of no file asks for none.
 pub fn request_for(folder: &Path, change: crate::commands::Change<'_>) -> Option<worker::RebuildRequest> {
     use crate::commands::Change;
     let (rename_pairs, paths): (Vec<_>, Vec<_>) = match change {
-        Change::Moved(pairs) => (pairs.to_vec(), pairs.iter().flat_map(|(from, to)| [folder.join(from), folder.join(to)]).collect()),
+        Change::Moved(moves) => (crate::editor::ref_scan::page_file_pairs(moves), moves.iter().flat_map(|(from, to)| [folder.join(from), folder.join(to)]).collect()),
         Change::Created(paths) => (Vec::new(), paths.iter().map(std::path::PathBuf::from).collect()),
         Change::Wrote(path) => return request_for_writes(folder, vec![path.to_path_buf()]),
     };

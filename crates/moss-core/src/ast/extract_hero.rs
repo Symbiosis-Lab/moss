@@ -49,6 +49,8 @@ use super::url::Url;
 #[derive(Debug, Default, Clone)]
 pub struct HeroExtraction {
     pub html: String,
+    /// The hero as written, for what the page takes from it besides the markup.
+    pub shortcode: HeroShortcode,
     pub image_url: Option<String>,
     pub overlay_text: Option<String>,
     /// The hero as it will be rendered, kept when it names a listing to draw
@@ -153,6 +155,7 @@ pub fn extract_hero(doc: &mut Document, hooks: &dyn RenderHooks) -> Option<HeroE
 
     Some(HeroExtraction {
         html,
+        shortcode: hero_args.clone(),
         image_url,
         overlay_text,
         drawn_from,
@@ -767,7 +770,7 @@ pub(crate) fn hero_asset_spans(
 mod tests;
 
 /// A block that holds only HTML comments, which a reader never sees.
-fn is_comment(block: &Block) -> bool {
+pub fn is_comment(block: &Block) -> bool {
     let Block::Other(html) = block else { return false };
     let mut rest = html.trim();
     while let Some(after) = rest.strip_prefix("<!--") {

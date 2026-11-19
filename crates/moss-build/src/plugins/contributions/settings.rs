@@ -70,6 +70,9 @@ pub enum FieldType {
     /// every serialized config. `secret` rather than `password`, deliberately:
     /// `password` names a widget, this names custody.
     Secret,
+    /// An account address, `@name@host` (the shape of an `acct:` URI), drawn
+    /// as text. An identity proof may read its `.user` and `.host`.
+    Acct,
     /// A table of named sub-`fields`. Site settings only, like the two below:
     /// the plugin's own `config.toml` and a blocker's form are written flat.
     /// The names match moss-core's schema `Object` and `Array`.
@@ -82,7 +85,7 @@ pub enum FieldType {
 
 impl FieldType {
     fn is_scalar(self) -> bool {
-        matches!(self, Self::String | Self::Number | Self::Boolean)
+        matches!(self, Self::String | Self::Number | Self::Boolean | Self::Acct)
     }
 }
 
@@ -155,6 +158,14 @@ pub struct Field {
     /// credential it never asks for — the token a sign-in flow earned.
     #[serde(default)]
     pub hidden: bool,
+
+    /// Asked on the channel's sign-in page, before its `login` runs, and never
+    /// drawn in the settings form: the one thing a sign-in cannot find out by
+    /// itself, such as which Mastodon server the account is on. The answer
+    /// reaches `login` in its context's `config`; the plugin keeps what it
+    /// needs. A `string` only.
+    #[serde(default)]
+    pub at_sign_in: bool,
 
     /// Ghost text in the empty input.
     #[serde(default)]
@@ -290,6 +301,7 @@ impl Field {
             options: Vec::new(),
             required: false,
             hidden: false,
+            at_sign_in: false,
             placeholder: None,
             help_url,
             pattern: None,
@@ -418,6 +430,9 @@ pub(crate) fn validate_declared_fields(fields: &[Field]) -> Result<(), String> {
                  secret is required by definition"
             ));
         }
+        if field.at_sign_in && field.field_type != FieldType::String {
+            return Err(format!("field `{key}`: `at_sign_in` asks for a `string` before signing in"));
+        }
         if !matches!(field.field_type, FieldType::String | FieldType::Number | FieldType::Boolean | FieldType::Secret)
             || field.has_site_only_modifiers()
         {
@@ -527,8 +542,8 @@ fn site_field_rules(field: &Field) -> Result<(), String> {
     if kind == FieldType::Secret {
         return Err("a `secret` cannot live in `.moss/config.toml`, which syncs with the folder; declare it in `setup.settings`".into());
     }
-    if field.hidden {
-        return Err("`hidden` is not for site settings: leave an undrawn key out of the manifest".into());
+    if field.hidden || field.at_sign_in {
+        return Err("`hidden` and `at_sign_in` are not for site settings: leave an undrawn key out of the manifest".into());
     }
     for pattern in [&field.pattern, &field.key_pattern].into_iter().flatten() {
         if regex::Regex::new(pattern).is_err() {

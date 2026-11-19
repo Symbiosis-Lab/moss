@@ -620,8 +620,8 @@ async fn the_seal_tail_leaves_the_served_staging_tree_alone() {
     std::fs::create_dir_all(mp.generation_dir("g1")).unwrap();
     let site_dir_cell = Arc::new(std::sync::RwLock::new(std::path::PathBuf::new()));
     let _ = lifecycle::adopt_server(&mp, &site_dir_cell);
-    let (shown, _) = lifecycle::show_render(&mp, true);
-    assert!(lifecycle::promote(&mp, crate::build::ship::next_promotion_epoch(), Some(shown), "g1", true).unwrap());
+    let shown = lifecycle::show_render(&mp, true).0;
+    assert!(lifecycle::promote(&mp, crate::build::ship::next_promotion_epoch(), Some(&shown), "g1", true).unwrap());
     let (port2, _, shutdown_tx2) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_cell.clone(), 59750)
     })
@@ -686,8 +686,8 @@ async fn a_rebuild_never_parks_the_preview_on_a_generation_older_than_the_render
     // Render 1 is shown and promoted as g1, which has no `fresh/`.
     let cell = Arc::new(std::sync::RwLock::new(std::path::PathBuf::new()));
     let _ = lifecycle::adopt_server(&mp, &cell);
-    let (r1, _) = lifecycle::show_render(&mp, true);
-    assert!(lifecycle::promote(&mp, next_promotion_epoch(), Some(r1), "g1", true).unwrap());
+    let r1 = lifecycle::show_render(&mp, true).0;
+    assert!(lifecycle::promote(&mp, next_promotion_epoch(), Some(&r1), "g1", true).unwrap());
 
     // Render 2 adds `fresh/` and is on screen; its seal tail has not run.
     let pages = [("index.html", "<html>home</html>"), ("fresh/index.html", "<html>fresh</html>")];
@@ -716,7 +716,7 @@ async fn a_rebuild_never_parks_the_preview_on_a_generation_older_than_the_render
     }
     let sealed = pending.seal();
     let promotion =
-        materialize_and_promote(&sealed, &mp, &stage, next_promotion_epoch(), Some(r2), ShipVerdict::Ship);
+        materialize_and_promote(&sealed, &mp, &stage, next_promotion_epoch(), Some(&r2), ShipVerdict::Ship);
     assert_eq!(promotion, Ok(Promotion::Promoted));
 
     assert!(lifecycle::park_for_rebuild(&mp, false, Default::default()).is_some(), "caught up, the next rebuild may sweep");

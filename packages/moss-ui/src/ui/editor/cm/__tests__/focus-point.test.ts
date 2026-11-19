@@ -50,6 +50,8 @@ const settle = async () => {
 const picture = () => document.querySelector<HTMLElement>('.cm-lp-image-block > .cm-focus-point');
 const dot = () => document.querySelector<HTMLElement>('.cm-focus-point-dot')!;
 const frame = () => document.querySelector<HTMLElement>('.cm-focus-point-frame');
+/** Line `n` as the editor shows it, which differs from the document while the dot moves. */
+const shownLine = (n: number) => view!.contentDOM.querySelectorAll('.cm-line')[n - 1].textContent;
 const focusWrites = (sent: [string, unknown][]) => sent.filter(([n]) => n === HERO_IMAGE_FOCUS).map(([, p]) => p);
 
 /** Pointer events on the dot, over a picture with a 200x100 box at the origin. */
@@ -154,7 +156,7 @@ describe('focus point instrument', () => {
     expect(frame()!.hidden).toBe(true);
   });
 
-  test('dragging moves the preview live; letting go writes one undoable edit and holds the written position on the preview', async () => {
+  test('dragging moves the preview live and shows the position in the line; letting go writes one undoable edit and holds the written position on the preview', async () => {
     const { view, sent } = open(HERO, 2);
     await settle();
     pointer('pointerdown', 20, 62);
@@ -162,8 +164,10 @@ describe('focus point instrument', () => {
     pointer('pointermove', 20, 70);
     expect(focusWrites(sent)).toEqual([{ path: 'p.md', line: 1, position: '20% 62%' }, { path: 'p.md', line: 1, position: '20% 70%' }]);
     expect(view.state.doc.toString()).toBe(HERO);
+    expect(shownLine(2)).toBe('![[photo.jpg|cover focus:20%,70%]]');
     pointer('pointerup', 20, 70);
     expect(view.state.doc.line(2).text).toBe('![[photo.jpg|cover focus:20%,70%]]');
+    expect(shownLine(2)).toBe(view.state.doc.line(2).text);
     expect(focusWrites(sent).at(-1)).toEqual({ path: 'p.md', line: 1, position: '20% 70%', held: true });
     undo(view);
     expect(view.state.doc.toString()).toBe(HERO);
@@ -221,8 +225,10 @@ describe('focus point instrument', () => {
     await settle();
     pointer('pointerdown', 20, 62);
     pointer('pointermove', 20, 62);
+    expect(shownLine(2)).toBe('![[photo.jpg|cover focus:20%,62%]]');
     pointer('pointerup', 50, 0);
     expect(view.state.doc.toString()).toBe(HERO);
+    expect(shownLine(2)).toBe(view.state.doc.line(2).text);
     expect(focusWrites(sent).at(-1)).toEqual({ path: 'p.md', line: 1, position: null });
   });
 

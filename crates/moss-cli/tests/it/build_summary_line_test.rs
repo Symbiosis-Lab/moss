@@ -120,6 +120,43 @@ fn advice_about_a_working_page_is_a_note_not_a_strict_failure() {
     assert!(stderr.contains("0 problems"), "{stderr}");
 }
 
+/// The alt-text note's suggestion, followed as written, gives the image alt
+/// text and no caption: a lone image's plain bracket text would become a
+/// visible caption with `alt=""` instead.
+#[test]
+fn following_the_alt_text_note_gives_alt_text_not_a_caption() {
+    let moss_home = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let site = std::fs::canonicalize(tmp.path()).unwrap();
+    std::fs::write(site.join("index.md"), "---\ntitle: Home\n---\n\n![](logo.png)\n").unwrap();
+    std::fs::write(site.join("logo.png"), [137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,0,1,0,0,0,1,8,2,0,0,0,144,119,83,222,0,0,0,12,73,68,65,84,120,156,99,248,207,192,0,0,3,1,1,0,201,254,146,239,0,0,0,0,73,69,78,68,174,66,96,130]).unwrap();
+    let build = || {
+        let out = Command::new(env!("CARGO_BIN_EXE_moss-cli"))
+            .args(["build", site.to_str().unwrap(), "--no-plugins"])
+            .env("MOSS_HOME", moss_home.path())
+            .env("MOSS_SITE_URL", "https://example.com")
+            .stdin(Stdio::null())
+            .output()
+            .expect("run moss-cli");
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    };
+
+    let stderr = build();
+    let hint = stderr
+        .lines()
+        .find_map(|l| l.split_once("write it in the brackets: ").map(|(_, md)| md.trim().to_string()))
+        .unwrap_or_else(|| panic!("no alt-text suggestion in:\n{stderr}"));
+    let followed = hint.replacen("describe the image", "A green square", 1);
+    std::fs::write(site.join("index.md"), format!("---\ntitle: Home\n---\n\n{followed}\n")).unwrap();
+
+    let stderr = build();
+    assert!(!stderr.contains("has no alt text"), "{stderr}");
+    let html = std::fs::read_to_string(site.join(".moss/build.nosync/current/index.html")).unwrap();
+    assert!(html.contains(r#"alt="A green square""#), "{html}");
+    assert!(!html.contains("<figcaption"), "{html}");
+}
+
 #[test]
 fn a_raw_style_block_in_a_page_is_a_note_naming_the_page() {
     let (out, stderr) = strict_build("---\ntitle: Home\n---\n\nWelcome.\n\n<style>.moss-prose { color: red; }</style>\n");

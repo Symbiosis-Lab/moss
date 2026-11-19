@@ -70,7 +70,7 @@ beforeEach(() => {
   loaded = [];
 });
 
-test("a timed-out image restores when only its original later arrives", async () => {
+test("a picture still downloading (503) rests three ticks, then restores when its original arrives", async () => {
   const doc = document.implementation.createHTMLDocument("preview");
   const img = doc.createElement("img");
   img.src = "/assets/card.webp";
@@ -96,6 +96,8 @@ test("a timed-out image restores when only its original later arrives", async ()
   tick?.();
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(img.hasAttribute("data-moss-ph")).toBe(true);
+  for (let i = 0; i < 3; i++) { tick?.(); await new Promise((resolve) => setTimeout(resolve, 0)); }
+  expect(fetch).toHaveBeenCalledTimes(1);
   tick?.();
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(fetch).toHaveBeenCalledTimes(2);
@@ -156,36 +158,116 @@ test("teardown aborts an in-flight probe and cannot restore its image", async ()
   expect(img.hasAttribute("data-moss-ph")).toBe(true);
 });
 
-test("a reused image can retry a new URL after an old URL is terminal", async () => {
+function retryHarness(srcs: string[], answer: (url: string) => Promise<{ ok: boolean; status: number }>, url = "http://preview.test/page/") {
+  const doc = document.implementation.createHTMLDocument("preview");
+  Object.defineProperty(doc, "URL", { value: url });
+  const base = doc.createElement("base");
+  base.href = url;
+  doc.head.appendChild(base);
+  const images = srcs.map((src) => {
+    const img = doc.createElement("img");
+    img.setAttribute("src", src);
+    img.getBoundingClientRect = () => ({ left: 0, top: 0, right: 100, bottom: 100 } as DOMRect);
+    doc.body.appendChild(img);
+    return img;
+  });
+  const fetch = vi.fn(answer);
+  let tick: (() => void) | undefined;
+  let live = 0;
+  const win = {
+    fetch, innerWidth: 1000, innerHeight: 1000,
+    setInterval: (fn: () => void) => { tick = fn; live++; return 1; },
+    clearInterval: () => { live--; }, setTimeout: () => 2, clearTimeout: () => {},
+  } as unknown as Window;
+  const teardown = install(doc, win);
+  for (const img of images) img.dispatchEvent(new Event("error"));
+  const ticks = async (n: number) => { for (let i = 0; i < n; i++) { tick?.(); await new Promise((r) => setTimeout(r, 0)); } };
+  return { images, fetch, ticks, teardown, live: () => live };
+}
+
+test("the retry clock runs only while a picture waits, and not while the page is hidden", async () => {
   const doc = document.implementation.createHTMLDocument("preview");
   const img = doc.createElement("img");
-  img.src = "/assets/removed.webp";
+  img.src = "/assets/card.webp";
   img.getBoundingClientRect = () => ({ left: 0, top: 0, right: 100, bottom: 100 } as DOMRect);
   doc.body.appendChild(img);
   let tick: (() => void) | undefined;
-  const fetch = vi.fn()
-    .mockResolvedValueOnce({ ok: false, status: 404 })
-    .mockResolvedValueOnce({ ok: true, status: 200 });
+  let live = 0;
+  const win = {
+    fetch: vi.fn(async () => ({ ok: true, status: 200 })), innerWidth: 1000, innerHeight: 1000,
+    setInterval: (fn: () => void) => { tick = fn; live++; return 1; },
+    clearInterval: () => { live--; }, setTimeout: () => 2, clearTimeout: () => {},
+  } as unknown as Window;
+  const teardown = install(doc, win);
+  expect(live).toBe(0);
+  img.dispatchEvent(new Event("error"));
+  expect(live).toBe(1);
+  tick?.();
+  await new Promise((r) => setTimeout(r, 0));
+  expect(img.hasAttribute("data-moss-ph")).toBe(false);
+  tick?.();
+  expect(live).toBe(0);
+  img.src = "/assets/next.webp";
+  img.dispatchEvent(new Event("error"));
+  expect(live).toBe(1);
+  Object.defineProperty(doc, "visibilityState", { value: "hidden", configurable: true });
+  doc.dispatchEvent(new Event("visibilitychange"));
+  expect(live).toBe(0);
+  Object.defineProperty(doc, "visibilityState", { value: "visible", configurable: true });
+  doc.dispatchEvent(new Event("visibilitychange"));
+  expect(live).toBe(1);
+  teardown();
+  expect(live).toBe(0);
+});
+
+test("an empty src, which resolves to the page itself, is never probed and keeps no clock", async () => {
+  const { fetch, ticks, teardown, live } = retryHarness([""], async () => ({ ok: true, status: 200 }));
+  expect(live()).toBe(0);
+  await ticks(3);
+  expect(fetch).not.toHaveBeenCalled();
+  teardown();
+});
+
+test("a picture that fails again on the same address after a restore is not asked again", async () => {
+  const { images, fetch, ticks, teardown } = retryHarness(["/assets/card.webp"], async () => ({ ok: true, status: 200 }));
+  await ticks(1);
+  expect(images[0].hasAttribute("data-moss-ph")).toBe(false);
+  images[0].dispatchEvent(new Event("error"));
+  expect(images[0].hasAttribute("data-moss-ph")).toBe(true);
+  fetch.mockClear();
+  await ticks(3);
+  expect(fetch).not.toHaveBeenCalled();
+  expect(restore("/assets/card.webp", images[0].ownerDocument)).toBe(1);
+  teardown();
+});
+
+test("every waiting picture on screen shows within a few ticks of the server having it, a 404 included", async () => {
+  const doc = document.implementation.createHTMLDocument("preview");
+  const images = Array.from({ length: 6 }, (_, i) => {
+    const img = doc.createElement("img");
+    img.src = `/assets/card-${i}.w800.webp`;
+    img.getBoundingClientRect = () => ({ left: 0, top: 0, right: 100, bottom: 100 } as DOMRect);
+    doc.body.appendChild(img);
+    return img;
+  });
+  // The build has not promised these pictures yet: the first answer is a 404.
+  let promised = false;
+  const fetch = vi.fn(async () => (promised ? { ok: true, status: 200 } : { ok: false, status: 404 }));
+  let tick: (() => void) | undefined;
   const win = {
     fetch, innerWidth: 1000, innerHeight: 1000,
     setInterval: (fn: () => void) => { tick = fn; return 1; },
     clearInterval: () => {}, setTimeout: () => 2, clearTimeout: () => {},
   } as unknown as Window;
   const teardown = install(doc, win);
-  img.dispatchEvent(new Event("error"));
-  tick?.();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  tick?.();
-  expect(fetch).toHaveBeenCalledTimes(1);
+  for (const img of images) img.dispatchEvent(new Event("error"));
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+  for (let i = 0; i < 3; i++) { tick?.(); await settle(); }
+  expect(images.every((img) => img.hasAttribute("data-moss-ph"))).toBe(true);
 
-  restore("/assets/removed.webp", doc);
-  img.src = "/assets/new.webp";
-  img.dispatchEvent(new Event("error"));
-  tick?.();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  expect(fetch).toHaveBeenCalledTimes(2);
-  expect(fetch).toHaveBeenLastCalledWith("/assets/new.webp", expect.objectContaining({ method: "HEAD" }));
-  expect(img.hasAttribute("data-moss-ph")).toBe(false);
+  promised = true;
+  for (let i = 0; i < 6; i++) { tick?.(); await settle(); }
+  expect(images.filter((img) => img.hasAttribute("data-moss-ph"))).toHaveLength(0);
   teardown();
 });
 
@@ -244,12 +326,17 @@ describe("place — paints the blueprint without destroying identity", () => {
     );
   });
 
-  test("picks the dark blueprint when the document is dark", () => {
-    document.documentElement.setAttribute("data-theme", "dark");
-    const img = bare("/assets/photo.webp");
-    fail(img);
-    // Dark grid lines are the grid package's dark blue, %235a9bff.
-    expect(img.getAttribute("src")).toContain("%235a9bff");
+  test("paints no grid of its own: an empty stand-in in the picture's own shape, in either theme", () => {
+    for (const theme of ["light", "dark"]) {
+      document.documentElement.setAttribute("data-theme", theme);
+      const img = bare("/assets/photo.webp");
+      img.setAttribute("width", "1600");
+      img.setAttribute("height", "900");
+      fail(img);
+      const svg = decodeURIComponent(img.getAttribute("src")!.slice(BLUEPRINT.length));
+      expect(svg).not.toMatch(/pattern|path|rect|fill|stroke/);
+      expect(svg).toContain("viewBox='0 0 1600 900'");
+    }
   });
 
   test("is idempotent — a second error does not overwrite the stash", () => {

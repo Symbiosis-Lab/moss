@@ -198,9 +198,8 @@ pub struct IndexTiming {
 
 static LAST_TIMING: std::sync::Mutex<Option<IndexTiming>> = std::sync::Mutex::new(None);
 
-/// Number of whole-site index computations this process has run. Test-facing;
-/// this is what "a burst of N rebuilds produces one reindex, not N" is measured
-/// with, now that the lane rather than a ticket decides.
+/// Number of whole-site index computations this process has run. Test-facing:
+/// what "N edits and one search read run one index, not N" is measured with.
 static INDEX_BUILDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// The most recent [`IndexTiming`], or `None` if no index has been built in
@@ -218,8 +217,8 @@ pub fn index_build_count() -> usize {
 ///
 /// [`INDEX_BUILDS`] is process-global and `cargo test` runs the suite on
 /// several threads, so without this a sibling test's index build lands inside
-/// another's measured delta and "a burst of N requests ran one index" fails for
-/// a reason that has nothing to do with the lane.
+/// another's measured delta and "N edits ran one index" fails for a reason that
+/// has nothing to do with the code under test.
 #[cfg(test)]
 pub(crate) fn lock_index_counter() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -556,9 +555,6 @@ pub(crate) fn clear_segment_cache() {
 /// [`segment_pages`]); publishing the bundle is the caller's job (see
 /// [`search_lane`][super::search_lane]).
 ///
-/// Uncancellable convenience form of [`build_search_index_cancellable`], for
-/// the publish-path settle and for tests.
-///
 /// # Async bridging
 ///
 /// `pagefind`'s programmatic API (`pagefind::api::PagefindIndex`) is
@@ -568,41 +564,22 @@ pub(crate) fn clear_segment_cache() {
 /// `block_on` from a runtime *thread* panics, so this spawns a plain
 /// `std::thread`, stands up a private current-thread runtime there, and joins
 /// it. That is unconditionally safe regardless of the ambient context, and
-/// costs one thread once per publish build.
+/// costs one thread per index.
 ///
 /// Returns `Err` with a human-readable message on any indexing failure. The
 /// caller treats that as non-fatal: a site that can't be indexed still ships.
 pub fn build_search_index(site_dir: &Path) -> Result<SearchIndex, String> {
-    build_search_index_cancellable(site_dir, &|| false)
-        .map(|index| index.unwrap_or_default())
-}
-
-/// [`build_search_index`] with cooperative cancellation at phase boundaries.
-///
-/// `cancelled` is polled after segmentation, before each page is handed to
-/// Pagefind and immediately before `get_files()` — never inside those calls,
-/// because none of them is interruptible. `get_files()` is the 3–4 s gzip block, so the
-/// worst case of a late cancellation is one wasted pass **off the critical
-/// path**; the boundary before it is the one that matters, since a superseded
-/// request usually arrives while the previous one is still fossicking.
-///
-/// `Ok(None)` means cancelled: nothing was produced and nothing is wrong.
-pub fn build_search_index_cancellable(
-    site_dir: &Path,
-    cancelled: &(dyn Fn() -> bool + Sync),
-) -> Result<Option<SearchIndex>, String> {
     let _phase = crate::build::phase::PhaseTrace::start("search_index");
     let t_read = std::time::Instant::now();
-    index_pages(read_pages(site_dir), t_read, cancelled)
+    index_pages(read_pages(site_dir), t_read)
 }
 
-/// [`build_search_index_cancellable`] over pages already read; `t_read` is when
-/// the read started, for the segment timing.
+/// [`build_search_index`] over pages already read; `t_read` is when the read
+/// started, for the segment timing.
 pub(crate) fn index_pages(
     PageRead { pages, unreadable, left_out }: PageRead,
     t_read: std::time::Instant,
-    cancelled: &(dyn Fn() -> bool + Sync),
-) -> Result<Option<SearchIndex>, String> {
+) -> Result<SearchIndex, String> {
     INDEX_BUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     let (pages, failed, resegmented) = segment_pages(pages);
@@ -611,18 +588,10 @@ pub(crate) fn index_pages(
     crate::build::phase::record_count("search_pages", readable);
     crate::build::phase::record_count("search_resegmented", resegmented);
     let segment_ms = t_read.elapsed().as_millis();
-    if cancelled() {
-        return Ok(None);
-    }
 
-    // `std::thread::scope` (not `Builder::spawn` + `join`) so the borrowed
-    // `cancelled` predicate can cross into the indexing thread without being
-    // `'static`. The thread is joined before the scope ends, so the borrow is
-    // sound and the ambient-runtime argument above is unaffected.
-    std::thread::scope(|scope| {
-        let handle = std::thread::Builder::new()
+    std::thread::Builder::new()
         .name("moss-pagefind".into())
-        .spawn_scoped(scope, move || -> Result<Option<SearchIndex>, String> {
+        .spawn(move || -> Result<SearchIndex, String> {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -645,9 +614,6 @@ pub(crate) fn index_pages(
                 let t_fossick = std::time::Instant::now();
                 let mut page_count = 0;
                 for page in pages {
-                    if cancelled() {
-                        return Ok(None);
-                    }
                     match index.add_html_file(Some(page.rel_path), None, page.html.to_string()).await {
                         Ok(_) => page_count += 1,
                         Err(e) => log::info!(target: "search", "search index skipped a page: {}", e),
@@ -659,12 +625,7 @@ pub(crate) fn index_pages(
                     // Not an error and not necessarily a success — the census
                     // travels so `publish_bundle` can tell "no indexable
                     // content" from "the tree went away".
-                    return Ok(Some(SearchIndex { files: Vec::new(), pages: readable, skipped, left_out }));
-                }
-                // The boundary that earns cancellation its keep: everything
-                // after this point is the uncancellable gzip.
-                if cancelled() {
-                    return Ok(None);
+                    return Ok(SearchIndex { files: Vec::new(), pages: readable, skipped, left_out });
                 }
 
                 // `get_files()` is `build_indexes()` PLUS `write_files_to_memory()`
@@ -707,20 +668,17 @@ pub(crate) fn index_pages(
                     *slot = Some(timing);
                 }
 
-                Ok(Some(SearchIndex {
+                Ok(SearchIndex {
                     files: files.into_iter().map(bundle_file).collect::<Result<_, _>>()?,
                     pages: readable,
                     skipped,
                     left_out,
-                }))
+                })
             })
         })
-        .map_err(|e| format!("failed to spawn search-index thread: {}", e))?;
-
-        handle
-            .join()
-            .map_err(|_| "search-index thread panicked".to_string())?
-    })
+        .map_err(|e| format!("failed to spawn search-index thread: {}", e))?
+        .join()
+        .map_err(|_| "search-index thread panicked".to_string())?
 }
 
 #[cfg(test)]

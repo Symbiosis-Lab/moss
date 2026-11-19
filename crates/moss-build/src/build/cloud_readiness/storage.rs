@@ -229,6 +229,38 @@ impl fmt::Display for Unavailable {
 
 pub(crate) type Operation = Arc<dyn Fn() -> Result<StorageValue, StorageFailure> + Send + Sync>;
 
+/// A wait with this deadline ends only with the operation's result or with
+/// cancellation (the folder closing).
+pub(crate) const UNTIL_CANCELLED: Duration = Duration::MAX;
+
+/// How long a waited-on operation may go without one entry before moss says
+/// the provider has stopped answering. It ends no wait.
+const NOT_ANSWERING_AFTER: Duration = Duration::from_secs(15);
+
+std::thread_local! {
+    static LAST_ENTRY: std::cell::RefCell<Option<Arc<std::sync::atomic::AtomicU64>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Milliseconds since this process's first storage operation, never 0, so a
+/// stored 0 can mean "not started".
+fn now_ms() -> u64 {
+    static EPOCH: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Instant::now);
+    EPOCH.elapsed().as_millis() as u64 + 1
+}
+
+/// Mark one entry for the operation running on this thread, so a long listing
+/// reads as moving and a provider that stopped answering reads as quiet.
+pub(crate) fn note_entry() {
+    LAST_ENTRY.with(|last| if let Some(last) = &*last.borrow() { last.store(now_ms(), std::sync::atomic::Ordering::Relaxed); });
+}
+
+/// How long the folder's running source walk has gone without an entry; None
+/// when no walk of it is running.
+#[cfg(test)]
+pub(crate) fn walk_quiet_for(folder: &Path) -> Option<Duration> {
+    super::PREFETCH.running_operation(&OperationKey { path: folder.to_path_buf(), policy: OperationPolicy::SourceWalk })?.quiet_for()
+}
+
 pub(crate) enum PublicationOutcome {
     Completed,
     PendingOptionalCache,
@@ -369,7 +401,7 @@ pub(crate) fn await_operation(
 ) -> Result<Arc<StorageValue>, Unavailable> {
     let managed_context = managed_context(path);
     #[cfg(test)]
-    let deadline = test_faults().roots.get(path).copied().unwrap_or(deadline);
+    let deadline = if deadline == UNTIL_CANCELLED { deadline } else { test_faults().roots.get(path).copied().unwrap_or(deadline) };
     if managed_context && !crate::platform::dataless_reads_fail_fast() {
         let operation = match policy { OperationPolicy::EditorDirectory { .. } => StorageOperation::ReadDirOpen, OperationPolicy::SourceWalk | OperationPolicy::SweepWalk { .. } => StorageOperation::WalkEntry, OperationPolicy::WatchTargets => StorageOperation::ReadDirOpen, OperationPolicy::CachePublication { .. } => StorageOperation::CachePublish };
         let waiting = Arc::new(StorageFailure::new(Some(path.to_path_buf()), operation,
@@ -432,6 +464,9 @@ pub(crate) struct OperationRequest {
 
 pub(crate) struct OperationTask {
     pub state: Mutex<OperationState>,
+    /// When the running attempt began or last noted an entry ([`note_entry`]),
+    /// as [`now_ms`]; 0 while no attempt runs.
+    last_entry: Arc<std::sync::atomic::AtomicU64>,
     pub(crate) request: OperationRequest,
     pub(crate) revision: Option<Arc<std::sync::atomic::AtomicU64>>,
 }
@@ -443,7 +478,7 @@ impl OperationTask {
     }
 
     pub fn from_request(request: OperationRequest) -> Self {
-        Self { request, revision: None, state: Mutex::new(OperationState { result: None, started_at: None, attempt_revision: None, last_failure: None, waiters: 1, deferred: false, superseding: None }) }
+        Self { request, revision: None, last_entry: Default::default(), state: Mutex::new(OperationState { result: None, started_at: None, attempt_revision: None, last_failure: None, waiters: 1, deferred: false, superseding: None }) }
     }
 
     /// The caller's deadline never bounds a kernel call. Only these reserved
@@ -463,13 +498,23 @@ impl OperationTask {
             state.started_at = Some(Instant::now());
             state.attempt_revision = self.revision.as_ref().map(|revision| revision.load(std::sync::atomic::Ordering::Acquire));
         }
+        self.last_entry.store(now_ms(), std::sync::atomic::Ordering::Relaxed);
+        LAST_ENTRY.with(|last| *last.borrow_mut() = Some(self.last_entry.clone()));
         let result = (self.request.attempt)().map(Arc::new).map_err(Arc::new);
+        LAST_ENTRY.with(|last| *last.borrow_mut() = None);
+        self.last_entry.store(0, std::sync::atomic::Ordering::Relaxed);
         if let Err(failure) = &result {
             self.state.lock().unwrap_or_else(|e| e.into_inner()).last_failure = Some(failure.clone());
         }
         result
     }
 
+    /// How long the running attempt has gone without an entry; None while no
+    /// attempt runs.
+    pub(crate) fn quiet_for(&self) -> Option<Duration> {
+        let last = self.last_entry.load(std::sync::atomic::Ordering::Relaxed);
+        (last != 0).then(|| Duration::from_millis(now_ms().saturating_sub(last)))
+    }
 }
 
 fn await_operation_in(
@@ -518,7 +563,16 @@ fn wait_for_operation(
         return Err(admission_failure(pool, &key, first));
     };
     let started = Instant::now();
+    let mut said = false;
+    let mut reaped = started;
     loop {
+        // This waiter may be the only caller left while every pool thread is parked.
+        if reaped.elapsed() >= Duration::from_secs(1) { pool.reap(); reaped = Instant::now(); }
+        let quiet = deadline > NOT_ANSWERING_AFTER && task.quiet_for().is_some_and(|quiet| quiet >= NOT_ANSWERING_AFTER);
+        if quiet && !said {
+            log::warn!("cloud: a folder listing has had no entry for 15 s; the provider is not answering");
+        }
+        said = quiet;
         let mut state = task.state.lock().unwrap_or_else(|e| e.into_inner());
         if cancel() {
             state.waiters -= 1;
@@ -575,6 +629,7 @@ mod tests;
 struct TestFaults {
     roots: std::collections::HashMap<PathBuf, Duration>,
     refusals: std::collections::HashMap<(PathBuf, StorageOperation), (usize, i32)>,
+    holds: std::collections::HashMap<PathBuf, Arc<(Mutex<bool>, std::sync::Condvar)>>,
 }
 
 #[cfg(test)]
@@ -585,6 +640,10 @@ fn test_faults() -> std::sync::MutexGuard<'static, TestFaults> {
 
 #[cfg(test)]
 pub(crate) fn test_probe(path: &Path, operation: StorageOperation) -> Result<(), StorageFailure> {
+    let hold = test_faults().holds.get(path).cloned();
+    if let Some(hold) = hold {
+        let _released = hold.1.wait_while(hold.0.lock().unwrap(), |released| !*released).unwrap();
+    }
     if let Some((remaining, errno)) = test_faults().refusals.get_mut(&(path.to_path_buf(), operation)) {
         if *remaining > 0 {
             *remaining -= 1;
@@ -621,5 +680,41 @@ impl Drop for TestFault {
         let mut faults = test_faults();
         faults.roots.remove(&self.root);
         faults.refusals.remove(&self.key);
+    }
+}
+
+/// A walk that reaches `path` under a managed `root` stops there, as on a
+/// provider that has stopped answering, until released or dropped.
+#[cfg(test)]
+pub(crate) struct TestHold {
+    root: PathBuf,
+    path: PathBuf,
+    gate: Arc<(Mutex<bool>, std::sync::Condvar)>,
+}
+
+#[cfg(test)]
+impl TestHold {
+    pub fn install(root: &Path, path: &Path) -> Self {
+        let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        let mut faults = test_faults();
+        faults.roots.insert(root.to_path_buf(), Duration::MAX);
+        faults.holds.insert(path.to_path_buf(), gate.clone());
+        Self { root: root.to_path_buf(), path: path.to_path_buf(), gate }
+    }
+
+    pub fn release(&self) {
+        *self.gate.0.lock().unwrap() = true;
+        self.gate.1.notify_all();
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestHold {
+    fn drop(&mut self) {
+        let mut faults = test_faults();
+        faults.roots.remove(&self.root);
+        faults.holds.remove(&self.path);
+        drop(faults);
+        self.release();
     }
 }

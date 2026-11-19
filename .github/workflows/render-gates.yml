@@ -5,10 +5,12 @@
 # be pushed freely and the release pull request is where these gates run.
 # Kept apart from pr.yml so the path filter decides whether it runs at all.
 #
-# Two legs, same gates, different engine: Chromium on Linux (cheap) and
-# WebKit on macOS (also free here, and it is the engine Safari readers
-# actually run — WebKit on Linux is a GTK port whose timing and font
-# substitution produce false failures unrelated to any real regression).
+# Chromium on Linux only. WebKit, the engine Safari readers and the desktop
+# preview run, is checked before each release by the full local run,
+# `bash scripts/render-gates.sh` with no --project, which runs every gate in
+# both engines: a hosted macOS runner never finished the
+# WebKit pass inside 75 minutes, and WebKit on Linux is a GTK port whose
+# timing and font substitution fail for reasons unrelated to the page.
 #
 # Gates nothing yet: this workflow is not wired into branch protection or any
 # required-checks aggregator. It becomes required after running green for a
@@ -111,61 +113,3 @@ jobs:
       - name: Run render gates (Chromium)
         run: bash scripts/render-gates.sh --project chromium
 
-  render-gates-webkit:
-    name: Render gates (WebKit)
-    runs-on: macos-latest
-    # The full WebKit pass alone runs past 45 minutes on a hosted macOS runner.
-    timeout-minutes: 75
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: pnpm/action-setup@v5
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '20'
-          cache: 'pnpm'
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: '. -> target'
-          shared-key: render-gates-webkit
-
-      # macOS runners do not guarantee ffmpeg; gate-site imports use it to
-      # synthesize a small busy-image fixture.
-      - name: Install ffmpeg
-        run: command -v ffmpeg >/dev/null 2>&1 || brew install ffmpeg
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-        env:
-          SKIP_RUST_INSTALL: 1
-
-      # Compiled here rather than downloaded, same reason as the Chromium job above.
-      - name: Build moss-cli
-        run: bash scripts/build-moss-cli.sh
-
-      # Same cache mechanics as the Chromium job; the path is macOS's own
-      # Playwright cache location, not Linux's.
-      - uses: actions/cache@v4
-        id: playwright-cache
-        with:
-          path: ~/Library/Caches/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-
-      # No install-deps step: that command satisfies Linux system-package
-      # requirements that the macOS runner image does not have in the first
-      # place.
-      - name: Install Playwright browsers
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: npx playwright install webkit
-
-      - name: Check render-gates classification
-        run: bash scripts/render-gates.sh --check
-
-      - name: Run render gates (WebKit)
-        run: bash scripts/render-gates.sh --project webkit

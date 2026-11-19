@@ -86,7 +86,7 @@ export function t(key: keyof UiStringMap, params?: TParams): string {
 export type RefusalLike =
   | { kind: 'revoked'; reason: string }
   | { kind: 'incompatible'; needs: string; host: string }
-  | { kind: 'unapproved' }
+  | { kind: 'untrusted' }
   | { kind: 'unavailable'; platforms: string[] }
   | { kind: 'unreadable_floor'; floor: string };
 
@@ -113,8 +113,8 @@ export function refusalTooltip(refusal: RefusalLike, name: string): string {
       return t('channels.revoked_tooltip', { name, reason: refusal.reason });
     case 'incompatible':
       return t('channels.incompatible_tooltip', { name, needs: refusal.needs, host: refusal.host });
-    case 'unapproved':
-      return t('channels.unapproved_tooltip', { name });
+    case 'untrusted':
+      return t('trust.off');
     case 'unavailable':
       return t('channels.unavailable_tooltip', { name, where: platformWords(refusal.platforms) });
     case 'unreadable_floor':

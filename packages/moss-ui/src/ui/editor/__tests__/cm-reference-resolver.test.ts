@@ -261,7 +261,7 @@ describe('a landed batch marks a missing file through the problem field', () => 
 
 
 describe('createReferenceResolver — SourceAssetChanged → image repaint', () => {
-  test('SourceAssetChanged bumps the per-asset bust for that path', async () => {
+  test('SourceAssetChanged bumps the per-asset bust for that path once the re-resolve lands', async () => {
     __resetAssetBustForTests();
     const cbs: Record<string, Array<(m: any) => void>> = {};
     const onMossEvent = vi.fn(async (kind: string, cb: (m: any) => void) => {
@@ -282,7 +282,9 @@ describe('createReferenceResolver — SourceAssetChanged → image repaint', () 
     expect(assetBustQuery('/assets/x.jpg')).toBe('');
     expect(cbs['SourceAssetChanged']?.length ?? 0).toBeGreaterThan(0);
     cbs['SourceAssetChanged'][0]({ payload: { path: '/assets/x.jpg' } });
+    expect(assetBustQuery('/assets/x.jpg'), 'the token waits for the re-resolved envelope').toBe('');
 
+    await new Promise((r) => setTimeout(r, 40));
     expect(assetBustQuery('/assets/x.jpg')).toMatch(/^\?_t=\d+$/);
     view.destroy();
     container.remove();
@@ -409,7 +411,9 @@ describe('createReferenceResolver — coordinator wiring', () => {
     container.remove();
   });
 
-  test('coordinator SourceAssetChanged handler bumps bust token, revalidates (no empty window), then re-resolves', async () => {
+  // A moved picture: a widget rebuilt between the event and the swap must not pair a new
+  // token with the old envelope, which names the path the file just left.
+  test('coordinator SourceAssetChanged revalidates (no empty window), and the bust token lands with the re-resolve', async () => {
     __resetAssetBustForTests();
     const sac: Array<(e: any) => void> = [];
     const fileEvents = {
@@ -437,8 +441,7 @@ describe('createReferenceResolver — coordinator wiring', () => {
     expect(assetBustQuery('/图片/摄影/X.jpeg')).toBe('');
     // Coordinator passes payload directly (no .payload wrapper)
     sac[0]({ path: '/图片/摄影/X.jpeg' });
-    // Bust token must be set for the path.
-    expect(assetBustQuery('/图片/摄影/X.jpeg')).toMatch(/^\?_t=\d+$/);
+    expect(assetBustQuery('/图片/摄影/X.jpeg'), 'the token waits for the re-resolved envelope').toBe('');
     // The cache must STAY populated (revalidate-and-swap — no empty window).
     expect(resolver.resolvedCache.has('x.jpg', true)).toBe(true);
     // ...then RE-RESOLVED — the handler reschedules a batch (scheduleBatch), NOT
@@ -449,6 +452,42 @@ describe('createReferenceResolver — coordinator wiring', () => {
     await new Promise((r) => setTimeout(r, 40));
     expect(resolver.resolvedCache.has('x.jpg', true)).toBe(true);
     expect((batch as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBeGreaterThan(callsAfterClear);
+    expect(assetBustQuery('/图片/摄影/X.jpeg')).toMatch(/^\?_t=\d+$/);
+
+    view.destroy();
+    container.remove();
+  });
+
+  test('a revalidation that fails keeps its bust token, through a typing batch, for the next one that lands', async () => {
+    __resetAssetBustForTests();
+    const sac: Array<(e: any) => void> = [];
+    const fileEvents = {
+      onFileChanged: (_h: any) => () => {},
+      onSitePromoted: (_h: any) => () => {},
+      onSourceAssetChanged: (h: any) => { sac.push(h); return () => {}; },
+    };
+    let fail = false;
+    const batch: BatchResolveReferencesFn = vi.fn().mockImplementation(async (targets: any[]) =>
+      fail ? undefined : targets.map((t) => envelope(t.text, t.is_embed, { kind: 'image' })),
+    );
+    const resolver = createReferenceResolver({ batchResolve: batch, getFromFile: () => '/x/p.md', debounceMs: 10, fileEvents: fileEvents as any });
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const view = makeView('![[x.jpg]]', resolver.extension, container);
+    await new Promise((r) => setTimeout(r, 40));
+
+    fail = true;
+    sac[0]({ path: '/a.jpg' });
+    await new Promise((r) => setTimeout(r, 40));
+    expect(assetBustQuery('/a.jpg'), 'no envelope landed, so no token').toBe('');
+    fail = false;
+    view.dispatch({ changes: { from: view.state.doc.length, insert: '\n![[y.jpg]]' } });
+    await new Promise((r) => setTimeout(r, 40));
+    expect(resolver.resolvedCache.has('y.jpg', true), 'the typing batch ran').toBe(true);
+    sac[0]({ path: '/b.jpg' });
+    await new Promise((r) => setTimeout(r, 40));
+    expect(assetBustQuery('/b.jpg')).toMatch(/^\?_t=\d+$/);
+    expect(assetBustQuery('/a.jpg'), 'the failed batch\'s token lands with this one').toMatch(/^\?_t=\d+$/);
 
     view.destroy();
     container.remove();

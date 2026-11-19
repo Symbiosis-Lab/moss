@@ -390,19 +390,11 @@ pub enum MossEvent {
     /// Design: C3.
     LoginBrowserFailed { reason: LoginFailureReason },
 
-    /// Matters is installed in the current project but has no valid session
-    /// (no `boundUserName` in config.json) and the user has not intentionally
-    /// dismissed the auto-open for this folder.
-    ///
-    /// Emitted by `spawn_process_hooks` on the first background build/preview
-    /// run for a folder (before `execute_process` runs). The app shell
-    /// (`app.ts`) responds by calling `connect_account("matters")` ONCE
-    /// per folder session — a per-folder latch in TS prevents re-opening on
-    /// every incremental rebuild.
-    ///
-    /// `project_path` lets the frontend tie the signal to the correct folder
-    /// and verify it hasn't been superseded by a folder switch.
-    MattersNeedsConnection { project_path: String },
+    /// A plugin whose process hook needs its account has none bound for this
+    /// folder, and the person has not dismissed the prompt. Emitted before
+    /// the process hooks run; the app shell opens that plugin's login once
+    /// per folder and plugin.
+    PluginNeedsConnection { project_path: String, plugin: String },
 
     /// The app UI language changed at runtime (live switch, no restart).
     ///
@@ -588,11 +580,10 @@ pub fn moss_event_for(
             open_in_another_app: *open_in_another_app,
         },
         PipelineEvent::PluginProgress(progress) => MossEvent::PluginProgress(progress.clone()),
-        // The shell's handler (`app.ts`) is keyed by the one plugin that can
-        // carry `Login` today; the event name is older than the general arm.
-        PipelineEvent::PluginNeedsConnection { project_path, .. } => {
-            MossEvent::MattersNeedsConnection { project_path: project_path.clone() }
-        }
+        PipelineEvent::PluginNeedsConnection { project_path, plugin } => MossEvent::PluginNeedsConnection {
+            project_path: project_path.clone(),
+            plugin: plugin.clone(),
+        },
         // Neither is moss→frontend news. `Error` is a log line, written by the
         // caller so that a second carrier draining this cannot double-log it;
         // `Progress` is Tier-1 and rides the loading screen's own channel,

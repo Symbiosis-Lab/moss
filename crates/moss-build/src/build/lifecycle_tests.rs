@@ -70,16 +70,16 @@ fn late_ready_render_is_revealed_once_and_stale_tails_cannot_switch_stage() {
     let (_tmp, mp) = vault(&[]);
     let cell = empty_cell();
     let _record = adopt_server(&mp, &cell);
-    let (first, _) = show_render(&mp, false);
+    let first = show_render(&mp, false).0;
     let unrelated = tempfile::tempdir().unwrap();
     let _ = lock_for(&MossPaths::new(unrelated.path()));
-    assert!(reveal_render_if_latest(&mp, Some(first)));
+    assert!(first.reveal_if_latest());
     assert_eq!(read(&cell), mp.staging_dir());
-    assert!(!reveal_render_if_latest(&mp, Some(first)), "the same tail must not reannounce its render");
+    assert!(!first.reveal_if_latest(), "the same tail must not reannounce its render");
 
-    let (newer, _) = show_render(&mp, false);
-    assert!(!reveal_render_if_latest(&mp, Some(first)), "an older tail must not reveal staging over a newer render");
-    assert!(reveal_render_if_latest(&mp, Some(newer)));
+    let newer = show_render(&mp, false).0;
+    assert!(!first.reveal_if_latest(), "an older tail must not reveal staging over a newer render");
+    assert!(newer.reveal_if_latest());
 }
 
 #[test]
@@ -91,13 +91,13 @@ fn late_ready_tail_cannot_repoint_shared_cell_after_another_folder_adopts_it() {
     let cell = empty_cell();
 
     let _ = adopt_server(&mp_a, &cell);
-    let (render_a, _) = show_render(&mp_a, false);
+    let render_a = show_render(&mp_a, false).0;
     assert_eq!(read(&cell), mp_a.initial_serve_dir());
 
     let _ = adopt_server(&mp_b, &cell);
     let served_b = read(&cell);
     assert!(served_b.starts_with(&mp_b.build_dir()));
-    assert!(!reveal_render_if_latest(&mp_a, Some(render_a)));
+    assert!(!render_a.reveal_if_latest());
     assert_eq!(read(&cell), served_b, "a stale folder tail must leave the new folder's shared cell untouched");
 }
 
@@ -113,8 +113,8 @@ async fn a_withheld_render_is_never_shown_and_its_workers_block_the_next_sweep()
     let (_tmp, mp) = vault(&[("g1", "in-g1")]);
     let cell = empty_cell();
     let _record = adopt_server(&mp, &cell);
-    let (r1, _) = show_render(&mp, true);
-    assert!(promote(&mp, next_promotion_epoch(), Some(r1), "g1", true).unwrap());
+    let r1 = show_render(&mp, true).0;
+    assert!(promote(&mp, next_promotion_epoch(), Some(&r1), "g1", true).unwrap());
 
     let build2 = cache_write_lease(&mp);
     assert!(park_for_rebuild(&mp, true, Default::default()).is_some(), "render 1 is on current, so build 2 may sweep");
@@ -123,7 +123,7 @@ async fn a_withheld_render_is_never_shown_and_its_workers_block_the_next_sweep()
     let (_, announced) = show_render(&mp, false);
 
     assert_eq!(read(&cell), mp.current_ptr(), "a withheld render must not be shown");
-    assert_eq!(snapshot(&mp).0, Some(r1));
+    assert_eq!(snapshot(&mp).0, Some(r1.seq()));
     assert_eq!(announced, Some(mp.current_ptr()), "and the served tree announced is current");
     let (port, _, stop) = serve(&cell, 63100).await;
     assert_eq!(status(port, "only-in-render-2/"), 404);
@@ -211,15 +211,15 @@ fn a_folder_switch_evicts_only_idle_records() {
     let (_c_tmp, c) = vault(&[]);
 
     let lease = cache_write_lease(&a);
-    let (first, _) = show_render(&a, false);
+    let first = show_render(&a, false).0.seq();
     lock_for(&b);
-    let (second, _) = show_render(&a, false);
+    let second = show_render(&a, false).0.seq();
     assert_eq!(second, first + 1, "a leased record must survive a switch to another folder");
     assert_eq!(snapshot(&a).2, 1);
 
     drop(lease);
     lock_for(&c);
-    assert_eq!(show_render(&a, false).0, 1, "an idle record is evicted, so the folder starts over");
+    assert_eq!(show_render(&a, false).0.seq(), 1, "an idle record is evicted, so the folder starts over");
     assert_eq!(snapshot(&a), (None, None, 0));
 }
 
@@ -355,4 +355,15 @@ fn without_a_permit_only_a_page_whose_source_is_gone_from_disk_is_licensed() {
     assert_eq!(shown, gone_only, "a present, offline or sourceless page keeps its HTML");
     assert_eq!(held, Vec::<String>::new(), "a render that will not be shown removes nothing");
     assert_eq!(permitted.len(), 5, "a permit licenses every stale key");
+}
+
+#[test]
+fn a_render_check_outlives_another_folders_first_lookup() {
+    let (_tmp, mp) = vault(&[]);
+    let (render, _) = show_render(&mp, false);
+    let unrelated = tempfile::tempdir().unwrap();
+    let _ = lock_for(&MossPaths::new(unrelated.path()));
+    assert!(render.is_latest(), "no other render was admitted, whatever other folders did");
+    show_render(&mp, false);
+    assert!(!render.is_latest(), "a newer render supersedes it");
 }

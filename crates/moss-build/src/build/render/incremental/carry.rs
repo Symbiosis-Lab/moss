@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crate::build::manifest::{HashBucket, PendingManifest};
+use crate::build::manifest::{HashBucket, PendingManifest, StageBytes};
 use crate::build::media::qr;
 use crate::build::render::incremental::RenderVerdict;
 use crate::build::served_path::ServedPath;
@@ -22,6 +22,7 @@ struct CarriedEntry {
 pub struct CarryProof {
     html: CarriedEntry,
     qr: Option<CarriedEntry>,
+    stage: StageBytes,
 }
 
 impl CarryProof {
@@ -48,7 +49,8 @@ impl CarryProof {
             None => None,
         };
 
-        Some(Self { html, qr })
+        let stage = if verdict.rereads_document(doc) { StageBytes::Newer } else { StageBytes::Sealed };
+        Some(Self { html, qr, stage })
     }
 
     pub fn html_path(&self) -> &ServedPath {
@@ -56,7 +58,7 @@ impl CarryProof {
     }
 
     pub fn register_all(&self, pending: &mut PendingManifest) {
-        pending.register_carried_page(&self.html.path, &self.html.manifest_value);
+        pending.register_carried_page(&self.html.path, &self.html.manifest_value, self.stage);
         if let Some(qr) = &self.qr {
             pending.register_hashed(&qr.path, &qr.manifest_value, HashBucket::Files);
         }

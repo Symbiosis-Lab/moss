@@ -38,7 +38,7 @@ export interface SettingFieldOption {
 
 export interface SettingField {
   key: string;
-  type: "string" | "number" | "boolean" | "secret" | "object" | "map" | "array";
+  type: "string" | "number" | "boolean" | "secret" | "acct" | "object" | "map" | "array";
   label?: string;
   description?: string | null;
   /** A heading the form draws above the first field of a run sharing it. */

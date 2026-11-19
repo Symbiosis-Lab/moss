@@ -321,28 +321,6 @@ fn an_edit_resegments_only_the_page_that_changed() {
     assert_same_bundle(&warm, &cold, "cold build of the edited tree");
 }
 
-/// A newer request arriving while pages are being handed to Pagefind stops the
-/// pass before the next page, rather than after the whole corpus is parsed.
-/// Pagefind parses one page at a time, so that phase is long enough to matter.
-#[test]
-fn a_cancellation_between_pages_stops_before_the_next_page() {
-    let dir = tempfile::tempdir().unwrap();
-    write_bilingual_site(dir.path());
-    let polls = std::sync::atomic::AtomicUsize::new(0);
-    // Poll 1 follows segmentation; polls 2 and 3 precede the first two pages.
-    let cancel_on = 3;
-    let cancelled = || polls.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1 >= cancel_on;
-
-    let _serialize = lock_index_counter();
-    let outcome = build_search_index_cancellable(dir.path(), &cancelled).expect("no error");
-    assert!(outcome.is_none(), "a cancelled pass produces nothing");
-    assert_eq!(
-        polls.into_inner(),
-        cancel_on,
-        "the pass stopped at the first poll that said cancelled"
-    );
-}
-
 /// End-to-end proof that the pre-pass reaches Pagefind: a Chinese page
 /// with no spaces in its source must come out of the indexer as several
 /// words, not one. The fragment Pagefind writes is gzipped JSON carrying

@@ -392,6 +392,30 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "`object-fit` for grid images. `contain` letterboxes onto the surface colour instead of cropping — the right choice for typographic work, where a crop costs words rather than scenery.",
     },
     CustomProp {
+        name: "--moss-share-card-bg",
+        owner: ":root",
+        default: "#faf8f5",
+        description: "Ground of the card moss draws for a link preview when a page has no picture of its own. Read by the build, not by a stylesheet, from the theme's `:root`; any opaque colour. Set it when the card should not be moss's paper, for example a dark site's night.",
+    },
+    CustomProp {
+        name: "--moss-share-card-ink",
+        owner: ":root",
+        default: "#1a1816",
+        description: "Title colour of the link-preview card. Read by the build from the theme's `:root`.",
+    },
+    CustomProp {
+        name: "--moss-share-card-muted",
+        owner: ":root",
+        default: "the ink at 65%",
+        description: "Site-name colour of the link-preview card. Read by the build from the theme's `:root`. The card's face is the lead family of `--moss-font-heading` when the theme hosts it as a `.ttf` or `.otf` (a `.ttf` of the same name beside a `.woff2` counts); otherwise Inter, and the build says which file to add.",
+    },
+    CustomProp {
+        name: "--moss-share-card-picture",
+        owner: ":root",
+        default: "none",
+        description: "A picture in `.moss/theme/` (`url(\"card.jpg\")`) filling the link-preview card's full height at its inline end, as wide as its shape at 630px, at most 540px (cropped about its middle beyond that). A horizontal title card only; a page's own picture still makes its own card.",
+    },
+    CustomProp {
         name: "--moss-card-cover-ratio",
         owner: "moss-card-cover",
         default: "4 / 3",
@@ -473,7 +497,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-header-bg",
         owner: "body > header",
         default: "transparent",
-        description: "Background of the site header's band. Unset, the header has none. A page whose opening hero says `header=over` keeps its header transparent over the photo whatever this is set to, so a theme that only sets this token never needs to know about `header=over`. Set it on `:root`, with its dark-mode pair under `:root[data-theme=\"dark\"]`.",
+        description: "Background of the site header's band. Unset, the header has none. A page whose opening hero or full-width band says `header=over` keeps its header transparent over the photo whatever this is set to, so a theme that only sets this token never needs to know about `header=over`. Set it on `:root`, with its dark-mode pair under `:root[data-theme=\"dark\"]`.",
     },
     CustomProp {
         name: "--moss-header-ink",
@@ -515,7 +539,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-footer-ink",
         owner: "footer.container",
         default: "var(--moss-color-muted)",
-        description: "Colour of the text, links and headings in the footer. Hover and focus keep the accent colour, and the colophon keeps its own. The footer's own text defaults to `var(--moss-color-muted)`, its authored links to `var(--moss-color-accent)` and its headings and generated link list to `var(--moss-color-text)`; setting this replaces all of them with one colour. Use it with `--moss-footer-bg` so the text stays readable on the band.",
+        description: "Colour of the text, links and headings in the footer. Hover and focus keep the accent colour; the colophon keeps its own at rest, and its mark takes this colour when reached for (and at rest on an archival copy, where the mark shows in colour). The footer's own text defaults to `var(--moss-color-muted)`, its authored links to `var(--moss-color-accent)` and its headings and generated link list to `var(--moss-color-text)`; setting this replaces all of them with one colour. Use it with `--moss-footer-bg` so the text stays readable on the band.",
     },
     CustomProp {
         name: "--moss-footer-rule",
@@ -588,6 +612,18 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         owner: "moss-mark",
         default: "0s",
         description: "How long the mark takes to change colour. The default snaps, which is what a surface that never recolours it wants. Give it a duration where the paint changes on hover or focus, so the mark fades rather than snaps — the colophon sets 240ms, the duration its wording fades out on.",
+    },
+    CustomProp {
+        name: "--moss-colophon-mark-ink",
+        owner: "moss-colophon-icon",
+        default: "var(--moss-footer-ink, var(--moss-mark-ink))",
+        description: "The colour the colophon's mark takes for its black half when it shows in colour: reached for, and at rest on an archival copy. It is the footer's ink when the theme sets one, so the mark reads on a dark footer band, and moss's own ink otherwise. A theme sets `--moss-footer-ink`, not this.",
+    },
+    CustomProp {
+        name: "--moss-colophon-mark-drop",
+        owner: "moss-colophon-icon",
+        default: "var(--moss-footer-ink, var(--moss-mark-drop))",
+        description: "The same for the mark's green: the footer's ink when the theme sets one, the ground's drop colour otherwise. A theme sets `--moss-footer-ink`, not this.",
     },
     CustomProp {
         name: "--moss-place-marker",
@@ -858,6 +894,12 @@ pub const SCOPE_ATTRS: &[ScopeAttr] = &[
         name: "data-width",
         values: &["body", "wide", "page", "screen"],
         description: "Set by block shortcodes, and by a fenced div that carries a width word (`:::{.band screen}`), to escape the text column. The width resolves through `--moss-escape`, clamped by `min(…, 100cqi)` so a narrow viewport stays safe.",
+    },
+    ScopeAttr {
+        selector: "body > header",
+        name: "data-header",
+        values: &["over"],
+        description: "Present on the site header when it lies over the block that opens the page: a hero with `header=over`, or a `screen` band written `::: {screen header=over}`. The header leaves the flow, has no band of its own and passes the pointer through except on its own controls. `data-header-ink` and `data-header-ink-night` (`light` or `dark`) name the ink the build found over the block's pictures in each theme; neither means white over a stronger wash.",
     },
     ScopeAttr {
         selector: "body",

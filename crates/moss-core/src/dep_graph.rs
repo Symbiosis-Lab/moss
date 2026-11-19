@@ -1,6 +1,6 @@
-//! Forward and backward link/embed edges between pages.
+//! Forward and backward link, embed and card edges between pages.
 //!
-//! `DepGraph` answers "who links to / embeds this page?" — the question
+//! `DepGraph` answers "who links to, embeds or draws the card of this page?" — the question
 //! the facade-gated render skip needs to widen a changed page's minimal
 //! render set to its backlinks. It is a standalone type, not a
 //! `ContentGraph` field: `ContentGraph` is a structural path index built
@@ -31,6 +31,7 @@ pub struct DepGraph {
     forward_embeds: HashMap<String, Vec<String>>,
     backlinks: HashMap<String, Vec<String>>,
     back_embeds: HashMap<String, Vec<String>>,
+    back_cards: HashMap<String, Vec<String>>,
 }
 
 impl DepGraph {
@@ -109,6 +110,24 @@ impl DepGraph {
         self
     }
 
+    /// Fold in card edges: `(target, reader)` where `reader` draws `target`'s
+    /// summary card. A card is found at render time, from a frontmatter field
+    /// or a grid cell, so no outgoing link carries it. Duplicates collapse.
+    pub fn with_card_pairs<I, S>(mut self, pairs: I) -> Self
+    where
+        I: IntoIterator<Item = (S, S)>,
+        S: Into<String>,
+    {
+        for (target, reader) in pairs {
+            let (target, reader) = (target.into(), reader.into());
+            let back = self.back_cards.entry(target).or_default();
+            if !back.contains(&reader) {
+                back.push(reader);
+            }
+        }
+        self
+    }
+
     /// Every file whose bytes are spliced into `path`'s markdown, transitively.
     ///
     /// A breadth-first walk of `forward_embeds` from `path`, excluding `path`
@@ -162,6 +181,11 @@ impl DepGraph {
     pub fn back_embeds(&self, path: &str) -> &[String] {
         self.back_embeds.get(path).map(Vec::as_slice).unwrap_or(&[])
     }
+
+    /// Pages that draw `path`'s card. Not a subset of `backlinks`.
+    pub fn back_cards(&self, path: &str) -> &[String] {
+        self.back_cards.get(path).map(Vec::as_slice).unwrap_or(&[])
+    }
 }
 
 #[cfg(test)]
@@ -174,6 +198,14 @@ mod tests {
             display_text: target.to_string(),
             link_type,
         }
+    }
+
+    #[test]
+    fn card_pairs_are_their_own_edges_and_collapse_duplicates() {
+        let graph = DepGraph::build(std::iter::empty()).with_card_pairs([("b.md", "a.md"), ("b.md", "a.md"), ("b.md", "c.md")]);
+        assert_eq!(graph.back_cards("b.md"), ["a.md", "c.md"]);
+        assert!(graph.backlinks("b.md").is_empty());
+        assert!(graph.back_embeds("b.md").is_empty());
     }
 
     #[test]

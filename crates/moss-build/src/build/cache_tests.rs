@@ -2671,6 +2671,49 @@ fn gc_keeps_another_machines_record_and_its_blobs_until_the_record_ages_out() {
     assert_eq!(result.objects_removed, 2);
 }
 
+/// Older versions filed a stat-keyed record under its key's own path, below the
+/// two shard levels. GC reaches it there: a young one keeps its blob (an older
+/// moss on another machine still reads it), an aged one goes, and so does the
+/// directory it leaves empty.
+#[test]
+fn gc_reaches_stat_records_filed_below_the_shards_and_ages_them_out() {
+    let (mp, objects_dir, transforms_dir) = make_gc_test_dir("gc_nested_stat");
+    let legacy = TransformCache::new(transforms_dir, ObjectStore::new(objects_dir.clone()));
+    let young = record_with("stat:photos/a.jpg:1:2", &"aaaa".repeat(16));
+    let aged = record_with("stat:photos/old/b.jpg:3:4", &"bbbb".repeat(16));
+    for record in [&young, &aged] {
+        legacy.put(record, RecordMode::Request).expect("write the record as an older moss did");
+    }
+    let aged_path = legacy.record_path(&aged.source_oid);
+    let a_day = std::time::Duration::from_secs(24 * 60 * 60);
+    fs::OpenOptions::new().write(true).open(&aged_path).unwrap().set_modified(std::time::SystemTime::now() - RECORD_TTL - a_day).unwrap();
+    for oid in ["aaaa", "bbbb"] {
+        put_object(&objects_dir, &oid.repeat(16), oid.as_bytes());
+    }
+
+    let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test()).expect("readable");
+
+    let store = ObjectStore::new(objects_dir);
+    assert_eq!(result.transforms_removed, 1, "only the aged record is condemned");
+    assert!(legacy.record_path(&young.source_oid).exists());
+    assert!(store.blob_path(&"aaaa".repeat(16)).exists(), "the young record keeps its blob");
+    assert!(!store.blob_path(&"bbbb".repeat(16)).exists(), "the aged record's blob goes with it");
+    assert!(!aged_path.parent().unwrap().exists(), "the emptied directory is removed");
+}
+
+/// A record in this machine's store keeps the blob it names in this machine's store.
+#[test]
+fn gc_keeps_the_blob_a_local_record_names() {
+    let (mp, _, _) = make_gc_test_dir("gc_local_record");
+    let local = TransformCache::for_site(&mp).machine_local().expect("a site store has a local one");
+    let oid = local.objects().store_bytes(b"dimensions").unwrap();
+    local.put(&record_with(&"cccc".repeat(16), &oid), RecordMode::Request).unwrap();
+
+    gc(&mp, &crate::build::lifecycle::gc_token_for_test()).expect("readable");
+
+    assert!(local.objects().blob_path(&oid).exists(), "GC swept a blob only a local record names");
+}
+
 /// A fresh `html/slots` record with its summary and page blobs in the shared store.
 fn put_slot_record(objects_dir: &Path, transforms_dir: &Path, source: &str, page: &str) {
     let entry = |oid: &str| TransformEntry { kept_for: None, validation: None, oid: oid.to_string(), size: 1, params: serde_json::json!({}) };
@@ -2684,13 +2727,20 @@ fn put_slot_record(objects_dir: &Path, transforms_dir: &Path, source: &str, page
     put_object(objects_dir, page, b"page");
 }
 
+/// A fresh slot record as this version files it: the page, its summary in the entry.
+fn put_slot_page_record(objects_dir: &Path, transforms_dir: &Path, source: &str, page: &str) {
+    let entry = TransformEntry { kept_for: None, validation: None, oid: page.to_string(), size: 1, params: serde_json::json!({"key": {}, "summary": {}}) };
+    put_transform(transforms_dir, &TransformRecord { source_oid: source.to_string(), source_size: 1, transforms: [("html/slot-page".to_string(), entry)].into_iter().collect() });
+    put_object(objects_dir, page, b"page");
+}
+
 #[test]
 fn gc_condemns_a_slot_record_the_last_slot_pass_did_not_use() {
     let (mp, objects_dir, transforms_dir) = make_gc_test_dir("gc_page_sources");
     let (used, moved_on) = ("a".repeat(64), "b".repeat(64));
     let (used_page, old_page) = ("c".repeat(64), "d".repeat(64));
     put_slot_record(&objects_dir, &transforms_dir, &used, &used_page);
-    put_slot_record(&objects_dir, &transforms_dir, &moved_on, &old_page);
+    put_slot_page_record(&objects_dir, &transforms_dir, &moved_on, &old_page);
     fs::write(mp.cache_page_sources(), format!(r#"{{"index.html":"{used}"}}"#)).unwrap();
 
     let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test()).expect("readable");
@@ -3515,7 +3565,7 @@ fn media_meta_leaves_a_record_the_cloud_holds_unwritten() {
         let (_managed, _in_cloud, inode) = cloud_held_owned_record(&cache, &oid, 1);
         let meta = crate::build::cache::CachedMediaMeta { dimensions: Some((4, 3)), dominant_color: None, lqip_data_uri: None, is_animated: false };
 
-        crate::build::scan::scan::write_cached_meta(cache.objects(), &cache, &oid, 1, &meta);
+        crate::build::scan::scan::write_cached_meta(&cache, &oid, 1, &meta);
 
         crate::build::cloud_readiness::storage::drain_cache_publications(&mut |_| {});
         assert_eq!(fs::metadata(cache.record_path(&oid)).unwrap().ino(), inode, "the record the cloud held is not replaced");

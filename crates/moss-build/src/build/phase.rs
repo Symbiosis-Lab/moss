@@ -112,14 +112,14 @@ use std::time::{Duration, Instant};
 /// These are INITIAL values to tune as real-world timing data accrues.
 /// Seeds: the observed timings in this module's doc examples
 /// (scan ~312ms, process_hooks ~13.4s, native_process_spawn ~1ms) plus
-/// generous headroom for network-bound phases (link-meta prewarm, plugin
+/// generous headroom for network-bound phases (link-card fetches, plugin
 /// process-hook syncs such as the Matters import legitimately run tens of
 /// seconds).
 const PHASE_BUDGETS_MS: &[(&str, u64)] = &[
     // Whole-pipeline envelope; every sub-phase below nests inside it.
     ("run_pipeline", 120_000),
-    // Network-bound: parallel HTTP fetches of link-preview metadata.
-    ("link_meta_prewarm", 30_000),
+    // Network-bound: a build that exits fetches its link cards; the fetch stops at 60 s.
+    ("link_meta_build_fetch", 30_000),
     // Filesystem walk + metadata extraction. Observed ~312ms on a typical site.
     ("scan", 2_000),
     // Blocking await of plugin process hooks (content download/import).
@@ -582,7 +582,7 @@ const BUILD_COUNTS: &[&str] = &[
     "background_assets_linked", "background_assets_stat_only", "sized_raster_blob_checks",
     "images_unchanged", "images_dispatched", "images_joined", "image_variants_stat_only", "image_variants_blob_checks",
     "image_transform_records_loaded", "files_sealed", "hash_index_hits_process", "hash_index_rehashed_process",
-    "proved_from_seal",
+    "proved_from_seal", "unchanged_at_entry",
 ];
 /// The video counts, which also make up a detached encode's own record.
 const VIDEO_COUNTS: &[&str] = &["videos_cache_hit", "video_blobs_validated", "videos_converted", "videos_detached"];

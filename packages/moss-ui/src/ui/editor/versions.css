@@ -82,10 +82,9 @@
 }
 
 /* The persistent save toggle — same footprint as the old text "+", an SVG
- * glyph morphing plus↔cross in place of it (shared/plus-cross-toggle.ts, the
- * same morph #moss-add-plugin-button uses). One element for the whole
- * open/closed life of the save control; only `__save-field-slot` beside it
- * mounts and unmounts. */
+ * glyph morphing plus↔cross in place of it (shared/plus-cross-toggle.ts).
+ * One element for the whole open/closed life of the save control; only
+ * `__save-field-slot` beside it mounts and unmounts. */
 .moss-versions__save-toggle {
   display: flex;
   align-items: center;

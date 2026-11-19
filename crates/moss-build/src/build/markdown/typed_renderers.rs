@@ -104,6 +104,37 @@ fn hero_picture_html(
 
 /// Render the typed [`HeroShortcode`] AST node to HTML.
 ///
+/// The picture a hero's header ink is read from and the dark theme's picture
+/// that pairs with it: a video or a slideshow has no pair (the parser warns).
+fn hero_pair(args: &moss_core::ast::HeroShortcode) -> (Option<&str>, Option<&str>) {
+    let Some(moss_core::ast::Url::Resolved(light)) = &args.image else { return (None, None) };
+    let dark = match &args.dark {
+        Some(moss_core::ast::Url::Resolved(dark))
+            if args.extra_images.is_empty() && !hero_href_is_video(&light.href) && !hero_href_is_video(&dark.href) =>
+        {
+            Some(dark.href.as_str())
+        }
+        _ => None,
+    };
+    (Some(light.href.as_str()), dark)
+}
+
+/// What the page's header takes when this hero opens the page with `header=over`.
+pub(crate) fn hero_header_over(
+    args: &moss_core::ast::HeroShortcode,
+    media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
+) -> Option<crate::build::markdown::hero_ink::HeaderOver> {
+    use crate::build::markdown::hero_ink::{ink_over_hero, Frame, HeaderOver};
+    if args.header.as_deref() != Some("over") {
+        return None;
+    }
+    let closing = args.classes.split_whitespace().any(|c| c == "moss-hero-closing");
+    Some(match hero_pair(args) {
+        (Some(light), dark) if !hero_href_is_video(light) => ink_over_hero(media_lookup, light, dark, Frame::of(args, closing)),
+        _ => HeaderOver::default(),
+    })
+}
+
 /// Mirrors [`render_hero_html`] but reads from the typed-AST representation
 /// (post-[`crate::build::markdown::pipeline::resolve_shortcode_urls`] —
 /// `image` is `Url::Resolved`). Used by `apply_typed_shortcodes` for the
@@ -283,16 +314,7 @@ pub(crate) fn render_hero_html_typed(
         && resolved_image.as_deref().is_some_and(hero_href_is_video)
         && extra_hrefs.iter().all(|h| hero_href_is_video(h));
 
-    // A pair needs one picture each side: a video or a slideshow has none to
-    // swap (the parser warns).
-    let dark_href = match (&args.dark, &resolved_image) {
-        (Some(moss_core::ast::Url::Resolved(dark)), Some(light))
-            if extra_hrefs.is_empty() && !hero_href_is_video(light) && !hero_href_is_video(&dark.href) =>
-        {
-            Some(dark.href.as_str())
-        }
-        _ => None,
-    };
+    let dark_href = hero_pair(args).1;
     let frame = crate::build::markdown::hero_ink::Frame::of(args, closing);
     let fade_attr = if frame.faded { r#" data-fade="top""# } else { "" };
     let ink_attrs = match (&resolved_image, is_plate || !laid_over) {
@@ -323,11 +345,7 @@ pub(crate) fn render_hero_html_typed(
     };
     // `header=over` lays the site header on the picture, so the header's ink is
     // measured whether or not the hero has words.
-    let header_ink_attrs = match (&resolved_image, args.header.as_deref() == Some("over")) {
-        (Some(light), true) if !hero_href_is_video(light) => crate::build::markdown::hero_ink::header_ink_attributes(media_lookup, light, dark_href, frame),
-        _ => String::new(),
-    };
-    let header_attr = format!("{header_attr}{header_ink_attrs}");
+    let header_attr = format!("{header_attr}{}", hero_header_over(args, media_lookup).map(|h| h.ink_attrs()).unwrap_or_default());
     let panel_attr = if args.panel.as_deref() == Some("none") { r#" data-panel="none""# } else { "" };
     let overlay_attr = if laid_over { format!("{overlay_attr}{fade_attr}{panel_attr}{ink_attrs}") } else { String::new() };
     let pair_attr = |v: &str| if dark_href.is_some() { format!(" data-hero-variant=\"{v}\"") } else { String::new() };
@@ -548,7 +566,7 @@ pub(crate) fn render_hero_html_typed(
         // Overlay URLs were already resolved by `resolve_shortcode_urls`, and
         // the snapshot hooks route inline images through the synthesizer.
         let mut html_content = String::new();
-        let hooks = moss_core::ast::DefaultHooks::hero_words(media_assets);
+        let hooks = moss_core::ast::DefaultHooks::hero_words(media_assets).with_strings(crate::i18n::hook_strings(lang));
         moss_core::ast::render::render_blocks_with_meta(
             &hooks,
             &mut html_content,

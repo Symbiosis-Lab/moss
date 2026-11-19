@@ -7,7 +7,7 @@
 //! grants no sweep permit. When the selected route has a verified copy in
 //! `current`, [`protect_current_before_rebuild`] may briefly show that older
 //! complete copy while staging is rewritten. A ready new render returns the
-//! preview to staging. [`withdraw_render`] also returns to the older copy when
+//! preview to staging. [`Render::withdraw`] also returns to the older copy when
 //! the visible render itself proves unreadable.
 //!
 //! Known gap: a process killed between a render and its seal, on a folder
@@ -40,7 +40,7 @@ struct FolderLifecycle {
     served: Option<ServedCell>,
     /// Last render number minted by [`show_render`].
     next_render: u64,
-    /// The newest render whose background work has sealed ([`note_sealed`]).
+    /// The newest render whose background work has sealed ([`Render::note_sealed`]).
     newest_sealed: Option<u64>,
     /// The render on the cell while it names staging; `None` when this record
     /// did not put it there.
@@ -378,10 +378,10 @@ pub(crate) fn protect_current_before_rebuild(mp: &MossPaths) {
 /// Mint this render's number and, when it may be shown, point the preview at
 /// staging. Called under the stage-write lock, once per render.
 ///
-/// Returns the number and the directory to announce as served: staging for a
+/// Returns the render and the directory to announce as served: staging for a
 /// shown render; for a withheld one the cell and `shown_render` are left alone
 /// and the answer is `current`, or nothing on a vault that has never promoted.
-pub(crate) fn show_render(mp: &MossPaths, publishable: bool) -> (u64, Option<PathBuf>) {
+pub(crate) fn show_render(mp: &MossPaths, publishable: bool) -> (Render, Option<PathBuf>) {
     let staging = mp.staging_dir();
     let current = mp.current_ptr();
     let current_exists = current.exists();
@@ -389,74 +389,116 @@ pub(crate) fn show_render(mp: &MossPaths, publishable: bool) -> (u64, Option<Pat
     let mut st = record.state();
     st.next_render += 1;
     let seq = st.next_render;
-    if !publishable {
-        return (seq, current_exists.then_some(current));
-    }
-    if let Some(cell) = &st.served {
-        point(cell, &staging);
-    }
-    st.shown_render = Some(seq);
-    (seq, Some(staging))
+    let announce = if publishable {
+        if let Some(cell) = &st.served {
+            point(cell, &staging);
+        }
+        st.shown_render = Some(seq);
+        Some(staging)
+    } else {
+        current_exists.then_some(current)
+    };
+    drop(st);
+    (Render { record, mp: mp.clone(), seq }, announce)
 }
 
-/// Whether `render` is still the newest render admitted for this folder: the
-/// test a detached background read makes between files, so a build that
-/// superseded it is the one that asks for the rebuild. `None` (no render was
-/// minted) cannot be told apart from newest, and counts as it.
-pub(crate) fn is_latest_render(mp: &MossPaths, render: Option<u64>) -> bool {
-    match render {
-        Some(render) => lock_for(mp).state().next_render == render,
-        None => true,
-    }
+/// One render `show_render` minted. It holds its folder's record, because a
+/// record nobody holds is dropped at another folder's first lookup and its
+/// successor starts counting renders again: whoever asks about this render
+/// later (the asset walk, the derive job, the seal tail) must reach the record
+/// that counted it, and the paths of that folder, never another's.
+#[derive(Clone)]
+pub(crate) struct Render {
+    record: Arc<LifecycleCell>,
+    mp: MossPaths,
+    seq: u64,
 }
 
-/// Record that `render`'s background work has sealed, so its tail is about to
-/// run. `None` (no render was minted) records nothing.
-pub(crate) fn note_sealed(mp: &MossPaths, render: Option<u64>) {
-    if let Some(render) = render {
-        let record = lock_for(mp);
-        let mut state = record.state();
-        state.newest_sealed = state.newest_sealed.max(Some(render));
+impl Render {
+    /// Render `seq` of `mp`'s folder without minting it, for a test that
+    /// orders renders itself.
+    #[cfg(test)]
+    pub(crate) fn numbered(mp: &MossPaths, seq: u64) -> Self {
+        Self { record: lock_for(mp), mp: mp.clone(), seq }
     }
-}
 
-/// Whether a render newer than `render` has already sealed. Its tail is then
-/// running, and writes everything this one's would unless it withholds or the
-/// process ends first; this one's writes would only be replaced by it, or land
-/// after it and roll it back.
-pub(crate) fn newer_render_sealed(mp: &MossPaths, render: Option<u64>) -> bool {
-    let Some(render) = render else { return false };
-    lock_for(mp).state().newest_sealed.is_some_and(|newest| newest > render)
-}
-
-/// Reveal a render whose required outputs became ready after its initial
-/// preview decision. A detached tail may do this only while the render it
-/// belongs to is still the newest admitted render.
-pub(crate) fn reveal_render_if_latest(mp: &MossPaths, render: Option<u64>) -> bool {
-    let Some(render) = render else { return false; };
-    let staging = mp.staging_dir();
-    let build_dir = mp.build_dir();
-    let record = lock_for(mp);
-    let mut state = record.state();
-    if state.next_render != render { return false; }
-    if state.shown_render == Some(render) { return false; }
-    let Some(cell) = state.served.clone() else { return false; };
-    // The preview server's cell is process-global and can be re-adopted by a
-    // different folder while this detached tail is waiting. Prove ownership
-    // and switch the pointer under the same write lock so a folder switch
-    // cannot land between the check and the write.
-    let mut served = cell.write().unwrap_or_else(PoisonError::into_inner);
-    if !served.starts_with(&build_dir) { return false; }
-    if *served != staging {
-        *served = staging;
+    pub(crate) fn seq(&self) -> u64 {
+        self.seq
     }
-    drop(served);
-    state.shown_render = Some(render);
-    true
+
+    /// Whether no newer render has been admitted for this folder: the test
+    /// detached work makes between files, so a build that superseded it is
+    /// the one that does the rest.
+    pub(crate) fn is_latest(&self) -> bool {
+        self.record.state().next_render == self.seq
+    }
+
+    /// Record that this render's background work has sealed, so its tail is
+    /// about to run.
+    pub(crate) fn note_sealed(&self) {
+        let mut state = self.record.state();
+        state.newest_sealed = state.newest_sealed.max(Some(self.seq));
+    }
+
+    /// Whether a newer render has already sealed. Its tail is then running,
+    /// and writes everything this one's would unless it withholds or the
+    /// process ends first; this one's writes would only be replaced by it, or
+    /// land after it and roll it back.
+    pub(crate) fn newer_sealed(&self) -> bool {
+        self.record.state().newest_sealed.is_some_and(|newest| newest > self.seq)
+    }
+
+    /// Reveal this render once its required outputs became ready after its
+    /// initial preview decision. A detached tail may do this only while its
+    /// render is still the newest admitted one.
+    pub(crate) fn reveal_if_latest(&self) -> bool {
+        let staging = self.mp.staging_dir();
+        let build_dir = self.mp.build_dir();
+        let mut state = self.record.state();
+        if state.next_render != self.seq { return false; }
+        if state.shown_render == Some(self.seq) { return false; }
+        let Some(cell) = state.served.clone() else { return false; };
+        // The preview server's cell is process-global and can be re-adopted by a
+        // different folder while this detached tail is waiting. Prove ownership
+        // and switch the pointer under the same write lock so a folder switch
+        // cannot land between the check and the write.
+        let mut served = cell.write().unwrap_or_else(PoisonError::into_inner);
+        if !served.starts_with(&build_dir) { return false; }
+        if *served != staging {
+            *served = staging;
+        }
+        drop(served);
+        state.shown_render = Some(self.seq);
+        true
+    }
+
+    /// Return the preview to `current` when this render is on screen and its
+    /// generation was withheld as unreadable.
+    ///
+    /// The one move to an older generation this module makes. A newer render
+    /// already on screen is left alone, and a vault with nothing promoted stays on
+    /// staging because there is nothing better to show.
+    pub(crate) fn withdraw(&self) {
+        let current = self.mp.current_ptr();
+        if !current.exists() {
+            return;
+        }
+        let current_gen = self.mp.current_generation_id().unwrap_or_else(|_| "unknown".to_string());
+        let mut st = self.record.state();
+        if st.shown_render != Some(self.seq) {
+            return;
+        }
+        if let Some(cell) = &st.served {
+            point(cell, &current);
+        }
+        st.shown_render = None;
+        log::info!("serve: render #{} withdrawn — preview back on gen {}", self.seq, current_gen);
+    }
 }
 
 /// Repoint `current` at `gen_id` unless a newer build already has, and record
-/// that `current` now holds `render`. `Ok(false)` is refused-as-stale.
+/// that `current` now holds `render` (none for a build that minted no render).
+/// `Ok(false)` is refused-as-stale.
 ///
 /// A `generation_id` is a content hash with no order, and seal
 /// tails run detached, so build N's tail can land after build N+1's. The epoch
@@ -469,11 +511,11 @@ pub(crate) fn reveal_render_if_latest(mp: &MossPaths, render: Option<u64>) -> bo
 pub(crate) fn promote(
     mp: &MossPaths,
     epoch: u64,
-    render: Option<u64>,
+    render: Option<&Render>,
     gen_id: &str,
     copied: bool,
 ) -> std::io::Result<bool> {
-    let record = lock_for(mp);
+    let record = render.map_or_else(|| lock_for(mp), |render| render.record.clone());
     let _swap = record.promote_lock.lock().unwrap_or_else(PoisonError::into_inner);
     let promoted = record.state().promoted_epoch;
     if promoted >= epoch {
@@ -485,7 +527,7 @@ pub(crate) fn promote(
     }
     let mut st = record.state();
     st.promoted_epoch = epoch;
-    st.current_render = render;
+    st.current_render = render.map(Render::seq);
     Ok(true)
 }
 
@@ -554,31 +596,6 @@ fn serves(mp: &MossPaths, gen_id: &str) -> bool {
     // `set_current_ptr` writes the marker only once `current` is whole.
     #[cfg(not(unix))]
     return mp.current_ptr().is_dir();
-}
-
-/// Return the preview to `current` when the render on screen is `render` and
-/// its generation was withheld as unreadable.
-///
-/// The one move to an older generation this module makes. A newer render
-/// already on screen is left alone, and a vault with nothing promoted stays on
-/// staging because there is nothing better to show.
-pub(crate) fn withdraw_render(mp: &MossPaths, render: Option<u64>) {
-    let Some(render) = render else { return };
-    let current = mp.current_ptr();
-    if !current.exists() {
-        return;
-    }
-    let current_gen = mp.current_generation_id().unwrap_or_else(|_| "unknown".to_string());
-    let record = lock_for(mp);
-    let mut st = record.state();
-    if st.shown_render != Some(render) {
-        return;
-    }
-    if let Some(cell) = &st.served {
-        point(cell, &current);
-    }
-    st.shown_render = None;
-    log::info!("serve: render #{} withdrawn — preview back on gen {}", render, current_gen);
 }
 
 /// A build that may still write the object store or staging: held from

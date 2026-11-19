@@ -74,7 +74,7 @@ fn only_lifecycle_moves_the_served_pointer() {
     let mut msg = String::from(
         "Found a served-pointer write outside `build::lifecycle`.\n\n\
          Move the preview through `lifecycle::{adopt_server, park_for_rebuild, show_render, \
-         withdraw_render}`; each keeps the rule that the preview never steps back to a \
+         Render::withdraw}`; each keeps the rule that the preview never steps back to a \
          generation older than the render on screen.\n\nWrites:\n",
     );
     for (path, line, text) in &hits {

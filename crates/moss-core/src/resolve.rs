@@ -201,12 +201,19 @@ pub fn resolve_content_with_derivations(
     let mut lowering_diagnostics = Vec::new();
     let body = lower_transclusion_and_folder_wikilinks(body, graph, source_path, derivations, &mut lowering_diagnostics);
 
-    // Step 3: Resolve markdown transclusion embeds. The inlined body of
-    // each embedded `.md` file is appended verbatim — its wikilinks (if
-    // any) survive into the markdown handed back to moss-build, where
-    // pulldown-cmark + the wikilink dispatcher resolves them along with the
-    // host page's own wikilinks.
-    let embed_result = embeds::resolve_embeds(&body, source_path, file_reader);
+    // Step 3: Resolve markdown transclusion embeds. A transcluded note's own
+    // block embeds (tables, notes, folders) are lowered from its own path
+    // before its text is inlined, as its own page lowers them; that page
+    // reports their diagnostics, so they are not repeated here. Its other
+    // wikilinks reach the wikilink dispatcher with the host page's own.
+    let lowering_reader = |path: &str| {
+        file_reader(path).map(|raw| {
+            let (fm, note_body) = split_frontmatter(&raw);
+            let lowered = lower_transclusion_and_folder_wikilinks(note_body, graph, path, derivations, &mut Vec::new());
+            format!("{}{lowered}", fm.unwrap_or(""))
+        })
+    };
+    let embed_result = embeds::resolve_embeds(&body, source_path, &lowering_reader);
     let mut diagnostics = diagnostics;
     diagnostics.extend(lowering_diagnostics);
     diagnostics.extend(embed_result.diagnostics);
@@ -1698,5 +1705,26 @@ mod tests {
             "Link wikilink alias should be discarded, got: {}",
             result.content_markdown
         );
+    }
+
+    #[test]
+    fn a_transcluded_note_lowers_its_own_block_embeds() {
+        let mut b = ContentGraphBuilder::new();
+        b.add_file("index.md", "index");
+        b.add_file("data/data.md", "data");
+        b.add_file("data/levels.csv", "levels");
+        b.add_file("inner.md", "inner");
+        let graph = b.build();
+        let mut files = HashMap::new();
+        files.insert("data/data.md".to_string(), "# Data\n\n![[levels.csv]]\n\n![[inner]]\n".to_string());
+        files.insert("inner.md".to_string(), "Inner words.\n".to_string());
+
+        let result = resolve_content("index.md", "![[data]]\n", &graph, &mock_reader(&files));
+
+        let md = &result.content_markdown;
+        assert!(md.contains("<!-- moss-embed-table:data/levels.csv?"), "the table is lowered, got: {md}");
+        assert!(md.contains("from=data/data.md"), "the table names the page that embeds it, got: {md}");
+        assert!(md.contains("Inner words."), "the nested note is inlined, got: {md}");
+        assert!(!md.contains("![["), "no block embed is left for the inline dispatcher, got: {md}");
     }
 }

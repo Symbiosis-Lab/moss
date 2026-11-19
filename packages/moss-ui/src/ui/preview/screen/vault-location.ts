@@ -9,13 +9,6 @@
 // detected cloud-sync root as a friendly location rather than its technical
 // container path.
 
-/** What the location line renders: the fitted text, and the untruncated
- *  string for the tooltip (`data-tooltip`, never the native `title=`). */
-export interface VaultLocation {
-  display: string;
-  full: string;
-}
-
 /** Default budget for the display text before middle-truncation kicks in.
  *  Generous enough that an ordinary `~/Documents/Sites` never truncates. */
 const DEFAULT_MAX_LENGTH = 40;
@@ -43,16 +36,13 @@ export function middleTruncate(text: string, maxLength: number = DEFAULT_MAX_LEN
 }
 
 /**
- * The location line's text: the fitted display string plus the untruncated
- * one for the tooltip.
+ * The location line's text, fitted to one line.
  *
  * A detected cloud provider overrides the raw parent path entirely — inside
  * `~/Library/Mobile Documents/iCloud~md~obsidian/Documents`, the parent is a
  * bundle id and a generic "Documents", neither of which tells the author
- * anything; "iCloud Drive › Obsidian Vault" does. The tooltip still carries
- * the real parent path underneath (`parentDisplay`, already home-abbreviated
- * by the backend's `redact_home_dir`) for whoever wants to see exactly where
- * the folder lives.
+ * anything; "iCloud Drive › Obsidian Vault" does. The reveal button beside
+ * the line shows exactly where the folder lives.
  */
 export function formatVaultLocation(opts: {
   folderName: string;
@@ -62,12 +52,9 @@ export function formatVaultLocation(opts: {
   /** The detected cloud provider's display name, if any. */
   cloudProviderLabel?: string | null;
   maxLength?: number;
-}): VaultLocation {
-  const full = opts.cloudProviderLabel
+}): string {
+  const place = opts.cloudProviderLabel
     ? `${opts.cloudProviderLabel}${BREADCRUMB_SEP}${opts.folderName}`
     : opts.parentDisplay;
-  return {
-    display: middleTruncate(full, opts.maxLength ?? DEFAULT_MAX_LENGTH),
-    full,
-  };
+  return middleTruncate(place, opts.maxLength ?? DEFAULT_MAX_LENGTH);
 }

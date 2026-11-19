@@ -289,6 +289,12 @@ impl PluginManager {
             .cloned()
     }
 
+    /// Whether a plugin here runs a process hook, which brings content in
+    /// before a build reads the folder.
+    pub fn has_process_hooks(&self) -> bool {
+        !self.find_plugins_by_capability(&Capability::Process).is_empty()
+    }
+
     /// Find all plugins with a specific capability
     fn find_plugins_by_capability(&self, capability: &Capability) -> Vec<Plugin> {
         self.plugins
@@ -399,12 +405,16 @@ impl PluginManager {
     ///
     /// # Timeout: 30s per plugin, 5min total
     pub async fn execute_process(&self, context: &ProcessContext) -> Result<(), String> {
-        // Before any hook runs, and whether or not one will: a login-capable
-        // plugin with no account bound for this folder, and the prompt not
-        // dismissed, gets ONE nudge. The shell auto-opens login on it;
-        // headless, the reporter says the plugin's content will be skipped
-        // (and counts it for `--strict`).
+        // Before any hook runs: a plugin whose process hook needs its account,
+        // with none bound for this folder and the prompt not dismissed, gets
+        // ONE nudge. The shell auto-opens its login; headless, the reporter
+        // says its content will be skipped (and counts it for `--strict`).
+        // A publish-only channel skips nothing in a build, so it asks for its
+        // account when it is used, never here.
         for plugin in self.find_plugins_by_capability(&Capability::Login) {
+            if !plugin.manifest.capabilities.contains(&Capability::Process) {
+                continue;
+            }
             let name = &plugin.manifest.name;
             if crate::plugins::discovery::plugin_needs_connection(&context.project_path, name) {
                 log::info!(target: "plugin", "[auto-open] {name} needs connection for {} — nudging the shell", context.project_path);
@@ -542,8 +552,8 @@ impl PluginManager {
         plugin: &Plugin,
         hook_name: &str,
         context_json: &str,
-    ) -> Result<(), String> {
-        self.execute_plugin_javascript(plugin, hook_name, context_json, AskedBy::Person).await.map(|_| ())
+    ) -> Result<Option<HookResult>, String> {
+        self.execute_plugin_javascript(plugin, hook_name, context_json, AskedBy::Person).await
     }
 
 
@@ -1178,17 +1188,8 @@ mod tests {
                 entry: Some("main.js".to_string()),
                 capabilities: vec![Capability::Syndicate],
                 contributes: Some(PluginContributes {
-                    frontmatter: None,
-                    channel: None,
-                    deploy_target: None,
-                    processor: None,
                     jobs: Some(ContributedJobs { descriptors }),
-                    stack: None,
-                    derivations: None,
-                    listing_styles: None,
-                    blocks: None,
-                    public_data: None,
-                    site_settings: None,
+                    ..Default::default()
                 }),
                 ..Default::default()
             },

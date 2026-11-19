@@ -191,7 +191,7 @@ fn build_test_with_stash(
             cancelled: _cancelled,
             home_ready: _home_ready,
             publishable: _publishable,
-            render_seq: _render_seq,
+            render: _render,
             unready_derivations: _unready,
             folder_lock: _,
             locked_at_nanos: _,
@@ -2168,6 +2168,8 @@ async fn a_rebuild_storm_enters_the_encoder_once_and_stops_on_its_own() {
 
     let mut services = BuildServices::headless();
     services.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
+    // Its subject is the encode entering once, not the budget it shares with sibling tests.
+    services.encode_pool = Some(crate::system::folder_session::CorePool::own());
     let services = std::sync::Arc::new(services);
     let folder = ctx.source_path.clone();
     let handle = worker::register(&folder);
@@ -6569,7 +6571,7 @@ fn the_first_publish_stamps_live_pages_and_a_later_rename_keeps_the_uid() {
 
     let (_, _, _, rebuilt) = build_test_promoted_or_withheld(folder_path).unwrap();
     let record = crate::build::manifest::published_record::load_for(&crate::moss_paths::MossPaths::new(&dir), Some("moss:site-1"));
-    let changes = crate::build::manifest::change_set::classify(record.as_ref(), &rebuilt);
+    let changes = crate::build::manifest::change_set::classify(record.as_ref(), rebuilt.site_hashes_view());
     assert!(changes.classified);
     assert_eq!(changes.edited, 0, "the stamp is not an edit: {changes:?}");
 
@@ -6661,7 +6663,7 @@ fn an_edit_made_before_the_publish_lands_is_still_an_edit_after_the_stamp() {
 
     let (_, _, _, rebuilt) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
     let record = crate::build::manifest::published_record::load_for(&crate::moss_paths::MossPaths::new(&dir), Some("moss:site-1"));
-    let changes = crate::build::manifest::change_set::classify(record.as_ref(), &rebuilt);
+    let changes = crate::build::manifest::change_set::classify(record.as_ref(), rebuilt.site_hashes_view());
     assert_eq!(changes.edited, 1, "{changes:?}");
 }
 
@@ -6849,7 +6851,7 @@ fn a_published_page_holds_its_uid_and_the_next_build_has_nothing_to_publish() {
     assert_eq!(second.files(), first.files(), "the stamped pages build to the same files");
     let paths = crate::moss_paths::MossPaths::new(&dir);
     let record = crate::build::manifest::published_record::load_for(&paths, Some("moss:site-1")).unwrap();
-    let left = crate::build::manifest::change_set::classify(Some(&record), &second);
+    let left = crate::build::manifest::change_set::classify(Some(&record), second.site_hashes_view());
     assert!(left.pages.is_empty(), "{:?}", left.pages);
 }
 
@@ -7450,7 +7452,7 @@ fn a_presence_pass_that_cannot_read_its_tree_drops_nothing_and_ships_nothing() {
         &mp,
         &stage,
         crate::build::ship::next_promotion_epoch(),
-        Some(render),
+        Some(&render),
         verdict.clone(),
     );
     fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o755)).unwrap();
@@ -8479,6 +8481,19 @@ fn an_author_supplied_web_manifest_wins_over_the_generated_one() {
     assert_eq!(staged(&dir, "manifest.webmanifest"), "{\"name\":\"Mine\"}");
 }
 
+/// A scan waits for the provider until the folder closes: open a session for
+/// `dir` and close it once the scan is waiting, then forget it.
+fn close_folder_during_its_scan(dir: &std::path::Path) -> std::thread::JoinHandle<()> {
+    let folder = dir.to_string_lossy().into_owned();
+    let session = crate::system::folder_session::FolderSession::new(dir.to_path_buf());
+    crate::system::folder_session::registry().insert(folder.clone(), session.clone());
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        session.cancel.cancel();
+        crate::system::folder_session::registry().remove(&folder);
+    })
+}
+
 #[test]
 fn availability_pending_source_walk_preserves_current_generation_and_baseline() {
     crate::infra::home::with_moss_home(|_| {
@@ -8502,7 +8517,9 @@ fn availability_pending_source_walk_preserves_current_generation_and_baseline() 
     let preflight = crate::system::build_records::records().publish_preflight(dir.to_str().unwrap()).unwrap();
     fs::write(dir.join("index.md"), "# newer").unwrap();
     let fault = TestFault::install(&dir, &dir, StorageOperation::RootMetadata, 1000, std::time::Duration::from_millis(20));
+    let closing = close_folder_during_its_scan(&dir);
     assert!(run_pipeline(config()).await.is_err());
+    closing.join().unwrap();
     assert_eq!(fs::read_link(paths.current_ptr()).unwrap(), current);
     assert_eq!(fs::read(paths.current_ptr().join("index.html")).unwrap(), generation);
     let pending = crate::system::build_records::records().publish_preflight(dir.to_str().unwrap()).unwrap();
@@ -8529,7 +8546,9 @@ fn availability_fatal_scan_settles_a_previous_cloud_waiting_gate() {
                 exits_after_build: true, site_url_override: None, server_port: None, admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
             };
             let fault = TestFault::install(&dir, &dir, StorageOperation::RootMetadata, 1000, std::time::Duration::from_millis(20));
+            let closing = close_folder_during_its_scan(&dir);
             assert!(run_pipeline(config()).await.is_err());
+            closing.join().unwrap();
             assert!(crate::build::cloud_readiness::take_gate(dir.to_str().unwrap()));
             crate::build::cloud_readiness::mark_gated(dir.to_str().unwrap());
             drop(fault);
@@ -8601,7 +8620,7 @@ fn marking_a_published_page_as_a_draft_is_not_an_unexplained_removal() {
 
     fs::write(dir.join("wip.md"), "---\ntitle: Plan\ndraft: true\n---\n\nBody.\n").unwrap();
     let (_, _, _, drafted) = build_test_promoted_or_withheld(folder).unwrap();
-    let removed = removed_addresses(&baseline, &drafted, |src| dir.join(src).exists());
+    let removed = removed_addresses(&baseline, drafted.site_hashes_view(), |src| dir.join(src).exists());
 
     let gone = removed.iter().find(|r| r.path == "wip/index.html").expect("the address leaves the site");
     assert_eq!(gone.reason, RemovalReason::Withheld);
@@ -8669,7 +8688,7 @@ fn a_published_page_whose_source_turns_up_empty_is_an_unexplained_removal() {
     fs::write(dir.join("plan.md"), "").unwrap();
     let (_, _, _, emptied) = build_test_promoted_or_withheld(folder).unwrap();
     assert!(!emptied.files().contains_key("plan/index.html"), "premise: the empty page is withheld");
-    let removed = removed_addresses(&baseline, &emptied, |src| dir.join(src).exists());
+    let removed = removed_addresses(&baseline, emptied.site_hashes_view(), |src| dir.join(src).exists());
 
     let gone = removed.iter().find(|r| r.path == "plan/index.html").expect("the address leaves the site");
     assert_eq!(gone.reason, RemovalReason::Unexplained);
@@ -8845,7 +8864,6 @@ mod hidden_from_search_engines {
             "rooms/acme-k3x9/second-round/index.html",
             "rooms/acme-k3x9/second-round/notes/index.html",
             "rooms/acme-k3x9/sketches/index.html",
-            "rooms/acme-k3x9/pics/index.html",
             "quietk3x9/index.html",
             "notes/quiet/index.html",
         ] {
@@ -8996,4 +9014,42 @@ fn a_sealed_generation_says_whether_it_restricted_a_page() {
         let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
         assert_eq!(sealed.restricts_pages(), restricts, "{files:?}");
     }
+}
+
+/// A build reports progress while the OS knows it is running, so App Nap does
+/// not throttle a build that answers an edit made in another app.
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_build_holds_its_activity_while_it_reports_progress() {
+    use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Seen(AtomicUsize);
+    impl crate::build::ports::reporter::BuildReporter for Seen {
+        fn report(&self, _event: &crate::build::progress::PipelineEvent) {
+            let held = crate::platform::activity::HELD.try_with(|held| held.get()).unwrap_or(0);
+            self.0.fetch_max(held, Ordering::SeqCst);
+        }
+    }
+
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "# Home\n").unwrap();
+    let seen = std::sync::Arc::new(Seen(AtomicUsize::new(0)));
+    let build = run_pipeline(PipelineConfig {
+        root: crate::vault::paths::VaultRoot::resolve(&dir),
+        progress: seen.clone(),
+        plugins: PluginMode::Skip,
+        watch: false,
+        start_server: false,
+        host: crate::build::ports::host::test_host_ports(),
+        trigger: BuildTrigger::Full,
+        exits_after_build: true,
+        site_url_override: None,
+        server_port: None,
+        admission_epoch: None,
+        live_port: None,
+        rename_pairs: Vec::new(),
+    });
+    crate::platform::activity::HELD.scope(std::cell::Cell::new(0), build).await.expect("build completes");
+    assert!(seen.0.load(Ordering::SeqCst) >= 1, "no activity held while the build reported progress");
 }

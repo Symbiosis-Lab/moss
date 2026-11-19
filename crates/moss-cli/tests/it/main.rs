@@ -1,7 +1,17 @@
 //! The crate's integration tests, one binary: each file is a module here.
 //! A file that sets process-wide environment (MOSS_HOME and friends) is a
-//! top-level tests/*.rs and keeps its own process. `layout` fails on a file
-//! this list misses or a name here without a file.
+//! top-level tests/*.rs, keeps its own process and is named in OWN_PROCESS.
+//! `layout` fails on a file either list misses or a name without a file.
+const OWN_PROCESS: &[&str] = &[
+    "folder_build_lock_test",
+    "folder_owner_record_test",
+    "standby_takeover_test",
+    "stdin_stop_test",
+    "sweep_reconcile_test",
+    "yield_sweep_and_standby_sigint_test",
+    "yield_test",
+];
+
 mod booking_offer_test;
 mod build_default_folder_test;
 mod build_summary_line_test;
@@ -23,6 +33,7 @@ mod edit_service_test;
 mod fence_warnings_test;
 mod field_end_test;
 mod folder_icon_test;
+mod folder_trust_cli_test;
 mod footer_sections_test;
 mod guide_list_test;
 mod heading_attributes_test;
@@ -64,4 +75,6 @@ mod term_editions_test;
 mod title_edit_rebuild_test;
 mod unresolved_embed_strict_test;
 mod unwritten_site_exit_test;
+mod watch_during_picture_batch_test;
+#[path = "../../../moss-core/tests/it/layout.rs"]
 mod layout;

@@ -95,24 +95,117 @@ impl Site {
     }
 }
 
+/// The build ended at its entry: nothing it would read had moved, so the
+/// generation the last seal promoted is its output.
+fn stopped(record: &serde_json::Value) -> bool {
+    count(record, "unchanged_at_entry") == 1
+}
+
+/// Proved from the seal, or stopped before needing to.
+fn unchanged(record: &serde_json::Value) -> bool {
+    stopped(record) || (count(record, "proved_from_seal") == 1 && count(record, "pages_rendered") == 0)
+}
+
 fn rendered_everything(record: &serde_json::Value) -> bool {
     count(record, "pages_carried") == 0 && count(record, "pages_rendered") > 0
 }
 
 #[test]
-fn a_build_that_watched_nothing_carries_every_page_when_nothing_changed() {
+fn a_build_that_watched_nothing_ends_unchanged_before_it_scans_when_nothing_changed() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let site = Site::new();
     site.sealed();
     let record = build(site.root(), BuildTrigger::Unobserved);
-    assert_eq!(count(&record, "proved_from_seal"), 1, "{record}");
-    assert_eq!(count(&record, "pages_rendered"), 0, "{record}");
-    assert!(count(&record, "pages_carried") > 0, "{record}");
+    assert!(stopped(&record), "{record}");
+    assert!(record["phases"].as_array().unwrap().iter().all(|p| p["name"] != "scan"), "{record}");
+    assert_publishes_a_full_render(&site);
+}
+
+/// Each thing the stop requires besides an unmoved folder, moved alone: the
+/// build renders, and publishes what a full render does.
+#[test]
+fn a_stop_needs_the_sealed_generation_current_and_its_media_settled() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    type Move = fn(&Site);
+    fn generation(s: &Site) -> PathBuf {
+        s.root().join(".moss/build.nosync/generations").join(fs::read_to_string(s.root().join(".moss/build.nosync/current.generation")).unwrap().trim())
+    }
+    let moves: &[(&str, Move)] = &[
+        ("current names another generation", |s| s.write(".moss/build.nosync/current.generation", "0123456789abcdef")),
+        ("the generation is gone", |s| fs::remove_dir_all(generation(s)).unwrap()),
+        ("the seal left work to later passes", |s| rewrite_manifest(s, |m| m["build_inputs"]["complete"] = false.into())),
+        ("media settled after the render", |s| rewrite_manifest(s, |m| m["build_inputs"]["media_settled"] = false.into())),
+        ("no list of waiting cards", |s| fs::remove_file(s.root().join(".moss/build.nosync/link-cards-waiting.json")).unwrap()),
+        ("an unreadable list of waiting cards", |s| s.write(".moss/build.nosync/link-cards-waiting.json", "[\"cut off")),
+    ];
+    let control = Site::new();
+    control.sealed();
+    assert!(stopped(&build(control.root(), BuildTrigger::Unobserved)), "control");
+    for (name, move_it) in moves {
+        let site = Site::new();
+        site.sealed();
+        move_it(&site);
+        let record = build(site.root(), BuildTrigger::Unobserved);
+        assert!(!stopped(&record), "{name}: {record}");
+        assert_publishes_a_full_render(&site);
+    }
+}
+
+/// The bisect switch renders, whatever the seal proves.
+#[test]
+fn moss_no_incremental_keeps_a_no_change_build_from_stopping() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let site = Site::new();
+    site.sealed();
+    std::env::set_var("MOSS_NO_INCREMENTAL", "1");
+    let record = build(site.root(), BuildTrigger::Unobserved);
+    std::env::remove_var("MOSS_NO_INCREMENTAL");
+    assert!(!stopped(&record) && rendered_everything(&record), "{record}");
+}
+
+/// A site with a picture whose last two builds ran beside a preview, sealed
+/// as a preview leaves it before the background fills the placeholders in.
+/// The second build reads colours the first one cached, so its own record
+/// says complete; a session that opened on a cold cache does not.
+fn served_site_with_a_picture() -> Site {
+    let site = Site::new();
+    site.write("notes/alpha.md", "---\ntitle: Alpha\ndate: 2026-01-02\n---\n\n![A field](field.png)\n");
+    image::RgbImage::from_fn(640, 480, |x, y| image::Rgb([(x % 251) as u8, (y % 241) as u8, 160])).save(site.root().join("notes/field.png")).unwrap();
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    for _ in 0..2 {
+        run(site.root(), BuildTrigger::Unobserved, moss_build::build::PluginMode::Skip, None, Some(port));
+    }
+    rewrite_manifest(&site, |m| m["build_inputs"]["complete"] = serde_json::Value::Bool(false));
+    site
+}
+
+/// A one-shot build after a serving seal renders and bakes the placeholders
+/// rather than keeping that generation.
+#[test]
+fn a_build_after_a_serving_seal_renders_and_publishes_a_full_render() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let site = served_site_with_a_picture();
+    let record = build(site.root(), BuildTrigger::Unobserved);
+    assert!(!stopped(&record), "{record}");
+    assert_publishes_a_full_render(&site);
+}
+
+/// A build that bakes but reuses pages from a serving seal keeps what they
+/// lacked, so the build after it renders rather than stopping on its seal.
+#[test]
+fn a_build_that_reused_a_serving_seal_does_not_let_the_next_one_stop() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let site = served_site_with_a_picture();
+    site.write("about.md", "---\ntitle: About\n---\n\nAbout us, again.\n");
+    build(site.root(), BuildTrigger::ContentOnly(vec![PathBuf::from("about.md")]));
+    let record = build(site.root(), BuildTrigger::Unobserved);
+    assert!(!stopped(&record), "{record}");
+    assert_publishes_a_full_render(&site);
 }
 
 /// Media the seal found other than the ones its render read (a first build's
 /// share image, a video ladder registered at the seal) leave no page to carry:
-/// the build after renders every page, and the one after that proves.
+/// the build after renders every page, and the one after that is unchanged.
 #[test]
 fn a_build_after_media_landed_at_the_seal_renders_every_page() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -121,8 +214,7 @@ fn a_build_after_media_landed_at_the_seal_renders_every_page() {
     let record = build(site.root(), BuildTrigger::Unobserved);
     assert!(rendered_everything(&record), "{record}");
     let settled = build(site.root(), BuildTrigger::Unobserved);
-    assert_eq!(count(&settled, "proved_from_seal"), 1, "{settled}");
-    assert_eq!(count(&settled, "pages_rendered"), 0, "{settled}");
+    assert!(unchanged(&settled), "{settled}");
 }
 
 /// A video and a `.webp` source are published by their media lanes, not the
@@ -137,8 +229,7 @@ fn a_site_with_a_video_and_a_webp_source_still_proves_from_the_seal() {
     fs::write(site.root().join("clip.mp4"), b"not a video").unwrap();
     site.sealed();
     let record = build(site.root(), BuildTrigger::Unobserved);
-    assert_eq!(count(&record, "proved_from_seal"), 1, "{record}");
-    assert_eq!(count(&record, "pages_rendered"), 0, "{record}");
+    assert!(unchanged(&record), "{record}");
 }
 
 #[test]
@@ -190,7 +281,7 @@ fn every_input_outside_the_page_tree_keeps_the_build_full() {
     // The control: with nothing moved the same setup proves, so each guard
     // below is what keeps its build full.
     let control = build(setup().root(), BuildTrigger::Unobserved);
-    assert_eq!(count(&control, "proved_from_seal"), 1, "control: {control}");
+    assert!(unchanged(&control), "control: {control}");
     let mut carried = Vec::new();
     for (name, move_it) in guards {
         let site = setup();
@@ -228,7 +319,7 @@ fn a_variable_a_carried_page_read_still_keeps_the_build_full_when_it_moves() {
     rewrite_manifest(&site, |m| { m["build_inputs"]["env"][VAR] = sha256_hex("a").into(); });
     std::env::set_var(VAR, "a");
     let carried = build(site.root(), BuildTrigger::Unobserved);
-    assert_eq!(count(&carried, "proved_from_seal"), 1, "{carried}");
+    assert!(unchanged(&carried), "{carried}");
     std::env::set_var(VAR, "b");
     let record = build(site.root(), BuildTrigger::Unobserved);
     std::env::remove_var(VAR);
@@ -291,7 +382,7 @@ fn another_site_url_option_keeps_the_build_full() {
         build_with(control.root(), BuildTrigger::Unobserved, Skip, Some(A));
     }
     let record = build_with(control.root(), BuildTrigger::Unobserved, Skip, Some(A));
-    assert_eq!(count(&record, "proved_from_seal"), 1, "control: {record}");
+    assert!(unchanged(&record), "control: {record}");
 
     for next in [Some(B), None] {
         let site = Site::new();
@@ -321,7 +412,7 @@ fn turning_plugins_on_keeps_the_build_full() {
         build_with(control.root(), BuildTrigger::Unobserved, Blocking, None);
     }
     let record = build_with(control.root(), BuildTrigger::Unobserved, Blocking, None);
-    assert_eq!(count(&record, "proved_from_seal"), 1, "control: {record}");
+    assert!(unchanged(&record), "control: {record}");
 
     let site = Site::new();
     for _ in 0..2 {
@@ -356,8 +447,7 @@ fn a_comment_refresh_that_fails_every_build_still_lets_the_next_build_prove() {
         let record = build(site.root(), BuildTrigger::Unobserved);
         let written = fs::read_to_string(site.root().join(state)).expect("the refresh ran and recorded its outcome");
         assert!(written.contains("last_error") && !written.contains("\"last_error\": null"), "{written}");
-        assert_eq!(count(&record, "proved_from_seal"), 1, "build {n}, recorded {state}: {:?}: {record}", recorded_moss_input(&site, state));
-        assert_eq!(count(&record, "pages_rendered"), 0, "build {n}: {record}");
+        assert!(unchanged(&record), "build {n}, recorded {state}: {:?}: {record}", recorded_moss_input(&site, state));
     }
 }
 
@@ -421,7 +511,10 @@ fn a_proved_build_after_staging_is_cleared_publishes_what_a_full_render_does() {
 }
 
 /// The re-render owed once pictures settle renders the pages showing them,
-/// carries the rest, and serves what a full render would.
+/// carries the rest, and serves what a full render would. The reference is the
+/// folder opened on another machine: its encodes arrive with it, its picture
+/// facts stay behind, so its first render has no blur and its own settle must
+/// bring it.
 #[test]
 fn a_settled_picture_renders_the_pages_showing_it_and_matches_a_full_render() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -445,11 +538,77 @@ fn a_settled_picture_renders_the_pages_showing_it_and_matches_a_full_render() {
     let full = Site(tempfile::tempdir().unwrap());
     copy_source(site.root(), full.root());
     build_previewing(full.root(), BuildTrigger::Full);
+    build_previewing(full.root(), BuildTrigger::ImagesSettled);
     let reference = published(full.root());
     let differing: Vec<_> = reference.keys().chain(settled.keys())
         .filter(|k| reference.get(*k) != settled.get(*k))
         .collect();
     assert!(differing.is_empty(), "differs from a full render: {differing:?}");
+}
+
+/// A card the entry check's retry brings in is on the page this build
+/// publishes, though nothing in the folder moved.
+#[test]
+fn a_card_that_arrives_at_the_entry_check_is_on_the_page_that_build_publishes() {
+    use std::io::{Read, Write};
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    for proxy in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"] {
+        std::env::remove_var(proxy);
+    }
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let url = format!("http://127.0.0.1:{port}/page");
+    let site = Site::new();
+    site.write("notes/alpha.md", &format!("---\ntitle: Alpha\ndate: 2026-01-02\n---\n\n:::grid 1\n[External]({url})\n:::\n"));
+    site.sealed();
+    assert!(stopped(&build(site.root(), BuildTrigger::Unobserved)), "the card is still missing, so nothing moved");
+
+    let listener = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+    std::thread::spawn(move || {
+        let html = "<html><head><title>Card Title</title></head><body></body></html>";
+        for mut stream in listener.incoming().flatten() {
+            let _ = stream.read(&mut [0u8; 2048]);
+            let _ = stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html\r\n\r\n{html}", html.len()).as_bytes());
+        }
+    });
+    let record = build(site.root(), BuildTrigger::Unobserved);
+    assert!(!stopped(&record), "{record}");
+    let page = String::from_utf8(published(site.root())["notes/alpha/index.html"].clone()).unwrap();
+    assert!(page.contains(&format!("http://127.0.0.1:{port}/favicon.ico")), "the card's favicon is not on the page: {record}");
+    assert_publishes_a_full_render(&site);
+}
+
+/// A card fetched outside any build (a publish settles the waiting cards
+/// before its rebuild) leaves that build nothing to fetch, so only the card
+/// files themselves keep it from ending at its entry.
+#[test]
+fn a_card_settled_before_the_build_is_on_the_page_that_build_publishes() {
+    use std::io::{Read, Write};
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    for proxy in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"] {
+        std::env::remove_var(proxy);
+    }
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let url = format!("http://127.0.0.1:{port}/page");
+    let site = Site::new();
+    site.write("notes/alpha.md", &format!("---\ntitle: Alpha\ndate: 2026-01-02\n---\n\n:::grid 1\n[External]({url})\n:::\n"));
+    site.sealed();
+
+    let listener = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+    std::thread::spawn(move || {
+        let html = "<html><head><title>Card Title</title></head><body></body></html>";
+        for mut stream in listener.incoming().flatten() {
+            let _ = stream.read(&mut [0u8; 2048]);
+            let _ = stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html\r\n\r\n{html}", html.len()).as_bytes());
+        }
+    });
+    let settled = moss_build::build::page::link_meta::settle(&moss_build::moss_paths::MossPaths::new(site.root()));
+    assert_eq!(settled.map(|s| (s.fetched, s.waiting)), Some((1, 0)), "the card came in before the build");
+
+    let record = build(site.root(), BuildTrigger::Unobserved);
+    assert!(!stopped(&record), "{record}");
+    let page = String::from_utf8(published(site.root())["notes/alpha/index.html"].clone()).unwrap();
+    assert!(page.contains(&format!("http://127.0.0.1:{port}/favicon.ico")), "the card's favicon is not on the page: {record}");
+    assert_publishes_a_full_render(&site);
 }
 
 /// Inputs a build moves itself after measuring `.moss/` (an older moss's link
@@ -472,6 +631,240 @@ fn inputs_a_build_moves_itself_still_let_the_next_build_prove() {
 
     let record = build_previewing(site.root(), BuildTrigger::ImagesSettled);
     assert_eq!(count(&record, "proved_from_seal"), 1, "{record}");
+}
+
+/// What a serving build told its host: the change set it published, and
+/// whether it said a servable site was ready, and with which port it completed.
+#[derive(Default)]
+struct Heard {
+    change_sets: Mutex<Vec<Option<moss_build::build::manifest::change_set::ChangeSet>>>,
+    stage_ready: std::sync::atomic::AtomicUsize,
+    completed_on: Mutex<Vec<Option<u16>>>,
+}
+
+struct Ear(std::sync::Arc<Heard>);
+
+impl moss_build::build::ports::reporter::BuildReporter for Ear {
+    fn report(&self, event: &moss_build::build::progress::PipelineEvent) {
+        if let moss_build::build::progress::PipelineEvent::Progress { step, completed: true, port, .. } = event {
+            if step == "build" {
+                self.0.completed_on.lock().unwrap().push(*port);
+            }
+        }
+    }
+
+    fn stage_ready(&self, _site_path: &Path) {
+        self.0.stage_ready.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[async_trait::async_trait]
+impl moss_build::build::ports::announcer::SealAnnouncer for Ear {
+    fn promoted(&self, _generation_id: &str) {}
+    async fn adopt_sealed(&self, _sealed: moss_build::build::manifest::SealedManifest) {}
+    async fn publish_change_set(&self, _project_root: &Path, change_set: Option<moss_build::build::manifest::change_set::ChangeSet>) {
+        self.0.change_sets.lock().unwrap().push(change_set);
+    }
+}
+
+const PREVIEW_PORT: u16 = 47_311;
+
+/// A build that opens a preview, as the app's folder open does, on `cell`: the
+/// preview cell the server reads. Its server is a stand-in that answers with a
+/// port.
+fn serve(root: &Path, cell: &std::sync::Arc<std::sync::RwLock<PathBuf>>) -> (serde_json::Value, std::sync::Arc<Heard>) {
+    use moss_build::build::{run_pipeline, PipelineConfig};
+    let heard = std::sync::Arc::new(Heard::default());
+    let folder = root.to_string_lossy().into_owned();
+    let mut host = moss_build::cli::host::cli_host_ports(&folder);
+    host.site_dir = Some(cell.clone());
+    host.launch_server = Some(std::sync::Arc::new(|_, _| Box::pin(async { Ok(PREVIEW_PORT) })));
+    host.services.reporter = std::sync::Arc::new(Ear(heard.clone()));
+    host.announcer = std::sync::Arc::new(Ear(heard.clone()));
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(run_pipeline(PipelineConfig {
+        root: moss_build::vault_root::VaultRoot::resolve(root),
+        progress: std::sync::Arc::new(Ear(heard.clone())),
+        plugins: moss_build::build::PluginMode::Skip,
+        watch: false,
+        start_server: true,
+        host,
+        trigger: BuildTrigger::Unobserved,
+        exits_after_build: true,
+        site_url_override: None,
+        server_port: None,
+        admission_epoch: None,
+        live_port: None,
+        rename_pairs: Vec::new(),
+    }))
+    .unwrap_or_else(|e| panic!("build failed: {e}"));
+    (last_profile(root), heard)
+}
+
+fn new_cell() -> std::sync::Arc<std::sync::RwLock<PathBuf>> {
+    std::sync::Arc::new(std::sync::RwLock::new(PathBuf::new()))
+}
+
+fn served(cell: &std::sync::Arc<std::sync::RwLock<PathBuf>>) -> PathBuf {
+    cell.read().unwrap().clone()
+}
+
+/// Every file under `dir`, by path.
+fn tree(dir: &Path) -> BTreeMap<String, Vec<u8>> {
+    walkdir::WalkDir::new(dir).follow_links(true).into_iter().filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file())
+        .map(|e| (e.path().strip_prefix(dir).unwrap().to_string_lossy().into_owned(), fs::read(e.path()).unwrap()))
+        .collect()
+}
+
+fn staging(root: &Path) -> PathBuf {
+    root.canonicalize().unwrap().join(".moss/build.nosync/staging")
+}
+
+/// Two serving opens: the second proves from the first's seal, so the next one
+/// has a settled seal to stop on.
+fn served_site() -> (Site, std::sync::Arc<std::sync::RwLock<PathBuf>>) {
+    let site = Site::new();
+    let cell = new_cell();
+    serve(site.root(), &cell);
+    serve(site.root(), &cell);
+    (site, cell)
+}
+
+/// An open that changed nothing shows the staging tree the seal left, without
+/// scanning or rendering, and tells the host what a build would have.
+#[test]
+fn a_serving_open_with_nothing_changed_shows_the_sealed_staging_without_scanning() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (site, cell) = served_site();
+    let before = tree(&staging(site.root()));
+    let folder = moss_build::vault_root::VaultRoot::resolve(site.root()).as_str().to_string();
+    let records = moss_build::system::build_records::records();
+    records.record_content_hashes(&folder, Default::default());
+    let (record, heard) = serve(site.root(), &cell);
+    assert!(stopped(&record), "{record}");
+    let sealed: serde_json::Value = serde_json::from_str(&fs::read_to_string(site.root().join(".moss/build.nosync/hashes.json")).unwrap()).unwrap();
+    let baseline = records.content_hashes(&folder).expect("the watcher has a baseline");
+    assert_eq!(serde_json::to_value(&baseline.files).unwrap(), sealed["files"], "the watcher diffs the next edit against the seal");
+    assert!(record["phases"].as_array().unwrap().iter().all(|p| p["name"] != "scan"), "{record}");
+    assert_eq!(served(&cell), staging(site.root()));
+    assert_eq!(tree(&staging(site.root())), before);
+    assert_eq!(heard.stage_ready.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(*heard.completed_on.lock().unwrap(), vec![Some(PREVIEW_PORT)]);
+    assert_publishes_a_full_render(&site);
+}
+
+/// The stopped open publishes the change set a proved open would: the same
+/// verdict, from the persisted manifest rather than a fresh seal.
+#[test]
+fn a_stopped_open_publishes_the_change_set_a_proved_open_does() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (site, cell) = served_site();
+    // A proved open: the stop refuses on a staging entry gone, so this build
+    // renders that page and seals.
+    fs::remove_file(staging(site.root()).join("about/index.html")).unwrap();
+    let (record, proved) = serve(site.root(), &cell);
+    assert!(!stopped(&record), "{record}");
+    let (record, stopped_heard) = serve(site.root(), &cell);
+    assert!(stopped(&record), "{record}");
+    let proved = proved.change_sets.lock().unwrap().last().cloned().flatten();
+    let stopped_set = stopped_heard.change_sets.lock().unwrap().last().cloned().flatten();
+    assert!(proved.is_some());
+    assert_eq!(stopped_set, proved);
+}
+
+/// The seal names a page staging no longer holds: the open builds, which puts
+/// it back. A file the seal does not name is swept, and the open still stops.
+#[test]
+fn a_staging_entry_gone_builds_and_a_stray_file_is_swept_by_the_stop() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (site, cell) = served_site();
+    fs::remove_file(staging(site.root()).join("about/index.html")).unwrap();
+    let (record, _) = serve(site.root(), &cell);
+    assert!(!stopped(&record), "{record}");
+    assert!(staging(site.root()).join("about/index.html").is_file());
+
+    fs::write(staging(site.root()).join("stray.html"), "left over").unwrap();
+    let (record, _) = serve(site.root(), &cell);
+    assert!(stopped(&record), "{record}");
+    assert!(!staging(site.root()).join("stray.html").exists());
+    assert_eq!(served(&cell), staging(site.root()));
+}
+
+/// Opening again in the same process after a stopped open, with the preview
+/// already on staging: the stop's record says `current` holds what is shown,
+/// so the next open may sweep and stops again.
+#[test]
+fn a_second_stopped_open_in_the_same_process_stops_again() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (site, cell) = served_site();
+    assert!(stopped(&serve(site.root(), &cell).0));
+    assert_eq!(served(&cell), staging(site.root()));
+    assert!(stopped(&serve(site.root(), &cell).0));
+    assert_publishes_a_full_render(&site);
+}
+
+/// The publish rebuild opens no preview and outlives its build: it never stops.
+#[test]
+fn a_build_that_neither_serves_nor_exits_does_not_stop() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (site, _cell) = served_site();
+    use moss_build::build::{run_pipeline, PipelineConfig};
+    let folder = site.root().to_string_lossy().into_owned();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(run_pipeline(PipelineConfig {
+        root: moss_build::vault_root::VaultRoot::resolve(site.root()),
+        progress: moss_build::build::null_sink(),
+        plugins: moss_build::build::PluginMode::SlotsOnly,
+        watch: false,
+        start_server: false,
+        host: moss_build::cli::host::cli_host_ports(&folder),
+        trigger: BuildTrigger::Unobserved,
+        exits_after_build: false,
+        site_url_override: None,
+        server_port: None,
+        admission_epoch: None,
+        live_port: None,
+        rename_pairs: Vec::new(),
+    }))
+    .unwrap();
+    let record = last_profile(site.root());
+    assert!(!stopped(&record), "{record}");
+}
+
+/// Staging holds bytes newer than the seal for a page whose source is as
+/// sealed: a render that reached staging but never sealed, its edit then
+/// undone. The stop serves what a proved open would, which carries the page
+/// by its presence.
+#[test]
+fn staging_newer_than_the_seal_is_served_as_a_proved_open_would() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (site, cell) = served_site();
+    let page = staging(site.root()).join("about/index.html");
+    let newer = fs::read_to_string(&page).unwrap().replace("About us.", "About us, unsaved.");
+    fs::write(&page, &newer).unwrap();
+    let (record, _) = serve(site.root(), &cell);
+    assert!(stopped(&record), "{record}");
+    let stopped_bytes = fs::read_to_string(&page).unwrap();
+
+    // The same staging under a proved open: another page moved, so the
+    // stop refuses, and about.md is carried.
+    fs::write(&page, &newer).unwrap();
+    site.write("notes/beta.md", "---\ntitle: Beta\ndate: 2026-01-03\n---\n\nBeta body, again.\n");
+    let (record, _) = serve(site.root(), &cell);
+    assert!(!stopped(&record), "{record}");
+    assert_eq!(fs::read_to_string(&page).unwrap(), stopped_bytes);
+}
+
+/// The site's current generation equals a full render of a copy of its source.
+fn assert_publishes_a_full_render(site: &Site) {
+    let built = published(site.root());
+    let full = Site(tempfile::tempdir().unwrap());
+    copy_source(site.root(), full.root());
+    build(full.root(), BuildTrigger::Full);
+    let reference = published(full.root());
+    let differing: Vec<_> = reference.keys().chain(built.keys()).filter(|k| reference.get(*k) != built.get(*k)).collect();
+    assert!(differing.is_empty(), "differs from a full render: {differing:?}");
 }
 
 fn rewrite_manifest(site: &Site, edit: impl FnOnce(&mut serde_json::Value)) {
@@ -498,9 +891,8 @@ fn copy_source(from: &Path, to: &Path) {
             fs::create_dir_all(&dest).unwrap();
         } else if entry.file_type().is_file() {
             fs::copy(entry.path(), &dest).unwrap();
-            // Picture placeholders are cached by the source's size and mtime.
-            // `fs::copy` keeps the mtime on macOS but not on Linux, where a copy
-            // made a second later would leave the reference render unsettled.
+            // A sync client keeps each file's mtime; `fs::copy` does on macOS
+            // but not on Linux.
             let mtime = filetime::FileTime::from_last_modification_time(&entry.metadata().unwrap());
             filetime::set_file_mtime(&dest, mtime).unwrap();
         }

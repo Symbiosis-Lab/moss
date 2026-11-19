@@ -16,15 +16,14 @@
 //! [`enforce`] is the verdict those layers feed: whether a given plugin may
 //! install or load at all. [`receipt`] is what an install leaves behind in the
 //! plugin directory so a later update can tell the plugin's own files from the
-//! last version's code; [`approval`] is what the user's consent leaves behind
+//! last version's code; [`trust`] is the user's answer for each folder, kept
 //! in app data, so a plugin that arrived with a shared folder does not run
-//! until they say so.
+//! until they trust the folder.
 //!
 //! Named `registry_client` rather than `registry` because `plugins/registry.rs`
 //! is the catalog, and two files called "registry" meaning different things is
 //! how the next reader loses.
 
-pub mod approval;
 pub mod artifact;
 pub mod cache;
 pub mod enforce;
@@ -33,3 +32,4 @@ pub mod icon;
 pub mod index;
 pub mod receipt;
 pub mod signature;
+pub mod trust;

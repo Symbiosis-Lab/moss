@@ -42,6 +42,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::SealedManifest;
+use crate::types::content::SiteHashes;
 use crate::build::manifest::is_page_source_key;
 use crate::build::served_path::{is_public_address, ServedPath, GATED_PREFIX};
 
@@ -204,14 +205,14 @@ impl PublishedSnapshot {
             generation_id: sealed.generation_id().to_string(),
             target: target.to_string(),
             published_at,
-            sources: page_source_hashes(sealed),
+            sources: page_source_hashes(sealed.site_hashes_view()),
             source_to_output: sealed.published_source_to_output().into_owned(),
             files: sealed.files().into_owned(),
             // Filled by the caller, which is the only place that has the
             // article map — see `deploy::landed`.
             uids: HashMap::new(),
             triples: None,
-            asset_source_to_output: Some(asset_sources_to_outputs(sealed)),
+            asset_source_to_output: Some(asset_sources_to_outputs(sealed.site_hashes_view())),
             page_stubs: sealed.page_stubs().iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
         }
     }
@@ -222,13 +223,13 @@ impl PublishedSnapshot {
 /// copies a notebook to its [`notebook::copy_path`](crate::build::notebook::copy_path).
 ///
 /// A file with no shipped public output is left out: it explains no address.
-fn asset_sources_to_outputs(sealed: &SealedManifest) -> HashMap<String, String> {
+fn asset_sources_to_outputs(sealed: &SiteHashes) -> HashMap<String, String> {
     let files = sealed.files();
-    let recorded = sealed.asset_outputs();
+    let recorded = &sealed.asset_outputs;
     sealed
-        .sources()
+        .sources
         .keys()
-        .filter(|src| !is_page_source_key(src) && !sealed.source_to_output().contains_key(*src))
+        .filter(|src| !is_page_source_key(src) && !sealed.source_to_output.contains_key(*src))
         .filter_map(|src| {
             let out = match bucket(src) {
                 ScanBucket::Notebook => crate::build::notebook::copy_path(src).ok()?.as_str().to_string(),
@@ -248,11 +249,11 @@ fn asset_sources_to_outputs(sealed: &SealedManifest) -> HashMap<String, String> 
 /// Shared by [`PublishedSnapshot::from_sealed`] and `deploy::history`'s
 /// publish snapshot, so the deploy baseline and the history record are always
 /// reading the same page set out of the same manifest.
-pub(crate) fn page_source_hashes(sealed: &SealedManifest) -> HashMap<String, String> {
+pub(crate) fn page_source_hashes(sealed: &SiteHashes) -> HashMap<String, String> {
     sealed
         .published_source_to_output()
         .keys()
-        .filter_map(|src| sealed.sources().get(src).map(|m| (src.clone(), m.hash.clone())))
+        .filter_map(|src| sealed.sources.get(src).map(|m| (src.clone(), m.hash.clone())))
         .collect()
 }
 
@@ -490,12 +491,12 @@ pub fn flat(need: usize, remove: usize) -> ChangeSet {
 /// [`super::backfill`] reconstructs `previous` by re-hashing the last deployed
 /// generation; `moss deploy --dry-run` takes the two halves separately
 /// ([`upload_count`], [`removed_files`]) because it also names the removals.
-pub fn flat_against(previous: &HashMap<String, String>, current: &SealedManifest) -> ChangeSet {
+pub fn flat_against(previous: &HashMap<String, String>, current: &SiteHashes) -> ChangeSet {
     flat(upload_count(previous, current), removed_files(previous, current).len())
 }
 
 /// How many of `current`'s files `previous` does not already hold.
-pub fn upload_count(previous: &HashMap<String, String>, current: &SealedManifest) -> usize {
+pub fn upload_count(previous: &HashMap<String, String>, current: &SiteHashes) -> usize {
     upload_count_of(previous, &current.files())
 }
 
@@ -517,7 +518,7 @@ where
 }
 
 /// The output paths `previous` has that `current` no longer produces, sorted.
-pub fn removed_files(previous: &HashMap<String, String>, current: &SealedManifest) -> Vec<String> {
+pub fn removed_files(previous: &HashMap<String, String>, current: &SiteHashes) -> Vec<String> {
     removed_files_of(previous, &current.files())
 }
 
@@ -587,12 +588,12 @@ pub(crate) fn diff_hashes(
 /// `diff_hashes`'s: a page mapped without a hash at the LAST publish is
 /// absent from `prev.sources` too, so a hash-only diff cannot see it
 /// disappear (`deletion_is_reported_even_when_the_page_was_never_hashed`).
-pub fn classify(previous: Option<&PublishedSnapshot>, current: &SealedManifest) -> ChangeSet {
+pub fn classify(previous: Option<&PublishedSnapshot>, current: &SiteHashes) -> ChangeSet {
     let Some(prev) = previous else {
         return ChangeSet::default();
     };
 
-    let cur_sources = current.sources();
+    let cur_sources = &current.sources;
     let cur_map = &*current.published_source_to_output();
     let cur_files = &*current.files();
 
@@ -676,7 +677,7 @@ pub fn classify(previous: Option<&PublishedSnapshot>, current: &SealedManifest) 
 /// was a page's. The one definition of "vanished" behind both
 /// `removed_assets` (non-pages, own-target record, `_moss/` included) and
 /// [`removed_addresses`] (public addresses only, address baseline).
-fn vanished_outputs<'a>(baseline: &'a PublishedSnapshot, current: &SealedManifest) -> Vec<(&'a str, bool)> {
+fn vanished_outputs<'a>(baseline: &'a PublishedSnapshot, current: &SiteHashes) -> Vec<(&'a str, bool)> {
     let page_outputs: std::collections::HashSet<&str> =
         baseline.source_to_output.values().map(String::as_str).collect();
     vanished_keys(&baseline.files, &current.files()).map(|out| (out, page_outputs.contains(out))).collect()
@@ -713,7 +714,7 @@ fn composes_to_served(out: &str, files: &HashMap<String, String>) -> bool {
 /// target's record, which must feed this and nothing else.
 pub fn removed_addresses(
     baseline: &PublishedSnapshot,
-    current: &SealedManifest,
+    current: &SiteHashes,
     source_exists: impl Fn(&str) -> bool,
 ) -> Vec<RemovedAddress> {
     fn by_output(map: &HashMap<String, String>) -> HashMap<&str, Vec<&str>> {
@@ -771,7 +772,7 @@ pub fn removed_addresses(
         if files.contains_key(page) {
             return Some(page.clone());
         }
-        written.get(page.as_str())?.iter().find_map(|src| current.source_to_output().get(*src)).cloned()
+        written.get(page.as_str())?.iter().find_map(|src| current.source_to_output.get(*src)).cloned()
     };
     let mut removed: Vec<RemovedAddress> = vanished_outputs(baseline, current)
         .into_iter()
@@ -785,7 +786,7 @@ pub fn removed_addresses(
                     path: out.to_string(), reason: RemovalReason::Unexplained, moved_to: Some(to), source: None,
                 });
             };
-            let renamed = srcs.iter().filter_map(|src| current.source_to_output().get(*src)).find(|now| now.as_str() != out).cloned();
+            let renamed = srcs.iter().filter_map(|src| current.source_to_output.get(*src)).find(|now| now.as_str() != out).cloned();
             // A page is matched by its source, never by bytes another page renders alike.
             let moved_to = if is_page { renamed } else { renamed.or_else(|| arrival(out)) };
             let reason = if withheld.contains(out) {

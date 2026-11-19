@@ -33,6 +33,44 @@ pub struct LinkMeta {
     pub cover_height: Option<u32>,
     pub cover_lqip: Option<String>,
     pub cover_color: Option<String>,
+    pub state: CardState,
+}
+
+/// What a card's picture slot holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CoverSlot {
+    /// This build serves the picture.
+    Served,
+    /// The linked page names no picture.
+    None,
+    /// A picture belongs here and this build doesn't have it: no entry yet,
+    /// or a picture not downloaded or not encoded.
+    Missing,
+}
+
+impl LinkMeta {
+    /// Only an entry whose page names no picture says there is none.
+    pub(crate) fn cover_slot(&self) -> CoverSlot {
+        if self.cover_served_path.is_some() {
+            CoverSlot::Served
+        } else if self.state == CardState::Fetched && self.og_image.is_none() {
+            CoverSlot::None
+        } else {
+            CoverSlot::Missing
+        }
+    }
+}
+
+/// Whether the folder holds a card's entry. Only a fetched entry can say a
+/// linked page has no picture; until then the card is waiting for one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CardState {
+    /// The entry exists: `cover: None` means the page names no picture, or
+    /// its download failed.
+    Fetched,
+    /// No entry yet, or one the cloud still holds.
+    #[default]
+    NotYet,
 }
 
 /// Parse OG/meta tags from HTML content.
@@ -233,8 +271,8 @@ fn resolve_url(href: &str, origin: &Option<String>) -> String {
         }
     }
 }
-/// `build.nosync/cache/link-meta/`: the URL list for prewarm, entries written
-/// before the fetched half moved into the site folder, and under `covers/`
+/// `build.nosync/cache/link-meta/`: entries written before the fetched half
+/// moved into the site folder, and under `covers/`
 /// what each build derives from a picture.
 fn cache_dir(moss_dir: &Path) -> std::path::PathBuf {
     MossPaths::from_moss_dir(moss_dir.to_path_buf()).cache_link_meta()
@@ -276,7 +314,7 @@ fn read_cache(moss_dir: &Path, url: &str, evidence: Option<&InputEvidence>) -> O
         link_snapshot::Entry::InCloud => return Some(empty(url)),
         link_snapshot::Entry::Absent => migrate_old_entry(moss_dir, url, evidence)?,
     };
-    let mut meta = LinkMeta { url: fetched.url, title: fetched.title, favicon: fetched.favicon, og_image: fetched.og_image, cover: fetched.cover, ..Default::default() };
+    let mut meta = LinkMeta { url: fetched.url, title: fetched.title, favicon: fetched.favicon, og_image: fetched.og_image, cover: fetched.cover, state: CardState::Fetched, ..Default::default() };
     let derived = meta
         .cover
         .as_deref()
@@ -290,9 +328,8 @@ fn read_cache(moss_dir: &Path, url: &str, evidence: Option<&InputEvidence>) -> O
 
 /// Moves an entry an older moss kept in `build.nosync` into the site folder,
 /// once, and removes the old one only after the move is written. Its picture
-/// comes along when this machine still holds the bytes; otherwise the card has
-/// none until its entry is deleted and fetched again, since fetching here
-/// would let two machines disagree.
+/// comes along when this machine still holds the bytes; otherwise it is
+/// downloaded again, like any picture that did not download.
 fn migrate_old_entry(moss_dir: &Path, url: &str, evidence: Option<&InputEvidence>) -> Option<link_snapshot::Fetched> {
     let (old_path, old) = old_entry(moss_dir, url)?;
     let objects = crate::build::cache::ObjectStore::for_site(&MossPaths::from_moss_dir(moss_dir.to_path_buf()));
@@ -319,10 +356,15 @@ fn old_entry(moss_dir: &Path, url: &str) -> Option<(std::path::PathBuf, OldEntry
     Some((path, old))
 }
 
-/// Whether a link has a card, leaving an older moss's entry where it is: the
-/// build's own read moves it, and its seal records the move.
-fn has_card(moss_dir: &Path, url: &str) -> bool {
-    !matches!(link_snapshot::read(moss_dir, url, None), link_snapshot::Entry::Absent) || old_entry(moss_dir, url).is_some()
+/// Whether a fetch has nothing left to bring for `url`: its entry is in the
+/// folder (or the cloud), and any picture its page names was downloaded. An
+/// older moss's entry counts and stays where it is; the build's read moves it.
+fn is_settled(moss_dir: &Path, url: &str) -> bool {
+    match link_snapshot::read(moss_dir, url, None) {
+        link_snapshot::Entry::Fetched(f) => !f.picture_failed(),
+        link_snapshot::Entry::InCloud => true,
+        link_snapshot::Entry::Absent => old_entry(moss_dir, url).is_some(),
+    }
 }
 
 /// Saves what a fetch brought back into the site folder.
@@ -503,9 +545,12 @@ fn is_unsafe_address(ip: std::net::IpAddr) -> bool {
 /// timeout given). Calling it from the build's render path freezes the
 /// pipeline; it runs only on the worker pool below.
 fn fetch_link_meta_with_timeout(url: &str, moss_dir: &Path, timeout: std::time::Duration) -> LinkMeta {
-    // 1. Check cache
+    // 1. Check cache; a picture that did not download is asked for again.
     if let Some(cached) = read_cache(moss_dir, url, None) {
-        return cached;
+        return match (cached.state, cached.og_image.as_deref(), &cached.cover) {
+            (CardState::Fetched, Some(image), None) => retry_picture(moss_dir, cached.clone(), image, timeout),
+            _ => cached,
+        };
     }
 
     // 2. Refuse an unsafe target rather than fetch it — see `is_unsafe_fetch_target`.
@@ -521,12 +566,11 @@ fn fetch_link_meta_with_timeout(url: &str, moss_dir: &Path, timeout: std::time::
             let (html, read_ok) = read_capped_body(resp.into_reader());
             if read_ok {
                 let mut meta = parse_link_meta(url, &html);
-                // Kept with the page's entry either way, so a picture that
-                // failed to download is not tried again until the entry is
-                // deleted, like the title.
-                meta.cover = meta.og_image.as_deref().and_then(|img| download_og_image(img, moss_dir, timeout));
+                if let Some(image) = meta.og_image.clone() {
+                    apply_download(&mut meta, download_og_image(&image, moss_dir, timeout));
+                }
                 save_fetched(moss_dir, &meta);
-                meta
+                LinkMeta { state: CardState::Fetched, ..meta }
             } else {
                 empty(url)
             }
@@ -558,18 +602,51 @@ const MAX_OG_IMAGE_DIMENSION: u32 = 10_000;
 /// any failure: non-image content type, oversized body, bytes that don't
 /// decode, or a target [`is_unsafe_fetch_target`] refuses — every case
 /// degrades to "no cover", never a build failure.
-fn download_og_image(image_url: &str, moss_dir: &Path, timeout: std::time::Duration) -> Option<String> {
-    if is_unsafe_fetch_target(image_url) {
-        return None;
+/// Why a picture did not download.
+#[derive(Debug, PartialEq, Eq)]
+enum PictureFailed {
+    /// Never will: the address is refused, gone (404, 410) or not a picture
+    /// moss can read.
+    Gone,
+    /// Might next time: a timeout, a connection error, a server error, any
+    /// other refusal, or a page answering in the picture's place.
+    Retry,
+}
+
+/// A stored picture becomes the card's cover; a gone one is forgotten, so the
+/// card is one with no picture.
+fn apply_download(meta: &mut LinkMeta, download: Result<String, PictureFailed>) {
+    match download {
+        Ok(cover) => meta.cover = Some(cover),
+        Err(PictureFailed::Gone) => meta.og_image = None,
+        Err(PictureFailed::Retry) => {}
     }
-    let resp = get_checked(image_url, timeout).ok()?;
-    // Cheap early exit on an explicit non-image Content-Type. Not the
-    // authoritative check — a server can omit or lie about it — but avoids
-    // downloading a body we're going to discard.
+}
+
+/// Downloads a fetched card's picture again, keeping the rest of its entry.
+/// A retry that fails leaves the entry's bytes, and so the file, untouched.
+fn retry_picture(moss_dir: &Path, mut meta: LinkMeta, image: &str, timeout: std::time::Duration) -> LinkMeta {
+    apply_download(&mut meta, download_og_image(image, moss_dir, timeout));
+    save_fetched(moss_dir, &meta);
+    meta
+}
+
+fn download_og_image(image_url: &str, moss_dir: &Path, timeout: std::time::Duration) -> Result<String, PictureFailed> {
+    use PictureFailed::{Gone, Retry};
+    if is_unsafe_fetch_target(image_url) {
+        return Err(Gone);
+    }
+    let resp = get_checked(image_url, timeout).map_err(|e| match e {
+        ureq::Error::Status(404 | 410, _) => Gone,
+        _ => Retry,
+    })?;
+    // An explicit non-image Content-Type is something answering in the
+    // picture's place, a captive portal or an error page, not word that the
+    // picture is gone; its body is not downloaded.
     if let Some(ct) = resp.header("Content-Type") {
         let ct = ct.split(';').next().unwrap_or(ct).trim();
         if !ct.is_empty() && !ct.starts_with("image/") {
-            return None;
+            return Err(Retry);
         }
     }
     let mut buf = Vec::new();
@@ -578,19 +655,19 @@ fn download_og_image(image_url: &str, moss_dir: &Path, timeout: std::time::Durat
         resp.into_reader()
             .take(MAX_OG_IMAGE_DOWNLOAD_BYTES)
             .read_to_end(&mut buf)
-            .ok()?;
+            .map_err(|_| Retry)?;
     }
     // The authoritative check: sniff the magic bytes and require moss's
     // pipeline to actually be able to decode it. `should_skip`'s CMYK/
     // animated/SVG rejections in the real conversion still apply later —
     // this only rules out "not an image at all" and a truncated download
     // (a cap mid-stream will usually fail to decode as a complete image).
-    let format = image::guess_format(&buf).ok()?;
+    let format = image::guess_format(&buf).map_err(|_| Gone)?;
     let ext = match format {
         image::ImageFormat::Jpeg => "jpg",
         image::ImageFormat::Png => "png",
         image::ImageFormat::WebP => "webp",
-        _ => return None,
+        _ => return Err(Gone),
     };
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(MAX_OG_IMAGE_DIMENSION);
@@ -598,8 +675,8 @@ fn download_og_image(image_url: &str, moss_dir: &Path, timeout: std::time::Durat
     let mut reader = image::ImageReader::new(std::io::Cursor::new(&buf));
     reader.set_format(format);
     reader.limits(limits);
-    reader.decode().ok()?;
-    link_snapshot::store_cover(moss_dir, &buf, ext)
+    reader.decode().map_err(|_| Gone)?;
+    link_snapshot::store_cover(moss_dir, &buf, ext).ok_or(Retry)
 }
 
 /// A `LinkMeta` with only its URL, for a URL that could not be fetched.
@@ -632,7 +709,8 @@ const FETCH_BUDGET: std::time::Duration = std::time::Duration::from_secs(60);
 /// caller can say why it is waiting.
 ///
 /// Callers: a build that exits when done, before its render (so the render
-/// reads a warm cache), and the app's background sync.
+/// reads a warm cache), and the background fetch an interactive build asks
+/// for once it returns (`features::sync::fetch_link_meta_in_background`).
 ///
 /// # Visibility
 ///
@@ -675,13 +753,7 @@ fn fetch_all_link_meta_parallel_bounded(
     use std::sync::{mpsc, Arc, Mutex};
     use std::time::Instant;
 
-    // Filter out URLs that are already cached — those need no fetch.
-    let cold: Vec<String> = urls
-        .iter()
-        .filter(|u| !has_card(moss_dir, u))
-        .map(|u| (*u).to_string())
-        .collect();
-
+    let cold = cold_urls(urls, moss_dir);
     if cold.is_empty() {
         return 0;
     }
@@ -749,134 +821,60 @@ fn fetch_all_link_meta_parallel_bounded(
     completed
 }
 
-// ---------------------------------------------------------------------------
-// Render-side API: cache reads + per-build URL recording for prewarm bridge.
-//
-// Design:
-//
-// 1. Render is a pure cache reader — `read_link_meta_from_cache` has NO
-//    side effects, so two pages racing don't lose-update a shared file.
-//
-// 2. URL recording is explicit and per-build — `record_urls_for_prewarm` adds
-//    to an in-memory session set. `start_build_session` clears it; render
-//    populates it; `flush_build_session` writes the set to disk atomically.
-//    This means the persisted list contains exactly THIS build's URLs, not
-//    a union with prior builds' (no unbounded growth, removed URLs vanish).
-//
-// 3. The bridge file lives in `.moss/build.nosync/cache/link-meta/.urls.json`
-//    next to the cache it indexes, so clearing that folder also clears the
-//    bridge and the two can never disagree about "what's available".
-//
-// 4. Render returns `read_cache`: an entry is served until it is deleted.
-// ---------------------------------------------------------------------------
-
-use std::sync::Mutex;
-
-/// In-memory accumulator for URLs encountered during the current build.
-/// Cleared by `start_build_session` at run_pipeline entry; flushed to disk
-/// by `flush_build_session` at run_pipeline exit (or near it).
-///
-/// Keyed by `moss_dir.to_string_lossy()` so multiple folders open in the
-/// same process don't trample each other.
-fn build_session() -> &'static Mutex<HashMap<String, std::collections::BTreeSet<String>>> {
-    use std::sync::OnceLock;
-    static SESSION: OnceLock<Mutex<HashMap<String, std::collections::BTreeSet<String>>>> =
-        OnceLock::new();
-    SESSION.get_or_init(|| Mutex::new(HashMap::new()))
+/// The URLs a fetch can still bring something for: no entry in the folder or
+/// the cloud, or a picture that did not download. Only these are fetched.
+pub(crate) fn cold_urls(urls: &[&str], moss_dir: &Path) -> Vec<String> {
+    urls.iter().filter(|u| !is_settled(moss_dir, u)).map(|u| (*u).to_string()).collect()
 }
 
-fn session_key(moss_dir: &Path) -> String {
-    moss_dir.to_string_lossy().to_string()
+/// The cards of `read` missing their picture that a fetch can bring. One the
+/// cloud holds is not one.
+pub(crate) fn waiting_cards(read: &HashMap<String, LinkMeta>, moss_dir: &Path) -> Vec<String> {
+    let missing: Vec<&str> = read.iter().filter(|(_, m)| m.cover_slot() == CoverSlot::Missing).map(|(u, _)| u.as_str()).collect();
+    cold_urls(&missing, moss_dir)
 }
 
-/// Begin a build session — clear any prior URL accumulator for this folder.
-/// Call once at the top of `run_pipeline` (or before render starts).
-pub fn start_build_session(moss_dir: &Path) {
-    let key = session_key(moss_dir);
-    if let Ok(mut g) = build_session().lock() {
-        g.entry(key).or_default().clear();
-    }
+/// The cards the generation a manifest describes showed with no entry, kept
+/// beside that manifest.
+pub(crate) fn waiting_path(hashes_path: &Path) -> std::path::PathBuf {
+    hashes_path.with_file_name("link-cards-waiting.json")
 }
 
-/// Record URLs encountered during render, to be prewarmed for the next build.
-/// Called by render once per page that has bare-URL grids. Pure in-memory,
-/// no I/O — so concurrent calls are safe (Mutex synchronizes the insert).
-pub fn record_urls_for_prewarm(urls: &[&str], moss_dir: &Path) {
-    let key = session_key(moss_dir);
-    if let Ok(mut g) = build_session().lock() {
-        let entry = g.entry(key).or_default();
-        for u in urls {
-            entry.insert((*u).to_string());
-        }
-    }
+/// What [`settle`] found for the cards the current generation shows waiting.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Settled {
+    /// Now have an entry: the generation is stale, and a rebuild shows them.
+    pub fetched: usize,
+    /// Still have none: they publish URL-only.
+    pub waiting: usize,
 }
 
-/// Flush the current build's URL set to the bridge file (atomic write).
-/// Returns the number of URLs written. Call once at the end of `run_pipeline`,
-/// after all pages have rendered. Best-effort: errors are logged at warn.
-pub fn flush_build_session(moss_dir: &Path) -> usize {
-    let key = session_key(moss_dir);
-    let urls: Vec<String> = match build_session().lock() {
-        Ok(g) => g.get(&key).map(|s| s.iter().cloned().collect()).unwrap_or_default(),
-        Err(_) => return 0,
-    };
-    if urls.is_empty() {
-        // Don't write an empty file — could mask "I'm in a session that hasn't
-        // recorded anything yet" vs "this build genuinely has no URLs". Just
-        // leave whatever is on disk; sync will work from the prior list.
-        return 0;
+/// Bring the link cards of the current generation up to date, synchronously:
+/// fetch the ones it showed with no entry, with the full budget, including any
+/// a background fetch already gave up on. When `fetched` is not zero the
+/// generation is stale: a publish rebuilds it, and a build does not end at its
+/// entry. `None` when the list is absent or unreadable, so which cards are
+/// waiting is not known.
+pub fn settle(mp: &MossPaths) -> Option<Settled> {
+    let listed: Vec<String> = serde_json::from_slice(&std::fs::read(waiting_path(&mp.hashes())).ok()?).ok()?;
+    if listed.is_empty() {
+        return Some(Settled::default());
     }
-    write_url_list_atomic(moss_dir, &urls);
-    urls.len()
-}
-
-/// Path to the persisted URL list (bridge between render-side recording and
-/// sync-side prewarming). Lives under `.moss/build.nosync/cache/link-meta/`,
-/// so wiping the cache clears the bridge too.
-pub(crate) fn url_list_path(moss_dir: &Path) -> std::path::PathBuf {
-    cache_dir(moss_dir).join(".urls.json")
-}
-
-/// Atomic write: serialize to a tempfile in the same directory, then rename.
-/// `rename` within the same filesystem is atomic on POSIX, so a crash mid-
-/// write can't leave a half-written JSON for sync to choke on.
-fn write_url_list_atomic(moss_dir: &Path, urls: &[String]) {
-    let path = url_list_path(moss_dir);
-    let parent = match path.parent() {
-        Some(p) => p,
-        None => return,
-    };
-    if let Err(e) = crate::build::io_utils::create_output_dir_all(parent) {
-        log::info!(target: "link-meta", "could not create {:?}: {}", parent, e);
-        return;
-    }
-    let json = match serde_json::to_string_pretty(urls) {
-        Ok(s) => s,
-        Err(e) => {
-            log::info!(target: "link-meta", "serialize url list failed: {}", e);
-            return;
-        }
-    };
-    // Tempfile name colocated with target so rename stays on the same FS.
-    let tmp = parent.join(format!(".urls.json.tmp.{}", std::process::id()));
-    if let Err(e) = std::fs::write(&tmp, &json) {  // allow:raw_write the temp for this cache's own atomic save, not the output tree
-        log::info!(target: "link-meta", "write tempfile failed: {}", e);
-        return;
-    }
-    // allow:unlink the link-meta URL list under .moss, not staging
-    if let Err(e) = std::fs::rename(&tmp, &path) {
-        log::info!(target: "link-meta", "rename tempfile failed: {}", e);
-        // allow:unlink the link-meta URL list under .moss, not staging
-        let _ = std::fs::remove_file(&tmp);
-    }
+    let moss_dir = mp.root();
+    let refs: Vec<&str> = listed.iter().map(String::as_str).collect();
+    // A slow site can hold this up to the full budget; say why.
+    fetch_all_link_meta_parallel(&refs, moss_dir, |cold| crate::build::cli_output::eprint_status_line(format_args!("Fetching {cold} link previews…")));
+    let fetched = refs.iter().filter(|u| is_settled(moss_dir, u)).count();
+    log::info!(target: "link-meta", "{fetched} of {} waiting link cards fetched", listed.len());
+    Some(Settled { fetched, waiting: listed.len() - fetched })
 }
 
 /// Read the cached metadata for a set of URLs. Pure cache reader, no I/O
 /// other than disk reads of the existing cache files; never makes HTTP calls.
 ///
 /// For URLs not in the cache, returns an empty `LinkMeta` (URL only, no title)
-/// so render can still produce a card with the URL displayed; the next build's
-/// sync prewarm populates the cache so the build after that renders fully.
+/// so render can still produce a card with the URL displayed; the build asks
+/// for them in the background, and the build after the fetch lands renders fully.
 /// An entry is served however old it is, until it is deleted.
 /// A card or picture the cloud still holds is marked pending in `evidence`.
 pub fn read_link_meta_from_cache(urls: &[&str], moss_dir: &Path, evidence: Option<&InputEvidence>) -> HashMap<String, LinkMeta> {
@@ -894,9 +892,7 @@ pub fn read_link_meta_from_cache(urls: &[&str], moss_dir: &Path, evidence: Optio
         }
     }
     if missing > 0 {
-        // User-visible signal — without this, "link previews look broken on
-        // first build" has no breadcrumb. Once the background sync runs, the
-        // next build will render with full metadata.
+        // Without this, "link previews look broken on first build" has no breadcrumb.
         log::info!(
             target: "link-meta",
             "{} URL(s) not yet in cache (a later build shows them once they are fetched)",
@@ -904,16 +900,6 @@ pub fn read_link_meta_from_cache(urls: &[&str], moss_dir: &Path, evidence: Optio
         );
     }
     map
-}
-
-/// Load the URL list previously written by `flush_build_session`.
-/// Used by the background sync to know which URLs to pre-warm.
-pub fn load_persisted_url_list(moss_dir: &Path) -> Vec<String> {
-    let path = url_list_path(moss_dir);
-    std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
-        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -1030,14 +1016,7 @@ mod tests {
         let meta = LinkMeta {
             url: "https://example.com".to_string(),
             title: Some("Test Title".to_string()),
-            favicon: None,
-            og_image: None,
-            cover: None,
-            cover_served_path: None,
-            cover_width: None,
-            cover_height: None,
-            cover_lqip: None,
-            cover_color: None,
+            ..Default::default()
         };
 
         save_fetched(&tmp, &meta);
@@ -1049,8 +1028,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// Use a unique tempdir per test so concurrent test runs (and the global
-    /// `build_session()` Mutex) don't trample each other.
+    /// Use a unique tempdir per test so concurrent test runs don't trample each other.
     fn unique_tmp(label: &str) -> std::path::PathBuf {
         let p = std::env::temp_dir().join(format!(
             "moss_link_meta_{}_{}_{}",
@@ -1075,14 +1053,7 @@ mod tests {
         let cached = LinkMeta {
             url: "https://cached.example".to_string(),
             title: Some("Cached".to_string()),
-            favicon: None,
-            og_image: None,
-            cover: None,
-            cover_served_path: None,
-            cover_width: None,
-            cover_height: None,
-            cover_lqip: None,
-            cover_color: None,
+            ..Default::default()
         };
         save_fetched(&tmp, &cached);
 
@@ -1099,101 +1070,64 @@ mod tests {
             "uncached URL gets empty meta (URL-only card, not a hang or panic)"
         );
 
-        // The bridge file must NOT exist — render-side reads have no side effect.
-        assert!(
-            !url_list_path(&tmp).exists(),
-            "read_link_meta_from_cache must not write the bridge file"
-        );
-
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
-    fn build_session_truncates_then_accumulates_then_flushes() {
-        let tmp = unique_tmp("session");
-
-        // Stale URL from a prior build still on disk — should be replaced, not merged.
-        let stale_path = url_list_path(&tmp);
-        std::fs::create_dir_all(stale_path.parent().unwrap()).unwrap();
-        std::fs::write(&stale_path, r#"["https://removed-from-content.example"]"#).unwrap();
-
-        start_build_session(&tmp);
-        record_urls_for_prewarm(&["https://page1.example", "https://shared.example"], &tmp);
-        record_urls_for_prewarm(&["https://page2.example", "https://shared.example"], &tmp);
-        let n = flush_build_session(&tmp);
-        assert_eq!(n, 3, "deduped: page1 + page2 + shared (the stale URL must be gone)");
-
-        let loaded = load_persisted_url_list(&tmp);
-        let loaded_set: std::collections::HashSet<_> = loaded.iter().map(|s| s.as_str()).collect();
-        assert!(loaded_set.contains("https://page1.example"));
-        assert!(loaded_set.contains("https://page2.example"));
-        assert!(loaded_set.contains("https://shared.example"));
-        assert!(
-            !loaded_set.contains("https://removed-from-content.example"),
-            "removed URLs MUST NOT persist (no unbounded growth)"
-        );
-        assert_eq!(loaded.len(), 3);
-
+    fn a_card_with_no_entry_is_waiting_and_a_fetched_one_without_a_picture_is_not() {
+        let tmp = unique_tmp("state");
+        save_fetched(&tmp, &LinkMeta { url: "https://no-picture.example".into(), title: Some("No picture".into()), ..Default::default() });
+        let cards = read_link_meta_from_cache(&["https://no-picture.example", "https://not-fetched.example"], &tmp, None);
+        assert_eq!((cards["https://no-picture.example"].state, cards["https://no-picture.example"].cover.as_deref()), (CardState::Fetched, None));
+        assert_eq!(cards["https://not-fetched.example"].state, CardState::NotYet);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    #[test]
-    fn flush_with_no_urls_keeps_prior_list_intact() {
-        let tmp = unique_tmp("emptyflush");
-
-        // Establish a prior list.
-        start_build_session(&tmp);
-        record_urls_for_prewarm(&["https://stable.example"], &tmp);
-        flush_build_session(&tmp);
-
-        // Now a build with zero URLs (e.g. user removed all link previews).
-        // We deliberately leave the prior list intact rather than
-        // overwriting with empty — sync still has something to prewarm,
-        // and the next build that DOES record URLs replaces cleanly.
-        start_build_session(&tmp);
-        let n = flush_build_session(&tmp);
-        assert_eq!(n, 0);
-
-        let loaded = load_persisted_url_list(&tmp);
-        assert_eq!(loaded, vec!["https://stable.example"]);
-
-        let _ = std::fs::remove_dir_all(&tmp);
+    /// A card whose fetched page names a picture that did not download.
+    fn seed_failed_picture(tmp: &Path, url: &str, image: &str) {
+        save_fetched(tmp, &LinkMeta { url: url.into(), title: Some("Kept title".into()), og_image: Some(image.into()), ..Default::default() });
     }
 
-    #[test]
-    fn malformed_bridge_file_is_treated_as_empty() {
-        let tmp = unique_tmp("malformed");
-        let path = url_list_path(&tmp);
+    /// The generation showed `url` waiting, so a publish settles it.
+    fn list_waiting(tmp: &Path, url: &str) -> MossPaths {
+        let mp = MossPaths::from_moss_dir(tmp.to_path_buf());
+        let path = waiting_path(&mp.hashes());
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, "not a valid json [{ url:").unwrap();
+        std::fs::write(path, serde_json::to_vec(&[url]).unwrap()).unwrap();
+        mp
+    }
 
-        let loaded = load_persisted_url_list(&tmp);
-        assert_eq!(loaded, Vec::<String>::new(), "malformed JSON yields empty, never panics");
-
+    #[test]
+    fn a_gone_picture_closes_the_card_up_after_one_retry() {
+        let tmp = unique_tmp("gone_picture");
+        let url = "https://gone-picture.example/";
+        let (base, server) = spawn_404_server();
+        seed_failed_picture(&tmp, url, &format!("{base}/cover.png"));
+        assert!(!is_settled(&tmp, url), "a picture that did not download is waiting");
+        let settled = settle(&list_waiting(&tmp, url));
+        assert_eq!(settled, Some(Settled { fetched: 1, waiting: 0 }), "the card changed, so the publish rebuilds");
+        let _ = server.join();
+        let card = read_cache(&tmp, url, None).unwrap();
+        assert_eq!((card.og_image.as_deref(), card.title.as_deref()), (None, Some("Kept title")));
+        assert_eq!(card.cover_slot(), CoverSlot::None);
+        // The 404 server answered once; a second retry would fail to connect and leave it waiting.
+        assert!(is_settled(&tmp, url));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
-    fn special_chars_in_urls_round_trip_through_bridge_file() {
-        let tmp = unique_tmp("special");
-        start_build_session(&tmp);
-        record_urls_for_prewarm(
-            &[
-                "https://example.com/path?q=hello%20world&x=\"quoted\"",
-                "https://example.com/path/with/中文/字符",
-                "https://example.com/path/with\\backslash",
-            ],
-            &tmp,
-        );
-        flush_build_session(&tmp);
-
-        let loaded = load_persisted_url_list(&tmp);
-        assert_eq!(loaded.len(), 3);
-        let set: std::collections::HashSet<_> = loaded.iter().map(|s| s.as_str()).collect();
-        assert!(set.contains("https://example.com/path?q=hello%20world&x=\"quoted\""));
-        assert!(set.contains("https://example.com/path/with/中文/字符"));
-        assert!(set.contains("https://example.com/path/with\\backslash"));
-
+    fn a_picture_that_cannot_be_reached_leaves_its_entry_as_it_was() {
+        let tmp = unique_tmp("unreachable_picture");
+        let url = "https://unreachable-picture.example/";
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
+        seed_failed_picture(&tmp, url, &format!("http://{closed}/cover.png"));
+        let card_path = link_snapshot::card_path(&tmp, url);
+        let before = (std::fs::read(&card_path).unwrap(), std::fs::metadata(&card_path).unwrap().modified().unwrap());
+        let settled = settle(&list_waiting(&tmp, url));
+        assert_eq!(settled, Some(Settled { fetched: 0, waiting: 1 }), "nothing changed, so no rebuild");
+        let after = (std::fs::read(&card_path).unwrap(), std::fs::metadata(&card_path).unwrap().modified().unwrap());
+        assert_eq!(after, before, "the entry is not written, so no watch event rebuilds the page");
+        assert!(!is_settled(&tmp, url), "it is asked for again next time");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -1393,20 +1327,13 @@ mod tests {
         assert!(!is_safe_favicon_url("blob:https://example.org/abc"));
     }
 
-    /// Helper: write a fresh (today-stamped) cache entry for a URL so
-    /// prewarm sees it as already cached.
+    /// Helper: write a fresh (today-stamped) cache entry for a URL so a
+    /// fetch sees it as already there.
     fn seed_fresh_cache(moss_dir: &Path, url: &str, title: &str) {
         let meta = LinkMeta {
             url: url.to_string(),
             title: Some(title.to_string()),
-            favicon: None,
-            og_image: None,
-            cover: None,
-            cover_served_path: None,
-            cover_width: None,
-            cover_height: None,
-            cover_lqip: None,
-            cover_color: None,
+            ..Default::default()
         };
         save_fetched(moss_dir, &meta);
     }
@@ -1953,7 +1880,7 @@ mod tests {
         let (base, server) = spawn_byte_server(png.clone(), Some("image/png"));
         let tmp = fresh_tmp("download_og_image_ok");
         let result = download_og_image(&format!("{base}/cover.png"), &tmp, std::time::Duration::from_secs(5));
-        let cover = result.expect("a real PNG must download and decode");
+        let Ok(cover) = result else { panic!("a real PNG must download and decode: {result:?}") };
         assert!(cover.ends_with(".png"), "{cover}");
         let stored = link_snapshot::cover_path(&tmp, &cover);
         assert_eq!(std::fs::read(stored).unwrap(), png, "stored in the site folder, identical to the download");
@@ -1962,11 +1889,11 @@ mod tests {
     }
 
     #[test]
-    fn download_og_image_rejects_a_non_image_content_type() {
-        let (base, server) = spawn_byte_server(b"<html>not a real image</html>".to_vec(), Some("text/html"));
+    fn a_page_answering_for_the_picture_is_tried_again() {
+        let (base, server) = spawn_byte_server(b"<html>Sign in to the Wi-Fi</html>".to_vec(), Some("text/html"));
         let tmp = fresh_tmp("download_og_image_wrong_ct");
-        let result = download_og_image(&format!("{base}/page.html"), &tmp, std::time::Duration::from_secs(5));
-        assert!(result.is_none(), "an explicit non-image Content-Type must short-circuit before decoding");
+        let result = download_og_image(&format!("{base}/cover.png"), &tmp, std::time::Duration::from_secs(5));
+        assert_eq!(result, Err(PictureFailed::Retry), "a captive portal must not make a card forget its picture");
         let _ = server.join();
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1978,7 +1905,7 @@ mod tests {
         let (base, server) = spawn_byte_server(b"this is not image data at all".to_vec(), Some("image/jpeg"));
         let tmp = fresh_tmp("download_og_image_fake_ct");
         let result = download_og_image(&format!("{base}/fake.jpg"), &tmp, std::time::Duration::from_secs(5));
-        assert!(result.is_none(), "a lying Content-Type must not bypass the decode check");
+        assert_eq!(result, Err(PictureFailed::Gone), "a lying Content-Type must not bypass the decode check");
         let _ = server.join();
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1988,7 +1915,7 @@ mod tests {
         let (base, server) = spawn_404_server();
         let tmp = fresh_tmp("download_og_image_404");
         let result = download_og_image(&format!("{base}/missing.png"), &tmp, std::time::Duration::from_secs(5));
-        assert!(result.is_none());
+        assert_eq!(result, Err(PictureFailed::Gone), "a 404 picture is gone");
         let _ = server.join();
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -2118,7 +2045,7 @@ mod tests {
             std::time::Duration::from_secs(5),
         );
         let elapsed = start.elapsed();
-        assert!(result.is_none(), "an unsafe target must never be downloaded");
+        assert_eq!(result, Err(PictureFailed::Gone), "an unsafe target must never be downloaded");
         assert!(
             elapsed < std::time::Duration::from_millis(200),
             "must reject before attempting any connection, not after timing one out: {elapsed:?}"
@@ -2156,7 +2083,7 @@ mod tests {
         let (base, server) = spawn_byte_server(bomb, Some("image/png"));
         let tmp = fresh_tmp("og_image_over_cap");
         let result = download_og_image(&format!("{base}/wide.png"), &tmp, std::time::Duration::from_secs(5));
-        assert!(result.is_none(), "a canvas over MAX_OG_IMAGE_DIMENSION must be rejected");
+        assert_eq!(result, Err(PictureFailed::Gone), "a canvas over MAX_OG_IMAGE_DIMENSION must be rejected");
         let _ = server.join();
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -2167,7 +2094,7 @@ mod tests {
         let (base, server) = spawn_byte_server(tiny_png_bytes(), Some("image/png"));
         let tmp = fresh_tmp("og_image_normal");
         let result = download_og_image(&format!("{base}/cover.png"), &tmp, std::time::Duration::from_secs(5));
-        assert!(result.is_some(), "an ordinary small image must still download");
+        assert!(result.is_ok(), "an ordinary small image must still download");
         let _ = server.join();
         let _ = std::fs::remove_dir_all(&tmp);
     }

@@ -188,6 +188,21 @@ pub fn download_snapshot() -> crate::build::cloud_prefetch::Snapshot {
     PREFETCH.snapshot()
 }
 
+/// Judge whether the provider is sending `folder`'s files while the guard lives.
+pub(crate) fn watch_downloads(folder: &Path) -> crate::build::cloud_prefetch::Watch {
+    PREFETCH.watch(folder)
+}
+
+#[cfg(test)]
+pub(crate) fn downloads_watched(folder: &Path) -> bool {
+    PREFETCH.watched(folder)
+}
+
+/// The provider is not sending a watched folder's files: see [`crate::build::cloud_prefetch::Prefetcher::stuck_for`].
+pub(crate) fn downloads_stuck_for(folder: &Path) -> bool {
+    PREFETCH.stuck_for(folder)
+}
+
 /// The reader pool's read tally now, for [`record_download_pool`] to subtract.
 pub(crate) fn download_reads() -> crate::build::cloud_prefetch::ReadTally {
     download_snapshot().reads
@@ -199,7 +214,7 @@ pub(crate) fn download_reads() -> crate::build::cloud_prefetch::ReadTally {
 pub(crate) fn record_download_pool(before: crate::build::cloud_prefetch::ReadTally) {
     let pool = download_snapshot();
     let reads = pool.reads.since(before);
-    if reads == Default::default() && pool.waiting == 0 && pool.in_flight == 0 {
+    if reads == Default::default() && pool.waiting == 0 && pool.in_flight == 0 && pool.parked == 0 {
         return;
     }
     use crate::build::phase::record_value as put;
@@ -209,6 +224,7 @@ pub(crate) fn record_download_pool(before: crate::build::cloud_prefetch::ReadTal
     put("cloud_reads_fetched", reads.fetched as usize);
     put("cloud_reads_still_in_cloud", reads.still_in_cloud as usize);
     put("cloud_reads_failed", reads.failed as usize);
+    put("cloud_parked", pool.parked);
     put("cloud_read_ms", reads.millis as usize);
 }
 
@@ -718,12 +734,7 @@ pub fn raise_gate_for_a_deferred_build(
     // without a home page", but severity is not the question the gate asks.
     // What the user gets instead is the last good site plus the download
     // counter in the titlebar, which is the honest partial state.
-    let has_a_servable_generation = crate::infra::moss_paths::MossPaths::new(
-        std::path::Path::new(folder_path),
-    )
-    .current_ptr()
-    .exists();
-    if has_a_servable_generation {
+    if crate::infra::moss_paths::MossPaths::new(std::path::Path::new(folder_path)).has_servable_generation() {
         log::info!(
             "cloud-sync: build STOPPED on a file still in the cloud, but a previous \
              generation is servable — not raising the waiting screen over it: {message}"

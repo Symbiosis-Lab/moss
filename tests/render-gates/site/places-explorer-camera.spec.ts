@@ -135,6 +135,9 @@ for (const [label, size] of [
   test(`cover leaves no empty band at ${label}`, async ({ page }) => {
     await page.setViewportSize(size);
     await gotoReady(page);
+    // "ready" means mounted; the world raster is baked after it, and until it lands the edges show the bare water fill this test reads as a gap.
+    await expect(page.locator(".moss-places-world-surface")).toHaveCount(1, { timeout: 20000 });
+    await untilRendering(page);
     const viewportBox = (await page.locator(".moss-places-viewport").boundingBox())!;
     const worldBox = (await page.locator(".moss-places-world").boundingBox())!;
     // The world layer's own box must cover the viewport's box on every
@@ -443,6 +446,8 @@ async function loadAndFindAdjacentTilePairs(
       return surface instanceof HTMLCanvasElement || surface instanceof SVGElement ? [] : [`${tile.dataset.mossPlacesTile ?? "unknown"}:not-ready`];
     });
   }), { timeout: 15000 }).toEqual([]);
+  // A canvas in place can still carry a faded edge toward a neighbour that is loading, or await its re-bake.
+  await tilesIdle(page);
 
   const tileEls = page.locator(".moss-places-tiles > .moss-places-tile");
   const count = await tileEls.count();

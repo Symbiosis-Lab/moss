@@ -13,20 +13,26 @@ thread_local! {
 }
 
 pub(crate) fn set_background(background: bool) {
-    LOWERED_FROM.with(|saved| match (background, saved.get()) {
-        (true, None) => {
-            let (class, priority) = current();
+    set_class(background.then_some(qos_class_t::QOS_CLASS_BACKGROUND));
+}
+
+/// Run the calling thread at `class`, or, with `None`, at the class it had
+/// before the first call that set one.
+pub(crate) fn set_class(class: Option<qos_class_t>) {
+    LOWERED_FROM.with(|saved| match (class, saved.get()) {
+        (Some(class), earlier) => {
+            let earlier = earlier.unwrap_or_else(current);
             // SAFETY: changes only the calling thread's own QoS.
-            if unsafe { libc::pthread_set_qos_class_self_np(qos_class_t::QOS_CLASS_BACKGROUND, 0) } == 0 {
-                saved.set(Some((class, priority)));
+            if unsafe { libc::pthread_set_qos_class_self_np(class, 0) } == 0 {
+                saved.set(Some(earlier));
             }
         }
-        (false, Some((class, priority))) => {
+        (None, Some((class, priority))) => {
             // SAFETY: as above.
             unsafe { libc::pthread_set_qos_class_self_np(class, priority) };
             saved.set(None);
         }
-        _ => {}
+        (None, None) => {}
     });
 }
 

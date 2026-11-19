@@ -1116,6 +1116,12 @@ pub fn process_markdown_file(
     // fallback, so no empty hero box is left behind.
     let hero_drawn_from = hero_extraction.as_ref().and_then(|h| h.drawn_from.clone());
     let hero_html = hero_extraction.as_ref().map(|h| h.html.clone()).filter(|_| !hero_drawn_from.as_ref().is_some_and(|d| !d.shortcode.has_own_content()));
+    // The block that opens the page, a hero or else a `screen` band, may take the site header over it.
+    let band_over = super::hero_ink::mark_opening_band(&mut doc, hero_extraction.is_none() && !fills_footer, media_lookup);
+    let header_over = match &hero_extraction {
+        Some(h) => super::typed_renderers::hero_header_over(&h.shortcode, media_lookup).filter(|_| hero_html.is_some()),
+        None => band_over,
+    };
 
     // 4. Capture the first body image for the cover chain.
     //    LOCKED ORDER: must run AFTER `extract_hero` (constraint 3). The
@@ -1149,8 +1155,10 @@ pub fn process_markdown_file(
     // is a prompt to describe the image, not a defect in the build, so it goes
     // to the closing line's notes: `log_warn_problem!` would make `--strict` fail every
     // existing site that has a decorative or not-yet-described image.
+    // The suggestion ends the bracket text with `|`: a lone image's bracket
+    // text alone becomes a visible caption with `alt=""`, not alt text.
     for href in moss_core::ast::images_without_text(&doc) {
-        crate::build::cli_output::log_note!("Accessibility: image '{href}' on '{file_path}' has no alt text — write it in the brackets: ![describe the image]({href})");
+        crate::build::cli_output::log_note!("Accessibility: image '{href}' on '{file_path}' has no alt text — write it in the brackets: ![describe the image|]({href})");
     }
     if moss_core::ast::has_raw_style_block(&doc) {
         crate::build::cli_output::log_note!("Style: '{file_path}' has a <style> block, which overrides the theme (its rules sit outside the theme's cascade layers); move the rules into .moss/theme/style.css");
@@ -1600,6 +1608,7 @@ pub fn process_markdown_file(
         logo: frontmatter.logo,
         cover,
         card_cover,
+        cover_opted_out,
         term_card: None,
         cover_type: frontmatter.cover_type,
         nav,
@@ -1678,6 +1687,7 @@ pub fn process_markdown_file(
         translation_key: frontmatter.translation_key,
         translations: vec![],
         hero_html,
+        header_over,
         hero_from,
         body_claims_eager,
         lists_folders,
@@ -2231,7 +2241,7 @@ impl<'a> PipelineHooks<'a> {
             None => moss_core::ast::DefaultHooks::new(),
         }
         .vertical(self.vertical)
-        .with_gallery_link_template(crate::i18n::t(self.lang, "gallery_open_image"))
+        .with_strings(crate::i18n::hook_strings(self.lang))
     }
 
 }
@@ -2247,8 +2257,8 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
         self.permalink_section_label
     }
 
-    fn gallery_link_template(&self) -> &str {
-        crate::i18n::t(self.lang, "gallery_open_image")
+    fn strings(&self) -> moss_core::ast::HookStrings<'_> {
+        crate::i18n::hook_strings(self.lang)
     }
 
     fn heading_anchors(&self, level: u8) -> moss_core::ast::HeadingAnchors {
@@ -2273,6 +2283,7 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
         let subscribe = |a: &moss_core::ast::SubscribeShortcode| self.render_subscribe_form(a);
         let form = |f: &moss_core::ast::FormShortcode| self.render_request_form(f);
         let hooks = moss_core::ast::DefaultHooks::card_titles(self.assets, self.heading_anchors.then_some(self.permalink_section_label))
+            .with_strings(crate::i18n::hook_strings(self.lang))
             .with_subscribe_form(moss_core::ast::SubscribeFormFn(&subscribe))
             .with_request_form(moss_core::ast::RequestFormFn(&form));
         moss_core::ast::render_grid_parts(&hooks, args, source_line)
@@ -2379,10 +2390,9 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
                 out.push_str(&self.render_grid_parts(args, source_line).to_html());
             }
             moss_core::ast::Shortcode::Buttons(_) | moss_core::ast::Shortcode::Gallery(_) => {
-                // Delegate to DefaultHooks. For Buttons, this is a pure
-                // byte-for-byte handoff. For Gallery, with a snapshot in
-                // scope the synth path emits
-                // the canonical `<picture><source srcset=*.webp>` shape with
+                // DefaultHooks carrying the page's words and, for Gallery,
+                // the asset snapshot: with one the synth path emits the
+                // `<picture><source srcset=*.webp>` shape with
                 // dims/LQIP/loading="lazy"; without one, the bare-`<img>`
                 // shape.
                 let inner = self.asset_bound_hooks();

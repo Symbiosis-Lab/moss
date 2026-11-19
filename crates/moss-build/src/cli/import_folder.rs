@@ -105,7 +105,7 @@ pub fn dispatch(args: &[String]) -> Option<i32> {
             return Some(1);
         }
     };
-        crate::plugins::install::registry_client::enforce::install_headless(args.iter().any(|a| a == ALLOW_PLUGINS));
+        crate::plugins::install::registry_client::enforce::install_headless(crate::infra::app_data::app_data_dir_early().as_deref(), args.iter().any(|a| a == ALLOW_PLUGINS));
     let result = match form {
         Form::Status { site, json } => status(site.as_deref(), json),
         Form::Folder { folder, with, recursive: false } => show_folder(&folder, with.as_deref()),

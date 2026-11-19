@@ -82,6 +82,7 @@ struct Harness {
     globals_salt: bool,
     render_id: Option<String>,
     sealed_render_id: Option<String>,
+    staged_render_id: Option<String>,
     build_day: chrono::NaiveDate,
 }
 
@@ -101,6 +102,7 @@ impl Harness {
             build_day: chrono::NaiveDate::from_ymd_opt(2026, 3, 14).unwrap(),
             render_id: None,
             sealed_render_id: None,
+            staged_render_id: None,
         }
     }
 
@@ -125,6 +127,9 @@ impl Harness {
                 build_day: self.build_day,
                 render_id: self.render_id.as_deref(),
                 sealed_render_id: self.sealed_render_id.as_deref(),
+                staged_render_id: self.staged_render_id.as_deref(),
+                graph: None,
+                site_assets: &crate::build::types::SiteAssets::of(documents, None, Default::default()),
             },
         )
     }
@@ -269,7 +274,7 @@ fn generated_page_becoming_authored_forces_a_structural_full_render() {
     };
     assert_full(&h.run(&[generated]), FullCause::ColdCache);
     let verdict = h.run(&[authored]);
-    assert_full(&verdict, FullCause::PathSetMoved);
+    assert_full(&verdict, FullCause::FolderPageMoved);
     match verdict.basis() {
         VerdictBasis::Full(_, Some(witness)) => {
             assert!(witness.contains("writings/index.html"), "{witness:?}");
@@ -329,10 +334,22 @@ fn a_page_rendered_since_the_sealed_manifest_is_not_carried() {
         VerdictBasis::Incremental { changed, by_unsealed, .. } => assert_eq!((*changed, *by_unsealed), (0, 1)),
         other => panic!("expected an incremental verdict, got {other:?}"),
     }
+    assert!(!b.rereads_document(&edited[2]), "a page rendered again is not re-read");
+
+    // B again, now that A's slot pass has ended: the stage holds A's final bytes.
+    h.staged_render_id = Some("b".into());
+    h.render_id = Some("b2".into());
+    let b2 = h.run(&edited);
+    assert!(b2.may_skip("writings/alpha/index.md") && b2.rereads_document(&edited[2]), "B's page is re-read from the stage");
+    assert!(b2.may_skip("writings/beta/index.md") && !b2.rereads_document(&edited[3]), "a sealed page is carried as sealed");
+    match b2.basis() {
+        VerdictBasis::Incremental { by_unsealed, .. } => assert_eq!(*by_unsealed, 0),
+        other => panic!("expected an incremental verdict, got {other:?}"),
+    }
 
     // B's generation ships: its manifest describes the stage again.
     h.render_id = Some("c".into());
-    h.sealed_render_id = Some("b".into());
+    h.sealed_render_id = Some("b2".into());
     let c = h.run(&edited);
     for d in &edited {
         let src = d.source_path.as_deref().unwrap();
@@ -366,6 +383,27 @@ fn a_lede_edit_on_an_undescribed_child_re_renders_its_listing_host() {
 
 // ---- the named escape hatches -------------------------------------------
 
+/// An article entering renders itself and the listing it joins, and carries
+/// the rest; one leaving renders the listing it left.
+#[test]
+fn an_article_entering_or_leaving_renders_only_what_lists_it() {
+    let h = Harness::new();
+    h.run(&vault());
+    let mut grown = vault();
+    let gamma = doc("writings/gamma/index.html", PageKind::Article, "Gamma lede.", Some("G"));
+    grown.push(ParsedDocument { source_path: Some("writings/gamma.md".into()), ..gamma });
+    let verdict = h.run(&grown);
+    assert!(matches!(verdict.basis(), VerdictBasis::Incremental { .. }), "{:?}", verdict.basis());
+    assert!(!verdict.may_skip("writings/gamma.md"), "the new page renders");
+    assert!(!verdict.may_skip("writings/index.md"), "the listing it joins renders");
+    assert!(verdict.may_skip("writings/alpha/index.md"));
+
+    let verdict = h.run(&vault());
+    assert!(matches!(verdict.basis(), VerdictBasis::Incremental { .. }), "{:?}", verdict.basis());
+    assert!(!verdict.may_skip("writings/index.md"), "the listing it left renders");
+    assert!(verdict.may_skip("writings/beta/index.md"));
+}
+
 #[test]
 fn each_full_render_says_why() {
     // SkipDisabled — the total off switch.
@@ -374,12 +412,12 @@ fn each_full_render_says_why() {
     h.skip = false;
     assert_full(&h.run(&vault()), FullCause::SkipDisabled);
 
-    // PathSetMoved — a page appeared.
+    // FolderPageMoved — a folder's page appeared.
     let h = Harness::new();
     h.run(&vault());
     let mut grown = vault();
-    grown.push(doc("writings/gamma/index.html", PageKind::Article, "g", Some("G")));
-    assert_full(&h.run(&grown), FullCause::PathSetMoved);
+    grown.push(doc("notes/index.html", PageKind::Folder, "n", Some("N")));
+    assert_full(&h.run(&grown), FullCause::FolderPageMoved);
 
     // SurfaceChanged — a cross-page-visible field moved by an UNCLASSIFIED
     // field (`children_source`, which `field_is_classified` does not name).
@@ -592,7 +630,7 @@ fn a_page_absent_from_the_corpus_is_never_skippable() {
 #[test]
 fn the_group_set_is_keyed_by_shape_not_by_host() {
     let docs = vault();
-    let groups = listing::ListingGroups::build(&docs, &project(), false);
+    let groups = listing::ListingGroups::build(&docs, &project(), false, &[]);
     assert!(groups
         .digest(&GroupKey {
             folder_slug: "writings".into(),
@@ -724,6 +762,54 @@ fn a_classified_label_edit_narrows_to_its_listing_host() {
     assert!(!verdict.may_skip("writings/alpha/index.md"));
     assert!(!verdict.may_skip("writings/index.md"), "the listing host must see the moved child projection");
     assert!(verdict.may_skip("writings/beta/index.md"), "an unrelated sibling must not be swept in");
+}
+
+/// A listed child's cover narrows to the child and its listing host. The
+/// edit also lands in `raw_frontmatter`, which must not read as an
+/// unclassified move beside it.
+#[test]
+fn a_childs_cover_edit_narrows_to_its_listing_host() {
+    let h = Harness::new();
+    let docs = vault();
+    h.run(&docs);
+
+    let mut edited = docs.clone();
+    let idx = edited.iter().position(|d| d.url_path == "writings/alpha/index.html").unwrap();
+    edited[idx].cover = Some("field.jpg".into());
+    edited[idx].raw_frontmatter.insert("cover".into(), serde_json::json!("field.jpg"));
+    let verdict = h.run(&edited);
+    assert_incremental(&verdict);
+    assert!(!verdict.may_skip("writings/alpha/index.md"));
+    assert!(!verdict.may_skip("writings/index.md"), "the listing card shows the cover");
+    assert!(verdict.may_skip("writings/beta/index.md"));
+}
+
+/// No reader list exists yet for a home page's cover, so it still renders the site.
+#[test]
+fn a_home_pages_cover_edit_still_forces_full() {
+    let h = Harness::new();
+    let docs = vault();
+    h.run(&docs);
+
+    let mut edited = docs.clone();
+    edited[0].cover = Some("field.jpg".into());
+    assert_full(&h.run(&edited), FullCause::SurfaceChanged);
+}
+
+/// A term card's count or picture moving renders the page that draws it and
+/// the listings of that page, not the site.
+#[test]
+fn a_term_card_move_narrows_to_its_page_and_its_listing_host() {
+    let h = Harness::new();
+    let docs = vault();
+    h.run(&docs);
+
+    let mut edited = docs.clone();
+    edited[1].term_card = Some(crate::build::types::TermCard { count: 2, ..Default::default() });
+    let verdict = h.run(&edited);
+    assert_incremental(&verdict);
+    assert!(!verdict.may_skip("writings/index.md"));
+    assert!(verdict.may_skip("writings/beta/index.md"));
 }
 
 /// `lang` is blanked out of the surface entirely (`facade::surface_debug`),

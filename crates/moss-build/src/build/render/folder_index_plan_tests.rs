@@ -43,7 +43,7 @@ fn generated_tree_and_output_agree_for_nested_empty_assets_terms_and_mapped_fold
     fs::create_dir_all(root.path().join("Authored/Empty")).unwrap();
     let (output, documents) = build(root.path());
     let generated = generated(&documents);
-    for expected in ["nested/index.html", "nested/deep/index.html", "assets/index.html", "authors/index.html", "authors/ada/index.html"] {
+    for expected in ["nested/index.html", "nested/deep/index.html", "authors/index.html", "authors/ada/index.html"] {
         assert!(generated.contains(expected), "missing generated tree entry {expected}: {generated:?}");
         assert!(output.join(expected).exists(), "missing emitted index {expected}");
     }
@@ -191,20 +191,24 @@ fn draft_only_language_tree_cannot_publish_a_generated_language_edition() {
 }
 
 #[test]
-fn folder_with_no_file_beneath_it_publishes_no_page() {
+fn folder_with_no_page_beneath_it_publishes_no_page() {
     let root = tempfile::tempdir().unwrap();
     write(root.path(), "index.md", "---\ntitle: Garden\n---\n# Garden");
     fs::create_dir(root.path().join("empty")).unwrap();
     fs::create_dir_all(root.path().join("nested/deeper")).unwrap();
-    write(root.path(), "keep/photo.png", "x");
+    write(root.path(), "photos/photo.png", "x");
+    write(root.path(), "oauth/client.json", "{}");
+    write(root.path(), "shelf/books/notes.txt", "x");
+    write(root.path(), "shelf/books/deep/story.md", "---\ntitle: Story\n---\nA story.");
     let (output, documents) = build(root.path());
     let generated = generated(&documents);
-    for gone in ["empty/index.html", "nested/index.html", "nested/deeper/index.html"] {
-        assert!(!generated.contains(gone), "an empty folder must not get {gone}: {generated:?}");
-        assert!(!output.join(gone).exists(), "an empty folder must not emit {gone}");
+    for gone in ["empty/index.html", "nested/index.html", "nested/deeper/index.html", "photos/index.html", "oauth/index.html"] {
+        assert!(!generated.contains(gone), "a folder with no page must not get {gone}: {generated:?}");
+        assert!(!output.join(gone).exists(), "a folder with no page must not emit {gone}");
     }
-    assert!(generated.contains("keep/index.html"), "an image-only folder keeps its page: {generated:?}");
-    assert!(output.join("keep/index.html").exists());
+    for kept in ["shelf/index.html", "shelf/books/index.html"] {
+        assert!(generated.contains(kept), "a folder with a page deeper down keeps {kept}: {generated:?}");
+    }
 }
 
 #[test]

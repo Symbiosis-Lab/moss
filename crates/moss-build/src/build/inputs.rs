@@ -32,12 +32,49 @@ pub struct BuildInputs {
     /// rather than trusted by its stat.
     #[serde(default)]
     pub taken_at: Option<u64>,
+    /// The day the render was as of, in the zone it was decided in. The
+    /// render verdict compares the day itself; a build that stops before
+    /// rendering compares it here.
+    #[serde(default)]
+    pub day: Option<BuildDay>,
+    /// Whether the generation this seal promoted is all a one-shot build
+    /// would write: every image placeholder baked and the search index built
+    /// from these pages. A build beside a preview leaves both to later passes,
+    /// and a later build in that process can read deferred placeholders back,
+    /// so this is taken from what the render had, never from its options.
+    #[serde(default)]
+    pub complete: bool,
     /// Whether the seal found the image and video outputs the render read
     /// from the last seal. Media that settle after the render (a variant
     /// encoded, a video ladder registered) leave pages a later build renders
     /// differently, so no page of that seal may be carried.
     #[serde(default)]
     pub media_settled: bool,
+}
+
+/// [`BuildInputs::day`]: the date [`effective_now`] gave, and the site zone it
+/// was given (`None` is UTC).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct BuildDay {
+    pub date: chrono::NaiveDate,
+    pub zone: Option<String>,
+}
+
+/// [`BuildInputs::complete`]: this build indexes search now, every raster
+/// image of its scan has its dominant colour (what a deferred image lacks
+/// until the background fills it in), and whatever it reused from the last
+/// build (a carried page, parsed HTML) was complete too. `reused` is the last
+/// seal's record when this build reused anything.
+pub(crate) fn complete(images: &[crate::types::content::MediaMetadata], indexes_now: bool, reused: Option<Option<&BuildInputs>>) -> bool {
+    let baked = images.iter().all(|m| !crate::build::scan::scan::is_raster_image(&m.file_type) || m.dominant_color.is_some());
+    indexes_now && baked && reused.is_none_or(|last| last.is_some_and(|r| r.complete))
+}
+
+impl BuildDay {
+    /// Whether a build starting now would be as of the same day.
+    pub(crate) fn is_today(&self) -> bool {
+        effective_now(build_instant(), self.zone.as_deref()).date() == self.date
+    }
 }
 
 /// This build's `.moss/` measurement, and whether it and the environment
@@ -138,7 +175,7 @@ fn record_key(folder: &Path, link_meta: &Path, path: &Path) -> Option<String> {
     // Cards are keyed under their own directory, which `MossPaths` may
     // resolve to another spelling of the folder (a symlinked temp root).
     // Only a card (`<sha256 of the URL>.json`) is recorded, never what a build
-    // writes beside them: the prewarm list, derived covers.
+    // writes beside them: an old link list, derived covers.
     if let Ok(card) = path.strip_prefix(link_meta) {
         return is_card_name(&card.to_string_lossy()).then(|| format!("link-meta/{}", card.to_string_lossy()));
     }

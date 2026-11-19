@@ -9,6 +9,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use moss_build::plugins::install::install_cli::install;
+use moss_build::plugins::install::registry_client::trust;
 use sha2::{Digest, Sha256};
 
 type Routes = Arc<Mutex<HashMap<&'static str, Vec<u8>>>>;
@@ -70,7 +71,7 @@ fn site(root: &Path) -> std::path::PathBuf {
 }
 
 #[test]
-fn installing_checks_the_catalog_every_time_and_approves_in_app_data() {
+fn installing_checks_the_catalog_every_time_and_trusts_nothing() {
     let tmp = tempfile::tempdir().unwrap();
     std::env::set_var("HOME", tmp.path());
     std::env::set_var("XDG_DATA_HOME", tmp.path().join("data"));
@@ -116,20 +117,25 @@ fn installing_checks_the_catalog_every_time_and_approves_in_app_data() {
         assert!(!app_data.exists());
     }
 
-    // Online: installed, one line said, consent kept in app data and not in the site.
+    // Online: installed, and the line says the folder is not trusted; the
+    // command records no trust, in app data or in the site.
     let done = install("alpha", &site, &origin, &[]).unwrap();
-    assert_eq!(done.line, format!("Installed alpha 1.2.0 into {} and approved it for this user on this machine", site.display()));
+    assert_eq!(
+        done.line,
+        format!("Installed alpha 1.2.0 into {}. This folder is not trusted, so its plugins stay off until you trust it in the moss app or build with --allow-plugins", site.display())
+    );
     assert!(done.notice.is_none());
     assert!(site.join(".moss/plugins/alpha/main.js").exists());
-    let approvals = std::fs::read_to_string(app_data.join("plugin-approvals.json")).unwrap();
-    assert!(approvals.contains("alpha"), "{approvals}");
-    let in_site: Vec<_> = walk(&site).into_iter().filter(|p| p.contains("approval")).collect();
-    assert!(in_site.is_empty(), "no approval is written into the site: {in_site:?}");
+    assert!(!app_data.join(trust::FILE).exists() && !app_data.join(trust::LEGACY_FILE).exists());
+    let in_site: Vec<_> = walk(&site).into_iter().filter(|p| p.contains("trust") || p.contains("approval")).collect();
+    assert!(in_site.is_empty(), "no trust is written into the site: {in_site:?}");
 
-    // A plugin already in the folder, with no approval on this machine, is allowed by the command too.
-    std::fs::remove_file(app_data.join("plugin-approvals.json")).unwrap();
-    install("alpha", &site, &origin, &[]).unwrap();
-    assert!(std::fs::read_to_string(app_data.join("plugin-approvals.json")).unwrap().contains("alpha"));
+    // In a folder the app trusts, the line is the install alone.
+    let mut record = trust::TrustRecord::default();
+    record.set(site.canonicalize().unwrap(), true);
+    trust::save(&app_data, &record).unwrap();
+    let done = install("alpha", &site, &origin, &[]).unwrap();
+    assert_eq!(done.line, format!("Installed alpha 1.2.0 into {}", site.display()));
 
     // The catalog moved since the last look: a plugin listed only now installs,
     // so the index was fetched again rather than read from the cache.

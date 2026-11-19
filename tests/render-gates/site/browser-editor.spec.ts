@@ -61,13 +61,11 @@
  * `browser-editor:preview`. Config: playwright/browser-editor.config.ts.
  */
 import { test, expect, type Frame, type Page } from '@playwright/test';
-import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { crc32, deflateSync } from 'node:zlib';
 import { join } from 'node:path';
-import { gatePort } from '../../../playwright/gate-ports';
-import { MOSS_BIN } from '../../e2e/helpers/scratch-site';
 import { png } from '../../e2e/helpers/contents-ruler-site';
+import { openEditor as openEditorFrames, useEditServe } from '../../e2e/helpers/edit-serve';
 import { buildPreviewCtxEntries, type PreviewCtxPayload } from '../../../packages/moss-ui/src/ui/preview/preview-context-menu';
 
 // Event pages, each linking to the next: the forms a person writes by hand,
@@ -95,19 +93,37 @@ const PICTURES = ['---', 'title: Pictures', '---',
   '![[picnotes/|style:summary]]', ''].join('\n');
 const PICTURE_MENU = 'a right-click on a picture in the preview';
 
+const PICTURE_GATE = 'a picture added, landed, replaced, renamed and moved shows in the preview each time';
+
+/** A PNG of a diagonal gradient, large enough that its encode outlasts the build after it. */
+function gradient(width: number, height: number, tint: number): Buffer {
+  const rows = Buffer.alloc((width * 3 + 1) * height);
+  for (let y = 0, at = 0; y < height; y++) {
+    rows[at++] = 0;
+    for (let x = 0; x < width; x++) {
+      rows[at++] = (x + y) & 255;
+      rows[at++] = tint;
+      rows[at++] = (x ^ y) & 255;
+    }
+  }
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type), data]);
+    const frame = Buffer.alloc(body.length + 8);
+    frame.writeUInt32BE(data.length, 0);
+    body.copy(frame, 4);
+    frame.writeUInt32BE(crc32(body), body.length + 4);
+    return frame;
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header.set([8, 2, 0, 0, 0], 8);
+  return Buffer.concat([Buffer.from('\x89PNG\r\n\x1a\n', 'latin1'), chunk('IHDR', header), chunk('IDAT', deflateSync(rows, { level: 1 })), chunk('IEND', Buffer.alloc(0))]);
+}
+
 const ONE_PIXEL_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
 
-let site = '';
-let home = '';
-let server: ChildProcess | undefined;
-let output = '';
-
-// One server a test: its sign-in link opens once.
-test.beforeEach(async ({}, testInfo) => {
-  output = '';
-  site = realpathSync(mkdtempSync(join(tmpdir(), 'moss-browser-editor-site-')));
-  home = realpathSync(mkdtempSync(join(tmpdir(), 'moss-browser-editor-home-')));
-  mkdirSync(join(home, 'moss'));
+const serve = useEditServe('browser-editor', (site, testInfo) => {
   writeFileSync(join(site, 'index.md'), '---\ntitle: Garden\n---\nHello garden.\n\n![[doc.pdf]]\n\n[Talk](talk.md)\n\n[To the workshops](/workshops/)\n\n[To the case](en/writing/case.md)\n\n[About](about.md)\n\n[To the Chinese pages](/zh-hans/)\n\n' +
     ':::grid 2\nBeds are dug in March.\n\nSeeds go in by April.\n+++\nWater comes from the well.\n\nThe well is closed in winter.\n:::\n');
   for (const [name, text] of Object.entries(EVENTS)) writeFileSync(join(site, name), text);
@@ -144,6 +160,11 @@ test.beforeEach(async ({}, testInfo) => {
     mkdirSync(join(site, 'picnotes'));
     writeFileSync(join(site, 'picnotes', 'first.md'), '---\ntitle: First\ncover: ../room.png\n---\nA first note.\n');
   }
+  if (testInfo.title === PICTURE_GATE) {
+    mkdirSync(join(site, 'pictures'));
+    writeFileSync(join(site, 'pictures', 'door.png'), gradient(800, 600, 40));
+    writeFileSync(join(site, 'album.md'), '---\ntitle: Album\n---\nAn album.\n\n![Door](pictures/door.png)\n\n![Later](pictures/later.png)\n\nLast line.\n');
+  }
   writeFileSync(join(site, 'about.md'), '---\ntitle: About\ntranslationKey: about\n---\nAbout the garden. [Talk](talk.md)\n');
   writeFileSync(join(site, 'zh-hans', '关于.md'), '---\ntitle: 关于\ntranslationKey: about\n---\n关于花园。\n');
   // A published address gives the site its feed, which every page links as
@@ -152,30 +173,9 @@ test.beforeEach(async ({}, testInfo) => {
   writeFileSync(join(site, '.moss', 'config.toml'), '[site]\nurl = "https://garden.example.org"\n');
   mkdirSync(join(site, 'notes'));
   writeFileSync(join(site, 'notes', 'first-frost.md'), '---\ntitle: First frost\ndate: 2026-10-01\n---\nThe beds are covered.\n');
-  // MOSS_HOME and the search root keep the binary from finding, or handing
-  // the folder to, an installed desktop app.
-  server = spawn(MOSS_BIN, ['edit', site, '--serve', '--no-browser', '--port', String(gatePort('browser-editor:ui'))], {
-    env: {
-      ...process.env,
-      MOSS_HOME: join(home, 'moss'),
-      MOSS_DESKTOP_SEARCH_ROOT: home,
-      MOSS_PREVIEW_PORT_BASE: String(gatePort('browser-editor:preview')),
-      // The new-page test reads the rename's own request from the log.
-      MOSS_LOG_LEVEL: 'info',
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  server.stdout?.on('data', (b) => (output += b));
-  server.stderr?.on('data', (b) => (output += b));
-});
-
-test.afterEach(async () => {
-  if (server && server.exitCode === null) {
-    server.kill('SIGTERM');
-    await new Promise((r) => server!.once('exit', r));
-  }
-  rmSync(site, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
+}, {
+  // The new-page test reads the rename's own request from the log.
+  MOSS_LOG_LEVEL: 'info',
 });
 
 /**
@@ -189,30 +189,14 @@ async function openTreeRoot(editor: Frame) {
 }
 
 /** Sign in, wait for the home page in the preview, and open the editor beside it. */
-async function openEditor(page: Page) {
-  await expect.poll(() => output.match(/Edit at (\S+)/)?.[1], { timeout: 60_000, message: `the sign-in link; server said:\n${output}` }).toBeTruthy();
-  const link = output.match(/Edit at (\S+)/)![1];
-
-  await page.goto(link);
-  await page.waitForURL((u) => u.pathname === '/', { timeout: 15_000 });
-  // Each frame is taken from its element: the editor's URL gains the open page as a query.
-  const frameOf = async (id: string) => (await (await page.waitForSelector(`#${id}`, { state: 'attached', timeout: 15_000 })).contentFrame())!;
-  const shell = await frameOf('moss-shell-frame');
-  const editor = await frameOf('moss-editor-frame');
-  const preview = (await (await shell.waitForSelector('#moss-preview-iframe', { state: 'attached', timeout: 15_000 })).contentFrame())!;
-  await preview.waitForFunction(() => document.body?.innerText.includes('Hello garden'), null, { timeout: 30_000 });
-
-  await shell.click('#moss-edit-button');
-  await expect(page.locator('#moss-frames')).toHaveAttribute('data-editor', 'split', { timeout: 10_000 });
-  return { shell, editor, preview };
-}
+const openEditor = (page: Page) => openEditorFrames(page, serve, 'Hello garden');
 
 test('the browser editor boots, saves, opens a sandboxed PDF in the file viewer, and follows the preview home', async ({ page, browserName }) => {
   const { shell, editor, preview } = await openEditor(page);
   await editor.waitForSelector('.cm-content', { timeout: 30_000 });
   await editor.click('.cm-line:has-text("Hello garden")');
   await page.keyboard.type(' Typed in a browser.');
-  await expect.poll(() => readFileSync(join(site, 'index.md'), 'utf8'), { timeout: 15_000 }).toContain('Typed in a browser.');
+  await expect.poll(() => readFileSync(join(serve.site, 'index.md'), 'utf8'), { timeout: 15_000 }).toContain('Typed in a browser.');
   await preview.waitForFunction(() => document.body?.innerText.includes('Typed in a browser'), null, { timeout: 30_000 });
 
   await shell.click('#moss-device-button');
@@ -335,7 +319,7 @@ test('the browser editor boots, saves, opens a sandboxed PDF in the file viewer,
     await expect(editor.locator('body')).not.toContainText('No page to edit');
     await editor.click('.cm-content');
     await page.keyboard.type('Second new page.');
-    await expect.poll(() => readFileSync(join(site, 'Workshops', 'untitled 2.md'), 'utf8'), { timeout: 15_000 }).toContain('Second new page.');
+    await expect.poll(() => readFileSync(join(serve.site, 'Workshops', 'untitled 2.md'), 'utf8'), { timeout: 15_000 }).toContain('Second new page.');
   });
 });
 
@@ -407,7 +391,7 @@ test("an event's start and end open date and time controls that write what the b
     }
     // A save would have landed by now: the editor writes a changed field at once.
     await page.waitForTimeout(1_000);
-    expect(readFileSync(join(site, name), 'utf8')).toBe(EVENTS[name]);
+    expect(readFileSync(join(serve.site, name), 'utf8')).toBe(EVENTS[name]);
   };
   await goTo('Talk', 'A talk.');
   await untouched('talk.md', { start: ['2026-12-01', ''], end: ['2026-12-01', '21:00'] });
@@ -417,7 +401,7 @@ test("an event's start and end open date and time controls that write what the b
   // The template's empty field: a date, then a time, then the date alone again.
   await goTo('Next', 'A fair.');
   const fair = (start: string) => `---\ntitle: Fair\n${start}---\nA fair.\n`;
-  const file = () => readFileSync(join(site, 'fair.md'), 'utf8');
+  const file = () => readFileSync(join(serve.site, 'fair.md'), 'utf8');
   await open('start');
   expect(await shown()).toEqual(['', '']);
   await date.fill('2026-12-05');
@@ -551,7 +535,7 @@ test("a page's problem count shows once, and steps through its problems", async 
 
 test('a missing picture says what was looked for, and its card offers the ways out', async ({ page, browserName }) => {
   const { editor } = await openCasePage(page);
-  const file = () => readFileSync(join(site, 'en', 'writing', 'case.md'), 'utf8');
+  const file = () => readFileSync(join(serve.site, 'en', 'writing', 'case.md'), 'utf8');
   const card = editor.locator('.cm-reference-card');
   const actions = () => card.locator('.cm-reference-card-actions button').allTextContents();
   const mark = (name: string) => editor.locator(`.cm-problem--blocks:has-text("${name}")`);
@@ -625,7 +609,7 @@ test('a missing picture says what was looked for, and its card offers the ways o
 test('a new page in a language folder shows in the preview before it has text, and is an ordinary page after one word', async ({ page }, testInfo) => {
   const { shell, editor, preview } = await openEditor(page);
   const openFile = () => editor.evaluate(() => decodeURIComponent(location.search));
-  const file = join(site, 'zh-hans', 'Quiet Harbour Notes.md');
+  const file = join(serve.site, 'zh-hans', 'Quiet Harbour Notes.md');
   const address = '/zh-hans/quiet-harbour-notes/';
   const folderLists = () => preview.evaluate(async (at) => (await (await fetch('/zh-hans/')).text()).includes(at), address);
 
@@ -642,7 +626,7 @@ test('a new page in a language folder shows in the preview before it has text, a
   // Shown at its address with the site's design, the waiting screen gone, the editor still on it.
   // Under the sweep's 20 s: the rename asks for its own build, whatever the file watcher delivers.
   await expect.poll(() => new URL(preview.url()).pathname, { timeout: 10_000 }).toBe(address);
-  expect(output, 'the rename asked for its own build').toContain('Rebuild asked by move');
+  expect(serve.output, 'the rename asked for its own build').toContain('Rebuild asked by move');
   await expect(preview.locator('h1')).toContainText('Quiet Harbour Notes', { timeout: 30_000 });
   await expect(shell.locator('#moss-preview-overlay')).not.toHaveClass(/visible/, { timeout: 30_000 });
   await expect(editor.locator('body')).not.toContainText('No page to edit');
@@ -683,7 +667,7 @@ test('a page renamed in the folder while it is shown is followed to its folder a
   await preview.click('a:has-text("About")');
   await expect(preview.locator('body')).toContainText('About the garden', { timeout: 30_000 });
 
-  renameSync(join(site, 'about.md'), join(site, 'about-us.md'));
+  renameSync(join(serve.site, 'about.md'), join(serve.site, 'about-us.md'));
   // Past the sweep's 20 s, for a rename the file watcher delivers late.
   await expect.poll(() => new URL(preview.url()).pathname, { timeout: 40_000 }).toMatch(/^\/about-us\//);
   expect(new URL(preview.url()).pathname).toBe('/about-us/');
@@ -694,7 +678,7 @@ test('an edit to a page in the feed updates it in place, not by a reload', async
   const { preview } = await openEditor(page);
   // The first build is promoted about 20 s after the server starts, and the
   // preview refreshes for that too: the marker below is set after it.
-  await expect.poll(() => output, { timeout: 60_000, message: 'the first build promoted' }).toMatch(/promoted generation \S+ to current/);
+  await expect.poll(() => serve.output, { timeout: 60_000, message: 'the first build promoted' }).toMatch(/promoted generation \S+ to current/);
   await preview.evaluate(() => location.assign('/notes/first-frost/'));
   // The home page lists the note's text too: wait for the note's own address.
   await preview.waitForFunction(() => location.pathname === '/notes/first-frost/' && document.readyState === 'complete' && document.body.innerText.includes('The beds are covered'), null, { timeout: 30_000 });
@@ -702,7 +686,7 @@ test('an edit to a page in the feed updates it in place, not by a reload', async
   // A reload makes a new window; an update in place keeps this one.
   await preview.evaluate(() => ((window as unknown as { kept: boolean }).kept = true));
 
-  writeFileSync(join(site, 'notes', 'first-frost.md'), readFileSync(join(site, 'notes', 'first-frost.md'), 'utf8') + '\nThe well is closed.\n');
+  writeFileSync(join(serve.site, 'notes', 'first-frost.md'), readFileSync(join(serve.site, 'notes', 'first-frost.md'), 'utf8') + '\nThe well is closed.\n');
   await preview.waitForFunction(() => document.body?.innerText.includes('The well is closed'), null, { timeout: 30_000 });
   expect(await preview.evaluate(async () => (await (await fetch('/rss.xml')).text()).includes('The well is closed')), 'the edit changed the feed').toBe(true);
   expect(await preview.evaluate(() => (window as unknown as { kept?: boolean }).kept), 'the page was reloaded').toBe(true);
@@ -733,6 +717,90 @@ test('the address copied from a page just made carries no reload stamp', async (
   const copyPage = entries.find((e) => 'action' in e && e.label === 'Copy page address') as { action(): void };
   copyPage.action();
   expect(copied).toEqual(['/zh-hans/untitled/']);
+});
+
+test(PICTURE_GATE, async ({ page }) => {
+  test.setTimeout(240_000);
+  const { editor, preview } = await openEditor(page);
+  await editor.click('.seg.bc[data-path=""]');
+  await editor.click('.seg[data-path="album.md"]');
+  await preview.waitForFunction(() => document.body?.innerText.includes('An album'), null, { timeout: 30_000 });
+  await editor.waitForSelector('.cm-line:has-text("Last line.")', { timeout: 30_000 });
+
+  const notFound: string[] = [];
+  page.on('response', (r) => {
+    if (r.status() === 404 && /harbour|quay|later/.test(r.url())) notFound.push(new URL(r.url()).pathname);
+  });
+  /**
+   * The preview's picture whose address holds `name`: its drawn size, its `<source>` count and what it loaded.
+   * Null while the preview reloads for a build that just landed: the page a person sees is replaced whole, so the next read answers.
+   */
+  const picture = (name: string) =>
+    preview.evaluate((name) => {
+      const img = [...document.querySelectorAll('img')].find((i) => (i.getAttribute('src') ?? '').includes(name));
+      if (!img) return null;
+      if (!img.complete || !img.naturalWidth) img.scrollIntoView({ block: 'center' });
+      return { width: img.naturalWidth, height: img.naturalHeight, sources: img.closest('picture')?.querySelectorAll('source').length ?? 0, loaded: img.currentSrc };
+    }, name).catch((error: Error) => {
+      if (/Execution context was destroyed/.test(error.message)) return null;
+      throw error;
+    });
+  const shown = (name: string) => expect.poll(async () => (await picture(name))?.width ?? 0, { timeout: 60_000, message: `the preview draws ${name}` }).toBeGreaterThan(0);
+
+  await test.step('a picture added to the page from the insert bar', async () => {
+    await editor.click('.cm-line:has-text("Last line.")');
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Enter');
+    await expect.poll(() => readFileSync(join(serve.site, 'album.md'), 'utf8'), { timeout: 15_000 }).toMatch(/Last line\.\n\n/);
+    const chooser = page.waitForEvent('filechooser', { timeout: 10_000 });
+    await editor.click('.insert-bar button[data-cmd="media"]');
+    await (await chooser).setFiles({ name: 'harbour.png', mimeType: 'image/png', buffer: gradient(3600, 2400, 120) });
+    await shown('harbour');
+    // A build that seals while the picture still encodes is the one that dropped the
+    // sizes, so they are read from the first paint until the encode has staged its files.
+    const encoded = () => readdirSync(join(serve.site, '.moss'), { recursive: true, encoding: 'utf8' }).some((f) => /harbour[^/]*\.webp$/.test(f));
+    for (const until = Date.now() + 120_000; ; ) {
+      const [p, done] = [await picture('harbour'), encoded()];
+      if (p) expect(p.sources, 'a build made while the picture encodes dropped its sizes').toBeGreaterThan(0);
+      if (done) break;
+      expect(Date.now(), 'the encode stages the picture').toBeLessThan(until);
+      await page.waitForTimeout(250);
+    }
+    await expect
+      .poll(async () => { const p = await picture('harbour'); return p !== null && p.sources > 0 && /\.webp/.test(p.loaded) && p.width > 0; }, { timeout: 120_000, message: 'the added picture ends with its responsive sizes' })
+      .toBe(true);
+  });
+
+  await test.step('a picture the page already names lands in its folder', async () => {
+    // Until now the page named a file that was not there.
+    notFound.splice(0, notFound.length, ...notFound.filter((path) => !path.includes('later')));
+    writeFileSync(join(serve.site, 'pictures', 'later.png'), gradient(900, 1200, 200));
+    await shown('later');
+  });
+
+  await test.step('a picture is replaced under its own name', async () => {
+    writeFileSync(join(serve.site, 'pictures', 'door.png'), gradient(600, 1200, 90));
+    await expect.poll(async () => { const p = await picture('door'); return p && p.width ? p.height / p.width : 0; }, { timeout: 60_000, message: 'the preview draws the new door' }).toBe(2);
+  });
+
+  await test.step('a picture renamed, then moved, from the file list', async () => {
+    const folder = readdirSync(serve.site, { recursive: true, encoding: 'utf8' }).find((f) => f.endsWith('harbour.png') && !f.startsWith('.moss'))!.replace(/\/?harbour\.png$/, '');
+    const levels = folder ? folder.split('/') : [];
+    for (let depth = 1; depth <= levels.length; depth++) await editor.click(`.seg[data-path="${levels.slice(0, depth).join('/')}"]:not(.bc)`);
+    const inFolder = (name: string) => (folder ? `${folder}/${name}` : name);
+    await editor.click(`.seg[data-path="${inFolder('harbour.png')}"]`, { button: 'right' });
+    await editor.locator('[role="menuitem"]:has-text("Rename"), :text-is("Rename")').first().click();
+    const name = editor.locator('input.moss-tree-rename-input');
+    await name.fill('quay');
+    await name.press('Enter');
+    await shown('quay');
+
+    await editor.locator(`.seg[data-path="${inFolder('quay.png')}"]`).dragTo(editor.locator('.seg[data-path="events"]:not(.bc)').first());
+    await shown('events/quay');
+  });
+
+  expect(notFound, 'the preview answered 404 for a picture that is in the folder').toEqual([]);
 });
 
 test.describe(PICTURE_MENU, () => {

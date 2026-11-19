@@ -4,6 +4,7 @@ import {
   closeBrowser,
   openBrowserWithHtml,
   showBrowserForm,
+  startBrowserSignIn,
   BrowserHandle,
 } from "../browser.js";
 
@@ -677,6 +678,21 @@ describe("Browser Utilities", () => {
 
       // Now closeBrowser should be called
       expect(mockInvoke).toHaveBeenCalledWith("close_action_panel", {});
+    });
+  });
+  describe("startBrowserSignIn", () => {
+    it("opens the sign-in page and hands back the redirect's query", async () => {
+      mockInvoke.mockImplementation(async (cmd: string) =>
+        cmd === "browser_sign_in_start"
+          ? { redirectUri: "http://127.0.0.1:5000/callback" }
+          : { params: [["code", "c1"], ["state", "s 1"]] }
+      );
+      const signIn = await startBrowserSignIn();
+      expect(signIn.redirectUri).toBe("http://127.0.0.1:5000/callback");
+      const reply = await signIn.open("https://example.com/authorize");
+      expect(mockInvoke).toHaveBeenLastCalledWith("browser_sign_in_wait", { url: "https://example.com/authorize" });
+      expect(reply.get("code")).toBe("c1");
+      expect(reply.get("state")).toBe("s 1");
     });
   });
 });

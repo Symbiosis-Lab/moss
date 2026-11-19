@@ -16,6 +16,7 @@
 pub mod abilities;
 pub mod blocks;
 pub mod derivation;
+pub mod identity;
 pub mod listing_style;
 pub mod platform;
 pub mod public_data;
@@ -101,6 +102,11 @@ pub struct PluginContributes {
     /// `[services.<plugin-id>]` table.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub site_settings: Option<site_settings::SiteSettingsContribution>,
+
+    /// Proofs that the site's domain is the person's identity on a network,
+    /// filled on every build from `[services.<plugin-id>]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<Vec<identity::Proof>>,
 }
 
 /// Job descriptors contributed by a plugin (§8).
@@ -567,6 +573,10 @@ impl PluginManifest {
             site.validate().map_err(serde_json::Error::custom)?;
             bound_author_text_in(&mut site.settings);
         }
+        if let Some(proofs) = manifest.contributes.as_ref().and_then(|c| c.identity.as_ref()) {
+            let declared = manifest.contributes.as_ref().and_then(|c| c.site_settings.as_ref()).map_or(&[][..], |s| &s.settings[..]);
+            identity::validate(&manifest.name, proofs, declared).map_err(serde_json::Error::custom)?;
+        }
         manifest.translations = translations::validated(std::mem::take(&mut manifest.translations)).map_err(serde_json::Error::custom)?;
         if let Some(derivations) = manifest.contributes.as_ref().and_then(|c| c.derivations.as_ref()) {
             for (id, derivation) in derivations {
@@ -756,6 +766,7 @@ impl PluginManifest {
                 options,
                 required: false,
                 hidden: false,
+                at_sign_in: false,
                 placeholder: lookup(&self.config_placeholders),
                 help_url: None,
                 pattern: None,
@@ -963,6 +974,16 @@ mod tests {
             r#"[{"key":"tok","type":"secret","label":"T","default":"paste-here"}]"#,
         );
         assert!(err.contains("a `secret` must not declare a `default`"), "{err}");
+    }
+
+    #[test]
+    fn only_a_string_is_asked_at_sign_in() {
+        let err = settings_error(r#"[{"key":"tok","type":"secret","label":"T","at_sign_in":true}]"#);
+        assert!(err.contains("`at_sign_in` asks for a `string`"), "{err}");
+        let fields: Vec<settings::Field> =
+            serde_json::from_str(r#"[{"key":"server","type":"string","label":"S","at_sign_in":true,"default":"mastodon.social"}]"#).unwrap();
+        assert!(validate_declared_fields(&fields).is_ok());
+        assert!(fields[0].at_sign_in);
     }
 
     #[test]

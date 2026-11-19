@@ -180,7 +180,7 @@ fn a_bare_link_cell_is_a_whole_cell_link() {
     assert_eq!(link.href, "writings/");
     assert_eq!(link.text, "Writings");
     assert!(link.whole_cell, "a lone link is the whole cell");
-    assert!(!link.external());
+    assert!(!link.kind.opens_new_tab());
 }
 
 #[test]
@@ -193,7 +193,7 @@ fn a_link_with_a_soft_wrapped_description_is_a_link_cell() {
     assert_eq!(link.href, "https://mdn.dev");
     assert_eq!(link.text, "MDN");
     assert!(!link.whole_cell, "the description is outside the link");
-    assert!(link.external());
+    assert!(link.kind.opens_new_tab());
 }
 
 #[test]
@@ -798,14 +798,7 @@ fn a_bare_url_cell_takes_its_title_from_cached_metadata() {
         LinkMeta {
             url: "https://slykiten.com/".to_string(),
             title: Some("Sly Kitten".to_string()),
-            favicon: None,
-            og_image: None,
-            cover: None,
-            cover_served_path: None,
-            cover_width: None,
-            cover_height: None,
-            cover_lqip: None,
-            cover_color: None,
+            ..Default::default()
         },
     );
     let html = both_passes(
@@ -827,13 +820,7 @@ fn a_bare_url_cell_shows_a_cached_favicon_in_the_kicker() {
             url: "https://slykiten.com/".to_string(),
             title: None,
             favicon: Some("https://slykiten.com/favicon.ico".to_string()),
-            og_image: None,
-            cover: None,
-            cover_served_path: None,
-            cover_width: None,
-            cover_height: None,
-            cover_lqip: None,
-            cover_color: None,
+            ..Default::default()
         },
     );
     let html = both_passes(
@@ -863,14 +850,7 @@ fn an_authored_cover_image_survives_alongside_cached_metadata() {
         LinkMeta {
             url: "https://example.org/".to_string(),
             title: Some("Fetched Title".to_string()),
-            favicon: None,
-            og_image: None,
-            cover: None,
-            cover_served_path: None,
-            cover_width: None,
-            cover_height: None,
-            cover_lqip: None,
-            cover_color: None,
+            ..Default::default()
         },
     );
     let md = ":::grid 1\n[![Alt text](a.jpg)](https://example.org/)\n:::\n";
@@ -927,8 +907,8 @@ fn a_bare_url_with_no_cached_metadata_falls_back_to_the_url_itself() {
 }
 
 #[test]
-fn every_external_cell_is_reported_for_prewarm_even_with_a_manual_title() {
-    // Owner decision (2026-09): author-written link text wins the TITLE
+fn every_external_cell_is_fetched_even_with_a_manual_title() {
+    // Author-written link text wins the TITLE
     // slot only. It must not suppress the fetch itself — a manually
     // titled cell still wants its favicon and og:image cover — so both
     // external URLs are candidates here, not just the bare one. Only the
@@ -1451,4 +1431,38 @@ fn a_folder_card_counts_in_cjk_numerals_under_vertical_typesetting() {
         horizontal.contains(r#"<div class="moss-card-meta">4 篇</div>"#),
         "got: {horizontal}"
     );
+}
+
+/// Only a card whose fetched page names no picture closes up; a card not yet
+/// fetched, whose picture was not downloaded, or whose picture fails to
+/// render, keeps its box.
+#[test]
+fn only_a_link_card_known_to_have_no_picture_closes_up() {
+    use crate::build::page::link_meta::CardState;
+    let docs: Vec<ParsedDocument> = vec![];
+    let page = Page::new("index.html", &docs);
+    let url = "https://slykiten.com/";
+    let cover_of = |meta: LinkMeta| {
+        let map = HashMap::from([(url.to_string(), LinkMeta { url: url.to_string(), ..meta })]);
+        both_passes(":::grid 1\n<https://slykiten.com/>\n:::\n", &page, Some(&map))
+    };
+    let not_fetched = cover_of(LinkMeta { state: CardState::NotYet, ..Default::default() });
+    let no_picture = cover_of(LinkMeta { state: CardState::Fetched, ..Default::default() });
+    let not_downloaded = cover_of(LinkMeta {
+        state: CardState::Fetched,
+        og_image: Some("https://slykiten.com/cover.jpg".to_string()),
+        ..Default::default()
+    });
+    let unrenderable = cover_of(LinkMeta {
+        state: CardState::Fetched,
+        og_image: Some("https://slykiten.com/cover.jpg".to_string()),
+        cover_served_path: Some(".moss/link/cover.jpg".to_string()),
+        ..Default::default()
+    });
+    for html in [&not_fetched, &not_downloaded, &unrenderable] {
+        assert!(html.contains(moss_core::ast::link_card::MISSING_COVER), "got: {html}");
+        assert!(!html.contains("moss-card-no-cover"), "got: {html}");
+    }
+    assert!(no_picture.contains(r#"<div class="moss-card-cover moss-card-no-cover"></div>"#), "got: {no_picture}");
+    assert!(!no_picture.contains(r#"data-cover="missing""#), "got: {no_picture}");
 }

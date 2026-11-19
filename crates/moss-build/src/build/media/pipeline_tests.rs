@@ -2648,6 +2648,76 @@ async fn the_walk_takes_a_lanes_oid_for_a_file_it_owns() {
     }
 }
 
+/// Three pictures that each need a fallback raster, and the walk's context.
+fn three_fallback_pictures(tmp: &std::path::Path) -> (BackgroundContext, std::path::PathBuf) {
+    let source = tmp.join("source");
+    let moss_dir = tmp.join(".moss");
+    let staging = moss_dir.join("build.nosync").join("staging");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::create_dir_all(&staging).unwrap();
+    for (i, name) in ["a.jpg", "b.jpg", "c.jpg"].into_iter().enumerate() {
+        let noise = image::ImageBuffer::from_fn(1200, 900, |x, y| image::Rgb([(x ^ y) as u8 ^ i as u8, (x * 7) as u8, (y * 13) as u8]));
+        image::DynamicImage::ImageRgb8(noise).save_with_format(source.join(name), image::ImageFormat::Jpeg).unwrap();
+    }
+    let ctx = BackgroundContext { source_path: source.to_string_lossy().to_string(), staging_dir: staging, moss_dir: moss_dir.clone(), ..BackgroundContext::for_test() };
+    (ctx, moss_dir)
+}
+
+/// One walk under `stop`: its fallback encodes and the manifest it sealed.
+async fn walk_until(ctx: BackgroundContext, stop: impl Fn() -> bool + Send + 'static) -> (usize, crate::build::manifest::SealedManifest) {
+    let (sealed, collector) = crate::build::phase::with_collector(async move {
+        let (tx, rx) = crate::build::coordinator::test_utils::build_test_coordinator();
+        tokio::task::spawn_blocking(crate::build::phase::inherit_blocking(move || {
+            let pending = crate::build::manifest::PendingManifest::new(SiteHashes::default());
+            let html = stage_source_html(&ctx, &[], &pending, crate::build::ports::reporter::discarding(), None);
+            super::copy_deferred_assets(&ctx, html, crate::build::ports::reporter::discarding(), tx, None, &stop);
+        }))
+        .await
+        .unwrap();
+        crate::build::coordinator::test_utils::drain_into_sealed(rx, SiteHashes::default()).await
+    })
+    .await;
+    let encodes = collector.lock().unwrap().counts.iter().find(|(name, _)| *name == "fallback_encodes").map_or(0, |(_, n)| *n);
+    (encodes, sealed)
+}
+
+/// A walk a newer render supersedes encodes nothing more and registers nothing,
+/// and says so, so its render's generation is never promoted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_superseded_walk_encodes_nothing_and_says_so() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (ctx, _) = three_fallback_pictures(tmp.path());
+    let (encodes, sealed) = walk_until(ctx.clone(), || true).await;
+    assert_eq!(encodes, 0);
+    assert_eq!(sealed.walk(), crate::build::manifest::WalkOutcome::Superseded);
+    assert!(sealed.all_files().keys().all(|k| !k.ends_with(".jpg")), "{:?}", sealed.all_files().keys().collect::<Vec<_>>());
+
+    let (encodes, sealed) = walk_until(ctx, || false).await;
+    assert_eq!(encodes, 3);
+    assert_eq!(sealed.walk(), crate::build::manifest::WalkOutcome::Complete);
+}
+
+/// A walk superseded mid-way finishes the picture it is on, whose record is
+/// whole, and starts no other.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_walk_superseded_mid_way_finishes_only_the_picture_it_is_on() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (ctx, moss_dir) = three_fallback_pictures(tmp.path());
+    let transforms = crate::build::cache::TransformCache::for_site(&crate::moss_paths::MossPaths::from_moss_dir(moss_dir));
+    let source = std::path::PathBuf::from(&ctx.source_path);
+    let record_of = |name: &str| transforms.record_path(&crate::build::cache::ObjectStore::hash_file(&source.join(name)).unwrap());
+    let fallback_of = |record: &std::path::Path| {
+        let record: serde_json::Value = std::fs::read(record).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+        record["transforms"][crate::build::media::fallback_raster::SIZED_RASTER_TRANSFORM]["oid"].is_string()
+    };
+    let (a, b, c) = (record_of("a.jpg"), record_of("b.jpg"), record_of("c.jpg"));
+    let (encodes, sealed) = walk_until(ctx, { let a = a.clone(); move || fallback_of(&a) }).await;
+    assert_eq!(encodes, 1);
+    assert_eq!(sealed.walk(), crate::build::manifest::WalkOutcome::Superseded);
+    assert!(fallback_of(&a), "the picture it was on keeps a whole record");
+    assert!(!fallback_of(&b) && !fallback_of(&c));
+}
+
 /// A fallback raster another machine made, whose record is still in the cloud
 /// here, is downloaded and placed, not encoded again: an encode is not
 /// byte-identical, so encoding it again would change what is published.

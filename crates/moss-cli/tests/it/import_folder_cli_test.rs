@@ -72,7 +72,7 @@ fn without_allow_plugins_a_folder_borne_plugin_is_refused_as_a_build_refuses_it(
         let o = moss(&f.home, &args);
         assert!(!o.status.success(), "{}", stdout(&o));
         let err = stderr(&o);
-        assert!(err.contains("has not been allowed to run here") && err.contains("--allow-plugins"), "{err}");
+        assert!(err.contains("is off until you trust this folder") && err.contains("--allow-plugins"), "{err}");
     }
     assert!(!folder.join("Q2.md").exists(), "no page is written for a plugin the build would refuse");
 }

@@ -178,6 +178,8 @@ pub struct ShellVars {
     pub page_wrapper_class: String,
     /// Hero section HTML (placed outside <main> for full-width display)
     pub hero_section: Option<String>,
+    /// Attributes `<header>` carries when it lies over the page's opening block.
+    pub header_attrs: String,
     /// `data-share-cover="<url>"` for `<article class="container">`, or empty.
     ///
     /// The page's own cover image, handed to the reader runtime instead of
@@ -376,7 +378,8 @@ impl ShellProcessor {
             String::new()
         } else {
             format!(
-                "<header>\n        <nav class=\"main-nav container\">\n            <div class=\"nav-content\">\n                {}\n            </div>\n        </nav>\n    </header>",
+                "<header{}>\n        <nav class=\"main-nav container\">\n            <div class=\"nav-content\">\n                {}\n            </div>\n        </nav>\n    </header>",
+                vars.header_attrs,
                 vars.navigation
             )
         };

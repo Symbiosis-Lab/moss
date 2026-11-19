@@ -1408,6 +1408,12 @@ body > footer.container:has(> .moss-hero-closing) > .moss-colophon a {
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
   padding-block: 0.25rem 0;
 }
+/* Over the picture only the credit's own ink is known to read, so reaching
+   for the mark keeps it. */
+body > footer.container:has(> .moss-hero-closing) > .moss-colophon a:is(:hover, :focus-visible) .moss-colophon-icon {
+  --moss-mark-paint: currentColor;
+  --moss-mark-drop-paint: currentColor;
+}
 /* No darkening: the words are in ink measured on the bare picture, or on a panel. */
 .moss-hero.moss-hero-closing[data-overlay]::before {
   content: none;
@@ -2147,11 +2153,18 @@ footer.container hr::before {
   --moss-mark-paint: currentColor;
   --moss-mark-drop-paint: currentColor;
   --moss-mark-fade: 240ms;
+  /* The inks the mark shows in colour, here and in archival.css. mark.css's
+     follow the page's theme, not the band under the colophon: on a footer
+     band the theme declares, `--moss-footer-ink` is the ink that reads, so
+     both halves take it. Declared here, on the `.moss-mark` element, because
+     that is where `--moss-mark-ink` resolves. */
+  --moss-colophon-mark-ink: var(--moss-footer-ink, var(--moss-mark-ink));
+  --moss-colophon-mark-drop: var(--moss-footer-ink, var(--moss-mark-drop));
 }
 
 .moss-colophon a:is(:hover, :focus-visible) .moss-colophon-icon {
-  --moss-mark-paint: var(--moss-mark-ink);
-  --moss-mark-drop-paint: var(--moss-mark-drop);
+  --moss-mark-paint: var(--moss-colophon-mark-ink);
+  --moss-mark-drop-paint: var(--moss-colophon-mark-drop);
 }
 
 /* 1.25rem, down from 1.5rem — 20px of box showing 17px of ink, against the
@@ -2346,13 +2359,15 @@ header:has(+ .moss-hero) .main-nav {
   margin-block-end: 0;
 }
 
-/* header=over (`:::hero {header=over}` on the page's opening hero): the header
-   leaves the flow so the hero starts at the page top, under it. Its ink is
+/* header=over (`:::hero {header=over}` on the page's opening hero, or
+   `::: {screen header=over}` on an opening full-width band): the build marks
+   `<header>` itself with `data-header="over"` and the ink, and the header
+   leaves the flow so the hero or band starts at the page top, under it. Its ink is
    white unless the build found only dark ink reads on the picture's top band
    (`data-header-ink`, `-night` for the dark theme). The build measures that
    dark ink as the default `--moss-hero-tone-color`; a theme's own value is not
    re-measured. */
-header:has(+ .moss-hero[data-header="over"]) {
+header[data-header="over"] {
   --_over-ink: #ffffff;
   position: absolute;
   inset-block-start: 0;
@@ -2362,9 +2377,14 @@ header:has(+ .moss-hero[data-header="over"]) {
   background: transparent;
   border-block-end: none;
   color: var(--_over-ink);
+  /* A band holds links under the header: the header takes the pointer only on its own controls. */
+  pointer-events: none;
+}
+header[data-header="over"] :where(a, button, input, select, textarea, summary, label, [tabindex], [role], [contenteditable], .nav-links.mobile-open, .moss-nav-sub) {
+  pointer-events: auto;
 }
 
-:is(:root:not([data-theme="dark"]) header:has(+ .moss-hero[data-header-ink="dark"]), :root[data-theme="dark"] header:has(+ .moss-hero[data-header-ink-night="dark"])) {
+:is(:root:not([data-theme="dark"]) header[data-header-ink="dark"], :root[data-theme="dark"] header[data-header-ink-night="dark"]) {
   --_over-ink: var(--moss-hero-tone-color, #2c2825);
 }
 
@@ -2373,14 +2393,14 @@ header:has(+ .moss-hero[data-header="over"]) {
    The phone menu's sheet is opaque and not over the photo, so its links keep
    their own colour, as does a submenu panel, which has its own background. The open sheet is excluded by `.mobile-open`, a closing
    one by `inert`, which it carries through the fade after `.mobile-open` goes. */
-header:has(+ .moss-hero[data-header="over"]) :where(a, button, .site-name):not(.nav-links:is(.mobile-open, [inert]) *, .moss-nav-sub *) {
+header[data-header="over"] :where(a, button, .site-name):not(.nav-links:is(.mobile-open, [inert]) *, .moss-nav-sub *) {
   color: inherit;
 }
 
 /* Focus rings sit on the photo, so they take the header's ink rather than the
    accent, which can fall below contrast on an image. The opened mobile sheet
    keeps the accent ring: it is opaque, not over the photo; so does a submenu panel. */
-header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.nav-links:is(.mobile-open, [inert]) *, .moss-nav-sub *) {
+header[data-header="over"] :focus-visible:not(.nav-links:is(.mobile-open, [inert]) *, .moss-nav-sub *) {
   outline-color: var(--_over-ink);
 }
 
@@ -2388,10 +2408,11 @@ header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.nav-links:is(.m
    no brighter than 0.18 luminance; black at 60% over pure white gives 0.13, so
    where no ink was measured to read, the wash is that strong and solid over
    the 5rem band the build measures. */
-.moss-hero[data-header="over"] {
+:is(.moss-hero, article.container > [data-width="screen"])[data-header="over"] {
   --moss-hero-wash-size: 6rem;
+  position: relative;
 }
-.moss-hero[data-header="over"]::after {
+:is(.moss-hero, article.container > [data-width="screen"])[data-header="over"]::after {
   content: "";
   position: absolute;
   inset-block-start: 0;
@@ -2401,10 +2422,10 @@ header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.nav-links:is(.m
   pointer-events: none;
   z-index: 1;
 }
-:is(:root:not([data-theme="dark"]) .moss-hero[data-header-ink="light"], :root[data-theme="dark"] .moss-hero[data-header-ink-night="light"])::after {
+:is(:root:not([data-theme="dark"]) :is(.moss-hero, article.container > [data-width="screen"])[data-header-ink="light"], :root[data-theme="dark"] :is(.moss-hero, article.container > [data-width="screen"])[data-header-ink-night="light"])::after {
   background: linear-gradient(rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0));
 }
-:is(:root:not([data-theme="dark"]) .moss-hero[data-header-ink="dark"], :root[data-theme="dark"] .moss-hero[data-header-ink-night="dark"])::after {
+:is(:root:not([data-theme="dark"]) :is(.moss-hero, article.container > [data-width="screen"])[data-header-ink="dark"], :root[data-theme="dark"] :is(.moss-hero, article.container > [data-width="screen"])[data-header-ink-night="dark"])::after {
   content: none;
 }
 /* With the words at the top they start below the header, which sits in the
@@ -2421,6 +2442,17 @@ header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.nav-links:is(.m
   .moss-hero[data-header="over"][data-mobile="overlay"][data-align="top"] > .moss-hero-content {
     margin-block-start: var(--_top-clear);
   }
+}
+
+/* The page title above an opening band is the band's to replace: it stays for readers
+   and search, and leaves the flow so the band starts at the page top. */
+article.container > .moss-article-title:has(+ [data-width="screen"][data-header="over"]) {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
 }
 
 /* nav-left: single-row flex; breadcrumb segments (below) shrink with ellipsis
@@ -6837,11 +6869,7 @@ article a:where(:not(.moss-btn)):focus {
 /* The INDEX state: a grid whose cards carry no cover at all.
  *
  * `data-list-has-covers` is emitted iff ANY child card has a cover
- * (grid_card.rs), so its ABSENCE proves every `.moss-card-cover` in this
- * listing is the empty placeholder div — which the `.moss-card-no-cover`
- * gradient would otherwise paint as a 4:3 grey rectangle per cell. Fifty-six
- * grey rectangles is the failure this state exists to remove; it is why
- * pointing a listing of bare labels at the grid did not previously work.
+ * (grid_card.rs), so its ABSENCE proves no card in this listing has a picture.
  *
  * The result is a roster of labels: no cover box, no surface fill, no rounded
  * clip, no hover lift. Chrome belongs to cover-bearing shapes (see the long
@@ -6871,10 +6899,6 @@ article a:where(:not(.moss-btn)):focus {
 .moss-cards[data-layout="grid"][data-list-axis]:not([data-list-has-covers]):not(:has(.moss-card-description)) {
   --_card-min: min(11em, 45%);
   gap: var(--moss-space-md) var(--moss-space-lg);
-}
-
-.moss-cards[data-layout="grid"][data-list-axis]:not([data-list-has-covers]):not(:has(.moss-card-description)) .moss-card-cover {
-  display: none;
 }
 
 .moss-cards[data-layout="grid"][data-list-axis]:not([data-list-has-covers]):not(:has(.moss-card-description)) .moss-card {
@@ -7000,25 +7024,22 @@ article a:where(:not(.moss-btn)):focus {
  *
  * The flex stack above gives each card its own cover-on-top/content-below
  * column, so a card with no cover would start its title where a covered
- * sibling starts its photo. moss's answer was an empty `.moss-card-cover
- * .moss-card-no-cover` div per coverless card, painted as a 4:3 gradient — a
- * layout shim that reads to a visitor as a failed image load, and that turned
- * a listing of bare labels (a term root: 56 names) into 56 grey rectangles.
+ * sibling starts its photo. A painted placeholder box would hold that line,
+ * but it reads to a visitor as a failed image load, so the empty slot takes no
+ * room (`.moss-card-no-cover`, below).
  *
- * Subgrid states the same intent without the shim. The listing declares two
+ * Subgrid holds the line without a shim. The listing declares two
  * implicit tracks; each card spans both and adopts them, so the media track
  * is sized by the real covers in that row and every content band in the row
  * starts at the same y. A card with no cover contributes nothing to the media
  * track, and a row where NO card has a cover collapses it to zero — the
- * roster case falls out with no wrapper flag consulted, which is why the
- * INDEX state below no longer has to reason about it on a modern engine.
+ * roster case falls out with no wrapper flag consulted.
  *
  * `@supports` rather than an outright replacement: subgrid is Chromium 117 /
  * WebKit 16 / Firefox 71, which the app's own webviews clear, but a published
- * moss site is read on whatever the visitor has. Without it, everything above
- * stands unchanged — the placeholder is emitted, painted, and reserves its
- * 4:3 box exactly as before, and the INDEX state hides it on term roots. The
- * degradation is a mixed listing with a tidier grid, never a broken one.
+ * moss site is read on whatever the visitor has. Without it, a coverless card
+ * in a mixed row starts its words at the top of the row: an uneven line, never
+ * a broken one.
  *
  * Scope is the listing grid only. `.moss-grid` is author-composed prose whose
  * `align-items: flex-start` is a deliberate different intent, and its cells
@@ -7057,12 +7078,6 @@ article a:where(:not(.moss-btn)):focus {
 
   .moss-cards[data-layout="grid"] .moss-card-content {
     grid-row: 2;
-  }
-
-  /* The placeholder is a fallback-only device. Removing it from the grid (not
-     merely un-painting it) is what lets the media track collapse. */
-  .moss-cards[data-layout="grid"] .moss-card-no-cover {
-    display: none;
   }
 }
 
@@ -7199,8 +7214,32 @@ article a:where(:not(.moss-btn)):focus {
   pointer-events: none;
 }
 
+/* A card with no picture has no cover box: the empty slot moss emits for it
+   takes no room, so the card starts at its words. Beside siblings that do
+   have pictures it keeps the box, so every title in the row starts on one
+   line, and keeps the cover's plain surface with a hairline edge rather than a
+   gradient that reads as a picture that failed to load. */
 .moss-card-no-cover {
-  background: linear-gradient(135deg, var(--moss-color-surface) 0%, var(--moss-border-light) 100%);
+  display: none;
+}
+
+.moss-grid:has(> .moss-card > .moss-card-cover:not(.moss-card-no-cover)) .moss-card-no-cover {
+  display: block;
+}
+
+/* A listing grid lines its rows up with subgrid instead (below), so it needs
+   the box only where subgrid is missing. */
+@supports not (grid-template-rows: subgrid) {
+  .moss-cards[data-layout="grid"]:has(> .moss-card > .moss-card-cover:not(.moss-card-no-cover)) .moss-card-no-cover {
+    display: block;
+  }
+}
+
+/* A kept empty slot, and a link card whose picture moss doesn't have, carry
+   the hairline a waiting picture has in the preview. */
+.moss-card-no-cover,
+.moss-card-cover[data-cover="missing"] {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 14%, transparent);
 }
 
 /* Quote card: a coverless card's cover slot in a list where OTHER cards do
@@ -7827,10 +7866,6 @@ span.moss-embed-missing {
   .moss-cards[data-lead] > .moss-card:first-child .moss-card-title { font-size: clamp(1.9rem, 3.2vw, 2.9rem); }
   .moss-cards[data-lead] > .moss-card:not(:first-child) { border: 0; padding-block: var(--moss-space-sm) 0; }
   .moss-cards[data-lead] > .moss-card:not(:first-child) .moss-card-description { -webkit-line-clamp: 3; }
-}
-
-[data-theme="dark"] .moss-card-no-cover {
-  background: linear-gradient(135deg, var(--moss-color-surface) 0%, rgba(255, 255, 255, 0.05) 100%);
 }
 
 /* External grid-cell links render through the same `.moss-card` shell an
@@ -9403,7 +9438,6 @@ a.moss-grid-card:hover {
      listing's grid. */
   .moss-grid[data-rows="equal"] > .moss-card .moss-card-cover { grid-row: 1; align-self: start; }
   .moss-grid[data-rows="equal"] > .moss-card .moss-card-content { grid-row: 2; }
-  .moss-grid[data-rows="equal"] > .moss-card .moss-card-no-cover { display: none; }
 }
 
 /* Collage (`:::grid {collage}`, 3 to 9 cells). The first cell is the lead: one

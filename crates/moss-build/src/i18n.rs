@@ -170,7 +170,7 @@ impl Language {
     }
 }
 
-pub use strings::{diagram_type_name, sources_headings, t, term_root_title};
+pub use strings::{diagram_type_name, hook_strings, sources_headings, t, term_root_title};
 
 /// A folder card's article count as displayed text — `3 articles`, `三篇`.
 ///

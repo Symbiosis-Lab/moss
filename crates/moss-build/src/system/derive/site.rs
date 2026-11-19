@@ -305,19 +305,18 @@ impl DerivedSite {
     }
 
     /// The reads `Adopt` deferred, as work for a background worker bound to
-    /// the render `render` of `paths`' folder. `None` when everything was cached.
-    pub fn take_background_job(&self, paths: &MossPaths, render: Option<u64>) -> Option<BackgroundDerive> {
+    /// `render`. `None` when everything was cached.
+    pub(crate) fn take_background_job(&self, render: crate::build::lifecycle::Render) -> Option<BackgroundDerive> {
         let jobs = std::mem::take(&mut *self.background.lock().ok()?);
         if jobs.is_empty() {
             return None;
         }
         Some(BackgroundDerive {
             paths: MossPaths::new(&self.root),
-            lifecycle_paths: MossPaths::from_moss_dir(paths.root().to_path_buf()),
+            render,
             root: self.root.clone(),
             folder: self.folder.clone(),
             jobs,
-            render,
         })
     }
 }
@@ -419,13 +418,11 @@ fn read_all(
 /// The deferred reads of one `Adopt` build, owned by a background worker.
 pub struct BackgroundDerive {
     paths: MossPaths,
-    /// The folder's paths as the build lifecycle knows them.
-    lifecycle_paths: MossPaths,
     root: PathBuf,
     folder: String,
     jobs: Vec<Demand>,
     /// The render this read belongs to.
-    render: Option<u64>,
+    render: crate::build::lifecycle::Render,
 }
 
 impl BackgroundDerive {
@@ -437,7 +434,7 @@ impl BackgroundDerive {
     /// so a redundant one is cheap while a missed one leaves finished text
     /// unapplied.
     pub fn run(self, reporter: Option<&dyn BuildReporter>, cancel: &std::sync::atomic::AtomicBool) {
-        let superseded = || !crate::build::lifecycle::is_latest_render(&self.lifecycle_paths, self.render);
+        let superseded = || !self.render.is_latest();
         let stop = || cancel.load(Ordering::SeqCst) || superseded();
         let results = read_all(&self.paths, &self.root, &self.jobs, reporter, &stop, true);
         let cancelled = cancel.load(Ordering::SeqCst);

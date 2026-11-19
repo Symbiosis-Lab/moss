@@ -943,14 +943,16 @@ fn the_placeholder_is_injected_first_inside_head() {
     );
 }
 
-/// The marker outline rides along, because `site.css` no longer carries it —
+/// The waiting style rides along, because `site.css` does not carry it —
 /// styling a class that only exists in the preview would ship dead bytes to
-/// every published site.
+/// every published site. It draws the edge in the theme's own text colour and
+/// no grid: the live grid the bridge lays over is the only one.
 #[test]
-fn the_placeholder_brings_its_own_marker_style() {
+fn the_placeholder_brings_its_own_waiting_style() {
     let out = inject_placeholder_into_head("<html><head></head><body></body></html>");
     assert!(out.contains("moss-img-fallback-style"));
-    assert!(out.contains("outline"));
+    assert!(out.contains("inset 0 0 0 1px color-mix(in srgb,currentColor 14%,transparent)"));
+    assert!(!out.contains("linear-gradient"), "a static grid in the waiting style");
 }
 
 /// A `<head>` with attributes is still a `<head>`. The insert point is the end

@@ -586,17 +586,23 @@ pub fn preflight_cli_build(folder_path: &str) {
 
 /// Shared epilogue of a CLI build the pipeline returned from: drain-print the
 /// result (printing DRAINS the problem counter — the returned count is the only
-/// surviving copy), print the agent-guidance pointer, then wait out any
-/// ui-bound background tasks with the cancel-aware poll. Returns the
-/// problem count for the caller's strict-mode exit decision. Serve/watch
-/// behaviour stays with the caller — it is host policy, not build epilogue.
+/// surviving copy) and print the agent-guidance pointer. Returns the problem
+/// count for the caller's strict-mode exit decision. Serve/watch behaviour
+/// stays with the caller — it is host policy, not build epilogue.
 ///
 /// An `unwritten` build says so in place of its result: the pipeline's
 /// message and the summary describe a site that is not there.
-pub async fn finish_cli_build(message: &str, folder: &str, strict: bool, unwritten: bool) -> usize {
+pub fn finish_cli_build(message: &str, folder: &str, strict: bool, unwritten: bool) -> usize {
     let problems = print_cli_build_result(message, strict, unwritten);
     crate::cli::agents::sync::print_guidance_pointer(std::path::Path::new(folder));
+    problems
+}
 
+/// Waits out the folder's ui-bound background tasks (the picture batch) and
+/// says when they are done. A process about to exit or publish awaits it; a
+/// serving process runs it beside the watcher, which must see an edit while
+/// the batch still runs.
+pub async fn wait_for_background_tasks(folder: &str) {
     if let Some(session) = crate::system::folder_session::registry().get(folder) {
         if session.has_ui_bound() {
             cli_eprintln!("Waiting for background tasks...");
@@ -609,5 +615,4 @@ pub async fn finish_cli_build(message: &str, folder: &str, strict: bool, unwritt
             cli_eprintln!("Background tasks complete");
         }
     }
-    problems
 }

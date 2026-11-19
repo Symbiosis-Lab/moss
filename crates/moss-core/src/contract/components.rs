@@ -429,16 +429,16 @@ const CORE: &[ComponentEntry] = &[
         data_attrs: &[
             DataAttr {
                 name: "data-cover",
-                values: &["quote"],
+                values: &["quote", "missing"],
                 default: "",
-                description: "Emitted iff this card has no cover of its own AND at least one sibling in the same listing does. Fills the slot with the page's description as text (an empty `aria-hidden` tile, with none, so the title is not printed twice) instead of the empty `.moss-card-no-cover` placeholder — a letter without a photo in a listing of photographed pieces. Absent when the whole listing is coverless (every card gets the plain placeholder there) and absent on a card that has its own cover.",
+                description: "`missing`: a link card whose picture belongs here and is not in hand (its card not fetched yet, or its picture not downloaded or encoded); the slot keeps its box with a hairline edge. Only a card known to have no picture gets `.moss-card-no-cover` and closes up. `quote`: emitted iff this card has no cover of its own AND at least one sibling in the same listing does. Fills the slot with the page's description as text (an empty `aria-hidden` tile, with none, so the title is not printed twice) instead of the empty `.moss-card-no-cover` placeholder — a letter without a photo in a listing of photographed pieces. Absent when the whole listing is coverless (every card gets the plain placeholder there) and absent on a card that has its own cover.",
             },
         ],
         example_html: r#"<div class="moss-card-cover"><img src="..." /></div>"#,
         example_markdown: "",
         status: Status::Confirmed,
         since: "1",
-        description: "Cover media slot inside `.moss-card`. Gets `.moss-card-no-cover` modifier when no image is present, or `data-cover=\"quote\"` when a sibling card in the same listing has a cover and this one doesn't.",
+        description: "Cover media slot inside `.moss-card`. Gets `.moss-card-no-cover` modifier when the card has no picture, `data-cover=\"missing\"` on a link card whose picture is not in hand, or `data-cover=\"quote\"` when a sibling card in the same listing has a cover and this one doesn't.",
     },
     ComponentEntry {
         class: "moss-marquee-track",
@@ -1482,7 +1482,7 @@ const CORE: &[ComponentEntry] = &[
                 name: "data-header",
                 values: &["over"],
                 default: "",
-                description: "Emitted **only** for `:::hero {header=over}` on the hero that opens the page. The site header is laid over this hero instead of sitting in a band above it: the header is absolutely positioned with a transparent background and light text, and a soft top wash sits on the photo. Heroes further down the page ignore the option. The selector is `header:has(+ .moss-hero[data-header=\"over\"])`.",
+                description: "Emitted **only** for `:::hero {header=over}` on the hero that opens the page. The site header is laid over this hero instead of sitting in a band above it: the header is absolutely positioned with a transparent background and light text, and a soft top wash sits on the photo. Heroes further down the page ignore the option. The same attribute and its ink attributes are written on a `screen` band (`::: {screen header=over}`) that opens the page when no hero does. Either way `<header>` itself carries `data-header=\"over\"`, the hook the stylesheet selects.",
             },
             DataAttr {
                 name: "data-overlay",
@@ -2187,7 +2187,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "Generic button primitive. Role on `data-role` (v1).",
+        description: "Generic button primitive. Role on `data-role` (v1). A `:::buttons` link that leaves the site carries `target=\"_blank\" rel=\"noopener\"` and ends in a `.visually-hidden` span saying, in the page's language, that it opens in a new tab.",
     },
     ComponentEntry {
         class: "moss-btn__label",

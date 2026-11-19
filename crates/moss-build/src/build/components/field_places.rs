@@ -153,6 +153,28 @@ fn linked_page<'a>(doc: &ParsedDocument, all_docs: &'a [ParsedDocument], graph: 
     all_docs.iter().find(|d| d.source_path.as_deref() == Some(source.as_str()))
 }
 
+/// Each placed `end` field with the page links it holds.
+fn end_links(placed: &[Placed]) -> impl Iterator<Item = (&FieldDecl, &[PageLink])> {
+    placed.iter().filter_map(|p| {
+        let Placed::Value(decl, value) = p else { return None };
+        if decl.place != Some(Place::End) {
+            return None;
+        }
+        match value {
+            TypedValue::Page(link) => Some((decl, std::slice::from_ref(link))),
+            TypedValue::Pages(links) => Some((decl, links.as_slice())),
+            _ => None,
+        }
+    })
+}
+
+/// The page each of `doc`'s `end` links draws as a card, `None` where a link
+/// names no page. A frontmatter link leaves nothing in `outgoing_links`, so
+/// this is the record that `doc` reads them.
+pub fn end_card_targets<'a>(doc: &'a ParsedDocument, all_docs: &'a [ParsedDocument], graph: Option<&'a ContentGraph>) -> impl Iterator<Item = Option<&'a ParsedDocument>> + 'a {
+    end_links(&doc.placed_fields).flat_map(|(_, links)| links).map(move |link| linked_page(doc, all_docs, graph, &link.target))
+}
+
 /// How an `end` card is drawn: everything the shared summary card needs beyond the linked page.
 pub struct EndCards<'a> {
     pub graph: Option<&'a ContentGraph>,
@@ -183,18 +205,8 @@ pub fn end_for_page(doc: &ParsedDocument, all_docs: &[ParsedDocument], cards: &E
 /// One `<section data-field>` per placed `end` field that has a card to draw, headed by the field's label.
 /// `card` draws one linked page, and says whether it stands for a collection.
 fn end_html(placed: &[Placed], lang: Language, card: &dyn Fn(&FieldDecl, &PageLink) -> Option<(String, bool)>) -> String {
-    placed
-        .iter()
-        .filter_map(|p| {
-            let Placed::Value(decl, value) = p else { return None };
-            if decl.place != Some(Place::End) {
-                return None;
-            }
-            let links: &[PageLink] = match value {
-                TypedValue::Page(link) => std::slice::from_ref(link),
-                TypedValue::Pages(links) => links,
-                _ => return None,
-            };
+    end_links(placed)
+        .filter_map(|(decl, links)| {
             let (cards, collections): (Vec<String>, Vec<bool>) = links.iter().filter_map(|link| card(decl, link)).unzip();
             (!cards.is_empty()).then(|| {
                 let label = html_escape(&decl.label_for(lang.as_bcp47_attr()));

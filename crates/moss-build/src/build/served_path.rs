@@ -511,9 +511,10 @@ impl ServedPath {
         ServedPath(".well-known/tdmrep.json".to_string())
     }
 
-    /// The file Bluesky reads to check a domain handle. Path is fixed.
-    pub fn for_atproto_did() -> Self {
-        ServedPath(".well-known/atproto-did".to_string())
+    /// An identity proof's file, at a path its network fixes under
+    /// `.well-known/`. `None` for any other path.
+    pub fn for_well_known(path: &str) -> Option<Self> {
+        crate::plugins::contributions::identity::well_known_path_ok(path).ok().map(|()| ServedPath(path.to_string()))
     }
 
     /// Default theme CSS, emitted from the binary-embedded default stylesheet

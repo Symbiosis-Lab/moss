@@ -623,11 +623,9 @@ fn a_long_wait_never_removes_a_structural_file_from_the_count() {
     assert_eq!(blocking_count(&pending), 2);
 }
 
-/// The two counts and the phase, read together on the incident's own shape:
-/// one non-structural file outstanding. The panel still honestly says moss is
-/// fetching something (`materializing`, one remaining), the screen stays down,
-/// and — because `stalled` is computed over the blocking count — the mandatory
-/// 90-second "Downloads have stalled" window never opens for this class.
+/// One non-structural file outstanding: the panel still says moss is fetching
+/// something (`materializing`), and the screen stays down even when the
+/// provider is stuck, since the render waits on nothing.
 #[test]
 fn a_pending_set_with_nothing_render_relevant_never_stalls() {
     let pending: HashSet<PathBuf> =
@@ -635,10 +633,7 @@ fn a_pending_set_with_nothing_render_relevant_never_stalls() {
 
     let blocking = blocking_count(&pending);
     assert_eq!(blocking, 0);
-
-    // What the sweep does with it: no stall however long the silence runs,
-    // because the stall test is `blocking > 0`.
-    let stalled = blocking > 0;
+    let stalled = is_stalled(blocking, true);
     assert!(!stalled);
     assert_eq!(phase_for(stalled), "materializing");
 }
@@ -1331,6 +1326,7 @@ async fn cancelling_the_session_stops_the_sweep_and_frees_its_claim() {
     let dispatch: crate::ops::watch::RebuildDispatch = std::sync::Arc::new(|_| Box::pin(async {}));
     start(session.clone(), host(dispatch)).await;
     assert!(sweeps().contains_key(&key), "the sweep claims its folder");
+    assert!(crate::build::cloud_readiness::downloads_watched(&session.folder), "the cloud readers do not judge the swept folder");
 
     session.cancel.cancel();
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -1338,6 +1334,7 @@ async fn cancelling_the_session_stops_the_sweep_and_frees_its_claim() {
         assert!(Instant::now() < deadline, "the sweep outlived its cancelled session");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    assert!(!crate::build::cloud_readiness::downloads_watched(&session.folder), "the folder is judged after its sweep ended");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

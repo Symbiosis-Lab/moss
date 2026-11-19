@@ -37,12 +37,12 @@ import { mossBuildAssets, openCrateDir } from '../../support/crate-paths';
 const CSS = fs.readFileSync(path.join(mossBuildAssets(), 'css/site.css'), 'utf8');
 const SHELL_HTML = fs.readFileSync(
   path.join(mossBuildAssets(), 'templates/shell.html'), 'utf8');
-// The marker outline the preview server injects alongside the script. Kept in
-// sync by hand with ASSET_PLACEHOLDER_STYLE in preview/iframe_bridge.rs — and by
-// `the_placeholder_brings_its_own_marker_style`, which fails if it disappears.
-const PLACEHOLDER_CSS = `
-.moss-img-fallback{outline:1px solid rgba(20,60,130,.25);outline-offset:-1px}
-[data-theme="dark"] .moss-img-fallback{outline-color:rgba(90,155,255,.3)}`;
+// The waiting style the preview server injects alongside the script, read out
+// of the Rust string literal so the harness cannot drift from it.
+const PLACEHOLDER_CSS = fs.readFileSync(
+  path.join(openCrateDir('moss-build'), 'src/ops/serve/iframe_bridge.rs'), 'utf8')
+  .match(/const ASSET_PLACEHOLDER_STYLE: &str = "\\\n([\s\S]*?)";/)[1]
+  .replace(/\\\n/g, '').replace(/\\"/g, '"');
 const PLACEHOLDER_JS = fs.readFileSync(
   path.join(openCrateDir('moss-build'), 'src/ops/serve/js/asset-placeholder.js'), 'utf8');
 
@@ -284,6 +284,23 @@ test('a pending <picture> ladder paints the real image after restore, with no re
   await expect(img).not.toHaveClass(/moss-img-fallback/);
   await expect(page.locator('#pic > source[srcset]')).toHaveCount(1);
   await expectRealBytes(img, 'the real bytes must paint without a reload');
+});
+
+test('a pending picture paints once the server has it, with no swap event', async ({ page }) => {
+  // A 404 in the preview is usually a picture asked for before the build
+  // promised it: the placeholder keeps asking, so the original shows as soon as
+  // it is served, long before its encode lands.
+  const land = await servePending(page,
+    `<picture id="pic">
+       <source srcset="/assets/early.w800.webp 800w" type="image/webp">
+       <img id="img" src="/assets/early.png" width="800" height="600" alt="">
+     </picture>`);
+  await settle(page);
+  await expect(page.locator('#img')).toHaveClass(/moss-img-fallback/);
+
+  land();
+  await expect(page.locator('#img')).not.toHaveClass(/moss-img-fallback/, { timeout: 4000 });
+  await expectRealBytes(page.locator('#img'), 'the served original must paint');
 });
 
 test('a pending bare <img> paints the real image after restore', async ({ page }) => {

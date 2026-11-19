@@ -399,12 +399,12 @@ fn the_manifest_records_the_bytes_written_for_each_gated_file() {
     assert_gated_manifest_matches_generation(&site, "cold");
     // A carried page is not rendered, so its gated version must be rendered on
     // its own. The first unobserved build after a full one renders in full;
-    // the second proves from its seal and carries.
+    // the second ends at its entry, leaving the sealed generation as it was.
     unobserved_build(&site);
-    assert!(unobserved_build(&site) > 0, "the unchanged build carried no page");
+    assert_eq!(count(&unobserved_build(&site), "unchanged_at_entry"), 1, "the unchanged build ended at its entry");
     assert_gated_manifest_matches_generation(&site, "unchanged");
     site.write("about.md", "---\ntitle: About\n---\nWho we are, and since when.\n");
-    assert!(unobserved_build(&site) > 0, "the edited build carried no page");
+    assert!(count(&unobserved_build(&site), "pages_carried") > 0, "the edited build carried no page");
     assert_gated_manifest_matches_generation(&site, "public edit");
 }
 
@@ -420,31 +420,34 @@ fn a_cascade_toggled_on_a_warm_site_moves_its_pages_into_and_out_of_gated() {
     files.push(("notes/tide.md", &tide));
     let site = site::Site::new(&files);
     unobserved_build(&site);
-    assert!(unobserved_build(&site) > 0, "the site is warm");
+    assert_eq!(count(&unobserved_build(&site), "unchanged_at_entry"), 1, "the site is warm");
     assert!(site.html("notes/tide/index.html").contains(TIDE), "a public page shows its whole body");
 
     site.write("notes/index.md", "---\ntitle: Notes\ncascade: { members: subscribers }\n---\nNotes.\n");
-    assert_eq!(unobserved_build(&site), 0, "a cascade edit renders every page; if it now carries pages, prove here that a carried page's public version loses its members-only text and its _gated/ entry is written");
+    assert_eq!(count(&unobserved_build(&site), "pages_carried"), 0, "a cascade edit renders every page; if it now carries pages, prove here that a carried page's public version loses its members-only text and its _gated/ entry is written");
     assert!(!site.html("notes/tide/index.html").contains(TIDE), "the cascaded page's public version holds its members-only text");
     assert!(site.html("_gated/notes/tide/index.html").contains(TIDE), "the gated version holds the whole body");
     assert!(manifest_of(&site).contains_key("_gated/notes/tide/index.html"), "the gated page is in the manifest");
     assert_gated_manifest_matches_generation(&site, "cascade added");
 
     site.write("notes/index.md", "---\ntitle: Notes\n---\nNotes.\n");
-    assert_eq!(unobserved_build(&site), 0, "a cascade edit renders every page; if it now carries pages, prove here that a carried page's _gated/ entry is removed and its public version is whole again");
+    assert_eq!(count(&unobserved_build(&site), "pages_carried"), 0, "a cascade edit renders every page; if it now carries pages, prove here that a carried page's _gated/ entry is removed and its public version is whole again");
     assert!(!manifest_of(&site).contains_key("_gated/notes/tide/index.html"), "the gated entry outlived its cascade");
     assert!(!site.output("_gated/notes/tide/index.html").exists(), "the gated file outlived its cascade");
     assert!(site.html("notes/tide/index.html").contains(TIDE), "the page is public again");
     assert_gated_manifest_matches_generation(&site, "cascade removed");
 }
 
-/// Build as `moss build` does, proving from the last seal; returns how many
-/// pages it carried.
-fn unobserved_build(site: &site::Site) -> u64 {
+/// Build as `moss build` does, proving from the last seal; returns the
+/// build's profile record.
+fn unobserved_build(site: &site::Site) -> serde_json::Value {
     site::build_sync(&site.root.to_string_lossy(), BuildTrigger::Unobserved).unwrap();
     let profile = fs::read_to_string(site.root.join(".moss/build.nosync/profile.jsonl")).unwrap();
-    let record: serde_json::Value = serde_json::from_str(profile.lines().last().unwrap()).unwrap();
-    record["counts"]["pages_carried"].as_u64().unwrap()
+    serde_json::from_str(profile.lines().last().unwrap()).unwrap()
+}
+
+fn count(record: &serde_json::Value, name: &str) -> u64 {
+    record["counts"][name].as_u64().unwrap_or(0)
 }
 
 fn assert_gated_manifest_matches_generation(site: &site::Site, build_kind: &str) {

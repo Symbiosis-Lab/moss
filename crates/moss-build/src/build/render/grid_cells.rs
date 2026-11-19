@@ -42,14 +42,14 @@
 use std::collections::HashMap;
 
 use moss_core::ast::{Block, Inline, ResolvedUrl, Url, UrlKind};
-use moss_core::ast::link_card::{blocks_text, push_inlines_text};
+use moss_core::ast::link_card::{blocks_text, push_inlines_text, MISSING_COVER, NO_COVER};
 
 use crate::build::components::child_list::ChildItemProps;
 use crate::build::components::grid_card::{render_external_card, render_item_with_typesetting, CoverLoading};
 use moss_core::render::image::Loading;
 use crate::build::markdown::body_plan::{BodyPlan, BodySegment, GridCellEmission, GridEmission};
 use crate::build::media::cover::detect_cover_type;
-use crate::build::page::link_meta::LinkMeta;
+use crate::build::page::link_meta::{CoverSlot, LinkMeta};
 use crate::i18n::Language;
 use crate::build::types::ParsedDocument;
 
@@ -111,12 +111,6 @@ pub(crate) struct CellLink<'a> {
 }
 
 impl CellLink<'_> {
-    /// Links that leave the site. `AssetNewtab` counts: it is an internal file
-    /// opened in a new tab, and the old scanner treated it the same way.
-    fn external(&self) -> bool {
-        matches!(self.kind, UrlKind::External | UrlKind::AssetNewtab)
-    }
-
     /// True when the author wrote a bare URL (or no text at all), which is the
     /// signal that the preview title should come from fetched metadata rather
     /// than from the link text.
@@ -130,7 +124,7 @@ impl CellLink<'_> {
     /// such a card would throw away. The one check both card-generating
     /// passes ([`card_markup`], [`summary_card_markup`]) share.
     fn ineligible_for_a_generated_card(&self) -> bool {
-        self.external() || self.cover_image.is_some()
+        self.kind.opens_new_tab() || self.cover_image.is_some()
     }
 }
 
@@ -304,12 +298,8 @@ pub(crate) fn resolve_page_body(
     } else {
         let moss_dir = std::path::Path::new(root_path).join(".moss");
         let url_refs: Vec<&str> = urls_to_fetch.iter().map(|s| s.as_str()).collect();
-        // Critical-path I/O policy: render reads cache only and explicitly
-        // records URLs for the next build's background prewarm. The first build
-        // may render empty cards; the next sees populated metadata after sync
-        // has run.
-        crate::build::page::link_meta::record_urls_for_prewarm(&url_refs, &moss_dir);
-        // The build's materialize step read these URLs into the ledger already.
+        // Render reads the cache only; the build fetches what it lacks. The
+        // build's materialize step read these URLs into the ledger already.
         Some(crate::build::page::link_meta::read_link_meta_from_cache(
             &url_refs, &moss_dir, None,
         ))
@@ -442,7 +432,7 @@ pub(crate) fn apply_collection_cards(plan: &mut BodyPlan, index: &BuildIndex<'_>
             let GridCell::Link(link) = classify_cell(&cell.blocks) else {
                 return false;
             };
-            !link.external()
+            !link.kind.opens_new_tab()
                 && picked_card_props(&link, index).is_some_and(|p| p.cover.is_some())
         });
         let cell_sizes = Some(grid.cell_sizes.as_str());
@@ -577,7 +567,7 @@ pub(crate) fn external_urls_needing_fetch(plan: &BodyPlan) -> Vec<String> {
     for grid in grids(plan) {
         for cell in &grid.cells {
             if let GridCell::Link(link) = classify_cell(&cell.blocks) {
-                if link.external() {
+                if link.kind.opens_new_tab() {
                     urls.push(link.href.to_string());
                 }
             }
@@ -638,7 +628,7 @@ fn external_card_markup(
     let GridCell::Link(link) = classify_cell(&cell.blocks) else {
         return None;
     };
-    if !link.external() {
+    if !link.kind.opens_new_tab() {
         // Every non-external cell that reaches here is non-whole-cell (a
         // `leading_link` paragraph, never a `Block::LinkCard`), so its own
         // `Inline::Link` already rendered an `<a>` around the cell's
@@ -665,7 +655,6 @@ fn external_card_markup(
     } else {
         fetched_title.unwrap_or_else(|| moss_core::ast::link_card::domain_and_path(link.href))
     };
-    let mut has_cover = true;
     let cover_html = match link.cover_image {
         // Author content always wins: an authored image is never displaced
         // by a fetched og:image, even when one is cached below.
@@ -673,7 +662,7 @@ fn external_card_markup(
             let (cover_path, attrs_str) = moss_core::media::split_pipe(href);
             let cover_attrs = moss_core::media::parse_media_attrs(attrs_str);
             let cover_type = detect_cover_type(cover_path, None);
-            crate::build::media::cover::render_cover_html(
+            Some(crate::build::media::cover::render_cover_html(
                 cover_path,
                 cover_type,
                 alt,
@@ -683,13 +672,20 @@ fn external_card_markup(
                 index.media_lookup,
                 Loading::Lazy,
                 cell_sizes,
-            )
+            ))
         }
-        None => remote_cover_html(link_meta.and_then(|m| m.get(link.href)), &title, cell_sizes).unwrap_or_else(|| {
-            has_cover = false;
-            r#"<div class="moss-card-cover moss-card-no-cover"></div>"#.to_string()
-        }),
+        None => {
+            let meta = link_meta.and_then(|m| m.get(link.href));
+            match meta.map_or(CoverSlot::Missing, LinkMeta::cover_slot) {
+                CoverSlot::None => None,
+                // A served picture that fails to render still keeps its box.
+                CoverSlot::Served => remote_cover_html(meta, &title, cell_sizes).or_else(|| Some(MISSING_COVER.to_string())),
+                CoverSlot::Missing => Some(MISSING_COVER.to_string()),
+            }
+        }
     };
+    let has_cover = cover_html.is_some();
+    let cover_html = cover_html.unwrap_or_else(|| NO_COVER.to_string());
     let html = render_external_card(
         link.href,
         &title,
@@ -814,7 +810,7 @@ fn resolve_cell_href(page_url_path: &str, href: &str) -> String {
 /// its own from `doc.date` alone, and a page whose date came from any other
 /// rung showed one in the listing and none here.
 fn picked_card_props(link: &CellLink<'_>, index: &BuildIndex<'_>) -> Option<ChildItemProps> {
-    let doc = find_linked_document(link, index)?;
+    let doc = find_linked_document(link.href, index.page_url_path, index.documents, index.graph)?;
     let mut props = crate::build::components::child_list::props_for_document(
         doc,
         index.documents,
@@ -835,28 +831,53 @@ fn picked_card_props(link: &CellLink<'_>, index: &BuildIndex<'_>) -> Option<Chil
 /// The page a cell's link names, or `None` when it points outside the build.
 ///
 /// Decode, anchor against the hosting page's pretty URL, then look up — the
-/// shared half of resolving a cell, used by both card shapes.
+/// shared half of resolving a cell, used by both card shapes and by
+/// [`card_targets`].
 fn find_linked_document<'a>(
-    link: &CellLink<'_>,
-    index: &BuildIndex<'a>,
+    href: &str,
+    page_url_path: &str,
+    documents: &'a [ParsedDocument],
+    graph: Option<&moss_core::content_graph::ContentGraph>,
 ) -> Option<&'a ParsedDocument> {
-    let decoded = urlencoding::decode(link.href)
+    let decoded = urlencoding::decode(href)
         .map(|s| s.to_string())
-        .unwrap_or_else(|_| link.href.to_string());
-    let anchored = resolve_cell_href(index.page_url_path, &decoded);
+        .unwrap_or_else(|_| href.to_string());
+    let anchored = resolve_cell_href(page_url_path, &decoded);
     let folder_url = if anchored.ends_with('/') || anchored.is_empty() {
         anchored
     } else {
         format!("{}/", anchored)
     };
-    find_document(&folder_url, index)
+    find_document(&folder_url, documents, graph)
+}
+
+/// The page each of `doc`'s grid link cells names, found the way rendering
+/// finds it, `None` where it names none. A cell may draw the named page's
+/// card, and a `/`-rooted href leaves nothing in `outgoing_links`. Every
+/// internal link cell counts, card or not: over-reading is the safe side.
+pub(crate) fn card_targets<'a>(
+    doc: &ParsedDocument,
+    documents: &'a [ParsedDocument],
+    graph: Option<&moss_core::content_graph::ContentGraph>,
+) -> Vec<Option<&'a ParsedDocument>> {
+    let Some(plan) = &doc.body_plan else { return Vec::new() };
+    grids(plan)
+        .flat_map(|grid| &grid.cells)
+        .filter_map(|cell| match classify_cell(&cell.blocks) {
+            GridCell::Link(link) if !link.kind.opens_new_tab() => Some(find_linked_document(link.href, &doc.url_path, documents, graph)),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Find the document a folder-shaped URL points at.
-fn find_document<'a>(folder_url: &str, index: &BuildIndex<'a>) -> Option<&'a ParsedDocument> {
+fn find_document<'a>(
+    folder_url: &str,
+    documents: &'a [ParsedDocument],
+    graph: Option<&moss_core::content_graph::ContentGraph>,
+) -> Option<&'a ParsedDocument> {
     let index_url = format!("{}index.html", folder_url);
-    let exact = index
-        .documents
+    let exact = documents
         .iter()
         .find(|d| d.url_path == folder_url || d.url_path == index_url);
     if exact.is_some() {
@@ -868,7 +889,7 @@ fn find_document<'a>(folder_url: &str, index: &BuildIndex<'a>) -> Option<&'a Par
     // where that folder note actually lives. Try `{folder}/index.md` first
     // (suffix matching reaches nested paths), then the bare name (stem matching
     // reaches self-named notes).
-    let graph = index.graph?;
+    let graph = graph?;
     let folder_name = folder_url.trim_end_matches('/');
     let resolved = graph
         .resolve_path(&format!("{folder_name}/index.md"), "")
@@ -879,8 +900,7 @@ fn find_document<'a>(folder_url: &str, index: &BuildIndex<'a>) -> Option<&'a Par
     // `index.html`) re-implemented three rules page_map already applied — and
     // spelled the folder in the source's case, so a mixed-case folder matched
     // nothing and the card silently vanished.
-    index
-        .documents
+    documents
         .iter()
         .find(|d| d.source_path.as_deref() == Some(resolved.as_str()))
 }

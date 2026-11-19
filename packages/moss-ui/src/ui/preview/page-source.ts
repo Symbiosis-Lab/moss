@@ -128,7 +128,7 @@ class PageSource {
       page = {
         urlPath, isReload, pending: pendingOf(data),
         sourcePath: data.source_path, takeover: data.takeover ?? null,
-        isDir: data.is_dir, isArticle: data.is_article, syndicated: data.syndicated ?? [],
+        isArticle: data.is_article, syndicated: data.syndicated ?? [],
       };
     } else if (previous && !this.failures) {
       // A failed re-ask keeps the answer it could not improve on.
@@ -160,11 +160,11 @@ class PageSource {
 }
 
 function noAnswer(urlPath: string, isReload: boolean): Answer {
-  return { urlPath, isReload, pending: 'lookup', sourcePath: null, takeover: null, isDir: false, isArticle: false, syndicated: [] };
+  return { urlPath, isReload, pending: 'lookup', sourcePath: null, takeover: null, isArticle: false, syndicated: [] };
 }
 
 function changed(a: Answer, b: Answer): boolean {
-  return a.pending !== b.pending || a.sourcePath !== b.sourcePath || a.isDir !== b.isDir || a.isArticle !== b.isArticle
+  return a.pending !== b.pending || a.sourcePath !== b.sourcePath || a.isArticle !== b.isArticle
     || JSON.stringify(a.takeover) !== JSON.stringify(b.takeover) || a.syndicated.join('\n') !== b.syndicated.join('\n');
 }
 

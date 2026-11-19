@@ -472,6 +472,19 @@ interface FootnoteDeco {
   to: number;
   deco: Decoration;
 }
+/** Direct children of `node` named `name`, in order. */
+declare function childrenNamed(node: {
+  cursor(): {
+    firstChild(): boolean;
+    nextSibling(): boolean;
+    name: string;
+    from: number;
+    to: number;
+  };
+}, name: string): Array<{
+  from: number;
+  to: number;
+}>;
 /** Where a footnote label is written: the whole construct, and its label span. */
 interface FootnoteSite {
   /** The whole `[^1]` / `[^1]: …` node. */
@@ -550,4 +563,4 @@ declare const footnoteViewPluginForTest: ViewPlugin<{
  */
 declare function footnoteExtension(): Extension;
 //#endregion
-export { CMType, EditorReferenceResolution, EmbedNodeRef, EmbedParts, EmbedSyntax, ExtractedTarget, FolderEmbedParams, FootnoteDeco, FootnoteSite, ImageTarget, LinkedEmbed, ParsedMark, ReferenceCacheRead, ShortcodeBlockInfo, ShortcodeBlockOptions, ShortcodeBlockStrings, TreeNode, buildLinkDecorations, collectShortcodeBlocks, criticmarkupExtension, dividesCellsAt, embedNodeAt, embedParts, extractImageTargets, extractLinkTargets, flattenBlocks, folderChips, folderParamsFromEmbed, footnoteDecorations, footnoteExtension, footnoteIndex, footnoteJumpTarget, footnoteTheme, footnoteViewPluginForTest, imageNodeAtWidget, inShortcodeBody, isCellDividerLine, isEmbedNode, isLegacyDividerLine, legacyDividesCellsAt, linkClickableExtension, linkUnitOfEmbed, linkedEmbedOf, mossHighlight, mossHighlightExtension, nodeTouchesSelection, parseFolderParams, parseMarks, shortcodeBlockExtension, shortcodeBodyRanges, topLevelLegacyDividerCount, widthFromPipe };
+export { CMType, EditorReferenceResolution, EmbedNodeRef, EmbedParts, EmbedSyntax, ExtractedTarget, FolderEmbedParams, FootnoteDeco, FootnoteSite, ImageTarget, LinkedEmbed, ParsedMark, ReferenceCacheRead, ShortcodeBlockInfo, ShortcodeBlockOptions, ShortcodeBlockStrings, TreeNode, buildLinkDecorations, childrenNamed, collectShortcodeBlocks, criticmarkupExtension, dividesCellsAt, embedNodeAt, embedParts, extractImageTargets, extractLinkTargets, flattenBlocks, folderChips, folderParamsFromEmbed, footnoteDecorations, footnoteExtension, footnoteIndex, footnoteJumpTarget, footnoteTheme, footnoteViewPluginForTest, imageNodeAtWidget, inShortcodeBody, isCellDividerLine, isEmbedNode, isLegacyDividerLine, legacyDividesCellsAt, linkClickableExtension, linkUnitOfEmbed, linkedEmbedOf, mossHighlight, mossHighlightExtension, nodeTouchesSelection, parseFolderParams, parseMarks, shortcodeBlockExtension, shortcodeBodyRanges, topLevelLegacyDividerCount, widthFromPipe };

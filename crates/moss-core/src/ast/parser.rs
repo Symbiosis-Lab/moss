@@ -282,25 +282,11 @@ fn parse_document(markdown: &str, config: &ParseConfig, heading_ids: HeadingIds)
         Parser::new_ext(&source, options).into_offset_iter().unzip();
     let (events, offsets, capped_at) = cap_nesting(events, offsets);
 
-    // Build the prefix-sum line table once (only when needed).
-    //
-    // CAVEAT: the markdown that the offsets index into is `source` (the
-    // post-extraction, post-linked-embed-substitution string), NOT the
-    // original `markdown` passed in. Shortcode extraction may rewrite some bytes
-    // into sentinel HTML comments of a different length; line numbers
-    // would be off for blocks following an extracted shortcode if we
-    // built the lookup against the original. We build against the
-    // post-extraction string, so the line numbers match the
-    // post-extraction view — which is what users see in their editor
-    // before shortcode-block lines, and is "close enough" after (the
-    // sentinel preserves one line per extracted block, so line counts
-    // after the extracted block are within one of the source). See the
-    // architecture note in `shortcode_extract.rs` for the placeholder
-    // shape.
-    //
-    // For the source-line-off path, lookup is unused.
+    // Lines are counted in `source`, the text pulldown-cmark reads. Extraction
+    // keeps one line per source line (a sentinel pads to its block's length)
+    // except the blank lines a wrapped div needs, which the lookup skips.
     let line_lookup = if config.emit_source_lines {
-        Some(LineLookup::build(&source, config.source_line_offset))
+        Some(LineLookup::build(&source, config.source_line_offset, extraction.inserted_lines.clone()))
     } else {
         None
     };
@@ -695,10 +681,14 @@ struct LineLookup {
     /// raw-file lines (the frontmatter line count). See
     /// `ParseConfig::source_line_offset`.
     line_offset: usize,
+    /// Source lines (0-based, ascending) the extractor inserted; a line number
+    /// counts only the lines up to it that the author wrote, so an inserted
+    /// line (an accordion's end marker) takes the authored line before it.
+    inserted_lines: Vec<usize>,
 }
 
 impl LineLookup {
-    fn build(source: &str, line_offset: usize) -> Self {
+    fn build(source: &str, line_offset: usize, inserted_lines: Vec<usize>) -> Self {
         let mut newline_offsets = Vec::new();
         for (i, b) in source.bytes().enumerate() {
             if b == b'\n' {
@@ -708,6 +698,7 @@ impl LineLookup {
         Self {
             newline_offsets,
             line_offset,
+            inserted_lines,
         }
     }
 
@@ -729,7 +720,7 @@ impl LineLookup {
             Ok(idx) => idx + 1,
             Err(idx) => idx + 1,
         };
-        body_line + self.line_offset
+        body_line - self.inserted_lines.partition_point(|&line| line < body_line) + self.line_offset
     }
 }
 

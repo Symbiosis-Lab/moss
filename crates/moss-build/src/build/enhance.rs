@@ -323,10 +323,9 @@ fn log_residual_slot_markers(page_path: &str, residual: &[&str]) {
     );
 }
 
-/// Transform name used for cached `html/slots` output in the `TransformCache`.
-use crate::build::cache::page_sources::SLOT_INJECT_TRANSFORM;
+use crate::build::cache::page_sources::{SLOT_INJECT_TRANSFORM, SLOT_PAGE_TRANSFORM};
 
-/// Cached record for an `html/slots` transform: the page's shipped bytes (the
+/// Cached record for a slot-injection transform: the page's shipped bytes (the
 /// blob holding them and their manifest hash), whether injection changed them,
 /// and the residual-marker scan result so the `residual_known_slot_markers`
 /// diagnostic can still fire on a cache hit (prior-art
@@ -351,15 +350,22 @@ use crate::build::cache::page_sources::SLOT_INJECT_TRANSFORM;
 /// this record is keyed on: a hit `link_to`s them into place when they do, and
 /// leaves the render's own bytes alone when they do not.
 ///
-/// A shape change here needs no version gate: `TransformCache::summary` returns
-/// `None` on a deserialize failure and falls through to a live re-run — which is
-/// how records written before these fields existed are retired.
+/// A shape change here needs no version gate: a record that does not
+/// deserialize reads as a miss and falls through to a live re-run, which is how
+/// records written before these fields existed are retired.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SlotInjectRecord {
     content_oid: String,
     manifest_hash: String,
     rewritten: bool,
     residual: Vec<String>,
+}
+
+/// The slot record for a page's rendered bytes, as this version writes it or as
+/// an older one did: an unchanged page needs no new record after an upgrade.
+fn slot_record(transform_cache: &crate::build::cache::TransformCache, source_oid: &str, params: &serde_json::Value) -> Option<SlotInjectRecord> {
+    transform_cache.summary_with_page(SLOT_PAGE_TRANSFORM, source_oid, params)
+        .or_else(|| transform_cache.summary(SLOT_INJECT_TRANSFORM, source_oid, params))
 }
 
 /// The slot records this process last used for a stage, by page, so a watch
@@ -590,7 +596,7 @@ pub(crate) fn inject_slots_into_directory_cached(
 
         let hit = key.as_ref().and_then(|(source_oid, params)| {
             remembered.get(&page_path).filter(|(oid, _)| oid == source_oid).map(|(_, record)| record.clone())
-                .or_else(|| transform_cache.summary::<SlotInjectRecord>(SLOT_INJECT_TRANSFORM, source_oid, params))
+                .or_else(|| slot_record(transform_cache, source_oid, params))
         })
             // Its blob may have been collected since: a miss too, re-run live. A
             // receipt must never name a blob `ship_phase` would not find.
@@ -626,7 +632,7 @@ pub(crate) fn inject_slots_into_directory_cached(
                     rewritten: changed_page,
                     residual: residual.iter().map(|s| s.to_string()).collect(),
                 };
-                transform_cache.put_summary(SLOT_INJECT_TRANSFORM, &source_oid, html.len() as u64, &params, &record, Some((oid, injected.len() as u64)));
+                transform_cache.put_with_page(SLOT_PAGE_TRANSFORM, &source_oid, html.len() as u64, &params, &record, (oid, injected.len() as u64));
                 kept.insert(page_path.clone(), (source_oid, record));
             }
             (changed_page, manifest_hash, content_oid, Some(injected))

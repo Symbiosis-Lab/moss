@@ -180,7 +180,8 @@ pub(crate) async fn build_and_describe(
     // waits out any ui-bound background work, which is a no-op headless today
     // and a guarantee rather than a coincidence.
     let unwritten = crate::system::build_records::records().last_build_failed(root.as_str());
-    crate::build::cli_output::finish_cli_build(&message, root.as_str(), false, unwritten).await;
+    crate::build::cli_output::finish_cli_build(&message, root.as_str(), false, unwritten);
+    crate::build::cli_output::wait_for_background_tasks(root.as_str()).await;
     let taken = captured.sealed.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
     let change_set = captured.change_set.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
     if let Some(set) = &change_set { super::profile::pages(set); }

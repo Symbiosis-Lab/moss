@@ -72,6 +72,10 @@ pub struct ExtractionResult {
     /// in source order of their openers, nested regions included. Lets a
     /// caller audit which classes a page uses without re-parsing the fences.
     pub css_regions: Vec<CssRegionSpan>,
+    /// Lines of `markdown_with_placeholders` (0-based, ascending) that stand
+    /// for no source line: the blank lines a wrapped div needs so its body
+    /// parses as Markdown. A source line number skips them.
+    pub inserted_lines: Vec<usize>,
 }
 
 /// An empty-name fenced div the extractor wrapped in a plain `<div>`.
@@ -1570,7 +1574,7 @@ pub fn extract_shortcodes_with_config(
 ) -> ExtractionResult {
     let nonce = compute_nonce(markdown);
     let mut collected = Collected::default();
-    let output = extract_with_state(markdown, &nonce, &mut collected, config);
+    let (output, inserted_lines) = extract_with_state(markdown, &nonce, &mut collected, config);
     ExtractionResult {
         markdown_with_placeholders: output,
         extracted: collected.extracted,
@@ -1578,6 +1582,7 @@ pub fn extract_shortcodes_with_config(
         warnings: collected.warnings,
         advisories: collected.advisories,
         css_regions: collected.css_regions,
+        inserted_lines,
     }
 }
 
@@ -1598,13 +1603,16 @@ struct Collected {
 /// here so their bodies also get scanned for typed shortcodes — the
 /// shared `extracted` and `warnings` accumulators ensure all sentinels
 /// across nesting levels share the same nonce and a flat index space.
+/// Also returns the output lines (0-based) that stand for no source line.
 fn extract_with_state(
     markdown: &str,
     nonce: &str,
     collected: &mut Collected,
     config: &ParseConfig,
-) -> String {
+) -> (String, Vec<usize>) {
     let mut output = String::with_capacity(markdown.len());
+    let mut inserted: Vec<usize> = Vec::new();
+    let mut seen = (0, 0);
     let lines: Vec<&str> = markdown.lines().collect();
     // Which lines are code or comment, and therefore carry no live `:::`
     // syntax. One shared scanner for every pre-parse pass in the tree —
@@ -1709,8 +1717,7 @@ fn extract_with_state(
                 // The body's first line sits `body_start` lines into this
                 // level, so the recursion's line numbers are shifted by it.
                 let body_config = config_at_body_line(config, body_start);
-                let body_processed =
-                    extract_with_state(&body, nonce, collected, &body_config);
+                let body_processed = extract_with_state(&body, nonce, collected, &body_config);
                 let mut extra_attrs = data_attrs_for(&parsed.kvs);
                 let mut classes = parsed.classes.clone();
                 let accordion = parsed
@@ -1720,19 +1727,11 @@ fn extract_with_state(
                     classes.insert(0, "moss-accordion".to_string());
                     extra_attrs.push_str(&format!(r#" data-accordion="{name}""#));
                 }
-                output.push_str(&render_div_open(
-                    &classes,
-                    parsed.id.as_deref(),
-                    parsed.width,
-                    Some(&extra_attrs),
-                ));
-                output.push_str("\n\n");
-                output.push_str(&body_processed);
-                if !body_processed.is_empty() && !body_processed.ends_with('\n') {
-                    output.push('\n');
-                }
-                output.push_str("\n</div>\n");
+                let open = render_div_open(&classes, parsed.id.as_deref(), parsed.width, Some(&extra_attrs));
+                push_wrapped_div(&mut output, &mut inserted, &mut seen, &open, body_processed);
                 if let Some(name) = &accordion {
+                    let blank = lines_in(&output, &mut seen);
+                    inserted.extend([blank, blank + 1]);
                     output.push_str(&format!("\n{}\n", super::accordion::end_marker(name)));
                 }
                 i = j + 1;
@@ -1798,15 +1797,9 @@ fn extract_with_state(
             classes.extend(parsed.classes.iter().cloned());
             let extra_attrs = format!(r#" data-name="{}""#, crate::media::html_escape(name));
             let body_config = config_at_body_line(config, body_start);
-            let body_processed =
-                extract_with_state(&body, nonce, collected, &body_config);
-            output.push_str(&render_div_open(&classes, parsed.id.as_deref(), None, Some(&extra_attrs)));
-            output.push_str("\n\n");
-            output.push_str(&body_processed);
-            if !body_processed.is_empty() && !body_processed.ends_with('\n') {
-                output.push('\n');
-            }
-            output.push_str("\n</div>\n");
+            let body_processed = extract_with_state(&body, nonce, collected, &body_config);
+            let open = render_div_open(&classes, parsed.id.as_deref(), None, Some(&extra_attrs));
+            push_wrapped_div(&mut output, &mut inserted, &mut seen, &open, body_processed);
             i = j + 1;
             continue;
         }
@@ -1833,7 +1826,7 @@ fn extract_with_state(
         i += 1;
     }
 
-    output
+    (output, inserted)
 }
 
 /// Replace an extracted block with its sentinel. The block spanned
@@ -1900,6 +1893,30 @@ fn clip_for_warning(line: &str) -> String {
         s.push('…');
     }
     s
+}
+
+/// Writes a div around an extracted body with the blank lines that end the
+/// HTML block so the body parses as Markdown. The opener and `</div>` stand for
+/// the fence's two lines; the blanks are recorded in `inserted`, and so are
+/// the body's own, moved to where the body lands. `body` is empty or ends in a
+/// newline, since every line `extract_with_state` writes does.
+fn push_wrapped_div(output: &mut String, inserted: &mut Vec<usize>, seen: &mut (usize, usize), open: &str, (body, body_inserted): (String, Vec<usize>)) {
+    output.push_str(open);
+    output.push_str("\n\n");
+    let body_start = lines_in(output, seen);
+    inserted.push(body_start - 1);
+    inserted.extend(body_inserted.into_iter().map(|line| body_start + line));
+    output.push_str(&body);
+    inserted.push(lines_in(output, seen));
+    output.push_str("\n</div>\n");
+}
+
+/// Newlines in the append-only `output`, scanning only the bytes added since
+/// the last call; `seen` is (bytes, newlines) counted so far. A page of many
+/// divs would otherwise rescan its whole output at each one.
+fn lines_in(output: &str, seen: &mut (usize, usize)) -> usize {
+    *seen = (output.len(), seen.1 + output.as_bytes()[seen.0..].iter().filter(|&&b| b == b'\n').count());
+    seen.1
 }
 
 /// Render the opening `<div>` tag for a CssRegion or Unknown wrapper.

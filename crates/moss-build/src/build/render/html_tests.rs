@@ -4681,8 +4681,7 @@ mod children_field_tests {
 
         let docs = vec![homepage, news_index];
 
-        // The flag should be true when any document has sidebar
-        let flag = docs.iter().any(|d| d.sidebar.is_some());
+        let flag = crate::build::render::page_chrome::has_sidebar_layout(&docs);
         assert!(
             flag,
             "has_sidebar_layout should be true when at least one doc has sidebar"
@@ -4690,7 +4689,7 @@ mod children_field_tests {
 
         // And false when none do
         let no_sidebar_docs = vec![make_doc("Test", "index.html")];
-        let no_flag = no_sidebar_docs.iter().any(|d| d.sidebar.is_some());
+        let no_flag = crate::build::render::page_chrome::has_sidebar_layout(&no_sidebar_docs);
         assert!(
             !no_flag,
             "has_sidebar_layout should be false when no doc has sidebar"
@@ -9926,6 +9925,131 @@ mod build_time_link_meta_fetch_tests {
             "a build with no next build must wait for a slow host: {index_html}"
         );
 
+        let _ = server.join();
+    }
+
+    /// An interactive build renders a card it has no entry for URL-only and
+    /// must ask for the fetch itself once it returns: the comment sync starts
+    /// before a build knows its links, and a watch rebuild starts none.
+    #[test]
+    fn a_watch_rebuild_asks_for_the_cards_it_lacks() {
+        let html = r#"<html><head><meta property="og:title" content="Fetched After The Build"></head></html>"#;
+        let (base, server) = spawn_test_server(html, 1, std::time::Duration::ZERO);
+
+        let test_dir = std::env::temp_dir().join(format!(
+            "moss_build_fetch_interactive_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&test_dir).unwrap();
+        let _cleanup = Cleanup(test_dir.clone());
+        let url = format!("{base}/after-build");
+        fs::write(test_dir.join("index.md"), format!(":::grid 1\n<{url}>\n:::\n")).unwrap();
+
+        // Its spawner runs a blocking task inline, so the fetch has finished when the build returns.
+        let host = crate::build::ports::host::test_host_ports();
+        let build = crate::build::run_pipeline(crate::build::PipelineConfig {
+            root: crate::vault::paths::VaultRoot::resolve(&test_dir),
+            progress: crate::build::null_sink(),
+            plugins: crate::build::PluginMode::SlotsOnly,
+            watch: false,
+            start_server: false,
+            host,
+            trigger: crate::build::BuildTrigger::Full,
+            exits_after_build: false,
+            site_url_override: None,
+            server_port: None,
+            admission_epoch: Some(crate::build::ship::next_promotion_epoch()),
+            live_port: None,
+            rename_pairs: Vec::new(),
+        });
+        tokio::runtime::Runtime::new().unwrap().block_on(build).expect("the build should succeed");
+
+        let cached = crate::build::page::link_meta::read_link_meta_from_cache(&[url.as_str()], &test_dir.join(".moss"), None);
+        assert_eq!(
+            cached[&url].title.as_deref(),
+            Some("Fetched After The Build"),
+            "the build that showed the card URL-only must have its entry fetched"
+        );
+        let _ = server.join();
+    }
+
+    /// A publish taken while the build's own fetch is still out ships the
+    /// generation on hand, so it settles the cards that generation showed
+    /// waiting and rebuilds when one came in.
+    #[test]
+    fn a_publish_during_the_fetch_settles_the_cards_and_ships_them() {
+        use crate::build::ports::spawner::{Joining, Spawner, Task};
+        // Holds the background fetch, so it is still out at publish; keeps the
+        // seal tail, which writes the manifest a publish reads, for the test to run.
+        #[derive(Default)]
+        struct HoldsFetches {
+            fetches: std::sync::Mutex<Vec<Box<dyn FnOnce() + Send>>>,
+            tails: std::sync::Mutex<Vec<Task>>,
+        }
+        impl Spawner for HoldsFetches {
+            fn spawn_blocking(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+                self.fetches.lock().unwrap().push(task);
+            }
+            fn spawn(&self, task: Task) -> Joining {
+                self.tails.lock().unwrap().push(task);
+                Box::pin(async { Ok(()) })
+            }
+        }
+
+        let html = r#"<html><head><meta property="og:title" content="Settled At Publish"></head></html>"#;
+        let (base, server) = spawn_test_server(html, 1, std::time::Duration::ZERO);
+        let test_dir = std::env::temp_dir().join(format!(
+            "moss_link_card_publish_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&test_dir).unwrap();
+        let _cleanup = Cleanup(test_dir.clone());
+        let url = format!("{base}/at-publish");
+        fs::write(test_dir.join("index.md"), format!(":::grid 1\n<{url}>\n:::\n")).unwrap();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let build = |spawner: &std::sync::Arc<HoldsFetches>| {
+            let mut host = crate::build::ports::host::test_host_ports();
+            host.spawner = spawner.clone();
+            rt.block_on(crate::build::run_pipeline(crate::build::PipelineConfig {
+                root: crate::vault::paths::VaultRoot::resolve(&test_dir),
+                progress: crate::build::null_sink(),
+                plugins: crate::build::PluginMode::SlotsOnly,
+                watch: false,
+                start_server: false,
+                host,
+                trigger: crate::build::BuildTrigger::Full,
+                exits_after_build: false,
+                site_url_override: None,
+                server_port: None,
+                admission_epoch: Some(crate::build::ship::next_promotion_epoch()),
+                live_port: None,
+                rename_pairs: Vec::new(),
+            }))
+            .expect("the build should succeed");
+            let tails: Vec<Task> = spawner.tails.lock().unwrap().drain(..).collect();
+            for tail in tails {
+                rt.block_on(tail);
+            }
+        };
+        let mp = crate::moss_paths::MossPaths::new(&test_dir);
+        let index = || fs::read_to_string(mp.staging_dir().join("index.html")).unwrap();
+
+        let opened = std::sync::Arc::new(HoldsFetches::default());
+        build(&opened);
+        assert!(!opened.fetches.lock().unwrap().is_empty(), "the open's fetch must still be out");
+        assert!(!index().contains("Settled At Publish"), "the open shows the card URL-only: {}", index());
+
+        let settled = crate::build::page::link_meta::settle(&mp);
+        assert_eq!(settled, Some(crate::build::page::link_meta::Settled { fetched: 1, waiting: 0 }));
+        build(&std::sync::Arc::new(HoldsFetches::default()));
+        assert!(index().contains("Settled At Publish"), "the rebuild a publish runs must show the card: {}", index());
         let _ = server.join();
     }
 

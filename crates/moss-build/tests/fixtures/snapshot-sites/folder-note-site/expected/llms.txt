@@ -128,10 +128,6 @@ My favorite recipes.
 
 ---
 
-## assets
-
----
-
 ## notes
 
 ---

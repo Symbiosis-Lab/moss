@@ -884,10 +884,10 @@ pub struct PipelineRunOutput {
     /// tail separately checks complete-generation evidence before changing
     /// the durable manifest or `current` generation.
     pub publishable: bool,
-    /// The render number `lifecycle::show_render` minted for this build, which
-    /// the seal tail hands to `lifecycle::promote`. `None` for a build that
+    /// The render `lifecycle::show_render` minted for this build, which the
+    /// seal tail hands to `lifecycle::promote`. `None` for a build that
     /// stopped before it rendered.
-    pub render_seq: Option<u64>,
+    pub(crate) render: Option<crate::build::lifecycle::Render>,
     /// The derived-text blocks this render showed without text: files still
     /// being read (a publish waits them out) and files whose read failed.
     pub unready_derivations: crate::system::derive::site::UnreadyReport,
@@ -1151,7 +1151,7 @@ fn build_inner(
         services.map(|s| s.cancellation.protected_outputs()).unwrap_or_default(),
     );
     crate::build::phase::record_value("parked_current", usize::from(sweep_permit.is_some()));
-    let current_ptr_exists = paths.current_ptr().exists();
+    let has_servable_generation = paths.has_servable_generation();
 
     // Step 1: Load previous hashes BEFORE building
     // CRITICAL: Must read hashes before generate_blocking_content() runs, because
@@ -1443,9 +1443,11 @@ fn build_inner(
     // `field_decls` below, so the listing gets its own copy.
     let listing_field_decls = field_decls.clone();
     // Read site-level config from .moss/config.toml [site] section
-    let declaring_plugins = crate::plugins::discovery::plugins_declaring_for_build(!services.is_some_and(|s| s.plugins_skipped), folder_path);
+    // Declarations are data, read even when plugin code is skipped, so a CI
+    // build ships what the app's build does.
+    let enabled_plugins = crate::plugins::discovery::plugins_declaring_for_build(folder_path);
     let (public_files, withheld) = crate::plugins::contributions::public_data::project(
-        &declaring_plugins,
+        &enabled_plugins,
         cfg.as_ref().unwrap_or(&crate::config::ConfigFile::empty()),
         &crate::plugins::contributions::public_data::FillContext::for_folder(folder_path),
     );
@@ -1510,7 +1512,7 @@ fn build_inner(
         site_url_override,
         declared_redirects: cfg.as_ref().map(|c| c.declared_redirects()).unwrap_or_default(),
         ai: crate::build::feeds::robots::AiSettings::from_config(cfg.as_ref()),
-        identity: crate::config::site_identity::SiteIdentity::from_config(cfg.as_ref()),
+        identity: crate::config::site_identity::SiteIdentity::from_config(cfg.as_ref(), &enabled_plugins),
         // One switch: the per-site Services-tab toggle, absent key = off
         // (graduated out of `experimental.preview_features` 2026-08-31).
         // Resolved here into the ONE value the nav button
@@ -1530,9 +1532,9 @@ fn build_inner(
         term_nav: cfg.as_ref().map(|c| c.terms_nav()).unwrap_or_default(),
         field_decls,
         forms_endpoint,
-        blocks: std::sync::Arc::new(crate::plugins::contributions::blocks::BlockPlan::from_plugins(&declaring_plugins)),
+        blocks: std::sync::Arc::new(crate::plugins::contributions::blocks::BlockPlan::from_plugins(&enabled_plugins)),
         public_data: public_files,
-        booking: core_booking(cfg.as_ref(), &declaring_plugins),
+        booking: core_booking(cfg.as_ref(), &enabled_plugins),
         members: cfg.as_ref().map(crate::config::services::MembersConfig::read).transpose()?.unwrap_or_default(),
         place_maps,
         incremental,
@@ -1569,6 +1571,9 @@ fn build_inner(
     let color_scheme = site_config.color_scheme;
     let (mut site_result, mut background_ctx, documents, carry_verification) = generate_blocking_content_for_build(root, project_structure, &stage_dir, services, progress_sender, emit_source_lines, site_config, &mut pending, exits_after_build, true, build_instant)?;
     let build_now = site_result.now;
+    let build_day = crate::build::inputs::BuildDay { date: build_now.date(), zone: crate::build::inputs::site_zone(&documents).map(str::to_string) };
+    let reused = (incremental.render_skip || incremental.parse_cache).then_some(previous_hashes.build_inputs.as_ref());
+    pending.set_render_facts(build_day, crate::build::inputs::complete(&project_structure.image_files, exits_after_build, reused));
     log::debug!(target: "timing", "[build] staging: generate_blocking_content: {:?}", build_start.elapsed());
 
     // Places-explorer data file (`_moss/places.<hash>.json`): the bytes the
@@ -1653,10 +1658,10 @@ fn build_inner(
     );
     let (html_deleted, stale_html) = crate::build::media::pipeline::html_deletions(
         &previous_hashes, &pending, project_structure, folder_path, &background_ctx.dir_overrides, &crate::system::build_records::records().late_redirects(folder_path));
-    let has_output_changes = html_deleted || !current_ptr_exists || builder_changed || !changed.is_empty() || !new.is_empty() || !deleted.is_empty();
+    let has_output_changes = html_deleted || !has_servable_generation || builder_changed || !changed.is_empty() || !new.is_empty() || !deleted.is_empty();
 
     log::debug!(target: "timing", "[build] staging: hash_compare (changed={}): {:?}", has_output_changes, build_start.elapsed());
-    if has_output_changes && current_ptr_exists {
+    if has_output_changes && has_servable_generation {
         let first = |paths: &[String]| paths.iter().take(5).cloned().collect::<Vec<_>>();
         log::debug!(
             "[build] output differs from the last build: builder {}, changed {} {:?}, new {} {:?}, deleted {} {:?}",
@@ -1715,7 +1720,7 @@ fn build_inner(
             // The folder is closed; nothing downstream should promote this
             // build's generation over whatever the user opens next.
             publishable: false,
-            render_seq: None,
+            render: None,
             unready_derivations: Default::default(),
             folder_lock: folder_build_lock,
             locked_at_nanos,
@@ -1781,9 +1786,9 @@ fn build_inner(
 
     // Step 5: show this render, unless this build could not read its own
     // sources: showing it is the moment the user sees this build's output.
-    let (seq, announce) = crate::build::lifecycle::show_render(&paths, publishable);
+    let (render, announce) = crate::build::lifecycle::show_render(&paths, publishable);
     drop(served_record);
-    let render_seq = Some(seq);
+    let seq = render.seq();
     // A shown render tells the preview at once what it now serves; what the
     // background writes later is the seal tail's to announce.
     if publishable {
@@ -1856,7 +1861,7 @@ fn build_inner(
         }
     }
 
-    // Adopt the search bundle, or read the pages a lane-less build indexes:
+    // Adopt the search bundle, or read the pages a one-shot build indexes:
     // inside the stage-write span (it lays files into `stage_dir`, and no
     // `.html` is written after this) and before the seal. Mark-and-sweep —
     // skipping it deletes `_moss/pagefind/*` off the live site.
@@ -2005,7 +2010,7 @@ fn build_inner(
 
         // Derived text the render left as a placeholder (adopt mode): read in
         // the background, then ask for a rebuild that renders it from the cache.
-        let derive_job = derived.as_ref().and_then(|d| d.take_background_job(&paths, render_seq));
+        let derive_job = derived.as_ref().and_then(|d| d.take_background_job(render.clone()));
         // The reads store into the object cache after this build's lease is
         // gone; their own keeps a cache GC off the blobs until the rebuild
         // has registered them.
@@ -2042,7 +2047,7 @@ fn build_inner(
                         svc_arc_for_image.as_deref(),
                         &ctx_for_image,
                         Some(tx_image),
-                        render_seq,
+                        Some(seq),
                     )
                 });
             }
@@ -2067,6 +2072,7 @@ fn build_inner(
                 let tx_assets = tx.clone();
                 let copying = session_for_assets.as_ref().map(|s| s.hold_ui_bound());
                 let session = session_for_assets.clone();
+                let render = render.clone();
                 crate::build::background::spawn_traced_worker(workers, move || {
                     let _copying = copying;
                     let reporter_for_assets = reporter_for_assets
@@ -2078,7 +2084,7 @@ fn build_inner(
                         reporter_for_assets,
                         tx_assets,
                         asset_registry_for_assets,
-                        &|| session.as_ref().is_some_and(|s| s.cancel.is_cancelled()),
+                        &|| session.as_ref().is_some_and(|s| s.cancel.is_cancelled()) || !render.is_latest(),
                     );
                     // Publish the skipped-symlink count so the video worker
                     // (which emits BuildComplete) can include it in the event.
@@ -2142,7 +2148,7 @@ fn build_inner(
         cancelled: false,
         home_ready,
         publishable,
-        render_seq,
+        render: Some(render),
         unready_derivations: derived.as_ref().map(|d| d.unready()).unwrap_or_default(),
         folder_lock: folder_build_lock,
         locked_at_nanos,
@@ -2172,6 +2178,26 @@ pub(crate) fn send_progress(
             is_empty: empty,
         });
     }
+}
+
+/// Show the sealed render again without rendering it, for a serving build that
+/// stops because nothing changed since the seal. Staging still holds that
+/// render, proven as the carry proves a page: every entry the seal names is
+/// present. What remains is sweeping what it does not name, pointing the
+/// preview at staging, and recording that `current` holds this render, so the
+/// next build may sweep. `None` when an entry is missing or no sweep is
+/// permitted; the caller then builds, which repairs both.
+pub(crate) fn reveal_sealed_staging(paths: &MossPaths, sealed: &SiteHashes, generation: &str, encode_outputs: std::collections::HashSet<String>) -> Option<u64> {
+    let stage_dir = paths.staging_dir();
+    if !sealed.files.keys().all(|key| crate::build::io_utils::output_present(&stage_dir.join(key))) {
+        return None;
+    }
+    // The stopping build holds its own cache lease, as every build does.
+    let permit = crate::build::lifecycle::park_for_rebuild(paths, true, encode_outputs)?;
+    crate::phase!("staging_sweep", { sweep_staging(&stage_dir, sealed, Some(&permit)) });
+    let (render, _) = crate::build::lifecycle::show_render(paths, true);
+    crate::build::lifecycle::promote(paths, crate::build::ship::next_promotion_epoch(), Some(&render), generation, false).ok()?;
+    Some(render.seq())
 }
 
 /// Unlink whatever the previous build's manifest does not name: variants the

@@ -36,6 +36,8 @@ pub struct CardInputs<'a> {
     /// around it rather than hand the platform the file itself. See
     /// [`CardPlate`] and `build::page::cover::plate_decision`.
     pub plate: Option<CardPlate<'a>>,
+    /// The site theme's say over the card; `None` is moss's own look.
+    pub theme: Option<std::sync::Arc<theme::CardTheme>>,
 }
 
 /// A cover moss draws INTO the card, whole and uncropped.
@@ -154,6 +156,7 @@ pub struct OgSink<'a> {
     filename_covers: &'a crate::build::page::cover::FilenameCovers,
     cards: Vec<CardOutput>,
     requests: Option<Vec<deferred::CardRequest>>,
+    theme: Option<std::sync::Arc<theme::CardTheme>>,
 }
 
 impl<'a> OgSink<'a> {
@@ -161,14 +164,23 @@ impl<'a> OgSink<'a> {
         previous_files: &'a std::collections::HashMap<String, String>,
         filename_covers: &'a crate::build::page::cover::FilenameCovers,
     ) -> Self {
-        Self { previous_files, filename_covers, cards: Vec::new(), requests: None }
+        Self { previous_files, filename_covers, cards: Vec::new(), requests: None, theme: None }
     }
 
-    pub fn deferred(
+    /// The build's sink: cards follow `theme`, and with `defer` title cards
+    /// are planned for the build to settle rather than drawn here.
+    pub fn for_build(
+        defer: bool,
         previous_files: &'a std::collections::HashMap<String, String>,
         filename_covers: &'a crate::build::page::cover::FilenameCovers,
+        theme: std::sync::Arc<theme::CardTheme>,
     ) -> Self {
-        Self { requests: Some(Vec::new()), ..Self::new(previous_files, filename_covers) }
+        let requests = defer.then(Vec::new);
+        Self { requests, theme: Some(theme), ..Self::new(previous_files, filename_covers) }
+    }
+
+    pub fn theme(&self) -> Option<&std::sync::Arc<theme::CardTheme>> {
+        self.theme.as_ref()
     }
 
     pub fn filename_covers(&self) -> &'a crate::build::page::cover::FilenameCovers {
@@ -285,9 +297,12 @@ pub fn render_card(
         .as_ref()
         .map(|img| layout_plate(inputs, img.width(), img.height()));
     let svg = build_svg(inputs, rect);
-    let mut pixmap = rasterize(&svg, 1200, 630, script)?;
+    let mut pixmap = rasterize(&svg, 1200, 630, script, inputs.theme.as_deref())?;
     if let (Some(img), Some(rect)) = (plate_img.as_ref(), rect) {
         draw_plate(&mut pixmap, img, rect)?;
+    }
+    if let Some((picture, rect)) = layout::theme_strip(inputs) {
+        draw_plate(&mut pixmap, &picture.image, rect)?;
     }
     let bytes = pixmap.encode_png().map_err(|e| CardError::Encode(e.to_string()))?;
 
@@ -335,6 +350,7 @@ fn card_identity(inputs: &CardInputs) -> Result<(ServedPath, Option<CardScript>)
 }
 
 pub mod deferred;
+pub mod theme;
 
 fn content_hash(inputs: &CardInputs, script: Option<CardScript>) -> String {
     let mut h = Sha256::new();
@@ -379,6 +395,13 @@ fn content_hash(inputs: &CardInputs, script: Option<CardScript>) -> String {
         h.update(plate.height.to_le_bytes());
         h.update(plate.digest);
     }
+    // Only what the theme adds beyond the colours, which are keyed above; a
+    // card without any of it keeps the key it had.
+    for (tag, part) in inputs.theme.iter().flat_map(|t| t.key_parts()) {
+        h.update(b"\0theme\0");
+        h.update(tag);
+        h.update(part);
+    }
     let bytes = h.finalize();
     bytes.iter().take(8).map(|b| format!("{:02x}", b)).collect::<String>()
 }
@@ -405,7 +428,7 @@ use layout::{build_svg, decode_plate, draw_plate, layout_plate};
 ///
 /// Inter is OFL-licensed; see src/assets/fonts/Inter-LICENSE.txt. No CJK
 /// face is bundled — they are megabytes, and the host always has one.
-fn shared_fontdb() -> &'static std::sync::Arc<usvg::fontdb::Database> {
+pub(crate) fn shared_fontdb() -> &'static std::sync::Arc<usvg::fontdb::Database> {
     static DB: std::sync::OnceLock<std::sync::Arc<usvg::fontdb::Database>> =
         std::sync::OnceLock::new();
     DB.get_or_init(|| {
@@ -557,11 +580,16 @@ fn rasterize(
     width: u32,
     height: u32,
     script: Option<CardScript>,
+    theme: Option<&theme::CardTheme>,
 ) -> Result<tiny_skia::Pixmap, CardError> {
     let mut opt = usvg::Options::default();
     // Arc-share, don't deep-clone: fontdb_mut() is Arc::make_mut and would
-    // copy every FaceInfo (hundreds of system faces) per card.
-    opt.fontdb = std::sync::Arc::clone(shared_fontdb());
+    // copy every FaceInfo (hundreds of system faces) per card. A theme that
+    // hosts a heading face brings its own database, built once per build.
+    opt.fontdb = match theme.and_then(|t| t.heading.as_ref()) {
+        Some(face) => std::sync::Arc::clone(&face.db),
+        None => std::sync::Arc::clone(shared_fontdb()),
+    };
     if let Some(script) = script {
         let usvg_fallback = usvg::FontResolver::default_fallback_selector();
         opt.font_resolver.select_fallback = Box::new(move |c, used, db| {
@@ -671,6 +699,7 @@ mod tests {
             lang: crate::i18n::Language::En,
             vertical: false,
             plate: None,
+            theme: None,
         }
     }
 
@@ -722,7 +751,7 @@ mod tests {
         let inputs = vertical_inputs("\u{81f4}\u{65b9}\u{58eb}\u{743f}\u{66f8}");
         let svg = build_svg(&inputs, None);
         assert_eq!(svg.matches(r#"writing-mode="tb""#).count(), 2, "{svg}");
-        let pixmap = rasterize(&svg, 1200, 630, card_script(inputs.lang, inputs.title)).expect("render");
+        let pixmap = rasterize(&svg, 1200, 630, card_script(inputs.lang, inputs.title), None).expect("render");
         assert!(ink(&pixmap, 610, 690, 84, 560) > 2000, "no title column at x=650");
         assert!(ink(&pixmap, 530, 570, 84, 560) > 200, "no site-name column at x=550");
         // The block and nothing else: everything outside 500..700 is ground.
@@ -732,7 +761,7 @@ mod tests {
         // vertical-rl sets a Latin run on the page. Two columns here, so the
         // block is one pitch wider and still centred on x=600.
         let latin = vertical_inputs("Letter to Fang");
-        let pixmap = rasterize(&build_svg(&latin, None), 1200, 630, None).expect("render");
+        let pixmap = rasterize(&build_svg(&latin, None), 1200, 630, None, None).expect("render");
         assert!(ink(&pixmap, 664, 736, 84, 560) > 2000, "Latin title not in the column");
         assert_eq!(ink(&pixmap, 0, 450, 20, 630), 0, "ink left of the two-column block");
         assert_eq!(ink(&pixmap, 745, 1200, 20, 630), 0, "ink right of the two-column block");
@@ -828,7 +857,7 @@ mod tests {
         // Outside the frame is the card's ground, not the picture.
         assert!(!near(card.get_pixel(150, 300), [20, 90, 200]), "the plate bled left of its frame");
         // And the title still stands in its column, clear of the picture.
-        let pixmap = rasterize(&build_svg(&inputs, Some(rect)), 1200, 630, Some(CardScript::Traditional))
+        let pixmap = rasterize(&build_svg(&inputs, Some(rect)), 1200, 630, Some(CardScript::Traditional), None)
             .expect("render");
         assert!(ink(&pixmap, 1070, 1150, 64, 500) > 2000, "no title column at x=1110");
 
@@ -1327,8 +1356,8 @@ mod tests {
         // differ only by the FACE chosen — exactly what the resolver decides.
         inputs.title = "\u{7dda}\u{689d}\u{8207}\u{7d50}\u{69cb}";
         let svg = build_svg(&inputs, None);
-        let hant = rasterize(&svg, 1200, 630, Some(CardScript::Traditional)).expect("rasterize hant");
-        let hans = rasterize(&svg, 1200, 630, Some(CardScript::Simplified)).expect("rasterize hans");
+        let hant = rasterize(&svg, 1200, 630, Some(CardScript::Traditional), None).expect("rasterize hant");
+        let hans = rasterize(&svg, 1200, 630, Some(CardScript::Simplified), None).expect("rasterize hans");
         assert_ne!(
             hant.data(),
             hans.data(),
@@ -1390,8 +1419,8 @@ mod tests {
         let mut b = sample_inputs();
         b.title = "纽约禅堂坐禅笔记与随想录";
 
-        let pa = rasterize(&build_svg(&a, None), 1200, 630, card_script(a.lang, a.title)).expect("render a");
-        let pb = rasterize(&build_svg(&b, None), 1200, 630, card_script(b.lang, b.title)).expect("render b");
+        let pa = rasterize(&build_svg(&a, None), 1200, 630, card_script(a.lang, a.title), None).expect("render a");
+        let pb = rasterize(&build_svg(&b, None), 1200, 630, card_script(b.lang, b.title), None).expect("render b");
         let (da, db) = (pa.data(), pb.data());
         let mut differing = 0usize;
         for y in 210..300 {
@@ -1430,8 +1459,8 @@ mod tests {
         // determinism is guarded by inter_resolves_to_the_embedded_face —
         // this test cannot see which face rendered.)
         let svg = build_svg(&sample_inputs(), None);
-        let p1 = rasterize(&svg, 1200, 630, None).expect("render 1");
-        let p2 = rasterize(&svg, 1200, 630, None).expect("render 2");
+        let p1 = rasterize(&svg, 1200, 630, None, None).expect("render 1");
+        let p2 = rasterize(&svg, 1200, 630, None, None).expect("render 2");
         assert_eq!(
             p1.data(),
             p2.data(),
@@ -1453,7 +1482,7 @@ mod tests {
         // rendering. A bare background gives zero. Threshold loosely so
         // we're robust to font-version pixel shifts.
         let svg = build_svg(&sample_inputs(), None);
-        let pixmap = rasterize(&svg, 1200, 630, None).expect("render");
+        let pixmap = rasterize(&svg, 1200, 630, None, None).expect("render");
         let data = pixmap.data();
         let bg = [0xfa, 0xf8, 0xf5];
         let mut differing = 0usize;

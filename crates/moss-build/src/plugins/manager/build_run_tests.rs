@@ -218,3 +218,47 @@ async fn a_build_runs_leftover_promise_never_gets_the_persons_reach() {
     assert!(!project.join("notes/late.md").exists());
     assert!(project.join("notes/person.md").exists());
 }
+
+/// The plugins a build nudged to connect, by name.
+#[derive(Default)]
+struct Nudges(std::sync::Mutex<Vec<String>>);
+
+impl BuildReporter for Nudges {
+    fn report(&self, event: &PipelineEvent) {
+        if let PipelineEvent::PluginNeedsConnection { plugin, .. } = event {
+            self.0.lock().unwrap().push(plugin.clone());
+        }
+    }
+}
+
+/// Only a plugin whose process hook needs its account is nudged when a build
+/// starts signed out. A publish-only channel skips nothing in the build, so it
+/// opens no sign-in on folder open and adds no warning that fails `--strict`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_signed_out_build_nudges_only_a_plugin_whose_process_needs_its_account() {
+    let (_container, project) = project();
+    let plugins = project.join(".moss/plugins");
+    std::fs::write(
+        plugins.join("folder-writer/manifest.json"),
+        r#"{"name":"folder-writer","version":"0.1.0","entry":"main.bundle.js",
+            "global_name":"FolderWriter","capabilities":["process"],
+            "contributes":{"channel":{"login":true}}}"#,
+    )
+    .unwrap();
+    let channel = plugins.join("post-only");
+    std::fs::create_dir_all(&channel).unwrap();
+    std::fs::write(
+        channel.join("manifest.json"),
+        r#"{"name":"post-only","version":"0.1.0","entry":"main.bundle.js",
+            "global_name":"PostOnly","contributes":{"channel":{"login":true}}}"#,
+    )
+    .unwrap();
+    std::fs::write(channel.join("main.bundle.js"), "var PostOnly = {};").unwrap();
+
+    let pp = project.to_str().unwrap();
+    let nudges = std::sync::Arc::new(Nudges::default());
+    let manager = PluginManager::new(pp, AdapterHost::headless(nudges.clone())).unwrap();
+    manager.execute_process(&ProcessContext::for_build(pp.into(), info())).await.unwrap();
+
+    assert_eq!(*nudges.0.lock().unwrap(), vec!["folder-writer".to_string()]);
+}

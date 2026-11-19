@@ -37,10 +37,12 @@ export {
   closeBrowser,
   returnToEditor,
   openSystemBrowser,
+  startBrowserSignIn,
   openBrowserWithHtml,
   showBrowserForm,
   type BrowserHandle,
   type BrowserCloseReason,
+  type BrowserSignIn,
 } from "./browser.js";
 
 // File System (project files)

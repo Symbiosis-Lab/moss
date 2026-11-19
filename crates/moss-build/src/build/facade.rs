@@ -206,6 +206,8 @@ fn surface_debug(doc: &ParsedDocument) -> String {
     // `hero_image_url` — the genuinely cross-page half, read by the homepage
     // — deliberately stays.
     stripped.hero_html = None;
+    // The header's ink is read from the same picture, and is as much the page's own.
+    stripped.header_over = None;
     // Whether this page has a contents bar is its own chrome.
     stripped.contents_list = false;
     // What this page loads is this page's own head, and its facade covers it.
@@ -428,6 +430,11 @@ pub struct PageFingerprints {
     /// guessing over.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub fields: String,
+    /// An authored page that is neither a folder's page nor a home, recorded
+    /// here so a page that has left is judged by what it was. A cache written
+    /// without it reads every page as not plain, which renders everything.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plain: bool,
 }
 
 impl PageFingerprints {
@@ -437,6 +444,7 @@ impl PageFingerprints {
             facade: compute_page_facade(doc),
             fields: surface_field_digests(&surface),
             surface: hash_str(&surface),
+            plain: doc.source_path.is_some() && doc.kind != moss_core::PageKind::Folder && !crate::build::render::lang_roots::is_home(doc),
         }
     }
 }
@@ -564,6 +572,16 @@ pub struct FacadeCache {
     /// See `nav_globals`'s field docs.
     #[serde(default)]
     home_breadcrumb_globals: std::collections::BTreeMap<String, String>,
+    /// Per card-drawing page, a digest of which page each of its `end` and
+    /// grid card links names (`render::incremental::verdict::card_answers`).
+    /// A move renders that reader.
+    #[serde(default)]
+    card_answers: std::collections::BTreeMap<String, String>,
+    /// One digest over the site's asset set and the distinct feature sets its
+    /// pages carry. Both decide the sheets and scripts every page's shell
+    /// links, so a move renders everything.
+    #[serde(default)]
+    site_features: std::collections::BTreeMap<String, String>,
     /// The render that wrote this cache; see [`SiteHashes::render_id`].
     ///
     /// [`SiteHashes::render_id`]: crate::types::content::SiteHashes::render_id
@@ -597,7 +615,7 @@ fn moved_keys(
     moved
 }
 
-/// The seven per-part digest maps `FacadeCache` keeps, one per field of the
+/// The per-part digest maps `FacadeCache` keeps, one per field of the
 /// same name. They share one shape and one comparison ([`moved_keys`]); they
 /// differ only in what a move obliges the caller to render.
 #[derive(Debug, Clone, Copy)]
@@ -609,6 +627,8 @@ pub enum DigestMap {
     NavGlobals,
     HomeTitleGlobals,
     HomeBreadcrumbGlobals,
+    CardAnswers,
+    SiteFeatures,
 }
 
 impl FacadeCache {
@@ -655,6 +675,8 @@ impl FacadeCache {
             nav_globals: std::collections::BTreeMap::new(),
             home_title_globals: std::collections::BTreeMap::new(),
             home_breadcrumb_globals: std::collections::BTreeMap::new(),
+            card_answers: std::collections::BTreeMap::new(),
+            site_features: std::collections::BTreeMap::new(),
             render_id: None,
             unsealed_pages: std::collections::BTreeSet::new(),
         }
@@ -692,6 +714,8 @@ impl FacadeCache {
             DigestMap::NavGlobals => &self.nav_globals,
             DigestMap::HomeTitleGlobals => &self.home_title_globals,
             DigestMap::HomeBreadcrumbGlobals => &self.home_breadcrumb_globals,
+            DigestMap::CardAnswers => &self.card_answers,
+            DigestMap::SiteFeatures => &self.site_features,
         }
     }
 
@@ -705,6 +729,8 @@ impl FacadeCache {
             DigestMap::NavGlobals => &mut self.nav_globals,
             DigestMap::HomeTitleGlobals => &mut self.home_title_globals,
             DigestMap::HomeBreadcrumbGlobals => &mut self.home_breadcrumb_globals,
+            DigestMap::CardAnswers => &mut self.card_answers,
+            DigestMap::SiteFeatures => &mut self.site_features,
         } = digests;
         self
     }
@@ -746,32 +772,32 @@ impl FacadeCache {
         self.unsealed_pages.clone()
     }
 
+    /// True when the stage holds this cache's render: its slot pass ended and
+    /// none has started since.
+    pub fn staged_its_render(&self, staged_render_id: Option<&str>) -> bool {
+        self.render_id.is_some() && self.render_id.as_deref() == staged_render_id
+    }
+
     /// True when this cache holds nothing — a cold or unreadable cache, which
     /// every caller must treat as "render everything."
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
-    /// True when this cache covers exactly the same set of page identities as
-    /// `current`. A page appearing or disappearing is a structural change no
-    /// per-page diff can reason about, so the caller falls back to a full
-    /// render.
-    pub fn covers_same_paths(&self, current: &HashMap<String, PageFingerprints>) -> bool {
-        self.entries.len() == current.len() && current.keys().all(|p| self.entries.contains_key(p))
-    }
-
-    /// The keys [`covers_same_paths`] disagreed on — appeared in `current`, or
-    /// vanished from it. Diagnostic only: "a page appeared or disappeared" is
-    /// not actionable on a 226-page vault until it says which one.
-    ///
-    /// [`covers_same_paths`]: FacadeCache::covers_same_paths
-    pub fn paths_symmetric_difference(
-        &self,
-        current: &HashMap<String, PageFingerprints>,
-    ) -> Vec<String> {
-        let appeared = current.keys().filter(|p| !self.entries.contains_key(*p));
-        let vanished = self.entries.keys().filter(|p| !current.contains_key(*p));
-        appeared.chain(vanished).cloned().collect()
+    /// The page identities that entered since this cache was written, and
+    /// those of the pages that entered or left that are not plain articles
+    /// (each judged by the fingerprint written when it was present), each sorted.
+    pub fn membership(&self, current: &HashMap<String, PageFingerprints>) -> (Vec<String>, Vec<String>) {
+        let mut entered: Vec<String> = current.keys().filter(|p| !self.entries.contains_key(*p)).cloned().collect();
+        let mut not_plain: Vec<String> = current
+            .iter()
+            .filter(|(p, f)| !f.plain && !self.entries.contains_key(*p))
+            .chain(self.entries.iter().filter(|(p, f)| !f.plain && !current.contains_key(*p)))
+            .map(|(p, _)| p.clone())
+            .collect();
+        entered.sort();
+        not_plain.sort();
+        (entered, not_plain)
     }
 
     /// Page identities whose facade in `current` differs from (or is absent
@@ -858,6 +884,7 @@ mod tests {
             facade: facade.to_string(),
             surface: surface.to_string(),
             fields: String::new(),
+            plain: false,
         }
     }
 
@@ -1305,7 +1332,7 @@ mod tests {
         current.insert("a.md".to_string(), fp("hash-a", "s-a"));
         assert!(cache.changed_paths(&current).is_empty());
         assert!(cache.surface_changed_paths(&current).is_empty());
-        assert!(cache.covers_same_paths(&current));
+        assert_eq!(cache.membership(&current), (vec![], vec![]));
     }
 
     #[test]
@@ -1331,14 +1358,16 @@ mod tests {
     }
 
     #[test]
-    fn a_new_page_breaks_path_coverage() {
+    fn a_new_page_has_entered() {
         let mut entries = HashMap::new();
         entries.insert("a.md".to_string(), fp("hash-a", "s-a"));
         let cache = FacadeCache::from_facades(entries);
         let mut current = HashMap::new();
         current.insert("a.md".to_string(), fp("hash-a", "s-a"));
         current.insert("b.md".to_string(), fp("hash-b", "s-b"));
-        assert!(!cache.covers_same_paths(&current));
+        assert_eq!(cache.membership(&current), (vec!["b.md".to_string()], vec!["b.md".to_string()]));
+        current.insert("b.md".to_string(), PageFingerprints { plain: true, ..fp("hash-b", "s-b") });
+        assert_eq!(cache.membership(&current), (vec!["b.md".to_string()], vec![]));
     }
 
     #[test]
@@ -1351,8 +1380,10 @@ mod tests {
         let cache = FacadeCache::from_facades(entries);
         let current: HashMap<String, PageFingerprints> = HashMap::new();
         assert!(cache.changed_paths(&current).is_empty());
-        // ...but it does break path coverage, so the caller falls back to full.
-        assert!(!cache.covers_same_paths(&current));
+        // ...but it has left, judged by what it was when it was present.
+        assert_eq!(cache.membership(&current), (vec![], vec!["a.md".to_string()]));
+        let plain = FacadeCache::from_facades(HashMap::from([("a.md".to_string(), PageFingerprints { plain: true, ..fp("hash-a", "s-a") })]));
+        assert_eq!(plain.membership(&current), (vec![], vec![]));
     }
 
     #[test]

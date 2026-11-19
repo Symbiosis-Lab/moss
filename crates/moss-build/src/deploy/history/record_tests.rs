@@ -264,7 +264,7 @@ fn manifest_with_a_page_and_an_asset() -> SealedManifest {
 fn page_source_hashes_agrees_with_from_sealed() {
     let sealed = manifest_with_a_page_and_an_asset();
 
-    let via_helper = crate::build::manifest::change_set::page_source_hashes(&sealed);
+    let via_helper = crate::build::manifest::change_set::page_source_hashes(sealed.site_hashes_view());
     let via_from_sealed = crate::build::manifest::change_set::PublishedSnapshot::from_sealed(
         &sealed,
         "moss:test",

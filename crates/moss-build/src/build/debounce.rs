@@ -2,14 +2,6 @@
 //! to a handler, after `idle` of quiet (capped by `max_defer`) — or
 //! immediately, when [`Lanes::settle_now`] forces it.
 //!
-//! Extracted from the search lane's own machinery
-//! (`build/feeds/search_lane.rs`'s `LANES`/`run_lane`/`quiesce`, before this
-//! crate had a second caller for the same shape): the level-triggered
-//! `watch`-channel-plus-parked-loop pattern is generic, and only the
-//! handler, the idle/max-defer durations, and the request payload are
-//! caller-specific. The search lane still owns its OWN request/response
-//! types and its OWN indexing logic; only the debounce timing moved here.
-//!
 //! # Level-triggered, not queued
 //!
 //! A request that arrives while a lane is already waiting REPLACES the
@@ -46,8 +38,7 @@ use std::time::Duration;
 use tokio::sync::watch;
 // `tokio::time::Instant`, not `std::time::Instant`: `quiesce`'s `max_defer`
 // check has to see the same (possibly paused, under `#[tokio::test(start_paused
-// = true)]`) clock its `sleep(idle)` races against — the same reason
-// `search_lane.rs` made this switch.
+// = true)]`) clock its `sleep(idle)` races against.
 use tokio::time::Instant;
 
 use crate::system::folder_session::DerivedWorkGate;
@@ -91,9 +82,7 @@ struct Lane<R> {
 
 /// A registry of debounce lanes, one per key, sharing one `idle`/`max_defer`
 /// policy and one handler. Construct one `static` per caller (see
-/// `build/seal_phase.rs` for the seal's own instance); the search lane's
-/// prior shape of one `LazyLock<Mutex<HashMap<...>>>` per concern is what
-/// this factors out.
+/// `build/seal_phase.rs` for the seal's own instance).
 pub struct Lanes<R: Send + Sync + 'static> {
     idle: Duration,
     max_defer: Duration,
@@ -116,9 +105,8 @@ impl<R: Send + Sync + 'static> Lanes<R> {
     /// non-blocking: it publishes a value and, the first time `key` is seen,
     /// spawns the lane's worker.
     ///
-    /// No-op outside a tokio runtime, matching `search_lane::request`'s own
-    /// rule — a caller that constructs a manifest by hand in a unit test
-    /// should not silently gain a background dependency.
+    /// No-op outside a tokio runtime: a caller that constructs a manifest by
+    /// hand in a unit test should not silently gain a background dependency.
     pub fn request(&self, key: &Path, req: R) {
         if tokio::runtime::Handle::try_current().is_err() {
             return;
@@ -273,9 +261,7 @@ fn take_pending<R>(tx: &watch::Sender<Slot<R>>) -> Option<R> {
 /// The lane loop: park while idle, quiesce a pending request, run it, repeat.
 ///
 /// **It parks between requests.** Every pass is driven by a value it has not
-/// seen before; nothing runs a timer while idle — the same rule
-/// `search_lane::run_lane`'s own doc names, and the reason this shape was
-/// worth extracting rather than reimplementing per caller.
+/// seen before; nothing runs a timer while idle.
 async fn run_lane<R: Send + Sync + 'static>(
     mut rx: watch::Receiver<Slot<R>>,
     lane: Arc<Lane<R>>,

@@ -63,8 +63,8 @@ footer.container > .moss-edition + .moss-colophon {
 }
 
 .moss-edition + .moss-colophon .moss-colophon-icon {
-  --moss-mark-paint: var(--moss-mark-ink);
-  --moss-mark-drop-paint: var(--moss-mark-drop);
+  --moss-mark-paint: var(--moss-colophon-mark-ink);
+  --moss-mark-drop-paint: var(--moss-colophon-mark-drop);
 }
 
 .moss-edition + .moss-colophon .moss-colophon-icon svg {

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-11-19
+
+### Added
+
+- `CUSTOM_PROPS` declares `--moss-share-card-bg`, `--moss-share-card-ink`, `--moss-share-card-muted` and `--moss-share-card-picture`, which the build reads from a theme's `:root` to draw its link-preview card.
+- `HookStrings` carries the words the default render hooks write into a page, `gallery_link_template` and `new_tab_hint`, with `HookStrings::EN`; `DefaultHooks::with_strings` sets them.
+- `UrlKind::opens_new_tab` says whether a link of that kind opens in a new tab: it leaves the site, or it is a file the browser shows outside the page (HTML, PDF).
+- `link_card::MISSING_COVER` and `link_card::NO_COVER` are the cover markup of a card whose picture has not arrived and of a card whose page has none.
+- `ContentGraph::identity` hashes everything a question to the graph can read; `content_graph::recorded` runs a closure and returns each `GraphRead` it asked, and `GraphRead::holds` says whether a graph still gives the same answer.
+- `DepGraph::with_card_pairs` folds in card edges (a page that draws another page's summary card), and `DepGraph::back_cards` lists the pages that draw a page's card.
+- `ExtractionResult::inserted_lines` lists the output lines that stand for no source line, so a source line number can skip them.
+- `ast::is_comment` is public.
+
+### Changed
+
+- **BREAKING:** `RenderHooks::gallery_link_template` is replaced by `RenderHooks::strings`, which returns `HookStrings`, and `DefaultHooks::with_gallery_link_template` by `with_strings`.
+- **BREAKING:** `HeroExtraction` has a new public field, `shortcode`, the hero as written, so a struct literal must set it.
+
 ## [0.27.0] - 2026-11-17
 
 ### Added

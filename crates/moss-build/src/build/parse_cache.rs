@@ -56,6 +56,12 @@
 //!   over-approximation, not a correctness requirement: the live resolver
 //!   splices ONE hop, so `b.md`'s bytes never reach `index.md`'s HTML. The
 //!   DEPTH-1 case is the load-bearing one: missing it ships a stale page.
+//! * every question the parse asked of the rest of the site (which file a
+//!   link or embed names, the URL a page is served at, its folder's inferred
+//!   language) still gets the answer it got then ([`Read`]). Re-asking is the
+//!   check, so a new page that satisfies a dangling link, a deleted one that
+//!   breaks it, or a same-named file that becomes the nearer match reparses
+//!   exactly the pages that asked.
 //!
 //! Content hashes go through [`HashIndex`], the existing `stat → sha256`
 //! accelerator, so an unchanged file is not re-read to be hashed. It trusts a
@@ -64,9 +70,9 @@
 //!
 //! # What this deliberately does NOT track
 //!
-//! Loop A also reads per-build inputs that are not any markdown file's bytes:
-//! `page_map`/`dir_overrides` (frontmatter `url:` overrides), `external_url_map`,
-//! `content_graph`, `event_level_image_lookup` (image dimensions), the asset
+//! Loop A also reads per-build inputs that are not any markdown file's bytes
+//! and that no page records: `dir_overrides` (folder `url:` overrides),
+//! `external_url_map`, `event_level_image_lookup` (image dimensions), the asset
 //! snapshot, and site-level flags. The first group is folded into a single
 //! build-level [`ParseSession::begin`] fingerprint — a mismatch disables the
 //! cache for the WHOLE build (full Loop A, cache refreshed for next time),
@@ -132,6 +138,7 @@ use crate::build::cache::HashIndex;
 use crate::build::stat::FileStat;
 use crate::build::markdown::math::TypesetMath;
 use crate::build::types::ParsedDocument;
+use moss_core::content_graph::{ContentGraph, GraphRead};
 use moss_core::dep_graph::DepGraph;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -145,11 +152,75 @@ use std::{cell::Cell, sync::MutexGuard};
 struct ParseCacheEntry {
     /// SHA-256 of the exact final source bytes recorded with this snapshot.
     content_hash: String,
-    /// `(path, hash)` for every member of the page's transitive embed closure,
-    /// as of the same moment. Materialized at write time so validity checking
-    /// is a flat comparison and does not depend on re-deriving the graph.
-    dep_hashes: Vec<(String, String)>,
+    /// What the parse read beyond its own bytes, each with what it got. The
+    /// entry replays only while every one of them still gives that answer.
+    reads: Vec<Read>,
     doc: ParsedDocument,
+}
+
+/// One thing a parse read beyond its own bytes, with what it read then.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Read {
+    /// A file in the page's transitive embed closure, by content hash.
+    /// Materialized at write time so checking it does not re-derive the graph.
+    Bytes { path: String, hash: String },
+    /// A question asked of the content graph: which file a link names, and
+    /// the like. A file added, removed or renamed moves only the answers it
+    /// changes, so it reparses only the pages that asked.
+    Graph(GraphRead),
+    /// The identity of the graph the `Graph` reads were answered by. While it
+    /// is unchanged every one of them holds, so they are not re-asked.
+    GraphIdentity(u64),
+    /// The URL a source path is served at.
+    Url { source: String, answer: Option<String> },
+    /// The language inferred for the page's folder, which a file entering or
+    /// leaving the folder can move.
+    FolderLang { folder: String, answer: Option<crate::i18n::Language> },
+    /// The file elected home of the page's folder. Read only by a page that
+    /// could be that home: in a folder without an index the first file by name
+    /// is elected, and no other page's parse depends on which one it is.
+    Home { folder: String, answer: Option<String> },
+}
+
+impl Read {
+    fn holds(&self, hasher: &FileHasher, answers: &Answers<'_>) -> bool {
+        match self {
+            Self::Bytes { path, hash } => hasher.hash(path).as_deref() == Some(hash.as_str()),
+            Self::Graph(read) => {
+                #[cfg(test)]
+                GRAPH_REASKS.with(|n| n.set(n.get() + 1));
+                read.holds(answers.graph)
+            }
+            Self::GraphIdentity(_) => true,
+            Self::Url { source, answer } => answers.page_map.get(source) == answer.as_ref(),
+            Self::FolderLang { folder, answer } => answers.folder_languages.get(folder) == answer.as_ref(),
+            Self::Home { folder, answer } => answers.home_of(folder) == answer.as_deref(),
+        }
+    }
+}
+
+/// This build's answers to what a parse reads of the rest of the site.
+pub struct Answers<'a> {
+    pub graph: &'a ContentGraph,
+    pub page_map: &'a HashMap<String, String>,
+    pub folder_languages: &'a HashMap<String, crate::i18n::Language>,
+    pub home_winners: &'a std::collections::HashSet<String>,
+}
+
+impl Answers<'_> {
+    fn home_of(&self, folder: &str) -> Option<&str> {
+        self.home_winners.iter().map(String::as_str).find(|winner| crate::build::scan::page_map::folder_of(winner) == folder)
+    }
+
+    /// Whether `path` is named like its folder's home, sits at the root, or
+    /// is served at its folder's own address (a `home: true` page).
+    fn could_be_home(&self, path: &str, folder: &str) -> bool {
+        let stem = Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+        let folder_index = if folder.is_empty() { "index.html".to_owned() } else { format!("{folder}/index.html") };
+        folder.is_empty()
+            || moss_core::home::is_home_file(&stem, folder.rsplit('/').next().unwrap_or(folder))
+            || self.page_map.get(path) == Some(&folder_index)
+    }
 }
 
 /// One root's cached Loop A output, plus the build-level input fingerprint the
@@ -379,6 +450,8 @@ pub struct ParseSession {
     began_at: Option<u64>,
     /// Decisions taken during Loop A: `path → hit`.
     decisions: Mutex<HashMap<String, bool>>,
+    /// Each page's reads this build, from its parse or carried with its replay.
+    reads: Mutex<HashMap<String, Vec<Read>>>,
     /// Pages that showed a block that is not final (derived text still being read).
     withheld: Mutex<std::collections::HashSet<String>>,
     stats: Mutex<ParseCacheStats>,
@@ -436,6 +509,7 @@ impl ParseSession {
             hasher: FileHasher::new(root, HashIndex::load(index_path)),
             began_at: crate::build::stat::recording_clock(),
             decisions: Mutex::new(HashMap::new()),
+            reads: Mutex::new(HashMap::new()),
             withheld: Mutex::new(std::collections::HashSet::new()),
             stats: Mutex::new(stats),
             #[cfg(test)]
@@ -454,8 +528,8 @@ impl ParseSession {
     /// Records the decision either way. Returns `None` in shadow mode even on a
     /// hit, so the caller always does the real work — the decision is still
     /// recorded, and [`Self::verify_shadow`] checks it against the real parse.
-    pub fn lookup(&self, relative_path: &str) -> Option<ParsedDocument> {
-        let hit = self.decide(relative_path);
+    pub fn lookup(&self, relative_path: &str, answers: &Answers<'_>) -> Option<ParsedDocument> {
+        let hit = self.decide(relative_path, answers);
         if let Ok(mut decisions) = self.decisions.lock() {
             decisions.insert(relative_path.to_string(), hit.is_some());
         }
@@ -465,18 +539,56 @@ impl ParseSession {
         hit
     }
 
-    fn decide(&self, relative_path: &str) -> Option<ParsedDocument> {
+    fn decide(&self, relative_path: &str, answers: &Answers<'_>) -> Option<ParsedDocument> {
         let previous = self.previous.as_ref()?;
         let entry = previous.entries.get(relative_path)?;
         if self.hasher.hash(relative_path).as_deref() != Some(entry.content_hash.as_str()) {
             return None;
         }
-        for (dep, hash) in &entry.dep_hashes {
-            if self.hasher.hash(dep).as_deref() != Some(hash.as_str()) {
-                return None;
+        let identity = answers.graph.identity();
+        let same_graph = entry.reads.contains(&Read::GraphIdentity(identity));
+        let mut to_check = entry.reads.iter().filter(|read| !(same_graph && matches!(read, Read::Graph(_))));
+        if !to_check.all(|read| read.holds(&self.hasher, answers)) {
+            return None;
+        }
+        // Embed bytes are re-derived at `finish` from this build's closure, and
+        // the identity is this build's: every graph read was just shown to hold.
+        let carried = entry.reads.iter().filter(|read| !matches!(read, Read::Bytes { .. } | Read::GraphIdentity(_))).cloned();
+        self.note_reads(relative_path, carried.chain([Read::GraphIdentity(identity)]));
+        Some(entry.doc.clone())
+    }
+
+    /// Run `parse` for `relative_path`, recording what it asked of the rest of
+    /// the site: each question put to the graph, the URL of the page itself
+    /// and of every page a link resolved to, and its folder's language.
+    pub fn recording<R>(&self, relative_path: &str, answers: &Answers<'_>, parse: impl FnOnce() -> R) -> R {
+        let (value, graph_reads) = moss_core::content_graph::recorded(parse);
+        self.record(relative_path, graph_reads, answers);
+        value
+    }
+
+    fn record(&self, relative_path: &str, graph_reads: Vec<GraphRead>, answers: &Answers<'_>) {
+        let url = |source: &str| Read::Url { source: source.to_owned(), answer: answers.page_map.get(source).cloned() };
+        let folder = crate::build::scan::page_map::folder_of(relative_path);
+        let mut reads = vec![url(relative_path), Read::GraphIdentity(answers.graph.identity())];
+        if answers.could_be_home(relative_path, &folder) {
+            reads.push(Read::Home { folder: folder.clone(), answer: answers.home_of(&folder).map(str::to_owned) });
+        }
+        reads.push(Read::FolderLang { answer: answers.folder_languages.get(&folder).copied(), folder });
+        reads.extend(graph_reads.iter().filter_map(GraphRead::resolved_path).map(url));
+        reads.extend(graph_reads.into_iter().map(Read::Graph));
+        self.note_reads(relative_path, reads);
+    }
+
+    fn note_reads(&self, relative_path: &str, reads: impl IntoIterator<Item = Read>) {
+        if let Ok(mut all) = self.reads.lock() {
+            let page = all.entry(relative_path.to_owned()).or_default();
+            for read in reads {
+                if !page.contains(&read) {
+                    page.push(read);
+                }
             }
         }
-        Some(entry.doc.clone())
     }
 
     /// The manifest's record of each page this build replayed from the cache:
@@ -569,6 +681,7 @@ impl ParseSession {
         let graph = DepGraph::default().with_embed_pairs(pairs);
 
         let withheld = self.withheld.lock().map(|w| w.clone()).unwrap_or_default();
+        let mut recorded = std::mem::take(&mut *self.reads.lock().unwrap_or_else(|e| e.into_inner()));
         let mut entries: HashMap<String, ParseCacheEntry> = HashMap::new();
         for doc in documents {
             let Some(path) = doc.source_path.as_ref().filter(|p| !withheld.contains(*p)) else {
@@ -577,11 +690,11 @@ impl ParseSession {
             let Some(content_hash) = self.hasher.hash(path) else {
                 continue;
             };
-            let mut dep_hashes = Vec::new();
+            let mut reads = Vec::new();
             let mut incomplete = false;
             for dep in graph.embed_closure(path) {
                 match self.hasher.hash(&dep) {
-                    Some(hash) => dep_hashes.push((dep, hash)),
+                    Some(hash) => reads.push(Read::Bytes { path: dep, hash }),
                     // An embed target we cannot hash (missing file, unreadable)
                     // can never be proven unchanged, so caching the page would
                     // only produce a guaranteed miss — or worse, a hit that
@@ -595,12 +708,12 @@ impl ParseSession {
             if incomplete {
                 continue;
             }
-            dep_hashes.sort();
+            reads.extend(recorded.remove(path).unwrap_or_default());
             entries.insert(
                 path.clone(),
                 ParseCacheEntry {
                     content_hash,
-                    dep_hashes,
+                    reads,
                     doc: doc.clone(),
                 },
             );
@@ -693,14 +806,16 @@ pub fn site_scalars<'a>(
 /// Every one of these is a whole-corpus pre-scan result threaded into
 /// `process_markdown_file`, so a change to any of them can alter a page's parse
 /// output without touching that page's bytes — the classic example being a
-/// folder index's frontmatter `url:`, which moves `page_map`'s shape for its
+/// folder index's frontmatter `url:`, which moves `dir_overrides` for its
 /// whole subtree. A mismatch bypasses the cache for the entire build.
 ///
 /// Maps arrive as `HashMap`s whose `Debug` order is per-instance random, so
 /// they are sorted into `BTreeMap`/`Vec` before hashing, as in the facade hash.
 ///
-/// NOT included, deliberately: `content_graph` (a pure function of the file
-/// path list, which IS included), and the asset/media inputs
+/// NOT included, deliberately: the file list, the content graph built from it,
+/// `page_map` and the folder homes elected from them. A page records the questions it asked of them with their
+/// answers ([`Read`]), so a file added, removed or renamed reparses only the
+/// pages whose answers it moved. Nor the asset/media inputs
 /// (`event_level_image_lookup`, the asset snapshot) — see the module docs for
 /// why those are handled by the whole-build markdown-only gate instead.
 ///
@@ -711,27 +826,16 @@ pub fn site_scalars<'a>(
 /// which forces a full RENDER when a slot page's body or a home page's
 /// extracted excerpt moves. If you are bisecting a stale-page report, check
 /// both — neither one subsumes the other.
-#[allow(clippy::too_many_arguments)]
 pub fn inputs_fingerprint(
-    markdown_files: &[String],
-    page_map: &HashMap<String, String>,
     dir_overrides: &HashMap<String, String>,
     external_url_map: &HashMap<String, String>,
-    home_file_winners: &std::collections::HashSet<String>,
     root_folder_name: &str,
     site_scalars: &dyn std::fmt::Debug,
 ) -> String {
     use std::collections::BTreeMap;
-    let mut files: Vec<&String> = markdown_files.iter().collect();
-    files.sort();
-    let mut winners: Vec<&String> = home_file_winners.iter().collect();
-    winners.sort();
     let ordered = (
-        files,
-        page_map.iter().collect::<BTreeMap<_, _>>(),
         dir_overrides.iter().collect::<BTreeMap<_, _>>(),
         external_url_map.iter().collect::<BTreeMap<_, _>>(),
-        winners,
         root_folder_name,
         format!("{site_scalars:?}"),
     );
@@ -891,6 +995,8 @@ static MATH_TEST_LOCK: std::sync::RwLock<()> = std::sync::RwLock::new(());
 #[cfg(test)]
 thread_local! {
     static HOLDS_MATH_TEST_LOCK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// How many graph questions this thread's cache checks re-asked.
+    static GRAPH_REASKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -925,6 +1031,14 @@ mod tests {
     use super::*;
     use crate::build::stat::FileStat;
 
+    fn no_answers() -> Answers<'static> {
+        static GRAPH: std::sync::LazyLock<ContentGraph> = std::sync::LazyLock::new(|| ContentGraph::from_paths(&[]));
+        static PAGES: std::sync::LazyLock<HashMap<String, String>> = std::sync::LazyLock::new(HashMap::new);
+        static LANGS: std::sync::LazyLock<HashMap<String, crate::i18n::Language>> = std::sync::LazyLock::new(HashMap::new);
+        static HOMES: std::sync::LazyLock<std::collections::HashSet<String>> = std::sync::LazyLock::new(Default::default);
+        Answers { graph: &GRAPH, page_map: &PAGES, folder_languages: &LANGS, home_winners: &HOMES }
+    }
+
     fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs
             .iter()
@@ -932,16 +1046,8 @@ mod tests {
             .collect()
     }
 
-    fn fingerprint_of(page_map: &HashMap<String, String>) -> String {
-        inputs_fingerprint(
-            &["a.md".to_string(), "b.md".to_string()],
-            page_map,
-            &HashMap::new(),
-            &HashMap::new(),
-            &std::collections::HashSet::new(),
-            "site",
-            &("en", true),
-        )
+    fn fingerprint_of(dir_overrides: &HashMap<String, String>) -> String {
+        inputs_fingerprint(dir_overrides, &HashMap::new(), "site", &("en", true))
     }
 
     #[test]
@@ -949,51 +1055,30 @@ mod tests {
         // Two HashMaps with the same contents hash the same even though their
         // iteration orders differ. Build the second map in the opposite insertion order.
         let mut reversed = HashMap::new();
-        for (k, v) in [("z.md", "z/index.html"), ("y.md", "y/index.html"), ("x.md", "x/index.html")] {
+        for (k, v) in [("z", "zz"), ("y", "yy"), ("x", "xx")] {
             reversed.insert(k.to_string(), v.to_string());
         }
-        let forward = map(&[
-            ("x.md", "x/index.html"),
-            ("y.md", "y/index.html"),
-            ("z.md", "z/index.html"),
-        ]);
+        let forward = map(&[("x", "xx"), ("y", "yy"), ("z", "zz")]);
         assert_eq!(fingerprint_of(&forward), fingerprint_of(&reversed));
     }
 
     #[test]
-    fn a_url_override_moves_the_inputs_fingerprint() {
-        let before = map(&[("notes/index.md", "notes/index.html")]);
-        let after = map(&[("notes/index.md", "writing/index.html")]);
+    fn a_folder_url_override_moves_the_inputs_fingerprint() {
+        let before = map(&[("notes", "notes")]);
+        let after = map(&[("notes", "writing")]);
         assert_ne!(fingerprint_of(&before), fingerprint_of(&after));
     }
 
     #[test]
     fn a_site_scalar_moves_the_inputs_fingerprint() {
-        let page_map = map(&[("a.md", "a/index.html")]);
-        let a = inputs_fingerprint(
-            &["a.md".to_string()],
-            &page_map,
-            &HashMap::new(),
-            &HashMap::new(),
-            &std::collections::HashSet::new(),
-            "site",
-            &("en", true),
-        );
-        let b = inputs_fingerprint(
-            &["a.md".to_string()],
-            &page_map,
-            &HashMap::new(),
-            &HashMap::new(),
-            &std::collections::HashSet::new(),
-            "site",
-            &("en", false),
-        );
-        assert_ne!(a, b);
+        let fingerprint = |flag: bool| {
+            inputs_fingerprint(&HashMap::new(), &HashMap::new(), "site", &("en", flag))
+        };
+        assert_ne!(fingerprint(true), fingerprint(false));
     }
 
     #[test]
     fn a_changed_block_declaration_moves_the_inputs_fingerprint() {
-        let page_map = map(&[("a.md", "a/index.html")]);
         let manifest = crate::plugins::types::PluginManifest::parse(
             r#"{"name":"catalog","version":"1.0.0","contributes":{"blocks":{"card":{"element":"demo-card"}}}}"#,
         ).unwrap();
@@ -1004,7 +1089,7 @@ mod tests {
                 ..Default::default()
             };
             let scalars = site_scalars(crate::i18n::Language::En, None, "", cfg.markdown(), false, false, Default::default());
-            inputs_fingerprint(&["a.md".to_string()], &page_map, &HashMap::new(), &HashMap::new(), &std::collections::HashSet::new(), "site", &scalars)
+            inputs_fingerprint(&HashMap::new(), &HashMap::new(), "site", &scalars)
         };
         assert_ne!(fingerprint(&[]), fingerprint(std::slice::from_ref(&plugin)));
     }
@@ -1014,49 +1099,150 @@ mod tests {
         // A vertical page's body images declare a different `sizes=`, so a
         // `[site] typesetting` edit must not replay bodies parsed under the
         // old value.
-        let page_map = map(&[("a.md", "a/index.html")]);
         let fingerprint = |typesetting: Option<&str>| {
             let cfg = crate::build::render::config::SiteConfig {
                 typesetting: typesetting.map(String::from),
                 ..Default::default()
             };
             let scalars = site_scalars(crate::i18n::Language::En, None, "", cfg.markdown(), false, false, Default::default());
-            let fp = inputs_fingerprint(
-                &["a.md".to_string()],
-                &page_map,
-                &HashMap::new(),
-                &HashMap::new(),
-                &std::collections::HashSet::new(),
-                "site",
-                &scalars,
-            );
-            fp
+            inputs_fingerprint(&HashMap::new(), &HashMap::new(), "site", &scalars)
         };
         assert_ne!(fingerprint(None), fingerprint(Some("vertical")));
     }
 
+    /// One build of a site whose pages each resolve some references: records
+    /// what each page asked, as Loop A does, and seals the cache. Returns the
+    /// pages it reparsed.
+    fn build_once(dir: &Path, files: &[&str], links: &[(&str, &str)]) -> Vec<String> {
+        let graph = ContentGraph::from_paths(files);
+        let page_map: HashMap<String, String> =
+            files.iter().map(|f| (f.to_string(), f.replace(".md", "/index.html"))).collect();
+        let langs = HashMap::new();
+        let homes = std::collections::HashSet::new();
+        let answers = Answers { graph: &graph, page_map: &page_map, folder_languages: &langs, home_winners: &homes };
+        let session = ParseSession::begin(dir, &dir.join("hash-index.json"), true, "fp".to_string());
+        let mut reparsed = Vec::new();
+        for page in files {
+            if session.lookup(page, &answers).is_some() {
+                continue;
+            }
+            reparsed.push(page.to_string());
+            session.recording(page, &answers, || {
+                for (_, target) in links.iter().filter(|(from, _)| from == page) {
+                    graph.resolve_path(target, page);
+                }
+            });
+        }
+        let docs: Vec<ParsedDocument> =
+            files.iter().map(|p| ParsedDocument { source_path: Some(p.to_string()), ..Default::default() }).collect();
+        session.finish(&docs);
+        reparsed
+    }
+
     #[test]
-    fn a_new_file_moves_the_inputs_fingerprint() {
-        let page_map = map(&[("a.md", "a/index.html")]);
-        let one = inputs_fingerprint(
-            &["a.md".to_string()],
-            &page_map,
-            &HashMap::new(),
-            &HashMap::new(),
-            &std::collections::HashSet::new(),
-            "site",
-            &(),
-        );
-        let two = inputs_fingerprint(
-            &["a.md".to_string(), "b.md".to_string()],
-            &page_map,
-            &HashMap::new(),
-            &HashMap::new(),
-            &std::collections::HashSet::new(),
-            "site",
-            &(),
-        );
-        assert_ne!(one, two);
+    fn a_page_added_or_deleted_reparses_only_the_pages_whose_answers_it_moved() {
+        let _guard = store_lock_for_tests();
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a.md", "c.md"] {
+            std::fs::write(dir.path().join(name), "body").unwrap();
+        }
+        reset_for_tests();
+        // `a` links to a page that does not exist yet; `c` links to `a`.
+        let links = [("a.md", "b"), ("c.md", "a")];
+        build_once(dir.path(), &["a.md", "c.md"], &links);
+
+        std::fs::write(dir.path().join("b.md"), "body").unwrap();
+        let reparsed = build_once(dir.path(), &["a.md", "b.md", "c.md"], &links);
+        assert_eq!(reparsed, ["a.md", "b.md"], "the new page satisfies only a's link");
+
+        // `c` was replayed above, so this miss proves its reads rode along.
+        std::fs::remove_file(dir.path().join("a.md")).unwrap();
+        let reparsed = build_once(dir.path(), &["b.md", "c.md"], &links);
+        assert_eq!(reparsed, ["c.md"], "deleting a breaks c's link and nothing else");
+        reset_for_tests();
+    }
+
+    #[test]
+    fn a_page_is_re_asked_its_graph_questions_only_when_the_graph_moved() {
+        let _guard = store_lock_for_tests();
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a.md", "b.md", "c.md"] {
+            std::fs::write(dir.path().join(name), "body").unwrap();
+        }
+        reset_for_tests();
+        let links = [("a.md", "b"), ("b.md", "a")];
+        let reasks = || GRAPH_REASKS.with(|n| n.replace(0));
+        build_once(dir.path(), &["a.md", "b.md"], &links);
+
+        reasks();
+        assert!(build_once(dir.path(), &["a.md", "b.md"], &links).is_empty());
+        assert_eq!(reasks(), 0, "an equal graph answers every question as before");
+
+        assert_eq!(build_once(dir.path(), &["a.md", "b.md", "c.md"], &links), ["c.md"]);
+        assert_eq!(reasks(), 2, "a moved graph re-asks each replayed page's question");
+
+        assert!(build_once(dir.path(), &["a.md", "b.md", "c.md"], &links).is_empty());
+        assert_eq!(reasks(), 0, "a replay that held carries this build's identity");
+        reset_for_tests();
+    }
+
+    #[test]
+    fn a_moved_url_reparses_the_pages_linking_to_it() {
+        let _guard = store_lock_for_tests();
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a.md", "b.md"] {
+            std::fs::write(dir.path().join(name), "body").unwrap();
+        }
+        reset_for_tests();
+        let graph = ContentGraph::from_paths(&["a.md", "b.md"]);
+        let langs = HashMap::new();
+        let homes = std::collections::HashSet::new();
+        let before = map(&[("a.md", "a/index.html"), ("b.md", "b/index.html")]);
+        let answers = Answers { graph: &graph, page_map: &before, folder_languages: &langs, home_winners: &homes };
+        let session = ParseSession::begin(dir.path(), &dir.path().join("hash-index.json"), true, "fp".to_string());
+        session.recording("a.md", &answers, || graph.resolve_path("b", "a.md"));
+        session.recording("b.md", &answers, || ());
+        let docs: Vec<ParsedDocument> =
+            ["a.md", "b.md"].iter().map(|p| ParsedDocument { source_path: Some(p.to_string()), ..Default::default() }).collect();
+        session.finish(&docs);
+
+        // `b` declares `url: elsewhere`: same files, a different URL for it.
+        let after = map(&[("a.md", "a/index.html"), ("b.md", "elsewhere/index.html")]);
+        let answers = Answers { graph: &graph, page_map: &after, folder_languages: &langs, home_winners: &homes };
+        let session = ParseSession::begin(dir.path(), &dir.path().join("hash-index.json"), true, "fp".to_string());
+        assert!(session.lookup("a.md", &answers).is_none(), "a's link to b must point at b's new URL");
+        session.finish(&docs);
+        reset_for_tests();
+    }
+
+    #[test]
+    fn a_folder_note_that_loses_its_home_reparses_and_its_siblings_do_not() {
+        let _guard = store_lock_for_tests();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("work")).unwrap();
+        for name in ["work/work.md", "work/z.md", "work/index.md"] {
+            std::fs::write(dir.path().join(name), "body").unwrap();
+        }
+        reset_for_tests();
+        let graph = ContentGraph::from_paths(&["work/work.md", "work/z.md"]);
+        let (page_map, langs) = (HashMap::new(), HashMap::new());
+        let build = |winner: &str, pages: &[&str]| {
+            let homes = std::collections::HashSet::from([winner.to_owned()]);
+            let answers = Answers { graph: &graph, page_map: &page_map, folder_languages: &langs, home_winners: &homes };
+            let session = ParseSession::begin(dir.path(), &dir.path().join("hash-index.json"), true, "fp".to_string());
+            let reparsed: Vec<&str> = pages.iter().copied().filter(|p| session.lookup(p, &answers).is_none()).collect();
+            for page in &reparsed {
+                session.recording(page, &answers, || ());
+            }
+            let docs: Vec<ParsedDocument> =
+                pages.iter().map(|p| ParsedDocument { source_path: Some(p.to_string()), ..Default::default() }).collect();
+            session.finish(&docs);
+            reparsed.into_iter().map(str::to_owned).collect::<Vec<_>>()
+        };
+        build("work/work.md", &["work/work.md", "work/z.md"]);
+        let reparsed = build("work/index.md", &["work/index.md", "work/work.md", "work/z.md"]);
+        assert_eq!(reparsed, ["work/index.md", "work/work.md"], "z.md was never a home, so who is cannot reach its parse");
+        reset_for_tests();
     }
 
     #[test]
@@ -1094,7 +1280,7 @@ mod tests {
             "fp".to_string(),
         );
         assert!(!hot.is_cold());
-        assert!(hot.lookup("a.md").is_some());
+        assert!(hot.lookup("a.md", &no_answers()).is_some());
         hot.finish(std::slice::from_ref(&doc));
 
         // `enabled == false` (a Full trigger, or MOSS_NO_INCREMENTAL) → cold.
@@ -1105,7 +1291,7 @@ mod tests {
             "fp".to_string(),
         );
         assert!(disabled.is_cold());
-        assert!(disabled.lookup("a.md").is_none());
+        assert!(disabled.lookup("a.md", &no_answers()).is_none());
         disabled.finish(std::slice::from_ref(&doc));
         reset_for_tests();
     }
@@ -1129,8 +1315,8 @@ mod tests {
         first.finish(&docs);
 
         let second = ParseSession::begin(dir.path(), &index, true, "fp".to_string());
-        assert!(second.lookup("a.md").is_none(), "a page that showed a placeholder must be rendered again");
-        assert!(second.lookup("b.md").is_some());
+        assert!(second.lookup("a.md", &no_answers()).is_none(), "a page that showed a placeholder must be rendered again");
+        assert!(second.lookup("b.md", &no_answers()).is_some());
         reset_for_tests();
     }
 
@@ -1173,7 +1359,7 @@ mod tests {
         std::fs::write(dir.path().join("a.md"), "hello, edited").unwrap();
 
         let session = ParseSession::begin(dir.path(), &index, true, "fp".to_string());
-        assert!(session.lookup("a.md").is_none());
+        assert!(session.lookup("a.md", &no_answers()).is_none());
         session.finish(std::slice::from_ref(&doc));
         reset_for_tests();
     }
@@ -1201,7 +1387,7 @@ mod tests {
         FileStat::stamp_in_the_second_of(&page, before);
 
         let session = ParseSession::begin(dir.path(), &index, true, "fp".to_string());
-        assert!(session.lookup("a.md").is_none());
+        assert!(session.lookup("a.md", &no_answers()).is_none());
         session.finish(std::slice::from_ref(&doc));
         reset_for_tests();
     }
@@ -1227,7 +1413,7 @@ mod tests {
         FileStat::replace_by_rename_keeping_mtime(&page, b"world");
 
         let session = ParseSession::begin(dir.path(), &index, true, "fp".to_string());
-        assert!(session.lookup("a.md").is_none(), "replayed the parse of the page that was replaced");
+        assert!(session.lookup("a.md", &no_answers()).is_none(), "replayed the parse of the page that was replaced");
         session.finish(std::slice::from_ref(&doc));
         reset_for_tests();
     }
@@ -1344,10 +1530,10 @@ mod tests {
         std::fs::write(dir.path().join("b.md"), "leaf, edited").unwrap();
 
         let session = ParseSession::begin(dir.path(), &index_json, true, "fp".to_string());
-        assert!(session.lookup("b.md").is_none(), "the edited leaf");
-        assert!(session.lookup("a.md").is_none(), "its direct embedder");
+        assert!(session.lookup("b.md", &no_answers()).is_none(), "the edited leaf");
+        assert!(session.lookup("a.md", &no_answers()).is_none(), "its direct embedder");
         assert!(
-            session.lookup("index.md").is_none(),
+            session.lookup("index.md", &no_answers()).is_none(),
             "the two-hop ancestor — the bug this design fixes"
         );
         session.finish(&docs);
@@ -1381,10 +1567,10 @@ mod tests {
         std::fs::write(dir.path().join("other.md"), "body, edited").unwrap();
 
         let session = ParseSession::begin(dir.path(), &index_json, true, "fp".to_string());
-        assert!(session.lookup("other.md").is_none());
-        assert!(session.lookup("index.md").is_some());
-        assert!(session.lookup("a.md").is_some());
-        assert!(session.lookup("b.md").is_some());
+        assert!(session.lookup("other.md", &no_answers()).is_none());
+        assert!(session.lookup("index.md", &no_answers()).is_some());
+        assert!(session.lookup("a.md", &no_answers()).is_some());
+        assert!(session.lookup("b.md", &no_answers()).is_some());
         session.finish(&docs);
         reset_for_tests();
     }
@@ -1413,7 +1599,7 @@ mod tests {
         ParseSession::begin(dir.path(), &index_json, true, "fp".to_string()).finish(&[doc]);
 
         let session = ParseSession::begin(dir.path(), &index_json, true, "fp".to_string());
-        let replayed = session.lookup("a.md").expect("unchanged source is warm");
+        let replayed = session.lookup("a.md", &no_answers()).expect("unchanged source is warm");
         assert_eq!(replayed.missing_reference_occurrences.len(), 1);
         assert_eq!(replayed.missing_reference_occurrences[0].reference, "gone.png");
         session.finish(&[replayed]);
@@ -1441,8 +1627,8 @@ mod tests {
         // Nothing on disk changed, but a folder index's `url:` moved page_map.
         let session = ParseSession::begin(dir.path(), &index_json, true, "fp-2".to_string());
         assert!(session.is_cold());
-        assert!(session.lookup("a.md").is_none());
-        assert!(session.lookup("b.md").is_none());
+        assert!(session.lookup("a.md", &no_answers()).is_none());
+        assert!(session.lookup("b.md", &no_answers()).is_none());
         session.finish(&docs);
         reset_for_tests();
     }

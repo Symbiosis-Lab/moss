@@ -294,6 +294,9 @@ pub struct ContentGraph {
 
     /// Normalized names of the folders at the site root that hold a file.
     top_dirs: HashSet<String>,
+
+    /// See [`Self::identity`]; cleared whenever an input changes.
+    identity: std::sync::OnceLock<u64>,
 }
 
 impl ContentGraph {
@@ -307,7 +310,31 @@ impl ContentGraph {
     /// with an empty map.
     pub fn with_output_overrides(mut self, overrides: HashMap<String, String>) -> Self {
         self.output_overrides = overrides;
+        self.identity = std::sync::OnceLock::new();
         self
+    }
+
+    /// A hash of everything a question to this graph can read, so two graphs
+    /// with equal identities give every question the same answer. The index
+    /// maps and `top_dirs` are functions of `files` in order, so they are not
+    /// hashed. A new field a question reads must join the hash, or an equal
+    /// identity hides a moved answer. Stable only within one process.
+    pub fn identity(&self) -> u64 {
+        *self.identity.get_or_init(|| {
+            use std::hash::{Hash, Hasher};
+            fn sorted<V: Ord>(map: &HashMap<String, V>) -> Vec<(&String, &V)> {
+                let mut pairs: Vec<_> = map.iter().collect();
+                pairs.sort();
+                pairs
+            }
+            let mut hasher = std::hash::DefaultHasher::new();
+            self.files.hash(&mut hasher);
+            sorted(&self.slug_map).hash(&mut hasher);
+            sorted(&self.output_overrides).hash(&mut hasher);
+            sorted(&self.auto_index_dirs).hash(&mut hasher);
+            sorted(&self.case_twins).hash(&mut hasher);
+            hasher.finish()
+        })
     }
 
     /// **The one URL a resolved reference may be emitted as.**
@@ -386,6 +413,12 @@ impl ContentGraph {
     /// reached and which other files were exactly as near to `from_path` as
     /// the winner.
     pub fn resolve_path_with_ties(&self, reference: &str, from_path: &str) -> Option<PathResolution> {
+        let answer = self.resolve_unrecorded(reference, from_path);
+        note(|| GraphRead::Resolve { reference: reference.to_owned(), from: from_path.to_owned(), answer: answer.clone() });
+        answer
+    }
+
+    fn resolve_unrecorded(&self, reference: &str, from_path: &str) -> Option<PathResolution> {
         let resolve = |text: &str| {
             let mut ties = Vec::new();
             let mut matched = PathMatch::Searched;
@@ -399,6 +432,12 @@ impl ContentGraph {
 
     /// Every file named like `reference` apart from its extension, sorted.
     pub fn files_with_stem_of(&self, reference: &str) -> Vec<String> {
+        let answer = self.stem_of_unrecorded(reference);
+        note(|| GraphRead::StemOf { reference: reference.to_owned(), answer: answer.clone() });
+        answer
+    }
+
+    fn stem_of_unrecorded(&self, reference: &str) -> Vec<String> {
         let stem = normalize_component(filename_stem(&normalize_path(reference)));
         let mut found: Vec<String> =
             self.filename_index.get(&stem).into_iter().flatten().map(|&i| self.files[i].clone()).collect();
@@ -694,6 +733,12 @@ impl ContentGraph {
     /// (the auto-index folder-note fallback's `<dir>/index.md`), which by
     /// construction is never itself registered.
     pub fn contains_path(&self, path: &str) -> bool {
+        let answer = self.contains_unrecorded(path);
+        note(|| GraphRead::Contains { path: path.to_owned(), answer });
+        answer
+    }
+
+    fn contains_unrecorded(&self, path: &str) -> bool {
         self.path_index.contains_key(&normalize_path(path))
     }
 
@@ -808,8 +853,87 @@ impl ContentGraphBuilder {
             // Installed by the host via `with_output_overrides` once the build's
             // page map is known; the builder itself is scan-time and has none.
             output_overrides: HashMap::new(),
+            identity: std::sync::OnceLock::new(),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// What a caller asked the graph while a recording was open, so a later build
+// can ask the same questions again and learn whether any answer moved.
+//
+// A host that caches a parsed page needs to know when another file's arrival,
+// departure or rename changes how that page resolves. Rather than a second
+// model of resolution, the graph remembers each question with its answer;
+// re-asking them against the next build's graph is the whole check, so case
+// folding, ties, folder homes and percent-decoding move an answer exactly as
+// they move the build.
+//
+// Frames are a per-thread stack: a thread that runs another page's parse
+// while waiting inside this one (a rayon worker stealing work) records that
+// page into its own frame, and this frame resumes afterwards.
+// ---------------------------------------------------------------------------
+
+/// One question the graph answered, with the answer it gave.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GraphRead {
+    Resolve { reference: String, from: String, answer: Option<PathResolution> },
+    StemOf { reference: String, answer: Vec<String> },
+    Contains { path: String, answer: bool },
+}
+
+impl GraphRead {
+    /// Whether `graph` still gives this answer.
+    pub fn holds(&self, graph: &ContentGraph) -> bool {
+        match self {
+            Self::Resolve { reference, from, answer } => graph.resolve_unrecorded(reference, from) == *answer,
+            Self::StemOf { reference, answer } => graph.stem_of_unrecorded(reference) == *answer,
+            Self::Contains { path, answer } => graph.contains_unrecorded(path) == *answer,
+        }
+    }
+
+    /// The file a resolved reference named, if any.
+    pub fn resolved_path(&self) -> Option<&str> {
+        match self {
+            Self::Resolve { answer: Some(found), .. } => Some(&found.path),
+            _ => None,
+        }
+    }
+}
+
+thread_local! {
+    static FRAMES: std::cell::RefCell<Vec<Vec<GraphRead>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Run `f`, returning every distinct question it asked the graph on this thread.
+/// A question asked on another thread is not recorded, so work recorded here
+/// must never fan out across threads.
+pub fn recorded<R>(f: impl FnOnce() -> R) -> (R, Vec<GraphRead>) {
+    FRAMES.with(|frames| frames.borrow_mut().push(Vec::new()));
+    // Popped even if `f` unwinds, so a caught panic cannot leave a frame that
+    // swallows the next caller's reads.
+    struct Pop;
+    impl Drop for Pop {
+        fn drop(&mut self) {
+            FRAMES.with(|frames| frames.borrow_mut().pop());
+        }
+    }
+    let pop = Pop;
+    let value = f();
+    let reads = FRAMES.with(|frames| frames.borrow_mut().last_mut().map(std::mem::take)).unwrap_or_default();
+    drop(pop);
+    (value, reads)
+}
+
+fn note(read: impl FnOnce() -> GraphRead) {
+    FRAMES.with(|frames| {
+        if let Some(frame) = frames.borrow_mut().last_mut() {
+            let read = read();
+            if !frame.contains(&read) {
+                frame.push(read);
+            }
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1092,6 +1216,28 @@ mod tests {
     // Two files whose paths differ only in letter case (a case-sensitive disk)
     // are one key; which of them the graph keeps must not depend on the order
     // a directory listing happened to return them in.
+    #[test]
+    fn the_identity_moves_with_every_input_a_question_can_read() {
+        let built = |slug: &str, auto: Option<&str>| {
+            let mut b = ContentGraphBuilder::new();
+            b.add_file("a.md", slug);
+            b.add_file("notes/b.md", "notes/b");
+            if let Some(dir) = auto {
+                b.register_auto_index_dir(dir);
+            }
+            b.build()
+        };
+        let base = built("a", None).identity();
+        assert_eq!(base, built("a", None).identity());
+        assert_ne!(base, built("other", None).identity(), "slug");
+        assert_ne!(base, built("a", Some("notes")).identity(), "auto-index folder");
+        assert_ne!(base, ContentGraph::from_paths(&["a.md", "notes/b.md", "c.md"]).identity(), "file added");
+        let overridden = built("a", None).with_output_overrides(HashMap::from([("notes".to_owned(), "writing".to_owned())]));
+        assert_ne!(base, overridden.identity(), "output override");
+        let twins = ContentGraph::from_paths(&["a/photo.jpg", "a/Photo.jpg"]);
+        assert_ne!(ContentGraph::from_paths(&["a/Photo.jpg"]).identity(), twins.identity(), "case twin");
+    }
+
     #[test]
     fn of_two_case_twins_the_same_one_is_kept_whatever_the_order() {
         let a = ContentGraph::from_paths(&["a/photo.jpg", "a/Photo.jpg"]);
@@ -1855,5 +2001,58 @@ mod tests {
             g.resolve_path("photo.png", "interactive/article.md"),
             Some("interactive/photo.PNG".into())
         );
+    }
+
+    // ---- recorded reads ----
+
+    #[test]
+    fn a_recording_holds_until_a_new_file_changes_an_answer() {
+        let before = ContentGraph::from_paths(&["notes/a.md"]);
+        let ((), reads) = recorded(|| {
+            before.resolve_path("b", "notes/a.md");
+            before.resolve_path("a", "notes/a.md");
+        });
+        assert_eq!(reads.len(), 2);
+        assert!(reads.iter().all(|r| r.holds(&before)));
+        let after = ContentGraph::from_paths(&["notes/a.md", "notes/b.md"]);
+        let moved: Vec<_> = reads.iter().filter(|r| !r.holds(&after)).collect();
+        assert_eq!(moved.len(), 1, "only the dangling `b` moves: {moved:?}");
+    }
+
+    #[test]
+    fn a_new_tie_moves_a_resolved_answer() {
+        let before = ContentGraph::from_paths(&["x/note.md", "y/page.md"]);
+        let ((), reads) = recorded(|| {
+            before.resolve_path_with_ties("note", "y/page.md");
+        });
+        let after = ContentGraph::from_paths(&["x/note.md", "y/page.md", "z/note.md"]);
+        assert!(!reads[0].holds(&after));
+    }
+
+    #[test]
+    fn a_nested_frame_keeps_its_reads_apart() {
+        let graph = ContentGraph::from_paths(&["a.md", "b.md"]);
+        let ((inner, ()), outer) = recorded(|| {
+            graph.resolve_path("a", "");
+            let nested = recorded(|| {
+                graph.resolve_path("b", "");
+            });
+            (nested.1, ())
+        });
+        assert_eq!(outer.len(), 1);
+        assert_eq!(inner.len(), 1);
+        assert_ne!(outer, inner);
+    }
+
+    #[test]
+    fn re_asking_records_nothing() {
+        let graph = ContentGraph::from_paths(&["a.md"]);
+        let ((), reads) = recorded(|| {
+            graph.resolve_path("a", "");
+        });
+        let ((), again) = recorded(|| {
+            assert!(reads[0].holds(&graph));
+        });
+        assert!(again.is_empty());
     }
 }

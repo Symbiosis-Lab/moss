@@ -154,7 +154,7 @@ pub(crate) fn promise_image_variants(
 /// The second pass re-renders pages over output the first pass already
 /// produced. It must not repeat what belongs to the build as a whole: the
 /// plugins' process hooks (minutes of external fetching, meant for the initial
-/// build only), the link-preview prewarm, the agent-guidance sync, and the
+/// build only), the agent-guidance sync, and the
 /// completion line and problem reports the user has already seen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Pass {

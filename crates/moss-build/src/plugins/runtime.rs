@@ -6,6 +6,7 @@
 //! Tauri command wrappers, the streaming binary path, and the action-panel
 //! members stay app-side.
 
+pub mod browser_sign_in;
 pub mod download;
 pub mod portable;
 mod http;

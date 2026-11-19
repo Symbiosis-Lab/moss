@@ -442,16 +442,21 @@ mod tests {
     }
 
     #[test]
-    fn instantiate_strips_a_template_claim_on_a_declared_name_list_field() {
+    fn instantiate_strips_a_named_claim_on_a_declared_name_list_field_and_keeps_true() {
         let vault = vault();
         let root = vault.path();
         write(root, ".moss/config.toml", "[terms.performers]\nfields = [\"conductor\"]\n");
-        write(root, "maestro.md", "---\ntitle: Maestro\nconductor_page: true\n---\nBio\n");
-        let id = save(root, "maestro.md", "Conductor");
+        write(root, "maestro.md", "---\ntitle: Maestro\nconductor_page: Ada Example\n---\nBio\n");
+        write(root, "soloist.md", "---\ntitle: Soloist\nconductor_page: true\n---\nBio\n");
+        let named = save(root, "maestro.md", "Conductor");
+        let own = save(root, "soloist.md", "Own name");
 
-        let dest = instantiate_template_in(root, &id, root.to_str().unwrap(), "untitled").unwrap();
+        let dest = instantiate_template_in(root, &named, root.to_str().unwrap(), "untitled").unwrap();
         let doc = moss_core::frontmatter::parse(&fs::read_to_string(&dest).unwrap());
         assert!(!doc.frontmatter.contains_key("conductor_page"), "{:?}", doc.frontmatter);
+        let dest = instantiate_template_in(root, &own, root.to_str().unwrap(), "untitled-2").unwrap();
+        let doc = moss_core::frontmatter::parse(&fs::read_to_string(&dest).unwrap());
+        assert_eq!(doc.frontmatter.get("conductor_page").and_then(|v| v.as_bool()), Some(true), "{:?}", doc.frontmatter);
     }
 
     #[test]

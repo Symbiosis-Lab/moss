@@ -114,6 +114,7 @@ const GATE_PORT_KEYS = [
   'places-explorer-vertical',
   'places-explorer-single',
   'header-over-ink',
+  'header-over-band',
   'hero-pause',
   'hero-caption-stack',
   'bridge-capture',
@@ -127,6 +128,8 @@ const GATE_PORT_KEYS = [
   'request-form',
   'colophon-credit:long',
   'colophon-credit:short',
+  'colophon-credit:band',
+  'colophon-credit:archival-band',
   'footer-end-space:hidden',
   'footer-end-space:default',
   'facts-margin:widened',
@@ -171,6 +174,9 @@ const GATE_PORT_KEYS = [
   'focus-point:ui',
   'focus-point:preview',
   'hosted-bold',
+  'link-card-cover-slot',
+  'address-bar:ui',
+  'address-bar:preview',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

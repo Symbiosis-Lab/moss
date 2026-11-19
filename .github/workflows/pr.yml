@@ -422,6 +422,9 @@ jobs:
       - name: Diagram check tests
         run: node --test scripts/__tests__/gen-architecture-diagrams.test.mjs
 
+      - name: Render gate selection tests
+        run: node --test scripts/__tests__/render-gate-select.test.mjs
+
       # `check` goes green precisely BECAUSE a ceiling rose, so a raise with
       # no reason is otherwise invisible in review — this audits every
       # commit the PR actually adds (not just its final diff) for a
