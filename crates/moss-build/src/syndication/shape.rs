@@ -134,7 +134,8 @@ pub fn shape_with(post: &ArticleInfo, spec: &ChannelSpec, site_url: &str, opts: 
         if spec.takes(Form::Thread) && parts.len() > 1 && parts.iter().all(|p| spec.fits(&p.text)) {
             (Form::Thread, parts, None, None)
         } else if spec.takes(Form::Long) {
-            let (mut html, included, omitted) = super::pictures::article_html(post, site_url, opts, spec.max_article_images());
+            let (html, included, omitted) = super::pictures::article_html(post, site_url, opts, spec.max_article_images());
+            let mut html = super::pictures::clean(&html, &post.title);
             included_pictures = included;
             omitted_pictures = omitted;
             if opts.link_back {
@@ -146,7 +147,7 @@ pub fn shape_with(post: &ArticleInfo, spec: &ChannelSpec, site_url: &str, opts: 
                 let (prefix, stop) = footer(lang.as_deref().unwrap_or(""));
                 html.push_str(&format!("\n<p>{prefix} <a href=\"{url}\">{name}</a>{stop}</p>"));
             }
-            (Form::Long, Vec::new(), None, Some(Article { title: post.title.clone(), blocks: super::pictures::blocks(&html, &post.title), html, description: described(post), cover: cover(post, site_url) }))
+            (Form::Long, Vec::new(), None, Some(Article { title: post.title.clone(), blocks: super::pictures::blocks(&html), html, description: described(post), cover: cover(post, site_url) }))
         } else if spec.takes(Form::Teaser) {
             let (teaser, part) = teaser(post, spec, &page, site_url)?;
             (Form::Teaser, vec![part], Some(teaser), None)
