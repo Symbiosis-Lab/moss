@@ -140,6 +140,28 @@ pub(crate) fn read_record_file(path: &Path) -> io::Result<String> {
     fs::read_to_string(path)
 }
 
+/// `rename`, or across volumes a copy beside `to` renamed into place, then
+/// the original removed. Any other rename error leaves the original in place. The copy keeps the `.pending.` name the sweep skips
+/// until it lands.
+pub(crate) fn move_across_volumes(from: &Path, to: &Path, rename: impl Fn(&Path, &Path) -> std::io::Result<()>) -> bool {
+    // allow:unlink callers move between stores, never out of staging
+    match rename(from, to) {
+        Ok(()) => return true,
+        Err(e) if e.kind() != io::ErrorKind::CrossesDevices => return false,
+        Err(_) => {}
+    }
+    let pending = to.with_file_name(format!("{}.pending.{}", to.file_name().and_then(|n| n.to_str()).unwrap_or("blob"), std::process::id()));
+    // allow:unlink the copy lands in place before the original goes
+    let landed = fs::copy(from, &pending).and_then(|_| fs::rename(&pending, to)).is_ok(); // allow:raw_write a pending copy only this call names
+    if !landed {
+        // allow:unlink our own pending copy
+        let _ = fs::remove_file(&pending);
+        return false;
+    }
+    // allow:unlink the original, once its copy has landed
+    fs::remove_file(from).is_ok()
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Refusal {
     /// A `create_dir_all` reaching through the refused directory.

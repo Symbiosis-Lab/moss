@@ -227,3 +227,67 @@ fn concurrent_resolves_of_a_new_folder_agree_on_its_id() {
         assert!(ids.windows(2).all(|p| p[0] == p[1]), "round {round}: {ids:?}");
     }
 }
+
+#[test]
+fn the_collector_removes_a_gone_folders_stores_and_keeps_the_rest() {
+    let w = World::new();
+    let stores = w.stores(volume_a);
+    let gone = w.folder("gone");
+    let kept = w.folder("kept");
+    let (gone_store, kept_store) = (stores.resolve(&gone).unwrap(), stores.resolve(&kept).unwrap());
+    mark(&gone_store);
+    mark(&kept_store);
+    std::fs::remove_dir_all(&gone).unwrap();
+
+    assert_eq!(stores.collect(std::time::Duration::from_secs(3600)).unwrap(), 0, "a recently used store waits out its grace");
+    assert!(marked(&gone_store));
+
+    assert_eq!(stores.collect(std::time::Duration::ZERO).unwrap(), 1);
+    assert!(!gone_store.cache_dir.exists() && !gone_store.record_dir.exists());
+    assert!(marked(&kept_store), "a folder that is still there keeps its store");
+}
+
+#[test]
+fn the_collector_keeps_the_stores_of_a_folder_whose_volume_is_away() {
+    let w = World::new();
+    let stores = w.stores(volume_a);
+    let folder = w.folder("away/site");
+    let store = stores.resolve(&folder).unwrap();
+    mark(&store);
+    // The whole mount is gone, parent included; what exists above it is another volume.
+    std::fs::remove_dir_all(folder.parent().unwrap()).unwrap();
+
+    assert_eq!(w.stores(volume_b).collect(std::time::Duration::ZERO).unwrap(), 0);
+    assert!(marked(&store));
+    assert_eq!(w.stores(unidentified).collect(std::time::Duration::ZERO).unwrap(), 0);
+    assert!(marked(&store));
+
+    assert_eq!(w.stores(volume_a).collect(std::time::Duration::ZERO).unwrap(), 1, "the volume is mounted and the folder is not on it");
+}
+
+#[test]
+fn a_folder_with_no_store_yet_never_keeps_facts_in_itself() {
+    let tmp = TempDir::new().unwrap();
+    let folder = tmp.path().join("not-yet");
+    let before = for_folder(&folder);
+    assert!(!before.cache_dir.starts_with(&folder) && !before.record_dir.starts_with(&folder));
+    std::fs::create_dir_all(&folder).unwrap();
+    let after = for_folder(&folder);
+    assert_ne!(after, before, "the miss is not remembered: the folder gets its store once it exists");
+    assert!(!after.cache_dir.starts_with(std::fs::canonicalize(&folder).unwrap()));
+    assert_eq!(for_folder(&folder), after);
+}
+
+#[test]
+fn an_exited_process_scratch_store_is_swept_and_a_running_one_kept() {
+    let tmp = TempDir::new().unwrap();
+    let gone = tmp.path().join(format!("{UNSTORED_PREFIX}4000000000"));
+    let ours = tmp.path().join(format!("{UNSTORED_PREFIX}{}", std::process::id()));
+    let other = tmp.path().join(format!("{UNSTORED_PREFIX}notapid"));
+    for dir in [&gone, &ours, &other] {
+        std::fs::create_dir_all(dir.join("site/cache")).unwrap();
+    }
+    sweep_unstored(tmp.path());
+    assert!(!gone.exists());
+    assert!(ours.exists() && other.exists());
+}

@@ -60,7 +60,7 @@ impl FolderLangEntry {
     }
 }
 
-/// Persisted `.moss/build.nosync/cache/folder-lang.json`.
+/// Persisted at [`crate::moss_paths::MossPaths::cache_folder_lang`], this computer's facts.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct FolderLangCache {
     pub(super) entries: HashMap<String, FolderLangEntry>,

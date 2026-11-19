@@ -61,7 +61,7 @@ impl Served {
     }
 
     fn asks_and_is_served_within(&self, command: &str, args: serde_json::Value, address: &str, within: Duration) {
-        let token = std::fs::read_to_string(self.site.join(".moss/build.nosync/http-token")).expect("the carrier token is published");
+        let token = std::fs::read_to_string(moss_build::ops::serve::carrier_token::token_path(&self.site)).expect("the carrier token is published");
         let from = self.child.stderr_len();
         ureq::post(&format!("http://localhost:{}/__moss/mutate/{command}", self.port))
             .set("Content-Type", "application/json")

@@ -90,9 +90,18 @@ impl FolderStores {
         let temp = std::env::temp_dir();
         let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
         if crate::infra::app_data::in_test_binary() || canonical(folder).starts_with(canonical(&temp)) {
-            let root = temp.join("moss-folder-stores");
-            return Some(Self::new(root.join("records"), root.join("caches")));
+            return Some(Self::temporary());
         }
+        Self::app()
+    }
+
+    /// The stores every folder under the temporary directory shares.
+    fn temporary() -> Self {
+        let root = std::env::temp_dir().join("moss-folder-stores");
+        Self::new(root.join("records"), root.join("caches"))
+    }
+
+    fn app() -> Option<Self> {
         let local = crate::infra::app_data::AppRoots::running()?.local;
         let caches = dirs::cache_dir()?.join(local.file_name()?).join("folders");
         Some(Self::new(local.join("folders"), caches))
@@ -209,6 +218,61 @@ impl FolderStores {
         Ok(())
     }
 
+    /// Remove the stores of folders that are gone: the recorded path is missing
+    /// while its parent exists or its volume is mounted, and nothing resolved it
+    /// for `grace`. A folder on an unmounted volume keeps its stores. A store
+    /// set aside for a replaced folder goes once it is older than `grace`.
+    pub fn collect(&self, grace: std::time::Duration) -> io::Result<usize> {
+        let entries = match std::fs::read_dir(&self.record_root) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(0),
+            Err(e) => return Err(e),
+        };
+        let _held = self.lock()?;
+        let old = |path: &Path| {
+            path.symlink_metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > grace)
+        };
+        let mut removed = 0;
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            let gone = if name.contains(".replaced-") {
+                old(&self.record_root.join(&name))
+            } else {
+                match self.read(&name) {
+                    Some(rec) => old(&self.record_root.join(&name).join(RECORD)) && self.folder_gone(&rec),
+                    None => false,
+                }
+            };
+            if gone {
+                for root in [&self.cache_root, &self.record_root] {
+                    // allow:unlink this computer's store for a folder that no longer exists
+                    match std::fs::remove_dir_all(root.join(&name)) {
+                        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+                        _ => {}
+                    }
+                }
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
+
+    fn folder_gone(&self, rec: &Record) -> bool {
+        if rec.path.symlink_metadata().is_ok() {
+            return false;
+        }
+        if rec.path.parent().is_some_and(|parent| parent.is_dir()) {
+            return true;
+        }
+        // The parent is missing too: gone only if its volume is mounted now.
+        let Some(recorded) = &rec.volume else { return false };
+        let Some(existing) = rec.path.ancestors().find(|a| a.exists()) else { return false };
+        (self.volume_of)(existing).is_some_and(|v| v.id == recorded.id)
+    }
+
     /// Held for one resolve, across every folder: resolves are rare and short.
     fn lock(&self) -> io::Result<std::fs::File> {
         // allow:raw_write this computer's per-folder stores, outside any synced folder
@@ -230,6 +294,114 @@ impl FolderStores {
         // allow:raw_write this computer's per-folder stores, outside any synced folder
         std::fs::create_dir_all(&dir)?;
         crate::infra::atomic_write::write_json_atomic(&dir.join(RECORD), record).map_err(io::Error::other)
+    }
+}
+
+/// How long a gone folder's stores wait before [`collect_gone_once`] removes
+/// them: a folder moved aside for a while keeps its facts.
+const GONE_GRACE: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 3600);
+
+/// Once per process, in the background, from the first resolve: remove the
+/// stores of folders that are gone. The shared temporary root goes at once, since nothing else empties it;
+/// the app's after [`GONE_GRACE`]. A test binary never sweeps real app data.
+fn collect_gone_once() {
+    static STARTED: std::sync::Once = std::sync::Once::new();
+    STARTED.call_once(|| {
+        let _ = std::thread::Builder::new().name("folder-store-gc".into()).spawn(|| {
+            sweep_unstored(&std::env::temp_dir());
+            let mut sweeps = vec![(FolderStores::temporary(), std::time::Duration::ZERO)];
+            if !crate::infra::app_data::in_test_binary() {
+                sweeps.extend(FolderStores::app().map(|stores| (stores, GONE_GRACE)));
+            }
+            for (stores, grace) in sweeps {
+                if let Err(e) = stores.collect(grace) {
+                    log::info!("folder store sweep stopped ({e})");
+                }
+            }
+        });
+    });
+}
+
+/// `folder`'s stores for this process, resolved once per path spelling.
+///
+/// When no store can be resolved, the
+/// folder gets a scratch store for this process only, so its build runs
+/// without stored facts rather than keeping them in the folder.
+pub fn for_folder(folder: &Path) -> FolderStore {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static RESOLVED: OnceLock<Mutex<HashMap<PathBuf, FolderStore>>> = OnceLock::new();
+    let memo = RESOLVED.get_or_init(Default::default);
+    if let Some(store) = memo.lock().unwrap_or_else(|e| e.into_inner()).get(folder) {
+        return store.clone();
+    }
+    let resolved = std::fs::canonicalize(folder).and_then(|canonical| {
+        FolderStores::running_for(&canonical).ok_or_else(|| io::Error::other("no app-data directory"))?.resolve(&canonical)
+    });
+    collect_gone_once();
+    let store = match resolved {
+        Ok(store) => store,
+        // Not created yet: try again on the next call.
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return unstored(folder),
+        Err(e) => {
+            log::warn!("no computer store for {} ({e}); this run keeps no facts about it", folder.display());
+            unstored(folder)
+        }
+    };
+    memo.lock().unwrap_or_else(|e| e.into_inner()).insert(folder.to_path_buf(), store.clone());
+    store
+}
+
+const UNSTORED_PREFIX: &str = "moss-unstored-";
+
+fn unstored(folder: &Path) -> FolderStore {
+    let root = std::env::temp_dir().join(format!("{UNSTORED_PREFIX}{}", std::process::id())).join(name_for(folder));
+    FolderStore { id: String::new(), cache_dir: root.join("cache"), record_dir: root.join("record") }
+}
+
+/// Removes the scratch stores of processes that have exited: Windows never
+/// ages its temporary directory out.
+pub(crate) fn sweep_unstored(temp: &Path) {
+    let Ok(entries) = std::fs::read_dir(temp) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(|n| n.strip_prefix(UNSTORED_PREFIX)).and_then(|p| p.parse::<u32>().ok()) else {
+            continue;
+        };
+        if pid != std::process::id() && !pid_alive(pid) {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+/// A pid reused by an unrelated process reads as alive, which only keeps a
+/// stale record until that process exits too.
+#[cfg(unix)]
+pub(crate) fn pid_alive(pid: u32) -> bool {
+    let Ok(pid) = i32::try_from(pid) else { return false };
+    if pid <= 0 {
+        return false;
+    }
+    // SAFETY: signal 0 delivers nothing; it only checks the pid exists.
+    let signalled = unsafe { libc::kill(pid, 0) == 0 };
+    signalled || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(windows)]
+pub(crate) fn pid_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    // SAFETY: a null handle (no such process) is checked before use, and the
+    // handle is closed once its exit code is read.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return false;
+        }
+        let mut code = 0u32;
+        let read = GetExitCodeProcess(handle, &mut code) != 0;
+        let _ = CloseHandle(handle);
+        read && code == STILL_ACTIVE as u32
     }
 }
 

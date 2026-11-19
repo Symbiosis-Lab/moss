@@ -206,11 +206,11 @@ pub(crate) enum Placement {
 }
 
 impl StagedLinks {
-    /// The record `producer` left in `paths`' per-machine cache for the
+    /// The record `producer` left in this computer's facts for the
     /// outputs it links under `staging`, or an empty one (everything relinks
     /// once) when there is none or it cannot be read.
     pub(crate) fn load(paths: &crate::moss_paths::MossPaths, producer: &str, staging: &Path) -> Self {
-        Self::at(paths.cache_dir().join(format!("staged-links-{producer}.json")), staging)
+        Self::at(paths.staged_links(producer), staging)
     }
 
     /// The record kept in `file`, for a producer that keeps its own beside

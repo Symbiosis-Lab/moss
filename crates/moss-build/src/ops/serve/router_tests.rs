@@ -2813,18 +2813,20 @@ async fn reading_a_source_is_not_a_token_free_command() {
     let _ = shutdown_tx.send(());
 }
 
-/// moss's own files under `.moss/` (the carrier token among them) are out of
-/// a carrier read's reach even with the token; the site's config, which the
-/// author edits, is not.
+/// moss's own files under `.moss/`, and the carrier token outside the folder,
+/// are out of a carrier read's reach even with the token; the site's config,
+/// which the author edits, is not.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_carrier_read_never_reaches_moss_own_files() {
     let (_parent, vault_path, site_dir) = confinement_vault();
     let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 63440).await;
     let token_file = crate::ops::serve::carrier_token::token_path(&vault_path);
     assert!(token_file.exists(), "control: the carrier published its token file");
-    let relative = token_file.strip_prefix(&vault_path).unwrap().to_string_lossy().into_owned();
+    let own = vault_path.join(".moss/build.nosync/article-map.json");
+    std::fs::create_dir_all(own.parent().unwrap()).unwrap();
+    std::fs::write(&own, "{}").unwrap();
 
-    for path in [relative.clone(), token_file.to_string_lossy().into_owned()] {
+    for path in [".moss/build.nosync/article-map.json".to_string(), token_file.to_string_lossy().into_owned()] {
         let res = ureq::post(&format!("http://localhost:{}/__moss/read/parse_frontmatter", port))
             .set("Content-Type", "application/json")
             .set("X-Moss-Token", &token)

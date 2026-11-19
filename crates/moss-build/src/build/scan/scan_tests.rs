@@ -2085,7 +2085,7 @@ impl ScannedVault {
     }
 
     fn index_path(&self) -> std::path::PathBuf {
-        self.dir.path().join(".moss/build.nosync/cache/hash-index.json")
+        crate::moss_paths::MossPaths::new(self.dir.path()).cache_hash_index()
     }
 
     /// Scan, and return `photo.png`'s entry in the index the scan persisted.

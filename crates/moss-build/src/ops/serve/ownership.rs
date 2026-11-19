@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 
 
 use crate::infra::atomic_write;
-use crate::infra::folder_store::name_for;
+use crate::infra::folder_store::{name_for, pid_alive};
 use crate::infra::home::moss_home;
 
 /// Which kind of process holds a folder's ownership record.
@@ -243,37 +243,6 @@ fn sweep_dead_records(dir: &Path, keep: &Path) {
     }
     if removed > 0 {
         log::info!("removed {removed} owner records of servers that are gone from {}", dir.display());
-    }
-}
-
-/// A pid reused by an unrelated process reads as alive, which only keeps a
-/// stale record until that process exits too.
-#[cfg(unix)]
-fn pid_alive(pid: u32) -> bool {
-    let Ok(pid) = i32::try_from(pid) else { return false };
-    if pid <= 0 {
-        return false;
-    }
-    // SAFETY: signal 0 delivers nothing; it only checks the pid exists.
-    let signalled = unsafe { libc::kill(pid, 0) == 0 };
-    signalled || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-}
-
-#[cfg(windows)]
-fn pid_alive(pid: u32) -> bool {
-    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
-    use windows_sys::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
-    // SAFETY: a null handle (no such process) is checked before use, and the
-    // handle is closed once its exit code is read.
-    unsafe {
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if handle.is_null() {
-            return false;
-        }
-        let mut code = 0u32;
-        let read = GetExitCodeProcess(handle, &mut code) != 0;
-        let _ = CloseHandle(handle);
-        read && code == STILL_ACTIVE as u32
     }
 }
 
@@ -563,7 +532,7 @@ pub enum YieldOutcome {
 /// `POST /__moss/yield`, so a fuller engine elsewhere on the machine (the
 /// desktop app) can take the folder over. Reads the live owner's record
 /// (for its URL), then the vault's
-/// `.moss/build.nosync/http-token` (for the same bearer token the carrier
+/// the folder's `http-token` record on this computer (for the same bearer token the carrier
 /// checks — see [`super::carrier_token`]), and reports what the owner
 /// answered rather than assuming the request landed.
 pub async fn request_yield(folder: &Path) -> Result<YieldOutcome, String> {

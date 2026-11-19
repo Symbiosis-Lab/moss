@@ -5557,7 +5557,7 @@ fn a_staged_record_without_ctime_precision_is_rehashed_before_relinking() {
         let h = harness();
         let oid = h.objects.store_bytes(b"valid bytes").unwrap();
         let path = h.staging.join("asset.bin");
-        let saved = MossPaths::from_moss_dir(h._tmp.path().join(".moss")).cache_dir().join("staged-links-test.json");
+        let saved = MossPaths::from_moss_dir(h._tmp.path().join(".moss")).staged_links("test");
         let mut first = staged_links(&h);
         assert!(matches!(first.link(&h.objects, &oid, &path, None), Placement::Linked));
         first.save();

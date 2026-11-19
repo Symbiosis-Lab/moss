@@ -2511,6 +2511,8 @@ fn test_gc_preserves_objects_referenced_by_site_hashes() {
         serde_json::to_string_pretty(&hashes_json).unwrap(),
     )
     .expect("write hashes.json");
+    // A build that wrote hashes.json wrote its index too.
+    HashIndex::new().save(&mp.cache_hash_index()).unwrap();
 
     let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test()).expect("every mark input is readable");
 
@@ -3909,4 +3911,43 @@ fn the_second_pass_waits_for_the_first_to_end() {
         assert_eq!(second.join().unwrap(), Some((0, true)));
     });
     assert!(work.take().is_none());
+}
+
+/// The hash index lives in this computer's store, which the system may purge
+/// while the build it marks stays in the folder. A sweep then would condemn
+/// what that build still uses, in the synced store too: it must not run.
+#[test]
+fn a_sweep_stops_when_the_index_is_gone_but_its_build_is_not() {
+    let (mp, objects_dir, _) = make_gc_test_dir("gc_index_purged");
+    let oid = "ab".repeat(32);
+    let blob = objects_dir.join(&oid[..2]).join(&oid[2..4]).join(&oid);
+    fs::create_dir_all(blob.parent().unwrap()).unwrap();
+    fs::write(&blob, b"still served").unwrap();
+    fs::create_dir_all(mp.build_dir()).unwrap();
+    fs::write(mp.hashes(), "{}").unwrap();
+    let _ = fs::remove_file(mp.cache_hash_index());
+
+    let refused = gc(&mp, &crate::build::lifecycle::gc_token_for_test());
+    assert!(refused.is_err(), "swept with no index: {refused:?}");
+    assert!(blob.exists());
+}
+
+#[test]
+fn a_source_copy_moves_across_volumes_by_copy_then_remove() {
+    let tmp = tempfile::tempdir().unwrap();
+    let from = tmp.path().join("synced-blob");
+    let to = tmp.path().join("local").join("blob");
+    fs::create_dir_all(to.parent().unwrap()).unwrap();
+    fs::write(&from, b"bytes").unwrap();
+    let cross_device = |_: &Path, _: &Path| Err(std::io::Error::from(std::io::ErrorKind::CrossesDevices));
+
+    assert!(crate::build::io_utils::move_across_volumes(&from, &to, cross_device));
+    assert_eq!(fs::read(&to).unwrap(), b"bytes");
+    assert!(!from.exists());
+    assert_eq!(fs::read_dir(to.parent().unwrap()).unwrap().count(), 1, "no copy left pending");
+
+    fs::write(&from, b"bytes").unwrap();
+    let refused = |_: &Path, _: &Path| Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+    assert!(!crate::build::io_utils::move_across_volumes(&from, &tmp.path().join("local").join("other"), refused));
+    assert!(from.exists(), "any other failure keeps the original");
 }

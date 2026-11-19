@@ -173,3 +173,55 @@ fn a_build_leaves_the_agent_guidance_another_computer_wrote() {
     assert_eq!(fs::read_to_string(&guidance).unwrap(), theirs);
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Every file under `.moss/` that records a file's stat (an mtime, an inode),
+/// build output included. Two records of the build output carry one, and leave
+/// the folder with it: the build manifest and each generation's own listing.
+fn stat_keyed(dir: &Path) -> Vec<String> {
+    let moss = dir.join(".moss");
+    walkdir::WalkDir::new(&moss)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file())
+        .map(|e| e.path().strip_prefix(&moss).unwrap().to_string_lossy().into_owned())
+        .filter(|rel| rel != "build.nosync/hashes.json" && !(rel.starts_with("build.nosync/generations/.") && rel.ends_with(".whole.json")))
+        .filter(|rel| fs::read(moss.join(rel)).is_ok_and(|bytes| bytes.windows(7).any(|w| w == b"\"mtime\"")))
+        .collect()
+}
+
+/// This computer's facts about the folder live outside it: deleting them costs
+/// a hash pass, never a page, and the synced folder does not notice. Nothing
+/// left under `.moss/` is keyed by this computer's stats.
+#[test]
+fn a_build_without_this_computers_facts_publishes_the_same_pages() {
+    let dir = site("facts_gone");
+    let facts = moss_build::moss_paths::MossPaths::new(&dir).facts_dir();
+    for preview in [false, true] {
+        settle(&dir, preview);
+        let page = || fs::read_to_string(dir.join(".moss/build.nosync/staging/index.html")).expect("the home page");
+        let before = (page(), synced(&dir));
+        assert!(facts.join("hash-index.json").exists(), "preview={preview}: the facts are where this test deletes them");
+        fs::remove_dir_all(&facts).unwrap();
+        build(&dir, preview);
+        assert_eq!(page(), before.0, "preview={preview}");
+        assert_eq!(written(&before.1, &synced(&dir)), Vec::<String>::new(), "preview={preview}");
+        assert_eq!(stat_keyed(&dir), Vec::<String>::new(), "preview={preview}");
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A folder an older moss built keeps this computer's facts in
+/// `build.nosync/cache/`. The next build carries them out of the folder.
+#[test]
+fn a_build_moves_out_the_facts_an_older_moss_left_in_the_folder() {
+    let dir = site("facts_left");
+    settle(&dir, false);
+    let paths = moss_build::moss_paths::MossPaths::new(&dir);
+    let old = paths.cache_dir();
+    fs::rename(paths.cache_hash_index(), old.join("hash-index.json")).unwrap();
+    fs::write(old.join("staged-links-pages.json"), "{}").unwrap();
+    build(&dir, false);
+    assert!(!old.join("hash-index.json").exists() && !old.join("staged-links-pages.json").exists());
+    assert!(paths.cache_hash_index().exists());
+    let _ = fs::remove_dir_all(&dir);
+}

@@ -812,6 +812,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // Before the tree is marked or held: the split layout is what both assume.
     let paths_at_start = crate::moss_paths::MossPaths::from_moss_dir(moss_dir_path.to_path_buf());
     crate::build::lifecycle::tree_migration::migrate_build_tree(&paths_at_start);
+    crate::infra::moss_paths::move_local_facts_out(&paths_at_start);
     crate::vault::synced_siblings::reconcile_synced_state(&paths_at_start);
     crate::infra::moss_paths::exclude_dirs_from_cloud_sync(&moss_dir_path); // regenerable output: keep it out of iCloud, and out of the set moss waits for
     // Hold `.moss/build.nosync` by fd from here so a cloud sync client's rename-aside
