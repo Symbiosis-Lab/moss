@@ -1,3 +1,4 @@
+use crate::moss_paths::MossPaths;
 use super::*;
 // `is_port_available` is no longer needed by the production server-start
 // path (the bind-with-scan helper is the authoritative check), but tests
@@ -1221,7 +1222,7 @@ async fn old_current_image_uses_its_own_original_after_new_registry_is_cleared()
 
     for (index, latest_failed) in [false, true].into_iter().enumerate() {
         let site = TempDir::new().unwrap();
-        let current = site.path().join(".moss/build.nosync/current");
+        let current = MossPaths::new(site.path()).current_ptr();
         std::fs::create_dir_all(current.join("assets")).unwrap();
         std::fs::write(current.join("assets/cover.jpg"), b"old original").unwrap();
         let registry = latest_failed.then(|| {
@@ -1252,7 +1253,7 @@ async fn old_current_image_waits_for_hidden_cloud_original() {
     use tempfile::TempDir;
 
     let site = TempDir::new().unwrap();
-    let current = site.path().join(".moss/build.nosync/current");
+    let current = MossPaths::new(site.path()).current_ptr();
     let assets = current.join("assets");
     std::fs::create_dir_all(&assets).unwrap();
     let stub = assets.join(".cover.jpg.icloud");
@@ -1311,7 +1312,7 @@ async fn waiting_for_hidden_original_stays_on_the_selected_generation() {
     use tempfile::TempDir;
 
     let site = TempDir::new().unwrap();
-    let build = site.path().join(".moss/build.nosync");
+    let build = MossPaths::new(site.path()).build_dir();
     let first = build.join("generations/first");
     let second = build.join("generations/second");
     std::fs::create_dir_all(first.join("assets")).unwrap();
@@ -1701,7 +1702,7 @@ fn a_directory_url_is_resolved_to_its_index_before_the_cloud_check() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn page_route_redirects_a_source_file_to_its_page_and_tells_nothing_else() {
     let vault = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
-    let site_dir = vault.path().join(".moss/build.nosync/current");
+    let site_dir = MossPaths::new(vault.path()).current_ptr();
     std::fs::create_dir_all(site_dir.join("posts/hello")).unwrap();
     std::fs::write(site_dir.join("posts/hello/index.html"), b"<h1>Hello</h1>").unwrap();
     std::fs::create_dir_all(vault.path().join("posts")).unwrap();
@@ -1751,8 +1752,8 @@ async fn source_route_serves_vault_bytes_not_build_output() {
     let vault = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
     let vault_path = vault.path();
 
-    // `.moss/` in the path is how `Served::test_cell` names the folder.
-    let site_dir = vault_path.join(".moss/build.nosync/current");
+    // `Served::test_cell` names the folder that holds the build output.
+    let site_dir = MossPaths::new(vault_path).current_ptr();
     std::fs::create_dir_all(site_dir.join("assets")).unwrap();
     std::fs::create_dir_all(vault_path.join("assets")).unwrap();
     std::fs::write(vault_path.join("assets/photo.txt"), b"SOURCE").unwrap();
@@ -1785,7 +1786,7 @@ async fn source_route_serves_vault_bytes_not_build_output() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn source_route_serves_files_sandboxed() {
     let vault = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
-    let site_dir = vault.path().join(".moss/build.nosync/current");
+    let site_dir = MossPaths::new(vault.path()).current_ptr();
     std::fs::create_dir_all(&site_dir).unwrap();
     std::fs::write(
         vault.path().join("drawing.svg"),
@@ -1813,7 +1814,7 @@ async fn source_route_serves_files_sandboxed() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn source_route_passes_the_width_query_to_the_core() {
     let vault = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
-    let site_dir = vault.path().join(".moss/build.nosync/current");
+    let site_dir = MossPaths::new(vault.path()).current_ptr();
     std::fs::create_dir_all(&site_dir).unwrap();
     std::fs::write(vault.path().join("inside.txt"), b"INSIDE").unwrap();
     let (port, _, shutdown_tx) = start_server(ServeConfig::new(crate::moss_paths::Served::test_cell(site_dir), 58750))
@@ -1852,7 +1853,7 @@ async fn source_route_rejects_escape_above_the_vault() {
     std::fs::write(parent.path().join("secret.txt"), b"SECRET").unwrap();
 
     let vault_path = parent.path().join("vault");
-    let site_dir = vault_path.join(".moss/build.nosync/current");
+    let site_dir = MossPaths::new(&vault_path).current_ptr();
     std::fs::create_dir_all(&site_dir).unwrap();
     std::fs::write(vault_path.join("inside.txt"), b"INSIDE").unwrap();
 
@@ -2023,7 +2024,7 @@ async fn invoke_carrier_resolves_an_asset_using_the_derived_project_root() {
     // Rooted in the crate dir (not /tmp): resolve_asset canonicalizes, and on
     // macOS /tmp is a symlink — the sibling source-route test does the same.
     let vault = TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
-    let site_dir = vault.path().join(".moss/build.nosync/current");
+    let site_dir = MossPaths::new(vault.path()).current_ptr();
     std::fs::create_dir_all(&site_dir).unwrap();
     std::fs::create_dir_all(vault.path().join("assets")).unwrap();
     std::fs::write(vault.path().join("assets/hero.jpg"), b"JPGBYTES").unwrap();
@@ -2116,7 +2117,7 @@ async fn invoke_carrier_is_behind_the_trust_boundary() {
 
 // ===== Token-gated HTTP mutation carrier: POST /__moss/mutate/<cmd> =====
 
-/// Stand up a vault fixture whose site dir is `<vault>/.moss/build.nosync/current`, so
+/// Stand up a vault fixture whose site dir is the build output `MossPaths` names, so
 /// `Served::test_cell` names the vault as the served folder. Returns the TempDir (kept alive by the caller)
 /// and the site_dir path. Rooted in the crate dir, not /tmp: create_files /
 /// resolve canonicalize, and on macOS /tmp is a symlink (the source-route tests
@@ -2124,7 +2125,7 @@ async fn invoke_carrier_is_behind_the_trust_boundary() {
 #[cfg(test)]
 fn served_vault() -> (tempfile::TempDir, std::path::PathBuf) {
     let vault = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
-    let site_dir = vault.path().join(".moss/build.nosync/current");
+    let site_dir = MossPaths::new(vault.path()).current_ptr();
     std::fs::create_dir_all(&site_dir).unwrap();
     (vault, site_dir)
 }
@@ -2754,7 +2755,7 @@ fn confinement_vault() -> (tempfile::TempDir, std::path::PathBuf, std::path::Pat
         .unwrap();
 
     let vault_path = parent.path().join("vault");
-    let site_dir = vault_path.join(".moss/build.nosync/current");
+    let site_dir = MossPaths::new(&vault_path).current_ptr();
     std::fs::create_dir_all(&site_dir).unwrap();
     std::fs::write(vault_path.join("inside.md"), "---\ntitle: INSIDE\n---\nin the vault\n")
         .unwrap();
@@ -2821,7 +2822,7 @@ async fn a_carrier_read_never_reaches_moss_own_files() {
     let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 63440).await;
     let token_file = crate::ops::serve::carrier_token::token_path(&vault_path);
     assert!(token_file.exists(), "control: the carrier published its token file");
-    let own = vault_path.join(".moss/build.nosync/article-map.json");
+    let own = MossPaths::new(&vault_path).article_map();
     std::fs::create_dir_all(own.parent().unwrap()).unwrap();
     std::fs::write(&own, "{}").unwrap();
 

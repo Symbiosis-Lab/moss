@@ -3,6 +3,7 @@
 //! when it could not. The comment server is a local stand-in; all names and
 //! text are invented.
 
+use moss_build::moss_paths::MossPaths;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::Path;
@@ -33,7 +34,7 @@ fn record_dir(site: &Path) -> std::path::PathBuf {
 }
 
 fn page(site: &Path) -> String {
-    std::fs::read_to_string(site.join(".moss/build.nosync/current/posts/hello/index.html")).expect("built page")
+    std::fs::read_to_string(MossPaths::new(site).current_ptr().join("posts/hello/index.html")).expect("built page")
 }
 
 /// A site whose comment server is `server`, built once so the article map
@@ -53,7 +54,7 @@ fn site_with_stale_cache(tmp: &Path, home: &Path, server: &str) -> std::path::Pa
     std::fs::write(site.join("posts/hello.md"), "---\ntitle: Hello Garden\nuid: \"4e110a11\"\n---\n\nA post about gardens.\n").unwrap();
     build(home, &site, &[]);
     let map: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(site.join(".moss/build.nosync/article-map.json")).unwrap()).unwrap();
+        serde_json::from_str(&std::fs::read_to_string(MossPaths::new(&site).article_map()).unwrap()).unwrap();
     let uid = map["articles"]["posts/hello/"]["uid"].as_str().unwrap().to_string();
     std::fs::write(tmp.join("uid.txt"), &uid).unwrap();
     let cached = serde_json::json!({"schemaVersion": "1.1.0", "articles": {uid: {"comments": [
@@ -123,7 +124,7 @@ fn the_first_build_of_a_fresh_folder_ships_the_comment_the_server_has_now() {
     std::fs::create_dir_all(&home).unwrap();
     let server = serve_new_comment(Duration::from_millis(200), tmp.path().join("uid.txt"));
     let site = site_with_stale_cache(tmp.path(), &home, &server);
-    std::fs::remove_dir_all(site.join(".moss/build.nosync")).unwrap();
+    std::fs::remove_dir_all(MossPaths::new(&site).build_dir()).unwrap();
 
     let o = build(&home, &site, &[]);
     assert!(

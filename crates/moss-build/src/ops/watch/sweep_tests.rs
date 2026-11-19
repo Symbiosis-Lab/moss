@@ -1,3 +1,4 @@
+use crate::moss_paths::MossPaths;
 use super::*;
 use super::progress::*;
 use super::tick::*;
@@ -299,11 +300,11 @@ fn the_walk_reaches_moss_inputs_but_not_moss_output() {
     let root = dir.path().join("vault");
     std::fs::create_dir_all(root.join(".moss/theme")).unwrap();
     std::fs::create_dir_all(root.join(".moss/identity")).unwrap();
-    std::fs::create_dir_all(root.join(".moss/build.nosync/generations/1")).unwrap();
+    std::fs::create_dir_all(MossPaths::new(&root).generations_dir().join("1")).unwrap();
     std::fs::write(root.join(".moss/.config.toml.icloud"), b"").unwrap();
     std::fs::write(root.join(".moss/theme/.style.css.icloud"), b"").unwrap();
     std::fs::write(root.join(".moss/identity/.secret-key.icloud"), b"").unwrap();
-    std::fs::write(root.join(".moss/build.nosync/generations/1/.index.html.icloud"), b"").unwrap();
+    std::fs::write(MossPaths::new(&root).generations_dir().join("1/.index.html.icloud"), b"").unwrap();
 
     let mut paths = walk(&root, None, None).dataless;
     paths.sort();

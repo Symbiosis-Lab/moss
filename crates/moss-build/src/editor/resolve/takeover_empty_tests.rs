@@ -1,3 +1,4 @@
+use crate::moss_paths::MossPaths;
 use super::*;
 
 #[test]
@@ -20,7 +21,7 @@ fn folder_empty_tracks_author_entries_and_preserves_unknown() {
 #[test]
 fn a_stale_home_map_after_deletion_resolves_the_empty_folder_recipe() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join(".moss/build.nosync")).unwrap();
+    std::fs::create_dir_all(MossPaths::new(dir.path()).build_dir()).unwrap();
     let map = ArticleMap { pages: [("".into(), "index.md".into())].into(), ..Default::default() };
     map.save(&dir.path().join(".moss")).unwrap();
     let source = crate::editor::page_source::resolve_page_source("/", dir.path()).unwrap();

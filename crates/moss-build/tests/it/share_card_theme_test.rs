@@ -2,6 +2,7 @@
 //! page that gets one, the home page included, and a rebuild after
 //! the theme's card picture changes draws the new picture.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::Path;
 
@@ -19,7 +20,7 @@ fn strip(root: &Path, rgb: [u8; 3]) {
 
 /// The card a page's `og:image` names, decoded.
 fn card(root: &Path, page: &str) -> image::RgbImage {
-    let html = fs::read_to_string(root.join(".moss/build.nosync/staging").join(page)).unwrap();
+    let html = fs::read_to_string(MossPaths::new(root).staging_dir().join(page)).unwrap();
     let doc = scraper::Html::parse_document(&html);
     let url = doc
         .select(&scraper::Selector::parse(r#"meta[property="og:image"]"#).unwrap())
@@ -28,7 +29,7 @@ fn card(root: &Path, page: &str) -> image::RgbImage {
         .unwrap_or_else(|| panic!("{page} has no og:image"))
         .to_string();
     let at = url.find("/_moss/og/").unwrap_or_else(|| panic!("{page} shares no drawn card: {url}"));
-    let file = root.join(".moss/build.nosync/staging").join(&url[at + 1..]);
+    let file = MossPaths::new(root).staging_dir().join(&url[at + 1..]);
     image::open(&file).unwrap_or_else(|e| panic!("{page}'s card {}: {e}", file.display())).to_rgb8()
 }
 

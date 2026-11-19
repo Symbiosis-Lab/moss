@@ -2,6 +2,7 @@
 //! nav bar, after the content entries, in the order the kinds appear in the
 //! config. Without it the nav is what it was.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 
 use crate::site;
@@ -31,7 +32,7 @@ fn nav_links_with(terms_config: &str, pages: &[(&str, &str)]) -> Vec<(String, St
         write(file, &format!("---\n{front}\nnav: true\n---\n\nBody.\n"));
     }
     let result = crate::site::build_full(&tmp.to_string_lossy());
-    let html = fs::read_to_string(tmp.join(".moss/build.nosync/staging/index.html"));
+    let html = fs::read_to_string(MossPaths::new(&tmp).staging_dir().join("index.html"));
     let _ = fs::remove_dir_all(&tmp);
     assert!(result.is_ok(), "build failed: {result:?}");
     let html = html.unwrap();

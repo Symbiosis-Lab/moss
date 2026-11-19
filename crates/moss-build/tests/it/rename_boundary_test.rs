@@ -17,6 +17,8 @@
 //! that `rename_entry_inner` actually consults the boundary before touching the
 //! filesystem.
 
+use moss_build::moss_paths::MossPaths;
+
 /// A relative old-path is the original bug input: it does not start with the
 /// absolute project root, so the boundary check must reject it rather than
 /// letting `fs::rename` operate relative to the process cwd (escape).
@@ -263,7 +265,7 @@ fn build_staged(root: &std::path::Path) -> std::path::PathBuf {
         rename_pairs: Vec::new(),
     }))
     .expect("build");
-    root.join(".moss/build.nosync/staging")
+    MossPaths::new(root).staging_dir()
 }
 
 /// `[a](/docs/)` is a published address, which the build keeps verbatim. When

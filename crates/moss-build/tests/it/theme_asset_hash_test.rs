@@ -1,6 +1,7 @@
 //! The files a theme stylesheet points at are published under content-hashed
 //! names, and the stylesheet's own name follows what it points at.
 
+use moss_build::moss_paths::MossPaths;
 use moss_build::build::assets::paths::compute_binary_hash;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -28,7 +29,7 @@ impl Site {
     fn build(&self) -> PathBuf {
         let result = crate::site::build_full(&self.0.to_string_lossy());
         assert!(result.is_ok(), "build failed: {result:?}");
-        self.0.join(".moss/build.nosync/staging")
+        MossPaths::new(&self.0).staging_dir()
     }
 }
 

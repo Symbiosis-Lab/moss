@@ -4,6 +4,7 @@
 //! before the previous build has promoted.
 #![cfg(unix)]
 
+use moss_build::moss_paths::MossPaths;
 use crate::served_child;
 
 use served_child::*;
@@ -53,12 +54,12 @@ impl Folder {
     }
 
     fn manifest_names_the_page(&self) -> bool {
-        std::fs::read_to_string(self.site.join(".moss/build.nosync/hashes.json")).is_ok_and(|manifest| manifest.contains("notes/quiet-harbour-notes/index.html"))
+        std::fs::read_to_string(MossPaths::new(&self.site).hashes()).is_ok_and(|manifest| manifest.contains("notes/quiet-harbour-notes/index.html"))
     }
 }
 
 fn never_promoted(site: &Path) -> bool {
-    !site.join(".moss/build.nosync/current").exists()
+    !MossPaths::new(site).current_ptr().exists()
 }
 
 #[test]

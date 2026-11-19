@@ -1,3 +1,4 @@
+use crate::moss_paths::MossPaths;
 use super::*;
 use crate::build::assets::paths::compute_binary_hash;
 use crate::build::manifest::{HashBucket, PendingManifest};
@@ -63,7 +64,7 @@ fn a_manifest_entry_hashes_the_shipped_page_not_the_staged_one() {
 
     let (dir, mp) = project_with_pointer("gen-shipped");
     let staged: &[u8] = br#"<p data-source-line="3">home</p>"#;
-    let stage_dir = dir.path().join(".moss/build.nosync/staging");
+    let stage_dir = MossPaths::new(dir.path()).staging_dir();
     std::fs::create_dir_all(&stage_dir).unwrap();
     std::fs::write(stage_dir.join("index.html"), staged).unwrap();
 

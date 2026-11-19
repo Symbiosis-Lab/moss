@@ -2,6 +2,7 @@
 //! embeds as a map, and what the build says when the home page and the nav both
 //! show the same kind.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -30,7 +31,7 @@ fn site(name: &str, terms: &str) -> (PathBuf, Cleanup) {
 fn built(tmp: &Path) -> PathBuf {
     let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    tmp.join(".moss/build.nosync/staging")
+    MossPaths::new(tmp).staging_dir()
 }
 
 #[test]

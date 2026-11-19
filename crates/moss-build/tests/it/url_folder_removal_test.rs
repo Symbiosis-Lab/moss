@@ -118,5 +118,5 @@ fn a_size_no_longer_made_of_a_webp_picture_in_a_folder_with_its_own_address_keep
     site.rebuild();
 
     assert_eq!(reasons_for(&site, "shows/day.w9999.webp"), []);
-    assert!(site.root.join(".moss/build.nosync/current/shows/day.w9999.webp").is_file());
+    assert!(MossPaths::new(&site.root).current_ptr().join("shows/day.w9999.webp").is_file());
 }

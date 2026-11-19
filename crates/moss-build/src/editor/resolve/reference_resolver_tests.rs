@@ -1,3 +1,4 @@
+use crate::moss_paths::MossPaths;
 use super::*;
 use crate::build::scan::article_map::ArticleMap;
 
@@ -102,7 +103,7 @@ fn folder_listing_carries_folder_detail() {
         },
     );
     let moss_dir = root.join(".moss");
-    std::fs::create_dir_all(moss_dir.join("build.nosync")).expect("mkdir .moss/build.nosync");
+    std::fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).build_dir()).expect("mkdir .moss/build.nosync");
     map.save(&moss_dir).expect("save article map");
 
     let targets = vec![
@@ -150,7 +151,7 @@ fn folder_embed_follows_a_slug_override_to_its_real_source() {
     // What the build recorded: the pretty URL `awards/` ← the CJK source.
     map.pages.insert("awards/".into(), "評選/評選.md".into());
     let moss_dir = root.join(".moss");
-    std::fs::create_dir_all(moss_dir.join("build.nosync")).expect("mkdir .moss/build.nosync");
+    std::fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).build_dir()).expect("mkdir .moss/build.nosync");
     map.save(&moss_dir).expect("save article map");
 
     let targets = vec![RefTarget { text: "/awards/".into(), is_embed: true }];
@@ -217,7 +218,7 @@ fn folder_embed_whose_index_source_is_gone_has_nothing_to_follow() {
         },
     );
     let moss_dir = root.join(".moss");
-    std::fs::create_dir_all(moss_dir.join("build.nosync")).expect("mkdir .moss/build.nosync");
+    std::fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).build_dir()).expect("mkdir .moss/build.nosync");
     map.save(&moss_dir).expect("save article map");
 
     let targets = vec![RefTarget { text: "/notes/".into(), is_embed: true }];
@@ -416,7 +417,7 @@ fn folder_embed_with_a_synthesized_index_has_nothing_to_follow() {
         },
     );
     let moss_dir = root.join(".moss");
-    std::fs::create_dir_all(moss_dir.join("build.nosync")).expect("mkdir .moss/build.nosync");
+    std::fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).build_dir()).expect("mkdir .moss/build.nosync");
     map.save(&moss_dir).expect("save article map");
 
     let targets = vec![RefTarget { text: "/notes/".into(), is_embed: true }];
@@ -448,7 +449,7 @@ fn a_folder_as_embed_and_as_link_stay_separate() {
     let mut map = ArticleMap::new();
     map.pages.insert("notes/".into(), "notes/index.md".into());
     let moss_dir = root.join(".moss");
-    std::fs::create_dir_all(moss_dir.join("build.nosync")).expect("mkdir .moss/build.nosync");
+    std::fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).build_dir()).expect("mkdir .moss/build.nosync");
     map.save(&moss_dir).expect("save article map");
 
     let targets = vec![

@@ -1,6 +1,7 @@
 //! `[site].me` writes `rel="me"` links into the head of the site's pages, and
 //! `[site].atproto_did` writes the file a Bluesky domain handle is checked against.
 
+use moss_build::moss_paths::MossPaths;
 use crate::site;
 
 use site::{LoggedSite, Site};
@@ -68,9 +69,9 @@ fn atproto_did_writes_the_did_as_the_well_known_file() {
 #[test]
 fn the_sealed_generation_a_publish_uploads_carries_the_did_file() {
     let site = Site::with_config("atproto_did = \"did:plc:abcdefghijklmnopqrstuvwx\"\n", &PAGES);
-    let served = site.root.join(".moss/build.nosync/current/.well-known/atproto-did");
+    let served = MossPaths::new(&site.root).current_ptr().join(".well-known/atproto-did");
     assert_eq!(std::fs::read_to_string(served).expect("sealed copy").trim_end(), "did:plc:abcdefghijklmnopqrstuvwx");
-    let hashes = std::fs::read_to_string(site.root.join(".moss/build.nosync/hashes.json")).unwrap();
+    let hashes = std::fs::read_to_string(MossPaths::new(&site.root).hashes()).unwrap();
     assert!(hashes.contains(".well-known/atproto-did"), "the manifest names the file");
 }
 

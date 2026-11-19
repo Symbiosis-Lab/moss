@@ -3,6 +3,7 @@
 //! classified `io::Error`. Getting that backwards turns a real build failure
 //! into an unclearable waiting screen, or into a silent second build.
 
+use crate::moss_paths::MossPaths;
 use super::*;
 use std::io;
 
@@ -188,7 +189,7 @@ fn a_relocated_vault_gets_the_same_disposition() {
 #[test]
 fn a_present_output_file_is_not_discarded() {
     let dir = tempfile::tempdir().unwrap();
-    let staged = dir.path().join(".moss/build.nosync/staging/index.html");
+    let staged = MossPaths::new(dir.path()).staging_dir().join("index.html");
     std::fs::create_dir_all(staged.parent().unwrap()).unwrap();
     std::fs::write(&staged, b"<html>").unwrap();
 

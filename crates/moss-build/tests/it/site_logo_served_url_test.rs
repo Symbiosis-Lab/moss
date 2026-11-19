@@ -4,6 +4,7 @@
 //! written path 404s on a case-sensitive host while a case-insensitive disk
 //! serves it locally.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -52,7 +53,7 @@ fn logo_imgs(logo: &str) -> (PathBuf, Cleanup, Vec<(String, String)>) {
     write(&tmp, "Notes/first.md", "---\ntitle: First Note\n---\n\nHello.\n");
     let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    let out = tmp.join(".moss/build.nosync/staging");
+    let out = MossPaths::new(&tmp).staging_dir();
     let imgs = ["index.html", "notes/first/index.html"]
         .iter()
         .map(|page| (page.to_string(), logo_img(&fs::read_to_string(out.join(page)).unwrap())))

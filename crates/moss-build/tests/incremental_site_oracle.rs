@@ -27,6 +27,7 @@
 //! a browser. `MOSS_ORACLE_WORK` is where the clones go (default: the output).
 //! `MOSS_ORACLE_REPEAT` (default 3) is how many timed rebuilds each case gets.
 
+use moss_build::moss_paths::MossPaths;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -129,15 +130,13 @@ fn clone_source(src: &Path, dst: &Path) {
     // page from source. The content-addressed media store comes along: it is
     // keyed by source bytes, and re-encoding every video per clean build would
     // cost hours on a video-heavy site without testing anything rendered.
-    let moss = dst.join(".moss");
-    for sub in ["build.nosync", "build"] {
-        let _ = std::fs::remove_dir_all(moss.join(sub));
-    }
+    let _ = std::fs::remove_dir_all(MossPaths::new(dst).build_dir());
+    let _ = std::fs::remove_dir_all(dst.join(".moss").join("build"));
     // Two caches of this computer's hold inputs, not render state: what the network answered for external links, and the local
     // object store their downloaded covers (and other encoded bytes) live in.
     // A clean build that fetched them again would be judged on different input.
     // The incremental caches beside them (dependency, facade, hash index) stay out.
-    let (from, to) = (moss_build::moss_paths::MossPaths::new(src), moss_build::moss_paths::MossPaths::new(dst));
+    let (from, to) = (MossPaths::new(src), MossPaths::new(dst));
     for (cache, copy) in [(from.cache_link_meta(), to.cache_link_meta()), (from.cache_local_objects(), to.cache_local_objects())] {
         if cache.is_dir() {
             std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
@@ -147,7 +146,7 @@ fn clone_source(src: &Path, dst: &Path) {
 }
 
 fn staging(root: &Path) -> PathBuf {
-    root.join(".moss/build.nosync/staging")
+    MossPaths::new(root).staging_dir()
 }
 
 /// Text outputs by bytes; everything else (images, video, fonts) by length,

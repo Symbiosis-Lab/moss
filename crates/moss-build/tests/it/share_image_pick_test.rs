@@ -1,6 +1,7 @@
 //! A page that declares no cover shares the first body picture a platform can
 //! take as-is, not whatever picture happens to come first.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::Path;
 
@@ -47,7 +48,7 @@ fn page(front: &str, body: &str) -> String {
 }
 
 fn share_image(root: &Path, slug: &str) -> String {
-    let html = fs::read_to_string(root.join(format!(".moss/build.nosync/staging/{slug}/index.html"))).unwrap();
+    let html = fs::read_to_string(MossPaths::new(root).staging_dir().join(format!("{slug}/index.html"))).unwrap();
     let doc = scraper::Html::parse_document(&html);
     doc.select(&scraper::Selector::parse(r#"meta[property="og:image"]"#).unwrap())
         .next()

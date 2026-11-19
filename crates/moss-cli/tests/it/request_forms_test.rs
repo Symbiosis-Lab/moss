@@ -1,6 +1,7 @@
 //! `:::form` through the real CLI: the markup, the site's public description
 //! of its forms, and the build problems (a warning, a failure under `--strict`).
 
+use moss_build::moss_paths::MossPaths;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -43,7 +44,7 @@ fn site(config: &str, booking_md: &str) -> (tempfile::TempDir, std::path::PathBu
 }
 
 fn built(dir: &Path, rel: &str) -> String {
-    std::fs::read_to_string(dir.join(".moss/build.nosync/current").join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"))
+    std::fs::read_to_string(MossPaths::new(dir).current_ptr().join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"))
 }
 
 #[test]
@@ -81,7 +82,7 @@ fn the_description_exists_for_a_setting_alone_and_not_for_a_site_with_neither() 
 
     let (_t2, neither) = site("", "No form here.\n");
     assert!(run(&neither, true).0);
-    assert!(!neither.join(".moss/build.nosync/current/_moss/commerce.json").exists());
+    assert!(!MossPaths::new(&neither).current_ptr().join("_moss/commerce.json").exists());
 }
 
 #[test]

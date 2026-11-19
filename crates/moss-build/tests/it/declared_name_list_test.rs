@@ -2,6 +2,7 @@
 //! A declared field feeds term pages like `author:` does, its section label
 //! comes from its own name, and its term page is claimed by `<field>_page:`.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -29,7 +30,7 @@ fn build_site(name: &str, files: &[(&str, &str)]) -> (Cleanup, PathBuf) {
     }
     let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    (cleanup, tmp.join(".moss/build.nosync/staging"))
+    (cleanup, MossPaths::new(&tmp).staging_dir())
 }
 
 const PERFORMERS_CONFIG: &str = "schema_version = 6\n\n[site]\nlang = \"en\"\n\n[terms.performers]\nfields = [\"conductor\", \"soloist\"]\ntitle = \"Performers\"\n";

@@ -1,3 +1,4 @@
+use crate::moss_paths::MossPaths;
 use super::*;
 use crate::build::stat::{mtime_is_racy, RACY_WRITE_EPSILON_SECS, ZERO_NANOS_TRUST_AGE_SECS};
 use std::io::Write;
@@ -1348,7 +1349,7 @@ fn cached_link_recovers_a_refused_regenerable_target_directory() {
     let dir = tempfile::tempdir().unwrap();
     let store = ObjectStore::new(dir.path().join("objects"));
     let oid = store.store_bytes(b"complete source").unwrap();
-    let parent = dir.path().join(".moss/build.nosync/staging/assets");
+    let parent = MossPaths::new(dir.path()).staging_dir().join("assets");
     fs::create_dir_all(&parent).unwrap();
     let obsolete = parent.join("obsolete-output");
     fs::write(&obsolete, b"previous disposable output").unwrap();
@@ -1365,7 +1366,7 @@ fn cached_link_recovers_a_refused_regenerable_target_directory() {
 #[cfg(target_os = "macos")]
 fn hash_index_save_recovers_a_refused_regenerable_cache_directory() {
     let dir = tempfile::tempdir().unwrap();
-    let parent = dir.path().join(".moss/build.nosync/cache");
+    let parent = MossPaths::new(dir.path()).cache_dir();
     fs::create_dir_all(&parent).unwrap();
     let obsolete = parent.join("obsolete-index");
     fs::write(&obsolete, b"previous disposable index").unwrap();

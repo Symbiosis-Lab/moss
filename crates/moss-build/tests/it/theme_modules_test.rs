@@ -2,6 +2,7 @@
 //! served from a content-hashed URL named in an import map in `<head>`. A theme
 //! without a `script.mjs` is untouched. Built through the real pipeline.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -27,11 +28,11 @@ impl Site {
 
     fn build(&self) -> String {
         crate::site::build_full(&self.0.to_string_lossy()).expect("build failed");
-        fs::read_to_string(self.0.join(".moss/build.nosync/staging/index.html")).unwrap()
+        fs::read_to_string(MossPaths::new(&self.0).staging_dir().join("index.html")).unwrap()
     }
 
     fn staged(&self, rel: &str) -> PathBuf {
-        self.0.join(".moss/build.nosync/staging").join(rel)
+        MossPaths::new(&self.0).staging_dir().join(rel)
     }
 
     fn hashed(&self, dir: &str, stem: &str) -> Vec<String> {

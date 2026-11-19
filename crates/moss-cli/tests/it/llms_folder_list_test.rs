@@ -1,6 +1,7 @@
 //! A folder-list embed reaches llms.txt as the pages it lists, as markdown
 //! links in the listing's order, never as the build's internal marker.
 
+use moss_build::moss_paths::MossPaths;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -30,7 +31,7 @@ fn a_folder_list_embed_is_written_to_llms_txt_as_links() {
         .expect("run moss-cli");
     assert!(out.status.success(), "build failed:\n{}", String::from_utf8_lossy(&out.stderr));
 
-    let llms = std::fs::read_to_string(site.join(".moss/build.nosync/current/llms.txt")).unwrap();
+    let llms = std::fs::read_to_string(MossPaths::new(&site).current_ptr().join("llms.txt")).unwrap();
     assert!(!llms.contains("MOSS_MARKER"), "internal marker leaked:\n{llms}");
 
     let home = llms.split("## Home").nth(1).unwrap().split("\n---\n").next().unwrap();

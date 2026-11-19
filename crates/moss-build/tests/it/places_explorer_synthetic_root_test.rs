@@ -2,6 +2,7 @@
 //! `places/index.md` or authored when it has one: the explorer is the page
 //! when it is on, and the root is an ordinary folder page when it is off.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 use scraper::{Html, Selector};
@@ -50,7 +51,7 @@ fn synthetic_places_root_gets_the_explorer_bundle_and_handshake() {
 
     let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    let out = tmp.join(".moss/build.nosync/staging");
+    let out = MossPaths::new(&tmp).staging_dir();
 
     let places_html = read_page(&out, "places/index.html");
     let document = Html::parse_document(&places_html);
@@ -114,7 +115,7 @@ fn explorer_false_leaves_a_synthetic_root_untouched() {
 
     let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    let out = tmp.join(".moss/build.nosync/staging");
+    let out = MossPaths::new(&tmp).staging_dir();
 
     let places_html = read_page(&out, "places/index.html");
     assert!(
@@ -148,7 +149,7 @@ fn explorer_false_keeps_an_authored_roots_title_and_puts_its_words_first() {
 
     let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    let places_html = read_page(&tmp.join(".moss/build.nosync/staging"), "places/index.html");
+    let places_html = read_page(&MossPaths::new(&tmp).staging_dir(), "places/index.html");
     let main = &places_html[places_html.find("<main").expect("page has a <main>")..];
     let h1 = &main[main.find("<h1").expect("an <h1>")..];
     let h1 = &h1[..h1.find("</h1>").unwrap()];
@@ -177,7 +178,7 @@ fn a_root_that_embeds_its_own_map_draws_it_once() {
 
         let result = crate::site::build_full(&tmp.to_string_lossy());
         assert!(result.is_ok(), "build failed: {result:?}");
-        let places_html = read_page(&tmp.join(".moss/build.nosync/staging"), "places/index.html");
+        let places_html = read_page(&MossPaths::new(&tmp).staging_dir(), "places/index.html");
         let main = &places_html[places_html.find("<main").expect("page has a <main>")..];
         assert_eq!(main.matches(r#"class="moss-place-map""#).count(), 1, "explorer = {explorer}: one map:\n{main}");
         if explorer {

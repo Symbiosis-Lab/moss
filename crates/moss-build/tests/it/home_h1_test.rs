@@ -3,6 +3,7 @@
 //! opening hero stands in for the masthead, and a visible one otherwise; a
 //! page that opens with `# Title` already has one and adds none.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -28,7 +29,7 @@ fn home_html(home_body: &str) -> String {
     write(&tmp, "posts/first.md", "---\ntitle: First Post\n---\n\nHello.\n");
     let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    fs::read_to_string(tmp.join(".moss/build.nosync/staging/index.html")).unwrap()
+    fs::read_to_string(MossPaths::new(&tmp).staging_dir().join("index.html")).unwrap()
 }
 
 fn h1s(html: &str) -> Vec<String> {
@@ -87,7 +88,7 @@ fn page_saved_with_a_byte_order_mark_keeps_its_own_h1() {
     write(&tmp, "posts/host.md", "---\ntitle: Host\n---\n\n![[note]]\n\n![[note#A heading]]\n");
     let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    let staging = tmp.join(".moss/build.nosync/staging/posts");
+    let staging = MossPaths::new(&tmp).staging_dir().join("posts");
     let html = fs::read_to_string(staging.join("note/index.html")).unwrap();
     assert!(!html.contains('\u{feff}'), "{html}");
     assert_eq!(h1s(&html).iter().filter(|h| h.ends_with("|A heading")).count(), 1, "{html}");
@@ -108,7 +109,7 @@ fn folder_page_html(folder_note_body: &str) -> String {
     write(&tmp, "notes/first.md", "---\ntitle: First\n---\n\nHello.\n");
     let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    fs::read_to_string(tmp.join(".moss/build.nosync/staging/notes/index.html")).unwrap()
+    fs::read_to_string(MossPaths::new(&tmp).staging_dir().join("notes/index.html")).unwrap()
 }
 
 #[test]
@@ -134,7 +135,7 @@ fn article_html(article_body: &str, nav: bool) -> String {
     write(&tmp, "posts/other.md", "---\ntitle: Other\n---\n\nHello.\n");
     let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    fs::read_to_string(tmp.join(".moss/build.nosync/staging/posts/story/index.html")).unwrap()
+    fs::read_to_string(MossPaths::new(&tmp).staging_dir().join("posts/story/index.html")).unwrap()
 }
 
 #[test]

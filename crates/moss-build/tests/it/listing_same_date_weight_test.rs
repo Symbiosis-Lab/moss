@@ -1,6 +1,7 @@
 //! Two pages with the same date keep the order their authors give them with
 //! `weight:`; without a weight a listing keeps ordering them by url path.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -29,7 +30,7 @@ fn build_site(name: &str, files: &[(&str, &str)]) -> (Cleanup, PathBuf) {
     }
     let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    (cleanup, tmp.join(".moss/build.nosync/staging"))
+    (cleanup, MossPaths::new(&tmp).staging_dir())
 }
 
 

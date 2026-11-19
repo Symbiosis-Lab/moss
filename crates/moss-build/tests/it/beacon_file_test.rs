@@ -1,6 +1,7 @@
 //! A moss-hosted build writes the visit counter's one script file, and every
 //! page loads it with one tag. A site without a site id gets neither.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -20,7 +21,7 @@ impl Site {
     fn build(&self) -> PathBuf {
         let result = crate::site::build_full(&self.0.to_string_lossy());
         assert!(result.is_ok(), "build failed: {result:?}");
-        self.0.join(".moss/build.nosync/staging")
+        MossPaths::new(&self.0).staging_dir()
     }
 }
 

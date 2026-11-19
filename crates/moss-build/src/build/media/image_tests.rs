@@ -1,3 +1,4 @@
+use crate::moss_paths::MossPaths;
 use super::*;
 use crate::build::media::output_emit::summarize_coherence_violations;
 use crate::build::lifecycle::cas_heal::{rematerialize, rematerialize_with_record, HealOutcome};
@@ -899,11 +900,11 @@ async fn base_failure_fails_registered_rung_promises() {
     fs::write(root.join(img_rel), &corrupt).unwrap();
 
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     fs::create_dir_all(&staging).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).cache_tmp()).unwrap();
 
     let source_oid = crate::build::cache::ObjectStore::hash_file(&root.join(img_rel)).unwrap();
 
@@ -987,11 +988,11 @@ async fn base_failed_advisory_names_the_full_nested_source_path() {
     fs::write(root.join(img_rel), &corrupt).unwrap();
 
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     fs::create_dir_all(&staging).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).cache_tmp()).unwrap();
 
     let source_oid = crate::build::cache::ObjectStore::hash_file(&root.join(img_rel)).unwrap();
 
@@ -1077,11 +1078,11 @@ async fn unhashable_source_fails_its_promises_instead_of_going_quiet() {
     fs::create_dir_all(root.join(img_rel)).unwrap();
 
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     fs::create_dir_all(&staging).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).cache_tmp()).unwrap();
 
     // Mirror blocking.rs: base + rungs registered Pending up front
     // (scan dims 2000×1200 → ladder [800, 1600]).
@@ -1153,11 +1154,11 @@ async fn rung_collision_keeps_user_file_and_produces_other_rungs() {
     fs::write(root.join("photo.w800.webp"), user_bytes).unwrap();
 
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     fs::create_dir_all(&staging).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).cache_tmp()).unwrap();
     // Simulate the asset-copy leg having landed the user's file in
     // staging (it runs independently of the image worker).
     fs::write(staging.join("photo.w800.webp"), user_bytes).unwrap();
@@ -2983,11 +2984,11 @@ fn test_dispatch_image_conversions_with_items_produces_webp_headless() {
     make_big_jpeg(&img_path, 400, 300);
 
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     fs::create_dir_all(&staging).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).cache_tmp()).unwrap();
 
     let source_oid = crate::build::cache::ObjectStore::hash_file(&img_path).unwrap();
 
@@ -3044,11 +3045,11 @@ async fn an_image_that_panics_its_worker_does_not_leave_the_folder_busy() {
     let root = tmp.path();
     make_big_jpeg(&root.join("photo.jpg"), 400, 300);
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     fs::create_dir_all(&staging).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).cache_tmp()).unwrap();
     let ctx = BackgroundContext {
         video_items: vec![],
         image_items: vec![ImageConversionItem {
@@ -3110,11 +3111,11 @@ async fn an_image_whose_worker_panicked_is_converted_by_the_next_build() {
     let rel = "panicked-worker.jpg";
     make_big_jpeg(&root.join(rel), 400, 300);
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     fs::create_dir_all(&staging).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).cache_tmp()).unwrap();
     let ctx = BackgroundContext {
         video_items: vec![],
         image_items: vec![ImageConversionItem {
@@ -3171,11 +3172,11 @@ fn cached_base_of_size(root: &Path, file_dimensions: (u32, u32), scan_dimensions
     let rel = "photo.jpg";
     make_big_jpeg(&root.join(rel), file_dimensions.0, file_dimensions.1);
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     fs::create_dir_all(&staging).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).cache_tmp()).unwrap();
 
     let cfg = ImageCompressionConfig::default();
     let paths = MossPaths::from_moss_dir(moss_dir.clone());
@@ -3411,11 +3412,11 @@ fn test_image_dispatch_applies_dir_overrides_to_served_path() {
     make_big_jpeg(&img_path, 400, 300);
 
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     fs::create_dir_all(&staging).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).cache_tmp()).unwrap();
 
     let source_oid = crate::build::cache::ObjectStore::hash_file(&img_path).unwrap();
 
@@ -3570,11 +3571,11 @@ async fn test_webp_survives_stale_cleanup_after_dispatch() {
     make_big_jpeg(&img_path, 400, 300);
 
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     fs::create_dir_all(&staging).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).cache_tmp()).unwrap();
 
     let source_oid = crate::build::cache::ObjectStore::hash_file(&img_path).unwrap();
 
@@ -3686,11 +3687,11 @@ async fn a_new_image_only_dispatches_the_new_one_others_survive_seal_and_stale_s
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     fs::create_dir_all(&staging).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).cache_tmp()).unwrap();
 
     let cfg = ImageCompressionConfig::default();
 
@@ -3868,11 +3869,11 @@ async fn a_skip_carried_images_advisory_rides_the_terminal_ticks_full_set() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     fs::create_dir_all(&staging).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).cache_tmp()).unwrap();
 
     let cfg = ImageCompressionConfig::default();
 
@@ -4013,11 +4014,11 @@ async fn a_deleted_images_advisory_still_fires_a_tick_with_nothing_to_dispatch()
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     fs::create_dir_all(&staging).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).cache_tmp()).unwrap();
 
     let cfg = ImageCompressionConfig::default();
 
@@ -4120,11 +4121,11 @@ fn an_unreferenced_image_is_not_redispatched_until_a_page_references_it() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     fs::create_dir_all(&staging).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).cache_tmp()).unwrap();
 
     // UUID-suffixed: the fingerprint ledger is a process-global keyed by path.
     let name = format!("orphan-{}.jpg", uuid::Uuid::new_v4());
@@ -4215,13 +4216,13 @@ async fn test_image_cancel_aborts_image_runner() {
     make_big_jpeg(&img_path, 400, 300);
 
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     fs::create_dir_all(&staging).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).cache_tmp()).unwrap();
     fs::write(
-        moss_dir.join("build.nosync").join("hashes.json"),
+        MossPaths::from_moss_dir(moss_dir.to_path_buf()).hashes(),
         serde_json::to_string_pretty(&SiteHashes::new()).unwrap(),
     )
     .unwrap();
@@ -4302,13 +4303,13 @@ async fn test_image_hashes_updated_on_cancellation() {
     make_big_jpeg(&root.join(img2_rel), 400, 300);
 
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     fs::create_dir_all(&staging).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).cache_tmp()).unwrap();
     fs::write(
-        moss_dir.join("build.nosync").join("hashes.json"),
+        MossPaths::from_moss_dir(moss_dir.to_path_buf()).hashes(),
         serde_json::to_string_pretty(&SiteHashes::new()).unwrap(),
     )
     .unwrap();
@@ -6247,11 +6248,11 @@ async fn ship_phase_ships_a_freshly_encoded_webp_from_cas_despite_stage_overwrit
     let root = tmp.path();
     make_big_jpeg(&root.join("photo.jpg"), 400, 300);
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     fs::create_dir_all(&staging).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).cache_tmp()).unwrap();
 
     let item = ImageConversionItem {
         source_path: PathBuf::from("photo.jpg"),
@@ -6330,11 +6331,11 @@ async fn run_image_conversion_always_records_a_staged_oid_for_base_and_rungs() {
     // and LADDER = [800, 1600] keeps only 800 below that.
     make_big_jpeg(&root.join("wide.jpg"), 1000, 750);
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     fs::create_dir_all(&staging).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).cache_tmp()).unwrap();
 
     let item = ImageConversionItem {
         source_path: PathBuf::from("wide.jpg"),
@@ -6403,11 +6404,11 @@ async fn skip_path_carry_forward_registers_the_verified_cas_oid_not_a_stale_or_f
     let root = tmp.path();
     make_big_jpeg(&root.join("kept.jpg"), 400, 300);
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     fs::create_dir_all(&staging).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).cache_tmp()).unwrap();
     fs::write(staging.join("kept.webp"), b"kept-bytes").unwrap();
 
     let item = ImageConversionItem {
@@ -6490,9 +6491,9 @@ async fn skip_path_takes_a_carried_variants_hash_from_the_memo_by_oid() {
     let root = tmp.path();
     make_big_jpeg(&root.join("kept.jpg"), 400, 300);
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     fs::create_dir_all(&staging).unwrap();
-    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).cache_tmp()).unwrap();
     fs::write(staging.join("kept.webp"), b"kept-bytes").unwrap();
     let item = ImageConversionItem {
         source_path: PathBuf::from("kept.jpg"),
@@ -6567,11 +6568,11 @@ fn a_stale_staged_webp_from_an_earlier_generation_is_not_shipped_as_unchanged() 
     let name = "photo.jpg";
     make_big_jpeg(&root.join(name), 400, 300);
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     fs::create_dir_all(&staging).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).cache_tmp()).unwrap();
 
     // A stale file already sitting at the staging path — belongs to no
     // known oid, standing in for "whatever an earlier generation left
@@ -6669,11 +6670,11 @@ fn a_missing_output_is_dispatched_while_its_unaffected_sibling_takes_the_skip_pa
     make_big_jpeg(&root.join("pending.jpg"), 401, 300);
 
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     fs::create_dir_all(&staging).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("objects")).unwrap();
     fs::create_dir_all(moss_dir.join("cache").join("transforms")).unwrap();
-    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).cache_tmp()).unwrap();
     fs::write(staging.join("kept.webp"), b"kept-bytes").unwrap();
 
     let items: Vec<ImageConversionItem> = ["kept.jpg", "pending.jpg"]
@@ -7026,7 +7027,7 @@ impl RewriteVault {
         let root = tmp.path().to_path_buf();
         let moss_dir = root.join(".moss");
         for dir in ["staging", "cache/objects", "cache/transforms", "cache/tmp"] {
-            fs::create_dir_all(moss_dir.join("build.nosync").join(dir)).unwrap();
+            fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).build_dir().join(dir)).unwrap();
         }
         Self { _tmp: tmp, root, moss_dir }
     }
@@ -7867,7 +7868,7 @@ async fn an_image_the_walk_hashed_this_build_is_not_read_again() {
     let root = tmp.path();
     image::RgbImage::from_pixel(2600, 8, image::Rgb([20, 90, 160])).save(root.join("cover.webp")).unwrap();
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     fs::create_dir_all(&staging).unwrap();
     let stat = crate::build::stat::FileStat::of(&fs::metadata(root.join("cover.webp")).unwrap());
     let run_ctx = ImageRunContext {
@@ -7909,7 +7910,7 @@ async fn a_picture_waits_for_a_core_from_the_folder_budget() {
     let root = tmp.path().to_path_buf();
     make_big_jpeg(&root.join("photo.jpg"), 400, 300);
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     fs::create_dir_all(&staging).unwrap();
     let run_ctx = ImageRunContext {
         items: vec![ImageConversionItem {
@@ -7962,9 +7963,9 @@ async fn a_cloud_held_picture_is_fetched_not_encoded_again() {
     let root = tmp.path().to_path_buf();
     make_big_jpeg(&root.join("photo.jpg"), 2000, 1250);
     let moss_dir = root.join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     fs::create_dir_all(&staging).unwrap();
-    fs::create_dir_all(moss_dir.join("build.nosync").join("cache").join("tmp")).unwrap();
+    fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).cache_tmp()).unwrap();
     let source_oid = crate::build::cache::ObjectStore::hash_file(&root.join("photo.jpg")).unwrap();
     // The run's encode count.
     let run = |source_oid: String| {

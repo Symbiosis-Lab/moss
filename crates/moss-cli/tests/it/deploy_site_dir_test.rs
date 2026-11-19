@@ -4,6 +4,7 @@
 //! tries a working directory outside the site. Unix only: the plugin runs `sh`.
 #![cfg(unix)]
 
+use moss_build::moss_paths::MossPaths;
 use std::path::Path;
 use std::process::Command;
 
@@ -70,7 +71,7 @@ fn a_deploy_hook_reads_a_copy_of_exactly_the_published_files_that_is_gone_afterw
     let site_dir = Path::new(&text("site_dir")).to_path_buf();
     assert!(site_dir.is_absolute(), "{report}");
     let root = root.canonicalize().unwrap();
-    assert!(site_dir.starts_with(root.join(".moss/build.nosync/deploy")), "{report}");
+    assert!(site_dir.starts_with(MossPaths::new(&root).deploy_scratch_dir()), "{report}");
 
     // The copy holds the listed files and nothing else: the draft is withheld.
     let mut listed: Vec<String> =
@@ -80,7 +81,7 @@ fn a_deploy_hook_reads_a_copy_of_exactly_the_published_files_that_is_gone_afterw
     let found: Vec<&str> = seen.lines().filter(|l| l.starts_with("./")).collect();
     assert_eq!(found, listed, "{report}");
     assert!(found.contains(&"./index.html") && !found.iter().any(|f| f.contains("wip")), "{report}");
-    let generation: Vec<String> = walk(&root.join(".moss/build.nosync/current"));
+    let generation: Vec<String> = walk(&MossPaths::new(&root).current_ptr());
     assert!(generation.iter().any(|f| f.contains("wip")), "the build keeps the draft for preview: {generation:?}");
     assert!(seen.lines().any(|l| l.starts_with("-r--r--r--")), "the copy is read-only: {report}");
 

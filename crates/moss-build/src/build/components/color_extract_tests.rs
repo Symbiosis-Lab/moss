@@ -1,3 +1,4 @@
+use crate::moss_paths::MossPaths;
 use super::*;
 
 #[test]
@@ -183,7 +184,7 @@ fn resolve_image_cover_prefers_source_root_when_present() {
     let src = tmp.path();
     std::fs::create_dir_all(src.join("assets")).unwrap();
     std::fs::write(src.join("assets/cover.jpg"), b"fake").unwrap();
-    let out = src.join(".moss/build.nosync/current");
+    let out = MossPaths::new(src).current_ptr();
 
     let resolved = resolve_color_source_path("assets/cover.jpg", src, &out)
         .expect("image cover should resolve");
@@ -196,7 +197,7 @@ fn resolve_image_cover_falls_back_to_output_when_source_missing() {
     // build hook into output only), fall back to the output root.
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path();
-    let out = src.join(".moss/build.nosync/current");
+    let out = MossPaths::new(src).current_ptr();
 
     let resolved = resolve_color_source_path("assets/missing.jpg", src, &out)
         .expect("image cover should resolve to fallback");
@@ -226,7 +227,7 @@ fn resolve_cover_decodes_a_percent_encoded_url_back_to_the_on_disk_name() {
     let src = tmp.path();
     std::fs::create_dir_all(src.join("評選")).unwrap();
     std::fs::write(src.join("評選/封面.jpg"), b"fake").unwrap();
-    let out = src.join(".moss/build.nosync/current");
+    let out = MossPaths::new(src).current_ptr();
 
     let resolved =
         resolve_color_source_path("/%E8%A9%95%E9%81%B8/%E5%B0%81%E9%9D%A2.jpg", src, &out)
@@ -410,7 +411,7 @@ fn video_cover_resolves_and_extracts_end_to_end() {
     // alone wouldn't catch a renaming of `.thumb.jpg`.
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path();
-    let out_videos = src.join(".moss/build.nosync/current/videos");
+    let out_videos = MossPaths::new(src).current_ptr().join("videos");
     std::fs::create_dir_all(&out_videos).unwrap();
 
     // Synthesize a 4×4 solid-blue JPEG at the conventional .thumb.jpg
@@ -418,13 +419,13 @@ fn video_cover_resolves_and_extracts_end_to_end() {
     // upscale), averages, darkens for WCAG — the result must be a
     // blue HSL string.
     let img = image::ImageBuffer::from_fn(4, 4, |_, _| image::Rgb([0u8, 0, 255]));
-    let thumb_path = src.join(".moss/build.nosync/current/videos/clip.thumb.jpg");
+    let thumb_path = MossPaths::new(src).current_ptr().join("videos/clip.thumb.jpg");
     image::DynamicImage::ImageRgb8(img)
         .save_with_format(&thumb_path, image::ImageFormat::Jpeg)
         .unwrap();
 
     let resolved =
-        resolve_color_source_path("/videos/clip.mp4", src, &src.join(".moss/build.nosync/current"))
+        resolve_color_source_path("/videos/clip.mp4", src, &MossPaths::new(src).current_ptr())
             .expect("video cover should resolve");
     assert_eq!(resolved, thumb_path);
 
@@ -448,7 +449,7 @@ fn resolve_video_cover_never_falls_back_to_source_root() {
     let src = tmp.path();
     std::fs::create_dir_all(src.join("音乐")).unwrap();
     std::fs::write(src.join("音乐/cover.mp4"), b"fake mp4 bytes").unwrap();
-    let out = src.join(".moss/build.nosync/current");
+    let out = MossPaths::new(src).current_ptr();
 
     let resolved =
         resolve_color_source_path("音乐/cover.mp4", src, &out).expect("video should resolve");
@@ -887,7 +888,7 @@ fn card_color_video_resolves_thumbnail_through_ladder() {
     // resolve_card_color reads THIS build's own render-time output, which is
     // staging — see the "reads fresh render output" tests below for why.
     let tmp = repo_tmp();
-    let out_dir = tmp.path().join(".moss/build.nosync/staging/videos");
+    let out_dir = MossPaths::new(tmp.path()).staging_dir().join("videos");
     std::fs::create_dir_all(&out_dir).unwrap();
     let img = image::ImageBuffer::from_fn(4, 4, |_, _| image::Rgb([0u8, 0, 255]));
     image::DynamicImage::ImageRgb8(img)
@@ -920,7 +921,7 @@ fn card_color_video_resolves_thumbnail_through_ladder() {
 #[test]
 fn card_color_video_self_heals_once_the_poster_lands() {
     let tmp = repo_tmp();
-    let out_dir = tmp.path().join(".moss/build.nosync/staging/videos");
+    let out_dir = MossPaths::new(tmp.path()).staging_dir().join("videos");
     std::fs::create_dir_all(&out_dir).unwrap();
 
     // Before: background video conversion hasn't produced the thumbnail yet —
@@ -974,8 +975,8 @@ fn card_color_video_self_heals_once_the_poster_lands() {
 #[test]
 fn card_color_video_reads_this_builds_staging_not_a_lagging_current_generation() {
     let tmp = repo_tmp();
-    let stale_dir = tmp.path().join(".moss/build.nosync/current/videos");
-    let fresh_dir = tmp.path().join(".moss/build.nosync/staging/videos");
+    let stale_dir = MossPaths::new(tmp.path()).current_ptr().join("videos");
+    let fresh_dir = MossPaths::new(tmp.path()).staging_dir().join("videos");
     std::fs::create_dir_all(&stale_dir).unwrap();
     std::fs::create_dir_all(&fresh_dir).unwrap();
 

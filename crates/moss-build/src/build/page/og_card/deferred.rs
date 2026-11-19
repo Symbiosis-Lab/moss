@@ -85,6 +85,7 @@ pub(crate) fn render_requests(
 
 #[cfg(test)]
 mod tests {
+    use crate::moss_paths::MossPaths;
     use super::*;
     use crate::build::background::BackgroundHandle;
     use crate::build::manifest::PendingManifest;
@@ -117,7 +118,7 @@ mod tests {
                 std::fs::write(dir.path().join("index.md"), "# Garden").unwrap();
                 std::fs::write(dir.path().join("leaf.md"), "# A new leaf").unwrap();
             }
-            let output = dir.path().join(".moss/build.nosync/site");
+            let output = MossPaths::new(dir.path()).build_dir().join("site");
             std::fs::create_dir_all(&output).unwrap();
             let project = crate::build::scan_folder(dir.path().to_str().unwrap()).unwrap();
             let mut pending = PendingManifest::for_build(SiteHashes::default(),

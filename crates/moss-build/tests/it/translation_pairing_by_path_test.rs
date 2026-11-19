@@ -2,6 +2,7 @@
 //! the language tree; a shared `translationKey:` pairs pages whatever they are
 //! called. A folder that does not name a language is just a folder.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -36,7 +37,7 @@ fn build(files: &[(&str, &str)]) -> (PathBuf, Cleanup) {
 
 /// The `href` of every language link in the built page's navigation.
 fn alternates(site: &Path, page: &str) -> Vec<String> {
-    let html = fs::read_to_string(site.join(".moss/build.nosync/staging").join(page))
+    let html = fs::read_to_string(MossPaths::new(site).staging_dir().join(page))
         .unwrap_or_else(|e| panic!("{page}: {e}"));
     let doc = scraper::Html::parse_document(&html);
     let sel = scraper::Selector::parse("a.nav-lang-link").unwrap();
@@ -88,7 +89,7 @@ fn a_shared_translation_key_pairs_pages_with_different_names() {
 #[test]
 fn a_paired_home_keeps_the_generated_folder_page_and_pairs_pages_by_path() {
     let (site, _c) = build(&[("guide/x.md", ""), ("de/index.md", ""), ("de/guide/x.md", "")]);
-    assert!(site.join(".moss/build.nosync/staging/de/guide/index.html").exists());
+    assert!(MossPaths::new(&site).staging_dir().join("de/guide/index.html").exists());
     assert!(links_to(&site, "guide/x/index.html", "/de/guide/x"), "{:?}", alternates(&site, "guide/x/index.html"));
 }
 
@@ -102,7 +103,7 @@ fn an_authored_key_outranks_a_path_twin_in_the_same_language() {
     ]);
     assert_eq!(alternates(&site, "x/index.html").len(), 1, "{:?}", alternates(&site, "x/index.html"));
     assert!(links_to(&site, "x/index.html", "/de/y"));
-    let html = fs::read_to_string(site.join(".moss/build.nosync/staging/x/index.html")).unwrap();
+    let html = fs::read_to_string(MossPaths::new(&site).staging_dir().join("x/index.html")).unwrap();
     assert_eq!(html.matches(r#"hreflang="de""#).count(), 1, "{html}");
 }
 

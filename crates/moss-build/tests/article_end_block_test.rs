@@ -1,6 +1,7 @@
 //! A `slot: before-article-end` partial closes the articles of its folder and
 //! the folders beneath it, as real builds draw it.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -81,7 +82,7 @@ impl Site {
     }
 
     fn output(&self, rel: &str) -> PathBuf {
-        self.0.join(".moss/build.nosync/staging").join(rel)
+        MossPaths::new(&self.0).staging_dir().join(rel)
     }
 
     fn html(&self, rel: &str) -> String {
@@ -209,7 +210,7 @@ fn the_article_map_records_the_page_without_the_block() {
 
     assert!(has_block(&site.html("letters/one/index.html")), "the page itself carries the block");
     let map: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(site.0.join(".moss/build.nosync/article-map.json")).unwrap()).unwrap();
+        serde_json::from_str(&fs::read_to_string(MossPaths::new(&site.0).article_map()).unwrap()).unwrap();
     let article = map["articles"]
         .as_object()
         .and_then(|articles| articles.values().find(|a| a["source_path"] == "letters/one.md"))

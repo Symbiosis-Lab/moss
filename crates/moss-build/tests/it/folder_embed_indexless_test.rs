@@ -3,6 +3,7 @@
 //! build writes a synthetic `/orchard/` index for such a folder, so the embed
 //! cannot call the same folder missing.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -36,14 +37,14 @@ fn built_with(home_body: &str, extra: &[(&str, &str)]) -> (String, PathBuf, Clea
     }
     let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    let home = fs::read_to_string(tmp.join(".moss/build.nosync/staging/index.html")).unwrap();
+    let home = fs::read_to_string(MossPaths::new(&tmp).staging_dir().join("index.html")).unwrap();
     (home, tmp, cleanup)
 }
 
 #[test]
 fn wiki_embed_of_indexless_folder_lists_its_pages() {
     let (home, tmp, _c) = built("![[orchard/]]");
-    assert!(tmp.join(".moss/build.nosync/staging/orchard/index.html").exists());
+    assert!(MossPaths::new(&tmp).staging_dir().join("orchard/index.html").exists());
     assert!(!home.contains("moss-embed-missing") && !home.contains("Folder not found"), "{home}");
     assert!(home.contains("Apples Of Autumn") && home.contains("Pears In Winter"), "{home}");
 }

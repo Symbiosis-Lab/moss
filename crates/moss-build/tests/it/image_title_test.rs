@@ -3,6 +3,7 @@
 //! the real pipeline, because the snapshot-aware image path is where the title
 //! used to be dropped.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -42,7 +43,7 @@ fn an_image_title_becomes_the_img_title_attribute() {
         "---\ntitle: Home\n---\n\n![Caption words](photos/a.png \"Hover \\\"words\\\" style=x\")\n\nText ![Inline alt](photos/a.png \"Inline title\") here.\n\n![No title](photos/a.png)\n\n:::gallery\n![G alt](photos/a.png \"Gallery title\")\n:::\n",
     );
     crate::site::build_full(&root.to_string_lossy()).expect("build failed");
-    let html = fs::read_to_string(root.join(".moss/build.nosync/staging/index.html")).unwrap();
+    let html = fs::read_to_string(MossPaths::new(&root).staging_dir().join("index.html")).unwrap();
 
     assert!(html.contains(r#"title="Hover &quot;words&quot; style=x""#), "figure image keeps its title: {html}");
     assert!(html.contains("<figcaption>Caption words</figcaption>"), "the bracket text stays the caption");

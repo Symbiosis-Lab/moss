@@ -3,6 +3,7 @@
 //! write nothing there, and the facts only true on this machine (keyed by its
 //! own paths and mtimes) must never go there at all.
 
+use moss_build::moss_paths::MossPaths;
 use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::MetadataExt;
@@ -110,9 +111,9 @@ fn a_build_without_this_machines_cache_publishes_the_same_pages() {
     for preview in [false, true] {
         build(&dir, preview);
         build(&dir, preview);
-        let page = || fs::read_to_string(dir.join(".moss/build.nosync/staging/index.html")).expect("the home page");
+        let page = || fs::read_to_string(MossPaths::new(&dir).staging_dir().join("index.html")).expect("the home page");
         let before = page();
-        fs::remove_dir_all(dir.join(".moss/build.nosync")).unwrap();
+        fs::remove_dir_all(MossPaths::new(&dir).build_dir()).unwrap();
         build(&dir, preview);
         assert_eq!(page(), before, "preview={preview}");
         let stat_keyed: Vec<String> = synced(&dir).into_keys().filter(|p| p.contains("stat-") || p.contains("stat:")).collect();
@@ -198,7 +199,7 @@ fn a_build_without_this_computers_facts_publishes_the_same_pages() {
     let facts = moss_build::moss_paths::MossPaths::new(&dir).facts_dir();
     for preview in [false, true] {
         settle(&dir, preview);
-        let page = || fs::read_to_string(dir.join(".moss/build.nosync/staging/index.html")).expect("the home page");
+        let page = || fs::read_to_string(MossPaths::new(&dir).staging_dir().join("index.html")).expect("the home page");
         let before = (page(), synced(&dir));
         assert!(facts.join("hash-index.json").exists(), "preview={preview}: the facts are where this test deletes them");
         fs::remove_dir_all(&facts).unwrap();
@@ -239,7 +240,7 @@ fn the_slot_pass_writes_nothing_to_the_synced_folder() {
     let before = synced(&dir);
     settle(&dir, false);
     assert_eq!(slot_pass_files(&dir, &before), Vec::<String>::new(), "first build");
-    let page = || fs::read_to_string(dir.join(".moss/build.nosync/staging/index.html")).expect("the home page");
+    let page = || fs::read_to_string(MossPaths::new(&dir).staging_dir().join("index.html")).expect("the home page");
     let first_page = page();
     fs::write(&css, "body { color: #222; }\n").unwrap();
     let before = synced(&dir);

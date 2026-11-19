@@ -1,6 +1,7 @@
 //! An automatic description is plain text: no heading mark, emphasis mark or
 //! link bracket from the Markdown it was read from, in every tag that carries it.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -25,7 +26,7 @@ fn home_html(home_body: &str) -> String {
     write(&tmp, "index.md", &format!("---\ntitle: Example Garden\n---\n\n{home_body}\n"));
     let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    fs::read_to_string(tmp.join(".moss/build.nosync/staging/index.html")).unwrap()
+    fs::read_to_string(MossPaths::new(&tmp).staging_dir().join("index.html")).unwrap()
 }
 
 fn assert_description(html: &str, want: &str) {

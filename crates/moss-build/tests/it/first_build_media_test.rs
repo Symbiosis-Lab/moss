@@ -9,6 +9,7 @@
 //! Skipped when ffmpeg is absent rather than failing: the encoder is an
 //! optional runtime dependency moss downloads, not a build requirement.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -50,7 +51,7 @@ impl Site {
         fs::write(self.root.join(rel), body).unwrap();
     }
     fn staging(&self) -> PathBuf {
-        self.root.join(".moss/build.nosync/staging")
+        MossPaths::new(&self.root).staging_dir()
     }
     fn page(&self, rel: &str) -> String {
         fs::read_to_string(self.staging().join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"))

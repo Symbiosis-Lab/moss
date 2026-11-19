@@ -3,6 +3,7 @@
 //! neither the id nor the permalink a page heading gets, so a footer `##
 //! Contact` cannot collide with a page's own. Built through the real CLI.
 
+use moss_build::moss_paths::MossPaths;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -32,7 +33,7 @@ fn footer_of_home_with(footer_md: &str, config: Option<&str>) -> (String, String
         .output()
         .expect("run moss-cli");
     assert!(out.status.success(), "stderr:\n{}", String::from_utf8_lossy(&out.stderr));
-    let html = std::fs::read_to_string(site.join(".moss/build.nosync/current/index.html")).unwrap();
+    let html = std::fs::read_to_string(MossPaths::new(&site).current_ptr().join("index.html")).unwrap();
     let start = html.find("<footer").expect("footer");
     let end = html.find("</footer>").expect("footer end");
     (html[start..end].to_string(), html)

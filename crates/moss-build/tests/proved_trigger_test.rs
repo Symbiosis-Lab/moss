@@ -3,6 +3,7 @@
 //! rest. Each guard below is one input no page's markdown shows; moving it must
 //! render every page again.
 
+use moss_build::moss_paths::MossPaths;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -53,7 +54,7 @@ fn run(root: &Path, trigger: BuildTrigger, plugins: moss_build::build::PluginMod
 }
 
 fn last_profile(root: &Path) -> serde_json::Value {
-    let text = fs::read_to_string(root.join(".moss/build.nosync/profile.jsonl")).unwrap();
+    let text = fs::read_to_string(MossPaths::new(root).profile()).unwrap();
     serde_json::from_str(text.lines().last().unwrap()).unwrap()
 }
 
@@ -79,7 +80,8 @@ impl Site {
         self.0.path()
     }
 
-    fn write(&self, rel: &str, text: &str) {
+    /// `rel` may also be an absolute path, such as one `MossPaths` names.
+    fn write(&self, rel: impl AsRef<Path>, text: &str) {
         let path = self.root().join(rel);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, text).unwrap();
@@ -128,15 +130,15 @@ fn a_stop_needs_the_sealed_generation_current_and_its_media_settled() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     type Move = fn(&Site);
     fn generation(s: &Site) -> PathBuf {
-        s.root().join(".moss/build.nosync/generations").join(fs::read_to_string(s.root().join(".moss/build.nosync/current.generation")).unwrap().trim())
+        MossPaths::new(s.root()).generations_dir().join(fs::read_to_string(MossPaths::new(s.root()).current_generation_marker()).unwrap().trim())
     }
     let moves: &[(&str, Move)] = &[
-        ("current names another generation", |s| s.write(".moss/build.nosync/current.generation", "0123456789abcdef")),
+        ("current names another generation", |s| s.write(MossPaths::new(s.root()).current_generation_marker(), "0123456789abcdef")),
         ("the generation is gone", |s| fs::remove_dir_all(generation(s)).unwrap()),
         ("the seal left work to later passes", |s| rewrite_manifest(s, |m| m["build_inputs"]["complete"] = false.into())),
         ("media settled after the render", |s| rewrite_manifest(s, |m| m["build_inputs"]["media_settled"] = false.into())),
-        ("no list of waiting cards", |s| fs::remove_file(s.root().join(".moss/build.nosync/link-cards-waiting.json")).unwrap()),
-        ("an unreadable list of waiting cards", |s| s.write(".moss/build.nosync/link-cards-waiting.json", "[\"cut off")),
+        ("no list of waiting cards", |s| fs::remove_file(MossPaths::new(s.root()).build_dir().join("link-cards-waiting.json")).unwrap()),
+        ("an unreadable list of waiting cards", |s| s.write(MossPaths::new(s.root()).build_dir().join("link-cards-waiting.json"), "[\"cut off")),
     ];
     let control = Site::new();
     control.sealed();
@@ -266,7 +268,7 @@ fn every_input_outside_the_page_tree_keeps_the_build_full() {
         ("a deleted page", |s| fs::remove_file(s.root().join("notes/beta.md")).unwrap()),
         ("a redirect table", |s| s.write(".moss/redirects.json", "{\"/old/\": \"/about/\"}\n")),
         ("a data file", |s| s.write(".moss/data/people.json", "[\"Ada\"]\n")),
-        ("deleted link cards", |s| fs::remove_dir_all(s.root().join(".moss/build.nosync/cache/link-meta")).unwrap()),
+        ("deleted link cards", |s| fs::remove_dir_all(MossPaths::new(s.root()).cache_link_meta()).unwrap()),
         ("a new image", |s| s.write("notes/pic.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\"/>")),
         ("another moss binary", |s| rewrite_manifest(s, |m| m["builder_fingerprint"] = "an older moss".into())),
         ("a manifest with no input record", |s| rewrite_manifest(s, |m| { m.as_object_mut().unwrap().remove("build_inputs"); })),
@@ -274,7 +276,7 @@ fn every_input_outside_the_page_tree_keeps_the_build_full() {
     let setup = || {
         let site = Site::new();
         site.write(".moss/data/people.json", "[]\n");
-        site.write(&format!(".moss/build.nosync/cache/link-meta/{}.json", "a".repeat(64)), "{}\n");
+        site.write(MossPaths::new(site.root()).cache_link_meta().join(format!("{}.json", "a".repeat(64))), "{}\n");
         site.sealed();
         site
     };
@@ -455,7 +457,7 @@ fn a_comment_refresh_that_fails_every_build_still_lets_the_next_build_prove() {
 
 fn recorded_moss_input(site: &Site, rel: &str) -> Option<serde_json::Value> {
     let manifest: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(site.root().join(".moss/build.nosync/hashes.json")).unwrap()).unwrap();
+        serde_json::from_str(&fs::read_to_string(MossPaths::new(site.root()).hashes()).unwrap()).unwrap();
     manifest["build_inputs"]["moss"].get(rel).cloned()
 }
 
@@ -497,7 +499,7 @@ fn a_proved_build_after_staging_is_cleared_publishes_what_a_full_render_does() {
     let site = Site::new();
     site.sealed();
     site.write("about.md", "---\ntitle: About\n---\n\nAbout us, at length.\n");
-    let _ = fs::remove_dir_all(site.root().join(".moss/build.nosync/staging"));
+    let _ = fs::remove_dir_all(MossPaths::new(site.root()).staging_dir());
     let record = build(site.root(), BuildTrigger::Unobserved);
     assert_eq!(count(&record, "proved_from_seal"), 1, "{record}");
     let proved = published(site.root());
@@ -527,7 +529,7 @@ fn a_settled_picture_renders_the_pages_showing_it_and_matches_a_full_render() {
         .unwrap();
     let blur = "background-image:url(data:image";
     build_previewing(site.root(), BuildTrigger::Unobserved);
-    let page = || fs::read_to_string(site.root().join(".moss/build.nosync/staging/notes/alpha/index.html")).unwrap();
+    let page = || fs::read_to_string(MossPaths::new(site.root()).staging_dir().join("notes/alpha/index.html")).unwrap();
     assert!(!page().contains(blur), "the first preview render left the blur to the media phase");
 
     let record = build_previewing(site.root(), BuildTrigger::ImagesSettled);
@@ -623,7 +625,7 @@ fn inputs_a_build_moves_itself_still_let_the_next_build_prove() {
     let site = Site::new();
     let url = "https://example.com";
     site.write("notes/alpha.md", &format!("---\ntitle: Alpha\ndate: 2026-01-02\n---\n\n:::grid 1\n[External]({url})\n:::\n"));
-    let old_card = format!(".moss/build.nosync/cache/link-meta/{}.json", sha256_hex(url));
+    let old_card = MossPaths::new(site.root()).cache_link_meta().join(format!("{}.json", sha256_hex(url)));
     site.write(&old_card, "{\"title\": \"Example\"}\n");
     site.write(".moss/redirects.json", "{\"qr/notes/alpha.svg\": \"notes/alpha/\"}\n");
     build_previewing(site.root(), BuildTrigger::Unobserved);
@@ -725,7 +727,7 @@ fn tree(dir: &Path) -> BTreeMap<String, Vec<u8>> {
 }
 
 fn staging(root: &Path) -> PathBuf {
-    root.canonicalize().unwrap().join(".moss/build.nosync/staging")
+    MossPaths::new(&root.canonicalize().unwrap()).staging_dir()
 }
 
 /// Two serving opens: the second proves from the first's seal, so the next one
@@ -750,7 +752,7 @@ fn a_serving_open_with_nothing_changed_shows_the_sealed_staging_without_scanning
     records.record_content_hashes(&folder, Default::default());
     let (record, heard) = serve(site.root(), &cell);
     assert!(stopped(&record), "{record}");
-    let sealed: serde_json::Value = serde_json::from_str(&fs::read_to_string(site.root().join(".moss/build.nosync/hashes.json")).unwrap()).unwrap();
+    let sealed: serde_json::Value = serde_json::from_str(&fs::read_to_string(MossPaths::new(site.root()).hashes()).unwrap()).unwrap();
     let baseline = records.content_hashes(&folder).expect("the watcher has a baseline");
     assert_eq!(serde_json::to_value(&baseline.files).unwrap(), sealed["files"], "the watcher diffs the next edit against the seal");
     assert!(record["phases"].as_array().unwrap().iter().all(|p| p["name"] != "scan"), "{record}");
@@ -875,7 +877,7 @@ fn assert_publishes_a_full_render(site: &Site) {
 }
 
 fn rewrite_manifest(site: &Site, edit: impl FnOnce(&mut serde_json::Value)) {
-    let path = site.root().join(".moss/build.nosync/hashes.json");
+    let path = MossPaths::new(site.root()).hashes();
     let mut manifest: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     edit(&mut manifest);
     fs::write(&path, serde_json::to_string(&manifest).unwrap()).unwrap();
@@ -883,7 +885,7 @@ fn rewrite_manifest(site: &Site, edit: impl FnOnce(&mut serde_json::Value)) {
 
 /// Every HTML file the current generation serves, by path.
 fn published(root: &Path) -> BTreeMap<String, Vec<u8>> {
-    let current = root.join(".moss/build.nosync/current");
+    let current = MossPaths::new(root).current_ptr();
     walkdir::WalkDir::new(&current).follow_links(true).into_iter().filter_map(Result::ok)
         .filter(|e| e.file_type().is_file() && e.path().extension().is_some_and(|x| x == "html"))
         .map(|e| (e.path().strip_prefix(&current).unwrap().to_string_lossy().into_owned(), fs::read(e.path()).unwrap()))

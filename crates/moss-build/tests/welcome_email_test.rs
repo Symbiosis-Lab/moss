@@ -2,6 +2,7 @@
 //! build writes it to `.moss-email/welcome.<edition>.json` for the hosting
 //! server to send to new subscribers.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -78,7 +79,7 @@ fn build_with_state(files: &[(&str, &str)], state: Option<&str>) -> (Cleanup, Pa
     }
     let result = build_sync(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    let stage = tmp.join(".moss/build.nosync/staging");
+    let stage = MossPaths::new(&tmp).staging_dir();
     (cleanup, stage)
 }
 

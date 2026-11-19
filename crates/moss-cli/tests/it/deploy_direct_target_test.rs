@@ -2,6 +2,7 @@
 //! moss that this version cannot publish to yet: refused at once, with the
 //! key named, before anything is built.
 
+use moss_build::moss_paths::MossPaths;
 use std::path::Path;
 use std::process::Command;
 
@@ -35,7 +36,7 @@ fn deploy(extra: &[&str]) {
     assert_eq!(out.status.code(), Some(1), "{stderr}");
     assert!(stderr.contains("deploy = \"server\""), "{stderr}");
     assert!(!stderr.contains("plugin"), "a built-in host is not a missing plugin: {stderr}");
-    assert!(!root.join(".moss/build.nosync/current").exists(), "refused before the build");
+    assert!(!MossPaths::new(&root).current_ptr().exists(), "refused before the build");
 }
 
 #[test]

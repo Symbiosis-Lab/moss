@@ -1,4 +1,5 @@
 //! A collision is a build problem and an unconditional publish refusal.
+use moss_build::moss_paths::MossPaths;
 use std::process::{Command, Output, Stdio};
 
 struct Site {
@@ -61,7 +62,7 @@ fn output_collisions_warn_and_render_in_plain_builds() {
         let plain = site.run("build", &["--no-plugins"]);
         assert!(plain.status.success(), "{}", String::from_utf8_lossy(&plain.stderr));
         site.warnings(&plain);
-        let output = site.root.path().join(".moss/build.nosync/current");
+        let output = MossPaths::new(site.root.path()).current_ptr();
         for path in if verbatim { vec!["index.html", "docs/index.html"] } else {
             vec!["index.html", "shared/index.html", "shared-2/index.html", "another/index.html", "another-2/index.html"]
         } {
@@ -77,7 +78,7 @@ fn output_collisions_fail_strict_builds() {
         let strict = site.run("build", &["--no-plugins", "--strict"]);
         assert_eq!(strict.status.code(), Some(1), "{}", String::from_utf8_lossy(&strict.stderr));
         site.warnings(&strict);
-        assert!(site.root.path().join(".moss/build.nosync/current/index.html").exists());
+        assert!(MossPaths::new(site.root.path()).current_ptr().join("index.html").exists());
     }
 }
 

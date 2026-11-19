@@ -405,9 +405,11 @@ fn render_theme_rules(rules: &ThemeRules, out: &mut String) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::moss_paths::MossPaths;
     use super::*;
 
-    fn write(root: &Path, rel: &str, content: &str) {
+    /// `rel` may also be an absolute path, such as one `MossPaths` names.
+    fn write(root: &Path, rel: impl AsRef<Path>, content: &str) {
         let path = root.join(rel);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, content).unwrap();
@@ -499,7 +501,7 @@ mod tests {
     #[test]
     fn a_theme_rule_no_built_page_matches_is_a_finding() {
         let dir = fixture();
-        write(dir.path(), ".moss/build.nosync/staging/index.html", "<html><body><p>x</p></body></html>");
+        write(dir.path(), MossPaths::new(dir.path()).staging_dir().join("index.html"), "<html><body><p>x</p></body></html>");
         let report = audit(dir.path(), false);
         let ThemeRules::Checked { pages, unmatched } = &report.theme_rules else { panic!("the staged build was read") };
         assert_eq!(*pages, 1);
@@ -514,7 +516,7 @@ mod tests {
     fn a_rule_for_an_empty_listing_is_not_called_dead() {
         let dir = fixture();
         write(dir.path(), ".moss/theme/style.css", ".moss-cards-container .moss-card-title { x: 1 }\n");
-        write(dir.path(), ".moss/build.nosync/staging/index.html", "<html><body><p>x</p></body></html>");
+        write(dir.path(), MossPaths::new(dir.path()).staging_dir().join("index.html"), "<html><body><p>x</p></body></html>");
         let report = audit(dir.path(), false);
         let text = render_text(&report);
         assert!(text.contains("Every theme rule matches an element"), "{text}");

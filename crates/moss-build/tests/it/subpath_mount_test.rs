@@ -4,6 +4,7 @@
 //! fallback to the origin's root. Every URL the HTML and CSS load or link to
 //! must answer.
 
+use moss_build::moss_paths::MossPaths;
 use crate::site;
 
 use std::collections::{BTreeSet, HashMap};
@@ -59,7 +60,7 @@ struct Served {
 
 impl Served {
     fn of(site: &Site, prefix: &str) -> Served {
-        Served { root: site.root.join(".moss/build.nosync/current"), prefix: prefix.to_string() }
+        Served { root: MossPaths::new(&site.root).current_ptr(), prefix: prefix.to_string() }
     }
 
     fn file(&self, path: &str) -> Option<PathBuf> {
@@ -188,9 +189,9 @@ fn css_refs(css: &str) -> Vec<String> {
 /// publish uploads those bytes and checks each against its entry.
 fn manifest_describes_the_generation(site: &Site) -> Vec<String> {
     let hashes: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(site.root.join(".moss/build.nosync/hashes.json")).unwrap()).unwrap();
+        serde_json::from_str(&fs::read_to_string(MossPaths::new(&site.root).hashes()).unwrap()).unwrap();
     let files: HashMap<String, String> = serde_json::from_value(hashes["files"].clone()).unwrap();
-    let current = site.root.join(".moss/build.nosync/current");
+    let current = MossPaths::new(&site.root).current_ptr();
     files
         .iter()
         .filter_map(|(path, entry)| {
@@ -223,7 +224,7 @@ fn every_url_answers_at_the_root() {
 #[test]
 fn every_url_answers_under_a_user_path() {
     let site = every_url_answers_under("https://example.edu/~alice/", "/~alice/");
-    let home = fs::read_to_string(site.root.join(".moss/build.nosync/current/index.html")).unwrap();
+    let home = fs::read_to_string(MossPaths::new(&site.root).current_ptr().join("index.html")).unwrap();
     assert!(home.contains(r#"<meta name="moss:base" content="/~alice/">"#), "{home}");
     // Absolute addresses already carry the path, once.
     assert!(home.contains("https://example.edu/~alice/about/") || home.contains(r#"href="/~alice/about/""#));

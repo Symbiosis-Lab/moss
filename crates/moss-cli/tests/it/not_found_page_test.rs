@@ -3,6 +3,7 @@
 //! as well as at `/404/`, and neither address is part of the site's content:
 //! the sitemap, feed and `llms.txt` leave it out. Built through the real CLI.
 
+use moss_build::moss_paths::MossPaths;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -39,7 +40,7 @@ fn the_not_found_page_is_served_at_404_html_and_stays_out_of_the_listings() {
     site_with_404(&site);
     build(&site, moss_home.path());
 
-    let built = site.join(".moss/build.nosync/current");
+    let built = MossPaths::new(&site).current_ptr();
     let root_copy = std::fs::read_to_string(built.join("404.html")).expect("/404.html is written");
     let page = std::fs::read_to_string(built.join("404/index.html")).expect("/404/ keeps resolving");
     assert!(root_copy.contains(MARK) && page.contains(MARK));
@@ -73,7 +74,7 @@ fn an_authors_own_404_html_is_not_overwritten() {
     write(&site, "404.html", "<!doctype html><title>mine</title><p>hand-written</p>");
     build(&site, moss_home.path());
 
-    let built = site.join(".moss/build.nosync/current");
+    let built = MossPaths::new(&site).current_ptr();
     let root_copy = std::fs::read_to_string(built.join("404.html")).unwrap();
     assert!(root_copy.contains("hand-written") && !root_copy.contains(MARK), "{root_copy}");
     assert!(std::fs::read_to_string(built.join("404/index.html")).unwrap().contains(MARK));
@@ -86,7 +87,7 @@ fn an_own_404_html_added_after_a_build_wins_and_removing_it_brings_back_the_copy
     let site = std::fs::canonicalize(tmp.path()).unwrap();
     site_with_404(&site);
     build(&site, moss_home.path());
-    let built = site.join(".moss/build.nosync/current");
+    let built = MossPaths::new(&site).current_ptr();
     assert!(std::fs::read_to_string(built.join("404.html")).unwrap().contains(MARK));
 
     write(&site, "404.html", "<!doctype html><title>mine</title><p>hand-written</p>");

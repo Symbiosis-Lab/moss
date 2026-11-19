@@ -86,6 +86,7 @@ pub async fn handle_authed_read(
 
 #[cfg(test)]
 mod tests {
+    use crate::moss_paths::MossPaths;
     use super::*;
     use crate::commands::{CommandHost, VaultPath};
 
@@ -254,7 +255,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn list_vault_terms_groups_the_article_map_terms() {
         let (dir, ctx) = scratch();
-        std::fs::create_dir_all(dir.path().join(".moss").join("build.nosync")).expect("build.nosync");
+        std::fs::create_dir_all(MossPaths::new(dir.path()).build_dir()).expect("build.nosync");
 
         let mut map = crate::build::scan::article_map::ArticleMap::new();
         map.kinds = vec![crate::build::terms::TermKind {

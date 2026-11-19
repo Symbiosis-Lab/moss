@@ -172,6 +172,7 @@ fn read_folder_files(root: &Path, folder: &str) -> Option<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
+    use crate::moss_paths::MossPaths;
     use super::*;
 
     /// A 1,200 px photo has only the 800 rung, so a 2x column needs its
@@ -201,10 +202,10 @@ mod tests {
         let root = dir.path();
         std::fs::create_dir_all(root.join("assets")).unwrap();
         std::fs::write(root.join("assets/forest.jpg"), b"real").unwrap();
-        std::fs::create_dir_all(root.join(".moss/build.nosync/staging/assets")).unwrap();
-        std::fs::write(root.join(".moss/build.nosync/staging/assets/forest.jpg"), b"shadow").unwrap();
-        std::fs::create_dir_all(root.join(".moss/build.nosync/current/assets")).unwrap();
-        std::fs::write(root.join(".moss/build.nosync/current/assets/forest.jpg"), b"shadow").unwrap();
+        std::fs::create_dir_all(MossPaths::new(root).staging_dir().join("assets")).unwrap();
+        std::fs::write(MossPaths::new(root).staging_dir().join("assets/forest.jpg"), b"shadow").unwrap();
+        std::fs::create_dir_all(MossPaths::new(root).current_ptr().join("assets")).unwrap();
+        std::fs::write(MossPaths::new(root).current_ptr().join("assets/forest.jpg"), b"shadow").unwrap();
 
         let from_file = root.join("main.md");
         let result = resolve_asset("forest.jpg", &from_file, root, EditorScope::Site).expect("resolves");
@@ -492,8 +493,8 @@ mod tests {
         let p = root.path();
         std::fs::create_dir_all(p.join("docs/a/b/c/d")).unwrap();
         std::fs::write(p.join("docs/a/b/c/d/photo.jpg"), b"x").unwrap();
-        std::fs::create_dir_all(p.join(".moss/build.nosync/current")).unwrap();
-        std::fs::write(p.join(".moss/build.nosync/current/photo.jpg"), b"shadow").unwrap();
+        std::fs::create_dir_all(MossPaths::new(p).current_ptr()).unwrap();
+        std::fs::write(MossPaths::new(p).current_ptr().join("photo.jpg"), b"shadow").unwrap();
 
         let graph = project_graph(p);
         assert_eq!(graph.all_files(), ["docs/a/b/c/d/photo.jpg".to_string()],

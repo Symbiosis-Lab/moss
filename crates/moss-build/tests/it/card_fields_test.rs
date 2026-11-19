@@ -2,6 +2,7 @@
 //! row of a page that has a value for it: never a link, and a text value with
 //! only inline emphasis.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -30,7 +31,7 @@ fn build_site(name: &str, files: &[(&str, &str)]) -> (Cleanup, PathBuf) {
     }
     let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    (cleanup, tmp.join(".moss/build.nosync/staging"))
+    (cleanup, MossPaths::new(&tmp).staging_dir())
 }
 
 const CONFIG: &str = r#"schema_version = 6

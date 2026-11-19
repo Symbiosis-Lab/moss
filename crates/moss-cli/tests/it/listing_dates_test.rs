@@ -1,6 +1,7 @@
 //! How a folder listing prints and orders dates, through the real binary. All
 //! names and text are invented.
 
+use moss_build::moss_paths::MossPaths;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -47,7 +48,7 @@ impl Site {
     }
 
     fn listing(&self) -> String {
-        std::fs::read_to_string(self.root.join(".moss/build.nosync/current/shows/index.html")).expect("shows listing")
+        std::fs::read_to_string(MossPaths::new(&self.root).current_ptr().join("shows/index.html")).expect("shows listing")
     }
 }
 

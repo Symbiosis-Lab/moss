@@ -1,6 +1,7 @@
 //! A gazetteer place with no `lat`/`lng` is advice, not a failure: a page that
 //! names only that place still builds, and it simply gets no map.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -30,7 +31,7 @@ fn a_page_whose_only_place_has_no_coordinates_builds_without_a_map() {
 
     let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    let out = tmp.join(".moss/build.nosync/staging");
+    let out = MossPaths::new(&tmp).staging_dir();
     let page = fs::read_to_string(out.join("posts/lost/index.html")).expect("the page still builds");
     assert!(page.contains("Nowhere"), "the page still names its place");
     let place = fs::read_to_string(out.join("places/nowhere/index.html")).expect("the place page still builds");

@@ -4,6 +4,7 @@
 //! whose data directory comes from the Known Folder API and ignores HOME.
 #![cfg(not(windows))]
 
+use moss_build::moss_paths::MossPaths;
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -47,7 +48,7 @@ fn a_headless_build_runs_a_folder_s_plugins_only_when_the_app_trusted_the_folder
         &site.join(".moss/plugins/boardview/main.js"),
         r#"var BoardviewPlugin = (() => ({ async listing(ctx) { return { html: '<ul class="boardview"></ul>' }; } }))();"#,
     );
-    let page = || std::fs::read_to_string(site.join(".moss/build.nosync/current/board/index.html")).unwrap();
+    let page = || std::fs::read_to_string(MossPaths::new(&site).current_ptr().join("board/index.html")).unwrap();
     let stderr = |o: &Output| String::from_utf8_lossy(&o.stderr).into_owned();
 
     let refused = build(&site, &home);

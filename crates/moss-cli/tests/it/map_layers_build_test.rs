@@ -1,6 +1,7 @@
 //! A `[map.layers.<name>]` table the build cannot use fails the build and
 //! names the table and key; a valid one builds and writes `layers.json`.
 
+use moss_build::moss_paths::MossPaths;
 use std::process::{Command, Stdio};
 
 fn build(config: &str, source_dir: bool) -> (bool, String, String, tempfile::TempDir) {
@@ -45,7 +46,7 @@ fn a_bad_layer_fails_the_build_naming_the_table_and_key() {
 fn a_valid_layer_builds_and_writes_layers_json() {
     let (ok, stdout, stderr, site) = build("[map.layers.atlas]\nkind = \"historical\"\nsource = \"maps/atlas\"\nbbox = [-0.2, 51.4, -0.0, 51.6]\n", true);
     assert!(ok, "stdout:\n{stdout}\nstderr:\n{stderr}");
-    let current = site.path().join(".moss/build.nosync/current/_moss");
+    let current = MossPaths::new(site.path()).current_ptr().join("_moss");
     let found = std::fs::read_dir(&current).unwrap().filter_map(Result::ok).any(|e| e.path().join("layers.json").is_file());
     assert!(found, "layers.json was not written under {}", current.display());
 }

@@ -1,6 +1,7 @@
 //! `[services.booking]` through the real CLI: the offer reaches the site's public
 //! description, `/_moss/commerce.json`, and a broken one is a build problem.
 
+use moss_build::moss_paths::MossPaths;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -67,7 +68,7 @@ fn run(site: &Path, strict: bool) -> (bool, String) {
 }
 
 fn commerce(dir: &Path) -> Option<serde_json::Value> {
-    let text = std::fs::read_to_string(dir.join(".moss/build.nosync/current/_moss/commerce.json")).ok()?;
+    let text = std::fs::read_to_string(MossPaths::new(dir).current_ptr().join("_moss/commerce.json")).ok()?;
     Some(serde_json::from_str(&text).unwrap())
 }
 
@@ -105,7 +106,7 @@ fn a_misspelt_booking_key_costs_the_site_nothing_else() {
     let json = commerce(&dir).expect("the forms still write commerce.json");
     assert!(json["forms"]["ask"].is_object(), "the form is still published");
     assert!(json.get("booking").is_none(), "the broken offer is not");
-    let html = std::fs::read_to_string(dir.join(".moss/build.nosync/current/index.html")).unwrap();
+    let html = std::fs::read_to_string(MossPaths::new(&dir).current_ptr().join("index.html")).unwrap();
     assert!(html.contains(r#"action="https://forms.example/f/ask""#), "the form still posts to its endpoint");
 }
 

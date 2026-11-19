@@ -1,3 +1,4 @@
+use crate::moss_paths::MossPaths;
 use super::*;
 use crate::build::media::fallback_raster::FALLBACK_MAX_EDGE;
 use crate::build::stat::FileStat;
@@ -1049,7 +1050,7 @@ fn a_second_asset_walk_relinks_no_unchanged_asset() {
     let tmp = tempfile::TempDir::new().unwrap();
     let source = tmp.path().join("source");
     let moss = tmp.path().join(".moss");
-    let staging = moss.join("build.nosync/staging");
+    let staging = MossPaths::from_moss_dir(moss.to_path_buf()).staging_dir();
     fs::create_dir_all(&source).unwrap();
     fs::create_dir_all(&staging).unwrap();
     let names = ["notes.txt", "paper.pdf", "track.mp3"];
@@ -2652,7 +2653,7 @@ async fn the_walk_takes_a_lanes_oid_for_a_file_it_owns() {
 fn three_fallback_pictures(tmp: &std::path::Path) -> (BackgroundContext, std::path::PathBuf) {
     let source = tmp.join("source");
     let moss_dir = tmp.join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     std::fs::create_dir_all(&source).unwrap();
     std::fs::create_dir_all(&staging).unwrap();
     for (i, name) in ["a.jpg", "b.jpg", "c.jpg"].into_iter().enumerate() {
@@ -2726,7 +2727,7 @@ async fn a_cloud_held_fallback_raster_is_fetched_not_encoded_again() {
     let tmp = tempfile::TempDir::new().unwrap();
     let source = tmp.path().join("source");
     let moss_dir = tmp.path().join(".moss");
-    let staging = moss_dir.join("build.nosync").join("staging");
+    let staging = MossPaths::from_moss_dir(moss_dir.to_path_buf()).staging_dir();
     std::fs::create_dir_all(&source).unwrap();
     std::fs::create_dir_all(&staging).unwrap();
     let noise = image::ImageBuffer::from_fn(1200, 900, |x, y| image::Rgb([(x ^ y) as u8, (x * 7) as u8, (y * 13) as u8]));

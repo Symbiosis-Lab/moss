@@ -1,3 +1,4 @@
+use crate::moss_paths::MossPaths;
 use super::*;
 use crate::build::load_previous_hashes;
 use crate::build::stat::{RACY_WRITE_EPSILON_SECS, ZERO_NANOS_TRUST_AGE_SECS};
@@ -1239,7 +1240,7 @@ fn path_to_relative_key_returns_none_for_path_outside_folder() {
 fn gate_write_manifest(folder: &std::path::Path, hashes: &crate::types::content::SiteHashes) {
     // load_previous_hashes reads from MossPaths::hashes(folder), which is
     // .moss/build.nosync/hashes.json. Mirror that layout in tests.
-    let build = folder.join(".moss").join("build.nosync");
+    let build = MossPaths::new(folder).build_dir();
     fs::create_dir_all(&build).unwrap();
     fs::write(
         build.join("hashes.json"),
@@ -3758,9 +3759,9 @@ fn source_asset_request_paths_markdown_never_emits() {
 fn source_asset_request_paths_excludes_moss_outputs() {
     let dir = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(dir.path()).unwrap();
-    std::fs::create_dir_all(root.join(".moss/build.nosync/staging/assets")).unwrap();
+    std::fs::create_dir_all(MossPaths::new(&root).staging_dir().join("assets")).unwrap();
     let kind = EventKind::Create(notify::event::CreateKind::Folder);
-    let out = source_asset_request_paths(&root, kind, &[root.join(".moss/build.nosync/staging/assets")]);
+    let out = source_asset_request_paths(&root, kind, &[MossPaths::new(&root).staging_dir().join("assets")]);
     assert!(out.is_empty(), ".moss build outputs must never notify the editor");
 }
 

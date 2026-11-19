@@ -2,6 +2,7 @@
 //! directory, as `moss history` resolves it; with a folder it builds that one.
 //! All names and text are invented.
 
+use moss_build::moss_paths::MossPaths;
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -33,7 +34,7 @@ fn assert_built(site: &Path, o: &Output) {
         String::from_utf8_lossy(&o.stderr)
     );
     assert!(
-        site.join(".moss/build.nosync/current/index.html").is_file(),
+        MossPaths::new(site).current_ptr().join("index.html").is_file(),
         "no built home page under {}",
         site.display()
     );
@@ -58,7 +59,7 @@ fn build_with_no_folder_from_a_subfolder_builds_the_enclosing_site() {
     let site = make_site(tmp.path());
     // The first build creates the site's `.moss/`; the subfolder build must find it.
     assert_built(&site, &run_in(&home, &site, &["build", "--no-plugins"]));
-    std::fs::remove_dir_all(site.join(".moss/build.nosync")).unwrap();
+    std::fs::remove_dir_all(MossPaths::new(&site).build_dir()).unwrap();
 
     let o = run_in(&home, &site.join("posts"), &["build", "--strict", "--no-plugins"]);
     assert_built(&site, &o);

@@ -2,6 +2,7 @@
 //! the real pipeline: the article locator, a place's own page, and the places
 //! root with the interactive explorer off.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -40,7 +41,7 @@ fn built<R>(check: impl FnOnce(&Path) -> R) -> R {
     write_site(&tmp);
     let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    check(&tmp.join(".moss/build.nosync/staging"))
+    check(&MossPaths::new(&tmp).staging_dir())
 }
 
 fn figure(html: &str) -> &str {
@@ -98,7 +99,7 @@ fn nearby_dots_cluster_at_the_narrowest_drawn_scale() {
     write(&tmp, "posts/nearby.md", "---\ntitle: Nearby\nlocation: [Harbor, Harbor Annex, Inland]\n---\n\nNearby places.\n");
     write(&tmp, "maps.md", "---\ntitle: Maps\n---\n\n![[places/|style:map]]\n");
     assert!(crate::site::build_full(&tmp.to_string_lossy()).is_ok());
-    let out = tmp.join(".moss/build.nosync/staging");
+    let out = MossPaths::new(&tmp).staging_dir();
     for path in ["places/index.html", "posts/nearby/index.html", "maps/index.html"] {
         let page = read_page(&out, path);
         let map = figure(&page);

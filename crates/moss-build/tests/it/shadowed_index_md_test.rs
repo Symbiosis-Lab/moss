@@ -1,6 +1,7 @@
 //! A source-owned HTML document owns its address; the `index.md` beside it is
 //! only metadata, at the site root and in a language edition alike.
 
+use moss_build::moss_paths::MossPaths;
 use crate::site;
 
 use site::{LoggedSite, Site};
@@ -62,7 +63,7 @@ fn an_undeclared_edition_index_html_still_wins_its_address() {
 fn a_rebuild_with_nothing_changed_reports_its_output_unchanged() {
     let site = site();
     site.rebuild();
-    let profile = std::fs::read_to_string(site.root.join(".moss/build.nosync/profile.jsonl")).unwrap();
+    let profile = std::fs::read_to_string(MossPaths::new(&site.root).profile()).unwrap();
     let last: serde_json::Value = serde_json::from_str(profile.lines().last().unwrap()).unwrap();
     assert_eq!(last["counts"]["output_unchanged"], 1, "the markdown homes must not be rendered over the documents: {last}");
     assert!(site.html("index.html").contains("real home"));
@@ -72,7 +73,7 @@ fn a_rebuild_with_nothing_changed_reports_its_output_unchanged() {
 #[test]
 fn a_shadowed_index_md_still_maps_to_the_address_its_document_owns() {
     let site = site();
-    let hashes: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(site.root.join(".moss/build.nosync/hashes.json")).unwrap()).unwrap();
+    let hashes: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(MossPaths::new(&site.root).hashes()).unwrap()).unwrap();
     for (source, output) in [("index.md", "index.html"), ("fr/index.md", "fr/index.html")] {
         assert_eq!(hashes["source_to_output"][source], output, "{source}");
         assert!(hashes["page_meta"][source].is_object(), "{source} keeps its metadata");
@@ -92,7 +93,7 @@ fn a_changed_build_still_indexes_the_documents_the_last_build_laid_down() {
         ("fr/about.md", "---\ntitle: A propos\n---\n\nA propos texte.\n"),
     ]);
     let indexed = || {
-        let receipt = std::fs::read_to_string(site.root.join(".moss/build.nosync/index/receipt.json")).unwrap();
+        let receipt = std::fs::read_to_string(MossPaths::new(&site.root).index_receipt()).unwrap();
         serde_json::from_str::<serde_json::Value>(&receipt).unwrap()["pages"].as_u64().unwrap()
     };
     site.rebuild();

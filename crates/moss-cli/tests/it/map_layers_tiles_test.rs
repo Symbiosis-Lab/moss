@@ -1,6 +1,7 @@
 //! A historical layer's folder of plate files becomes raster tiles, an index,
 //! credits and notes; budgets, incremental builds and hand-written folders.
 
+use moss_build::moss_paths::MossPaths;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -56,7 +57,7 @@ impl Site {
     }
 
     fn map_dir(&self) -> PathBuf {
-        let current = self.dir.path().join(".moss/build.nosync/current/_moss");
+        let current = MossPaths::new(self.dir.path()).current_ptr().join("_moss");
         std::fs::read_dir(&current).unwrap().filter_map(Result::ok).map(|e| e.path()).find(|p| p.join("layers.json").is_file()).expect("a map directory with layers.json")
     }
 
@@ -255,7 +256,7 @@ const LOCATOR_PLACES: &str = "[\"Trinity Church\"]\nlat = 40.7081\nlng = -74.011
 
 impl Site {
     fn article(&self, name: &str) -> String {
-        std::fs::read_to_string(self.dir.path().join(".moss/build.nosync/current").join(name).join("index.html")).unwrap()
+        std::fs::read_to_string(MossPaths::new(self.dir.path()).current_ptr().join(name).join("index.html")).unwrap()
     }
 
     fn locator_site(layers: &str) -> Site {
@@ -297,7 +298,7 @@ fn an_exact_place_on_a_plate_gets_a_locator_framed_to_it_with_the_plate_clipped_
     let hrefs = crop_hrefs(figure);
     assert_eq!(hrefs.len(), 1, "{figure:.600}");
     assert!(hrefs[0].contains("/layers/atlas/crops/") && hrefs[0].ends_with(".webp"), "{}", hrefs[0]);
-    let written = site.dir.path().join(".moss/build.nosync/current").join(hrefs[0].trim_start_matches('/'));
+    let written = MossPaths::new(site.dir.path()).current_ptr().join(hrefs[0].trim_start_matches('/'));
     let bytes = std::fs::read(&written).unwrap_or_else(|_| panic!("{} was not written", written.display()));
     // WebP, not JPEG: the static figure's `<image>` cannot load lazily, so it
     // competes with the page's first picture and its bytes matter.
@@ -346,7 +347,7 @@ fn a_second_build_does_not_warp_a_crop_again() {
     site.plate("maps/atlas", |_, b| b);
     assert!(site.build(&[]).ok);
     let href = crop_hrefs(locator(&site.article("exact"))).remove(0);
-    let marked = site.dir.path().join(".moss/build.nosync/current").join(href.trim_start_matches('/'));
+    let marked = MossPaths::new(site.dir.path()).current_ptr().join(href.trim_start_matches('/'));
     let staged = PathBuf::from(marked.to_string_lossy().replace("/current/", "/staging/"));
     assert!(staged.is_file(), "{}", staged.display());
     std::fs::write(&staged, b"previous build's crop").unwrap();
@@ -389,7 +390,7 @@ fn a_place_on_a_plate_but_outside_its_fetched_image_keeps_the_usual_figure_and_w
 }
 
 fn published(site: &Site) -> Vec<String> {
-    let current = site.dir.path().join(".moss/build.nosync/current");
+    let current = MossPaths::new(site.dir.path()).current_ptr();
     let mut found = Vec::new();
     let mut stack = vec![current.clone()];
     while let Some(dir) = stack.pop() {
@@ -448,7 +449,7 @@ fn an_archival_source_copy_still_holds_the_layer_source_data() {
         assert!(files.contains(&copy), "{copy} missing from {files:?}");
     }
     assert!(!files.iter().any(|f| f.starts_with("maps/")), "{files:?}");
-    let readme = std::fs::read_to_string(site.dir.path().join(".moss/build.nosync/current/_moss/source/README.md")).unwrap();
+    let readme = std::fs::read_to_string(MossPaths::new(site.dir.path()).current_ptr().join("_moss/source/README.md")).unwrap();
     assert!(readme.contains("## Map layer `maps/atlas`"), "{readme}");
     assert!(readme.contains(&format!("- `{PLATE}`: from ")), "{readme}");
 }

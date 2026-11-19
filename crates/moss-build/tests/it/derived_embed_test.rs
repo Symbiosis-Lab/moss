@@ -3,6 +3,7 @@
 
 #![cfg(unix)]
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -90,7 +91,7 @@ impl Site {
     fn sealed_file(&self, served: &str) -> Option<String> {
         // What a publish does first: finish the materialize the seal queued.
         self.rt.block_on(moss_build::build::seal_phase::settle(&moss_build::moss_paths::MossPaths::new(self.root())));
-        fs::read_to_string(self.root().join(".moss/build.nosync/current").join(served)).ok()
+        fs::read_to_string(MossPaths::new(self.root()).current_ptr().join(served)).ok()
     }
 
     /// A derive it does not await logs after this returns, so the test holds
@@ -116,7 +117,7 @@ impl Site {
     }
 
     fn page(&self, slug: &str) -> String {
-        let staging = self.root().join(".moss/build.nosync/staging");
+        let staging = MossPaths::new(self.root()).staging_dir();
         for candidate in [format!("{slug}/index.html"), format!("{slug}.html")] {
             if let Ok(html) = fs::read_to_string(staging.join(&candidate)) {
                 return html;

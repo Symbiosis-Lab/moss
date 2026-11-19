@@ -2,6 +2,7 @@
 //! ending in a sources section (`## Sources`, `## Quellen`, ...) gets the
 //! listing before that section.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 
 /// Build a site whose `acme.md` claims the "Acme" partner term with the given
@@ -18,7 +19,7 @@ fn claimed_page(extra_fm: &str, body: &str) -> String {
     write("acme.md", &format!("---\ntitle: Acme\npartner_page: true\n{extra_fm}---\n\n{body}\n"));
     write("notes/first.md", "---\ntitle: First Note\npartner: [Acme]\n---\n\nNote.\n");
     let result = crate::site::build_full(&tmp.to_string_lossy());
-    let html = fs::read_to_string(tmp.join(".moss/build.nosync/staging/acme/index.html"));
+    let html = fs::read_to_string(MossPaths::new(&tmp).staging_dir().join("acme/index.html"));
     let _ = fs::remove_dir_all(&tmp);
     assert!(result.is_ok(), "build failed: {result:?}");
     html.unwrap()

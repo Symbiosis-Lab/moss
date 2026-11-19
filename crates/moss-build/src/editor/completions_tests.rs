@@ -1,3 +1,4 @@
+use crate::moss_paths::MossPaths;
 use super::*;
 use std::fs;
 use tempfile::TempDir;
@@ -29,8 +30,8 @@ fn find<'a>(rows: &'a [WikilinkCompletion], insert: &str) -> &'a WikilinkComplet
 
 /// A map as the build would write it for `about.md` (titled) and a tag page.
 fn write_map(root: &Path, json: &str) {
-    fs::create_dir_all(root.join(".moss/build.nosync")).unwrap();
-    fs::write(root.join(".moss/build.nosync/article-map.json"), json).unwrap();
+    fs::create_dir_all(MossPaths::new(root).build_dir()).unwrap();
+    fs::write(MossPaths::new(root).article_map(), json).unwrap();
 }
 
 #[test]

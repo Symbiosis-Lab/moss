@@ -2,6 +2,7 @@
 //! page would get from its own `author:`: a byline naming them links to their
 //! author page, they are listed there, and a page's own `author:` still wins.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -28,7 +29,7 @@ fn build_site(name: &str, files: &[(&str, &str)]) -> (Cleanup, PathBuf) {
     }
     let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
-    (cleanup, tmp.join(".moss/build.nosync/staging"))
+    (cleanup, MossPaths::new(&tmp).staging_dir())
 }
 
 const CONFIG: &str = "schema_version = 6\n\n[site]\nlang = \"en\"\n";

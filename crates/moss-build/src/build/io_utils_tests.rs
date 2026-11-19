@@ -6,6 +6,7 @@
 //! proving no output write uses an `O_TRUNC` open. What is testable here is
 //! everything downstream of that choice: atomicity, inode freshness, no litter.
 
+use crate::moss_paths::MossPaths;
 use super::*;
 #[cfg(unix)] // inode identity: the two *_inode tests below are unix-only
 use std::os::unix::fs::MetadataExt;
@@ -233,7 +234,7 @@ fn a_non_cloud_error_is_reported_not_worked_around() {
 #[test]
 fn a_scratch_dir_under_a_cache_tmp_the_provider_refuses_is_made_by_replacing_it() {
     let dir = tempdir().unwrap();
-    let tmp_root = dir.path().join(".moss/build.nosync/cache/tmp");
+    let tmp_root = MossPaths::new(dir.path()).cache_tmp();
     fs::create_dir_all(&tmp_root).unwrap();
     fs::write(tmp_root.join("left-dataless"), b"x").unwrap();
     fault::refuse_dataless(&tmp_root);

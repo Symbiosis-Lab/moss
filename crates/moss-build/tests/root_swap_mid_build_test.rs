@@ -11,6 +11,7 @@
 //! the build's own thread, the instant `log::info!` is called; no sleep, no
 //! race against the pipeline's own timing.
 
+use moss_build::moss_paths::MossPaths;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -104,7 +105,7 @@ async fn a_rename_aside_mid_build_still_promotes_under_the_renamed_directory() {
     std::fs::write(folder.join("index.md"), "---\ntitle: Home\n---\n\nHello.\n").unwrap();
     let folder_str = folder.to_string_lossy().to_string();
 
-    let build_dir = folder.join(".moss").join("build.nosync");
+    let build_dir = MossPaths::new(&folder).build_dir();
     let renamed_dir = build_dir.with_file_name("build 2");
     *CAPTURE.swap_at_start.lock().unwrap() = Some(build_dir.clone());
 

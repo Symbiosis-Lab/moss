@@ -574,7 +574,7 @@ mod tests {
         let project = repo_temp();
         let folder_path = project.path();
         let moss_dir = folder_path.join(".moss");
-        fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
+        fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).build_dir()).unwrap();
 
         // The build records this folder index in `pages`, keyed by served
         // url_path (slugified + lowercased), NOT in `articles`.
@@ -600,7 +600,7 @@ mod tests {
         let project = repo_temp();
         let folder_path = project.path();
         let moss_dir = folder_path.join(".moss");
-        fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
+        fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).build_dir()).unwrap();
 
         let mut map = ArticleMap::new();
         map.pages.insert(String::new(), "index.md".to_string());
@@ -620,7 +620,7 @@ mod tests {
         let project = repo_temp();
         let folder_path = project.path();
         let moss_dir = folder_path.join(".moss");
-        fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
+        fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).build_dir()).unwrap();
 
         let mut map = ArticleMap::new();
         map.pages
@@ -640,7 +640,7 @@ mod tests {
         let project = repo_temp();
         let folder_path = project.path();
         let moss_dir = folder_path.join(".moss");
-        fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
+        fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).build_dir()).unwrap();
 
         ArticleMap::new().save(&moss_dir).unwrap();
 
@@ -736,7 +736,7 @@ mod tests {
         let project = repo_temp();
         let folder_path = project.path();
         let moss_dir = folder_path.join(".moss");
-        fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
+        fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).build_dir()).unwrap();
 
         // A map that (wrongly) still carries the slot entry — e.g. written by a
         // pre-fix build — must not resurrect the URL.
@@ -766,7 +766,7 @@ mod tests {
         let project = repo_temp();
         let folder_path = project.path();
         let moss_dir = folder_path.join(".moss");
-        fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
+        fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).build_dir()).unwrap();
 
         let mut map = ArticleMap::new();
         map.articles.insert(
@@ -843,7 +843,7 @@ mod tests {
         let project = repo_temp();
         let folder_path = project.path();
         let moss_dir = folder_path.join(".moss");
-        fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
+        fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).build_dir()).unwrap();
 
         let mut map = ArticleMap::new();
         map.dir_overrides
@@ -927,7 +927,7 @@ mod tests {
         let project = repo_temp();
         let folder_path = project.path();
         let moss_dir = folder_path.join(".moss");
-        fs::create_dir_all(moss_dir.join("build.nosync")).unwrap();
+        fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).build_dir()).unwrap();
 
         let mut map = ArticleMap::new();
         map.dir_overrides

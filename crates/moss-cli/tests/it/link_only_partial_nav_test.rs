@@ -3,6 +3,7 @@
 //! page behind it. Built through the real CLI, so every surface that lists
 //! pages is checked, not one stage of the build.
 
+use moss_build::moss_paths::MossPaths;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -44,7 +45,7 @@ fn a_partial_with_nav_and_external_url_is_a_header_link_and_nothing_else() {
     write(&site, "Dead link.md", "---\ntitle: Dead end\npartial: true\nnav: true\nweight: 4\n---\n\ndead-body.\n");
 
     let log = build(&site, moss_home.path());
-    let built = site.join(".moss/build.nosync/current");
+    let built = MossPaths::new(&site).current_ptr();
     let home = std::fs::read_to_string(built.join("index.html")).unwrap();
 
     let about = home.find(r#"<a href="/about/">About</a>"#).expect("page entry");

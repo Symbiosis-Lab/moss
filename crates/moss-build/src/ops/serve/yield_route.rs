@@ -86,6 +86,7 @@ pub(crate) fn handle_admitted_yield(
 
 #[cfg(test)]
 mod tests {
+    use crate::moss_paths::MossPaths;
     use super::super::carrier_token::TOKEN_HEADER;
     use super::super::invoke::InvokeCtx;
     use super::super::ownership::HostKind;
@@ -94,7 +95,7 @@ mod tests {
 
     fn served_vault() -> (tempfile::TempDir, std::path::PathBuf) {
         let vault = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
-        let site_dir = vault.path().join(".moss/build.nosync/current");
+        let site_dir = MossPaths::new(vault.path()).current_ptr();
         std::fs::create_dir_all(&site_dir).unwrap();
         (vault, site_dir)
     }

@@ -4,6 +4,7 @@
 //! folder) fails `--strict`; a note is advice, is tallied on the line, and never
 //! fails it. Run through the real CLI.
 
+use moss_build::moss_paths::MossPaths;
 use std::process::{Command, Stdio};
 
 #[test]
@@ -152,7 +153,7 @@ fn following_the_alt_text_note_gives_alt_text_not_a_caption() {
 
     let stderr = build();
     assert!(!stderr.contains("has no alt text"), "{stderr}");
-    let html = std::fs::read_to_string(site.join(".moss/build.nosync/current/index.html")).unwrap();
+    let html = std::fs::read_to_string(MossPaths::new(&site).current_ptr().join("index.html")).unwrap();
     assert!(html.contains(r#"alt="A green square""#), "{html}");
     assert!(!html.contains("<figcaption"), "{html}");
 }
@@ -185,7 +186,7 @@ fn a_dot_prefixed_file_is_not_built_but_a_draft_is() {
         .output()
         .expect("run moss-cli");
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    let built = site.join(".moss/build.nosync/current");
+    let built = MossPaths::new(&site).current_ptr();
     assert!(built.join("drafty/index.html").exists(), "a draft still builds into the preview output");
     assert!(!built.join("scratch").exists() && !built.join(".scratch").exists(), "a dot-prefixed file is never built");
 }

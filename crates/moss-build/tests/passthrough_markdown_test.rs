@@ -5,6 +5,7 @@
 //! Its own test binary: `log::set_logger` is process-global and one-shot, and
 //! the problem count is process-wide, so the tests take turns.
 
+use moss_build::moss_paths::MossPaths;
 use moss_build::build::cli_output::take_cli_problems;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -60,7 +61,7 @@ struct Site {
 
 impl Site {
     fn out(&self, rel: &str) -> PathBuf {
-        self.root.join(".moss/build.nosync/staging").join(rel)
+        MossPaths::new(&self.root).staging_dir().join(rel)
     }
     fn warned(&self, parts: &[&str]) -> bool {
         self.warnings.iter().any(|w| parts.iter().all(|p| w.contains(p)))

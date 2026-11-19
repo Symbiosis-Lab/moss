@@ -4,6 +4,7 @@
 //! real CLI so the whole pipeline (scan, parse, render, sitemap, llms.txt,
 //! the `moss list` inventory) is covered, not one stage of it.
 
+use moss_build::moss_paths::MossPaths;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -64,7 +65,7 @@ fn a_partial_is_transcluded_but_never_published() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "build must be clean under --strict; stderr:\n{stderr}");
 
-    let built = site.join(".moss/build.nosync/current");
+    let built = MossPaths::new(&site).current_ptr();
     let home = std::fs::read_to_string(built.join("index.html")).unwrap();
     assert!(home.contains(MARK), "the host page must contain the partial's content");
 

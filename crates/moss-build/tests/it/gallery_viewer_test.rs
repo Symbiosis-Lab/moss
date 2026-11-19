@@ -2,6 +2,7 @@
 //! collection pages use: the page carries the viewer's markup and script, and
 //! every image sits in a link the script binds to.
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -23,7 +24,7 @@ impl Site {
     fn build(&self) -> PathBuf {
         let result = crate::site::build_full(&self.0.to_string_lossy());
         assert!(result.is_ok(), "build failed: {result:?}");
-        self.0.join(".moss/build.nosync/staging")
+        MossPaths::new(&self.0).staging_dir()
     }
 }
 

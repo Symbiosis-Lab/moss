@@ -1,6 +1,7 @@
 //! A throwaway site built from inline files, and what its build wrote and logged.
 #![allow(dead_code)]
 
+use moss_build::moss_paths::MossPaths;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Mutex, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -202,7 +203,7 @@ impl Site {
 
     /// The path a build wrote `rel` at.
     pub fn output(&self, rel: &str) -> PathBuf {
-        self.root.join(".moss/build.nosync/staging").join(rel)
+        MossPaths::new(&self.root).staging_dir().join(rel)
     }
 
     pub fn html(&self, rel: &str) -> String {

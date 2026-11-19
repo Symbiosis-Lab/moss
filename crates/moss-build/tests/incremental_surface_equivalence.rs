@@ -15,6 +15,7 @@
 //! narrowing bug's symptom is exactly a page NOBODY thought to check staying
 //! stale.
 
+use moss_build::moss_paths::MossPaths;
 use std::path::{Path, PathBuf};
 
 #[path = "it/copy_dir.rs"]
@@ -377,7 +378,7 @@ fn build_with_site_url(
 }
 
 fn staging_dir(root: &Path) -> PathBuf {
-    root.join(".moss/build.nosync/staging")
+    MossPaths::new(root).staging_dir()
 }
 
 /// Every file under `dir`, keyed by its path relative to `dir`.
