@@ -60,6 +60,7 @@ function deepTree() {
       dir(`${ROOT}/docs`, [
           dir(`${ROOT}/docs/sub`, [
               file(`${ROOT}/docs/sub/page.md`),
+              file(`${ROOT}/docs/sub/extra.md`),
             ]),
         ]),
     ], { name: 'blog' });
@@ -293,10 +294,10 @@ describe('sash-model drag-fill', () => {
     dividerDblClick();
 
     // Identical to clicking the deepest breadcrumb chevron — handleToggleTop
-    // opens that folder and the chain above it, so the two can never drift.
+    // opens only that folder, so the two can never drift.
     expect(overrideAt(fileTree, 'docs/sub')).toBe('open');
-    expect(overrideAt(fileTree, 'docs')).toBe('open');
-    expect(overrideAt(fileTree, '')).toBe('open');
+    expect(overrideAt(fileTree, 'docs')).toBeUndefined();
+    expect(overrideAt(fileTree, '')).toBeUndefined();
     expect(priv(fileTree).render.renderedRowCount()).toBeGreaterThan(0);
   });
 
