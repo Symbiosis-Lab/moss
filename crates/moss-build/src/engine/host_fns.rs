@@ -256,7 +256,7 @@ fn keystore_caller_scope(
     let plugin = host.plugin.ok_or_else(|| {
         format!("'{cmd}' could not identify the calling plugin — refusing")
     })?;
-    Ok(crate::identity::keystore::Scope::Plugin(plugin.to_string()))
+    crate::identity::keystore::Scope::plugin(plugin).map_err(|e| format!("'{cmd}': {e:?}"))
 }
 
 /// The plugin whose private storage or cookies an arm may touch.
@@ -499,8 +499,7 @@ async fn dispatch_command_core(
         // Keystore. Not gated: the caller signs only with
         // its own scoped key. The scope is the calling plugin, resolved from the
         // dispatch seam — never a parameter, so a caller cannot reach another's
-        // key. moss's own identity uses the same store at the System scope, off
-        // this seam.
+        // key.
         "key_get_or_create" => {
             use base64::Engine as _;
             let scope = keystore_caller_scope(&host, "key_get_or_create")?;

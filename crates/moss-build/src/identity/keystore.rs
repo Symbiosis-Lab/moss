@@ -4,12 +4,11 @@
 //! signs with it, and lists its keys — it never receives private bytes. Every
 //! name resolves inside the *caller's own* scope, so one caller cannot name or
 //! reach another's key. The scope is structural: it comes from who is calling
-//! (the plugin dispatch seam, or moss itself), never a parameter, so there is
-//! nothing to forge.
+//! (the plugin dispatch seam), never a parameter, so there is nothing to forge.
 //!
-//! The user's own identity key is one entry here too, at the reserved [`SYSTEM`]
-//! scope — the keystore is the general mechanism, and identity is its flagship
-//! caller. Plugin keys are separate keys at per-plugin scopes.
+//! Every entry belongs to a plugin. The folder's own identity key is not here:
+//! it lives in `.moss/identity/` (`identity::keypair`), and moss signs with it
+//! directly.
 //!
 //! Custody, not restriction: moss holds the bytes because
 //! `.moss/plugins/` is not gitignored, so a caller holding its own key bytes
@@ -49,35 +48,24 @@ impl Algorithm {
     }
 }
 
-/// The caller a key belongs to. Resolved host-side from the dispatch seam, never
-/// supplied by the caller.
+/// The plugin a key or secret belongs to, by its manifest name (= install-dir
+/// name). Resolved host-side from the dispatch seam, never supplied by the
+/// caller.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Scope {
-    /// The user's own identity — seta auth, Nostr, moderation.
-    System,
-    /// A plugin, by its manifest name (= install-dir name).
-    Plugin(String),
-}
-
-/// The reserved scope for the user's identity key.
-pub const SYSTEM: Scope = Scope::System;
+pub struct Scope(String);
 
 impl Scope {
-    /// A single, filesystem-safe path segment for the scope's storage dir.
-    pub(crate) fn dir_segment(&self) -> Result<String, KeystoreError> {
-        match self {
-            Scope::System => Ok("system".to_string()),
-            Scope::Plugin(id) => {
-                if id.is_empty()
-                    || id == "system"
-                    || id.contains(['/', '\\', '\0'])
-                    || id.contains("..")
-                {
-                    return Err(KeystoreError::InvalidScope);
-                }
-                Ok(id.clone())
-            }
+    /// Refuses an id that is not one filesystem-safe path segment, since it
+    /// names the scope's storage directory.
+    pub fn plugin(id: &str) -> Result<Self, KeystoreError> {
+        if id.is_empty() || id.contains(['/', '\\', '\0']) || id.contains("..") {
+            return Err(KeystoreError::InvalidScope);
         }
+        Ok(Self(id.to_string()))
+    }
+
+    pub(crate) fn dir_segment(&self) -> &str {
+        &self.0
     }
 }
 
@@ -128,15 +116,15 @@ impl Keystore {
         Self { root: project_path.join(".moss").join(KEYS_DIRNAME) }
     }
 
-    fn key_dir(&self, scope: &Scope) -> Result<PathBuf, KeystoreError> {
-        Ok(self.root.join(scope.dir_segment()?))
+    fn key_dir(&self, scope: &Scope) -> PathBuf {
+        self.root.join(scope.dir_segment())
     }
 
     fn key_path(&self, scope: &Scope, name: &str) -> Result<PathBuf, KeystoreError> {
         validate_entry_name(name)?;
         // `<name>.<algo>` — the algorithm is part of the filename so a key's
         // algorithm is fixed at creation and a mismatched request is caught.
-        Ok(self.key_dir(scope)?.join(name))
+        Ok(self.key_dir(scope).join(name))
     }
 }
 
@@ -171,7 +159,7 @@ impl Keystore {
 
     /// Every key in the caller's scope.
     pub fn list(&self, scope: &Scope) -> Result<Vec<KeyInfo>, KeystoreError> {
-        let dir = self.key_dir(scope)?;
+        let dir = self.key_dir(scope);
         let entries = match std::fs::read_dir(&dir) {
             Ok(e) => e,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -342,8 +330,8 @@ mod tests {
     #[test]
     fn get_or_create_is_idempotent() {
         let (_t, ks) = store();
-        let a = ks.get_or_create(&Scope::Plugin("ipfs".into()), "ipns", Algorithm::Ed25519).unwrap();
-        let b = ks.get_or_create(&Scope::Plugin("ipfs".into()), "ipns", Algorithm::Ed25519).unwrap();
+        let a = ks.get_or_create(&Scope::plugin("ipfs").unwrap(), "ipns", Algorithm::Ed25519).unwrap();
+        let b = ks.get_or_create(&Scope::plugin("ipfs").unwrap(), "ipns", Algorithm::Ed25519).unwrap();
         assert_eq!(a.public_key, b.public_key, "same name must return the same key");
         assert_eq!(a.algorithm, Algorithm::Ed25519);
         assert_eq!(a.public_key.len(), 32, "ed25519 public key is 32 bytes");
@@ -352,27 +340,26 @@ mod tests {
     #[test]
     fn scopes_are_isolated() {
         let (_t, ks) = store();
-        let a = ks.get_or_create(&Scope::Plugin("a".into()), "k", Algorithm::Ed25519).unwrap();
-        let b = ks.get_or_create(&Scope::Plugin("b".into()), "k", Algorithm::Ed25519).unwrap();
+        let a = ks.get_or_create(&Scope::plugin("a").unwrap(), "k", Algorithm::Ed25519).unwrap();
+        let b = ks.get_or_create(&Scope::plugin("b").unwrap(), "k", Algorithm::Ed25519).unwrap();
         assert_ne!(a.public_key, b.public_key, "same name in different scopes = different keys");
-        assert_eq!(ks.list(&Scope::Plugin("a".into())).unwrap().len(), 1);
-        assert_eq!(ks.list(&Scope::Plugin("a".into())).unwrap()[0].name, "k");
+        assert_eq!(ks.list(&Scope::plugin("a").unwrap()).unwrap().len(), 1);
+        assert_eq!(ks.list(&Scope::plugin("a").unwrap()).unwrap()[0].name, "k");
     }
 
     #[test]
-    fn system_scope_is_distinct_from_plugins() {
-        let (_t, ks) = store();
-        let sys = ks.get_or_create(&SYSTEM, "identity", Algorithm::Secp256k1Schnorr).unwrap();
-        let plug = ks.get_or_create(&Scope::Plugin("system".into()), "identity", Algorithm::Ed25519);
-        assert_eq!(plug, Err(KeystoreError::InvalidScope));
-        assert_eq!(sys.algorithm, Algorithm::Secp256k1Schnorr);
+    fn a_scope_is_one_path_segment() {
+        for id in ["", "../ipfs", "a/b", "a\\b", "a\0b"] {
+            assert_eq!(Scope::plugin(id), Err(KeystoreError::InvalidScope), "{id:?}");
+        }
+        assert!(Scope::plugin("ipfs").is_ok());
     }
 
     #[test]
     fn ed25519_sign_verifies() {
         use ed25519_dalek::{Signature, Verifier, VerifyingKey};
         let (_t, ks) = store();
-        let scope = Scope::Plugin("ipfs".into());
+        let scope = Scope::plugin("ipfs").unwrap();
         let key = ks.get_or_create(&scope, "ipns", Algorithm::Ed25519).unwrap();
         let msg = b"ipns record bytes";
         let sig = ks.sign(&scope, "ipns", msg).unwrap();
@@ -386,9 +373,10 @@ mod tests {
     fn secp256k1_schnorr_sign_verifies() {
         use k256::schnorr::{signature::Verifier, Signature, VerifyingKey};
         let (_t, ks) = store();
-        let key = ks.get_or_create(&SYSTEM, "identity", Algorithm::Secp256k1Schnorr).unwrap();
+        let scope = Scope::plugin("nostr").unwrap();
+        let key = ks.get_or_create(&scope, "identity", Algorithm::Secp256k1Schnorr).unwrap();
         let msg = b"nostr event id";
-        let sig = ks.sign(&SYSTEM, "identity", msg).unwrap();
+        let sig = ks.sign(&scope, "identity", msg).unwrap();
         let pk: [u8; 32] = key.public_key.as_slice().try_into().unwrap();
         let vk = VerifyingKey::from_bytes(&pk.into()).unwrap();
         let sig = Signature::try_from(sig.as_slice()).unwrap();
@@ -398,7 +386,7 @@ mod tests {
     #[test]
     fn algorithm_mismatch_is_refused() {
         let (_t, ks) = store();
-        let scope = Scope::Plugin("ipfs".into());
+        let scope = Scope::plugin("ipfs").unwrap();
         ks.get_or_create(&scope, "k", Algorithm::Ed25519).unwrap();
         assert_eq!(
             ks.get_or_create(&scope, "k", Algorithm::Secp256k1Schnorr),
@@ -409,7 +397,7 @@ mod tests {
     #[test]
     fn keys_are_stored_privately_under_moss_and_names_are_bounded() {
         let (tmp, ks) = store();
-        let scope = Scope::Plugin("ipfs".into());
+        let scope = Scope::plugin("ipfs").unwrap();
         ks.get_or_create(&scope, "ipns", Algorithm::Ed25519).unwrap();
         let key_file = tmp.path().join(".moss").join("keys").join("ipfs").join("ipns");
         assert!(key_file.exists(), "key must be written under .moss/keys/<scope>/<name>");

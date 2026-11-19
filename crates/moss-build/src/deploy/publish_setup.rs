@@ -92,7 +92,7 @@ pub struct PublishSetupNeeds {
 pub fn needs_from_store(folder_path: &str) -> Result<Option<PublishSetupNeeds>, String> {
     let store = SecretStore::require("the publish setup gate")?;
     Ok(deploy_setup_needs(folder_path, &|plugin, key| {
-        store.get(&Scope::Plugin(plugin.to_string()), key).ok().flatten().is_some()
+        Scope::plugin(plugin).is_ok_and(|scope| store.get(&scope, key).ok().flatten().is_some())
     }))
 }
 

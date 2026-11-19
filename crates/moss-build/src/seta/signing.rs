@@ -1,10 +1,8 @@
 //! Request signing for moss-seta authentication: BIP-340 Schnorr signatures
 //! (Nostr-compatible) over each request.
 //!
-//! REFACTOR-LATER (keystore): this signs with the identity key directly. The
-//! identity key is one entry in the keystore at the `System` scope
-//! (`identity::keystore`), so this should become a keystore caller, unifying
-//! every signing path, as a change with no behavior difference.
+//! It signs with the folder's identity key from `.moss/identity/`, which is not
+//! a keystore entry: the keystore holds plugin keys only.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
