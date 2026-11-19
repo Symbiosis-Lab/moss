@@ -16,7 +16,8 @@
 //! `nav_width_is_a_custom_prop_not_a_token` (a separate concern from this
 //! file's three checks).
 
-use moss_core::contract::components::{Status, COMPONENTS};
+use moss_core::contract::components::COMPONENTS;
+use moss_core::contract::retired::{RetiredKind, RETIRED};
 use moss_core::contract::custom_props::CUSTOM_PROPS;
 use moss_core::contract::tokens::load_tokens;
 use regex::Regex;
@@ -151,16 +152,9 @@ fn css_selectors_match_components_table() {
         selectors.insert(class.to_string());
     }
 
-    let declared_live: HashSet<&str> = COMPONENTS
-        .iter()
-        .filter(|e| e.status != Status::Retired)
-        .map(|e| e.class)
-        .collect();
-    let declared_retired: HashSet<&str> = COMPONENTS
-        .iter()
-        .filter(|e| e.status == Status::Retired)
-        .map(|e| e.class)
-        .collect();
+    let declared_live: HashSet<&str> = COMPONENTS.iter().map(|e| e.class).collect();
+    let declared_retired: HashSet<&str> =
+        RETIRED.iter().filter(|r| r.kind == RetiredKind::Class).map(|r| r.name).collect();
     let allowlisted: HashSet<&str> = CSS_SELECTOR_ALLOWLIST.iter().map(|(k, _)| *k).collect();
 
     let mut missing: Vec<String> = Vec::new();
@@ -182,7 +176,7 @@ fn css_selectors_match_components_table() {
     if !only_retired.is_empty() {
         only_retired.sort();
         eprintln!(
-            "WARNING: site.css has selectors only present in COMPONENTS as Retired (dead CSS — schedule removal):\n  - {}",
+            "WARNING: site.css has selectors moss retired (dead CSS — schedule removal):\n  - {}",
             only_retired.join("\n  - ")
         );
     }
@@ -195,7 +189,7 @@ fn css_selectors_match_components_table() {
             .collect::<Vec<_>>()
             .join("\n");
         panic!(
-            "site.css has `.moss-*` selectors with no contract entry (or no live entry — only Retired):\n{}\n\n\
+            "site.css has `.moss-*` selectors with no contract entry:\n{}\n\n\
              Add a ComponentEntry for each class to `src/contract/components.rs` with a substantive \
              `description`, correct `parent`, and `Status::Confirmed` (or `Emerging` for in-flight \
              work). If a class is genuinely a non-COMPONENTS surface, add it to \

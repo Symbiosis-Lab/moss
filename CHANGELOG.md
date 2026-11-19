@@ -6,6 +6,7 @@ All notable changes to moss will be documented here.
 
 ### Added
 
+- A theme that still uses a class, `data-*` value or `--moss-*` property moss no longer writes gets a build warning that names the release it went in and what to use instead, or says nothing replaces it. Before, a renamed property fell back to the browser default with no message, and a class that left without notice was reported only as "not a moss component".
 - A short note can continue an earlier one: write `in_reply_to: "[[name]]"` in its frontmatter, and every page of the thread shows the others, the earlier ones above its title and the later ones after its body. A stream listing shows a thread as one unit, folded to its first part and last two when it is longer than three. `in_reply_to` can also name a post elsewhere by its address, shown as "In reply to" above the page, and any page field now takes an address as well as a page of the site.
 
 ### Fixed

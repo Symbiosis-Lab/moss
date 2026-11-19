@@ -12,7 +12,13 @@ if ! command -v node >/dev/null 2>&1 || ! command -v cargo >/dev/null 2>&1; then
   exit 0
 fi
 
+# git hands the pushed refs on stdin; read them before anything else can.
+pushed_refs=$(cat)
+
 node scripts/ratchet.mjs check || exit 1
+
+# The released-contract list changes only at a release cut, and only grows.
+printf '%s\n' "$pushed_refs" | node scripts/check-released-contract.mjs || exit 1
 
 # The architecture diagrams name only crates, paths and items that exist. Needs
 # pele from node_modules; skipped without it.

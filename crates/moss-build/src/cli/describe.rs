@@ -361,9 +361,6 @@ fn print_human(payload: &DescribePayload) {
     println!("Components ({}):", payload.components.len());
     for c in &payload.components {
         let mut suffix = String::new();
-        if c.status == "retired" {
-            suffix.push_str(" [retired]");
-        }
         if c.authorable {
             suffix.push_str(" [shortcode]");
         }

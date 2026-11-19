@@ -1543,8 +1543,7 @@ pub fn generate_blocking_content_for_build(
     let card_theme = std::sync::LazyLock::new(|| crate::build::page::og_card::theme::CardTheme::of_site(user_css_content.as_deref(), source_path_buf, &input_evidence));
     let new_og_sink = || crate::build::page::og_card::OgSink::for_build(defer_title_cards, &previous_hashes.files, &filename_covers, std::sync::Arc::clone(&card_theme));
     let user_css_version = user_css_content.as_ref().zip(theme_css.as_ref()).map(|(content, themed)| {
-        // Warn when theme references pre-v1 (Retired) class
-        // vocabulary. Non-fatal; one warning per retired class found.
+        // Non-fatal: a theme problem never fails a build.
         for warning in crate::build::theme_lint::lint_theme_css(content, site_config.color_scheme) {
             log_warn_problem!("{}", warning);
         }

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `contract::retired`: every class, `data-*` value and `--moss-*` property moss released and no longer writes, with the release it went in, what replaces it (`replaced_by`) and whether moss still writes it beside its replacement (`aliased`). From `ALIAS_FLOOR` on, a retired name with a replacement must stay aliased.
+- `src/contract/released-contract.txt` lists every contract name a release has shipped. A test fails when one is neither live nor retired, and the pre-push hook keeps the file unchanged outside a `release/v*` branch and never lets it lose a line. A release cut adds the live names with `CONTRACT_LOCK=update cargo test -p moss-core --test it contract_lock`.
+
+### Removed
+
+- **BREAKING** — `components::Status::Retired`, `ComponentEntry::is_public` and `components::retired_class_names` are gone. `COMPONENTS` now holds only names moss writes; read retired names from `contract::retired::RETIRED`. `moss describe --json` already left retired components out, so its output is unchanged. **Bump the minor.**
+
 ## [0.28.0] - 2026-11-19
 
 ### Added
