@@ -153,7 +153,7 @@ impl InvokeCtx {
         let vault = site_dir
             .read()
             .ok()
-            .and_then(|dir| VaultRoot::find_containing(&dir));
+            .and_then(|dir| crate::moss_paths::served_folder(&dir));
         let Some(vault) = vault else {
             if let Some(previous) = session.take() {
                 previous.retired.cancel();

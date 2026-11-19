@@ -1715,7 +1715,7 @@ async fn source_route_serves_vault_bytes_not_build_output() {
     let vault = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
     let vault_path = vault.path();
 
-    // `.moss/` is the vault marker VaultRoot::find_containing walks up to.
+    // `.moss/` is the vault marker `moss_paths::served_folder` walks up to.
     let site_dir = vault_path.join(".moss/build.nosync/current");
     std::fs::create_dir_all(site_dir.join("assets")).unwrap();
     std::fs::create_dir_all(vault_path.join("assets")).unwrap();
@@ -2081,8 +2081,8 @@ async fn invoke_carrier_is_behind_the_trust_boundary() {
 // ===== Token-gated HTTP mutation carrier: POST /__moss/mutate/<cmd> =====
 
 /// Stand up a vault fixture whose site dir is `<vault>/.moss/build.nosync/current`, so
-/// `VaultRoot::find_containing` (walked up by the carrier to derive the project
-/// root) resolves to the vault. Returns the TempDir (kept alive by the caller)
+/// `moss_paths::served_folder` (the carrier's walk to the project root) resolves
+/// to the vault. Returns the TempDir (kept alive by the caller)
 /// and the site_dir path. Rooted in the crate dir, not /tmp: create_files /
 /// resolve canonicalize, and on macOS /tmp is a symlink (the source-route tests
 /// do the same).

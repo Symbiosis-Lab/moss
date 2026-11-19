@@ -78,7 +78,7 @@ pub(crate) async fn moss_health_handler(
     let folder_id = site_dir
         .read()
         .ok()
-        .and_then(|dir| crate::vault::paths::VaultRoot::find_containing(&dir))
+        .and_then(|dir| crate::moss_paths::served_folder(&dir))
         .map(|vault| crate::infra::folder_store::name_for(vault.path()));
     axum::response::Response::builder()
         .status(axum::http::StatusCode::OK)

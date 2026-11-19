@@ -28,10 +28,8 @@ use tower_http::services::{ServeDir, ServeFile};
 /// `/__moss/source/*path` — serve a project-scoped SOURCE file over HTTP.
 ///
 /// The vault root is derived from the served site directory rather than passed
-/// in: the site dir is `<vault>/.moss/build.nosync/…`, and `VaultRoot::find_containing`
-/// walks up to the nearest ancestor owning a `.moss/`. The `find_` variant is
-/// deliberate — it returns `None` instead of falling back to the starting
-/// directory, so a server pointed somewhere unexpected 404s rather than
+/// in, by [`crate::moss_paths::served_folder`]. It returns `None` instead of
+/// falling back to the starting directory, so a server pointed somewhere unexpected 404s rather than
 /// silently exposing whatever folder it happened to start in.
 ///
 /// `path` arrives percent-DECODED (axum's `Path` extractor decodes once), which
@@ -50,7 +48,7 @@ pub(super) async fn source_asset_route(
         Ok(d) => d.clone(),
         Err(_) => return dress(SourceAssetResponse::not_found()),
     };
-    let Some(vault) = crate::vault::paths::VaultRoot::find_containing(&site_dir) else {
+    let Some(vault) = crate::moss_paths::served_folder(&site_dir) else {
         return dress(SourceAssetResponse::not_found());
     };
     dress(serve_source_asset(vault.path(), &path, query.as_deref()).await)
@@ -68,7 +66,7 @@ pub(super) async fn source_asset_route(
 async fn search_bundle_file(current_dir: &std::path::Path, normalized: &str) -> Option<std::path::PathBuf> {
     use crate::build::feeds::search_lane;
     let rel = normalized.strip_prefix(crate::build::served_path::ServedPath::search_mount_url().trim_start_matches('/'))?;
-    let vault = crate::vault::paths::VaultRoot::find_containing(current_dir)?;
+    let vault = crate::moss_paths::served_folder(current_dir)?;
     let mp = crate::moss_paths::MossPaths::new(vault.path());
     if matches!(rel, "pagefind.js" | "pagefind-entry.json") && search_lane::enabled_for(&mp) {
         let session = crate::system::folder_session::registry().get(&vault.path().to_string_lossy());

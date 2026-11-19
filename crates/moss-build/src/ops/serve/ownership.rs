@@ -367,7 +367,7 @@ fn resolve_vault_folder(site_dir: &std::sync::Arc<std::sync::RwLock<PathBuf>>) -
     site_dir
         .read()
         .ok()
-        .and_then(|dir| crate::vault::paths::VaultRoot::find_containing(&dir).map(|v| v.path().to_path_buf()))
+        .and_then(|dir| crate::moss_paths::served_folder(&dir).map(|v| v.path().to_path_buf()))
 }
 
 /// [`acquire`] for whichever folder `site_dir` currently resolves to, for

@@ -1046,6 +1046,12 @@ pub fn is_materialized_rel(rel: &str) -> bool {
     }
 }
 
+/// The site folder a preview server's served directory belongs to: the one
+/// place serve and its callers turn a served directory back into a folder.
+pub fn served_folder(dir: &Path) -> Option<crate::vault_root::VaultRoot> {
+    crate::vault_root::VaultRoot::find_containing(dir)
+}
+
 /// Delete the output roots older moss versions wrote, and unblock `current`.
 /// `.moss/site/` and `build/site/` (now under `build.nosync/`, where the
 /// tree migration moves the old root) lost their last reader when generations
@@ -1325,6 +1331,23 @@ mod tests {
 
     fn make_paths(root: &std::path::Path) -> MossPaths {
         MossPaths::new(root)
+    }
+
+    #[test]
+    fn a_served_generation_belongs_to_its_folder() {
+        let tmp = TempDir::new().unwrap();
+        let folder = tmp.path().canonicalize().unwrap();
+        let generation = make_paths(&folder).generation_dir("g1");
+        std::fs::create_dir_all(&generation).unwrap();
+        assert_eq!(served_folder(&generation).map(|v| v.path().to_path_buf()), Some(folder));
+    }
+
+    #[test]
+    fn a_served_dir_in_no_folder_belongs_to_none() {
+        let tmp = TempDir::new().unwrap();
+        let loose = tmp.path().join("site");
+        std::fs::create_dir_all(&loose).unwrap();
+        assert!(served_folder(&loose).is_none());
     }
 
     // ─── The moss-written path registry ──────────────────────────────────────

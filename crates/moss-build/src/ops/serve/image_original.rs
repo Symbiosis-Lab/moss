@@ -18,7 +18,7 @@ pub(super) async fn recorded_original(
     root: &Path, url: &str,
 ) -> Option<RecordedOriginal> {
     let root = root.canonicalize().ok()?;
-    let vault = crate::vault::paths::VaultRoot::find_containing(&root)?;
+    let vault = crate::moss_paths::served_folder(&root)?;
     let mp = crate::moss_paths::MossPaths::from_moss_dir(vault.path().join(".moss"));
     let generation = root.file_name()?.to_str()?.to_string();
     if mp.sealed_generation_dir(&generation)? != root { return None; }
@@ -197,7 +197,7 @@ mod tests;
 /// Compare resolved generation directories, not path names: a server may hold
 /// either the `current` symlink or the generation it names.
 pub(super) fn serves_current(root: &Path) -> bool {
-    let Some(vault) = crate::vault::paths::VaultRoot::find_containing(root) else { return false; };
+    let Some(vault) = crate::moss_paths::served_folder(root) else { return false; };
     let current = crate::moss_paths::MossPaths::from_moss_dir(vault.path().join(".moss")).current_ptr();
     matches!((root.canonicalize(), current.canonicalize()), (Ok(a), Ok(b)) if a == b)
 }
