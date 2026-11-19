@@ -12,13 +12,13 @@ const packageRoot = path.join(__dirname, '..');
 const fetchLib = path.join(packageRoot, 'lib', 'fetch.js');
 
 // Run code in a child process with mocked platform/arch, isolated from inherited env.
-function resolveOnPlatform(platform, arch) {
+function resolveOnPlatform(platform, arch, version) {
   const code = `
     Object.defineProperty(process, 'platform', { value: '${platform}' });
     Object.defineProperty(process, 'arch', { value: '${arch}' });
     const fetch = require(${JSON.stringify(fetchLib)});
     console.log(JSON.stringify({
-      asset: fetch.resolveAsset(),
+      asset: fetch.resolveAsset(${JSON.stringify(version)}),
       vendorPath: fetch.vendorBinary()
     }));
   `;
@@ -29,9 +29,16 @@ function resolveOnPlatform(platform, arch) {
   return JSON.parse(out.trim().split('\n').pop());
 }
 
-test('resolveAsset returns moss-windows-x86_64.exe on win32-x64', () => {
-  const { asset } = resolveOnPlatform('win32', 'x64');
-  assert.equal(asset, 'moss-windows-x86_64.exe');
+test('resolveAsset names the CLI asset of each platform from 0.15.28 on', () => {
+  assert.equal(resolveOnPlatform('win32', 'x64', '0.15.28').asset, 'moss-cli-windows-x86_64.exe');
+  assert.equal(resolveOnPlatform('darwin', 'arm64', '0.16.0').asset, 'moss-cli-mac');
+  assert.equal(resolveOnPlatform('linux', 'x64', '1.0.0').asset, 'moss-cli-linux-x86_64');
+});
+
+test('resolveAsset keeps the old names for releases that published them', () => {
+  assert.equal(resolveOnPlatform('win32', 'x64', '0.15.27').asset, 'moss-windows-x86_64.exe');
+  assert.equal(resolveOnPlatform('darwin', 'x64', '0.15.27').asset, 'moss-darwin-universal');
+  assert.equal(resolveOnPlatform('linux', 'x64', '0.11.2').asset, 'moss-linux-x86_64');
 });
 
 test('vendorBinary path ends with moss.exe on win32', () => {
