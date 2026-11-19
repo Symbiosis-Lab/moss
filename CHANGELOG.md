@@ -4,13 +4,7 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
-### Added
-
-- A theme can style the link-preview card moss draws for a page with no picture: `--moss-share-card-bg`, `--moss-share-card-ink` and `--moss-share-card-muted` colour it, `--moss-share-card-picture` places a picture along its right edge, and the card uses the theme's heading face when the theme hosts it as a `.ttf` or `.otf`.
-- `header=over` works on a full-width band that opens the page (`::: {screen header=over}`) as it does on an opening hero: the site header lies over the band's pictures, its ink is read from every picture in the band, and the header passes the pointer through to the band's links. On a band that is not the page's first block it does nothing.
-- A channel signs in through its own sign-in page in your browser, and its settings page shows the account it signed in to, with Sign out. Mastodon asks which server first, already filled in with mastodon.social; nothing else is typed in.
-- A channel plugin can make your domain your identity on its network: from one setting in its `[services.<plugin>]` table, moss writes the proof on every build, a file under `.well-known/` such as Bluesky's `atproto-did`, a `rel="me"` link to your profile, or Mastodon's `fediverse:creator`. A build with `--no-plugins` writes them too, and a proof the last build served that is now gone is named in the build's output.
-- For plugin authors: `contributes.identity` declares those proofs, and an `acct` setting holds an `@name@host` address.
+## [0.15.27] - 2026-11-19
 
 ### Fixed
 
@@ -33,9 +27,19 @@ All notable changes to moss will be documented here.
 - In the plugin catalog, a channel stays where it is after you add one, so the next press lands on the channel you meant. Added channels moved to the front on each press, and a second press could remove a channel you had just passed.
 - The + under the channel pill stays a plus while the catalog is open, and the + at the end of the settings tabs says "Install plugin".
 - A channel that only posts copies, such as X, Substack or LinkedIn, no longer opens a sign-in when its folder opens while it is signed out; it asks when it posts, and in its Settings row. Opening the folder used to bring up Matters' sign-in instead, and `moss build --strict` failed with a warning that the channel's content would be skipped, though none was. A channel that brings content into the build, like Matters, still opens its own sign-in once.
+- When a picture has no alt text, the build's note suggests `![describe the image|](pic.jpg)`, the form that writes alt text. It suggested `![describe the image](pic.jpg)`, which on a picture alone on its line becomes a visible caption with empty alt text.
+
+### New
+
+- A theme can style the link-preview card moss draws for a page with no picture: `--moss-share-card-bg`, `--moss-share-card-ink` and `--moss-share-card-muted` colour it, `--moss-share-card-picture` places a picture along its right edge, and the card uses the theme's heading face when the theme hosts it as a `.ttf` or `.otf`.
+- `header=over` works on a full-width band that opens the page (`::: {screen header=over}`) as it does on an opening hero: the site header lies over the band's pictures, its ink is read from every picture in the band, and the header passes the pointer through to the band's links. On a band that is not the page's first block it does nothing.
+- A channel signs in through its own sign-in page in your browser, and its settings page shows the account it signed in to, with Sign out. Mastodon asks which server first, already filled in with mastodon.social; nothing else is typed in.
+- A channel plugin can make your domain your identity on its network: from one setting in its `[services.<plugin>]` table, moss writes the proof on every build, a file under `.well-known/` such as Bluesky's `atproto-did`, a `rel="me"` link to your profile, or Mastodon's `fediverse:creator`. A build with `--no-plugins` writes them too, and a proof the last build served that is now gone is named in the build's output.
+- For plugin authors: `contributes.identity` declares those proofs, and an `acct` setting holds an `@name@host` address.
 
 ### Changed
 
+- A folder's plugins are trusted once, for the folder. The first time a folder carrying plugins moss didn't ship is opened, one question asks "Trust <folder>?": Trust runs every plugin in it, now and later, and Open without plugins leaves them off, with a "Plugins off" chip, the channel rail and Settings → Plugins as the ways back. Plugins used to be approved one by one, and could ask again after any edit to their code. The answer is kept on the computer, never in the folder, so a folder passed on carries no trust with it; `moss build` reads the answers the app recorded, and `--allow-plugins` still runs a folder's plugins without one. Code moss ships, or whose exact bytes the plugin registry lists, needs no trust.
 - `moss build --no-plugins` keeps what plugins declare as data (elements, published settings, identity proofs) and skips only their code, so a CI build publishes what the app's build does.
 - Opening a folder in the app that hasn't changed since moss last built it shows the last build at once instead of building it again: on a site of about 400 pages the preview is ready in about a second, with half the memory. A build that runs while the app sits in the background is no longer slowed by macOS's App Nap, so the first edit after a quiet spell shows about as fast as any other.
 - In the editor, the picture's line shows the focus point's position as the dot is dragged or moved with the arrow keys. It is written to the file once, when the dot is let go, and one undo takes the whole move back.
