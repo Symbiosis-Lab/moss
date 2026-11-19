@@ -2168,6 +2168,8 @@ async fn a_rebuild_storm_enters_the_encoder_once_and_stops_on_its_own() {
 
     let mut services = BuildServices::headless();
     services.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
+    // Its subject is the encode entering once, not the budget it shares with sibling tests.
+    services.encode_pool = Some(crate::system::folder_session::CorePool::own());
     let services = std::sync::Arc::new(services);
     let folder = ctx.source_path.clone();
     let handle = worker::register(&folder);

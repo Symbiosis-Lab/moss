@@ -26,6 +26,8 @@ use tokio_util::sync::CancellationToken;
 
 mod derived_work;
 pub use derived_work::{DerivedWorkGate, Encoder};
+#[cfg(test)]
+pub(crate) use derived_work::CorePool;
 
 pub struct FolderSession {
     pub folder: PathBuf,

@@ -2011,7 +2011,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
             .unwrap_or(64);
         let mp_budget = MegapixelBudget::new(budget_mp);
         // Encodes keep running while the window is hidden, at background QoS.
-        let gate = crate::system::folder_session::DerivedWorkGate::of(services.session.as_ref());
+        let gate = services.derived_work_gate();
         let work = crate::build::cache::LocalFirst::new(n_items);
         let encodes = AtomicUsize::new(0);
         let cancelled = || cancel_flag.is_some_and(|f| f.load(Ordering::SeqCst));

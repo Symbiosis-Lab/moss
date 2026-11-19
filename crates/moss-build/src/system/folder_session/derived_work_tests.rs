@@ -204,7 +204,7 @@ async fn a_publish_started_mid_batch_widens_the_budget_to_every_core() {
         .unwrap_or_else(|e| e.into_inner());
     let (_tx, rx) = watch::channel(Cadence::Live);
     let gate = DerivedWorkGate::following(rx);
-    let pool: &'static CorePool = Box::leak(Box::new(CorePool::new()));
+    let pool = CorePool::own();
     let open: Vec<_> = (0..gate.cores()).map(|_| pool.take(|| gate.cores(), Encoder::Picture, &|| false).unwrap()).collect();
 
     let waiter = {

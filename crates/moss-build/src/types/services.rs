@@ -293,6 +293,10 @@ pub struct BuildServices {
     /// `--no-plugins`: no plugin ran or was read for this build, so a text
     /// embed having no text is not the author's missing plugin.
     pub plugins_skipped: bool,
+    /// The pool this build's encodes draw from when it is not the process's:
+    /// only a test sets one, so its encodes never wait on a sibling test's.
+    #[cfg(test)]
+    pub(crate) encode_pool: Option<&'static crate::system::folder_session::CorePool>,
 }
 
 impl BuildServices {
@@ -321,6 +325,17 @@ impl BuildServices {
     ///
     /// Creates fresh instances of all services with a discarding reporter and
     /// no spawner. A real headless build wants [`headless_for`](Self::headless_for).
+    /// The gate this build's derived work waits on.
+    pub(crate) fn derived_work_gate(&self) -> crate::system::folder_session::DerivedWorkGate {
+        let gate = crate::system::folder_session::DerivedWorkGate::of(self.session.as_ref());
+        #[cfg(test)]
+        let gate = match self.encode_pool {
+            Some(pool) => gate.drawing_from(pool),
+            None => gate,
+        };
+        gate
+    }
+
     pub fn headless() -> Self {
         Self {
             session: None,
@@ -354,6 +369,8 @@ impl BuildServices {
             // Filled by `run_pipeline`, which is the one place that knows.
             deploy_video_max_size_mb: None,
             plugins_skipped: false,
+            #[cfg(test)]
+            encode_pool: None,
         }
     }
 

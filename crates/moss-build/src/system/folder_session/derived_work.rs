@@ -40,15 +40,28 @@ pub(super) type CadenceSlot = Arc<Mutex<Option<watch::Receiver<Cadence>>>>;
 /// Whether derived work may run now, and how many cores its encodes may use.
 /// Cheap to clone; a clone follows the same cadence. The default gate is
 /// always open and has every core.
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Debug)]
 pub struct DerivedWorkGate {
     cadence: Option<CadenceSlot>,
+    pool: &'static CorePool,
+}
+
+impl Default for DerivedWorkGate {
+    fn default() -> Self {
+        Self { cadence: None, pool: &POOL }
+    }
 }
 
 impl DerivedWorkGate {
     #[cfg(test)]
     pub(crate) fn following(cadence: watch::Receiver<Cadence>) -> Self {
-        Self { cadence: Some(Arc::new(Mutex::new(Some(cadence)))) }
+        Self { cadence: Some(Arc::new(Mutex::new(Some(cadence)))), ..Self::default() }
+    }
+
+    /// This gate, drawing its cores from `pool` instead of the process's.
+    #[cfg(test)]
+    pub(crate) fn drawing_from(self, pool: &'static CorePool) -> Self {
+        Self { pool, ..self }
     }
 
     /// The gate of `session`, or an open one when there is no session.
@@ -109,7 +122,7 @@ impl DerivedWorkGate {
     /// Take `encoder`'s share of the core budget, waiting until it is free;
     /// `None` once `stop` turns true while waiting.
     pub fn take_cores(&self, encoder: Encoder, stop: &dyn Fn() -> bool) -> Option<Cores<'static>> {
-        POOL.take(|| self.cores(), encoder, stop)
+        self.pool.take(|| self.cores(), encoder, stop)
     }
 }
 
@@ -123,9 +136,10 @@ fn budget(all: usize, attached: bool, publishing: bool) -> usize {
 
 static ALL_CORES: LazyLock<usize> = LazyLock::new(|| std::thread::available_parallelism().map_or(1, |n| n.get()));
 
-/// The one pool every picture and video encode in the process draws from.
-/// Each gate sets its own budget against it, so a session with no cadence
-/// (every core) can fill it while a session with one waits.
+/// The one pool every picture and video encode in the process draws from,
+/// and outside tests the only one there is. Each gate sets its own budget
+/// against it, so a session with no cadence (every core) can fill it while a
+/// session with one waits. A test may give a build its own ([`CorePool::own`]).
 static POOL: CorePool = CorePool::new();
 
 /// How often a waiter re-reads the budget: a publish that starts while
@@ -154,6 +168,7 @@ impl Encoder {
 }
 
 /// A counting semaphore whose size is read at every take.
+#[derive(Debug)]
 pub(crate) struct CorePool {
     in_use: Mutex<usize>,
     freed: Condvar,
@@ -181,8 +196,15 @@ impl Drop for Cores<'_> {
 }
 
 impl CorePool {
-    pub(crate) const fn new() -> Self {
+    const fn new() -> Self {
         Self { in_use: Mutex::new(0), freed: Condvar::new() }
+    }
+
+    /// A pool no other build draws from, for a test whose encodes must not
+    /// wait on a sibling test's.
+    #[cfg(test)]
+    pub(crate) fn own() -> &'static Self {
+        Box::leak(Box::new(Self::new()))
     }
 
     fn lock(&self) -> MutexGuard<'_, usize> {
@@ -217,7 +239,7 @@ impl FolderSession {
     /// The gate derived work for this folder waits on. Open until
     /// [`follow_cadence`](Self::follow_cadence) attaches a cadence.
     pub fn derived_work_gate(&self) -> DerivedWorkGate {
-        DerivedWorkGate { cadence: Some(self.cadence.clone()) }
+        DerivedWorkGate { cadence: Some(self.cadence.clone()), ..DerivedWorkGate::default() }
     }
 }
 

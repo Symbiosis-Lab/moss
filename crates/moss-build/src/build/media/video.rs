@@ -1158,7 +1158,7 @@ pub(crate) fn run_video_conversion(
     let project_root = Path::new(&ctx.source_path);
 
     use crate::build::media::ffmpeg::VideoCompressionConfig;
-    let gate = crate::system::folder_session::DerivedWorkGate::of(services.session.as_ref());
+    let gate = services.derived_work_gate();
     let compression_config = match services.deploy_video_max_size_mb {
         // The plugin host's own per-file limit, so it bounds BOTH files this
         // worker can produce for one video: the progressive MP4 directly, and
