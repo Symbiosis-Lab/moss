@@ -79,7 +79,7 @@ pub(crate) async fn moss_health_handler(
         .read()
         .ok()
         .and_then(|dir| crate::vault::paths::VaultRoot::find_containing(&dir))
-        .map(|vault| crate::infra::folder_lock::folder_id(vault.path()));
+        .map(|vault| crate::infra::folder_store::name_for(vault.path()));
     axum::response::Response::builder()
         .status(axum::http::StatusCode::OK)
         .header("content-type", "application/json; charset=utf-8")

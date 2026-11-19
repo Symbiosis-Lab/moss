@@ -4,6 +4,7 @@
 //! resolved without an `AppHandle`, the generic warn-at-most-once-per-key
 //! gate shared by every "don't repeat this log line every rebuild" site,
 //! the per-user moss home directory, the cross-process folder build lock,
+//! the stores this computer keeps per site folder,
 //! the calling thread's QoS class on macOS, the collector for per-version
 //! machine stores,
 //! plus a path alias so the moved tree's `crate::infra::moss_paths::…`
@@ -16,6 +17,7 @@ pub mod atomic_write;
 pub(crate) mod disposable;
 pub(crate) mod edit_distance;
 pub mod folder_lock;
+pub mod folder_store;
 pub mod home;
 pub mod liveness;
 #[cfg(target_os = "macos")]

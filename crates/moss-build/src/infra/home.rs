@@ -130,7 +130,7 @@ mod tests {
             trigger: BuildTrigger::Full, exits_after_build: true,
             site_url_override: None, server_port: None, admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
         }).await.expect("fixture builds");
-        let id = crate::infra::folder_lock::folder_id(site.path());
+        let id = crate::infra::folder_store::name_for(site.path());
         let real_locks = dirs::home_dir().unwrap().join(".moss").join("locks");
         let leaked: Vec<_> = std::fs::read_dir(&real_locks).into_iter().flatten().flatten()
             .filter(|e| e.file_name().to_string_lossy().starts_with(&id)).map(|e| e.path()).collect();

@@ -4,7 +4,7 @@ use crate::infra::home::with_moss_home;
 
 /// Two spellings of the same folder — its canonical absolute form and a
 /// relative path through `..` — must name the same lock file. This is the
-/// whole reason [`folder_id`] canonicalizes before hashing rather than
+/// whole reason [`name_for`](crate::infra::folder_store::name_for) canonicalizes before hashing rather than
 /// hashing whatever string a caller happened to pass.
 #[test]
 fn the_lock_path_is_derived_from_the_canonical_folder_path() {
@@ -229,7 +229,7 @@ fn the_promotion_epoch_lives_in_the_folder() {
         record_promoted_epoch(tmp.path(), 7).unwrap();
 
         assert!(epoch_path_for(tmp.path()).starts_with(tmp.path()));
-        assert!(!home.join("locks").join(format!("{}.epoch", folder_id(tmp.path()))).exists());
+        assert!(!home.join("locks").join(format!("{}.epoch", crate::infra::folder_store::name_for(tmp.path()))).exists());
         assert_eq!(last_promoted_epoch(tmp.path()), 7);
     });
 }
@@ -254,7 +254,7 @@ fn a_promoted_build_leaves_nothing_in_the_locks_folder() {
             site_url_override: None, server_port: None, admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
         })).expect("fixture builds");
         assert!(last_promoted_epoch(site.path()) > 0, "the build never recorded a promotion");
-        let id = folder_id(site.path());
+        let id = crate::infra::folder_store::name_for(site.path());
         let left: Vec<_> = std::fs::read_dir(home.join("locks")).into_iter().flatten().flatten()
             .filter(|e| e.file_name().to_string_lossy().starts_with(&id)).map(|e| e.file_name()).collect();
         if cfg!(unix) {

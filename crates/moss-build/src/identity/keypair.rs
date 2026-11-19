@@ -129,6 +129,15 @@ pub(crate) fn load_key_from_file(path: &Path) -> Result<Vec<u8>, IdentityError> 
     hex::decode(hex_str).map_err(|_| IdentityError::InvalidPrivateKey)
 }
 
+/// The public key the folder's `secret-key` proves, derived from the secret
+/// itself. Never read from `public.json`, which a copy can carry without the
+/// secret. `None` when there is no readable key.
+pub(crate) fn proven_pubkey(project_path: &Path) -> Option<String> {
+    let bytes: [u8; 32] = load_key_from_file(&key_file_path(project_path)).ok()?.try_into().ok()?;
+    let key = SigningKey::from_bytes(&bytes.into()).ok()?;
+    Some(hex::encode(key.verifying_key().to_bytes()))
+}
+
 // ---------------------------------------------------------------------------
 // Retired keys
 // ---------------------------------------------------------------------------

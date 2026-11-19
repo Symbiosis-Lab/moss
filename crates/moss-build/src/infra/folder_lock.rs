@@ -127,29 +127,13 @@ fn still_named(_file: &std::fs::File, _path: &Path) -> bool {
     true
 }
 
-/// A stable id for `folder`, the same for every spelling that names the same
-/// directory. Canonicalizes first — collapsing `.`, a trailing separator, or
-/// a `..` component onto one path — then sha256-hexes the result.
-///
-/// Falls back to the path as given, lexically, when the folder cannot be
-/// canonicalized (`std::fs::canonicalize` requires the path to already
-/// exist on disk): the lock still needs something to name, and every real
-/// build call site canonicalizes a folder that is already there.
-///
-/// `pub(crate)` rather than private: `ops::serve::ownership` names the same
-/// folder for its owner record and lock, and must agree with this one on
-/// what a folder is called.
-pub(crate) fn folder_id(folder: &Path) -> String {
-    use sha2::{Digest, Sha256};
-    let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
-    format!("{:x}", Sha256::digest(canonical.to_string_lossy().as_bytes()))
-}
+use crate::infra::folder_store::name_for;
 
 /// `<moss_home>/locks/<folder-id>.<name>` — one lock file per (folder, name),
 /// so a different job on the same folder can hold its own lock without waiting
 /// on the build's.
 pub fn lock_path_named(folder: &Path, name: &str) -> Result<PathBuf, String> {
-    Ok(crate::infra::home::moss_home()?.join("locks").join(format!("{}.{name}", folder_id(folder))))
+    Ok(crate::infra::home::moss_home()?.join("locks").join(format!("{}.{name}", name_for(folder))))
 }
 
 /// Acquire the exclusive build lock for `folder`, creating

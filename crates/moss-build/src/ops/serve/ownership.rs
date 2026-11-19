@@ -6,7 +6,7 @@
 //! shadows the first. This is the record that lets a second process find the
 //! first instead of racing it: one owner per folder per machine.
 //!
-//! Two files per folder, both named by [`folder_id`] (the same hash
+//! Two files per folder, both named by [`name_for`] (the same hash
 //! [`crate::infra::folder_lock`] already uses for its cross-process build
 //! lock, so a folder has one identity everywhere this crate names one):
 //!
@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 
 
 use crate::infra::atomic_write;
-use crate::infra::folder_lock::folder_id;
+use crate::infra::folder_store::name_for;
 use crate::infra::home::moss_home;
 
 /// Which kind of process holds a folder's ownership record.
@@ -55,7 +55,7 @@ pub enum HostKind {
 /// One process's claim on one folder: who, running what, reachable where,
 /// since when.
 ///
-/// `folder` is stored canonicalized (the same path [`folder_id`] hashed),
+/// `folder` is stored canonicalized (the same path [`name_for`] hashed),
 /// so a reader never has to re-resolve it to know what this record is
 /// about.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -76,7 +76,7 @@ pub struct OwnerRecord {
 /// `<moss_home>/servers/<folder-id>.json` — where [`acquire`] writes and
 /// [`find_live_owner`] reads a folder's [`OwnerRecord`].
 fn record_path(folder: &Path) -> Result<PathBuf, String> {
-    Ok(moss_home()?.join("servers").join(format!("{}.json", folder_id(folder))))
+    Ok(moss_home()?.join("servers").join(format!("{}.json", name_for(folder))))
 }
 
 /// The name of the `infra::folder_lock` lock [`acquire`] takes,
@@ -173,7 +173,7 @@ pub fn acquire(folder: &Path, kind: HostKind, version: String, url: String) -> R
 
 fn acquire_with_ui(folder: &Path, kind: HostKind, version: String, url: String, ui_url: Option<String>) -> Result<OwnerGuard, Held> {
     let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
-    let id = folder_id(&canonical);
+    let id = name_for(&canonical);
     let untracked = || Ok(OwnerGuard { _lock: None });
     let path = record_path(&canonical);
     if let Err(e) = &path {
@@ -321,7 +321,7 @@ pub async fn find_live_owner(folder: &Path) -> Option<OwnerRecord> {
         return None;
     }
     let seen_folder_id = parsed.get("folder_id").and_then(serde_json::Value::as_str)?;
-    if seen_folder_id == folder_id(&canonical) {
+    if seen_folder_id == name_for(&canonical) {
         Some(record)
     } else {
         None
@@ -910,7 +910,7 @@ mod tests {
         let other_pid = std::process::id().wrapping_add(1);
         let mut seen = vec![open_in_another_app(&site_dir).await];
         for (pid, kind) in [(other_pid, HostKind::Desktop), (other_pid, HostKind::Cli), (std::process::id(), HostKind::Desktop)] {
-            let stop = recorded_holder(&canonical, folder_id(&canonical), pid, kind);
+            let stop = recorded_holder(&canonical, name_for(&canonical), pid, kind);
             seen.push(open_in_another_app(&site_dir).await);
             stop();
         }
