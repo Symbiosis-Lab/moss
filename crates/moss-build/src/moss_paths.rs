@@ -470,6 +470,12 @@ impl MossPaths {
         self.cache_dir().join("verified-video-blobs.json")
     }
 
+    /// `.moss/build.nosync/cache/verified-asset-blobs.json` — the same record for
+    /// the asset pass, whose cached rasters and copies the seal never asks about.
+    pub fn cache_verified_asset_blobs(&self) -> PathBuf {
+        self.cache_dir().join("verified-asset-blobs.json")
+    }
+
     /// `.moss/build.nosync/cache/dep-cache.json` — per-page facade fingerprints from
     /// the previous build, keyed by source path.
     pub fn cache_dep_graph(&self) -> PathBuf {

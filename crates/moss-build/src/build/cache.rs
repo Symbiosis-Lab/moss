@@ -132,6 +132,12 @@ impl ObjectStore {
         Self::for_site(mp).remembering_verified(&mp.cache_verified_slot_blobs())
     }
 
+    /// `mp`'s store for one asset pass, so an edit or a reopen hashes only the
+    /// cached blobs whose stat moved since an earlier pass read them.
+    pub(crate) fn for_asset_pass(mp: &crate::moss_paths::MossPaths) -> Self {
+        Self::for_site(mp).remembering_verified(&mp.cache_verified_asset_blobs())
+    }
+
     fn local_blob_path(&self, oid: &str) -> Option<PathBuf> {
         self.site.as_ref().map(|site| Self::blob_path_in(&site.cache_local_objects(), oid))
     }
