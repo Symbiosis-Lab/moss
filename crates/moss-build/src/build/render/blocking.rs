@@ -2409,29 +2409,7 @@ pub fn generate_blocking_content_for_build(
     // Generate RSS feed and sitemap (only if a real https URL was resolved)
     if has_rss {
         let url = site_url.as_str();
-        // Generate RSS feed (always when a real https URL is resolved)
-        {
-            let home = documents.iter().find(|d| d.url_path == "index.html");
-            let rss_site_title = home
-                .map(|d| d.title.as_str())
-                .unwrap_or(crate::i18n::t(site_lang, "site"));
-
-            let rss_content = crate::build::feeds::rss::generate_rss_feed(
-                &documents,
-                rss_site_title,
-                url,
-                None,
-                home.and_then(|d| d.analytics.as_ref()),
-            )
-            .into_bytes();
-
-            // Site 10 (Pattern A): emit rss.xml. Its former address, feed.xml,
-            // is an entry of the redirect table, written with the rest of it.
-            let rss_path = ServedPath::for_rss("").unwrap();
-            BuildContext::for_render(output_dir, pending)
-                .emit_held(&rss_path, rss_content, HashBucket::Files)
-                .map_err(|e| format!("Failed to emit {}: {}", rss_path.as_str(), e))?;
-        }
+        crate::build::feeds::emit(&documents, url, site_lang, output_dir, pending)?;
 
         // sitemap.xml is emitted further down, once every page is registered.
 

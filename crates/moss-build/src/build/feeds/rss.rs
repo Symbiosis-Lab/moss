@@ -113,6 +113,44 @@ fn add_utm_to_internal_links(html: &str, site_url: &str) -> String {
     result
 }
 
+/// The articles a site feed lists: dated, listable, newest first. A linkblog
+/// page (`external_url:`) is left out: its home is the outlet, which has its
+/// own feed. A date shared by several articles orders them by address, never
+/// by the order the disk listed their files.
+pub(crate) fn feed_articles(documents: &[ParsedDocument]) -> Vec<&ParsedDocument> {
+    let mut articles: Vec<&ParsedDocument> = documents
+        .iter()
+        .filter(|doc| doc.date.is_some())
+        .filter(|doc| doc.is_listable())
+        .filter(|doc| !has_external_url(doc))
+        .collect();
+    articles.sort_by(|a, b| b.date.cmp(&a.date).then_with(|| a.url_path.cmp(&b.url_path)));
+    articles
+}
+
+/// An article's absolute address, as a feed item names it.
+pub(crate) fn article_url(site_url: &str, url_path: &str) -> String {
+    percent_encode_feed_url(&format!("{}/{}", site_url.trim_end_matches('/'), url_path.trim_start_matches('/')))
+}
+
+/// An article's body as a feed carries it. Its ids are scoped, since one feed
+/// holds every article and three footnoted ones would otherwise each ship an
+/// `fn-1`; `links` rewrites its links. Math and diagrams become the hosted PNGs
+/// email uses, because feed readers strip inline `<svg>` and the figure would
+/// vanish; refused-math `<code>` passes through.
+pub(crate) fn item_html(
+    article: &ParsedDocument,
+    index: usize,
+    scopes: &mut crate::build::folder_embed::inline_body::IdScopes,
+    site_url: &str,
+    links: impl Fn(&str) -> String,
+) -> String {
+    let body = crate::build::feeds::calendar::strip_links_paragraphs(&article.html_content);
+    let html = links(&scopes.scope(&body, &article.url_path, index));
+    let html = crate::build::emit::math_png::swap_math_svgs_for_email_imgs(&html, site_url);
+    crate::build::emit::diagram_png::swap_diagram_figures_for_feed_imgs(&html, site_url)
+}
+
 /// Generates an RSS 2.0 feed XML string from articles.
 ///
 /// # Arguments
@@ -130,21 +168,7 @@ pub fn generate_rss_feed(
     site_description: Option<&str>,
     analytics: Option<&AnalyticsConfig>,
 ) -> String {
-    // Filter to only documents with dates (articles) and sort by date descending.
-    // Skip linkblog pages (`external_url:` in frontmatter) — their canonical
-    // home is the outlet, which has its own feed; including them here would
-    // duplicate the outlet's content under our domain.
-    let mut articles: Vec<&ParsedDocument> = documents
-        .iter()
-        .filter(|doc| doc.date.is_some())
-        .filter(|doc| doc.is_listable())
-        .filter(|doc| !has_external_url(doc))
-        .collect();
-
-    // Newest first; a date shared by several articles orders them by address,
-    // never by the order the disk listed their files.
-    articles.sort_by(|a, b| b.date.cmp(&a.date).then_with(|| a.url_path.cmp(&b.url_path)));
-
+    let articles = feed_articles(documents);
     let description = site_description.unwrap_or(site_title);
 
     let mut xml = String::new();
@@ -175,11 +199,7 @@ pub fn generate_rss_feed(
     // Add items for each article
     let mut scopes = crate::build::folder_embed::inline_body::IdScopes::default();
     for (index, article) in articles.into_iter().enumerate() {
-        let article_url = percent_encode_feed_url(&format!(
-            "{}/{}",
-            site_url.trim_end_matches('/'),
-            article.url_path.trim_start_matches('/')
-        ));
+        let article_url = article_url(site_url, &article.url_path);
         let article_url_with_utm =
             format!("{}?utm_source=rss&utm_medium=feed", article_url);
 
@@ -206,24 +226,9 @@ pub fn generate_rss_feed(
             }
         }
 
-        // Build description: scope the item's ids (the feed is one document
-        // holding every article, so three footnoted articles would otherwise
-        // ship three `fn-1`s), rewrite internal links with UTM, add optional
-        // tracking pixel.
-        let body = crate::build::feeds::calendar::strip_links_paragraphs(&article.html_content);
-        let scoped_html = scopes.scope(&body, &article.url_path, index);
-        let mut description_html = add_utm_to_internal_links(&scoped_html, site_url);
-
-        // The website HTML inlines typeset math as <svg>, which
-        // feed readers sanitize away — the equation would silently VANISH for
-        // every reader subscriber. Swap each math <svg> for the same hosted
-        // 2× PNG <img> (absolute URLs) email uses; refused-math <code> nodes
-        // pass through untouched.
-        description_html = crate::build::emit::math_png::swap_math_svgs_for_email_imgs(
-            &description_html,
-            site_url,
-        );
-        description_html = crate::build::emit::diagram_png::swap_diagram_figures_for_feed_imgs(&description_html, site_url);
+        // Internal links carry UTM; an optional tracking pixel follows.
+        let mut description_html =
+            item_html(article, index, &mut scopes, site_url, |html| add_utm_to_internal_links(html, site_url));
 
         if let Some(analytics_config) = analytics {
             // Use pretty path (strip index.html/.html) to match browser page views

@@ -1729,6 +1729,7 @@ pub fn process_markdown_file(
             PageKind::Article
         },
         uid: frontmatter.uid,
+        uid_derived: false,
         typesetting: frontmatter.typesetting,
         content_width: frontmatter.content_width,
         color: frontmatter.color,

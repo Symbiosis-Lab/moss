@@ -643,6 +643,11 @@ pub struct ParsedDocument {
     /// published uid is the join key for the page's comment thread, its signed
     /// moderation events and its copies.
     pub uid: Option<String>,
+    /// The build derived `uid` from the page's path and bytes, so it changes
+    /// with each edit until a publish records it.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub uid_derived: bool,
     /// Typesetting direction: "horizontal" or "vertical" (from frontmatter)
     #[serde(skip)]
     #[specta(skip)]

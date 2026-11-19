@@ -99,6 +99,7 @@ mod image_title_test;
 mod img_contract_test;
 mod inline_subscribe_scope_test;
 mod interchangeable_forms_test;
+mod json_feed_test;
 mod lead_listing_test;
 mod legacy_moss_ignore_note_test;
 mod list_translations_test;

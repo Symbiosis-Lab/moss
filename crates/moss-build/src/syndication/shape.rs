@@ -316,7 +316,7 @@ fn end_paragraph(text: &mut String) {
 }
 
 /// A link's address as a reader elsewhere can follow it.
-pub(super) fn absolute(dest: &str, page_url: &str, site_url: &str) -> String {
+pub(crate) fn absolute(dest: &str, page_url: &str, site_url: &str) -> String {
     // An address with its own scheme (https, mailto, tel) is kept as the author wrote it.
     if url::Url::parse(dest).is_ok() {
         return dest.to_string();

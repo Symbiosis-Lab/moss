@@ -479,6 +479,11 @@ impl ServedPath {
         Ok(ServedPath(format!("{}/{}", SOURCE_COPY_MOUNT, rel)))
     }
 
+    /// The JSON Feed. Path is fixed.
+    pub fn for_json_feed() -> Self {
+        ServedPath("feed.json".to_string())
+    }
+
     /// LLMs.txt. Path is fixed.
     pub fn for_llms_txt() -> Self {
         ServedPath("llms.txt".to_string())
