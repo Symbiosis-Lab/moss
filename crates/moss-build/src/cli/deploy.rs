@@ -285,7 +285,7 @@ pub fn publish(
     // deploy --allow-plugins` is the same consent `moss build --allow-plugins`
     // is: without it a plugin the app never allowed is refused, and its
     // content is missing from what gets published.
-    crate::plugins::install::registry_client::enforce::install_headless(crate::infra::app_data::app_data_dir_early().as_deref(), flags.allow_plugins);
+    crate::plugins::install::registry_client::enforce::install_headless_for_running_app(flags.allow_plugins);
 
     // Multi-thread since C4f: the hosted route runs the build pipeline here,
     // and the pipeline's content and asset halves are concurrent. The prebuilt

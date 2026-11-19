@@ -602,23 +602,11 @@ pub fn channel_is_listed(channel: &AvailablePlugin, show_preview: bool) -> bool 
 /// Install a plugin into a project.
 ///
 /// Copies it out of the binary when moss ships it, and otherwise downloads the
-/// version the registry publishes — see [`published_entry`].
-///
-/// # Arguments
-/// * `plugin_id` - ID of the plugin to install
-/// * `project_path` - Path to the project where plugin should be installed
-///
-/// # Returns
-/// * `Ok(())` on success
-/// * `Err(String)` with error message on failure
-pub fn install_plugin(plugin_id: &str, project_path: &str) -> Result<(), String> {
-    install_plugin_allowing(plugin_id, project_path, crate::infra::app_data::preview_features_on())
-}
-
-/// [`install_plugin`] for a caller that already knows whether the user turned
-/// on Preview features: the app passes the switch its catalog was drawn with,
-/// so a row it shows is never refused when clicked.
-pub fn install_plugin_allowing(plugin_id: &str, project_path: &str, preview_on: bool) -> Result<(), String> {
+/// version the registry publishes — see [`published_entry`]. `preview_on` is
+/// whether the user turned on Preview features: the app passes the switch its
+/// catalog was drawn with, so a row it shows is never refused when clicked.
+/// `settings` is the file a refusal tells a command-line user to edit.
+pub fn install_plugin_allowing(plugin_id: &str, project_path: &str, preview_on: bool, settings: Option<&std::path::Path>) -> Result<(), String> {
     // No catalog-row check first. A row is a thing the UI drew; what decides
     // whether an install may proceed is whether the bytes can be got, and the
     // two branches below each answer that for their own origin. Checking the
@@ -646,7 +634,7 @@ pub fn install_plugin_allowing(plugin_id: &str, project_path: &str, preview_on: 
     // forgotten.
     let Some(manifest) = crate::plugins::bundled::get_bundled_plugin_info(plugin_id) else {
         let entry = published_entry(plugin_id)?;
-        refuse_preview(plugin_id, entry.preview, preview_on)?;
+        refuse_preview(plugin_id, entry.preview, preview_on, settings)?;
         return artifact::install_from_registry(&entry, project_path).map(|_| ());
     };
 
@@ -660,7 +648,7 @@ pub fn install_plugin_allowing(plugin_id: &str, project_path: &str, preview_on: 
     if let Some(refusal) = enforce::withheld(&manifest, true) {
         return Err(format!("{plugin_id} cannot be installed: {}", refusal.sentence(&manifest)));
     }
-    refuse_preview(plugin_id, manifest.preview, preview_on)?;
+    refuse_preview(plugin_id, manifest.preview, preview_on, settings)?;
 
     // Install from bundled plugins (no download needed)
     install_bundled_plugin(plugin_id, project_path)
@@ -671,12 +659,11 @@ pub fn install_plugin_allowing(plugin_id: &str, project_path: &str, preview_on: 
 /// typed `moss plugin install` from going round the catalog. A copy already
 /// in the folder never reaches here (an install of it returns early), so it
 /// keeps running.
-fn refuse_preview(plugin_id: &str, preview: bool, preview_on: bool) -> Result<(), String> {
+fn refuse_preview(plugin_id: &str, preview: bool, preview_on: bool, settings: Option<&std::path::Path>) -> Result<(), String> {
     if !preview || preview_on {
         return Ok(());
     }
-    let file = crate::infra::app_data::app_config_path_early()
-        .map_or_else(|| "app-config.json".to_string(), |p| p.display().to_string());
+    let file = settings.map_or_else(|| "app-config.json".to_string(), |p| p.display().to_string());
     Err(format!(
         "{plugin_id} is a preview plugin and installs only with Preview features on. \
          In the moss app, turn on Settings > Preview features. \
@@ -1009,7 +996,7 @@ mod tests {
         let project_path = temp.path().to_str().unwrap();
         fs::create_dir_all(temp.path().join(".moss")).unwrap();
 
-        let result = install_plugin("nonexistent-plugin", project_path);
+        let result = install_plugin_allowing("nonexistent-plugin", project_path, false, None);
         assert!(result.is_err());
         assert!(
             result.unwrap_err().contains("not in this build or the catalog"),

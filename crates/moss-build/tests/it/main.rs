@@ -4,6 +4,7 @@
 //! keeps its own process and is named in OWN_PROCESS. `layout` fails on a file
 //! either list misses or a name without a file.
 const OWN_PROCESS: &[&str] = &[
+    "app_identity_test",
     "article_end_block_test",
     "booking_step_aside_test",
     "child_listing_repeat_note_test",

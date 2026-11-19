@@ -48,6 +48,31 @@ impl TrustRecord {
     }
 }
 
+/// Where `roots`' app keeps its answers: the non-roaming root, since whether
+/// this computer runs a folder's code is a fact about this computer. The
+/// per-plugin approvals a released moss kept in the roaming root are copied
+/// over the first time and left in place for that moss; no release kept a
+/// record there, so there is none to copy.
+pub fn root(roots: &crate::infra::app_data::AppRoots) -> PathBuf {
+    adopt_legacy(&roots.roaming, &roots.local);
+    roots.local.clone()
+}
+
+fn adopt_legacy(from: &Path, to: &Path) {
+    refuse_a_real_root_in_tests(from);
+    refuse_a_real_root_in_tests(to);
+    let old = from.join(LEGACY_FILE);
+    if from == to || to.join(LEGACY_FILE).exists() || to.join(FILE).exists() || !old.is_file() || fs::create_dir_all(to).is_err() {
+        return;
+    }
+    // Whole or not at all: a torn copy would read as no approvals.
+    let partial = to.join(format!(".{LEGACY_FILE}.{}.tmp", std::process::id()));
+    // allow:raw_write the temp this call just minted, renamed into place whole
+    if fs::copy(&old, &partial).is_err() || fs::rename(&partial, to.join(LEGACY_FILE)).is_err() {
+        let _ = fs::remove_file(&partial);
+    }
+}
+
 /// The record under `root`, or empty. An unreadable file is empty too: the
 /// cost is a question asked again, not a plugin running without an answer.
 pub fn load(root: &Path) -> TrustRecord {
@@ -143,6 +168,29 @@ fn is_test_binary_path(exe: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_approvals_are_copied_to_the_local_root_once_and_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = crate::infra::app_data::AppRoots { roaming: tmp.path().join("roaming"), local: tmp.path().join("local") };
+        fs::create_dir_all(&roots.roaming).unwrap();
+        fs::write(roots.roaming.join(LEGACY_FILE), r#"{"approvals":[]}"#).unwrap();
+
+        assert_eq!(root(&roots), roots.local);
+        assert_eq!(fs::read_to_string(roots.local.join(LEGACY_FILE)).unwrap(), r#"{"approvals":[]}"#);
+        assert!(roots.roaming.join(LEGACY_FILE).exists(), "the old file stays for the moss that wrote it");
+        let names: Vec<_> = fs::read_dir(&roots.local).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(names.len(), 1, "no partial copy and no record made up: {names:?}");
+
+        fs::write(roots.local.join(LEGACY_FILE), "{}").unwrap();
+        root(&roots);
+        assert_eq!(fs::read_to_string(roots.local.join(LEGACY_FILE)).unwrap(), "{}", "a copy already there is never overwritten");
+
+        fs::remove_file(roots.local.join(LEGACY_FILE)).unwrap();
+        save(&roots.local, &TrustRecord::default()).unwrap();
+        root(&roots);
+        assert!(!roots.local.join(LEGACY_FILE).exists(), "a root that already holds a record is done");
+    }
 
     #[test]
     fn an_answer_is_per_folder_and_survives_a_round_trip() {

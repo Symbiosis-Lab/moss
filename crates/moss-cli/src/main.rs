@@ -100,6 +100,10 @@ fn main() {
     moss_build::system::seed_app_version(env!("CARGO_PKG_VERSION"));
     // A sign-in link's page tells this binary from the app.
     moss_build::system::seed_app_name("moss command line");
+    if let Err(message) = moss_build::infra::app_data::refuse_synced_running_roots() {
+        eprintln!("{message}");
+        std::process::exit(1);
+    }
     // `moss-cli <subcommand> --help` from the same table the app binary reads,
     // so the two cannot describe a command differently. Before this, `guide
     // --help` reached `guide`, which rejects unknown flags — the app exited 0
