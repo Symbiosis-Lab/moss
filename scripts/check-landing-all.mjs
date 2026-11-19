@@ -25,6 +25,7 @@ const CHECKS = [
   'check-landing-readiness.mjs',
   'check-landing-slow-network.mjs',
   'check-landing-subscription.mjs',
+  'check-landing-try-it.mjs',
   'check-landing-text-track.mjs',
   'check-landing-transitions.mjs',
   'check-landing-wash-recovery.mjs',

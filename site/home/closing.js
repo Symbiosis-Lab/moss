@@ -89,24 +89,51 @@
       }, true);
     }
 
-    document.querySelectorAll('a[href="#downloads"]').forEach((link) => {
-      link.addEventListener('click', (event) => {
-        event.preventDefault();
-        const downloads = document.querySelector('#downloads');
-        downloads?.scrollIntoView({ behavior: 'auto', block: 'center' });
-        window.mossLanding?.openSignup();
-        const started = performance.now();
-        // The buttons live inside the staged closing scene, so they take the pointer only once it
-        // has settled: the focus waits for the scene, not for the scroll.
-        const focusDownload = () => {
-          const state = window.__state?.();
-          const first = downloads?.querySelector('a');
-          if (first && !first.closest('[inert]') && state?.shown === 4 && !state.running) first.focus({ preventScroll: true });
-          else if (performance.now() - started < 10000) setTimeout(focusDownload, 50);
-        };
-        focusDownload();
-        if ('onscrollend' in window) addEventListener('scrollend', focusDownload, { once: true });
+    // The try-it block's stylesheet and script load on the first open, never with the page.
+    const tryOpen = document.getElementById('try-it-open');
+    const tryDialog = document.getElementById('try-it');
+    if (tryOpen && typeof tryDialog?.showModal === 'function') {
+      let loaded = null;
+      const load = () => loaded ??= new Promise((done, fail) => {
+        const css = Object.assign(document.createElement('link'), { rel: 'stylesheet', href: 'home/try-it/try-it.css' });
+        css.addEventListener('load', () => import(new URL('home/try-it/try-it.js', document.baseURI).href).then(done, fail));
+        css.addEventListener('error', fail);
+        document.head.append(css);
       });
+      const press = tryOpen.querySelector('button');
+      tryOpen.hidden = false;
+      press.addEventListener('click', async () => {
+        if (tryOpen.dataset.state === 'loading') return;
+        tryOpen.dataset.state = 'loading';
+        press.setAttribute('aria-disabled', 'true');
+        try { await load(); tryDialog.showModal(); } catch { loaded = null; } finally {
+          tryOpen.dataset.state = 'idle';
+          press.removeAttribute('aria-disabled');
+        }
+      });
+      tryDialog.querySelector('.try-it-close').addEventListener('click', () => tryDialog.close());
+      // The backdrop, and a link to a place on the page behind (Download moss), close it.
+      tryDialog.addEventListener('click', (e) => { if (e.target === tryDialog || e.target.closest('a[href^="#"]')) tryDialog.close(); });
+    }
+
+    // Delegated, so a link added later (the try-it block's) leads there too.
+    document.addEventListener('click', (event) => {
+      if (!event.target.closest?.('a[href="#downloads"]')) return;
+      event.preventDefault();
+      const downloads = document.querySelector('#downloads');
+      downloads?.scrollIntoView({ behavior: 'auto', block: 'center' });
+      window.mossLanding?.openSignup();
+      const started = performance.now();
+      // The buttons live inside the staged closing scene, so they take the pointer only once it
+      // has settled: the focus waits for the scene, not for the scroll.
+      const focusDownload = () => {
+        const state = window.__state?.();
+        const first = downloads?.querySelector('a');
+        if (first && !first.closest('[inert]') && state?.shown === 4 && !state.running) first.focus({ preventScroll: true });
+        else if (performance.now() - started < 10000) setTimeout(focusDownload, 50);
+      };
+      focusDownload();
+      if ('onscrollend' in window) addEventListener('scrollend', focusDownload, { once: true });
     });
   });
 })();

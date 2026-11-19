@@ -121,6 +121,11 @@ pub fn free_name(dir: &str, name: &str, taken_json: &str) -> Result<String, JsVa
     crate::free_name(dir, name, taken_json).map_err(|e| JsValue::from_str(&e))
 }
 
+#[wasm_bindgen(js_name = relativeDestination)]
+pub fn relative_destination(from: &str, target: &str) -> String {
+    crate::relative_destination(from, target)
+}
+
 #[wasm_bindgen(js_name = imageExtensions)]
 pub fn image_extensions() -> String {
     crate::image_extensions()

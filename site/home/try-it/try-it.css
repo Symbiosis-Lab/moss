@@ -1,0 +1,113 @@
+/* The try-it block: the visitor's folder on the left, moss's page on the right.
+   Colours come from the landing's own tokens; the buttons are its .moss-btn
+   and moss's loading slot (subscribe-form.css). */
+/* The dialog that hosts the block on the current landing. */
+#try-it {
+  --try-line: var(--border);
+  --try-muted: var(--text2);
+  --try-pick: color-mix(in srgb, var(--accent) 10%, transparent);
+  --try-surface: #fff;
+  inline-size: min(880px, 100% - 32px);
+  max-block-size: calc(100dvh - 32px);
+  padding: 24px;
+  border: 0;
+  border-radius: var(--win-r);
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: var(--sheet-shadow);
+}
+#try-it::backdrop { background: rgba(20, 18, 16, .45); }
+html:has(#try-it[open]) { overflow: hidden; }
+.try-it-head { display: flex; align-items: start; justify-content: space-between; gap: 16px; margin-block-end: 24px; }
+#try-it h2 { margin: 0; font: 400 clamp(26px, 3.4vw, 36px)/1.15 var(--heading); text-wrap: balance; }
+#try-it .try-it-lede { margin: 8px 0 0; color: var(--try-muted); font-size: 16px; line-height: 1.5; text-wrap: pretty; }
+.try-it-close {
+  flex: none; inline-size: 44px; block-size: 44px; margin-block-start: -8px; margin-inline-end: -8px;
+  border: 0; border-radius: 8px; background: none; color: var(--try-muted);
+  font: 400 28px/1 var(--body); cursor: pointer;
+}
+@media (hover: hover) { .try-it-close:hover { background: var(--try-pick); color: var(--text); } }
+
+[data-try-it] {
+  display: grid;
+  grid-template-columns: 184px minmax(0, 1fr);
+  grid-template-areas: "folder view" "take take" "local local";
+  gap: 16px 24px;
+  font-family: var(--body);
+}
+.try-it-folder { grid-area: folder; display: flex; flex-direction: column; gap: 8px; min-inline-size: 0; }
+.try-it-site { margin: 0; font-weight: 600; font-size: 14px; }
+.try-it-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.try-it-file {
+  display: block; inline-size: 100%; min-block-size: 32px; padding: 6px 8px;
+  border: 0; border-radius: 6px; background: none; color: var(--text);
+  font: 400 14px/1.4 var(--body); text-align: start;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+span.try-it-file { color: var(--try-muted); }
+button.try-it-file { cursor: pointer; }
+button.try-it-file[aria-current="page"] { background: var(--try-pick); font-weight: 600; }
+@media (hover: hover) { button.try-it-file:hover { background: var(--try-pick); } }
+.try-it-add { display: flex; flex-direction: column; gap: 8px; margin-block-start: 8px; }
+.try-it-add .try-it-slot, .try-it-add .moss-btn-slot, .try-it-add .moss-btn { inline-size: 100%; }
+.try-it-add .moss-btn { justify-content: center; font-size: 14px; padding: 8px 12px; }
+
+.try-it-view {
+  grid-area: view; min-inline-size: 0;
+  border-radius: var(--win-r); overflow: hidden; background: var(--try-surface);
+  box-shadow: 0 0 0 1px rgba(0,0,0,.10), 0 1px 3px rgba(0,0,0,.08), 0 12px 32px rgba(40,35,28,.14);
+}
+.try-it-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  min-block-size: 40px; padding: 4px 4px 4px 12px; border-block-end: 1px solid var(--try-line);
+  font-size: 13px; color: var(--try-muted);
+}
+.try-it-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.try-it-toggle {
+  min-block-size: 32px; padding: 4px 12px; border: 1px solid var(--try-line); border-radius: 6px;
+  background: var(--bg); color: var(--text); font: 500 13px/1 var(--body); cursor: pointer;
+  transition: scale .2s ease-out;
+}
+.try-it-toggle:active { scale: .97; }
+.try-it-stage { position: relative; block-size: 380px; }
+/* Waiting on the renderer after a file arrives. */
+.try-it-stage[aria-busy="true"]::after {
+  content: ''; position: absolute; inset: 0; background: rgba(255,255,255,.6) no-repeat center / 28px
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='9' fill='none' stroke='%232d5a2d' stroke-width='2' stroke-dasharray='42 14'/%3E%3C/svg%3E");
+  cursor: wait;
+}
+.try-it-stage iframe, .try-it-text { display: block; inline-size: 100%; block-size: 100%; border: 0; }
+.try-it-stage iframe[hidden], .try-it-text[hidden] { display: none; }
+.try-it-text {
+  padding: 16px; resize: none; background: var(--try-surface); color: var(--text);
+  font: 15px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.try-it-text:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.try-it-drop {
+  position: absolute; inset: auto 12px 12px; margin: 0; padding: 6px 10px;
+  border-radius: 6px; background: rgba(250,248,245,.92); color: var(--try-muted);
+  font-size: 13px; text-align: center; pointer-events: none;
+}
+[data-try-it][data-drag="over"] .try-it-stage iframe { pointer-events: none; }
+[data-try-it][data-drag="over"] .try-it-view { box-shadow: 0 0 0 2px var(--accent), 0 12px 32px rgba(40,35,28,.14); }
+[data-try-it][data-drag="over"] .try-it-drop { color: var(--accent); font-weight: 600; }
+
+.try-it-take { grid-area: take; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.try-it-local { grid-area: local; margin: 0; color: var(--try-muted); font-size: 13px; text-align: center; }
+.try-it-status { grid-column: 1 / -1; margin: 0; min-block-size: 1.4em; color: var(--text); font-size: 14px; text-align: center; }
+.try-it-status:empty { display: none; }
+
+#try-it button:focus-visible, #try-it a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (max-width: 720px) {
+  #try-it { inline-size: 100%; max-inline-size: 100%; max-block-size: 100dvh; block-size: 100dvh; padding: 16px; border-radius: 0; }
+  [data-try-it] { grid-template-columns: minmax(0, 1fr); grid-template-areas: "view" "folder" "take" "local"; }
+  .try-it-stage { block-size: 340px; }
+  .try-it-files { flex-direction: row; flex-wrap: wrap; gap: 4px; }
+  .try-it-file { inline-size: auto; max-inline-size: 100%; min-block-size: 44px; padding: 10px 12px; }
+  .try-it-add .moss-btn { min-block-size: 44px; }
+  .try-it-take .try-it-slot, .try-it-take > .moss-btn { flex: 1 1 100%; }
+  .try-it-take .moss-btn-slot { inline-size: 100%; }
+  .try-it-take .moss-btn { inline-size: 100%; justify-content: center; min-block-size: 44px; }
+}
+@media (prefers-reduced-motion: reduce) { .try-it-toggle { transition: none; } .try-it-toggle:active { scale: none; } }

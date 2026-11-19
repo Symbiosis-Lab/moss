@@ -12,6 +12,9 @@
 //      of the form looks right (check-landing-subscription.mjs).
 //   4. The mark at the top of every page shows against its ground in the
 //      light and the dark theme, whatever the OS setting (check-landing-logo.mjs).
+//   5. The try-it block's renderer and first pages are built from this commit
+//      (build-site-try-it.mjs); they are not checked in, so without this step
+//      the deploy would ship a block with nothing to run.
 // Pass the staged URL as the first argument to run the click-through against
 // the deployed copy instead of the local source: predeploy-landing.mjs [url].
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -34,6 +37,7 @@ const dirty = git('status', '--porcelain', '--', 'site', ':!site/.moss');
 if (dirty) fail(`site/ has uncommitted changes, so what would deploy is not what develop holds:\n${dirty}`);
 
 const run = (script, ...args) => spawnSync(process.execPath, [fileURLToPath(new URL(script, import.meta.url)), ...args], { stdio: 'inherit', cwd: repo }).status === 0;
+if (!run('build-site-try-it.mjs')) fail('the try-it block did not build; do not deploy.');
 if (!run('build-backend-scripts.mjs', '--check')) fail('site/home/subscribe.js or subscribe-form.css is stale; run node scripts/build-backend-scripts.mjs and commit.');
 if (!run('check-landing-download.mjs', ...process.argv.slice(2))) fail('the download check failed; do not deploy.');
 if (!run('check-landing-subscription.mjs', ...process.argv.slice(2))) fail('the sign-up check failed; do not deploy.');

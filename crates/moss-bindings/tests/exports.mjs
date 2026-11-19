@@ -24,6 +24,13 @@ const tests = {
     } finally {
       site.free();
     }
+    const named = new wasm.MossSite('{"files":["index.md"],"lang":"en"}');
+    try {
+      named.setTexts('{"index.md":"Words."}', 'My site');
+      assert.equal(json(named.preview('index.md', 'Words.', '/')).title, 'My site');
+    } finally {
+      named.free();
+    }
   },
   siteBundle() {
     const { bundle } = json(wasm.siteBundle('{"files":["index.md"],"config_toml":"[site]\\nlang = \\"de\\""}'));
@@ -63,6 +70,10 @@ const tests = {
     assert.equal(wasm.freeName('photos', 'a.jpg', '["photos/a.jpg","photos/a-2.jpg","other/a-3.jpg"]'), 'a-3.jpg');
     assert.equal(wasm.freeName('', 'a.jpg', '[]'), 'a.jpg');
     assert.throws(() => wasm.freeName('', 'a.jpg', '{}'));
+  },
+  relativeDestination() {
+    assert.equal(wasm.relativeDestination('index.md', 'heron.jpg'), 'heron.jpg');
+    assert.equal(wasm.relativeDestination('notes/a.md', 'notes/my heron.jpg'), 'my%20heron.jpg');
   },
   imageExtensions() {
     assert.deepEqual(json(wasm.imageExtensions()), ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'avif']);

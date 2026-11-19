@@ -105,7 +105,7 @@ impl SiteBundle {
         let blocks = block_names::BlockNames::from_contributions(self.plugins.iter().flat_map(|p| {
             p.blocks.iter().map(|short| (p.name.as_str(), short.as_str()))
         }));
-        SiteInputs { files: self.files, notes: self.notes, schema, lang: self.lang, blocks, terms: self.terms }
+        SiteInputs { files: self.files, notes: self.notes, schema, lang: self.lang, blocks, terms: self.terms, root_name: None }
     }
 }
 
@@ -123,6 +123,8 @@ pub struct SiteInputs {
     pub blocks: block_names::BlockNames,
     /// The site's term kinds.
     pub terms: Vec<crate::terms::kinds::TermKind>,
+    /// The site folder's name, for its home page's title.
+    pub root_name: Option<String>,
 }
 
 /// Check frontmatter, moss syntax and page links. Lines count from the file's start.
@@ -343,7 +345,7 @@ pub fn render_page(source_path: &str, text: &str, site: &SiteInputs) -> Rendered
         file_path: source_path,
         frontmatter_title: fields.get("title").and_then(|v| v.as_str()),
         body_markdown: &markdown,
-        root_folder_name: None,
+        root_folder_name: site.root_name.as_deref(),
         is_home_override: fields.get("home").and_then(|v| v.as_bool()) == Some(true),
         slot_only: source_path == "footer.md",
         dated: fields.contains_key("date") || fields.contains_key("start"),

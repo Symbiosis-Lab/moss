@@ -563,7 +563,7 @@
     <section class="scene" id="c1"><div class="scene-text">
       <h2>隨處寫作，<br>隨處發布。</h2>
       <p class="lede">青苔將你的資料夾發布成網站。在本機資料夾裡寫 Markdown，用任何雲端硬碟協作。按一下就能預覽，再按一下就能發布到任何地方。</p>
-      <div class="btns"><a class="moss-btn" data-role="primary" data-track="cta-download" href="#downloads">下載青苔</a><a class="moss-btn" data-role="secondary" data-track="cta-get-started" href="/zh-hant/開始使用/">開始使用 →</a></div>
+      <div class="btns"><a class="moss-btn" data-role="primary" data-track="cta-download" href="#downloads">下載青苔</a><a class="moss-btn" data-role="secondary" data-track="cta-get-started" href="/zh-hant/開始使用/">開始使用 →</a><span id="try-it-open" data-state="idle" hidden><span class="moss-btn-slot"><button class="moss-btn" data-role="secondary" data-track="cta-try-it" type="button"><span class="moss-btn__label">在這裡試試</span><span class="moss-btn__spinner" aria-hidden="true"></span></button></span></span></div>
     </div></section>
     <section class="scene" id="c2"><div class="scene-text">
       <h2>柔軟如人，<br>強大如機器。</h2>
@@ -614,6 +614,36 @@
     </footer>
   </div>
 </section>
+
+<!-- Try it: a self-contained block (site/home/try-it/), hosted in a dialog
+     because nothing after the pinned columns can be reached on desktop.
+     closing.js loads its stylesheet and script on the first open, and the block
+     loads moss's renderer on the first press or drop inside it. The words it
+     shows are the template's, so each language's page carries its own. -->
+<dialog id="try-it" aria-labelledby="try-it-h">
+  <div class="try-it-head"><div><h2 id="try-it-h">不用先學什麼。</h2><p class="try-it-lede">打開資料夾，開始打字。拖一張圖進來。</p></div><button type="button" class="try-it-close" aria-label="關閉">×</button></div>
+  <div data-try-it><template data-try-it-words>
+    <span data-word="folder">我的網站</span>
+    <span data-word="files">我的網站裡的檔案</span>
+    <span data-word="preview">預覽</span>
+    <span data-word="write">編輯</span>
+    <span data-word="text">頁面文字</span>
+    <span data-word="pick">選擇圖片</span>
+    <span data-word="add">加入筆記或圖片</span>
+    <span data-word="drop">把筆記或圖片拖到這裡</span>
+    <span data-word="sample">加入範例圖片</span>
+    <span data-word="sampleName">魚.jpg</span>
+    <span data-word="newPage">加入頁面</span>
+    <span data-word="untitled">未命名</span>
+    <span data-word="zip">下載資料夾</span>
+    <span data-word="save">儲存到資料夾</span>
+    <span data-word="saved">已儲存到 {folder}。</span>
+    <span data-word="local">檔案不會離開你的裝置。</span>
+    <span data-word="refused">青苔支援 .md 筆記，以及 JPEG、PNG、GIF、WebP、AVIF 或 SVG 圖片。</span>
+    <span data-word="failed">預覽未能載入。請重新整理頁面再試。</span>
+    <span data-word="download">下載青苔</span>
+  </template></div>
+</dialog>
 
 <!-- A checked-in build of packages/moss-watercolor (this repo); rebuilt by
      scripts/build-site-watercolor.mjs, checked by check-site-watercolor-freshness.mjs.

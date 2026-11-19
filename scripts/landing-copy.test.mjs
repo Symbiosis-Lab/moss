@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { sectionProblems } from './landing-copy.mjs';
+import { sectionProblems, tryItWords } from './landing-copy.mjs';
 
 const section = (id, heading, body) => `<section id="${id}"><h2>${heading}</h2><p>${body}</p></section>`;
 const page = (override = {}) => `<!doctype html><title>t</title><header id="intro"><h1>Make the thing.</h1><p>Write in a folder.</p></header>`
@@ -23,4 +23,10 @@ test('a missing section is reported, and nested sections are read to their own e
 
 test('a Chinese page with an English heading is reported', () => {
   assert.deepEqual(sectionProblems(page(), 'zh-hans').slice(0, 2), ['#intro: heading is not in zh-hans', '#c1: heading is not in zh-hans']);
+});
+
+test('the try-it words are read from the page template, entities decoded', () => {
+  const html = '<div data-try-it><template data-try-it-words>\n<span data-word="folder">My site</span>\n<span data-word="refused">.md &amp; JPEG</span>\n</template></div>';
+  assert.deepEqual(tryItWords(html), { folder: 'My site', refused: '.md & JPEG' });
+  assert.equal(tryItWords('<p>no block</p>'), null);
 });

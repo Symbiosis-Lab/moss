@@ -27,6 +27,7 @@ Each proposal is a folder here: a `README.md` with the design, and its screens b
 | [A hero that stays while the page rises over it](fixed-hero/README.md) | Proposed |
 | [A site-wide date style](site-date-style/README.md) | Proposed |
 | [Plugin sandbox: declared hosts, budgets, no network in a build](plugin-sandbox/README.md) | In progress |
+| [Try moss on the landing page, with nothing to install](try-it-on-the-landing/README.md) | In progress |
 
 ## Status
 

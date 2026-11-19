@@ -563,7 +563,7 @@
     <section class="scene" id="c1"><div class="scene-text">
       <h2>Write anywhere.<br>Publish everywhere.</h2>
       <p class="lede">Write in your folder with Markdown files. Collaborate through any cloud drive. One click to preview, another to publish anywhere.</p>
-      <div class="btns"><a class="moss-btn" data-role="primary" data-track="cta-download" href="#downloads">Download moss</a><a class="moss-btn" data-role="secondary" data-track="cta-get-started" href="/get-started/">Get started →</a></div>
+      <div class="btns"><a class="moss-btn" data-role="primary" data-track="cta-download" href="#downloads">Download moss</a><a class="moss-btn" data-role="secondary" data-track="cta-get-started" href="/get-started/">Get started →</a><span id="try-it-open" data-state="idle" hidden><span class="moss-btn-slot"><button class="moss-btn" data-role="secondary" data-track="cta-try-it" type="button"><span class="moss-btn__label">Try it here</span><span class="moss-btn__spinner" aria-hidden="true"></span></button></span></span></div>
     </div></section>
     <section class="scene" id="c2"><div class="scene-text">
       <h2>Friendly for humans.<br>Powerful for machines.</h2>
@@ -614,6 +614,36 @@
     </footer>
   </div>
 </section>
+
+<!-- Try it: a self-contained block (site/home/try-it/), hosted in a dialog
+     because nothing after the pinned columns can be reached on desktop.
+     closing.js loads its stylesheet and script on the first open, and the block
+     loads moss's renderer on the first press or drop inside it. The words it
+     shows are the template's, so each language's page carries its own. -->
+<dialog id="try-it" aria-labelledby="try-it-h">
+  <div class="try-it-head"><div><h2 id="try-it-h">Nothing to learn first.</h2><p class="try-it-lede">Open a folder and start typing. Drag a picture in.</p></div><button type="button" class="try-it-close" aria-label="Close">×</button></div>
+  <div data-try-it><template data-try-it-words>
+    <span data-word="folder">My site</span>
+    <span data-word="files">Files in My site</span>
+    <span data-word="preview">Preview</span>
+    <span data-word="write">Write</span>
+    <span data-word="text">Page text</span>
+    <span data-word="pick">Choose a picture</span>
+    <span data-word="add">Add a note or picture</span>
+    <span data-word="drop">Drop a note or picture here</span>
+    <span data-word="sample">Add a sample picture</span>
+    <span data-word="sampleName">fish.jpg</span>
+    <span data-word="newPage">Add a page</span>
+    <span data-word="untitled">Untitled</span>
+    <span data-word="zip">Download folder</span>
+    <span data-word="save">Save to a folder</span>
+    <span data-word="saved">Saved to {folder}.</span>
+    <span data-word="local">Nothing leaves your device.</span>
+    <span data-word="refused">moss takes .md notes and JPEG, PNG, GIF, WebP, AVIF or SVG pictures.</span>
+    <span data-word="failed">The preview did not load. Reload the page to try again.</span>
+    <span data-word="download">Download moss</span>
+  </template></div>
+</dialog>
 
 <!-- A checked-in build of packages/moss-watercolor (this repo); rebuilt by
      scripts/build-site-watercolor.mjs, checked by check-site-watercolor-freshness.mjs.

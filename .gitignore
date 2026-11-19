@@ -35,3 +35,7 @@ Icon
 /moss-linux-x86_64
 /moss-darwin-universal
 /moss-windows-x86_64.exe
+
+# Built by scripts/build-site-try-it.mjs; published, never committed.
+site/home/try-it/wasm/
+site/home/try-it/sample-*.html

@@ -10,7 +10,17 @@ fn site(files: &[&str]) -> SiteInputs {
         schema: crate::schema::builtin_schema(),
         lang: "en".into(),
         terms: Vec::new(),
+        root_name: None,
     }
+}
+
+#[test]
+fn home_page_takes_the_site_folders_name_as_its_title() {
+    let mut inputs = site(&["index.md", "note.md"]);
+    assert_eq!(render_page("index.md", "Words.", &inputs).title, "index");
+    inputs.root_name = Some("My site".into());
+    assert_eq!(render_page("index.md", "Words.", &inputs).title, "My site");
+    assert_eq!(render_page("note.md", "Words.", &inputs).title, "note");
 }
 
 #[test]

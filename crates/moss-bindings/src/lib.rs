@@ -38,6 +38,7 @@ impl Site {
     pub fn set_texts(&mut self, texts_json: &str, root_name: &str) -> Result<(), String> {
         self.texts = serde_json::from_str(texts_json).map_err(|e| e.to_string())?;
         self.pages = page::site_page::site_pages(&self.texts, &self.bundle, root_name);
+        self.inputs.root_name = Some(root_name).filter(|n| !n.is_empty()).map(str::to_string);
         Ok(())
     }
 
@@ -182,6 +183,11 @@ pub fn free_name(dir: &str, name: &str, taken_json: &str) -> Result<String, Stri
     let taken: std::collections::HashSet<std::path::PathBuf> = decode(taken_json)?;
     Ok(moss_core::source_edit::free_name(std::path::Path::new(dir), name.as_ref(), |p| taken.contains(p))
         .to_string_lossy().into_owned())
+}
+
+/// The escaped markdown destination of `target` written from the page `from`, the path the editor writes for a dropped file.
+pub fn relative_destination(from: &str, target: &str) -> String {
+    moss_core::link_completions::relative_destination(from, target)
 }
 
 /// Lowercase extensions, without dots, supported by image embeds.

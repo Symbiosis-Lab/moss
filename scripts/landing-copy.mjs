@@ -47,3 +47,11 @@ export function sectionProblems(html, locale) {
     return [];
   });
 }
+
+/** The try-it block's words in a landing page: its `<template data-try-it-words>`, keyed by `data-word`. */
+export function tryItWords(html) {
+  const template = /<template data-try-it-words>([\s\S]*?)<\/template>/.exec(html);
+  if (!template) return null;
+  return Object.fromEntries([...template[1].matchAll(/<span data-word="([^"]+)">([\s\S]*?)<\/span>/g)]
+    .map(([, key, text]) => [key, visibleText(text)]));
+}

@@ -2049,7 +2049,7 @@ const scrollToRest = (scene) => { aimed = scene; settling = null; scrollTo({ top
 function sceneKey(e, fromDemo) {
   if (mobileLayout() || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || (fromDemo && demoInUse)) return;
   if (e.shiftKey && e.key !== ' ') return;
-  if (!fromDemo && (e.target.closest?.('input, textarea, select, video, audio, [contenteditable="true"], [role="slider"], [role="listbox"], [role="tablist"], [role="radiogroup"], [role="menu"], [role="grid"], [role="tree"], [role="spinbutton"], [role="combobox"]') || (e.key === ' ' && e.target.closest?.('button, a, summary')))) return;
+  if (!fromDemo && (e.target.closest?.('dialog, input, textarea, select, video, audio, [contenteditable="true"], [role="slider"], [role="listbox"], [role="tablist"], [role="radiogroup"], [role="menu"], [role="grid"], [role="tree"], [role="spinbutton"], [role="combobox"]') || (e.key === ' ' && e.target.closest?.('button, a, summary')))) return;
   const dir = e.key === ' ' && e.shiftKey ? -1 : KEY_STEP[e.key];
   if (dir == null || (inClose() && !(dir < 0 && scrollY <= restY(SHARE) + 2))) return;
   e.preventDefault();
