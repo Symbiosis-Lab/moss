@@ -21,10 +21,16 @@ pub static MOSS_HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
 /// The status a GET of `path` gets from the server on `port`.
 #[allow(dead_code)]
 pub fn status(port: u16, path: &str) -> u16 {
+    try_status(port, path).unwrap_or_else(|e| panic!("the server did not answer: {e}"))
+}
+
+/// As [`status`], with a dropped connection returned instead of a panic.
+#[allow(dead_code)]
+fn try_status(port: u16, path: &str) -> Result<u16, ureq::Error> {
     match ureq::get(&format!("http://localhost:{port}{path}")).call() {
-        Ok(r) => r.status(),
-        Err(ureq::Error::Status(code, _)) => code,
-        Err(e) => panic!("the server did not answer: {e}"),
+        Ok(r) => Ok(r.status()),
+        Err(ureq::Error::Status(code, _)) => Ok(code),
+        Err(e) => Err(e),
     }
 }
 
@@ -190,6 +196,13 @@ impl ServedChild {
     /// How many stderr lines have been captured so far — the `skip` value for
     /// a later [`Self::wait_for_access_line_after`] call that wants only
     /// lines printed from this point on.
+    /// As [`status`], with this server's stderr in the panic when it does not
+    /// answer, since that is where the reason for a dropped connection is.
+    #[allow(dead_code)]
+    pub fn status(&self, port: u16, path: &str) -> u16 {
+        try_status(port, path).unwrap_or_else(|e| panic!("the server did not answer {path}: {e}; stderr:\n{}", joined(&self.stderr)))
+    }
+
     #[allow(dead_code)]
     pub fn stderr_len(&self) -> usize {
         self.stderr.lock().unwrap_or_else(std::sync::PoisonError::into_inner).len()
