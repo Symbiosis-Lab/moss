@@ -35,7 +35,7 @@ pub mod site_languages;
 mod strings;
 
 /// Supported languages for UI string translation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
 pub enum Language {
     #[default]
     En,

@@ -10,7 +10,7 @@ use super::visit::for_each_child_sequence;
 use super::shortcode::Shortcode;
 
 /// The first absolute link of a quotation's source line.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct QuoteSource {
     pub href: String,
     pub text: String,

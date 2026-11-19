@@ -221,7 +221,7 @@ fn sanitize_slug_segment(segment: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// How [`ContentGraph::resolve_path`] reached the file it returned.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PathMatch {
     /// The target is the file's path, written from the page's folder or,
     /// with a leading `/`, from the site root. `exact_case` is false when the
@@ -236,7 +236,7 @@ pub enum PathMatch {
 }
 
 /// The answer of [`ContentGraph::resolve_path_with_ties`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PathResolution {
     /// The file the target names.
     pub path: String,
@@ -880,7 +880,7 @@ impl ContentGraphBuilder {
 // ---------------------------------------------------------------------------
 
 /// One question the graph answered, with the answer it gave.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum GraphRead {
     Resolve { reference: String, from: String, answer: Option<PathResolution> },
     StemOf { reference: String, answer: Vec<String> },

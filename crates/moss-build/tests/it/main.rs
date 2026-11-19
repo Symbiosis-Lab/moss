@@ -28,6 +28,7 @@ const OWN_PROCESS: &[&str] = &[
     "nav_external_url_test",
     "no_plugins_problem_count_test",
     "no_system_ca_test",
+    "parse_cache_kept_test",
     "passthrough_markdown_test",
     "plugin_admission_test",
     "plugin_install_cli_test",

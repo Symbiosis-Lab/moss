@@ -44,6 +44,9 @@ impl IncrementalGates {
             ChangeProof::for_build(trigger, folder, builder, seal)
         };
         crate::build::phase::record_value("proved_from_seal", usize::from(matches!(proof, ChangeProof::Manifest | ChangeProof::ImagesSettled)));
+        if let (ChangeProof::Manifest, Some(generation)) = (&proof, seal.generation_id()) {
+            crate::build::parse_cache::note_proven_seal(folder, generation);
+        }
         Self { render_skip: proof.allows_incremental_skip(), parse_cache: proof.allows_parse_cache_reuse() }
     }
 }
@@ -107,10 +110,13 @@ impl LastSeal {
     /// names, and is on disk. The manifest is written before the generation
     /// is promoted, so its presence alone proves neither.
     fn sealed_generation_is_current(&self, folder: &Path) -> bool {
-        let Some(manifest) = self.manifest.as_ref() else { return false };
+        let Some(id) = self.generation_id() else { return false };
         let paths = crate::moss_paths::MossPaths::new(folder);
-        let id = crate::build::assets::paths::compute_manifest_generation_id(&manifest.files);
         paths.current_generation_id().is_ok_and(|current| current == id) && paths.sealed_generation_dir(&id).is_some()
+    }
+
+    fn generation_id(&self) -> Option<String> {
+        self.manifest.as_ref().map(|manifest| crate::build::assets::paths::compute_manifest_generation_id(&manifest.files))
     }
 
     /// The manifest as read, before key migration; `build_inner` migrates its
@@ -334,7 +340,12 @@ impl AtEntry {
         }
         let fetched = fetch();
         match (fetched, seal.remeasure(folder, options)) {
-            (Some(_), true) => Self::Unchanged,
+            (Some(_), true) => {
+                if let Some(generation) = seal.generation_id() {
+                    crate::build::parse_cache::note_proven_seal(folder, generation);
+                }
+                Self::Unchanged
+            }
             (comments_refreshed, _) => Self::Build { comments_refreshed: comments_refreshed.unwrap_or(false) },
         }
     }

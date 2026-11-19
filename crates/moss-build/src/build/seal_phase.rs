@@ -108,6 +108,9 @@ pub(crate) struct PendingSeal {
     pub is_pinned: Arc<dyn Fn(&str) -> bool + Send + Sync>,
     pub session: Option<Arc<FolderSession>>,
     pub cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
+    /// The parse cache this build left, kept in a file once its generation
+    /// is promoted.
+    pub parse: Option<crate::build::parse_cache::KeptParse>,
     /// `Some` from the one-shot arm only: the cross-process build lock its
     /// render took, held through its seal and released once this phase has
     /// promoted. `None` makes this phase take it itself.
@@ -210,6 +213,7 @@ async fn run_materialize_phase(req: PendingSeal) {
         cache_lease,
         folder_lock,
         media_rerender_owed: _,
+        parse,
     } = req;
     let mut sealed = sealed;
     let mut verdict = verdict;
@@ -322,6 +326,10 @@ async fn run_materialize_phase(req: PendingSeal) {
                 held_lock.then_some(locked_at_nanos),
             ),
         };
+        // Keep the parse cache only for a generation that was promoted, while the lock is held.
+        if let (Ok(Promotion::Promoted), Some(parse)) = (&promotion, &parse) {
+            parse.write(&mp.memo_dir(), sealed.generation_id());
+        }
         drop(folder_build_lock);
         (sealed, promotion)
     })

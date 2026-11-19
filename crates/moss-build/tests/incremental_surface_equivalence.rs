@@ -1161,7 +1161,7 @@ fn membership_scenario(name: &str, setup: fn(&Path), change: fn(&Path), moved: &
     let result = build(&incremental_root.to_string_lossy(), moss_build::build::BuildTrigger::Structural(moved));
     assert!(result.is_ok(), "[{name}] {result:?}");
     let lines = logger.lines.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-    let replayed = lines.iter().any(|l| l.starts_with("parse cache: ") && !l.starts_with("parse cache: 0 of"));
+    let replayed = lines.iter().any(|l| l.starts_with("parse cache: ") && l.contains(" pages replayed,") && !l.starts_with("parse cache: 0 of"));
     assert_eq!(replayed, replays, "[{name}] parse cache replay, got: {lines:?}");
     let carried = lines.iter().any(|l| l.contains("tracked pages") && !l.contains("skipping 0"));
     assert_eq!(carried, scoped, "[{name}] render carried pages, got: {lines:?}");

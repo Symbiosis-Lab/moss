@@ -15,7 +15,7 @@ pub use crate::build::render::{DraftLinkOccurrence, MissingReferenceOccurrence, 
 
 /// Validated event facts shared by page metadata, listings and calendar files.
 /// Present when `start` parses; `end` must also parse and not precede it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EventFields {
     pub start: moss_core::event::EventTime,
     pub end: Option<moss_core::event::EventTime>,
@@ -50,7 +50,7 @@ impl EventFields {
 }
 
 /// The accent a folder's `color:` gives the pages under it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SectionAccent {
     /// The validated colour, as written (`#rgb` or `#rrggbb`).
     pub color: String,
@@ -63,7 +63,7 @@ pub struct SectionAccent {
 }
 
 /// The count and picture a term's pseudo-folder card shows.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct TermCard {
     pub count: usize,
     pub cover: Option<String>,
@@ -1077,7 +1077,7 @@ pub(crate) fn mark_hidden_folders(docs: &mut [ParsedDocument]) {
 /// fires (typically a shortcode arm or markdown processor), and read it in
 /// `build/features.rs` to gate CSS/JS injection. Do not add ad-hoc bools
 /// elsewhere on `ParsedDocument` for this purpose.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct PageFeatures {
     /// True if the page contains a `:::form`, nested ones included. Gates the forms
     /// stylesheet and script, and tells `commerce.json` which pages to read.

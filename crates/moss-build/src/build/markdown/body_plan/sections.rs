@@ -8,7 +8,7 @@ use regex::Regex;
 
 /// A heading of level 2 or below whose section is folder embeds and deeper
 /// sections of the same kind, and nothing else.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SectionEmission {
     /// The heading's HTML, permalink included.
     pub heading: String,
@@ -17,7 +17,7 @@ pub struct SectionEmission {
     pub parts: Vec<SectionPart>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum SectionPart {
     /// A folder-embed marker, then the listing it expands to.
     Embed(String),
@@ -130,7 +130,7 @@ pub(super) fn build(blocks: &[Block], start: usize, end: usize, render: &mut dyn
 /// A heading's anchor, its name, and its place among the headings of that
 /// name in the order the page renders them, which puts hoisted endnotes after
 /// the body.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HeadingName {
     pub id: String,
     pub name: String,

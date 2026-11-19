@@ -37,7 +37,7 @@ pub mod source;
 pub use source::prepare_markdown_source;
 
 /// A link going out from a document.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OutgoingLink {
     pub target_path: String,
     pub display_text: String,
@@ -45,7 +45,7 @@ pub struct OutgoingLink {
 }
 
 /// The kind of link syntax used.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum LinkType {
     /// `[[target]]` or `[[target|display]]`
     Wikilink,

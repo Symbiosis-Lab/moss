@@ -131,7 +131,7 @@ pub fn validate(plugin: &str, short: &str, block: &BlockContribution) -> Result<
 /// A file a page loads for a block, kept by kind so nothing guesses it from an
 /// extension. Stylesheets sort first, so an element is styled before its
 /// script upgrades it.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub enum BlockAsset {
     Stylesheet(String),
     Script(String),

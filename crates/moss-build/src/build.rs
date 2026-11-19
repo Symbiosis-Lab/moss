@@ -2214,6 +2214,7 @@ async fn advertise_sealed(
         cache_lease: guards.cache_lease,
         folder_lock: None,
         media_rerender_owed,
+        parse: crate::build::parse_cache::take_for_seal(std::path::Path::new(folder_path)),
     };
     // Under the guard, so within one folder session the lane's requests
     // arrive in lock order and its last is the newest render's.

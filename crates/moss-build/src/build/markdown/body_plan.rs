@@ -36,7 +36,7 @@
 //! `body_plan_tests::plan_reassembles_to_render_document_output`.
 
 mod sections;
-pub use sections::{SectionEmission, SectionPart};
+pub use sections::{HeadingName, SectionEmission, SectionPart};
 
 use moss_core::ast::{
     grid_parts::TileKind, Block, Document, GridCellParts, GridParts, GridShortcode, RenderHooks, Shortcode,

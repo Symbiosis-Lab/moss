@@ -54,7 +54,7 @@ use crate::build::scan::section_text::{luminance, Rgb, BACKGROUNDS};
 use crate::build::scan::wcag::{contrast_ratio, linear_to_srgb, srgb_to_linear};
 
 /// The colour the words are set in, with no panel behind them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Ink {
     Dark,
     Light,

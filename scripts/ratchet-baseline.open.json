@@ -62,7 +62,7 @@
       "armed": true,
       "value": {
         "crates/moss-build/src": 45,
-        "crates/moss-build/src/build": 80,
+        "crates/moss-build/src/build": 81,
         "crates/moss-build/src/build/media": 21,
         "crates/moss-build/src/deploy": 22,
         "crates/moss-build/src/js-src/bridge": 18,
@@ -125,7 +125,7 @@
         "crates/moss-build/src/build/media/image.rs::dispatch_image_conversions_at": 250,
         "crates/moss-build/src/build/media/video.rs::convert_single_video": 250,
         "crates/moss-build/src/build/media/video.rs::run_video_conversion": 350,
-        "crates/moss-build/src/build/parse_cache.rs::begin": 250,
+        "crates/moss-build/src/build/parse_cache.rs::begin": 300,
         "crates/moss-build/src/build/pipeline.rs::run_notebook_processing": 350,
         "crates/moss-build/src/build/pipeline.rs::build_inner": 650,
         "crates/moss-build/src/build/render/blocking.rs::generate_blocking_content_for_build": 1800,
@@ -149,7 +149,8 @@
         "packages/moss-ui/src/ui/editor/cm-editor.ts::constructor": 250,
         "packages/moss-ui/src/ui/editor/editor-main.ts::init": 550,
         "packages/moss-ui/src/ui/editor/editor-main.ts::loadFileBody": 250,
-        "packages/moss-ui/src/ui/editor/versions-surface.ts::renderVersionsSurface": 400
+        "packages/moss-ui/src/ui/editor/versions-surface.ts::renderVersionsSurface": 400,
+        "crates/moss-build/src/build/parse_cache/persist.rs::split": 250
       },
       "oversized": {
         "crates/moss-build/src/build/render/blocking.rs::generate_blocking_content_for_build": "One function runs the whole blocking build in sequence: source scan, page map, note IDs, content graph and folder languages, theme and assets, the authored page loop, generated term, place and index pages, feeds and sitemap, then the hand-off to the background context; the phases share mutable state (the pending manifest, warnings, source records) instead of passing results. Fix the state model first: give each phase an explicit result (source set, authored pages, generated pages, site files) that the next phase and the background context consume, then split along those results.",
