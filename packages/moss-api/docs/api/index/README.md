@@ -1711,6 +1711,70 @@ carry a `sha256`.
 
 ***
 
+### IdentityProof
+
+```ts
+type IdentityProof = 
+  | {
+  body: string;
+  file: string;
+}
+  | {
+  href: string;
+  link: "me";
+}
+  | {
+  content: string;
+  meta: "fediverse:creator";
+};
+```
+
+One entry of `contributes.identity`: a proof that the site's domain is the
+person's on a network, filled on every build from the plugin's own
+`[services.<plugin>]` table. `{key}` reads a declared setting; on an `acct`
+setting, `{key.user}` and `{key.host}` read its halves.
+
+#### Union Members
+
+##### Type Literal
+
+```ts
+{
+  body: string;
+  file: string;
+}
+```
+
+A file under `.well-known/`. A `.json` body is filled as JSON.
+
+***
+
+##### Type Literal
+
+```ts
+{
+  href: string;
+  link: "me";
+}
+```
+
+A `<link>` in every page's head. The rel is `me`.
+
+***
+
+##### Type Literal
+
+```ts
+{
+  content: string;
+  meta: "fediverse:creator";
+}
+```
+
+A `<meta>` in every page's head. The name is `fediverse:creator`.
+
+***
+
 ### PluginCategory
 
 ```ts
