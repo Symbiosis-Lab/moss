@@ -4,7 +4,8 @@
 //! resolved without an `AppHandle`, the generic warn-at-most-once-per-key
 //! gate shared by every "don't repeat this log line every rebuild" site,
 //! the per-user moss home directory, the cross-process folder build lock,
-//! the calling thread's QoS class on macOS,
+//! the calling thread's QoS class on macOS, the collector for per-version
+//! machine stores,
 //! plus a path alias so the moved tree's `crate::infra::moss_paths::…`
 //! spellings keep resolving to the layout owner at [`crate::moss_paths`].
 //! The rest of the app's `infra` family (state, the config migrations
@@ -12,6 +13,7 @@
 pub mod app_advisory;
 pub mod app_data;
 pub mod atomic_write;
+pub(crate) mod disposable;
 pub(crate) mod edit_distance;
 pub mod folder_lock;
 pub mod home;

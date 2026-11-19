@@ -103,6 +103,9 @@ pub fn install_into(
         let _ = fs::remove_dir_all(&staging);
     }
     outcome?;
+    // Installed, so the archive is not needed again: a reinstall downloads
+    // it. One kept after a failure lets the retry resume.
+    let _ = fs::remove_file(&archive);
     Ok(entry.version.clone())
 }
 
@@ -392,7 +395,8 @@ fn receipt_name(path: &Path) -> String {
 /// Where downloaded archives are kept between attempts.
 ///
 /// App data, not the vault: a half-finished download is moss's business and
-/// resuming it should work whichever folder is open. It is also not something
+/// resuming it should work whichever folder is open. An archive leaves once
+/// its plugin is installed. It is also not something
 /// to sync — the vault's `.moss` is a synced folder for at least one real user.
 fn download_dir() -> Result<PathBuf, String> {
     let dir = crate::infra::app_data::app_data_dir_early()
@@ -793,6 +797,10 @@ mod tests {
 
         let plugin_dir = project.path().join(".moss").join("plugins").join(id);
         assert!(plugin_dir.join("main.js").exists(), "the archive's own files land");
+        assert!(
+            !archive_dir.path().join(format!("{id}-{version}.zip")).exists(),
+            "an installed plugin's archive leaves the download store"
+        );
 
         let receipt = super::super::receipt::read(&plugin_dir)
             .expect("install_into wrote a receipt before the swap, so one is there to read");

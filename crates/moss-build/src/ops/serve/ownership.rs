@@ -17,10 +17,11 @@
 //!   owner, full stop.
 //! * `<moss_home>/servers/<folder-id>.json` — an [`OwnerRecord`] naming the
 //!   current or the last holder: its host kind, pid, version, and the URL
-//!   a client can reach it at. Written on every acquire and never deleted,
-//!   so it is stale from the moment its writer stops — which is why
-//!   [`find_live_owner`] never trusts it alone and always confirms it
-//!   against the URL's own health endpoint.
+//!   a client can reach it at. Written on every acquire and removed when
+//!   the server stops. A killed holder leaves its record behind until the
+//!   next acquire sweeps records whose pid is gone, so a record can still be
+//!   stale, which is why [`find_live_owner`] never trusts it alone and always
+//!   confirms it against the URL's own health endpoint.
 //!
 //! [`acquire`] writes both; [`find_live_owner`] reads only the record and
 //! verifies it over HTTP. A caller that wants the authoritative answer
@@ -118,11 +119,29 @@ pub enum OnConflict {
 /// `acquire` for a folder THIS process already holds upgrades the weak
 /// reference and reuses the held lock instead of attempting — and losing —
 /// a second lock against itself.
-static HELD: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<crate::infra::folder_lock::Held>>>> =
+static HELD: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<Claim>>>> =
     std::sync::OnceLock::new();
 
-fn held() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<crate::infra::folder_lock::Held>>> {
+fn held() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<Claim>>> {
     HELD.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// The owner lock and the record it vouches for. The record goes first, while
+/// the lock is still held, so it can never remove a record the next owner
+/// wrote.
+#[derive(Debug)]
+struct Claim {
+    record: Option<PathBuf>,
+    _lock: crate::infra::folder_lock::Held,
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        if let Some(path) = &self.record {
+            // allow:unlink an owner record under <moss_home>/servers, never staging
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 /// The held owner lock. Dropping the last guard a process holds for a folder
@@ -131,7 +150,7 @@ fn held() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::sy
 pub struct OwnerGuard {
     /// `None` when ownership could not be tracked at all (home directory
     /// unresolvable, lock file unopenable) — see [`acquire`]'s fallback.
-    _lock: Option<std::sync::Arc<crate::infra::folder_lock::Held>>,
+    _lock: Option<std::sync::Arc<Claim>>,
 }
 
 /// Try to become `folder`'s recorded owner, without blocking.
@@ -156,13 +175,22 @@ fn acquire_with_ui(folder: &Path, kind: HostKind, version: String, url: String, 
     let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
     let id = folder_id(&canonical);
     let untracked = || Ok(OwnerGuard { _lock: None });
+    let path = record_path(&canonical);
+    if let Err(e) = &path {
+        log::warn!("could not resolve the owner-record path for {}: {e}", canonical.display());
+    }
 
     let mut table = held().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let lock = match table.get(&id).and_then(std::sync::Weak::upgrade) {
         Some(lock) => lock,
         None => match crate::infra::folder_lock::try_acquire_named(&canonical, OWNER_LOCK) {
             Ok(Some(lock)) => {
-                let lock = std::sync::Arc::new(lock);
+                if let Ok(path) = &path {
+                    if let Some(dir) = path.parent() {
+                        sweep_dead_records(dir, path);
+                    }
+                }
+                let lock = std::sync::Arc::new(Claim { record: path.clone().ok(), _lock: lock });
                 table.insert(id, std::sync::Arc::downgrade(&lock));
                 lock
             }
@@ -184,15 +212,69 @@ fn acquire_with_ui(folder: &Path, kind: HostKind, version: String, url: String, 
         ui_url,
         started_at: crate::system::now_iso(),
     };
-    match record_path(&canonical) {
-        Ok(path) => {
-            if let Err(e) = atomic_write::write_json_atomic(&path, &record) {
-                log::warn!("could not persist the owner record at {}: {e}", path.display());
-            }
+    if let Ok(path) = &path {
+        if let Err(e) = atomic_write::write_json_atomic(path, &record) {
+            log::warn!("could not persist the owner record at {}: {e}", path.display());
         }
-        Err(e) => log::warn!("could not resolve the owner-record path for {}: {e}", canonical.display()),
     }
     Ok(OwnerGuard { _lock: Some(lock) })
+}
+
+/// Removes every record in `dir` but `keep` whose process is gone (a holder
+/// killed before it could remove its own) or that does not parse. A server
+/// start is rare, and once the litter is gone the directory holds one record
+/// per running server, so the pass is synchronous.
+fn sweep_dead_records(dir: &Path, keep: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let mut removed = 0usize;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path == keep || path.extension().is_none_or(|ext| ext != "json") {
+            continue;
+        }
+        let live = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<OwnerRecord>(&text).ok())
+            .is_some_and(|record| pid_alive(record.pid));
+        // allow:unlink a dead owner record under <moss_home>/servers, never staging
+        if !live && std::fs::remove_file(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    if removed > 0 {
+        log::info!("removed {removed} owner records of servers that are gone from {}", dir.display());
+    }
+}
+
+/// A pid reused by an unrelated process reads as alive, which only keeps a
+/// stale record until that process exits too.
+#[cfg(unix)]
+fn pid_alive(pid: u32) -> bool {
+    let Ok(pid) = i32::try_from(pid) else { return false };
+    if pid <= 0 {
+        return false;
+    }
+    // SAFETY: signal 0 delivers nothing; it only checks the pid exists.
+    let signalled = unsafe { libc::kill(pid, 0) == 0 };
+    signalled || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(windows)]
+fn pid_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    // SAFETY: a null handle (no such process) is checked before use, and the
+    // handle is closed once its exit code is read.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return false;
+        }
+        let mut code = 0u32;
+        let read = GetExitCodeProcess(handle, &mut code) != 0;
+        let _ = CloseHandle(handle);
+        read && code == STILL_ACTIVE as u32
+    }
 }
 
 fn read_record(folder: &Path) -> Option<OwnerRecord> {
@@ -575,6 +657,7 @@ mod tests {
         assert!(!on_disk.started_at.is_empty());
 
         drop(owned);
+        assert!(!path.exists(), "a stopped server leaves no record");
         assert!(!owner_lock_path(&canonical).unwrap().exists(), "a released owner lock leaves no file");
         let next = crate::infra::folder_lock::try_acquire_named(&canonical, OWNER_LOCK).unwrap();
         assert!(next.is_some(), "dropping the guard frees the folder");
@@ -632,9 +715,10 @@ mod tests {
         std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
         let foreign = std::fs::OpenOptions::new().read(true).write(true).create(true).open(&lock_path).unwrap();
         foreign.try_lock().expect("the foreign handle must win the uncontended lock");
+        // A live pid, so the start's sweep keeps the record.
         let foreign_record = OwnerRecord {
             folder: canonical.clone(),
-            pid: 777,
+            pid: std::process::id(),
             kind: HostKind::Desktop,
             version: "7.0.0".to_string(),
             url: "http://127.0.0.1:7777".to_string(),
@@ -646,7 +730,7 @@ mod tests {
         let result = acquire(folder.path(), HostKind::Cli, "1.2.3".to_string(), "http://127.0.0.1:9999".to_string());
         result.expect_err("a lock held outside this process's own registry must refuse");
 
-        // The record on disk names pid 777 at an address nothing answers on:
+        // The record on disk names an address nothing answers on:
         // the refusal must not repeat it as the holder.
         std::fs::create_dir_all(folder.path().join(".moss")).unwrap();
         let cell = std::sync::Arc::new(std::sync::RwLock::new(folder.path().join(".moss")));
@@ -664,6 +748,48 @@ mod tests {
         assert_eq!(refusal, "this folder is already served by another moss process");
 
         drop(foreign);
+        std::env::remove_var("MOSS_HOME");
+    }
+
+    /// A killed server cannot remove its record; the next start does, and
+    /// keeps the records of servers still running.
+    #[test]
+    fn a_start_removes_the_records_of_servers_that_are_gone() {
+        let _guard = env_guard();
+        let home = moss_home_dir();
+        std::env::set_var("MOSS_HOME", &home);
+        let gone = tempfile::tempdir().unwrap();
+        let running = tempfile::tempdir().unwrap();
+        let mut exited = std::process::Command::new(std::env::current_exe().unwrap()).arg("--list").stdout(std::process::Stdio::null()).spawn().unwrap();
+        let dead_pid = exited.id();
+        exited.wait().unwrap();
+        let record = |folder: &Path, pid: u32| {
+            let canonical = std::fs::canonicalize(folder).unwrap();
+            let path = record_path(&canonical).unwrap();
+            let record = OwnerRecord {
+                folder: canonical,
+                pid,
+                kind: HostKind::Cli,
+                version: "1.0.0".to_string(),
+                url: "http://127.0.0.1:1".to_string(),
+                ui_url: None,
+                started_at: crate::system::now_iso(),
+            };
+            atomic_write::write_json_atomic(&path, &record).unwrap();
+            path
+        };
+        let gone_record = record(gone.path(), dead_pid);
+        let running_record = record(running.path(), std::process::id());
+        let garbage = home.join("servers").join("garbage.json");
+        std::fs::write(&garbage, "not a record").unwrap();
+
+        let next = tempfile::tempdir().unwrap();
+        let owned = acquire(next.path(), HostKind::Cli, "1.0.0".to_string(), "http://127.0.0.1:2".to_string()).unwrap();
+
+        assert!(!gone_record.exists(), "the record of a server that is gone is removed");
+        assert!(!garbage.exists(), "a record that does not parse is removed");
+        assert!(running_record.exists(), "a running server keeps its record");
+        drop(owned);
         std::env::remove_var("MOSS_HOME");
     }
 
