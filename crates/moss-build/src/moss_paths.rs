@@ -402,7 +402,7 @@ impl MossPaths {
     /// This computer's facts about the folder, keyed by its own paths, stats
     /// and inodes: outside the folder, in its store under the platform cache
     /// directory ([`crate::infra::folder_store::for_folder`]). Deleting it costs
-    /// one hash pass and never changes a page.
+    /// one hash pass and one slot pass over every page, and never changes a page.
     pub fn facts_dir(&self) -> PathBuf {
         crate::infra::folder_store::for_folder(self.project_root()).cache_dir.join("facts")
     }

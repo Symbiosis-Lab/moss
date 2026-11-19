@@ -210,6 +210,45 @@ fn a_build_without_this_computers_facts_publishes_the_same_pages() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Synced files `written` since `before` that the slot pass made: its records
+/// and the page blobs they name.
+fn slot_pass_files(dir: &Path, before: &BTreeMap<String, (u64, i64, i64, u64)>) -> Vec<String> {
+    let moss = dir.join(".moss");
+    let after = synced(dir);
+    after.iter().filter(|(p, s)| before.get(*p) != Some(s)).map(|(p, _)| p)
+        .filter(|rel| {
+            let bytes = fs::read(moss.join(rel)).unwrap_or_default();
+            let head = String::from_utf8_lossy(&bytes[..bytes.len().min(256)]).to_ascii_lowercase();
+            (rel.starts_with("cache/transforms/") && bytes.windows(14).any(|w| w == b"html/slot-page"))
+                || (rel.starts_with("cache/objects/") && head.trim_start().starts_with("<!doctype html"))
+        })
+        .cloned()
+        .collect()
+}
+
+/// The slot pass's page blobs and records are this computer's: a build makes
+/// them again from the folder. A first build leaves none in the synced folder,
+/// and neither does the build after an upgrade, which changes the stylesheet
+/// link on every page (here, the site's own stylesheet changes).
+#[test]
+fn the_slot_pass_writes_nothing_to_the_synced_folder() {
+    let dir = site("slot_pass");
+    let css = dir.join(".moss/theme/style.css");
+    fs::create_dir_all(css.parent().unwrap()).unwrap();
+    fs::write(&css, "body { color: #111; }\n").unwrap();
+    let before = synced(&dir);
+    settle(&dir, false);
+    assert_eq!(slot_pass_files(&dir, &before), Vec::<String>::new(), "first build");
+    let page = || fs::read_to_string(dir.join(".moss/build.nosync/staging/index.html")).expect("the home page");
+    let first_page = page();
+    fs::write(&css, "body { color: #222; }\n").unwrap();
+    let before = synced(&dir);
+    build(&dir, false);
+    assert_ne!(page(), first_page, "the stylesheet link moved, as an upgrade moves it");
+    assert_eq!(slot_pass_files(&dir, &before), Vec::<String>::new(), "upgrade");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// A folder an older moss built keeps this computer's facts in
 /// `build.nosync/cache/`. The next build carries them out of the folder.
 #[test]

@@ -126,10 +126,13 @@ impl ObjectStore {
         Self::for_site(mp).remembering_verified(&mp.cache_verified_video_blobs())
     }
 
-    /// `mp`'s store for one slot pass, so a new process checks only the page and
-    /// summary blobs whose stat moved since an earlier pass read them.
+    /// `mp`'s store for one slot pass: this computer's, since a build makes its
+    /// page and summary blobs again from the folder, and a site store would
+    /// replicate them into the synced cache. Every site store reads it first.
+    /// A new process checks only the blobs whose stat moved since an earlier
+    /// pass read them.
     pub(crate) fn for_slot_pass(mp: &crate::moss_paths::MossPaths) -> Self {
-        Self::for_site(mp).remembering_verified(&mp.cache_verified_slot_blobs())
+        Self::new(mp.cache_local_objects()).remembering_verified(&mp.cache_verified_slot_blobs())
     }
 
     /// `mp`'s store for one asset pass, so an edit or a reopen hashes only the
@@ -707,6 +710,12 @@ impl TransformCache {
     /// through that store: one store checks a blob once.
     pub(crate) fn over(mp: &crate::moss_paths::MossPaths, objects: &ObjectStore) -> Self {
         Self { base: mp.cache_transforms(), objects: objects.clone() }
+    }
+
+    /// The slot pass's records, beside its store
+    /// ([`ObjectStore::for_slot_pass`]) on this computer.
+    pub(crate) fn for_slot_pass(mp: &crate::moss_paths::MossPaths, objects: &ObjectStore) -> Self {
+        Self { base: mp.cache_local_transforms(), objects: objects.clone() }
     }
 
     /// The site's local records and blobs, outside the synced folder. `None` for
