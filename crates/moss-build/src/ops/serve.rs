@@ -220,11 +220,8 @@ fn served_tree_label(current_dir: &std::path::Path) -> String {
     match current_dir.file_name().and_then(|n| n.to_str()) {
         Some("staging") => "staging".to_string(),
         Some("current") => {
-            let id = current_dir
-                .parent()
-                .map(|build| build.join("current.generation"))
-                .and_then(|marker| std::fs::read_to_string(marker).ok())
-                .map(|id| id.trim().to_string())
+            let id = crate::moss_paths::served_folder(current_dir)
+                .and_then(|folder| crate::moss_paths::MossPaths::new(folder.path()).current_generation_id().ok())
                 .unwrap_or_else(|| "unknown".to_string());
             format!("current→gen {id}")
         }

@@ -150,13 +150,11 @@ fn resolved_values(
     values
 }
 
-/// `.moss/build.nosync/inventory.json` — written by the build, read by `moss list`.
-///
-/// Through `MossPaths::build_dir()`, not a bare join: a cloud sync client's
-/// rename-aside mid-build must not send this file to the decoy while the
-/// held root handle already knows where the real one went.
+/// Through `MossPaths`, not a bare join: a cloud sync client's rename-aside
+/// mid-build must not send this file to the decoy while the held root handle
+/// already knows where the real one went.
 pub fn inventory_path(moss_dir: &Path) -> PathBuf {
-    crate::moss_paths::MossPaths::from_moss_dir(moss_dir.to_path_buf()).build_dir().join("inventory.json")
+    crate::moss_paths::MossPaths::from_moss_dir(moss_dir.to_path_buf()).inventory()
 }
 
 /// Why `doc` will not appear in a generated article listing.

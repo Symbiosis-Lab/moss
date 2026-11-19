@@ -340,7 +340,7 @@ pub async fn acquire_async(folder: &Path) -> Option<Held> {
 /// it describes and goes when the folder or its build output does, which is
 /// also when there is nothing left for it to protect.
 pub fn epoch_path_for(folder: &Path) -> PathBuf {
-    crate::moss_paths::MossPaths::new(folder).build_dir().join("promoted.epoch")
+    crate::moss_paths::MossPaths::new(folder).promoted_epoch()
 }
 
 /// The last promotion time recorded for `folder`, or `0` if none has been —

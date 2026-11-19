@@ -750,6 +750,29 @@ impl MossPaths {
         self.build_dir().join("profile.jsonl")
     }
 
+    /// `.moss/build.nosync/site-languages.json`: the site's audiences by
+    /// language, written by each build and read by email.
+    pub fn site_languages(&self) -> PathBuf {
+        self.build_dir().join("site-languages.json")
+    }
+
+    /// `.moss/build.nosync/inventory.json`: written by the build, read by `moss list`.
+    pub fn inventory(&self) -> PathBuf {
+        self.build_dir().join("inventory.json")
+    }
+
+    /// `.moss/build.nosync/promoted.epoch`: when the last promotion happened,
+    /// as other processes see it.
+    pub fn promoted_epoch(&self) -> PathBuf {
+        self.build_dir().join("promoted.epoch")
+    }
+
+    /// `.moss/build.nosync/cache/gc-watermark.json`: the store's size after its
+    /// last sweep.
+    pub fn gc_watermark(&self) -> PathBuf {
+        self.cache_dir().join("gc-watermark.json")
+    }
+
     /// Read the id of the current promoted generation from the marker file.
     pub fn current_generation_id(&self) -> std::io::Result<String> {
         std::fs::read_to_string(self.current_generation_marker()).map(|s| s.trim().to_string())

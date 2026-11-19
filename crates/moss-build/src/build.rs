@@ -556,7 +556,7 @@ fn collect_native_slots_for_documents(
         let sections =
             crate::build::features::email::site_audience_list(Some(site_lang), &pages);
         let meta_path =
-            crate::moss_paths::MossPaths::new(Path::new(folder_path)).build_dir().join("site-languages.json");
+            crate::moss_paths::MossPaths::new(Path::new(folder_path)).site_languages();
         if let Ok(json) = serde_json::to_string(&sections) {
             let _ = crate::build::io_utils::write_output(&meta_path, json.as_bytes());
         }

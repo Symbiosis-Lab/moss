@@ -212,7 +212,7 @@ pub fn stamp_inline_subscribe_scopes(
 /// build resolved for the site; readers that must answer without a build
 /// decide their own fallback.
 pub fn read_site_languages(project_root: &std::path::Path) -> Option<Vec<EmailAudience>> {
-    let path = crate::moss_paths::MossPaths::new(project_root).build_dir().join("site-languages.json");
+    let path = crate::moss_paths::MossPaths::new(project_root).site_languages();
     let raw = std::fs::read_to_string(path).ok()?;
     serde_json::from_str::<Vec<EmailAudience>>(&raw).ok().filter(|list| !list.is_empty())
 }
