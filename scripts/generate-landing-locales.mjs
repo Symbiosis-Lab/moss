@@ -26,6 +26,7 @@ function localize(sourceHtml, locale) {
     return part;
   }).join('');
   result = result.replace(/(<span class="moss-wordmark">)[^<]+/, `$1${target.product}`);
+  result = result.replace(/(<meta property="og:site_name" content=")[^"]+/, `$1${target.product}`);
   const languages = [ ['en', 'EN', 'English', '/'], ['zh-hant', '繁', '繁體中文', '/zh-hant/'], ['zh-hans', '简', '简体中文', '/zh-hans/'] ];
   const nav = `<nav class="language-picker nav-lang-toggle" aria-label="${locale === 'zh-hans' ? '语言' : '語言'}">` + languages.map(([code, label, name, href]) => code === locale
     ? `<span class="nav-lang-current" lang="${code}" aria-label="${name}">${label}</span>`

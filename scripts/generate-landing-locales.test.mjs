@@ -31,7 +31,8 @@ test('locale generation preserves script and style text through HTML end tag var
       for (const locale of ['zh-hans', 'zh-hant']) {
         const output = await readFile(join(root, `site/${locale}/index.html`), 'utf8');
         assert(output.includes(block), `${locale} changed protected text in ${block}`);
-        assert(output.includes(locale === 'zh-hans' ? '你的互联网发布器。' : '你的網路發布器。'), `${locale} did not translate visible text`);
+        assert(output.includes(locale === 'zh-hans' ? '公测期间免费。' : '公測期間免費。'), `${locale} did not translate visible text`);
+        assert(output.includes('<meta property="og:site_name" content="青苔">'), `${locale} shares under the English name`);
       }
     }
   } finally { await rm(root, { recursive: true, force: true }); }

@@ -32,14 +32,18 @@
   query.addEventListener('change', (event) => apply(event.matches));
 })();
 </script>
-<title>青苔 — 從你的資料夾，到你的網站</title>
-<meta name="description" content="發布並擁有自己網站的最簡單方式。">
-<meta property="og:title" content="青苔 — 從你的資料夾，到你的網站">
-<meta property="og:description" content="發布並擁有自己網站的最簡單方式。">
+<title>青苔 — 把你的作品帶到讀者面前</title>
+<meta name="description" content="在資料夾裡寫。按一下就送到你的網站、訂閱者的信箱和你常用的社群平台。">
+<meta property="og:title" content="青苔 — 把你的作品帶到讀者面前">
+<meta property="og:description" content="在資料夾裡寫。按一下就送到你的網站、訂閱者的信箱和你常用的社群平台。">
 <meta property="og:type" content="website">
-<meta property="og:site_name" content="moss">
-<meta name="twitter:card" content="summary">
-<meta name="twitter:description" content="發布並擁有自己網站的最簡單方式。">
+<meta property="og:site_name" content="青苔">
+<meta property="og:image" content="https://mosspub.com/assets/brand/share-zh-hant.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="只管創作。青苔把它帶到讀者面前。">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:description" content="在資料夾裡寫。按一下就送到你的網站、訂閱者的信箱和你常用的社群平台。">
 <!-- landing-discovery:start -->
 <link rel="canonical" href="https://mosspub.com/zh-hant/">
 <link rel="alternate" hreflang="en" href="https://mosspub.com/">
@@ -354,7 +358,7 @@
      headline and links when they cannot run. */
   :is(html:not(.js), html[data-static]) #col { display: none; }
   :is(html:not(.js), html[data-static]) #intro { min-height: 0; padding-block: 100px 32px; }
-  :is(html:not(.js), html[data-static]) #intro h1 { position: static; }
+  :is(html:not(.js), html[data-static]) #intro .intro-in { position: static; }
   :is(html:not(.js), html[data-static]) .page { display: block; margin-top: 0; }
   :is(html:not(.js), html[data-static]) .scene { min-height: 0; padding: 32px 0; }
   :is(html:not(.js), html[data-static]) #five { position: relative; min-height: 100vh; margin-top: 0; opacity: 1; pointer-events: auto; background: #101110; }
@@ -365,7 +369,9 @@
      to the measured desktop composition. The script supplies these variables
      after it knows the viewport and copy heights. */
   #intro { pointer-events: none; display: grid; place-items: start center; min-height: 108svh; padding: 0 32px; text-align: center; }
-  #intro h1 { position: sticky; top: 34svh; margin: 0; font-family: var(--heading); font-weight: 400; max-width: 18ch; font-size: clamp(48px, 6.2vw, 92px); line-height: .98; letter-spacing: -.045em; font-variant-ligatures: none; text-wrap: balance; opacity: 1; }
+  #intro .intro-in { position: sticky; top: 18svh; }
+  #intro h1 { margin: 0 auto; font-family: var(--heading); font-weight: 400; max-width: 18ch; font-size: clamp(48px, min(6.2vw, 10svh), 92px); line-height: .98; letter-spacing: -.045em; font-variant-ligatures: none; text-wrap: balance; opacity: 1; }
+  .intro-lede { max-width: 30em; margin: 28px auto 0; font-size: clamp(17px, 1.4vw, 21px); line-height: 1.5; color: var(--text2); text-wrap: pretty; }
   #title-gl { position: absolute; display: none; pointer-events: none; }
   .page { margin-top: -42svh; }
   .page { grid-template-columns: calc(var(--vis-w) * var(--layout-s, var(--s)) - clamp(168px, calc(23vw - 126px), 238px)) minmax(0, 1fr); }
@@ -441,10 +447,17 @@
     #commands { margin-top: 22px; }
   }
 
+  /* a small phone keeps the title, its line and scene 1's art on one screen */
+  @media (max-width: 360px) {
+    html #intro { padding: 76px 24px 16px; }
+    html .intro-lede { font-size: 15px; margin-top: 12px; }
+  }
   @media (max-width: 900px) {
     body::before { opacity: 1; }
     #intro { min-height: 0; justify-items: start; padding: 88px 34px 32px; }
-    #intro h1 { position: static; text-align: left; font-size: clamp(40px, 11vw, 58px); opacity: 1; }
+    #intro .intro-in { position: static; }
+    #intro h1 { text-align: left; font-size: clamp(34px, 11vw, 58px); opacity: 1; }
+    .intro-lede { margin: 20px 0 0; text-align: left; }
     .page { position: relative; display: block; width: 100%; margin-top: 0; padding: 0 16px; }
     #col { margin-top: 0; position: absolute; inset: 0; height: auto; z-index: 0; pointer-events: none; }
     #copy { position: relative; z-index: 1; min-width: 0; }
@@ -489,7 +502,7 @@
 <nav class="language-picker nav-lang-toggle" aria-label="語言"><a class="nav-lang-link" data-landing-locale="en" hreflang="en" lang="en" aria-label="English" href="/">EN</a><span aria-hidden="true">/</span><span class="nav-lang-current" lang="zh-hant" aria-label="繁體中文">繁</span><span aria-hidden="true">/</span><a class="nav-lang-link" data-landing-locale="zh-hans" hreflang="zh-hans" lang="zh-hans" aria-label="简体中文" href="/zh-hans/">简</a></nav>
 
 
-<header id="intro"><h1>從你的資料夾，<br>到你的網站。</h1></header>
+<header id="intro"><div class="intro-in"><h1>只管創作。<br>青苔把它帶到<br>讀者面前。</h1><p class="intro-lede">在資料夾裡寫。按一下就送到你的網站、訂閱者的信箱和你常用的社群平台。</p></div></header>
 <div class="page">
   <div id="col"><div id="vis"><div id="stage"><div id="cell">
     <!-- Scene 1's plates: built by JS (buildPlates(), in this page's script,
@@ -577,8 +590,8 @@
   <div id="closing-film" aria-hidden="true"><video id="loop" muted playsinline loop preload="none" tabindex="-1"></video><div id="scrim"></div></div>
   <div id="five-in">
     <noscript><style>.signup, [data-copy] { display: none; }</style><p>To subscribe for updates, enable JavaScript. Downloads and installation commands work without it.</p></noscript>
-    <h2 id="five-headline">加入公測。</h2>
-    <p class="closing-lede">網路不只用來瀏覽，也用來創作。這裡是你的網路發布器。</p>
+    <h2 id="five-headline">公測期間免費。</h2>
+    <p class="closing-lede">已經有網站？可以從 Squarespace、WordPress 或 Ghost 搬過來。<br>AI 公司會被告知：不要用你的網站訓練模型。</p>
     <div id="install">
       <div id="downloads" aria-label="下載青苔">
         <div class="download-choice"><a class="moss-btn" data-role="primary" data-platform="macos" data-track="download-macos" href="https://github.com/Symbiosis-Lab/moss/releases/latest/download/moss.dmg">macOS</a><small class="availability">macOS 12 或更新版本</small></div>
@@ -672,7 +685,7 @@ const PUB_SCALE = 2.6, PUB_MS = 420, PUB_BEAT = 120, PUB_OUT_DELAY = 450;
 const arg = (k, d) => new URLSearchParams(location.search).get(k) || d;
 const LOOP_SRC = arg('loopVideo', 'home/scene5-loop/out/v8-press.mp4');
 const LOOP_POSTER = arg('loopPoster', 'home/scene5-loop/out/v8-press-poster.jpg');
-const HEADLINE = arg('headline', 'Join the beta test.');
+const HEADLINE = arg('headline', 'Free during the beta.');
 const SCRIM = 0.72;
 // Only the three creative artifacts move. Their initial positions are
 // measured against the available viewport when Scene 3 opens.
@@ -803,7 +816,7 @@ plateEls.forEach((pl) => { const im = pl.querySelector('img'); im.addEventListen
 let SCALE = 1, baseScale = 1;
 const mobileLayout = () => innerWidth <= 900;
 const opening = document.getElementById('intro');
-const openingTitle = opening.querySelector('h1');
+const openingTitle = opening.querySelector('h1'), openingLede = opening.querySelector('.intro-lede');
 // The title is ink too. On desktop the reader's first scroll lets its ink go into water, in a small
 // simulation of its own over the heading, the way the scenes' ink goes (INK), so the paper is clear
 // by the time scene 1's copy is at rest; a turn back up gathers the title from the same frames. The
@@ -879,6 +892,7 @@ function refitTitle() {
 }
 // u is how far the title has gone, 0 standing and 1 flushed off the sheet.
 function titleDissolve(u) {
+  openingLede.style.opacity = u > 0 ? String(1 - smooth(0, .3, u)) : '';
   if (!titleWash) { openingTitle.style.opacity = titleWash === false ? String(1 - u) : ''; return; }
   const wash = titleWash;
   if (u === wash.drawn) return;   // called every frame; the same place on the page is the same frame
@@ -901,7 +915,7 @@ function titleDissolve(u) {
 function updateOpening() {
   // On phones the opening and first scene are ordinary document flow. Their
   // geometry is established once in fit(); scrolling only moves that flow.
-  if (mobileLayout()) return;
+  if (mobileLayout()) { openingLede.style.opacity = ''; return; }
   const y = scrollY;
   const visible = Math.max(0, opening.getBoundingClientRect().bottom);
   const introP = Math.min(1, visible / Math.max(1, opening.offsetHeight));
@@ -916,7 +930,9 @@ function updateOpening() {
   const introScale = .4 + .1 * clamp01((innerHeight - 720) / 480);
   SCALE = baseScale * (1 - (1 - introScale) * stageIntroP);
   setRootVar('--s', String(SCALE));
+  // reduced motion: no ink, the opening simply fades as the copy arrives under it
   if (!reduce) titleDissolve(1 - titleP);
+  else openingTitle.style.opacity = openingLede.style.opacity = titleP < 1 ? String(smooth(.7, 1, titleP)) : '';
   // CSS pins the visual from the document opening. Only the intro moves it;
   // once titleP is zero there is no scroll-position compensation to chase.
   const pageStart = parseFloat(document.documentElement.style.getPropertyValue('--page-start')) || 0;

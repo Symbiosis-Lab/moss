@@ -4,7 +4,7 @@ export const escapeHtml = (value) => value.replaceAll('&', '&amp;').replaceAll('
 // Catalog strings a landing page must carry in its markup with no script run.
 // Narrower than the catalog: the rest are set at runtime (form status, link
 // titles) or live in attributes a text scan can't judge.
-export const STATIC_COPY = ['title', 'description', 'intro', 'h1', 'b1', 'h2', 'b2', 'h3', 'b3', 'h4', 'b4', 'start', 'editor', 'theme', 'media', 'requestType', 'plugin', 'registry', 'closeH', 'closeB', 'download', 'macNote', 'soon', 'install', 'copy', 'betaH', 'betaB', 'email', 'request', 'privacy'];
+export const STATIC_COPY = ['title', 'description', 'intro', 'introB', 'h1', 'b1', 'h2', 'b2', 'h3', 'b3', 'h4', 'b4', 'start', 'editor', 'theme', 'media', 'requestType', 'plugin', 'registry', 'closeH', 'closeB', 'download', 'macNote', 'cliNote', 'install', 'copy', 'betaH', 'betaB', 'email', 'request', 'privacy'];
 
 /** The STATIC_COPY keys whose string is in neither raw nor escaped form in `html`. */
 export function missingStaticCopy(html, catalog) {
