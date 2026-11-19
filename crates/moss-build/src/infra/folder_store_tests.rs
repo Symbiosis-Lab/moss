@@ -76,11 +76,13 @@ fn a_renamed_folder_keeps_its_store_and_id() {
     let site = w.site("blog");
     let before = stores.resolve(&site).unwrap();
     mark(&before);
+    std::fs::write(before.record_dir.join("comment-sync-state.json"), "{}").unwrap();
     let renamed = site.with_file_name("journal");
     std::fs::rename(&site, &renamed).unwrap();
     let after = stores.resolve(&renamed).unwrap();
     assert_eq!(after.id, before.id);
     assert!(marked(&after), "the cache moved with the record");
+    assert!(after.record_dir.join("comment-sync-state.json").exists(), "a kept fact moved with the record");
     assert!(!before.cache_dir.exists());
 }
 

@@ -44,6 +44,9 @@ pub struct FolderStore {
     pub id: String,
     /// Disposable: anything here can be rebuilt from the folder.
     pub cache_dir: PathBuf,
+    /// This computer's facts about the folder, kept across a cache purge and
+    /// moved with the folder on a rename.
+    pub record_dir: PathBuf,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -75,6 +78,24 @@ impl FolderStores {
     /// may be inside a synced folder.
     pub fn new(record_root: PathBuf, cache_root: PathBuf) -> Self {
         Self::with_volume_lookup(record_root, cache_root, volume_of)
+    }
+
+    /// The running app's stores for `folder`: records under its non-roaming
+    /// root, caches under the platform cache directory, both named by its
+    /// identifier. A folder under the system temporary directory, and every
+    /// folder a test binary opens, gets stores under the temporary directory
+    /// instead: tests build there, and a test, or the binary one spawns, must
+    /// never fill real app data.
+    pub fn running_for(folder: &Path) -> Option<Self> {
+        let temp = std::env::temp_dir();
+        let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        if crate::infra::app_data::in_test_binary() || canonical(folder).starts_with(canonical(&temp)) {
+            let root = temp.join("moss-folder-stores");
+            return Some(Self::new(root.join("records"), root.join("caches")));
+        }
+        let local = crate::infra::app_data::AppRoots::running()?.local;
+        let caches = dirs::cache_dir()?.join(local.file_name()?).join("folders");
+        Some(Self::new(local.join("folders"), caches))
     }
 
     pub(crate) fn with_volume_lookup(
@@ -140,7 +161,7 @@ impl FolderStores {
             },
         };
         self.write(&name, &record)?;
-        Ok(FolderStore { id: record.id, cache_dir: self.cache_root.join(&name) })
+        Ok(FolderStore { id: record.id, cache_dir: self.cache_root.join(&name), record_dir: self.record_root.join(&name) })
     }
 
     /// The one store whose folder is gone from this folder's volume and whose
