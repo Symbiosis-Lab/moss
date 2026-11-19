@@ -136,7 +136,7 @@ pub(crate) struct Admission {
 }
 
 /// The carrier a local moss process reaches, and the folder whose token it holds.
-pub(crate) type Carrier = (super::invoke::InvokeCtx, std::sync::Arc<std::sync::RwLock<std::path::PathBuf>>);
+pub(crate) type Carrier = (super::invoke::InvokeCtx, crate::moss_paths::ServedCell);
 
 /// What admits a request to a preview that has a public URL: a signed-in
 /// browser's session, or the carrier token a local moss process reads from

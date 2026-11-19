@@ -865,7 +865,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
         .host
         .site_dir
         .clone()
-        .unwrap_or_else(|| std::sync::Arc::new(std::sync::RwLock::new(initial_serve_dir.clone())));
+        .unwrap_or_else(|| crate::moss_paths::Served::of(&lifecycle_paths, initial_serve_dir.clone()).into_cell());
     let standalone_state = SiteDirectoryState { current_dir: shared_dir };
     // Points the cell here only if it names nothing or another folder: every
     // later move belongs to `lifecycle`, which never steps the preview back to

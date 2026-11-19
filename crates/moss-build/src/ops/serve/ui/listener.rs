@@ -122,7 +122,7 @@ pub(crate) fn router(
     port: u16,
     preview_port: u16,
     ctx: Option<InvokeCtx>,
-    site_dir: Arc<RwLock<PathBuf>>,
+    site_dir: crate::moss_paths::ServedCell,
     kind: super::super::ownership::HostKind,
     notify: Arc<tokio::sync::Notify>,
 ) -> Result<Router, String> {

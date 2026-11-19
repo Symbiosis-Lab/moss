@@ -272,7 +272,7 @@ use axum::{
 /// `super::yield_route`), which need the same 401 and no body at all.
 pub(crate) async fn require_carrier_token(
     ctx: super::invoke::InvokeCtx,
-    site_dir: Arc<RwLock<PathBuf>>,
+    site_dir: crate::moss_paths::ServedCell,
     mut request: Request<Body>,
     next: axum::middleware::Next,
 ) -> Response {
@@ -324,7 +324,7 @@ pub(crate) async fn require_carrier_token(
 /// same check directly rather than growing a second token comparison.
 pub(crate) fn admit(
     ctx: &super::invoke::InvokeCtx,
-    site_dir: &Arc<RwLock<PathBuf>>,
+    site_dir: &crate::moss_paths::ServedCell,
     request: &Request<Body>,
 ) -> Result<Arc<super::invoke::Session>, Response> {
     // Bind BEFORE comparing: across a folder switch the presented token must
@@ -365,7 +365,7 @@ pub(crate) fn unauthorized() -> Response {
 /// Token gate for `GET /__moss/events` — [`admit`] and nothing else.
 pub(crate) async fn require_carrier_token_only(
     ctx: super::invoke::InvokeCtx,
-    site_dir: Arc<RwLock<PathBuf>>,
+    site_dir: crate::moss_paths::ServedCell,
     mut request: Request<Body>,
     next: axum::middleware::Next,
 ) -> Response {

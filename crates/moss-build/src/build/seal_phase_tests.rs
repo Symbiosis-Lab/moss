@@ -30,7 +30,7 @@ struct Vault {
     folder_key: String,
     mp: crate::moss_paths::MossPaths,
     session: Arc<FolderSession>,
-    served: Arc<RwLock<std::path::PathBuf>>,
+    served: crate::moss_paths::ServedCell,
     _record: Arc<crate::build::lifecycle::LifecycleCell>,
 }
 
@@ -53,7 +53,7 @@ impl Vault {
         let mp = crate::moss_paths::MossPaths::new(&folder);
         let record = crate::build::lifecycle::lock_for(&mp);
         std::fs::write(folder.join("index.md"), "---\ntitle: Home\n---\n\nv0\n").unwrap();
-        Self { _serial: serial, _tmp: tmp, folder, folder_key, mp, session, served: Arc::new(RwLock::new(std::path::PathBuf::new())), _record: record }
+        Self { _serial: serial, _tmp: tmp, folder, folder_key, mp, session, served: crate::moss_paths::Served::test_cell(std::path::PathBuf::new()), _record: record }
     }
 
     /// One long-lived-arm build (`exits_after_build: false`, a real
@@ -466,11 +466,11 @@ async fn selected_page_with_late_copied_local_stylesheet_becomes_servable() {
     vault.drained().await;
     assert!(vault.mp.staging_dir().join("critical.css").is_file(), "deferred copy must land before the seal projection");
     assert!(std::fs::read_to_string(vault.mp.staging_dir().join("index.html")).unwrap().contains("critical.css"));
-    assert_eq!(*vault.served.read().unwrap(), vault.mp.staging_dir(), "the ready stage should be revealed before the materialize debounce");
+    assert_eq!(vault.served.read().unwrap().dir, vault.mp.staging_dir(), "the ready stage should be revealed before the materialize debounce");
     crate::build::seal_phase::settle(&vault.mp).await;
 
     assert!(vault.mp.current_generation_id().is_ok(), "a complete selected page should promote");
-    assert_eq!(*vault.served.read().unwrap(), vault.mp.staging_dir(), "the late-ready latest render should be revealed");
+    assert_eq!(vault.served.read().unwrap().dir, vault.mp.staging_dir(), "the late-ready latest render should be revealed");
 }
 
 /// The selected page cannot promote a generation while its linked local CSS

@@ -39,7 +39,7 @@ fn status(port: u16, path: &str) -> u16 {
 }
 
 fn empty_cell() -> ServedCell {
-    Arc::new(RwLock::new(PathBuf::new()))
+    Served::test_cell(PathBuf::new())
 }
 
 #[test]
@@ -50,19 +50,19 @@ fn incomplete_rebuild_uses_immutable_current_then_ready_stage() {
     let cell = empty_cell();
     let _record = adopt_server(&mp, &cell);
     show_render(&mp, true);
-    assert_eq!(read(&cell), mp.staging_dir());
+    assert_eq!(read(&cell).dir, mp.staging_dir());
     assert!(park_for_rebuild(&mp, false, Default::default()).is_none());
 
     protect_current_before_rebuild(&mp);
     std::fs::write(mp.staging_dir().join("article/index.html"), "<html>partial</html>").unwrap();
-    assert_eq!(read(&cell), mp.current_ptr());
-    assert_eq!(std::fs::read_to_string(read(&cell).join("article/index.html")).unwrap(), "<html>complete article</html>");
+    assert_eq!(read(&cell).dir, mp.current_ptr());
+    assert_eq!(std::fs::read_to_string(read(&cell).dir.join("article/index.html")).unwrap(), "<html>complete article</html>");
 
     // Admitting another folder must not evict this active build's record.
     let unrelated = tempfile::tempdir().unwrap();
     let _ = lock_for(&MossPaths::new(unrelated.path()));
     show_render(&mp, true);
-    assert_eq!(read(&cell), mp.staging_dir());
+    assert_eq!(read(&cell).dir, mp.staging_dir());
 }
 
 #[test]
@@ -74,7 +74,7 @@ fn late_ready_render_is_revealed_once_and_stale_tails_cannot_switch_stage() {
     let unrelated = tempfile::tempdir().unwrap();
     let _ = lock_for(&MossPaths::new(unrelated.path()));
     assert!(first.reveal_if_latest());
-    assert_eq!(read(&cell), mp.staging_dir());
+    assert_eq!(read(&cell).dir, mp.staging_dir());
     assert!(!first.reveal_if_latest(), "the same tail must not reannounce its render");
 
     let newer = show_render(&mp, false).0;
@@ -92,13 +92,13 @@ fn late_ready_tail_cannot_repoint_shared_cell_after_another_folder_adopts_it() {
 
     let _ = adopt_server(&mp_a, &cell);
     let render_a = show_render(&mp_a, false).0;
-    assert_eq!(read(&cell), mp_a.initial_serve_dir());
+    assert_eq!(read(&cell).dir, mp_a.initial_serve_dir());
 
     let _ = adopt_server(&mp_b, &cell);
-    let served_b = read(&cell);
+    let served_b = read(&cell).dir;
     assert!(served_b.starts_with(&mp_b.build_dir()));
     assert!(!render_a.reveal_if_latest());
-    assert_eq!(read(&cell), served_b, "a stale folder tail must leave the new folder's shared cell untouched");
+    assert_eq!(read(&cell).dir, served_b, "a stale folder tail must leave the new folder's shared cell untouched");
 }
 
 /// A withheld render leaves the preview where the park put it, and the next
@@ -118,11 +118,11 @@ async fn a_withheld_render_is_never_shown_and_its_workers_block_the_next_sweep()
 
     let build2 = cache_write_lease(&mp);
     assert!(park_for_rebuild(&mp, true, Default::default()).is_some(), "render 1 is on current, so build 2 may sweep");
-    assert_eq!(read(&cell), mp.current_ptr());
+    assert_eq!(read(&cell).dir, mp.current_ptr());
     stage_page(&mp, "only-in-render-2");
     let (_, announced) = show_render(&mp, false);
 
-    assert_eq!(read(&cell), mp.current_ptr(), "a withheld render must not be shown");
+    assert_eq!(read(&cell).dir, mp.current_ptr(), "a withheld render must not be shown");
     assert_eq!(snapshot(&mp).0, Some(r1.seq()));
     assert_eq!(announced, Some(mp.current_ptr()), "and the served tree announced is current");
     let (port, _, stop) = serve(&cell, 63100).await;
@@ -132,7 +132,7 @@ async fn a_withheld_render_is_never_shown_and_its_workers_block_the_next_sweep()
 
     let build3 = cache_write_lease(&mp);
     assert!(park_for_rebuild(&mp, true, Default::default()).is_none(), "build 2's workers are still writing staging");
-    assert_eq!(read(&cell), mp.current_ptr());
+    assert_eq!(read(&cell).dir, mp.current_ptr());
     drop(build2);
     assert!(park_for_rebuild(&mp, true, Default::default()).is_some(), "and once they have joined, build 3 may sweep");
     drop(build3);
@@ -156,19 +156,19 @@ async fn render_numbers_from_before_this_record_are_never_compared() {
     stage_page(&mp, "fresh");
     let cell = empty_cell();
     let _record = adopt_server(&mp, &cell);
-    assert_eq!(read(&cell), mp.current_ptr());
+    assert_eq!(read(&cell).dir, mp.current_ptr());
     assert_eq!(snapshot(&mp).0, None);
     assert!(park_for_rebuild(&mp, false, Default::default()).is_some());
-    assert_eq!(read(&cell), mp.current_ptr());
+    assert_eq!(read(&cell).dir, mp.current_ptr());
 
     // (b)
     let (_tmp_b, mp_b) = vault(&[("g1", "old")]);
     mp_b.set_current_ptr("g1").unwrap();
     stage_page(&mp_b, "fresh");
-    let cell_b: ServedCell = Arc::new(RwLock::new(mp_b.staging_dir()));
+    let cell_b: ServedCell = crate::moss_paths::Served::test_cell(mp_b.staging_dir());
     let _record_b = adopt_server(&mp_b, &cell_b);
     assert!(park_for_rebuild(&mp_b, false, Default::default()).is_none(), "an unnumbered render on staging is no licence");
-    assert_eq!(read(&cell_b), mp_b.staging_dir());
+    assert_eq!(read(&cell_b).dir, mp_b.staging_dir());
     let (port, _, stop) = serve(&cell_b, 63200).await;
     assert_eq!(status(port, "fresh/"), 200);
     let _ = stop.send(());
@@ -180,9 +180,9 @@ async fn render_numbers_from_before_this_record_are_never_compared() {
     let _record_c = adopt_server(&mp_c, &cell_c);
     show_render(&mp_c, true);
     let _ = adopt_server(&mp_c, &cell_c);
-    assert_eq!(read(&cell_c), mp_c.staging_dir(), "the second build must not pull the preview off render 1");
+    assert_eq!(read(&cell_c).dir, mp_c.staging_dir(), "the second build must not pull the preview off render 1");
     assert!(park_for_rebuild(&mp_c, false, Default::default()).is_none());
-    assert_eq!(read(&cell_c), mp_c.staging_dir());
+    assert_eq!(read(&cell_c).dir, mp_c.staging_dir());
 }
 
 /// Another folder's first lookup between a build's adoption and its render
@@ -193,13 +193,13 @@ fn the_adopted_record_keeps_the_cell_through_a_folder_switch() {
     mp.set_current_ptr("g1").unwrap();
     let cell = empty_cell();
     let _record = adopt_server(&mp, &cell);
-    assert_eq!(read(&cell), mp.current_ptr());
+    assert_eq!(read(&cell).dir, mp.current_ptr());
 
     let unrelated = tempfile::tempdir().unwrap();
     let _ = lock_for(&MossPaths::new(unrelated.path()));
     let _permit = park_for_rebuild(&mp, false, Default::default());
     show_render(&mp, true);
-    assert_eq!(read(&cell), mp.staging_dir(), "the preview shows this render");
+    assert_eq!(read(&cell).dir, mp.staging_dir(), "the preview shows this render");
 }
 
 /// A record something still holds survives a folder switch; an idle one is
@@ -366,4 +366,17 @@ fn a_render_check_outlives_another_folders_first_lookup() {
     assert!(render.is_latest(), "no other render was admitted, whatever other folders did");
     show_render(&mp, false);
     assert!(!render.is_latest(), "a newer render supersedes it");
+}
+
+#[test]
+fn a_build_keeps_a_cell_on_its_own_folder_and_takes_one_from_another() {
+    let (_tmp_a, mp_a) = vault(&[("g1", "a")]);
+    mp_a.set_current_ptr("g1").unwrap();
+    let (_tmp_b, mp_b) = vault(&[("g1", "b")]);
+    mp_b.set_current_ptr("g1").unwrap();
+    let cell = Served::of(&mp_a, mp_a.staging_dir()).into_cell();
+    let _a = adopt_server(&mp_a, &cell);
+    assert_eq!(read(&cell), Served::of(&mp_a, mp_a.staging_dir()), "its own folder's cell is left where it is");
+    let _b = adopt_server(&mp_b, &cell);
+    assert_eq!(read(&cell), Served::of(&mp_b, mp_b.current_ptr()), "another folder's cell is pointed here");
 }

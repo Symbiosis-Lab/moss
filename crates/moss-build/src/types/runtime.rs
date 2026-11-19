@@ -31,7 +31,7 @@ pub struct ServerHandle {
     pub shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
     /// Shared directory pointer — the server reads this on every request.
     /// Updating this switches which directory the server serves (zero-flicker).
-    pub site_dir: std::sync::Arc<std::sync::RwLock<std::path::PathBuf>>,
+    pub site_dir: crate::moss_paths::ServedCell,
     /// The HTTP command carrier mounted on this server, if any. Switch the
     /// served directory through [`ServerHandle::point_at`] (defined beside
     /// the carrier's session, `ops::serve::session`) so the carrier rebinds
@@ -122,31 +122,27 @@ impl std::fmt::Debug for ServerState {
 /// - Writers (rebuild) get exclusive access for the brief switch
 #[derive(Debug)]
 pub struct SiteDirectoryState {
-    /// Current directory the server should serve files from.
-    /// Updated atomically during rebuilds to switch between staging and `current`.
-    pub current_dir: std::sync::Arc<std::sync::RwLock<std::path::PathBuf>>,
+    /// The folder and directory the server serves files from. The build
+    /// switches the directory between staging and `current`.
+    pub current_dir: crate::moss_paths::ServedCell,
 }
 
 impl SiteDirectoryState {
-    /// Create a new state with the given initial directory
-    pub fn new(initial_dir: std::path::PathBuf) -> Self {
-        Self {
-            current_dir: std::sync::Arc::new(std::sync::RwLock::new(initial_dir)),
-        }
+    pub fn new(initial: crate::moss_paths::Served) -> Self {
+        Self { current_dir: initial.into_cell() }
     }
 
-    /// Switch to a new directory (atomic from server's perspective).
+    /// Switch to a new folder or directory (atomic from server's perspective).
     ///
-    /// Returns whether the directory actually changed. Callers log the switch,
-    /// and the `initial-build-complete` listener that drives it fires on every
-    /// rebuild rather than only the first — so without this it announced 63
-    /// switches in one session's log, none of which moved anything.
-    pub fn switch_to(&self, new_dir: std::path::PathBuf) -> bool {
+    /// Returns whether anything changed. Callers log the switch, and the
+    /// `initial-build-complete` listener that drives it fires on every rebuild,
+    /// not only the first.
+    pub fn switch_to(&self, to: crate::moss_paths::Served) -> bool {
         let mut current = self.current_dir.write().unwrap();
-        if *current == new_dir {
+        if *current == to {
             return false;
         }
-        *current = new_dir;
+        *current = to;
         true
     }
 }
@@ -708,7 +704,7 @@ mod tests {
         ServerHandle {
             port,
             shutdown_tx: Some(tx),
-            site_dir: std::sync::Arc::new(std::sync::RwLock::new(std::path::PathBuf::new())),
+            site_dir: crate::moss_paths::Served::test_cell(std::path::PathBuf::new()),
             carrier: None,
         }
     }
@@ -758,7 +754,7 @@ mod tests {
         let mut handle = ServerHandle {
             port: 8080,
             shutdown_tx: Some(tx),
-            site_dir: std::sync::Arc::new(std::sync::RwLock::new(std::path::PathBuf::new())),
+            site_dir: crate::moss_paths::Served::test_cell(std::path::PathBuf::new()),
             carrier: None,
         };
 
@@ -811,10 +807,12 @@ mod tests {
     #[test]
     fn test_server_handle_site_dir_update() {
         let handle = test_handle(8080);
-        handle.point_at(std::path::PathBuf::from("/new/path"));
-        // Verify the update is visible
-        let dir = handle.site_dir.read().unwrap();
-        assert_eq!(*dir, std::path::PathBuf::from("/new/path"));
+        let to = crate::moss_paths::Served {
+            folder: crate::vault_root::VaultRoot::resolve("/new"),
+            dir: std::path::PathBuf::from("/new/path"),
+        };
+        handle.point_at(to.clone());
+        assert_eq!(*handle.site_dir.read().unwrap(), to);
     }
 
     #[test]
@@ -835,11 +833,17 @@ mod tests {
     // SiteDirectoryState Tests
     // =========================================
 
+    /// A cell value on `dir`, in the folder its `.moss` names.
+    fn served(dir: &str) -> crate::moss_paths::Served {
+        let folder = dir.split("/.moss").next().unwrap();
+        crate::moss_paths::Served { folder: crate::vault_root::VaultRoot::resolve(folder), dir: dir.into() }
+    }
+
     #[test]
     fn test_site_directory_state_new() {
-        let state = SiteDirectoryState::new(std::path::PathBuf::from("/folder_a/.moss/build.nosync/current"));
+        let state = SiteDirectoryState::new(served("/folder_a/.moss/build.nosync/current"));
         let current = state.current_dir.read().unwrap();
-        assert_eq!(*current, std::path::PathBuf::from("/folder_a/.moss/build.nosync/current"));
+        assert_eq!(*current, served("/folder_a/.moss/build.nosync/current"));
     }
 
     #[test]
@@ -847,20 +851,20 @@ mod tests {
         // Behavior: When switching from folder A to folder B, the server should
         // continue running but serve content from folder B's active generation.
         // This is used for zero-flicker folder switching without restarting servers.
-        let state = SiteDirectoryState::new(std::path::PathBuf::from("/folder_a/.moss/build.nosync/current"));
+        let state = SiteDirectoryState::new(served("/folder_a/.moss/build.nosync/current"));
 
         // Switch to folder B
-        assert!(state.switch_to(std::path::PathBuf::from("/folder_b/.moss/build.nosync/current")));
+        assert!(state.switch_to(served("/folder_b/.moss/build.nosync/current")));
         // Re-switching to the same directory is not a switch. The caller logs
         // off this, and its `initial-build-complete` listener fires on every
         // rebuild — 63 announced switches in one session's log, none of which
         // moved anything.
-        assert!(!state.switch_to(std::path::PathBuf::from("/folder_b/.moss/build.nosync/current")));
+        assert!(!state.switch_to(served("/folder_b/.moss/build.nosync/current")));
 
         let current = state.current_dir.read().unwrap();
         assert_eq!(
             *current,
-            std::path::PathBuf::from("/folder_b/.moss/build.nosync/current"),
+            served("/folder_b/.moss/build.nosync/current"),
             "After switch_to, server should serve folder_b content"
         );
     }
@@ -869,19 +873,19 @@ mod tests {
     fn test_site_directory_state_switch_preserves_arc() {
         // Behavior: The Arc should remain the same after switching, allowing
         // the server to pick up the new directory on next request without restart.
-        let state = SiteDirectoryState::new(std::path::PathBuf::from("/initial"));
+        let state = SiteDirectoryState::new(served("/initial"));
 
         // Get a clone of the Arc (simulating what the server would hold)
         let server_ref = state.current_dir.clone();
 
         // Switch directories
-        state.switch_to(std::path::PathBuf::from("/switched"));
+        state.switch_to(served("/switched"));
 
         // Server's reference should see the new directory
         let server_sees = server_ref.read().unwrap();
         assert_eq!(
             *server_sees,
-            std::path::PathBuf::from("/switched"),
+            served("/switched"),
             "Server's Arc reference should see the switched directory"
         );
     }

@@ -12,7 +12,7 @@
 //! race against the pipeline's own timing.
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::Mutex;
 
 struct Capture {
     lines: Mutex<Vec<String>>,
@@ -108,9 +108,9 @@ async fn a_rename_aside_mid_build_still_promotes_under_the_renamed_directory() {
     let renamed_dir = build_dir.with_file_name("build 2");
     *CAPTURE.swap_at_start.lock().unwrap() = Some(build_dir.clone());
 
-    // The same Arc the build moves, so the server started below reads
+    // The same cell the build moves, so the server started below reads
     // wherever the build actually put its output.
-    let served = Arc::new(RwLock::new(PathBuf::new()));
+    let served = moss_build::moss_paths::Served::of(&moss_build::moss_paths::MossPaths::new(&folder), PathBuf::new()).into_cell();
     let mut host = cli_host_ports(&folder_str);
     host.site_dir = Some(served.clone());
 

@@ -15,15 +15,16 @@ pub(super) struct RecordedOriginal {
 
 /// Read source identities only from evidence bound to the selected generation.
 pub(super) async fn recorded_original(
-    root: &Path, url: &str,
+    served: &crate::moss_paths::Served, url: &str,
 ) -> Option<RecordedOriginal> {
-    let root = root.canonicalize().ok()?;
-    let vault = crate::moss_paths::served_folder(&root)?;
-    let mp = crate::moss_paths::MossPaths::from_moss_dir(vault.path().join(".moss"));
+    let root = served.dir.canonicalize().ok()?;
+    let mp = crate::moss_paths::MossPaths::from_moss_dir(served.folder.path().join(".moss"));
     let generation = root.file_name()?.to_str()?.to_string();
     if mp.sealed_generation_dir(&generation)? != root { return None; }
-    contained_candidate(mp.project_root(), &crate::build::manifest::preview_originals::receipt_path(&mp.generations_dir(), &generation))?;
-    let hashes = contained_candidate(mp.project_root(), &mp.hashes())?;
+    // The output lives in the build root, which need not be inside the folder.
+    let output = mp.build_dir();
+    contained_candidate(&output, &crate::build::manifest::preview_originals::receipt_path(&mp.generations_dir(), &generation))?;
+    let hashes = contained_candidate(&output, &mp.hashes())?;
     let generations = mp.generations_dir();
     let url = url.to_string();
     let read = tokio::task::spawn_blocking(move || {
@@ -200,10 +201,9 @@ mod tests;
 
 /// Compare resolved generation directories, not path names: a server may hold
 /// either the `current` symlink or the generation it names.
-pub(super) fn serves_current(root: &Path) -> bool {
-    let Some(vault) = crate::moss_paths::served_folder(root) else { return false; };
-    let current = crate::moss_paths::MossPaths::from_moss_dir(vault.path().join(".moss")).current_ptr();
-    matches!((root.canonicalize(), current.canonicalize()), (Ok(a), Ok(b)) if a == b)
+pub(super) fn serves_current(served: &crate::moss_paths::Served) -> bool {
+    let current = crate::moss_paths::MossPaths::from_moss_dir(served.folder.path().join(".moss")).current_ptr();
+    matches!((served.dir.canonicalize(), current.canonicalize()), (Ok(a), Ok(b)) if a == b)
 }
 
 /// Find a unique original output in the selected generation. The URL is

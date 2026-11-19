@@ -1108,10 +1108,61 @@ pub fn is_materialized_rel(rel: &str) -> bool {
     }
 }
 
-/// The site folder a preview server's served directory belongs to: the one
-/// place serve and its callers turn a served directory back into a folder.
-pub fn served_folder(dir: &Path) -> Option<crate::vault_root::VaultRoot> {
-    crate::vault_root::VaultRoot::find_containing(dir)
+/// What a preview server serves: a site folder, and the directory of that
+/// folder's output it reads files from. The folder is never derived from the
+/// directory, which need not lie inside it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Served {
+    pub folder: crate::vault_root::VaultRoot,
+    pub dir: PathBuf,
+}
+
+/// The cell a preview server reads per request and the build re-points.
+pub type ServedCell = std::sync::Arc<std::sync::RwLock<Served>>;
+
+impl Served {
+    /// `dir` of the folder `mp` belongs to.
+    pub fn of(mp: &MossPaths, dir: PathBuf) -> Self {
+        Self { folder: Self::folder_of(mp), dir }
+    }
+
+    /// The folder as every cell names it, so two cells for one folder compare equal.
+    pub fn folder_of(mp: &MossPaths) -> crate::vault_root::VaultRoot {
+        crate::vault_root::VaultRoot::resolve(mp.project_root())
+    }
+
+    /// The folder's first directory to serve: `current`, else staging.
+    pub fn initial(mp: &MossPaths) -> Self {
+        Self::of(mp, mp.initial_serve_dir())
+    }
+
+    pub fn into_cell(self) -> ServedCell {
+        std::sync::Arc::new(std::sync::RwLock::new(self))
+    }
+}
+
+#[cfg(test)]
+impl Served {
+    /// A test's cell on `dir`, naming the folder that holds it, else `dir`
+    /// itself; an empty `dir` names a folder no test builds.
+    pub(crate) fn test_cell(dir: impl Into<PathBuf>) -> ServedCell {
+        Self::test(dir).into_cell()
+    }
+
+    /// [`Self::test_cell`]'s value, for a test that hands one to a cell it already holds.
+    pub(crate) fn test(dir: impl Into<PathBuf>) -> Self {
+        let dir = dir.into();
+        let folder = if dir.as_os_str().is_empty() {
+            crate::vault_root::VaultRoot::resolve("/moss-test/no-folder")
+        } else {
+            // By the `.moss` in the path first: a fresh test folder has none on disk yet.
+            let holder = dir.ancestors().find(|a| a.file_name() == Some(".moss".as_ref())).and_then(Path::parent); // allow:root-name a test spelled the path
+            holder.map(crate::vault_root::VaultRoot::resolve)
+                .or_else(|| crate::vault_root::VaultRoot::find_containing(&dir))
+                .unwrap_or_else(|| crate::vault_root::VaultRoot::resolve(&dir))
+        };
+        Self { folder, dir }
+    }
 }
 
 /// Delete the output roots older moss versions wrote, and unblock `current`.
@@ -1446,23 +1497,6 @@ mod tests {
 
     fn make_paths(root: &std::path::Path) -> MossPaths {
         MossPaths::new(root)
-    }
-
-    #[test]
-    fn a_served_generation_belongs_to_its_folder() {
-        let tmp = TempDir::new().unwrap();
-        let folder = tmp.path().canonicalize().unwrap();
-        let generation = make_paths(&folder).generation_dir("g1");
-        std::fs::create_dir_all(&generation).unwrap();
-        assert_eq!(served_folder(&generation).map(|v| v.path().to_path_buf()), Some(folder));
-    }
-
-    #[test]
-    fn a_served_dir_in_no_folder_belongs_to_none() {
-        let tmp = TempDir::new().unwrap();
-        let loose = tmp.path().join("site");
-        std::fs::create_dir_all(&loose).unwrap();
-        assert!(served_folder(&loose).is_none());
     }
 
     /// An older moss kept this computer's facts in `build.nosync/cache/`. They

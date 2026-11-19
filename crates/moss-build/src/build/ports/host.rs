@@ -86,7 +86,7 @@ pub struct HostPorts {
     /// the build drives the SAME Arc the preview server reads (C3 /
     /// regression cce38aa0fc). `None` → the build mints a fresh cell and
     /// hands it to `launch_server`.
-    pub site_dir: Option<Arc<std::sync::RwLock<std::path::PathBuf>>>,
+    pub site_dir: Option<crate::moss_paths::ServedCell>,
     /// Shared media-metadata dedup cache (app-managed). `None` → scans
     /// dedup nothing, exactly as before.
     pub metadata_dedup:
@@ -120,7 +120,7 @@ pub struct HostPorts {
     /// later); the pipeline only asks for a port.
     pub launch_server: Option<
         Arc<
-            dyn Fn(String, Option<Arc<std::sync::RwLock<std::path::PathBuf>>>) -> ServerFuture
+            dyn Fn(String, Option<crate::moss_paths::ServedCell>) -> ServerFuture
                 + Send
                 + Sync,
         >,

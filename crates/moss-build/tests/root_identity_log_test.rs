@@ -9,7 +9,7 @@
 //! `hash_index_tally_test.rs`).
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::Mutex;
 
 struct Capture(Mutex<Vec<String>>);
 
@@ -112,9 +112,9 @@ async fn build_and_serve_report_the_same_root_identity_through_every_phase() {
     std::fs::write(folder.join("index.md"), "---\ntitle: Home\n---\n\nHello.\n").unwrap();
     let folder_str = folder.to_string_lossy().to_string();
 
-    // The same Arc the build moves, so the server started below reads
+    // The same cell the build moves, so the server started below reads
     // wherever the build actually put its output.
-    let served = Arc::new(RwLock::new(PathBuf::new()));
+    let served = moss_build::moss_paths::Served::of(&moss_build::moss_paths::MossPaths::new(&folder), PathBuf::new()).into_cell();
     let mut host = cli_host_ports(&folder_str);
     host.site_dir = Some(served.clone());
 

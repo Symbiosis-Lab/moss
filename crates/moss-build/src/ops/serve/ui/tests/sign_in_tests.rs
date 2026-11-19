@@ -157,7 +157,7 @@ async fn sessions_survive_new_server_and_revoke_all() {
         62001,
         62000,
         Some(super::super::super::InvokeCtx::standalone()),
-        Arc::new(std::sync::RwLock::new(f.site.clone())),
+        crate::moss_paths::Served::test_cell(f.site.clone()),
         super::super::super::HostKind::Cli,
         Arc::default(),
     )

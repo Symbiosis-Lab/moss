@@ -150,7 +150,7 @@ struct Overlap {
     folder: std::path::PathBuf,
     mp: crate::moss_paths::MossPaths,
     spawner: Arc<CapturingSpawner>,
-    served: Arc<std::sync::RwLock<std::path::PathBuf>>,
+    served: crate::moss_paths::ServedCell,
     _record: Arc<crate::build::lifecycle::LifecycleCell>,
 }
 
@@ -207,7 +207,7 @@ impl Overlap {
             folder,
             mp,
             spawner: Arc::default(),
-            served: Arc::new(std::sync::RwLock::new(std::path::PathBuf::new())),
+            served: crate::moss_paths::Served::test_cell(std::path::PathBuf::new()),
             _record: record,
         };
         vault.write("index.md", HOME);

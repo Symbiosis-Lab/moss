@@ -44,7 +44,7 @@ use axum::{
 /// Handler for `POST /__moss/yield`. See the module doc for the contract.
 pub(crate) async fn handle_yield(
     ctx: Option<super::invoke::InvokeCtx>,
-    site_dir: Arc<RwLock<PathBuf>>,
+    site_dir: crate::moss_paths::ServedCell,
     kind: super::ownership::HostKind,
     yield_notify: Arc<tokio::sync::Notify>,
     request: Request<Body>,
@@ -106,7 +106,7 @@ mod tests {
         let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(InvokeCtx::standalone()),
             kind: HostKind::Cli,
-            ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64100)
+            ..ServeConfig::new(crate::moss_paths::Served::test_cell(site_dir), 64100)
         })
         .await
         .expect("server should start");
@@ -129,7 +129,7 @@ mod tests {
         let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
             kind: HostKind::Desktop,
-            ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64110)
+            ..ServeConfig::new(crate::moss_paths::Served::test_cell(site_dir), 64110)
         })
         .await
         .expect("server should start");

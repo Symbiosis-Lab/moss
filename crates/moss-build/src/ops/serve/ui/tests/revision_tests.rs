@@ -55,7 +55,7 @@ async fn token_mint_refuses_cookie_and_uses_same_live_auth() {
     let f = Fixture::new();
     let (_, cookie) = f.enrolled().await;
     let ctx = super::super::super::InvokeCtx::standalone();
-    let dir = Arc::new(std::sync::RwLock::new(f.site.clone()));
+    let dir = crate::moss_paths::Served::test_cell(f.site.clone());
     let token = ctx.bind(&dir).unwrap().token().to_string();
     let mut server = super::super::super::ServeConfig::new(dir, 62000);
     server.invoke = Some(ctx);

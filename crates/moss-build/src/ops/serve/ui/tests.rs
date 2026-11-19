@@ -51,7 +51,7 @@ impl Fixture {
             62001,
             62000,
             Some(super::super::InvokeCtx::standalone()),
-            Arc::new(std::sync::RwLock::new(site.clone())),
+            crate::moss_paths::Served::test_cell(site.clone()),
             super::super::HostKind::Cli,
             Arc::default(),
         )

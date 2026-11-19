@@ -61,7 +61,7 @@ impl Site {
         registry.set_source_passthrough(ALIAS.into(), self.mp.project_root().join("unrelated.jpg"));
         start_server(ServeConfig {
             asset_registry: Some(registry), is_evicted: probe,
-            ..ServeConfig::new(Arc::new(RwLock::new(self.mp.current_ptr())), 61850)
+            ..ServeConfig::new(crate::moss_paths::Served::test_cell(self.mp.current_ptr()), 61850)
         }).await.unwrap()
     }
 
@@ -231,9 +231,41 @@ async fn a_picture_current_never_held_is_served_from_the_newer_render() {
     registry.set_pending(url.into(), Some((1600, 1000)), None);
     let (port, _, shutdown) = start_server(ServeConfig {
         asset_registry: Some(registry), is_evicted: |_| false,
-        ..ServeConfig::new(Arc::new(RwLock::new(site.mp.current_ptr())), 61850)
+        ..ServeConfig::new(crate::moss_paths::Served::test_cell(site.mp.current_ptr()), 61850)
     }).await.unwrap();
     let response = ureq::get(&format!("http://localhost:{port}/{url}")).call().unwrap();
     assert_eq!(bytes(response), std::fs::read(&added).unwrap());
+    let _ = shutdown.send(());
+}
+
+/// The build's output moved outside the folder, behind a symlink: the server
+/// still knows its folder, and the receipt and hashes there still count as the
+/// folder's own. 7d replaces the symlink with the computer's build root.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_site_served_from_outside_its_folder_answers_as_inside() {
+    let site = Site::new(false);
+    let outside = tempfile::tempdir().unwrap();
+    let moved = outside.path().canonicalize().unwrap().join("build");
+    let in_folder = site.mp.root().join("build.nosync");
+    std::fs::rename(&in_folder, &moved).unwrap();
+    std::os::unix::fs::symlink(&moved, &in_folder).unwrap();
+    let dir = site.mp.current_ptr().canonicalize().unwrap();
+    assert!(dir.starts_with(&moved) && !dir.starts_with(site.mp.project_root()));
+    let served = crate::moss_paths::Served { folder: crate::moss_paths::Served::folder_of(&site.mp), dir };
+
+    let cell = served.clone().into_cell();
+    let carrier = crate::ops::serve::InvokeCtx::standalone();
+    assert_eq!(carrier.bind(&cell).map(|s| s.vault().clone()), Some(served.folder.clone()), "the carrier token belongs to the folder");
+
+    let registry = Arc::new(crate::types::assets::AssetRegistry::new());
+    let (port, _, shutdown) = start_server(ServeConfig {
+        asset_registry: Some(registry), is_evicted: |_| false,
+        ..ServeConfig::new(cell, 61850)
+    }).await.unwrap();
+    let health: serde_json::Value = ureq::get(&format!("http://localhost:{port}{}", super::super::port::MOSS_HEALTH_PATH))
+        .call().unwrap().into_json().unwrap();
+    assert_eq!(health["folder_id"], crate::infra::folder_store::name_for(site.mp.project_root()));
+    assert_eq!(bytes(ureq::get(&format!("http://localhost:{port}/{ALIAS}")).call().unwrap()), BYTES,
+        "the picture's original answers from the generation outside the folder");
     let _ = shutdown.send(());
 }

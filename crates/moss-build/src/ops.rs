@@ -357,7 +357,7 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
         // yielded `--watch` process can call it again to resume serving —
         // `HostPorts::launch_server` is an `Arc<dyn Fn>`, not `FnOnce`, for
         // exactly this reuse.
-        let launch_server_fn: Option<Arc<dyn Fn(String, Option<Arc<std::sync::RwLock<std::path::PathBuf>>>) -> crate::build::ServerFuture + Send + Sync>> =
+        let launch_server_fn: Option<Arc<dyn Fn(String, Option<crate::moss_paths::ServedCell>) -> crate::build::ServerFuture + Send + Sync>> =
             if run.flags.serve {
             let slot = server_shutdown.clone();
             // The same registry this build fills, so the server can answer for
@@ -369,7 +369,7 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
             let on_conflict = if run.flags.watch { serve::ownership::OnConflict::StandBy } else { serve::ownership::OnConflict::Refuse };
             let yield_notify = yield_requested.clone();
             let host_serve = std::mem::take(&mut run.serve);
-            let launch: Arc<dyn Fn(String, Option<Arc<std::sync::RwLock<std::path::PathBuf>>>) -> crate::build::ServerFuture + Send + Sync> =
+            let launch: Arc<dyn Fn(String, Option<crate::moss_paths::ServedCell>) -> crate::build::ServerFuture + Send + Sync> =
                 Arc::new(move |moss_dir, cell| {
                 let slot = slot.clone();
                 let assets = assets.clone();
@@ -506,7 +506,8 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
                                     break;
                                 }
                                 let Some(launch) = &launch_server_fn else { break };
-                                match launch(run.folder_path.clone(), None).await {
+                                let moss_dir = crate::moss_paths::MossPaths::new(folder).root().to_string_lossy().into_owned();
+                                match launch(moss_dir, None).await {
                                     // The port can differ from the first one, and a host reads this line to find the page.
                                     Ok(port) => cli_eprintln!("{}", serve::ownership::preview_ready_line(&format!("http://localhost:{port}"))),
                                     Err(e) => {

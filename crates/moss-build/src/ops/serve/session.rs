@@ -53,7 +53,7 @@ pub struct Session {
     rename_undo: RenameUndoStore,
     publish_dates: crate::editor::filesystem::PublishDateMemo,
     /// The server's live serve-dir pointer.
-    site_dir: Arc<RwLock<PathBuf>>,
+    site_dir: crate::moss_paths::ServedCell,
 }
 
 impl Session {
@@ -90,7 +90,7 @@ impl CommandHost for Session {
     }
 
     fn served_dir(&self) -> PathBuf {
-        self.site_dir.read().map(|d| d.clone()).unwrap_or_else(|e| e.into_inner().clone())
+        self.site_dir.read().map(|d| d.dir.clone()).unwrap_or_else(|e| e.into_inner().dir.clone())
     }
 
     fn publish(&self, event: &MossEvent) {
@@ -148,12 +148,12 @@ impl InvokeCtx {
     /// it off the lock. Best-effort on the publish itself: a vault whose local
     /// record cannot be written still gets a token, and a client that cannot read
     /// it is simply 401 — the read-only tier is unaffected.
-    pub fn bind(&self, site_dir: &Arc<RwLock<PathBuf>>) -> Option<Arc<Session>> {
+    pub fn bind(&self, site_dir: &crate::moss_paths::ServedCell) -> Option<Arc<Session>> {
         let mut session = self.session.write().unwrap_or_else(|e| e.into_inner());
         let vault = site_dir
             .read()
             .ok()
-            .and_then(|dir| crate::moss_paths::served_folder(&dir));
+            .map(|served| served.folder.clone());
         let Some(vault) = vault else {
             if let Some(previous) = session.take() {
                 previous.retired.cancel();
@@ -200,9 +200,9 @@ impl ServerHandle {
     /// streams are retired when the switch happens, not when the next
     /// carrier request happens to observe it (the desktop app talks Tauri
     /// IPC, so without this nothing guarantees such a request ever comes).
-    pub fn point_at(&self, dir: PathBuf) {
+    pub fn point_at(&self, served: crate::moss_paths::Served) {
         if let Ok(mut current) = self.site_dir.write() {
-            *current = dir;
+            *current = served;
         }
         if let Some(ctx) = &self.carrier {
             ctx.bind(&self.site_dir);

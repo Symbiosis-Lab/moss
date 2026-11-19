@@ -2,7 +2,6 @@ use super::super::{ownership, start_server, InvokeCtx, ServeConfig};
 use super::*;
 use sign_in::SignInLink;
 use std::sync::Arc;
-use std::sync::RwLock;
 
 fn config(root: &std::path::Path) -> ServeConfig {
     let site = root.join("site");
@@ -23,7 +22,7 @@ fn config(root: &std::path::Path) -> ServeConfig {
             }],
         }),
         invoke: Some(InvokeCtx::standalone()),
-        ..ServeConfig::new(Arc::new(RwLock::new(site)), 63100)
+        ..ServeConfig::new(crate::moss_paths::Served::test_cell(site), 63100)
     }
 }
 
@@ -54,7 +53,7 @@ fn ui_listener_is_separate_and_recorded_and_shuts_down() {
         .block_on(async {
             let root = tempfile::tempdir().unwrap();
             let config = config(root.path());
-            let site = config.site_dir_cell.read().unwrap().clone();
+            let site = config.site_dir_cell.read().unwrap().dir.clone();
             let link = config.ui.as_ref().unwrap().auth.mint_sign_in().unwrap();
             let (preview, ui, shutdown) = start_server(config).await.unwrap();
             let ui = ui.expect("a UI port must be returned");
@@ -149,7 +148,7 @@ fn behind_a_public_url_the_preview_asks_for_a_session_on_every_host() {
             let root = tempfile::tempdir().unwrap();
             let mut config = config(root.path());
             config.start_port = 63200;
-            let site = config.site_dir_cell.read().unwrap().clone();
+            let site = config.site_dir_cell.read().unwrap().dir.clone();
             std::fs::write(site.join("index.html"), "draft").unwrap();
             let ui_config = config.ui.as_mut().unwrap();
             ui_config.port = UiPort::ScanFrom(63220);

@@ -77,7 +77,9 @@ async fn a_yielded_folder_goes_to_the_next_process_and_comes_back_with_a_page_op
     b.join_drain_threads();
 
     let a_again = port_from_url_line(&a.wait_for_access_line_after(a_lines_before_return, Duration::from_secs(15)));
-    let owner = find_live_owner(&site_dir).await.expect("A is found again once it serves again");
+    let owner = find_live_owner(&site_dir)
+        .await
+        .unwrap_or_else(|| panic!("A is found again once it serves again; A:\n{}\nB:\n{}", joined(&a.stderr), joined(&b.stderr)));
     assert_eq!((owner.pid, owner.url), (a.child.id(), format!("http://127.0.0.1:{a_again}")));
 
     drop(slow);

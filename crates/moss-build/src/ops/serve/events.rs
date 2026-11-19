@@ -137,7 +137,7 @@ pub(crate) fn note_activity() {
 /// reads of the files it embeds start first. A nested frame carries no shell
 /// marker, an asset is no navigation, and a failed request shows no page.
 pub(super) async fn track_viewer(
-    site_dir: std::sync::Arc<std::sync::RwLock<std::path::PathBuf>>,
+    site_dir: crate::moss_paths::ServedCell,
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
@@ -151,7 +151,7 @@ pub(super) async fn track_viewer(
     let html = response.status().is_success()
         && response.headers().get(axum::http::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|v| v.starts_with("text/html"));
     if shell && html {
-        if let Some(folder) = site_dir.read().ok().and_then(|dir| crate::moss_paths::served_folder(&dir)) {
+        if let Some(folder) = site_dir.read().ok().map(|served| served.folder.clone()) {
             let url = urlencoding::decode(&path).map_or(path.clone(), |p| p.into_owned());
             crate::system::derive::priority::note_viewed(folder.path(), &url);
         }

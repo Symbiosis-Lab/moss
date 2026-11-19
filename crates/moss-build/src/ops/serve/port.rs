@@ -73,13 +73,12 @@ pub(crate) fn moss_health_body(folder_id: Option<&str>, pid: u32) -> String {
 /// `site_dir` on every request, not fixed at router-build time, so a future
 /// folder switch reports the folder served NOW.
 pub(crate) async fn moss_health_handler(
-    site_dir: std::sync::Arc<std::sync::RwLock<std::path::PathBuf>>,
+    site_dir: crate::moss_paths::ServedCell,
 ) -> axum::response::Response<axum::body::Body> {
     let folder_id = site_dir
         .read()
         .ok()
-        .and_then(|dir| crate::moss_paths::served_folder(&dir))
-        .map(|vault| crate::infra::folder_store::name_for(vault.path()));
+        .map(|served| crate::infra::folder_store::name_for(served.folder.path()));
     axum::response::Response::builder()
         .status(axum::http::StatusCode::OK)
         .header("content-type", "application/json; charset=utf-8")

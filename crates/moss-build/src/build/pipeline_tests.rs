@@ -586,7 +586,7 @@ fn test_build_with_site_dir_state() {
     // Create SiteDirectoryState seeded to staging (post-generations: site/ is empty)
     let staging_path = test_dir.join(".moss/build.nosync/staging");
     fs::create_dir_all(&staging_path).unwrap();
-    let site_dir_state = SiteDirectoryState::new(staging_path.clone());
+    let site_dir_state = SiteDirectoryState::new(crate::moss_paths::Served { folder: crate::vault_root::VaultRoot::resolve(folder_path), dir: staging_path.clone() });
 
     // Build with state
     let result = build_test(
@@ -1118,13 +1118,13 @@ fn test_pointer_switches_during_rebuild() {
     // Set up state for second build — seed to staging (post-generations: site/ is empty)
     let staging_seed = test_dir.join(".moss/build.nosync/staging");
     fs::create_dir_all(&staging_seed).unwrap();
-    let state = SiteDirectoryState::new(staging_seed.clone());
+    let state = SiteDirectoryState::new(crate::moss_paths::Served::test(staging_seed.clone()));
 
     // Modify content to trigger changes
     fs::write(test_dir.join("index.md"), "# Second").unwrap();
 
     // Before rebuild, pointer should be at staging/
-    assert_eq!(state.current_dir.read().unwrap().as_path(), staging_seed);
+    assert_eq!(state.current_dir.read().unwrap().dir.as_path(), staging_seed);
 
     // Rebuild with state
     build_test(
@@ -1139,7 +1139,7 @@ fn test_pointer_switches_during_rebuild() {
 
     // After build returns, pointer rests on site-stage/ (preview has annotations)
     let stage_dir = test_dir.join(".moss/build.nosync/staging");
-    assert_eq!(state.current_dir.read().unwrap().as_path(), stage_dir);
+    assert_eq!(state.current_dir.read().unwrap().dir.as_path(), stage_dir);
 
     // Staging/ is the sole output. site/ is NOT updated.
     // Check that staging/ has the new content.
@@ -1190,7 +1190,7 @@ fn test_multiple_sequential_rebuilds() {
     // Create state seeded to staging (post-generations: site/ is empty)
     let staging_seed = test_dir.join(".moss/build.nosync/staging");
     fs::create_dir_all(&staging_seed).unwrap();
-    let state = SiteDirectoryState::new(staging_seed);
+    let state = SiteDirectoryState::new(crate::moss_paths::Served::test(staging_seed));
 
     // Multiple rebuilds with changes
     let stage_dir = test_dir.join(".moss/build.nosync/staging");
@@ -1207,7 +1207,7 @@ fn test_multiple_sequential_rebuilds() {
         .unwrap();
 
         // Pointer rests on site-stage/ (preview with annotations)
-        assert_eq!(state.current_dir.read().unwrap().as_path(), stage_dir);
+        assert_eq!(state.current_dir.read().unwrap().dir.as_path(), stage_dir);
 
         // Verify content in staging/ (sole output)
         let content = fs::read_to_string(stage_dir.join("index.html")).unwrap();
@@ -1244,10 +1244,10 @@ fn test_pointer_sequence_during_rebuild() {
     // Seed state to staging (post-generations: site/ is empty)
     let staging_seed = test_dir.join(".moss/build.nosync/staging");
     fs::create_dir_all(&staging_seed).unwrap();
-    let state = SiteDirectoryState::new(staging_seed.clone());
+    let state = SiteDirectoryState::new(crate::moss_paths::Served::test(staging_seed.clone()));
 
     // Verify initial state
-    let initial_path = state.current_dir.read().unwrap().clone();
+    let initial_path = state.current_dir.read().unwrap().dir.clone();
     assert_eq!(initial_path, staging_seed);
 
     // Trigger rebuild with changes
@@ -1264,7 +1264,7 @@ fn test_pointer_sequence_during_rebuild() {
 
     // Pointer rests on site-stage/ (preview with annotations)
     let stage_dir = test_dir.join(".moss/build.nosync/staging");
-    assert_eq!(state.current_dir.read().unwrap().as_path(), stage_dir);
+    assert_eq!(state.current_dir.read().unwrap().dir.as_path(), stage_dir);
 
     // staging/ has the new content (sole output)
     let content = fs::read_to_string(stage_dir.join("index.html")).unwrap();
@@ -2298,7 +2298,7 @@ async fn a_rebuild_sweeps_staging_only_when_the_render_on_screen_is_promoted() {
     crate::system::folder_session::registry().insert(folder_key.clone(), session.clone());
     let mp = crate::moss_paths::MossPaths::new(&folder);
     let _record = crate::build::lifecycle::lock_for(&mp);
-    let cell = std::sync::Arc::new(std::sync::RwLock::new(std::path::PathBuf::new()));
+    let cell = crate::moss_paths::Served::test_cell(std::path::PathBuf::new());
 
     let build = || {
         let mut services = BuildServices::headless();
@@ -2349,7 +2349,7 @@ async fn a_rebuild_sweeps_staging_only_when_the_render_on_screen_is_promoted() {
     fs::write(&orphan, "left behind").unwrap();
     build().await.expect("build 2");
     assert!(!orphan.exists(), "a caught-up rebuild sweeps what no manifest names");
-    assert_eq!(*cell.read().unwrap(), mp.staging_dir(), "and ends showing its own render");
+    assert_eq!(cell.read().unwrap().dir, mp.staging_dir(), "and ends showing its own render");
     drained().await;
     crate::build::seal_phase::settle(&mp).await;
 
@@ -2358,7 +2358,7 @@ async fn a_rebuild_sweeps_staging_only_when_the_render_on_screen_is_promoted() {
     fs::write(&orphan, "left behind").unwrap();
     build().await.expect("build 3");
     assert!(orphan.exists(), "and a rebuild ahead of the promotion unlinks nothing");
-    assert_eq!(*cell.read().unwrap(), mp.staging_dir(), "a ready render returns to staging");
+    assert_eq!(cell.read().unwrap().dir, mp.staging_dir(), "a ready render returns to staging");
     drained().await;
     crate::system::folder_session::registry().remove(&folder_key);
 }
@@ -5584,7 +5584,7 @@ fn build_test_with_focus(
             Some(&services),
             Some(Box::new(move |_, _, _, _| {
                 if let (Some(cell), Some(expected)) = (&served_cell, expected_served_during_render) {
-                    assert_eq!(*cell.read().unwrap(), expected, "staging must be hidden while it is rewritten");
+                    assert_eq!(cell.read().unwrap().dir, expected, "staging must be hidden while it is rewritten");
                 }
                 if let (Some(session), Some((url, source))) = (navigation_session, navigate_during_render) {
                     session.set_preview_requirement(url, source)?;
@@ -5711,7 +5711,7 @@ fn cold_page_metadata_keeps_complete_home_and_assets_until_recovery() {
 
     fs::remove_file(dir.join("story.md")).unwrap();
     fs::write(dir.join(".story.md.icloud"), "").unwrap();
-    let state = SiteDirectoryState::new(mp.staging_dir());
+    let state = SiteDirectoryState::new(crate::moss_paths::Served::test(mp.staging_dir()));
     let session = FolderSession::new(dir.clone());
     session.set_preview_requirement("/".into(), PreviewSource::File("index.md".into())).unwrap();
     let (cold, _, unresolved, cold_seal) = build_test_with_focus(folder, scan_folder(folder).unwrap(), Some(&state), Some(session), None, Some(current.clone())).unwrap();
@@ -5719,7 +5719,7 @@ fn cold_page_metadata_keeps_complete_home_and_assets_until_recovery() {
     assert!(first_seal.was_shown(), "a shown render records its show");
     assert!(!cold_seal.was_shown(), "a render never shown records none, so its seal tail announces nothing");
     assert_eq!(unresolved, ["story.md"]);
-    assert_eq!(*state.current_dir.read().unwrap(), current);
+    assert_eq!(state.current_dir.read().unwrap().dir, current);
     assert_eq!(fs::read(current.join("index.html")).unwrap(), original_home);
     assert_eq!(fs::read(current.join("card.jpg")).unwrap(), original_image);
     assert_eq!(fs::read(current.join(stylesheet)).unwrap(), original_css);
@@ -5774,7 +5774,7 @@ fn navigation_during_render_uses_latest_ready_source() {
     let (dir, _cleanup) = create_test_dir();
     fs::write(dir.join("article.md"), "# Ready article\n").unwrap();
     let mp = crate::moss_paths::MossPaths::new(&dir);
-    let state = SiteDirectoryState::new(mp.staging_dir());
+    let state = SiteDirectoryState::new(crate::moss_paths::Served::test(mp.staging_dir()));
     let session = FolderSession::new(dir.clone());
     session.set_preview_requirement("/article/".into(), PreviewSource::Unresolved).unwrap();
     let (promotion, _, unresolved, _) = build_test_with_focus(
@@ -5783,7 +5783,7 @@ fn navigation_during_render_uses_latest_ready_source() {
     ).unwrap();
     assert_eq!(promotion, crate::build::ship::Promotion::Promoted);
     assert!(unresolved.is_empty());
-    assert_eq!(*state.current_dir.read().unwrap(), mp.staging_dir());
+    assert_eq!(state.current_dir.read().unwrap().dir, mp.staging_dir());
 }
 
 #[cfg(target_os = "macos")]
@@ -5840,14 +5840,14 @@ fn a_page_unusable_for_a_reason_outside_the_cloud_raises_no_cloud_wait() {
     fs::set_permissions(dir.join("article.md"), fs::Permissions::from_mode(0o000)).unwrap();
     let phase = focused_build_phase(folder, "/article/", PreviewSource::File("article.md".into()));
     let mp = crate::moss_paths::MossPaths::new(&dir);
-    let state = SiteDirectoryState::new(mp.current_ptr());
+    let state = SiteDirectoryState::new(crate::moss_paths::Served::test(mp.current_ptr()));
     let session = crate::system::folder_session::FolderSession::new(dir.clone());
     session.set_preview_requirement("/article/".into(), PreviewSource::File("article.md".into())).unwrap();
     let built = build_test_with_focus(folder, scan_folder(folder).unwrap(), Some(&state), Some(session), None, None);
     fs::set_permissions(dir.join("article.md"), fs::Permissions::from_mode(0o644)).unwrap();
     assert_eq!(phase.unwrap(), "home_ready", "nothing is in the cloud, so nothing is waited on");
     built.unwrap();
-    assert_eq!(*state.current_dir.read().unwrap(), mp.staging_dir(),
+    assert_eq!(state.current_dir.read().unwrap().dir, mp.staging_dir(),
         "the preview shows this build, not a stale one held back for a download that does not exist");
 }
 
@@ -5865,11 +5865,11 @@ fn a_downloaded_page_shows_at_render_while_its_build_waits_on_a_joined_picture()
     make_big_jpeg_at(&dir.join("pic.jpg"), 1600, 1200);
     fs::write(dir.join(".article.md.icloud"), "").unwrap();
     let mp = crate::moss_paths::MossPaths::new(&dir);
-    let state = SiteDirectoryState::new(mp.current_ptr());
+    let state = SiteDirectoryState::new(crate::moss_paths::Served::test(mp.current_ptr()));
     let session = crate::system::folder_session::FolderSession::new(dir.clone());
     session.set_preview_requirement("/article/".into(), PreviewSource::File("article.md".into())).unwrap();
     build_test_with_focus(folder, scan_folder(folder).unwrap(), Some(&state), Some(session.clone()), None, None).unwrap();
-    assert_ne!(*state.current_dir.read().unwrap(), mp.staging_dir(), "the page is still in the cloud");
+    assert_ne!(state.current_dir.read().unwrap().dir, mp.staging_dir(), "the page is still in the cloud");
 
     fs::remove_file(dir.join(".article.md.icloud")).unwrap();
     fs::write(dir.join("article.md"), "# Article\n\n![](pic.jpg)\n").unwrap();
@@ -5883,7 +5883,7 @@ fn a_downloaded_page_shows_at_render_while_its_build_waits_on_a_joined_picture()
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         let joined = join_waiters(&ledger_key) > 0;
-        let shown = state.current_dir.read().unwrap().clone();
+        let shown = state.current_dir.read().unwrap().dir.clone();
         drop(batch);
         rebuild.join().unwrap().unwrap();
         assert!(joined, "premise: the rebuild joined the running picture batch");
@@ -7410,10 +7410,10 @@ fn a_presence_pass_that_cannot_read_its_tree_drops_nothing_and_ships_nothing() {
     fs::create_dir_all(stage.join("locked")).unwrap();
     // The preview shows this render on staging; `current` is g1.
     let _record = crate::build::lifecycle::lock_for(&mp);
-    let cell = std::sync::Arc::new(std::sync::RwLock::new(std::path::PathBuf::new()));
+    let cell = crate::moss_paths::Served::test_cell(std::path::PathBuf::new());
     let _ = crate::build::lifecycle::adopt_server(&mp, &cell);
     let (render, _) = crate::build::lifecycle::show_render(&mp, true);
-    assert_eq!(*cell.read().unwrap(), stage);
+    assert_eq!(cell.read().unwrap().dir, stage);
     let html = concat!(
         "<html><body>",
         r#"<picture><source srcset="assets/deleted.webp" type="image/webp">"#,
@@ -7483,7 +7483,7 @@ fn a_presence_pass_that_cannot_read_its_tree_drops_nothing_and_ships_nothing() {
     let generations: Vec<_> = fs::read_dir(mp.generations_dir()).unwrap().collect();
     assert_eq!(generations.len(), 1, "no partial generation was frozen");
     assert_eq!(
-        *cell.read().unwrap(),
+        cell.read().unwrap().dir,
         mp.current_ptr(),
         "the unreadable render is withdrawn: the preview goes back to the last good generation"
     );

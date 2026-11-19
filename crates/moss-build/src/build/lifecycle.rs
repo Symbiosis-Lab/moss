@@ -28,11 +28,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, PoisonError, RwLock};
 
-use crate::moss_paths::MossPaths;
+use crate::moss_paths::{MossPaths, Served};
 use crate::types::runtime::SiteDirectoryState;
 
-/// The cell the preview server reads its root from, per request.
-pub(crate) type ServedCell = Arc<RwLock<PathBuf>>;
+pub(crate) use crate::moss_paths::ServedCell;
 
 #[derive(Default)]
 struct FolderLifecycle {
@@ -178,11 +177,11 @@ pub(crate) fn held_build_root_path(root: &Path) -> Option<PathBuf> {
     }
 }
 
-fn point(cell: &ServedCell, to: &Path) -> bool {
-    SiteDirectoryState { current_dir: cell.clone() }.switch_to(to.to_path_buf())
+fn point(cell: &ServedCell, mp: &MossPaths, to: &Path) -> bool {
+    SiteDirectoryState { current_dir: cell.clone() }.switch_to(Served::of(mp, to.to_path_buf()))
 }
 
-fn read(cell: &ServedCell) -> PathBuf {
+fn read(cell: &ServedCell) -> Served {
     cell.read().unwrap_or_else(PoisonError::into_inner).clone()
 }
 
@@ -199,14 +198,12 @@ fn read(cell: &ServedCell) -> PathBuf {
 #[must_use = "keep the record until the render is shown, or another folder's first lookup can evict it in between"]
 pub(crate) fn adopt_server(mp: &MossPaths, cell: &ServedCell) -> Arc<LifecycleCell> {
     let target = mp.initial_serve_dir();
-    let build_dir = mp.build_dir();
     root_identity::log_build_root(&mp.root().join("build.nosync"), "serve", None);
     let record = lock_for(mp);
     let mut st = record.state();
     st.served = Some(cell.clone());
-    let shown = read(cell);
-    if shown.as_os_str().is_empty() || !shown.starts_with(&build_dir) {
-        point(cell, &target);
+    if read(cell).folder != Served::folder_of(mp) {
+        point(cell, mp, &target);
         st.shown_render = None;
         log::info!("serve: adopted the preview for {} on {}", mp.project_root().display(), target.display());
     }
@@ -336,13 +333,13 @@ pub(crate) fn park_for_rebuild(
     let record = lock_for(mp);
     let st = record.state();
     let others_writing = st.build_writers.saturating_sub(usize::from(holds_lease));
-    let on_staging = st.served.as_ref().is_some_and(|cell| read(cell) == staging);
+    let on_staging = st.served.as_ref().is_some_and(|cell| read(cell).dir == staging);
     let caught_up = matches!((st.shown_render, st.current_render), (Some(s), Some(c)) if c >= s);
     let render = |r: Option<u64>| r.map_or("none".to_string(), |r| r.to_string());
     if others_writing == 0 && (!on_staging || (caught_up && current_exists)) {
         if on_staging {
             if let Some(cell) = &st.served {
-                point(cell, &current);
+                point(cell, mp, &current);
             }
         }
         log::info!(
@@ -371,7 +368,7 @@ pub(crate) fn protect_current_before_rebuild(mp: &MossPaths) {
     if !current.exists() { return }
     let record = lock_for(mp);
     if let Some(cell) = &record.state().served {
-        point(cell, &current);
+        point(cell, mp, &current);
     };
 }
 
@@ -391,7 +388,7 @@ pub(crate) fn show_render(mp: &MossPaths, publishable: bool) -> (Render, Option<
     let seq = st.next_render;
     let announce = if publishable {
         if let Some(cell) = &st.served {
-            point(cell, &staging);
+            point(cell, mp, &staging);
         }
         st.shown_render = Some(seq);
         Some(staging)
@@ -453,7 +450,6 @@ impl Render {
     /// render is still the newest admitted one.
     pub(crate) fn reveal_if_latest(&self) -> bool {
         let staging = self.mp.staging_dir();
-        let build_dir = self.mp.build_dir();
         let mut state = self.record.state();
         if state.next_render != self.seq { return false; }
         if state.shown_render == Some(self.seq) { return false; }
@@ -463,9 +459,9 @@ impl Render {
         // and switch the pointer under the same write lock so a folder switch
         // cannot land between the check and the write.
         let mut served = cell.write().unwrap_or_else(PoisonError::into_inner);
-        if !served.starts_with(&build_dir) { return false; }
-        if *served != staging {
-            *served = staging;
+        if served.folder != Served::folder_of(&self.mp) { return false; }
+        if served.dir != staging {
+            served.dir = staging;
         }
         drop(served);
         state.shown_render = Some(self.seq);
@@ -489,7 +485,7 @@ impl Render {
             return;
         }
         if let Some(cell) = &st.served {
-            point(cell, &current);
+            point(cell, &self.mp, &current);
         }
         st.shown_render = None;
         log::info!("serve: render #{} withdrawn — preview back on gen {}", self.seq, current_gen);

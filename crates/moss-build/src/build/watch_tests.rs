@@ -3126,7 +3126,7 @@ async fn a_page_rewritten_on_disk_between_two_real_builds_is_in_modified_paths()
     // cancelled build records no stash.
     let session = crate::system::folder_session::FolderSession::new(folder.clone());
     let _record = crate::build::lifecycle::lock_for(&crate::moss_paths::MossPaths::new(&folder));
-    let cell = std::sync::Arc::new(std::sync::RwLock::new(PathBuf::new()));
+    let cell = crate::moss_paths::Served::test_cell(PathBuf::new());
     let build = |trigger: BuildTrigger| {
         let mut services = crate::types::services::BuildServices::headless();
         services.session = Some(session.clone());
@@ -3488,7 +3488,7 @@ async fn a_theme_css_file_rewritten_on_disk_between_two_real_builds_is_in_modifi
     let folder_key = root.as_str().to_string();
     let session = crate::system::folder_session::FolderSession::new(folder.clone());
     let _record = crate::build::lifecycle::lock_for(&crate::moss_paths::MossPaths::new(&folder));
-    let cell = std::sync::Arc::new(std::sync::RwLock::new(PathBuf::new()));
+    let cell = crate::moss_paths::Served::test_cell(PathBuf::new());
     let build = |trigger: BuildTrigger| {
         let mut services = crate::types::services::BuildServices::headless();
         services.session = Some(session.clone());
@@ -3575,7 +3575,7 @@ async fn a_places_toml_file_rewritten_on_disk_between_two_real_builds_is_in_modi
     let folder_key = root.as_str().to_string();
     let session = crate::system::folder_session::FolderSession::new(folder.clone());
     let _record = crate::build::lifecycle::lock_for(&crate::moss_paths::MossPaths::new(&folder));
-    let cell = std::sync::Arc::new(std::sync::RwLock::new(PathBuf::new()));
+    let cell = crate::moss_paths::Served::test_cell(PathBuf::new());
     let build = |trigger: BuildTrigger| {
         let mut services = crate::types::services::BuildServices::headless();
         services.session = Some(session.clone());

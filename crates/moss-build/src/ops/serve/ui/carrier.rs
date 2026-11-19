@@ -21,7 +21,7 @@ pub(super) fn router(
     auth: Arc<dyn UiAuth>,
     origin: String,
     ctx: Option<InvokeCtx>,
-    site_dir: Arc<RwLock<PathBuf>>,
+    site_dir: crate::moss_paths::ServedCell,
     kind: super::super::ownership::HostKind,
     notify: Arc<tokio::sync::Notify>,
 ) -> Router {

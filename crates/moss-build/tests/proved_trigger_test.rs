@@ -674,7 +674,7 @@ const PREVIEW_PORT: u16 = 47_311;
 /// A build that opens a preview, as the app's folder open does, on `cell`: the
 /// preview cell the server reads. Its server is a stand-in that answers with a
 /// port.
-fn serve(root: &Path, cell: &std::sync::Arc<std::sync::RwLock<PathBuf>>) -> (serde_json::Value, std::sync::Arc<Heard>) {
+fn serve(root: &Path, cell: &moss_build::moss_paths::ServedCell) -> (serde_json::Value, std::sync::Arc<Heard>) {
     use moss_build::build::{run_pipeline, PipelineConfig};
     let heard = std::sync::Arc::new(Heard::default());
     let folder = root.to_string_lossy().into_owned();
@@ -703,12 +703,17 @@ fn serve(root: &Path, cell: &std::sync::Arc<std::sync::RwLock<PathBuf>>) -> (ser
     (last_profile(root), heard)
 }
 
-fn new_cell() -> std::sync::Arc<std::sync::RwLock<PathBuf>> {
-    std::sync::Arc::new(std::sync::RwLock::new(PathBuf::new()))
+/// A preview cell still on another folder, as a server left by an earlier folder is.
+fn new_cell() -> moss_build::moss_paths::ServedCell {
+    moss_build::moss_paths::Served {
+        folder: moss_build::vault_root::VaultRoot::resolve("/moss-test/no-folder"),
+        dir: PathBuf::new(),
+    }
+    .into_cell()
 }
 
-fn served(cell: &std::sync::Arc<std::sync::RwLock<PathBuf>>) -> PathBuf {
-    cell.read().unwrap().clone()
+fn served(cell: &moss_build::moss_paths::ServedCell) -> PathBuf {
+    cell.read().unwrap().dir.clone()
 }
 
 /// Every file under `dir`, by path.
@@ -725,7 +730,7 @@ fn staging(root: &Path) -> PathBuf {
 
 /// Two serving opens: the second proves from the first's seal, so the next one
 /// has a settled seal to stop on.
-fn served_site() -> (Site, std::sync::Arc<std::sync::RwLock<PathBuf>>) {
+fn served_site() -> (Site, moss_build::moss_paths::ServedCell) {
     let site = Site::new();
     let cell = new_cell();
     serve(site.root(), &cell);

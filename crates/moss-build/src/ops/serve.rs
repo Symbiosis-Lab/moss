@@ -159,13 +159,11 @@ pub struct HeadlessServe {
 /// plain `moss build --serve` starts.
 pub async fn start_server_headless(
     moss_path: &str,
-    cli_site_dir: Option<Arc<std::sync::RwLock<std::path::PathBuf>>>,
+    cli_site_dir: Option<crate::moss_paths::ServedCell>,
     asset_registry: Option<Arc<crate::types::assets::AssetRegistry>>,
     serve: HeadlessServe,
 ) -> Result<(u16, Option<u16>, tokio::sync::oneshot::Sender<()>), String> {
-    let serve_dir = serve_dir_for_site_path(moss_path);
-    let site_dir_state =
-        cli_site_dir.unwrap_or_else(|| Arc::new(std::sync::RwLock::new(serve_dir)));
+    let site_dir_state = cli_site_dir.unwrap_or_else(|| serve_dir_for_site_path(moss_path).into_cell());
     // Headless mode: the HTTP command carrier is the entire point — typing
     // `moss build --serve` IS the opt-in. Standalone context, no
     // Tauri shell (mirrors host_fns::HostState::standalone).
@@ -193,15 +191,13 @@ pub async fn start_server_headless(
     Ok((port, ui_port, shutdown_tx))
 }
 
-/// Derive the cold-start serve dir for a folder from its `.moss` directory
-/// path: the frozen `current` generation, else `/staging`. Mirrors
-/// `build.rs`'s initial seed via `MossPaths::initial_serve_dir()`.
+/// The folder whose `.moss` directory is `moss_path`, served from its frozen
+/// `current` generation, else staging. Mirrors `build.rs`'s initial seed.
 ///
 /// Also used by the app's folder-switch re-key, so a reused server rests on
 /// the new folder's `current` generation rather than the old folder's.
-pub fn serve_dir_for_site_path(moss_path: &str) -> std::path::PathBuf {
-    crate::moss_paths::MossPaths::from_moss_dir(std::path::PathBuf::from(moss_path))
-        .initial_serve_dir()
+pub fn serve_dir_for_site_path(moss_path: &str) -> crate::moss_paths::Served {
+    crate::moss_paths::Served::initial(&crate::moss_paths::MossPaths::from_moss_dir(std::path::PathBuf::from(moss_path)))
 }
 
 /// One WARN per 10 s per served root for preview 404s, with the count it held
@@ -216,24 +212,22 @@ static PREVIEW_404_LOG: std::sync::LazyLock<
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
 /// Which tree a 404 came from: `staging`, `current→gen <id>`, or `other`.
-fn served_tree_label(current_dir: &std::path::Path) -> String {
-    match current_dir.file_name().and_then(|n| n.to_str()) {
+fn served_tree_label(served: &crate::moss_paths::Served) -> String {
+    match served.dir.file_name().and_then(|n| n.to_str()) {
         Some("staging") => "staging".to_string(),
         Some("current") => {
-            let id = crate::moss_paths::served_folder(current_dir)
-                .and_then(|folder| crate::moss_paths::MossPaths::new(folder.path()).current_generation_id().ok())
-                .unwrap_or_else(|| "unknown".to_string());
+            let id = crate::moss_paths::MossPaths::new(served.folder.path())
+                .current_generation_id()
+                .unwrap_or_else(|_| "unknown".to_string());
             format!("current→gen {id}")
         }
         _ => "other".to_string(),
     }
 }
 
-pub(crate) fn log_preview_404(current_dir: &std::path::Path, path: &str) {
-    let root = match current_dir.file_name().and_then(|n| n.to_str()) {
-        Some("staging" | "current") => current_dir.parent().unwrap_or(current_dir),
-        _ => current_dir,
-    };
+pub(crate) fn log_preview_404(served: &crate::moss_paths::Served, path: &str) {
+    let build_dir = crate::moss_paths::MossPaths::new(served.folder.path()).build_dir();
+    let root = build_dir.as_path();
     let Ok(mut windows) = PREVIEW_404_LOG.lock() else {
         return;
     };
@@ -252,7 +246,7 @@ pub(crate) fn log_preview_404(current_dir: &std::path::Path, path: &str) {
     log::warn!(
         "preview 404 {} from {} ({} more suppressed)",
         path,
-        served_tree_label(current_dir),
+        served_tree_label(served),
         suppressed
     );
 }
@@ -269,7 +263,7 @@ mod tests {
         use crate::moss_paths::MossPaths;
         let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
         std::fs::create_dir_all(&base).unwrap();
-        let proj = tempfile::TempDir::new_in(&base).expect("temp project");
+        let proj = tempfile::TempDir::new_in(base.canonicalize().unwrap()).expect("temp project");
 
         let mp = MossPaths::new(proj.path());
         mp.ensure_dirs().unwrap();
@@ -278,8 +272,9 @@ mod tests {
 
         let moss_path = mp.root();
         let resolved = serve_dir_for_site_path(moss_path.to_str().unwrap());
+        assert_eq!(resolved.folder.path(), proj.path());
         assert_eq!(
-            resolved,
+            resolved.dir,
             mp.current_ptr(),
             "folder-switch re-key must rest on the frozen current generation, not empty /site"
         );

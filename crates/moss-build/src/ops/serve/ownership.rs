@@ -395,7 +395,7 @@ pub async fn find_live_owner(folder: &Path) -> Option<OwnerRecord> {
 /// folder `site_dir` resolves to. A CLI holder yields to the app when asked;
 /// another desktop app is never asked, so it is still answering after a
 /// start it refused.
-pub async fn open_in_another_app(site_dir: &std::sync::Arc<std::sync::RwLock<PathBuf>>) -> bool {
+pub async fn open_in_another_app(site_dir: &crate::moss_paths::ServedCell) -> bool {
     let Some(folder) = resolve_vault_folder(site_dir) else { return false };
     find_live_owner(&folder)
         .await
@@ -426,11 +426,11 @@ pub const ALREADY_SERVED_EXIT_CODE: i32 = 3;
 /// resolves it once up front and passes the result on to
 /// [`wait_for_owner_to_leave`], which takes the already-resolved path rather
 /// than re-resolving it itself.
-fn resolve_vault_folder(site_dir: &std::sync::Arc<std::sync::RwLock<PathBuf>>) -> Option<PathBuf> {
+fn resolve_vault_folder(site_dir: &crate::moss_paths::ServedCell) -> Option<PathBuf> {
     site_dir
         .read()
         .ok()
-        .and_then(|dir| crate::moss_paths::served_folder(&dir).map(|v| v.path().to_path_buf()))
+        .map(|served| served.folder.path().to_path_buf())
 }
 
 /// [`acquire`] for whichever folder `site_dir` currently resolves to, for
@@ -442,7 +442,7 @@ fn resolve_vault_folder(site_dir: &std::sync::Arc<std::sync::RwLock<PathBuf>>) -
 /// A held lock is handled as `on_conflict` says. The wait is a timer, never
 /// a blocked thread, and ends when the caller drops this future.
 pub async fn acquire_for_site_dir(
-    site_dir: &std::sync::Arc<std::sync::RwLock<PathBuf>>,
+    site_dir: &crate::moss_paths::ServedCell,
     kind: HostKind,
     version: String,
     url: String,
@@ -820,7 +820,7 @@ mod tests {
         // The record on disk names an address nothing answers on:
         // the refusal must not repeat it as the holder.
         std::fs::create_dir_all(folder.path().join(".moss")).unwrap();
-        let cell = std::sync::Arc::new(std::sync::RwLock::new(folder.path().join(".moss")));
+        let cell = crate::moss_paths::Served::test_cell(folder.path().join(".moss"));
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let refusal = runtime
             .block_on(acquire_for_site_dir(&cell, HostKind::Cli, "1.2.3".to_string(), "http://127.0.0.1:9999".to_string(), OnConflict::Refuse, None))
@@ -890,7 +890,7 @@ mod tests {
         let folder = tempfile::tempdir().expect("tempdir for the served folder");
         let canonical = std::fs::canonicalize(folder.path()).unwrap();
         std::fs::create_dir_all(folder.path().join(".moss")).unwrap();
-        let cell = std::sync::Arc::new(std::sync::RwLock::new(folder.path().join(".moss")));
+        let cell = crate::moss_paths::Served::test_cell(folder.path().join(".moss"));
 
         let lock_path = owner_lock_path(&canonical).unwrap();
         std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
@@ -993,7 +993,7 @@ mod tests {
         let folder = tempfile::tempdir().expect("tempdir for the served folder");
         std::fs::create_dir(folder.path().join(".moss")).unwrap();
         let canonical = std::fs::canonicalize(folder.path()).unwrap();
-        let site_dir = std::sync::Arc::new(std::sync::RwLock::new(canonical.join(".moss")));
+        let site_dir = crate::moss_paths::Served::test_cell(canonical.join(".moss"));
         let other_pid = std::process::id().wrapping_add(1);
         let mut seen = vec![open_in_another_app(&site_dir).await];
         for (pid, kind) in [(other_pid, HostKind::Desktop), (other_pid, HostKind::Cli), (std::process::id(), HostKind::Desktop)] {

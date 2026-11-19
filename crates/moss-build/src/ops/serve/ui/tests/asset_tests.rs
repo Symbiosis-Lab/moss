@@ -36,7 +36,7 @@ fn app(f: &Fixture) -> Router {
         62001,
         62000,
         None,
-        Arc::new(std::sync::RwLock::new(f.site.clone())),
+        crate::moss_paths::Served::test_cell(f.site.clone()),
         super::super::super::HostKind::Cli,
         Arc::default(),
     )
