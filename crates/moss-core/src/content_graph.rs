@@ -255,8 +255,12 @@ pub struct PathResolution {
 /// case-insensitive (NFC-normalized, lowercased).
 #[derive(Debug, Clone)]
 pub struct ContentGraph {
-    /// All file paths (normalized), in insertion order.
+    /// All file paths as written, in insertion order.
     files: Vec<String>,
+
+    /// `normalize_path` of each entry in `files`, kept so a scan over every
+    /// file compares keys instead of re-normalizing each path per lookup.
+    normalized: Vec<String>,
 
     /// Normalized filename stem (no extension, lowercase) -> list of file indices.
     filename_index: HashMap<String, Vec<usize>>,
@@ -490,13 +494,11 @@ impl ContentGraph {
         ties: &mut Vec<String>,
     ) -> Option<usize> {
         let from_dirs = dir_components(norm_from);
-        // self.files stores original (pre-normalized) paths for filesystem
-        // fidelity; re-normalize to compare against norm_from.
         let rank = |idx: usize| {
-            let normalized = normalize_path(&self.files[idx]);
-            let tree_match = lang_tree_match(&normalized, from_lang);
-            let (page_score, extension_rank) = page_preference_score(ref_ext, &normalized);
-            let near = common_prefix_len(&dir_components(&normalized), &from_dirs);
+            let normalized = self.normalized[idx].as_str();
+            let tree_match = lang_tree_match(normalized, from_lang);
+            let (page_score, extension_rank) = page_preference_score(ref_ext, normalized);
+            let near = common_prefix_len(&dir_components(normalized), &from_dirs);
             ((page_score, tree_match, near, extension_rank), normalized)
         };
         let best = candidates
@@ -562,7 +564,7 @@ impl ContentGraph {
             .get(&normalize_component(name))?
             .iter()
             .copied()
-            .filter(|&i| dir_components(&normalize_path(&self.files[i])).as_slice() == dir)
+            .filter(|&i| dir_components(&self.normalized[i]).as_slice() == dir)
             .collect();
         let idx = self.nearest(&candidates, None, &normalize_path(from_path), from_lang, ties)?;
         Some(self.files[idx].clone())
@@ -666,8 +668,8 @@ impl ContentGraph {
 
                 // Try suffix match (sub-path as suffix of a longer graph path)
                 let suffix = format!("/{}", subpath);
-                let candidates: Vec<usize> = self.files.iter().enumerate()
-                    .filter(|(_, f)| normalize_path(f).ends_with(&suffix))
+                let candidates: Vec<usize> = self.normalized.iter().enumerate()
+                    .filter(|(_, f)| f.ends_with(&suffix))
                     .map(|(i, _)| i)
                     .collect();
                 if let Some(idx) = self.nearest(&candidates, ref_ext.as_deref(), &norm_from, from_lang, ties) {
@@ -772,6 +774,7 @@ impl ContentGraph {
 #[derive(Debug, Default)]
 pub struct ContentGraphBuilder {
     files: Vec<String>,
+    normalized: Vec<String>,
     filename_index: HashMap<String, Vec<usize>>,
     path_index: HashMap<String, usize>,
     slug_map: HashMap<String, String>,
@@ -827,6 +830,7 @@ impl ContentGraphBuilder {
 
         // Store original path (preserve casing for filesystem operations)
         self.files.push(relative_path.to_string());
+        self.normalized.push(norm);
     }
 
     /// Register a directory that gets an auto-generated folder-index page —
@@ -844,6 +848,7 @@ impl ContentGraphBuilder {
     pub fn build(self) -> ContentGraph {
         ContentGraph {
             files: self.files,
+            normalized: self.normalized,
             filename_index: self.filename_index,
             path_index: self.path_index,
             slug_map: self.slug_map,
