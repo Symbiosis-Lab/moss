@@ -65,8 +65,9 @@ pub struct ExtractionResult {
     /// surfaces these in the build log; presence does not abort the build.
     pub warnings: Vec<String>,
     /// Advisories that are not build problems: the author wrote something
-    /// that parses but has no effect on the output. They are logged at the
-    /// plain warning level, outside the problem count `--strict` reads.
+    /// that parses but has no effect on the output, or an older spelling
+    /// that still works. They are logged outside the problem count
+    /// `--strict` reads.
     pub advisories: Vec<String>,
     /// One entry per empty-name fenced div (`:::{.x}`) the extractor wrapped,
     /// in source order of their openers, nested regions included. Lets a
@@ -189,7 +190,7 @@ fn parse_shortcode_by_name(
         }
         "gallery" => {
             let (sc, warns) = parse_gallery_body(args, body, config);
-            (Some(Shortcode::Gallery(sc)), Diagnostics { warnings: warns, ..Default::default() })
+            (Some(Shortcode::Gallery(sc)), warns)
         }
         "hero" => {
             // Body media lines are the CANONICAL multi-slide grammar (the
@@ -251,9 +252,8 @@ fn parse_shortcode_by_name(
             let (sc, legacy, fragment_warnings) = parse_grid(args, body, config);
             let mut warns = fragment_warnings;
             if let Some(body_line) = legacy {
-                warns.warnings.push(format!(
-                    "`---` on line {} divides `:::grid` cells but is deprecated: write `+++` instead \
-                     (`---` support will be removed in a future release).",
+                warns.advisories.push(format!(
+                    "`---` on line {} divides `:::grid` cells, a spelling moss replaced with `+++` in 0.6.5.",
                     config.warning_line_offset + body_line + 1
                 ));
             }
@@ -305,12 +305,13 @@ fn per_line_attr<'a>(parsed: &'a super::attrs::AttrBlock) -> (Option<&'a str>, b
     (parsed.get("per-line").or(cols), cols.is_some())
 }
 
-/// Deprecation warning for the `cols=` alias, shared between `:::grid` and
-/// `:::gallery` so the message can't drift between the two shortcodes.
+/// Note for the `cols=` alias, shared between `:::grid` and `:::gallery` so
+/// the message can't drift between the two shortcodes. An advisory, not a
+/// problem: the alias still renders, so `--strict` must not fail on it.
 fn cols_alias_warning(shortcode_name: &str) -> String {
     format!(
-        "shortcode `:::{shortcode_name}` uses `cols=` (deprecated). \
-         Use `per-line=` or the positional form `:::{shortcode_name} 3`."
+        "shortcode `:::{shortcode_name}` uses `cols=`, renamed in moss 0.15.1. \
+         The current spelling is `per-line=`, or the positional form `:::{shortcode_name} 3`."
     )
 }
 
@@ -437,7 +438,7 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, O
         .collect();
     fragment.warnings.extend(unread.iter().copied().chain(words_after_braces(args)).map(|word| unread_word_warning("grid", word)));
     if used_cols_alias {
-        fragment.warnings.push(cols_alias_warning("grid"));
+        fragment.advisories.push(cols_alias_warning("grid"));
     }
     let mid_columns = parsed.get("mid").and_then(|v| match v.parse::<u32>() {
         Ok(n) if (1..=MAX_GRID_COLUMNS).contains(&n) => Some(n),
@@ -1203,9 +1204,10 @@ fn gallery_lines<'a>(lines: impl Iterator<Item = &'a str>, config: &ParseConfig)
 /// a positional `N` when both are present; `cols=` is a deprecated alias
 /// for `per-line=` — see [`per_line_attr`].
 ///
-/// Returns the shortcode plus its warnings: the `cols=` alias, a count a
-/// layout word overrides, and each word outside the braces it does not read.
-fn parse_gallery_body(args: &str, body: &str, config: &ParseConfig) -> (GalleryShortcode, Vec<String>) {
+/// Returns the shortcode plus its diagnostics: as warnings, a count a layout
+/// word overrides and each word outside the braces it does not read; as an
+/// advisory, the `cols=` alias.
+fn parse_gallery_body(args: &str, body: &str, config: &ParseConfig) -> (GalleryShortcode, Diagnostics) {
     let attrs = split_positional_classes_width_and_per_line(args);
     let mut warnings = Vec::new();
     // `rows` and `marquee` are layout words, not counts: `:::gallery rows` is
@@ -1257,9 +1259,7 @@ fn parse_gallery_body(args: &str, body: &str, config: &ParseConfig) -> (GalleryS
             }
         }
     }
-    if attrs.used_cols_alias {
-        warnings.push(cols_alias_warning("gallery"));
-    }
+    let advisories = if attrs.used_cols_alias { vec![cols_alias_warning("gallery")] } else { Vec::new() };
     (
         GalleryShortcode {
             columns,
@@ -1270,7 +1270,7 @@ fn parse_gallery_body(args: &str, body: &str, config: &ParseConfig) -> (GalleryS
             marquee,
             caption: Vec::new(),
         },
-        warnings,
+        Diagnostics { warnings, advisories },
     )
 }
 
@@ -1791,6 +1791,7 @@ fn extract_with_state(
                     "`:::{name}` on line {line_number} is declared by more than one plugin, so only its content is shown; write {} instead",
                     owners.iter().map(|o| format!("`:::{o}`")).collect::<Vec<_>>().join(" or ")
                 ),
+                _ if name == "apply" || name == "toc" => format!("`:::{name}` on line {line_number} was removed in moss {}, so only its content is shown. Nothing replaces it.", if name == "apply" { "0.15.13" } else { "0.6.5" }),
                 _ => format!("unknown shortcode `:::{name}` on line {line_number}"),
             });
             let mut classes = vec!["moss-unknown-shortcode".to_string()];
