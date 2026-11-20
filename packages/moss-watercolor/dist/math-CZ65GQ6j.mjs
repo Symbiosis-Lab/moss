@@ -88,35 +88,4 @@ const parseColour = (c) => {
 };
 
 //#endregion
-//#region src/engine/preset.ts
-const DEFAULT_PRESET = {
-	dt: 1 / 120,
-	stepsPerFrame: 36,
-	tSplash: .2,
-	tDry: 1.2,
-	tTake: 1.2,
-	tCure: .9,
-	tTotal: 2.1,
-	recDuration: 1.7,
-	recEvery: 8,
-	recStir: (t) => 1.5 * smooth(.25, .9, t),
-	recOpen: (t) => smooth(.45, 1.35, t),
-	recRain: (t) => .012 * smooth(.45, .7, t) * (1 - smooth(1.4, 1.7, t)),
-	recRinseFrom: .9,
-	recRinse: .02,
-	recLight: .28,
-	playOut: .42,
-	playIn: .58,
-	endpointMargin: .08,
-	drainFloor: .35
-};
-/** Derived from `recDuration`/`dt`/`recEvery`: never store these independently, or a preset override can silently desync the recorded step count from the frames actually kept. */
-function recordingSteps(preset) {
-	return Math.round(preset.recDuration / preset.dt);
-}
-function recordingFrameCount(preset) {
-	return Math.ceil(recordingSteps(preset) / preset.recEvery) + 1;
-}
-
-//#endregion
-export { drain as a, parseColour as c, clamp01 as i, smooth as l, recordingFrameCount as n, endpointPresence as o, recordingSteps as r, isDarkPage as s, DEFAULT_PRESET as t };
+export { parseColour as a, isDarkPage as i, drain as n, smooth as o, endpointPresence as r, clamp01 as t };

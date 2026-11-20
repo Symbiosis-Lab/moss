@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pigment in motion</title>
+<style>
+  :root { color-scheme: light; --bg: #f4efe6; background: var(--bg); color: #263447; font: 17px/1.5 system-ui, sans-serif; }
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  header, footer { max-width: 52rem; padding: 2rem 1rem; margin: auto; }
+  h1 { font: 500 clamp(2rem, 6vw, 4rem)/1.05 Georgia, serif; margin: 0 0 1rem; }
+  p { max-width: 40rem; }
+  .journey { height: 340svh; }
+  .sticky { position: sticky; top: 0; min-height: 100svh; display: grid; align-content: center; justify-items: center; gap: 1rem; padding: 1rem; }
+  .picture { position: relative; width: min(100%, 820px, 68svh * 820 / 780); aspect-ratio: 820 / 780; }
+  .picture img, .picture canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .picture canvas { opacity: 0; pointer-events: none; }
+  .picture.active canvas { opacity: 1; }
+  .picture.active img { visibility: hidden; }
+  #second { display: none; }
+  #caption { min-height: 1.5em; margin: 0; text-align: center; }
+  button { font: inherit; padding: .5rem 1rem; color: inherit; border: 1px solid currentColor; background: transparent; cursor: pointer; }
+  .still .journey { height: auto; }
+  .still .sticky { position: static; min-height: 0; }
+  .still .picture { aspect-ratio: auto; display: grid; gap: 1rem; }
+  .still .picture img { display: block !important; position: static; height: auto; visibility: visible; }
+  .still canvas { display: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .journey { height: auto; }
+    .sticky { position: static; min-height: 0; }
+    .picture { aspect-ratio: auto; display: grid; gap: 1rem; }
+    .picture img { display: block !important; position: static; height: auto; visibility: visible !important; }
+    .picture canvas { display: none; }
+  }
+</style>
+<header><h1>Colour, carried by water.</h1><p>Scroll from a warm hillside to a cool shoreline. The picture washes into pigment, gathers into a turning cloud, then settles into the next view.</p></header>
+<main class="journey"><div class="sticky">
+  <div class="picture"><img id="first" src="hills.svg" alt="An ochre hillside beneath a rust-coloured sun"><img id="second" src="shore.svg" alt="Blue water and green islands beneath a pale sky"><canvas aria-hidden="true"></canvas></div>
+  <p id="caption" role="status">Preparing the colours…</p>
+</div></main>
+<footer><p>Pause anywhere in the cloud. Its colours change with your scroll; its shape keeps a quiet rhythm.</p><button type="button" id="again">Back to the hillside</button></footer>
+<script type="module" src="main.js"></script>
+</html>

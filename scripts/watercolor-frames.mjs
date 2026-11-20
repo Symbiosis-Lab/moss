@@ -11,9 +11,11 @@ import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { loadPlaywright } from './landing-harness.mjs';
+import { SPHERE_CASES, captureSphereCase, compareSphereFrames } from './watercolor-sphere-frames.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const BASELINE = join(ROOT, 'scripts/watercolor-frames.hashes.json');
+const SPHERE_BASELINE = join(ROOT, 'scripts/watercolor-sphere-frames.hashes.json');
 const PLAYWRIGHT_VERSION = '1.61.1';
 export const CASES = ['light', 'dark', 'transparent', 'to-nothing', 'turn'];
 export const GRIDS = [{ name: 'phone-205x195', divisor: 4 }, { name: 'desktop-410x390', divisor: 2 }];
@@ -67,7 +69,7 @@ export async function pinnedPlaywright() {
 
 export async function bundleEngine() {
   const bundle = await build({
-    stdin: { contents: "export * from './engine/index.js'; export * from './model/index.js';",
+    stdin: { contents: "export * from './engine/index.js'; export * from './model/index.js'; export * from './sphere/index.js';",
       resolveDir: join(ROOT, 'packages/moss-watercolor/src'), loader: 'ts' },
     tsconfig: join(ROOT, 'packages/moss-watercolor/tsconfig.json'),
     bundle: true, format: 'iife', globalName: 'MossWatercolor', target: 'es2020', write: false,
@@ -111,6 +113,7 @@ export function prepareInPage({ name, divisor }) {
     webgl: gl.getParameter(gl.VERSION), shadingLanguage: gl.getParameter(gl.SHADING_LANGUAGE_VERSION) };
   let baked;
   window.watercolorFrames = {
+    sphereInput: { sim, canvas, sides },
     // Each call is bounded so the host can identify a stalled recording.
     record(index) { sim.recordSide(sides[index], 36); return sim.sideRecorded(sides[index]); },
     count: sides.length,
@@ -139,7 +142,7 @@ export function prepareInPage({ name, divisor }) {
   return { metadata, count: sides.length };
 }
 
-async function captureCase(browser, script, name, grid, out, hashes, expectedMetadata, runtime) {
+async function captureCase(browser, script, name, grid, out, hashes, expectedMetadata, runtime, extension) {
   const page = await browser.newPage({ viewport: { width: 820, height: 780 }, deviceScaleFactor: 1 });
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -166,6 +169,9 @@ async function captureCase(browser, script, name, grid, out, hashes, expectedMet
       mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, bytes, { flag: 'wx' });
       hashes[key] = createHash('sha256').update(bytes).digest('hex');
     }
+    if (extension && SPHERE_CASES.includes(name)) {
+      await captureSphereCase(page, name, grid, out, extension.hashes, extension.timing);
+    }
     if (errors.length) throw new Error(errors.join('\n'));
     await page.evaluate(() => window.watercolorFrames.dispose());
     console.log(`${name}/${grid.name}: 61 frames`);
@@ -174,11 +180,14 @@ async function captureCase(browser, script, name, grid, out, hashes, expectedMet
 }
 
 export async function main(args = process.argv.slice(2)) {
-  const { values } = parseArgs({ args, options: { write: { type: 'boolean' }, out: { type: 'string' }, help: { type: 'boolean' } } });
+  const { values } = parseArgs({ args, options: { write: { type: 'boolean' }, out: { type: 'string' }, help: { type: 'boolean' },
+    'wash-only': { type: 'boolean' }, 'write-sphere': { type: 'boolean' }, 'sphere-timing': { type: 'boolean' } } });
   if (values.help) {
-    console.log('Usage: node scripts/watercolor-frames.mjs [--write] [--out DIR]\n610 alpha-preserving PNGs; DIR must be outside the repo (default: temp directory).\nDefault compares scripts/watercolor-frames.hashes.json. --write records an initial baseline.');
+    console.log('Usage: node scripts/watercolor-frames.mjs [--wash-only] [--write-sphere] [--sphere-timing] [--out DIR]\n610 alpha-preserving PNGs; DIR must be outside the repo (default: temp directory).\nDefault compares 610 wash and 366 sphere hashes and checks post-hold In. --wash-only checks the original baseline. --write-sphere records only the sphere hashes, after the wash matches. --sphere-timing measures 120 hold intervals against wash. --write is only for a missing initial wash baseline.');
     return;
   }
+  if (values.write && existsSync(BASELINE)) throw new Error('The existing wash baseline is immutable; --write cannot replace it');
+  if (values['write-sphere'] && (values.write || values['wash-only'])) throw new Error('--write-sphere requires wash comparison and sphere capture');
   const outputParent = outsideRepository(values.out ?? tmpdir());
   if (!values.write && !existsSync(BASELINE)) throw new Error('Missing scripts/watercolor-frames.hashes.json; capture the initial baseline with --write on the pinned renderer');
   const expected = values.write ? null : JSON.parse(readFileSync(BASELINE, 'utf8'));
@@ -196,11 +205,14 @@ export async function main(args = process.argv.slice(2)) {
     hash: 'sha256-png', timeline: 'turn-at-half-resume-through-one' };
   const browser = await chromium.launch({ headless: true, args: ['--use-angle=swiftshader'] });
   const hashes = {};
+  const extension = values['wash-only'] || values.write ? null : { hashes: {}, timing: values['sphere-timing'] };
+  const sphereExpected = extension && !values['write-sphere'] && existsSync(SPHERE_BASELINE)
+    ? JSON.parse(readFileSync(SPHERE_BASELINE, 'utf8')) : null;
   let metadata;
   try {
     runtime.chromium = browser.version();
     for (const name of CASES) for (const grid of GRIDS) {
-      metadata = await captureCase(browser, script, name, grid, out, hashes, expected?.metadata ?? metadata, runtime);
+      metadata = await captureCase(browser, script, name, grid, out, hashes, expected?.metadata ?? metadata, runtime, extension);
     }
   } finally { await browser.close(); }
   const record = { metadata, frames: Object.fromEntries(Object.entries(hashes).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) };
@@ -209,6 +221,18 @@ export async function main(args = process.argv.slice(2)) {
   const differences = compareFrames(expected?.frames ?? hashes, hashes);
   if (differences.length) throw new Error(differences.join('\n'));
   if (values.write) writeFileSync(BASELINE, json);
+  if (extension) {
+    const sphereRecord = { metadata, frames: Object.fromEntries(Object.entries(extension.hashes).sort()) };
+    const sphereJSON = JSON.stringify(sphereRecord, null, 2) + '\n';
+    writeFileSync(join(out, 'sphere-hashes.json'), sphereJSON);
+    if (values['write-sphere']) writeFileSync(SPHERE_BASELINE, sphereJSON);
+    else {
+      if (!sphereExpected) throw new Error('Wash matched; sphere baseline missing. Capture with --write-sphere on the pinned renderer, then compare twice');
+      const errors = [...compareMetadata(sphereExpected.metadata, metadata),
+        ...compareSphereFrames(sphereExpected.frames, extension.hashes, GRIDS)];
+      if (errors.length) throw new Error(errors.join('\n'));
+    }
+  }
   console.log(`${values.write ? 'Recorded' : 'Matched'} ${Object.keys(hashes).length} frames; evidence: ${out}`);
 }
 

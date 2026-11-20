@@ -23,6 +23,10 @@
     "./model": {
       "import": "./dist/model/index.mjs",
       "types": "./dist/model/index.d.mts"
+    },
+    "./sphere": {
+      "import": "./dist/sphere/index.mjs",
+      "types": "./dist/sphere/index.d.mts"
     }
   },
   "files": [

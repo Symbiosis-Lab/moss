@@ -5,6 +5,7 @@ export default defineConfig({
     index: "src/index.ts",
     "engine/index": "src/engine/index.ts",
     "paper/index": "src/paper/index.ts",
+    "sphere/index": "src/sphere/index.ts",
     "model/index": "src/model/index.ts",
   },
   format: ["esm"],

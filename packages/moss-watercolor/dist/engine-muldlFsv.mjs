@@ -1,5 +1,7 @@
-import { a as drain, c as parseColour, i as clamp01, l as smooth, n as recordingFrameCount, o as endpointPresence, r as recordingSteps, s as isDarkPage, t as DEFAULT_PRESET } from "./preset-CbPMJNtm.mjs";
-import { t as createPaper } from "./default-D3yqzjlz.mjs";
+import { a as parseColour, i as isDarkPage, n as drain, o as smooth, r as endpointPresence, t as clamp01 } from "./math-CZ65GQ6j.mjs";
+import { n as recordingFrameCount, r as recordingSteps, t as DEFAULT_PRESET } from "./preset-JJvOfqsz.mjs";
+import { t as createPaper } from "./default-DJJ93qau.mjs";
+import { n as forgetSim, r as registerSim } from "./context-8HSrqj5R.mjs";
 
 //#region src/engine/shaders.ts
 const V = `#version 300 es
@@ -683,6 +685,7 @@ function createSim(opts) {
 	let owner = null, recording = false, grownFor = null;
 	const api = {
 		dispose() {
+			forgetSim(api);
 			gl.getExtension("WEBGL_lose_context")?.loseContext();
 		},
 		setPrints(src, tgt) {
@@ -835,6 +838,9 @@ function createSim(opts) {
 		sideRecorded(side) {
 			return side.n >= REC_STEPS && fresh(side);
 		},
+		pigmentAt(side, u) {
+			return frameAt(side, u);
+		},
 		playSides(x, ux, y, uy, k, p, { toNothing = false } = {}) {
 			return drawSides(x, ux, y, uy, k, p, null, toNothing);
 		},
@@ -912,6 +918,13 @@ function createSim(opts) {
 		draw();
 		return true;
 	};
+	registerSim(api, {
+		gl,
+		width: W,
+		height: H,
+		ground,
+		page
+	});
 	return api;
 }
 

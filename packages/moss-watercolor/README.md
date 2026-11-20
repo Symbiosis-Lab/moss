@@ -17,7 +17,8 @@ A dispersion is recorded once per scene (`sceneSide`/`recordSide`), budgeted acr
 - **`./engine`** -- `createSim(options)`, the solver and its recording-and-playback methods (`setPrints`, `reset`, `step`, `draw`, `probe`, `setTint`, the scene-side methods `sceneSide`, `recordSide`, `sideRecorded`, `playSides`, `bake`, `freeSide`, and `onContextLost`, `dispose`). Returns `null` without WebGL2 + `EXT_color_buffer_float`. Also exports `DEFAULT_PRESET` (every paper/fluid timing constant the solver reads) and `advance` (the host utility: paces a sim's clock toward a goal, however that goal is produced -- scroll, a timer, a test driving it by hand. This package has no opinion on which).
 - **`./paper`** -- `createPaper(options)`, the generated paper texture (tileable value noise: r relief, g absorbency, b fibre, a pore). A fixed default seed makes two calls reproduce the same sheet bit-for-bit.
 - **`./model`** -- the three-phase leg as pure functions of `p`, independent of the engine: `phaseOf` (which phase `p` is in), `legAt` (the dissolves and mix `playSides` draws at `p`) and `turnAt` (where a leg turned toward a third scene resumes; see "Transitions that turn"), with `DEFAULT_PHASE_BOUNDS` read from `DEFAULT_PRESET`.
-- **`.`** -- re-exports all three.
+- **`./sphere`** -- optional pigment-point renderer, described below. The root entry does not include its shader.
+- **`.`** -- re-exports engine, paper and model.
 
 ## Usage
 
@@ -70,6 +71,75 @@ Because every side is recorded over the same footprint, any two of them mix, so 
 `legAt(p, bounds)` in `./model` gives the `ux`, `uy` and `k` a leg draws at `p`, and `turnAt(p, bounds)` turns it toward a third scene with no change on screen. Before the mix, the incoming side is swapped for the new scene; while the incoming scene gathers, it becomes the outgoing side at the matching dissolve; and while the two washes mix, `bake(a, ux, b, uy, k, p)` keeps the mix on screen as one side, which plays as the outgoing side toward the new scene from the `p` `turnAt` returns. A baked side keeps the envelope it was baked at, so the frame holds on either ground and with any endpoint margin up to the middle of the leg; the bounds must be symmetric. Free it with `freeSide` once the leg is done. `sceneSide` takes `dose` (how strongly the print's colour is charged), `rinse` and `light` (the flush per step once the wash is mixed, while its mean pigment is above `light`: a rinse of 0 keeps a dark wash whose colour is the point, and a light of 0 flushes a wash off the sheet), and a `look` that shapes how the ink lets go: `stir` and `lift` (how much the film is stirred and how fast the print lets go, as scales of the recording's schedule), `splash` and `mix` (0 for paint laid flat on still water rather than splashed and stirred to one colour), `flow` and `flowSize` (slow eddies with no direction), `bloom` and `reach` (dense colour running apart faster than thin), `diffuse`, `dilute` and `diluteFrom` (thinning into the water's depth), and `liftRamp`. Prints are uploaded once and kept by identity, up to ten; past that the oldest goes (any but the two last recorded against), and one dropped is uploaded again the next time a side plays it. Each side's recording costs GPU memory until it is freed (see "Memory cost").
 
 The browser test (`pnpm --filter @symbiosis-lab/moss-watercolor run test:browser`) renders these in real WebGL, which the vitest suite cannot: run it after changing the engine. It checks both ends of a leg against their prints on light, dark and fully saturated page colours and on a transparent ground, that mid-leg frames hold wash, that a transparent ground composited over the page matches the paper ground and drains as `drainFloor` says, a leg to nothing, and a theme flip before and during a recording. For turning legs it checks both ends against their own prints, a recording interrupted by another against an uninterrupted one, a bake against the mix it was baked from, that every look field reaches the recording, a print dropped from the cache and drawn again, a freed side, and a side voided by a new page colour.
+
+## Pigment sphere
+
+Import `createSphere` from `@symbiosis-lab/moss-watercolor/sphere` and
+`sphereLegAt` from `@symbiosis-lab/moss-watercolor/model`. This optional renderer
+uses the same canvas and recorded pigment as the wash. It allocates one program
+and one empty vertex array, with no textures or vertex buffers. Engine-only
+consumers do not ship its shaders.
+
+```ts
+const sphere = createSphere(sim, { stride: 1 });
+const pose = sphereLegAt(p); // ux, uy, k, lift, grain
+sim.playSides(a, pose.ux, b, pose.uy, pose.k, washP);
+sphere.draw(sim.pigmentAt(a, pose.ux), sim.pigmentAt(b, pose.uy), { ...pose, t: seconds });
+// When this renderer is no longer needed:
+sphere.dispose();
+```
+
+The five phase boundaries default to Out ending at `.18`, Hold starting at
+`.34` and ending at `.66`, and In starting at `.82`. Pass a `SphereBounds`
+object to `sphereLegAt` to change them. Grain hands the wash over to points
+at their own cells before they lift; on Release the points return to their cells
+before handing back to water. During Hold, the sample dissolve is `.55`, which
+retains separated hues, and `k` mixes their optical thickness. The complete
+Out and In recordings still play. For their original endpoint envelope,
+map `washP` from 0 to `DEFAULT_PRESET.playOut` during Out, hold it between
+`playOut` and `playIn` through the middle, then map `playIn` to 1 during In.
+The standalone demo shows this mapping.
+
+Call `playSides` before **every** sphere draw: the renderer fades that frame
+toward transparency (or clear paper), then draws its pigment points. At grain
+zero it does nothing. It restores the GL state it changes, including texture
+and sampler bindings, separate draw framebuffer, viewport, program, vertex
+array, blend state, colour mask and enables. Pass samples from the same sim;
+`pigmentAt` returns read-only borrowed frame views, using playback's existing
+clamping and partial-recording lookup. They become invalid after freeing or
+re-recording a side, changing tint, disposing the sim, or losing its context.
+It returns null for unrecorded, freed or tint-invalidated sides. A missing
+sample prevents drawing unless that side contributes no pigment. Shader
+compilation failure throws; a host can catch it and keep the wash or a still.
+
+The consumer owns both clocks: run the short Out/Gather and Release/In phases
+on a timer and map scrolling to Hold. `t` is seconds for calm rotation and
+breathing; `stride` draws every nth grid cell (default 1), and optional
+`pointSize` sets the diameter in canvas pixels. Keep both sides' recordings
+alive through Hold and Release. This extends their lifetime, not their size.
+With reduced motion, use the existing wash or display the two stills.
+
+### Standalone example and rendering checks
+
+Serve this repository over local HTTP and open
+`packages/moss-watercolor/demo/`. It uses the committed dist modules and two
+local SVG pictures, a 205×195 grid at phone widths and 410×390 on desktop.
+The reduced-motion view shows both pictures in normal document flow.
+
+`pnpm --filter @symbiosis-lab/moss-watercolor test:frames --wash-only`
+checks the original 610 hashes. The default also compares 366 sphere frames
+and checks 186 In frames against their pristine render after a sphere hold.
+Only the pinned Playwright 1.61.1 / SwiftShader renderer is accepted.
+`--write-sphere` captures the separate sphere baseline only after the original
+wash matches; it never rewrites the wash baseline. The sphere baseline must
+be captured and then compared twice before landing. `--sphere-timing` measures
+120 phone-grid frame intervals after warmup, with a relative limit of the
+wash p95 × 1.25 + 1 ms. SwiftShader timing is a regression check, not phone proof.
+
+Before landing, measure a real iPhone in Safari at **205×195**, with Hold frame
+interval **p95 ≤ 16.7 ms**; record script transfer bytes and tab memory through
+Hold alongside the result. Headless Chromium and mock GL tests cannot establish
+that device result or visual quality.
 
 ## Requirements
 

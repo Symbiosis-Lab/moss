@@ -102,3 +102,7 @@ test('capture uses recorded sides, null incoming for to-nothing, and a baked mid
     window.watercolorFrames.dispose();
   }
 });
+
+test('an existing wash baseline cannot be overwritten', async () => {
+  await assert.rejects(main(['--write']), /immutable/);
+});

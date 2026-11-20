@@ -1,4 +1,4 @@
-import { t as Paper } from "./default-Cs3xymcD.mjs";
+import { t as Paper } from "./default-DjfhyYf-.mjs";
 
 //#region src/engine/math.d.ts
 
@@ -134,6 +134,16 @@ interface BakedSide {
   print: PrintSource;
   at: number;
 }
+/** Read-only views of the two recorded frames around a dissolve; owned by the sim. */
+interface PigmentFrame {
+  readonly s: WebGLTexture;
+  readonly d: WebGLTexture;
+}
+interface PigmentSample {
+  readonly k0: PigmentFrame;
+  readonly k1: PigmentFrame;
+  readonly f: number;
+}
 interface WatercolorSim {
   dispose(): void;
   setPrints(src: PrintSource, tgt: PrintSource): void;
@@ -156,6 +166,10 @@ interface WatercolorSim {
   /** Records up to `budget` steps of a scene side. One side records at a time: the sides share the simulation's state. */
   recordSide(side: SceneSide, budget: number): void;
   sideRecorded(side: SceneSide): boolean;
+  /** Uses playback's exact frame lookup, including partial recordings and tint invalidation.
+   * Valid until freeSide, re-recording, tint change or dispose; do not mutate the textures.
+   */
+  pigmentAt(side: SceneSide, u: number): PigmentSample | null;
   /** `x` at dissolve `ux` (0 its print, 1 its mixed wash), mixed by `k` into `y` at `uy`; `p` in [0, 1] places the leg's envelope, so at either end the canvas is that end's plain print. A `y` with nothing recorded yet adds nothing to the mix, but the leg still ends on its print. `toNothing`, on a transparent ground, drains the canvas clear from the middle of the leg on, so the host shows its own incoming page; ignored on a paper ground. */
   playSides(x: SceneSide | BakedSide, ux: number, y: SceneSide | null, uy: number, k: number, p: number, options?: {
     toNothing?: boolean;
@@ -166,22 +180,4 @@ interface WatercolorSim {
 }
 declare function createSim(opts: CreateSimOptions): WatercolorSim | null;
 //#endregion
-//#region src/engine/host.d.ts
-interface ClockState {
-  /** Sim-seconds already stepped toward the last goal. */
-  t: number;
-  /** The `t` last painted, or -1 if nothing has been painted yet. */
-  drawn: number;
-}
-interface AdvanceResult {
-  /** Whether `t` reached within one step of `goal` (the sim is as far along as this frame's goal asks). */
-  caughtUp: boolean;
-  /** Steps actually spent this call. */
-  count: number;
-}
-declare function advance(sim: Pick<WatercolorSim, 'reset' | 'step'>, state: ClockState, goal: number, fwd: boolean, stir: number, tilt: number, relift: number, paint: (t: number) => void, preset?: WatercolorPreset): AdvanceResult;
-//#endregion
-//#region src/engine/shaders.d.ts
-declare const DIAG_VIEWS: Record<number, string>;
-//#endregion
-export { BakedSide as a, Rect as c, StepOptions as d, WatercolorSim as f, WatercolorPreset as h, advance as i, SceneSide as l, DEFAULT_PRESET as m, AdvanceResult as n, CreateSimOptions as o, createSim as p, ClockState as r, PrintSource as s, DIAG_VIEWS as t, SideLook as u };
+export { PrintSource as a, SideLook as c, createSim as d, DEFAULT_PRESET as f, PigmentSample as i, StepOptions as l, CreateSimOptions as n, Rect as o, WatercolorPreset as p, PigmentFrame as r, SceneSide as s, BakedSide as t, WatercolorSim as u };

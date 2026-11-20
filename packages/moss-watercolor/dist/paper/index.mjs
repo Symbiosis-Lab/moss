@@ -1,3 +1,3 @@
-import { t as createPaper } from "../default-D3yqzjlz.mjs";
+import { t as createPaper } from "../default-DJJ93qau.mjs";
 
 export { createPaper };
