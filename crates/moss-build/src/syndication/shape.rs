@@ -141,7 +141,7 @@ pub fn shape_with(post: &ArticleInfo, spec: &ChannelSpec, site_url: &str, opts: 
         }
         if spec.takes(Form::Thread) && parts.len() > 1 && parts.iter().all(|p| spec.fits(&p.text)) {
             (Form::Thread, parts, None, None)
-        } else if spec.takes(Form::Long) {
+        } else if spec.takes_article(&whole.text) {
             let (html, included, omitted) = super::pictures::article_html(post, site_url, opts, spec.max_article_images());
             let mut html = super::pictures::clean(&html, &post.title);
             included_pictures = included;

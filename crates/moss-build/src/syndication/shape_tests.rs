@@ -93,6 +93,19 @@ fn too_long_for_the_network_becomes_a_link_post_that_never_quotes_the_page() {
 }
 
 #[test]
+fn an_article_longer_than_the_networks_article_form_goes_as_a_link_post() {
+    let mut p = post("Autumn", &"A sentence about autumn. ".repeat(20));
+    p.frontmatter.insert("description".into(), serde_json::json!("About the season."));
+    let mut channel = spec(&[Form::Short, Form::Long, Form::Teaser], 100);
+    channel.max_article_chars = Some(10_000);
+    assert_eq!(shape(&p, &channel, SITE).unwrap().form, Form::Long);
+    channel.max_article_chars = Some(400);
+    let s = shape(&p, &channel, SITE).unwrap();
+    assert_eq!(s.form, Form::Teaser);
+    assert_eq!(s.parts[0].text, format!("Autumn\n\nAbout the season.\n\n{PAGE}"));
+}
+
+#[test]
 fn a_description_that_does_not_fit_whole_is_left_out_not_cut() {
     let mut p = post("Autumn", "A long essay.\n");
     p.frontmatter.insert("description".into(), serde_json::json!("今天很冷。我们去吃火锅了，吃了很久很久很久很久。"));
