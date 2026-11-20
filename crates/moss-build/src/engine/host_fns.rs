@@ -1694,8 +1694,14 @@ mod tests {
     }
 
     async fn browser_call(desk: &PanelRecorder, cmd: &str, args: serde_json::Value) -> std::result::Result<String, String> {
+        browser_call_as(desk, "mastodon", cmd, args).await
+    }
+
+    /// Sign-ins are keyed by plugin across the process, so a test that waits
+    /// on one uses a plugin no parallel test does.
+    async fn browser_call_as(desk: &PanelRecorder, plugin: &str, cmd: &str, args: serde_json::Value) -> std::result::Result<String, String> {
         let state = HostState::standalone();
-        let host = EngineHost { app: Some(desk), state: &state, project_path: "/tmp/none", plugin: Some("mastodon"), asked_by: None, declared: None };
+        let host = EngineHost { app: Some(desk), state: &state, project_path: "/tmp/none", plugin: Some(plugin), asked_by: None, declared: None };
         dispatch_command_core(host, cmd, &args.to_string()).await
     }
 
@@ -1723,6 +1729,30 @@ mod tests {
         let reply = browser_call(&desk, "fill_browser_panel", serde_json::json!({ "pluginName": "matters", "fill": fill })).await.unwrap();
         assert_eq!(reply, r#"{"filled":true}"#);
         assert_eq!(*desk.fill.lock().unwrap(), Some(("mastodon".to_string(), "/tmp/none".to_string(), fill)));
+    }
+
+    /// A plugin tells a cancel from a failure by this text alone, so the
+    /// engine's rejection and moss-api's `SignInCancelled` must agree on it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_superseded_sign_in_rejects_with_the_text_moss_api_reads_as_cancelled() {
+        use crate::plugins::runtime::browser_sign_in::CANCELLED;
+        let desk = std::sync::Arc::new(PanelRecorder::default());
+        browser_call_as(&desk, "cancel-probe", "browser_sign_in_start", serde_json::json!({})).await.unwrap();
+        let waiting = {
+            let desk = desk.clone();
+            tokio::spawn(async move { browser_call_as(&desk, "cancel-probe", "browser_sign_in_wait", serde_json::json!({ "url": "https://example.com/authorize" })).await })
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while desk.browser.lock().unwrap().is_empty() {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the sign-in never opened the browser");
+        browser_call_as(&desk, "cancel-probe", "browser_sign_in_start", serde_json::json!({})).await.unwrap();
+        assert_eq!(waiting.await.unwrap(), Err(CANCELLED.to_string()));
+        let moss_api = include_str!("../../../../packages/moss-api/src/utils/browser.ts");
+        assert!(moss_api.contains(&format!("const CANCELLED = \"{CANCELLED}\";")), "moss-api's SignInCancelled reads a different text");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -38,6 +38,7 @@ export {
   returnToEditor,
   openSystemBrowser,
   startBrowserSignIn,
+  SignInCancelled,
   openBrowserWithHtml,
   showBrowserForm,
   fillEditor,

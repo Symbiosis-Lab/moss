@@ -9,6 +9,7 @@ use engine_adapter::PluginEngine;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
+pub mod accounts;
 pub mod copies;
 pub mod engine_adapter;
 pub mod listing;
@@ -451,7 +452,7 @@ impl PluginManager {
                 &context_json,
                 asked_by,
             ).await {
-                Ok(result) => self.restate_offer(plugin, asked_by, result),
+                Ok((result, _)) => self.restate_offer(plugin, asked_by, result),
                 Err(e) => {
                     log::warn!(target: "plugin", "⚠️ Plugin '{}' process hook failed: {}", plugin.manifest.name, e);
                     if !has_login {
@@ -506,7 +507,7 @@ impl PluginManager {
             Capability::Process.hook_name(),
             &context_json,
             asked_by,
-        ).await?;
+        ).await?.0;
         self.restate_offer(&plugin, asked_by, result);
         Ok(())
     }
@@ -534,27 +535,6 @@ impl PluginManager {
         });
     }
 
-    /// Dispatch a named plugin export by hook name — public entry point for
-    /// commands that need to invoke an export that isn't a routed `Capability`
-    /// (e.g. the `login` export invoked by `connect_account`).
-    ///
-    /// The caller is responsible for passing a pre-initialized plugin and a
-    /// pre-serialized context JSON. The watchdog suppression, singleflight dedup,
-    /// and hook-state lifecycle are all handled inside `execute_plugin_javascript`.
-    ///
-    /// # Design note
-    /// `execute_plugin_javascript` is private so callers can't accidentally bypass
-    /// the initialization and state-management guards. This thin public wrapper
-    /// exposes the dispatch surface without relaxing those guards — the caller
-    /// must already hold an initialized `Plugin` reference.
-    pub async fn execute_plugin_javascript_pub(
-        &self,
-        plugin: &Plugin,
-        hook_name: &str,
-        context_json: &str,
-    ) -> Result<Option<HookResult>, String> {
-        self.execute_plugin_javascript(plugin, hook_name, context_json, AskedBy::Person).await
-    }
 
 
     /// Execute deploy capability (publish to hosting platforms)
@@ -701,7 +681,7 @@ impl PluginManager {
         hook_name: &str,
         context_json: &str,
         asked_by: AskedBy,
-    ) -> Result<Option<HookResult>, String> {
+    ) -> Result<(Option<HookResult>, Option<serde_json::Value>), String> {
         let hook_state = &self.host.state.hooks;
 
         // --- Singleflight: deduplicate concurrent dispatch of the same hook ---
@@ -741,7 +721,7 @@ impl PluginManager {
             let _ = rx.changed().await;
             return match rx.borrow().clone() {
                 Some(result) => result,
-                None => Ok(None), // Aborted — treat as no-op
+                None => Ok((None, None)), // Aborted — treat as no-op
             };
         }
 
@@ -766,7 +746,6 @@ impl PluginManager {
             // The select! loop produced a verdict (success or timeout) —
             // disarm the guard and share it with any waiters.
             HookRun::Finished(result) => {
-                let result = result.map(|(hook_result, _)| hook_result);
                 sf_guard.disarm();
                 hook_state.in_flight_hooks.complete(&singleflight_key, result.clone());
                 result

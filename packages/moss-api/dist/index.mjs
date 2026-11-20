@@ -483,6 +483,29 @@ async function returnToEditor() {
 async function openSystemBrowser(url) {
 	await getTauriCore().invoke("open_system_browser", { url });
 }
+/** The text moss ends a cancelled sign-in with. */
+const CANCELLED = "sign-in cancelled";
+/**
+* The person stopped the sign-in: they closed it, or another sign-in started.
+* A `login` answers `{ status: "cancelled" }` for it rather than a failure.
+*
+* @example
+* ```typescript
+* try {
+*   reply = await signIn.open(authorizeUrl);
+* } catch (e) {
+*   if (e instanceof SignInCancelled) return { status: "cancelled" };
+*   throw e;
+* }
+* ```
+* @category Browser
+*/
+var SignInCancelled = class extends Error {
+	constructor() {
+		super(CANCELLED);
+		this.name = "SignInCancelled";
+	}
+};
 /**
 * Start a sign-in that finishes in the person's own browser, where they are
 * usually signed in already: the OAuth flow RFC 8252 asks native apps to use.
@@ -506,8 +529,12 @@ async function startBrowserSignIn() {
 	return {
 		redirectUri,
 		async open(authorizeUrl) {
-			const { params } = await core.invoke("browser_sign_in_wait", { url: authorizeUrl });
-			return new URLSearchParams(params);
+			try {
+				const { params } = await core.invoke("browser_sign_in_wait", { url: authorizeUrl });
+				return new URLSearchParams(params);
+			} catch (e) {
+				throw (e instanceof Error ? e.message : String(e)) === CANCELLED ? new SignInCancelled() : e;
+			}
 		}
 	};
 }
@@ -1770,4 +1797,4 @@ async function dismissToast(id) {
 }
 
 //#endregion
-export { TOAST_DISMISS_EVENT, TOAST_EVENT, TOAST_UPDATE_EVENT, clearPluginCookies, closeBrowser, dismissToast, downloadAsset, emitEvent, executeBinary, fetchUrl, fileExists, fillEditor, getKey, getPlatformInfo, getPluginCookie, getPluginEnvVar, getSecret, getTauriCore, htmlToMarkdown, httpGet, httpPost, httpPostMultipart, listFiles, listKeys, listProjectTree, listSiteFilesWithSizes, onEvent, openBrowser, openBrowserWithHtml, openSystemBrowser, pluginFileExists, readFile, readPluginFile, readSiteFile, rejectSecret, reportError, reportProgress, returnToEditor, sendMessage, setMessageContext, setPluginCookie, setSecret, showBrowserForm, showToast, signWithKey, startBrowserSignIn, startTask, writeFile, writeFileBinary, writePluginFile };
+export { SignInCancelled, TOAST_DISMISS_EVENT, TOAST_EVENT, TOAST_UPDATE_EVENT, clearPluginCookies, closeBrowser, dismissToast, downloadAsset, emitEvent, executeBinary, fetchUrl, fileExists, fillEditor, getKey, getPlatformInfo, getPluginCookie, getPluginEnvVar, getSecret, getTauriCore, htmlToMarkdown, httpGet, httpPost, httpPostMultipart, listFiles, listKeys, listProjectTree, listSiteFilesWithSizes, onEvent, openBrowser, openBrowserWithHtml, openSystemBrowser, pluginFileExists, readFile, readPluginFile, readSiteFile, rejectSecret, reportError, reportProgress, returnToEditor, sendMessage, setMessageContext, setPluginCookie, setSecret, showBrowserForm, showToast, signWithKey, startBrowserSignIn, startTask, writeFile, writeFileBinary, writePluginFile };
