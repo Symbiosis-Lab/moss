@@ -302,6 +302,23 @@ partial: true
 
 For an animated or interactive drawing, write the still version in the partial and let the theme script enhance it: it finds `svg[data-figure]`, reads `dataset.figure`, and replaces or animates the still. With no script, or when the script bails out, the reader sees the static drawing. Honour reduced motion in the script itself, `window.matchMedia("(prefers-reduced-motion: reduce)").matches`, and leave the static drawing in place when it is true. moss gives no motion switch of its own: reduced motion is the site's job, in CSS with a `prefers-reduced-motion` media query and in script with `matchMedia`.
 
+## Pages read without JavaScript
+
+Every page serves its words in its HTML. A crawler, a reader's mode, a feed reader and a slow connection get the page without running a script, so a sentence that only a script writes is not on the page for them. Scripts enhance: they animate, switch, fetch, play. They do not supply text.
+
+- Write the words in the markdown or the template, never in a string a script inserts (`textContent = "…"`, a catalog object, a template literal that builds a paragraph). The same goes for a heading, a button label, an `aria-label` and a status message: put the message in the markup, hidden, and let the script show it.
+- A language is a page of its own (`zh-hant/about.md`, "Multilingual sites" below) with `<html lang>` and `hreflang` alternates, and the switch is a plain link. No runtime catalog translating one page in place.
+- A control or drawing that works only with a script (a filter field, a pause button, a chart, the labels of a map) may be made by the script, as long as the words it stands for are in the HTML: the list it filters, the page the chart summarises.
+- A script that needs a word reads it from the markup (a `data-*` attribute, a hidden element), so the markup stays the only source.
+
+Check a built page the way a crawler reads it: fetch it, drop script, style, noscript and svg, and look for each section's words.
+
+```bash
+curl -s https://example.com/ | perl -0pe 's/<(script|style|noscript|svg)\b.*?<\/\1>//gis; s/<[^>]+>/ /g' | tr -s '[:space:]' ' ' | grep -o "a phrase from each section"
+```
+
+A phrase that does not come back is on the page only if a script writes it. moss's own output passes: a markdown page's text is in its built HTML, and the default theme's script adds behavior only.
+
 ## Embedding media
 
 All media via embeds — never raw `<img>`, `<video>`, or `<audio>`. The standard Markdown form is the default; the wikilink form renders the same thing:

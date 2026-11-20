@@ -262,6 +262,7 @@ A stylesheet that is longer than the design needs is a defect even when it rende
   `::: {.figure fig=teapot}` (which emits `data-fig="teapot"`), or as a raw
   `<svg data-figure="…">`/`<canvas>` where the element itself is the drawing.
   Drawings and your own JavaScript: `moss guide authoring`.
+- Words live in the page's HTML, readable with JavaScript off; a script never supplies text. See "Pages read without JavaScript" in `moss guide authoring`.
 - Never write inline `style="..."` — put the rule in `.moss/theme/style.css`.
 - A button that sends or waits changes the moment it is pressed and shows moss's loading state until the answer comes; a form the theme writes itself uses moss's button for it. See `moss guide authoring`, "A press answers at once".
 - Images and media use the standard form: `![](photo.jpg)`, written as a path relative to the page. Wikilinks (`![[photo.jpg]]`) work too and find the file by name. Either way moss resolves the file, so never write a site-absolute or `https://` address for a file in the folder.
