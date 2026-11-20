@@ -220,12 +220,6 @@
 .moss-info-grid > .moss-settings-section-title {
   grid-column: 1 / -1;
 }
-/* The credentials-intro paragraph SchemaFieldRenderer drops into the same
-   grid is prose, not a row — same span rule as
-   the heading above, or it would render squeezed into the label column. */
-.moss-info-grid > .moss-settings-description {
-  grid-column: 1 / -1;
-}
 /* `.moss-field--inline` gets `display: contents` from the rule above, an
    author-origin rule that always beats the UA `[hidden] { display: none; }`
    regardless of selector specificity — without this override a `when`-hidden
