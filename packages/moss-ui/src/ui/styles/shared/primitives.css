@@ -925,6 +925,9 @@
 
 .moss-setup-row__label {
   flex: 1;
+  min-width: 0;
+  /* A fingerprint or path is one long word; it wraps instead of pushing the row's action out of view. */
+  overflow-wrap: anywhere;
   color: var(--moss-color-text);
 }
 .moss-setup-row--checking .moss-setup-row__label,

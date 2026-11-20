@@ -403,6 +403,8 @@ const EN = {
 
   // First-publish flow (modal + target cards)
   'publish.setup_title': "Publish {folder} to {host}",
+  'publish.server_instead': "Publish to your own server instead",
+  'publish.host_instead': "Publish to {host} instead",
   'publish.setup_title_domain': "Publish to {domain}",     // {domain} placeholder
   'publish.subdomain_label_domain': "Your {host} address, forwarding to {domain}",
   'publish.publish_btn': 'Publish',
@@ -2388,6 +2390,8 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'appsettings.language_switch_failed': 'Sprache konnte nicht umgestellt werden. Versuche es bitte erneut.',
     'appsettings.save_failed': 'Diese Einstellung konnte nicht gespeichert werden. Versuche es bitte erneut.',
     'publish.setup_title': "{folder} auf {host} veröffentlichen",
+    'publish.server_instead': "Stattdessen auf deinem eigenen Server veröffentlichen",
+    'publish.host_instead': "Stattdessen auf {host} veröffentlichen",
     'publish.setup_title_domain': "Auf {domain} veröffentlichen",
     'publish.subdomain_label_domain': "Deine Adresse auf {host}, weitergeleitet zu {domain}",
     'publish.publish_btn': 'Veröffentlichen',
@@ -4143,6 +4147,8 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'appsettings.save_failed': '设置保存失败，请重试。',
 
     'publish.setup_title': "将 {folder} 发布到 {host}",
+    'publish.server_instead': "改为发布到你自己的服务器",
+    'publish.host_instead': "改为发布到 {host}",
     'publish.setup_title_domain': "发布到 {domain}",
     'publish.subdomain_label_domain': "你在 {host} 上的地址，转到 {domain}",
     'publish.publish_btn': '发布',
@@ -5957,6 +5963,8 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'appsettings.save_failed': '設定儲存失敗，請重試。',
 
     'publish.setup_title': "將 {folder} 發佈到 {host}",
+    'publish.server_instead': "改為發佈到你自己的伺服器",
+    'publish.host_instead': "改為發佈到 {host}",
     'publish.setup_title_domain': "發佈到 {domain}",
     'publish.subdomain_label_domain': "你在 {host} 上的地址，轉到 {domain}",
     'publish.publish_btn': '發佈',

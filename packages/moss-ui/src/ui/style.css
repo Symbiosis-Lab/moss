@@ -5356,6 +5356,18 @@ body.own-titlebar.platform-linux:has(.action-panel-open) .moss-titlebar [data-ca
   align-self: flex-start;
 }
 
+/* The form's `display: flex` beats the UA's `[hidden]` while "Your own server" stands in for it. */
+.first-publish-form[hidden] {
+  display: none;
+}
+/* The switch between mosspub.com and "Your own server", under the sheet's actions. */
+.fp-switch {
+  margin-block-start: var(--moss-space-md);
+}
+.fp-server .moss-info-grid {
+  margin-block-end: var(--moss-space-md);
+}
+
 /* A revealed block fades and rises into the space the height morph just made.
    The delay is 58% of the morph, so content lands AFTER the space exists. */
 /* `backwards`, NOT `both`. The class is never removed (revealRow re-adds it to
