@@ -29,6 +29,7 @@ test.each(['focus', 'intersection'])('prewarms on %s and consumes only a ready u
   expect(frame()).toBeNull();
   if (trigger === 'focus') form().dispatchEvent(new FocusEvent('focusin'));
   else intersect([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+  expect(frame()).not.toBeNull();
   expect(frame().src).toContain('/captcha/subscription-prewarm/demo/');
   expect(frame().hidden).toBe(true);
   expect(frame().tabIndex).toBe(-1);
