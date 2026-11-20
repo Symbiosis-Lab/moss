@@ -994,7 +994,10 @@ main {
   padding-block-start: calc(var(--moss-space-lg) + env(safe-area-inset-top, 0px));
 }
 
-/* Article container - centered content */
+/* Article container - centered content.
+   Themes set --moss-content-width on a common ancestor (e.g. :root:lang(en))
+   to change the article, masthead, and floating bar together. A direct article
+   max-inline-size override cannot reach the two navigation siblings. */
 main > article.container {
   max-inline-size: var(--moss-content-width);
   line-break: strict;
