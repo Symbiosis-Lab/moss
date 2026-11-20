@@ -43,8 +43,8 @@ fn stopped_at_entry(record: &serde_json::Value) -> bool {
     record["counts"]["unchanged_at_entry"].as_u64() == Some(1)
 }
 
-/// A process that has built nothing yet.
-fn new_process() {
+/// Clear only the parse globals; OS-process coverage is below.
+fn reset_parse_globals() {
     parse_cache::reset_for_tests();
 }
 
@@ -114,7 +114,7 @@ fn the_first_edit_after_an_open_replays_the_kept_parse_and_renders_the_same_site
         pages(root, &mut all);
         let Some(page) = all.first() else { continue };
 
-        new_process();
+        reset_parse_globals();
         let open = build(root, BuildTrigger::Unobserved);
         if !stopped_at_entry(&open) {
             continue;
@@ -126,7 +126,7 @@ fn the_first_edit_after_an_open_replays_the_kept_parse_and_renders_the_same_site
         replayed_somewhere |= stats.hits > 0;
         let replayed = generation(root);
 
-        new_process();
+        reset_parse_globals();
         build(root, BuildTrigger::Full);
         assert_eq!(generation(root), replayed, "{name}: the replayed parse renders what a full parse renders");
     }
@@ -151,7 +151,7 @@ fn a_page_with_a_grid_a_subscribe_form_or_a_drawn_hero_parses_again_and_renders_
     build(root, BuildTrigger::Unobserved);
     build(root, BuildTrigger::Unobserved);
 
-    new_process();
+    reset_parse_globals();
     assert!(stopped_at_entry(&build(root, BuildTrigger::Unobserved)), "the open proves the seal");
     build(root, edit(&root.join("notes.md")));
     let stats = parse_cache::last_stats().expect("stats");
@@ -161,7 +161,7 @@ fn a_page_with_a_grid_a_subscribe_form_or_a_drawn_hero_parses_again_and_renders_
     assert!(stats.missed("latest.md"), "the drawn hero's page parses again: {stats:?}");
     let replayed = generation(root);
 
-    new_process();
+    reset_parse_globals();
     build(root, BuildTrigger::Full);
     assert_eq!(generation(root), replayed, "the replayed parse renders what a full parse renders");
 }
@@ -179,7 +179,7 @@ fn a_build_no_open_proved_reads_nothing_kept() {
     build(root, BuildTrigger::Unobserved);
     build(root, BuildTrigger::Unobserved);
 
-    new_process();
+    reset_parse_globals();
     fs::write(root.join("square.png"), png(8)).unwrap();
     build(root, edit(&root.join("about.md")));
     let stats = parse_cache::last_stats().expect("stats");
@@ -193,4 +193,80 @@ fn png(side: u32) -> Vec<u8> {
         .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
         .unwrap();
     out
+}
+
+/// Re-execute this test binary: no cache globals survive between phases.
+fn child(root: &Path, phase: &str) {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "fresh_process_child", "--ignored", "--nocapture"])
+        .env("MOSS_CACHE_TEST_ROOT", root)
+        .env("MOSS_CACHE_TEST_PHASE", phase)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{phase}: {}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+}
+
+#[test]
+#[ignore = "launched by fresh_process_output_and_replay_parity with an isolated site"]
+fn fresh_process_child() {
+    let root = PathBuf::from(std::env::var_os("MOSS_CACHE_TEST_ROOT").expect("child site"));
+    match std::env::var("MOSS_CACHE_TEST_PHASE").unwrap().as_str() {
+        "seed" => {
+            build(&root, BuildTrigger::Unobserved);
+            build(&root, BuildTrigger::Unobserved);
+        }
+        "replay" => {
+            assert!(stopped_at_entry(&build(&root, BuildTrigger::Unobserved)), "fresh open must prove the seal");
+            build(&root, edit(&root.join("about.md")));
+            let stats = parse_cache::last_stats().expect("replay stats");
+            assert!(stats.eligible, "{stats:?}");
+            assert!(stats.hits > 0, "the fresh process must actually replay: {stats:?}");
+            assert_eq!(stats.hits + 1, stats.total, "only the edited page reparses: {stats:?}");
+        }
+        "changed-image" => {
+            fs::write(root.join("square.png"), png(8)).unwrap();
+            build(&root, edit(&root.join("about.md")));
+            let stats = parse_cache::last_stats().expect("refusal stats");
+            assert_eq!(stats.hits, 0, "a changed image without a proven open refuses persisted entries: {stats:?}");
+        }
+        "full" => { build(&root, BuildTrigger::Full); }
+        phase => panic!("unknown phase {phase}"),
+    }
+}
+
+fn output_bytes(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    fn collect(dir: &Path, base: &Path, files: &mut std::collections::BTreeMap<PathBuf, Vec<u8>>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                collect(&path, base, files);
+            } else {
+                files.insert(path.strip_prefix(base).unwrap().to_path_buf(), fs::read(path).unwrap());
+            }
+        }
+    }
+    let dir = MossPaths::new(root).current_ptr();
+    let mut files = std::collections::BTreeMap::new();
+    collect(&dir, &dir, &mut files);
+    assert!(!files.is_empty());
+    files
+}
+
+#[test]
+fn fresh_process_output_and_replay_parity() {
+    let site = tempfile::tempdir().unwrap();
+    let root = site.path();
+    fs::write(root.join("index.md"), "---\ntitle: Home\n---\n\n![A square](square.png)\n").unwrap();
+    fs::write(root.join("about.md"), "---\ntitle: About\n---\n\nAbout us.\n").unwrap();
+    fs::write(root.join("notes.md"), "---\ntitle: Notes\n---\n\nSome notes.\n").unwrap();
+    fs::write(root.join("square.png"), png(4)).unwrap();
+    child(root, "seed");
+    child(root, "replay");
+    let replayed = output_bytes(root);
+    child(root, "full");
+    assert_eq!(output_bytes(root), replayed, "persisted replay and fresh full parse must emit identical files");
+    child(root, "changed-image");
+    let changed = output_bytes(root);
+    child(root, "full");
+    assert_eq!(output_bytes(root), changed, "refusing the cache must render the changed image exactly like a full parse");
 }

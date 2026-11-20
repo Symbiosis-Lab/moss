@@ -6,7 +6,7 @@ use crate::build::types::ParsedDocument;
 use crate::i18n::Language;
 
 /// One field's names on one page, ready for the credit area.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TermLine {
     pub term: String,
     pub field: String,

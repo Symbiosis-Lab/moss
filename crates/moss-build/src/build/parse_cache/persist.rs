@@ -2,9 +2,9 @@
 //! pages instead of parsing every one of them again.
 //!
 //! A document is saved as its own serde shape plus [`Rest`], every field that
-//! shape leaves out. [`SavedDoc::split`] names every field of
+//! shape leaves out and capture supports. [`SavedDoc::split`] names every field of
 //! `ParsedDocument` with no `..`, so a field added later does not compile
-//! until it is saved here or listed as one the own shape carries.
+//! until capture explicitly saves it, rejects it, or uses the own shape.
 //!
 //! The file names the sealed generation it was written for and is read only
 //! for a build proved against that same seal (see `ParseSession::begin`): an
@@ -38,13 +38,12 @@ struct SavedDoc {
     rest: Rest,
 }
 
-/// The fields `ParsedDocument`'s own serde shape skips.
+/// Supported fields that `ParsedDocument`'s own serde shape skips.
 #[derive(Serialize, Deserialize)]
 struct Rest {
     logo: Option<String>,
     card_cover: Option<String>,
     cover_opted_out: bool,
-    term_card: Option<crate::build::types::TermCard>,
     byline: Vec<String>,
     colophon: Vec<String>,
     fm_tags: Option<Vec<String>>,
@@ -63,7 +62,6 @@ struct Rest {
     term_listing: Option<String>,
     term_sections: Option<Vec<(Option<String>, Vec<String>)>>,
     place_children: Option<Vec<(String, String, usize)>>,
-    term_lines: Vec<crate::build::terms::TermLine>,
     place_names: Option<String>,
     card_extras: Option<String>,
     explorer_places_hash: Option<String>,
@@ -90,7 +88,6 @@ struct Rest {
     content_width: Option<String>,
     layout: Option<String>,
     color: Option<String>,
-    section: Option<crate::build::types::SectionAccent>,
     source_path: Option<String>,
     url_override: Option<String>,
     raw_frontmatter: std::collections::BTreeMap<String, serde_json::Value>,
@@ -169,7 +166,8 @@ impl SavedDoc {
     /// translation links, which the passes after the parse set, and typed
     /// field values, whose serde shape cannot be read back, a hero drawn from
     /// another page or a grid or subscribe form, which hold typed AST blocks.
-    /// The page is parsed again instead.
+    /// Term cards, term lines and section accents belong to later passes and
+    /// are also refused if present. The page is parsed again instead.
     fn split(doc: &ParsedDocument) -> Option<Self> {
         let ParsedDocument {
             title: _,
@@ -305,6 +303,9 @@ impl SavedDoc {
         if !translations.is_empty() || !placed_fields.is_empty() || !declared.is_empty() || hero_from.is_some() {
             return None;
         }
+        if term_card.is_some() || !term_lines.is_empty() || section.is_some() {
+            return None;
+        }
         let members_full = match members_full {
             Some(full) => Some(Box::new(Self::split(full)?)),
             None => None,
@@ -319,7 +320,6 @@ impl SavedDoc {
                 logo: logo.clone(),
                 card_cover: card_cover.clone(),
                 cover_opted_out: cover_opted_out.clone(),
-                term_card: term_card.clone(),
                 byline: byline.clone(),
                 colophon: colophon.clone(),
                 fm_tags: fm_tags.clone(),
@@ -338,7 +338,6 @@ impl SavedDoc {
                 term_listing: term_listing.clone(),
                 term_sections: term_sections.clone(),
                 place_children: place_children.clone(),
-                term_lines: term_lines.clone(),
                 place_names: place_names.clone(),
                 card_extras: card_extras.clone(),
                 explorer_places_hash: explorer_places_hash.clone(),
@@ -365,7 +364,6 @@ impl SavedDoc {
                 content_width: content_width.clone(),
                 layout: layout.clone(),
                 color: color.clone(),
-                section: section.clone(),
                 source_path: source_path.clone(),
                 url_override: url_override.clone(),
                 raw_frontmatter: raw_frontmatter.clone(),
@@ -392,7 +390,6 @@ impl SavedDoc {
             logo,
             card_cover,
             cover_opted_out,
-            term_card,
             byline,
             colophon,
             fm_tags,
@@ -411,7 +408,6 @@ impl SavedDoc {
             term_listing,
             term_sections,
             place_children,
-            term_lines,
             place_names,
             card_extras,
             explorer_places_hash,
@@ -438,7 +434,6 @@ impl SavedDoc {
             content_width,
             layout,
             color,
-            section,
             source_path,
             url_override,
             raw_frontmatter,
@@ -459,7 +454,6 @@ impl SavedDoc {
         doc.logo = logo;
         doc.card_cover = card_cover;
         doc.cover_opted_out = cover_opted_out;
-        doc.term_card = term_card;
         doc.byline = byline;
         doc.colophon = colophon;
         doc.fm_tags = fm_tags;
@@ -478,7 +472,6 @@ impl SavedDoc {
         doc.term_listing = term_listing;
         doc.term_sections = term_sections;
         doc.place_children = place_children;
-        doc.term_lines = term_lines;
         doc.place_names = place_names;
         doc.card_extras = card_extras;
         doc.explorer_places_hash = explorer_places_hash;
@@ -505,7 +498,6 @@ impl SavedDoc {
         doc.content_width = content_width;
         doc.layout = layout;
         doc.color = color;
-        doc.section = section;
         doc.source_path = source_path;
         doc.url_override = url_override;
         doc.raw_frontmatter = raw_frontmatter;
@@ -558,4 +550,48 @@ pub(super) fn read(dir: &Path, generation: &str) -> Option<ParseCache> {
         .map(|(path, entry)| (path, ParseCacheEntry { content_hash: entry.content_hash, reads: entry.reads, doc: entry.doc.join() }))
         .collect();
     Some(ParseCache { inputs_fingerprint: saved.inputs_fingerprint, entries })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::build::terms::TermLine;
+    use crate::build::types::{SectionAccent, TermCard};
+
+    #[test]
+    fn saved_shape_omits_later_pass_fields() {
+        let doc = ParsedDocument { title: "Kept title".into(), logo: Some("logo.svg".into()), ..Default::default() };
+        let saved = SavedDoc::split(&doc).expect("a parse without later-pass values is kept");
+        let value = serde_json::to_value(saved).unwrap();
+        for shape in ["doc", "rest"] {
+            for field in ["term_card", "term_lines", "section"] {
+                assert!(!value[shape].as_object().unwrap().contains_key(field), "{shape} must omit {field}");
+            }
+        }
+        let restored = serde_json::from_value::<SavedDoc>(value).unwrap().join();
+        assert_eq!(restored.title, doc.title);
+        assert_eq!(restored.logo, doc.logo);
+        assert!(restored.term_card.is_none());
+        assert!(restored.term_lines.is_empty());
+        assert!(restored.section.is_none());
+    }
+
+    #[test]
+    fn capture_refuses_each_later_pass_value_including_members() {
+        let cases = [
+            ParsedDocument { term_card: Some(TermCard::default()), ..Default::default() },
+            ParsedDocument { term_lines: vec![TermLine {
+                term: "tags".into(), field: "tags".into(), label: "Tags".into(),
+                separator: ": ".into(), links: "[Notes](/tags/notes/)".into(), is_place: false,
+            }], ..Default::default() },
+            ParsedDocument { section: Some(SectionAccent {
+                color: "#123".into(), text_light: "#112233".into(), text_dark: "#aabbcc".into(), segment: "notes".into(),
+            }), ..Default::default() },
+        ];
+        for doc in cases {
+            assert!(SavedDoc::split(&doc).is_none(), "later-pass content must be reparsed");
+            let members = ParsedDocument { members_full: Some(Box::new(doc)), ..Default::default() };
+            assert!(SavedDoc::split(&members).is_none(), "nested content must also be reparsed");
+        }
+    }
 }

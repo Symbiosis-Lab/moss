@@ -37,10 +37,11 @@
 //! changed between the two processes while no page did, and a replayed page
 //! would carry the old image's dimensions.
 //!
-//! Every field of a `ParsedDocument` is kept, its own serde shape plus the
-//! fields that shape skips; `persist` names each one, so a new field does not
-//! compile until it is kept. A page holding typed field values is not kept
-//! (their serde shape cannot be read back) and is parsed again.
+//! `persist` names every `ParsedDocument` field explicitly, so a new field
+//! requires a capture decision. Supported values use its own serde shape plus
+//! the fields that shape skips. Typed fields, AST-backed render plans and
+//! later-pass term cards, term lines or section accents are not kept: a page
+//! holding any of them is parsed again.
 //!
 //! # Validity
 //!

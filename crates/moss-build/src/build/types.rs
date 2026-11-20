@@ -50,7 +50,7 @@ impl EventFields {
 }
 
 /// The accent a folder's `color:` gives the pages under it.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SectionAccent {
     /// The validated colour, as written (`#rgb` or `#rrggbb`).
     pub color: String,
@@ -63,7 +63,7 @@ pub struct SectionAccent {
 }
 
 /// The count and picture a term's pseudo-folder card shows.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct TermCard {
     pub count: usize,
     pub cover: Option<String>,
