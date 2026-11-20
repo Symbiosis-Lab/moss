@@ -12,14 +12,18 @@ Give your AI agent a folder and `moss guide`, and it can help you build and publ
 Open the folder in your agent and paste:
 
 ```text
-Install moss with `npm install -g @symbiosis-lab/moss` if it is missing. Read moss guide and moss describe --json. Help me make a website in this folder.
-Ask what the site is for and what content I want, then create plain Markdown
-pages and keep styling in .moss/theme/. Follow the guide for any settings.
-Run moss build . --strict and fix any problems. Run moss build . --serve
-and give me the preview URL it prints so I can review the site.
-When I am ready to publish, help me use moss deploy . following the guide.
-Ask me for the site name and email if needed, and let me complete verification
-before publishing.
+Install moss if it is missing:
+`npm install -g @symbiosis-lab/moss`
+Read moss guide and moss describe --json. Help me make
+a website in this folder. Ask what the site is for and
+what content I want, then create plain Markdown pages
+and keep styling in .moss/theme/. Follow the guide for
+any settings. Run moss build . --strict and fix any
+problems. Run moss build . --serve and give me the
+preview URL it prints so I can review the site. When I
+am ready to publish, help me use moss deploy . following
+the guide. Ask me for the site name and email if needed,
+and let me complete verification before publishing.
 ```
 
 You get a folder of editable Markdown pages and a built website. To preview it again, run `moss build . --serve` in that folder and open the URL it prints; press Ctrl-C to stop.

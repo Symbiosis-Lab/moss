@@ -13,13 +13,17 @@ translationKey: docs-agents
 在 AI 助手中打开这个文件夹，粘贴：
 
 ```text
-如果还没装青苔，先用 `npm install -g @symbiosis-lab/moss` 安装。请阅读 moss guide 和 moss describe --json，帮我在这个文件夹里制作网站。
-先问我网站的用途和想放的内容，再创建普通 Markdown 页面，把样式放在
-.moss/theme/ 中，按照指南配置网站。
-运行 moss build . --strict，修复发现的问题。运行 moss build . --serve，
-把命令输出的预览地址给我，让我检查网站。
-等我准备好发布时，按照指南帮我使用 moss deploy .。
-如果需要网站名称和邮箱，请先问我，并让我完成验证后再发布。
+如果还没装青苔，先安装：
+`npm install -g @symbiosis-lab/moss`
+请阅读 moss guide 和 moss describe --json，
+帮我在这个文件夹里制作网站。先问我网站的用途
+和想放的内容，再创建普通 Markdown 页面，把样式
+放在 .moss/theme/ 中，按照指南配置网站。
+运行 moss build . --strict，修复发现的问题。
+运行 moss build . --serve，把命令输出的预览地址
+给我，让我检查网站。等我准备好发布时，按照指南
+帮我使用 moss deploy .。如果需要网站名称和邮箱，
+请先问我，并让我完成验证后再发布。
 ```
 
 你会得到一个装着可编辑 Markdown 页面的文件夹，以及构建好的网站。以后想再预览，在这个文件夹中运行 `moss build . --serve`，打开命令输出的地址；按 Ctrl-C 停止预览。
