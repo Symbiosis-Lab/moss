@@ -7,18 +7,24 @@ description: Give a coding agent your site folder and one prompt. moss gives it 
 translationKey: docs-agents
 ---
 
-## Start
+Give your AI agent a folder and `moss guide`, and it can help you build and publish a website.
 
-Open your site folder in your agent and paste:
+Open the folder in your agent and paste:
 
+```text
+Install moss with `npm install -g @symbiosis-lab/moss` if it is missing. Read moss guide and moss describe --json. Help me make a website in this folder.
+Ask what the site is for and what content I want, then create plain Markdown
+pages and keep styling in .moss/theme/. Follow the guide for any settings.
+Run moss build . --strict and fix any problems. Run moss build . --serve
+and give me the preview URL it prints so I can review the site.
+When I am ready to publish, help me use moss deploy . following the guide.
+Ask me for the site name and email if needed, and let me complete verification
+before publishing.
 ```
-Install moss with `npm install -g @symbiosis-lab/moss`. Read `moss guide`, then help me build and check my site in this folder.
-```
 
-- **Claude Code:** run `claude` in the folder. Once moss has built the site, run `moss agents init`: Claude Code then reads moss's manual on its own.
-- **Codex (OpenAI):** run `codex` in the folder.
-- **Cursor:** open the folder and paste into Agent. `moss agents init` adds a rule Cursor reads on its own.
-- **Any other agent:** paste the prompt. If it reads no moss files, begin with "Read `.moss/agents/SKILL.md` first."
+You get a folder of editable Markdown pages and a built website. To preview it again, run `moss build . --serve` in that folder and open the URL it prints; press Ctrl-C to stop.
+
+[Download moss](/#downloads)
 
 ## Why keep your content apart
 

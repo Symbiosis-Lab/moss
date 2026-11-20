@@ -8,18 +8,23 @@ description: 把网站文件夹和一条提示交给编程助手。青苔给它�
 translationKey: docs-agents
 ---
 
-## 开始
+把一个文件夹和 `moss guide` 交给 AI 助手，它就能帮你构建并发布网站。
 
-在你的网站文件夹里打开 AI 助手，粘贴：
+在 AI 助手中打开这个文件夹，粘贴：
 
+```text
+如果还没装青苔，先用 `npm install -g @symbiosis-lab/moss` 安装。请阅读 moss guide 和 moss describe --json，帮我在这个文件夹里制作网站。
+先问我网站的用途和想放的内容，再创建普通 Markdown 页面，把样式放在
+.moss/theme/ 中，按照指南配置网站。
+运行 moss build . --strict，修复发现的问题。运行 moss build . --serve，
+把命令输出的预览地址给我，让我检查网站。
+等我准备好发布时，按照指南帮我使用 moss deploy .。
+如果需要网站名称和邮箱，请先问我，并让我完成验证后再发布。
 ```
-用 `npm install -g @symbiosis-lab/moss` 安装青苔（moss）。阅读 `moss guide`，然后帮我在这个文件夹里构建并检查我的网站。
-```
 
-- **Claude Code：** 在文件夹里运行 `claude`。青苔构建过一次网站之后，运行 `moss agents init`：Claude Code 之后会自动阅读青苔的手册。
-- **Codex（OpenAI）：** 在文件夹里运行 `codex`。
-- **Cursor：** 打开文件夹，粘贴到 Agent。`moss agents init` 会添加一条 Cursor 自动读取的规则。
-- **其他助手：** 粘贴上面的提示。如果它不读青苔的文件，就以「先阅读 `.moss/agents/SKILL.md`」开头。
+你会得到一个装着可编辑 Markdown 页面的文件夹，以及构建好的网站。以后想再预览，在这个文件夹中运行 `moss build . --serve`，打开命令输出的地址；按 Ctrl-C 停止预览。
+
+[下载青苔](/zh-hans/#downloads)
 
 ## 为什么内容要和网站分开
 
