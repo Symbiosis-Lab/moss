@@ -67,7 +67,7 @@ The plugin exports up to three functions, one per operation, each handling exact
 | `find_copy(job)` | a send stopped before the network answered, or a copy was handed to the author: is the copy there? |
 | `copy_account({ channel, config })` | once per run, before moss works on any of the channel's copies: which account is the channel signed in to? |
 
-A job carries the post's absolute address, its language, date and tags, the form moss chose, and the copy already shaped: the text of each part with its links, each picture's file and alt text, for a teaser its title, description and cover, and for a whole article its title, HTML, description and cover. An update also carries the copy's `id` and `url`. Its `idempotency_key` is derived from the post's note id and the channel alone, so every retry, on any computer, carries the same key, and an edit made between a crash and its retry cannot turn the retry into a second post.
+A job carries the site's address and name, the post's absolute address, its language, date and tags, the form moss chose, and the copy already shaped: the text of each part with its links, each picture's file and alt text, for a teaser its title, description and cover, and for a whole article its title, HTML, plain text (without the title or link back), description and cover. An update also carries the copy's `id` and `url`. Its `idempotency_key` is derived from the post's note id and the channel alone, so every retry, on any computer, carries the same key, and an edit made between a crash and its retry cannot turn the retry into a second post.
 
 The plugin answers with the `HookResult` every hook returns, with the outcome in its `copy` field, as `check_setup` puts its verdict in `setup`:
 

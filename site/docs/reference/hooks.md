@@ -70,7 +70,7 @@ A channel posts a copy of each new post to another network (POSSE: publish on yo
 
 Use for: cross-posting to Bluesky, Mastodon, Matters.town, LinkedIn, X; a hand-off for a network with no posting API.
 
-**Context:** a `CopyJob`: the post's address, title, language, date and tags, the form moss chose, and the copy already shaped. The full contract is in the [syndication design](https://github.com/Symbiosis-Lab/moss/tree/develop/docs/proposals/syndication).
+**Context:** a `CopyJob`: the site's address and name, the post's address, title, language, date and tags, the form moss chose, and the copy already shaped (a long article also as plain text). The full contract is in the [syndication design](https://github.com/Symbiosis-Lab/moss/tree/develop/docs/proposals/syndication).
 
 ## login
 

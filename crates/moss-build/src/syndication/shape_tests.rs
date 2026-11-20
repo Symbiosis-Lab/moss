@@ -480,3 +480,25 @@ fn old_maps_without_page_names_use_the_hostname() {
     assert!(html.contains("example.org</a>"));
     assert!(!html.contains("Stale default"));
 }
+
+#[test]
+fn an_articles_plain_text_is_the_page_as_written_without_title_or_footer() {
+    let p = post("Autumn", "Leaves *fall* on [the river](/river/).\n\nSecond paragraph.\n");
+    let article = shape(&p, &spec(&[Form::Long], 30), SITE).unwrap().article.unwrap();
+    assert_eq!(article.text, "Leaves fall on the river (https://example.org/river/).\n\nSecond paragraph.");
+    assert!(article.html.contains("Originally published"), "the footer stays in the html only");
+}
+
+#[test]
+fn the_site_name_falls_back_to_the_host() {
+    assert_eq!(site_name(&ShapeOptions::default(), SITE).as_deref(), Some("example.org"));
+    let named = ShapeOptions { site_name: Some("山居".into()), ..Default::default() };
+    assert_eq!(site_name(&named, SITE).as_deref(), Some("山居"));
+}
+
+#[test]
+fn an_article_of_short_paragraphs_goes_long_where_the_network_also_takes_threads() {
+    let body = (0..12).map(|i| format!("Paragraph {i} is short.")).collect::<Vec<_>>().join("\n\n");
+    let copy = shape(&post("Essay", &body), &spec(&[Form::Short, Form::Thread, Form::Long], 300), SITE).unwrap();
+    assert_eq!(copy.form, Form::Long, "only parts the author divided with a rule make a thread");
+}

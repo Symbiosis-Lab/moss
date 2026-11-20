@@ -198,6 +198,8 @@ export interface CopyJob {
   channel: string;
   /** The same on every send of this post to this channel, on every computer. */
   idempotency_key: string;
+  /** The site the post lives on: `post.url` is built on `url` (absolute, no trailing slash); `name` falls back to its host. */
+  site: { url: string; name: string };
   /** The original the copy points back to; `url` is absolute, `title` empty for an untitled post. */
   post: { url: string; source_path: string; title: string; lang?: string | null; date?: string | null; tags?: string[] };
   /** Payload fields may be absent for a lookup whose copy no longer fits. */
@@ -214,6 +216,8 @@ export interface CopyJob {
   article?: {
     title: string;
     html: string;
+    /** The page as written, in plain text: no title and no link back. */
+    text?: string;
     description?: string | null;
     cover?: string | null;
     /**

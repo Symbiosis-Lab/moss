@@ -13,6 +13,11 @@ release heading.
 
 ## [Unreleased]
 
+### Added
+
+- `CopyJob.site` (`url`, `name`): the site the post lives on; `post.url` is built on `site.url`.
+- `CopyJob.article.text`: the page as written, in plain text, with no title and no link back.
+
 ## [0.22.0] - 2026-11-20
 
 ### Added
