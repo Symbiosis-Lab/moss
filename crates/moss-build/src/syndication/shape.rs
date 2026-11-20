@@ -336,30 +336,24 @@ pub(crate) fn absolute(dest: &str, page_url: &str, site_url: &str) -> String {
         .unwrap_or_else(|_| format!("{}/{}", page_url.trim_end_matches('/'), dest))
 }
 
-/// The teaser and link: the title, the description (or the opening, cut at the
-/// last sentence end that fits), and the address, together within the limit.
+/// The link post for a page no other form takes: the title, the author's own
+/// `description` and the address. A description that does not fit whole is
+/// left out, never cut, and the page's text is never quoted.
 fn teaser(post: &ArticleInfo, spec: &ChannelSpec, page_url: &str, site_url: &str) -> Result<(Teaser, Part), String> {
     let title = if post.untitled || post.title.trim().is_empty() { String::new() } else { post.title.trim().to_string() };
-    let description = described(post).unwrap_or_else(|| {
-        let first = split_parts(&post.content).into_iter().next().unwrap_or_default();
-        lower(&first, page_url, site_url).text.split("\n\n").next().unwrap_or_default().to_string()
-    });
-    let compose = |desc: &str| {
-        [title.as_str(), desc, page_url].iter().filter(|s| !s.is_empty()).cloned().collect::<Vec<_>>().join("\n\n")
+    let compose = |desc: &str, url: &str| {
+        [title.as_str(), desc, url].iter().filter(|s| !s.is_empty()).cloned().collect::<Vec<_>>().join("\n\n")
     };
-    let fitted = fit(&description, |d| {
-        // The authored title and opening still obey the limit before a publish
-        // address exists. Only the mandatory final address is deferred.
-        let known = if site_url.is_empty() {
-            [title.as_str(), d].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n\n")
-        } else { compose(d) };
-        spec.fits(&known)
-    })
-        .ok_or_else(|| "the post's title and address alone are longer than this network allows".to_string())?;
+    // Before a publish address exists, only the final address is left out of the count.
+    let fits = |desc: &str| spec.fits(&compose(desc, if site_url.is_empty() { "" } else { page_url }));
+    let description = described(post).map(|d| d.trim().to_string()).filter(|d| fits(d)).unwrap_or_default();
+    if !fits(&description) {
+        return Err("the post's title and address alone are longer than this network allows".to_string());
+    }
     let cover = cover(post, site_url);
-    let text = compose(&fitted);
+    let text = compose(&description, page_url);
     let part = Part { links: addresses(&text), text };
-    Ok((Teaser { title, description: fitted, url: page_url.to_string(), cover }, part))
+    Ok((Teaser { title, description, url: page_url.to_string(), cover }, part))
 }
 
 fn described(post: &ArticleInfo) -> Option<String> {
@@ -370,38 +364,6 @@ fn described(post: &ArticleInfo) -> Option<String> {
 fn cover(post: &ArticleInfo, site_url: &str) -> Option<String> {
     let c = post.frontmatter.get("cover")?.as_str()?;
     Some(if c.contains("://") { c.to_string() } else { page_url(site_url, c) })
-}
-
-/// The longest prefix of `text` that `fits` and ends a sentence; else the
-/// longest that ends a word, with an ellipsis; else nothing at all.
-fn fit(text: &str, fits: impl Fn(&str) -> bool) -> Option<String> {
-    let text = text.trim();
-    if fits(text) {
-        return Some(text.to_string());
-    }
-    let ends = |pred: &dyn Fn(char) -> bool| -> Vec<usize> {
-        text.char_indices().filter(|(_, c)| pred(*c)).map(|(i, c)| i + c.len_utf8()).collect()
-    };
-    let sentence_ends = ends(&|c| matches!(c, '.' | '!' | '?' | '。' | '！' | '？' | '…'));
-    for end in sentence_ends.into_iter().rev() {
-        if fits(&text[..end]) {
-            return Some(text[..end].trim().to_string());
-        }
-    }
-    let mut cut: Vec<usize> = ends(&|c| c.is_whitespace() || is_wide(c));
-    cut.reverse();
-    for end in cut {
-        let candidate = format!("{}…", text[..end].trim_end());
-        if fits(&candidate) {
-            return Some(candidate);
-        }
-    }
-    fits("").then(String::new)
-}
-
-/// A character after which a line may break without a space (CJK).
-fn is_wide(c: char) -> bool {
-    matches!(c as u32, 0x3000..=0x9FFF | 0xAC00..=0xD7AF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF)
 }
 
 #[cfg(test)]
