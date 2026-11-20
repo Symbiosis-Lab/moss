@@ -4934,7 +4934,7 @@ body.own-titlebar.controls-trailing .moss-titlebar-traffic-light-space {
      .moss-settings-content keeps overflow-y:auto only as a small-window
      safety valve and for the Analytics dashboard (the one sanctioned
      scrolling tab). */
-  height: min(85vh, 680px);
+  height: min(85vh, 680px, calc(100% - var(--moss-modal-titlebar-height) - 16px));
   display: flex;
   flex-direction: row;
   overflow: visible;
@@ -6637,8 +6637,8 @@ body.own-titlebar.controls-trailing .moss-titlebar-traffic-light-space {
 @media (max-width: 700px) {
   .moss-modal--settings {
     width: 100%;
-    height: 100%;
-    max-height: 100%;
+    height: calc(100% - var(--moss-modal-titlebar-height));
+    max-height: calc(100% - var(--moss-modal-titlebar-height));
     border-radius: 0;
   }
   .moss-settings-rail {
