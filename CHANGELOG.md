@@ -7,6 +7,11 @@ All notable changes to moss will be documented here.
 ### New
 
 - A channel plugin's copy job names the site the post lives on (`site.url`, `site.name`), and a long article carries the page's plain text (`article.text`, without its title or link back), so a network that keeps an article as a record of its own can store the full text and point back to the site.
+- A channel plugin can state the longest article its network holds (`max_article_chars` in its `syndication` block); a longer page goes in the next form the channel takes.
+
+### Changed
+
+- A page that no other form of a channel takes goes as its title, the `description` from its front matter and its link. A description that does not fit whole is left out, and moss no longer quotes the page's opening in its place.
 
 ## [0.15.28] - 2026-11-20
 

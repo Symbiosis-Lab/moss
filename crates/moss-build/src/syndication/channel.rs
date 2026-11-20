@@ -75,6 +75,10 @@ pub struct ChannelSpec {
     /// for a network whose article format only some accounts have.
     #[serde(default)]
     pub long_setting: Option<String>,
+    /// The longest article the network's article form holds, counted as
+    /// `counting` counts; a longer page goes in the next form declared.
+    #[serde(default)]
+    pub max_article_chars: Option<u32>,
 }
 
 impl ChannelSpec {
@@ -120,6 +124,10 @@ impl ChannelSpec {
 
     pub fn fits(&self, text: &str) -> bool {
         self.max_chars.is_none_or(|max| self.length(text) <= max as usize)
+    }
+
+    pub fn takes_article(&self, text: &str) -> bool {
+        self.takes(Form::Long) && self.max_article_chars.is_none_or(|max| self.length(text) <= max as usize)
     }
 }
 
