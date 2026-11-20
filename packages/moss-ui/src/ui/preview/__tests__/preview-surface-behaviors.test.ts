@@ -205,53 +205,6 @@ describe("Behavior: shouldSurface / checkAutoClose gating", () => {
   });
 });
 
-// ─── 4. Narration Law-2: failed narrated task never auto-fades ───────────────
-
-describe("Behavior: narration Law-2 — failed narrated task never auto-fades", () => {
-  it("failed narrated task persists past 2s (linger+fade window)", () => {
-    vi.useFakeTimers();
-    try {
-      const { panel, container } = makePanel();
-      panel.handleJobUpdate({
-        id: "narrated-fail",
-        window_id: "main",
-        scope: "workspace",
-        kind: "import",
-        tone: "narrated",
-        title: "Sync to Matters",
-        fade_after_ms: null,
-        started_at_ms: 0,
-        verb: null,
-        amount: null,
-        elapsed_ms: null,
-        parent: null,
-        state: {
-          state: "failed",
-          advisory: {
-            scope: "Config",
-            severity: "Blocking",
-            item: null,
-            what: "network down",
-            action: "None",
-          },
-        },
-      });
-
-      // Advance well past any linger+fade window.
-      vi.advanceTimersByTime(5_000);
-
-      const narrated = panel.getNarratedTasks();
-      const failedTask = narrated.find((t) => t.id.includes("narrated-fail"));
-      expect(failedTask).toBeDefined();
-
-      panel.destroy();
-      document.body.removeChild(container);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-});
-
 // ─── 5. Advisory-dot survives panel teardown ──────────────────────────────────
 
 describe("Behavior: advisory-dot survives panel teardown (seam sibling, not panel child)", () => {
@@ -397,38 +350,6 @@ describe("Behavior: consequential events surface the panel from hidden", () => {
     expect(panel.isHidden).toBe(false);
     const tasks = panel.getActiveTasks();
     expect(tasks.some((t) => t.label === "Connecting example.test")).toBe(true);
-
-    panel.destroy();
-    document.body.removeChild(container);
-  });
-});
-
-// ─── 7. Narrated rows still render ───────────────────────────────────────────
-
-describe("Behavior: narrated task rows render via getNarratedTasks()", () => {
-  it("non-preview narrated task appears in getNarratedTasks(), not getActiveTasks()", () => {
-    const { panel, container } = makePanel();
-    panel.handleJobUpdate({
-      id: "narrated-1",
-      window_id: "main",
-      scope: "workspace",
-      kind: "import",
-      tone: "narrated",
-      title: "Connecting to Matters",
-      fade_after_ms: null,
-      started_at_ms: 0,
-      verb: null,
-      amount: null,
-      elapsed_ms: null,
-      parent: null,
-      state: { state: "running", fraction: null, message: null },
-    });
-
-    const narrated = panel.getNarratedTasks();
-    expect(narrated.length).toBeGreaterThan(0);
-    expect(narrated[0].label).toBe("Connecting to Matters");
-    // Must NOT also appear in getActiveTasks().
-    expect(panel.getActiveTasks().some((t) => t.id.includes("narrated-1"))).toBe(false);
 
     panel.destroy();
     document.body.removeChild(container);

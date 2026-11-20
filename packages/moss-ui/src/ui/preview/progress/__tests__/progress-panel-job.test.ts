@@ -61,7 +61,7 @@ describe("ProgressPanel Job ingestion (Preview-scope Jobs)", () => {
   // and the row must outlast it like a publish does.
   it.each([
     { kind: "import" as const, after20s: 1 },
-    { kind: "syndicate" as const, after20s: 0 },
+    { kind: "resolve" as const, after20s: 0 },
   ])("a running $kind row after 20 s with no tick: $after20s", ({ kind, after20s }) => {
     vi.useFakeTimers();
     try {
@@ -161,12 +161,12 @@ describe("ProgressPanel Job ingestion (Preview-scope Jobs)", () => {
 
   it("renders a Succeeded Job as a verb · receipt row (non-deploy/publish kind)", () => {
     // Deploy/publish kinds dissolve without a receipt row (the shelf
-    // record is the durable surface). This test uses kind='syndicate' to verify
+    // record is the durable surface). This test uses kind='resolve' to verify
     // the receipt path still works for non-deploy kinds.
     panel.handleJobUpdate(
       wire({
         scope: "preview",
-        kind: "syndicate",
+        kind: "resolve",
         verb: "Connected",
         state: { state: "succeeded", receipt: "4 min", advisories: [] },
       }),
@@ -180,11 +180,11 @@ describe("ProgressPanel Job ingestion (Preview-scope Jobs)", () => {
   it("formats elapsed_ms into the receipt when the producer sends no receipt string (non-deploy kind)", () => {
     // The live orchestrator passes receipt:None and relies on the frozen
     // elapsed span (wire.elapsed_ms) — the renderer formats it (R-fix).
-    // A deploy Job leaves no receipt row (the shelf record is its surface), so this uses kind='syndicate'.
+    // A deploy Job leaves no receipt row (the shelf record is its surface), so this uses kind='resolve'.
     panel.handleJobUpdate(
       wire({
         scope: "preview",
-        kind: "syndicate",
+        kind: "resolve",
         verb: "Connected",
         elapsed_ms: 240000, // 4 minutes
         state: { state: "succeeded", receipt: null, advisories: [] },
@@ -195,11 +195,11 @@ describe("ProgressPanel Job ingestion (Preview-scope Jobs)", () => {
 
   it("receipt formatting: verb · amount · elapsed for a non-deploy succeeded Job", () => {
     // A deploy Job leaves no receipt row (the shelf record is its surface);
-    // every other kind, such as syndicate, is formatted as a receipt.
+    // every other kind, such as resolve, is formatted as a receipt.
     panel.handleJobUpdate(
       wire({
         scope: "preview",
-        kind: "syndicate",
+        kind: "resolve",
         verb: "Published",
         amount: { count: 142, noun: "files" },
         elapsed_ms: 2100,
@@ -211,11 +211,11 @@ describe("ProgressPanel Job ingestion (Preview-scope Jobs)", () => {
 
   it("a Job with no amount omits that segment (non-deploy kind, no files)", () => {
     // Invariant #4: amount present iff the producer set it.
-    // A deploy Job leaves no receipt row (the shelf record is its surface), so this uses kind='syndicate'.
+    // A deploy Job leaves no receipt row (the shelf record is its surface), so this uses kind='resolve'.
     panel.handleJobUpdate(
       wire({
         scope: "preview",
-        kind: "syndicate",
+        kind: "resolve",
         verb: "Connected",
         amount: null,
         elapsed_ms: 2100,
@@ -232,7 +232,7 @@ describe("ProgressPanel Job ingestion (Preview-scope Jobs)", () => {
     panel.handleJobUpdate(
       wire({
         scope: "preview",
-        kind: "syndicate",
+        kind: "resolve",
         verb: "Syndicated",
         amount: { count: 0, noun: "posts" },
         state: { state: "succeeded", receipt: null, advisories: [] },
@@ -247,7 +247,7 @@ describe("ProgressPanel Job ingestion (Preview-scope Jobs)", () => {
     panel.handleJobUpdate(
       wire({
         scope: "preview",
-        kind: "syndicate",
+        kind: "resolve",
         verb: "Syndicated",
         amount: { count: 0, noun: "posts" },
         state: {
@@ -272,7 +272,7 @@ describe("ProgressPanel Job ingestion (Preview-scope Jobs)", () => {
     panel.handleJobUpdate(
       wire({
         scope: "preview",
-        kind: "syndicate",
+        kind: "resolve",
         verb: "Syndicated",
         amount: { count: 3, noun: "posts" },
         state: { state: "succeeded", receipt: null, advisories: [] },
@@ -412,11 +412,11 @@ describe("ProgressPanel Job ingestion (Preview-scope Jobs)", () => {
   });
 
   it("uses a singular noun for a count of 1 ('1 file', not '1 files') — non-deploy kind", () => {
-    // A deploy Job leaves no receipt row, so this uses the syndicate kind.
+    // A deploy Job leaves no receipt row, so this uses the resolve kind.
     panel.handleJobUpdate(
       wire({
         scope: "preview",
-        kind: "syndicate",
+        kind: "resolve",
         verb: "Published",
         amount: { count: 1, noun: "files" },
         elapsed_ms: 2100,

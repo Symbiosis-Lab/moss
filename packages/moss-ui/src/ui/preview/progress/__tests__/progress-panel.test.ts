@@ -116,7 +116,7 @@ describe("ProgressPanel", () => {
     // Use a narrated task to create panel DOM (only narrated tasks render as rows).
     function addNarratedTask(id = "narrated:1", label = "Building") {
       panel.handleJobUpdate({
-        id, window_id: "main", scope: "workspace", kind: "import", tone: "narrated",
+        id, window_id: "main", scope: "workspace", kind: "deploy", tone: "narrated",
         title: label, fade_after_ms: null, started_at_ms: 0, verb: null, amount: null,
         elapsed_ms: null, parent: null, state: { state: "running", fraction: null, message: null },
       });
@@ -237,7 +237,7 @@ describe("ProgressPanel", () => {
     it("hide() hides the panel", () => {
       // Narrated task creates panel DOM.
       panel.handleJobUpdate({
-        id: "narrated:1", window_id: "main", scope: "workspace", kind: "import", tone: "narrated",
+        id: "narrated:1", window_id: "main", scope: "workspace", kind: "deploy", tone: "narrated",
         title: "Building", fade_after_ms: null, started_at_ms: 0, verb: null, amount: null,
         elapsed_ms: null, parent: null, state: { state: "running", fraction: null, message: null },
       });
@@ -250,7 +250,7 @@ describe("ProgressPanel", () => {
 
     it("show() shows the panel", () => {
       panel.handleJobUpdate({
-        id: "narrated:1", window_id: "main", scope: "workspace", kind: "import", tone: "narrated",
+        id: "narrated:1", window_id: "main", scope: "workspace", kind: "deploy", tone: "narrated",
         title: "Building", fade_after_ms: null, started_at_ms: 0, verb: null, amount: null,
         elapsed_ms: null, parent: null, state: { state: "running", fraction: null, message: null },
       });
@@ -365,7 +365,7 @@ describe("ProgressPanel", () => {
     it("⌄ minimize transitions to 'minimized' (the panel body is gone)", () => {
       // Narrated task creates panel DOM.
       panel.handleJobUpdate({
-        id: "narrated:1", window_id: "main", scope: "workspace", kind: "import", tone: "narrated",
+        id: "narrated:1", window_id: "main", scope: "workspace", kind: "deploy", tone: "narrated",
         title: "Building", fade_after_ms: null, started_at_ms: 0, verb: null, amount: null,
         elapsed_ms: null, parent: null, state: { state: "running", fraction: null, message: null },
       });
@@ -606,7 +606,7 @@ describe("ProgressPanel", () => {
       });
       expect(panel.getActiveTasks()).toHaveLength(0);
 
-      // ...while deploy/syndicate still render here.
+      // ...while deploy still render here.
       panel.handlePluginProgress({
         plugin_name: "github",
         hook_name: "deploy",
@@ -622,10 +622,10 @@ describe("ProgressPanel", () => {
     it("completing one plugin's hook does not remove another plugin's progress", () => {
       vi.useFakeTimers();
       try {
-        // Add matters:syndicate task (publish hook — paints immediately).
+        // Add matters:deploy task (publish hook — paints immediately).
         panel.handlePluginProgress({
           plugin_name: "matters",
-          hook_name: "syndicate",
+          hook_name: "deploy",
           phase: "distributing",
           current: 3,
           total: 10,
@@ -649,7 +649,7 @@ describe("ProgressPanel", () => {
         // Complete matters
         panel.handlePluginProgress({
           plugin_name: "matters",
-          hook_name: "syndicate",
+          hook_name: "deploy",
           phase: "done",
           current: 0,
           total: 0,
@@ -772,10 +772,10 @@ describe("ProgressPanel", () => {
         // Let the deferred row paint.
         vi.advanceTimersByTime(250);
 
-        // Add matters:syndicate task (publish hook — paints immediately).
+        // Add matters:deploy task (publish hook — paints immediately).
         panel.handlePluginProgress({
           plugin_name: "matters",
-          hook_name: "syndicate",
+          hook_name: "deploy",
           phase: "distributing",
           current: 1,
           total: 4,
@@ -797,7 +797,7 @@ describe("ProgressPanel", () => {
         });
 
         expect(panel.getActiveTasks()).toHaveLength(1);
-        expect(panel.getActiveTasks()[0].id).toBe("plugin:matters:syndicate");
+        expect(panel.getActiveTasks()[0].id).toBe("plugin:matters:deploy");
       } finally {
         vi.useRealTimers();
       }
@@ -1071,7 +1071,7 @@ describe("ProgressPanel", () => {
     it("destroy removes panel from DOM", () => {
       // Narrated task creates panel DOM (only narrated tasks render as rows).
       panel.handleJobUpdate({
-        id: "narrated:1", window_id: "main", scope: "workspace", kind: "import", tone: "narrated",
+        id: "narrated:1", window_id: "main", scope: "workspace", kind: "deploy", tone: "narrated",
         title: "Building", fade_after_ms: null, started_at_ms: 0, verb: null, amount: null,
         elapsed_ms: null, parent: null, state: { state: "running", fraction: null, message: null },
       });
@@ -3875,7 +3875,7 @@ describe("ProgressPanel", () => {
     it("the rendered panel element feeds pointerenter/leave into the union (renderer wiring)", () => {
       // Narrated task creates panel DOM — only narrated tasks render as rows.
       panel.handleJobUpdate({
-        id: "narrated:wire-1", window_id: "main", scope: "workspace", kind: "import", tone: "narrated",
+        id: "narrated:wire-1", window_id: "main", scope: "workspace", kind: "deploy", tone: "narrated",
         title: "Building", fade_after_ms: null, started_at_ms: 0, verb: null, amount: null,
         elapsed_ms: null, parent: null, state: { state: "running", fraction: null, message: null },
       });
@@ -3979,7 +3979,7 @@ describe("Panel mounting and shape keep it attached to the nav pill", () => {
   function panelEl(): HTMLElement {
     // Narrated task creates panel DOM (only narrated tasks render as rows in the new model).
     panel.handleJobUpdate({
-      id: "narrated:1", window_id: "main", scope: "workspace", kind: "import", tone: "narrated",
+      id: "narrated:1", window_id: "main", scope: "workspace", kind: "deploy", tone: "narrated",
       title: "Building", fade_after_ms: null, started_at_ms: 0, verb: null, amount: null,
       elapsed_ms: null, parent: null, state: { state: "running", fraction: null, message: null },
     });
@@ -4191,7 +4191,7 @@ describe("Panel mounting and shape keep it attached to the nav pill", () => {
     const p2 = new ProgressPanel(bare);
     // Narrated task creates panel DOM (only narrated tasks render as rows in the new model).
     p2.handleJobUpdate({
-      id: "narrated:1", window_id: "main", scope: "workspace", kind: "import", tone: "narrated",
+      id: "narrated:1", window_id: "main", scope: "workspace", kind: "deploy", tone: "narrated",
       title: "x", fade_after_ms: null, started_at_ms: 0, verb: null, amount: null,
       elapsed_ms: null, parent: null, state: { state: "running", fraction: null, message: null },
     });
@@ -4350,7 +4350,7 @@ describe("buildViewModel", () => {
       id: "narr-1",
       window_id: "main",
       scope: "workspace",
-      kind: "syndicate",
+      kind: "deploy",
       tone: "awaiting",
       title: "Authorize publication",
       fade_after_ms: null,
@@ -4404,7 +4404,7 @@ describe("buildViewModel", () => {
     expect(panel.getRevealState()).toBe("minimized");
 
     panel.handleJobUpdate(
-      wire({ state: "awaiting", directive: "Sign in to GitHub", action: "None" })
+      wire({ state: "awaiting", directive: "Check your DNS records", action: "None" })
     );
 
     expect(panel.getRevealState()).toBe("surfaced");
@@ -4416,9 +4416,9 @@ describe("buildViewModel", () => {
       id: "narr-job-1",
       window_id: "main",
       scope: "workspace",
-      kind: "syndicate",
+      kind: "deploy",
       tone: "narrated",
-      title: "Syndicating to Mirror",
+      title: "Deploying site",
       fade_after_ms: null,
       started_at_ms: 0,
       verb: null,
@@ -4428,7 +4428,7 @@ describe("buildViewModel", () => {
       state: {
         state: "running",
         fraction: 0.5,
-        message: "Uploading post",
+        message: "Uploading site",
       },
     });
 
@@ -4508,15 +4508,15 @@ describe("buildViewModel", () => {
     expect(brokenAfter.length).toBe(0);
   });
 
-  // ── (f) Active syndicate plugin hook → status line ────────────────────────
-  it("(f) an active syndicate plugin hook task → appears in the status line (wiring iii)", () => {
+  // ── (f) Active deploy plugin hook → status line ────────────────────────
+  it("(f) an active site deploy plugin hook task → appears in the status line (wiring iii)", () => {
     // plugin:* tasks in the running tier feed the status line when no stage/publish/media.
     // handlePluginProgress is called directly (same as the event path) using the
     // correct PluginProgressEvent field names: plugin_name, hook_name, phase, current, total.
-    // "syndicate" is an IMMEDIATE_HOOK → no deferral, upserts directly.
+    // "deploy" is an IMMEDIATE_HOOK → no deferral, upserts directly.
     panel.handlePluginProgress({
       plugin_name: "Mirror",
-      hook_name: "syndicate",
+      hook_name: "deploy",
       phase: "running",
       current: 0,
       total: 0,
@@ -4708,7 +4708,7 @@ describe("AdvisoryEntry carries scope", () => {
     fireMossEvent({
       kind: "PanelTaskUpdate",
       payload: {
-        id: "task-1", window_id: "main", scope: "workspace", kind: "syndicate",
+        id: "task-1", window_id: "main", scope: "workspace", kind: "deploy",
         tone: "awaiting", title: "Authorize", started_at_ms: "0",
         verb: null, amount: null, elapsed_ms: null, parent: null,
         state: { state: "awaiting", directive: "Authorize to continue", action: "None" },
@@ -4745,16 +4745,16 @@ describe("Area A — PUSH_NOTICE event → advisory zone", () => {
   it("PUSH_NOTICE is stored in the advisory map keyed by task", async () => {
     const { eventBus, Events } = await import("../../../context/event-bus");
     eventBus.emit(Events.PUSH_NOTICE, {
-      task: "deploy:site-live-gate",
+      task: "publish-verify",
       item: null,
-      reason: "Publish your site first — deploy to your website, then syndicate.",
+      reason: "Checking your site is live.",
       severity: "NeedsAction",
       scope: "Remote",
     });
     const advs = panel.getAdvisories();
-    const notice = advs.find((a) => a.task === "deploy:site-live-gate");
+    const notice = advs.find((a) => a.task === "publish-verify");
     expect(notice).toBeDefined();
-    expect(notice!.reason).toBe("Publish your site first — deploy to your website, then syndicate.");
+    expect(notice!.reason).toBe("Checking your site is live.");
     expect(notice!.item).toBeNull();
   });
 
@@ -4762,7 +4762,7 @@ describe("Area A — PUSH_NOTICE event → advisory zone", () => {
     const { eventBus, Events } = await import("../../../context/event-bus");
     // Add a narrated task first to get the panel DOM mounted
     panel.handleJobUpdate({
-      id: "narrated:1", window_id: "main", scope: "workspace", kind: "import", tone: "narrated",
+      id: "narrated:1", window_id: "main", scope: "workspace", kind: "deploy", tone: "narrated",
       title: "Building", fade_after_ms: null, started_at_ms: 0, verb: null, amount: null,
       elapsed_ms: null, parent: null, state: { state: "running", fraction: null, message: null },
     });
@@ -4770,9 +4770,9 @@ describe("Area A — PUSH_NOTICE event → advisory zone", () => {
     // resting default is collapsed); its row only renders when the body is shown.
     panel.show();
     eventBus.emit(Events.PUSH_NOTICE, {
-      task: "deploy:site-live-gate",
+      task: "publish-verify",
       item: null,
-      reason: "Publish your site first — deploy to your website, then syndicate.",
+      reason: "Checking your site is live.",
       severity: "NeedsAction",
       scope: "Remote",
     });
@@ -5122,7 +5122,7 @@ describe("Closing the panel acknowledges the Blocking advisory shown at that mom
     // A NeedsAction row never surfaces the panel on its own; open it by hand
     // (as a hover/click would) to exercise dismiss() over a mixed advisory set.
     eventBus.emit(Events.PUSH_NOTICE, {
-      task: "deploy:site-live-gate", item: null,
+      task: "publish-verify", item: null,
       reason: "Publish your site first", severity: "NeedsAction", scope: "Remote",
     });
     panel.pin();
