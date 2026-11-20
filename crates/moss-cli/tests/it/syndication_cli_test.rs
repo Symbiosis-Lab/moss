@@ -551,12 +551,12 @@ fn impossible_new_copies_are_unavailable_before_sending() {
     std::fs::write(path, manifest.to_string()).unwrap();
     let report: serde_json::Value = serde_json::from_slice(&deploy(&s, &["--dry-run", "--json"]).stdout).unwrap();
     assert_eq!(report["copies"][0]["action"], "unavailable", "{report}");
-    assert!(report["copies"][0]["reason"].as_str().unwrap().contains("fits none"));
+    assert!(report["copies"][0]["reason"].as_str().unwrap().contains("doesn't take articles."));
     let choices = moss_build::syndication::choose::read_post(&s.root, "notes/first.md").unwrap();
     assert!(!choices[0].on);
-    assert!(choices[0].reason.as_deref().unwrap().contains("fits none"));
+    assert!(choices[0].reason.as_deref().unwrap().contains("doesn't take articles."));
     let human = deploy(&s, &["--dry-run"]);
-    assert!(String::from_utf8_lossy(&human.stdout).contains("fits none"));
+    assert!(String::from_utf8_lossy(&human.stdout).contains("doesn't take articles."));
     deploy(&s, &[]);
     assert!(paths(&net).is_empty());
     let records = moss_build::syndication::record::Records::in_vault(&moss_build::moss_paths::MossPaths::new(&s.root));

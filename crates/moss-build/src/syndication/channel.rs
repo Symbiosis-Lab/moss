@@ -48,6 +48,9 @@ pub struct ImageLimits {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChannelSpec {
+    /// What the person calls the network, filled from the manifest when the spec is read; it names the channel in a refusal.
+    #[serde(skip)]
+    pub name: Option<String>,
     #[serde(default)]
     pub forms: Vec<Form>,
     #[serde(default)]

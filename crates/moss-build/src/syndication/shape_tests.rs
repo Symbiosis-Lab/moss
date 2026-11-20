@@ -30,6 +30,15 @@ fn spec(forms: &[Form], max: u32) -> ChannelSpec {
 }
 
 #[test]
+fn a_page_no_declared_form_takes_is_refused_in_one_plain_line() {
+    let long = post("Essay", &"A sentence about autumn. ".repeat(100));
+    let mut bluesky = spec(&[Form::Short], 300);
+    assert_eq!(shape(&long, &bluesky, SITE).unwrap_err(), "This channel doesn't take articles.");
+    bluesky.name = Some("Bluesky".into());
+    assert_eq!(shape(&long, &bluesky, SITE).unwrap_err(), "Bluesky doesn't take articles.");
+}
+
+#[test]
 fn a_short_post_is_its_own_text_with_links_spelled_out() {
     let p = post("", "Autumn's **first** hotpot, after [the walk](/notes/walk/) and https://example.com.\n");
     let s = shape(&p, &spec(&[Form::Short, Form::Teaser], 300), SITE).unwrap();

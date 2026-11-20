@@ -152,7 +152,7 @@ pub fn shape_with(post: &ArticleInfo, spec: &ChannelSpec, site_url: &str, opts: 
             let (teaser, part) = teaser(post, spec, &page, site_url)?;
             (Form::Teaser, vec![part], Some(teaser), None)
         } else {
-            return Err("the whole page, including its title and link back, fits none of this channel's declared forms".into());
+            return Err(format!("{} doesn't take articles.", spec.name.as_deref().unwrap_or("This channel")));
         }
     };
     let pictures = if form == Form::Long { Vec::new() } else {

@@ -64,6 +64,7 @@ pub fn copy_channels_of(project_path: &str, plugins: &[Plugin]) -> BTreeMap<Stri
             }
             let channel = p.manifest.contributes.as_ref().and_then(|c| c.channel.as_ref());
             let name = channel.and_then(|c| c.display_name.clone()).or_else(|| p.manifest.display_name.clone());
+            spec.name = name.clone();
             Some((p.manifest.name.clone(), CopyChannel { spec, domains, name }))
         })
         .collect()
@@ -161,6 +162,7 @@ mod tests {
         std::fs::write(root.join(".moss/config.toml"), "[channels.social]\n").unwrap();
         let channels = crate::syndication::landing::channels(root);
         assert_eq!(channels["social"].domains, ["social.example.net"]);
+        assert_eq!(channels["social"].spec.name.as_deref(), Some("Social"), "a refusal names the channel");
     }
 
     #[test]
