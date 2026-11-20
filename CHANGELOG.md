@@ -18,6 +18,7 @@ All notable changes to moss will be documented here.
 - An empty folder's home page shows the same site name before its first page as after it: `my-site` reads "my site" from the start.
 - Opening a folder in the file tree's breadcrumb opens only that folder, not every folder above it.
 - The asset folder control in settings keeps its shape in a narrow row instead of shrinking to an empty circle.
+- `moss history --restore --at` takes the commit a version's row in `moss history` shows, not only the version id. An id that starts with the text still wins, and a commit shared by two versions is refused as ambiguous.
 
 ### New
 
