@@ -343,6 +343,9 @@ function pruneUnnamed(siteDir: string, files: ScratchSiteSpec["files"]): boolean
   const named = new Set(Object.keys(files).map((rel) => path.normalize(rel)));
   for (const rel of fs.readdirSync(siteDir, { recursive: true }) as string[]) {
     if (rel.split(path.sep).some((part) => part.startsWith("."))) continue;
+    // moss's build writes the folder's Finder stamp here; pruning it would
+    // drop the build stamp and rebuild a folder its server already owns.
+    if (rel === "Icon\r") continue;
     const abs = path.join(siteDir, rel);
     if (!named.has(rel) && fs.statSync(abs).isFile()) {
       fs.rmSync(abs);
