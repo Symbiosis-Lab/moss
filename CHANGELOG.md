@@ -35,6 +35,7 @@ All notable changes to moss will be documented here.
 - When moss signs in or publishes, it tells the hosting service which computer it is running on: a random key kept in moss's local app data on that computer, different for each folder, with the kind of computer (MacBook Pro, a Windows PC). Nothing is refused or asked because of it, and a CI run sends none. The privacy page says what is kept.
 - `cols=`, a grid's `---` divider and `sidebar:` still render as their current spelling and now give a note naming it instead of a problem, so `moss build --strict` passes a folder written for an older moss. `:::apply` and `:::toc`, which no longer render, stay problems and name the release that removed them.
 - What a build knows only about one computer (file hashes and stats, the preview server's token, each page's filled bytes, the last comment refresh) now lives in moss's cache folder on that computer instead of in the site folder. A copied or moved folder no longer carries facts that are wrong on its new disk, and a sync client no longer uploads a copy of every page when the stylesheet changes. The first build after updating moves what an older moss left there. Stores on the computer drop what no folder or moss version still uses.
+- A program that writes through the preview server finds its token file from the server's stderr: each time the server publishes a token it prints `HTTP carrier token file: <JSON-encoded path>`, also with `--quiet`. The file is no longer under `.moss/build.nosync/`.
 
 ## [0.15.27] - 2026-11-19
 

@@ -18,7 +18,8 @@
 //! ## The token, and why a local file delivers it
 //!
 //! moss mints one random token per vault the server binds and writes it to a
-//! **loopback-readable local file** under that vault. A client proves it is a genuine local
+//! **owner-readable local file** in this computer's folder record, outside the vault
+//! (see [`token_path`]). A client proves it is a genuine local
 //! process — a coding agent, a Playwright driver, moss's own tooling — by
 //! reading that file and echoing the token in a custom request header
 //! ([`TOKEN_HEADER`], `X-Moss-Token`). Two properties make this defeat the
@@ -47,12 +48,11 @@
 //!    is overwritten.
 //! 2. **Publish** — [`publish`] writes the token to
 //!    the folder's `http-token` record on this computer (see [`token_path`]) in the same bind.
-//!    `.moss/build.nosync/` is cloud-EXCLUDED and regenerable
-//!    (`moss_paths::MOSS_PATH_RULES`), so the file never syncs to another
-//!    machine and is never left dataless by an eviction — and the write goes
-//!    through `build::io_utils::write_output`, so it lands via
-//!    temp+rename and never materializes a dataless destination.
-//! 3. **Obtain (client)** — a local client reads the whole file, trims it, and
+//!    This local record stays outside synced and served output and survives cache
+//!    purges; `build::io_utils::write_output` lands it via temp+rename.
+//! 3. **Obtain (client)** — after successful publication, stderr emits exactly one
+//!    `HTTP carrier token file: <JSON-encoded absolute path>` line, even in quiet
+//!    mode. A local client JSON-decodes the path, reads and trims the file, and
 //!    sends the value as `X-Moss-Token`.
 //! 4. **Verify (server)** — [`constant_time_eq`] compares the header against the
 //!    session token in the mutation middleware; a miss is `401`.

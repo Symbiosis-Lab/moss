@@ -145,8 +145,8 @@ impl InvokeCtx {
     /// with the record, and a request that read the serve dir before a switch
     /// must not rebind the old vault over the new one afterwards. The publish
     /// is a small synchronous write that runs only on a switch; do not move
-    /// it off the lock. Best-effort on the publish itself: a vault whose build
-    /// dir cannot be written still gets a token, and a client that cannot read
+    /// it off the lock. Best-effort on the publish itself: a vault whose local
+    /// record cannot be written still gets a token, and a client that cannot read
     /// it is simply 401 — the read-only tier is unaffected.
     pub fn bind(&self, site_dir: &Arc<RwLock<PathBuf>>) -> Option<Arc<Session>> {
         let mut session = self.session.write().unwrap_or_else(|e| e.into_inner());
@@ -165,10 +165,14 @@ impl InvokeCtx {
         }
         let token = Arc::new(super::carrier_token::mint());
         match super::carrier_token::publish(vault.path(), &token) {
-            Ok(()) => log::info!(
-                target: "preview",
-                "HTTP carrier token published under .moss/build.nosync/ (loopback-readable)"
-            ),
+            Ok(()) => {
+                let path = super::carrier_token::token_path(vault.path());
+                // Discovery is required even when routine status output is quiet.
+                crate::build::cli_output::write_status_line(
+                    std::io::stderr().lock(),
+                    format_args!("HTTP carrier token file: {}", serde_json::json!(path.to_string_lossy())),
+                );
+            }
             Err(e) => log::warn!(target: "preview", "could not publish HTTP carrier token: {e}"),
         }
         let fresh = Arc::new(Session {
@@ -185,6 +189,10 @@ impl InvokeCtx {
         Some(fresh)
     }
 }
+
+#[cfg(test)]
+#[path = "session_tests.rs"]
+mod tests;
 
 impl ServerHandle {
     /// Point the server at a new serve dir — the folder switch. Rebinds the
