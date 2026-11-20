@@ -657,6 +657,7 @@ pub(crate) fn test_probe(path: &Path, operation: StorageOperation) -> Result<(),
 pub(crate) struct TestFault {
     root: PathBuf,
     key: (PathBuf, StorageOperation),
+    count: usize,
 }
 
 #[cfg(test)]
@@ -670,7 +671,32 @@ impl TestFault {
         faults.roots.insert(root.to_path_buf(), deadline);
         let key = (path.to_path_buf(), operation);
         faults.refusals.insert(key.clone(), (count, errno));
-        Self { root: root.to_path_buf(), key }
+        Self { root: root.to_path_buf(), key, count }
+    }
+
+    /// A handle that outlives borrows of the fault, to wait on its first refusal from another thread.
+    pub fn watch(&self) -> FaultWatch {
+        FaultWatch { key: self.key.clone(), count: self.count }
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct FaultWatch {
+    key: (PathBuf, StorageOperation),
+    count: usize,
+}
+
+#[cfg(test)]
+impl FaultWatch {
+    /// Block until the fault has refused a probe, so a caller acts only once the walk is waiting.
+    pub fn wait_for_first_refusal(&self) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(120);
+        while std::time::Instant::now() < deadline {
+            if test_faults().refusals.get(&self.key).is_some_and(|(remaining, _)| *remaining < self.count) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 }
 
