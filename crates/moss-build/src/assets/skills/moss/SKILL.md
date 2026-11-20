@@ -252,7 +252,7 @@ A stylesheet that is longer than the design needs is a defect even when it rende
 
 ## Where you may write
 
-Write pages, pictures and folders anywhere outside `.moss/`, the theme in `.moss/theme/`, settings in `.moss/config.toml` and `.moss/places.toml`, and this site's own notes for agents in `.moss/AGENTS.md`. Nothing else under `.moss/` is yours: the build output, the version history, the publish record and the site's keys change only through moss commands, and a hand edit there is overwritten or breaks publishing. Outside `.moss/`, moss also writes `.claude/skills/moss/`, `.cursor/rules/moss.mdc` and the folder icon file; leave those too. `moss describe --json` lists every such path under `.paths`, with who writes it and, for moss's, the command that changes it (`null` for output moss regenerates).
+Outside `.moss/`, paths are the author's by default; inside `.moss/`, paths are moss's by default. `moss describe --json` is the authoritative list of exceptions under `.paths`: write paths marked `author`, and leave paths marked `moss` to the command in `changed_by` (`null` for output moss regenerates). The theme, assets, templates, settings and this site's own notes for agents are authoring surfaces. Build output, version history, publish records and the site's keys belong to moss; a hand edit there is overwritten or breaks publishing.
 
 Never hand-apply a rewrite `moss migrate` offers: run it, so it saves a version first. Never lower `min_moss_version` or `schema_version`. Never add a class to pages to make a theme rule match again.
 

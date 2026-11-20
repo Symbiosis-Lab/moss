@@ -1031,6 +1031,7 @@ pub const MOSS_PATH_RULES: &[MossPathRule] = &[
     r(".moss/config.toml", Writer::Author, false, CloudPolicy::Synced, true, true),
     r(".moss/theme/", Writer::Author, false, CloudPolicy::Synced, true, true),
     r(".moss/assets/", Writer::Author, false, CloudPolicy::Synced, true, true),
+    r(".moss/templates/", Writer::Author, false, CloudPolicy::Synced, true, true),
     // moss writes this one (background comment/social sync) and it is still
     // watched on purpose: the sync is change-gated, and the preview has to
     // refresh when it lands. Pinned by the social-sync rebuild regression test.
@@ -1571,6 +1572,7 @@ mod tests {
             (".moss/config.toml", "the user's own configuration — content, not machine state"),
             (".moss/theme/", "the user's own theme — content"),
             (".moss/assets/", "the user's own assets — content"),
+            (".moss/templates/", "the user's starting pages: a second machine needs the same templates to create content"),
             (".moss/data/social/", "background comment/social sync results, re-fetchable from the server that produced them"),
             (".moss/places.toml", "the user's own gazetteer — content, same reasoning as config.toml"),
             (".moss/deploy/", "what is live at each target, which is a fact about the SITE: a second machine needs it to leave a forwarding link for a page this one renamed. Read through `manifest::live_baseline`, whose tri-state keeps unreadable apart from absent"),
@@ -1743,6 +1745,7 @@ mod tests {
             ".moss/theme/style.css",
             ".moss/theme/fonts/IM-Fell.woff2",
             ".moss/assets/logo.png",
+            ".moss/templates/article.md",
         ] {
             assert!(is_watchable_rel(rel), "{rel} is the user's to edit");
         }

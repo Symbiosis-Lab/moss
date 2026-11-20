@@ -90,27 +90,26 @@ fn run_init(_args: &[String]) -> i32 {
 
         if new_content == existing {
             println!("{} is up to date", target.display());
-            return 0;
-        }
+        } else {
+            // Back up before write.
+            let backup = target.with_extension("md.bak");
+            // allow:raw_write the vault's root agent files are the user's documents, not build output
+            if let Err(e) = fs::write(&backup, &existing) {
+                eprintln!("error writing backup {}: {}", backup.display(), e);
+                return 1;
+            }
 
-        // Back up before write.
-        let backup = target.with_extension("md.bak");
-        // allow:raw_write the vault's root agent files are the user's documents, not build output
-        if let Err(e) = fs::write(&backup, &existing) {
-            eprintln!("error writing backup {}: {}", backup.display(), e);
-            return 1;
+            // allow:raw_write the vault's root agent files are the user's documents, not build output
+            if let Err(e) = fs::write(&target, &new_content) {
+                eprintln!("error writing {}: {}", target.display(), e);
+                return 1;
+            }
+            println!(
+                "{} updated (managed block refreshed; your-notes preserved; backup at {})",
+                target.display(),
+                backup.display()
+            );
         }
-
-        // allow:raw_write the vault's root agent files are the user's documents, not build output
-        if let Err(e) = fs::write(&target, &new_content) {
-            eprintln!("error writing {}: {}", target.display(), e);
-            return 1;
-        }
-        println!(
-            "{} updated (managed block refreshed; your-notes preserved; backup at {})",
-            target.display(),
-            backup.display()
-        );
     } else {
         // allow:raw_write the vault's root agent files are the user's documents, not build output
         if let Err(e) = fs::write(&target, TEMPLATE) {

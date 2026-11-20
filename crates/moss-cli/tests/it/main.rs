@@ -12,6 +12,7 @@ const OWN_PROCESS: &[&str] = &[
     "yield_test",
 ];
 
+mod agent_write_scope_test;
 mod booking_offer_test;
 mod build_default_folder_test;
 mod build_json_output_test;
