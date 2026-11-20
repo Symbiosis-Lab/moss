@@ -3,8 +3,10 @@ const entities = { '&amp;': '&', '&quot;': '"', '&#39;': "'", '&lt;': '<', '&gt;
 
 /** The words in `html` a reader gets with scripts off: markup, script, style and noscript removed. */
 export function visibleText(html) {
-  return html
-    .replace(/<!--[\s\S]*?-->/g, '')
+  // Repeated until stable: one pass over `<!<!---->--` leaves a comment behind.
+  let text = html, before;
+  do { before = text; text = text.replace(/<!--[\s\S]*?-->/g, ''); } while (text !== before);
+  return text
     .replace(/<(script|style|noscript|svg|template)\b[\s\S]*?<\/\1\s*>/gi, ' ')
     .replace(/<[^>]*>/g, ' ')
     .replace(/&(?:amp|quot|#39|lt|gt);/g, (entity) => entities[entity])

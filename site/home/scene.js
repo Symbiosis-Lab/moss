@@ -56,13 +56,10 @@ const PEEK = 150, SIB_MS = 320, SIB_STAGGER = 170, SIB_LEAD = 140;
 // targets start popping (below). Going back, the control drops last, after
 // PUB_OUT_DELAY, so the targets' own (much shorter) retreat finishes first.
 const PUB_SCALE = 2.6, PUB_MS = 420, PUB_BEAT = 120, PUB_OUT_DELAY = 450;
-// Scene 5's close. The loop, its poster and the headline are the page's own
-// arguments, so another cut of the footage or another line can be put in front
-// of a reviewer without an edit. SCRIM is how much paper lies over the footage
-// so the line reads off it.
-const arg = (k, d) => new URLSearchParams(location.search).get(k) || d;
-const LOOP_SRC = arg('loopVideo', 'home/scene5-loop/out/v8-press.mp4');
-const LOOP_POSTER = arg('loopPoster', 'home/scene5-loop/out/v8-press-poster.jpg');
+// Scene 5's close. SCRIM is how much paper lies over the footage so the line
+// reads off it.
+const LOOP_SRC = 'home/scene5-loop/out/v8-press.mp4';
+const LOOP_POSTER = 'home/scene5-loop/out/v8-press-poster.jpg';
 const SCRIM = 0.72;
 // Only the three creative artifacts move. Their initial positions are
 // measured against the available viewport when Scene 3 opens.
