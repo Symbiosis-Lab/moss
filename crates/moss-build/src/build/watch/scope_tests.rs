@@ -230,7 +230,7 @@ fn a_target_metadata_refusal_discards_the_watch_set_candidate() {
 fn root_agent_files_are_recognised_as_moss_written() {
     let root = Path::new("/site");
     assert!(all_paths_moss_written(root, &[root.join("AGENTS.md")]));
-    assert!(all_paths_moss_written(root, &[MossPaths::new(root).staging_dir().join("i.html")]));
+    assert!(all_paths_moss_written(root, &[MossPaths::new(root).legacy_build_dir().join("staging/i.html")]));
 
     // …but the same name one directory down is ordinary content, which is what
     // `editor::filesystem::a_nested_agents_md_is_an_ordinary_file` pins.

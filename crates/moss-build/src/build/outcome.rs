@@ -71,7 +71,7 @@
 //! Meant to be replaced when `ports.rs` draws the real build-outcome seam.
 
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Why a build stopped, and whether waiting would help.
 #[derive(Clone, PartialEq, Eq)]
@@ -337,21 +337,28 @@ enum Disposition {
 /// a list that has already drifted once; delegating means a new watched
 /// extension is picked up for free.
 ///
-/// The staging check splits on the `.moss` *component* rather than a substring,
-/// so a vault whose own directory name contains `.moss` cannot be misread. It
+/// Staging and the build cache are wherever [`MossPaths`] puts them. The shared
+/// store's check splits on the `.moss` *component* rather than a substring, so
+/// a vault whose own directory name contains `.moss` cannot be misread. It
 /// takes the last such component, matching what `path_is_watchable` does with
 /// the vault-relative path.
+///
+/// [`MossPaths`]: crate::moss_paths::MossPaths
 fn disposition(root: &Path, path: &Path) -> Disposition {
-    let regenerable = moss_relative_tail(path).is_some_and(|rel| {
-        rel.starts_with("build.nosync/staging/")
-            || rel.starts_with("build.nosync/cache/")
-            || rel.starts_with("cache/")
-    });
+    let mp = crate::moss_paths::MossPaths::new(root);
+    // Both spellings: the build writes through the joined path, an error can
+    // carry the resolved one (`/var` against `/private/var`).
+    let resolved = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let under = |dir: PathBuf| path.starts_with(&dir) || path.starts_with(resolved(&dir));
+    let regenerable = under(mp.staging_dir())
+        || under(mp.cache_dir())
+        || moss_relative_tail(path).is_some_and(|rel| rel.starts_with("cache/"));
     if regenerable {
         return Disposition::Discard;
     }
     use crate::build::watch::scope::{path_is_watchable, path_passes_filter};
-    if path_is_watchable(root, path) && path_passes_filter(root, path) {
+    // Only an arrival inside the folder reaches its watcher.
+    if under(root.to_path_buf()) && path_is_watchable(root, path) && path_passes_filter(root, path) {
         return Disposition::Wait;
     }
     Disposition::Report

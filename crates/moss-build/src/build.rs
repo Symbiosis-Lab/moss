@@ -788,6 +788,13 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // pipeline's background handle, and a retried attempt takes a fresh one if
     // the first attempt's handle took it down with it.
     let lifecycle_paths = crate::moss_paths::MossPaths::new(config.source());
+    // A build with no place on this computer for its output stops here, so
+    // the output never lands in the folder. Then the output an older moss
+    // kept in the folder moves out, before anything below reads the records
+    // that came with it.
+    let build_root = lifecycle_paths.resolve_build_root()?;
+    crate::build::lifecycle::tree_migration::move_output_out(&lifecycle_paths);
+    log::info!(target: "build", "build.root {}", build_root.display());
     let cache_lease = std::sync::Arc::new(std::sync::Mutex::new(Some(
         crate::build::lifecycle::cache_write_lease(&lifecycle_paths),
     )));
@@ -811,23 +818,12 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     let moss_dir_path = config.source().join(".moss");
     let moss_dir_str = moss_dir_path.to_string_lossy().to_string();
 
-    // Ensure .moss/ exists and mark the regenerable tree out of cloud sync
-    // BEFORE anything below writes into it: the CLI's link-meta fetch writes
-    // `.moss/build.nosync/cache/link-meta/`, and a marker cannot un-sync bytes a
-    // provider already took.
-    // allow:raw_write `.moss` itself; the regenerable tree starts below it
+    // allow:raw_write `.moss` itself
     std::fs::create_dir_all(&moss_dir_path).map_err(|e| format!("Failed to create .moss directory: {}", e))?;
-    // Before the tree is marked or held: the split layout is what both assume.
     let paths_at_start = crate::moss_paths::MossPaths::from_moss_dir(moss_dir_path.to_path_buf());
     crate::build::lifecycle::tree_migration::migrate_build_tree(&paths_at_start);
     crate::infra::moss_paths::move_local_facts_out(&paths_at_start);
     crate::vault::synced_siblings::reconcile_synced_state(&paths_at_start);
-    crate::infra::moss_paths::exclude_dirs_from_cloud_sync(&moss_dir_path); // regenerable output: keep it out of iCloud, and out of the set moss waits for
-    // Hold `.moss/build.nosync` by fd from here so a cloud sync client's rename-aside
-    // mid-build cannot silently move where `build_dir()` reads or writes.
-    crate::build::lifecycle::open_build_root_handle(&lifecycle_paths);
-    // This build's root identity, to compare against later phases.
-    let start_identity = crate::build::lifecycle::root_identity::log_build_root(&lifecycle_paths.root().join("build.nosync"), "start", None);
 
     crate::infra::moss_paths::ensure_moss_gitignore(&moss_dir_path)?;
     crate::infra::moss_paths::note_hidden_moss_files(config.source());
@@ -1429,7 +1425,6 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                                 // be reading `stage_dir`. Never reclaim here.
                                 final_sweep: None,
                                 cache_lease,
-                                build_root_identity: start_identity,
                                 // Long-lived runtime: the materialize is
                                 // debounced (`build::seal_phase`), and the
                                 // hand-off is non-blocking, so the `sealing` hold
@@ -1524,7 +1519,6 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                             // that manifest names. Reclaim now or never.
                             final_sweep: Some(crate::build::lifecycle::final_build_permit(&mp)),
                             cache_lease,
-                            build_root_identity: start_identity,
                             handoff: Handoff::Caller,
                         },
                     )
@@ -1781,12 +1775,6 @@ pub(crate) struct SealGuards {
     /// pass in the same process starts from the sealed manifest, so it inherits
     /// the sweep), so the tail reclaims it now (`ship::reclaim_staging_now`).
     pub final_sweep: Option<crate::build::lifecycle::SweepPermit>,
-    /// The identity `root_identity::log_build_root` observed for this
-    /// build's root at "start", carried here because this is the one value
-    /// that already reaches both the detached seal task and `advertise_sealed`
-    /// — the next one joins as a field for the same reason `cache_lease` and
-    /// `final_sweep` do.
-    pub build_root_identity: Option<crate::build::lifecycle::root_identity::RootIdentity>,
     /// The build's `lifecycle::CacheWriteLease`, handed back by
     /// `BackgroundHandle::await_completion` instead of being dropped there.
     /// Held across `materialize_and_promote` (`ship_phase`) in
@@ -1975,8 +1963,8 @@ async fn advertise_sealed(
     folder_path: &str,
     // The seal tail's one-off RAII permits — see `SealGuards` for what each
     // field is and when it is read or dropped. `final_sweep` is consumed
-    // below, inline; `cache_lease` and `build_root_identity` travel into the
-    // returned `PendingSeal` for the materialize phase to read or drop.
+    // below, inline; `cache_lease` travels into the returned `PendingSeal`
+    // for the materialize phase to drop.
     guards: SealGuards,
 ) -> Option<crate::build::seal_phase::PendingSeal> {
     // The seal's per-build half, which a detached tail runs after `run_pipeline`
@@ -2224,7 +2212,6 @@ async fn advertise_sealed(
         is_pinned,
         session: session.clone(),
         cache_lease: guards.cache_lease,
-        build_root_identity: guards.build_root_identity,
         folder_lock: None,
         media_rerender_owed,
     };

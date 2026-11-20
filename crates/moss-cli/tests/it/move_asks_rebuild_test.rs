@@ -123,6 +123,6 @@ fn a_rename_made_during_the_first_build_is_built_once_by_its_own_request() {
     let asked = at("Rebuild asked by move");
     let first_built = at("build.summary");
     assert!(asked < first_built, "premise: the rename was made during the first build:\n{}", lines.join("\n"));
-    let starts: Vec<usize> = lines.iter().enumerate().filter(|(_, l)| l.contains("build.root phase=start")).map(|(i, _)| i).collect();
+    let starts: Vec<usize> = lines.iter().enumerate().filter(|(_, l)| l.contains("build.root ")).map(|(i, _)| i).collect();
     assert_eq!(starts.len(), 2, "the first build and the rename's:\n{}", lines.join("\n"));
 }

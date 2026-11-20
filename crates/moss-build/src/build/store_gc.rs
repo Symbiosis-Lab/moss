@@ -617,6 +617,7 @@ pub fn gc_old_generations(
                     crate::build::manifest::publish_view::receipt_path(generations_dir, name),
                     crate::build::manifest::publish_view::articles_path(generations_dir, name),
                     WholeGeneration::record_path(generations_dir, name),
+                    crate::infra::folder_lock::promotion_record_path(generations_dir, name),
                 ] {
                     // allow:unlink the records kept beside this removed generation, outside staging
                     let _ = std::fs::remove_file(receipt);

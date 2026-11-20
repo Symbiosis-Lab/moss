@@ -33,8 +33,6 @@ const OWN_PROCESS: &[&str] = &[
     "plugin_install_cli_test",
     "proved_trigger_test",
     "registry_status_test",
-    "root_identity_log_test",
-    "root_swap_mid_build_test",
     "section_color_test",
     "seta_poll_log_test",
     "shortcode_attr_warning_test",

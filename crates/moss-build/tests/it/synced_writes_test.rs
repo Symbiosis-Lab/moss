@@ -265,3 +265,76 @@ fn a_build_moves_out_the_facts_an_older_moss_left_in_the_folder() {
     assert!(paths.cache_hash_index().exists());
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// What may be under the folder's `.moss/` after a build: the folder's own
+/// files at the top, and these directories. Nothing a build makes for this
+/// computer (the output, its records, this computer's facts) is among them.
+const SYNCED_DIRS: &[&str] = &["agents/", "cache/", "data/", "history/", "identity/", "keys/", "deploy/records/"];
+
+fn outside_synced_dirs(dir: &Path) -> Vec<String> {
+    let moss = dir.join(".moss");
+    walkdir::WalkDir::new(&moss)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| !e.file_type().is_dir())
+        .map(|e| e.path().strip_prefix(&moss).unwrap().to_string_lossy().replace('\\', "/"))
+        .filter(|rel| rel.contains('/') && !SYNCED_DIRS.iter().any(|kept| rel.starts_with(kept)))
+        .collect()
+}
+
+#[cfg(unix)]
+fn current_inode(paths: &MossPaths) -> u64 {
+    fs::metadata(paths.generation_dir(&paths.current_generation_id().unwrap())).unwrap().ino()
+}
+
+/// The build output lives on this computer, not in the folder: after a first
+/// build, and after the first open by this moss of a folder an older moss
+/// built (its output in `.moss/build.nosync/`), the folder's `.moss/` holds
+/// nothing else. On one volume the older output is renamed, so the last build
+/// arrives whole: the same generation directory, served, no cold build.
+#[test]
+fn the_build_output_stays_out_of_the_folder() {
+    let dir = site("output_out");
+    build(&dir, false);
+    assert_eq!(outside_synced_dirs(&dir), Vec::<String>::new(), "after a first build");
+    let paths = MossPaths::new(&dir);
+    assert!(paths.has_servable_generation());
+
+    let generation = current_inode(&paths);
+    fs::rename(paths.build_dir(), paths.legacy_build_dir()).unwrap();
+    build(&dir, true);
+    assert_eq!(outside_synced_dirs(&dir), Vec::<String>::new(), "after an upgrade open");
+    assert_eq!(current_inode(&paths), generation, "the older output moved warm");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The system may purge this computer's cache at any time. A purged output
+/// reads as nothing built, and the next build makes it again.
+#[test]
+fn a_purged_build_output_is_built_again() {
+    let dir = site("purged");
+    build(&dir, false);
+    let paths = MossPaths::new(&dir);
+    fs::remove_dir_all(paths.build_dir()).unwrap();
+    assert!(!paths.has_servable_generation(), "a purged root reads as nothing built");
+    build(&dir, false);
+    assert!(paths.has_servable_generation());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A generation whose list of preview-only pages is gone (a partial purge)
+/// is not one moss can vouch for: its drafts would read as published. It is
+/// not served, and the next build replaces it.
+#[test]
+fn a_current_without_its_records_is_not_served_and_is_replaced() {
+    let dir = site("partial_purge");
+    build(&dir, false);
+    let paths = MossPaths::new(&dir);
+    let id = paths.current_generation_id().unwrap();
+    fs::remove_file(paths.generations_dir().join(format!(".{id}.withheld.json"))).unwrap();
+    assert!(!paths.has_servable_generation());
+    assert_eq!(paths.initial_serve_dir(), paths.staging_dir());
+    build(&dir, false);
+    assert!(paths.has_servable_generation());
+    let _ = fs::remove_dir_all(&dir);
+}

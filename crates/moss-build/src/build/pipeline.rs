@@ -1251,14 +1251,6 @@ fn build_inner(
     // Step 2: Ensure staging directory exists (persistent across rebuilds)
     // We keep staging/ between rebuilds so that mtime+size checks can skip
     // unchanged binary assets (videos, images) — avoids re-reading/writing 1GB+.
-    //
-    // `create_output_dir_all`, not `fs::create_dir_all`: on a cloud-synced vault
-    // this is the FIRST thing the build does to the output tree, and a raw
-    // `create_dir_all` here failed `EDEADLK` on a Google Drive vault's first
-    // preview — putting "Resource deadlock avoided (os error 11)" on the
-    // onboarding overlay, before the build could reach the cloud gate that
-    // explains itself. The staging tree is regenerable, so unreadable is
-    // treated as absent, and it is replaced rather than waited for.
     crate::build::io_utils::create_output_dir_all(&stage_dir)
         .map_err(|e| format!("Failed to create staging directory: {}", e))?;
 

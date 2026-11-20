@@ -36,7 +36,7 @@ Every sealed build lands in its own generation directory, and by default the new
 
 For an editing session, start with `moss build <folder> --serve --watch` and use the URL printed by that process. Verify the exact URL the reader will open. A successful build or HTTP 200 for the page does not prove its styles loaded: check the linked CSS and JavaScript responses, their content types, and the rendered page. An HTML fallback can return 200 at a stylesheet URL while leaving the page unstyled.
 
-Test watching with a reversible edit to the actual source, observe the changed page or asset through the running server, then restore it and verify restoration. Checking only the initial build cannot reveal a watcher that ignores source events. Edit source files, not the generated output under `.moss/build.nosync/`.
+Test watching with a reversible edit to the actual source, observe the changed page or asset through the running server, then restore it and verify restoration. Checking only the initial build cannot reveal a watcher that ignores source events. Edit source files, not the generated output (the `output` path `moss build --json` prints).
 
 If you separately serve an exported build, set the server root explicitly to that output and preserve its `/_moss/` asset paths. A prototype-specific rewrite can break an otherwise valid documentation build.
 

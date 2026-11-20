@@ -267,6 +267,7 @@ mod tests {
     /// `pages`, with `files` written as sources.
     fn vault(articles: &[(&str, &str)], pages: &[(&str, &str)], files: &[&str]) -> tempfile::TempDir {
         let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(MossPaths::new(dir.path()).root()).unwrap();
         let build = MossPaths::new(dir.path()).build_dir();
         std::fs::create_dir_all(&build).unwrap();
         let articles: serde_json::Map<String, serde_json::Value> = articles
@@ -542,6 +543,7 @@ mod tests {
             // open `apple.md` as the root's source.
             let parent = tempfile::tempdir().unwrap();
             let root = parent.path().join("wild garden");
+            std::fs::create_dir_all(&root).unwrap();
             std::fs::create_dir_all(MossPaths::new(&root).build_dir()).unwrap();
             write_map(&root, serde_json::json!({ "articles": {}, "pages": {} }));
             std::fs::write(root.join("apple.md"), "---\ntitle: Apple\n---\nbody").unwrap();
@@ -637,7 +639,7 @@ mod tests {
         std::fs::write(staging.join("index.html"), "<title>Home</title>").unwrap();
         assert_eq!(pages_in(&paths.initial_serve_dir()).len(), 1, "before the first seal, staging is served");
 
-        std::fs::create_dir_all(paths.generation_dir("gen001")).unwrap();
+        paths.finish_test_generation("gen001");
         paths.set_current_ptr("gen001").unwrap();
         std::fs::write(staging.join("second.html"), "<title>Second</title>").unwrap();
         assert_eq!(pages_in(&staging).len(), 2);

@@ -37,7 +37,7 @@ fn test_article_map_is_article() {
 #[test]
 fn test_article_map_save_and_load() {
     let temp_dir = TempDir::new().unwrap();
-    let moss_dir = temp_dir.path();
+    let moss_dir = &temp_dir.path().join(".moss");
     fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).build_dir()).unwrap();
 
     let mut map = ArticleMap::new();
@@ -74,7 +74,7 @@ fn test_article_map_save_and_load() {
 #[test]
 fn test_article_map_load_nonexistent() {
     let temp_dir = TempDir::new().unwrap();
-    let moss_dir = temp_dir.path();
+    let moss_dir = &temp_dir.path().join(".moss");
 
     // Should return empty map when file doesn't exist
     let map = ArticleMap::load(moss_dir).unwrap();
@@ -87,7 +87,7 @@ fn test_article_map_save_is_atomic_no_temp_leftover() {
     // never catch a half-written file. Assert the rename consumed the temp
     // (no `.json.tmp` sibling left behind) and the final file is complete.
     let temp_dir = TempDir::new().unwrap();
-    let moss_dir = temp_dir.path();
+    let moss_dir = &temp_dir.path().join(".moss");
     fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).build_dir()).unwrap();
 
     let map = ArticleMap::new();
@@ -344,7 +344,7 @@ fn test_build_article_map_includes_html_content() {
 #[test]
 fn test_article_map_html_content_roundtrips_through_json() {
     let temp_dir = TempDir::new().unwrap();
-    let moss_dir = temp_dir.path();
+    let moss_dir = &temp_dir.path().join(".moss");
     fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).build_dir()).unwrap();
 
     let mut map = ArticleMap::new();
@@ -382,7 +382,7 @@ fn test_article_map_loads_without_html_content_field() {
     // Old article-map.json files won't have html_content
     // Deserialization should still work (field defaults to None)
     let temp_dir = TempDir::new().unwrap();
-    let moss_dir = temp_dir.path();
+    let moss_dir = &temp_dir.path().join(".moss");
     fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).build_dir()).unwrap();
 
     let old_json = r##"{
@@ -412,7 +412,7 @@ fn test_article_map_loads_without_html_content_field() {
 fn test_article_map_uid_serialization() {
     // Test that uid field is serialized to JSON and can be loaded back
     let temp_dir = TempDir::new().unwrap();
-    let moss_dir = temp_dir.path();
+    let moss_dir = &temp_dir.path().join(".moss");
     fs::create_dir_all(MossPaths::from_moss_dir(moss_dir.to_path_buf()).build_dir()).unwrap();
 
     let mut map = ArticleMap::new();

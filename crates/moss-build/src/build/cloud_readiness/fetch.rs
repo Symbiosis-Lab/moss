@@ -225,7 +225,10 @@ pub fn require_sources_local(
     if walked.dataless.is_empty() {
         return Ok(());
     }
-    bring_local(folder, walked.dataless, &wait(), "run `moss build` again", say).map(|_| ())
+    bring_local(folder, walked.dataless, &wait(), "run `moss build` again", say)?;
+    // No provider lets moss keep a folder's files on disk; the person can.
+    say(&format!("Make {} available offline", folder.display()));
+    Ok(())
 }
 
 /// Usage line for `moss fetch`.

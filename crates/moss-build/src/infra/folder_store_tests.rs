@@ -248,6 +248,23 @@ fn the_collector_removes_a_gone_folders_stores_and_keeps_the_rest() {
 }
 
 #[test]
+fn a_cache_written_for_a_folder_that_never_came_goes_after_a_day() {
+    let w = World::new();
+    let stores = w.stores(volume_a);
+    let kept = stores.resolve(&w.folder("kept")).unwrap();
+    mark(&kept);
+    let orphan = stores.to_be(&w.tmp.path().join("never-made")).cache_dir;
+    std::fs::create_dir_all(orphan.join("build")).unwrap();
+
+    assert_eq!(stores.collect(std::time::Duration::ZERO).unwrap(), 0, "a folder made just after it asked keeps its cache");
+    let two_days_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 24 * 3600);
+    std::fs::File::open(&orphan).unwrap().set_modified(two_days_ago).unwrap();
+    assert_eq!(stores.collect(std::time::Duration::ZERO).unwrap(), 1);
+    assert!(!orphan.exists());
+    assert!(marked(&kept));
+}
+
+#[test]
 fn the_collector_keeps_the_stores_of_a_folder_whose_volume_is_away() {
     let w = World::new();
     let stores = w.stores(volume_a);
@@ -266,15 +283,16 @@ fn the_collector_keeps_the_stores_of_a_folder_whose_volume_is_away() {
 }
 
 #[test]
-fn a_folder_with_no_store_yet_never_keeps_facts_in_itself() {
+fn a_folder_not_made_yet_reads_the_store_it_will_have() {
     let tmp = TempDir::new().unwrap();
-    let folder = tmp.path().join("not-yet");
+    let folder = tmp.path().join("not-yet").join("site");
     let before = for_folder(&folder);
     assert!(!before.cache_dir.starts_with(&folder) && !before.record_dir.starts_with(&folder));
+    assert!(!before.record_dir.exists(), "asking writes nothing");
     std::fs::create_dir_all(&folder).unwrap();
     let after = for_folder(&folder);
-    assert_ne!(after, before, "the miss is not remembered: the folder gets its store once it exists");
-    assert!(!after.cache_dir.starts_with(std::fs::canonicalize(&folder).unwrap()));
+    assert!(!after.id.is_empty(), "the miss is not remembered: the folder gets its record once it exists");
+    assert_eq!((&after.cache_dir, &after.record_dir), (&before.cache_dir, &before.record_dir));
     assert_eq!(for_folder(&folder), after);
 }
 
@@ -290,4 +308,25 @@ fn an_exited_process_scratch_store_is_swept_and_a_running_one_kept() {
     sweep_unstored(tmp.path());
     assert!(!gone.exists());
     assert!(ours.exists() && other.exists());
+}
+
+/// A build asks where its output goes thousands of times; the folder's store
+/// is resolved, and its record written, once.
+#[test]
+fn a_build_resolves_its_folders_store_once() {
+    use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+    let site = tempfile::tempdir().unwrap();
+    std::fs::write(site.path().join("index.md"), "---\ntitle: Orchard\n---\n\nPlum trees.\n").unwrap();
+    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+    rt.block_on(run_pipeline(PipelineConfig {
+        root: crate::vault::paths::VaultRoot::resolve(site.path()),
+        progress: crate::build::null_sink(), plugins: PluginMode::Skip,
+        watch: false, start_server: false,
+        host: crate::build::ports::host::test_host_ports(),
+        trigger: BuildTrigger::Full, exits_after_build: true,
+        site_url_override: None, server_port: None, admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
+    })).expect("fixture builds");
+    assert!(crate::moss_paths::MossPaths::new(site.path()).has_servable_generation());
+    let writes = RECORD_WRITES.lock().unwrap().get(&name_for(site.path())).copied();
+    assert_eq!(writes, Some(1));
 }

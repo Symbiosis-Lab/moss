@@ -22,12 +22,29 @@ use std::path::{Path, PathBuf};
 const RECORD: &str = "folder.json";
 
 /// The name of `folder`'s stores, the same for every spelling of the same
-/// directory: sha256 of its canonical path. A path that cannot be
-/// canonicalized (it does not exist yet) is hashed as given.
+/// directory: sha256 of its canonical path. A folder that does not exist yet
+/// is named by its deepest existing ancestor's canonical path plus the rest,
+/// which is the name it will have once created.
 pub fn name_for(folder: &Path) -> String {
     use sha2::{Digest, Sha256};
-    let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
-    format!("{:x}", Sha256::digest(canonical.to_string_lossy().as_bytes()))
+    format!("{:x}", Sha256::digest(canonical_to_be(folder).to_string_lossy().as_bytes()))
+}
+
+fn canonical_to_be(folder: &Path) -> PathBuf {
+    let mut missing = Vec::new();
+    let mut at = folder;
+    loop {
+        if let Ok(found) = std::fs::canonicalize(at) {
+            return missing.iter().rev().fold(found, |path, part| path.join(part));
+        }
+        match (at.parent(), at.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing.push(name);
+                at = parent;
+            }
+            _ => return folder.to_path_buf(),
+        }
+    }
 }
 
 /// The filesystem a folder lives on: its UUID and where it is mounted now.
@@ -88,8 +105,7 @@ impl FolderStores {
     /// never fill real app data.
     pub fn running_for(folder: &Path) -> Option<Self> {
         let temp = std::env::temp_dir();
-        let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-        if crate::infra::app_data::in_test_binary() || canonical(folder).starts_with(canonical(&temp)) {
+        if crate::infra::app_data::in_test_binary() || canonical_to_be(folder).starts_with(canonical_to_be(&temp)) {
             return Some(Self::temporary());
         }
         Self::app()
@@ -218,6 +234,13 @@ impl FolderStores {
         Ok(())
     }
 
+    /// Where `folder`'s stores will be once it exists, writing nothing: a
+    /// reader asking before the folder is made finds the place a build will use.
+    fn to_be(&self, folder: &Path) -> FolderStore {
+        let name = name_for(folder);
+        FolderStore { id: String::new(), cache_dir: self.cache_root.join(&name), record_dir: self.record_root.join(&name) }
+    }
+
     /// Remove the stores of folders that are gone: the recorded path is missing
     /// while its parent exists or its volume is mounted, and nothing resolved it
     /// for `grace`. A folder on an unmounted volume keeps its stores. A store
@@ -229,9 +252,7 @@ impl FolderStores {
             Err(e) => return Err(e),
         };
         let _held = self.lock()?;
-        let old = |path: &Path| {
-            path.symlink_metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > grace)
-        };
+        let old = |path: &Path| old_by(path, grace);
         let mut removed = 0;
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
@@ -255,6 +276,17 @@ impl FolderStores {
                     }
                 }
                 removed += 1;
+            }
+        }
+        // Written for a folder before it existed, and the folder never came.
+        let orphan_grace = grace.max(std::time::Duration::from_secs(24 * 3600));
+        for entry in std::fs::read_dir(&self.cache_root).into_iter().flatten().flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.starts_with('.') && !self.record_root.join(&name).exists() && old_by(&entry.path(), orphan_grace) {
+                // allow:unlink this computer's cache for a folder that was never made
+                if std::fs::remove_dir_all(entry.path()).is_ok() {
+                    removed += 1;
+                }
             }
         }
         Ok(removed)
@@ -290,12 +322,35 @@ impl FolderStores {
     }
 
     fn write(&self, name: &str, record: &Record) -> io::Result<()> {
+        #[cfg(test)]
+        {
+            *RECORD_WRITES.lock().unwrap_or_else(|e| e.into_inner()).entry(name.to_string()).or_insert(0) += 1;
+        }
         let dir = self.record_root.join(name);
         // allow:raw_write this computer's per-folder stores, outside any synced folder
         std::fs::create_dir_all(&dir)?;
         crate::infra::atomic_write::write_json_atomic(&dir.join(RECORD), record).map_err(io::Error::other)
     }
 }
+
+/// The folder whose temporary-root store holds `path`, by its record: a test
+/// that has only a served directory finds its folder this way.
+#[cfg(test)]
+pub(crate) fn test_folder_holding(path: &Path) -> Option<PathBuf> {
+    let stores = FolderStores::temporary();
+    let rest = path.strip_prefix(&stores.cache_root).ok()?;
+    let name = rest.components().next()?.as_os_str().to_str()?;
+    stores.read(name).map(|record| record.path)
+}
+
+fn old_by(path: &Path, grace: std::time::Duration) -> bool {
+    path.symlink_metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > grace)
+}
+
+/// `folder.json` writes by store name, for the tests that count them.
+#[cfg(test)]
+pub(crate) static RECORD_WRITES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, usize>>> =
+    std::sync::LazyLock::new(Default::default);
 
 /// How long a gone folder's stores wait before [`collect_gone_once`] removes
 /// them: a folder moved aside for a while keeps its facts.
@@ -324,32 +379,55 @@ fn collect_gone_once() {
 
 /// `folder`'s stores for this process, resolved once per path spelling.
 ///
-/// When no store can be resolved, the
-/// folder gets a scratch store for this process only, so its build runs
-/// without stored facts rather than keeping them in the folder.
+/// A folder not created yet gets the place its stores will have. When no
+/// store can be resolved otherwise, the folder gets a scratch store for this
+/// process only, so a reader finds nothing and a build that did not check
+/// [`try_for_folder`] runs without stored facts rather than keeping them in
+/// the folder.
 pub fn for_folder(folder: &Path) -> FolderStore {
+    match try_for_folder(folder) {
+        Ok(store) => store,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            FolderStores::running_for(folder).map_or_else(|| unstored(folder), |stores| stores.to_be(folder))
+        }
+        Err(_) => unstored(folder),
+    }
+}
+
+/// [`for_folder`], or why this computer has no store for `folder`. A build
+/// asks this before it writes, so its output never falls back into scratch.
+pub fn try_for_folder(folder: &Path) -> io::Result<FolderStore> {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
-    static RESOLVED: OnceLock<Mutex<HashMap<PathBuf, FolderStore>>> = OnceLock::new();
+    type Known = HashMap<PathBuf, Result<FolderStore, (io::ErrorKind, String)>>;
+    static RESOLVED: OnceLock<Mutex<Known>> = OnceLock::new();
     let memo = RESOLVED.get_or_init(Default::default);
-    if let Some(store) = memo.lock().unwrap_or_else(|e| e.into_inner()).get(folder) {
-        return store.clone();
-    }
-    let resolved = std::fs::canonicalize(folder).and_then(|canonical| {
-        FolderStores::running_for(&canonical).ok_or_else(|| io::Error::other("no app-data directory"))?.resolve(&canonical)
-    });
-    collect_gone_once();
-    let store = match resolved {
-        Ok(store) => store,
-        // Not created yet: try again on the next call.
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return unstored(folder),
-        Err(e) => {
-            log::warn!("no computer store for {} ({e}); this run keeps no facts about it", folder.display());
-            unstored(folder)
-        }
+    let answer = |known: &Result<FolderStore, (io::ErrorKind, String)>| {
+        known.clone().map_err(|(kind, message)| io::Error::new(kind, message))
     };
-    memo.lock().unwrap_or_else(|e| e.into_inner()).insert(folder.to_path_buf(), store.clone());
-    store
+    if let Some(known) = memo.lock().unwrap_or_else(|e| e.into_inner()).get(folder) {
+        return answer(known);
+    }
+    // Not created yet: try again on the next call.
+    let canonical = std::fs::canonicalize(folder)?;
+    let mut known = memo.lock().unwrap_or_else(|e| e.into_inner());
+    // Another spelling of the same folder resolved it already.
+    if let Some(found) = known.get(&canonical).cloned() {
+        known.insert(folder.to_path_buf(), found.clone());
+        return answer(&found);
+    }
+    // Held across the resolve, so two threads never resolve one folder twice.
+    let resolved = FolderStores::running_for(&canonical)
+        .ok_or_else(|| io::Error::other("no app-data directory"))
+        .and_then(|stores| stores.resolve(&canonical));
+    collect_gone_once();
+    if let Err(e) = &resolved {
+        log::warn!("no computer store for {} ({e}); this run keeps nothing for it", folder.display());
+    }
+    let kept = resolved.as_ref().map(Clone::clone).map_err(|e| (e.kind(), e.to_string()));
+    known.insert(canonical, kept.clone());
+    known.insert(folder.to_path_buf(), kept);
+    resolved
 }
 
 const UNSTORED_PREFIX: &str = "moss-unstored-";

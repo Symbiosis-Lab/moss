@@ -334,19 +334,24 @@ pub async fn acquire_async(folder: &Path) -> Option<Held> {
     }
 }
 
-/// `<folder>/.moss/build.nosync/promoted.epoch` — where [`last_promoted_epoch`]
-/// and [`record_promoted_epoch`] keep the last cross-process-visible promotion
-/// time for `folder`. It must outlive the lock, so it sits beside the `current`
-/// it describes and goes when the folder or its build output does, which is
-/// also when there is nothing left for it to protect.
-pub fn epoch_path_for(folder: &Path) -> PathBuf {
-    crate::moss_paths::MossPaths::new(folder).promoted_epoch()
+/// Where generation `id`'s promotion record is kept, beside it: the
+/// `locked_at` stamp of the build that last promoted it. Written before the
+/// flip of `current`, so the flip carries its epoch with it. A crash between
+/// the write and the flip leaves a record on a generation `current` does not
+/// name, which nothing reads.
+pub fn promotion_record_path(generations: &Path, id: &str) -> PathBuf {
+    generations.join(format!(".{id}.promoted.json"))
 }
 
-/// The last promotion time recorded for `folder`, or `0` if none has been —
-/// a missing file and a corrupt one both read as "nothing promoted yet",
-/// the same "unreadable is never a promise" posture `.moss/deploy/` already
-/// takes for the analogous local record.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PromotionRecord {
+    locked_at: u64,
+}
+
+/// The `locked_at` of the build that promoted the generation `current` names,
+/// or `0` when nothing is promoted, or that generation has no readable record
+/// (it was promoted by a moss that kept none, or its record was purged). A
+/// build compared against `0` promotes over it.
 ///
 /// **Precondition, not enforced here:** the caller must hold [`acquire`]'s
 /// lock for this SAME `folder` for the whole read-compare-write span around
@@ -354,13 +359,19 @@ pub fn epoch_path_for(folder: &Path) -> PathBuf {
 /// concurrent write is exactly the cross-process ordering bug it exists to
 /// close, so the exclusion has to come from outside.
 pub fn last_promoted_epoch(folder: &Path) -> u64 {
-    std::fs::read_to_string(epoch_path_for(folder)).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0)
+    let mp = crate::moss_paths::MossPaths::new(folder);
+    let Ok(id) = mp.current_generation_id() else { return 0 };
+    std::fs::read(promotion_record_path(&mp.generations_dir(), &id))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<PromotionRecord>(&bytes).ok())
+        .map_or(0, |record| record.locked_at)
 }
 
-/// Record `epoch` as the last promotion time for `folder`. Same locking
-/// precondition as [`last_promoted_epoch`] — see that function's doc.
-pub fn record_promoted_epoch(folder: &Path, epoch: u64) -> Result<(), String> {
-    crate::infra::atomic_write::write_atomic(&epoch_path_for(folder), &epoch.to_string())
+/// Record that the build stamped `locked_at` is promoting generation `id`.
+/// Same locking precondition as [`last_promoted_epoch`].
+pub fn record_promotion(generations: &Path, id: &str, locked_at: u64) -> Result<(), String> {
+    let json = serde_json::to_string(&PromotionRecord { locked_at }).map_err(|e| e.to_string())?;
+    crate::infra::atomic_write::write_atomic(&promotion_record_path(generations, id), &json)
 }
 
 #[cfg(test)]

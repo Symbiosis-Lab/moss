@@ -1,7 +1,7 @@
 //! A nav entry whose page declares `external_url:` links there: a `mailto:`
 //! address or a section anchor, beside ordinary page links. Built through the
 //! real pipeline, and one test only because `log::set_logger` is
-//! process-global and one-shot (same reasoning as `root_identity_log_test.rs`).
+//! process-global and one-shot.
 
 use moss_build::moss_paths::MossPaths;
 use std::fs;

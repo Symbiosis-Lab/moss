@@ -51,83 +51,11 @@ fn ensure_parent(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// `create_dir_all` for the output tree: the same rule, applied to directories.
-///
-/// Every *file* write here already treats a dataless destination as absent. The
-/// directories those files live in had no such rule, and a plain
-/// `fs::create_dir_all` under `.moss/build.nosync/` can fail `EDEADLK` — "Resource
-/// deadlock avoided (os error 11)" — when the provider will not hand back a
-/// directory entry it is managing. That is the same fail-fast policy
-/// (`platform::macos::iopolicy`) that `write_output` exists to route around,
-/// reached one level up.
-///
-/// It is not hypothetical: it took down the *first* preview of a Google Drive
-/// vault with `Failed to create staging directory: Resource deadlock avoided
-/// (os error 11)` on the onboarding overlay, before the build could reach the
-/// cloud gate that would have explained itself.
-///
-/// **Why replace rather than wait.** A regenerable directory is absent when it
-/// is unreadable, exactly as a regenerable file is. Waiting is not merely slow
-/// here, it is unreachable: `build_shell::watch::sweep::should_descend` refuses to
-/// descend into `.moss/build.nosync` and `watch::path_is_watchable` refuses to watch
-/// it, so nothing would ever request the download and no arrival would ever
-/// schedule the rebuild that lowers a gate. A waiting screen raised over this
-/// path could never come down — the hazard `build::outcome::Disposition::Report`
-/// documents. So the entry is removed and remade.
-///
-/// `remove_dir_all` is safe against dataless children: `unlink` does not touch
-/// data extents, so it cannot materialize and cannot deadlock (same property
-/// `Disposition::Discard` relies on). The cost of removing is one non-incremental
-/// build, which is the same cost the `Discard` arm already accepts.
-///
-/// **Only `.moss/build.nosync/` may be replaced.** The walk starts at the filesystem
-/// root, so without [`is_regenerable_output`] the destructive arm could fire on
-/// an ancestor — and the vault directory itself is an ancestor of every output
-/// path moss writes. Deleting it would destroy the user's site to fix a
-/// scratch directory. Everything above `.moss/build.nosync/` reports the error
-/// unchanged: nothing there is regenerable, so "unreadable is not absent" is
-/// still the rule.
+/// `create_dir_all` for the output tree. The tree lives under the platform
+/// cache directory, which no cloud provider manages, so a directory there is
+/// never dataless.
 pub fn create_output_dir_all(dir: &Path) -> io::Result<()> {
-    match refused(dir, Refusal::Chain).map_or_else(|| fs::create_dir_all(dir), Err) {
-        Ok(()) => return Ok(()),
-        Err(e) if !crate::build::icloud::is_dataless_unavailable(&e) => return Err(e),
-        Err(e) if !is_regenerable_output(dir) => return Err(e),
-        Err(_) => {}
-    }
-
-    // Walk down from the root and rebuild the first component the provider
-    // refuses. `create_dir_all` reports one error for the whole chain without
-    // saying which component produced it, so the component has to be found by
-    // creating them one at a time.
-    let mut built = PathBuf::new();
-    for component in dir.components() {
-        built.push(component);
-        match refused(&built, Refusal::Entry).map_or_else(|| fs::create_dir(&built), Err) {
-            Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(e)
-                if crate::build::icloud::is_dataless_unavailable(&e)
-                    && is_regenerable_output(&built) =>
-            {
-                log::info!(
-                    "[output-dir] {} could not be created — the cloud provider refused to \
-                     materialize it. It is regenerable output, so it is being replaced rather \
-                     than waited for.",
-                    built.display()
-                );
-                fs::remove_dir_all(&built).or_else(|rm| {
-                    // A file (or a dataless placeholder for one) sitting where a
-                    // directory belongs: `remove_dir_all` gives ENOTDIR, and
-                    // `remove_file` is the right verb. Still an unlink, so still
-                    // cannot materialize.
-                    if rm.kind() == io::ErrorKind::NotFound { Ok(()) } else { fs::remove_file(&built) }
-                })?;
-                fs::create_dir(&built)?;
-            }
-            Err(e) => return Err(e),
-        }
-    }
-    Ok(())
+    fs::create_dir_all(dir)
 }
 
 /// Read a transform record's text. The one read step of a record, so a test can
@@ -162,35 +90,12 @@ pub(crate) fn move_across_volumes(from: &Path, to: &Path, rename: impl Fn(&Path,
     fs::remove_file(from).is_ok()
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum Refusal {
-    /// A `create_dir_all` reaching through the refused directory.
-    Chain,
-    /// A `create_dir` of the refused directory itself.
-    Entry,
-}
-
-/// The `EDEADLK` a cloud provider answers for a directory it will not
-/// materialize, when a test has asked for one ([`fault::refuse_dataless`]); no
-/// CI moss runs on has a File Provider vault to produce the real one.
-#[cfg(test)]
-fn refused(dir: &Path, how: Refusal) -> Option<io::Error> {
-    fault::refuses(dir, how).then(|| io::Error::from_raw_os_error(libc::EDEADLK))
-}
-
-#[cfg(not(test))]
-fn refused(_dir: &Path, _how: Refusal) -> Option<io::Error> {
-    None
-}
-
 #[cfg(test)]
 pub(crate) mod fault {
-    use super::Refusal;
     use std::cell::RefCell;
     use std::path::{Path, PathBuf};
 
     thread_local! {
-        static REFUSED: RefCell<Option<(PathBuf, bool)>> = const { RefCell::new(None) };
         static FAILING_READS: RefCell<Option<(PathBuf, i32, u32)>> = const { RefCell::new(None) };
     }
 
@@ -210,46 +115,6 @@ pub(crate) mod fault {
             })
         })
     }
-
-    /// On this thread, refuse `dir` the way a provider refuses a dataless
-    /// directory: every `create_dir_all` through it, and the first
-    /// `create_dir` of it.
-    pub(crate) fn refuse_dataless(dir: &Path) {
-        REFUSED.with(|r| *r.borrow_mut() = Some((dir.to_path_buf(), true)));
-    }
-
-    pub(super) fn refuses(path: &Path, how: Refusal) -> bool {
-        REFUSED.with(|r| {
-            let mut r = r.borrow_mut();
-            let Some((dir, entry_left)) = r.as_mut() else { return false };
-            match how {
-                Refusal::Chain => path.starts_with(&*dir) && *entry_left,
-                Refusal::Entry if path == dir && *entry_left => {
-                    *entry_left = false;
-                    true
-                }
-                Refusal::Entry => false,
-            }
-        })
-    }
-}
-
-/// Is `dir` at or below some `.moss/build.nosync/`?
-///
-/// The one question that licenses deleting a directory. Matched on the path's
-/// own components rather than against a folder root, because `ensure_parent`'s
-/// callers hold an output path and nothing else — the same reason
-/// `cloud_ledger` is keyed by path. `.moss/build.nosync` itself does **not** qualify:
-/// remaking it would drop every sealed generation at once, and the gate that
-/// keeps a served site up depends on one surviving.
-fn is_regenerable_output(dir: &Path) -> bool {
-    let parts: Vec<_> = dir.components().map(|c| c.as_os_str()).collect();
-    parts
-        .windows(2)
-        .position(|w| w[0] == ".moss" && w[1] == "build.nosync")
-        // `+ 2` is the `.moss/build.nosync` pair itself; a qualifying path has at
-        // least one component below it.
-        .is_some_and(|at| parts.len() > at + 2)
 }
 
 /// Finish an output write: `rename` the already-populated `tmp` over `path`,

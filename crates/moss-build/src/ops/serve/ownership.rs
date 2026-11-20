@@ -243,6 +243,23 @@ fn sweep_dead_records(dir: &Path, keep: &Path) {
     }
 }
 
+/// Whether `folder`'s owner record names a live process other than this one.
+/// Unlike [`find_live_owner`] it asks the process nothing, so an older moss,
+/// which may not answer this one's token, still counts.
+pub(crate) fn live_foreign_owner(folder: &Path) -> bool {
+    let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
+    read_record(&canonical).ok().flatten().is_some_and(|record| record.pid != std::process::id() && pid_alive(record.pid))
+}
+
+/// Write `record` as `folder`'s owner, for tests standing in for another process.
+#[cfg(test)]
+pub(crate) fn write_record_for_tests(folder: &Path, record: &OwnerRecord) {
+    let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
+    let path = record_path(&canonical).unwrap();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, serde_json::to_vec(record).unwrap()).unwrap();
+}
+
 fn read_record(folder: &Path) -> Result<Option<OwnerRecord>, String> {
     let path = record_path(folder)?;
     match std::fs::read_to_string(&path) {

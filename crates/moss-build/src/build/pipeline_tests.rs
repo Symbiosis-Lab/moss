@@ -5527,6 +5527,7 @@ fn build_test_shipped(
             crate::build::ship::next_promotion_epoch(),
             None,
             crate::build::ship::ShipVerdict::Ship,
+            None,
         )?;
         Ok(pruned)
     })
@@ -5619,6 +5620,7 @@ fn build_test_with_focus(
             crate::build::ship::next_promotion_epoch(),
             None,
             verdict,
+            None,
         )?;
         let stale_sources = sealed.unresolved_inputs();
         Ok((promotion, keys, stale_sources, sealed))
@@ -5709,7 +5711,7 @@ fn cold_page_metadata_keeps_complete_home_and_assets_until_recovery() {
 
     fs::remove_file(dir.join("story.md")).unwrap();
     fs::write(dir.join(".story.md.icloud"), "").unwrap();
-    let state = SiteDirectoryState::new(crate::moss_paths::Served::test(mp.staging_dir()));
+    let state = SiteDirectoryState::new(crate::moss_paths::Served::of(&mp, mp.staging_dir()));
     let session = FolderSession::new(dir.clone());
     session.set_preview_requirement("/".into(), PreviewSource::File("index.md".into())).unwrap();
     let (cold, _, unresolved, cold_seal) = build_test_with_focus(folder, scan_folder(folder).unwrap(), Some(&state), Some(session), None, Some(current.clone())).unwrap();
@@ -5772,7 +5774,7 @@ fn navigation_during_render_uses_latest_ready_source() {
     let (dir, _cleanup) = create_test_dir();
     fs::write(dir.join("article.md"), "# Ready article\n").unwrap();
     let mp = crate::moss_paths::MossPaths::new(&dir);
-    let state = SiteDirectoryState::new(crate::moss_paths::Served::test(mp.staging_dir()));
+    let state = SiteDirectoryState::new(crate::moss_paths::Served::of(&mp, mp.staging_dir()));
     let session = FolderSession::new(dir.clone());
     session.set_preview_requirement("/article/".into(), PreviewSource::Unresolved).unwrap();
     let (promotion, _, unresolved, _) = build_test_with_focus(
@@ -5838,7 +5840,7 @@ fn a_page_unusable_for_a_reason_outside_the_cloud_raises_no_cloud_wait() {
     fs::set_permissions(dir.join("article.md"), fs::Permissions::from_mode(0o000)).unwrap();
     let phase = focused_build_phase(folder, "/article/", PreviewSource::File("article.md".into()));
     let mp = crate::moss_paths::MossPaths::new(&dir);
-    let state = SiteDirectoryState::new(crate::moss_paths::Served::test(mp.current_ptr()));
+    let state = SiteDirectoryState::new(crate::moss_paths::Served::of(&mp, mp.current_ptr()));
     let session = crate::system::folder_session::FolderSession::new(dir.clone());
     session.set_preview_requirement("/article/".into(), PreviewSource::File("article.md".into())).unwrap();
     let built = build_test_with_focus(folder, scan_folder(folder).unwrap(), Some(&state), Some(session), None, None);
@@ -5863,7 +5865,7 @@ fn a_downloaded_page_shows_at_render_while_its_build_waits_on_a_joined_picture()
     make_big_jpeg_at(&dir.join("pic.jpg"), 1600, 1200);
     fs::write(dir.join(".article.md.icloud"), "").unwrap();
     let mp = crate::moss_paths::MossPaths::new(&dir);
-    let state = SiteDirectoryState::new(crate::moss_paths::Served::test(mp.current_ptr()));
+    let state = SiteDirectoryState::new(crate::moss_paths::Served::of(&mp, mp.current_ptr()));
     let session = crate::system::folder_session::FolderSession::new(dir.clone());
     session.set_preview_requirement("/article/".into(), PreviewSource::File("article.md".into())).unwrap();
     build_test_with_focus(folder, scan_folder(folder).unwrap(), Some(&state), Some(session.clone()), None, None).unwrap();
@@ -7453,6 +7455,7 @@ fn a_presence_pass_that_cannot_read_its_tree_drops_nothing_and_ships_nothing() {
         crate::build::ship::next_promotion_epoch(),
         Some(&render),
         verdict.clone(),
+        None,
     );
     fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o755)).unwrap();
 

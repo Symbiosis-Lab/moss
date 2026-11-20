@@ -166,8 +166,8 @@ and `:root[data-theme="dark"] {}` (dark), then write ordinary CSS selectors for
 the rest. No `!important`, no `@layer`.
 
 moss's default rules ship **compiled into the binary** — there is no readable
-default stylesheet on disk anywhere in a site folder. Everything under
-`.moss/build.nosync/` is regenerated output, not source. A themed site has at least two
+default stylesheet on disk anywhere in a site folder. Everything in the build output
+(the `output` path `moss build --json` prints) is regenerated, not source. A themed site has at least two
 stylesheets there: `_moss/style.<hash>.css` (the built-in defaults, minified to
 one line with comments stripped) and `_moss/theme/style.<hash>.css` (a
 hashed copy of your own `.moss/theme/style.css`), plus one

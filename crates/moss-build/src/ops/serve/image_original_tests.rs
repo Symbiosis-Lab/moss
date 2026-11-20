@@ -26,7 +26,7 @@ impl Site {
         let site = Self { _temp: temp, mp };
         let sealed = site.manifest(!legacy);
         let result = crate::build::ship::materialize_and_promote(&sealed, &site.mp, &site.mp.staging_dir(), 1, None,
-            crate::build::ship::ShipVerdict::Ship).unwrap();
+            crate::build::ship::ShipVerdict::Ship, None).unwrap();
         assert!(matches!(result, crate::build::ship::Promotion::Promoted));
         sealed.write_to_disk(&site.mp.hashes()).unwrap();
         if legacy {
@@ -120,7 +120,7 @@ async fn generation_original_legacy_missing_copies_pin_canonical_identity_once()
     let frozen = std::fs::read(site.receipt()).unwrap();
     let warm = site.manifest(false);
     crate::build::ship::materialize_and_promote(&warm, &site.mp, &site.mp.staging_dir(), 2, None,
-        crate::build::ship::ShipVerdict::Ship).unwrap();
+        crate::build::ship::ShipVerdict::Ship, None).unwrap();
     assert_eq!(std::fs::read(site.receipt()).unwrap(), frozen, "a warm producer map cannot replace legacy proof");
     std::fs::write(site.mp.project_root().join(SOURCE), b"newer portrait version").unwrap();
     let newer = site.manifest(false);
@@ -195,7 +195,7 @@ fn generation_original_identity_collision_keeps_first_receipt_while_valid_output
     assert_eq!(newer.generation_id(), site.mp.current_generation_id().unwrap());
     for epoch in [0, 2] {
         let outcome = crate::build::ship::materialize_and_promote(&newer, &site.mp, &site.mp.staging_dir(), epoch, None,
-            crate::build::ship::ShipVerdict::Ship).unwrap();
+            crate::build::ship::ShipVerdict::Ship, None).unwrap();
         assert!(matches!(outcome, crate::build::ship::Promotion::Promoted | crate::build::ship::Promotion::Superseded));
         assert_eq!(std::fs::read(site.receipt()).unwrap(), prior);
     }
@@ -238,19 +238,13 @@ async fn a_picture_current_never_held_is_served_from_the_newer_render() {
     let _ = shutdown.send(());
 }
 
-/// The build's output moved outside the folder, behind a symlink: the server
-/// still knows its folder, and the receipt and hashes there still count as the
-/// folder's own. 7d replaces the symlink with the computer's build root.
+/// The build's output lives outside the folder: the server still knows its
+/// folder, and the receipt and hashes there still count as the folder's own.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_site_served_from_outside_its_folder_answers_as_inside() {
     let site = Site::new(false);
-    let outside = tempfile::tempdir().unwrap();
-    let moved = outside.path().canonicalize().unwrap().join("build");
-    let in_folder = site.mp.root().join("build.nosync");
-    std::fs::rename(&in_folder, &moved).unwrap();
-    std::os::unix::fs::symlink(&moved, &in_folder).unwrap();
     let dir = site.mp.current_ptr().canonicalize().unwrap();
-    assert!(dir.starts_with(&moved) && !dir.starts_with(site.mp.project_root()));
+    assert!(!dir.starts_with(site.mp.project_root()));
     let served = crate::moss_paths::Served { folder: crate::moss_paths::Served::folder_of(&site.mp), dir };
 
     let cell = served.clone().into_cell();

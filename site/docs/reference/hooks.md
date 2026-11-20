@@ -54,7 +54,7 @@ Use for: fetching external data, transforming source files, pre-processing conte
 
 **Data contract:** A process hook that fetches external data writes JSON to `.moss/data/social/<plugin>.json`. The build core does not read this file; moss's native slot-filling and other plugins consume it.
 
-The generated source-to-output map (paths plus uids) is at `.moss/build.nosync/article-map.json`.
+The generated source-to-output map (paths plus uids) is `article-map.json` in the build output's root, the folder above the `output` path `moss build --json` prints.
 
 ## deploy
 

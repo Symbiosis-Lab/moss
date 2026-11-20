@@ -700,8 +700,7 @@ mod tests {
         );
 
         // Seal: promote a generation, so `current` now exists.
-        fs::create_dir_all(paths.generation_dir("gen001")).unwrap();
-        fs::create_dir_all(paths.generations_dir()).unwrap();
+        paths.finish_test_generation("gen001");
         paths.set_current_ptr("gen001").unwrap();
 
         // Post-seal, passing the LIVE server's actual served dir (staging,

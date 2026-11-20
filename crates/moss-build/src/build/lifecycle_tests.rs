@@ -12,6 +12,7 @@ fn vault(gens: &[(&str, &str)]) -> (tempfile::TempDir, MossPaths) {
         let dir = mp.generation_dir(gen).join(page);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("index.html"), format!("<html>{gen} {page}</html>")).unwrap();
+        mp.finish_test_generation(gen);
     }
     std::fs::create_dir_all(mp.staging_dir()).unwrap();
     (tmp, mp)

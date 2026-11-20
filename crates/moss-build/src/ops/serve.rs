@@ -242,7 +242,6 @@ pub(crate) fn log_preview_404(served: &crate::moss_paths::Served, path: &str) {
     }
     let suppressed = std::mem::take(&mut entry.1);
     entry.0 = Some(now);
-    crate::build::lifecycle::root_identity::log_build_root(root, "serve", None);
     log::warn!(
         "preview 404 {} from {} ({} more suppressed)",
         path,
@@ -268,6 +267,7 @@ mod tests {
         let mp = MossPaths::new(proj.path());
         mp.ensure_dirs().unwrap();
         std::fs::create_dir_all(mp.generation_dir("gen001")).unwrap();
+        mp.finish_test_generation("gen001");
         mp.set_current_ptr("gen001").unwrap();
 
         let moss_path = mp.root();

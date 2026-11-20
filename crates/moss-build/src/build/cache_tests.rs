@@ -1343,43 +1343,6 @@ fn test_hash_index_save_retries_on_parent_dir_eviction() {
     assert_eq!(loaded.lookup("b.jpg", &stat(200, 2000)), Some("bbbb"));
 }
 
-#[test]
-#[cfg(target_os = "macos")]
-fn cached_link_recovers_a_refused_regenerable_target_directory() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = ObjectStore::new(dir.path().join("objects"));
-    let oid = store.store_bytes(b"complete source").unwrap();
-    let parent = MossPaths::new(dir.path()).staging_dir().join("assets");
-    fs::create_dir_all(&parent).unwrap();
-    let obsolete = parent.join("obsolete-output");
-    fs::write(&obsolete, b"previous disposable output").unwrap();
-    crate::build::io_utils::fault::refuse_dataless(&parent);
-
-    let target = parent.join("asset.bin");
-    store.link_to(&oid, &target).unwrap();
-    assert!(!obsolete.exists(), "the refused output directory must be regenerated");
-    assert_eq!(fs::read(&target).unwrap(), b"complete source");
-    assert_eq!(fs::read(store.blob_path(&oid)).unwrap(), b"complete source");
-}
-
-#[test]
-#[cfg(target_os = "macos")]
-fn hash_index_save_recovers_a_refused_regenerable_cache_directory() {
-    let dir = tempfile::tempdir().unwrap();
-    let parent = MossPaths::new(dir.path()).cache_dir();
-    fs::create_dir_all(&parent).unwrap();
-    let obsolete = parent.join("obsolete-index");
-    fs::write(&obsolete, b"previous disposable index").unwrap();
-    crate::build::io_utils::fault::refuse_dataless(&parent);
-
-    let path = parent.join("hash-index.json");
-    let mut index = HashIndex::new();
-    index.update("asset.bin".into(), &stat(15, 1000), "complete-hash".into());
-    index.save(&path).unwrap();
-    assert!(!obsolete.exists(), "the refused local cache directory must be regenerated");
-    assert_eq!(HashIndex::load(&path).lookup("asset.bin", &stat(15, 1000)), Some("complete-hash"));
-}
-
 // -----------------------------------------------------------------------
 // Metadata cache via TransformCache tests (media/meta transform)
 // -----------------------------------------------------------------------

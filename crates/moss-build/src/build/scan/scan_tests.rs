@@ -1707,7 +1707,9 @@ impl ScanFixture {
     fn new(name: &str) -> Self {
         let dir = std::env::temp_dir().join(format!("moss_scan_{name}_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
         let cache = MossPaths::new(&dir).cache_dir();
+        let _ = fs::remove_dir_all(&cache);
         fs::create_dir_all(cache.join("objects")).unwrap();
         fs::create_dir_all(cache.join("transforms")).unwrap();
         let png = dir.join("photo.png");

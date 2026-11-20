@@ -168,14 +168,15 @@ The old spellings — `config_schema` and the other `config_*` maps, `setup.cred
   Enhance hooks and other plugins read it — and so does core, for the built-in
   comment and review features, which load every `.moss/data/social/*.json`
   during the build. Do not assume a file there is inert.
-- The source→output map is at **`.moss/build.nosync/article-map.json`** (paths + uids),
-  for correlating plugin data with generated pages.
+- The source→output map (paths + uids), for correlating plugin data with
+  generated pages, is `article-map.json` in the build output's root, the
+  folder above the `output` path `moss build --json` prints.
 - Core emits standard HTML5 landmarks (`<article>`, `<main>`, `<h1>`) and
   `data-*` attributes; enhance hooks target these.
 
-> Note: older moss documentation says `.moss/social/` and
-> `.moss/article-map.json`. Those paths are stale — use `.moss/data/social/`
-> and `.moss/build.nosync/article-map.json` above.
+> Note: older moss documentation says `.moss/social/`,
+> `.moss/article-map.json` or `.moss/build.nosync/article-map.json`. Those
+> paths are stale; use the ones above.
 
 ## Distribution
 

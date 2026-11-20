@@ -522,6 +522,7 @@ fn materialize_and_promote_ships_the_sealed_bytes_of_a_page_the_stage_no_longer_
         crate::build::ship::next_promotion_epoch(),
         None,
         crate::build::ship::ShipVerdict::Ship,
+        None,
     )
     .expect("materialize");
 

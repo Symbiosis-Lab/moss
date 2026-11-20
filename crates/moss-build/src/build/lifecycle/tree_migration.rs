@@ -1,78 +1,131 @@
-//! One-time move from the single `.moss/build` root to the split tree: the
-//! content-addressed store at `.moss/cache/{objects,transforms}`, shared with
-//! the folder, and everything else per machine under `.moss/build.nosync`.
+//! Two jobs on the folder's `.moss/` tree, run at every build start.
 //!
-//! Runs at every build start and does nothing once the tree is in shape. The
-//! per-machine root is renamed, never copied, so the move is free; the two
-//! store directories are renamed out of it, or merged into a store another
-//! machine already synced in. A root a cloud sync client renamed aside —
-//! `build 2`, `build 31` — is harvested for blobs the store lacks, each hashed
-//! once before it is trusted, and then removed. On a provider that honours the
-//! `.nosync` suffix the rename is also what clears the cloud's copy of the old
-//! root: it sees a delete, and a create it does not upload.
+//! The build output an older moss kept inside the folder, `.moss/build.nosync/`
+//! (or `.moss/build/` before that), moves to this computer's store for the
+//! folder ([`MossPaths::build_dir`]): renamed when the two share a volume, so
+//! the last build arrives warm, and deleted otherwise, a step per build in the
+//! background. Neither is ever done while another live process serves the
+//! folder: it may be an older moss serving that very tree.
+//!
+//! Copies of the shared store, `.moss/cache`, that a sync client makes when two
+//! machines create it at once are folded into it and removed. Their blobs move
+//! unread, so a placeholder is not downloaded to be moved, and are checked when
+//! first read.
 
 use std::path::{Path, PathBuf};
 
-use crate::build::cache::ObjectStore;
 use crate::build::io_utils::{create_output_dir_all, remove_output_dir_all};
 use crate::moss_paths::MossPaths;
 
-/// The name the tree had before the split.
-const LEGACY_ROOT: &str = "build";
-
-/// Bring `mp`'s tree into the split layout. Idempotent; every failure is
-/// logged and leaves the build to run with whatever is there.
+/// Fold sync-client copies of the shared store into it. Idempotent; every
+/// failure is logged and leaves the build to run with whatever is there.
 pub(crate) fn migrate_build_tree(mp: &MossPaths) {
-    let moss = mp.root();
-    let legacy = moss.join(LEGACY_ROOT);
-    let per_machine = moss.join("build.nosync");
-    if legacy.is_dir() && !per_machine.exists() {
-        // allow:unlink the legacy root is renamed whole, contents untouched
-        match std::fs::rename(&legacy, &per_machine) {
-            Ok(()) => log::info!("[tree] moved {} to {}", legacy.display(), per_machine.display()),
-            Err(e) => {
-                log::info!("[tree] could not move {} aside ({e}); building beside it", legacy.display());
-                return;
-            }
-        }
-    }
-    for (sub, verify) in [("objects", true), ("transforms", false)] {
-        move_or_merge(&per_machine.join("cache").join(sub), &mp.store_dir().join(sub), verify);
-    }
-
-    // Roots left beside the live one: the legacy root, when `build.nosync`
-    // was already there (the authoring docs once told iCloud users to make
-    // it by hand), and every root a sync client renamed aside, each with its
-    // store under `cache/` and its blobs hashed before they are trusted. Then
-    // copies of the store itself, which a sync client makes when two machines
-    // create it at once; their blobs move unread, so a placeholder is not
-    // downloaded to be moved, and are checked when first read.
-    let mut leftovers: Vec<(PathBuf, PathBuf, bool)> =
-        renamed_aside_siblings(&legacy).into_iter().map(|root| (root.join("cache"), root, true)).collect();
-    if legacy.is_dir() {
-        leftovers.push((legacy.join("cache"), legacy, true));
-    }
-    leftovers.extend(renamed_aside_siblings(&mp.store_dir()).into_iter().map(|copy| (copy.clone(), copy, false)));
-    for (store, root, verify_blobs) in leftovers {
-        match sightings(&root) {
+    for copy in renamed_aside_siblings(&mp.store_dir()) {
+        match sightings(&copy) {
             1 => {}
             2 => {
                 log::info!(
                     "[tree] {} came back after it was removed: a sync client is restoring it, so it is left until the next launch",
-                    root.display()
+                    copy.display()
                 );
                 continue;
             }
             _ => continue,
         }
-        for (sub, verify) in [("objects", verify_blobs), ("transforms", false)] {
-            merge(&store.join(sub), &mp.store_dir().join(sub), verify);
+        for sub in ["objects", "transforms"] {
+            merge(&copy.join(sub), &mp.store_dir().join(sub));
         }
-        // allow:unlink a root or store copy the sync client left, or the legacy root, after harvest
-        match remove_output_dir_all(&root) {
-            Ok(()) => log::info!("[tree] harvested and removed {}", root.display()),
-            Err(e) => log::info!("[tree] harvested {} but could not remove it: {e}", root.display()),
+        // allow:unlink a store copy the sync client left, after its entries joined the store
+        match remove_output_dir_all(&copy) {
+            Ok(()) => log::info!("[tree] folded and removed {}", copy.display()),
+            Err(e) => log::info!("[tree] folded {} but could not remove it: {e}", copy.display()),
         }
+    }
+}
+
+/// Move the build output an older moss left in the folder to this computer's
+/// store: one rename when the store has no output yet and the rename works,
+/// otherwise a background delete. Does nothing while another live process
+/// serves the folder, and tries again at the next build.
+pub(crate) fn move_output_out(mp: &MossPaths) {
+    // allow:unlink moves the folder's old output tree whole, never a served staging entry
+    let doomed = move_output_out_with(mp, |from, to| std::fs::rename(from, to));
+    if !doomed.is_empty() {
+        std::thread::spawn(move || doomed.iter().for_each(|root| delete_a_step(root)));
+    }
+}
+
+/// [`move_output_out`] with the rename given, returning the trees left to delete.
+fn move_output_out_with(mp: &MossPaths, rename: impl FnOnce(&Path, &Path) -> std::io::Result<()>) -> Vec<PathBuf> {
+    let leftovers = output_left_in_folder(mp);
+    if leftovers.is_empty() {
+        return leftovers;
+    }
+    let folder = mp.project_root();
+    if crate::ops::serve::ownership::live_foreign_owner(folder) {
+        log::info!("[tree] the folder's build output stays in it while another moss process serves it");
+        return Vec::new();
+    }
+    let Ok(_held) = crate::infra::folder_lock::acquire(folder) else { return Vec::new() };
+    let (old, new) = (mp.legacy_build_dir(), mp.build_dir());
+    let mut doomed = leftovers;
+    if doomed.first() == Some(&old) && new.symlink_metadata().is_err() {
+        // allow:unlink the store has no output yet, so nothing this rename replaces is served
+        let moved = new.parent().map_or(Ok(()), create_output_dir_all).and_then(|()| rename(&old, &new));
+        match moved {
+            Ok(()) => {
+                log::info!("[tree] moved {} to {}", old.display(), new.display());
+                relink_current(mp);
+                doomed.remove(0);
+            }
+            Err(e) => log::info!("[tree] could not move {} ({e}); it is deleted instead", old.display()),
+        }
+    }
+    doomed
+}
+
+/// The trees an older moss left: `.moss/build.nosync` first, then the root it
+/// had before that, and every copy of either a sync client renamed aside.
+fn output_left_in_folder(mp: &MossPaths) -> Vec<PathBuf> {
+    let old = mp.legacy_build_dir();
+    if old == mp.build_dir() {
+        return Vec::new();
+    }
+    let older = mp.root().join("build");
+    let mut found: Vec<PathBuf> = [&old, &older].into_iter().filter(|p| p.is_dir()).cloned().collect();
+    found.extend(renamed_aside_siblings(&old));
+    found.extend(renamed_aside_siblings(&older));
+    found
+}
+
+/// An older moss wrote `current` as an absolute link into the folder, which
+/// the move leaves dangling: point it at the same generation, relatively.
+fn relink_current(mp: &MossPaths) {
+    #[cfg(unix)]
+    if let Ok(target) = std::fs::read_link(mp.current_ptr()) {
+        if let (true, Some(id)) = (target.is_absolute(), target.file_name()) {
+            let relative = Path::new("generations").join(id);
+            if let Err(e) = crate::build::io_utils::replace_with_symlink(&relative, &mp.current_ptr()) {
+                log::info!("[tree] could not relink {} ({e})", mp.current_ptr().display());
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = mp;
+}
+
+/// Remove one generation of `root`, or `root` itself once none is left, so a
+/// tree of tens of thousands of files is never deleted in one go. Never
+/// uploaded, so deleting it is not a write a sync client sees.
+fn delete_a_step(root: &Path) {
+    let next = std::fs::read_dir(root.join("generations"))
+        .ok()
+        .and_then(|entries| entries.flatten().find(|e| e.file_type().is_ok_and(|t| t.is_dir())))
+        .map(|e| e.path());
+    let target = next.unwrap_or_else(|| root.to_path_buf());
+    // allow:unlink build output an older moss left in the folder; this computer's store holds the output now
+    if let Err(e) = remove_output_dir_all(&target) {
+        log::info!("[tree] could not remove {} ({e})", target.display());
     }
 }
 
@@ -104,29 +157,8 @@ fn renamed_aside_siblings(root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Rename `from` into place as `to`; when `to` already exists — another
-/// machine's store synced in first — merge into it instead.
-fn move_or_merge(from: &Path, to: &Path, verify: bool) {
-    if !from.is_dir() {
-        return;
-    }
-    if !to.exists() {
-        let parent_ok = to.parent().is_none_or(|p| create_output_dir_all(p).is_ok());
-        // allow:unlink a store directory is renamed whole into the store
-        if parent_ok && std::fs::rename(from, to).is_ok() {
-            log::info!("[tree] moved {} to {}", from.display(), to.display());
-            return;
-        }
-    }
-    merge(from, to, verify);
-    // allow:unlink the emptied store directory under the per-machine root, not staging
-    let _ = remove_output_dir_all(from);
-}
-
-/// Move every entry of a two-level fan-out `from` lacks in `to`. With
-/// `verify`, an entry is trusted only if its bytes hash to its name — a blob
-/// out of a root the sync client shunted may be anything.
-fn merge(from: &Path, to: &Path, verify: bool) {
+/// Move every entry of a two-level fan-out `from` lacks in `to`.
+fn merge(from: &Path, to: &Path) {
     if !from.is_dir() {
         return;
     }
@@ -145,10 +177,6 @@ fn merge(from: &Path, to: &Path, verify: bool) {
                     .join(p2.file_name().unwrap_or_default())
                     .join(&name);
                 if dest.exists() {
-                    continue;
-                }
-                if verify && ObjectStore::hash_file(&file.path()).ok().as_deref() != Some(name_str) {
-                    log::info!("[tree] {} does not hash to its name — left behind", file.path().display());
                     continue;
                 }
                 if dest.parent().is_none_or(|p| create_output_dir_all(p).is_err()) {
@@ -175,58 +203,92 @@ fn read_dirs(dir: &Path) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::build::cache::ObjectStore;
 
     fn blob(dir: &Path, bytes: &[u8]) -> String {
         ObjectStore::new(dir.to_path_buf()).store_bytes(bytes).expect("stored")
     }
 
-    fn put_forged(dir: &Path, oid: &str) {
-        let shard = dir.join(&oid[..2]).join(&oid[2..4]);
-        std::fs::create_dir_all(&shard).unwrap();
-        std::fs::write(shard.join(oid), b"not what the name says").unwrap();
+    /// An older moss's output tree with one generation `current` names, the
+    /// link written absolute as some older versions wrote it.
+    fn older_output(mp: &MossPaths) -> PathBuf {
+        let old = mp.legacy_build_dir();
+        let generation = old.join("generations").join("0123456789abcdef");
+        std::fs::create_dir_all(&generation).unwrap();
+        std::fs::write(generation.join("index.html"), "built").unwrap();
+        std::fs::write(old.join("current.generation"), "0123456789abcdef").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&generation, old.join("current")).unwrap();
+        old
     }
 
-    #[test]
-    fn the_legacy_root_becomes_the_per_machine_root_and_the_store_moves_out_of_it() {
-        let tmp = tempfile::tempdir().unwrap();
-        let mp = MossPaths::new(tmp.path());
-        let legacy = mp.root().join(LEGACY_ROOT);
-        std::fs::create_dir_all(legacy.join("staging")).unwrap();
-        std::fs::write(legacy.join("staging").join("index.html"), "built").unwrap();
-        let kept = blob(&legacy.join("cache").join("objects"), b"encoded once");
-
-        migrate_build_tree(&mp);
-
-        assert!(!legacy.exists(), "nothing is left at the legacy root");
-        assert!(mp.staging_dir().join("index.html").exists(), "staging rode along under the per-machine root");
-        assert!(ObjectStore::new(mp.cache_objects()).blob_path(&kept).exists(), "the blob is in the store");
-        assert!(!mp.build_dir().join("cache").join("objects").exists(), "and no longer under the per-machine root");
-        migrate_build_tree(&mp);
-        assert!(mp.staging_dir().join("index.html").exists(), "a second run changes nothing");
+    #[cfg(unix)]
+    fn inode(path: &Path) -> u64 {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(path).unwrap().ino()
     }
 
+    /// On one volume the tree is renamed, so the last build arrives whole: the
+    /// same directory, not a copy, and `current` still serves it.
+    #[cfg(unix)]
     #[test]
-    fn renamed_aside_roots_are_harvested_for_verifying_blobs_and_removed() {
+    fn the_older_output_is_renamed_into_the_store_and_current_still_serves() {
         let tmp = tempfile::tempdir().unwrap();
         let mp = MossPaths::new(tmp.path());
-        let legacy = mp.root().join(LEGACY_ROOT);
-        std::fs::create_dir_all(legacy.join("staging")).unwrap();
-        let aside = mp.root().join("build 31");
-        let only_there = blob(&aside.join("cache").join("objects"), b"a video encoded before the swap");
-        let forged = "f".repeat(64);
-        put_forged(&aside.join("cache").join("objects"), &forged);
-        // A hand-made per-machine root already holds a store of its own.
-        let hand_made = mp.root().join("build.nosync");
-        let already = blob(&hand_made.join("cache").join("objects"), b"stored by hand");
+        let old = older_output(&mp);
+        let before = inode(&old.join("generations").join("0123456789abcdef"));
 
-        migrate_build_tree(&mp);
+        assert!(move_output_out_with(&mp, |from, to| std::fs::rename(from, to)).is_empty());
 
-        let store = ObjectStore::new(mp.cache_objects());
-        assert!(store.blob_path(&only_there).exists(), "the sibling's blob was harvested");
-        assert!(store.blob_path(&already).exists(), "so was the hand-made root's");
-        assert!(!store.blob_path(&forged).exists(), "a blob that does not hash to its name was not");
-        assert!(!aside.exists(), "the sibling is gone");
-        assert!(!legacy.exists(), "and so is the legacy root");
+        assert!(!old.exists(), "nothing is left in the folder");
+        assert_eq!(inode(&mp.generation_dir("0123456789abcdef")), before, "renamed, not copied");
+        assert_eq!(std::fs::read_link(mp.current_ptr()).unwrap(), Path::new("generations/0123456789abcdef"));
+        assert!(mp.current_ptr().join("index.html").exists(), "current resolves inside the store");
+    }
+
+    /// Across volumes the folder's tree is deleted, one generation a step, and
+    /// nothing of it reaches the store.
+    #[test]
+    fn a_tree_that_cannot_be_renamed_is_deleted_a_step_at_a_time() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mp = MossPaths::new(tmp.path());
+        let old = older_output(&mp);
+        let aside = mp.root().join("build.nosync 2");
+        std::fs::create_dir_all(&aside).unwrap();
+
+        let doomed = move_output_out_with(&mp, |_, _| Err(std::io::Error::from_raw_os_error(libc::EXDEV)));
+
+        assert_eq!(doomed, vec![old.clone(), aside.clone()]);
+        assert!(!mp.generations_dir().exists(), "nothing moved into the store");
+        delete_a_step(&old);
+        assert!(old.exists() && !old.join("generations").join("0123456789abcdef").exists(), "one generation went first");
+        delete_a_step(&old);
+        assert!(!old.exists(), "then the rest");
+    }
+
+    /// Another live process may be an older moss serving that very tree.
+    #[test]
+    fn a_tree_another_live_process_serves_is_left_alone() {
+        crate::infra::home::with_moss_home(|_home| {
+            let tmp = tempfile::tempdir().unwrap();
+            let mp = MossPaths::new(tmp.path());
+            let old = older_output(&mp);
+            let owner = crate::ops::serve::ownership::OwnerRecord {
+                folder: tmp.path().to_path_buf(),
+                pid: 1,
+                kind: crate::ops::serve::ownership::HostKind::Desktop,
+                version: "0.15.20".into(),
+                url: "http://127.0.0.1:1".into(),
+                ui_url: None,
+                started_at: String::new(),
+            };
+            crate::ops::serve::ownership::write_record_for_tests(tmp.path(), &owner);
+
+            assert!(move_output_out_with(&mp, |from, to| std::fs::rename(from, to)).is_empty());
+
+            assert!(old.join("generations").join("0123456789abcdef").join("index.html").exists());
+            assert!(!mp.build_dir().exists());
+        });
     }
 
     fn put_record(dir: &Path, oid: &str, text: &str) -> PathBuf {
@@ -271,19 +333,19 @@ mod tests {
         assert!(objects.blob_path(&kept).exists(), "a second run changes nothing");
     }
 
-    /// A sync client that has not taken the delete puts the root back before
-    /// the next build; removing it again on every build only fights it.
+    /// A sync client that has not taken the delete puts a store copy back
+    /// before the next build; removing it again on every build only fights it.
     #[test]
-    fn a_root_that_comes_back_is_left_until_the_next_launch() {
+    fn a_store_copy_that_comes_back_is_left_until_the_next_launch() {
         let tmp = tempfile::tempdir().unwrap();
         let mp = MossPaths::new(tmp.path());
         std::fs::create_dir_all(mp.build_dir()).unwrap();
-        let aside = mp.root().join("build 2");
-        std::fs::create_dir_all(aside.join("cache")).unwrap();
+        let aside = mp.root().join("cache 2");
+        std::fs::create_dir_all(aside.join("objects")).unwrap();
         migrate_build_tree(&mp);
         assert!(!aside.exists(), "the first sighting is removed");
 
-        std::fs::create_dir_all(aside.join("cache")).unwrap();
+        std::fs::create_dir_all(aside.join("objects")).unwrap();
         migrate_build_tree(&mp);
         assert!(aside.exists(), "a root that came back is left alone this launch");
     }

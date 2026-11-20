@@ -105,3 +105,46 @@ fn walk(dir: &Path) -> Vec<String> {
     }
     out
 }
+
+/// The system may purge the build output between a build and a deploy. The
+/// deploy then builds again and publishes, rather than failing.
+#[test]
+fn a_deploy_after_the_output_was_purged_builds_and_publishes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let root = tmp.path().join("site");
+    std::fs::create_dir_all(&home).unwrap();
+    write(&root, "index.md", "---\ntitle: Home\n---\nWelcome.\n");
+    write(&root, ".moss/config.toml", "[hooks]\ndeploy = \"localdir\"\n");
+    write(
+        &root,
+        ".moss/plugins/localdir/manifest.json",
+        r#"{"name":"localdir","version":"0.0.1","display_name":"Local","description":"","author":"","entry":"main.bundle.js","global_name":"LocaldirPlugin","requires":["execute_binary:sh"],"contributes":{"deploy_target":{}}}"#,
+    );
+    write(&root, ".moss/plugins/localdir/main.bundle.js", PLUGIN);
+    let moss = |args: &[&str]| {
+        let out = Command::new(MOSS)
+            .args(args)
+            .arg(&root)
+            .arg("--allow-plugins")
+            .env("MOSS_HOME", &home)
+            .env("HOME", &home)
+            .env_remove("MOSS_ENV")
+            .env_remove("MOSS_SETA_URL")
+            .output()
+            .expect("spawn moss-cli");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(out.status.success(), "{args:?} failed: {stderr}");
+        stderr
+    };
+
+    moss(&["build"]);
+    let paths = MossPaths::new(&root.canonicalize().unwrap());
+    assert!(paths.has_servable_generation());
+    std::fs::remove_dir_all(paths.build_dir()).unwrap();
+
+    let stderr = moss(&["deploy"]);
+    let line = stderr.lines().find_map(|l| l.strip_prefix("REPORT ")).unwrap_or_else(|| panic!("{stderr}"));
+    let report: serde_json::Value = serde_json::from_str(line).unwrap();
+    assert!(report["listed"].as_array().unwrap().iter().any(|f| f == "index.html"), "{report}");
+}

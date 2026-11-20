@@ -63,7 +63,7 @@ fn an_ordinary_io_failure_classifies_as_fatal() {
 #[test]
 #[cfg(target_os = "macos")]
 fn edeadlk_defers() {
-    let path = std::path::Path::new("/tmp/moss-outcome-edeadlk-probe.png");
+    let path = std::path::Path::new("/Users/x/Vault/images/edeadlk-probe.png");
     let e = io::Error::from_raw_os_error(libc::EDEADLK);
     assert!(io_stop(root(), "read OG card for hashing", path, e).is_deferred());
 }
@@ -71,7 +71,7 @@ fn edeadlk_defers() {
 #[test]
 #[cfg(all(unix, not(target_os = "macos")))] // libc::EDEADLK is a unix errno; Windows has no File Provider and no EDEADLK
 fn edeadlk_is_fatal_where_there_is_no_file_provider() {
-    let path = std::path::Path::new("/tmp/moss-outcome-edeadlk-probe.png");
+    let path = std::path::Path::new("/Users/x/Vault/images/edeadlk-probe.png");
     let e = io::Error::from_raw_os_error(libc::EDEADLK);
     assert!(
         !io_stop(root(), "read OG card for hashing", path, e).is_deferred(),
@@ -93,14 +93,16 @@ fn every_path_gets_the_disposition_whose_wait_can_actually_end() {
     // source or re-derives. Extension-independent — an OG card, a copied
     // notebook asset and a cache blob are all regenerable, and the `.html`
     // special case that used to be here left them reported instead.
+    let mp = MossPaths::new(root());
     for p in [
-        "/Users/x/Vault/.moss/build.nosync/staging/index.html",
-        "/Users/x/Vault/.moss/build.nosync/staging/posts/hello/index.html",
-        "/Users/x/Vault/.moss/build.nosync/staging/_moss/og/abc123.png",
-        "/Users/x/Vault/.moss/build.nosync/staging/jupyter/jupyter-lite.json",
-        "/Users/x/Vault/.moss/cache/objects/ab/cd1234",
+        mp.staging_dir().join("index.html"),
+        mp.staging_dir().join("posts/hello/index.html"),
+        mp.staging_dir().join("_moss/og/abc123.png"),
+        mp.staging_dir().join("jupyter/jupyter-lite.json"),
+        mp.cache_dir().join("link-meta/ab.json"),
+        std::path::PathBuf::from("/Users/x/Vault/.moss/cache/objects/ab/cd1234"),
     ] {
-        assert_eq!(disposition(root(), std::path::Path::new(p)), Disposition::Discard, "{p}");
+        assert_eq!(disposition(root(), &p), Disposition::Discard, "{}", p.display());
     }
 
     // Watched inputs: the arrival trips the watcher, so the gate it raises can
@@ -126,8 +128,8 @@ fn every_path_gets_the_disposition_whose_wait_can_actually_end() {
     // Neither regenerable-in-place nor watched. Deferring on one of these would
     // raise a screen nothing can lower; discarding one would destroy the
     // generation the preview server is serving right now.
+    assert_eq!(disposition(root(), &mp.generation_dir("ab12").join("index.html")), Disposition::Report);
     for p in [
-        "/Users/x/Vault/.moss/build.nosync/generations/ab12/index.html",
         "/Users/x/Vault/.moss/data/redirects.json",
         "/Users/x/Vault/.moss/plugins/github/main.js",
         // A file whose extension nothing consumes. Its arrival schedules no
@@ -169,7 +171,7 @@ fn a_relocated_vault_gets_the_same_disposition() {
             );
         }
         assert_eq!(
-            disposition(root, &mount_join(mount, ".moss/build.nosync/staging/index.html")),
+            disposition(root, &MossPaths::new(root).staging_dir().join("index.html")),
             Disposition::Discard,
             "a staged page under {shape}"
         );
@@ -180,6 +182,21 @@ fn a_relocated_vault_gets_the_same_disposition() {
                 "`{rel}` under {shape}: no arrival here schedules a rebuild"
             );
         }
+    }
+}
+
+/// An evicted file under staging is discarded whichever spelling of the path
+/// the error carries: the joined one the build wrote through, or the resolved
+/// one (a temporary directory under `/var` resolves to `/private/var`).
+#[test]
+fn staging_is_discarded_in_either_spelling() {
+    let tmp = tempfile::tempdir().unwrap();
+    let staging = MossPaths::new(tmp.path()).staging_dir();
+    std::fs::create_dir_all(&staging).unwrap();
+    let resolved = std::fs::canonicalize(&staging).unwrap();
+    for dir in [&staging, &resolved] {
+        let page = dir.join("posts/hello/index.html");
+        assert_eq!(disposition(tmp.path(), &page), Disposition::Discard, "{}", page.display());
     }
 }
 

@@ -326,6 +326,7 @@ async fn cold_start_serves_generation_through_current_symlink() {
         "<html><body>FROZEN-GEN</body></html>",
     )
     .unwrap();
+    mp.finish_test_generation("gen001");
     mp.set_current_ptr("gen001").unwrap();
 
     // site/ is empty — the regression rested here and 404'd.
@@ -717,7 +718,7 @@ async fn a_rebuild_never_parks_the_preview_on_a_generation_older_than_the_render
     }
     let sealed = pending.seal();
     let promotion =
-        materialize_and_promote(&sealed, &mp, &stage, next_promotion_epoch(), Some(&r2), ShipVerdict::Ship);
+        materialize_and_promote(&sealed, &mp, &stage, next_promotion_epoch(), Some(&r2), ShipVerdict::Ship, None);
     assert_eq!(promotion, Ok(Promotion::Promoted));
 
     assert!(lifecycle::park_for_rebuild(&mp, false, Default::default()).is_some(), "caught up, the next rebuild may sweep");
@@ -1124,9 +1125,8 @@ async fn a_cloud_evicted_source_is_never_opened_for_passthrough() {
     // that merely exists must not produce an early, truncated 200.
     use crate::types::assets::AssetRegistry;
     use tempfile::TempDir;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static EVICTED: AtomicBool = AtomicBool::new(true);
-    fn evicted(_: &std::path::Path) -> bool { EVICTED.load(Ordering::SeqCst) }
+    // The source stays in the cloud until the server asks for its download.
+    fn evicted(path: &std::path::Path) -> bool { crate::build::icloud::pretend::requests_for(path) == 0 }
 
     let site = TempDir::new().unwrap();
     let src = TempDir::new().unwrap();
@@ -1138,7 +1138,6 @@ async fn a_cloud_evicted_source_is_never_opened_for_passthrough() {
     registry.set_source_passthrough("assets/hero.webp".to_string(), source_file.clone());
 
     let site_dir_state = crate::moss_paths::Served::test_cell(site.path().to_path_buf());
-    EVICTED.store(true, Ordering::SeqCst);
     let (port, _, shutdown_tx) = start_server(ServeConfig {
         asset_registry: Some(registry),
         is_evicted: evicted,
@@ -1146,10 +1145,6 @@ async fn a_cloud_evicted_source_is_never_opened_for_passthrough() {
     })
     .await
     .expect("Server should start");
-    std::thread::spawn(|| {
-        std::thread::sleep(std::time::Duration::from_millis(250));
-        EVICTED.store(false, Ordering::SeqCst);
-    });
 
     let url = format!("http://localhost:{}/assets/hero.webp", port);
     let response = ureq::get(&url)
@@ -1786,6 +1781,7 @@ async fn source_route_serves_vault_bytes_not_build_output() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn source_route_serves_files_sandboxed() {
     let vault = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    std::fs::create_dir_all(MossPaths::new(vault.path()).root()).unwrap();
     let site_dir = MossPaths::new(vault.path()).current_ptr();
     std::fs::create_dir_all(&site_dir).unwrap();
     std::fs::write(
@@ -1814,6 +1810,7 @@ async fn source_route_serves_files_sandboxed() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn source_route_passes_the_width_query_to_the_core() {
     let vault = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    std::fs::create_dir_all(MossPaths::new(vault.path()).root()).unwrap();
     let site_dir = MossPaths::new(vault.path()).current_ptr();
     std::fs::create_dir_all(&site_dir).unwrap();
     std::fs::write(vault.path().join("inside.txt"), b"INSIDE").unwrap();
@@ -1853,6 +1850,7 @@ async fn source_route_rejects_escape_above_the_vault() {
     std::fs::write(parent.path().join("secret.txt"), b"SECRET").unwrap();
 
     let vault_path = parent.path().join("vault");
+    std::fs::create_dir_all(vault_path.join(".moss")).unwrap();
     let site_dir = MossPaths::new(&vault_path).current_ptr();
     std::fs::create_dir_all(&site_dir).unwrap();
     std::fs::write(vault_path.join("inside.txt"), b"INSIDE").unwrap();
@@ -2125,6 +2123,7 @@ async fn invoke_carrier_is_behind_the_trust_boundary() {
 #[cfg(test)]
 fn served_vault() -> (tempfile::TempDir, std::path::PathBuf) {
     let vault = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    std::fs::create_dir_all(MossPaths::new(vault.path()).root()).unwrap();
     let site_dir = MossPaths::new(vault.path()).current_ptr();
     std::fs::create_dir_all(&site_dir).unwrap();
     (vault, site_dir)
@@ -2755,6 +2754,7 @@ fn confinement_vault() -> (tempfile::TempDir, std::path::PathBuf, std::path::Pat
         .unwrap();
 
     let vault_path = parent.path().join("vault");
+    std::fs::create_dir_all(vault_path.join(".moss")).unwrap();
     let site_dir = MossPaths::new(&vault_path).current_ptr();
     std::fs::create_dir_all(&site_dir).unwrap();
     std::fs::write(vault_path.join("inside.md"), "---\ntitle: INSIDE\n---\nin the vault\n")

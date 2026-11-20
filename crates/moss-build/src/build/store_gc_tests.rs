@@ -456,7 +456,8 @@ fn a_symlink_entry_is_never_reused_where_ship_copies_its_target() {
 
 
 /// Every record kept beside a generation goes with it: its original
-/// identities, its preview-only list, its article map and its seed record.
+/// identities, its preview-only list, its article map, its seed record and
+/// its promotion record.
 #[test]
 fn generation_receipts_lifetime_follows_their_generation() {
     let (_temp, generations) = make_generations(&["old", "current"]);
@@ -465,6 +466,7 @@ fn generation_receipts_lifetime_follows_their_generation() {
         crate::build::manifest::publish_view::receipt_path(&generations, "old"),
         crate::build::manifest::publish_view::articles_path(&generations, "old"),
         WholeGeneration::record_path(&generations, "old"),
+        crate::infra::folder_lock::promotion_record_path(&generations, "old"),
     ];
     for receipt in &receipts {
         std::fs::write(receipt, b"receipt").unwrap();

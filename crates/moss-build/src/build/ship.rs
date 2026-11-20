@@ -612,6 +612,10 @@ pub fn tail_owns_shared_state(promotion: &Result<Promotion, String>) -> bool {
 /// swap goes through `lifecycle::promote`, which refuses it when a newer build
 /// has already promoted.
 ///
+/// `locked_at` is the build's cross-process stamp, kept beside the generation
+/// before `current` moves (`infra::folder_lock::record_promotion`); `None`
+/// where the caller holds no folder lock.
+///
 /// `verdict` covers the seal's required inputs and output presence pass
 /// ([`ShipVerdict::after_presence_pass`]). A `Withhold` returns
 /// [`Promotion::Withheld`] before anything is copied.
@@ -622,6 +626,7 @@ pub(crate) fn materialize_and_promote(
     epoch: u64,
     render: Option<&crate::build::lifecycle::Render>,
     verdict: ShipVerdict,
+    locked_at: Option<u64>,
 ) -> Result<Promotion, String> {
     if let ShipVerdict::Withhold(reason) = verdict {
         match &reason {
@@ -691,6 +696,10 @@ pub(crate) fn materialize_and_promote(
         .map_err(|e| format!("Failed to write generation original identities: {e}"))?;
     sealed.write_publish_view(&mp.generations_dir())
         .map_err(|e| format!("Failed to record which pages are preview-only: {e}"))?;
+    if let Some(locked_at) = locked_at {
+        crate::infra::folder_lock::record_promotion(&mp.generations_dir(), sealed.generation_id(), locked_at)
+            .map_err(|e| format!("Failed to record the promotion epoch: {e}"))?;
+    }
     let promoted = crate::build::lifecycle::promote(mp, epoch, render, sealed.generation_id(), copied)
         .map_err(|e| format!("Failed to set current_ptr: {}", e))?;
     // A generation holding bytes its id does not describe keeps its lock file,
@@ -1548,6 +1557,7 @@ mod tests {
             next_promotion_epoch(),
             None,
             ShipVerdict::Withhold(WithholdReason::SourcesDownloading),
+            None,
         );
 
         assert_eq!(outcome.unwrap(), Promotion::Withheld(WithholdReason::SourcesDownloading));
@@ -1589,7 +1599,7 @@ mod tests {
             std::collections::HashSet::new(),
         );
         let promotion =
-            materialize_and_promote(&sealed, &mp, &stage, next_promotion_epoch(), None, verdict)
+            materialize_and_promote(&sealed, &mp, &stage, next_promotion_epoch(), None, verdict, None)
                 .unwrap();
         (mp, sealed, promotion)
     }
@@ -1636,7 +1646,7 @@ mod tests {
         std::fs::write(stage.join("index.html"), b"<h1>home</h1>").unwrap();
         let sealed = manifest_of(&[("index.html", b"<h1>home</h1>"), ("gone/index.html", b"<h1>gone</h1>")]);
         let (render, _) = crate::build::lifecycle::show_render(&mp, true);
-        let ship = || materialize_and_promote(&sealed, &mp, &stage, next_promotion_epoch(), Some(&render), ShipVerdict::Ship);
+        let ship = || materialize_and_promote(&sealed, &mp, &stage, next_promotion_epoch(), Some(&render), ShipVerdict::Ship, None);
 
         ship().expect_err("the newest render's generation is short of a file it names");
         crate::build::lifecycle::show_render(&mp, true);
@@ -1656,7 +1666,7 @@ mod tests {
         std::fs::write(stage.join("index.html"), b"<h1>home</h1>").unwrap();
         let sealed = manifest_of(&[("index.html", b"<h1>home</h1>")]);
         let promote = || {
-            materialize_and_promote(&sealed, &mp, &stage, next_promotion_epoch(), None, ShipVerdict::Ship).unwrap()
+            materialize_and_promote(&sealed, &mp, &stage, next_promotion_epoch(), None, ShipVerdict::Ship, None).unwrap()
         };
         assert_eq!(promote(), Promotion::Promoted);
 
@@ -1682,7 +1692,7 @@ mod tests {
         sealed.stamp_all_ship_fingerprints(&stage);
         let shipped = mp.generation_dir(sealed.generation_id()).join("page.html");
         let promote = |sealed: &SealedManifest| {
-            materialize_and_promote(sealed, &mp, &stage, next_promotion_epoch(), None, ShipVerdict::Ship).unwrap()
+            materialize_and_promote(sealed, &mp, &stage, next_promotion_epoch(), None, ShipVerdict::Ship, None).unwrap()
         };
 
         std::fs::write(stage.join("page.html"), b"<h1>RACED</h1>").unwrap();
@@ -1726,7 +1736,7 @@ mod tests {
 
         let before = reads();
         assert_eq!(
-            materialize_and_promote(&sealed, &mp, &stage, next_promotion_epoch(), None, ShipVerdict::Ship).unwrap(),
+            materialize_and_promote(&sealed, &mp, &stage, next_promotion_epoch(), None, ShipVerdict::Ship, None).unwrap(),
             Promotion::Promoted
         );
         assert_eq!(reads() - before, 0, "the copy hashed a blob the presence pass verified");
@@ -1772,7 +1782,7 @@ mod tests {
 
     fn promote_sealed(mp: &crate::moss_paths::MossPaths, sealed: &SealedManifest) {
         let promotion =
-            materialize_and_promote(sealed, mp, &mp.staging_dir(), next_promotion_epoch(), None, ShipVerdict::Ship);
+            materialize_and_promote(sealed, mp, &mp.staging_dir(), next_promotion_epoch(), None, ShipVerdict::Ship, None);
         assert_eq!(promotion, Ok(Promotion::Promoted));
     }
 
