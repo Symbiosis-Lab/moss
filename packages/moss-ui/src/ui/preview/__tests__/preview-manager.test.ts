@@ -756,6 +756,25 @@ describe('PreviewManager', () => {
       document.body.innerHTML = '';
     });
 
+    test('coarse channel-only publish lifecycle never opens or completes a site hairline', async () => {
+      getBuildConfig.mockReturnValue(null);
+      const h = (previewManager as any).hairline;
+      const start = vi.spyOn(h, 'startDeterminate');
+      const complete = vi.spyOn(h, 'complete');
+      const flash = vi.spyOn(previewManager as any, 'flashPill');
+      await previewManager.initialize();
+      start.mockClear();
+      complete.mockClear();
+      flash.mockClear();
+      for (const status of ['pending', 'in_progress', 'success', 'error'] as const) {
+        busDeliver(Events.DEPLOY_PROGRESS, { isDeploying: status === 'pending' || status === 'in_progress', status });
+        expect((previewManager as any).uploadingStarted).toBe(false);
+        expect(start).not.toHaveBeenCalled();
+        expect(complete).not.toHaveBeenCalled();
+        expect(flash).not.toHaveBeenCalled();
+      }
+    });
+
     test('a publish that resolves with NO terminal stage (needs_setup) still closes the pass', async () => {
       // Rust emits `Preparing` BEFORE the site-id check, so push_site →
       // NeedsSetup returns Ok having opened the pass and never emitting

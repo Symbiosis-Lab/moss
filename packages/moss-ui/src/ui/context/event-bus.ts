@@ -384,6 +384,8 @@ export interface EmailSubscribersChangedEvent {}
  */
 export interface PushNoticeEvent {
   task: string;
+  /** The originating task's UI owner, distinct from the advisory's problem scope. */
+  taskScope?: "preview" | "workspace" | "action_panel";
   /**
    * The file this notice is about, or `null` for a site-wide one. A notice that
    * names a file gets it rendered as the row's item, which is how the missing-media

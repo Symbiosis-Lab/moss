@@ -38,7 +38,7 @@ function narratedWire(opts: {
     id: opts.id ?? "narrated-1",
     window_id: "main",
     scope: opts.scope ?? "workspace",
-    kind: "import",
+    kind: "deploy",
     tone: "narrated",
     title: opts.title ?? null,
     fade_after_ms: null,
@@ -97,11 +97,11 @@ describe("ProgressPanel narration ingestion", () => {
 
   it("(a) non-preview narrated running task → appears as a panel row", () => {
     panel.handleJobUpdate(
-      narratedWire({ title: "Connecting to Matters" }),
+      narratedWire({ title: "Connecting example.test" }),
     );
     const tasks = panel.getNarratedTasks();
     expect(tasks.length).toBeGreaterThan(0);
-    expect(tasks[0].label).toBe("Connecting to Matters");
+    expect(tasks[0].label).toBe("Connecting example.test");
   });
 
   it("(a) narrated task with no title uses message", () => {
@@ -141,7 +141,7 @@ describe("ProgressPanel narration ingestion", () => {
     panel.handleJobUpdate(
       narratedWire({
         id: "fail-1",
-        title: "Sync to Matters",
+        title: "Check site",
         state: {
           state: "failed",
           advisory: {
@@ -266,7 +266,7 @@ describe("ProgressPanel narration ingestion", () => {
       id: "n-1",
       window_id: "main",
       scope: "workspace",
-      kind: "import",
+      kind: "deploy",
       tone: "ambient",
       title: "Working",
       fade_after_ms: null,
@@ -282,109 +282,17 @@ describe("ProgressPanel narration ingestion", () => {
     expect(remaining).toHaveLength(0);
   });
 
-  it("(d) tone de-escalation away from awaiting clears the advisory + row (Matters 'Connect to Matters' flip)", () => {
-    // The Matters import (empty folder, not-yet-bound) calls
-    // `task.awaiting("Connect to Matters")` to suspend the inactivity watchdog,
-    // then IMMEDIATELY `task.progress(...)` to drop the Awaiting amber back to a
-    // quiet Ambient running label. The backend tone therefore flips
-    // Awaiting→Ambient on the SAME task id (Job::tone(): awaiting outranks, but
-    // once Running a Workspace/Process task rests at Ambient). The panel must tear
-    // down the synthetic awaiting advisory + popover row on the Ambient wire —
-    // otherwise "Waiting for you to Connect to Matters." leaks forever AND pins the
-    // panel open (a live advisory/task suppresses checkAutoClose).
-    let topSeverity: "broken" | "degraded" | "none" = "none";
-    panel.onTopSeverityChange((s) => { topSeverity = s; });
-
-    panel.handleJobUpdate(
-      awaitingWire({ id: "matters", directive: "Connect to Matters" }),
-    );
-    expect(topSeverity).not.toBe("none");
-    expect(
-      panel.getActiveTasks().some((t) => t.label.includes("Connect to Matters")),
-    ).toBe(true);
-
-    // task.progress(...) → Running, resting Ambient tone, SAME id.
-    panel.handleJobUpdate({
-      id: "matters",
-      window_id: "main",
-      scope: "workspace",
-      kind: "process",
-      tone: "ambient",
-      title: null,
-      fade_after_ms: null,
-      started_at_ms: 0,
-      verb: null,
-      amount: null,
-      elapsed_ms: null,
-      parent: null,
-      state: { state: "running", fraction: null, message: "Connect to Matters" },
-    });
-
-    // The synthetic awaiting advisory (amber dot) + popover row must be gone.
-    expect(topSeverity).toBe("none");
-    expect(
-      panel.getActiveTasks().some((t) => t.label.includes("Connect to Matters")),
-    ).toBe(false);
-  });
-
-  it("(d) tone de-escalation awaiting→NARRATED also clears the advisory + row (Matters Settings re-sync)", () => {
-    // A `(Workspace, Import)` task rests at the Narrated tone (tasks.rs Job::tone),
-    // so the Matters import triggered from Settings flips Awaiting→Narrated (not
-    // Ambient) when `task.progress("Connect to Matters")` lands. The awaiting
-    // teardown must fire on the narrated wire too, BEFORE it routes to the narrated
-    // handler — otherwise the synthetic awaiting advisory/row/awaitingJob leaks for
-    // this whole class of imports.
-    let topSeverity: "broken" | "degraded" | "none" = "none";
-    panel.onTopSeverityChange((s) => { topSeverity = s; });
-
-    panel.handleJobUpdate(
-      awaitingWire({ id: "matters", directive: "Connect to Matters" }),
-    );
-    expect(topSeverity).not.toBe("none");
-
-    // task.progress(...) → Running, but the resting tone for (Workspace, Import) is
-    // NARRATED. Same id.
-    panel.handleJobUpdate(
-      narratedWire({ id: "matters", title: "Syncing from Matters" }),
-    );
-
-    // Awaiting advisory cleared (amber dot gone); the narrated row took over.
-    expect(topSeverity).toBe("none");
-    expect(
-      panel.getActiveTasks().some((t) => t.label.includes("Connect to Matters")),
-    ).toBe(false);
-    expect(panel.getNarratedTasks().some((t) => t.id.includes("matters"))).toBe(true);
-  });
-
-  it("(d) tone de-escalation away from awaiting lets a surfaced panel auto-close (stuck-open fix)", () => {
-    // Same flip as above, but assert the visibility consequence: the leaked
-    // advisory/task is exactly what kept the window stuck open showing
-    // "Waiting for you to Connect to Matters." Once cleared, a settled build must
-    // be free to retract the panel.
-    panel.show(); // surfaced
-    panel.handleJobUpdate(
-      awaitingWire({ id: "matters", directive: "Connect to Matters" }),
-    );
-
-    panel.handleJobUpdate({
-      id: "matters",
-      window_id: "main",
-      scope: "workspace",
-      kind: "process",
-      tone: "ambient",
-      title: null,
-      fade_after_ms: null,
-      started_at_ms: 0,
-      verb: null,
-      amount: null,
-      elapsed_ms: null,
-      parent: null,
-      state: { state: "running", fraction: null, message: "Connect to Matters" },
-    });
-
-    // Nothing keeps the panel open anymore → a settled build retracts it.
-    panel.setStage("ready");
-    expect(panel.isHidden).toBe(true);
+  it.each(["ambient", "narrated"] as const)("resumed site work clears the awaiting dot before routing to %s", (tone) => {
+    panel.handleJobUpdate(awaitingWire({ id: "site", directive: "Check DNS" }));
+    expect(panel.buildViewModel().topSeverity).toBe("degraded");
+    panel.handleJobUpdate({ ...narratedWire({ id: "site", title: "Checking site" }), tone });
+    expect(panel.buildViewModel().topSeverity).toBe("none");
+    expect(panel.getActiveTasks()).toEqual([]);
+    expect(panel.getNarratedTasks()).toHaveLength(tone === "narrated" ? 1 : 0);
+    if (tone === "ambient") {
+      panel.setStage("ready");
+      expect(panel.isHidden).toBe(true);
+    }
   });
 
   // ── checkAutoClose respects narratedTasks ──────
@@ -395,7 +303,7 @@ describe("ProgressPanel narration ingestion", () => {
     expect(panel.isHidden).toBe(false);
 
     // Add a running narrated task.
-    panel.handleJobUpdate(narratedWire({ id: "law2-running", title: "Syncing to Matters" }));
+    panel.handleJobUpdate(narratedWire({ id: "law2-running", title: "Checking site" }));
     expect(panel.getNarratedTasks()).toHaveLength(1);
 
     // setStage('ready') drives checkAutoClose() — normally closes a surfaced panel
@@ -416,7 +324,7 @@ describe("ProgressPanel narration ingestion", () => {
     panel.handleJobUpdate(
       narratedWire({
         id: "law2-failed",
-        title: "Sync to Matters",
+        title: "Check site",
         state: {
           state: "failed",
           advisory: {

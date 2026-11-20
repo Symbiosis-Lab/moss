@@ -25,7 +25,7 @@
  *     - BackgroundProgress for every OTHER task (images, videos, assets,
  *       notebooks, sealing, …) — `bgTaskRowDecision` in progress-panel-stage.ts
  *       decides the row
- *     - PluginProgress (deploy/syndicate hooks running concurrently)
+ *     - PluginProgress (site deploy hooks running concurrently)
  *     - VideoConversionProgress — enriches bg:videos with filename + phase
  *     - the Domain Job (Preview-scope `PanelTaskUpdate`, DNS readiness
  *       check after publish)
@@ -106,6 +106,11 @@ export type {
   NoticeVM,
   PanelViewModel,
 } from "./progress-panel-stage";
+
+// These hooks belong to their action panel or channel, including terminal updates.
+function isLocalPluginHook(hook: string): boolean {
+  return hook === "login" || hook === "syndicate" || hook === "process";
+}
 
 const CLOUD_UNAVAILABLE_ADV_KEY = "cloud-sync-unavailable";
 
@@ -539,17 +544,6 @@ export class ProgressPanel {
    * comments/social network fetch) still surfaces after the grace period.
    */
   private static readonly DEFER_UPSERT_MS = 250;
-
-  /**
-   * Plugin hooks carrying publish work: user-triggered, network-bound, and
-   * genuinely long. Their rows paint immediately (every other non-`process`
-   * hook is deferred — see handlePluginProgress) and get the long stale window
-   * below, which is why they emit no fake progress.
-   */
-  private static readonly PUBLISH_HOOKS: ReadonlySet<string> = new Set([
-    "deploy",
-    "syndicate",
-  ]);
 
   constructor(container: HTMLElement, iframe?: HTMLIFrameElement | null) {
     this.renderer = new ProgressPanelRenderer(container);
@@ -1039,6 +1033,14 @@ export class ProgressPanel {
   // of a toast. Keyed by `task` — a second emit with the same task replaces
   // the first. Cleared at next build-start like other advisories.
   private onPushNotice(entry: PushNoticeEvent): void {
+    // Advisory scope describes the problem, not its UI owner. Use the task's
+    // surface or operation identity; Account/SignIn can also mean site verification.
+    if (entry.taskScope === "action_panel" ||
+        (entry.task.startsWith("plugin:") && isLocalPluginHook(entry.task.slice(entry.task.lastIndexOf(":") + 1))) ||
+        entry.task === "deploy:site-live-gate" || entry.task.startsWith("deploy:email-")) {
+      this.onClearNotice({ task: entry.task });
+      return;
+    }
     this.advisories.set(entry.task, {
       task: entry.task,
       item: entry.item,
@@ -1122,8 +1124,7 @@ export class ProgressPanel {
     // A caller that knows its work goes quiet the same way says so (`quiet`).
     const publish =
       task.id.startsWith("deploy:") ||
-      (task.id.startsWith("plugin:") &&
-        ProgressPanel.PUBLISH_HOOKS.has(task.id.slice(task.id.lastIndexOf(":") + 1)));
+      (task.id.startsWith("plugin:") && task.id.endsWith(":deploy"));
     const timeout = publish || opts?.quiet ? 600_000 : ProgressPanel.STALE_TIMEOUT_MS;
     this.staleTimers.set(
       task.id,
@@ -1144,25 +1145,22 @@ export class ProgressPanel {
    *   Cancelled -> removed
    */
   handleJobUpdate(wire: PanelTaskWire): void {
-    // Narrated/awaiting tones from ANY scope are folded
-    // into the pill popover. Route them before the preview-scope guard so they
-    // are never silently dropped.
+    // Scope and kind survive awaiting→running and localization. Panel sign-in
+    // and workspace imports/processes have their own UI; syndication has its channel.
+    if (wire.scope === "action_panel" || wire.kind === "syndicate" ||
+        (wire.scope === "workspace" && (wire.kind === "import" || wire.kind === "process"))) {
+      for (const key of [`job:${wire.id}`, `awaiting-narration:${wire.id}`]) {
+        this.deleteAdvisory(key);
+        this.awaitingJobs.delete(key);
+        this.removeTask(key);
+      }
+      this.dropNarratedTask(`narrated:${wire.id}`);
+      this.checkAutoClose();
+      return;
+    }
+    // Site jobs may narrate from workspace scope. A resumed wire must clear
+    // its awaiting row and dot before routing to its new tone.
     if (wire.scope !== "preview") {
-      // TONE IS NOT STABLE ACROSS A TASK'S LIFE. The Matters import calls
-      // `task.awaiting("Connect to Matters")` then IMMEDIATELY `task.progress(...)`
-      // to drop the amber Awaiting pulse for a quiet login label — flipping the
-      // SAME id OUT of the Awaiting tone. Where it lands depends on the route:
-      // Ambient under the onboarding/empty-folder import (`Workspace, Process`) but
-      // back to Narrated under the Settings re-sync (`Workspace, Import` rests
-      // Narrated — tasks.rs Job::tone). Either way the dedicated
-      // `handleAwaitingNarrationUpdate` only runs while the wire still carries the
-      // awaiting tone, so on ANY non-awaiting follow-up we must drive its teardown
-      // HERE — or the synthetic advisory + row + `awaitingJobs` entry it created
-      // leaks forever. That leak was the root cause of the stuck "Waiting for you
-      // to Connect to Matters." advisory: it both kept the amber dot AND pinned the
-      // panel open (a live advisory/row suppresses `checkAutoClose`, and the
-      // `awaitingJobs` entry keeps `shouldSurface()` true). Re-entering the handler
-      // with a non-awaiting `state` hits its clear path (removes all three).
       if (
         wire.tone !== "awaiting" &&
         this.awaitingJobs.has(`awaiting-narration:${wire.id}`)
@@ -1490,23 +1488,8 @@ export class ProgressPanel {
     const key = `awaiting-narration:${wire.id}`;
     const state = wire.state;
 
-    // Terminal → clear everything.
-    if (
-      state.state === "succeeded" ||
-      state.state === "failed" ||
-      state.state === "cancelled"
-    ) {
-      this.deleteAdvisory(key);
-      // Also clear any existing task row for this awaiting task from the primary
-      // tasks map (it may have been upserted as an awaiting row below).
-      this.tasks.delete(key);
-      this.awaitingJobs.delete(key);
-      this.renderPanel();
-      return;
-    }
-
     if (state.state !== "awaiting") {
-      // Running/resumed: clear the amber dot (awaiting is over).
+      // Resumed or terminal: clear the row and dot (awaiting is over).
       this.deleteAdvisory(key);
       this.tasks.delete(key);
       this.awaitingJobs.delete(key);
@@ -1568,15 +1551,10 @@ export class ProgressPanel {
 
   /** Handle plugin progress event: upsert on updates, remove on completion */
   handlePluginProgress(pp: PluginProgressEvent): void {
-    // The `process` hook (e.g. the Matters import) is Workspace-scoped
-    // background work that surfaces via showToast, not the preview progress
-    // panel — keep it out of here. Deploy / syndicate and the setup hooks
-    // still render here.
-    if (pp.hook_name === "process") return;
-
     const taskId = `plugin:${pp.plugin_name}:${pp.hook_name}`;
 
-    if (pp.completed) {
+    // Excluded follow-ups also remove an old row or a deferred first paint.
+    if (isLocalPluginHook(pp.hook_name) || pp.completed) {
       // If the row was scheduled but never painted (the hook finished inside
       // the grace window — the common incremental-rebuild case), cancel the
       // pending upsert so nothing ever flashes. removeTask is a safe no-op
@@ -1599,14 +1577,14 @@ export class ProgressPanel {
       pluginName: pp.plugin_name,
     };
 
-    // Publish / distribution hooks (deploy, syndicate) are user-triggered and
+    // Site publish hooks (deploy) are user-triggered and
     // genuinely slow — paint immediately, there is no flash to suppress.
-    if (ProgressPanel.PUBLISH_HOOKS.has(pp.hook_name)) {
+    if (pp.hook_name === "deploy") {
       this.upsertTask(task);
       return;
     }
 
-    // Every other hook (configure_domain, check_setup, login) is bracketed by
+    // Other site hooks (configure_domain, check_setup) are bracketed by
     // start/done around a step that is usually near-instant. Defer the first
     // row so a sub-window hook cancels (in the `completed` branch above)
     // before painting; a genuinely slow one surfaces once the grace period
