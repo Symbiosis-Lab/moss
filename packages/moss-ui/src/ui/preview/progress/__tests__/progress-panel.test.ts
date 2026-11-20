@@ -1883,6 +1883,15 @@ describe("ProgressPanel", () => {
       expect(condition()).toBe("");
     });
 
+    // A publish waiting on the first build: the build is running, not paused.
+    it("says nothing about a paused rebuild while the publish waits for the build", () => {
+      const condition = () =>
+        container.querySelector(".moss-status-condition")?.textContent ?? "";
+      fireMossEvent({ kind: "DeployWaitingForBuild" });
+      expect(container.textContent).toContain("Preparing");
+      expect(condition()).toBe("");
+    });
+
     // ── The ledger keeps two registers with distinct responsibilities ─────────
 
     it("puts the size on the headline and the file + rate on the detail row", () => {

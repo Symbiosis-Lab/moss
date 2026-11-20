@@ -2248,7 +2248,8 @@ export class ProgressPanel {
         const ledger = this.publish.ledger(label.text, paused);
         if (ledger) return ledger;
       }
-      return { kind: "running", verb: label.text, condition: paused, tooltip: label.detail };
+      // Waiting on the first build: that build runs, so nothing is paused yet.
+      return { kind: "running", verb: label.text, condition: this.currentPublishStage === "waiting" ? undefined : paused, tooltip: label.detail };
     }
 
     // A publish that just landed. Placed directly under the active-publish tier
