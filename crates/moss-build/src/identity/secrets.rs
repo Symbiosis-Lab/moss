@@ -23,7 +23,7 @@
 //! credential. This store lives beside `app-config.json` in the app-support
 //! directory, which no vault syncs.
 
-use super::keystore::{write_private, KeystoreError, Scope};
+use super::keystore::{KeystoreError, Scope};
 use std::path::{Path, PathBuf};
 
 /// The store's directory name under the app-support directory.
@@ -106,11 +106,7 @@ impl SecretStore {
         if value.is_empty() {
             return self.remove(scope, key);
         }
-        let path = self.path(scope, key)?;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|_| KeystoreError::Io)?;
-        }
-        write_private(&path, value.as_bytes())
+        crate::infra::atomic_write::write_private_atomic(&self.path(scope, key)?, value).map_err(|_| KeystoreError::Io)
     }
 
     /// Forget `key`. Absent is success — this is what `rejectSecret` does, and
@@ -207,6 +203,22 @@ mod tests {
             assert_eq!(store.set(&plugin("ipfs"), bad, "x"), Err(KeystoreError::InvalidName));
             assert_eq!(store.get(&plugin("ipfs"), bad), Err(KeystoreError::InvalidName));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_secret_written_over_a_wider_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempdir().unwrap();
+        let store = SecretStore::in_app_data(dir.path());
+        let path = dir.path().join(SECRETS_DIRNAME).join("ipfs").join("pinata_jwt");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        store.set(&plugin("ipfs"), "pinata_jwt", "tok").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0, "secret file is readable beyond its owner: {mode:o}");
+        assert_eq!(store.get(&plugin("ipfs"), "pinata_jwt").unwrap().as_deref(), Some("tok"));
     }
 
     #[cfg(unix)]

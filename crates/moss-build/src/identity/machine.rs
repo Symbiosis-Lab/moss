@@ -91,7 +91,7 @@ fn secret_in(dir: &Path) -> Option<[u8; 32]> {
         std::fs::create_dir_all(dir).ok()?;
         let draft = dir.join(format!("{SECRET_FILE}.{}", hex::encode(rand::random::<[u8; 8]>())));
         let secret: [u8; 32] = rand::random();
-        super::keystore::write_private(&draft, hex::encode(secret).as_bytes()).ok()?;
+        crate::infra::atomic_write::write_private_atomic(&draft, hex::encode(secret)).ok()?;
         // allow:hard_link no-clobber publish in local app data; the draft is removed next, so no two paths share the inode
         let _ = std::fs::hard_link(&draft, &path);
         let _ = std::fs::remove_file(&draft);

@@ -244,11 +244,8 @@ impl StoredKey {
     }
 
     fn save(&self, path: &Path) -> Result<(), KeystoreError> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|_| KeystoreError::Io)?;
-        }
         let body = format!("{}\n{}\n", self.algorithm.as_wire(), hex::encode(self.secret));
-        write_private(path, body.as_bytes())
+        crate::infra::atomic_write::write_private_atomic(path, body).map_err(|_| KeystoreError::Io)
     }
 
     fn public_key(&self) -> Vec<u8> {
@@ -288,32 +285,6 @@ impl StoredKey {
     fn info(&self, name: String) -> KeyInfo {
         KeyInfo { name, algorithm: self.algorithm, public_key: self.public_key() }
     }
-}
-
-/// Write `bytes` to `path` with `0600` on Unix, created atomically so there is
-/// no window where the secret is world-readable. Mirrors `keypair.rs`.
-pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> Result<(), KeystoreError> {
-    use std::io::Write;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        // allow:raw_write identity keys live under .moss/identity/, not .moss/build.nosync/ — 0600 perms require this open, and the path is never cloud-evicted output
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)
-            .map_err(|_| KeystoreError::Io)?;
-        f.write_all(bytes).map_err(|_| KeystoreError::Io)?;
-    }
-    #[cfg(not(unix))]
-    {
-        // allow:raw_write identity keys live under .moss/identity/, not .moss/build.nosync/
-        let mut f = std::fs::File::create(path).map_err(|_| KeystoreError::Io)?;
-        f.write_all(bytes).map_err(|_| KeystoreError::Io)?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
