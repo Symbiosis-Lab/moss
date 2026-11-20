@@ -4,6 +4,10 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
+### New
+
+- A channel plugin's copy job names the site the post lives on (`site.url`, `site.name`), and a long article carries the page's plain text (`article.text`, without its title or link back), so a network that keeps an article as a record of its own can store the full text and point back to the site.
+
 ## [0.15.28] - 2026-11-20
 
 ### Fixed

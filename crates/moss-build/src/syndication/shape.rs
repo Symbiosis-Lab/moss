@@ -31,6 +31,9 @@ pub struct Teaser {
 pub struct Article {
     pub title: String,
     pub html: String,
+    /// The page as written, in plain text: no title, no link back.
+    #[serde(default)]
+    pub text: String,
     #[serde(default)]
     pub description: Option<String>,
     /// Absolute, like a teaser's.
@@ -80,6 +83,11 @@ fn hex(bytes: &[u8]) -> String {
 /// A page's absolute address on the site at `site_url`.
 pub fn page_url(site_url: &str, url_path: &str) -> String {
     format!("{}/{}", site_url.trim_end_matches('/'), moss_core::resolve::fuzzy_path::percent_encode_url(url_path.trim_start_matches('/')))
+}
+
+/// The site's own name, or its host when the build has none.
+pub fn site_name(opts: &ShapeOptions, site_url: &str) -> Option<String> {
+    opts.site_name.clone().or_else(|| url::Url::parse(site_url).ok().and_then(|url| url.host_str().map(str::to_string)))
 }
 
 /// Settings shared by previews and sends. Without a built output, math stays text.
@@ -140,14 +148,13 @@ pub fn shape_with(post: &ArticleInfo, spec: &ChannelSpec, site_url: &str, opts: 
             omitted_pictures = omitted;
             if opts.link_back {
                 let escape = crate::build::features::html_escape;
-                let host = url::Url::parse(site_url).ok().and_then(|url| url.host_str().map(str::to_string));
-                let name = escape(opts.site_name.as_deref().or(host.as_deref()).unwrap_or(&page));
+                let name = escape(site_name(opts, site_url).as_deref().unwrap_or(&page));
                 let url = escape(&page);
                 let lang = super::record::effective_language(post, None, opts.lang.as_deref());
                 let (prefix, stop) = footer(lang.as_deref().unwrap_or(""));
                 html.push_str(&format!("\n<p>{prefix} <a href=\"{url}\">{name}</a>{stop}</p>"));
             }
-            (Form::Long, Vec::new(), None, Some(Article { title: post.title.clone(), blocks: super::pictures::blocks(&html), html, description: described(post), cover: cover(post, site_url) }))
+            (Form::Long, Vec::new(), None, Some(Article { title: post.title.clone(), blocks: super::pictures::blocks(&html), html, text: lower(&post.content, &page, site_url).text, description: described(post), cover: cover(post, site_url) }))
         } else if spec.takes(Form::Teaser) {
             let (teaser, part) = teaser(post, spec, &page, site_url)?;
             (Form::Teaser, vec![part], Some(teaser), None)

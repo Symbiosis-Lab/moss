@@ -327,18 +327,20 @@ describe("copy picture payload", () => {
     expectTypeOf<CopyJob["pictures"]>().toEqualTypeOf<CopyPicture[] | undefined>();
     expectTypeOf<CopyJob["included_pictures"]>().toEqualTypeOf<number | undefined>();
     expectTypeOf<CopyJob["omitted_pictures"]>().toEqualTypeOf<number | undefined>();
+    expectTypeOf<CopyJob["site"]>().toEqualTypeOf<{ url: string; name: string }>();
     const picture: CopyPicture = { url: "https://example.org/photo.png", alt: "A maple" };
     const job: CopyJob = {
       op: "publish", channel: "one", idempotency_key: "stable-key",
+      site: { url: "https://example.org", name: "example.org" },
       post: { url: "https://example.org/page/", source_path: "page.md", title: "Page" },
       config: {}, form: "short", parts: [{ text: "Hello", links: [] }],
       pictures: [picture], included_pictures: 1, omitted_pictures: 2,
     };
     expect(job.pictures?.[0].alt).toBe("A maple");
-    const long: CopyJob = { ...job, form: "long", parts: [], pictures: [], article: { title: "Page", html: '<img src="https://example.org/photo.png" alt="A maple">' } };
+    const long: CopyJob = { ...job, form: "long", parts: [], pictures: [], article: { title: "Page", html: '<img src="https://example.org/photo.png" alt="A maple">', text: "" } };
     expect(long.pictures).toEqual([]);
     expect(long.included_pictures).toBe(1);
-    const identity: CopyJob = { op: "find", channel: job.channel, idempotency_key: job.idempotency_key, post: job.post, config: {} };
+    const identity: CopyJob = { op: "find", channel: job.channel, idempotency_key: job.idempotency_key, site: job.site, post: job.post, config: {} };
     expect(identity.pictures).toBeUndefined();
     expect(identity.included_pictures).toBeUndefined();
     expect(identity.omitted_pictures).toBeUndefined();

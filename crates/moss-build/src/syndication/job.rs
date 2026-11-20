@@ -45,12 +45,21 @@ pub struct PostRef {
     pub tags: Vec<String>,
 }
 
+/// The site a post lives on: `post.url` is built on `url`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SiteRef {
+    /// Absolute, no trailing slash.
+    pub url: String,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CopyJob {
     pub op: Op,
     pub channel: String,
     /// The same on every send of this post to this channel.
     pub idempotency_key: String,
+    pub site: SiteRef,
     pub post: PostRef,
     /// The copy as moss shaped it: `form`, `parts`, and `teaser` or `article`.
     /// Absent for a lookup whose payload no longer fits.

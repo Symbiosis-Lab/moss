@@ -17,6 +17,7 @@ optional article?:
   cover?: string | null;
   description?: string | null;
   html: string;
+  text?: string;
   title: string;
 }
   | null;
@@ -32,6 +33,7 @@ optional article?:
   cover?: string | null;
   description?: string | null;
   html: string;
+  text?: string;
   title: string;
 }
 ```
@@ -63,6 +65,14 @@ optional description?: string | null;
 ```ts
 html: string;
 ```
+
+##### text?
+
+```ts
+optional text?: string;
+```
+
+The page as written, in plain text: no title and no link back.
 
 ##### title
 
@@ -213,6 +223,28 @@ optional previous?: CopyRef & object | null;
 ```
 
 The copy already on the network (for an update or lookup), or the draft a hand-off left there.
+
+***
+
+### site
+
+```ts
+site: object;
+```
+
+The site the post lives on: `post.url` is built on `url` (absolute, no trailing slash); `name` falls back to its host.
+
+#### name
+
+```ts
+name: string;
+```
+
+#### url
+
+```ts
+url: string;
+```
 
 ***
 
