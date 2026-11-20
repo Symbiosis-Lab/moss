@@ -26,6 +26,7 @@ use crate::vault_root::{resolve_input, VaultRoot};
 
 mod import_sources;
 mod lift;
+mod list;
 mod translation_keys;
 
 /// One file's text before and after.
@@ -53,6 +54,7 @@ struct Args {
     folder: Option<String>,
     apply: bool,
     json: bool,
+    list: bool,
     lift: Option<String>,
     field: Option<String>,
     place: Option<String>,
@@ -77,14 +79,19 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         match arg.as_str() {
             "--apply" => out.apply = true,
             "--json" => out.json = true,
+            "--list" => out.list = true,
             "--lift" => out.lift = Some(value("--lift")?.trim_start_matches('.').to_string()),
             "--as" => out.field = Some(value("--as")?),
             "--place" => out.place = Some(value("--place")?),
             "--import-sources" => out.import_sources = Some(value("--import-sources")?),
+            "--dry-run" => return Err("unknown flag --dry-run: without --apply, moss migrate writes nothing".to_string()),
             flag if flag.starts_with('-') => return Err(format!("unknown flag {flag}")),
             folder if out.folder.is_none() => out.folder = Some(folder.to_string()),
             extra => return Err(format!("unexpected argument {extra}")),
         }
+    }
+    if out.list && (out.apply || out.lift.is_some() || out.field.is_some() || out.place.is_some() || out.import_sources.is_some()) {
+        return Err("--list is a run of its own, with only a folder and --json".to_string());
     }
     if out.lift.is_some() != out.field.is_some() {
         return Err("--lift <class> and --as <field> go together".to_string());
@@ -101,14 +108,21 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     Ok(out)
 }
 
-fn usage() -> &'static str {
-    "Usage: moss migrate [<folder>] [--apply] [--json]
-       moss migrate [<folder>] --lift <class> --as <field> --place <place> [--apply] [--json]
-       moss migrate [<folder>] --import-sources <list.json> [--apply] [--json]
+/// The command's forms, as `moss describe` lists them and `--help` prints them.
+pub(crate) const ARGS: &str = "[<folder>] [--apply] [--json] | [<folder>] --list [--json] | [<folder>] --lift <class> --as <field> --place <place> [--apply] [--json] | [<folder>] --import-sources <list.json> [--apply] [--json]";
 
-Rewrites what `moss doctor --surface` finds. Without --apply it prints the
+fn usage() -> String {
+    let forms: Vec<String> = ARGS.split(" | ").map(|form| format!("moss migrate {form}")).collect();
+    format!("Usage: {}\n\n{}", forms.join("\n       "), HELP)
+}
+
+const HELP: &str = "Rewrites what `moss doctor --surface` finds. Without --apply it prints the
 change as a diff and writes nothing; with --apply it saves a version of the
 site first (undo with `moss history --restore`), then writes.
+
+--list prints the retired names the folder still uses (today, in the theme's
+style.css): each with its id, how many times it appears, the release that
+retired it and what replaces it, or that nothing does. It reads files only.
 
 With no --lift, it removes a `translationKey` that the page's path already
 implies, and only when building the site with and without it gives the same
@@ -131,8 +145,7 @@ imported from. Imports made before `origin:` existed wrote that address into
 `syndicated:` holds one listed address gets it as `origin:` instead; its
 other entries stay. A page is left as written when it already names a
 different origin, holds two listed addresses, shares one with another page,
-or when moss itself posted a copy to that address."
-}
+or when moss itself posted a copy to that address.";
 
 pub fn run(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "--help" || a == "-h") {
@@ -150,6 +163,19 @@ pub fn run(args: &[String]) -> i32 {
     }
     if let Err(msg) = crate::cli::site_guard::guard_cli_open(&folder.to_string_lossy(), "migrate") {
         return fail(&msg, args.json);
+    }
+    if args.list {
+        return match list::found(&folder) {
+            Ok(found) => {
+                if args.json {
+                    println!("{}", list::to_json(&found));
+                } else {
+                    print!("{}", list::to_text(&found));
+                }
+                0
+            }
+            Err(e) => fail(&e, args.json),
+        };
     }
     match migrate(&folder, &args) {
         Ok(report) => {

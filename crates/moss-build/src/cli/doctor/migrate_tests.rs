@@ -110,3 +110,11 @@ fn a_diff_of_a_huge_rewrite_shows_it_whole_without_matching() {
     assert_eq!(d.lines().filter(|l| l.starts_with('-')).count(), 3000);
     assert_eq!(diff("a\n", "a"), "@@ line endings or the final newline change @@\n");
 }
+
+#[test]
+fn list_is_a_run_of_its_own_and_dry_run_says_what_the_plain_run_does() {
+    let parse = |list: &[&str]| parse_args(&list.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+    assert!(parse(&["--list", "--json"]).unwrap().list);
+    assert!(parse(&["--list", "--apply"]).is_err());
+    assert_eq!(parse(&["--dry-run"]).unwrap_err(), "unknown flag --dry-run: without --apply, moss migrate writes nothing");
+}

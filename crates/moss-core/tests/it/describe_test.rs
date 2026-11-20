@@ -279,3 +279,16 @@ fn describe_publishes_the_language_allowlist() {
         "the allowlist must not contain invented long names"
     );
 }
+
+#[test]
+fn describe_lists_each_retired_name_with_its_migration_or_null_when_gone() {
+    let tokens = load_tokens().expect("tokens");
+    let json = serde_json::to_value(DescribePayload::new(&tokens)).expect("serialize");
+    let retired = json["retired"].as_array().expect("retired");
+    assert_eq!(retired.len(), moss_core::contract::retired::RETIRED.len());
+    let row = |name: &str| retired.iter().find(|r| r["name"] == name).unwrap_or_else(|| panic!("{name}"));
+    assert_eq!(row("moss-cards-grid")["replaced_by"], ".moss-cards[data-layout=grid]");
+    assert_eq!(row("moss-cards-grid")["migration"], serde_json::json!({ "id": "class:moss-cards-grid", "keeps_look": false }));
+    assert_eq!(row("--moss-font-size")["migration"]["id"], "property:--moss-font-size");
+    assert_eq!(row("moss-visual")["migration"], serde_json::Value::Null);
+}

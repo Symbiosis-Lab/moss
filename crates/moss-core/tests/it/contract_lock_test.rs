@@ -108,7 +108,7 @@ fn contract_lock_retired_names_are_not_live() {
 fn contract_lock_a_rename_from_the_alias_floor_on_stays_aliased() {
     let unaliased: Vec<&str> = RETIRED
         .iter()
-        .filter(|r| r.replaced_by.is_some() && !r.aliased)
+        .filter(|r| r.replaced_by().is_some() && !r.aliased)
         .filter(|r| r.retired_in.is_some_and(|v| version(v) >= version(ALIAS_FLOOR)))
         .map(|r| r.name)
         .collect();
@@ -127,7 +127,7 @@ fn contract_lock_replacements_name_live_classes() {
     let class_ref = regex::Regex::new(r"\.([A-Za-z0-9_-]+)").unwrap();
     let mut dead = Vec::new();
     for r in RETIRED {
-        let Some(now) = r.replaced_by else { continue };
+        let Some(now) = r.replaced_by() else { continue };
         match r.kind {
             RetiredKind::Property => {
                 if !live.contains(&format!("property {now}")) {

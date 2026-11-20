@@ -30,6 +30,10 @@ pub struct DescribePayload<'a> {
     /// — `<body data-page>`, `<html data-theme>`. Schema v6.
     pub scope_attributes: Vec<ScopeAttrJson>,
     pub frontmatter: Vec<FrontmatterFieldJson>,
+    /// Every contract name moss has released and no longer writes, each with
+    /// the `moss migrate` rewrite that brings a folder off it, or `null` when
+    /// the feature is gone and nothing replaces it.
+    pub retired: Vec<RetiredJson>,
     /// Every language code that makes a directory or filename suffix a
     /// language edition (`zh-hant/about.md`, `about.zh-hans.md`).
     ///
@@ -212,6 +216,43 @@ pub struct CustomPropJson {
     pub description: &'static str,
 }
 
+/// A retired contract name, emitted in `retired`.
+#[derive(Serialize)]
+pub struct RetiredJson {
+    pub kind: &'static str,
+    pub name: &'static str,
+    pub retired_in: Option<&'static str>,
+    pub replaced_by: Option<&'static str>,
+    /// Whether moss still writes the old name beside its replacement.
+    pub aliased: bool,
+    pub note: &'static str,
+    pub migration: Option<MigrationJson>,
+}
+
+#[derive(Serialize)]
+pub struct MigrationJson {
+    /// What `moss migrate --list` calls it.
+    pub id: String,
+    /// Whether migrating changes nothing a reader sees.
+    pub keeps_look: bool,
+}
+
+fn retired_rows() -> Vec<RetiredJson> {
+    use crate::contract::retired::{Migrate, RETIRED};
+    RETIRED
+        .iter()
+        .map(|r| RetiredJson {
+            kind: r.kind.slug(),
+            name: r.name,
+            retired_in: r.retired_in,
+            replaced_by: r.replaced_by(),
+            aliased: r.aliased,
+            note: r.note,
+            migration: (r.migrate != Migrate::Gone).then(|| MigrationJson { id: r.id(), keeps_look: r.keeps_look() }),
+        })
+        .collect()
+}
+
 impl<'a> DescribePayload<'a> {
     pub fn new(tokens: &'a Tokens) -> Self {
         let mut tokens_map: BTreeMap<&str, Vec<TokenJson>> = BTreeMap::new();
@@ -286,6 +327,7 @@ impl<'a> DescribePayload<'a> {
                 })
                 .collect(),
             frontmatter: frontmatter_fields(),
+            retired: retired_rows(),
             languages: crate::home::known_language_codes(),
             // Populated by moss-build's CLI layer (`cli::describe`), which
             // has access to moss-build's own plugin types. Callers using

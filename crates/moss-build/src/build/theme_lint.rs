@@ -84,7 +84,7 @@ pub fn lint_theme_css(css: &str, scheme: crate::build::page::color_scheme::Color
     let stripped = strip_comments(css);
     let mut warnings = Vec::new();
 
-    lint_retired_classes(&stripped, &mut warnings);
+    lint_retired_names(&stripped, &mut warnings);
     lint_custom_properties(&stripped, &mut warnings);
     lint_classes(&stripped, &mut warnings);
     if scheme == crate::build::page::color_scheme::ColorScheme::Auto {
@@ -290,19 +290,38 @@ fn lint_light_only_colours(stripped: &str, warnings: &mut Vec<String>) {
     ));
 }
 
-fn lint_retired_classes(stripped: &str, warnings: &mut Vec<String>) {
-    for r in RETIRED.iter().filter(|r| r.kind == RetiredKind::Class) {
-        if find_complete_class(stripped, &format!(".{}", r.name)) {
-            warnings.push(retired_warning(r, &format!("selects .{}", r.name)));
+fn lint_retired_names(stripped: &str, warnings: &mut Vec<String>) {
+    for (r, _) in retired_uses(stripped) {
+        let uses = if r.kind == RetiredKind::Class { format!("selects .{}", r.name) } else { format!("uses {}", r.name) };
+        warnings.push(retired_warning(r, &uses));
+    }
+}
+
+/// Every retired class and property a comment-stripped stylesheet still
+/// names, with how many times: classes in table order, then properties by
+/// name. The build's warnings and `moss migrate --list` both read this.
+pub(crate) fn retired_uses(stripped: &str) -> Vec<(&'static Retired, usize)> {
+    let mut found: Vec<(&'static Retired, usize)> = RETIRED
+        .iter()
+        .filter(|r| r.kind == RetiredKind::Class)
+        .map(|r| (r, count_complete_class(stripped, &format!(".{}", r.name))))
+        .filter(|(_, n)| *n > 0)
+        .collect();
+    let mut properties: std::collections::BTreeMap<&'static str, (&'static Retired, usize)> = std::collections::BTreeMap::new();
+    for c in PROP_DECL.captures_iter(stripped).chain(VAR_REF.captures_iter(stripped)) {
+        if let Some(r) = retired::find(RetiredKind::Property, &c[1]) {
+            properties.entry(r.name).or_insert((r, 0)).1 += 1;
         }
     }
+    found.extend(properties.into_values());
+    found
 }
 
 /// What the build tells a theme's author about a retired name it still uses.
 fn retired_warning(r: &Retired, uses: &str) -> String {
     let when = r.retired_in.map_or_else(|| "before moss 0.6.6".to_string(), |v| format!("in moss {v}"));
     let verb = if r.kind == RetiredKind::Class { "select" } else { "use" };
-    match r.replaced_by {
+    match r.replaced_by() {
         Some(now) if r.aliased => format!("theme {uses}, renamed {when}: moss still writes it beside {now}; {verb} {now} instead"),
         Some(now) => format!("theme {uses}, retired {when}: {}; {verb} {now} instead", r.note),
         None => format!("theme {uses}, retired {when}: {}; nothing replaces it", r.note),
@@ -325,13 +344,6 @@ fn lint_custom_properties(stripped: &str, warnings: &mut Vec<String>) {
     // References: warn only when the name is neither a known token/escape
     // hatch nor something the theme declares itself.
     let retired_property = |name: &str| retired::find(RetiredKind::Property, &format!("--{name}"));
-    let mut used_retired: Vec<&String> = referenced.union(&declared).filter(|name| retired_property(name).is_some()).collect();
-    used_retired.sort();
-    for name in used_retired {
-        if let Some(r) = retired_property(name) {
-            warnings.push(retired_warning(r, &format!("uses --{name}")));
-        }
-    }
 
     let mut warned_refs: Vec<&String> = referenced
         .iter()
@@ -418,11 +430,11 @@ fn nearest_name<'a>(needle: &str, candidates: impl Iterator<Item = &'a str>) -> 
         .unwrap_or_else(|| needle.to_string())
 }
 
-/// Does the CSS contain `pattern` as a complete class reference?
-/// A complete reference is followed by a character that is NOT a CSS-class
-/// continuation character (so `.moss-card-grid-overlay` does NOT match `.moss-card-grid`).
-fn find_complete_class(css: &str, pattern: &str) -> bool {
-    css.match_indices(pattern).any(|(idx, _)| {
+/// How many times the CSS names `pattern` as a complete class: followed by a
+/// character that cannot continue a class name, so `.moss-card-grid-overlay`
+/// is not `.moss-card-grid`.
+fn count_complete_class(css: &str, pattern: &str) -> usize {
+    css.match_indices(pattern).filter(|(idx, _)| {
         match css
             .get(idx + pattern.len()..)
             .and_then(|after| after.chars().next())
@@ -430,7 +442,7 @@ fn find_complete_class(css: &str, pattern: &str) -> bool {
             None => true,
             Some(c) => !c.is_ascii_alphanumeric() && c != '_' && c != '-',
         }
-    })
+    }).count()
 }
 
 /// The browser's root font size, which moss's stylesheet leaves as it is.
