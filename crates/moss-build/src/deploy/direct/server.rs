@@ -25,9 +25,10 @@ pub struct Server {
 
 impl Server {
     /// Read `sftp://user@host[:port]/folder`, or the `user@host:/folder` a
-    /// developer copies from scp. An scp path without a leading `/` is
-    /// relative to the home folder, which the URL form cannot say, so it is
-    /// refused rather than read as a different folder.
+    /// developer copies from scp. Without a folder, the folder is empty and
+    /// the check looks for it. An scp path without a leading `/` is relative
+    /// to the home folder, which the URL form cannot say, so it is refused
+    /// rather than read as a different folder.
     pub fn parse(text: &str) -> Result<Server, String> {
         let text = text.trim();
         let wrong = || format!("{text:?} isn't a server address like deploy@example.com:/var/www/html");
@@ -35,20 +36,22 @@ impl Server {
         let (user, rest) = url.unwrap_or(text).split_once('@').ok_or_else(wrong)?;
         let (host, rest) = match rest.strip_prefix('[') {
             Some(bracketed) => bracketed.split_once(']').ok_or_else(wrong)?,
-            None => rest.split_at(rest.find([':', '/']).ok_or_else(wrong)?),
+            None => rest.split_at(rest.find([':', '/']).unwrap_or(rest.len())),
         };
         let (port, folder) = if url.is_some() {
-            let (port, path) = rest.split_once('/').ok_or_else(wrong)?;
+            let (port, path) = rest.split_once('/').map_or((rest, None), |(port, path)| (port, Some(path)));
             let port = match port.strip_prefix(':') {
                 Some(p) => p.parse::<u16>().map_err(|_| wrong())?,
                 None if port.is_empty() => 22,
                 None => return Err(wrong()),
             };
-            (port, format!("/{path}"))
+            (port, path.map(|p| format!("/{p}")).unwrap_or_default())
+        } else if rest.is_empty() {
+            (22, String::new())
         } else {
             (22, rest.strip_prefix(':').ok_or_else(wrong)?.to_string())
         };
-        if !folder.starts_with('/') {
+        if !folder.is_empty() && !folder.starts_with('/') {
             return Err(format!("{text:?} names a folder relative to the home folder; give its full path, like /home/deploy/www"));
         }
         if user.is_empty() || host.is_empty() || user.contains(['/', ':']) {

@@ -21,6 +21,9 @@ pub enum StepKind {
     Trust,
     SignIn,
     Write,
+    /// The address serves what was written: a question, never a stop, since
+    /// a new server's domain often points elsewhere until it moves.
+    Address,
 }
 
 /// One step's outcome, in the words a person reads.
@@ -44,11 +47,16 @@ pub struct Checked {
     /// The line to add to the server's `authorized_keys`, when it refused
     /// moss's key.
     pub authorized_key: Option<String>,
+    /// The web folders found, when none showed at the address: the person
+    /// picks one.
+    pub folders: Vec<String>,
+    /// The address the last step fetched.
+    pub address: String,
 }
 
 impl Checked {
     pub fn passed(&self) -> bool {
-        self.steps.last().is_some_and(|s| s.passed && s.kind == StepKind::Write)
+        self.steps.iter().any(|s| s.passed && s.kind == StepKind::Write)
     }
 }
 
@@ -61,8 +69,11 @@ impl Refusal {
             }
             Refusal::UnknownHostKey { .. } | Refusal::HostKeyChanged { .. } | Refusal::RsaOnly { .. } => StepKind::Trust,
             Refusal::KeyRefused { .. } | Refusal::SignInFailed { .. } => StepKind::SignIn,
+            Refusal::NotServed { .. } => StepKind::Address,
             Refusal::NoSftp { .. }
             | Refusal::NoFolder { .. }
+            | Refusal::NoWebFolder { .. }
+            | Refusal::WhichFolder { .. }
             | Refusal::CannotWrite { .. }
             | Refusal::WriteFailed { .. }
             | Refusal::NoAtomicRename { .. } => {
@@ -72,13 +83,14 @@ impl Refusal {
     }
 }
 
-fn passed(kind: StepKind, settings: &Settings) -> Step {
+fn passed(kind: StepKind, settings: &Settings, address: &str) -> Step {
     let host = &settings.server.host;
     let text = match kind {
         StepKind::Reach => format!("Reached {host}"),
         StepKind::Trust => format!("Trusted {host}"),
         StepKind::SignIn => format!("Signed in as {}", settings.server.user),
         StepKind::Write => format!("Can publish to {}", settings.server.folder),
+        StepKind::Address => format!("{address} shows this folder"),
     };
     Step { kind, passed: true, text, refusal: None }
 }
@@ -104,21 +116,54 @@ async fn open(folder: &Path, keys: &Keys, settings: &Settings, trust: Option<&st
 }
 
 /// Run every step against the folder's server: reach it, trust its key, sign
-/// in, and write, rename and remove a file in its folder.
+/// in, write, rename and remove a file in its folder, and fetch that file at
+/// the site's address. Without a folder, the usual web folders are tried, and
+/// the one the address shows is saved.
 pub async fn check(folder: &Path, keys: &Keys, trust: Option<&str>) -> Result<Checked, String> {
     let settings = server::settings(folder)?.ok_or("Set the server first.")?;
+    let host = &settings.server.host;
+    let candidates = sftp::WEB_FOLDERS.iter().map(|f| f.replace("{host}", host)).collect::<Vec<_>>();
+    check_among(folder, keys, trust, &candidates).await
+}
+
+pub(super) async fn check_among(folder: &Path, keys: &Keys, trust: Option<&str>, candidates: &[String]) -> Result<Checked, String> {
+    let mut settings = server::settings(folder)?.ok_or("Set the server first.")?;
+    let config = crate::build::site_config::read_project_config(&folder.to_string_lossy())?;
+    let address = config.site_address()?.unwrap_or_else(|| derived_address(&settings.server.host));
+    let mut folders = Vec::new();
     let refused = match open(folder, keys, &settings, trust).await? {
-        Ok(dest) => probe(&dest).await.err(),
         Err(refusal) => Some(refusal),
+        Ok(dest) if !settings.server.folder.is_empty() => probe(&dest, &address).await.err(),
+        Ok(mut dest) => {
+            folders = dest.folders(candidates).await;
+            let mut found = None;
+            for candidate in &folders {
+                dest.move_to(candidate);
+                if probe(&dest, &address).await.is_ok() {
+                    found = Some(candidate.clone());
+                    break;
+                }
+            }
+            match found {
+                Some(found) => {
+                    settings.server.folder = found;
+                    server::save_server(folder, &settings.server)?;
+                    folders.clear();
+                    None
+                }
+                None if folders.is_empty() => Some(Refusal::NoWebFolder { host: settings.server.host.clone() }),
+                None => Some(Refusal::WhichFolder { host: settings.server.host.clone() }),
+            }
+        }
     };
     let mut steps = Vec::new();
-    for kind in [StepKind::Reach, StepKind::Trust, StepKind::SignIn, StepKind::Write] {
+    for kind in [StepKind::Reach, StepKind::Trust, StepKind::SignIn, StepKind::Write, StepKind::Address] {
         match &refused {
             Some(r) if r.step() == kind => {
                 steps.push(Step { kind, passed: false, text: r.to_string(), refusal: Some(r.clone()) });
                 break;
             }
-            _ => steps.push(passed(kind, &settings)),
+            _ => steps.push(passed(kind, &settings, &address)),
         }
     }
     let trust = match &refused {
@@ -130,14 +175,36 @@ pub async fn check(folder: &Path, keys: &Keys, trust: Option<&str>) -> Result<Ch
         Some(Refusal::KeyRefused { .. }) => Some(keys.public_line(&server::publisher(folder)?, &label(folder))?),
         _ => None,
     };
-    Ok(Checked { steps, trust, authorized_key })
+    Ok(Checked { steps, trust, authorized_key, folders, address })
 }
 
-/// Write a file, rename it over itself and remove it.
-async fn probe(dest: &SftpDestination) -> Result<(), Refusal> {
-    let name = format!(".moss-check-{}", std::process::id());
-    dest.put(&name, Body::Bytes(b"moss".to_vec())).await?;
-    dest.remove(&name).await.map_err(|e| Refusal::WriteFailed { path: name.clone(), reason: e.to_string() })
+/// The address of a folder that names none: its server's.
+fn derived_address(host: &str) -> String {
+    if host.contains(':') { format!("https://[{host}]/") } else { format!("https://{host}/") }
+}
+
+/// Write a file, rename it over itself, fetch it at `address`, and remove it.
+/// A failed fetch is [`Refusal::NotServed`], returned after the file is gone.
+async fn probe(dest: &SftpDestination, address: &str) -> Result<(), Refusal> {
+    let name = format!("moss-check-{}.txt", std::process::id());
+    let token = format!("moss {}", uuid::Uuid::new_v4());
+    dest.put(&name, Body::Bytes(token.clone().into_bytes())).await?;
+    let served = shows(address, &name, &token).await;
+    dest.remove(&name).await.map_err(|e| Refusal::WriteFailed { path: name.clone(), reason: e.to_string() })?;
+    if served { Ok(()) } else { Err(Refusal::NotServed { address: address.to_string() }) }
+}
+
+/// Whether `address` serves the file `name` holding `token`.
+async fn shows(address: &str, name: &str, token: &str) -> bool {
+    let url = format!("{}/{name}", address.trim_end_matches('/'));
+    let token = token.to_string();
+    tokio::task::spawn_blocking(move || {
+        let (builder, _) = crate::system::proxy::proxied_agent_builder(&url, std::time::Duration::from_secs(10), 3);
+        let body = builder.build().get(&url).call().ok().and_then(|r| r.into_string().ok());
+        body.is_some_and(|b| b.trim() == token)
+    })
+    .await
+    .unwrap_or(false)
 }
 
 /// Publish a sealed build to the folder's server, after the gates every

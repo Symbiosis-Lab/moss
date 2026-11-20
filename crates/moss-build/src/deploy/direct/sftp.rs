@@ -54,7 +54,14 @@ pub enum Refusal {
     /// Signed in, but the server runs no SFTP.
     NoSftp { host: String },
     NoFolder { folder: String },
+    /// No folder given, and none of the usual web folders is on the server.
+    NoWebFolder { host: String },
+    /// No folder given, and the web folders found don't show at the
+    /// address: the person picks one.
+    WhichFolder { host: String },
     CannotWrite { folder: String },
+    /// The folder takes files, but the address doesn't serve them (yet).
+    NotServed { address: String },
     /// A write in the folder failed; `reason` is the server's own words.
     WriteFailed { path: String, reason: String },
     /// The server cannot replace a file in one step, so a visitor could meet
@@ -85,6 +92,9 @@ impl std::fmt::Display for Refusal {
             Refusal::SignInFailed { host, reason } => write!(f, "Couldn't sign in to {host}: {reason}"),
             Refusal::NoSftp { host } => write!(f, "Signed in, but {host} doesn't offer SFTP."),
             Refusal::NoFolder { folder } => write!(f, "Signed in, but there is no folder {folder}."),
+            Refusal::NoWebFolder { host } => write!(f, "No web folder found on {host}. Add its path after the server, like deploy@{host}:/var/www/html."),
+            Refusal::WhichFolder { host } => write!(f, "Which folder on {host} holds the site?"),
+            Refusal::NotServed { address } => write!(f, "{address} doesn't show this folder yet."),
             Refusal::CannotWrite { folder } => write!(f, "Signed in, but can't write to {folder}."),
             Refusal::WriteFailed { path, reason } => write!(f, "write {path}: {reason}"),
             Refusal::NoAtomicRename { host } => write!(
@@ -128,6 +138,11 @@ impl russh::client::Handler for Trust {
         Ok(trusted)
     }
 }
+
+/// Where web servers usually serve sites from; a relative path is under the
+/// home folder, `{host}` is the server's name.
+pub(super) const WEB_FOLDERS: &[&str] =
+    &["public_html", "www", "htdocs", "domains/{host}/public_html", "/var/www/{host}", "/var/www/html", "/srv/www"];
 
 /// A folder on a server moss has signed in to.
 pub struct SftpDestination {
@@ -181,7 +196,9 @@ pub async fn connect(server: &Server, host_key: Option<&str>, key: Arc<PrivateKe
     }
     // OpenSSH answers realpath for a path that is not there.
     let no_folder = || Refusal::NoFolder { folder: server.folder.clone() };
-    let root = match sftp.realpath(&server.folder).await {
+    // No folder yet: open at the home folder, and look for the web folder there.
+    let wanted = if server.folder.is_empty() { "." } else { server.folder.as_str() };
+    let root = match sftp.realpath(wanted).await {
         Ok(name) => name.files.into_iter().next().map(|f| f.filename).unwrap_or_default(),
         Err(_) => return Err(no_folder()),
     };
@@ -219,7 +236,25 @@ fn split(path: &str) -> (&str, &str) {
 }
 
 impl SftpDestination {
-    /// The folder's real path, as the server named it.
+    /// Of `candidates`, the folders on the server, as full paths, in order.
+    pub async fn folders(&self, candidates: &[String]) -> Vec<String> {
+        let mut found = Vec::new();
+        for candidate in candidates {
+            let Ok(real) = self.sftp.realpath(candidate).await else { continue };
+            let Some(path) = real.files.into_iter().next().map(|f| f.filename) else { continue };
+            if !found.contains(&path) && self.sftp.stat(&path).await.is_ok_and(|a| a.attrs.is_dir()) {
+                found.push(path);
+            }
+        }
+        found
+    }
+
+    /// Write into `folder` from now on.
+    pub fn move_to(&mut self, folder: &str) {
+        self.root = folder.trim_end_matches('/').to_string();
+        self.inside = Mutex::new(HashSet::new());
+    }
+
     /// Write a file under a temporary name, then rename it over the live one,
     /// so a visitor never meets a half written file. A refusal stays typed for
     /// the check, which words it in each surface's language.

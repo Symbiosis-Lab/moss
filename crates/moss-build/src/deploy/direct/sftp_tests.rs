@@ -350,7 +350,10 @@ fn every_refusal_has_words_in_the_app() {
         Refusal::SignInFailed { host: s(), reason: s() },
         Refusal::NoSftp { host: s() },
         Refusal::NoFolder { folder: s() },
+        Refusal::NoWebFolder { host: s() },
+        Refusal::WhichFolder { host: s() },
         Refusal::CannotWrite { folder: s() },
+        Refusal::NotServed { address: s() },
         Refusal::WriteFailed { path: s(), reason: s() },
         Refusal::NoAtomicRename { host: s() },
         Refusal::Broken { host: s(), reason: s() },
@@ -360,7 +363,8 @@ fn every_refusal_has_words_in_the_app() {
         match refusal {
             Refusal::NoSuchServer { .. } | Refusal::NoAnswer { .. } | Refusal::PortRefused { .. } | Refusal::UnknownHostKey { .. }
             | Refusal::HostKeyChanged { .. } | Refusal::RsaOnly { .. } | Refusal::KeyRefused { .. } | Refusal::SignInFailed { .. }
-            | Refusal::NoSftp { .. } | Refusal::NoFolder { .. } | Refusal::CannotWrite { .. } | Refusal::WriteFailed { .. }
+            | Refusal::NoSftp { .. } | Refusal::NoFolder { .. } | Refusal::NoWebFolder { .. } | Refusal::WhichFolder { .. }
+            | Refusal::CannotWrite { .. } | Refusal::NotServed { .. } | Refusal::WriteFailed { .. }
             | Refusal::NoAtomicRename { .. } | Refusal::Broken { .. } => {}
         }
         let kind = serde_json::to_value(&refusal).unwrap()["kind"].as_str().unwrap().to_string();
@@ -474,7 +478,13 @@ fn a_server_address_is_read_in_the_url_and_scp_forms() {
     assert_eq!((v6.host.as_str(), v6.port, v6.folder.as_str()), ("2001:db8::1", 2222, "/srv/www"));
     assert_eq!(Server::parse(&v6.to_url()).unwrap(), v6);
     assert!(Server::parse("deploy@example.com:www").unwrap_err().contains("full path"), "a home-relative scp path is not read as /www");
-    for bad in ["example.com", "deploy@example.com", "@example.com:/x", "sftp://deploy@example.com:port/x"] {
+    // No folder: the check looks for it.
+    for bare in ["deploy@example.com", "sftp://deploy@example.com", "deploy@example.com:"] {
+        let server = Server::parse(bare).unwrap();
+        assert_eq!((server.host.as_str(), server.port, server.folder.as_str()), ("example.com", 22, ""), "{bare}");
+        assert_eq!(Server::parse(&server.to_url()).unwrap(), server);
+    }
+    for bad in ["example.com", "@example.com:/x", "sftp://deploy@example.com:port/x"] {
         assert!(Server::parse(bad).is_err(), "{bad}");
     }
 }
@@ -487,4 +497,90 @@ fn the_key_moss_makes_is_kept_and_shown_as_one_authorized_keys_line() {
     assert!(line.starts_with("ssh-ed25519 AAAA") && line.ends_with(" my-blog"), "{line}");
     assert_eq!(keys.public_line(PUBLISHER, "my-blog").unwrap(), line, "made once");
     assert_ne!(Keys::in_folder(dir.path()).public_line("another-site", "my-blog").unwrap(), line);
+}
+
+/// A web server over `dir` on a free port, for as long as the test runs.
+fn serve(dir: &Path) -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("http://127.0.0.1:{}/", listener.local_addr().unwrap().port());
+    let dir = dir.to_path_buf();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            use std::io::{BufRead, Write};
+            let mut stream = stream;
+            let mut line = String::new();
+            let _ = std::io::BufReader::new(&stream).read_line(&mut line);
+            let path = line.split_whitespace().nth(1).unwrap_or("/").trim_start_matches('/').to_string();
+            let reply = match std::fs::read(dir.join(&path)) {
+                Ok(body) => [format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).into_bytes(), body].concat(),
+                Err(_) => b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+            };
+            let _ = stream.write_all(&reply);
+        }
+    });
+    address
+}
+
+/// A folder publishing to `sshd` with no server folder given and `address`
+/// as its site's address.
+fn site_without_folder(sshd: &Sshd, address: &str) -> tempfile::TempDir {
+    let folder = tempfile::tempdir().unwrap();
+    std::fs::create_dir(folder.path().join(".moss")).unwrap();
+    std::fs::write(folder.path().join(".moss/config.toml"), format!("[site]\nurl = \"{address}\"\n\n[deploy]\npublisher = \"{PUBLISHER}\"\n")).unwrap();
+    server::save_server(folder.path(), &Server { folder: String::new(), ..sshd.server() }).unwrap();
+    server::save_host_key(folder.path(), &sshd.host_key()).unwrap();
+    folder
+}
+
+fn kinds(checked: &check::Checked) -> Vec<(check::StepKind, bool)> {
+    checked.steps.iter().map(|s| (s.kind, s.passed)).collect()
+}
+
+/// Left out, the folder is the web folder the site's address shows, and it
+/// is saved; another writable web folder is passed over.
+#[tokio::test]
+async fn a_folder_left_out_is_the_one_the_address_shows() {
+    let Some(sshd) = Sshd::start("ed25519") else { return };
+    let other = sshd.dir.path().join("other");
+    std::fs::create_dir(&other).unwrap();
+    let folder = site_without_folder(&sshd, &serve(&sshd.www));
+    let candidates = [sshd.dir.path().join("absent"), other, sshd.www.clone()].map(|p| p.display().to_string());
+
+    let checked = check::check_among(folder.path(), &sshd.keys, None, &candidates).await.unwrap();
+    assert!(checked.passed() && checked.folders.is_empty(), "{checked:?}");
+    assert_eq!(kinds(&checked).last(), Some(&(check::StepKind::Address, true)));
+    let saved = server::settings(folder.path()).unwrap().unwrap().server.folder;
+    assert_eq!(Path::new(&saved).canonicalize().unwrap(), sshd.www.canonicalize().unwrap());
+    assert!(walk(&sshd.www).is_empty(), "the check leaves nothing behind");
+}
+
+/// When the address shows none of the web folders found, the person picks
+/// one, and nothing is saved for them.
+#[tokio::test]
+async fn web_folders_the_address_does_not_show_are_offered_to_pick() {
+    let Some(sshd) = Sshd::start("ed25519") else { return };
+    let nowhere = format!("http://127.0.0.1:{}/", free_port());
+    let folder = site_without_folder(&sshd, &nowhere);
+    let candidates = [sshd.www.display().to_string()];
+
+    let checked = check::check_among(folder.path(), &sshd.keys, None, &candidates).await.unwrap();
+    assert!(!checked.passed());
+    assert!(matches!(checked.steps.last().and_then(|s| s.refusal.clone()), Some(Refusal::WhichFolder { .. })), "{checked:?}");
+    assert_eq!(checked.folders.len(), 1);
+    assert_eq!(server::settings(folder.path()).unwrap().unwrap().server.folder, "");
+
+    let none = check::check_among(folder.path(), &sshd.keys, None, &[sshd.dir.path().join("absent").display().to_string()]).await.unwrap();
+    assert!(matches!(none.steps.last().and_then(|s| s.refusal.clone()), Some(Refusal::NoWebFolder { .. })), "{none:?}");
+}
+
+/// A folder named by the person that the address doesn't show yet can still
+/// be published to: the last step asks, it doesn't stop.
+#[tokio::test]
+async fn an_address_that_does_not_show_the_folder_yet_does_not_stop_publishing() {
+    let Some(sshd) = Sshd::start("ed25519") else { return };
+    let folder = site_on(&sshd);
+    let checked = check::check(folder.path(), &sshd.keys, None).await.unwrap();
+    assert!(checked.passed(), "{checked:?}");
+    assert_eq!(kinds(&checked).last(), Some(&(check::StepKind::Address, false)));
+    assert!(matches!(checked.steps.last().and_then(|s| s.refusal.clone()), Some(Refusal::NotServed { .. })));
 }
