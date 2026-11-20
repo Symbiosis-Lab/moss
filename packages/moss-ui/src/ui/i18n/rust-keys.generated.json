@@ -117,6 +117,7 @@
     "fm_hint.end",
     "fm_hint.external_url",
     "fm_hint.footer",
+    "fm_hint.in_reply_to",
     "fm_hint.jury",
     "fm_hint.jury_page",
     "fm_hint.lang",
