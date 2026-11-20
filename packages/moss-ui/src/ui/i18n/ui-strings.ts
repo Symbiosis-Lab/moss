@@ -901,7 +901,6 @@ const EN = {
 
   // Schema field renderer feedback
   'credentials.title': '{plugin} needs a credential',
-  'credentials.intro': 'moss keeps this for you and hands it to {plugin} when it publishes. It is not written into your site folder.',
   'credentials.get_one': 'Where to get one',
   'credentials.save': 'Save and publish',
   'credentials.cancel': 'Cancel',
@@ -2643,7 +2642,6 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'shortcode.divider.legacy_label': 'alter Trenner — verwende +++',
     'shortcode.divider.legacy_tooltip': 'Das Raster teilt hier noch auf, aber --- ist die alte Schreibweise für einen Zellentrenner. Ersetze es durch +++.',
     'credentials.title': '{plugin} braucht Zugangsdaten',
-    'credentials.intro': 'moss bewahrt sie für dich auf und gibt sie beim Veröffentlichen an {plugin} weiter. Im Website-Ordner landen sie nicht.',
     'credentials.get_one': 'So bekommst du sie',
     'credentials.save': 'Speichern und veröffentlichen',
     'credentials.cancel': 'Abbrechen',
@@ -4271,7 +4269,6 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'shortcode.divider.legacy_tooltip': '此处仍会分栏，但 --- 是旧的单元格分隔写法。请改用 +++。',
 
     'credentials.title': '{plugin} 需要一个凭证',
-    'credentials.intro': '青苔会替你保管，并在发布时交给 {plugin}。它不会写进你的站点文件夹。',
     'credentials.get_one': '在哪里获取',
     'credentials.save': '保存并发布',
     'credentials.cancel': '取消',
@@ -5939,7 +5936,6 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'shortcode.divider.legacy_tooltip': '此處仍會分欄，但 --- 是舊的儲存格分隔寫法。請改用 +++。',
 
     'credentials.title': '{plugin} 需要一個憑證',
-    'credentials.intro': '青苔會替你保管，並在發布時交給 {plugin}。它不會寫進你的網站資料夾。',
     'credentials.get_one': '在哪裡取得',
     'credentials.save': '儲存並發布',
     'credentials.cancel': '取消',
