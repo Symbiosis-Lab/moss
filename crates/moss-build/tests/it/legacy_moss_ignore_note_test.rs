@@ -18,7 +18,7 @@ fn the_legacy_pair_gets_a_note_with_the_replacement_lines() {
     let site = LoggedSite::new(&[PAGE, (".gitignore", ignore)]);
     let found = notes(&site);
     assert_eq!(found.len(), 1, "{:?}", site.logged);
-    for line in [".moss/*", "!.moss/theme/", "!.moss/config.toml", "!.moss/redirects.json"] {
+    for line in [".moss/*", "!.moss/theme/", "!.moss/templates/", "!.moss/config.toml", "!.moss/redirects.json"] {
         assert!(found[0].contains(line), "{}", found[0]);
     }
     assert!(site.problems.is_empty(), "a note is not a problem: {:?}", site.problems);
@@ -27,7 +27,7 @@ fn the_legacy_pair_gets_a_note_with_the_replacement_lines() {
 
 #[test]
 fn a_gitignore_that_reincludes_every_tracked_path_gets_no_note() {
-    let all = ".moss/*\n!.moss/deploy/\n!.moss/plugins/\n!.moss/state.toml\n!.moss/redirects.json\n!.moss/config.toml\n!.moss/theme/\n!.moss/assets/\n!.moss/places.toml\n!.moss/AGENTS.md\n";
+    let all = ".moss/*\n!.moss/deploy/\n!.moss/plugins/\n!.moss/state.toml\n!.moss/redirects.json\n!.moss/config.toml\n!.moss/theme/\n!.moss/assets/\n!.moss/templates/\n!.moss/places.toml\n!.moss/AGENTS.md\n";
     let site = LoggedSite::new(&[PAGE, (".gitignore", all)]);
     assert!(notes(&site).is_empty(), "{:?}", site.logged);
 }
