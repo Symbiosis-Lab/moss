@@ -17,6 +17,8 @@ release heading.
 
 - `CopyJob.site` (`url`, `name`): the site the post lives on; `post.url` is built on `site.url`.
 - `CopyJob.article.text`: the page as written, in plain text, with no title and no link back.
+- `LoginResult`: what a channel's `login` answers, `completed` with the account's stable `id` (and a `name` to show), `cancelled` or `failed`. moss records a completed sign-in as the folder's account, so a plugin no longer writes `boundUserName` into its config. A `login` that returns nothing is read the old way. Needs moss 0.15.29.
+- `SignInCancelled`: `BrowserSignIn.open` rejects with it when the person closes the sign-in or another one starts, so `login` can answer `cancelled` rather than fail.
 
 ## [0.22.0] - 2026-11-20
 

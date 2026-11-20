@@ -906,6 +906,29 @@ interface HookResult {
   } | null;
 }
 /**
+ * What a channel's `login` answers. moss records the folder as signed in to
+ * `account.id`, the provider's stable identifier for the account (a DID, a
+ * numeric user id written as a string, `id@server`), never a display name; `name` is only shown.
+ * Answer `cancelled` when the person stopped the sign-in, as when
+ * {@link BrowserSignIn.open} rejects with {@link SignInCancelled}. A `login`
+ * that returns nothing is read the older way, from its own config. Needs moss
+ * 0.15.29; raise `min_moss_version` to it when `login` returns this.
+ *
+ * @category Hooks
+ */
+type LoginResult = {
+  status: "completed";
+  account: {
+    id: string;
+    name?: string;
+  };
+} | {
+  status: "cancelled";
+} | {
+  status: "failed";
+  message: string;
+};
+/**
  * One field of a {@link SetupForm} — the same vocabulary a manifest's
  * `settings[]` declares, minus `when` (in a stepped flow, the steps are the
  * conditionality). moss draws it; the plugin supplies no pixels.
@@ -1328,11 +1351,30 @@ interface BrowserSignIn {
   /**
    * Open the provider's sign-in page in the default browser and wait for it to
    * send the browser back. Resolves with the query of that redirect, `error`
-   * included; check `state` yourself. Rejects with "sign-in cancelled" when the
-   * person closes the sign-in panel or another sign-in starts, and with "the
-   * sign-in took longer than ten minutes" at that limit.
+   * included; check `state` yourself. Rejects with {@link SignInCancelled}
+   * when the person closes the sign-in panel or another sign-in starts. Any
+   * other rejection is a failure, such as "the sign-in took longer than ten
+   * minutes" or "the sign-in stopped listening".
    */
   open(authorizeUrl: string): Promise<URLSearchParams>;
+}
+/**
+ * The person stopped the sign-in: they closed it, or another sign-in started.
+ * A `login` answers `{ status: "cancelled" }` for it rather than a failure.
+ *
+ * @example
+ * ```typescript
+ * try {
+ *   reply = await signIn.open(authorizeUrl);
+ * } catch (e) {
+ *   if (e instanceof SignInCancelled) return { status: "cancelled" };
+ *   throw e;
+ * }
+ * ```
+ * @category Browser
+ */
+declare class SignInCancelled extends Error {
+  constructor();
 }
 /**
  * Start a sign-in that finishes in the person's own browser, where they are
@@ -2643,4 +2685,4 @@ declare function showToast(options: ToastOptions | string): Promise<void>;
  */
 declare function dismissToast(id: string): Promise<void>;
 //#endregion
-export { AccountQuery, AddressKind, AdvisoryAction, AdvisoryAppOp, AdvisoryProposal, AdvisoryScope, AdvisorySeverity, ArchType, ArticleBlock, ArtifactSource, BaseContext, BlockAttribute, BlockContribution, BrowserCloseReason, BrowserHandle, BrowserSignIn, CompleteMessage, ConfigureDomainContext, Cookie, CopyJob, CopyOutcome, CopyPart, CopyPicture, CopyRef, DeployAddress, DeployContext, DeploymentInfo, DerivationContribution, DnsRecord, DnsTarget, DownloadOptions, DownloadResult, EditorFill, EditorFillAnswer, EditorFillPart, ErrorMessage, EscapeSpec, ExecuteOptions, ExecuteResult, FetchOptions, FetchResult, FieldDeclaration, GetOptions, HookResult, HookToast, IdentityProof, KeyAlgorithm, KeyInfo, LegacySetupVerdict, ListingContext, ListingResult, ListingStyleContribution, LogMessage, MultipartFilePart, MultipartPostOptions, MultipartTextField, OSType, PageRecord, PlatformInfo, PlatformKey, PluginCategory, PluginHook, PluginManifest, PluginMessage, PostOptions, ProcessContext, ProgressMessage, ProjectFileEntry, ProjectInfo, PublicDataContribution, SetupBlocker, SetupContext, SetupField, SetupForm, SetupVerdict, SiteFileInfo, SocialArticleData, SocialComment, SocialDataFile, StartTaskOptions, TOAST_DISMISS_EVENT, TOAST_EVENT, TOAST_UPDATE_EVENT, TaskHandle, TauriCore, ToastAction, ToastOptions, ToastType, ToastVariant, TriggerContext, clearPluginCookies, closeBrowser, dismissToast, downloadAsset, emitEvent, executeBinary, fetchUrl, fileExists, fillEditor, getKey, getPlatformInfo, getPluginCookie, getPluginEnvVar, getSecret, getTauriCore, htmlToMarkdown, httpGet, httpPost, httpPostMultipart, listFiles, listKeys, listProjectTree, listSiteFilesWithSizes, onEvent, openBrowser, openBrowserWithHtml, openSystemBrowser, pluginFileExists, readFile, readPluginFile, readSiteFile, rejectSecret, reportError, reportProgress, returnToEditor, sendMessage, setMessageContext, setPluginCookie, setSecret, showBrowserForm, showToast, signWithKey, startBrowserSignIn, startTask, writeFile, writeFileBinary, writePluginFile };
+export { AccountQuery, AddressKind, AdvisoryAction, AdvisoryAppOp, AdvisoryProposal, AdvisoryScope, AdvisorySeverity, ArchType, ArticleBlock, ArtifactSource, BaseContext, BlockAttribute, BlockContribution, BrowserCloseReason, BrowserHandle, BrowserSignIn, CompleteMessage, ConfigureDomainContext, Cookie, CopyJob, CopyOutcome, CopyPart, CopyPicture, CopyRef, DeployAddress, DeployContext, DeploymentInfo, DerivationContribution, DnsRecord, DnsTarget, DownloadOptions, DownloadResult, EditorFill, EditorFillAnswer, EditorFillPart, ErrorMessage, EscapeSpec, ExecuteOptions, ExecuteResult, FetchOptions, FetchResult, FieldDeclaration, GetOptions, HookResult, HookToast, IdentityProof, KeyAlgorithm, KeyInfo, LegacySetupVerdict, ListingContext, ListingResult, ListingStyleContribution, LogMessage, LoginResult, MultipartFilePart, MultipartPostOptions, MultipartTextField, OSType, PageRecord, PlatformInfo, PlatformKey, PluginCategory, PluginHook, PluginManifest, PluginMessage, PostOptions, ProcessContext, ProgressMessage, ProjectFileEntry, ProjectInfo, PublicDataContribution, SetupBlocker, SetupContext, SetupField, SetupForm, SetupVerdict, SignInCancelled, SiteFileInfo, SocialArticleData, SocialComment, SocialDataFile, StartTaskOptions, TOAST_DISMISS_EVENT, TOAST_EVENT, TOAST_UPDATE_EVENT, TaskHandle, TauriCore, ToastAction, ToastOptions, ToastType, ToastVariant, TriggerContext, clearPluginCookies, closeBrowser, dismissToast, downloadAsset, emitEvent, executeBinary, fetchUrl, fileExists, fillEditor, getKey, getPlatformInfo, getPluginCookie, getPluginEnvVar, getSecret, getTauriCore, htmlToMarkdown, httpGet, httpPost, httpPostMultipart, listFiles, listKeys, listProjectTree, listSiteFilesWithSizes, onEvent, openBrowser, openBrowserWithHtml, openSystemBrowser, pluginFileExists, readFile, readPluginFile, readSiteFile, rejectSecret, reportError, reportProgress, returnToEditor, sendMessage, setMessageContext, setPluginCookie, setSecret, showBrowserForm, showToast, signWithKey, startBrowserSignIn, startTask, writeFile, writeFileBinary, writePluginFile };

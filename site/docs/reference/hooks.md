@@ -34,7 +34,7 @@ Plugins attach to stages by declaring **capabilities** in their manifest.
 | `find_copy` | multiple | `CopyJob` | Look a copy up after a send whose outcome is unknown, or one handed off to the author; optional. Answers the copy, a `handoff` still waiting, or `absent: true`; anything else leaves it unknown, and only `absent` lets moss send again. |
 | `copy_account` | multiple | `AccountQuery` | Say which account a channel is signed in to, as `copy.account` (and `copy.name`, shown to the person), or `copy.signed_out: true` when its session or credential was read and holds none; optional. Asked once per run before a channel's copies are worked on; a copy sent from another account is left alone until that account is signed in again, and a signed-out channel's copies wait for a sign-in. A read that failed or is not available on this host is a failed call, never `signed_out`. |
 | `listing` | multiple | `ListingContext` | Draw a folder's listing in a style the plugin contributes (contributes.listing_styles); runs after render, once per folder home page whose children_style names one of the plugin's styles. |
-| `login` | multiple | `BaseContext` | Sign the person in to a channel's account (contributes.channel.login: true); invoked once via `connect_account`, not part of the build pipeline. |
+| `login` | multiple | `BaseContext` | Sign the person in to a channel's account (contributes.channel.login: true) when they press Sign in, never during a build. Answers a `LoginResult`: `completed` with the account's stable `id` (and `name`, shown), which moss records as the folder's account in `.moss/state.toml`, `cancelled`, or `failed` with a `message`. A `login` that answers nothing is read from its own config, as before. |
 <!-- auto:end:hooks -->
 
 ## process

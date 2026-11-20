@@ -6,6 +6,7 @@ import {
   openBrowserWithHtml,
   showBrowserForm,
   startBrowserSignIn,
+  SignInCancelled,
   BrowserHandle,
 } from "../browser.js";
 
@@ -710,6 +711,24 @@ describe("Browser Utilities", () => {
       expect(mockInvoke).toHaveBeenLastCalledWith("browser_sign_in_wait", { url: "https://example.com/authorize" });
       expect(reply.get("code")).toBe("c1");
       expect(reply.get("state")).toBe("s 1");
+    });
+
+    it("tells a cancelled sign-in from a failed one", async () => {
+      const waitFails = (reason: unknown) =>
+        mockInvoke.mockImplementation(async (cmd: string) => {
+          if (cmd === "browser_sign_in_start") return { redirectUri: "http://127.0.0.1:5000/callback" };
+          throw reason;
+        });
+      waitFails(new Error("sign-in cancelled"));
+      const cancelled = await (await startBrowserSignIn()).open("https://example.com/authorize").catch((e) => e);
+      expect(cancelled).toBeInstanceOf(SignInCancelled);
+      expect(cancelled.name).toBe("SignInCancelled");
+      waitFails("sign-in cancelled");
+      await expect((await startBrowserSignIn()).open("https://example.com/authorize")).rejects.toBeInstanceOf(SignInCancelled);
+      waitFails(new Error("the sign-in took longer than ten minutes"));
+      const late = await (await startBrowserSignIn()).open("https://example.com/authorize").catch((e) => e);
+      expect(late).not.toBeInstanceOf(SignInCancelled);
+      expect(late.message).toBe("the sign-in took longer than ten minutes");
     });
   });
 });
