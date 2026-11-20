@@ -77,7 +77,7 @@ fn carrier_announcement_child() {
     runtime.block_on(async {
         let _quiet = (mode == "quiet").then(crate::build::cli_output::quiet);
         let ctx = InvokeCtx::standalone();
-        let site_dir = Arc::new(RwLock::new(vault));
+        let site_dir = crate::moss_paths::Served::test_cell(vault);
         let (port, _, shutdown) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
             ..ServeConfig::new(site_dir.clone(), 61950)
