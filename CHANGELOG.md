@@ -4,19 +4,35 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
-### Added
-
-- A theme that still uses a class, `data-*` value or `--moss-*` property moss no longer writes gets a build warning that names the release it went in and what to use instead, or says nothing replaces it. Before, a renamed property fell back to the browser default with no message, and a class that left without notice was reported only as "not a moss component".
-- A short note can continue an earlier one: write `in_reply_to: "[[name]]"` in its frontmatter, and every page of the thread shows the others, the earlier ones above its title and the later ones after its body. A stream listing shows a thread as one unit, folded to its first part and last two when it is longer than three. `in_reply_to` can also name a post elsewhere by its address, shown as "In reply to" above the page, and any page field now takes an address as well as a page of the site.
+## [0.15.28] - 2026-11-20
 
 ### Fixed
 
 - On a window wide enough for the contents list in the left margin, scrolling back up anywhere in a long page brings the floating bar, without its sections button while that list is on screen. The bar used to stay away until the end of the article, so it seemed to appear only at the bottom of the page.
+- A copy of a site opened on another computer, or downloaded again, shows its pictures' colour placeholders in the preview at once, instead of decoding every picture again to find them.
+- A feed reader gets each article as a reader of the page sees it: the title is not repeated at the top, and links and pictures work in RSS readers too.
+- In the Obsidian plugin, the preview follows the open note and updates after each change, bringing the line being edited into view. It opens beside the editor instead of in the right sidebar, and folders that hold `.moss/` carry the moss mark in the file tree.
+- The places explorer's world map no longer stays blank, showing only the water colour, after the browser drops and restores its drawing surface under memory pressure.
+- Chinese pages name moss 青苔 in the footer's GitHub link label and in two build messages; commands and paths keep the Latin name.
+- A folder's language follows what its files say now. It used to keep the language it was first given until a file was added or removed, so two computers could publish the same folder in different languages.
+- An empty folder's home page shows the same site name before its first page as after it: `my-site` reads "my site" from the start.
+- Opening a folder in the file tree's breadcrumb opens only that folder, not every folder above it.
+- The asset folder control in settings keeps its shape in a narrow row instead of shrinking to an empty circle.
+
+### New
+
+- A theme that still uses a class, `data-*` value or `--moss-*` property moss no longer writes gets a build warning that names the release it went in and what to use instead, or says nothing replaces it. Before, a renamed property fell back to the browser default with no message, and a class that left without notice was reported only as "not a moss component".
+- A short note can continue an earlier one: write `in_reply_to: "[[name]]"` in its frontmatter, and every page of the thread shows the others, the earlier ones above its title and the later ones after its body. A stream listing shows a thread as one unit, folded to its first part and last two when it is longer than three. `in_reply_to` can also name a post elsewhere by its address, shown as "In reply to" above the page, and any page field now takes an address as well as a page of the site.
+- Every site has a JSON Feed at `/feed.json` beside `rss.xml`, with each article's summary, picture, tags and language. Once a page is published its item keeps one id through renames, so a reader can tell a new article from an edited one.
+- Settings choose the site-wide asset folder with the system folder picker, and refuse a folder outside the site.
+- For a network with no posting API, its plugin can put a long article into the network's own editor in moss's browser panel: the text is pasted at once and each picture lands in its place.
 
 ### Changed
 
 - A folder holding two files whose names differ only by letter case or accent encoding, two pictures or videos that would publish under one name, or a `[site] url` and `[site] domain` naming different hosts builds again, as it did before 0.15.21. The build keeps one file of each pair, the same on every computer, and `url` over `domain`, and counts a problem naming both, so publishing stays refused until one is renamed or removed.
 - When moss signs in or publishes, it tells the hosting service which computer it is running on: a random key kept in moss's local app data on that computer, different for each folder, with the kind of computer (MacBook Pro, a Windows PC). Nothing is refused or asked because of it, and a CI run sends none. The privacy page says what is kept.
+- `cols=`, a grid's `---` divider and `sidebar:` still render as their current spelling and now give a note naming it instead of a problem, so `moss build --strict` passes a folder written for an older moss. `:::apply` and `:::toc`, which no longer render, stay problems and name the release that removed them.
+- What a build knows only about one computer (file hashes and stats, the preview server's token, each page's filled bytes, the last comment refresh) now lives in moss's cache folder on that computer instead of in the site folder. A copied or moved folder no longer carries facts that are wrong on its new disk, and a sync client no longer uploads a copy of every page when the stylesheet changes. The first build after updating moves what an older moss left there. Stores on the computer drop what no folder or moss version still uses.
 
 ## [0.15.27] - 2026-11-19
 

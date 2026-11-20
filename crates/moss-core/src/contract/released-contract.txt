@@ -303,6 +303,7 @@ class moss-hl-tag
 class moss-hl-type
 class moss-image
 class moss-img-fallback
+class moss-in-reply-to
 class moss-info-grid
 class moss-input
 class moss-input--boxed
@@ -434,6 +435,8 @@ class moss-stream-body
 class moss-stream-date
 class moss-stream-item
 class moss-stream-row
+class moss-stream-thread
+class moss-stream-thread-more
 class moss-stream-title
 class moss-subscribe
 class moss-subscribe-btn-slot
@@ -451,6 +454,7 @@ class moss-table-scroll
 class moss-term-line
 class moss-term-line-label
 class moss-term-role
+class moss-thread
 class moss-title-beside
 class moss-unknown-shortcode
 class moss-visual
@@ -492,6 +496,19 @@ class size-std
 class theme-toggle-icon
 class title
 class wikilink
+data callout[data-type=abstract]
+data callout[data-type=bug]
+data callout[data-type=danger]
+data callout[data-type=example]
+data callout[data-type=failure]
+data callout[data-type=info]
+data callout[data-type=note]
+data callout[data-type=question]
+data callout[data-type=quote]
+data callout[data-type=success]
+data callout[data-type=tip]
+data callout[data-type=todo]
+data callout[data-type=warning]
 data comment-item[data-comment-source=artalk]
 data media-item[data-type=iframe]
 data media-item[data-type=image]
@@ -524,6 +541,7 @@ data moss-cards[data-list-holds=collections]
 data moss-cards[data-list-holds=entries]
 data moss-cards[data-list-holds=mixed]
 data moss-contents-ruler[data-contents=pictures]
+data moss-diagram[data-narrow=]
 data moss-embed-figure[data-width=body]
 data moss-embed-figure[data-width=page]
 data moss-embed-figure[data-width=screen]
@@ -670,6 +688,8 @@ data moss-subscribe-form[data-state=error]
 data moss-subscribe-form[data-state=idle]
 data moss-subscribe-form[data-state=loading]
 data moss-subscribe-form[data-state=success]
+data moss-thread[data-part=after]
+data moss-thread[data-part=before]
 property --moss-bg
 property --moss-border-light
 property --moss-border-medium

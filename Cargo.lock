@@ -2964,7 +2964,7 @@ dependencies = [
 
 [[package]]
 name = "moss-cli"
-version = "0.15.28-dev"
+version = "0.15.28"
 dependencies = [
  "base64 0.21.7",
  "dotenvy",
@@ -2980,7 +2980,7 @@ dependencies = [
 
 [[package]]
 name = "moss-core"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "basic-toml",
  "proptest",

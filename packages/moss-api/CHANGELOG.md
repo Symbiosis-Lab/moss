@@ -13,6 +13,8 @@ release heading.
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-11-20
+
 ### Added
 
 - `fillEditor`: puts a long article into the network's editor a plugin opened in the panel, as the author would paste it. The plugin gives data only (the editor's elements, the article in parts, and which of moss's fixed reshapings the editor needs: two heading levels, table rows as paragraphs, code lines as paragraphs). moss runs its own script on a page of the plugin's declared domains and answers whether the editor took it.
