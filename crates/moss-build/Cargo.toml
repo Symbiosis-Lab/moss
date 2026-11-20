@@ -139,6 +139,8 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 tempfile = "3.0"
 ammonia = "4"
 async-trait = "0.1"
+russh = { version = "0.65", default-features = false, features = ["ring"] }
+russh-sftp = "3"
 color_quant = "1.1"
 hex = "0.4"
 # Marks a machine-store entry used, by its modification time.

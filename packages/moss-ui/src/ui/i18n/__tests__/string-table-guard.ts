@@ -47,6 +47,7 @@ const GERMAN_IDENTICAL = [
   // German uses these English words as they are
   'launcher.import.kind_site', // Website
   'launcher.import.kind_file', // Export
+  'deployment.label.server', // Server
   // brand and product names
   'launcher.wordmark',
   'channels.name.matters',

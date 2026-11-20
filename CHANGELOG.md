@@ -19,6 +19,7 @@ All notable changes to moss will be documented here.
 - `moss migrate --apply` gives a place-typed kind `landscape = "detail"` and copies moss's place-map pack into `.moss/maps/`, so the site's maps stay as they are once moss stops carrying the pack. It never replaces a usable pack already there, and a second run writes nothing. Until a site is migrated, its builds say so.
 - In the Obsidian plugin, the preview pane's header has two buttons while a page shows: "Open in browser" opens that page in your browser (also the command "moss: Open in browser"), and "Publish this folder" hands the previewed site to the moss app, whatever note is open.
 - A HEIC or HEIF photo, as an iPhone saves it, is a picture like any other: on a Mac or iPhone moss makes its webp copies, and its page, RSS feed and email name only those, since only Safari can show a HEIC. A computer that cannot read HEIC uses the copies a Mac kept in the folder; without them it shows the HEIC file as before and says to build once on a Mac or iPhone. A HEIC moss cannot read asks you to export it again.
+- `moss deploy` publishes a folder to your own server over SFTP. Name it once with `moss deploy --to deploy@example.com:/var/www/html`, then `moss deploy --check` shows the line to add to the server's `~/.ssh/authorized_keys` and the server's key to trust (`--trust <fingerprint>`). Each publish uploads only what changed, pages last, and deletes only files moss put there; other files in the folder are left alone.
 
 ### Changed
 

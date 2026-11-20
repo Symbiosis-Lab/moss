@@ -187,28 +187,37 @@ pub fn require_members_moss(folder: &Path) -> Result<(), String> {
     write_managed_toml(&path, &config.original, &config.root, CURRENT_VERSION)
 }
 
+/// Let `edit` change the folder's `.moss/config.toml`, then write back only
+/// what it changed.
+pub fn edit_config(folder: &Path, edit: impl FnOnce(&mut Table) -> Result<(), String>) -> Result<(), String> {
+    let path = folder.join(".moss").join("config.toml");
+    let ManagedToml { original, mut root } = load_managed_toml(&path)?;
+    edit(&mut root)?;
+    write_managed_toml(&path, &original, &root, crate::config::migrations::CURRENT_VERSION)
+}
+
 /// Write the top-level `environment` key into `.moss/config.toml`.
 pub fn save_environment(project_path: &str, env: HostingEnvironment) -> Result<(), String> {
-    let config_path = Path::new(project_path).join(".moss").join("config.toml");
-    let ManagedToml { original, mut root } = load_managed_toml(&config_path)?;
-    root.insert("environment".to_string(), Value::String(env.name().to_string()));
-    write_managed_toml(&config_path, &original, &root, crate::config::migrations::CURRENT_VERSION)
+    edit_config(Path::new(project_path), |root| {
+        root.insert("environment".to_string(), Value::String(env.name().to_string()));
+        Ok(())
+    })
 }
 
 /// Write one `[site]` field — the shared frame behind the typed wrappers
 /// [`save_site_str`] and [`save_site_bool`], which were byte-level twins of
 /// each other until 2026-08-31.
 fn save_site_value(project_path: &str, field: &str, value: Value) -> Result<(), String> {
-    let config_path = Path::new(project_path).join(".moss").join("config.toml");
-    let ManagedToml { original, mut root } = load_managed_toml(&config_path)?;
-    let site = subtable(&mut root, "site")?;
-    site.insert(field.to_string(), value);
-    // `url` replaces the older `domain`: every write of it drops `domain`, so
-    // a folder never holds two addresses that could disagree.
-    if field == "url" {
-        site.remove("domain");
-    }
-    write_managed_toml(&config_path, &original, &root, crate::config::migrations::CURRENT_VERSION)
+    edit_config(Path::new(project_path), |root| {
+        let site = subtable(root, "site")?;
+        site.insert(field.to_string(), value);
+        // `url` replaces the older `domain`: every write of it drops
+        // `domain`, so a folder never holds two addresses that could disagree.
+        if field == "url" {
+            site.remove("domain");
+        }
+        Ok(())
+    })
 }
 
 /// Write a string field into `[site]`.

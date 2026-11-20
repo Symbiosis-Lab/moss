@@ -140,6 +140,22 @@ fn capture_accepting(host: &mut crate::build::HostPorts, accept_removals: bool) 
 /// deploy and `moss history` all build before they act; this is the build.
 /// Each caller keeps its own session guard (the session must outlive the
 /// action, not just the build) and decides when to `require_sealed`.
+/// The build every one-shot publish route runs before its upload: build and
+/// seal the folder, then apply what the person accepted to that seal.
+pub(crate) async fn build_for_publish(
+    folder: &std::path::Path,
+    host: crate::build::HostPorts,
+    plugins: crate::build::PluginMode,
+    overrides: &crate::deploy::push::PublishOverrides,
+    sink: &std::sync::Arc<dyn crate::deploy::progress::DeploySink>,
+) -> Result<Option<SealedManifest>, String> {
+    sink.stage(crate::deploy::progress::DeployStage::Preparing, 0, 0, "Building the site...");
+    let root = crate::vault::paths::VaultRoot::resolve(folder);
+    let sealed = build_and_seal(&root, host, plugins, overrides.accept_removals).await?;
+    overrides.accept(folder, sealed.as_ref());
+    Ok(sealed)
+}
+
 pub(crate) async fn build_and_seal(
     root: &crate::vault::paths::VaultRoot,
     host: crate::build::HostPorts,

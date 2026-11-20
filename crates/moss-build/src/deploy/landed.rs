@@ -103,6 +103,36 @@ pub async fn record_landed(
     summary
 }
 
+/// Record a publish that landed: the folder's deployment state, which is
+/// what reads as "published" afterwards, and what went live. `site_url` is
+/// the address the next build bakes in, when the host minted it.
+pub async fn record_publish_landed(
+    folder: &Path,
+    sealed: &SealedManifest,
+    deployment: &crate::plugins::types::DeploymentInfo,
+    site_url: Option<String>,
+    ports: &dyn crate::build::ports::deploy::DeployPorts,
+) {
+    let outcome = crate::vault::deployment_state::PublishOutcome {
+        url: deployment.url.clone(),
+        deployed_at: deployment.deployed_at.clone(),
+        site_url,
+        dns_target: deployment.dns_target.clone(),
+        metadata: (!deployment.metadata.is_empty()).then(|| deployment.metadata.clone()),
+        addresses: deployment.addresses.clone(),
+        generation_id: Some(sealed.generation_id().to_string()),
+    };
+    if let Err(e) = crate::vault::deployment_state::record_publish(&folder.to_string_lossy(), outcome) {
+        log::warn!("failed to save deployment info to state.toml: {}", e);
+    }
+    // Keyed by `slot_for`, never the deployment URL: a target that re-mints
+    // its URL on every publish would orphan the record it just wrote.
+    if let Some(target) = crate::config::deployment::slot_for(&deployment.method, None) {
+        let history = crate::deploy::history::HistoryStore::in_vault(folder);
+        record_landed(folder, sealed, &target, ports, &history).await;
+    }
+}
+
 /// Write the publish record, including which note ID is live at which page.
 ///
 /// The record is one artifact carrying two facts, because one publish

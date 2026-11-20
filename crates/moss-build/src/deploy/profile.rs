@@ -63,7 +63,7 @@ impl Outcome for DeployReport {
                 pages(&d.change_set);
                 if let Some(r) = &d.refusal { refused(r.kind); }
             }
-            Self::Plugin { .. } => {}
+            Self::Plugin { .. } | Self::Checked(_) => {}
         }
     }
 }

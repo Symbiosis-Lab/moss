@@ -110,10 +110,14 @@ fn the_plugin_path_records_after_the_plugin_reported_success() {
     );
     let copied = body.find("DeployScratch::create(").expect("the plugin publishes from its own copy");
     assert!(pinned < copied, "the generation is pinned before the copy starts");
+    let landed_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/deploy/landed.rs");
+    let landed = std::fs::read_to_string(&landed_path)
+        .unwrap_or_else(|e| panic!("read {}: {e}", landed_path.display()));
     assert!(
-        fn_body(&src, "record_landing").contains("record_landed("),
-        "`record_landing` must delegate to `landed::record_landed`, or the ordering asserted \
-         above is about a call that writes nothing."
+        fn_body(&src, "record_landing").contains("record_publish_landed(")
+            && fn_body(&landed, "record_publish_landed").contains("record_landed("),
+        "`record_landing` must delegate to `landed::record_landed` (through \
+         `record_publish_landed`), or the ordering asserted above is about a call that writes nothing."
     );
 }
 

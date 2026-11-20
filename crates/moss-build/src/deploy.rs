@@ -134,6 +134,9 @@ pub enum DeployReport {
     },
     /// `--dry-run`: the build ran, nothing was sent.
     DryRun(Box<dry_run::DryRun>),
+    /// `--check` on your own server: each step up to the first that failed;
+    /// nothing was built or sent.
+    Checked(direct::check::Checked),
 }
 
 impl DeployReport {
@@ -145,7 +148,7 @@ impl DeployReport {
         match self {
             DeployReport::Push(result) => result.landed(),
             DeployReport::Plugin { .. } => true,
-            DeployReport::DryRun(_) => false,
+            DeployReport::DryRun(_) | DeployReport::Checked(_) => false,
         }
     }
 

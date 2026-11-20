@@ -37,7 +37,6 @@
 use std::path::Path;
 
 use crate::build::manifest::SealedManifest;
-use crate::config::deployment;
 use crate::deploy::plugin_context::{
     build_deploy_context, deploy_domain, deploy_failed, get_git_origin, refuses_subpath_pages,
     DeployScratch,
@@ -123,9 +122,6 @@ pub async fn run_plugin_deploy(
     // reaches for it, and so does the seal tail.
     let _session = crate::system::folder_session::register_session(&folder_str);
 
-    sink.stage(DeployStage::Preparing, 0, 0, "Building the site...");
-
-    let root = crate::vault::paths::VaultRoot::resolve(folder);
     let host = host_ports(&folder_str);
     // Taken before `host` moves into the build: this is the manager the
     // build's own hooks ran on, so the deploy hook shares its engine and its
@@ -135,9 +131,7 @@ pub async fn run_plugin_deploy(
     // An empty slot is refused rather than shrugged at, by
     // `one_shot::require_sealed` inside the inner body — see its doc for why
     // the absence is a promotion failure and not a missing description.
-    let sealed = super::one_shot::build_and_seal(&root, host, plugins, overrides.accept_removals).await?;
-
-    overrides.accept(folder, sealed.as_ref());
+    let sealed = super::one_shot::build_for_publish(folder, host, plugins, &overrides, sink).await?;
 
     let ports = super::one_shot::HeadlessDeployPorts;
     run_plugin_deploy_inner(&PluginDeployContext {
@@ -172,6 +166,23 @@ pub struct PluginDeployContext<'a> {
     pub ports: &'a dyn crate::build::ports::deploy::DeployPorts,
 }
 
+/// The gates every route that uploads a sealed build passes, after the build
+/// and before any byte moves. Here, not in each caller, because "after the
+/// build, before any bytes move" is where both binaries meet: the app's
+/// publish arrives with a seal a watcher made, `moss deploy` with the one it
+/// just made, and without a sealed manifest there is no generation to check
+/// `current` against. The seal's materialize phase is debounced, so `current`
+/// can lag the manifest; `settle` materializes it first.
+pub(crate) async fn sealed_for_upload<'a>(folder: &Path, sealed: Option<&'a SealedManifest>) -> Result<&'a SealedManifest, String> {
+    crate::build::site_config::publish_door(folder, sealed.is_some_and(|s| s.restricts_pages()))?;
+    let sealed = super::one_shot::require_sealed(sealed)?;
+    super::refuse_before_upload(folder, sealed)?;
+    let mp = MossPaths::new(folder);
+    crate::build::seal_phase::settle(&mp).await;
+    require_promoted(&mp, sealed)?;
+    Ok(sealed)
+}
+
 /// Refuse a publish whose sealed generation is not the one `current` names.
 ///
 /// Without the check a build whose promotion was withheld or superseded
@@ -199,32 +210,10 @@ pub async fn run_plugin_deploy_inner(
     cx: &PluginDeployContext<'_>,
 ) -> Result<DeployResult, String> {
     let folder_str = cx.folder.to_string_lossy().to_string();
-    let mp = MossPaths::new(cx.folder);
-
-    // The door guard every publish route shares
-    // (`site_config::publish_door`). Here, not in `with_publish_guard`:
-    // the app's `deploy_site` wraps `deploy_site_body` (which calls straight
-    // into this function) in that guard, but `moss deploy`'s plugin route
-    // (`cli/deploy.rs`) calls `run_plugin_deploy` → this function directly,
-    // never through `with_publish_guard` — the CLI is a one-shot process with
-    // no live watcher to freeze, so it never needed that guard's single-flight
-    // latch. This function is the one place both callers actually converge.
-    crate::build::site_config::publish_door(cx.folder, cx.sealed.is_some_and(|s| s.restricts_pages()))?;
-
-    // Before anything else, and before any bytes move: without a sealed
-    // manifest there is no generation to check `current` against, and
-    // `current` on this path is the PREVIOUS build's tree. Then the gates,
-    // here rather than in each caller because "after the build, before any
-    // bytes move" is exactly where this body starts on both binaries.
-    let sealed = super::one_shot::require_sealed(cx.sealed)?;
-    super::refuse_before_upload(cx.folder, sealed)?;
-
-    // The seal's materialize phase is debounced, so `current` can lag the
-    // manifest `cx.sealed` names and `require_promoted` would refuse a publish
-    // clicked right after a save. `settle` materializes it now; a no-op when
-    // nothing is pending (a one-shot CLI publish already materialized).
-    crate::build::seal_phase::settle(&mp).await;
-    require_promoted(&mp, sealed)?;
+    // The door guard is here, not in `with_publish_guard`: `moss deploy`'s
+    // plugin route reaches this function without that guard, which only the
+    // app's long-lived process needs.
+    let sealed = sealed_for_upload(cx.folder, cx.sealed).await?;
     let generation = sealed.generation_id();
 
     let manager = match cx.managers.get_or_create(&folder_str) {
@@ -377,35 +366,9 @@ async fn record_landing(
     folder_str: &str,
     deployment: &crate::plugins::types::DeploymentInfo,
 ) {
-    let metadata = if deployment.metadata.is_empty() {
-        None
-    } else {
-        Some(deployment.metadata.clone())
-    };
-    if let Err(e) = crate::vault::deployment_state::record_publish(
-        folder_str,
-        crate::vault::deployment_state::PublishOutcome {
-            url: deployment.url.clone(),
-            deployed_at: deployment.deployed_at.clone(),
-            // The plugin's own canonical URL (e.g. an OnionPress onion
-            // address), so the next build bakes it into canonical/OG/RSS
-            // instead of localhost.
-            site_url: Some(deployment.url.clone()),
-            dns_target: deployment.dns_target.clone(),
-            metadata,
-            addresses: deployment.addresses.clone(),
-            generation_id: Some(sealed.generation_id().to_string()),
-        },
-    ) {
-        log::warn!("failed to save deployment info to state.toml: {}", e);
-    }
-
-    // Keyed by `slot_for`, never the deployment URL: a target that re-mints
-    // its URL on every publish would orphan the record it just wrote.
-    if let Some(target) = deployment::slot_for(&deployment.method, None) {
-        let history = crate::deploy::history::HistoryStore::in_vault(cx.folder);
-        crate::deploy::landed::record_landed(cx.folder, sealed, &target, cx.ports, &history).await;
-    }
+    // The plugin's own canonical URL (e.g. an OnionPress onion address), so
+    // the next build bakes it into canonical/OG/RSS instead of localhost.
+    crate::deploy::landed::record_publish_landed(cx.folder, sealed, deployment, Some(deployment.url.clone()), cx.ports).await;
 
     // The bytes are live; what is left is redirects/analytics/DNS.
     cx.sink.stage(
