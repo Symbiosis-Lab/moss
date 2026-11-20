@@ -81,15 +81,25 @@ fn a_rule_without_a_blank_line_above_is_not_a_break() {
 }
 
 #[test]
-fn too_long_for_the_network_becomes_a_teaser_cut_at_a_sentence() {
+fn too_long_for_the_network_becomes_a_link_post_that_never_quotes_the_page() {
     let body = "First sentence here. Second sentence is longer than the limit allows for sure.\n";
-    let p = post("", body);
     let limit = (PAGE.chars().count() + 2 + "First sentence here.".len()) as u32;
-    let s = shape(&p, &spec(&[Form::Short, Form::Teaser], limit), SITE).unwrap();
+    let s = shape(&post("", body), &spec(&[Form::Short, Form::Teaser], limit), SITE).unwrap();
     assert_eq!(s.form, Form::Teaser);
-    assert_eq!(s.parts[0].text, format!("First sentence here.\n\n{PAGE}"));
+    assert_eq!(s.parts[0].text, PAGE, "no description: the opening is not excerpted");
     assert_eq!(s.parts[0].links, [PAGE]);
-    assert!(spec(&[], limit).fits(&s.parts[0].text));
+    let titled = shape(&post("Essay", body), &spec(&[Form::Teaser], limit), SITE).unwrap();
+    assert_eq!(titled.parts[0].text, format!("Essay\n\n{PAGE}"));
+}
+
+#[test]
+fn a_description_that_does_not_fit_whole_is_left_out_not_cut() {
+    let mut p = post("Autumn", "A long essay.\n");
+    p.frontmatter.insert("description".into(), serde_json::json!("今天很冷。我们去吃火锅了，吃了很久很久很久很久。"));
+    let limit = (PAGE.chars().count() + "Autumn".len() + 4 + 5) as u32;
+    let s = shape(&p, &spec(&[Form::Teaser], limit), SITE).unwrap();
+    assert_eq!(s.teaser.unwrap().description, "");
+    assert_eq!(s.parts[0].text, format!("Autumn\n\n{PAGE}"));
 }
 
 #[test]
@@ -108,8 +118,8 @@ fn an_article_is_long_where_the_network_has_articles_and_a_teaser_elsewhere() {
     assert_eq!(teaser.parts[0].text, format!("Autumn\n\nAbout the season.\n\n{PAGE}"));
     assert_eq!(teaser.teaser.unwrap().description, "About the season.");
 
-    let mut with_link = post("", "Out by the river: https://example.com/river and on.\n\n---\n\nMore.\n");
-    with_link.title = "Walk".into();
+    let mut with_link = post("Walk", "More.\n");
+    with_link.frontmatter.insert("description".into(), serde_json::json!("Out by the river: https://example.com/river and on."));
     let t = shape(&with_link, &spec(&[Form::Teaser], 300), SITE).unwrap();
     assert_eq!(t.parts[0].links, ["https://example.com/river", PAGE], "an address in the teaser's own words is a link too");
 }
@@ -118,14 +128,6 @@ fn an_article_is_long_where_the_network_has_articles_and_a_teaser_elsewhere() {
 fn a_post_too_long_with_no_teaser_is_refused() {
     let p = post("", &"word ".repeat(100));
     assert!(shape(&p, &spec(&[Form::Short], 50), SITE).is_err());
-}
-
-#[test]
-fn chinese_text_is_cut_at_a_full_stop() {
-    let p = post("", "今天很冷。我们去吃火锅了，吃了很久很久很久很久。\n");
-    let limit = (PAGE.chars().count() + 2 + 5) as u32;
-    let s = shape(&p, &spec(&[Form::Teaser], limit), SITE).unwrap();
-    assert_eq!(s.teaser.unwrap().description, "今天很冷。");
 }
 
 #[test]
@@ -148,7 +150,8 @@ fn backlinks_fit_at_the_boundary_for_every_counting_rule() {
                 let mut channel = ChannelSpec { forms: if form == Form::Teaser { vec![form] } else { vec![form, Form::Teaser] }, counting, link_chars, ..Default::default() };
                 let limit = channel.length(&text) as u32;
                 channel.max_chars = Some(limit);
-                let p = post("", "秋 🍁");
+                let mut p = post("", "秋 🍁");
+                p.frontmatter.insert("description".into(), serde_json::json!("秋 🍁"));
                 let exact = shape(&p, &channel, SITE).unwrap();
                 assert_eq!(exact.form, form);
                 assert_eq!(exact.parts[0].text, text);
@@ -435,6 +438,7 @@ fn provisional_teasers_preserve_known_limits_and_form_order() {
     assert!(assess(&p, &channel, None, &ShapeOptions::default(), &record).is_err(), "an unknown URL cannot exempt the title");
     p.title = "Title".into();
     p.content = "First. More words that cannot all fit. ".repeat(40);
+    p.frontmatter.insert("description".into(), serde_json::json!("First."));
     let teaser = assess(&p, &channel, None, &ShapeOptions::default(), &record).unwrap();
     assert_eq!(teaser.form, Form::Teaser, "the whole body still exceeds the short limit");
     let card = teaser.teaser.unwrap();
