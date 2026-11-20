@@ -19,6 +19,7 @@ All notable changes to moss will be documented here.
 - Opening a folder in the file tree's breadcrumb opens only that folder, not every folder above it.
 - The asset folder control in settings keeps its shape in a narrow row instead of shrinking to an empty circle.
 - `moss history --restore --at` takes the commit a version's row in `moss history` shows, not only the version id. An id that starts with the text still wins, and a commit shared by two versions is refused as ambiguous.
+- The site's Versions screen lists the site's saved versions. It showed "No versions yet" however many there were.
 
 ### New
 
