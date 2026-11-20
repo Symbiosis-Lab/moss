@@ -95,6 +95,14 @@ impl LastSeal {
         self.moss.record.clone()
     }
 
+    /// Whether `.moss/config.toml` differs from the seal's only in
+    /// [`FINGERPRINTED_KEYS`](crate::build::inputs::FINGERPRINTED_KEYS).
+    pub(crate) fn config_rest_holds(&self) -> bool {
+        let sealed = self.manifest.as_ref().and_then(|m| m.build_inputs.as_ref()).and_then(|r| r.config_rest.as_ref());
+        let now = self.moss.record.as_ref().and_then(|r| r.config_rest.as_ref());
+        sealed.is_some() && sealed == now
+    }
+
     /// See [`BuildInputs::media_settled`](crate::build::inputs::BuildInputs::media_settled).
     fn media_settled(&self) -> bool {
         self.manifest.as_ref().and_then(|m| m.build_inputs.as_ref()).is_some_and(|r| r.media_settled)
@@ -132,7 +140,10 @@ impl LastSeal {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChangeProof {
     /// The watcher's batch, an edit or a create, remove or rename alike.
-    Events { paths: Vec<PathBuf> },
+    /// `config_held`: the batch also edited `.moss/config.toml`, and only in
+    /// keys each page's fingerprint covers ([`LastSeal::config_rest_holds`]);
+    /// those paths are not in `paths`.
+    Events { paths: Vec<PathBuf>, config_held: bool },
     /// The last sealed manifest proves that nothing but markdown pages changed
     /// since; see [`SinceSeal::walk`].
     Manifest,
@@ -152,7 +163,11 @@ impl ChangeProof {
         }
         match trigger {
             BuildTrigger::Full => Self::None,
-            BuildTrigger::Structural(paths) | BuildTrigger::ContentOnly(paths) => Self::Events { paths: paths.clone() },
+            BuildTrigger::Structural(paths) | BuildTrigger::ContentOnly(paths) => {
+                let config = crate::moss_paths::MossPaths::new(folder).config();
+                let (held, paths): (Vec<_>, Vec<_>) = paths.iter().cloned().partition(|p| *p == config && seal.config_rest_holds());
+                Self::Events { paths, config_held: !held.is_empty() }
+            }
             // A seal whose media settled after its render leaves pages a later
             // build renders differently; only the re-render those media owe may
             // prove from it.
@@ -183,7 +198,9 @@ impl ChangeProof {
     ///    edit also arrives as a plain modify, but it moves build-globals
     ///    (`css_version`, `site_url`, layout config) that are baked into
     ///    EVERY page's HTML while changing no page's fingerprint — the one
-    ///    way this design could silently serve a stale whole site.
+    ///    way this design could silently serve a stale whole site. The one
+    ///    exception is a `config.toml` edit `config_held` vouches for: it moved
+    ///    only keys each page's own fingerprint covers.
     /// 4. At least one path — an empty batch carries no information.
     ///
     /// Condition 3 stays MARKDOWN-ONLY here even though the parse cache below
@@ -204,7 +221,7 @@ impl ChangeProof {
     /// only markdown changed and that every build-global input held.
     pub fn allows_incremental_skip(&self) -> bool {
         match self {
-            Self::Events { paths, .. } => !paths.is_empty() && paths.iter().all(|p| is_markdown_ext(p)),
+            Self::Events { paths, config_held } => (*config_held || !paths.is_empty()) && paths.iter().all(|p| is_markdown_ext(p)),
             Self::Manifest | Self::ImagesSettled => true,
             Self::None => false,
         }
@@ -239,7 +256,8 @@ impl ChangeProof {
     /// `<picture><source>` wrap into parsed HTML, so an image edit replaying a
     /// cached parse would leave the `<picture>` markup stale.
     /// `.moss/config.toml` is likewise excluded: it moves site scalars that
-    /// `process_markdown_file` reads.
+    /// `process_markdown_file` reads. A `config_held` edit is admitted, since
+    /// no fingerprinted key is a parse input.
     ///
     /// Unrecognised extensions — and extensionless paths — disable the cache.
     /// The allowlist is the whole safety argument, so it over-approximates by
@@ -247,7 +265,7 @@ impl ChangeProof {
     /// parse-irrelevant and adds it here.
     pub fn allows_parse_cache_reuse(&self) -> bool {
         match self {
-            Self::Events { paths, .. } => !paths.is_empty()
+            Self::Events { paths, config_held } => (*config_held || !paths.is_empty())
                 && paths.iter().all(|p| is_markdown_ext(p) || is_parse_irrelevant_ext(p)),
             Self::Manifest => true,
             Self::ImagesSettled | Self::None => false,

@@ -907,3 +907,36 @@ fn copy_source(from: &Path, to: &Path) {
         }
     }
 }
+
+/// Two sections of 80 words each: enough for the floating island to list.
+fn long_page(title: &str) -> String {
+    let words = "The harbour keeps its own hours and the boats come in with the tide. ".repeat(12);
+    format!("---\ntitle: {title}\n---\n\n## Morning\n\n{words}\n\n## Evening\n\n{words}\n")
+}
+
+/// `[site].floating_nav` changes only the pages that can show the island, so a
+/// watch save of `config.toml` that flips it renders those and carries the
+/// rest; any other change to the file still renders everything.
+#[test]
+fn a_floating_nav_toggle_renders_only_the_pages_it_changes() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let site = Site::new();
+    site.write("notes/long.md", &long_page("Long"));
+    site.sealed();
+    let config = site.root().join(".moss/config.toml");
+    let save = |text: &str| {
+        site.write(".moss/config.toml", text);
+        build(site.root(), BuildTrigger::ContentOnly(vec![config.clone()]))
+    };
+
+    for flag in ["true", "false"] {
+        let record = save(&format!("[site]\ndomain = \"example.com\"\nfloating_nav = {flag}\n"));
+        assert_eq!(count(&record, "pages_rendered"), 1, "floating_nav = {flag}: {record}");
+        assert!(count(&record, "pages_carried") > 0, "floating_nav = {flag}: {record}");
+        assert_publishes_a_full_render(&site);
+    }
+
+    let record = save("[site]\ndomain = \"example.org\"\nfloating_nav = false\n");
+    assert!(rendered_everything(&record), "{record}");
+    assert_publishes_a_full_render(&site);
+}
