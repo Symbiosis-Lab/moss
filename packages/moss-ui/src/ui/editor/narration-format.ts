@@ -105,13 +105,8 @@ export function formatNarration(task: NarratedTask): string {
  */
 export function formatAwaitingCopy(state: TaskState): string {
   if (state.state !== "awaiting") return "";
-  const trimmed = state.directive.trim();
-  if (!trimmed) return t("narration.awaiting_generic");
-  // A plugin may pass its button label ("Sign in to …"); mid-sentence the
-  // verb is lowercase. A capital followed by a capital or nothing is a name.
-  const directive = /^\p{Lu}\p{Ll}/u.test(trimmed)
-    ? trimmed.charAt(0).toLowerCase() + trimmed.slice(1)
-    : trimmed;
+  const directive = state.directive.trim();
+  if (!directive) return t("narration.awaiting_generic");
   // Some directives may already include their own punctuation; keep the
   // prefix simple and let the directive carry trailing punctuation.
   const needsPeriod = !/[.!?]$/.test(directive);

@@ -62,14 +62,6 @@ describe("formatAwaitingCopy", () => {
     ).toBe("Waiting for you to confirm sign-in on your other device.");
   });
 
-  it("lowercases a sentence-cased first word, never a name", () => {
-    const copy = (directive: string) =>
-      formatAwaitingCopy({ state: "awaiting", directive, action: CANCEL });
-    expect(copy("Sign in to Substack")).toBe("Waiting for you to sign in to Substack.");
-    expect(copy("X sign-in")).toBe("Waiting for you to X sign-in.");
-    expect(copy("OK the prompt")).toBe("Waiting for you to OK the prompt.");
-  });
-
   it("returns 'Waiting for you.' for empty directive", () => {
     expect(
       formatAwaitingCopy({
