@@ -11,6 +11,9 @@
 
 use std::path::Path;
 
+/// The file Finder reads a custom folder icon from.
+pub(crate) const MARKER: &str = "Icon\r";
+
 #[cfg(target_os = "macos")]
 mod compose;
 #[cfg(target_os = "macos")]

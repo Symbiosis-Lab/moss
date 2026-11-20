@@ -103,7 +103,7 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         CliCommandInfo {
             name: "agents",
             args: "sync | init",
-            description: "`sync` writes the pointer to moss's guidance for the coding agents installed here or in your home folder (.claude/skills/moss/SKILL.md for Claude Code, .cursor/rules/moss.mdc for Cursor); a build never creates these, only keeps them current once written. `init` does the same and seeds .moss/AGENTS.md with this site's own conventions. moss's own guidance is `moss guide`.",
+            description: "`sync` writes the pointer to moss's guidance for the coding agents installed here or in your home folder (.claude/skills/moss/SKILL.md for Claude Code, .cursor/rules/moss.mdc for Cursor); a build never creates these, only keeps them current once written. `init` does the same, seeds .moss/AGENTS.md with this site's own conventions, and writes a root AGENTS.md pointing other agents at `moss guide` when the folder has none (an existing one is left as it is, and a build never recreates a deleted one). moss's own guidance is `moss guide`.",
         },
         CliCommandInfo {
             name: "guide",

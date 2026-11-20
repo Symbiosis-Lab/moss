@@ -58,6 +58,10 @@ pub struct DescribePayload<'a> {
     pub config_tables: Vec<ConfigTableInfo>,
     /// Template injection slots: each named slot in the build pipeline.
     pub slots: Vec<SlotInfo>,
+    /// Who may write each path in a site folder. Filled by moss-build's CLI
+    /// layer from its path table; empty from `DescribePayload::new()`.
+    /// Append-only: agent tools read it.
+    pub paths: PathsJson,
     /// CLI commands: each subcommand moss exposes.
     // hand-maintained: keep in sync with run_mode.rs
     pub cli_commands: Vec<CliCommandInfo>,
@@ -216,6 +220,27 @@ pub struct CustomPropJson {
     pub description: &'static str,
 }
 
+/// Where an agent may write, emitted in `paths`.
+#[derive(Serialize, Default)]
+pub struct PathsJson {
+    /// Who writes a path outside `.moss/` that no rule names.
+    pub default_outside_moss: &'static str,
+    /// Who writes a path inside `.moss/` that no rule names.
+    pub default_inside_moss: &'static str,
+    pub rules: Vec<PathRuleJson>,
+}
+
+#[derive(Serialize)]
+pub struct PathRuleJson {
+    /// Folder-relative; a trailing `/` covers everything beneath it.
+    pub path: &'static str,
+    /// `author` or `moss`.
+    pub writer: &'static str,
+    /// For a `moss` path, the command that changes it; `null` when moss
+    /// regenerates it, and for an `author` path.
+    pub changed_by: Option<&'static str>,
+}
+
 /// A retired contract name, emitted in `retired`.
 #[derive(Serialize)]
 pub struct RetiredJson {
@@ -338,6 +363,7 @@ impl<'a> DescribePayload<'a> {
             site_settings: Vec::new(),
             config_tables: Vec::new(),
             slots: Vec::new(),
+            paths: PathsJson::default(),
             cli_commands: Vec::new(),
         }
     }
@@ -379,6 +405,11 @@ impl<'a> DescribePayload<'a> {
     /// Builder method: attach the `[site]` settings table. Same caller as
     /// [`DescribePayload::with_plugin_contract`], since the keys are read by
     /// moss-build.
+    pub fn with_paths(mut self, paths: PathsJson) -> Self {
+        self.paths = paths;
+        self
+    }
+
     pub fn with_site_settings(mut self, site_settings: Vec<SiteSettingInfo>) -> Self {
         self.site_settings = site_settings;
         self

@@ -44,7 +44,7 @@ the `.css` files under its `_moss/` are minified build output — use
 
 **Before a restructure, save a version.** Moving pages, rewriting the theme, or deleting sections is safer with a named snapshot first: `moss history --save "before restructuring the nav"`. Both `--save` and `--restore` read the files currently on disk without running a build, so versions work before the site has ever been built. `moss history [--json]` lists what's saved, newest first — every landed publish gets one automatically, `--save` adds one on demand. `moss history <path> --restore --at <id> [--copy]` brings back one page (`--copy` writes it alongside the current file instead of overwriting it); `moss history --restore --at <id> --yes` brings back the whole site (`--yes` is required, since it can move pages added since that version to the Trash). A restore saves its own version of the current state first, so a restore is itself undoable the same way. `<id>` is a version's id from the timeline (or an unambiguous prefix), and `--json` includes it. This history lives in `.moss/history/` inside the site folder itself, gitignored and not part of the published output — being inside the folder, it travels along with whatever sync the site already uses, the same as `.moss/config.toml`. To try a restructure on a copy instead, copy the folder without `.moss/identity/`, `.moss/data/`, `.moss/state.toml` and `.moss/build.nosync/`: the site's identity and publish record stay with the original, and `moss deploy <copy> --dry-run` on the copy reports that it has no site and that a real deploy would create a new signing key and be refused until `moss env` names an environment.
 
-**Version control.** Commit `.moss/config.toml`, `.moss/theme/` and `.moss/redirects.json`, and any assets or plugins folder there, with the site; moss's own `.moss/.gitignore` keeps identity, data, caches, history and build output out. A root `.gitignore` rule `.moss/*` (an older GitHub Pages deploy wrote it with `!.moss/site/`) hides those too, and `.moss/` cannot be undone by `!` lines at all: use `.moss/*` followed by a `!` line for each of those (the build prints the exact lines), and never delete the rule outright.
+**Version control.** Commit `.moss/config.toml`, `.moss/theme/`, `.moss/redirects.json` and `.moss/AGENTS.md`, and any assets or plugins folder there, with the site; moss's own `.moss/.gitignore` keeps identity, data, caches, history and build output out. A root `.gitignore` rule `.moss/*` (an older GitHub Pages deploy wrote it with `!.moss/site/`) hides those too, and `.moss/` cannot be undone by `!` lines at all: use `.moss/*` followed by a `!` line for each of those (the build prints the exact lines), and never delete the rule outright.
 
 ## First, get the live vocabulary
 
@@ -249,6 +249,12 @@ For a quotation and its source, and for footnotes that move into the margin on a
 - Head each group with a one-line comment, and comment a rule only for the reason the CSS cannot show (why this offset, which default it displaces). No commented-out code, no history.
 
 A stylesheet that is longer than the design needs is a defect even when it renders correctly: build before and after and compare the pages.
+
+## Where you may write
+
+Write pages, pictures and folders anywhere outside `.moss/`, the theme in `.moss/theme/`, settings in `.moss/config.toml` and `.moss/places.toml`, and this site's own notes for agents in `.moss/AGENTS.md`. Nothing else under `.moss/` is yours: the build output, the version history, the publish record and the site's keys change only through moss commands, and a hand edit there is overwritten or breaks publishing. Outside `.moss/`, moss also writes `.claude/skills/moss/`, `.cursor/rules/moss.mdc` and the folder icon file; leave those too. `moss describe --json` lists every such path under `.paths`, with who writes it and, for moss's, the command that changes it (`null` for output moss regenerates).
+
+Never hand-apply a rewrite `moss migrate` offers: run it, so it saves a version first. Never lower `min_moss_version` or `schema_version`. Never add a class to pages to make a theme rule match again.
 
 ## Hard rules
 

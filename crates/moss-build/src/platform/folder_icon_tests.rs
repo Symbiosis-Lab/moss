@@ -1,5 +1,6 @@
 use super::compose::{compose_rep, mark_alpha};
-use super::finder::{self, Existing, MARKER};
+use super::finder::{self, Existing};
+use super::MARKER;
 use super::*;
 use std::path::Path;
 

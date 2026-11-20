@@ -503,8 +503,8 @@ pub fn sync_after_build(project: &Path, is_full_build: bool) {
 }
 
 /// The files that mark an agent's guidance as asked for in a project.
-const CLAUDE_SKILL: &str = ".claude/skills/moss/SKILL.md";
-const CURSOR_RULE: &str = ".cursor/rules/moss.mdc";
+pub(crate) const CLAUDE_SKILL: &str = ".claude/skills/moss/SKILL.md";
+pub(crate) const CURSOR_RULE: &str = ".cursor/rules/moss.mdc";
 
 /// Write `project`'s agent guidance for every agent installed here or in
 /// `$HOME` — the explicit request (`moss agents sync`).

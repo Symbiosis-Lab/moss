@@ -27,7 +27,7 @@ fn the_legacy_pair_gets_a_note_with_the_replacement_lines() {
 
 #[test]
 fn a_gitignore_that_reincludes_every_tracked_path_gets_no_note() {
-    let all = ".moss/*\n!.moss/deploy/\n!.moss/plugins/\n!.moss/state.toml\n!.moss/redirects.json\n!.moss/config.toml\n!.moss/theme/\n!.moss/assets/\n!.moss/places.toml\n";
+    let all = ".moss/*\n!.moss/deploy/\n!.moss/plugins/\n!.moss/state.toml\n!.moss/redirects.json\n!.moss/config.toml\n!.moss/theme/\n!.moss/assets/\n!.moss/places.toml\n!.moss/AGENTS.md\n";
     let site = LoggedSite::new(&[PAGE, (".gitignore", all)]);
     assert!(notes(&site).is_empty(), "{:?}", site.logged);
 }

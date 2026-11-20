@@ -891,10 +891,30 @@ impl CloudPolicy {
     }
 }
 
+/// Who may write a path: what `moss guide` tells an agent, and what
+/// `moss describe --json` lists under `paths`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Writer {
+    /// The person, or the agent working for them, edits it by hand.
+    Author,
+    /// Only moss writes it, through the named command; `None` is output moss
+    /// regenerates. A hand edit is lost or breaks the site.
+    Moss { changed_by: Option<&'static str> },
+}
+
+const REGENERATED: Writer = Writer::Moss { changed_by: None };
+
+const fn by(command: &'static str) -> Writer {
+    Writer::Moss { changed_by: Some(command) }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct MossPathRule {
     /// Root-relative, forward slashes, trailing `/` iff it is a directory.
     pub rel: &'static str,
+    /// Who may write it. Outside `.moss/`, a path with no rule is the
+    /// author's; inside, a path with no rule is moss's.
+    pub writer: Writer,
     /// Must never reach a commit — contributes a line to `.moss/.gitignore`.
     pub gitignore: bool,
     /// What a cloud provider may do with this path.
@@ -935,18 +955,18 @@ pub const MOSS_PATH_RULES: &[MossPathRule] = &[
     // — gitignored, in .moss/.gitignore order —
     // Not watched (no edit here rebuilds anything) but materialized: these are
     // the site's cryptographic identity, and publish signs with them.
-    r(".moss/identity/", true, CloudPolicy::Synced, false, true),
-    r(".moss/keys/", true, CloudPolicy::Synced, false, true),
+    r(".moss/identity/", by("moss deploy"), true, CloudPolicy::Synced, false, true),
+    r(".moss/keys/", by("moss deploy"), true, CloudPolicy::Synced, false, true),
     // `data/` holds non-regenerable user state moss reads and WRITES BACK —
     // reading an evicted one as empty turns a merge into an erase
     // (`feeds::redirects`).
-    r_negatable(".moss/data/", true, CloudPolicy::Synced, false, true),
+    r_negatable(".moss/data/", by("moss build"), true, CloudPolicy::Synced, false, true),
     // Where an older moss kept the comment refresh's last outcome (this one
     // keeps it on the computer). An older moss on another computer still
     // rewrites it on every attempt, so it is not materialized: a build does not
     // count it as an input and can still prove nothing changed. `data/*`
     // already ignores it.
-    r(".moss/data/comment-sync-state.json", false, CloudPolicy::Synced, false, false),
+    r(".moss/data/comment-sync-state.json", by("moss build"), false, CloudPolicy::Synced, false, false),
     // What the last publish put live: one record per target, holding the page
     // hashes the change set is computed from and the note ID that was live at
     // each URL.
@@ -960,14 +980,14 @@ pub const MOSS_PATH_RULES: &[MossPathRule] = &[
     // showed the blank costs more, and every reader already treats the record
     // as advisory: unreadable is never "nothing published". The v6
     // gitignore migration prunes the old `deploy/` line from existing projects.
-    r(".moss/deploy/", false, CloudPolicy::Synced, false, true),
+    r(".moss/deploy/", by("moss deploy"), false, CloudPolicy::Synced, false, true),
     // Where an older moss kept the build output. This one writes nothing
     // there, but an older moss on another computer sharing the folder still
     // can, so the rows stay (`kept_output_rules_wait_for_the_update_floor`).
-    r(".moss/build.nosync/cache/", false, CloudPolicy::ExcludedRegenerable, false, false),
-    r(".moss/build.nosync/staging/", false, CloudPolicy::ExcludedRegenerable, false, false),
-    r(".moss/build.nosync/generations/", false, CloudPolicy::ExcludedRegenerable, false, false),
-    r(".moss/agents/", true, CloudPolicy::Synced, false, false),
+    r(".moss/build.nosync/cache/", REGENERATED, false, CloudPolicy::ExcludedRegenerable, false, false),
+    r(".moss/build.nosync/staging/", REGENERATED, false, CloudPolicy::ExcludedRegenerable, false, false),
+    r(".moss/build.nosync/generations/", REGENERATED, false, CloudPolicy::ExcludedRegenerable, false, false),
+    r(".moss/agents/", by("moss agents sync"), true, CloudPolicy::Synced, false, false),
     // Gitignored: a git user already has git's own history, and moss must never
     // turn a version store into commits nobody made. `CloudPolicy::Synced`
     // because traveling with the vault via whatever cloud provider it already
@@ -975,53 +995,62 @@ pub const MOSS_PATH_RULES: &[MossPathRule] = &[
     // rebuild. Not materialized: an evicted blob already reads as "not kept" —
     // the store's existing honest-about-missing-bytes posture — so nothing here
     // needs to be force-downloaded.
-    r(".moss/history/", true, CloudPolicy::Synced, false, false),
+    r(".moss/history/", by("moss history"), true, CloudPolicy::Synced, false, false),
     // Not gitignored: a new folder gets no line for a directory this moss never
     // makes, and an existing folder's line is left alone.
-    r(".moss/build.nosync/", false, CloudPolicy::ExcludedRegenerable, false, false),
+    r(".moss/build.nosync/", REGENERATED, false, CloudPolicy::ExcludedRegenerable, false, false),
     // The store is the one path that is both regenerable and shared: see the
     // variant's doc. Gitignored like the rest of the output — blobs in a
     // site's repository are never wanted.
-    r(".moss/cache/", true, CloudPolicy::SyncedRegenerable, false, false),
+    r(".moss/cache/", REGENERATED, true, CloudPolicy::SyncedRegenerable, false, false),
     // — moss-written, neither gitignored nor cloud-excluded —
     // Plugin bundles are moss-written but not regenerable without a re-install,
     // and a plugin whose bundle is evicted simply fails to load.
-    r(".moss/plugins/", false, CloudPolicy::Synced, false, true),
+    r(".moss/plugins/", by("moss plugin"), false, CloudPolicy::Synced, false, true),
     // The record of where this site is published. Read as empty, a deployed
     // site looks undeployed and the build bakes localhost into every page.
-    r(".moss/state.toml", false, CloudPolicy::Synced, false, true),
-    r(".moss/redirects.json", false, CloudPolicy::Synced, false, true),
+    r(".moss/state.toml", by("moss deploy"), false, CloudPolicy::Synced, false, true),
+    r(".moss/redirects.json", by("moss build"), false, CloudPolicy::Synced, false, true),
     // Root agent-instruction files — tooling, not content, whoever wrote them.
     // Kept in step with the app crate's `build::scan::classify::ROOT_AGENT_CONFIG_FILES`
     // by `moss::infra::moss_paths::tests::root_agent_files_match_the_classifier`,
     // which stays on that side of the crate line because the list it compares
     // against is still there.
-    r("AGENTS.md", false, CloudPolicy::Synced, false, false),
-    r("CLAUDE.md", false, CloudPolicy::Synced, false, false),
-    r("GEMINI.md", false, CloudPolicy::Synced, false, false),
+    r("AGENTS.md", Writer::Author, false, CloudPolicy::Synced, false, false),
+    r("CLAUDE.md", Writer::Author, false, CloudPolicy::Synced, false, false),
+    r("GEMINI.md", Writer::Author, false, CloudPolicy::Synced, false, false),
+    // What `moss agents sync` writes outside `.moss/`, refreshed by every build
+    // that finds it; and the folder stamp the build writes. Listed so an agent
+    // told "outside .moss/ is yours" is not sent to edit a file moss rewrites.
+    r(".claude/skills/moss/", by("moss agents sync"), false, CloudPolicy::Synced, false, false),
+    r(".cursor/rules/moss.mdc", by("moss agents sync"), false, CloudPolicy::Synced, false, false),
+    r("Icon\r", REGENERATED, false, CloudPolicy::Synced, false, false),
+    // The site's own conventions for agents: the author's, never a build input.
+    r(".moss/AGENTS.md", Writer::Author, false, CloudPolicy::Synced, false, false),
     // — inside `.moss/`, but the user's to edit: these MUST stay watched —
-    r(".moss/config.toml", false, CloudPolicy::Synced, true, true),
-    r(".moss/theme/", false, CloudPolicy::Synced, true, true),
-    r(".moss/assets/", false, CloudPolicy::Synced, true, true),
+    r(".moss/config.toml", Writer::Author, false, CloudPolicy::Synced, true, true),
+    r(".moss/theme/", Writer::Author, false, CloudPolicy::Synced, true, true),
+    r(".moss/assets/", Writer::Author, false, CloudPolicy::Synced, true, true),
     // moss writes this one (background comment/social sync) and it is still
     // watched on purpose: the sync is change-gated, and the preview has to
     // refresh when it lands. Pinned by the social-sync rebuild regression test.
-    r(".moss/data/social/", false, CloudPolicy::Synced, true, true),
+    r(".moss/data/social/", by("moss build"), false, CloudPolicy::Synced, true, true),
     // The place-name gazetteer (places build slice) — user hand-edits this
     // file, so it must stay watched (a hand edit rebuilds the preview) and
     // materialized (a cloud-evicted gazetteer must never silently read as
     // absent). Modeled directly on `config.toml`'s own identical row above.
-    r(".moss/places.toml", false, CloudPolicy::Synced, true, true),
+    r(".moss/places.toml", Writer::Author, false, CloudPolicy::Synced, true, true),
 ];
 
 const fn r(
     rel: &'static str,
+    writer: Writer,
     gitignore: bool,
     cloud: CloudPolicy,
     watched: bool,
     materialized: bool,
 ) -> MossPathRule {
-    MossPathRule { rel, gitignore, cloud, watched, materialized, gitignore_negatable: false }
+    MossPathRule { rel, writer, gitignore, cloud, watched, materialized, gitignore_negatable: false }
 }
 
 /// Same, for the one directory whose gitignore line must permit re-including a
@@ -1029,12 +1058,13 @@ const fn r(
 /// spelling is what you get by not thinking about it.
 const fn r_negatable(
     rel: &'static str,
+    writer: Writer,
     gitignore: bool,
     cloud: CloudPolicy,
     watched: bool,
     materialized: bool,
 ) -> MossPathRule {
-    MossPathRule { rel, gitignore, cloud, watched, materialized, gitignore_negatable: true }
+    MossPathRule { rel, writer, gitignore, cloud, watched, materialized, gitignore_negatable: true }
 }
 
 /// The rule governing a project-root-relative path, longest prefix wins.
@@ -1437,6 +1467,17 @@ pub(crate) fn exclude_from_cloud_sync(_dir: &std::path::Path) {}
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// A file moss writes outside `.moss/` would otherwise fall under "the
+    /// author's", and an agent told so would edit what the next build rewrites.
+    #[test]
+    fn every_file_moss_writes_outside_its_folder_is_listed_as_moss_s() {
+        use crate::cli::agents::sync::{CLAUDE_SKILL, CURSOR_RULE};
+        for path in [CLAUDE_SKILL, CURSOR_RULE, ".moss/agents/SKILL.md", crate::platform::folder_icon::MARKER] {
+            let rule = rule_for(path).unwrap_or_else(|| panic!("{path:?} has no row"));
+            assert!(matches!(rule.writer, Writer::Moss { .. }), "{path:?} is listed as the author's");
+        }
+    }
 
     fn make_paths(root: &std::path::Path) -> MossPaths {
         MossPaths::new(root)
