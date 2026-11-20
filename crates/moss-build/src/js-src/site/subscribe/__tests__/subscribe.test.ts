@@ -1,4 +1,4 @@
-import { beforeEach, afterEach, describe, expect, test, vi } from 'vitest';
+import { beforeEach, afterEach, describe, expect, test, vi, type MockInstance } from 'vitest';
 import { hydrateSubscribeForm } from '../subscribe.js';
 import { COPY, langBucket } from '../i18n.js';
 import { QUIET_MS, VERIFYING } from '../captcha.js';
@@ -63,7 +63,7 @@ describe('langBucket', () => {
 });
 
 describe('hydrateSubscribeForm', () => {
-  let fetchSpy: ReturnType<typeof vi.spyOn>;
+  let fetchSpy: MockInstance<typeof fetch>;
   beforeEach(() => {
     fetchSpy = vi.spyOn(globalThis, 'fetch');
   });
@@ -317,7 +317,7 @@ function makePreviewForm(): HTMLFormElement {
 }
 
 describe('subscribe preview mode', () => {
-  let fetchSpy: ReturnType<typeof vi.spyOn>;
+  let fetchSpy: MockInstance<typeof fetch>;
   beforeEach(() => {
     fetchSpy = vi.spyOn(globalThis, 'fetch');
     vi.useFakeTimers();
@@ -366,7 +366,7 @@ describe('subscribe preview mode', () => {
 describe('the service asks for its bot check', () => {
   const CAPTCHA = 'https://api.example.com/captcha/';
   let posts: number;
-  let fetchSpy: ReturnType<typeof vi.spyOn>;
+  let fetchSpy: MockInstance<typeof fetch>;
   beforeEach(() => {
     vi.useFakeTimers();
     posts = 0;
@@ -408,6 +408,78 @@ describe('the service asks for its bot check', () => {
     expect(posts).toBe(2);
     expect(form.dataset.state).toBe('success');
     expect(dialog()).toBeNull();
+  });
+
+  test('expired check retry repeats the original POST and solves the new attempt', async () => {
+    const first = CAPTCHA + 'subscription/old/';
+    const fresh = CAPTCHA + 'subscription/new/';
+    fetchSpy.mockImplementation(async () => {
+      posts += 1;
+      return posts <= 2
+        ? new Response(JSON.stringify({ need_captcha: true, captcha_url: posts === 1 ? first : fresh }), { status: 403 })
+        : new Response(JSON.stringify({ subscribed: true, confirmationSent: true }));
+    });
+    const form = await submit();
+    const oldFrame = dialog()!.querySelector('iframe')!;
+    expect(oldFrame.src).toContain(first);
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { moss_captcha: 'cancelled', retry: true }, source: oldFrame.contentWindow,
+    }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posts).toBe(2);
+    expect(form.dataset.state).toBe('loading');
+    expect(dialog()!.querySelector('iframe')!.src).toContain(fresh);
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { moss_captcha: 'passed' }, source: oldFrame.contentWindow,
+    }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posts).toBe(2);
+    tell('passed');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posts).toBe(3);
+    expect(form.dataset.state).toBe('success');
+    expect(dialog()).toBeNull();
+    const calls = fetchSpy.mock.calls;
+    expect(calls.map(([url]) => url)).toEqual([form.action, form.action, form.action]);
+    expect(calls.map(([, init]) => init?.body)).toEqual([calls[0][1]?.body, calls[0][1]?.body, calls[0][1]?.body]);
+  });
+
+  test.each(['unresolved', 'error', 'observed'])('observation %s never delays or changes success or focus', async (ending) => {
+    const observation = 'https://api.example.com/captcha/subscription/observation/';
+    fetchSpy.mockImplementation(async () => {
+      posts += 1;
+      return new Response(JSON.stringify({ subscribed: true, confirmationSent: true, observation_url: observation }));
+    });
+    const form = await submit();
+    expect(form.dataset.state).toBe('success');
+    expect(posts).toBe(1);
+    expect(dialog()).toBeNull();
+    const frame = document.querySelector<HTMLIFrameElement>('[data-moss-captcha-observation]')!;
+    expect(frame).not.toBeNull();
+    expect(frame.hidden).toBe(true);
+    expect(frame.tabIndex).toBe(-1);
+    expect(frame.getAttribute('aria-hidden')).toBe('true');
+    const focus = document.activeElement;
+    const buttonState = form.querySelector('button')!.disabled;
+    for (const state of ['interactive', 'passed', 'failed', 'cancelled']) {
+      window.dispatchEvent(new MessageEvent('message', { data: { moss_captcha: state }, origin: new URL(observation).origin, source: frame.contentWindow }));
+    }
+    if (ending === 'error') frame.dispatchEvent(new Event('error'));
+    if (ending === 'observed') window.dispatchEvent(new MessageEvent('message', { data: { moss_captcha: 'observed' }, origin: new URL(observation).origin, source: frame.contentWindow }));
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(document.querySelector('[data-moss-captcha-observation]')).toBeNull();
+    expect(document.activeElement).toBe(focus);
+    expect(form.querySelector('button')!.disabled).toBe(buttonState);
+    expect(form.dataset.state).toBe('success');
+    expect(posts).toBe(1);
+    expect(dialog()).toBeNull();
+  });
+
+  test('a malformed observation URL cannot turn successful subscription into an error', async () => {
+    fetchSpy.mockResolvedValue(new Response(JSON.stringify({ subscribed: true, confirmationSent: true, observation_url: 'https://[' })));
+    const form = await submit();
+    expect(form.dataset.state).toBe('success');
+    expect(document.querySelector('[data-moss-captcha-observation]')).toBeNull();
   });
 
   test('shows the check only when Turnstile needs the reader, and takes focus then', async () => {

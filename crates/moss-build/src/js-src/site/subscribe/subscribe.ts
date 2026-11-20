@@ -14,7 +14,7 @@
 
 import { COPY, langBucket, type Lang, type SubscribeCopy } from './i18n.js';
 import { autoHydrate, claim, inPreview, lockSlotWidth, setState } from './hosted-form.js';
-import { solveCaptcha } from './captcha.js';
+import { observeCaptcha, prewarmCaptcha, solveCaptcha } from './captcha.js';
 import { watchReader } from './reader.js';
 
 type StatusKey = 'check-email' | 'error';
@@ -25,6 +25,7 @@ type SubscribeResponse = {
   error?: string;
   need_captcha?: boolean;
   captcha_url?: string;
+  observation_url?: string;
 };
 
 /**
@@ -39,6 +40,17 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
   // any listener bound, and a later retry would early-return.
   if (!input || !btn) return;
   if (!claim(form)) return;
+
+  const captcha: ReturnType<typeof prewarmCaptcha> = inPreview() ? () => ({ turnstile_started: false }) : prewarmCaptcha(form);
+  const trap = document.createElement('label');
+  trap.hidden = true;
+  trap.textContent = 'Leave this field empty';
+  const honeypot = document.createElement('input');
+  honeypot.name = 'website';
+  honeypot.tabIndex = -1;
+  honeypot.autocomplete = 'off';
+  trap.appendChild(honeypot);
+  form.appendChild(trap);
 
   const lang: Lang = langBucket(document.documentElement.lang);
   const copy: SubscribeCopy = COPY[lang];
@@ -87,17 +99,22 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
     // `return` brings the reader back here once the mailed link signs this browser in.
     const jsonBody = {
       email,
+      website: honeypot.value,
+      load_to_submit_ms: Math.round(performance.now()),
       scope: form.querySelector<HTMLInputElement>('input[name="scope"]')?.value,
       lang,
       return: location.pathname + location.search + location.hash,
     };
 
+    let firstPost = true;
+    const signals = captcha();
     const post = async (): Promise<[Response, SubscribeResponse]> => {
       const res = await fetch(form.action, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify(jsonBody),
+        body: JSON.stringify({ ...jsonBody, ...signals, turnstile_token: firstPost ? signals.turnstile_token : undefined }),
       });
+      firstPost = false;
       return [res, await res.json().catch(() => ({}))];
     };
 
@@ -105,7 +122,7 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
       let [res, data] = await post();
       // The service asks for its bot check on a site that publishes
       // `subscribe.turnstile`; the button keeps spinning while the modal is open.
-      if (res.status === 403 && data.need_captcha && data.captcha_url) {
+      while (res.status === 403 && data.need_captcha && data.captcha_url) {
         if (!(await solveCaptcha(data.captcha_url))) {
           setState(form, 'idle', btn);
           return;
@@ -121,6 +138,7 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
       }
       showStatus(form, 'check-email', copy);
       setState(form, 'success', btn);
+      if (data.observation_url && !signals.turnstile_token) observeCaptcha(data.observation_url);
     } catch {
       showStatus(form, 'error', copy);
       setState(form, 'error', btn);
