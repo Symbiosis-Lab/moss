@@ -636,6 +636,11 @@ async fn dispatch_command_core(
             app.return_to_editor().await?;
             Ok("null".into())
         }
+        "fill_browser_panel" => {
+            let (app, plugin) = (need_app(&host, "fill_browser_panel")?, caller_plugin(&host, "fill_browser_panel")?);
+            let fill = args.get("fill").cloned().ok_or("missing 'fill'")?;
+            reply_json(&app.fill_browser_panel(&plugin, host.project_path, fill).await?)
+        }
         "resolve_git_path" => {
             let r = crate::plugins::runtime::portable::resolve_git_path_impl().await?;
             reply_json(&r)
@@ -1540,6 +1545,7 @@ mod tests {
             "download_asset",
             "execute_binary",
             "fetch_url",
+            "fill_browser_panel",
             "get_plugin_cookie",
             "get_plugin_env_var",
             "html_to_markdown",
@@ -1658,6 +1664,7 @@ mod tests {
     struct PanelRecorder {
         panel: std::sync::Mutex<Option<Option<String>>>,
         browser: std::sync::Mutex<Vec<String>>,
+        fill: std::sync::Mutex<Option<(String, String, serde_json::Value)>>,
     }
 
     #[async_trait::async_trait]
@@ -1676,6 +1683,10 @@ mod tests {
             Ok(())
         }
         async fn return_to_editor(&self) -> std::result::Result<(), String> { unreachable!() }
+        async fn fill_browser_panel(&self, plugin: &str, project_path: &str, fill: serde_json::Value) -> std::result::Result<serde_json::Value, String> {
+            *self.fill.lock().unwrap() = Some((plugin.to_string(), project_path.to_string(), fill));
+            Ok(serde_json::json!({ "filled": true }))
+        }
         async fn prompt_credential(&self, _: &str, _: &str, _: &str, _: Option<String>) -> std::result::Result<Option<String>, String> { unreachable!() }
         fn listen(&self, _: String, _: Box<dyn Fn(&str) + Send + Sync + 'static>) -> crate::engine::app_host::ListenerId { unreachable!() }
         fn unlisten(&self, _: crate::engine::app_host::ListenerId) { unreachable!() }
@@ -1702,6 +1713,16 @@ mod tests {
         assert!(desk.browser.lock().unwrap().is_empty(), "nothing may reach the browser: {:?}", desk.browser.lock().unwrap());
         browser_call(&desk, "open_system_browser", serde_json::json!({ "url": "https://example.com/a" })).await.unwrap();
         assert_eq!(*desk.browser.lock().unwrap(), vec!["https://example.com/a".to_string()]);
+    }
+
+    /// The fill goes to the plugin that called, whatever name it passes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fill_browser_panel_reaches_the_app_as_the_calling_plugin() {
+        let desk = PanelRecorder::default();
+        let fill = serde_json::json!({ "editor": { "body": ".editor" }, "parts": [{ "html": "<p>a</p>" }] });
+        let reply = browser_call(&desk, "fill_browser_panel", serde_json::json!({ "pluginName": "matters", "fill": fill })).await.unwrap();
+        assert_eq!(reply, r#"{"filled":true}"#);
+        assert_eq!(*desk.fill.lock().unwrap(), Some(("mastodon".to_string(), "/tmp/none".to_string(), fill)));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1809,6 +1830,7 @@ mod tests {
             ("close_action_panel", "null"),
             ("open_system_browser", r#"{"url":"https://example.com"}"#),
             ("return_to_editor", "null"),
+            ("fill_browser_panel", r#"{"fill":{}}"#),
         ];
         for (cmd, args_json) in cases {
             let err = dispatch_command_test_stub("/tmp/none", None, cmd, args_json)
@@ -1898,6 +1920,7 @@ mod tests {
             async fn close_action_panel(&self) -> std::result::Result<(), String> { unreachable!() }
             async fn open_system_browser(&self, _: String) -> std::result::Result<(), String> { unreachable!() }
             async fn return_to_editor(&self) -> std::result::Result<(), String> { unreachable!() }
+            async fn fill_browser_panel(&self, _: &str, _: &str, _: serde_json::Value) -> std::result::Result<serde_json::Value, String> { unreachable!() }
             async fn prompt_credential(&self, _: &str, _: &str, _: &str, _: Option<String>) -> std::result::Result<Option<String>, String> { unreachable!() }
             fn listen(&self, _: String, _: Box<dyn Fn(&str) + Send + Sync + 'static>) -> crate::engine::app_host::ListenerId { unreachable!() }
             fn unlisten(&self, _: crate::engine::app_host::ListenerId) { unreachable!() }
