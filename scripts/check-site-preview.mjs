@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 // Verify the served site, including the assets whose failure leaves an HTTP-200 page unstyled.
 import { readFile } from 'node:fs/promises';
-import { createRequire } from 'node:module';
-import { missingStaticCopy } from './landing-copy.mjs';
+import { sectionProblems } from './landing-copy.mjs';
 import { resolveBaseURL } from './landing-harness.mjs';
 
 const { baseURL, close } = await resolveBaseURL(process.argv[2]);
@@ -11,10 +10,6 @@ const contract = JSON.parse(await readFile(new URL('./landing-routes.json', impo
 const landingRoutes = new Set(['/', '/zh-hans/', '/zh-hant/']);
 const landingLocale = { '/': 'en', '/zh-hans/': 'zh-hans', '/zh-hant/': 'zh-hant' };
 const routes = [...landingRoutes, ...contract.required];
-// No browser runs here, so the served bytes are checked as a reader with
-// JavaScript disabled receives them.
-const { en, hans, hant } = createRequire(import.meta.url)('../site/home/landing-i18n.js');
-const catalogByRoute = { '/': en, '/zh-hans/': hans, '/zh-hant/': hant };
 const failures = [];
 const assets = new Map();
 const attr = (tag, name) => tag.match(new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, 'i'))?.[1];
@@ -46,8 +41,9 @@ for (const route of routes) {
   const isLanding = html.includes('id="intro"');
   if (landingRoutes.has(route) && !isLanding) failures.push({ url: String(url), problem: 'Custom landing homepage is missing' });
   if (landingRoutes.has(route) && isLanding) {
-    const missing = missingStaticCopy(html, catalogByRoute[route]);
-    if (missing.length) failures.push({ url: String(url), problem: `Visible strings missing with JavaScript disabled: ${missing.join(', ')}` });
+    // Nothing runs here: the served bytes are what a crawler without JavaScript reads.
+    const problems = sectionProblems(html, landingLocale[route]);
+    if (problems.length) failures.push({ url: String(url), problem: `Sections without their words in the HTML with JavaScript off: ${problems.join('; ')}` });
     // The footer privacy link must be same-origin (so it works on any host, including staging)
     // and must resolve to the page in the SAME language as the landing page it's linked from.
     const footerNav = html.match(/<nav aria-label="[^"]*"[^>]*>[\s\S]*?<\/nav>/i)?.[0] ?? '';
