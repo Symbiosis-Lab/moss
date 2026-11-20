@@ -514,9 +514,12 @@ export function initTooltips(): void {
   };
 
   // Mirror mouseover/mouseout with focusin/focusout for keyboard accessibility.
+  // Only keyboard focus (:focus-visible) shows it: a modal that moves focus
+  // into itself after a click must not pop its first control's tooltip.
   handleFocusIn = (e: Event) => {
     const target = (e as FocusEvent).target;
     if (!(target instanceof Element)) return;
+    if (!target.matches(":focus-visible")) return;
 
     const trigger = target.closest("[data-tooltip]");
     if (!trigger) return;
