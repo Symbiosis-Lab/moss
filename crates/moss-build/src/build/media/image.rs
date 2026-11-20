@@ -1426,6 +1426,38 @@ struct ImageLedger {
     /// The render of each build blocked in [`wait_for_joined_images`] (`None`
     /// where the build has no render number).
     join_waiters: Vec<Option<u64>>,
+    /// Marks ever made. Every mark leaves `pending` once, so the ones gone
+    /// are this less what `pending` still holds.
+    queued: u64,
+}
+
+/// Images handed to a worker since the process started, and how many of
+/// those are done: delivered, failed, replaced by a newer dispatch, or
+/// dropped with their page. Both only grow; `queued - finished` is in flight.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ImageWork {
+    pub queued: u64,
+    pub finished: u64,
+}
+
+impl ImageLedger {
+    fn work(&self) -> ImageWork {
+        ImageWork { queued: self.queued, finished: self.queued.saturating_sub(self.pending.len() as u64) }
+    }
+}
+
+/// [`ImageWork`] over every folder, for a reader that samples it over time.
+pub fn image_work() -> ImageWork {
+    let ledgers = IMAGE_LEDGERS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    ledgers.values().map(ImageLedger::work).fold(ImageWork::default(), |a, w| ImageWork {
+        queued: a.queued + w.queued,
+        finished: a.finished + w.finished,
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn image_work_in(folder: &str) -> ImageWork {
+    with_image_ledger(folder, |ledger| ledger.work())
 }
 
 /// `folder`'s ledger. One per folder, process-wide: two folders can hold an
@@ -1497,7 +1529,10 @@ pub(crate) fn wait_for_joined_images(folder: &str, joined: &[(String, Arc<ImageF
 #[must_use]
 pub(crate) fn mark_image_items_pending(folder: &str, items: impl IntoIterator<Item = (String, Arc<ImageFingerprint>)>) -> PendingImageMarks {
     let marked: Vec<_> = items.into_iter().collect();
-    with_image_ledger(folder, |ledger| ledger.pending.extend(marked.iter().cloned()));
+    with_image_ledger(folder, |ledger| {
+        ledger.queued += marked.len() as u64;
+        ledger.pending.extend(marked.iter().cloned());
+    });
     PendingImageMarks { folder: folder.to_string(), marked }
 }
 

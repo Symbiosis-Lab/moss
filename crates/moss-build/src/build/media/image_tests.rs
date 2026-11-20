@@ -8006,3 +8006,28 @@ async fn a_cloud_held_picture_is_fetched_not_encoded_again() {
     assert_eq!(run(String::new()).await, 0, "nothing is encoded again");
     assert!(staging.join("photo.webp").exists(), "the fetched picture is placed");
 }
+
+/// A heartbeat tells an idle app from one still encoding by these totals, so
+/// every mark must end exactly once: finished by its worker, replaced by a
+/// newer dispatch, or dropped with its page.
+#[test]
+fn image_work_counts_every_mark_until_it_ends() {
+    let tmp = tempfile::tempdir().unwrap();
+    make_big_jpeg(&tmp.path().join("pic.jpg"), 40, 30);
+    let folder = tmp.path().to_string_lossy();
+    let seen = compute_image_item_fingerprint(&folder, Path::new("pic.jpg"), &ImageCompressionConfig::default()).unwrap();
+    let mark = || std::sync::Arc::new(seen.clone());
+    let work = |queued, finished| ImageWork { queued, finished };
+    assert_eq!(image_work_in(&folder), work(0, 0));
+
+    let first = mark();
+    let _run = mark_image_items_pending(&folder, [("a.jpg".to_string(), first.clone()), ("b.jpg".to_string(), mark())]);
+    assert_eq!(image_work_in(&folder), work(2, 0), "both in flight");
+    end_image_item(&folder, "a.jpg", &first, true, &[]);
+    assert_eq!(image_work_in(&folder), work(2, 1), "a worker finished one");
+    let _newer = mark_image_items_pending(&folder, [("b.jpg".to_string(), mark())]);
+    assert_eq!(image_work_in(&folder), work(3, 2), "a newer dispatch replaced the other");
+    retain_image_item_fingerprints(&folder, &std::collections::HashSet::new());
+    assert_eq!(image_work_in(&folder), work(3, 3), "its page went");
+    assert!(image_work().queued >= 3, "the process total includes this folder");
+}
