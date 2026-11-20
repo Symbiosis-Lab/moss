@@ -99,7 +99,7 @@ void main() {
   gl_PointSize = uPointSize * mix(1.0, .8 + .2 * (cloud.z + 1.0), uLift);
 }`;
 const FRAGMENT = `#version 300 es
-precision highp float;
+precision highp float; precision highp int;
 uniform vec3 uTint;
 uniform float uDark, uGrain, uPaper;
 uniform int uPass;

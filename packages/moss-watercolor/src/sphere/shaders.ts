@@ -41,7 +41,7 @@ void main() {
 }`;
 
 export const FRAGMENT = `#version 300 es
-precision highp float;
+precision highp float; precision highp int;
 uniform vec3 uTint;
 uniform float uDark, uGrain, uPaper;
 uniform int uPass;
