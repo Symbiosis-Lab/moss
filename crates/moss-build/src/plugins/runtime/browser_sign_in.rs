@@ -20,7 +20,8 @@ pub const SIGN_IN_LIMIT: Duration = Duration::from_secs(10 * 60);
 /// Where the provider sends the browser back.
 pub const CALLBACK_PATH: &str = "/callback";
 
-/// What `wait` ends with when the person presses Cancel.
+/// What `wait` ends with when the person presses Cancel. moss-api turns
+/// exactly this text into `SignInCancelled`.
 pub const CANCELLED: &str = "sign-in cancelled";
 
 /// What `wait` ends with at [`SIGN_IN_LIMIT`].

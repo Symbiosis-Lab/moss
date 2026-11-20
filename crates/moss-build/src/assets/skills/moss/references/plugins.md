@@ -162,6 +162,14 @@ A contribution that needs anything from the user declares a `setup` block — mo
 
 The old spellings — `config_schema` and the other `config_*` maps, `setup.credentials`, `requires_stack` — still parse, as aliases folded into this shape. Write the new one.
 
+## Signing in to a channel
+
+A channel that posts to an account signs in with one button: its manifest sets `contributes.channel.login` to `true` and the plugin exports `login(ctx)`, or sets it to the provider's sign-in address for moss to open. Never ask for a handle, a server or a token in `settings`; the sign-in finds them out.
+
+`login` answers a `LoginResult`: `{ status: "completed", account: { id, name } }`, `{ status: "cancelled" }` or `{ status: "failed", message }`. `id` is the provider's stable identifier for the account (a DID, a numeric user id written as a string, `id@server`), never the handle: moss records the folder as signed in to it, under `[accounts.<plugin>]` in `.moss/state.toml`, and runs a channel's first sync when that binds a folder that had no account. `name` is only shown. A plugin never writes its own binding into its config (`boundUserName`, `boundUserId` are read only for plugins from before this contract), and a plugin that returns a `LoginResult` sets `min_moss_version` to `0.15.29`.
+
+An OAuth sign-in runs in the person's own browser with `startBrowserSignIn()`: register its `redirectUri`, then `open(authorizeUrl)` resolves with the redirect's query. It rejects with `SignInCancelled` when the person closes the sign-in or another one starts; answer `{ status: "cancelled" }` for that, and let other errors fail. Keep what the sign-in earned with `moss.setSecret(key, value)` under a key the manifest declares as a hidden `secret` setting, and answer `copy_account` from it.
+
 ## The data contract (verified paths)
 
 - Plugins that fetch external data write JSON to **`.moss/data/social/<plugin>.json`**.

@@ -136,7 +136,7 @@ pub struct PluginHookState {
     /// This solves the __MOSS_INTERNAL_CONTEXT__ clobbering bug: the JS runtime
     /// has a single shared context global, so only one hook execution per plugin
     /// can safely run at a time.
-    pub in_flight_hooks: Arc<Singleflight<Result<Option<crate::plugins::types::HookResult>, String>>>,
+    pub in_flight_hooks: Arc<Singleflight<Result<(Option<crate::plugins::types::HookResult>, Option<serde_json::Value>), String>>>,
     /// Each plugin's hook runs under way: who asked for them, and how many.
     /// A host call carries only the plugin's name, so a plugin never runs a
     /// build's hook and a person's at once, or a write could not be told apart

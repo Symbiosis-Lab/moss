@@ -206,11 +206,37 @@ export interface BrowserSignIn {
   /**
    * Open the provider's sign-in page in the default browser and wait for it to
    * send the browser back. Resolves with the query of that redirect, `error`
-   * included; check `state` yourself. Rejects with "sign-in cancelled" when the
-   * person closes the sign-in panel or another sign-in starts, and with "the
-   * sign-in took longer than ten minutes" at that limit.
+   * included; check `state` yourself. Rejects with {@link SignInCancelled}
+   * when the person closes the sign-in panel or another sign-in starts. Any
+   * other rejection is a failure, such as "the sign-in took longer than ten
+   * minutes" or "the sign-in stopped listening".
    */
   open(authorizeUrl: string): Promise<URLSearchParams>;
+}
+
+/** The text moss ends a cancelled sign-in with. */
+const CANCELLED = "sign-in cancelled";
+
+/**
+ * The person stopped the sign-in: they closed it, or another sign-in started.
+ * A `login` answers `{ status: "cancelled" }` for it rather than a failure.
+ *
+ * @example
+ * ```typescript
+ * try {
+ *   reply = await signIn.open(authorizeUrl);
+ * } catch (e) {
+ *   if (e instanceof SignInCancelled) return { status: "cancelled" };
+ *   throw e;
+ * }
+ * ```
+ * @category Browser
+ */
+export class SignInCancelled extends Error {
+  constructor() {
+    super(CANCELLED);
+    this.name = "SignInCancelled";
+  }
 }
 
 /**
@@ -236,8 +262,12 @@ export async function startBrowserSignIn(): Promise<BrowserSignIn> {
   return {
     redirectUri,
     async open(authorizeUrl: string) {
-      const { params } = await core.invoke<{ params: [string, string][] }>("browser_sign_in_wait", { url: authorizeUrl });
-      return new URLSearchParams(params);
+      try {
+        const { params } = await core.invoke<{ params: [string, string][] }>("browser_sign_in_wait", { url: authorizeUrl });
+        return new URLSearchParams(params);
+      } catch (e) {
+        throw (e instanceof Error ? e.message : String(e)) === CANCELLED ? new SignInCancelled() : e;
+      }
     },
   };
 }

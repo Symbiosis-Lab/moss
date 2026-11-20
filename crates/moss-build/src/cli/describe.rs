@@ -115,7 +115,7 @@ fn plugin_hooks() -> Vec<PluginHookInfo> {
         },
         PluginHookInfo {
             name: "login",
-            description: "Sign the person in to a channel's account (contributes.channel.login: true); invoked once via `connect_account`, not part of the build pipeline.",
+            description: "Sign the person in to a channel's account (contributes.channel.login: true) when they press Sign in, never during a build. Answers a `LoginResult`: `completed` with the account's stable `id` (and `name`, shown), which moss records as the folder's account in `.moss/state.toml`, `cancelled`, or `failed` with a `message`. A `login` that answers nothing is read from its own config, as before.",
             arity: "multiple",
             context: "BaseContext",
         },

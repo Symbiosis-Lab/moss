@@ -292,6 +292,36 @@ value — so a plugin may name one outside this list.
 
 ## Hooks
 
+### LoginResult
+
+```ts
+type LoginResult = 
+  | {
+  account: {
+     id: string;
+     name?: string;
+  };
+  status: "completed";
+}
+  | {
+  status: "cancelled";
+}
+  | {
+  message: string;
+  status: "failed";
+};
+```
+
+What a channel's `login` answers. moss records the folder as signed in to
+`account.id`, the provider's stable identifier for the account (a DID, a
+numeric user id written as a string, `id@server`), never a display name; `name` is only shown.
+Answer `cancelled` when the person stopped the sign-in, as when
+[BrowserSignIn.open](interfaces/BrowserSignIn.md#open) rejects with [SignInCancelled](classes/SignInCancelled.md). A `login`
+that returns nothing is read the older way, from its own config. Needs moss
+0.15.29; raise `min_moss_version` to it when `login` returns this.
+
+***
+
 ### SetupVerdict
 
 ```ts

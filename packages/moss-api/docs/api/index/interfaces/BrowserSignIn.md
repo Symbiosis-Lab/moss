@@ -24,9 +24,10 @@ open(authorizeUrl): Promise<URLSearchParams>;
 
 Open the provider's sign-in page in the default browser and wait for it to
 send the browser back. Resolves with the query of that redirect, `error`
-included; check `state` yourself. Rejects with "sign-in cancelled" when the
-person closes the sign-in panel or another sign-in starts, and with "the
-sign-in took longer than ten minutes" at that limit.
+included; check `state` yourself. Rejects with [SignInCancelled](../classes/SignInCancelled.md)
+when the person closes the sign-in panel or another sign-in starts. Any
+other rejection is a failure, such as "the sign-in took longer than ten
+minutes" or "the sign-in stopped listening".
 
 #### Parameters
 
