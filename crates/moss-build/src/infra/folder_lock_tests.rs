@@ -264,6 +264,30 @@ fn a_promoted_build_leaves_nothing_in_the_locks_folder() {
 }
 
 const HOLD_ENV: &str = "MOSS_TEST_HOLD_LOCK_FILE";
+
+/// An owner acquirer has opened its file but has not locked it yet. The
+/// background build-lock collector must not compete for that file: its
+/// temporary lock would make this process refuse its own next build.
+#[cfg(unix)]
+#[test]
+fn the_litter_sweep_never_competes_with_owner_admission() {
+    with_moss_home(|home| {
+        let folder = tempfile::tempdir().unwrap();
+        let path = lock_path_named(folder.path(), "owner").unwrap();
+        let opening = open_lock_file(&path).unwrap();
+        assert_eq!(sweep_litter(&home.join("locks"), 1, std::time::Duration::ZERO), 0);
+        assert!(still_named(&opening, &path), "the sweep must leave the owner's open file alone");
+
+        use crate::ops::serve::ownership::{acquire, HostKind};
+        let first = acquire(folder.path(), HostKind::Cli, "test".into(), String::new()).unwrap();
+        let second = acquire(folder.path(), HostKind::Cli, "test".into(), String::new()).unwrap();
+        drop(first);
+        assert!(try_acquire_named(folder.path(), "owner").unwrap().is_none());
+        drop(second);
+        assert!(try_acquire_named(folder.path(), "owner").unwrap().is_some());
+    });
+}
+
 const CHILD_TEST: &str = "infra::folder_lock::folder_lock_tests::child_lock_holder";
 
 /// Not a test of its own: [`the_sweep_leaves_a_lock_another_process_holds`]

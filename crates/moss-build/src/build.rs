@@ -713,6 +713,14 @@ pub(crate) fn should_stash_hashes(publishable: bool, cancelled: bool) -> bool {
 /// `PHASE_TIMINGS`-equivalent state must be gone by the time this fn
 /// returns, not read after the fact from a task that no longer exists.
 pub async fn run_pipeline(config: PipelineConfig) -> Result<String, String> {
+    // Ownership precedes migrations, cache leases and render/output writes.
+    // The server retains a shared guard when this build returns.
+    let _owner = crate::ops::serve::ownership::acquire_for_folder(
+        config.source(), crate::ops::serve::ownership::HostKind::Cli,
+        crate::system::app_version().to_string(), String::new(),
+        if config.start_server && config.watch { crate::ops::serve::ownership::OnConflict::StandBy }
+        else { crate::ops::serve::ownership::OnConflict::Refuse }, None,
+    ).await?;
     let _activity = crate::platform::begin_build();
     let pipeline_start = std::time::Instant::now();
     let (result, collector) = crate::build::phase::with_collector(async {
@@ -893,7 +901,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                     message: e.clone(),
                     open_in_another_app: crate::ops::serve::ownership::open_in_another_app(&standalone_state.current_dir).await,
                 });
-                None
+                return Err(e);
             }
         }
     } else {

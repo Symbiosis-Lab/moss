@@ -8538,6 +8538,7 @@ fn availability_pending_source_walk_preserves_current_generation_and_baseline() 
 fn availability_fatal_scan_settles_a_previous_cloud_waiting_gate() {
     crate::infra::home::with_moss_home(|_| {
         tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap().block_on(async {
+            let started = std::time::Instant::now();
             use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
             use crate::build::cloud_readiness::{storage::TestFault, StorageOperation};
             let (dir, _cleanup) = create_test_dir();
@@ -8557,6 +8558,8 @@ fn availability_fatal_scan_settles_a_previous_cloud_waiting_gate() {
             let failure = run_pipeline(config()).await.unwrap_err();
             assert!(failure.contains("Permission denied"), "the resumed owner must report the actual hard error: {failure}");
             assert!(!crate::build::cloud_readiness::take_gate(dir.to_str().unwrap()), "fatal scan must settle the old cloud waiting latch");
+            assert!(started.elapsed() < std::time::Duration::from_secs(10),
+                "scan admission and cancellation must settle promptly: {:?}", started.elapsed());
         });
     });
 }

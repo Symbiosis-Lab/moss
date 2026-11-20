@@ -308,12 +308,6 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
         let server_shutdown: Arc<
             std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
         > = Arc::default();
-        // Captures `start_server_headless`'s own error text at the moment it
-        // fails, so the `Ok(msg)` arm below can report the exact reason the
-        // server never came up instead of re-probing for a live owner after
-        // the whole build has run — a re-probe can miss an owner that has
-        // since exited in that window and wrongly report success.
-        let launch_error: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
         // Fires when `POST /__moss/yield` is admitted on whichever server is
         // live right now. One `Notify` for the whole process: every
         // relaunch after honoring a yield passes this SAME `Arc` back into
@@ -329,7 +323,6 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
         let launch_server_fn: Option<Arc<dyn Fn(String, Option<Arc<std::sync::RwLock<std::path::PathBuf>>>) -> crate::build::ServerFuture + Send + Sync>> =
             if run.flags.serve {
             let slot = server_shutdown.clone();
-            let launch_error_slot = launch_error.clone();
             // The same registry this build fills, so the server can answer for
             // a variant that is still encoding.
             let assets = host.services.assets.clone();
@@ -342,7 +335,6 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
             let launch: Arc<dyn Fn(String, Option<Arc<std::sync::RwLock<std::path::PathBuf>>>) -> crate::build::ServerFuture + Send + Sync> =
                 Arc::new(move |moss_dir, cell| {
                 let slot = slot.clone();
-                let launch_error_slot = launch_error_slot.clone();
                 let assets = assets.clone();
                 let yield_notify = yield_notify.clone();
                 let host_serve = host_serve.clone();
@@ -359,12 +351,7 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
                                 Some(shutdown_tx);
                             Ok(port)
                         }
-                        Err(e) => {
-                            *launch_error_slot
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(e.clone());
-                            Err(e)
-                        }
+                        Err(e) => Err(e),
                     }
                 })
             });
@@ -407,28 +394,6 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
 
         match result {
             Ok(msg) => {
-                // `launch_server` failing is not itself a build failure (the
-                // pipeline logs a warning and carries on with no server —
-                // `build.rs`'s `PreviewServerFailed` handling), so a folder
-                // already owned by a live process would otherwise reach here
-                // as an otherwise-successful build whose server never came
-                // up. `launch_error` carries the exact reason captured at
-                // the moment `launch_server` failed — read here, not
-                // re-derived, so nothing can change between then and now.
-                if run.flags.serve
-                    && server_shutdown
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .is_none()
-                {
-                    if let Some(message) =
-                        launch_error.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
-                    {
-                        cli_eprintln!("{}", message);
-                        return serve::ownership::ALREADY_SERVED_EXIT_CODE;
-                    }
-                }
-
                 // The build that exits writes its site before the pipeline
                 // returns, so the record is final here.
                 let unwritten = exits_after_build && crate::system::build_records::records().last_build_failed(&run.folder_path);
@@ -523,7 +488,7 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
             }
             Err(e) => {
                 cli_eprintln!("Build failed: {}", e);
-                1
+                if e.starts_with("this folder is already served") { serve::ownership::ALREADY_SERVED_EXIT_CODE } else { 1 }
             }
         }
     });

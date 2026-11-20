@@ -224,8 +224,9 @@ fn hold(path: &Path, mut contended: impl FnMut(&std::fs::File) -> Result<bool, S
     }
 }
 
-/// Remove, on a background thread, every file in `<moss_home>/locks` that no
-/// process holds. Since a released lock unlinks itself, an unheld file there
+/// Remove, on a background thread, unheld job locks in `<moss_home>/locks`.
+/// Owner locks are left for the next owner, so collection cannot contend with
+/// nonblocking admission. Since a released lock unlinks itself, an unheld file there
 /// is one a moss that predates that left behind, or an old `.epoch` record:
 /// litter, however many there are. A held lock fails the `flock` and stays.
 /// The directory is its own progress record, so a sweep cut off by the
@@ -268,6 +269,12 @@ fn sweep_litter(dir: &Path, batch: usize, pause: std::time::Duration) -> usize {
             continue;
         }
         let path = entry.path();
+        // Ownership admission is nonblocking: even the sweep's brief lock
+        // would look like another server. A crashed owner's file is reclaimed
+        // when that folder is next claimed, then unlinked by its guard.
+        if path.extension().is_some_and(|ext| ext == "owner") {
+            continue;
+        }
         // allow:raw_write opens an existing lock file under ~/.moss/locks to lock it, never creates one
         let Ok(file) = std::fs::OpenOptions::new().read(true).write(true).open(&path) else { continue };
         if file.try_lock().is_err() || !still_named(&file, &path) {
