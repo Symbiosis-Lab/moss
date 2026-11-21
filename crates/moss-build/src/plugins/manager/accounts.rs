@@ -764,4 +764,19 @@ mod tests {
         assert!(err.contains("does not declare 'app-social.example.net' as a hidden `secret` setting"), "{err}");
         assert_eq!(account_binding(&project, "social"), None);
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_sign_in_keeps_what_it_learns_in_its_declared_hidden_secret() {
+        let (_dir, project) = folder_with_channel(r#"
+            await globalThis.__TAURI__.core.invoke("set_plugin_secret", { key: "session", value: "client" });
+            return { status: "completed", account: { id: "s/1" } };"#);
+        write(&project, ".moss/plugins/social/manifest.json", r#"{"name":"social","version":"0.1.0","entry":"main.bundle.js",
+            "global_name":"Social","contributes":{"channel":{"login":true,
+            "setup":{"settings":[{"key":"session","type":"secret","label":"Session","hidden":true}]}}}}"#);
+        sign_in(&project).await;
+        let store = crate::identity::secrets::SecretStore::require("test").unwrap();
+        let scope = crate::identity::keystore::Scope::plugin("social").unwrap();
+        assert_eq!(store.get(&scope, "session").unwrap().as_deref(), Some("client"));
+        store.remove(&scope, "session").unwrap();
+    }
 }

@@ -13,3 +13,9 @@ fn the_running_roots_are_the_shipped_apps_until_a_binary_seeds_its_own() {
     let settings = app_config_path_early().unwrap();
     assert!(settings.ends_with("host.moss.publisher.wt-test/app-config.json"), "a local build reads its own settings: {}", settings.display());
 }
+
+#[test]
+fn a_test_binary_keeps_credentials_in_a_scratch_root() {
+    let root = moss_build::infra::app_data::credential_root().unwrap();
+    assert!(root.starts_with(std::env::temp_dir()), "{}", root.display());
+}

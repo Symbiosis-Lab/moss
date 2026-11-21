@@ -113,6 +113,17 @@ pub fn refuse_synced_running_roots() -> Result<(), String> {
     refuse_synced_roots(&roots, crate::infra::home::moss_home().ok().as_deref())
 }
 
+/// The root the credential stores (plugin secrets, sign-ins) live under: the
+/// shipped app's roaming root. Any test binary, this crate's or a dependent's,
+/// gets a scratch root per process instead, so no test can read, write or
+/// delete a person's credentials.
+pub fn credential_root() -> Option<PathBuf> {
+    if cfg!(test) || in_test_binary() {
+        return Some(std::env::temp_dir().join(format!("moss-test-app-data-{}", std::process::id())));
+    }
+    app_data_dir_early()
+}
+
 /// Whether this process is a test binary, which must never reach a real app
 /// data root.
 pub(crate) fn in_test_binary() -> bool {

@@ -57,7 +57,7 @@ impl SecretStore {
     /// keystore arms do, instead of adding an app-only capability that would
     /// deny under `moss-cli`. `None` = the platform has no data dir.
     fn app_default() -> Option<Self> {
-        crate::infra::app_data::app_data_dir_early().map(|d| Self::in_app_data(&d))
+        crate::infra::app_data::credential_root().map(|d| Self::in_app_data(&d))
     }
 
     /// The store or a refusal naming what wanted it. Every caller that cannot
@@ -148,6 +148,12 @@ mod tests {
 
     fn plugin(id: &str) -> Scope {
         Scope::plugin(id).unwrap()
+    }
+
+    #[test]
+    fn a_test_never_opens_the_real_store() {
+        let root = SecretStore::require("test").unwrap().root;
+        assert!(root.starts_with(std::env::temp_dir()), "{}", root.display());
     }
 
     #[test]
