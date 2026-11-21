@@ -1917,6 +1917,8 @@ async fn a_video_worker_that_panics_leaves_the_folder_idle(watched: bool) {
     let mut services = BuildServices::headless();
     services.session = Some(session.clone());
     services.spawner = Some(std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner));
+    // Its subject is the folder's busy state after a panic, not the budget it shares with sibling tests.
+    services.encode_pool = Some(crate::system::folder_session::CorePool::own());
     services.reporter = failing.clone();
 
     tokio::task::spawn_blocking(move || crate::build::media::video::dispatch_video_conversions(Some(&services), ctx, None))
