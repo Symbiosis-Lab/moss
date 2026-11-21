@@ -690,21 +690,14 @@ mod tests {
         crate::infra::folder_lock::lock_path_named(folder, OWNER_LOCK)
     }
 
-    /// Serializes the handful of tests here that set `MOSS_HOME` — the same
-    /// process-global hazard `infra::home`'s own test documents.
-    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
-        crate::infra::home::MOSS_HOME_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
     /// The timeout fallback: nobody ever claims the folder (an empty,
     /// freshly-made `MOSS_HOME` has no record for it at all), so the wait
     /// must give up and return `None` rather than hang — the ablation target
     /// for the yield arm's "serve it myself again" fallback.
     #[tokio::test]
     async fn wait_for_owner_to_appear_gives_up_and_returns_none_within_the_timeout() {
-        let _guard = env_guard();
         let home = moss_home_dir();
-        std::env::set_var("MOSS_HOME", &home);
+        let _home = crate::infra::home::thread_moss_home(&home);
         let folder = tempfile::tempdir().expect("tempdir for the unclaimed folder");
 
         let timeout = std::time::Duration::from_millis(300);
@@ -717,14 +710,12 @@ mod tests {
             elapsed < timeout + std::time::Duration::from_secs(2),
             "the wait must return at or shortly after its timeout, not hang; took {elapsed:?}"
         );
-        std::env::remove_var("MOSS_HOME");
     }
 
     #[test]
     fn acquire_writes_a_record_that_round_trips_through_the_atomic_writer() {
-        let _guard = env_guard();
         let home = moss_home_dir();
-        std::env::set_var("MOSS_HOME", &home);
+        let _home = crate::infra::home::thread_moss_home(&home);
         let folder = tempfile::tempdir().expect("tempdir for the served folder");
 
         let owned = acquire(folder.path(), HostKind::Cli, "9.9.9".to_string(), "http://127.0.0.1:1234".to_string())
@@ -745,7 +736,6 @@ mod tests {
         assert!(!owner_lock_path(&canonical).unwrap().exists(), "a released owner lock leaves no file");
         let next = crate::infra::folder_lock::try_acquire_named(&canonical, OWNER_LOCK).unwrap();
         assert!(next.is_some(), "dropping the guard frees the folder");
-        std::env::remove_var("MOSS_HOME");
     }
 
     /// One process runs two servers against a vault for a moment during a
@@ -753,9 +743,8 @@ mod tests {
     /// another port: the record must name the server started last.
     #[test]
     fn a_second_acquire_in_the_same_process_succeeds_and_rewrites_the_record() {
-        let _guard = env_guard();
         let home = moss_home_dir();
-        std::env::set_var("MOSS_HOME", &home);
+        let _home = crate::infra::home::thread_moss_home(&home);
         let folder = tempfile::tempdir().expect("tempdir for the served folder");
 
         let first =
@@ -773,27 +762,26 @@ mod tests {
         let foreign = std::fs::File::open(owner_lock_path(&canonical).unwrap()).unwrap();
         assert!(foreign.try_lock().is_err(), "the folder stays held while `second` lives");
         drop(second);
-        std::env::remove_var("MOSS_HOME");
     }
 
     #[test]
     fn build_admission_leaves_unrelated_records_for_server_start() {
-        crate::infra::home::with_moss_home(|home| {
-            let folder = tempfile::tempdir().unwrap();
-            let servers = home.join("servers");
-            std::fs::create_dir_all(&servers).unwrap();
-            let garbage = servers.join("gone.json");
-            std::fs::write(&garbage, "not a record").unwrap();
+        let home = crate::infra::home::scratch_moss_home();
+        let _home = crate::infra::home::thread_moss_home(&home);
+        let folder = tempfile::tempdir().unwrap();
+        let servers = home.join("servers");
+        std::fs::create_dir_all(&servers).unwrap();
+        let garbage = servers.join("gone.json");
+        std::fs::write(&garbage, "not a record").unwrap();
 
-            let build = acquire(folder.path(), HostKind::Cli, "test".into(), String::new()).unwrap();
-            assert!(garbage.exists(), "build admission must not scan unrelated owner records");
-            assert!(crate::infra::folder_lock::try_acquire_named(folder.path(), OWNER_LOCK).unwrap().is_none());
-            let server = acquire(folder.path(), HostKind::Cli, "test".into(), "http://127.0.0.1:4321".into()).unwrap();
-            assert!(!garbage.exists(), "server startup still collects stale announcements");
-            let rebuild = acquire(folder.path(), HostKind::Cli, "test".into(), String::new()).unwrap();
-            assert_eq!(read_record(folder.path()).unwrap().unwrap().url, "http://127.0.0.1:4321");
-            drop((build, server, rebuild));
-        });
+        let build = acquire(folder.path(), HostKind::Cli, "test".into(), String::new()).unwrap();
+        assert!(garbage.exists(), "build admission must not scan unrelated owner records");
+        assert!(crate::infra::folder_lock::try_acquire_named(folder.path(), OWNER_LOCK).unwrap().is_none());
+        let server = acquire(folder.path(), HostKind::Cli, "test".into(), "http://127.0.0.1:4321".into()).unwrap();
+        assert!(!garbage.exists(), "server startup still collects stale announcements");
+        let rebuild = acquire(folder.path(), HostKind::Cli, "test".into(), String::new()).unwrap();
+        assert_eq!(read_record(folder.path()).unwrap().unwrap().url, "http://127.0.0.1:4321");
+        drop((build, server, rebuild));
     }
 
     /// The real cross-process shape: a lock held by a file THIS process
@@ -806,9 +794,8 @@ mod tests {
     /// branch without needing to spawn one.
     #[test]
     fn acquire_is_refused_by_a_lock_held_outside_this_process_registry() {
-        let _guard = env_guard();
         let home = moss_home_dir();
-        std::env::set_var("MOSS_HOME", &home);
+        let _home = crate::infra::home::thread_moss_home(&home);
         let folder = tempfile::tempdir().expect("tempdir for the served folder");
         let canonical = std::fs::canonicalize(folder.path()).unwrap();
 
@@ -852,16 +839,14 @@ mod tests {
         assert_eq!(refusal, "this folder is already served by another moss process");
 
         drop(foreign);
-        std::env::remove_var("MOSS_HOME");
     }
 
     /// A killed server cannot remove its record; the next start does, and
     /// keeps the records of servers still running.
     #[test]
     fn a_start_removes_the_records_of_servers_that_are_gone() {
-        let _guard = env_guard();
         let home = moss_home_dir();
-        std::env::set_var("MOSS_HOME", &home);
+        let _home = crate::infra::home::thread_moss_home(&home);
         let gone = tempfile::tempdir().unwrap();
         let running = tempfile::tempdir().unwrap();
         let mut exited = std::process::Command::new(std::env::current_exe().unwrap()).arg("--list").stdout(std::process::Stdio::null()).spawn().unwrap();
@@ -894,16 +879,14 @@ mod tests {
         assert!(!garbage.exists(), "a record that does not parse is removed");
         assert!(running_record.exists(), "a running server keeps its record");
         drop(owned);
-        std::env::remove_var("MOSS_HOME");
     }
 
     /// A holder that has been asked to yield lets go a moment later; the
     /// requester's wait is on the lock itself.
     #[test]
     fn wait_gets_a_folder_its_holder_releases_in_time() {
-        let _guard = env_guard();
         let home = moss_home_dir();
-        std::env::set_var("MOSS_HOME", &home);
+        let _home = crate::infra::home::thread_moss_home(&home);
         let folder = tempfile::tempdir().expect("tempdir for the served folder");
         let canonical = std::fs::canonicalize(folder.path()).unwrap();
         std::fs::create_dir_all(folder.path().join(".moss")).unwrap();
@@ -928,7 +911,6 @@ mod tests {
             None,
         ));
         release.join().unwrap();
-        std::env::remove_var("MOSS_HOME");
 
         assert!(matches!(waited, Ok(Some(_))), "the wait must end with the folder: {waited:?}");
     }
@@ -987,8 +969,7 @@ mod tests {
     /// process that happens to use the same loopback port) reads as unowned.
     #[tokio::test]
     async fn find_live_owner_is_none_when_the_health_body_names_a_different_folder() {
-        let _guard = env_guard();
-        std::env::set_var("MOSS_HOME", moss_home_dir());
+        let _home = crate::infra::home::thread_moss_home(&moss_home_dir());
         let folder = tempfile::tempdir().expect("tempdir for the served folder");
         let canonical = std::fs::canonicalize(folder.path()).unwrap();
         let stop = recorded_holder(&canonical, "not-the-right-folder".to_string(), 4242, HostKind::Cli);
@@ -996,7 +977,6 @@ mod tests {
         let found = find_live_owner(&canonical).await;
 
         stop();
-        std::env::remove_var("MOSS_HOME");
         assert!(
             found.is_none(),
             "a health body naming a different folder must not read as this folder's live owner, got {:?}",
@@ -1006,8 +986,7 @@ mod tests {
 
     #[tokio::test]
     async fn open_in_another_app_is_another_process_answering_as_the_desktop_app() {
-        let _guard = env_guard();
-        std::env::set_var("MOSS_HOME", moss_home_dir());
+        let _home = crate::infra::home::thread_moss_home(&moss_home_dir());
         let folder = tempfile::tempdir().expect("tempdir for the served folder");
         std::fs::create_dir(folder.path().join(".moss")).unwrap();
         let canonical = std::fs::canonicalize(folder.path()).unwrap();
@@ -1020,7 +999,6 @@ mod tests {
             stop();
         }
         seen.push(open_in_another_app(&site_dir).await);
-        std::env::remove_var("MOSS_HOME");
 
         assert_eq!(
             seen,
@@ -1149,8 +1127,7 @@ mod tests {
     }
 
     async fn legacy_auth_fixture(stale: bool, private: bool) {
-        let _guard = env_guard();
-        std::env::set_var("MOSS_HOME", moss_home_dir());
+        let _home = crate::infra::home::thread_moss_home(&moss_home_dir());
         let folder = tempfile::tempdir().unwrap();
         let folder = folder.path().canonicalize().unwrap();
         let mut health = legacy_health(&folder);
@@ -1180,13 +1157,11 @@ mod tests {
             assert!(!owner.capabilities.authenticated_events, "health must not prove the stale credential");
             assert!(owner.token().is_none());
         }
-        std::env::remove_var("MOSS_HOME");
     }
 
     #[tokio::test]
     async fn discovery_rejects_wrong_marker_pid_folder_record_and_redirects() {
-        let _guard = env_guard();
-        std::env::set_var("MOSS_HOME", moss_home_dir());
+        let _home = crate::infra::home::thread_moss_home(&moss_home_dir());
         let folder = tempfile::tempdir().unwrap();
         let folder = folder.path().canonicalize().unwrap();
         super::super::carrier_token::publish(&folder, "legacy-secret").unwrap();
@@ -1206,14 +1181,12 @@ mod tests {
             assert!(discover_owner(&folder).await.unwrap().is_none(), "{case}");
             assert_eq!(server.credential_requests.load(std::sync::atomic::Ordering::Relaxed), 0, "credentials sent to {case}");
         }
-        std::env::remove_var("MOSS_HOME");
     }
 
     #[tokio::test]
     async fn resolve_owner_distinguishes_stale_replacement_unresponsive_and_storage_failure() {
-        let _guard = env_guard();
         let home = moss_home_dir();
-        std::env::set_var("MOSS_HOME", &home);
+        let _home = crate::infra::home::thread_moss_home(&home);
         let folder = tempfile::tempdir().unwrap();
         let folder = folder.path().canonicalize().unwrap();
         let record = fixture_record(&folder, "http://127.0.0.1:1".into());
@@ -1236,7 +1209,6 @@ mod tests {
         std::fs::remove_dir_all(home.join("servers")).unwrap();
         std::fs::write(home.join("servers"), "not a directory").unwrap();
         assert!(resolve().await.is_err(), "announcement IO failure must remain an error");
-        std::env::remove_var("MOSS_HOME");
     }
 
 }

@@ -352,17 +352,24 @@ fn the_sweep_waits_for_no_resolve_while_it_reads_stores_that_stay() {
 
 #[test]
 fn a_known_folder_answers_while_another_folder_is_still_resolving() {
+    let memo: &'static Memo = Box::leak(Box::default());
     let (known, new) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    let known_store = try_for_folder(known.path()).unwrap();
-    let held = FolderStores::temporary().lock().unwrap();
+    let store = |path: &Path| FolderStore { id: String::new(), cache_dir: path.join("cache"), record_dir: path.join("record") };
+    let known_store = memoized(memo, known.path(), |p| Ok(store(p))).unwrap();
+    let (started, resolving) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
     let new_path = new.path().to_path_buf();
-    let resolving = std::thread::spawn(move || try_for_folder(&new_path).map(|s| s.record_dir));
-    // Only orders the calls: started late, the resolve cannot block the lookup
-    // in either version, so a slow machine can only pass this test, never fail it.
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    let slow = std::thread::spawn(move || {
+        memoized(memo, &new_path, |p| {
+            started.send(()).unwrap();
+            released.recv().unwrap();
+            Ok(store(p))
+        })
+    });
+    resolving.recv().unwrap();
     let known_path = known.path().to_path_buf();
-    let answered = within_five_seconds(move || try_for_folder(&known_path).unwrap().record_dir);
-    drop(held);
-    assert!(resolving.join().unwrap().is_ok());
+    let answered = within_five_seconds(move || memoized(memo, &known_path, |_| panic!("a known folder is not resolved again")).unwrap().record_dir);
+    release.send(()).unwrap();
+    assert!(slow.join().unwrap().is_ok());
     assert_eq!(answered, Some(known_store.record_dir), "the known folder waited for another folder's resolve");
 }
