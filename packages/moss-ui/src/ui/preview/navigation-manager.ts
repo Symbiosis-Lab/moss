@@ -588,11 +588,15 @@ export class NavigationManager {
       return;
     }
 
-    // Listen for navigation messages from iframe (via bridge script)
-    // This is the ONLY source of navigation events - see notes above
+    // Navigation messages from the bridge: the start of a link click, and the page that reported in.
     window.addEventListener("message", (event) => {
-      if (event.data?.type === "moss-navigation") {
+      if (event.data?.type === "moss-navigation" && this.isFromPreview(event)) {
         this.handleNavigationUpdate(event.data);
+      }
+      // A link click the bridge is about to follow: recorded before the frame unloads, so a build that
+      // lands meanwhile yields to it instead of reloading the page being left.
+      if (event.data?.type === "moss-navigation-start" && this.isFromPreview(event) && this.onPreviewOrigin(event.data.url)) {
+        this.beginNavigation(event.data.url);
       }
 
       // Trackpad swipe over the preview (detected in the iframe bridge —
@@ -723,6 +727,13 @@ export class NavigationManager {
    */
   private isFromPreview(event: MessageEvent): boolean {
     return event.source !== null && event.source === this.iframe?.contentWindow;
+  }
+
+  /** Only a URL on the preview's own origin starts a navigation. */
+  private onPreviewOrigin(url: unknown): url is string {
+    const target = typeof url === "string" ? tryParseUrl(url) : null;
+    const base = this.iframe?.src ? tryParseUrl(this.iframe.src) : null;
+    return !!target && !!base && target.origin === base.origin;
   }
 
   /**

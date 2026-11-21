@@ -44,6 +44,18 @@ export function rowFor(root: ParentNode | null, id: EntryId): HTMLElement | null
   return root?.querySelector<HTMLElement>(`.seg[data-entry-id="${id}"]`) ?? null;
 }
 
+/** The entry whose row holds `el`, if any. */
+function rowId(el: Element): EntryId | null {
+  const id = el.closest<HTMLElement>('.seg[data-entry-id]')?.dataset.entryId;
+  return id === undefined ? null : (Number(id) as EntryId);
+}
+
+/** What render() puts back after it re-attaches the rows. */
+interface SavedView {
+  scrollTop: number;
+  focus: { el: HTMLElement; row: EntryId | null; onCount: boolean } | null;
+}
+
 /** A row (or breadcrumb segment) resolved from an event, with its path. */
 export interface TreeRow {
   readonly el: HTMLElement;
@@ -828,9 +840,8 @@ export class TreeRender {
     const container = this.container;
     if (!strip || !body || !container) return;
 
-    // Detaching every row would reset the body's scroll offset. Restored at
-    // the end, after applyWrapperHeight has settled the scrollable range.
-    const savedScrollTop = body.scrollTop;
+    // Detaching every row resets the body's scroll and drops keyboard focus; both are put back at the end.
+    const saved = this.saveView(body);
 
     // Row reconciliation: the strip and body are emptied, but their
     // ROWS are not destroyed — they are parked in rowCache by EntryId, and
@@ -1001,13 +1012,37 @@ export class TreeRender {
     // references so they can be collected.
     this.rowCache.clear();
 
-    // Restore the scroll position saved before the rebuild above.
-    // Placed after applyWrapperHeight() (which can change the scrollable
-    // range) so scrollTop isn't clamped against a stale, pre-resize
-    // scrollHeight. A raw pixel restore is sufficient here: toggling a
-    // folder only adds/removes rows AFTER that folder's own row, so content
-    // above the previous scroll position is unchanged.
-    body.scrollTop = savedScrollTop;
+    // After applyWrapperHeight(), so scrollTop isn't clamped against a stale
+    // scrollHeight, and after the selection pass, which sets the roving tabindex.
+    this.restoreView(saved, body, container);
+  }
+
+  /** What this render's own detach loses: the body's scroll, and keyboard focus. */
+  private saveView(body: HTMLElement): SavedView {
+    const active = document.activeElement;
+    return {
+      scrollTop: body.scrollTop,
+      focus: active instanceof HTMLElement ? { el: active, row: rowId(active), onCount: active.classList.contains('tree-preflight-count') } : null,
+    };
+  }
+
+  /** A raw scroll offset is enough: a render only adds or removes rows after the one that changed.
+   *  Focus that survived the detach is left alone, which is always the case outside the tree. Lost focus
+   *  goes to the first that takes it: the row's new count button, the row (a breadcrumb row has no
+   *  tabindex and refuses), the roving-tabindex row. */
+  private restoreView(saved: SavedView, body: HTMLElement, container: HTMLElement): void {
+    body.scrollTop = saved.scrollTop;
+    const focus = saved.focus;
+    if (!focus || document.activeElement === focus.el) return;
+    const row = focus.row === null ? null : rowFor(container, focus.row);
+    for (const target of [
+      focus.onCount ? row?.querySelector<HTMLElement>('.tree-preflight-count') : null,
+      row,
+      container.querySelector<HTMLElement>('[tabindex="0"]'),
+    ]) {
+      target?.focus({ preventScroll: true });
+      if (target && document.activeElement === target) return;
+    }
   }
 
   /**

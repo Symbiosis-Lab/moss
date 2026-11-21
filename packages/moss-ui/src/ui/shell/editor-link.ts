@@ -28,7 +28,7 @@ import type { PreviewManager } from '../preview/preview-manager';
  * a new page. `fieldReveal`: a preview click reveals the chip, and the chip
  * opening would reveal the preview element back; the direction the user did
  * not ask for yields for the round trip. `scrollSync`: one side's scroll does
- * not echo back from the other.
+ * not echo back from the other, and a click's reveal is not scrolled away.
  */
 const SETTLE_MS = { pageSwitch: 300, fieldReveal: 600, scrollSync: 400 } as const;
 type Hold = keyof typeof SETTLE_MS;
@@ -330,6 +330,8 @@ export class EditorLink {
       case 'body-range': {
         const startLine = target.kind === 'body-line' ? target.line : target.startLine;
         const endLine = target.kind === 'body-line' ? target.line : target.endLine;
+        // Each gesture scrolls its line into view; the preview's report of a scroll just before it can arrive after, and would move the line away.
+        this.hold('scrollSync');
         if (interaction === 'select' && target.text) uiHost.bus.emit('editor:select-text', { text: target.text, startLine, endLine });
         else if (interaction === 'dblclick') this.host.openTarget(target);
         else if (interaction === 'click') uiHost.bus.emit('editor:reveal-line', { startLine, endLine });

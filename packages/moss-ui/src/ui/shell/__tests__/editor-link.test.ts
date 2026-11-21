@@ -192,6 +192,24 @@ describe('EditorLink', () => {
     expect(emitted).toEqual([['editor:reveal-line', { startLine: 4, endLine: 6 }]]);
   });
 
+  test.each([
+    ['click', { kind: 'body-line', line: 70 }],
+    ['select', { kind: 'body-range', startLine: 70, endLine: 71, text: 'Entry 70' }],
+  ])("a preview scroll report arriving just after a %s does not move the editor off the revealed line", (interaction, target) => {
+    link();
+    const synced: unknown[] = [];
+    host.bus.on('scroll-sync:preview-to-editor', (payload) => synced.push(payload));
+    const now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+    post({ type: 'moss-source-target', target, interaction });
+    clock.mockReturnValue(now + 90);
+    post({ type: 'moss-scroll-position', line: 68 });
+    expect(synced).toEqual([]);
+    clock.mockReturnValue(now + 1000);
+    post({ type: 'moss-scroll-position', line: 40 });
+    expect(synced).toEqual([{ type: 'source-line', line: 40, atTop: false, atBottom: false }]);
+  });
+
   test('the context menu goes to the host whether or not the editor is open', () => {
     const { host } = link({ editorIsOpen: () => false });
     const ctx = { type: 'moss-context-menu', x: 1, y: 2, page: '/a/', targets: [], styles: [], link: null, image: null, selection: null };

@@ -23,7 +23,7 @@ import { installSwipeNavigation } from "./swipe-gesture";
 import { startChromeAmbient } from "./chrome-ambient";
 import { startSiteAccent } from "./site-accent";
 import type { ThemeSettled } from "./theme-settled";
-import { classifyClickGesture, installViewerGuard, shouldLeaveClickToPage } from "./click-vocabulary";
+import { classifyClickGesture, installViewerGuard, loadsDocument, shouldLeaveClickToPage } from "./click-vocabulary";
 import { installContextMenu } from "./context-menu";
 import { installPlainTabReload } from "./plain-tab-reload";
 import { installSelectionSync, resolveSourceTarget } from "./source-target";
@@ -573,8 +573,10 @@ import { installCaptureResponder } from "./capture/responder";
       // them. See `iframe_bridge.rs::SHELL_MARKER` for the contract.
       event.preventDefault();
       const url = new URL(href, window.location.href);
-      if (isShellMounted) {
-        url.searchParams.set("__moss_shell", "1");
+      if (isShellMounted) url.searchParams.set("__moss_shell", "1");
+      // Not only when shell-mounted: the browser editor nests the shell in a frame of its own.
+      if (loadsDocument(anchor, url, new URL(location.href))) {
+        window.parent.postMessage({ type: "moss-navigation-start", url: url.href }, "*");
       }
       window.location.href = url.href;
     },

@@ -64,7 +64,7 @@ function mkManager(): { nav: NavigationManager; rpc: ReturnType<typeof vi.fn> } 
 /** Drive a bridge navigation echo the way the real iframe does. */
 function echoNavigation(url: string): void {
   window.dispatchEvent(
-    new MessageEvent('message', { data: { type: 'moss-navigation', url, title: '' } }),
+    new MessageEvent('message', { data: { type: 'moss-navigation', url, title: '' }, source: document.querySelector('iframe')!.contentWindow }),
   );
 }
 

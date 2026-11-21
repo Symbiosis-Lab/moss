@@ -10,7 +10,7 @@ import { describe, test, expect, afterAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { loadViewer, unloadViewer } from '../../site/__tests__/fixtures/load-viewer';
-import { classifyClickGesture, installViewerGuard, shouldLeaveClickToPage } from '../click-vocabulary';
+import { classifyClickGesture, installViewerGuard, loadsDocument, shouldLeaveClickToPage } from '../click-vocabulary';
 
 describe('classifyClickGesture', () => {
   test('a lone click is the reveal, with zero latency', () => {
@@ -47,6 +47,32 @@ describe('shouldLeaveClickToPage', () => {
   test('a click inside a plain link is not left to the page', () => {
     document.body.innerHTML = '<a href="/about">About</a>';
     expect(shouldLeaveClickToPage(document.querySelector('a')!)).toBe(false);
+  });
+});
+
+describe('loadsDocument', () => {
+  const current = new URL('http://localhost:8080/notes/?__moss_shell=1#top');
+  const link = (attrs = '') => {
+    document.body.innerHTML = `<a href="#" ${attrs}>x</a>`;
+    return document.querySelector('a')!;
+  };
+  const at = (path: string) => new URL(path, 'http://localhost:8080');
+
+  test('a link to another page loads a document', () => {
+    expect(loadsDocument(link(), at('/pictures/?__moss_shell=1'), current)).toBe(true);
+  });
+
+  test('a fragment on the current page only scrolls, even the one already in the URL', () => {
+    expect(loadsDocument(link(), at('/notes/?__moss_shell=1#later'), current)).toBe(false);
+    expect(loadsDocument(link(), at('/notes/?__moss_shell=1#top'), current)).toBe(false);
+  });
+
+  test('a fragment on another page loads that page', () => {
+    expect(loadsDocument(link(), at('/pictures/?__moss_shell=1#door'), current)).toBe(true);
+  });
+
+  test('a download commits no document', () => {
+    expect(loadsDocument(link('download'), at('/files/a.zip'), current)).toBe(false);
   });
 });
 

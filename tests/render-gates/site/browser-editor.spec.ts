@@ -207,7 +207,8 @@ test('the browser editor boots, saves, opens a sandboxed PDF in the file viewer,
   // The preview follows to the PDF's own address, and the shell asks what backs it.
   const backing = page.waitForResponse(
     (r) => r.url().endsWith('/resolve_page_source') && (r.request().postData() ?? '').includes('doc.pdf'),
-    { timeout: 15_000 },
+    // Its clock starts before the click and the viewer's mount, which take up to 15 s of their own on a loaded machine.
+    { timeout: 30_000 },
   );
   // Every PDF viewer the editor mounts or removes from here on, read as the test's last step.
   await editor.evaluate(() => {
@@ -494,7 +495,9 @@ async function shots(page: Page, name: string, browserName: string) {
 test("a page's problem count shows once, and steps through its problems", async ({ page, browserName }) => {
   const { editor } = await openCasePage(page);
   const count = (path: string) => editor.locator(`.seg[data-path="${path}"] .tree-preflight-count`);
-  const colour = (selector: string) => editor.locator(selector).first().evaluate((el) => getComputedStyle(el).color);
+  // Read through the selector in one step: a build landing re-renders the breadcrumb's children, and a
+  // style read off a node it has just replaced is empty.
+  const colour = (selector: string) => editor.evaluate((s) => getComputedStyle(document.querySelector(s)!).color, selector);
 
   // The breadcrumb: the page's number, and no number on any folder above it;
   // each folder's chevron wears the number's colour instead.
@@ -512,13 +515,17 @@ test("a page's problem count shows once, and steps through its problems", async 
   });
   const button = editor.locator('.seg.bc-current button.tree-preflight-count');
   await expect(button).toHaveAccessibleName('7 unresolved references. Go to the next');
-  expect(await button.evaluate((el) => getComputedStyle(el).cursor)).toBe('pointer');
+  await expect(button).toHaveCSS('cursor', 'pointer');
   await button.click();
   await expect.poll(caretLine).toContain('slide-01.jpg');
   // A key that is not a modifier: WebKit shows the focus ring only after one.
   await page.keyboard.press('ArrowRight');
   await button.focus();
   expect(await button.evaluate((el) => getComputedStyle(el).outlineStyle)).not.toBe('none');
+  // A build landing between the focus and the key rebuilds the button; the key must still reach it.
+  const focused = await button.elementHandle();
+  writeFileSync(join(serve.site, 'en', 'writing', 'other.md'), '---\ntitle: Other\n---\nStill nothing missing.\n');
+  await expect.poll(() => focused!.evaluate((el) => el.isConnected), { timeout: 15_000 }).toBe(false);
   await page.keyboard.press('Enter');
   await expect.poll(caretLine).toContain('slide-02.jpg');
 
@@ -690,6 +697,32 @@ test('an edit to a page in the feed updates it in place, not by a reload', async
   await preview.waitForFunction(() => document.body?.innerText.includes('The well is closed'), null, { timeout: 30_000 });
   expect(await preview.evaluate(async () => (await (await fetch('/rss.xml')).text()).includes('The well is closed')), 'the edit changed the feed').toBe(true);
   expect(await preview.evaluate(() => (window as unknown as { kept?: boolean }).kept), 'the page was reloaded').toBe(true);
+});
+
+// Red only in WebKit without the fix: Chromium's in-place refresh succeeds mid-navigation, WebKit's fails and falls back to a reload.
+test('a build landing while a clicked page loads does not send the preview back', async ({ page }) => {
+  const { preview } = await openEditor(page);
+  await expect.poll(() => serve.output, { timeout: 60_000, message: 'the first build promoted' }).toMatch(/promoted generation \S+ to current/);
+  // Hold the clicked page's response so the build below always lands mid-navigation.
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route('**/zh-hans/**', async (route) => {
+    await held;
+    await route.continue().catch(() => {}); // a navigation the frame cancelled has nothing to continue
+  });
+  const refreshes: string[] = [];
+  page.on('console', (m) => m.text().startsWith('[preview-refresh]') && refreshes.push(m.text()));
+
+  await preview.click('a:has-text("To the Chinese pages")');
+  // Both the page being left and the page being loaded change, so the shell refreshes whichever it watches.
+  for (const file of ['index.md', join('zh-hans', 'index.md')]) {
+    writeFileSync(join(serve.site, file), readFileSync(join(serve.site, file), 'utf8') + '\nA held line.\n');
+  }
+  await expect.poll(() => refreshes.length, { timeout: 30_000, message: 'the build refreshed the preview' }).toBeGreaterThan(0);
+  release();
+
+  await expect.poll(() => new URL(preview.url()).pathname, { timeout: 15_000 }).toBe('/zh-hans/');
+  await expect(preview.locator('body')).toContainText('你好，花园。', { timeout: 15_000 });
 });
 
 test('the address copied from a page just made carries no reload stamp', async ({ page }) => {
