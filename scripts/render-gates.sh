@@ -385,10 +385,11 @@ fi
 # durations the last run recorded in target/render-gate-times.tsv. The gates in
 # SERIAL_GATES assert timing that fails under load, so they run alone, one after
 # another, once the rest are done. Each run keeps its logs in a folder under
-# target/test-tmp/render-gates, named on the run's first line, and prints them in
+# target/test-tmp/render-gates, named on the lanes' header line, and prints them in
 # the order of GATES when it ends. A fullyParallel config run alone keeps four
 # workers, or one per lane a smaller RENDER_GATES_MEM_GB allows
-# (RENDER_GATES_WORKERS, read by playwright/define-gate-config.ts).
+# (RENDER_GATES_WORKERS, read by playwright/define-gate-config.ts). A
+# RENDER_GATES_WORKERS already in the environment wins over the grant.
 #
 # RENDER_GATES_MEM_GB is the memory the run may use (default half the
 # machine's), at RENDER_GATES_SHARD_GB (default 2) a lane: it caps --jobs N, and

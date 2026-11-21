@@ -112,7 +112,7 @@ test('a lane killed outright still leaves every gate named and the run summed up
   assert.equal(r.status, 1);
   assert.match(r.stdout, /^RED nav-island$/m);
   assert.match(r.stdout, /── \d+ ran in/, 'the run printed its summary');
-  assert.doesNotMatch(times, /^nav-island\t/m, 'a gate with no result keeps its old time');
+  assert.doesNotMatch(times, /^nav-island\t/m, 'a gate with no result records no time');
   assert.doesNotMatch(r.stderr, /No such file/);
   for (const g of ['edge-clamp', 'map-tiles', 'figure-grid']) {
     const named = new RegExp(`^RED ${g}$`, 'm').test(r.stdout), timed = new RegExp(`^${g}\t`, 'm').test(times);
