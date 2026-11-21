@@ -80,11 +80,11 @@ How it is known that a channel is signed in: its `copy_account` answer. `copy.ac
 
 An OAuth channel signs in through the person's default browser, where they are usually signed in already: `startBrowserSignIn()` from `@symbiosis-lab/moss-api` listens once on `127.0.0.1` and gives the redirect address to register, and its `open(authorizeUrl)` opens the provider's page and resolves with the redirect's query. The plugin checks `state` and exchanges the code; `crypto.subtle.digest` makes the PKCE challenge. moss opens only `https` addresses (and `http` to a loopback address) in the browser. A sign-in ends after ten minutes, when the person presses Cancel, when the channel starts another, or in a terminal at once ("Sign in from the moss app"). A token the sign-in earns is a setting with `"type": "secret", "hidden": true`, which signing out removes.
 
-When the sign-in needs one thing it cannot find out by itself, such as the server a Mastodon account is on, the channel declares it as a `string` setting with `"at_sign_in": true` and a `default`. The settings form never draws it; the sign-in asks it first, pre-filled, and the answer reaches `login` in its context's `config`. The plugin keeps what it needs of it.
+`login` answers a `LoginResult`: `{ status: "completed", account: { id, name } }`, `{ status: "cancelled" }` or `{ status: "failed", message }`. A channel whose accounts live on many servers, as Mastodon's do, asks which server inside its own sign-in page and adds `account.host`, the account's server: moss records it with the account and takes a `syndicated:` address on that host as the channel's copy.
 
 Use for: authenticating with a remote platform before `process` or a copy hook can act on the user's behalf.
 
-**Context:** `BaseContext` — `project_info` and the plugin's resolved `config`, with any `at_sign_in` answers on top.
+**Context:** `BaseContext` — `project_info` and the plugin's resolved `config`.
 
 ## Plugin runtime
 

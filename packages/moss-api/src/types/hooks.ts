@@ -90,6 +90,8 @@ export interface HookResult {
  * What a channel's `login` answers. moss records the folder as signed in to
  * `account.id`, the provider's stable identifier for the account (a DID, a
  * numeric user id written as a string, `id@server`), never a display name; `name` is only shown.
+ * `host` is the account's own server, for a channel whose accounts live on
+ * many servers: moss takes a `syndicated:` address on it as this channel's copy.
  * Answer `cancelled` when the person stopped the sign-in, as when
  * {@link BrowserSignIn.open} rejects with {@link SignInCancelled}. A `login`
  * that returns nothing is read the older way, from its own config. Needs moss
@@ -98,7 +100,7 @@ export interface HookResult {
  * @category Hooks
  */
 export type LoginResult =
-  | { status: "completed"; account: { id: string; name?: string } }
+  | { status: "completed"; account: { id: string; name?: string; host?: string } }
   | { status: "cancelled" }
   | { status: "failed"; message: string };
 

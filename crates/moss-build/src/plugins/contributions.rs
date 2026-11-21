@@ -756,7 +756,6 @@ impl PluginManifest {
                 options,
                 required: false,
                 hidden: false,
-                at_sign_in: false,
                 placeholder: lookup(&self.config_placeholders),
                 help_url: None,
                 pattern: None,
@@ -1039,16 +1038,6 @@ mod tests {
             r#"[{"key":"tok","type":"secret","label":"T","default":"paste-here"}]"#,
         );
         assert!(err.contains("a `secret` must not declare a `default`"), "{err}");
-    }
-
-    #[test]
-    fn only_a_string_is_asked_at_sign_in() {
-        let err = settings_error(r#"[{"key":"tok","type":"secret","label":"T","at_sign_in":true}]"#);
-        assert!(err.contains("`at_sign_in` asks for a `string`"), "{err}");
-        let fields: Vec<settings::Field> =
-            serde_json::from_str(r#"[{"key":"server","type":"string","label":"S","at_sign_in":true,"default":"mastodon.social"}]"#).unwrap();
-        assert!(validate_declared_fields(&fields).is_ok());
-        assert!(fields[0].at_sign_in);
     }
 
     #[test]

@@ -11,6 +11,7 @@ All notable changes to moss will be documented here.
 - A channel plugin can state the longest article its network holds (`max_article_chars` in its `syndication` block); a longer page goes in the next form the channel takes.
 - A page that opens with a wide picture directly above its only `# Heading` shows that picture as its banner, as if it were written inside `:::hero`: window-wide under the header, loaded first and used as the share picture, its description kept for screen readers. A picture is wide when it is wider than tall and at least 1200 pixels wide. A logo, a portrait or a smaller picture stays in the text column with its caption, as before, and so does a picture with a width word (`![Harbour|body](harbour.jpg)`), a caption line under it, text between it and the heading, or a page with a second `# Heading`.
 - `moss root <file> --json` also says what an editor shows beside a page: its address on the site, whether it is a draft, whether it is published and changed since, where its copies went, and the settings it takes from a folder's `cascade:`. `moss describe --json` lists moss's own shortcodes with their attributes, for completion in an editor.
+- A channel whose accounts live on many servers, such as Mastodon, names the account's server when its sign-in completes, and moss takes a `syndicated:` address on that server as the channel's copy without a server setting.
 
 ### Changed
 
@@ -22,6 +23,10 @@ All notable changes to moss will be documented here.
 - The preview's page panel no longer says "Preparing…" for about 20 seconds after every save. The page was already up to date; the panel was showing moss waiting for a pause in typing before it keeps a copy of the site for publishing.
 - A picture among an opening hero's words, such as a title drawn as an image, loads with the page and at high priority. It used to wait until after the first paint, so on a slow phone it appeared seconds after the rest of the screen.
 - Each dash of the contents list in the left margin is a 24-pixel target, the size accessibility guidelines ask for; the dashes were 20 pixels apart.
+
+### Removed
+
+- The `at_sign_in` setting flag. A channel asks what its sign-in needs inside its own sign-in page; a manifest that still declares the flag draws the field as an ordinary setting.
 
 ## [0.15.28] - 2026-11-20
 

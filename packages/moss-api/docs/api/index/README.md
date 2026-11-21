@@ -298,6 +298,7 @@ value — so a plugin may name one outside this list.
 type LoginResult = 
   | {
   account: {
+     host?: string;
      id: string;
      name?: string;
   };
@@ -315,6 +316,8 @@ type LoginResult =
 What a channel's `login` answers. moss records the folder as signed in to
 `account.id`, the provider's stable identifier for the account (a DID, a
 numeric user id written as a string, `id@server`), never a display name; `name` is only shown.
+`host` is the account's own server, for a channel whose accounts live on
+many servers: moss takes a `syndicated:` address on it as this channel's copy.
 Answer `cancelled` when the person stopped the sign-in, as when
 [BrowserSignIn.open](interfaces/BrowserSignIn.md#open) rejects with [SignInCancelled](classes/SignInCancelled.md). A `login`
 that returns nothing is read the older way, from its own config. Needs moss

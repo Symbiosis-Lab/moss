@@ -14,7 +14,8 @@ pub struct CopyChannel {
     pub spec: ChannelSpec,
     /// Hosts its copies live on, so a `syndicated:` address there is taken as
     /// this channel's copy rather than posted again: the manifest's `domains`
-    /// (else `domain`), and the host of the setting `host_setting` names.
+    /// (else `domain`), the host of the setting `host_setting` names, and the
+    /// host of the account the folder is signed in to.
     pub domains: Vec<String>,
     /// The name its network goes by, which a `syndicate:` entry may use for it.
     pub name: Option<String>,
@@ -61,6 +62,7 @@ pub fn copy_channels_of(project_path: &str, plugins: &[Plugin]) -> BTreeMap<Stri
                     spec.forms.retain(|form| *form != Form::Long);
                 }
             }
+            domains.extend(super::accounts::account_host(project_path, &p.manifest.name).as_deref().and_then(host_of));
             let channel = p.manifest.contributes.as_ref().and_then(|c| c.channel.as_ref());
             let name = channel.and_then(|c| c.display_name.clone()).or_else(|| p.manifest.display_name.clone());
             spec.name = name.clone();

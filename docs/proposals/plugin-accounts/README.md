@@ -18,7 +18,7 @@ A manifest already says which kind a channel is, so nothing new is declared:
 
 This proposal covers channels. A deploy target or other plugin whose only credential is an API token (an IPFS pinning key) keeps its credential prompt until its provider offers a sign-in.
 
-A value the sign-in cannot find out by itself, such as which Mastodon server the account is on, is a `string` setting with `at_sign_in: true`: it is asked inside the sign-in, before `login` runs, and never drawn as a settings field.
+A value the sign-in cannot find out by itself, such as which Mastodon server the account is on, is asked by the plugin's own sign-in page, never drawn as a settings field. The server comes back as `account.host` in the `login` answer, and moss records it with the account so copies on that server are recognised.
 
 ## The plugin's side
 

@@ -13,12 +13,16 @@ use serde_json::Value;
 use std::path::Path;
 
 /// An account on a channel, as moss records it: `id` is the provider's stable
-/// identifier; `name` is only shown.
+/// identifier, opaque to moss; `name` is only shown.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct AccountBinding {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The account's own server, where its copies live, for a channel whose
+    /// accounts live on many servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
 }
 
 /// What a folder reads as signed in to: its record, or what an older plugin
@@ -70,8 +74,15 @@ impl LoginOutcome {
             Some("completed") => {
                 let account = field("account");
                 let id = account.and_then(|a| a.get("id"));
+                let host = match account.and_then(|a| a.get("host")) {
+                    None => None,
+                    Some(v) => match v.as_str().and_then(super::copies::host_of) {
+                        Some(host) => Some(host),
+                        None => return Self::Failed { message: "the sign-in named the account's server by something other than a host".into() },
+                    },
+                };
                 match text(id, false) {
-                    Some(id) => Self::Completed(AccountBinding { id, name: text(account.and_then(|a| a.get("name")), false) }),
+                    Some(id) => Self::Completed(AccountBinding { id, name: text(account.and_then(|a| a.get("name")), false), host }),
                     None if id.is_some_and(|v| !v.is_string()) => Self::Failed { message: "the sign-in named the account by something other than text".into() },
                     None => Self::Failed { message: "the sign-in finished without naming the account".into() },
                 }
@@ -126,6 +137,12 @@ pub fn account_binding(project_path: &str, plugin: &str) -> Option<BoundAccount>
         let bound = BoundAccount { id: text(config.get("boundUserId"), true), name: text(config.get("boundUserName"), true) };
         (bound.id.is_some() || bound.name.is_some()).then_some(bound)
     })
+}
+
+/// The server of the account `plugin` is signed in to in this folder, when
+/// the sign-in named one.
+pub fn account_host(project_path: &str, plugin: &str) -> Option<String> {
+    recorded(project_path, plugin)?.host
 }
 
 /// Record that this folder is signed in to `binding` on `plugin`.
@@ -284,7 +301,7 @@ mod tests {
     use serde_json::json;
 
     fn completed(id: &str, name: Option<&str>) -> LoginOutcome {
-        LoginOutcome::Completed(AccountBinding { id: id.into(), name: name.map(str::to_string) })
+        LoginOutcome::Completed(AccountBinding { id: id.into(), name: name.map(str::to_string), host: None })
     }
 
     #[test]
@@ -371,7 +388,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().to_str().unwrap();
         write(project, ".moss/state.toml", "schema_version = 1\n\n[deployment]\nsite_id = \"site-1\"\n");
-        bind_account(project, "social", &AccountBinding { id: "acct:1".into(), name: None }).unwrap();
+        bind_account(project, "social", &AccountBinding { id: "acct:1".into(), name: None, host: None }).unwrap();
         crate::vault::deployment_state::update_domain_observation(project, |_| None).unwrap();
         let state = std::fs::read_to_string(dir.path().join(".moss/state.toml")).unwrap();
         assert!(state.contains("site_id = \"site-1\""), "{state}");
@@ -389,8 +406,47 @@ mod tests {
         write(project, ".moss/plugins/social/config.json", r#"{"boundUserName": "", "login_dismissed": true}"#);
         assert_eq!(account_binding(project, "social"), None, "a dismissed sign-in is not an account");
         write(project, ".moss/plugins/social/config.json", r#"{"boundUserName": "@old"}"#);
-        bind_account(project, "social", &AccountBinding { id: "acct:2".into(), name: Some("@new".into()) }).unwrap();
+        bind_account(project, "social", &AccountBinding { id: "acct:2".into(), name: Some("@new".into()), host: None }).unwrap();
         assert_eq!(account_binding(project, "social").and_then(|b| b.name), Some("@new".into()));
+    }
+
+    #[tokio::test]
+    async fn the_server_a_sign_in_names_owns_that_servers_addresses() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().to_str().unwrap().to_string();
+        write(&project, ".moss/plugins/social/manifest.json", r#"{"name":"social","version":"0.1.0","entry":"main.bundle.js",
+            "global_name":"Social","contributes":{"channel":{"login":true,"syndication":{"forms":["short"]}}}}"#);
+        write(&project, ".moss/plugins/social/main.bundle.js", r#"var Social = { async login(ctx) {
+            return { status: "completed", account: { id: "social.example.net/1", name: "@a@social.example.net", host: "https://Social.Example.net/" } }; } };"#);
+        write(&project, ".moss/config.toml", "[channels.social]\n");
+        assert!(matches!(sign_in(&project).await.outcome, LoginOutcome::Completed(_)));
+
+        use crate::build::scan::article_map::{ArticleInfo, ArticleMap};
+        use crate::syndication::plan::{decide, Action, PlanInputs};
+        let listed = "https://social.example.net/@a/1";
+        let post: ArticleInfo = serde_json::from_value(json!({ "source_path": "a.md", "title": "A", "content": "Hello.", "url_path": "a/", "date": null,
+            "uid": "aa11aa11", "syndicate": ["social"], "frontmatter": { "uid": "aa11aa11", "syndicated": [listed] } })).unwrap();
+        let mut articles = ArticleMap::default();
+        articles.articles.insert(post.url_path.clone(), post);
+        let channels = crate::syndication::landing::channels(dir.path());
+        let config = crate::config::ConfigFile::parse("").unwrap();
+        let records = crate::syndication::record::Records::at(dir.path().join("copies"));
+        let none = std::collections::HashSet::new();
+        let plans = decide(&PlanInputs { folder: dir.path(), config: &config, site_url: Some("https://example.org"), articles: &articles, previously_live: None, edited_sources: &none, channels: &channels }, &records);
+        let actions: Vec<_> = plans.iter().flat_map(|p| p.entries.iter().map(|e| e.action.clone())).collect();
+        assert_eq!(actions, [Action::Adopt { url: listed.into() }], "a copy on the signed-in server is adopted, not posted again");
+    }
+
+    #[test]
+    fn a_sign_ins_server_is_a_host_or_the_sign_in_fails() {
+        let read = |host: serde_json::Value| LoginOutcome::from_returned(Some(&json!({"status": "completed", "account": {"id": "s/1", "host": host}})));
+        let bound = |host: &str| LoginOutcome::Completed(AccountBinding { id: "s/1".into(), name: None, host: Some(host.into()) });
+        assert_eq!(read(json!("https://Social.Example.net:443/")), bound("social.example.net"));
+        assert_eq!(read(json!("social.example.net")), bound("social.example.net"));
+        let refused = LoginOutcome::Failed { message: "the sign-in named the account's server by something other than a host".into() };
+        assert_eq!(read(json!(7)), refused);
+        assert_eq!(read(json!("")), refused);
+        assert_eq!(read(json!(null)), refused);
     }
 
     /// A channel whose bundle is `body` (the members of its global), with one
@@ -421,7 +477,7 @@ mod tests {
     #[tokio::test]
     async fn sign_out_runs_the_plugins_logout_and_forgets_the_credentials_and_the_binding() {
         let (dir, project) = folder_with_hooks(WRITES_LOGGED_OUT);
-        bind_account(&project, "social", &AccountBinding { id: "acct:1".into(), name: Some("@ada".into()) }).unwrap();
+        bind_account(&project, "social", &AccountBinding { id: "acct:1".into(), name: Some("@ada".into()), host: None }).unwrap();
         write(&project, ".moss/plugins/social/config.json", r#"{"boundUserId": "acct:1", "boundUserName": "ada", "publication": "https://ada.example"}"#);
         let app = tempfile::tempdir().unwrap();
         let secrets = crate::identity::secrets::SecretStore::in_app_data(app.path());
@@ -439,7 +495,7 @@ mod tests {
     #[tokio::test]
     async fn a_logout_that_fails_is_reported_and_the_rest_of_sign_out_still_runs() {
         let (_dir, project) = folder_with_hooks(r#"async logout(ctx) { throw new Error("revoke refused"); }"#);
-        bind_account(&project, "social", &AccountBinding { id: "acct:1".into(), name: None }).unwrap();
+        bind_account(&project, "social", &AccountBinding { id: "acct:1".into(), name: None, host: None }).unwrap();
         let app = tempfile::tempdir().unwrap();
         let secrets = crate::identity::secrets::SecretStore::in_app_data(app.path());
         let (manager, plugin) = manager(&project);
@@ -451,7 +507,7 @@ mod tests {
     #[tokio::test]
     async fn a_channel_with_no_logout_signs_out_without_a_failure() {
         let (_dir, project) = folder_with_hooks("");
-        bind_account(&project, "social", &AccountBinding { id: "acct:1".into(), name: None }).unwrap();
+        bind_account(&project, "social", &AccountBinding { id: "acct:1".into(), name: None, host: None }).unwrap();
         let app = tempfile::tempdir().unwrap();
         let secrets = crate::identity::secrets::SecretStore::in_app_data(app.path());
         let (manager, plugin) = manager(&project);
@@ -465,10 +521,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().to_str().unwrap();
         assert!(plugin_needs_connection(project, "social"));
-        bind_account(project, "social", &AccountBinding { id: "acct:1".into(), name: None }).unwrap();
+        bind_account(project, "social", &AccountBinding { id: "acct:1".into(), name: None, host: None }).unwrap();
         unbind_account(project, "social").unwrap();
         assert!(!plugin_needs_connection(project, "social"), "a build after Sign out does not open the sign-in");
-        bind_account(project, "social", &AccountBinding { id: "acct:2".into(), name: None }).unwrap();
+        bind_account(project, "social", &AccountBinding { id: "acct:2".into(), name: None, host: None }).unwrap();
         assert!(!marked_signed_out(project, "social"), "signing in again lifts it");
     }
 
@@ -482,7 +538,7 @@ mod tests {
         unbind_account(project, "social").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "[deployment]\nsite_id = \"site-1\"\n");
         assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), modified);
-        bind_account(project, "social", &AccountBinding { id: "acct:1".into(), name: None }).unwrap();
+        bind_account(project, "social", &AccountBinding { id: "acct:1".into(), name: None, host: None }).unwrap();
         unbind_account(project, "social").unwrap();
         let (bytes, modified) = (std::fs::read(&path).unwrap(), std::fs::metadata(&path).unwrap().modified().unwrap());
         unbind_account(project, "social").unwrap();
@@ -494,14 +550,14 @@ mod tests {
     fn a_conflicted_copy_from_before_the_sign_out_does_not_bring_the_account_back() {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().to_str().unwrap();
-        bind_account(project, "social", &AccountBinding { id: "acct:1".into(), name: Some("@ada".into()) }).unwrap();
+        bind_account(project, "social", &AccountBinding { id: "acct:1".into(), name: Some("@ada".into()), host: None }).unwrap();
         let before = std::fs::read_to_string(dir.path().join(".moss/state.toml")).unwrap();
         unbind_account(project, "social").unwrap();
         write(project, ".moss/state 2.toml", &before);
         crate::vault::synced_siblings::reconcile_synced_state(&crate::moss_paths::MossPaths::new(dir.path()));
         assert!(!dir.path().join(".moss/state 2.toml").exists(), "the sibling was folded in");
         assert_eq!(account_binding(project, "social"), None);
-        bind_account(project, "social", &AccountBinding { id: "acct:2".into(), name: None }).unwrap();
+        bind_account(project, "social", &AccountBinding { id: "acct:2".into(), name: None, host: None }).unwrap();
         assert_eq!(account_binding(project, "social").and_then(|b| b.id), Some("acct:2".into()), "signing in again replaces the mark");
     }
 
@@ -509,10 +565,10 @@ mod tests {
     fn a_conflicted_copy_from_after_a_sign_in_does_not_sign_the_folder_out() {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().to_str().unwrap();
-        bind_account(project, "social", &AccountBinding { id: "acct:1".into(), name: None }).unwrap();
+        bind_account(project, "social", &AccountBinding { id: "acct:1".into(), name: None, host: None }).unwrap();
         unbind_account(project, "social").unwrap();
         let signed_out_copy = std::fs::read_to_string(dir.path().join(".moss/state.toml")).unwrap();
-        bind_account(project, "social", &AccountBinding { id: "acct:2".into(), name: None }).unwrap();
+        bind_account(project, "social", &AccountBinding { id: "acct:2".into(), name: None, host: None }).unwrap();
         write(project, ".moss/state 2.toml", &signed_out_copy);
         crate::vault::synced_siblings::reconcile_synced_state(&crate::moss_paths::MossPaths::new(dir.path()));
         assert_eq!(account_binding(project, "social").and_then(|b| b.id), Some("acct:2".into()));
@@ -521,7 +577,7 @@ mod tests {
     #[tokio::test]
     async fn an_older_login_after_a_sign_out_lifts_it() {
         let (_dir, project) = folder_with_channel(r#"await globalThis.__TAURI__.core.invoke("write_plugin_file", { relativePath: "config.json", content: JSON.stringify({ boundUserName: "@ada" }) }); return { success: true };"#);
-        bind_account(&project, "social", &AccountBinding { id: "acct:1".into(), name: None }).unwrap();
+        bind_account(&project, "social", &AccountBinding { id: "acct:1".into(), name: None, host: None }).unwrap();
         unbind_account(&project, "social").unwrap();
         assert!(sign_in(&project).await.newly_bound);
         assert!(!marked_signed_out(&project, "social"));
@@ -530,7 +586,7 @@ mod tests {
     async fn state_with(copy_account: &str, bound: Option<&str>) -> AccountState {
         let (_dir, project) = folder_with_hooks(&format!("async copy_account(q) {{ return {copy_account}; }}"));
         if let Some(name) = bound {
-            bind_account(&project, "social", &AccountBinding { id: "acct:1".into(), name: Some(name.into()) }).unwrap();
+            bind_account(&project, "social", &AccountBinding { id: "acct:1".into(), name: Some(name.into()), host: None }).unwrap();
         }
         manager(&project).0.account_state("social").await
     }
@@ -545,7 +601,7 @@ mod tests {
         let other = r#"{ success: true, copy: { account: "acct:9" } }"#;
         assert_eq!(state_with(other, Some("@ada")).await, AccountState::SignedIn { name: "acct:9".into() }, "another account's session is not shown under this binding's name");
         let (_dir, project) = folder_with_hooks("");
-        bind_account(&project, "social", &AccountBinding { id: "acct:1".into(), name: Some("@ada".into()) }).unwrap();
+        bind_account(&project, "social", &AccountBinding { id: "acct:1".into(), name: Some("@ada".into()), host: None }).unwrap();
         assert_eq!(manager(&project).0.account_state("social").await, AccountState::SignedIn { name: "@ada".into() }, "no copy_account: the binding");
         let failed = r#"{ success: false, error: "rate limited" }"#;
         assert!(matches!(state_with(failed, Some("@ada")).await, AccountState::Unread { name: Some(n), why: Some(_) } if n == "@ada"), "a failed read is neither signed in nor signed out");
