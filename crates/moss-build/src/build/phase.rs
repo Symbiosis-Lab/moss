@@ -517,17 +517,17 @@ fn store_count(name: &'static str, value: usize, merge: fn(&mut usize, usize)) {
     }
 }
 
-/// Pure formatter for the `build.summary` line — factored out of
-/// [`log_build_summary`] so the shape is testable without a log-capture
-/// harness (none exists in this crate; see `phase.rs`'s own tests below).
+/// The `build.summary` line, apart from the logging so its shape is testable.
+/// `unattributed` is signed: below zero, phases on the main lane overlapped.
 pub fn format_build_summary(
-    phases: &[(&'static str, Duration)],
-    counts: &[(&'static str, usize)],
+    t: &BuildTelemetry,
     total: Duration,
     outcome: &str,
     trigger: &crate::build::BuildTrigger,
+    reason: Option<crate::build::BuildReason>,
 ) -> String {
     use crate::build::BuildTrigger;
+    use std::fmt::Write;
     // `changed` counts the watcher's paths for this build, after its filter; a
     // path the OS reported twice counts twice, so it is a size hint.
     let trigger = match trigger {
@@ -537,24 +537,16 @@ pub fn format_build_summary(
         BuildTrigger::Structural(paths) => format!("trigger=structural changed={}", paths.len()),
         BuildTrigger::ContentOnly(paths) => format!("trigger=content changed={}", paths.len()),
     };
-    let phases_str = phases
-        .iter()
-        .map(|(name, d)| format!("{name}={}ms", d.as_millis()))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let counts_str = counts
-        .iter()
-        .map(|(name, v)| format!("{name}={v}"))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let mut line = format!("build.summary outcome={outcome} {trigger} total={}ms", total.as_millis());
-    if !counts_str.is_empty() {
-        line.push(' ');
-        line.push_str(&counts_str);
+    let mut line = format!("build.summary outcome={outcome} {trigger}");
+    if let Some(reason) = reason {
+        let _ = write!(line, " reason={reason}");
     }
-    if !phases_str.is_empty() {
-        line.push(' ');
-        line.push_str(&phases_str);
+    let _ = write!(line, " total={}ms unattributed={}ms", total.as_millis(), unattributed_ms(&t.phases, total));
+    for (name, v) in &t.counts {
+        let _ = write!(line, " {name}={v}");
+    }
+    for p in &t.phases {
+        let _ = write!(line, " {}={}ms", p.name, p.ms);
     }
     line
 }
@@ -568,10 +560,11 @@ pub fn log_build_summary(
     total: Duration,
     outcome: &str,
     trigger: &crate::build::BuildTrigger,
+    reason: Option<crate::build::BuildReason>,
 ) {
-    let telemetry = collector.lock().map(|t| (t.phases.iter().map(|p| (p.name, Duration::from_millis(p.ms as u64))).collect::<Vec<_>>(), t.counts.clone()));
-    let (phases, counts) = telemetry.unwrap_or_default();
-    log::info!(target: "build", "{}", format_build_summary(&phases, &counts, total, outcome, trigger));
+    let line = collector.lock().map(|t| format_build_summary(&t, total, outcome, trigger, reason))
+        .unwrap_or_else(|_| format_build_summary(&BuildTelemetry::default(), total, outcome, trigger, reason));
+    log::info!(target: "build", "{line}");
 }
 
 /// Counts every build record carries, so a build that did none of the work says 0
@@ -619,7 +612,7 @@ fn profile_record(t: &BuildTelemetry, kind: &str, keys: &[&[&'static str]], tota
     record
 }
 
-fn build_record(t: &BuildTelemetry, total: Duration, outcome: &str, trigger: &crate::build::BuildTrigger) -> serde_json::Value {
+fn build_record(t: &BuildTelemetry, total: Duration, outcome: &str, trigger: &crate::build::BuildTrigger, reason: Option<crate::build::BuildReason>) -> serde_json::Value {
     use crate::build::BuildTrigger;
     let (kind, changed) = match trigger {
         BuildTrigger::Full => ("full", 0),
@@ -630,6 +623,9 @@ fn build_record(t: &BuildTelemetry, total: Duration, outcome: &str, trigger: &cr
     };
     let mut record = profile_record(t, "build", &[BUILD_COUNTS, VIDEO_COUNTS], total, outcome);
     record["trigger"] = serde_json::json!({ "kind": kind, "changed": changed });
+    if let Some(reason) = reason {
+        record["reason"] = serde_json::json!(reason.to_string());
+    }
     record
 }
 
@@ -674,9 +670,9 @@ fn profile_path(source: &std::path::Path) -> Option<std::path::PathBuf> {
     source.is_dir().then(|| crate::moss_paths::MossPaths::new(source).profile())
 }
 
-pub(crate) fn append_profile(collector: &PhaseCollector, total: Duration, result: &Result<String, String>, source: &std::path::Path, trigger: &crate::build::BuildTrigger) {
+pub(crate) fn append_profile(collector: &PhaseCollector, total: Duration, result: &Result<String, String>, source: &std::path::Path, trigger: &crate::build::BuildTrigger, reason: Option<crate::build::BuildReason>) {
     let Some(path) = profile_path(source) else { return };
-    let record = collector.lock().map(|t| build_record(&t, total, if result.is_ok() { "ok" } else { "error" }, trigger));
+    let record = collector.lock().map(|t| build_record(&t, total, if result.is_ok() { "ok" } else { "error" }, trigger, reason));
     let written = record.map_err(|e| std::io::Error::other(e.to_string()))
         .and_then(|record| append_record(&path, &record));
     if let Err(e) = written { log::debug!("could not append build profile: {e}"); }
@@ -784,9 +780,9 @@ mod tests {
         let collector: PhaseCollector = Arc::new(Mutex::new(BuildTelemetry::default()));
         let refused = Err("no such folder".to_string());
         let gone = dir.path().join("gone");
-        append_profile(&collector, Duration::ZERO, &refused, &gone, &crate::build::BuildTrigger::Full);
+        append_profile(&collector, Duration::ZERO, &refused, &gone, &crate::build::BuildTrigger::Full, None);
         assert!(!gone.exists(), "a refused build makes no folder to keep its record in");
-        append_profile(&collector, Duration::ZERO, &refused, dir.path(), &crate::build::BuildTrigger::Full);
+        append_profile(&collector, Duration::ZERO, &refused, dir.path(), &crate::build::BuildTrigger::Full, None);
         assert!(crate::moss_paths::MossPaths::new(dir.path()).profile().exists(), "a folder keeps the record");
     }
 
@@ -822,7 +818,7 @@ mod tests {
                 record_count("search_pages", 3);
             })).await.unwrap();
         }).await;
-        let record = build_record(&collector.lock().unwrap(), Duration::from_millis(42), "ok", &crate::build::BuildTrigger::ContentOnly(vec!["page.md".into()]));
+        let record = build_record(&collector.lock().unwrap(), Duration::from_millis(42), "ok", &crate::build::BuildTrigger::ContentOnly(vec!["page.md".into()]), None);
         assert_eq!(record["schema"], 1);
         assert_eq!(record["kind"], "build");
         assert_eq!(record["moss_version"], crate::system::app_version());
@@ -944,7 +940,7 @@ mod tests {
             progress: Arc::new(crate::build::ports::reporter::NullReporter), plugins: PluginMode::Skip,
             watch: false, start_server: false,
             host: crate::build::ports::host::test_host_ports(),
-            trigger: BuildTrigger::Full, exits_after_build: true,
+            trigger: BuildTrigger::Full, reason: None, exits_after_build: true,
             site_url_override: None, server_port: None, admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
         }).await.expect("fixture builds");
         release.join().unwrap();
@@ -953,6 +949,24 @@ mod tests {
         let waited: u64 = record["phases"].as_array().unwrap().iter()
             .filter(|p| p["name"] == "lock_wait").map(|p| p["ms"].as_u64().unwrap()).sum();
         assert!(waited >= 300, "the wait for the held folder lock is recorded as lock_wait: {record}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_build_records_why_it_was_asked_for() {
+        use crate::build::{run_pipeline, BuildReason, BuildTrigger, PipelineConfig, PluginMode};
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.md"), "---\ntitle: Garden\n---\n\nA quiet garden.\n").unwrap();
+        run_pipeline(PipelineConfig {
+            root: crate::vault::paths::VaultRoot::resolve(dir.path()),
+            progress: Arc::new(crate::build::ports::reporter::NullReporter), plugins: PluginMode::Skip,
+            watch: false, start_server: false,
+            host: crate::build::ports::host::test_host_ports(),
+            trigger: BuildTrigger::Full, reason: Some(BuildReason::setting("math")), exits_after_build: true,
+            site_url_override: None, server_port: None, admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
+        }).await.expect("fixture builds");
+        let text = std::fs::read_to_string(crate::moss_paths::MossPaths::new(dir.path()).profile()).unwrap();
+        let record: serde_json::Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
+        assert_eq!(record["reason"], "setting:math", "{record}");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -986,7 +1000,7 @@ mod tests {
                 progress: receipts.clone(), plugins: PluginMode::Skip,
                 watch: false, start_server: false,
                 host,
-                trigger: BuildTrigger::Full, exits_after_build: true,
+                trigger: BuildTrigger::Full, reason: None, exits_after_build: true,
                 site_url_override: None, server_port: None, admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
             }).await.expect("fixture builds");
             let generation = paths.generation_dir(&paths.current_generation_id().unwrap());
@@ -1273,23 +1287,29 @@ mod tests {
         assert!(!telemetry.phases.iter().any(|p| p.name == "unbridged_blocking"));
     }
 
+    fn telemetry(phases: &[(u64, &'static str, u128, Option<u64>)], counts: &[(&'static str, usize)]) -> BuildTelemetry {
+        let phases = phases.iter().map(|&(id, name, ms, parent_id)| PhaseSample { pass: 1, name, ms, parent: None, beside: false, id, parent_id }).collect();
+        BuildTelemetry { phases, counts: counts.to_vec(), ..BuildTelemetry::default() }
+    }
+
     #[test]
     fn format_build_summary_includes_every_phase_and_count() {
-        let phases = vec![("scan", Duration::from_millis(12)), ("build", Duration::from_millis(340))];
-        let counts = vec![("pages", 7usize)];
+        let t = telemetry(&[(0, "scan", 12, None), (1, "build", 340, None)], &[("pages", 7)]);
         let edits = crate::build::BuildTrigger::ContentOnly(vec!["a.md".into(), "b.md".into()]);
-        let line = format_build_summary(&phases, &counts, Duration::from_millis(400), "ok", &edits);
-        assert!(line.contains("outcome=ok trigger=content changed=2 total=400ms"), "{line}");
-        assert!(line.contains("outcome=ok"));
-        assert!(line.contains("total=400ms"));
-        assert!(line.contains("pages=7"));
-        assert!(line.contains("scan=12ms"));
-        assert!(line.contains("build=340ms"));
+        let line = format_build_summary(&t, Duration::from_millis(400), "ok", &edits, None);
+        assert_eq!(line, "build.summary outcome=ok trigger=content changed=2 total=400ms unattributed=48ms pages=7 scan=12ms build=340ms");
     }
 
     #[test]
     fn format_build_summary_with_nothing_recorded_still_reports_outcome_and_total() {
-        let line = format_build_summary(&[], &[], Duration::from_millis(5), "error", &crate::build::BuildTrigger::Full);
-        assert_eq!(line, "build.summary outcome=error trigger=full total=5ms");
+        let line = format_build_summary(&BuildTelemetry::default(), Duration::from_millis(5), "error", &crate::build::BuildTrigger::Full, None);
+        assert_eq!(line, "build.summary outcome=error trigger=full total=5ms unattributed=5ms");
+    }
+
+    #[test]
+    fn a_build_summary_names_why_it_was_asked_for_and_shows_overlapping_phases_below_zero() {
+        let t = telemetry(&[(0, "scan", 70, None), (1, "render", 60, None)], &[]);
+        let line = format_build_summary(&t, Duration::from_millis(100), "ok", &crate::build::BuildTrigger::Full, Some(crate::build::BuildReason::setting("math")));
+        assert_eq!(line, "build.summary outcome=ok trigger=full reason=setting:math total=100ms unattributed=-30ms scan=70ms render=60ms");
     }
 }

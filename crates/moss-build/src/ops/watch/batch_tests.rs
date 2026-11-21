@@ -225,3 +225,47 @@ fn an_atomic_save_is_one_batch_released_within_200ms() {
     assert_eq!(holds.len(), 1, "one save, one batch: {holds:?}");
     assert!(holds[0] < Duration::from_millis(200), "the save waited {:?} for its rebuild", holds[0]);
 }
+
+#[tokio::test]
+async fn a_batch_that_touches_the_config_asks_for_a_config_build() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join(".moss")).unwrap();
+    std::fs::write(root.join(".moss/config.toml"), "[site]\nmath = true\n").unwrap();
+    std::fs::write(root.join("P.md"), "# Page\n").unwrap();
+    let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let dispatch: RebuildDispatch = {
+        let asked = asked.clone();
+        Arc::new(move |req: worker::RebuildRequest| {
+            asked.lock().unwrap().push(req.reason);
+            Box::pin(async {})
+        })
+    };
+    let (emit, _events) = recording_relay();
+    let edit = EventKind::Modify(ModifyKind::Any);
+    let folder = root.to_str().unwrap();
+    handle_debounced_batch(vec![event(edit, vec![root.join(".moss/config.toml")])], folder, &emit, &dispatch).await;
+    handle_debounced_batch(vec![event(edit, vec![root.join("P.md")])], folder, &emit, &dispatch).await;
+    assert_eq!(*asked.lock().unwrap(), [Some(crate::build::BuildReason::Config), Some(crate::build::BuildReason::Watch)]);
+}
+
+#[test]
+fn a_write_moss_makes_to_the_config_asks_for_a_config_build() {
+    use crate::build::BuildReason::{Config, Watch};
+    use crate::build::watch::drift::{Drift, DriftKind, DriftReport};
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join(".moss")).unwrap();
+    let config = root.join(".moss/config.toml");
+    std::fs::write(&config, "[site]\nmath = true\n").unwrap();
+    std::fs::write(root.join("P.md"), "# Page\n").unwrap();
+    let written = |path: &std::path::Path| request_for_writes(&root, vec![path.to_path_buf()]).map(|r| r.reason);
+    assert_eq!(written(&config), Some(Some(Config)));
+    assert_eq!(written(&root.join("P.md")), Some(Some(Watch)));
+    let created = request_for(&root, crate::commands::Change::Created(&[config.to_string_lossy().into_owned()])).map(|r| r.reason);
+    assert_eq!(created, Some(Some(Config)));
+    let mut report = DriftReport::default();
+    report.drifted.insert(".moss/config.toml".into(), Drift { kind: DriftKind::Structural, stamp: crate::build::stat::FileStat::of(&std::fs::metadata(&config).unwrap()) });
+    let drift = sweep::request_for_drift(&root, &report, &[".moss/config.toml".into()], None);
+    assert_eq!(drift.reason, Some(Config));
+}

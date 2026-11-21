@@ -293,8 +293,9 @@ pub(crate) fn request_for_drift(
 ) -> crate::ops::watch::worker::RebuildRequest {
     use crate::build::BuildTrigger;
     use crate::ops::watch::worker::RebuildRequest;
-    let ungated = |trigger| RebuildRequest { rename_pairs: Vec::new(), trigger, gate_paths: None };
     let paths: Vec<std::path::PathBuf> = fresh.iter().map(|r| folder.join(r)).collect();
+    let reason = Some(crate::ops::watch::reason_for(folder, paths.iter()));
+    let ungated = |trigger| RebuildRequest { rename_pairs: Vec::new(), trigger, gate_paths: None, reason };
     if report.any_structural(fresh) {
         return ungated(BuildTrigger::Structural(paths));
     }

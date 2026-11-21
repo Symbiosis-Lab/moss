@@ -29,7 +29,7 @@ async fn a_build_folds_a_conflict_sibling_into_the_state_file() {
         watch: false,
         start_server: false,
         host: cli_host_ports(&folder_str),
-        trigger: BuildTrigger::Full,
+        trigger: BuildTrigger::Full, reason: None,
         exits_after_build: true,
         site_url_override: Some("https://example.com".to_string()),
         server_port: None,

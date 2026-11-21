@@ -37,7 +37,7 @@ async fn a_build_removes_the_oldest_output_roots_from_the_folder() {
         watch: false,
         start_server: false,
         host: cli_host_ports(&folder_str),
-        trigger: BuildTrigger::Full,
+        trigger: BuildTrigger::Full, reason: None,
         exits_after_build: true,
         site_url_override: Some("https://example.com".to_string()),
         server_port: None,

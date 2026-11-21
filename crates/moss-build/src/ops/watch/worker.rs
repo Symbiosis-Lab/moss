@@ -83,6 +83,8 @@ pub struct RebuildRequest {
     /// remove, lost-events full scan, the sweep's top-level change or cloud
     /// arrival, thaw).
     pub gate_paths: Option<Vec<std::path::PathBuf>>,
+    /// Why the host asked; merged with [`BuildReason::merge`](crate::build::BuildReason::merge).
+    pub reason: Option<crate::build::BuildReason>,
 }
 
 impl RebuildRequest {
@@ -91,6 +93,7 @@ impl RebuildRequest {
             rename_pairs: Vec::new(),
             trigger: BuildTrigger::Full,
             gate_paths: None,
+            reason: None,
         }
     }
 
@@ -196,7 +199,11 @@ pub fn merge_requests(occupant: RebuildRequest, incoming: RebuildRequest) -> Reb
         _ => None,
     };
     let rename_pairs = compose_rename_pairs(occupant.rename_pairs, incoming.rename_pairs);
-    RebuildRequest { gate_paths, trigger: occupant.trigger.merge(incoming.trigger), rename_pairs }
+    let reason = match (occupant.reason, incoming.reason) {
+        (Some(a), Some(b)) => Some(a.merge(b)),
+        (a, b) => a.or(b),
+    };
+    RebuildRequest { gate_paths, trigger: occupant.trigger.merge(incoming.trigger), rename_pairs, reason }
 }
 
 /// Shared handle to one folder's request slot. Producers enqueue/poke through

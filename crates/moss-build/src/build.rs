@@ -68,6 +68,8 @@
 //! - `ship::ship_phase` — writes the generation from the sealed manifest.
 
 pub mod pipeline;
+pub mod reason;
+pub use reason::BuildReason;
 pub mod cloud_ledger;
 pub(crate) mod cloud_prefetch;
 pub mod cloud_provider;
@@ -318,6 +320,9 @@ pub struct PipelineConfig {
     /// What triggered this build — see `BuildTrigger`. Read by
     /// `incremental_gates::ChangeProof::for_build`.
     pub trigger: BuildTrigger,
+    /// Why the host asked for this build, printed on its `build.summary` line.
+    /// `None` where the host does not say, as in the CLI and tests.
+    pub reason: Option<BuildReason>,
     /// True when this build is invoked from a process that will exit shortly
     /// after `run_pipeline` returns (CLI subcommands, snapshot tests). Such
     /// callers cannot rely on a background task to fill the link-meta or
@@ -734,8 +739,9 @@ pub async fn run_pipeline(config: PipelineConfig) -> Result<String, String> {
         pipeline_start.elapsed(),
         if result.is_ok() { "ok" } else { "error" },
         &config.trigger,
+        config.reason,
     );
-    crate::build::phase::append_profile(&collector, pipeline_start.elapsed(), &result, config.source(), &config.trigger);
+    crate::build::phase::append_profile(&collector, pipeline_start.elapsed(), &result, config.source(), &config.trigger, config.reason);
     result
 }
 

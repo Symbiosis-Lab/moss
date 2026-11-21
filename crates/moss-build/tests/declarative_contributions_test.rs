@@ -32,7 +32,7 @@ fn build_for(root: &Path, mode: PluginMode, trigger: BuildTrigger) {
         watch: false,
         start_server: false,
         host: moss_build::cli::host::cli_host_ports(root.to_str().unwrap()),
-        trigger,
+        trigger, reason: None,
         exits_after_build: true,
         site_url_override: Some("https://example.com".into()),
         server_port: None,

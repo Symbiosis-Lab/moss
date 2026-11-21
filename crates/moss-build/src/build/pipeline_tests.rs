@@ -453,7 +453,7 @@ async fn production_build_installs_one_ordered_preflight_projection_for_the_publ
         watch: false,
         start_server: false,
         host: crate::build::ports::host::test_host_ports(),
-        trigger: BuildTrigger::Full,
+        trigger: BuildTrigger::Full, reason: None,
         exits_after_build: true,
         site_url_override: None,
         server_port: None,
@@ -2314,7 +2314,7 @@ async fn a_rebuild_sweeps_staging_only_when_the_render_on_screen_is_promoted() {
                 services,
                 ..crate::build::ports::host::test_host_ports()
             },
-            trigger: BuildTrigger::Full,
+            trigger: BuildTrigger::Full, reason: None,
             // A long-lived process: the seal tail runs detached, as in the app.
             exits_after_build: false,
             site_url_override: None,
@@ -6804,7 +6804,7 @@ fn a_review_item_still_in_the_cloud_holds_the_publish() {
                 root: crate::vault_root::VaultRoot::resolve(&dir),
                 progress: crate::build::null_sink(), plugins: PluginMode::Skip,
                 watch: false, start_server: false,
-                host: crate::build::ports::host::test_host_ports(), trigger: BuildTrigger::Full,
+                host: crate::build::ports::host::test_host_ports(), trigger: BuildTrigger::Full, reason: None,
                 exits_after_build: true, site_url_override: None, server_port: None,
                 admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
             }).await;
@@ -8519,7 +8519,7 @@ fn availability_pending_source_walk_preserves_current_generation_and_baseline() 
         root: crate::vault_root::VaultRoot::resolve(&dir),
         progress: crate::build::null_sink(), plugins: PluginMode::Skip,
         watch: false, start_server: false,
-        host: crate::build::ports::host::test_host_ports(), trigger: BuildTrigger::Full,
+        host: crate::build::ports::host::test_host_ports(), trigger: BuildTrigger::Full, reason: None,
         exits_after_build: true, site_url_override: None, server_port: None,
         admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
     };
@@ -8565,7 +8565,7 @@ fn a_folder_closed_before_its_scan_still_cancels_the_scan() {
             let config = PipelineConfig {
                 root: crate::vault_root::VaultRoot::resolve(&dir), progress: crate::build::null_sink(), plugins: PluginMode::Skip,
                 watch: false, start_server: false, host: crate::build::ports::host::HostPorts { services, ..crate::build::ports::host::test_host_ports() },
-                trigger: BuildTrigger::Full, exits_after_build: true, site_url_override: None, server_port: None, admission_epoch: None,
+                trigger: BuildTrigger::Full, reason: None, exits_after_build: true, site_url_override: None, server_port: None, admission_epoch: None,
                 live_port: None, rename_pairs: Vec::new(),
             };
             session.cancel.cancel();
@@ -8589,7 +8589,7 @@ fn availability_fatal_scan_settles_a_previous_cloud_waiting_gate() {
             let (dir, _cleanup) = create_test_dir();
             let config = || PipelineConfig {
                 root: crate::vault_root::VaultRoot::resolve(&dir), progress: crate::build::null_sink(), plugins: PluginMode::Skip,
-                watch: false, start_server: false, host: crate::build::ports::host::test_host_ports(), trigger: BuildTrigger::Full,
+                watch: false, start_server: false, host: crate::build::ports::host::test_host_ports(), trigger: BuildTrigger::Full, reason: None,
                 exits_after_build: true, site_url_override: None, server_port: None, admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
             };
             let fault = TestFault::install(&dir, &dir, StorageOperation::RootMetadata, 1000, std::time::Duration::from_millis(20));
@@ -8763,7 +8763,7 @@ async fn a_build_whose_published_page_links_to_a_draft_refuses_the_publish() {
         watch: false,
         start_server: false,
         host: crate::build::ports::host::test_host_ports(),
-        trigger: BuildTrigger::Full,
+        trigger: BuildTrigger::Full, reason: None,
         exits_after_build: true,
         site_url_override: None,
         server_port: None,
@@ -9095,7 +9095,7 @@ async fn a_build_holds_its_activity_while_it_reports_progress() {
         watch: false,
         start_server: false,
         host: crate::build::ports::host::test_host_ports(),
-        trigger: BuildTrigger::Full,
+        trigger: BuildTrigger::Full, reason: None,
         exits_after_build: true,
         site_url_override: None,
         server_port: None,

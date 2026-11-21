@@ -19,7 +19,7 @@ fn build(folder: &Path) -> Result<String, String> {
         watch: false,
         start_server: false,
         host: cli_host_ports(&folder.to_string_lossy()),
-        trigger: moss_build::build::BuildTrigger::Full,
+        trigger: moss_build::build::BuildTrigger::Full, reason: None,
         exits_after_build: true,
         site_url_override: None,
         server_port: None,

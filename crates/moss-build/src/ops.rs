@@ -417,7 +417,7 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
             // last seal what changed, and render everything when they cannot.
             // `--strict` renders everything, since it fails on problems only a
             // render reports.
-            trigger: if run.flags.strict { BuildTrigger::Full } else { BuildTrigger::Unobserved },
+            trigger: if run.flags.strict { BuildTrigger::Full } else { BuildTrigger::Unobserved }, reason: None,
             // A serving process stays alive (it parks on ctrl-C below), so
             // only the plain build seals inline and fetches its link cards first.
             exits_after_build,

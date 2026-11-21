@@ -24,7 +24,7 @@ async fn build_once(folder_path: &str) {
         watch: false,
         start_server: false,
         host: crate::build::ports::host::test_host_ports(),
-        trigger: BuildTrigger::Full,
+        trigger: BuildTrigger::Full, reason: None,
         // A one-shot build sets this too: it is what
         // makes the seal tail (the `hashes.json` write these tests read)
         // finish before the call returns, rather than detaching the way a

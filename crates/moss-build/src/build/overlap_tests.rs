@@ -268,7 +268,7 @@ impl Overlap {
             watch: false,
             start_server: false,
             host,
-            trigger,
+            trigger, reason: None,
             exits_after_build,
             site_url_override: Some("https://example.com".to_string()),
             server_port: None,

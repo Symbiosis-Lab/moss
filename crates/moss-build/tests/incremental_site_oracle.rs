@@ -83,7 +83,7 @@ fn build_in(rt: &tokio::runtime::Runtime, root: &Path, trigger: BuildTrigger, ex
         watch: false,
         start_server: false,
         host: cli_host_ports(&folder),
-        trigger,
+        trigger, reason: None,
         exits_after_build,
         site_url_override: None,
         server_port: None,

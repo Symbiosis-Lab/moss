@@ -50,7 +50,7 @@ fn build(files: &[(&str, &str)]) -> (Site, PathBuf, usize) {
         watch: false,
         start_server: false,
         host: cli_host_ports(&source),
-        trigger: BuildTrigger::Full,
+        trigger: BuildTrigger::Full, reason: None,
         exits_after_build: true,
         site_url_override: None,
         server_port: None,

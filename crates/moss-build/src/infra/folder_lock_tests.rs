@@ -234,7 +234,7 @@ fn a_promoted_build_leaves_nothing_in_the_locks_folder() {
             progress: crate::build::null_sink(), plugins: PluginMode::Skip,
             watch: false, start_server: false,
             host: crate::build::ports::host::test_host_ports(),
-            trigger: BuildTrigger::Full, exits_after_build: true,
+            trigger: BuildTrigger::Full, reason: None, exits_after_build: true,
             site_url_override: None, server_port: None, admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
         })).expect("fixture builds");
         assert!(last_promoted_epoch(site.path()) > 0, "the build never recorded a promotion");

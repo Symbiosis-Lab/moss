@@ -62,7 +62,7 @@
       "armed": true,
       "value": {
         "crates/moss-build/src": 45,
-        "crates/moss-build/src/build": 81,
+        "crates/moss-build/src/build": 82,
         "crates/moss-build/src/build/media": 21,
         "crates/moss-build/src/deploy": 22,
         "crates/moss-build/src/js-src/bridge": 18,

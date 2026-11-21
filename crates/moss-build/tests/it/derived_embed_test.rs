@@ -105,7 +105,7 @@ impl Site {
             watch: false,
             start_server: false,
             host: cli_host_ports(&folder),
-            trigger: BuildTrigger::Full,
+            trigger: BuildTrigger::Full, reason: None,
             exits_after_build: mode == DeriveMode::Await,
             site_url_override: None,
             server_port: None,

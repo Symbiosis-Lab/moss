@@ -85,7 +85,7 @@ fn built_fixture() -> (tempfile::TempDir, HashMap<String, String>) {
         watch: false,
         start_server: false,
         host: crate::build::ports::host::test_host_ports(),
-        trigger: BuildTrigger::Full,
+        trigger: BuildTrigger::Full, reason: None,
         // Wait for the seal tail to write hashes.json before reading it.
         exits_after_build: true,
         site_url_override: None,

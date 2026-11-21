@@ -12,6 +12,7 @@ fn content_only(path: &str) -> RebuildRequest {
         rename_pairs: Vec::new(),
         trigger: BuildTrigger::ContentOnly(vec![std::path::PathBuf::from(path)]),
         gate_paths: None,
+        reason: None,
     }
 }
 
@@ -23,6 +24,7 @@ fn with_pairs(pairs: &[(&str, &str)]) -> RebuildRequest {
             .collect(),
         trigger: BuildTrigger::Structural(vec![]),
         gate_paths: None,
+        reason: None,
     }
 }
 
@@ -34,6 +36,15 @@ fn gated(paths: &[&str]) -> RebuildRequest {
 }
 
 // ── The merge rule ──────────────────────────────────────────────────────────
+
+#[test]
+fn a_merged_request_keeps_the_reason_that_says_most() {
+    use crate::build::BuildReason::{Plugins, Watch};
+    let ask = |reason| RebuildRequest { reason, ..content_only("a.md") };
+    assert_eq!(merge_requests(ask(Some(Watch)), ask(Some(Plugins))).reason, Some(Plugins));
+    assert_eq!(merge_requests(ask(None), ask(Some(Watch))).reason, Some(Watch));
+    assert_eq!(merge_requests(ask(Some(Plugins)), ask(None)).reason, Some(Plugins));
+}
 
 #[test]
 fn a_lone_request_keeps_its_rename_pairs_and_trigger() {
@@ -139,6 +150,7 @@ fn enqueue_onto_an_occupied_slot_merges() {
                 std::path::PathBuf::from("b.md")
             ]),
             gate_paths: None,
+            reason: None,
         })
     );
     assert_eq!(handle.take(), None, "merge must not leave a second request");

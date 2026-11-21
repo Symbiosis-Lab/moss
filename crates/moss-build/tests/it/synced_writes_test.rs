@@ -24,7 +24,7 @@ fn build(folder: &Path, preview: bool) {
         watch: false,
         start_server: false,
         host: cli_host_ports(&folder_path),
-        trigger: BuildTrigger::Full,
+        trigger: BuildTrigger::Full, reason: None,
         exits_after_build: true,
         site_url_override: None,
         // A server already serving the folder is what makes a build defer

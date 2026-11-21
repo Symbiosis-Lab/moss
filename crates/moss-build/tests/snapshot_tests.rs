@@ -78,7 +78,7 @@ fn build_sync(folder_path: &str, auto_serve: bool) -> Result<String, String> {
         watch: false,
         start_server: auto_serve,
         host: cli_host_ports(folder_path),
-        trigger: BuildTrigger::Full,
+        trigger: BuildTrigger::Full, reason: None,
         // Mirrors `build_sync`'s own doc comment on `PipelineConfig::
         // exits_after_build`: this process drops its runtime right after
         // `run_pipeline` returns, so link cards are fetched before render

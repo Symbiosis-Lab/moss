@@ -50,7 +50,7 @@ fn build(root: &Path) -> Vec<String> {
         watch: false,
         start_server: false,
         host: moss_build::cli::host::cli_host_ports(root.to_str().unwrap()),
-        trigger: BuildTrigger::Full,
+        trigger: BuildTrigger::Full, reason: None,
         exits_after_build: true,
         site_url_override: Some("https://example.com".into()),
         server_port: None,

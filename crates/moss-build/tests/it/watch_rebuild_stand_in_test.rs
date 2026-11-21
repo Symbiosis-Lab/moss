@@ -23,7 +23,7 @@ async fn build(turn: &crate::site::Turn, folder: &Path) {
         watch: false,
         start_server: false,
         host: cli_host_ports(&folder.to_string_lossy()),
-        trigger: BuildTrigger::Full,
+        trigger: BuildTrigger::Full, reason: None,
         exits_after_build: true,
         site_url_override: Some("https://example.com".to_string()),
         server_port: None,

@@ -3143,7 +3143,7 @@ async fn a_page_rewritten_on_disk_between_two_real_builds_is_in_modified_paths()
                 services,
                 ..crate::build::ports::host::test_host_ports()
             },
-            trigger,
+            trigger, reason: None,
             exits_after_build: false,
             site_url_override: None,
             server_port: None,
@@ -3203,7 +3203,7 @@ async fn a_save_between_the_builds_read_and_its_stash_is_built() {
                 services,
                 ..crate::build::ports::host::test_host_ports()
             },
-            trigger,
+            trigger, reason: None,
             exits_after_build: false,
             site_url_override: None,
             server_port: None,
@@ -3228,7 +3228,7 @@ async fn a_save_between_the_builds_read_and_its_stash_is_built() {
     let read = crate::build::render::blocking::source_metadata(None, b"# Note\n\nsecond\n").hash;
     assert_eq!(stash.sources.get("note.md").map(|m| m.hash.clone()), Some(read), "the stash holds the hash of the bytes build 2 read");
 
-    let request = crate::ops::watch::worker::RebuildRequest { rename_pairs: Vec::new(), trigger: edit(), gate_paths: Some(vec![page.clone()]) };
+    let request = crate::ops::watch::worker::RebuildRequest { rename_pairs: Vec::new(), trigger: edit(), gate_paths: Some(vec![page.clone()]), reason: None };
     assert!(request.gate_admits(&folder_key, "test").await, "the second save is admitted, not gated");
     build(edit()).await.expect("build 3");
     crate::system::build_records::records().forget_content_hashes(&folder_key);
@@ -3280,7 +3280,7 @@ async fn a_watch_rebuild_sends_file_changed_when_it_shows_the_render() {
                 services,
                 ..crate::build::ports::host::test_host_ports()
             },
-            trigger,
+            trigger, reason: None,
             exits_after_build: false,
             site_url_override: None,
             server_port: None,
@@ -3389,7 +3389,7 @@ async fn announce_one_save(evict_another_page: bool) {
                 services,
                 ..crate::build::ports::host::test_host_ports()
             },
-            trigger: BuildTrigger::Full,
+            trigger: BuildTrigger::Full, reason: None,
             exits_after_build: false,
             site_url_override: None,
             server_port: None,
@@ -3505,7 +3505,7 @@ async fn a_theme_css_file_rewritten_on_disk_between_two_real_builds_is_in_modifi
                 services,
                 ..crate::build::ports::host::test_host_ports()
             },
-            trigger,
+            trigger, reason: None,
             exits_after_build: false,
             site_url_override: None,
             server_port: None,
@@ -3592,7 +3592,7 @@ async fn a_places_toml_file_rewritten_on_disk_between_two_real_builds_is_in_modi
                 services,
                 ..crate::build::ports::host::test_host_ports()
             },
-            trigger,
+            trigger, reason: None,
             exits_after_build: false,
             site_url_override: None,
             server_port: None,

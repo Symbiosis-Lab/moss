@@ -59,7 +59,7 @@ fn cfg(folder: &std::path::Path, epoch: u64) -> PipelineConfig {
         // a detached background task — the whole point here, since the test
         // needs to control exactly when each build's promotion attempt runs.
         host: crate::build::ports::host::test_host_ports(),
-        trigger: BuildTrigger::Full,
+        trigger: BuildTrigger::Full, reason: None,
         exits_after_build: true,
         site_url_override: None,
         server_port: None,
