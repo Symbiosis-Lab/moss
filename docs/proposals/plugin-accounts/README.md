@@ -37,7 +37,7 @@ What the sign-in earned is stored with `setSecret` under a key the manifest decl
 
 `copy_account(ctx)` keeps its meaning: which account the stored credential belongs to now, answered from what is stored, or `signed_out` when there is none or the provider refuses it. A channel that signs in through an address returns no `LoginResult`; its binding comes from the first account `copy_account` names after the page opens.
 
-An optional `logout(ctx)` revokes the credential at the provider (Mastodon's `/oauth/revoke`, for one). moss calls it before forgetting the credential, and signs out locally whatever it answers.
+An optional `logout(ctx)` revokes the credential at the provider (Mastodon's `/oauth/revoke`, for one) and forgets the settings the plugin's sign-in filled in. moss calls it before forgetting the credential, and signs out locally whatever it answers.
 
 ## moss's side
 
@@ -54,7 +54,7 @@ A `copy_account` that fails stays an error, as today. These are the account stat
 
 **One sign-in at a time.** moss listens for one browser sign-in at a time, across all channels. Pressing Sign in ends any sign-in already running; a sign-in moss opens by itself, when a publish needs an account, joins one already running instead of starting another.
 
-**Sign out** calls `logout` if the plugin exports it, removes the account's secrets, clears the binding in every folder this computer knows that is bound to that account (folders on other computers fall to "sign in again"), and clears the channel's sign-in browser session. A step that fails is reported as one that can be retried; the others still happen. A folder can also be disconnected without signing the account out, which only clears that folder's binding.
+**Sign out** closes the channel's sign-in panel, calls `logout` if the plugin exports it, removes the secrets the manifest declares, clears this folder's binding, and clears the channel's sign-in browser session. `logout` runs first because it needs the credential to revoke it, and it is where a plugin forgets the settings its sign-in learned (a publication's address, a server), since moss cannot tell those from settings the person typed. The cleared binding is kept as a `signed-out` mark, so a conflicted copy of `state.toml` written before the sign out does not bring it back; a folder with nothing to clear is not written. Another folder on this computer bound to the same account is left as it is, and its row shows signed out because the secrets and cookies are gone; on other computers the folder shows signed out once its synced binding is gone. A step that fails is reported as one that can be retried; the others still happen. Off macOS, clearing the browser session cannot reach the server's httpOnly cookies, so the next sign-in there may find the platform still signed in.
 
 **Browser sessions.** Each channel that signs in through the action panel gets its own cookie store, so signing out of one never signs the person out of another. This needs macOS 14 or later; on older macOS, sign-out clears the channel's own domains from the shared store, as today. A sign-in in the system browser leaves no cookies in moss.
 

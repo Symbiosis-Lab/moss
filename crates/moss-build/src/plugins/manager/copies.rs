@@ -51,8 +51,7 @@ pub fn copy_channels_of(project_path: &str, plugins: &[Plugin]) -> BTreeMap<Stri
         .filter(|p| installed.is_installed(&p.manifest.name))
         .filter_map(|p| {
             let mut spec = copy_spec(&p.manifest)?.clone();
-            let declared = p.manifest.domains.clone().unwrap_or_else(|| p.manifest.domain.iter().cloned().collect());
-            let mut domains: Vec<String> = declared.iter().filter_map(|d| host_of(d)).collect();
+            let mut domains: Vec<String> = p.manifest.declared_domains().iter().filter_map(|d| host_of(d)).collect();
             if spec.host_setting.is_some() || spec.long_setting.is_some() {
                 let config = super::hook_context::hook_config_for_plugin(project_path, p);
                 if let Some(key) = &spec.host_setting {
@@ -137,8 +136,7 @@ impl PluginManager {
         match self.execute_hook_with_result(&plugin, hook, &context).await {
             Ok(Some(result)) => CopyCall::Answered(result),
             Ok(None) => CopyCall::Unknown(format!("{hook} returned no result")),
-            // The engine reports a missing export by this exact substring.
-            Err(e) if e.contains("Hook function not found") => CopyCall::NoExport,
+            Err(e) if crate::engine::is_missing_export(&e) => CopyCall::NoExport,
             Err(e) => CopyCall::Unknown(e),
         }
     }

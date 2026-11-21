@@ -596,9 +596,7 @@ impl PluginManager {
         let plugin_context = context_for_plugin(project_path, context, &plugin);
         match self.execute_hook_with_result(&plugin, hook, &plugin_context).await {
             Ok(result) => Ok(result),
-            // The engine reports a missing export by this exact substring
-            // — see `engine_tests.rs`.
-            Err(e) if e.contains("Hook function not found") => Ok(None),
+            Err(e) if crate::engine::is_missing_export(&e) => Ok(None),
             Err(e) => Err(e),
         }
     }
