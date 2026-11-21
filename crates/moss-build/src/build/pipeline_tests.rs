@@ -8484,21 +8484,27 @@ fn an_author_supplied_web_manifest_wins_over_the_generated_one() {
 }
 
 /// A scan waits for the provider until the folder closes: open a session for
-/// `dir` and close it once `fault` has refused the scan's first probe, then
-/// forget it. Keyed to the refusal, not a delay, so a slow start cannot close
-/// the folder before the scan is waiting.
-fn close_folder_during_its_scan(dir: &std::path::Path, fault: &crate::build::cloud_readiness::storage::TestFault) -> std::thread::JoinHandle<std::time::Instant> {
+/// `dir`, return the services a build of it enters with, and close the session
+/// once `fault` has refused the scan's first probe. Keyed to the refusal, not a
+/// delay, so a slow start cannot close the folder before the scan is waiting.
+fn close_folder_during_its_scan(dir: &std::path::Path, fault: &crate::build::cloud_readiness::storage::TestFault) -> (crate::types::services::BuildServices, std::thread::JoinHandle<std::time::Instant>) {
     let watch = fault.watch();
+    let (services, session) = open_folder(dir);
     let folder = dir.to_string_lossy().into_owned();
-    let session = crate::system::folder_session::FolderSession::new(dir.to_path_buf());
-    crate::system::folder_session::registry().insert(folder.clone(), session.clone());
-    std::thread::spawn(move || {
-        // Closing before the scan holds the session would test a build with no folder session.
+    (services, std::thread::spawn(move || {
         assert!(watch.wait_for_first_refusal(), "the build never reached its scan");
         session.cancel.cancel();
         crate::system::folder_session::registry().remove(&folder);
         std::time::Instant::now()
-    })
+    }))
+}
+
+/// Register a session for `dir` and the services a build of it enters with.
+fn open_folder(dir: &std::path::Path) -> (crate::types::services::BuildServices, std::sync::Arc<crate::system::folder_session::FolderSession>) {
+    let folder = dir.to_string_lossy().into_owned();
+    let session = crate::system::folder_session::FolderSession::new(dir.to_path_buf());
+    crate::system::folder_session::registry().insert(folder.clone(), session.clone());
+    (crate::types::services::BuildServices::headless_for(&folder), session)
 }
 
 #[test]
@@ -8524,8 +8530,10 @@ fn availability_pending_source_walk_preserves_current_generation_and_baseline() 
     let preflight = crate::system::build_records::records().publish_preflight(dir.to_str().unwrap()).unwrap();
     fs::write(dir.join("index.md"), "# newer").unwrap();
     let fault = TestFault::install(&dir, &dir, StorageOperation::RootMetadata, 1000, std::time::Duration::from_millis(20));
-    let closing = close_folder_during_its_scan(&dir, &fault);
-    assert!(run_pipeline(config()).await.is_err());
+    let (services, closing) = close_folder_during_its_scan(&dir, &fault);
+    let mut closed = config();
+    closed.host.services = services;
+    assert!(run_pipeline(closed).await.is_err());
     closing.join().unwrap();
     assert_eq!(fs::read_link(paths.current_ptr()).unwrap(), current);
     assert_eq!(fs::read(paths.current_ptr().join("index.html")).unwrap(), generation);
@@ -8536,6 +8544,38 @@ fn availability_pending_source_walk_preserves_current_generation_and_baseline() 
     drop(fault);
     run_pipeline(config()).await.unwrap();
     assert_ne!(fs::read(paths.current_ptr().join("index.html")).unwrap(), generation);
+        });
+    });
+}
+
+/// The session a build entered with stops its scan: a folder closed after
+/// entry but before the scan looks anything up still ends a walk on storage
+/// that refuses, and the build raises the deferred gate rather than waiting
+/// out every refusal.
+#[test]
+fn a_folder_closed_before_its_scan_still_cancels_the_scan() {
+    crate::infra::home::with_moss_home(|_| {
+        tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap().block_on(async {
+            use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+            use crate::build::cloud_readiness::{storage::TestFault, StorageOperation};
+            let (dir, _cleanup) = create_test_dir();
+            fs::write(dir.join("index.md"), "# home").unwrap();
+            let folder = dir.to_str().unwrap();
+            let (services, session) = open_folder(&dir);
+            let config = PipelineConfig {
+                root: crate::vault_root::VaultRoot::resolve(&dir), progress: crate::build::null_sink(), plugins: PluginMode::Skip,
+                watch: false, start_server: false, host: crate::build::ports::host::HostPorts { services, ..crate::build::ports::host::test_host_ports() },
+                trigger: BuildTrigger::Full, exits_after_build: true, site_url_override: None, server_port: None, admission_epoch: None,
+                live_port: None, rename_pairs: Vec::new(),
+            };
+            session.cancel.cancel();
+            crate::system::folder_session::registry().remove(folder);
+            let _fault = TestFault::install(&dir, &dir, StorageOperation::RootMetadata, 20, std::time::Duration::from_millis(20));
+            let started = std::time::Instant::now();
+            assert!(run_pipeline(config).await.is_err());
+            let took = started.elapsed();
+            assert!(crate::build::cloud_readiness::take_gate(folder), "the cancelled scan raises the deferred gate");
+            assert!(took < std::time::Duration::from_secs(5), "the closed folder's scan waited {took:?}");
         });
     });
 }
@@ -8553,8 +8593,10 @@ fn availability_fatal_scan_settles_a_previous_cloud_waiting_gate() {
                 exits_after_build: true, site_url_override: None, server_port: None, admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
             };
             let fault = TestFault::install(&dir, &dir, StorageOperation::RootMetadata, 1000, std::time::Duration::from_millis(20));
-            let closing = close_folder_during_its_scan(&dir, &fault);
-            assert!(run_pipeline(config()).await.is_err());
+            let (services, closing) = close_folder_during_its_scan(&dir, &fault);
+            let mut closed = config();
+            closed.host.services = services;
+            assert!(run_pipeline(closed).await.is_err());
             let cancelled = closing.join().unwrap().elapsed();
             assert!(crate::build::cloud_readiness::take_gate(dir.to_str().unwrap()));
             crate::build::cloud_readiness::mark_gated(dir.to_str().unwrap());

@@ -978,6 +978,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             config.host.metadata_dedup.as_deref(),
             config.host.scan_events.as_ref(),
             config.defers_image_placeholders(),
+            cloud_readiness::storage::OperationOwner::of(config.host.services.session.as_ref()),
         )
         .map_err(&scan_failure)?;
         let pi = ProjectInfo::from_structure(&ps, &config.root);

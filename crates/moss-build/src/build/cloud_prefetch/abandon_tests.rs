@@ -217,7 +217,7 @@ fn a_stuck_folder_listing_does_not_hold_a_foreground_read() {
     let bounds = Bounds { probe_first: Duration::from_secs(3), probe_most: Duration::from_secs(3), ..quick() };
     let p = Prefetcher::with_bounds(2, provider.materializer(), bounds);
     for i in 0..STRUCTURAL_READERS + 2 {
-        p.structural_operation(OperationKey { path: format!("/f/dir-{i}").into(), policy: OperationPolicy::SourceWalk }, listing.clone()).unwrap();
+        p.structural_operation(OperationKey { path: format!("/f/dir-{i}").into(), policy: OperationPolicy::SourceWalk }, OperationOwner::Host, listing.clone()).unwrap();
     }
     // Both listings given up, and a replacement has taken the third as the probe.
     assert!(wait_until(Duration::from_secs(2), || listings.load(Ordering::SeqCst) == STRUCTURAL_READERS + 1), "premise: the structural probe runs");
@@ -293,7 +293,7 @@ fn a_held_listing_marks_its_folder_and_a_held_write_neither_marks_nor_clears_it(
     assert!(wait_until(Duration::from_secs(2), || p.snapshot().parked == 1), "premise: the write is given up");
     assert!(!p.stuck_for(f), "a held write said the provider is not sending");
     let walk = OperationKey { path: "/f/dir".into(), policy: OperationPolicy::SourceWalk };
-    p.structural_operation(walk, held(&listing, || StorageValue::Directory { entries: Vec::new(), hidden: 0 })).unwrap();
+    p.structural_operation(walk, OperationOwner::Host, held(&listing, || StorageValue::Directory { entries: Vec::new(), hidden: 0 })).unwrap();
     assert!(wait_until(Duration::from_secs(2), || p.stuck_for(f)), "a held listing did not mark its folder");
     write.release();
     assert!(wait_until(Duration::from_secs(2), || p.snapshot().parked == 1), "premise: the write returned");

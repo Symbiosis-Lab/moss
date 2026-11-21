@@ -28,12 +28,11 @@ pub(super) fn list_directory_sized(
 ) -> Result<(Vec<(DirEntry, u64)>, u32), crate::build::cloud_readiness::storage::Unavailable> {
     let dir = std::path::Path::new(path);
 
-    let session = crate::system::folder_session::registry().get(project_path);
     let snapshot = crate::build::cloud_readiness::storage::await_operation(
         dir,
         crate::build::cloud_readiness::storage::OperationPolicy::EditorDirectory { project: project_path.into(), show_internal },
         std::time::Duration::from_secs(3),
-        &|| session.as_ref().is_some_and(|s| s.cancel.is_cancelled()),
+        crate::build::cloud_readiness::storage::OperationOwner::for_folder(std::path::Path::new(project_path)),
         &|| log::info!("Waiting for the editor directory to become available: {}", path),
         crate::build::cloud_readiness::storage::directory_operation(dir, std::path::Path::new(project_path), show_internal),
     )?;

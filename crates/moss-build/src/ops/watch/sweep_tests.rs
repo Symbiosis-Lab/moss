@@ -1467,7 +1467,7 @@ fn availability_resumed_suffix_eof_is_not_complete_structure() {
         while !*released { released = native_gate.1.wait(released).unwrap(); }
         walk_with_error(&root, Some(Instant::now() + Duration::from_secs(1)), Some("a.md")).map(StorageValue::Sweep)
     });
-    let task = pool.structural_operation(OperationKey { path: dir.path().into(), policy: OperationPolicy::SweepWalk { budget: Some(Duration::from_secs(1)), resume: Some("a.md".into()) } }, op).unwrap();
+    let task = pool.structural_operation(OperationKey { path: dir.path().into(), policy: OperationPolicy::SweepWalk { budget: Some(Duration::from_secs(1)), resume: Some("a.md".into()) } }, crate::build::cloud_readiness::storage::OperationOwner::of(Some(&session)), op).unwrap();
     { let mut state = task.state.lock().unwrap(); state.waiters = 0; state.deferred = true; }
     *gate.0.lock().unwrap() = true;
     gate.1.notify_all();

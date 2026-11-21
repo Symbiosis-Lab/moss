@@ -107,7 +107,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
-use crate::build::cloud_readiness::storage::{Operation, OperationKey, OperationTask, OperationOwner, OperationPolicy};
+use crate::build::cloud_readiness::storage::{Operation, OperationKey, OperationTask, OperationOwner, OperationPolicy, OperationRequest};
 
 mod abandon;
 mod operations;
@@ -594,7 +594,7 @@ impl Prefetcher {
         self.inner.queue.lock().ok()?.operation_pending.get(key).cloned()
     }
 
-    pub(crate) fn structural_operation(&self, key: OperationKey, attempt: Operation) -> Option<Arc<OperationTask>> {
+    pub(crate) fn structural_operation(&self, key: OperationKey, owner: OperationOwner, attempt: Operation) -> Option<Arc<OperationTask>> {
         let mut q = self.inner.queue.lock().ok()?;
         if q.shutdown { return None; }
         abandon::reap(&mut q, &self.inner, Instant::now());
@@ -602,11 +602,10 @@ impl Prefetcher {
             let task = task.clone();
             let mut state = task.state.lock().unwrap_or_else(|e| e.into_inner());
             if !task.owner_active() {
-                let owner = OperationOwner::for_folder(key.folder());
                 if owner.active() {
                     // One fresh request waits behind the old native call. It
                     // replaces only a previous intent, never a native worker.
-                    state.superseding = Some(crate::build::cloud_readiness::storage::OperationRequest { owner, attempt });
+                    state.superseding = Some(OperationRequest { owner, attempt });
                 }
             }
             state.waiters += 1;
@@ -617,7 +616,6 @@ impl Prefetcher {
         q.structural_arrivals.retain(|_, owner| owner.active());
         q.editor_intents.retain(|(_, owner)| owner.active());
         if q.structural_count() >= BACKGROUND_WAITING + STRUCTURAL_READERS {
-            let owner = OperationOwner::for_folder(key.folder());
             if owner.active() {
                 if matches!(key.policy, OperationPolicy::EditorDirectory { .. }) {
                     if !q.editor_intents.iter().any(|(waiting, _)| waiting == &key) && q.editor_intents.len() < BACKGROUND_WAITING {
@@ -630,7 +628,7 @@ impl Prefetcher {
             return None;
         }
         q.editor_intents.retain(|(waiting, _)| waiting != &key);
-        let task = Arc::new(OperationTask::new(&key, attempt));
+        let task = Arc::new(OperationTask::from_request(OperationRequest { owner, attempt }));
         q.operation_pending.insert(key.clone(), task.clone());
         q.structural.push_back((key, task.clone(), Instant::now()));
         drop(q);
@@ -667,8 +665,7 @@ impl Prefetcher {
             if now >= until { return None; }
             q = self.inner.work.wait_timeout(q, until - now).ok()?.0;
         }
-        let mut task = OperationTask::new(&key, attempt);
-        task.request.owner = OperationOwner::Host;
+        let mut task = OperationTask::from_request(OperationRequest { owner: OperationOwner::Host, attempt });
         task.revision = revision;
         task.state.lock().unwrap().waiters = 0;
         let task = Arc::new(task);

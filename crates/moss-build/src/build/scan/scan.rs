@@ -1024,7 +1024,8 @@ pub fn scan_folder_with_dedup_emit(
     // passes `false` to extract them synchronously so the built HTML is complete.
     defer_placeholders: bool,
 ) -> Result<ProjectStructure, String> {
-    scan_folder_with_dedup_emit_with_error(folder_path, metadata_dedup, emitter, defer_placeholders)
+    let owner = crate::build::cloud_readiness::storage::OperationOwner::for_folder(Path::new(folder_path));
+    scan_folder_with_dedup_emit_with_error(folder_path, metadata_dedup, emitter, defer_placeholders, owner)
         .map_err(|failure| failure.to_string())
 }
 
@@ -1098,21 +1099,23 @@ fn collect_source_walk(path: &Path) -> Result<crate::build::cloud_readiness::sto
 
 /// Typed counterpart to [`scan_folder_with_dedup_emit`]. Storage failures stay
 /// structured until the caller chooses its user-facing error boundary.
-pub fn scan_folder_with_dedup_emit_with_error(
+/// `owner` cancels the source walk; a build passes the session it entered
+/// with, so closing the folder later still reaches a walk on refusing storage.
+pub(crate) fn scan_folder_with_dedup_emit_with_error(
     folder_path: &str,
     metadata_dedup: Option<&crate::build::cache::Singleflight<MediaMetadata>>,
     emitter: Option<&ScanEventEmitter>,
     defer_placeholders: bool,
+    owner: crate::build::cloud_readiness::storage::OperationOwner,
 ) -> Result<ProjectStructure, ScanFailure> {
     let path = Path::new(folder_path);
 
     let root = path.to_path_buf();
-    let session = crate::system::folder_session::registry().get(folder_path);
     let snapshot = crate::build::cloud_readiness::storage::await_operation(
         path,
         crate::build::cloud_readiness::storage::OperationPolicy::SourceWalk,
         crate::build::cloud_readiness::storage::UNTIL_CANCELLED,
-        &|| session.as_ref().is_some_and(|s| s.cancel.is_cancelled()),
+        owner,
         &|| log::info!("Waiting for the source directory to become available: {}", folder_path),
         std::sync::Arc::new(move || collect_source_walk(&root)),
     ).map_err(|unavailable| {

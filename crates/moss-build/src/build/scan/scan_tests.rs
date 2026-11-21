@@ -2963,7 +2963,7 @@ fn availability_scan_waits_out_a_slow_provider() {
     fs::write(dir.path().join("first.md"), "# first").unwrap();
     fs::write(&child, "# second").unwrap();
     let _fault = TestFault::install(dir.path(), &child, StorageOperation::WalkEntry, 3, std::time::Duration::from_millis(20));
-    let result = scan_folder_with_dedup_emit_with_error(dir.path().to_str().unwrap(), None, None, false).unwrap();
+    let result = scan_folder_with_dedup_emit_with_error(dir.path().to_str().unwrap(), None, None, false, crate::build::cloud_readiness::storage::OperationOwner::Host).unwrap();
     assert_eq!(result.markdown_files.len(), 2);
 }
 
@@ -2977,7 +2977,7 @@ fn availability_a_held_walk_reads_quiet_since_its_last_entry() {
     fs::write(&page, "# page").unwrap();
     let (at_root, at_page) = (TestHold::install(dir.path(), dir.path()), TestHold::install(dir.path(), &page));
     let folder = dir.path().to_string_lossy().into_owned();
-    let scan = std::thread::spawn(move || scan_folder_with_dedup_emit_with_error(&folder, None, None, false).map(|r| r.markdown_files.len()));
+    let scan = std::thread::spawn(move || scan_folder_with_dedup_emit_with_error(&folder, None, None, false, crate::build::cloud_readiness::storage::OperationOwner::Host).map(|r| r.markdown_files.len()));
     let quiet = || walk_quiet_for(dir.path());
     let start = std::time::Instant::now();
     while quiet().is_none() { assert!(start.elapsed() < std::time::Duration::from_secs(5)); std::thread::sleep(std::time::Duration::from_millis(5)); }
@@ -3004,12 +3004,11 @@ fn availability_scan_of_a_closed_folder_returns_no_partial_candidate() {
     fs::write(&child, "# second").unwrap();
     let folder = dir.path().to_string_lossy().into_owned();
     let session = crate::system::folder_session::FolderSession::new(dir.path().to_path_buf());
-    crate::system::folder_session::registry().insert(folder.clone(), session.clone());
+    let owner = crate::build::cloud_readiness::storage::OperationOwner::of(Some(&session));
     let _fault = TestFault::install(dir.path(), &child, StorageOperation::WalkEntry, 1000, std::time::Duration::from_millis(20));
     let closer = std::thread::spawn(move || { std::thread::sleep(std::time::Duration::from_millis(100)); session.cancel.cancel(); });
-    let result = scan_folder_with_dedup_emit_with_error(&folder, None, None, false);
+    let result = scan_folder_with_dedup_emit_with_error(&folder, None, None, false, owner);
     closer.join().unwrap();
-    crate::system::folder_session::registry().remove(&folder);
     let ScanFailure::Storage(error) = result.unwrap_err() else { panic!("not a contextual storage stop") };
     assert_eq!(error.pending, Some(Settled::Cancelled));
 }
