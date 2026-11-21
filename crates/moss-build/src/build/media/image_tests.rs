@@ -1747,6 +1747,7 @@ fn should_skip_heic() {
 
 /// The probe's verdict is worked out again from the source: adding it to a
 /// record the cloud holds would be an upload on every machine.
+#[cfg(unix)]
 #[test]
 fn format_probe_leaves_a_record_the_cloud_holds_unwritten() {
     crate::infra::home::with_moss_home(|_| {

@@ -3478,6 +3478,7 @@ fn availability_owned_merge_publishes_over_a_record_still_in_the_cloud() {
 /// Another machine already recorded the same work: publishing it again would
 /// leave the record unchanged, and rewriting it anyway is an upload of the
 /// file on every machine sharing the folder.
+#[cfg(unix)]
 #[test]
 fn availability_owned_merge_leaves_a_record_that_already_holds_it_unwritten() {
     crate::infra::home::with_moss_home(|_| {
@@ -3506,6 +3507,7 @@ fn availability_owned_merge_leaves_a_record_that_already_holds_it_unwritten() {
 
 /// A record in a managed folder whose next `reads` reads find it in the cloud,
 /// holding only a `format-probe` entry. Returns the guards and its inode.
+#[cfg(unix)]
 pub(crate) fn cloud_held_owned_record(cache: &TransformCache, oid: &str, reads: u32) -> (impl Drop, impl Drop, u64) {
     use crate::build::cloud_readiness::{StorageOperation, storage::TestFault};
     use std::os::unix::fs::MetadataExt;
@@ -3521,6 +3523,7 @@ pub(crate) fn cloud_held_owned_record(cache: &TransformCache, oid: &str, reads: 
 
 /// Media metadata is worked out again from the source: adding it to a record
 /// the cloud holds would be an upload on every machine that opens the folder.
+#[cfg(unix)]
 #[test]
 fn media_meta_leaves_a_record_the_cloud_holds_unwritten() {
     crate::infra::home::with_moss_home(|_| {
