@@ -297,6 +297,7 @@ impl PluginManager {
 mod tests {
     use super::*;
     use crate::plugins::adapter_host::AdapterHost;
+    use crate::plugins::manager::HookWatchdog;
     use crate::plugins::types::{ProcessContext, ProjectInfo, TriggerContext};
     use serde_json::json;
 
@@ -361,6 +362,21 @@ mod tests {
         assert_eq!(sign_in(&project).await, SignedIn { outcome: LoginOutcome::Unsaid, newly_bound: false });
         let (_dir, project) = folder_with_channel(r#"return { success: false, message: "wrong password" };"#);
         assert_eq!(try_sign_in(&project).await, Err("Hook failed: wrong password".into()), "an older login's failure keeps its message");
+        assert_eq!(account_binding(&project, "social"), None);
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_waiting_on_nobody_is_cancelled_at_the_watchdogs_limit() {
+        let (_dir, project) = folder_with_channel("await new Promise(() => {});");
+        let watchdog = HookWatchdog { limit: std::time::Duration::from_secs(1), check: std::time::Duration::from_millis(100) };
+        let manager = PluginManager::new(&project, AdapterHost::headless(crate::build::ports::reporter::discard_owned())).unwrap().with_watchdog(watchdog);
+        let plugin = manager.plugins().into_iter().find(|p| p.manifest.name == "social").unwrap();
+        let info = ProjectInfo { total_files: 0, homepage_file: None, folder_name: None, site_name: None, lang: "en".into() };
+        let context = serde_json::to_string(&ProcessContext::new(project.clone(), info, TriggerContext::SettingsManual)).unwrap();
+        let started = std::time::Instant::now();
+        let refused = manager.sign_in(&plugin, &context).await.unwrap_err();
+        assert_eq!(refused, "Hook 'social::login' timed out - no progress for 1 seconds");
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "the shortened limit, not the default minute");
         assert_eq!(account_binding(&project, "social"), None);
     }
 

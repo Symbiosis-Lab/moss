@@ -8,6 +8,7 @@ use super::types::*;
 use engine_adapter::PluginEngine;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
 
 pub mod accounts;
 pub mod copies;
@@ -197,6 +198,23 @@ pub struct PluginManager {
     /// shared (Arc) with the engine's dispatch task. Re-snapshotted by
     /// `rediscover_plugins` — the ONE place a grant may change while moss runs.
     grants: crate::engine::host_fns::GrantRegistry,
+
+    watchdog: HookWatchdog,
+}
+
+/// How long a hook may go without progress before it is cancelled, and how
+/// often that is checked. A test that needs a person slower than the limit
+/// shortens both instead of waiting a minute.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HookWatchdog {
+    pub limit: Duration,
+    pub check: Duration,
+}
+
+impl Default for HookWatchdog {
+    fn default() -> Self {
+        Self { limit: Duration::from_secs(60), check: Duration::from_secs(5) }
+    }
 }
 
 /// Build the hook-dispatch engine.
@@ -271,6 +289,7 @@ impl PluginManager {
             engine: build_engine(host.clone(), project_path, grants.clone()),
             grants,
             host,
+            watchdog: HookWatchdog::default(),
         };
 
         // Nothing to spawn: every plugin self-initializes per-Context on its
@@ -278,6 +297,11 @@ impl PluginManager {
         // went with the hidden runtime webview.
 
         Ok(manager)
+    }
+
+    pub fn with_watchdog(mut self, watchdog: HookWatchdog) -> Self {
+        self.watchdog = watchdog;
+        self
     }
 
     /// Find a plugin by name
@@ -658,7 +682,7 @@ impl PluginManager {
 
         // Execute with activity-based timeout (timeout is managed inside the function)
         // The inner function uses inactivity detection: if no progress messages
-        // arrive within INACTIVITY_TIMEOUT, the hook is considered stuck.
+        // arrive within the watchdog's limit, the hook is considered stuck.
         self.execute_plugin_javascript_with_result(plugin, hook_name, &context_json).await
     }
 
@@ -877,8 +901,7 @@ impl PluginManager {
 
         // Activity-based timeout: check for inactivity instead of fixed timeout.
         // This allows plugins to run as long as they're making progress.
-        const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(60);
-        const CHECK_INTERVAL: Duration = Duration::from_secs(5);
+        let HookWatchdog { limit, check } = self.watchdog;
 
         let result = loop {
             tokio::select! {
@@ -903,12 +926,12 @@ impl PluginManager {
                         Err(_) => Err("Completion channel closed unexpectedly".to_string()),
                     };
                 }
-                _ = tokio::time::sleep(CHECK_INTERVAL) => {
+                _ = tokio::time::sleep(check) => {
                     if hook_state.is_making_progress(&plugin.manifest.name, hook_name) {
                         continue;
                     }
                     let last_activity = hook_state.get_last_activity(&plugin.manifest.name, hook_name);
-                    if last_activity.elapsed() > INACTIVITY_TIMEOUT {
+                    if last_activity.elapsed() > limit {
                         // Condition 6: kill the orphaned engine-side hook so it does
                         // not keep running invisibly. Late Complete after this break
                         // is harmless: hook_state.clear below removed the completion
@@ -926,7 +949,7 @@ impl PluginManager {
                         );
                         break Err(format!(
                             "Hook '{}::{}' timed out - no progress for {} seconds",
-                            plugin.manifest.name, hook_name, INACTIVITY_TIMEOUT.as_secs()
+                            plugin.manifest.name, hook_name, limit.as_secs()
                         ));
                     }
                 }
