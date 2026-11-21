@@ -476,6 +476,15 @@ export interface EditorFill {
     title?: string;
     /** Present once the editor has loaded; `body` when absent. */
     ready?: string;
+    /**
+     * A file field (`input[type=file]`) for a network whose post starts from
+     * pictures: they are given to it first, as many as it allows and of the
+     * kinds it accepts, then the editor is filled once it appears. Picture parts go
+     * to the field, not the editor. No such field answers `no-editor`; a field
+     * that takes none of them, or an editor that never appears after them,
+     * `refused`.
+     */
+    upload?: string;
   };
   title?: string;
   parts: EditorFillPart[];
