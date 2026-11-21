@@ -225,8 +225,8 @@ test('a file the browser loads through the static server is an input', async () 
 
 test('a site whose rebuild fails is not taken for its last green build', async () => {
   const t = tree();
-  // Fails when the spec names a file called `fail`, else builds one page.
-  t.w('bin/fake-moss', '#!/bin/sh\n[ -e "$2/fail" ] && exit 1\nmkdir -p "$2/.moss/build.nosync/staging"\necho built > "$2/.moss/build.nosync/staging/index.html"\n');
+  // Fails when the spec names a file called `fail`, else builds one page and reports it as `build --json` does.
+  t.w('bin/fake-moss', '#!/bin/sh\n[ -e "$2/fail" ] && exit 1\nmkdir -p "$2/.moss/build.nosync/staging"\necho built > "$2/.moss/build.nosync/staging/index.html"\necho "{\\"output\\":\\"$2/.moss/build.nosync/staging\\"}"\n');
   fs.chmodSync(path.join(t.root, 'bin/fake-moss'), 0o755);
   const { build } = await import('esbuild');
   // Bundled into the temporary tree, so the helper scaffolds its sites there.
