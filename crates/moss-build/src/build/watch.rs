@@ -627,8 +627,9 @@ impl RefreshPlan {
     /// (`on_disk` is the build's read of `hashes.json`), with its output list
     /// cut to the keys `written` says are already in staging. A key whose
     /// bytes the background writes later is the seal tail's to announce.
-    /// Sends nothing when nothing is left to say.
-    pub(crate) fn announce(&self, new_hashes: &SiteHashes, on_disk: &SiteHashes, written: impl Fn(&str) -> bool, render: u64) {
+    /// Sends nothing when nothing is left to say. Returns whether the preview
+    /// reloads: a save that renders identically still sends its source change.
+    pub(crate) fn announce(&self, new_hashes: &SiteHashes, on_disk: &SiteHashes, written: impl Fn(&str) -> bool, render: u64) -> bool {
         let nothing = SiteHashes::default();
         let (baseline, from) = match &self.baseline {
             Baseline::Shown(stash) => (stash, "the shown render"),
@@ -643,9 +644,14 @@ impl RefreshPlan {
         match event {
             Some(mut event) => {
                 event.render_seq = Some(render);
+                let reloads = event.changes_output();
                 self.asked.events.report(&crate::build::progress::PipelineEvent::FileChanged(event));
+                reloads
             }
-            None => log::info!("Rebuild shown with no output changes against {from} (suppressing refresh)"),
+            None => {
+                log::info!("Rebuild shown with no output changes against {from} (suppressing refresh)");
+                false
+            }
         }
     }
 }

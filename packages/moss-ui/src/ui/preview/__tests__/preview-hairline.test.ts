@@ -149,15 +149,23 @@ describe('PreviewHairline', () => {
     expect(bar()?.classList.contains('dissolving')).toBe(true);
   });
 
-  test('cancelPendingDissolve() stops a scheduled dissolveAfter', () => {
+  test('a pass that takes the bar runs the no-paint fallback at once; a paint takes it over', () => {
+    const settled = vi.fn();
     hairline.start();
-    hairline.dissolveAfter(1500);
+    hairline.dissolveAfter(1500, settled);
     hairline.cancelPendingDissolve();
-    // Even well past the delay, the bar is still active (refresh will complete
-    // it precisely when the morph lands).
+    expect(settled).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(5000);
+    expect(settled).toHaveBeenCalledTimes(1);
+
+    const painted = vi.fn();
+    hairline.dissolveAfter(1500, painted);
+    hairline.handOverToPaint();
+    hairline.cancelPendingDissolve();
+    vi.advanceTimersByTime(5000);
+    expect(painted).not.toHaveBeenCalled();
+    // The paint completes it, not the timer.
     expect(bar()?.classList.contains('active')).toBe(true);
-    expect(bar()?.classList.contains('dissolving')).toBe(false);
   });
 
   // The `setBuildProgress() self-starts and never moves backwards` case was

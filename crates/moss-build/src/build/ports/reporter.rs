@@ -137,6 +137,59 @@ impl BuildReporter for NullReporter {
     fn report(&self, _event: &PipelineEvent) {}
 }
 
+/// The sink of a build that does not announce itself (`BuildTrigger::announces`):
+/// its loading-screen steps and page counts are dropped, and everything else,
+/// the completion and the advisories included, reaches `inner`. The completion
+/// loses `reloads`: `Some(false)` ends the line on "Updated", and this build
+/// never put "Updating…" on it. A page count,
+/// even a final one, is what the preview's progress line reads as a build
+/// starting (`PAGE_PHASE_BY_TASK` in moss-ui). `wants_tier1` is deliberately
+/// not forwarded: its default `false` is what drops the loading-screen steps.
+pub struct Unannounced(pub std::sync::Arc<dyn BuildReporter>);
+
+impl BuildReporter for Unannounced {
+    fn report(&self, event: &PipelineEvent) {
+        let announces = match event {
+            PipelineEvent::Progress { completed, .. } => !completed,
+            PipelineEvent::BackgroundProgress { task, advisories, .. } => {
+                matches!(task.as_str(), "markdown" | "html_pages") && advisories.is_empty()
+            }
+            _ => false,
+        };
+        match event {
+            _ if announces => {}
+            PipelineEvent::Progress { completed: true, reloads: Some(_), .. } => {
+                let mut quiet = event.clone();
+                if let PipelineEvent::Progress { reloads, .. } = &mut quiet {
+                    *reloads = None;
+                }
+                self.0.report(&quiet);
+            }
+            _ => self.0.report(event),
+        }
+    }
+
+    fn stage_ready(&self, site_path: &std::path::Path) {
+        self.0.stage_ready(site_path)
+    }
+
+    fn cloud_sync(&self, status: &CloudSync<'_>) {
+        self.0.cloud_sync(status)
+    }
+
+    fn download_progress(&self, binary: &str, bytes: u64, total: Option<u64>) {
+        self.0.download_progress(binary, bytes, total)
+    }
+
+    fn shell_listening(&self) -> bool {
+        self.0.shell_listening()
+    }
+
+    fn is_terminal(&self) -> bool {
+        self.0.is_terminal()
+    }
+}
+
 /// There is no GUI: nothing to report to, and the terminal is the surface.
 ///
 /// This is `BuildServices.reporter` on a headless build, and the difference

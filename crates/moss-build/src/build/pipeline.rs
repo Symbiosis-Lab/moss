@@ -884,6 +884,9 @@ pub struct PipelineRunOutput {
     /// tail separately checks complete-generation evidence before changing
     /// the durable manifest or `current` generation.
     pub publishable: bool,
+    /// Whether the preview reloads for this build (`watch::RefreshPlan::announce`);
+    /// `None` when it was not shown.
+    pub reloads: Option<bool>,
     /// The render `lifecycle::show_render` minted for this build, which the
     /// seal tail hands to `lifecycle::promote`. `None` for a build that
     /// stopped before it rendered.
@@ -1696,10 +1699,7 @@ fn build_inner(
     // Bailing here rather than mid-write is deliberate: everything above this
     // point wrote only into this build's own staging directory, which the next
     // build overwrites anyway.
-    if services
-        .and_then(|s| s.session.as_ref())
-        .is_some_and(|s| s.cancel.is_cancelled())
-    {
+    if services.and_then(|s| s.session.as_ref()).is_some_and(|s| s.cancel.is_cancelled()) {
         log::info!("[build] folder closed during the build — not switching the preview");
         return Ok(PipelineRunOutput {
             is_empty,
@@ -1713,6 +1713,7 @@ fn build_inner(
             // The folder is closed; nothing downstream should promote this
             // build's generation over whatever the user opens next.
             publishable: false,
+            reloads: None,
             render: None,
             unready_derivations: Default::default(),
             folder_lock: folder_build_lock,
@@ -1784,12 +1785,12 @@ fn build_inner(
     let seq = render.seq();
     // A shown render tells the preview at once what it now serves; what the
     // background writes later is the seal tail's to announce.
-    if publishable {
+    let reloads = publishable.then(|| {
         pending.note_shown();
         // A key the show names must already be bytes in staging: one registered
         // before it is written would be named early here and never by the tail.
-        refresh.announce(&content_hashes_for_watch, &previous_hashes, |key| pending.is_registered(key) && { debug_assert!(stage_dir.join(key).exists(), "the show names {key}, which is not in staging yet"); true }, seq);
-    }
+        refresh.announce(&content_hashes_for_watch, &previous_hashes, |key| pending.is_registered(key) && { debug_assert!(stage_dir.join(key).exists(), "the show names {key}, which is not in staging yet"); true }, seq)
+    });
     log::debug!(target: "timing", "[build] staging: switch_to_stage: {:?}", build_start.elapsed());
 
     // Asked HERE, not carried in: a build that started no server of its own
@@ -2141,6 +2142,7 @@ fn build_inner(
         cancelled: false,
         home_ready,
         publishable,
+        reloads,
         render: Some(render),
         unready_derivations: derived.as_ref().map(|d| d.unready()).unwrap_or_default(),
         folder_lock: folder_build_lock,
@@ -2169,6 +2171,7 @@ pub(crate) fn send_progress(
             completed: done,
             port,
             is_empty: empty,
+            reloads: None,
         });
     }
 }

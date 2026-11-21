@@ -212,10 +212,10 @@ pub(crate) struct PassOutcome {
 /// If the second pass fails, the first is a complete, sealed site, so the build
 /// does not fail: it reports one problem (which `--strict` fails on) and
 /// returns the first pass's result.
-pub(crate) async fn drive_passes<F, Fut>(plugins: PluginMode, mut run: F) -> Result<(PassOutcome, bool), String>
+pub(crate) async fn drive_passes<F, Fut>(plugins: PluginMode, mut run: F) -> Result<(PassOutcome, bool), crate::build::outcome::BuildStopped>
 where
     F: FnMut(Pass) -> Fut,
-    Fut: std::future::Future<Output = Result<PassOutcome, String>>,
+    Fut: std::future::Future<Output = Result<PassOutcome, crate::build::outcome::BuildStopped>>,
 {
     let first_pass = Pass::first(plugins);
     crate::build::phase::begin_pass();
@@ -233,8 +233,9 @@ where
         Ok(second) => Ok((second, true)),
         Err(e) => {
             crate::build::cli_output::log_warn_problem!(
-                "The pages could not be rendered again after the videos were encoded ({e}); \
-                 this build links the plain video files and the small thumbnails."
+                "The pages could not be rendered again after the videos were encoded ({}); \
+                 this build links the plain video files and the small thumbnails.",
+                e.message()
             );
             Ok((first, true))
         }
@@ -320,7 +321,7 @@ pub(crate) fn trigger_media_settle_rerender(
     let (request, scope) = if settled.iter().all(|a| a.asset_type == "image") {
         (crate::ops::watch::worker::RebuildRequest::images_settled(), "the pages showing them")
     } else {
-        (crate::ops::watch::worker::RebuildRequest::full(), "every page")
+        (crate::ops::watch::worker::RebuildRequest::videos_settled(), "every page")
     };
     log::info!(
         "media settle: a video poster or a brand-new image landed for '{}' — re-rendering {} so grid-card covers pick up the color band and thumbnail",
@@ -387,7 +388,7 @@ mod media_settle_rerender_tests {
     /// without a fresh render (see `trigger_media_settle_rerender`'s doc) — so
     /// it must enqueue on the SAME slot a file edit would.
     #[test]
-    fn a_settled_thumbnail_enqueues_a_full_rebuild() {
+    fn a_settled_thumbnail_enqueues_a_videos_settled_rebuild() {
         let folder = "/tmp/media-settle-rerender-test-thumbnail";
         let handle = worker::register(folder);
         assert!(!handle.slot_occupied(), "clean start");
@@ -400,8 +401,8 @@ mod media_settle_rerender_tests {
 
         assert_eq!(
             handle.take().map(|r| r.trigger),
-            Some(crate::build::BuildTrigger::Full),
-            "a settled thumbnail must enqueue a full rebuild"
+            Some(crate::build::BuildTrigger::VideosSettled),
+            "a settled thumbnail must enqueue a re-render of every page"
         );
         assert!(!second_pass_owed, "the worker owns the re-render, so the build must not also run a second pass");
         worker::deregister(folder, &handle);
@@ -410,7 +411,7 @@ mod media_settle_rerender_tests {
     /// A poster settling beside a new picture can change pages the render
     /// verdict does not model, so the batch keeps the full path.
     #[test]
-    fn a_thumbnail_beside_a_new_image_enqueues_a_full_rebuild() {
+    fn a_thumbnail_beside_a_new_image_enqueues_a_videos_settled_rebuild() {
         let folder = "/tmp/media-settle-rerender-test-thumbnail-and-image";
         let handle = worker::register(folder);
 
@@ -420,7 +421,7 @@ mod media_settle_rerender_tests {
             Some(&SiteHashes::default()),
         );
 
-        assert_eq!(handle.take().map(|r| r.trigger), Some(crate::build::BuildTrigger::Full));
+        assert_eq!(handle.take().map(|r| r.trigger), Some(crate::build::BuildTrigger::VideosSettled));
         worker::deregister(folder, &handle);
     }
 
@@ -465,7 +466,7 @@ mod media_settle_rerender_tests {
 
         assert_eq!(
             handle.take().map(|r| r.trigger),
-            Some(crate::build::BuildTrigger::ImagesSettled),
+            Some(crate::build::BuildTrigger::ImagesSettled { edited: false }),
             "a brand-new image settle must enqueue a re-render of the pages showing it, not of every page"
         );
         worker::deregister(folder, &handle);
@@ -572,7 +573,7 @@ mod pass_tests {
     use super::*;
     use std::cell::RefCell;
 
-    fn outcome(owed: bool) -> Result<PassOutcome, String> {
+    fn outcome(owed: bool) -> Result<PassOutcome, crate::build::outcome::BuildStopped> {
         Ok(PassOutcome { message: format!("owed={owed}"), owed, is_empty: false, port: None })
     }
 
@@ -580,8 +581,8 @@ mod pass_tests {
     /// returning the passes it was asked for and the result.
     fn drive(
         plugins: PluginMode,
-        answers: Vec<Result<PassOutcome, String>>,
-    ) -> (Vec<Pass>, Result<(PassOutcome, bool), String>) {
+        answers: Vec<Result<PassOutcome, crate::build::outcome::BuildStopped>>,
+    ) -> (Vec<Pass>, Result<(PassOutcome, bool), crate::build::outcome::BuildStopped>) {
         let seen = RefCell::new(Vec::new());
         let answers = RefCell::new(answers.into_iter());
         let result = futures::executor::block_on(drive_passes(plugins, |pass| {
@@ -614,7 +615,7 @@ mod pass_tests {
     fn a_failed_first_pass_never_starts_a_second() {
         let (seen, result) = drive(PluginMode::Blocking, vec![Err("scan failed".into())]);
         assert_eq!(seen.len(), 1);
-        assert_eq!(result.err().as_deref(), Some("scan failed"));
+        assert_eq!(result.err().map(|e| e.into_message()).as_deref(), Some("scan failed"));
     }
 
     #[test]

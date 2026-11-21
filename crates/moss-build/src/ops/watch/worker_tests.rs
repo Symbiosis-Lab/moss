@@ -67,7 +67,7 @@ fn a_lone_request_keeps_its_rename_pairs_and_trigger() {
 fn merging_preserves_the_narrowest_honest_trigger() {
     let paths = |t: &BuildTrigger| match t {
         BuildTrigger::ContentOnly(p) | BuildTrigger::Structural(p) => p.clone(),
-        BuildTrigger::Full | BuildTrigger::Unobserved | BuildTrigger::ImagesSettled => vec![],
+        BuildTrigger::Full | BuildTrigger::Unobserved | BuildTrigger::ImagesSettled { .. } | BuildTrigger::VideosSettled => vec![],
     };
 
     // Two content-only batches union their paths and STAY content-only: the
@@ -101,14 +101,19 @@ fn merging_preserves_the_narrowest_honest_trigger() {
 
     // The pictures a settle owes still render when an edit joins it, and its
     // proof walks the whole disk, so it sees the edit too; `Full` still wins.
-    assert_eq!(
-        merge_requests(content_only("a.md"), RebuildRequest::images_settled()).trigger,
-        BuildTrigger::ImagesSettled
-    );
-    assert_eq!(
-        merge_requests(RebuildRequest::images_settled(), with_pairs(&[("a.md", "b.md")])).trigger,
-        BuildTrigger::ImagesSettled
-    );
+    // The edit makes it the user's build, so it announces itself.
+    let edited = BuildTrigger::ImagesSettled { edited: true };
+    assert_eq!(merge_requests(content_only("a.md"), RebuildRequest::images_settled()).trigger, edited);
+    assert_eq!(merge_requests(RebuildRequest::images_settled(), with_pairs(&[("a.md", "b.md")])).trigger, edited);
+    assert!(edited.announces());
+    let quiet = merge_requests(RebuildRequest::images_settled(), RebuildRequest::images_settled()).trigger;
+    assert!(!quiet.announces(), "two settles are still nobody's save");
+
+    // A video settle renders every page: beside a save that is `Full`, beside a
+    // picture settle it stays a settle.
+    assert_eq!(merge_requests(RebuildRequest::videos_settled(), content_only("a.md")).trigger, BuildTrigger::Full);
+    assert_eq!(merge_requests(RebuildRequest::images_settled(), RebuildRequest::videos_settled()).trigger, BuildTrigger::VideosSettled);
+    assert!(!BuildTrigger::VideosSettled.announces());
     assert_eq!(
         merge_requests(RebuildRequest::images_settled(), RebuildRequest::full()).trigger,
         BuildTrigger::Full

@@ -1750,6 +1750,23 @@ impl crate::build::ports::reporter::BuildReporter for HeardChanges {
     }
 }
 
+/// A save that renders identically still tells the editor its source moved,
+/// but the preview reloads for output only, so the show says no reload.
+#[test]
+fn a_save_that_renders_identically_announces_its_source_and_no_reload() {
+    let mut before = page_at("same");
+    before.source_to_output.insert("research.md".into(), "research/index.html".into());
+    before.sources.insert("research.md".into(), page_hash("v1"));
+    let mut after = before.clone();
+    after.sources.insert("research.md".into(), page_hash("v2"));
+    let (plan, heard) = plan_with(Baseline::Shown(before));
+
+    assert!(!plan.announce(&after, &SiteHashes::new(), |_| true, 3), "no output changed: no reload");
+    let heard = heard.0.lock().unwrap();
+    assert_eq!(heard.len(), 1, "the editor still hears the source change");
+    assert_eq!(heard[0].modified_paths.as_deref(), Some(&["research.md".to_string()][..]));
+}
+
 fn plan_with(baseline: Baseline) -> (RefreshPlan, std::sync::Arc<HeardChanges>) {
     let heard = std::sync::Arc::new(HeardChanges::default());
     let asked = RefreshRequest { rename_pairs: Vec::new(), events: heard.clone() };
@@ -1794,16 +1811,16 @@ fn a_refresh_plan_takes_the_stash_else_the_disk_else_nothing() {
 fn the_show_event_diffs_against_the_stash_else_hashes_json_else_nothing() {
     let written = |_: &str| true;
     let (plan, heard) = plan_with(Baseline::Shown(page_at("v1")));
-    plan.announce(&page_at("v2"), &page_at("v2"), written, 1);
+    assert!(plan.announce(&page_at("v2"), &page_at("v2"), written, 1));
     assert_eq!(named(&heard), [["research/index.html"]], "the stash wins over a poisoned hashes.json");
 
     let (plan, heard) = plan_with(Baseline::Disk);
-    plan.announce(&page_at("v2"), &page_at("v2"), written, 1);
-    plan.announce(&page_at("v2"), &page_at("v1"), written, 2);
+    assert!(!plan.announce(&page_at("v2"), &page_at("v2"), written, 1), "nothing changed against hashes.json: no reload");
+    assert!(plan.announce(&page_at("v2"), &page_at("v1"), written, 2));
     assert_eq!(named(&heard), [["research/index.html"]], "without a stash, hashes.json is the baseline");
 
     let (plan, heard) = plan_with(Baseline::Gone);
-    plan.announce(&page_at("v2"), &page_at("v2"), written, 1);
+    assert!(plan.announce(&page_at("v2"), &page_at("v2"), written, 1));
     assert_eq!(named(&heard), [["research/index.html"]], "with staging gone, everything is new");
 }
 
@@ -1819,8 +1836,8 @@ fn the_show_event_names_only_keys_whose_bytes_are_already_shown() {
     after.insert("notes/handout.css".into(), "100644:blue".into());
     let (plan, heard) = plan_with(Baseline::Shown(before));
 
-    plan.announce(&after, &SiteHashes::new(), |key| key == "research/index.html", 7);
-    plan.announce(&after, &SiteHashes::new(), |_| false, 8);
+    assert!(plan.announce(&after, &SiteHashes::new(), |key| key == "research/index.html", 7));
+    assert!(!plan.announce(&after, &SiteHashes::new(), |_| false, 8), "a show that names nothing reloads nothing");
 
     let heard = heard.0.lock().unwrap();
     assert_eq!(heard.len(), 1, "the render that wrote nothing changed sends nothing: {heard:?}");
@@ -4295,7 +4312,8 @@ fn an_atomic_save_of_a_known_page_is_a_content_edit() {
         BuildTrigger::Structural(_) => "structural",
         BuildTrigger::Full => "full",
         BuildTrigger::Unobserved => "unobserved",
-        BuildTrigger::ImagesSettled => "images-settled",
+        BuildTrigger::ImagesSettled { .. } => "images-settled",
+        BuildTrigger::VideosSettled => "videos-settled",
     };
     let renamed_over = || event(EventKind::Modify(ModifyKind::Name(RenameMode::Any)), &["a.md"]);
     assert_eq!(kind(renamed_over(), Some(&baseline)), "content");

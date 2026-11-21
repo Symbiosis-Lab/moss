@@ -263,7 +263,7 @@ async fn a_discarded_stop_builds_once_more() {
 
     let attempts = Cell::new(0usize);
 
-    let built: Result<&str, String> = retry_once_after_discard(|| {
+    let built: Result<&str, BuildStopped> = retry_once_after_discard(|| {
         let attempt = attempts.get() + 1;
         attempts.set(attempt);
         async move {
@@ -295,14 +295,14 @@ async fn only_a_first_discard_is_retried() {
         let attempts = Cell::new(0usize);
         let message = stopped.message().to_string();
         let stopped = &stopped;
-        let out: Result<(), String> = retry_once_after_discard(|| {
+        let out: Result<(), BuildStopped> = retry_once_after_discard(|| {
             attempts.set(attempts.get() + 1);
             let stopped = stopped.clone();
             async move { Err(stopped) }
         })
         .await;
 
-        assert_eq!(out.unwrap_err(), message, "the message survives the flattening");
+        assert_eq!(out.unwrap_err().into_message(), message, "the message survives the flattening");
         assert_eq!(attempts.get(), expected_attempts, "for {message}");
     }
 }
@@ -373,4 +373,144 @@ fn not_yet_is_true_only_for_a_file_in_the_cloud() {
     assert!(not_yet(dir.path(), &evicted), "an evicted file is still coming");
     assert_eq!(crate::build::icloud::pretend::requests_for(&evicted) - before, 1);
     assert!(!not_yet(dir.path(), &local), "an ordinary local file is not waiting");
+}
+
+#[derive(Default)]
+struct Recorder(std::sync::Mutex<Vec<crate::build::progress::PipelineEvent>>);
+impl crate::build::ports::reporter::BuildReporter for Recorder {
+    fn report(&self, event: &crate::build::progress::PipelineEvent) {
+        self.0.lock().unwrap().push(event.clone());
+    }
+}
+
+fn failures(recorder: &Recorder) -> Vec<String> {
+    use crate::build::progress::PipelineEvent;
+    recorder.0.lock().unwrap().iter().filter_map(|e| match e {
+        PipelineEvent::Error { message, .. } => Some(message.clone()),
+        _ => None,
+    }).collect()
+}
+
+/// A build that fails says so once to the shells, or their line stays on
+/// "Updating…"; nothing else tells them the build is over.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_build_tells_the_shells_once() {
+    use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let mp = MossPaths::new(root);
+    std::fs::create_dir_all(mp.root()).unwrap();
+    std::fs::write(mp.config(), "[site\n").unwrap();
+    std::fs::write(root.join("index.md"), "---\ntitle: Garden\n---\n\nBeds are dug in April.\n").unwrap();
+    let recorder = std::sync::Arc::new(Recorder::default());
+
+    let built = run_pipeline(PipelineConfig {
+        root: crate::vault::paths::VaultRoot::resolve(root),
+        progress: std::sync::Arc::new(crate::build::ports::reporter::NullReporter), plugins: PluginMode::Skip,
+        watch: false, start_server: false,
+        host: crate::build::ports::host::HostPorts { events: recorder.clone(), ..crate::build::ports::host::test_host_ports() },
+        trigger: BuildTrigger::Full, reason: None, exits_after_build: true,
+        site_url_override: None, server_port: None, admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
+    }).await;
+
+    let message = built.expect_err("a config that does not parse fails the build");
+    assert_eq!(failures(&recorder), vec![message]);
+}
+
+/// A deferred stop is the cloud gate's wait, which already shows, and a told
+/// stop (the preview server's) has its own event; a failure report on either
+/// would put a second, generic error over the one the shells already show.
+#[test]
+fn a_stop_the_shells_already_know_is_not_reported_as_a_failure() {
+    let recorder = std::sync::Arc::new(Recorder::default());
+    let events: crate::build::ProgressSink = recorder.clone();
+    crate::build::report_failure(&events, &BuildStopped::deferred("still downloading"));
+    crate::build::report_failure(&events, &BuildStopped::told("port in use"));
+    assert!(failures(&recorder).is_empty());
+    crate::build::report_failure(&events, &BuildStopped::from("invalid frontmatter".to_string()));
+    assert_eq!(failures(&recorder), vec!["invalid frontmatter".to_string()]);
+}
+
+/// The first pass sealed the site, so a second pass that fails is no failure:
+/// the line must end on "Updated", never "Couldn't update".
+#[test]
+fn a_failed_second_pass_ends_the_build_as_complete() {
+    use crate::build::media::promise::{drive_passes, PassOutcome};
+    use crate::build::progress::PipelineEvent;
+    let recorder = std::sync::Arc::new(Recorder::default());
+    let sink: crate::build::ProgressSink = recorder.clone();
+    let mut answers = vec![
+        Ok(PassOutcome { message: "first".into(), owed: true, is_empty: false, port: None }),
+        Err(BuildStopped::from("the second render broke")),
+    ]
+    .into_iter();
+    let passes = futures::executor::block_on(drive_passes(crate::build::PluginMode::Blocking, |_| {
+        let next = answers.next().expect("two passes");
+        async move { next }
+    }));
+
+    assert_eq!(crate::build::end_build(&sink, &sink, passes), Ok("first".to_string()));
+    assert!(failures(&recorder).is_empty(), "the shells were told the build failed");
+    let completed = recorder.0.lock().unwrap().iter().any(|e| matches!(e, PipelineEvent::Progress { completed: true, .. }));
+    assert!(completed, "the held-back completion was never sent");
+}
+
+/// A re-render only settling media started is not the user's: the line,
+/// already on "Updated", must not go back to "Updating…" for it, and the
+/// preview still needs its completion.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_settle_rerender_sends_its_completion_and_no_ticks() {
+    use crate::build::progress::PipelineEvent;
+    use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("index.md"), "---\ntitle: Garden\n---\n\nBeds are dug in April.\n").unwrap();
+    let recorder = std::sync::Arc::new(Recorder::default());
+
+    run_pipeline(PipelineConfig {
+        root: crate::vault::paths::VaultRoot::resolve(root),
+        progress: recorder.clone(), plugins: PluginMode::Skip,
+        watch: false, start_server: false,
+        host: crate::build::ports::host::test_host_ports(),
+        trigger: BuildTrigger::VideosSettled, reason: None, exits_after_build: true,
+        site_url_override: None, server_port: None, admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
+    }).await.expect("the site builds");
+
+    let events = recorder.0.lock().unwrap();
+    let ticks = events.iter().filter(|e| matches!(e, PipelineEvent::Progress { completed: false, .. })).count();
+    assert_eq!(ticks, 0, "a settle re-render announced itself");
+    assert!(events.iter().any(|e| matches!(e, PipelineEvent::Progress { completed: true, .. })), "its completion never arrived");
+    assert_eq!(completion_reloads(&events), vec![None], "a settle re-render's completion would end a line it never started");
+}
+
+fn completion_reloads(events: &[crate::build::progress::PipelineEvent]) -> Vec<Option<bool>> {
+    use crate::build::progress::PipelineEvent;
+    events.iter().filter_map(|e| match e { PipelineEvent::Progress { completed: true, reloads, .. } => Some(*reloads), _ => None }).collect()
+}
+
+/// A saved build's completion says whether the preview reloads for it: when
+/// it does not, the completion is what ends the line on "Updated".
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_saved_builds_completion_says_whether_the_preview_reloads() {
+    use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("index.md"), "---\ntitle: Garden\n---\n\nBeds are dug in April.\n").unwrap();
+    let build = || async {
+        let recorder = std::sync::Arc::new(Recorder::default());
+        run_pipeline(PipelineConfig {
+            root: crate::vault::paths::VaultRoot::resolve(root),
+            progress: recorder.clone(), plugins: PluginMode::Skip,
+            watch: false, start_server: false,
+            host: crate::build::ports::host::test_host_ports(),
+            trigger: BuildTrigger::Full, reason: None, exits_after_build: true,
+            site_url_override: None, server_port: None, admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
+        }).await.expect("the site builds");
+        let events = recorder.0.lock().unwrap().clone();
+        completion_reloads(&events)
+    };
+
+    assert_eq!(build().await, vec![Some(true)], "a first build shows every page");
+    build().await; // shows the share card the first build wrote after its show
+    assert_eq!(build().await, vec![Some(false)], "a build that changed nothing reloads nothing");
 }

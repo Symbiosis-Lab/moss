@@ -185,6 +185,9 @@ pub enum PipelineEvent {
         completed: bool,
         port: Option<u16>,
         is_empty: Option<bool>,
+        /// See `ProgressUpdate::reloads`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reloads: Option<bool>,
     },
     /// Tier-2 background task progress (toast)
     BackgroundProgress {
@@ -246,6 +249,18 @@ pub enum PipelineEvent {
         plugin: String,
         project_path: String,
     },
+}
+
+impl PipelineEvent {
+    /// A `Progress` event as the shells receive it, on the app's build
+    /// channel and on the browser's `build-progress` frame alike.
+    pub fn progress_update(&self) -> Option<crate::types::events::ProgressUpdate> {
+        let PipelineEvent::Progress { step, message, percentage, completed, port, is_empty, reloads } = self else { return None };
+        Some(crate::types::events::ProgressUpdate {
+            step: step.clone(), message: message.clone(), percentage: *percentage,
+            completed: *completed, port: *port, is_empty: *is_empty, reloads: *reloads,
+        })
+    }
 }
 
 /// The ACL's routing decision (§5): a raw pipeline fact is either a Sync
@@ -392,6 +407,7 @@ pub fn announce_process_hook_wait(sink: &super::ProgressSink, port: Option<u16>)
             completed: false,
             port,
             is_empty: None,
+            reloads: None,
         },
     );
 }
@@ -411,6 +427,7 @@ pub fn announce_process_hook_done(sink: &super::ProgressSink, elapsed_ms: u128, 
             completed: false,
             port,
             is_empty: None,
+            reloads: None,
         },
     );
 }
@@ -799,6 +816,7 @@ mod tests {
             completed: false,
             port: None,
             is_empty: None,
+            reloads: None,
         };
         let json = serde_json::to_string(&event).unwrap();
         assert!(
@@ -898,6 +916,7 @@ mod tests {
                 completed: false,
                 port: Some(3000),
                 is_empty: Some(false),
+                reloads: None,
             },
             PipelineEvent::BackgroundProgress {
                 task: "videos".to_string(),
@@ -957,6 +976,7 @@ mod tests {
                 completed: false,
                 port: None,
                 is_empty: None,
+                reloads: None,
             },
             PipelineEvent::BackgroundProgress {
                 task: "t".to_string(),
@@ -988,11 +1008,11 @@ mod tests {
         let events = vec![
             PipelineEvent::Progress {
                 step: "scanning".into(), message: "msg".into(),
-                percentage: 20, completed: false, port: Some(3000), is_empty: Some(false),
+                percentage: 20, completed: false, port: Some(3000), is_empty: Some(false), reloads: None,
             },
             PipelineEvent::Progress {
                 step: "complete".into(), message: "done".into(),
-                percentage: 100, completed: true, port: None, is_empty: None,
+                percentage: 100, completed: true, port: None, is_empty: None, reloads: None,
             },
             PipelineEvent::BackgroundProgress {
                 task: "assets".into(), current: 5, total: 10,

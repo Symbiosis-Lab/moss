@@ -1408,7 +1408,11 @@ export type MossEvent = { kind: "BackgroundProgress"; payload: BackgroundProgres
  * `open_in_another_app`: another process's desktop app is serving the
  * folder.
  */
-{ kind: "PreviewServerFailed"; payload: { message: string; open_in_another_app: boolean } } | { kind: "ActionPanelLoaded" } | { kind: "ActionPanelOpened"; payload: ActionPanelOpened } | { kind: "ActionPanelClosed" } | { kind: "DividerPositionChanged"; payload: { position: number } } | 
+{ kind: "PreviewServerFailed"; payload: { message: string; open_in_another_app: boolean } } | 
+/**
+ * A build failed; the shells say so until the next build starts.
+ */
+{ kind: "BuildFailed"; payload: { message: string } } | { kind: "ActionPanelLoaded" } | { kind: "ActionPanelOpened"; payload: ActionPanelOpened } | { kind: "ActionPanelClosed" } | { kind: "DividerPositionChanged"; payload: { position: number } } | 
 /**
  * Preview-tiling mode flip (wry#175 cursor constraint — see
  * system/preview_tiling.rs). `tiled: true` → the preview webview is
@@ -2006,7 +2010,12 @@ port: number | null;
 /**
  * Whether the site is empty (no content files found)
  */
-is_empty: boolean | null }
+is_empty: boolean | null; 
+/**
+ * On a build's completion: whether the preview reloads for it. `false`
+ * means no paint follows, so the completion itself is the update.
+ */
+reloads?: boolean | null }
 
 /**
  * The completed build's publish-time evidence, replaced atomically per

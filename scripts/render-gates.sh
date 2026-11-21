@@ -144,6 +144,7 @@ GATES_BUILD=(
   browser-editor
   focus-point
   address-bar
+  progress-line
   series-nav
   card-min-token
 )
@@ -176,7 +177,7 @@ GATES_NOBUILD=(
 )
 
 # Gates that assert timing which fails under load; --jobs runs them alone.
-SERIAL_GATES=(marquee places-explorer-ring browser-editor focus-point address-bar footnote-target)
+SERIAL_GATES=(marquee places-explorer-ring browser-editor focus-point address-bar footnote-target progress-line)
 
 # One linear-search helper, not three copies of the same loop. No namerefs —
 # this has to run under macOS's bash 3.2, not just CI's bash 5. `"$@"` after

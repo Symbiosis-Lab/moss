@@ -29,6 +29,10 @@ pub struct ProgressUpdate {
     pub port: Option<u16>,
     /// Whether the site is empty (no content files found)
     pub is_empty: Option<bool>,
+    /// On a build's completion: whether the preview reloads for it. `false`
+    /// means no paint follows, so the completion itself is the update.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reloads: Option<bool>,
 }
 
 /// System diagnostic information for debugging and user support.
@@ -155,6 +159,12 @@ impl FileChangeEvent {
             && modified_paths.is_none()
     }
 
+    /// Whether the preview reloads for it. The source-domain fields are for
+    /// the editor and the file registry; the preview reads only these three.
+    pub fn changes_output(&self) -> bool {
+        self.changed_output_files.is_some() || self.deleted_paths.is_some() || self.moved_output_paths.is_some()
+    }
+
     /// Set the changed output files
     pub fn set_changed_output_files(&mut self, files: Vec<String>) {
         if files.is_empty() {
@@ -222,6 +232,10 @@ pub use crate::types::toast::ToastPayload;
 /// the same name). Frontend mirror lives in the desktop app's utils module.
 pub const MOSS_EVENT_CHANNEL: &str = "moss-event";
 
+/// The carrier frame that carries a build's progress, shaped like `ProgressUpdate`:
+/// the browser's counterpart of the app's build channel.
+pub const BUILD_PROGRESS_CHANNEL: &str = "build-progress";
+
 // The S1-crossed payload vocabulary lives in the sibling
 // `types/event_payloads.rs` (row-(a) length budget); re-exported here so the
 // enum stays a thin tag and every consumer spells `types::events::X`.
@@ -282,6 +296,8 @@ pub enum MossEvent {
     /// `open_in_another_app`: another process's desktop app is serving the
     /// folder.
     PreviewServerFailed { message: String, open_in_another_app: bool },
+    /// A build failed; the shells say so until the next build starts.
+    BuildFailed { message: String },
     ActionPanelLoaded,
     ActionPanelOpened(ActionPanelOpened),
     ActionPanelClosed,
@@ -584,11 +600,10 @@ pub fn moss_event_for(
             project_path: project_path.clone(),
             plugin: plugin.clone(),
         },
-        // Neither is moss→frontend news. `Error` is a log line, written by the
-        // caller so that a second carrier draining this cannot double-log it;
-        // `Progress` is Tier-1 and rides the loading screen's own channel,
-        // which `TauriReporter::report` handles before calling this.
-        PipelineEvent::Error { .. } | PipelineEvent::Progress { .. } => return None,
+        PipelineEvent::Error { message, .. } => MossEvent::BuildFailed { message: message.clone() },
+        // Tier-1: rides the loading screen's own channel, which
+        // `TauriReporter::report` handles before calling this.
+        PipelineEvent::Progress { .. } => return None,
     })
 }
 
@@ -605,6 +620,7 @@ mod tests {
             completed: false,
             port: None,
             is_empty: None,
+            reloads: None,
         };
 
         assert_eq!(progress.step, "scanning");
@@ -624,6 +640,7 @@ mod tests {
             completed: true,
             port: Some(3000),
             is_empty: Some(false),
+            reloads: None,
         };
 
         assert_eq!(progress.step, "serving");
@@ -642,6 +659,7 @@ mod tests {
             completed: false,
             port: None,
             is_empty: None,
+            reloads: None,
         };
         assert_eq!(progress_min.percentage, 0);
 
@@ -653,6 +671,7 @@ mod tests {
             completed: true,
             port: Some(8080),
             is_empty: Some(false),
+            reloads: None,
         };
         assert_eq!(progress_max.percentage, 100);
         assert!(progress_max.completed);

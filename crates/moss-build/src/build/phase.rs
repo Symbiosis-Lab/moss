@@ -533,7 +533,8 @@ pub fn format_build_summary(
     let trigger = match trigger {
         BuildTrigger::Full => "trigger=full".to_string(),
         BuildTrigger::Unobserved => "trigger=unobserved".to_string(),
-        BuildTrigger::ImagesSettled => "trigger=images-settled".to_string(),
+        BuildTrigger::ImagesSettled { .. } => "trigger=images-settled".to_string(),
+        BuildTrigger::VideosSettled => "trigger=videos-settled".to_string(),
         BuildTrigger::Structural(paths) => format!("trigger=structural changed={}", paths.len()),
         BuildTrigger::ContentOnly(paths) => format!("trigger=content changed={}", paths.len()),
     };
@@ -617,7 +618,8 @@ fn build_record(t: &BuildTelemetry, total: Duration, outcome: &str, trigger: &cr
     let (kind, changed) = match trigger {
         BuildTrigger::Full => ("full", 0),
         BuildTrigger::Unobserved => ("unobserved", 0),
-        BuildTrigger::ImagesSettled => ("images-settled", 0),
+        BuildTrigger::ImagesSettled { .. } => ("images-settled", 0),
+        BuildTrigger::VideosSettled => ("videos-settled", 0),
         BuildTrigger::Structural(paths) => ("structural", paths.len()),
         BuildTrigger::ContentOnly(paths) => ("content", paths.len()),
     };

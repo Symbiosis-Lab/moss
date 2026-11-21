@@ -28,6 +28,7 @@ export class PreviewHairline {
   private active = false;
   private dissolveTimer = 0;
   private pendingTimer = 0;
+  private onUnpainted: (() => void) | undefined;
   /** The dissolve fade-out cleanup timer. TRACKED (not anonymous) so clearTimers()
    *  can cancel it: an untracked timer fired ~500ms into a later start()/upload
    *  and zeroed `active`/`fraction` mid-run (cancel()→retry race). */
@@ -124,6 +125,8 @@ export class PreviewHairline {
    *  table, so the morph's reserved slice is applied here (the final 10%,
    *  completed via complete() when the morph lands). */
   setBuildProgress(fraction: number): void {
+    // A new build owns the line: a pending fallback would settle it mid-build.
+    this.dropFallback();
     this.applyDeterminate(fraction * PreviewHairline.BUILD_CAP);
   }
 
@@ -163,24 +166,39 @@ export class PreviewHairline {
   }
 
   /**
-   * Schedule a complete()+dissolve after `ms` (fallback for a no-change rebuild
-   * that triggers no refresh/morph). Cancelable via cancelPendingDissolve() —
-   * the refresh path cancels it and completes precisely when the morph lands.
+   * Schedule a complete()+dissolve after `ms`, the fallback for a rebuild no
+   * paint follows; `onUnpainted` runs with it. A paint takes over through
+   * handOverToPaint(); any other work that takes the bar runs `onUnpainted`
+   * through cancelPendingDissolve(), since no paint will follow for it either.
    */
-  dissolveAfter(ms: number): void {
+  dissolveAfter(ms: number, onUnpainted?: () => void): void {
     if (this.pendingTimer) clearTimeout(this.pendingTimer);
+    this.onUnpainted = onUnpainted;
     this.pendingTimer = window.setTimeout(() => {
       this.pendingTimer = 0;
+      this.cancelPendingDissolve();
       this.complete();
     }, ms);
   }
 
-  /** Cancel a pending dissolveAfter (a refresh/morph will apply → hold). */
+  /** Another pass takes the bar before the fallback fired. */
   cancelPendingDissolve(): void {
+    const settle = this.onUnpainted;
+    this.dropFallback();
+    settle?.();
+  }
+
+  /** A paint is coming: it completes the bar and settles what the fallback would have. */
+  handOverToPaint(): void {
+    this.dropFallback();
+  }
+
+  private dropFallback(): void {
     if (this.pendingTimer) {
       clearTimeout(this.pendingTimer);
       this.pendingTimer = 0;
     }
+    this.onUnpainted = undefined;
   }
 
   /**
@@ -217,10 +235,8 @@ export class PreviewHairline {
       clearTimeout(this.dissolveTimer);
       this.dissolveTimer = 0;
     }
-    if (this.pendingTimer) {
-      clearTimeout(this.pendingTimer);
-      this.pendingTimer = 0;
-    }
+    // A pass that restarts the bar owns the line from here.
+    this.dropFallback();
     if (this.dissolveAnimTimer) {
       clearTimeout(this.dissolveAnimTimer);
       this.dissolveAnimTimer = 0;

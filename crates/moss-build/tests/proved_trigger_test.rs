@@ -531,7 +531,7 @@ fn a_settled_picture_renders_the_pages_showing_it_and_matches_a_full_render() {
     let page = || fs::read_to_string(MossPaths::new(site.root()).staging_dir().join("notes/alpha/index.html")).unwrap();
     assert!(!page().contains(blur), "the first preview render left the blur to the media phase");
 
-    let record = build_previewing(site.root(), BuildTrigger::ImagesSettled);
+    let record = build_previewing(site.root(), BuildTrigger::ImagesSettled { edited: false });
     assert_eq!(count(&record, "proved_from_seal"), 1, "{record}");
     assert!(count(&record, "pages_rendered") >= 1, "{record}");
     assert!(count(&record, "pages_carried") > 0, "{record}");
@@ -541,7 +541,7 @@ fn a_settled_picture_renders_the_pages_showing_it_and_matches_a_full_render() {
     let full = Site(tempfile::tempdir().unwrap());
     copy_source(site.root(), full.root());
     build_previewing(full.root(), BuildTrigger::Full);
-    build_previewing(full.root(), BuildTrigger::ImagesSettled);
+    build_previewing(full.root(), BuildTrigger::ImagesSettled { edited: false });
     let reference = published(full.root());
     let differing: Vec<_> = reference.keys().chain(settled.keys())
         .filter(|k| reference.get(*k) != settled.get(*k))
@@ -632,7 +632,7 @@ fn inputs_a_build_moves_itself_still_let_the_next_build_prove() {
     assert!(!site.root().join(&old_card).exists());
     assert!(!fs::read_to_string(site.root().join(".moss/redirects.json")).unwrap().contains("qr/"), "the saved QR stub was dropped");
 
-    let record = build_previewing(site.root(), BuildTrigger::ImagesSettled);
+    let record = build_previewing(site.root(), BuildTrigger::ImagesSettled { edited: false });
     assert_eq!(count(&record, "proved_from_seal"), 1, "{record}");
 }
 
@@ -643,12 +643,18 @@ struct Heard {
     change_sets: Mutex<Vec<Option<moss_build::build::manifest::change_set::ChangeSet>>>,
     stage_ready: std::sync::atomic::AtomicUsize,
     completed_on: Mutex<Vec<Option<u16>>>,
+    page_ticks: std::sync::atomic::AtomicUsize,
 }
 
 struct Ear(std::sync::Arc<Heard>);
 
 impl moss_build::build::ports::reporter::BuildReporter for Ear {
     fn report(&self, event: &moss_build::build::progress::PipelineEvent) {
+        if let moss_build::build::progress::PipelineEvent::BackgroundProgress { task, .. } = event {
+            if task == "markdown" || task == "html_pages" {
+                self.0.page_ticks.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
         if let moss_build::build::progress::PipelineEvent::Progress { step, completed: true, port, .. } = event {
             if step == "build" {
                 self.0.completed_on.lock().unwrap().push(*port);
@@ -676,6 +682,10 @@ const PREVIEW_PORT: u16 = 47_311;
 /// preview cell the server reads. Its server is a stand-in that answers with a
 /// port.
 fn serve(root: &Path, cell: &moss_build::moss_paths::ServedCell) -> (serde_json::Value, std::sync::Arc<Heard>) {
+    serve_as(root, cell, BuildTrigger::Unobserved)
+}
+
+fn serve_as(root: &Path, cell: &moss_build::moss_paths::ServedCell, trigger: BuildTrigger) -> (serde_json::Value, std::sync::Arc<Heard>) {
     use moss_build::build::{run_pipeline, PipelineConfig};
     let heard = std::sync::Arc::new(Heard::default());
     let folder = root.to_string_lossy().into_owned();
@@ -692,7 +702,7 @@ fn serve(root: &Path, cell: &moss_build::moss_paths::ServedCell) -> (serde_json:
         watch: false,
         start_server: true,
         host,
-        trigger: BuildTrigger::Unobserved, reason: None,
+        trigger, reason: None,
         exits_after_build: true,
         site_url_override: None,
         server_port: None,
@@ -760,6 +770,21 @@ fn a_serving_open_with_nothing_changed_shows_the_sealed_staging_without_scanning
     assert_eq!(heard.stage_ready.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(*heard.completed_on.lock().unwrap(), vec![Some(PREVIEW_PORT)]);
     assert_publishes_a_full_render(&site);
+}
+
+/// The preview's progress line reads a page count as a build starting, so a
+/// re-render nobody asked for must not send one to the host.
+#[test]
+fn a_settle_render_counts_no_pages_to_the_host_where_a_full_render_does() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (site, cell) = served_site();
+    let ticks = |heard: &Heard| heard.page_ticks.load(std::sync::atomic::Ordering::SeqCst);
+    let (_, full) = serve_as(site.root(), &cell, BuildTrigger::Full);
+    assert!(ticks(&full) > 0, "premise: a full render counts its pages to the host");
+    let (record, settle) = serve_as(site.root(), &cell, BuildTrigger::VideosSettled);
+    assert!(count(&record, "pages_rendered") > 0, "premise: the settle rendered pages: {record}");
+    assert_eq!(ticks(&settle), 0, "a settle render announced itself");
+    assert_eq!(settle.stage_ready.load(std::sync::atomic::Ordering::SeqCst), full.stage_ready.load(std::sync::atomic::Ordering::SeqCst), "the settle still hands its stage to the server");
 }
 
 /// The stopped open publishes the change set a proved open would: the same

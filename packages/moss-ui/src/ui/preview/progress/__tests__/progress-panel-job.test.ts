@@ -77,7 +77,7 @@ describe("ProgressPanel Job ingestion (Preview-scope Jobs)", () => {
     }
   });
 
-  // An import's pages start a build of their own. Its receipt, "Built · 1 page",
+  // An import's pages start a build of their own. Its receipt, "Updated",
   // is finished work and false about the import still running, so the import's
   // line outranks it; the build's stage while it runs is true and outranks the import.
   it("a running import outranks the build's receipt, and the build's running stage outranks the import", () => {
@@ -87,12 +87,7 @@ describe("ProgressPanel Job ingestion (Preview-scope Jobs)", () => {
       wire({ scope: "preview", id: "7", kind: "import", state: { state: "running", fraction: null, message: "Importing from writer.example · 1 page" } }),
     );
     expect(line()).not.toContain("Importing");
-    panel.handleJobUpdate(
-      wire({
-        scope: "preview", id: "100", kind: "build", verb: "Built", amount: { count: 1, noun: "pages" }, elapsed_ms: 100,
-        state: { state: "succeeded", receipt: null, advisories: [] },
-      }),
-    );
+    panel.showUpdated(); // the build's paint
     expect(line()).toBe("Importing from writer.example · 1 page");
   });
 
@@ -481,10 +476,7 @@ describe("ProgressPanel Job ingestion (Preview-scope Jobs)", () => {
       ).toBeUndefined();
     });
 
-    it("the Build parent's terminal Succeeded drives the 'Built · N pages · X.Xs' header", () => {
-      // The backend drives the parent receipt: verb=Built,
-      // amount={page_count, pages}, frozen elapsed. The header reads it from the
-      // parent Job — NOT a phantom row, NOT the legacy BuildComplete listener.
+    it("the Build parent's terminal Succeeded mints no row and no receipt (the paint does)", () => {
       // A compiling stage keeps the panel open (the receipt only shows on an
       // already-surfaced panel, keeping quiet rebuilds silent).
       panel.setStage("compiling");
@@ -501,7 +493,7 @@ describe("ProgressPanel Job ingestion (Preview-scope Jobs)", () => {
       );
       const header = container.querySelector(".moss-status-line") as HTMLElement | null;
       expect(header).not.toBeNull();
-      expect(header!.textContent).toBe("Built · 12 pages · 2.1s");
+      expect(header!.textContent).not.toBe("Updated");
       // And it minted no `job:100` task row.
       expect(
         panel.getActiveTasks().find((t) => t.id === "job:100"),
@@ -627,7 +619,7 @@ describe("ProgressPanel Job ingestion (Preview-scope Jobs)", () => {
         // The receipt is rendered in the status line (buildReceipt was set).
         const header = container.querySelector(".moss-status-line") as HTMLElement | null;
         expect(header).not.toBeNull();
-        expect(header!.textContent).toContain("Built");
+        expect(header!.textContent).not.toBe("Updated");
       } finally {
         vi.useRealTimers();
       }

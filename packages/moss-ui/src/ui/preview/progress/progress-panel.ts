@@ -4,9 +4,8 @@
  * # The primary/secondary rule
  *
  * The panel renders ONE primary bar showing the current pipeline phase —
- * a build phase (opening/scanning/materializing/compiling) when
- * publish is idle, or a publish phase (waiting/preparing/syncing/
- * uploading/committing/finalizing) when publish is engaged.
+ * a build phase (opening, updating, downloading) when publish is idle, or
+ * a publish phase (preparing, uploading) when publish is engaged.
  *
  * Per event: is its progress already representable in the primary bar's own
  * current/total?
@@ -15,8 +14,7 @@
  *     - BackgroundProgress{task: markdown|html_pages} — PAGE_PHASE_BY_TASK,
  *       the only two tasks that count pages into the compiling stage
  *     - icloud-sync (cloud provider downloads) — feeds the download
- *       readout (downloaded/total/remaining) for as long as
- *       `remaining > 0`, whatever stage the build has reached
+ *       readout (downloaded/total) while the build is materializing
  *     - DeployWaitingForBuild / deploy-progress — advances publish stage,
  *       feeds uploading current/total
  *
@@ -42,6 +40,7 @@ import { ProgressPanelRenderer } from "./progress-panel-renderer";
 import type { PreviewStage } from "../preview-state";
 import {
   computeStageLabel,
+  stageCountText,
   computePublishLabel,
   formatStatus,
   nextStage,
@@ -53,6 +52,7 @@ import {
   noticeTier,
   compilingLabelInput,
   nextPageProgress,
+  PAGE_PHASE_BY_TASK,
   bgTaskRowDecision,
   staleTaskAdvisoryKeys,
   type PageProgress,
@@ -259,6 +259,7 @@ export class ProgressPanel {
   setFolder(path: string | null): void {
     if (this.healthFolder === path) return;
     this.healthFolder = path;
+    this.siteServed = false;
     this.cloudFileDetails.reset();
     this.renderer.resetCloudFilesDisclosure();
     if (this.deleteAdvisory(BUILD_OVERDUE_ADV_KEY)) this.renderPanel();
@@ -376,7 +377,6 @@ export class ProgressPanel {
    * renders nothing; see `setScreenUp`.
    */
   private screenUp = false;
-  private serverBaseUrl: string | null = null;
   private iframe: HTMLIFrameElement | null = null;
 
   /** Coarse pipeline stage driving the top-level "current stage" label. */
@@ -392,17 +392,6 @@ export class ProgressPanel {
      *  numbers — it is what makes them comparable. `nextPageProgress` is the
      *  only door in; it says which events are refused and why. */
     pages?: PageProgress;
-    /**
-     * Files still in the cloud, from the last `icloud-sync` tick for this
-     * folder. Set alongside `downloaded`/`total`, cleared when it reaches zero.
-     *
-     * This is the one part of `stageContext` that is NOT scoped to a stage. A
-     * download outlives the build that noticed it — the supervisor keeps
-     * draining while later builds compile and go ready — so `setStage` carries
-     * it across the `ready` reset and `activePrimaryLabel` reports it whatever
-     * stage the build is in. Scoping it to a stage would hide a download that is still running.
-     */
-    remaining?: number;
   } = {};
 
   /**
@@ -423,17 +412,16 @@ export class ProgressPanel {
    *
    * Stored rather than derived, because the readout is reset at `complete`.
    */
-  private publishReceipt: string | null = null;
+  private publishReceipt: { text: string; running: boolean } | null = null;
   private publishReceiptTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** Auto-remove tasks after 15s of no updates (defense-in-depth) */
   private static readonly STALE_TIMEOUT_MS = 15_000;
 
   /**
-   * Maximum dwell time for the `Built · N pages · X.Xs` completion receipt. The receipt is a confirmation, not a resident card — after this
-   * window it retracts to the pill (the panel auto-closes if nothing else is
-   * keeping it open). Kept deliberately short so a "Built · …" header never
-   * lingers as a floating card.
+   * Maximum dwell time for the "Updated" completion receipt. The receipt is a
+   * confirmation, not a resident card — after this window it retracts to the
+   * pill (the panel auto-closes if nothing else is keeping it open).
    */
   static readonly RECEIPT_DWELL_MS = 2_500;
 
@@ -453,29 +441,10 @@ export class ProgressPanel {
   static readonly PEEK_CLOSE_DELAY_MS = 200;
 
   /**
-   * The last completed build, or null when no build has completed since the
-   * receipt last retracted. Both facts are captured together AT completion, so
-   * the dwell timer can only discard data belonging to the build it armed for.
-   * `elapsedMs` is the measured span in ms, held raw (NOT a pre-formatted
-   * "2.1s") so the renderer formats the Duration at paint — values on data,
-   * formatting at the edge (Hickey). Either field is null when that fact is
-   * unknown for THIS build ("it finished, we don't know how long"): the receipt
-   * still renders and merely drops the segment it cannot fill.
+   * The last build has landed and its "Updated" receipt is up. Cleared by the
+   * dwell timer and at build start.
    */
-  private lastBuild: { elapsedMs: number | null; pageCount: number | null } | null = null;
-  /**
-   * The page count of the build IN FLIGHT — written when the `html_pages` task
-   * reports its total, consumed into `lastBuild` at that same build's
-   * completion. It is deliberately neither receipt state nor `stageContext`,
-   * because both are wiped on a clock that is not this build's: as receipt state
-   * the dwell timer wiped it 2.5s after the PREVIOUS build, blanking the header
-   * of any rebuild that started inside that window, and in `stageContext`
-   * `setStage("ready")` wiped it before the receipt was even minted (the
-   * backend's real order is ready THEN BuildComplete — the terminal progress
-   * event closes the build fn, BuildComplete comes later from the spawned seal
-   * task). Owned by the build, consumed by that build's completion.
-   */
-  private pendingPageCount: number | null = null;
+  private buildUpdated = false;
   /**
    * The live Build parent Job's row id (`job:<id>`), captured
    * when a top-level `kind === "build"` Job is first seen. Media sub-jobs and the
@@ -484,16 +453,6 @@ export class ProgressPanel {
    * rebuild (no parent Job is born — invariant #6).
    */
   private buildJobId: string | null = null;
-  /**
-   * The Build parent Job's terminal receipt text
-   * (`Built · N pages · X.Xs`), composed from the parent Job's
-   * verb·amount·elapsed at its `Succeeded` transition. When set it is the
-   * AUTHORITATIVE completion header (a media build); `completionReceiptText()`
-   * prefers it over the legacy `BuildComplete`-derived path, so the
-   * two never double-render. `null` for a media-less build (no parent Job — the
-   * legacy `BuildComplete` listener is the sole receipt there).
-   */
-  private buildReceipt: string | null = null;
   /** Pending retract timer for the completion receipt (R11). */
   private receiptTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -505,7 +464,8 @@ export class ProgressPanel {
    *   - A re-publish `waiting/progress` event while stage is "failed"
    *   - `setStage("opening" | "initial")` — new build starts
    */
-  private lastFailure: string | null = null;
+  /** The red line's text, and which of the four failures wrote it, so each clears only its own. */
+  private lastFailure: { cause: "server" | "update" | "job" | "publish"; text: string } | null = null;
 
   /**
    * Durable hover flag for the PANEL BODY (not the seam).
@@ -520,19 +480,6 @@ export class ProgressPanel {
    * `checkAutoClose()` while any child has focus.
    */
   private bodyFocused = false;
-
-  /**
-   * Current video encoding status, stashed from
-   * VideoConversionProgress events for use in buildViewModel.
-   * Preferred over build/publish stage labels in the status line while encoding.
-   * Cleared when BackgroundProgress { task: "videos", completed: true } arrives.
-   */
-  private mediaStatus: {
-    verb: string;
-    subject: string;
-    current: number;
-    total: number;
-  } | null = null;
 
   /**
    * Grace period before a fast build hook's row paints. The `enhance` hook
@@ -578,13 +525,26 @@ export class ProgressPanel {
     this.iframe = iframe ?? null;
   }
 
-  /**
-   * Set the server base URL for asset placeholder swapping.
-   * Called by PreviewManager once the dev server is ready.
-   */
-  setServerBaseUrl(url: string): void {
-    this.serverBaseUrl = url;
+  /** PreviewManager calls this once the folder's site is served. */
+  noteSiteServed(): void {
+    this.siteServed = true;
   }
+
+  /**
+   * The build has finished, whether or not it changed or failed: no more
+   * "Updating…". "Updated" waits for the paint (`showUpdated`).
+   */
+  buildSettled(): void {
+    this.stageContext.pages = undefined;
+    this.renderPanel();
+  }
+
+  /**
+   * This folder's site has been served at least once. From then on the
+   * person is looking at a preview, and a cloud download is part of it
+   * updating, never a line of its own.
+   */
+  private siteServed = false;
 
   /** Subscribes to everything the panel reports, in one table. */
   async init(): Promise<void> {
@@ -592,6 +552,7 @@ export class ProgressPanel {
       onMossEvents({
         BackgroundProgress: (e) => this.onBackgroundProgress(e.payload),
         PreviewServerFailed: (e) => this.onPreviewServerFailed(e.payload.message),
+        BuildFailed: (e) => this.onBuildFailed(e.payload.message),
         FolderHealthChanged: (e) => this.onFolderHealthChanged(e.payload),
         VideoConversionProgress: (e) => this.onVideoConversionProgress(e.payload),
         // Plugin hook progress (process, deploy, syndicate).
@@ -604,8 +565,7 @@ export class ProgressPanel {
         // this build: each goes through the same swap as AssetReady, and this
         // is the signal that fires after the background .webp encode lands.
         AssetsSettled: (e) => e.payload.changed.forEach((asset) => this.handleAssetReady(asset)),
-        BuildComplete: (e) => this.onBuildComplete(e.payload.total_time_ms),
-        // Deploy waits for background tasks: "Waiting for build…" on the primary bar.
+        // Deploy waits for background tasks: "Preparing…" on the primary bar.
         DeployWaitingForBuild: () => this.advancePublishStage({ kind: "waiting" }),
       }),
       host.engine.on("scan-progress", (p: { found: number; evicted: number }) => p && this.onScanProgress(p)),
@@ -657,18 +617,17 @@ export class ProgressPanel {
       typeof p.current === "number" &&
       typeof p.total === "number"
     ) {
+      // A page tick is a build running, so it ends the last one's receipt and failure.
+      if (PAGE_PHASE_BY_TASK[p.task]) {
+        this.endCompletionReceipt();
+        if (this.lastFailure?.cause === "update") this.lastFailure = null;
+      }
       this.stageContext.pages = nextPageProgress(
         this.stageContext.pages,
         p.task,
         p.current,
         p.total,
       );
-      // The receipt's "N pages" comes ONLY from the html_pages task: every
-      // other task counts its own set, so a later one would report
-      // "3 pages" for 3 videos, not the 47 pages actually built.
-      if (p.task === "html_pages") {
-        this.pendingPageCount = p.total;
-      }
     }
     // Soft-failure advisories: merge by task+item within a build (notebooks
     // emit incrementally; video/image emit their full set once on the terminal
@@ -725,10 +684,6 @@ export class ProgressPanel {
         this.deleteAdvisory(key);
       }
       this.taskRefreshedKeys.delete(p.task);
-      // Clear mediaStatus when video encoding finishes.
-      if (p.task === "videos") {
-        this.mediaStatus = null;
-      }
       const startedAt = this.bgJobStartedAt.get(p.task);
       this.bgJobStartedAt.delete(p.task);
       if (startedAt !== undefined) {
@@ -770,7 +725,7 @@ export class ProgressPanel {
     // Then set failure state (after setStage('ready') so the opening/initial
     // advisory-clear path doesn't run — this is a self-contained advisory
     // keyed to this session's server failure).
-    this.lastFailure = t('preview.server_failed', { msg });
+    this.lastFailure = { cause: "server", text: t('preview.server_failed', { msg }) };
     this.advisories.set(PREVIEW_SERVER_ADV_KEY, {
       task: "preview-server-error",
       item: null,
@@ -781,6 +736,17 @@ export class ProgressPanel {
       severity: "Blocking",
     });
     // Surface the panel so the user sees the red status + broken notice.
+    this.surfaceOnInterrupt();
+    this.renderPanel();
+  }
+
+  /** A rebuild failed: the line says so until the next one starts. */
+  private onBuildFailed(msg: string): void {
+    warn(`[ProgressPanel] Build failed: ${msg}`);
+    // A blank window shows the failure full-size.
+    if (cloudSync.getState().previewBlank) return;
+    this.setStage("ready");
+    this.lastFailure = { cause: "update", text: t('preview.update_failed', { msg }) };
     this.surfaceOnInterrupt();
     this.renderPanel();
   }
@@ -841,13 +807,6 @@ export class ProgressPanel {
   // VideoConversionProgress (typed): FFmpeg's callback — the SECOND
   // writer of `bg:videos` (BackgroundProgress above creates it first, quietly).
   private onVideoConversionProgress(vp: VideoConversionProgress): void {
-    // Stash for status line (buildViewModel).
-    this.mediaStatus = {
-      verb: t("verb.optimizing"),
-      subject: vp.filename,
-      current: vp.current_video,
-      total: vp.total_videos,
-    };
     const phaseLabel =
       vp.phase === "analyzing" ? t("progress.video_analyzing") : t("progress.video_encoding");
     this.upsertTask({
@@ -859,18 +818,6 @@ export class ProgressPanel {
       ambient: true,
       parentId: this.buildJobId ?? undefined,
     });
-  }
-
-  // BuildComplete (typed): the terminal build receipt, and where a build's
-  // two facts are joined — it carries the measured span (`total_time_ms`)
-  // but NOT the page count, so the count `html_pages` parked in
-  // `pendingPageCount` is consumed here and both are stamped onto
-  // `lastBuild` together so the receipt is consistent. A toast in preview-manager.ts
-  // consumes the same event independently on the one `moss-event` channel.
-  private onBuildComplete(totalTimeMs: number): void {
-    this.lastBuild = { elapsedMs: totalTimeMs, pageCount: this.pendingPageCount };
-    this.pendingPageCount = null;
-    this.showCompletionReceipt();
   }
 
   // icloud-sync: cloud provider download progress for evicted files.
@@ -897,7 +844,7 @@ export class ProgressPanel {
     // gate that can still be up while the build runs, a finished
     // download reported through `home_waiting` would leave the readout
     // running with nothing left to report — the same dishonesty, wearing
-    // the fix's clothes. `remaining` is the authority; see `cloudOutstanding`.
+    // the fix's clothes. `remaining` is the authority.
     // Concrete read errors are a separate supervisor fact from pending
     // downloads. Set the notice before the zero-remaining branch too.
     if (state.unavailable_count === null || state.unavailable_count > 0) {
@@ -924,19 +871,13 @@ export class ProgressPanel {
       return;
     }
 
-    // Otherwise the site is up but files are still arriving. That is worth
-    // showing: on a large synced vault the preview goes live long before
-    // every image has landed, and silence there reads as "images broken"
-    // rather than "images still downloading".
-
+    // Files still arriving: the materializing stage reads these counts. Once
+    // the build has moved past it they are background work, which the
+    // headline does not report.
     this.stageContext.provider =
       state.provider?.label || this.stageContext.provider || "cloud";
     this.stageContext.downloaded = state.downloaded;
     this.stageContext.total = state.total;
-    // `remaining` is what makes the readout outlive the stage — see
-    // `cloudOutstanding`. Without it, downloads would be reported only while
-    // the stage is `materializing`.
-    this.stageContext.remaining = state.remaining;
     // Direct mutation (vs. advanceStage) is intentional: there is no
     // matching `StageEvent` kind for icloud-sync. The condition here
     // mirrors the monotonic invariant baked into `nextStage` — only
@@ -1006,11 +947,12 @@ export class ProgressPanel {
     if (p.stage === "verifying") {
       // Publishing is verified live asynchronously: Complete precedes
       // Verifying on this channel, so this is a RECEIPT CORRECTION, not a
-      // stage advance — swap "Published · …" for the honest rung-1
-      // sentence on the normal dwell. No machine re-engagement: a resident
-      // stage would pin shouldSurface() true for the whole verification
-      // window. From 10s the `publish-verify` advisory is the carrier.
-      this.showPublishReceipt(t('publish_verify.uploaded_checking'));
+      // stage advance — the site is not live yet, so "Published · …" goes
+      // back to "Uploading…" on the normal dwell. No machine re-engagement: a
+      // resident stage would pin shouldSurface() true for the whole
+      // verification window. From 10s the `publish-verify` advisory carries
+      // the verdict.
+      this.showPublishReceipt(t('pstage.uploading_plain'), true);
       this.renderPanel();
       return;
     }
@@ -1203,8 +1145,7 @@ export class ProgressPanel {
 
     // The top-level Build Job is the receipt HEADER, not a
     // task row. It anchors the nesting of every media child + the fine-grained
-    // VideoConversionProgress detail, and its terminal drives the
-    // `Built · N pages · X.Xs` header. Route it here so it never paints a row.
+    // VideoConversionProgress detail. Route it here so it never paints a row.
     if (wire.kind === "build" && wire.parent == null) {
       this.handleBuildJobUpdate(id, wire);
       return;
@@ -1334,7 +1275,7 @@ export class ProgressPanel {
         // Set lastFailure for a publish/deploy Job so the
         // red status line persists and checkAutoClose is suppressed.
         if (wire.kind === "deploy" || wire.kind === "publish") {
-          this.lastFailure = state.advisory.what || t('preview.job_failed');
+          this.lastFailure = { cause: "job", text: state.advisory.what || t('preview.job_failed') };
         }
         // Remove the old task row (if any); the notice rail owns failure surfaces.
         this.clearStaleTimer(id);
@@ -1354,39 +1295,20 @@ export class ProgressPanel {
    * Ingest the top-level Build parent Job. The Build Job is the
    * receipt HEADER, never a task row:
    *   • `running` → remember its id (`buildJobId`) so media children + the
-   *     fine-grained `VideoConversionProgress` detail nest under it. No row, no
-   *     surface (the "Building…" header + the Sync hairline own the in-progress
-   *     moment — success makes no sound).
-   *   • `succeeded` → compose `Built · N pages · X.Xs` from the parent Job's
-   *     verb·amount·elapsed and drive it as the header (reconciled with the
-   *     legacy `BuildComplete` listener via `buildReceipt` — one header slot, so
-   *     no double receipt). Then forget the id (the build is over).
+   *     fine-grained `VideoConversionProgress` detail nest under it.
+   *   • `succeeded` → forget the id. Media workers have all joined by now, long
+   *     after the paint, which is what raises "Updated" (`showUpdated`).
    *   • `failed`/`cancelled` → forget the id; a build error surfaces via its
    *     advisory, not a Build-Job row.
    */
   private handleBuildJobUpdate(id: string, wire: PanelTaskWire): void {
-    const state = wire.state;
-    switch (state.state) {
+    switch (wire.state.state) {
       case "running":
         this.buildJobId = id;
         break;
-      case "succeeded": {
-        const verb = localizeVerb(wire.verb) || t("verb.built");
-        const amount = formatAmount(wire.amount);
-        const elapsed = formatElapsed(wire.elapsed_ms);
-        const receipt =
-          [verb, amount, state.receipt ?? undefined, elapsed]
-            .filter((p) => p && p.length > 0)
-            .join(" · ") || t('verb.built');
-        // Stash the parent Job's receipt (see `buildReceipt`) and seed
-        // `lastBuild` so the dwell/retract machinery (R11) applies unchanged.
-        this.buildReceipt = receipt;
-        this.lastBuild = { elapsedMs: wire.elapsed_ms, pageCount: this.pendingPageCount };
-        this.pendingPageCount = null;
+      case "succeeded":
         this.buildJobId = null;
-        this.showCompletionReceipt();
         break;
-      }
       case "failed":
       case "cancelled":
         this.buildJobId = null;
@@ -1985,16 +1907,15 @@ export class ProgressPanel {
     return Array.from(this.tasks.values());
   }
 
-  getAdvisories(): AdvisoryEntry[] {
-    return Array.from(this.advisories.values());
+  /** A task the panel can say something about. Ambient work has no row and
+   *  no headline, so it neither opens the seam nor holds the glass. */
+  private hasForegroundTask(): boolean {
+    for (const task of this.tasks.values()) if (!task.ambient) return true;
+    return false;
   }
 
-  /**
-   * Expose the current media encoding status for
-   * buildViewModel and tests.
-   */
-  getMediaStatus(): { verb: string; subject: string; current: number; total: number } | null {
-    return this.mediaStatus;
+  getAdvisories(): AdvisoryEntry[] {
+    return Array.from(this.advisories.values());
   }
 
   onAllComplete(callback: () => void): void {
@@ -2035,7 +1956,7 @@ export class ProgressPanel {
    * gate): no content ⇒ no panel, no line, no reveal handle. */
   private hasContent(): boolean {
     return (
-      this.getActiveTasks().length > 0 ||
+      this.hasForegroundTask() ||
       this.narratedTasks.size > 0 ||
       this.advisories.size > 0 ||
       // A terminal failure keeps the seam + reveal handle alive even after the
@@ -2121,7 +2042,7 @@ export class ProgressPanel {
   }
 
   /**
-   * Show the `Built · N pages · X.Xs` completion receipt in the panel header.
+   * Show the "Updated" completion receipt in the panel header.
    * To keep routine work quiet, it renders ONLY when the
    * panel is already shown — a routine rebuild's completion is the pill flash,
    * not a grown header. The max-dwell is armed BEFORE that check because it
@@ -2130,14 +2051,13 @@ export class ProgressPanel {
    * build long gone. Its other half is in `checkAutoClose`: this does not hold
    * the glass.
    */
-  private showCompletionReceipt(): void {
-    // Hard max-dwell: clear the receipt then re-render + try to auto-close so
-    // the "Built · …" header retracts to the pill rather than sitting forever.
+  showUpdated(): void {
+    this.buildUpdated = true;
+    this.stageContext.pages = undefined;
     if (this.receiptTimer) clearTimeout(this.receiptTimer);
     this.receiptTimer = setTimeout(() => {
       this.receiptTimer = null;
-      this.lastBuild = null;
-      this.buildReceipt = null;
+      this.buildUpdated = false;
       this.renderPanel();
       this.checkAutoClose();
     }, ProgressPanel.RECEIPT_DWELL_MS);
@@ -2155,9 +2075,9 @@ export class ProgressPanel {
    * confirmation is never an unbidden interruption. The panel is open anyway —
    * the publish kept it open.
    */
-  private showPublishReceipt(text: string): void {
+  private showPublishReceipt(text: string, running = false): void {
     this.clearPublishReceipt();
-    this.publishReceipt = text;
+    this.publishReceipt = { text, running };
     this.publishReceiptTimer = setTimeout(() => {
       this.publishReceiptTimer = null;
       this.publishReceipt = null;
@@ -2176,41 +2096,19 @@ export class ProgressPanel {
     this.publishReceipt = null;
   }
 
-  /**
-   * The completion-receipt text, formatted at render (no pre-formatted strings
-   * on data — Hickey): `Amount{count, noun: "pages"}` + `Duration(elapsedMs)`,
-   * both read off the `lastBuild` snapshot. Returns null when there is no
-   * receipt to show (no completed build yet, no html_pages total seen when it
-   * was minted, or it has retracted).
-   */
-  private completionReceiptText(): string | null {
-    // A media build's parent Job is the authoritative receipt; the legacy
-    // `BuildComplete` path below is the receipt only for a media-LESS build
-    // (invariant #6). One header slot — see `buildReceipt`.
-    if (this.buildReceipt != null) return this.buildReceipt;
-    if (this.lastBuild == null) return null;
-    const count = this.lastBuild.pageCount;
-    if (count == null) return null;
-    // The Job path's own three helpers, so the two receipt sources agree on
-    // every segment: the localized verb, the localized noun with its singular
-    // rule, and a span that drops `· X.Xs` rather than rendering "NaNs"/"0.0s".
-    const amount = formatAmount({ count, noun: "pages" });
-    return [t("verb.built"), amount, formatElapsed(this.lastBuild.elapsedMs)]
-      .filter((p) => p.length > 0)
-      .join(" · ");
-  }
-
-  /** Drop the completion receipt (state + pending retract timer). */
-  private clearCompletionReceipt(): void {
+  /** Drop the "Updated" receipt and its retract timer. */
+  private endCompletionReceipt(): void {
     if (this.receiptTimer) {
       clearTimeout(this.receiptTimer);
       this.receiptTimer = null;
     }
-    this.lastBuild = null;
-    // The parent-Job receipt + its parent-id anchor are per-build
-    // state — a fresh build must not inherit the previous Build Job's receipt or
-    // nest new children under a stale parent.
-    this.buildReceipt = null;
+    this.buildUpdated = false;
+  }
+
+  /** Drop the receipt, and the Build Job anchor: a fresh build must not nest
+   *  new children under a stale parent. */
+  private clearCompletionReceipt(): void {
+    this.endCompletionReceipt();
     this.buildJobId = null;
   }
 
@@ -2307,8 +2205,13 @@ export class ProgressPanel {
 
   /**
    * Build the status-line input by priority.
-   * Priority: failed → publish stage → publish receipt → media (mediaStatus) →
-   *           cloud download → build receipt → build stage → job/plugin → none.
+   * Priority: failed → publish stage → publish receipt → build stage →
+   *           job/plugin → build receipt → none.
+   *
+   * Background work (video conversion, cloud downloads, text reads, image
+   * variants) never takes the line: while previewing, the person needs only
+   * whether the preview is updating or has updated, and a publish says
+   * "Preparing…" for the background work it waits on.
    *
    * The "running job/plugin" tier (wiring iii): reads any this.tasks entry that
    * has progress != 100 (or null = indeterminate) AND is NOT in awaitingJobs
@@ -2319,7 +2222,7 @@ export class ProgressPanel {
     // lastFailure: set by PreviewServerFailed and by a failed publish deploy.
     // Highest priority: red status overrides everything.
     if (this.lastFailure != null) {
-      return { kind: "failed", text: this.lastFailure };
+      return { kind: "failed", text: this.lastFailure.text };
     }
 
     // Active publish stage (anything except idle/complete/failed)
@@ -2347,78 +2250,46 @@ export class ProgressPanel {
         const ledger = this.publish.ledger(label.text, paused);
         if (ledger) return ledger;
       }
-      return { kind: "running", verb: label.text, condition: paused };
+      return { kind: "running", verb: label.text, condition: paused, tooltip: label.detail };
     }
 
     // A publish that just landed. Placed directly under the active-publish tier
     // so it outranks the BUILD receipt below: after a publish, the rebuild that
     // fed it is not the result the author is waiting to hear about.
     if (this.publishReceipt != null) {
-      return { kind: "receipt", text: this.publishReceipt };
-    }
-
-    // Media (video conversion) in progress
-    if (this.mediaStatus !== null) {
-      return {
-        kind: "running",
-        verb: this.mediaStatus.verb,
-        subject: this.mediaStatus.subject,
-        current: this.mediaStatus.current,
-        total: this.mediaStatus.total,
-      };
-    }
-
-    // Outstanding cloud downloads outrank the completion receipt: "Built · 47
-    // pages" while 553 sources are still in the cloud is true about the build
-    // and false about the site. Ordering decides only who
-    // owns the line; the receipt still expires on its own dwell, seen or not.
-    if (this.cloudOutstanding()) {
-      return { kind: "running", verb: this.activePrimaryLabel().text };
-    }
-
-    // Text still being read from a site's documents outranks the receipt, and
-    // with it the build stage below: "Built" is true of the build and false of
-    // the page whose text has not landed. The read starts as the build
-    // completes, while the stage still reads as compiling, so in the running
-    // tier at the bottom it would never be shown.
-    const reading = this.tasks.get("bg:derive");
-    if (reading?.label && reading.progress !== 100) {
-      return { kind: "running", verb: reading.label };
+      const { text, running } = this.publishReceipt;
+      return running ? { kind: "running", verb: text } : { kind: "receipt", text };
     }
 
     // Work in progress outranks a finished receipt, and the build's own stage
-    // outranks a job: it is true now and the preview is about to change. The
-    // receipt fires while the stage still reads "compiling" (it becomes "ready"
-    // only at the next ProgressUpdate), so a receipt marks that stage as done.
-    // A job running past the build ("Importing · 12 pages") is then the line,
-    // since "Built · 1 page" would say something false about it.
-    const receipt = this.completionReceiptText();
+    // outranks a job: it is true now and the preview is about to change. A job
+    // running past the build ("Importing · 12 pages") is then the line, since
+    // "Updated" would say something false about it.
     const stageLabel = this.activePrimaryLabel();
-    if (receipt == null && stageLabel.text !== "") {
+    if (!this.buildUpdated && stageLabel.text !== "") {
       return { kind: "running", verb: stageLabel.text };
     }
     const job = this.runningJob();
     if (job !== null) {
       return { kind: "running", verb: job.label };
     }
-    if (receipt != null) {
-      return { kind: "receipt", text: receipt };
+    if (this.buildUpdated) {
+      return { kind: "receipt", text: t("pstage.updated") };
     }
 
     return { kind: "none" };
   }
 
   /**
-   * The running tier: active `job:*`/`plugin:*`/`bg:*` tasks that are not
-   * awaiting and have a label, most recently updated first. `bg:*` is included
-   * because a bgTaskRowDecision row satisfies hasContent(), so the seam opens
-   * and would otherwise open onto an empty line.
+   * The running tier: active `job:*`/`plugin:*` tasks that are not awaiting,
+   * not ambient (background work and a build's media children) and have a
+   * label, most recently updated first.
    */
   private runningJob(): ProgressTask | null {
     let best: ProgressTask | null = null;
     for (const t of this.tasks.values()) {
-      if (t.progress === 100 || this.awaitingJobs.has(t.id) || !t.label) continue;
-      if (!t.id.startsWith("job:") && !t.id.startsWith("plugin:") && !t.id.startsWith("bg:")) continue;
+      if (t.progress === 100 || t.ambient || this.awaitingJobs.has(t.id) || !t.label) continue;
+      if (!t.id.startsWith("job:") && !t.id.startsWith("plugin:")) continue;
       if (best === null || (t.lastUpdatedAt ?? 0) > (best.lastUpdatedAt ?? 0)) best = t;
     }
     return best;
@@ -2432,19 +2303,11 @@ export class ProgressPanel {
   setStage(stage: PreviewStage): void {
     this.currentStage = stage;
     if (stage === "initial" || stage === "ready") {
-      // A download outlives the build that noticed it: the supervisor keeps
-      // draining while this build goes ready, so `ready` must not wipe a
-      // readout that is still true. `initial` is a new session/folder and
-      // clears everything — that is where a stale download is dropped.
-      const { provider, downloaded, total, remaining } = this.stageContext;
-      this.stageContext =
-        stage === "ready" && (remaining ?? 0) > 0
-          ? { provider, downloaded, total, remaining }
-          : {};
+      this.stageContext = {};
     }
     if (stage === "initial") {
       // New session — clear stale publish state so the panel doesn't
-      // open the new project showing "Waiting for build…" or whatever
+      // open the new project showing "Preparing…" or whatever
       // publish stage was last seen.
       this.currentPublishStage = "idle";
       this.publish.reset();
@@ -2452,7 +2315,7 @@ export class ProgressPanel {
     }
     if (stage === "opening" || stage === "initial") {
       // Build-start supersedes the previous build: the stale advisory dot of a
-      // fixed-and-rebuilt file, the lingering "Built · …" receipt, and the
+      // fixed-and-rebuilt file, the lingering "Updated" receipt, and the
       // previous publish's failure — the user is taking action by
       // rebuilding. The failure is TWO fields, so both go.
       this.clearBuildAdvisories();
@@ -2470,10 +2333,8 @@ export class ProgressPanel {
       // advisories must persist through ready and clear only at opening/initial.
       if (this.advisories.has(PREVIEW_SERVER_ADV_KEY)) {
         this.deleteAdvisory(PREVIEW_SERVER_ADV_KEY);
-        // Ours to clear only if PreviewServerFailed set it, not a concurrent
-        // publish/deploy failure. The prefix comes from the SAME key with an
-        // empty {msg}, so the test is locale-correct — never the English literal.
-        if (this.lastFailure?.startsWith(t('preview.server_failed', { msg: '' }))) {
+        // Ours to clear only if PreviewServerFailed set it, not a concurrent publish/deploy failure.
+        if (this.lastFailure?.cause === "server") {
           this.lastFailure = null;
           this.clearPublishFailure();
         }
@@ -2640,7 +2501,7 @@ export class ProgressPanel {
       // The publish has engaged. Stamp the start for the receipt's elapsed
       // span, and drop any pending BUILD receipt: after a publish the rebuild
       // that fed it is not what the author wants confirmed, and leaving it
-      // pending is exactly how "Built · N pages · 3.2s" ended up being the last
+      // pending is exactly how "Updated" ended up being the last
       // word on the publish result.
       this.publish.begin(performance.now());
       this.clearCompletionReceipt();
@@ -2671,7 +2532,7 @@ export class ProgressPanel {
       // stays "failed" (terminal) until a re-publish event resets it above.
       // lastFailure drives the single-line red status; keep the generic label
       // there (the status line has no room for the full error).
-      this.lastFailure = t('preview.publish_failed');
+      this.lastFailure = { cause: "publish", text: t('preview.publish_failed') };
       // The uploading stage is over: drop the estimator window, the sticky
       // rate and the announced milestones so a retry starts clean.
       this.publish.resetUpload();
@@ -2714,44 +2575,16 @@ export class ProgressPanel {
     this.renderPanel();
   }
 
-  /**
-   * Are files for this folder still coming down from the cloud?
-   *
-   * The authority is `remaining`, not `downloaded < total`: the counts are a
-   * snapshot of one supervisor tick, and `remaining === 0` is the only thing
-   * the backend says that means "the episode is over".
-   */
-  private cloudOutstanding(): boolean {
-    return (this.stageContext.remaining ?? 0) > 0;
-  }
-
   /** Forget the download, so the chrome stops reporting one. */
   private clearCloudReadout(): void {
-    this.stageContext.remaining = undefined;
     this.stageContext.downloaded = undefined;
     this.stageContext.total = undefined;
   }
 
-  /**
-   * Pick build label or publish label depending on which half is active.
-   *
-   * Outstanding downloads outrank the build stage. The stage machine is
-   * monotonic and `materializing` ranks below `compiling`/`ready`, so once a
-   * build moved past it an ongoing bulk download had nowhere to be said —
-   * Reporting it from here rather than by
-   * rewinding the stage keeps the stage machine's invariant intact and reaches
-   * every consumer of the primary label at once (the bar, `hasContent`'s seam
-   * visibility, the status line).
-   *
-   * Publish still wins: it is a foreground action the user just took, and the
-   * download keeps its place in the status line below (`computeStatusInput`).
-   */
+  /** Pick build label or publish label depending on which half is active. */
   private activePrimaryLabel(): StageLabel {
     if (this.currentPublishStage !== "idle") {
       return computePublishLabel(this.buildPublishLabelInput());
-    }
-    if (this.cloudOutstanding()) {
-      return computeStageLabel(this.cloudLabelInput());
     }
     return computeStageLabel(this.buildStageLabelInput());
   }
@@ -2782,11 +2615,13 @@ export class ProgressPanel {
       case "scanning":
         return { stage: "scanning", found: ctx.found };
       case "materializing":
-        return this.cloudLabelInput();
+        return this.siteServed ? compilingLabelInput(ctx.pages) : this.cloudLabelInput();
       case "compiling":
         return compilingLabelInput(ctx.pages);
       case "ready":
-        return { stage: "ready" };
+        // The stage never leaves `ready` once the site is served, so a page
+        // tick is what says a rebuild is running; the receipt clears it.
+        return ctx.pages ? compilingLabelInput(ctx.pages) : { stage: "ready" };
     }
   }
 
@@ -2811,11 +2646,11 @@ export class ProgressPanel {
   buildStageKnownLabel(): string | null {
     switch (this.currentStage) {
       case "scanning":
-        return computeStageLabel({ stage: "scanning", found: this.stageContext.found }).text;
+        return stageCountText({ stage: "scanning", found: this.stageContext.found });
       case "materializing":
         return t("preview.waiting_building");
       case "compiling":
-        return computeStageLabel(compilingLabelInput(this.stageContext.pages)).text;
+        return stageCountText(compilingLabelInput(this.stageContext.pages));
       case "initial":
       case "opening":
       case "checking":
@@ -2851,7 +2686,7 @@ export class ProgressPanel {
     if (this.bodyHovered || this.bodyFocused) return;
     // An unresolved publish failure persists until the user acts.
     if (this.lastFailure != null) return;
-    if (this.hasActiveTasks()) return;
+    if (this.hasForegroundTask()) return;
     // A narrated task persists until dismissed (failed forever; running/
     // succeeded until their fade timer). Mirrors hasContent()'s narratedTasks.
     if (this.narratedTasks.size > 0) return;
@@ -2862,15 +2697,12 @@ export class ProgressPanel {
     // re-runs this. There is deliberately NO matching guard for the BUILD
     // receipt — the two run opposite disciplines, each owning one half. A
     // publish is foreground, so it paints unconditionally and is held here. A
-    // build is ambient, so `showCompletionReceipt` refuses to paint unless the
+    // build is ambient, so `showUpdated` refuses to paint unless the
     // glass is already open (R11/R12), and a receipt that only paints into an
     // open panel does not also get to keep it open — that would refuse to
     // retract at the very moment the author's site appears. R11 gives that
     // moment the pill flash instead.
     if (this.publishReceipt != null) return;
-    // An outstanding download holds the panel open past a settled stage:
-    // retracting takes down the one line saying the site is still filling in.
-    if (this.cloudOutstanding()) return;
     // Build is "active" in scanning/materializing/compiling — hide only after.
     if (
       this.currentStage !== "initial" &&

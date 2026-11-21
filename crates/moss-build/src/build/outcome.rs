@@ -77,8 +77,16 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, PartialEq, Eq)]
 pub struct BuildStopped {
     message: String,
-    deferred: bool,
-    discarded: bool,
+    kind: Stop,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stop {
+    Fatal,
+    Deferred,
+    Discarded,
+    /// A failure the shells were already told about in its own words.
+    Told,
 }
 
 impl BuildStopped {
@@ -89,7 +97,7 @@ impl BuildStopped {
     /// asserts; use this only where the deferral is known without an
     /// `io::Error` in hand.
     pub fn deferred(message: impl Into<String>) -> Self {
-        Self { message: message.into(), deferred: true, discarded: false }
+        Self { message: message.into(), kind: Stop::Deferred }
     }
 
     /// The build stopped on a file it has just unlinked from the stage.
@@ -100,18 +108,29 @@ impl BuildStopped {
     /// [`io_stop`]'s `Discard` arm, and only when the removal succeeded —
     /// re-running against a file that is still there would fail identically.
     pub fn discarded(message: impl Into<String>) -> Self {
-        Self { message: message.into(), deferred: false, discarded: true }
+        Self { message: message.into(), kind: Stop::Discarded }
+    }
+
+    /// A failure already reported to the shells by its own event (the preview
+    /// server's), so the build's generic failure report would repeat it.
+    pub fn told(message: impl Into<String>) -> Self {
+        Self { message: message.into(), kind: Stop::Told }
     }
 
     /// Would waiting help? Drives the cloud gate on the failure path.
     pub fn is_deferred(&self) -> bool {
-        self.deferred
+        self.kind == Stop::Deferred
     }
 
     /// Was the cause removed on the way out? Drives the single rebuild in
     /// `build::run_pipeline` — see [`BuildStopped::discarded`].
     pub fn is_discarded(&self) -> bool {
-        self.discarded
+        self.kind == Stop::Discarded
+    }
+
+    /// The shells already know: a deferral shows as the cloud wait, a told failure as its own event.
+    pub fn shells_know(&self) -> bool {
+        matches!(self.kind, Stop::Deferred | Stop::Told)
     }
 
     pub fn message(&self) -> &str {
@@ -142,12 +161,7 @@ impl BuildStopped {
 /// log line actually wants here.
 impl fmt::Debug for BuildStopped {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let kind = match (self.deferred, self.discarded) {
-            (true, _) => "Deferred",
-            (_, true) => "Discarded",
-            _ => "Fatal",
-        };
-        write!(f, "BuildStopped::{kind}({:?})", self.message)
+        write!(f, "BuildStopped::{:?}({:?})", self.kind, self.message)
     }
 }
 
@@ -155,7 +169,7 @@ impl fmt::Debug for BuildStopped {
 /// means `Fatal`, exactly as it does today. See the module doc.
 impl From<String> for BuildStopped {
     fn from(message: String) -> Self {
-        Self { message, deferred: false, discarded: false }
+        Self { message, kind: Stop::Fatal }
     }
 }
 
@@ -385,12 +399,12 @@ fn disposition(root: &Path, path: &Path) -> Disposition {
 ///
 /// Exactly once: a second consecutive discard means the removal did not settle
 /// anything, so it stops the build like any other failure.
-pub(crate) async fn retry_once_after_discard<T, A, F>(mut attempt: A) -> Result<T, String>
+pub(crate) async fn retry_once_after_discard<T, A, F>(mut attempt: A) -> Result<T, BuildStopped>
 where
     A: FnMut() -> F,
     F: std::future::Future<Output = Result<T, BuildStopped>>,
 {
-    let outcome = match attempt().await {
+    match attempt().await {
         Err(stopped) if stopped.is_discarded() => {
             log::info!(
                 "build stopped on a file it discarded from the stage ({}) — building again",
@@ -399,9 +413,7 @@ where
             attempt().await
         }
         first => first,
-    };
-    // The rest of moss speaks `String`; both verdicts have been read by here.
-    outcome.map_err(BuildStopped::into_message)
+    }
 }
 
 /// The path's tail after its last `.moss` component, `/`-separated.

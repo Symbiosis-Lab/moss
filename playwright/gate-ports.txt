@@ -123,3 +123,5 @@ link-card-cover-slot
 address-bar:ui
 address-bar:preview
 nav-first-paint
+progress-line:ui
+progress-line:preview

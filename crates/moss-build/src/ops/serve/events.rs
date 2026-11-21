@@ -62,7 +62,7 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use futures::stream::{Stream, StreamExt};
 use tokio::sync::{broadcast, watch};
 
-use crate::types::events::{MossEvent, MOSS_EVENT_CHANNEL};
+use crate::types::events::{MossEvent, BUILD_PROGRESS_CHANNEL, MOSS_EVENT_CHANNEL};
 
 /// Frames buffered per subscriber before it is considered lagged.
 ///
@@ -386,7 +386,6 @@ pub struct CarrierReporter;
 
 impl crate::build::ports::reporter::BuildReporter for CarrierReporter {
     fn report(&self, event: &crate::build::progress::PipelineEvent) {
-        use crate::build::progress::PipelineEvent;
         // The plugin manager reports through THIS reporter headless, and the
         // two plugin events are its only console voice: a plugin that cannot
         // run means content missing from the build, so the needs-connection
@@ -398,6 +397,11 @@ impl crate::build::ports::reporter::BuildReporter for CarrierReporter {
         }
         if let Some(m) = crate::types::events::moss_event_for(event) {
             publish(&m);
+        }
+        // The app gets these on its build channel; a browser has only this
+        // stream, and without them a rebuild that paints nothing never settles.
+        if let Some(Ok(payload)) = event.progress_update().map(serde_json::to_value) {
+            publish_named(BUILD_PROGRESS_CHANNEL, payload);
         }
     }
 
@@ -615,5 +619,24 @@ mod source_content_tests {
             if actual == expected { return; }
         }
         panic!("the carrier must deliver the source event without build or output fields");
+    }
+
+    #[test]
+    fn a_builds_progress_reaches_the_browser_shaped_as_the_apps_channel() {
+        use crate::build::ports::reporter::BuildReporter;
+        let mut receiver = bus().subscribe();
+        CarrierReporter.report(&crate::build::progress::PipelineEvent::Progress {
+            step: "build".into(), message: "Build complete".into(), percentage: 100,
+            completed: true, port: Some(4000), is_empty: Some(false), reloads: Some(false),
+        });
+        let expected = serde_json::json!({ "name": BUILD_PROGRESS_CHANNEL, "payload": {
+            "step": "build", "message": "Build complete", "percentage": 100,
+            "completed": true, "port": 4000, "is_empty": false, "reloads": false,
+        }});
+        while let Ok(frame) = receiver.try_recv() {
+            let actual: serde_json::Value = serde_json::from_str(&frame).unwrap();
+            if actual == expected { return; }
+        }
+        panic!("a build's completion must reach a browser, or a rebuild that paints nothing never settles its line");
     }
 }

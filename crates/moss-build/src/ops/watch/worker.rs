@@ -98,7 +98,11 @@ impl RebuildRequest {
     }
 
     pub fn images_settled() -> Self {
-        RebuildRequest { trigger: BuildTrigger::ImagesSettled, ..Self::full() }
+        RebuildRequest { trigger: BuildTrigger::ImagesSettled { edited: false }, ..Self::full() }
+    }
+
+    pub fn videos_settled() -> Self {
+        RebuildRequest { trigger: BuildTrigger::VideosSettled, ..Self::full() }
     }
 
     /// Run the deferred content-hash gate: `false` means every producing path

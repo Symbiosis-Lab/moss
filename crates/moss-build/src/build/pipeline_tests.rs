@@ -192,6 +192,7 @@ fn build_test_with_stash(
             cancelled: _cancelled,
             home_ready: _home_ready,
             publishable: _publishable,
+            reloads: _,
             render: _render,
             unready_derivations: _unready,
             folder_lock: _,

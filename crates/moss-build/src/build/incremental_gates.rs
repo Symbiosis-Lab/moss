@@ -163,7 +163,7 @@ impl ChangeProof {
             return Self::None;
         }
         match trigger {
-            BuildTrigger::Full => Self::None,
+            BuildTrigger::Full | BuildTrigger::VideosSettled => Self::None,
             BuildTrigger::Structural(paths) | BuildTrigger::ContentOnly(paths) => {
                 let config = crate::moss_paths::MossPaths::new(folder).config();
                 let (held, paths): (Vec<_>, Vec<_>) = paths.iter().cloned().partition(|p| *p == config && seal.config_rest_holds());
@@ -173,8 +173,8 @@ impl ChangeProof {
             // build renders differently; only the re-render those media owe may
             // prove from it.
             BuildTrigger::Unobserved if seal.media_settled() && SinceSeal::walk(folder, builder, seal).is_some() => Self::Manifest,
-            BuildTrigger::ImagesSettled if SinceSeal::walk(folder, builder, seal).is_some() => Self::ImagesSettled,
-            BuildTrigger::Unobserved | BuildTrigger::ImagesSettled => Self::None,
+            BuildTrigger::ImagesSettled { .. } if SinceSeal::walk(folder, builder, seal).is_some() => Self::ImagesSettled,
+            BuildTrigger::Unobserved | BuildTrigger::ImagesSettled { .. } => Self::None,
         }
     }
 
@@ -427,7 +427,7 @@ async fn serve_unchanged(config: &PipelineConfig, pass: Pass, seal: &LastSeal, p
         let domain = crate::build::site_config::get_domain_config(folder).unwrap_or_default();
         crate::build::features::sync::start_background_sync(folder.to_string(), domain, config.host.events.clone(), &*config.host.spawner);
     }
-    super::emit_build_complete(&config.progress, port, false);
+    super::emit_build_complete(&config.progress, port, false, None);
     Some(PassOutcome { port, ..unchanged_at_entry(config) })
 }
 

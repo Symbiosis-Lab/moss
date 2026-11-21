@@ -229,17 +229,34 @@ pub enum BuildTrigger {
     /// Pictures the last render could not finish have settled (their blur and
     /// colour, `media::promise`). Proved from the last seal like `Unobserved`,
     /// which may not hold its media settled; renders the pages that show one.
-    ImagesSettled,
+    ///
+    /// `edited`: a save merged into it, so the user started this build and it
+    /// announces itself; the render is the same either way.
+    ImagesSettled { edited: bool },
+    /// A video's poster or streams settled. Renders every page, as `Full`
+    /// does, because a video output can change a page no verdict models.
+    VideosSettled,
 }
 
 impl BuildTrigger {
+    /// Whether the shells hear this build's progress. A re-render only media
+    /// settling started is not one the user asked for, so the line, already
+    /// on "Updated", stays there; its errors and its completion still arrive.
+    pub fn announces(&self) -> bool {
+        match self {
+            BuildTrigger::ImagesSettled { edited } => *edited,
+            BuildTrigger::VideosSettled => false,
+            BuildTrigger::Full | BuildTrigger::Unobserved | BuildTrigger::Structural(_) | BuildTrigger::ContentOnly(_) => true,
+        }
+    }
+
     /// A rebuild for paths the watcher saw, rather than a build that stands
     /// alone or starts a session. Every variant is named, so a new one has to
     /// choose.
     pub fn is_watch_batch(&self) -> bool {
         match self {
             BuildTrigger::ContentOnly(_) | BuildTrigger::Structural(_) => true,
-            BuildTrigger::Full | BuildTrigger::Unobserved | BuildTrigger::ImagesSettled => false,
+            BuildTrigger::Full | BuildTrigger::Unobserved | BuildTrigger::ImagesSettled { .. } | BuildTrigger::VideosSettled => false,
         }
     }
 
@@ -258,9 +275,12 @@ impl BuildTrigger {
     /// it may absorb only triggers caused by a disk change, so every variant
     /// is named below and a new one has to choose. `ImagesSettled` absorbs
     /// those and `Unobserved` alike: its proof is the same walk, and the
-    /// pictures it owes still have to render.
+    /// pictures it owes still have to render; absorbing anything but another
+    /// settle makes it `edited`. `VideosSettled` renders every page, so it
+    /// stays itself only beside a quiet settle and is `Full` beside anything
+    /// the user started.
     pub fn merge(self, other: BuildTrigger) -> BuildTrigger {
-        use BuildTrigger::{ContentOnly, Full, ImagesSettled, Structural, Unobserved};
+        use BuildTrigger::{ContentOnly, Full, ImagesSettled, Structural, Unobserved, VideosSettled};
         fn union(mut a: Vec<PathBuf>, b: Vec<PathBuf>) -> Vec<PathBuf> {
             for p in b {
                 if !a.contains(&p) {
@@ -271,7 +291,11 @@ impl BuildTrigger {
         }
         match (self, other) {
             (Full, _) | (_, Full) => Full,
-            (ImagesSettled, _) | (_, ImagesSettled) => ImagesSettled,
+            (VideosSettled, VideosSettled | ImagesSettled { edited: false })
+            | (ImagesSettled { edited: false }, VideosSettled) => VideosSettled,
+            (VideosSettled, _) | (_, VideosSettled) => Full,
+            (ImagesSettled { edited: a }, ImagesSettled { edited: b }) => ImagesSettled { edited: a || b },
+            (ImagesSettled { .. }, _) | (_, ImagesSettled { .. }) => ImagesSettled { edited: true },
             (Unobserved, Unobserved | ContentOnly(_) | Structural(_))
             | (ContentOnly(_) | Structural(_), Unobserved) => Unobserved,
             (Structural(a), Structural(b))
@@ -717,7 +741,12 @@ pub(crate) fn should_stash_hashes(publishable: bool, cancelled: bool) -> bool {
 /// `Result<String, String>` has no room to carry timing data back out, and
 /// `PHASE_TIMINGS`-equivalent state must be gone by the time this fn
 /// returns, not read after the fact from a task that no longer exists.
-pub async fn run_pipeline(config: PipelineConfig) -> Result<String, String> {
+pub async fn run_pipeline(mut config: PipelineConfig) -> Result<String, String> {
+    if !config.trigger.announces() {
+        config.progress = std::sync::Arc::new(ports::reporter::Unannounced(config.progress));
+        let host = &mut config.host.services.reporter;
+        *host = std::sync::Arc::new(ports::reporter::Unannounced(host.clone()));
+    }
     // Ownership precedes migrations, cache leases and render/output writes.
     // The server retains a shared guard when this build returns.
     let _owner = crate::ops::serve::ownership::acquire_for_folder(
@@ -748,16 +777,37 @@ pub async fn run_pipeline(config: PipelineConfig) -> Result<String, String> {
 use crate::build::media::promise::{drive_passes, Pass, PassOutcome};
 
 async fn run_passes(config: &PipelineConfig) -> Result<String, String> {
-    let (outcome, completion_held) = drive_passes(config.plugins, |pass| run_pipeline_body(config, pass)).await?;
-    if completion_held {
-        emit_build_complete(&config.progress, outcome.port, outcome.is_empty);
+    let passes = drive_passes(config.plugins, |pass| run_pipeline_body(config, pass)).await;
+    end_build(&config.progress, &config.host.events, passes)
+}
+
+/// Tells the shells how the whole build ended. Only the passes' joint result
+/// counts: a second pass that fails leaves the first pass's sealed site.
+pub(crate) fn end_build(progress: &ProgressSink, events: &ProgressSink, passes: Result<(PassOutcome, bool), BuildStopped>) -> Result<String, String> {
+    match passes {
+        Ok((outcome, completion_held)) => {
+            if completion_held {
+                emit_build_complete(progress, outcome.port, outcome.is_empty, None);
+            }
+            Ok(outcome.message)
+        }
+        Err(stopped) => {
+            report_failure(events, &stopped);
+            Err(stopped.into_message())
+        }
     }
-    Ok(outcome.message)
+}
+
+/// Tells the shells a build failed, so the line does not stay on "Updating…".
+pub(crate) fn report_failure(events: &ProgressSink, stopped: &BuildStopped) {
+    if !stopped.shells_know() {
+        events.report(&progress::PipelineEvent::Error { phase: "build".to_string(), message: stopped.message().to_string() });
+    }
 }
 
 /// The "Build complete" progress event. `port` is what the preview server is
-/// listening on right now, if one is.
-fn emit_build_complete(progress: &ProgressSink, port: Option<u16>, is_empty: bool) {
+/// listening on right now, if one is; `reloads` is whether a paint follows it.
+fn emit_build_complete(progress: &ProgressSink, port: Option<u16>, is_empty: bool, reloads: Option<bool>) {
     progress::emit_event(
         progress,
         &progress::PipelineEvent::Progress {
@@ -767,17 +817,18 @@ fn emit_build_complete(progress: &ProgressSink, port: Option<u16>, is_empty: boo
             completed: true,
             port,
             is_empty: Some(is_empty),
+            reloads,
         },
     );
 }
 
-async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOutcome, String> {
+async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOutcome, BuildStopped> {
     use crate::build::phase::PhaseTrace;
     let _pipeline_trace = PhaseTrace::start("run_pipeline");
     let folder_path = config.root.as_str().to_string();
 
     if folder_path.is_empty() {
-        return Err("Empty folder path provided".to_string());
+        return Err("Empty folder path provided".into());
     }
 
     // This build's ordered identity is acquired before any work that can
@@ -903,7 +954,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                     message: e.clone(),
                     open_in_another_app: crate::ops::serve::ownership::open_in_another_app(&standalone_state.current_dir).await,
                 });
-                return Err(e);
+                return Err(BuildStopped::told(e));
             }
         }
     } else {
@@ -930,17 +981,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
         );
         log::info!("Prior output for early preview: {:?}", prior);
         if prior.may_show_early() {
-            progress::emit_event(
-                &config.progress,
-                &progress::PipelineEvent::Progress {
-                    step: "server-ready".to_string(),
-                    message: "Loading preview...".to_string(),
-                    percentage: 5,
-                    completed: false,
-                    port: Some(p),
-                    is_empty: Some(false),
-                },
-            );
+            pipeline::send_progress(Some(&*config.progress), "server-ready", "Loading preview...", 5, false, Some(p), Some(false));
         }
     }
 
@@ -1149,17 +1190,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     let port_owned = port_now.clone(); // moved into whichever run-arm executes
 
     // Emit build-start progress for CLI (the stdout reporter prints to stderr)
-    progress::emit_event(
-        &config.progress,
-        &progress::PipelineEvent::Progress {
-            step: "build".to_string(),
-            message: "Building site...".to_string(),
-            percentage: 10,
-            completed: false,
-            port: port_now(),
-            is_empty: None,
-        },
-    );
+    pipeline::send_progress(Some(&*config.progress), "build", "Building site...", 10, false, port_now(), None);
 
     // --- BUILD: Generate marked HTML, then resolve slots before artifact finalization ---
     // The internal pipeline renders HTML with <!-- slot:NAME --> markers, writes
@@ -1213,7 +1244,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
         })
     };
 
-    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_references, unresolved_inputs, cancelled, home_ready: _home_ready, publishable, render, unready_derivations, folder_lock, locked_at_nanos } = {
+    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_references, unresolved_inputs, cancelled, home_ready: _home_ready, publishable, reloads, render, unready_derivations, folder_lock, locked_at_nanos } = {
         // One attempt: its own clones, its own `SlotResolver`.
         let attempt = || {
             let root_owned = config.root.clone();
@@ -1573,7 +1604,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     //
     // Held back while a second pass is owed: `run_passes` emits it after the last.
     if !cancelled && !media_rerender_owed {
-        emit_build_complete(&config.progress, port_now(), _is_empty); // port: again about NOW
+        emit_build_complete(&config.progress, port_now(), _is_empty, reloads); // port: again about NOW
     }
 
     let folder_name = config.root.name_opt().unwrap_or("unnamed-site");
