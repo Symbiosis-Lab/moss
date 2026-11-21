@@ -429,7 +429,7 @@ fn spawn_host_dispatch(
                     let sink = sinks.lock().unwrap().get(&(plugin, hook)).map(|e| e.sink.clone());
                     match sink {
                         Some(sink) => sink.emit(signal),
-                        None => log::debug!(target: "plugin", "plugin_message with no in-flight sink (late signal?) — dropped"),
+                        None => log::info!(target: "plugin", "plugin_message with no in-flight sink (late signal?) — dropped"),
                     }
                 } else {
                     // Shape-drift diagnostics: a malformed payload would otherwise be
