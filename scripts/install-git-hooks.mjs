@@ -17,3 +17,12 @@ try {
 } catch (e) {
   console.error(`warning: could not set core.hooksPath (${e.message})`);
 }
+
+// The merge drivers .gitattributes names. git runs a driver from the checkout's top, so the path is relative.
+for (const [name, script] of [['moss-json-keys', 'merge-json.mjs keys'], ['moss-ratchet', 'merge-json.mjs ratchet'], ['moss-changelog', 'merge-changelog.mjs']]) {
+  try {
+    execFileSync('git', ['config', `merge.${name}.driver`, `node scripts/${script} %O %A %B`], { stdio: 'ignore' });
+  } catch (e) {
+    console.error(`warning: could not register the ${name} merge driver (${e.message})`);
+  }
+}

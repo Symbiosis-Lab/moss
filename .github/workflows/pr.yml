@@ -450,6 +450,9 @@ jobs:
       - name: Render gate sharding tests
         run: node --test scripts/__tests__/render-gates-jobs.test.mjs
 
+      - name: Merge driver tests
+        run: node --test scripts/__tests__/merge-drivers.test.mjs
+
       - name: Released-contract guard tests
         run: node --test scripts/__tests__/check-released-contract.test.mjs
 

@@ -1,1 +1,10 @@
 packages/moss-ui/src/engine.generated.ts linguist-generated=true eol=lf
+
+# Merges a person never needs to read: changelogs merge heading by heading (scripts/merge-changelog.mjs), the gate
+# port list only gains lines, and the two JSON files merge key by key (scripts/merge-json.mjs); both drivers are
+# registered by scripts/install-git-hooks.mjs.
+# Snapshot fixtures and ARCHITECTURE.md are regenerated instead, by whoever rebases.
+CHANGELOG.md merge=moss-changelog
+playwright/gate-ports.txt merge=union
+packages/moss-ui/src/ui/i18n/rust-keys.generated.json merge=moss-json-keys
+scripts/ratchet-baseline.open.json merge=moss-ratchet
