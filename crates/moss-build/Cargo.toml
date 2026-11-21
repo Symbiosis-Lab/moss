@@ -95,7 +95,7 @@ ring = "0.17"
 # candidate system font file whole into memory.
 resvg = { version = "0.42", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
 roxmltree = "0.20"
-scraper = "0.20"
+scraper = { version = "0.20", features = ["deterministic"] }
 # The CSS tokenizer the site mount uses to find `url()`. Already in the tree
 # through scraper; the version must keep matching what Cargo.lock resolves
 # for it (`cargo tree -d` is the check).
@@ -135,6 +135,8 @@ ammonia = "4"
 async-trait = "0.1"
 color_quant = "1.1"
 hex = "0.4"
+# Marks a machine-store entry used, by its modification time.
+filetime = "0.2"
 libc = "0.2"
 pagefind = { version = "1.5.2", default-features = false }
 png = "0.18"
@@ -202,7 +204,6 @@ specta-typescript = "=0.0.7"
 # vault_root_tests.rs mints unique temp dirs per test.
 uuid = { version = "1.11", features = ["v4"] }
 # The moved build tree's inline tests (M6a).
-filetime = "0.2"
 proptest = "1.5"
 tokio = { version = "1.0", features = ["rt", "macros", "test-util"] }
 # engine/acceptance.rs: the fetch_url wire-shape gate runs against a local server.

@@ -108,3 +108,7 @@ The download button's clicks are intent; completed downloads are GitHub's count,
 ```sh
 gh api repos/Symbiosis-Lab/moss/releases --jq '.[] | {tag: .tag_name, dmg: ([.assets[] | select(.name == "moss.dmg") | .download_count] | add)}'
 ```
+
+## render-share-cards.mjs
+
+The landing's share cards (`site/assets/brand/share-*.png`, its `og:image` in each language) are cut from the hero by `node scripts/render-share-cards.mjs` after `target/debug/moss-cli build site`, or from a deployed site by passing its URL. Run it whenever the hero's words change, and commit the cards with the change.

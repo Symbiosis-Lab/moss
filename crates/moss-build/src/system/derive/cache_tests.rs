@@ -148,6 +148,9 @@ fn a_result_the_cache_cannot_keep_is_remembered_only_by_background_reads() {
     let f = fixture();
     let e = entry(&f.bin(DERIVED), "1.0.0");
     // A file where the object store's directory should be: nothing can be stored.
+    // The folder exists first, as a build's does: until then this computer's
+    // store for it is a scratch one.
+    std::fs::create_dir_all(f.site.project_root()).unwrap();
     for objects in [f.site.cache_objects(), f.site.cache_local_objects()] {
         std::fs::create_dir_all(objects.parent().unwrap()).unwrap();
         std::fs::write(&objects, "not a directory").unwrap();

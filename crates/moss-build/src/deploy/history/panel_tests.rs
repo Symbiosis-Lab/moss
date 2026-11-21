@@ -131,6 +131,18 @@ fn save_compare_and_restore_need_no_build() {
     assert_eq!(read_version(&vault, &undo, "a.md").unwrap().text.as_deref(), Some("second"));
 }
 
+/// The editor opens site scope with the site's own path, which is empty: that
+/// asks for the timeline, not a version whose id is "".
+#[test]
+fn site_scope_with_the_empty_site_path_lists_the_timeline() {
+    let (_dir, vault) = tmp_vault();
+    std::fs::write(vault.join("a.md"), b"first").unwrap();
+    let saved = save_version(&vault, None).unwrap();
+
+    let list = list_versions(&vault, "site", Some(String::new())).unwrap();
+    assert_eq!(list.rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), [saved.id.as_str()]);
+}
+
 /// A version id is joined into a filename by the store, so an id the store
 /// does not list must be refused before it reaches one. Over Tauri IPC the id
 /// is always a row moss listed; over the HTTP carrier it is whatever the

@@ -135,6 +135,10 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // Where you are in a series. Two named placeholders, not the bare `{}`
         // used elsewhere, because both numbers appear in one sentence and the
         // caller replaces them one at a time.
+        // A page's thread: the pages it continues and the pages continuing it.
+        "thread_label" => ["Thread", "Verlauf", "这一串", "這一串"],
+        "thread_more" => ["{n} more", "{n} weitere", "还有 {n} 条", "還有 {n} 條"],
+        "in_reply_to" => ["In reply to", "Antwort auf", "回复", "回覆"],
         "series_position" => ["{n} of {total}", "{n} von {total}", "第 {n} 篇，共 {total} 篇", "第 {n} 篇，共 {total} 篇"],
         // Floating nav island. All three name a control that has no
         // visible text of its own: the trail's landmark, the "…" that stands in
@@ -324,12 +328,12 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // The reason with the line of the diagram it points at.
         "diagram_line" => ["line {n}: {what}", "Zeile {n}: {what}", "第 {n} 行：{what}", "第 {n} 行：{what}"],
         "diagram_empty" => ["it is empty", "es ist leer", "内容为空", "內容為空"],
-        "diagram_unsupported" => ["moss does not draw “{type}” diagrams", "moss zeichnet keine „{type}“-Diagramme", "moss 不绘制“{type}”图表", "moss 不繪製「{type}」圖表"],
+        "diagram_unsupported" => ["moss does not draw “{type}” diagrams", "moss zeichnet keine „{type}“-Diagramme", "青苔不绘制“{type}”图表", "青苔不繪製「{type}」圖表"],
         "diagram_syntax" => ["syntax error", "Syntaxfehler", "语法错误", "語法錯誤"],
         // {text} quotes the line of the diagram the error is on.
         "diagram_syntax_near" => ["syntax error near “{text}”", "Syntaxfehler bei „{text}“", "“{text}”附近有语法错误", "「{text}」附近有語法錯誤"],
         "diagram_timed_out" => ["it took too long to draw", "das Zeichnen hat zu lange gedauert", "绘制耗时过长", "繪製耗時過長"],
-        "diagram_unsafe" => ["the drawing failed moss's safety check", "die Zeichnung hat die Sicherheitsprüfung von moss nicht bestanden", "绘图未通过 moss 的安全检查", "繪圖未通過 moss 的安全檢查"],
+        "diagram_unsafe" => ["the drawing failed moss's safety check", "die Zeichnung hat die Sicherheitsprüfung von moss nicht bestanden", "绘图未通过青苔的安全检查", "繪圖未通過青苔的安全檢查"],
         "diagram_failed" => ["the renderer failed", "der Renderer ist fehlgeschlagen", "渲染器出错", "渲染器出錯"],
 
         // An unknown key is a programming error: return the key itself, leaked

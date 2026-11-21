@@ -137,8 +137,9 @@ pub fn install(registry_dir: Option<&Path>, trust_root: Option<&Path>) {
     crate::plugins::admission::install_check(refusal);
 }
 
-/// The headless build's verdict. Reads the cached kill list and the folder
-/// answers the app wrote under `app_data` — never fetches, never writes — and
+/// The headless build's verdict. Reads the cached kill list under
+/// `registry_dir` and the folder answers the app wrote under `trust_root` —
+/// never fetches, never writes — and
 /// installs one of two checks. Without `--allow-plugins`, the full verdict: a
 /// plugin in a folder the app was not told to trust is refused, with the two
 /// ways out in the sentence. With it, the command itself is the consent for
@@ -147,19 +148,28 @@ pub fn install(registry_dir: Option<&Path>, trust_root: Option<&Path>) {
 ///
 /// Installed only when plugins are going to run; a `--no-plugins` build has
 /// nothing to admit, and `install_check` is set-once for the process.
-pub fn install_headless(app_data: Option<&Path>, allow_plugins: bool) {
-    if let Some(dir) = app_data {
+pub fn install_headless(registry_dir: Option<&Path>, trust_root: Option<&Path>, allow_plugins: bool) {
+    if let Some(dir) = registry_dir {
         publish(cache::load(dir));
     }
-    // With no app data nothing was ever trusted, which is not the same as
+    // With no trust root nothing was ever trusted, which is not the same as
     // trust going unenforced: the record is installed empty, so headless is
     // always the enforced state.
-    *TRUST.write().unwrap_or_else(|e| e.into_inner()) = Some(Trust::read(app_data, false));
+    *TRUST.write().unwrap_or_else(|e| e.into_inner()) = Some(Trust::read(trust_root, false));
     crate::plugins::admission::install_check(if allow_plugins {
         refusal_without_consent
     } else {
         refusal_headless
     });
+}
+
+/// [`install_headless`] for the running app: the shared registry cache, and
+/// the answers the app this binary belongs to recorded, so a local build of
+/// the app reads its own. Unlike [`install_headless`] it may write: the first
+/// call copies the approvals an earlier moss kept in the roaming root.
+pub fn install_headless_for_running_app(allow_plugins: bool) {
+    let trust = crate::infra::app_data::AppRoots::running().map(|roots| trust::root(&roots));
+    install_headless(crate::infra::app_data::app_data_dir_early().as_deref(), trust.as_deref(), allow_plugins);
 }
 
 /// Install the cached verdict, then refresh it off-thread.

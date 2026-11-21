@@ -133,6 +133,12 @@ for (const [label, size] of [
   ["9:16", { width: 540, height: 960 }],
 ] as const) {
   test(`cover leaves no empty band at ${label}`, async ({ page }) => {
+    // Event capture only: a blank world with a non-zero count is a lost canvas context, with zero a draw that ran before a real decode.
+    await page.addInitScript(() => {
+      const w = window as unknown as { __contextLost: number };
+      w.__contextLost = 0;
+      window.addEventListener("contextlost", () => void w.__contextLost++, true);
+    });
     await page.setViewportSize(size);
     await gotoReady(page);
     // "ready" means mounted; the world raster is baked after it, and until it lands the edges show the bare water fill this test reads as a gap.
@@ -228,7 +234,7 @@ for (const [label, size] of [
         samples.every((s) => Math.abs(s[0] - iceColor[0]) <= 2 && Math.abs(s[1] - iceColor[1]) <= 2 && Math.abs(s[2] - iceColor[2]) <= 2);
       expect(
         variance > 0 || isFlatIce,
-        `${label} ${edgeName} edge reads perfectly flat — an undrawn band, not map content: ${JSON.stringify(samples)}`,
+        `${label} ${edgeName} edge reads perfectly flat — an undrawn band, not map content (canvas contextlost events: ${await page.evaluate(() => (window as unknown as { __contextLost: number }).__contextLost)}): ${JSON.stringify(samples)}`,
       ).toBe(true);
     }
   });

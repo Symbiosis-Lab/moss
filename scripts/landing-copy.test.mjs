@@ -1,25 +1,26 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { STATIC_COPY, missingStaticCopy } from './landing-copy.mjs';
+import { sectionProblems } from './landing-copy.mjs';
 
-const catalog = () => Object.fromEntries(STATIC_COPY.map((key) => [key, `copy for ${key}`]));
-const pageWith = (strings) => `<!doctype html><script>if (x === undefined) {}</script>${strings.join('\n')}`;
+const section = (id, heading, body) => `<section id="${id}"><h2>${heading}</h2><p>${body}</p></section>`;
+const page = (override = {}) => `<!doctype html><title>t</title><header id="intro"><h1>Make the thing.</h1><p>Write in a folder.</p></header>`
+  + ['c1', 'c2', 'c3', 'c4'].map((id) => override[id] ?? section(id, 'A heading', 'A sentence under the heading.')).join('')
+  + `<section id="five"><h2>Free.</h2><p>Bring a site over.</p><section id="beta"><h3>Updates</h3><p>News now and then.</p></section></section>`;
 
-test('a catalog that lacks a listed key throws, naming the key', () => {
-  const lacking = catalog();
-  delete lacking.intro;
-  const everything = pageWith(Object.values(lacking));
-  assert.throws(() => missingStaticCopy(everything, lacking), /"intro"/);
+test('a page whose sections carry their words in the markup has no problems', () => {
+  assert.deepEqual(sectionProblems(page(), 'en'), []);
 });
 
-test('a string present only in escaped form counts as present', () => {
-  const copy = { ...catalog(), title: `Tom & Jerry's "show"` };
-  const html = pageWith(Object.values({ ...copy, title: 'Tom &amp; Jerry&#39;s &quot;show&quot;' }));
-  assert.deepEqual(missingStaticCopy(html, copy), []);
+test('a section whose heading or text only a script, style or noscript writes is reported', () => {
+  const script = '<section id="c1"><h2></h2><script>h.textContent = "A heading"</script><p>A sentence under the heading.</p></section>';
+  const noscript = '<section id="c2"><h2>A heading</h2><noscript><p>A sentence under the heading.</p></noscript></section>';
+  assert.deepEqual(sectionProblems(page({ c1: script, c2: noscript }), 'en'), ['#c1: no heading text', '#c2: no text under its heading']);
 });
 
-test('a string the page lacks is reported', () => {
-  const copy = catalog();
-  const html = pageWith(Object.entries(copy).filter(([key]) => key !== 'privacy').map(([, value]) => value));
-  assert.deepEqual(missingStaticCopy(html, copy), ['privacy']);
+test('a missing section is reported, and nested sections are read to their own end', () => {
+  assert.deepEqual(sectionProblems(page().replace(/<section id="c3">.*?<\/section>/, ''), 'en'), ['#c3: not in the HTML']);
+});
+
+test('a Chinese page with an English heading is reported', () => {
+  assert.deepEqual(sectionProblems(page(), 'zh-hans').slice(0, 2), ['#intro: heading is not in zh-hans', '#c1: heading is not in zh-hans']);
 });

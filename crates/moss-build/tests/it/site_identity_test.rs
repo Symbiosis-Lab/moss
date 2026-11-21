@@ -3,7 +3,7 @@
 
 use crate::site;
 
-use site::Site;
+use site::{LoggedSite, Site};
 
 const PAGES: [(&str, &str); 2] = [
     ("index.md", "---\ntitle: Harbour\n---\n\nWelcome.\n"),
@@ -49,7 +49,7 @@ fn one_me_address_written_without_a_list_is_a_list_of_one() {
 
 #[test]
 fn a_me_entry_that_is_not_http_warns_by_setting_name_and_is_skipped() {
-    let site = Site::with_config("me = [\"https://social.example/@ana\", \"mailto:ana@example.org\"]\n", &PAGES);
+    let site = LoggedSite::with_config("me = [\"https://social.example/@ana\", \"mailto:ana@example.org\"]\n", &PAGES);
     assert_eq!(me_links(&site.html("index.html")), ["https://social.example/@ana"]);
     assert!(
         site.logged.iter().any(|l| l.contains("[site].me") && l.contains("mailto:ana@example.org")),
@@ -76,7 +76,7 @@ fn the_sealed_generation_a_publish_uploads_carries_the_did_file() {
 
 #[test]
 fn an_atproto_did_that_is_not_a_did_warns_and_writes_nothing() {
-    let site = Site::with_config("atproto_did = \"@ana.example\"\n", &PAGES);
+    let site = LoggedSite::with_config("atproto_did = \"@ana.example\"\n", &PAGES);
     assert!(!site.output(".well-known/atproto-did").exists());
     assert!(site.logged.iter().any(|l| l.contains("[site].atproto_did")), "{:?}", site.logged);
 }
@@ -111,13 +111,13 @@ fn with_plugin<'a>(manifest: &'a str, name: &str) -> Vec<(String, &'a str)> {
     vec![(format!(".moss/plugins/{name}/manifest.json"), manifest)]
 }
 
-fn site_with(config: &str, plugins: &[(&str, &str)]) -> Site {
+fn site_with(config: &str, plugins: &[(&str, &str)]) -> LoggedSite {
     let mut files: Vec<(String, &str)> = PAGES.iter().map(|(p, b)| (p.to_string(), *b)).collect();
     for (name, manifest) in plugins {
         files.extend(with_plugin(manifest, name));
     }
     let borrowed: Vec<(&str, &str)> = files.iter().map(|(p, b)| (p.as_str(), *b)).collect();
-    Site::with_config(config, &borrowed)
+    LoggedSite::with_config(config, &borrowed)
 }
 
 fn head_of(html: &str) -> &str {
@@ -185,7 +185,7 @@ fn a_profile_in_site_me_and_a_plugin_link_to_it_give_one_link() {
 fn a_proof_that_goes_away_is_named_by_the_next_build() {
     let site = site_with("\n[services.skyhandle]\ndid = \"did:plc:abcdefghijklmnopqrstuvwx\"\n", &[("skyhandle", HANDLE_PLUGIN)]);
     site.write(".moss/config.toml", "schema_version = 6\n\n[site]\nlang = \"en\"\n");
-    let logged = site.rebuild();
+    let logged = site.rebuild_logged().logged;
     assert!(!site.output(".well-known/atproto-did").exists());
     assert!(logged.iter().any(|l| l.contains("identity: .well-known/atproto-did removed")), "{logged:?}");
 }

@@ -50,8 +50,9 @@ impl Site {
         self.paths().staging_dir().join(rel)
     }
 
+    /// The store `ship_phase` reads: this computer's first, then the synced one.
     fn objects(&self) -> ObjectStore {
-        ObjectStore::new(self.paths().cache_objects())
+        ObjectStore::for_site(&self.paths())
     }
 
     /// One real build, awaited to its seal, persisted so the next `build` sees

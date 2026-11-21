@@ -2774,3 +2774,40 @@ async fn a_cloud_held_fallback_raster_is_fetched_not_encoded_again() {
     arrival.join().unwrap();
     assert_eq!(std::fs::read(staging.join("photo.jpg")).unwrap(), placed, "the fetched fallback is placed");
 }
+
+/// An edit or a reopen in a new process reads no cached raster an earlier asset
+/// pass already checked while the raster's stat has not moved.
+#[tokio::test]
+async fn an_asset_pass_reads_no_blob_an_earlier_pass_checked() {
+    use crate::build::cache::blob_residency::HASH_READS;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (ctx, moss_dir) = three_fallback_pictures(tmp.path());
+    let source = std::path::PathBuf::from(&ctx.source_path);
+    let old_time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1000);
+    for name in ["a.jpg", "b.jpg", "c.jpg"] {
+        std::fs::File::options().write(true).open(source.join(name)).unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(old_time)).unwrap();
+    }
+    let paths = MossPaths::from_moss_dir(moss_dir);
+    let mut previous = SiteHashes::default();
+    let mut reads = Vec::new();
+    for pass in 0..5 {
+        if pass == 3 {
+            let _ = std::fs::remove_file(paths.cache_verified_asset_blobs());
+        }
+        std::fs::create_dir_all(paths.hashes().parent().unwrap()).unwrap();
+        std::fs::write(paths.hashes(), b"{}").unwrap();
+        let ctx = BackgroundContext { previous_hashes: previous, ..ctx.clone() };
+        let (tx, rx) = crate::build::coordinator::test_utils::build_test_coordinator();
+        reads.push(tokio::task::spawn_blocking(move || {
+            HASH_READS.with(|count| count.set(0));
+            copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
+            HASH_READS.with(|count| count.get())
+        }).await.unwrap());
+        previous = crate::build::coordinator::test_utils::drain_into_sealed(rx, SiteHashes::default()).await.into_inner();
+    }
+    // Pass 0 encodes the rasters and pass 1 checks them. Pass 3, with the index
+    // gone, must check them again, or this test reaches no cached raster at all.
+    assert!(reads[3] > 0, "a pass without the index read no cached raster, so this test proves nothing: {reads:?}");
+    assert_eq!((reads[2], reads[4]), (0, 0), "a pass re-read a blob the one before it verified: {reads:?}");
+}

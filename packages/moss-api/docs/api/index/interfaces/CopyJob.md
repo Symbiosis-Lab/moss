@@ -13,6 +13,7 @@ under `contributes.channel.syndication`.
 ```ts
 optional article?: 
   | {
+  blocks?: ArticleBlock[];
   cover?: string | null;
   description?: string | null;
   html: string;
@@ -20,6 +21,58 @@ optional article?:
 }
   | null;
 ```
+
+#### Union Members
+
+##### Type Literal
+
+```ts
+{
+  blocks?: ArticleBlock[];
+  cover?: string | null;
+  description?: string | null;
+  html: string;
+  title: string;
+}
+```
+
+##### blocks?
+
+```ts
+optional blocks?: ArticleBlock[];
+```
+
+`html` as an editor is given it, split at its pictures in reading order:
+head elements, a leading h1 repeating the title and footnote back-links
+removed, embeds as links, a heading over the notes. Formula pictures stay inline.
+
+##### cover?
+
+```ts
+optional cover?: string | null;
+```
+
+##### description?
+
+```ts
+optional description?: string | null;
+```
+
+##### html
+
+```ts
+html: string;
+```
+
+##### title
+
+```ts
+title: string;
+```
+
+***
+
+`null`
 
 ***
 

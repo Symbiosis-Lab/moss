@@ -4252,6 +4252,12 @@ body {
   display: none;
 }
 
+/* While the contents ruler is on screen it is the page's one contents list,
+   so a trail island's bar keeps its trail and drops its sections. */
+.moss-nav-island:not([data-header="none"])[data-ruler="on"] :is(.moss-nav-island-sections, [data-island-menu="sections"]) {
+  display: none;
+}
+
 /* `[site].header = "none"`: no trail, so the site's name and then the
    section's take the room the trail would have had, and the bar keeps its end
    free for the controls (below), as wide as nav-island.ts measures them. */

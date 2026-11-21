@@ -3,7 +3,7 @@
 
 use crate::site;
 
-use site::{hero_of, Site};
+use site::{hero_of, LoggedSite, Site};
 
 const SOONER: &str = "---\ntitle: Sooner Show\nstart: 2099-03-01 19:30\n---\n\nBody.\n";
 
@@ -32,7 +32,7 @@ fn a_folder_embed_inside_a_hero_is_expanded() {
 #[test]
 fn a_raw_listing_marker_in_a_built_page_warns() {
     // A marker the expander cannot close is left as written.
-    let site = Site::new(&[(
+    let site = LoggedSite::new(&[(
         "index.md",
         "---\ntitle: Example Company\n---\n\nIntro.\n\n<!--MOSS_MARKER_FOLDER_LIST:path=shows/ no end\n\nText below.\n",
     )]);

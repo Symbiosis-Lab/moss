@@ -133,15 +133,15 @@ fn clone_source(src: &Path, dst: &Path) {
     for sub in ["build.nosync", "build"] {
         let _ = std::fs::remove_dir_all(moss.join(sub));
     }
-    // Two per-machine caches under the build tree hold inputs, not render
-    // state: what the network answered for external links, and the local
+    // Two caches of this computer's hold inputs, not render state: what the network answered for external links, and the local
     // object store their downloaded covers (and other encoded bytes) live in.
     // A clean build that fetched them again would be judged on different input.
     // The incremental caches beside them (dependency, facade, hash index) stay out.
-    for cache in [".moss/build.nosync/cache/link-meta", ".moss/build.nosync/cache/local-objects"] {
-        if src.join(cache).is_dir() {
-            std::fs::create_dir_all(dst.join(cache).parent().unwrap()).unwrap();
-            copy_tree(&src.join(cache), &dst.join(cache));
+    let (from, to) = (moss_build::moss_paths::MossPaths::new(src), moss_build::moss_paths::MossPaths::new(dst));
+    for (cache, copy) in [(from.cache_link_meta(), to.cache_link_meta()), (from.cache_local_objects(), to.cache_local_objects())] {
+        if cache.is_dir() {
+            std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
+            copy_tree(&cache, &copy);
         }
     }
 }

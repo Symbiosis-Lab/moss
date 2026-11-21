@@ -10,7 +10,7 @@
 //!
 //! * **Auth** — the same per-vault bearer token the mutation/read carriers
 //!   check ([`super::carrier_token::admit`]). The caller reads it from
-//!   `<vault>/.moss/build.nosync/http-token`, which only the same user can
+//!   the folder's `http-token` record on this computer, which only the same user can
 //!   read, and sends it as `X-Moss-Token`.
 //! * No token, a wrong token, or no carrier bound at all (this server was
 //!   started with no [`super::invoke::InvokeCtx`], so there is no session to

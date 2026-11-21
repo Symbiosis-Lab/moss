@@ -89,10 +89,8 @@ fn add_utm_to_internal_links(html: &str, site_url: &str) -> String {
 
         // Find the closing quote
         if let Some((url, after_quote)) = after_href.split_once('"') {
-            let is_internal = url.starts_with("./")
-                || url.starts_with("../")
-                || (url.starts_with('/') && !url.starts_with("//"))
-                || url.starts_with(site_url);
+            // Links arrive absolute (`for_readers`), so the site's own start with its address.
+            let is_internal = url.starts_with(site_url);
 
             if is_internal && !url.contains("utm_source=") {
                 let separator = if url.contains('?') { "&" } else { "?" };
@@ -113,6 +111,89 @@ fn add_utm_to_internal_links(html: &str, site_url: &str) -> String {
     result
 }
 
+/// The articles a site feed lists: dated, listable, newest first. A linkblog
+/// page (`external_url:`) is left out: its home is the outlet, which has its
+/// own feed. A date shared by several articles orders them by address, never
+/// by the order the disk listed their files.
+pub(crate) fn feed_articles(documents: &[ParsedDocument]) -> Vec<&ParsedDocument> {
+    let mut articles: Vec<&ParsedDocument> = documents
+        .iter()
+        .filter(|doc| doc.date.is_some())
+        .filter(|doc| doc.is_listable())
+        .filter(|doc| !has_external_url(doc))
+        .collect();
+    articles.sort_by(|a, b| b.date.cmp(&a.date).then_with(|| a.url_path.cmp(&b.url_path)));
+    articles
+}
+
+/// An article's absolute address, as a feed item names it.
+pub(crate) fn article_url(site_url: &str, url_path: &str) -> String {
+    percent_encode_feed_url(&format!("{}/{}", site_url.trim_end_matches('/'), url_path.trim_start_matches('/')))
+}
+
+/// An article's body as a feed carries it. Its ids are scoped, since one feed
+/// holds every article and three footnoted ones would otherwise each ship an
+/// `fn-1`; `links` rewrites its links. Math and diagrams become the hosted PNGs
+/// email uses, because feed readers strip inline `<svg>` and the figure would
+/// vanish; refused-math `<code>` passes through.
+pub(crate) fn item_html(
+    article: &ParsedDocument,
+    index: usize,
+    scopes: &mut crate::build::folder_embed::inline_body::IdScopes,
+    site_url: &str,
+    links: impl Fn(&str) -> String,
+) -> String {
+    let body = crate::build::feeds::calendar::strip_links_paragraphs(&article.html_content);
+    let page = article_url(site_url, &article.url_path);
+    let html = links(for_readers(&scopes.scope(&body, &article.url_path, index), &page, site_url).trim_start());
+    let html = crate::build::emit::math_png::swap_math_svgs_for_email_imgs(&html, site_url);
+    crate::build::emit::diagram_png::swap_diagram_figures_for_feed_imgs(&html, site_url)
+}
+
+/// The body as a reader elsewhere sees it. The title goes, since every reader
+/// shows the item's own, and so do the editor's `data-source-*` attributes.
+/// Links and pictures become absolute; a fragment link stays relative, so it
+/// still jumps within the item. `srcset` and `<source>` go, since their
+/// candidates are relative and `src` already names the picture.
+fn for_readers(html: &str, page: &str, site: &str) -> String {
+    lol_html::rewrite_str(html, lol_html::RewriteStrSettings {
+        element_content_handlers: vec![
+            lol_html::element!("h1.moss-article-title", |el| {
+                el.remove();
+                Ok(())
+            }),
+            lol_html::element!("*", |el| {
+                let editor: Vec<String> =
+                    el.attributes().iter().map(|a| a.name()).filter(|n| n.starts_with("data-source")).collect();
+                for name in editor {
+                    el.remove_attribute(&name);
+                }
+                Ok(())
+            }),
+            lol_html::element!("a[href]", |el| {
+                if let Some(href) = el.get_attribute("href").filter(|h| !h.starts_with('#')) {
+                    el.set_attribute("href", &crate::syndication::shape::absolute(&href, page, site))?;
+                }
+                Ok(())
+            }),
+            lol_html::element!("img", |el| {
+                if let Some(src) = el.get_attribute("src") {
+                    el.set_attribute("src", &crate::syndication::shape::absolute(&src, page, site))?;
+                }
+                el.remove_attribute("srcset");
+                el.remove_attribute("sizes");
+                Ok(())
+            }),
+            lol_html::element!("source", |el| {
+                el.remove();
+                Ok(())
+            }),
+        ],
+        ..Default::default()
+    })
+    .unwrap_or_else(|_| html.to_string())
+}
+
 /// Generates an RSS 2.0 feed XML string from articles.
 ///
 /// # Arguments
@@ -130,21 +211,7 @@ pub fn generate_rss_feed(
     site_description: Option<&str>,
     analytics: Option<&AnalyticsConfig>,
 ) -> String {
-    // Filter to only documents with dates (articles) and sort by date descending.
-    // Skip linkblog pages (`external_url:` in frontmatter) — their canonical
-    // home is the outlet, which has its own feed; including them here would
-    // duplicate the outlet's content under our domain.
-    let mut articles: Vec<&ParsedDocument> = documents
-        .iter()
-        .filter(|doc| doc.date.is_some())
-        .filter(|doc| doc.is_listable())
-        .filter(|doc| !has_external_url(doc))
-        .collect();
-
-    // Newest first; a date shared by several articles orders them by address,
-    // never by the order the disk listed their files.
-    articles.sort_by(|a, b| b.date.cmp(&a.date).then_with(|| a.url_path.cmp(&b.url_path)));
-
+    let articles = feed_articles(documents);
     let description = site_description.unwrap_or(site_title);
 
     let mut xml = String::new();
@@ -175,11 +242,7 @@ pub fn generate_rss_feed(
     // Add items for each article
     let mut scopes = crate::build::folder_embed::inline_body::IdScopes::default();
     for (index, article) in articles.into_iter().enumerate() {
-        let article_url = percent_encode_feed_url(&format!(
-            "{}/{}",
-            site_url.trim_end_matches('/'),
-            article.url_path.trim_start_matches('/')
-        ));
+        let article_url = article_url(site_url, &article.url_path);
         let article_url_with_utm =
             format!("{}?utm_source=rss&utm_medium=feed", article_url);
 
@@ -206,24 +269,9 @@ pub fn generate_rss_feed(
             }
         }
 
-        // Build description: scope the item's ids (the feed is one document
-        // holding every article, so three footnoted articles would otherwise
-        // ship three `fn-1`s), rewrite internal links with UTM, add optional
-        // tracking pixel.
-        let body = crate::build::feeds::calendar::strip_links_paragraphs(&article.html_content);
-        let scoped_html = scopes.scope(&body, &article.url_path, index);
-        let mut description_html = add_utm_to_internal_links(&scoped_html, site_url);
-
-        // The website HTML inlines typeset math as <svg>, which
-        // feed readers sanitize away — the equation would silently VANISH for
-        // every reader subscriber. Swap each math <svg> for the same hosted
-        // 2× PNG <img> (absolute URLs) email uses; refused-math <code> nodes
-        // pass through untouched.
-        description_html = crate::build::emit::math_png::swap_math_svgs_for_email_imgs(
-            &description_html,
-            site_url,
-        );
-        description_html = crate::build::emit::diagram_png::swap_diagram_figures_for_feed_imgs(&description_html, site_url);
+        // Internal links carry UTM; an optional tracking pixel follows.
+        let mut description_html =
+            item_html(article, index, &mut scopes, site_url, |html| add_utm_to_internal_links(html, site_url));
 
         if let Some(analytics_config) = analytics {
             // Use pretty path (strip index.html/.html) to match browser page views
@@ -285,6 +333,21 @@ mod tests {
             kind: PageKind::Article,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn both_feeds_carry_the_body_a_reader_sees() {
+        let html = r#"<h1 class="moss-article-title" data-source-fm="title">Spring</h1>
+<p data-source-line="2">See <a href="../other/">other</a>.</p><img src="bank.webp" alt="Bank">"#;
+        let docs = vec![create_test_document("Spring", Some("2026-03-01"), "notes/spring/index.html", html)];
+        let rss = generate_rss_feed(&docs, "A site", "https://example.org", None, None);
+        let json = crate::build::feeds::json_feed::generate_json_feed(&docs, "A site", "https://example.org", "en", &Default::default());
+        for feed in [&rss, &json] {
+            assert!(!feed.contains("data-source"), "{feed}");
+            assert!(!feed.contains("moss-article-title"), "{feed}");
+            assert!(feed.contains("https://example.org/notes/spring/bank.webp"), "{feed}");
+        }
+        assert!(rss.contains(r#"href="https://example.org/notes/other/?utm_source=rss&utm_medium=feed""#), "{rss}");
     }
 
     #[test]
@@ -910,9 +973,9 @@ mod tests {
 
         let rss = generate_rss_feed(&docs, "My Blog", "https://example.com", None, None);
 
-        // Internal relative link should get UTM params
+        // An internal link becomes absolute and gets UTM params
         assert!(
-            rss.contains("../other-post/?utm_source=rss&utm_medium=feed"),
+            rss.contains("https://example.com/other-post/?utm_source=rss&utm_medium=feed"),
             "Internal link should have UTM. RSS:\n{}",
             rss
         );

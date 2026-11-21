@@ -7,30 +7,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-fn build_sync(folder_path: &str) -> Result<String, String> {
-    use moss_build::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
-    use moss_build::cli::host::cli_host_ports;
-    use moss_build::vault_root::VaultRoot;
-
-    let source = PathBuf::from(folder_path);
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(run_pipeline(PipelineConfig {
-        root: VaultRoot::resolve(&source),
-        progress: moss_build::build::stdout_sink(),
-        plugins: PluginMode::Skip,
-        watch: false,
-        start_server: false,
-        host: cli_host_ports(folder_path),
-        trigger: BuildTrigger::Full,
-        exits_after_build: true,
-        site_url_override: None,
-        server_port: None,
-        admission_epoch: None,
-        live_port: None,
-        rename_pairs: Vec::new(),
-    }))
-}
-
 fn write(root: &Path, rel: &str, body: &str) {
     let path = root.join(rel);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -54,10 +30,10 @@ fn a_page_renamed_on_disk_between_two_builds_is_reported_as_a_rename() {
     write(&tmp, "index.md", "---\ntitle: Home\n---\n\nSee [[note]].\n");
     write(&tmp, "note.md", "---\ntitle: Note\n---\n\nNotes from the field.\n");
 
-    build_sync(&folder).expect("first build");
+    crate::site::build_full(&folder).expect("first build");
     let before = moss_build::build::load_previous_hashes(&folder);
     fs::rename(tmp.join("note.md"), tmp.join("field-notes.md")).unwrap();
-    build_sync(&folder).expect("second build");
+    crate::site::build_full(&folder).expect("second build");
     let after = moss_build::build::load_previous_hashes(&folder);
 
     let event = moss_build::build::watch::build_rebuild_event_with_renames(&after, &before, &[])

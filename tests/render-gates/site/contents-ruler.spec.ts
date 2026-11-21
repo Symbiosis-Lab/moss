@@ -211,30 +211,37 @@ for (const [width, height] of [
       }
     });
 
-    test('the whole island is hidden wherever the ruler shows, even scrolling up, and back once it fades', async ({ page }) => {
+    test('a scroll up brings the bar beside the ruler without its sections, which return once the ruler fades', async ({ page }) => {
       const island = () =>
         page.evaluate(() => {
           const el = document.querySelector<HTMLElement>('.moss-nav-island')!;
-          return { visible: getComputedStyle(el).opacity !== '0', inert: el.inert, shown: el.dataset.shown };
+          const bar = el.querySelector<HTMLElement>('.moss-nav-island-bar')!;
+          return {
+            visible: getComputedStyle(el).opacity !== '0',
+            inert: el.inert,
+            shown: el.dataset.shown,
+            sections: el.querySelector<HTMLElement>('.moss-nav-island-sections')!.checkVisibility(),
+            fits: bar.scrollWidth <= bar.clientWidth + 1,
+          };
         });
-      // Scrolling up is what reveals the island; while the ruler is up it does not.
+      // The ruler is the page's one contents list; the bar still answers a scroll up.
       await page.evaluate(() => window.scrollBy(0, -120));
       await frames(page);
       await expect.poll(() => isAway(page)).toBe(false);
-      await expect.poll(island).toEqual({ visible: false, inert: true, shown: 'false' });
+      await expect.poll(island).toEqual({ visible: true, inert: false, shown: 'true', sections: false, fits: true });
 
-      // Past the article the ruler fades, and a scroll up brings the bar back.
+      // Past the article the ruler fades and the bar has its sections again.
       await scrollTo(page, 1e6);
       await expect.poll(() => isAway(page)).toBe(true);
       await page.evaluate(() => window.scrollBy(0, -120));
       await frames(page);
-      await expect.poll(island).toEqual({ visible: true, inert: false, shown: 'true' });
+      await expect.poll(island).toEqual({ visible: true, inert: false, shown: 'true', sections: true, fits: true });
 
       await intoArticle(page);
-      await expect.poll(async () => (await island()).shown).toBe('false');
+      await expect.poll(async () => (await island()).sections).toBe(false);
     });
 
-    test('keyboard focus that brings a faded ruler up puts the island away at once', async ({ page }) => {
+    test('keyboard focus that brings a faded ruler up takes the bar\'s sections at once and leaves the bar', async ({ page }) => {
       await scrollTo(page, 1e6);
       await expect.poll(() => isAway(page)).toBe(true);
       await page.evaluate(() => window.scrollBy(0, -120));
@@ -245,9 +252,10 @@ for (const [width, height] of [
         document.querySelector<HTMLElement>('.moss-contents-ruler a')!.focus();
         await Promise.resolve();
         const el = document.querySelector<HTMLElement>('.moss-nav-island')!;
-        return { ruler: el.dataset.ruler, shown: el.dataset.shown, inert: el.inert };
+        const sections = el.querySelector<HTMLElement>('.moss-nav-island-sections')!.checkVisibility();
+        return { ruler: el.dataset.ruler, shown: el.dataset.shown, inert: el.inert, sections };
       });
-      expect(after).toEqual({ ruler: 'on', shown: 'false', inert: true });
+      expect(after).toEqual({ ruler: 'on', shown: 'true', inert: false, sections: false });
     });
   });
 }

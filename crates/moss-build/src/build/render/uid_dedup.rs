@@ -118,6 +118,7 @@ pub(crate) fn assign_missing(
                 // two machines could derive different uids.
                 let hash = source_hash(source);
                 debug_assert!(hash.is_some(), "no source hash for {source}");
+                doc.uid_derived = true;
                 crate::build::markdown::generate_uid(source, hash.as_deref().unwrap_or(""))
             }
         };
@@ -482,6 +483,7 @@ pub(crate) fn resolve_duplicate_uids<'a>(
                 .find(|candidate| !in_use(candidate))
                 .expect("an unused uid within 2^32 attempts");
             documents[idx].uid = Some(new_uid.clone());
+            documents[idx].uid_derived = true;
             // Built under the same new uid until a publish stamps it: told once.
             if built_under(&reassigned_path, &new_uid) {
                 continue;

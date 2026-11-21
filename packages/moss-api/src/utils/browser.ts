@@ -4,6 +4,7 @@
  */
 
 import { getTauriCore } from "./tauri.js";
+import { getInternalContext, hasContext } from "./context.js";
 
 // ============================================================================
 // Types
@@ -422,4 +423,75 @@ export async function showBrowserForm<T>(
   }
 
   return resultPromise;
+}
+
+/**
+ * A run of the article, or a picture given as its bytes, for {@link fillEditor}.
+ * @category Browser
+ */
+export type EditorFillPart = { html: string } | { picture: { url: string; name: string; type: string; base64: string } };
+
+/**
+ * What {@link fillEditor} puts where: the editor's elements on the network's
+ * page, the article in parts, and which of moss's reshapings the editor needs.
+ * @category Browser
+ */
+export interface EditorFill {
+  editor: {
+    /** The editable body. */
+    body: string;
+    /** The title field, an input, a textarea or an editable element. */
+    title?: string;
+    /** Present once the editor has loaded; `body` when absent. */
+    ready?: string;
+  };
+  title?: string;
+  parts: EditorFillPart[];
+  rules?: {
+    /** The article's top heading level becomes h1, every deeper one h2. */
+    headings?: "two-levels";
+    /** One paragraph per table row, cells joined by " · ". */
+    tables?: "rows";
+    /** One paragraph per line of code. */
+    code?: "paragraphs";
+  };
+  /** How long to wait for the editor. Default 20 s. */
+  timeout_ms?: number;
+  /** How long each picture may take to appear. Default 15 s. */
+  picture_ms?: number;
+}
+
+/**
+ * How a fill went. `refused`: the editor's content did not change after the
+ * first paste. `no-editor`: the editor did not appear in time (its page
+ * changed, or the panel shows a sign-in). `missing` names each picture, and
+ * the title, that the editor did not take; `url` is where the panel is now.
+ * @category Browser
+ */
+export interface EditorFillAnswer {
+  result: "filled" | "no-editor" | "refused";
+  placed: number;
+  missing: string[];
+  url: string;
+}
+
+/**
+ * Put an article into the network's editor that this plugin opened in the
+ * panel, as the author would paste it: moss runs its own script there with
+ * this data, never the plugin's code, and only on a page of one of the
+ * plugin's declared domains.
+ *
+ * Only in the moss app; elsewhere it rejects.
+ *
+ * @example
+ * ```typescript
+ * await openBrowser("https://network.example/editor/new");
+ * const answer = await fillEditor({ editor: { body: ".editor" }, title, parts });
+ * if (answer.result !== "filled") showCopyPage();
+ * ```
+ * @category Browser
+ */
+export async function fillEditor(fill: EditorFill): Promise<EditorFillAnswer> {
+  if (!hasContext()) throw new Error("fillEditor runs only inside a plugin hook");
+  return getTauriCore().invoke<EditorFillAnswer>("fill_browser_panel", { pluginName: getInternalContext().plugin_name, fill });
 }

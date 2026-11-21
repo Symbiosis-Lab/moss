@@ -193,7 +193,7 @@ pub fn run(args: &[String]) -> i32 {
     match install(&manifest, PLATFORM_KEY, &artifact, PUBKEY_B64, &dest_parent) {
         Ok(app) => {
             println!(
-                "verified: minisign signature over moss.app.tar.gz, against the release key moss ships"
+                "verified: minisign signature over the app bundle, against the release key moss ships"
             );
             println!("installed {}", app.display());
             0

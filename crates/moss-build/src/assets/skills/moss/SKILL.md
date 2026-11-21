@@ -149,6 +149,16 @@ For a folder of items with a metadata file (pictures plus a CSV, as an archive o
 10. **The source note** becomes a page by adding frontmatter above its unchanged text.
 11. `moss build --strict`, then read every warning and note.
 
+## A look taken from the person's own material
+
+A site built without a source of its own comes out as the generic template: a centred hero over a gradient, three feature cards with icons, rounded cards with soft shadows everywhere, a purple-blue palette, one sans serif (usually Inter) for everything, a stock "Get started" button, emoji as bullets. Choose the look before writing any CSS, and take it from the person.
+
+1. Gather their material first: their own words and how they write them, their photographs, drawings and objects, the things they make, their old site, their logo and colour. Look at the pictures themselves, not at descriptions of them.
+2. Choose one specific direction and write it in a sentence with its reason: "a printed programme, set in a serif, because they run a theatre and their posters are typeset". If the sentence would fit any other person, it is not a direction yet.
+3. Take the parts from the material: type from their lettering or the tone of their words, the palette from their own pictures (two or three colours sampled from them, one of them the accent), the layout from how their own work is arranged. Their strongest picture or sentence carries the first screen at full size, instead of a stock hero.
+4. Express it in moss's own terms: `--moss-*` tokens first, then selectors on moss's markup (`moss describe --css <selector>`), never a class the page or theme invents, and the pages stay plain markdown. A look that needs HTML in the pages is the wrong look or a gap in moss to report.
+5. Check the result against the person. Would someone who knows them recognise the site as theirs with the name covered? Then name every part of the first screen and one inner page that could sit unchanged on another person's site, and replace or delete it. Keep what they already have when it is good (a logo, a colour, a way of setting dates).
+
 ## Styling: the one-sentence model
 
 Edit `.moss/theme/style.css`: override any `--moss-*` token in `:root {}` (light)
@@ -252,6 +262,7 @@ A stylesheet that is longer than the design needs is a defect even when it rende
   `::: {.figure fig=teapot}` (which emits `data-fig="teapot"`), or as a raw
   `<svg data-figure="…">`/`<canvas>` where the element itself is the drawing.
   Drawings and your own JavaScript: `moss guide authoring`.
+- Words live in the page's HTML, readable with JavaScript off; a script never supplies text. See "Pages read without JavaScript" in `moss guide authoring`.
 - Never write inline `style="..."` — put the rule in `.moss/theme/style.css`.
 - A button that sends or waits changes the moment it is pressed and shows moss's loading state until the answer comes; a form the theme writes itself uses moss's button for it. See `moss guide authoring`, "A press answers at once".
 - Images and media use the standard form: `![](photo.jpg)`, written as a path relative to the page. Wikilinks (`![[photo.jpg]]`) work too and find the file by name. Either way moss resolves the file, so never write a site-absolute or `https://` address for a file in the folder.

@@ -66,7 +66,7 @@ impl SecretStore {
     /// reason: the name becomes a path segment.
     fn path(&self, scope: &Scope, key: &str) -> Result<PathBuf, KeystoreError> {
         super::keystore::validate_entry_name(key)?;
-        Ok(self.root.join(scope.dir_segment()?).join(key))
+        Ok(self.root.join(scope.dir_segment()).join(key))
     }
 
     /// The stored value, or `None` if this plugin has no secret under `key`.
@@ -136,7 +136,7 @@ mod tests {
     use tempfile::tempdir;
 
     fn plugin(id: &str) -> Scope {
-        Scope::Plugin(id.to_string())
+        Scope::plugin(id).unwrap()
     }
 
     #[test]

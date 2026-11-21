@@ -1315,6 +1315,86 @@ fn convert_single_image_leaves_a_complete_placeholder_entry_unwritten() {
     assert_eq!(after.transforms.get("media/meta"), Some(&entry));
 }
 
+const CURRENT: u64 = crate::build::scan::scan::MEDIA_META_VERSION as u64;
+
+/// Writes a `media/meta` record under `key` as a moss writing `version` would.
+fn put_placeholder_record(h: &TestHarness, key: &str, version: u64, meta: &crate::build::cache::CachedMediaMeta) -> crate::build::cache::TransformEntry {
+    let bytes = serde_json::to_vec(meta).unwrap();
+    let entry = crate::build::cache::TransformEntry { kept_for: None, validation: None, oid: h.objects.store_bytes(&bytes).unwrap(), size: bytes.len() as u64, params: serde_json::json!({ "v": version }) };
+    let record = crate::build::cache::TransformRecord { source_oid: key.into(), source_size: 1, transforms: HashMap::from([("media/meta".to_string(), entry.clone())]) };
+    h.transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
+    entry
+}
+
+fn placeholder_entry(h: &TestHarness, key: &str) -> Option<crate::build::cache::TransformEntry> {
+    h.transforms.get_with(key, crate::build::cache::RecordMode::Request)?.transforms.get("media/meta").cloned()
+}
+
+fn stale_png_placeholder() -> crate::build::cache::CachedMediaMeta {
+    crate::build::cache::CachedMediaMeta { dimensions: Some((8, 8)), dominant_color: Some("#000000".into()), lqip_data_uri: Some("data:image/webp;base64,AA".into()), is_animated: false }
+}
+
+/// A PNG's shared record from before the transparency fix no longer holds, so a
+/// fresh copy of the folder cannot use it. The preview's background encode is
+/// the only thing that computes the placeholder in a folder nobody publishes,
+/// so it must bring that record up to date, not only its own stat record.
+#[test]
+fn a_preview_encode_brings_a_stale_shared_png_placeholder_up_to_date() {
+    let h = harness();
+    let src = h._tmp.path().join("logo.png");
+    make_corner_transparent_png(&src);
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+    let stale = put_placeholder_record(&h, &source_oid, 2, &stale_png_placeholder());
+
+    let outcome = convert_single_image(&src, &source_oid, "logo.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &ImageCompressionConfig::default(), None, Some("stat:logo.png:1:2"), &Default::default());
+
+    assert!(outcome.error.is_none(), "{:?}", outcome.error);
+    let shared = placeholder_entry(&h, &source_oid).unwrap();
+    assert_ne!(shared, stale);
+    assert!(shared.params["v"].as_u64() >= Some(4), "{:?}", shared.params);
+    assert_eq!(
+        crate::build::scan::scan::read_cached_meta(&h.transforms, &source_oid, "png").map(|m| m.dominant_color),
+        crate::build::scan::scan::read_cached_meta(&h.transforms, "stat:logo.png:1:2", "png").map(|m| m.dominant_color),
+    );
+}
+
+/// A machine that already settled the picture under its stat key still owes the
+/// shared record: a version bump makes that record stale while the stat record
+/// stays current. The values are copied, without decoding the picture again.
+#[test]
+fn a_settled_stat_record_brings_a_stale_shared_png_placeholder_up_to_date() {
+    let h = harness();
+    let src = h._tmp.path().join("logo.png");
+    make_corner_transparent_png(&src);
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+    let stat_key = "stat:logo.png:1:2";
+    let settled = crate::build::cache::CachedMediaMeta { dominant_color: Some("#123456".into()), ..stale_png_placeholder() };
+    put_placeholder_record(&h, stat_key, CURRENT, &settled);
+    put_placeholder_record(&h, &source_oid, 2, &stale_png_placeholder());
+
+    let outcome = convert_single_image(&src, &source_oid, "logo.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &ImageCompressionConfig::default(), None, Some(stat_key), &Default::default());
+
+    assert!(outcome.error.is_none(), "{:?}", outcome.error);
+    let shared = crate::build::scan::scan::read_cached_meta(&h.transforms, &source_oid, "png");
+    assert_eq!(shared.and_then(|m| m.dominant_color).as_deref(), Some("#123456"));
+}
+
+/// A current shared record is left as it is, so encoding a folder that is
+/// already up to date writes nothing to the synced folder.
+#[test]
+fn a_preview_encode_leaves_a_current_shared_placeholder_unwritten() {
+    let h = harness();
+    let src = h._tmp.path().join("logo.png");
+    make_corner_transparent_png(&src);
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+    let current = put_placeholder_record(&h, &source_oid, CURRENT, &stale_png_placeholder());
+
+    let outcome = convert_single_image(&src, &source_oid, "logo.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &ImageCompressionConfig::default(), None, Some("stat:logo.png:1:2"), &Default::default());
+
+    assert!(outcome.error.is_none(), "{:?}", outcome.error);
+    assert_eq!(placeholder_entry(&h, &source_oid), Some(current));
+}
+
 #[test]
 fn convert_single_image_cache_hit() {
     let h = harness();
@@ -5477,7 +5557,7 @@ fn a_staged_record_without_ctime_precision_is_rehashed_before_relinking() {
         let h = harness();
         let oid = h.objects.store_bytes(b"valid bytes").unwrap();
         let path = h.staging.join("asset.bin");
-        let saved = MossPaths::from_moss_dir(h._tmp.path().join(".moss")).cache_dir().join("staged-links-test.json");
+        let saved = MossPaths::from_moss_dir(h._tmp.path().join(".moss")).staged_links("test");
         let mut first = staged_links(&h);
         assert!(matches!(first.link(&h.objects, &oid, &path, None), Placement::Linked));
         first.save();

@@ -2964,7 +2964,7 @@ dependencies = [
 
 [[package]]
 name = "moss-cli"
-version = "0.15.27"
+version = "0.15.28"
 dependencies = [
  "base64 0.21.7",
  "dotenvy",
@@ -2980,7 +2980,7 @@ dependencies = [
 
 [[package]]
 name = "moss-core"
-version = "0.28.0"
+version = "0.29.0"
 dependencies = [
  "basic-toml",
  "proptest",
@@ -4499,6 +4499,7 @@ dependencies = [
  "ego-tree",
  "getopts",
  "html5ever 0.27.0",
+ "indexmap 2.14.2",
  "once_cell",
  "selectors 0.25.0",
  "tendril 0.4.3",

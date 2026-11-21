@@ -93,11 +93,6 @@ pub fn verify_schnorr(pubkey_hex: &str, message: &[u8], sig_hex: &str) -> bool {
 /// what makes it infallible; the one failure the old signature carried was
 /// `signing_key_loaded()`, which now happens (and is reported) where the key
 /// is obtained — [`append_owner_event`] for the owner's key.
-///
-/// REFACTOR-LATER (keystore): like seta auth, this signs with the
-/// identity key directly. It should become a keystore caller at the `System`
-/// scope (`identity::keystore`) so all signing goes through one path, as a
-/// separate, behavior-preserving change.
 #[allow(clippy::too_many_arguments)]
 pub fn sign_mod_event(
     signing_key: &k256::schnorr::SigningKey,

@@ -3,11 +3,11 @@
 use crate::site;
 
 use moss_build::build::BuildTrigger;
-use site::Site;
+use site::{LoggedSite, Site};
 
 #[test]
 fn an_empty_page_is_built_for_the_preview_and_noted() {
-    let site = Site::new(&[
+    let site = LoggedSite::new(&[
         ("index.md", "Welcome."),
         ("blank.md", " \n\t\n"),
         ("untitled.md", ""),
@@ -37,7 +37,7 @@ fn an_empty_page_becomes_an_ordinary_page_with_its_first_word() {
 
 #[test]
 fn an_empty_home_file_builds_no_page_and_its_folder_keeps_the_generated_index() {
-    let site = Site::new(&[
+    let site = LoggedSite::new(&[
         ("index.md", "Welcome."),
         ("stories/index.md", ""),
         ("stories/one.md", "One."),
@@ -63,8 +63,8 @@ fn collision(files: &[(&str, &str)], first: &str, second: &str, url: &str) {
     for (path, content) in files {
         site.write(path, content);
     }
-    let warnings = site::build_sync(&site.root.to_string_lossy(), BuildTrigger::Full)
-        .expect("collisions must still render").join("\n");
+    let warnings = site::build_logged(&site.root.to_string_lossy(), BuildTrigger::Full)
+        .expect("collisions must still render").logged.join("\n");
     assert!(warnings.contains(first) && warnings.contains(second) && warnings.contains(url), "{warnings}");
 }
 
@@ -100,8 +100,8 @@ fn language_prefixes_and_non_page_slots_are_not_collisions() {
 fn a_content_edit_reports_a_url_collision() {
     let site = Site::new(&[("index.md", "Welcome."), ("one.md", "One."), ("two.md", "Two.")]);
     site.write("two.md", "---\nurl: one\n---\nTwo.");
-    let warnings = site::build_sync(&site.root.to_string_lossy(), BuildTrigger::ContentOnly(vec![site.root.join("two.md")]))
-        .expect("incremental collisions must still render").join("\n");
+    let warnings = site::build_logged(&site.root.to_string_lossy(), BuildTrigger::ContentOnly(vec![site.root.join("two.md")]))
+        .expect("incremental collisions must still render").logged.join("\n");
     assert!(warnings.contains("one.md") && warnings.contains("two.md") && warnings.contains("/one/"), "{warnings}");
 }
 

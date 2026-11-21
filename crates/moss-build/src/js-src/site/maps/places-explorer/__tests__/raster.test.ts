@@ -196,6 +196,23 @@ describe("rasterize", () => {
       expect(createdUrl).toHaveBeenCalledOnce();
       expect(revokedUrl).toHaveBeenCalledWith("blob:places-map-test");
 
+      // A restored context is blank: the markup is decoded again into the same canvas (no decoded bitmap is kept), and a released canvas is left alone.
+      drawImage.mockClear();
+      const lost = new Event("contextlost", { cancelable: true });
+      raster.el.dispatchEvent(lost);
+      expect(lost.defaultPrevented).toBe(true);
+      raster.el.dispatchEvent(new Event("contextrestored"));
+      await vi.waitFor(() => expect(drawImage).toHaveBeenCalledOnce());
+      expect(drawImage).toHaveBeenCalledWith(source, 0, 0, 1048, 1102);
+      expect(source.decode).toHaveBeenCalledTimes(2);
+      expect(revokedUrl).toHaveBeenCalledTimes(2);
+
+      raster.release();
+      drawImage.mockClear();
+      raster.el.dispatchEvent(new Event("contextrestored"));
+      await Promise.resolve();
+      expect(source.decode).toHaveBeenCalledTimes(2);
+      expect(drawImage).not.toHaveBeenCalled();
       raster.release();
       expect(raster.el.width).toBe(0);
       expect(raster.el.height).toBe(0);

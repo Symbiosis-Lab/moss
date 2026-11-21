@@ -38,7 +38,7 @@
 //! the serve dir, and again whenever a folder switch points the server at a
 //! different vault, which retires the previous token — and carried in the
 //! `X-Moss-Token` request header. It is published — never logged — to
-//! `.moss/build.nosync/http-token` inside the served vault (`carrier_token::publish`),
+//! the folder's `http-token` record on this computer, outside the served vault (`carrier_token::publish`),
 //! world-unreadable, so a local client (coding agent, Playwright) can
 //! authenticate before its first request. A request with a bad or absent token
 //! gets 401; a command absent from a tier's allowlist gets 404 (absent, not

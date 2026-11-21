@@ -229,6 +229,13 @@ fn surface_debug(doc: &ParsedDocument) -> String {
     // only. Its hash belongs in this page's facade, but it has no downstream
     // reader and must not widen a shared surface invalidation.
     stripped.explorer_places_hash = None;
+    // The other pages of a thread read it as card reads (the verdict's
+    // `card_reads`), which re-render exactly them. `in_reply_to` is read only
+    // to join threads: each page whose thread it changes carries that thread
+    // in its own facade, and the stylesheet it ships is in the site features.
+    stripped.thread = Vec::new();
+    stripped.declared.remove(moss_core::fields::IN_REPLY_TO);
+    stripped.raw_frontmatter.remove(moss_core::fields::IN_REPLY_TO);
     // `slug` moves in lockstep with `title` (`markdown/pipeline.rs`'s
     // `generate_slug(&title)`) but, unlike `title`, has NO reader at all:
     // grepping every `.slug` access across `moss-build` and `moss-core`

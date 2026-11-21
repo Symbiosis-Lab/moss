@@ -7,32 +7,6 @@ use moss_core::contract::components::{
 };
 
 #[test]
-fn is_public_returns_false_for_retired_entries() {
-    // moss-cards-grid is Retired — is_public() must return false.
-    let retired = COMPONENTS
-        .iter()
-        .find(|e| e.class == "moss-cards-grid")
-        .expect("moss-cards-grid must be in COMPONENTS");
-    assert!(
-        !retired.is_public(),
-        "retired entry 'moss-cards-grid' must not be is_public()"
-    );
-}
-
-#[test]
-fn is_public_returns_true_for_confirmed_entries() {
-    // moss-cards is Confirmed — is_public() must return true.
-    let confirmed = COMPONENTS
-        .iter()
-        .find(|e| e.class == "moss-cards")
-        .expect("moss-cards must be in COMPONENTS");
-    assert!(
-        confirmed.is_public(),
-        "confirmed entry 'moss-cards' must be is_public()"
-    );
-}
-
-#[test]
 fn components_table_is_non_empty() {
     assert!(!COMPONENTS.is_empty(), "COMPONENTS must contain at least one entry");
 }

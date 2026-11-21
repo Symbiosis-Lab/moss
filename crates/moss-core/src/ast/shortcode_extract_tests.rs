@@ -584,10 +584,11 @@ fn gallery_cols_alias_still_sets_columns_and_warns() {
         other => panic!("expected Gallery, got {other:?}"),
     }
     assert!(
-        result.warnings.iter().any(|w| w.contains("cols=") && w.contains("deprecated")),
+        result.advisories.iter().any(|w| w.contains("cols=") && w.contains("per-line=")),
         "expected a cols= deprecation warning, got {:?}",
-        result.warnings
+        result.advisories
     );
+    assert!(!result.warnings.iter().any(|w| w.contains("cols=")), "a working alias is not a problem: {:?}", result.warnings);
 }
 
 #[test]
@@ -599,10 +600,11 @@ fn gallery_per_line_wins_over_cols_but_cols_still_warns() {
         other => panic!("expected Gallery, got {other:?}"),
     }
     assert!(
-        result.warnings.iter().any(|w| w.contains("cols=") && w.contains("deprecated")),
+        result.advisories.iter().any(|w| w.contains("cols=") && w.contains("per-line=")),
         "cols= was still written, so it should still warn: {:?}",
-        result.warnings
+        result.advisories
     );
+    assert!(!result.warnings.iter().any(|w| w.contains("cols=")), "a working alias is not a problem: {:?}", result.warnings);
 }
 
 #[test]
@@ -1821,19 +1823,19 @@ fn unclosed_multi_line_attrs_block_emits_verbatim() {
     // The opener is preserved either way.
 }
 
-// ---- Deprecation warnings (Step 3 E2) ----
+// ---- Deprecated spellings: advisories, not problems ----
 
 #[test]
 fn grid_legacy_dash_emits_deprecation_warning() {
     let md = ":::grid 2\ncell A\n---\ncell B\n:::\n";
     let result = extract_shortcodes(md);
-    assert_eq!(result.warnings.len(), 1);
-    assert!(result.warnings[0].contains("deprecated"));
-    assert!(result.warnings[0].contains("+++"));
+    assert!(result.warnings.is_empty(), "a working alias is not a problem: {:?}", result.warnings);
+    assert_eq!(result.advisories.len(), 1);
+    assert!(result.advisories[0].contains("+++"));
 }
 
 #[test]
-fn grid_legacy_dash_warning_names_the_divider_line_in_the_file() {
+fn grid_legacy_dash_note_names_the_divider_line_in_the_file() {
     // Two frontmatter lines above the body; the `---` is body line 4.
     let config = ParseConfig { warning_line_offset: 2, ..Default::default() };
     let md = "intro
@@ -1845,18 +1847,27 @@ cell B
 :::
 ";
     let result = extract_shortcodes_with_config(md, &config);
-    assert_eq!(result.warnings.len(), 1, "{:?}", result.warnings);
-    assert!(result.warnings[0].contains("`---` on line 7"), "{:?}", result.warnings);
-    assert!(result.warnings[0].contains("write `+++`"), "{:?}", result.warnings);
+    assert_eq!(result.advisories.len(), 1, "{:?}", result.advisories);
+    assert!(result.advisories[0].contains("`---` on line 7"), "{:?}", result.advisories);
+    assert!(result.advisories[0].contains("replaced with `+++`"), "{:?}", result.advisories);
 }
 
 #[test]
-fn grid_legacy_dash_warning_line_survives_a_typed_shortcode_body() {
+fn a_removed_shortcode_names_the_release_that_removed_it() {
+    for (name, release) in [("apply", "0.15.13"), ("toc", "0.6.5")] {
+        let result = extract_shortcodes(&format!(":::{name}\nJoin us\n:::\n"));
+        assert_eq!(result.warnings.len(), 1, "{:?}", result.warnings);
+        assert!(result.warnings[0].contains(&format!("removed in moss {release}")), "{:?}", result.warnings);
+    }
+}
+
+#[test]
+fn grid_legacy_dash_note_line_survives_a_typed_shortcode_body() {
     let config = ParseConfig { warning_line_offset: 2, ..Default::default() };
     let md = ":::hero\n# T\n:::grid 2\na\n---\nb\n:::\n:::\n";
     let result = extract_shortcodes_with_config(md, &config);
-    let w: Vec<_> = result.warnings.iter().filter(|w| w.contains("`---`")).collect();
-    assert_eq!(w.len(), 1, "{:?}", result.warnings);
+    let w: Vec<_> = result.advisories.iter().filter(|w| w.contains("`---`")).collect();
+    assert_eq!(w.len(), 1, "{:?}", result.advisories);
     assert!(w[0].contains("on line 7"), "{w:?}");
 }
 
@@ -1894,10 +1905,11 @@ fn grid_cols_alias_still_sets_columns_and_warns() {
         other => panic!("expected Grid, got {other:?}"),
     }
     assert!(
-        result.warnings.iter().any(|w| w.contains("cols=") && w.contains("deprecated")),
+        result.advisories.iter().any(|w| w.contains("cols=") && w.contains("per-line=")),
         "expected a cols= deprecation warning, got {:?}",
-        result.warnings
+        result.advisories
     );
+    assert!(!result.warnings.iter().any(|w| w.contains("cols=")), "a working alias is not a problem: {:?}", result.warnings);
 }
 
 #[test]
@@ -1909,10 +1921,11 @@ fn grid_per_line_wins_over_cols_but_cols_still_warns() {
         other => panic!("expected Grid, got {other:?}"),
     }
     assert!(
-        result.warnings.iter().any(|w| w.contains("cols=") && w.contains("deprecated")),
+        result.advisories.iter().any(|w| w.contains("cols=") && w.contains("per-line=")),
         "cols= was still written, so it should still warn: {:?}",
-        result.warnings
+        result.advisories
     );
+    assert!(!result.warnings.iter().any(|w| w.contains("cols=")), "a working alias is not a problem: {:?}", result.warnings);
 }
 
 // ---- One rule: a bare colon line closes the innermost open block ----

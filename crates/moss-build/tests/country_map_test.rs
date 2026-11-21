@@ -4,7 +4,7 @@
 #[path = "it/site.rs"]
 mod site;
 
-use site::Site;
+use site::{LoggedSite, Site};
 
 const NAMES: [&str; 50] = [
     "Mexico", "Japan", "Chile", "Canada", "Brazil", "Norway", "France", "Germany", "Kenya", "Egypt", "India", "China", "Australia",
@@ -25,20 +25,19 @@ fn fifty() -> String {
     NAMES.iter().enumerate().map(|(i, n)| format!("| {n} | {} | Note {i} |\n", levels[i % 3])).collect()
 }
 
-fn problems(site: &Site) -> Vec<&String> {
+fn problems(site: &LoggedSite) -> Vec<&String> {
     site.logged.iter().filter(|l| l.contains("[risk.md]")).collect()
 }
 
-fn built(rows: &str) -> Site {
-    let _ = moss_build::build::cli_output::take_cli_problems();
-    Site::new(&[("index.md", "---\ntitle: Home\n---\n\nHi.\n"), ("risk.md", &page(rows))])
+fn built(rows: &str) -> LoggedSite {
+    LoggedSite::new(&[("index.md", "---\ntitle: Home\n---\n\nHi.\n"), ("risk.md", &page(rows))])
 }
 
 #[test]
 fn fifty_countries_build_without_a_problem_and_the_figure_legend_and_stamp_agree() {
     let site = built(&fifty());
     assert!(problems(&site).is_empty(), "{:?}", site.logged);
-    assert_eq!(moss_build::build::cli_output::take_cli_problems(), 0);
+    assert_eq!(site.cli_problems, 0);
     let html = site.html("risk/index.html");
     let coloured = html.matches("class=\"moss-country\" data-slug=").count();
     assert!(coloured > 200, "every country is a path, got {coloured}");
@@ -56,7 +55,7 @@ fn fifty_countries_build_without_a_problem_and_the_figure_legend_and_stamp_agree
 
 #[test]
 fn an_embed_draws_map_legend_stamp_and_rows_grouped_by_level_with_anchors() {
-    let site = Site::new(&[
+    let site = LoggedSite::new(&[
         ("index.md", "---\ntitle: Home\n---\n\nHi.\n"),
         ("risk.md", &page("| Mexico | High | Night. |\n| Japan | Low | |\n| Chile | | |\n")),
         ("guide.md", "---\ntitle: Guide\n---\n\nBefore.\n\n![[risk|style:map]]\n\nAfter.\n"),
@@ -86,7 +85,7 @@ fn a_misspelt_name_is_a_problem_naming_page_row_and_value_and_counts_for_strict(
     for part in ["risk.md", "row 1", "'Mexco'"] {
         assert!(found[0].contains(part), "{part} missing from {}", found[0]);
     }
-    assert!(moss_build::build::cli_output::take_cli_problems() >= 1, "counts toward --strict");
+    assert!(site.cli_problems >= 1, "counts toward --strict");
 }
 
 #[test]
@@ -96,7 +95,7 @@ fn a_value_outside_levels_a_duplicate_and_disputed_and_antarctic_names_each_name
     for part in ["row 1: 'Severe' for Mexico", "row 3: 'japan' is listed twice", "row 4: 'Somaliland' is disputed", "row 5: Antarctica"] {
         assert!(all.contains(part), "{part} missing from:\n{all}");
     }
-    assert!(moss_build::build::cli_output::take_cli_problems() >= 4);
+    assert!(site.cli_problems >= 4);
 }
 
 #[test]

@@ -1728,13 +1728,10 @@ export class FileTree {
   // ── Event Handlers ────────────────────────────────────────────────────
 
   /**
-   * Toggle a BREADCRUMB folder at `activePath[index]` (root chevron = index 0 =
-   * PROJECT_ROOT_REL → reveals root's children). Opening a breadcrumb folder
-   * also opens every ancestor up to it (activePath[0..index]) so the open
-   * forest actually reaches it — a breadcrumb ancestor is reachable by
-   * definition (it's on the active file's path), and the forest only renders a
-   * folder's children when the chain from the root is open. Closing collapses
-   * just that folder.
+   * Toggle a BREADCRUMB folder at `anchor[index]` (root chevron = index 0 =
+   * PROJECT_ROOT_REL → reveals root's children). Opening or closing touches
+   * only that folder: its ancestors stay breadcrumb crumbs, and both
+   * renderers show each open level on its own.
    */
   private handleToggleTop(index: number): void {
     const path = this.view.anchor[index];
@@ -1759,8 +1756,7 @@ export class FileTree {
     // which always returns to content-fit GROW — clear the park. Tree-body
     // opens (toggleFolderOpen) instead FREEZE the park to cap+scroll; the
     // two open paths are intentionally opposite.
-    const chain = this.folderIds(this.view.anchor.slice(0, index + 1));
-    this.update(v => openFolders(parkAt(v, null), chain));
+    this.update(v => openFolders(parkAt(v, null), this.folderIds([path])));
     this.render.render();
     this.render.applyWrapperHeight();
     const rows = this.render.renderedRowCount();

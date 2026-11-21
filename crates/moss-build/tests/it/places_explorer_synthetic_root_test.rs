@@ -6,30 +6,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use scraper::{Html, Selector};
 
-fn build_sync(folder_path: &str) -> Result<String, String> {
-    use moss_build::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
-    use moss_build::cli::host::cli_host_ports;
-    use moss_build::vault_root::VaultRoot;
-
-    let source = PathBuf::from(folder_path);
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(run_pipeline(PipelineConfig {
-        root: VaultRoot::resolve(&source),
-        progress: moss_build::build::stdout_sink(),
-        plugins: PluginMode::Skip,
-        watch: false,
-        start_server: false,
-        host: cli_host_ports(folder_path),
-        trigger: BuildTrigger::Full,
-        exits_after_build: true,
-        site_url_override: None,
-        server_port: None,
-        admission_epoch: None,
-        live_port: None,
-        rename_pairs: Vec::new(),
-    }))
-}
-
 fn write(root: &Path, rel: &str, body: &str) {
     let path = root.join(rel);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -72,7 +48,7 @@ fn synthetic_places_root_gets_the_explorer_bundle_and_handshake() {
     write(&tmp, "index.md", "---\ntitle: Home\n---\n\nHi.\n");
     write(&tmp, "posts/report.md", "---\ntitle: Report\nlocation: Harbor\n---\n\nA single place, named through `location:`.\n");
 
-    let result = build_sync(&tmp.to_string_lossy());
+    let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
     let out = tmp.join(".moss/build.nosync/staging");
 
@@ -136,7 +112,7 @@ fn explorer_false_leaves_a_synthetic_root_untouched() {
     write(&tmp, "index.md", "---\ntitle: Home\n---\n\nHi.\n");
     write(&tmp, "posts/report.md", "---\ntitle: Report\nlocation: Harbor\n---\n\nA single place, named through `location:`.\n");
 
-    let result = build_sync(&tmp.to_string_lossy());
+    let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
     let out = tmp.join(".moss/build.nosync/staging");
 
@@ -170,7 +146,7 @@ fn explorer_false_keeps_an_authored_roots_title_and_puts_its_words_first() {
     write(&tmp, "places/index.md", "---\ntitle: Where it happened\n---\n\nThe words about the map.\n");
     write(&tmp, "posts/report.md", "---\ntitle: Report\nlocation: Harbor\n---\n\nA single place, named through `location:`.\n");
 
-    let result = build_sync(&tmp.to_string_lossy());
+    let result = crate::site::build_full(&tmp.to_string_lossy());
     assert!(result.is_ok(), "build failed: {result:?}");
     let places_html = read_page(&tmp.join(".moss/build.nosync/staging"), "places/index.html");
     let main = &places_html[places_html.find("<main").expect("page has a <main>")..];
@@ -199,7 +175,7 @@ fn a_root_that_embeds_its_own_map_draws_it_once() {
         write(&tmp, "places/index.md", "---\ntitle: Where it happened\n---\n\nThe words about the map.\n\n![[/places/|style:map]]\n");
         write(&tmp, "posts/report.md", "---\ntitle: Report\nlocation: Harbor\n---\n\nA single place, named through `location:`.\n");
 
-        let result = build_sync(&tmp.to_string_lossy());
+        let result = crate::site::build_full(&tmp.to_string_lossy());
         assert!(result.is_ok(), "build failed: {result:?}");
         let places_html = read_page(&tmp.join(".moss/build.nosync/staging"), "places/index.html");
         let main = &places_html[places_html.find("<main").expect("page has a <main>")..];

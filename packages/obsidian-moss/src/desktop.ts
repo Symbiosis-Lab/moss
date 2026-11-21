@@ -1,4 +1,5 @@
-import { FileSystemAdapter, Notice, TFolder, WorkspaceLeaf } from "obsidian";
+import { EditorView } from "@codemirror/view";
+import { editorInfoField, FileSystemAdapter, Notice, TFile, TFolder, WorkspaceLeaf } from "obsidian";
 import { shell } from "electron";
 import { execFile, spawn } from "node:child_process";
 import * as fs from "node:fs";
@@ -16,6 +17,7 @@ import {
 import { FirstPreviewModal } from "./desktop/first-build-modal";
 import { MossPreviewView, MOSS_PREVIEW_VIEW_TYPE, PREVIEW_STOPPED } from "./desktop/preview-view";
 import { MossProcess, type SpawnFn } from "./desktop/process";
+import { pageFor, watchRebuilds } from "./desktop/server";
 import { MossSettingTab } from "./settings";
 import type MossPlugin from "./main";
 
@@ -52,6 +54,16 @@ export class DesktopCommands {
         .setTitle("Preview with moss")
         .setIcon("globe")
         .onClick(() => void this.runPreview(file.path)));
+    }));
+
+    this.plugin.registerEvent(this.app.workspace.on("file-open", (file) => void this.follow(file)));
+    this.plugin.registerEditorExtension(EditorView.updateListener.of((update) => {
+      const session = this.session;
+      if (!session?.page || !update.selectionSet || update.state.field(editorInfoField).file?.path !== session.page) return;
+      const line = update.state.doc.lineAt(update.state.selection.main.head).number;
+      if (line === session.line) return;
+      session.line = line;
+      this.openPreviewView()?.scrollToLine(line);
     }));
 
     // Obsidian calls no onunload when its window closes or it quits.
@@ -163,7 +175,11 @@ export class DesktopCommands {
       onServerReady: (addr) => {
         if (this.session !== session) return;
         session.url = addr.url;
-        view?.setUrl(addr.url);
+        session.stopWatching?.();
+        session.stopWatching = watchRebuilds(addr.url, () => void this.openPreviewView()?.update());
+        void this.follow(this.app.workspace.getActiveFile()).then((followed) => {
+          if (!followed && this.session === session) view?.setUrl(addr.url);
+        });
       },
       onError: (message) => {
         session.failure = `moss could not preview ${session.folder}: ${message}`;
@@ -171,6 +187,26 @@ export class DesktopCommands {
       },
       onExit: () => this.endSession(session),
     });
+  }
+
+  /**
+   * Points the pane at the page of the note in front of the person, as Obsidian's
+   * own panes follow the active note. It stays where it is for a note outside the
+   * previewed folder, a note with no page yet, and while the person has it pinned.
+   */
+  private async follow(file: TFile | null): Promise<boolean> {
+    const session = this.session;
+    const vault = this.vaultPath();
+    if (!session?.url || !vault || file?.extension !== "md") return false;
+    if (this.app.workspace.getLeavesOfType(MOSS_PREVIEW_VIEW_TYPE)[0]?.getViewState().pinned) return false;
+    const inFolder = path.relative(session.root, path.join(vault, file.path));
+    if (inFolder.startsWith("..") || path.isAbsolute(inFolder)) return false;
+    const page = await pageFor(session.url, inFolder.split(path.sep).join("/"));
+    if (!page || this.session !== session || !session.url) return false;
+    session.page = file.path;
+    session.line = undefined;
+    this.openPreviewView()?.setUrl(session.url + page);
+    return true;
   }
 
   /** `announce` is false when the pane closed itself, or another site's preview replaces this one. */
@@ -186,6 +222,7 @@ export class DesktopCommands {
   private endSession(session: Session): void {
     if (this.session !== session) return;
     this.session = null;
+    session.stopWatching?.();
     session.modal?.close();
     this.setStatus(null);
     // A failure stays on screen; the exit that follows it is not news.
@@ -211,12 +248,13 @@ export class DesktopCommands {
   private async openPreviewLeaf(folder?: string): Promise<MossPreviewView | null> {
     const existing = this.app.workspace.getLeavesOfType(MOSS_PREVIEW_VIEW_TYPE);
     let leaf: WorkspaceLeaf | null = existing[0] ?? null;
-    if (!leaf) {
-      leaf = this.app.workspace.getRightLeaf(false);
-      if (!leaf) return null;
-    }
-    if (!existing[0] || folder) await leaf.setViewState({ type: MOSS_PREVIEW_VIEW_TYPE, active: true, state: { folder } });
+    const editing = this.app.workspace.getMostRecentLeaf();
+    // Beside the editor: a page needs the width, and a sidebar puts other tools' tabs over it.
+    leaf ??= this.app.workspace.getLeaf("split", "vertical");
+    if (!existing[0] || folder) await leaf.setViewState({ type: MOSS_PREVIEW_VIEW_TYPE, active: false, state: { folder } });
     await this.app.workspace.revealLeaf(leaf);
+    // The person goes on writing; the pane follows.
+    if (editing && editing !== leaf) this.app.workspace.setActiveLeaf(editing, { focus: true });
     const view = leaf.view;
     return view instanceof MossPreviewView ? view : null;
   }
@@ -233,6 +271,11 @@ interface Session {
   root: string;
   folder: string;
   url: string | null;
+  /** The vault path of the note whose page the pane follows, and the cursor line last sent to it. */
+  page?: string;
+  line?: number;
+  /** Ends the watch on the server's rebuilds. */
+  stopWatching?: () => void;
   /** Why the preview failed, kept on screen after the process exits. */
   failure?: string;
   /** The first-preview question while it is open; ending the session closes it. */

@@ -42,7 +42,6 @@
 //! └── build.nosync/         Generated artifacts, per machine (safe to delete)
 //!     ├── cache/            Per-machine caches — NOT synced, NOT the store above
 //!     │   ├── link-meta/    Cached og:tag metadata for links
-//!     │   ├── hash-index.json
 //!     │   └── tmp/
 //!     ├── generations/      Immutable frozen build outputs (content-addressed)
 //!     │   └── <gen-id>/     One frozen directory per sealed generation
@@ -55,6 +54,12 @@
 //!     ├── article-map.json  Content index (all pages with metadata)
 //!     └── profile.jsonl     Build performance metrics
 //! ```
+//!
+//! Facts true on this computer only (the hash index, verified-blob and
+//! staged-link records, the front-matter scan, process memos, the local object
+//! store and the server's token) are keyed by its own paths, stats and inodes,
+//! so they live outside the folder, in its store under the platform cache
+//! directory ([`MossPaths::facts_dir`], [`MossPaths::record_dir`]).
 //!
 //! ## Design Principles
 //!
@@ -394,10 +399,34 @@ impl MossPaths {
         self.build_dir().join("cache")
     }
 
-    /// `.moss/build.nosync/cache/memo/` — what one process kept for the next
-    /// ([`crate::build::cache::MemoFile`]).
+    /// This computer's facts about the folder, keyed by its own paths, stats
+    /// and inodes: outside the folder, in its store under the platform cache
+    /// directory ([`crate::infra::folder_store::for_folder`]). Deleting it costs
+    /// one hash pass and one slot pass over every page, and never changes a page.
+    pub fn facts_dir(&self) -> PathBuf {
+        crate::infra::folder_store::for_folder(self.project_root()).cache_dir.join("facts")
+    }
+
+    /// The folder's record directory on this computer, which a cache purge
+    /// leaves alone.
+    pub fn record_dir(&self) -> PathBuf {
+        crate::infra::folder_store::for_folder(self.project_root()).record_dir
+    }
+
+    /// What one process kept for the next ([`crate::build::cache::MemoFile`]).
     pub fn memo_dir(&self) -> PathBuf {
-        self.cache_dir().join("memo")
+        self.facts_dir().join("memo")
+    }
+
+    /// The stat-keyed record of what one linking pass staged, per producer.
+    pub fn staged_links(&self, producer: &str) -> PathBuf {
+        self.facts_dir().join(format!("staged-links-{producer}.json"))
+    }
+
+    /// The running server's session secret, which its clients read. In the
+    /// record directory, so a cache purge cannot pull it from a live server.
+    pub fn http_token(&self) -> PathBuf {
+        self.record_dir().join("http-token")
     }
 
     /// `.moss/build.nosync/deploy/` — the per-call copies a deploy hook
@@ -421,12 +450,18 @@ impl MossPaths {
 
     /// This machine's CAS: copies of source files, and output bytes the synced cache could not take.
     pub fn cache_local_objects(&self) -> PathBuf {
-        self.cache_dir().join("local-objects")
+        self.facts_dir().join("local-objects")
     }
 
     /// This machine's transform records: facts keyed by its own paths and mtimes.
     pub fn cache_local_transforms(&self) -> PathBuf {
-        self.cache_dir().join("local-transforms")
+        self.facts_dir().join("local-transforms")
+    }
+
+    /// Scratch beside [`cache_local_objects`](Self::cache_local_objects), on its
+    /// volume, for a file that is renamed into it.
+    pub fn local_tmp(&self) -> PathBuf {
+        self.facts_dir().join("tmp")
     }
 
     /// `.moss/cache/transforms/` — source→output mappings.
@@ -439,9 +474,9 @@ impl MossPaths {
         self.cache_dir().join("tmp")
     }
 
-    /// `.moss/build.nosync/cache/hash-index.json` — fast-path cache validation index.
+    /// `<facts>/hash-index.json` — fast-path cache validation index.
     pub fn cache_hash_index(&self) -> PathBuf {
-        self.cache_dir().join("hash-index.json")
+        self.facts_dir().join("hash-index.json")
     }
 
     /// `.moss/build.nosync/cache/page-sources.json` — the source oid of each page the
@@ -450,24 +485,30 @@ impl MossPaths {
         self.cache_dir().join("page-sources.json")
     }
 
-    /// `.moss/build.nosync/cache/verified-blobs.json` — which CAS blobs the last
+    /// `<facts>/verified-blobs.json` — which CAS blobs the last
     /// seal pass read and found matching their names, keyed by absolute path and
     /// stat. Machine-local: the key and the inode mean nothing on another machine.
     pub fn cache_verified_blobs(&self) -> PathBuf {
-        self.cache_dir().join("verified-blobs.json")
+        self.facts_dir().join("verified-blobs.json")
     }
 
-    /// `.moss/build.nosync/cache/verified-slot-blobs.json` — the same record for the
+    /// `<facts>/verified-slot-blobs.json` — the same record for the
     /// slot pass, which checks page and summary blobs the seal never asks about.
     pub fn cache_verified_slot_blobs(&self) -> PathBuf {
-        self.cache_dir().join("verified-slot-blobs.json")
+        self.facts_dir().join("verified-slot-blobs.json")
     }
 
-    /// `.moss/build.nosync/cache/verified-video-blobs.json` — the same record for
+    /// `<facts>/verified-video-blobs.json` — the same record for
     /// the video passes. Its own file, because the seal's save drops every blob
     /// the seal did not check.
     pub fn cache_verified_video_blobs(&self) -> PathBuf {
-        self.cache_dir().join("verified-video-blobs.json")
+        self.facts_dir().join("verified-video-blobs.json")
+    }
+
+    /// `<facts>/verified-asset-blobs.json` — the same record for
+    /// the asset pass, whose cached rasters and copies the seal never asks about.
+    pub fn cache_verified_asset_blobs(&self) -> PathBuf {
+        self.facts_dir().join("verified-asset-blobs.json")
     }
 
     /// `.moss/build.nosync/cache/dep-cache.json` — per-page facade fingerprints from
@@ -476,21 +517,19 @@ impl MossPaths {
         self.cache_dir().join("dep-cache.json")
     }
 
-    /// `.moss/build.nosync/cache/frontmatter-scan.json` — per-file `url:`/`external_url:`
+    /// `<facts>/frontmatter-scan.json` — per-file `url:`/`external_url:`
     /// frontmatter extraction, keyed by source path, so an unchanged markdown
     /// file's page-map pre-scan is not re-read and re-parsed on every build.
     pub fn cache_frontmatter_scan(&self) -> PathBuf {
-        self.cache_dir().join("frontmatter-scan.json")
+        self.facts_dir().join("frontmatter-scan.json")
     }
 
-    /// `.moss/build.nosync/cache/folder-lang.json` — per-folder inferred language,
-    /// keyed by folder path, alongside the file-set fingerprint it
-    /// was inferred from. A folder whose file set is unchanged since the
-    /// last build reuses its stored language rather than re-inferring from
-    /// content — an edit to one file's body must never move the folder's
-    /// language, only adding/removing a file may.
+    /// `<facts>/folder-lang.json` — per-folder inferred language,
+    /// keyed by folder path, beside the stat of each file it was inferred from.
+    /// A pure cache: it is reused only while those stats vouch for the same
+    /// bytes, so losing it costs one inference pass and never changes a page.
     pub fn cache_folder_lang(&self) -> PathBuf {
-        self.cache_dir().join("folder-lang.json")
+        self.facts_dir().join("folder-lang.json")
     }
 
     /// `.moss/build.nosync/cache/link-meta/` — cached og:tag metadata for external links.
@@ -889,11 +928,11 @@ pub const MOSS_PATH_RULES: &[MossPathRule] = &[
     // reading an evicted one as empty turns a merge into an erase
     // (`feeds::redirects`).
     r_negatable(".moss/data/", true, CloudPolicy::Synced, false, true),
-    // The comment refresh's last outcome, rewritten on every attempt and read
-    // by no page. Not materialized, so a build does not count it as an input
-    // and the next build can still prove nothing changed; an evicted copy
-    // reads as "never refreshed", which only words a note. `data/*` already
-    // ignores it.
+    // Where an older moss kept the comment refresh's last outcome (this one
+    // keeps it on the computer). An older moss on another computer still
+    // rewrites it on every attempt, so it is not materialized: a build does not
+    // count it as an input and can still prove nothing changed. `data/*`
+    // already ignores it.
     r(".moss/data/comment-sync-state.json", false, CloudPolicy::Synced, false, false),
     // What the last publish put live: one record per target, holding the page
     // hashes the change set is computed from and the note ID that was live at
@@ -1046,6 +1085,12 @@ pub fn is_materialized_rel(rel: &str) -> bool {
     }
 }
 
+/// The site folder a preview server's served directory belongs to: the one
+/// place serve and its callers turn a served directory back into a folder.
+pub fn served_folder(dir: &Path) -> Option<crate::vault_root::VaultRoot> {
+    crate::vault_root::VaultRoot::find_containing(dir)
+}
+
 /// Delete the output roots older moss versions wrote, and unblock `current`.
 /// `.moss/site/` and `build/site/` (now under `build.nosync/`, where the
 /// tree migration moves the old root) lost their last reader when generations
@@ -1083,6 +1128,59 @@ pub fn retire_legacy_roots(mp: &MossPaths) {
                             promotion will keep failing until it is deleted by hand", current.display());
             }
         }
+    }
+}
+
+/// The names under `build.nosync/cache/` an older moss kept there, which are
+/// facts about this computer and now live in [`MossPaths::facts_dir`].
+const LOCAL_FACTS: &[&str] = &[
+    "hash-index.json",
+    "verified-blobs.json",
+    "verified-slot-blobs.json",
+    "verified-video-blobs.json",
+    "verified-asset-blobs.json",
+    "frontmatter-scan.json",
+    "folder-lang.json",
+    "memo",
+    "local-objects",
+    "local-transforms",
+];
+
+/// Move the facts an older moss kept in `build.nosync/cache/` to this
+/// computer's store: a rename on one volume, so the next build hashes nothing
+/// again; deleted where the rename cannot happen. Only `build.nosync`, which
+/// is never uploaded, is touched.
+pub fn move_local_facts_out(mp: &MossPaths) {
+    let old_cache = mp.cache_dir();
+    let facts = mp.facts_dir();
+    let mut moves: Vec<(PathBuf, PathBuf)> =
+        LOCAL_FACTS.iter().map(|name| (old_cache.join(name), facts.join(name))).collect();
+    if let Ok(entries) = std::fs::read_dir(&old_cache) {
+        for name in entries.flatten().map(|e| e.file_name().to_string_lossy().into_owned()) {
+            if name.starts_with("staged-links-") && name.ends_with(".json") {
+                moves.push((old_cache.join(&name), facts.join(&name)));
+            }
+        }
+    }
+    // Cheap to rebuild, and a running older server keeps its own copy in memory.
+    let dropped = [mp.index_dir().join("staged-links.json"), mp.build_dir().join("http-token")];
+    if moves.iter().all(|(old, _)| old.symlink_metadata().is_err()) && dropped.iter().all(|p| p.symlink_metadata().is_err()) {
+        return;
+    }
+    // allow:raw_write this computer's store for the folder, outside it
+    let _ = std::fs::create_dir_all(&facts);
+    for (old, new) in moves {
+        if old.symlink_metadata().is_err() {
+            continue;
+        }
+        // allow:unlink a fact moved out of build.nosync, never uploaded
+        if new.symlink_metadata().is_ok() || std::fs::rename(&old, &new).is_err() {
+            let _ = crate::build::io_utils::remove_output_dir_all(&old).or_else(|_| std::fs::remove_file(&old));
+        }
+    }
+    for old in dropped {
+        // allow:unlink a fact moved out of build.nosync, never uploaded
+        let _ = std::fs::remove_file(old);
     }
 }
 
@@ -1325,6 +1423,60 @@ mod tests {
 
     fn make_paths(root: &std::path::Path) -> MossPaths {
         MossPaths::new(root)
+    }
+
+    #[test]
+    fn a_served_generation_belongs_to_its_folder() {
+        let tmp = TempDir::new().unwrap();
+        let folder = tmp.path().canonicalize().unwrap();
+        let generation = make_paths(&folder).generation_dir("g1");
+        std::fs::create_dir_all(&generation).unwrap();
+        assert_eq!(served_folder(&generation).map(|v| v.path().to_path_buf()), Some(folder));
+    }
+
+    #[test]
+    fn a_served_dir_in_no_folder_belongs_to_none() {
+        let tmp = TempDir::new().unwrap();
+        let loose = tmp.path().join("site");
+        std::fs::create_dir_all(&loose).unwrap();
+        assert!(served_folder(&loose).is_none());
+    }
+
+    /// An older moss kept this computer's facts in `build.nosync/cache/`. They
+    /// move to the computer's store (no hash pass) and leave the folder, and a
+    /// file the store already has a newer copy of is dropped, not moved over it.
+    #[test]
+    fn facts_an_older_moss_kept_in_the_folder_move_out() {
+        let tmp = TempDir::new().unwrap();
+        let mp = make_paths(tmp.path());
+        let old = mp.cache_dir();
+        std::fs::create_dir_all(old.join("memo")).unwrap();
+        std::fs::create_dir_all(old.join("local-objects/ab/cd")).unwrap();
+        std::fs::write(old.join("local-objects/ab/cd/blob"), "bytes").unwrap();
+        std::fs::write(old.join("hash-index.json"), "old index").unwrap();
+        std::fs::write(old.join("staged-links-pages.json"), "links").unwrap();
+        std::fs::write(old.join("verified-blobs.json"), "old").unwrap();
+        std::fs::write(old.join("dep-cache.json"), "stays").unwrap();
+        std::fs::create_dir_all(mp.index_dir()).unwrap();
+        std::fs::write(mp.index_dir().join("staged-links.json"), "search").unwrap();
+        std::fs::write(mp.build_dir().join("http-token"), "secret").unwrap();
+        std::fs::create_dir_all(mp.facts_dir()).unwrap();
+        std::fs::write(mp.cache_verified_blobs(), "new").unwrap();
+
+        move_local_facts_out(&mp);
+
+        assert_eq!(std::fs::read_to_string(mp.cache_hash_index()).unwrap(), "old index");
+        assert_eq!(std::fs::read_to_string(mp.cache_local_objects().join("ab/cd/blob")).unwrap(), "bytes");
+        assert_eq!(std::fs::read_to_string(mp.staged_links("pages")).unwrap(), "links");
+        assert_eq!(std::fs::read_to_string(mp.cache_verified_blobs()).unwrap(), "new");
+        assert!(mp.memo_dir().is_dir());
+        for name in ["hash-index.json", "memo", "local-objects", "staged-links-pages.json", "verified-blobs.json"] {
+            assert!(!old.join(name).exists(), "{name} left in the folder");
+        }
+        assert!(!mp.index_dir().join("staged-links.json").exists());
+        assert!(!mp.build_dir().join("http-token").exists());
+        assert_eq!(std::fs::read_to_string(old.join("dep-cache.json")).unwrap(), "stays", "a record of the build output stays with it");
+        assert!(!mp.facts_dir().starts_with(tmp.path().canonicalize().unwrap()));
     }
 
     // ─── The moss-written path registry ──────────────────────────────────────

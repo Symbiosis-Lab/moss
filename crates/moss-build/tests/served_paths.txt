@@ -4,6 +4,7 @@ assets/favicon-16.png
 assets/favicon-180.png
 assets/favicon-32.png
 assets/favicon.svg
+feed.json
 feed.xml
 index.html
 llms.txt

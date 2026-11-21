@@ -26,6 +26,12 @@ fn build(home: &Path, site: &Path, env: &[(&str, &str)]) -> Output {
     o
 }
 
+/// Where a build of `site` keeps this computer's record for it.
+fn record_dir(site: &Path) -> std::path::PathBuf {
+    let stores = moss_build::infra::folder_store::FolderStores::running_for(site).unwrap();
+    stores.resolve(site).unwrap().record_dir
+}
+
 fn page(site: &Path) -> String {
     std::fs::read_to_string(site.join(".moss/build.nosync/current/posts/hello/index.html")).expect("built page")
 }
@@ -56,7 +62,7 @@ fn site_with_stale_cache(tmp: &Path, home: &Path, server: &str) -> std::path::Pa
     std::fs::write(site.join(".moss/data/social/comment.json"), cached.to_string()).unwrap();
     // 2026-10-14 12:00 UTC: the cache's last refresh.
     std::fs::write(
-        site.join(".moss/data/comment-sync-state.json"),
+        record_dir(&site).join("comment-sync-state.json"),
         r#"{"last_success_at": 1791979200.0, "last_attempt_at": 1791979200.0, "last_error": null}"#,
     )
     .unwrap();

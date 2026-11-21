@@ -482,9 +482,9 @@ pub fn generate_blocking_content_for_build(
 
     // Per-folder language for folders with no naming convention —
     // declared in the folder's index, else inferred — computed ONCE here (not
-    // per page below) and keyed to each folder's file SET so an edited body
-    // never moves it; only adding/removing a file, or declaring, does. See
-    // `scan::page_map::folder_lang` for the stability mechanism.
+    // per page below), one vote over each folder's files; the record only
+    // saves re-reading a folder whose files are unchanged. See
+    // `scan::page_map::folder_lang`.
     let folder_lang_cache_path = paths.cache_folder_lang();
     let mut folder_lang_cache = FolderLangCache::load(&folder_lang_cache_path);
     // Its declaration rung reads `frontmatter_scan_cache`, which the page-map
@@ -1248,6 +1248,8 @@ pub fn generate_blocking_content_for_build(
         // per-page reading, before the same incremental hash.
         crate::build::terms::set_card_credits(&mut documents, &site_config.term_kinds);
         crate::build::components::field_places::set_card_fields(&mut documents, &site_config.field_decls, site_config.typesetting.as_deref());
+        // A thread is part of each member's surface, so before the verdict.
+        crate::build::scan::replies::mark_threads(&mut documents, &content_graph);
         if let Some(maps) = site_config.place_maps.as_ref() {
             crate::build::terms::places::warn_unknown_places(&documents, &site_config.term_kinds, maps.gazetteer());
         }
@@ -1270,6 +1272,8 @@ pub fn generate_blocking_content_for_build(
         // it against a fresh resolution and rebuilds when they disagree. Before
         // anything else registers: a stylesheet's hash depends on its mount.
         pending.set_site_url(site_url.as_str());
+        let config = crate::build::site_config::read_project_config(source_path);
+        pending.record_output_collisions(config.ok().and_then(|c| c.site_address_conflict()).into_iter().collect());
         let calendar = crate::build::feeds::calendar::CalendarPlan::build(&documents, project_structure, &site_url);
 
         // A listing row names its page's language, so every page has its tag before any listing is drawn.
@@ -1539,8 +1543,7 @@ pub fn generate_blocking_content_for_build(
     let card_theme = std::sync::LazyLock::new(|| crate::build::page::og_card::theme::CardTheme::of_site(user_css_content.as_deref(), source_path_buf, &input_evidence));
     let new_og_sink = || crate::build::page::og_card::OgSink::for_build(defer_title_cards, &previous_hashes.files, &filename_covers, std::sync::Arc::clone(&card_theme));
     let user_css_version = user_css_content.as_ref().zip(theme_css.as_ref()).map(|(content, themed)| {
-        // Warn when theme references pre-v1 (Retired) class
-        // vocabulary. Non-fatal; one warning per retired class found.
+        // Non-fatal: a theme problem never fails a build.
         for warning in crate::build::theme_lint::lint_theme_css(content, site_config.color_scheme) {
             log_warn_problem!("{}", warning);
         }
@@ -1686,6 +1689,7 @@ pub fn generate_blocking_content_for_build(
     // every pseudo-folder document exists.
     crate::build::terms::set_term_cards(&mut documents, &term_index);
     pending.record_output_collisions(super::build_shared::verbatim_collisions(&documents, project_structure, &dir_overrides));
+    pending.record_output_collisions(project_structure.path_collisions.clone());
     let owned_by_documents = super::build_shared::withhold_shadowed_bodies(&mut documents, project_structure, &dir_overrides);
     // The resolved set now contains both authored and synthetic folders.
     // Stamp every explorer root once so its facade includes the shared places
@@ -2404,29 +2408,7 @@ pub fn generate_blocking_content_for_build(
     // Generate RSS feed and sitemap (only if a real https URL was resolved)
     if has_rss {
         let url = site_url.as_str();
-        // Generate RSS feed (always when a real https URL is resolved)
-        {
-            let home = documents.iter().find(|d| d.url_path == "index.html");
-            let rss_site_title = home
-                .map(|d| d.title.as_str())
-                .unwrap_or(crate::i18n::t(site_lang, "site"));
-
-            let rss_content = crate::build::feeds::rss::generate_rss_feed(
-                &documents,
-                rss_site_title,
-                url,
-                None,
-                home.and_then(|d| d.analytics.as_ref()),
-            )
-            .into_bytes();
-
-            // Site 10 (Pattern A): emit rss.xml. Its former address, feed.xml,
-            // is an entry of the redirect table, written with the rest of it.
-            let rss_path = ServedPath::for_rss("").unwrap();
-            BuildContext::for_render(output_dir, pending)
-                .emit_held(&rss_path, rss_content, HashBucket::Files)
-                .map_err(|e| format!("Failed to emit {}: {}", rss_path.as_str(), e))?;
-        }
+        crate::build::feeds::emit(&documents, url, site_lang, &dir_overrides, output_dir, pending)?;
 
         // sitemap.xml is emitted further down, once every page is registered.
 

@@ -637,8 +637,11 @@ pub fn process_markdown_file(
     // Translate the deprecated `sidebar:` field for both simplified and YAML
     // paths. Runs after frontmatter is fully parsed so it sees the final state
     // of children_source. See `apply_sidebar_alias` for the conflict rules.
-    for warning in crate::build::markdown::frontmatter::apply_sidebar_alias(&mut frontmatter) {
-        crate::build::cli_output::cli_warn!("[{}] {}", file_path, warning);
+    use crate::build::markdown::frontmatter::SidebarAlias;
+    match crate::build::markdown::frontmatter::apply_sidebar_alias(&mut frontmatter) {
+        Some(SidebarAlias::Applied(note)) => crate::build::cli_output::log_note!("[{}] {}", file_path, note),
+        Some(SidebarAlias::Ignored(problem)) => crate::build::cli_output::cli_warn!("[{}] {}", file_path, problem),
+        None => {}
     }
 
     // Pre-parse source hygiene, in the one place that owns its ordering:
@@ -1587,6 +1590,7 @@ pub fn process_markdown_file(
         declared_written,
         field_errors,
         placed_fields,
+        thread: Vec::new(),
         title_block: frontmatter.title_block,
         members_full: None,
         bare: frontmatter.chrome.as_deref() == Some("none"),
@@ -1725,6 +1729,7 @@ pub fn process_markdown_file(
             PageKind::Article
         },
         uid: frontmatter.uid,
+        uid_derived: false,
         typesetting: frontmatter.typesetting,
         content_width: frontmatter.content_width,
         color: frontmatter.color,

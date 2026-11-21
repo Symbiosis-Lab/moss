@@ -4,6 +4,9 @@
 // the preview iframe via postMessage. The iframe runs an injected bridge
 // script (iframe-bridge.js) that handles RPC calls dynamically.
 
+/** How a request to update the page in place ended; `error` says why the caller must reload instead. */
+export type MorphResult = { applied: true; title?: string } | { applied: false; error: string };
+
 type PendingCall = {
   resolve: (result: unknown) => void;
   reject: (error: Error) => void;
@@ -19,6 +22,7 @@ export class IframeRPC {
   private iframe: HTMLIFrameElement;
   private pending = new Map<string, PendingCall>();
   private callId = 0;
+  private morphId = 0;
   private boundHandleMessage: (event: MessageEvent) => void;
 
   constructor(iframe: HTMLIFrameElement) {
@@ -83,6 +87,35 @@ export class IframeRPC {
           reject(new Error(`RPC timeout: ${method}`));
         }
       }, 5000);
+    });
+  }
+
+  /**
+   * Ask the page to update itself in place, keeping scroll, focus and undo.
+   * Settles on the bridge's answer to this request, or after 4 s without one:
+   * its fetch, parse and morph of a large page fit well inside that.
+   */
+  morph(): Promise<MorphResult> {
+    const target = this.iframe.contentWindow;
+    if (!target) return Promise.resolve({ applied: false, error: "no page" });
+    const gen = ++this.morphId;
+    return new Promise((resolve) => {
+      const done = (result: MorphResult) => {
+        window.removeEventListener("message", onMessage);
+        clearTimeout(timer);
+        resolve(result);
+      };
+      const onMessage = (e: MessageEvent) => {
+        const type = e.data?.type;
+        if ((type !== "moss-morph-applied" && type !== "moss-morph-failed") || e.source !== target || e.data?.gen !== gen) return;
+        if (type === "moss-morph-applied") return done({ applied: true, title: e.data?.title });
+        // `changedScripts` names the scripts behind a `script-changed` verdict.
+        const why = (e.data?.changedScripts as string[] | undefined)?.join(", ");
+        done({ applied: false, error: `${e.data?.error ?? "unknown"}${why ? ` [${why}]` : ""}` });
+      };
+      window.addEventListener("message", onMessage);
+      const timer = setTimeout(() => done({ applied: false, error: "timed out" }), 4000);
+      target.postMessage({ type: "moss-morph", gen }, "*");
     });
   }
 

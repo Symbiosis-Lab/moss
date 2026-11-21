@@ -43,9 +43,8 @@ test.describe("footnote :target landing", () => {
     // only on a plain fragment jump; removing it alone leaves this test green.
     //
     // Below the 76rem threshold, the only width where the sheet exists, and
-    // narrow enough that the contents ruler has no room: from about 1100px
-    // the ruler shows, and the island stays put away wherever it does, so
-    // there is no reveal to clear.
+    // narrow enough that the contents ruler has no room, so the island's bar
+    // is the page's contents list and keeps its sections button.
     await page.setViewportSize({ width: 900, height: 720 });
     await page.goto("/notes/");
 
@@ -64,7 +63,7 @@ test.describe("footnote :target landing", () => {
     ).toHaveCount(0);
     await expect(
       page.locator('.moss-nav-island[data-ruler="on"]'),
-      "the contents ruler is up at this width, and the island yields to it",
+      "the contents ruler is up at this width",
     ).toHaveCount(0);
 
     // Reader's route: tap the last marker (the fixture cites it deep in the

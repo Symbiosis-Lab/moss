@@ -72,18 +72,22 @@ function resolveVersion() {
   return require(path.join(packageRoot, 'package.json')).version;
 }
 
-// Platform → release asset. The darwin binary is a universal (x64 + arm64)
-// build, so both Mac architectures map to the same asset.
-function resolveAsset() {
+// Platform → release asset. The Mac binary is a universal (x64 + arm64)
+// build, so both Mac architectures map to the same asset. Releases before
+// CLI_NAMES_SINCE named the same binaries without the `cli` word.
+const CLI_NAMES_SINCE = [0, 15, 28];
+
+function resolveAsset(version) {
   const { platform, arch } = process;
+  const named = atLeast(version, CLI_NAMES_SINCE);
   if (platform === 'darwin' && (arch === 'x64' || arch === 'arm64')) {
-    return 'moss-darwin-universal';
+    return named ? 'moss-cli-mac' : 'moss-darwin-universal';
   }
   if (platform === 'linux' && arch === 'x64') {
-    return 'moss-linux-x86_64';
+    return named ? 'moss-cli-linux-x86_64' : 'moss-linux-x86_64';
   }
   if (platform === 'win32' && arch === 'x64') {
-    return 'moss-windows-x86_64.exe';
+    return named ? 'moss-cli-windows-x86_64.exe' : 'moss-windows-x86_64.exe';
   }
   throw new Error(
     `moss-npm: no moss binary is published for ${platform}-${arch}.\n` +
@@ -104,16 +108,22 @@ async function download(url) {
 // nothing to verify against; from it on, every release has one.
 const CHECKSUMS_SINCE = [0, 11, 2];
 
-// Must a missing checksum be fatal for this version? Anything unparseable
-// answers yes: an unrecognised version string is not a licence to skip the
-// only check on bytes we are about to mark executable.
-function checksumsRequired(version) {
+// Is `version` at or after `since`? Anything unparseable answers yes: it is
+// treated as a release newer than every rule here.
+function atLeast(version, since) {
   const parts = String(version).split('-')[0].split('.').map(Number);
   if (parts.length !== 3 || parts.some((n) => !Number.isInteger(n))) return true;
   for (let i = 0; i < 3; i += 1) {
-    if (parts[i] !== CHECKSUMS_SINCE[i]) return parts[i] > CHECKSUMS_SINCE[i];
+    if (parts[i] !== since[i]) return parts[i] > since[i];
   }
   return true;
+}
+
+// Must a missing checksum be fatal for this version? An unrecognised version
+// string is not a licence to skip the only check on bytes we are about to
+// mark executable.
+function checksumsRequired(version) {
+  return atLeast(version, CHECKSUMS_SINCE);
 }
 
 // Verifies bytes against the release's SHA256SUMS.
@@ -166,7 +176,7 @@ async function verifyChecksum(bytes, asset, version) {
 
 async function fetchBinary() {
   const version = resolveVersion();
-  const asset = resolveAsset();
+  const asset = resolveAsset(version);
   const url = `${RELEASES}/v${version}/${asset}`;
 
   console.log(`moss-npm: downloading moss v${version} (${asset})...`);

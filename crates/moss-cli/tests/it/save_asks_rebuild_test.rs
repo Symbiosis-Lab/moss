@@ -68,7 +68,7 @@ fn spawn(notes: usize, ready: &str) -> Site {
     let line = wait_for_line(&child.stderr, ready, Duration::from_secs(60))
         .unwrap_or_else(|| panic!("the server never said {ready:?}:\n{}", joined(&child.stderr)));
     let port = port_from_url_line(&line);
-    let token = std::fs::read_to_string(site.join(".moss/build.nosync/http-token")).expect("the carrier token is published");
+    let token = std::fs::read_to_string(moss_build::ops::serve::carrier_token::token_path(&site)).expect("the carrier token is published");
     Site { _root: root, _home: home, site, child, port, token: token.trim().to_string() }
 }
 

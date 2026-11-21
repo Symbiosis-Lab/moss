@@ -502,7 +502,7 @@ fn a_public_page_that_embeds_a_gated_file_stops_the_build() {
 
 #[test]
 fn a_members_cascade_on_a_page_that_is_not_a_folder_home_is_reported() {
-    let site = site::Site::new(&[
+    let site = site::LoggedSite::new(&[
         ("index.md", "---\ntitle: Home\n---\nHome.\n"),
         ("maps/index.md", "---\ntitle: Map\n---\nMap.\n"),
         ("maps/detail.md", "---\ntitle: Detail\ncascade: { members: subscribers }\n---\nDetail.\n"),
@@ -574,8 +574,8 @@ fn the_private_part_of_a_members_page_changes_no_public_file() {
 const SCRIPT: &str = "window.regions = {\"north-quay\": 2};\n";
 const NOTICE: &str = "maps/incidents/detail.js is in a members folder and is published to everyone. Put members-only data in a CSV or JSON file.";
 
-fn script_site(cascade: &str) -> site::Site {
-    site::Site::new(&[
+fn script_site(cascade: &str) -> site::LoggedSite {
+    site::LoggedSite::new(&[
         (".moss/config.toml", CONFIG),
         ("index.md", "---\ntitle: Harbour watch\n---\nWelcome.\n"),
         ("maps/incidents/index.md", &format!("---\npartial: true\ncascade: {{ members: {cascade} }}\n---\n")),
@@ -610,7 +610,7 @@ fn a_script_a_members_folder_publishes_to_everyone_is_named_and_published_unchan
     assert!(!members.notes.iter().any(|line| line.contains("map.css") || line.contains("maps/regions.js")), "{:?}", members.notes);
     assert!(!public.notes.iter().any(|line| line.contains("published to everyone")), "{:?}", public.notes);
 
-    assert_eq!(members.rebuild_turn().notes.iter().filter(|line| line.as_str() == NOTICE).count(), 1, "a warm rebuild names it again");
+    assert_eq!(members.rebuild_logged().notes.iter().filter(|line| line.as_str() == NOTICE).count(), 1, "a warm rebuild names it again");
 }
 
 /// The paths the notes name, each of which must be in the manifest a deploy uploads.
@@ -627,7 +627,7 @@ fn assert_named_are_published(site: &site::Site, notes: &[String]) -> Vec<String
 /// lives in `.moss/theme/`), and scripts in folders a build leaves out.
 #[test]
 fn a_script_that_is_not_served_is_not_named() {
-    let site = site::Site::new(&[
+    let site = site::LoggedSite::new(&[
         ("index.md", "---\ntitle: Harbour watch\ncascade: { members: subscribers }\n---\nWelcome.\n"),
         ("script.js", SCRIPT),
         ("node_modules/charts/index.js", SCRIPT),

@@ -153,7 +153,7 @@ pub fn value_text(v: &TypedValue, lang: Language, typesetting: Option<&str>) -> 
             }
         }
         TypedValue::Count { number: None, text, .. } => text.clone(),
-        TypedValue::Page(p) => p.target.clone(),
+        TypedValue::Page(p) => p.target.as_str().to_string(),
         TypedValue::Pages(pages) => {
             pages.iter().map(|p| p.target.as_str()).collect::<Vec<_>>().join(", ")
         }

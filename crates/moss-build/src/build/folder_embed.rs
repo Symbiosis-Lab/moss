@@ -39,7 +39,7 @@ pub(crate) mod upcoming;
 mod empty_section_note;
 mod nav_note;
 mod repeat_note;
-mod stream;
+pub(crate) mod stream;
 pub(crate) use nav_note::note_home_map_of_nav_root;
 pub(crate) use stream::is_stream_host;
 pub(crate) use repeat_note::{note_repeated_child_listing, ListingHost};
@@ -497,7 +497,7 @@ pub(crate) fn generate_children(
     }
 
     if style == "stream" {
-        return stream::render(&sorted, folder_docs, typesetting, rows);
+        return stream::render(&sorted, folder_docs, typesetting, rows, true);
     }
 
     // Grid style: render as collection cards.

@@ -56,8 +56,9 @@ pub fn set(plugin: &str, key: &str, value: &str, folder: &std::path::Path) -> Re
             false => format!("{plugin} asks for {}, not {key}", keys.join(", ")),
         });
     }
+    let scope = Scope::plugin(plugin).map_err(|e| format!("{e:?}"))?;
     SecretStore::require("moss plugin secret")?
-        .set(&Scope::Plugin(plugin.to_string()), key, value)
+        .set(&scope, key, value)
         .map_err(|e| format!("{e:?}"))?;
     Ok(if value.is_empty() { format!("removed {plugin}'s {key}") } else { format!("stored {plugin}'s {key}, outside the site folder") })
 }

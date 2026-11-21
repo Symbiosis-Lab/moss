@@ -6,7 +6,8 @@ use std::path::Path;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_build_folds_a_conflict_sibling_into_the_state_file() {
-    use moss_build::build::{null_sink, run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+    let turn = crate::site::turn();
+    use moss_build::build::{null_sink, BuildTrigger, PipelineConfig, PluginMode};
     use moss_build::cli::host::cli_host_ports;
     use moss_build::vault_root::VaultRoot;
 
@@ -21,7 +22,7 @@ async fn a_build_folds_a_conflict_sibling_into_the_state_file() {
     std::fs::write(moss.join("state 2.toml"), "[deployment]\nmethod = \"onion\"\ndomain = \"x.onion\"\n").unwrap();
 
     let folder_str = folder.to_string_lossy().to_string();
-    run_pipeline(PipelineConfig {
+    crate::site::run(&turn, PipelineConfig {
         root: VaultRoot::resolve(&folder),
         progress: null_sink(),
         plugins: PluginMode::Skip,

@@ -4,7 +4,7 @@
 
 use crate::site;
 
-use site::Site;
+use site::{LoggedSite, Site};
 
 const THEME: &str = ":root { --moss-site-max-width: 1200px; }\n";
 const PNG: &[u8] = &[
@@ -14,13 +14,13 @@ const PNG: &[u8] = &[
     0x1D, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
 ];
 
-fn notes(site: &Site) -> usize {
+fn notes(site: &LoggedSite) -> usize {
     site.logged.iter().filter(|l| l.contains("closing picture's words")).count()
 }
 
 #[test]
 fn a_site_without_a_closing_picture_gets_no_note_about_one() {
-    let site = Site::new(&[("index.md", "---\ntitle: Example Lab\n---\n\nBody.\n"), (".moss/theme/style.css", THEME)]);
+    let site = LoggedSite::new(&[("index.md", "---\ntitle: Example Lab\n---\n\nBody.\n"), (".moss/theme/style.css", THEME)]);
     assert_eq!(notes(&site), 0, "{:?}", site.logged);
 }
 
@@ -32,6 +32,6 @@ fn a_site_with_a_closing_picture_still_gets_it() {
         (".moss/theme/style.css", THEME),
     ]);
     std::fs::write(site.root.join("day.png"), PNG).unwrap();
-    let logged = site.rebuild();
+    let logged = site.rebuild_logged().logged;
     assert_eq!(logged.iter().filter(|l| l.contains("closing picture's words")).count(), 1, "{logged:?}");
 }

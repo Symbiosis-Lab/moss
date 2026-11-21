@@ -4852,6 +4852,40 @@ content_width: wide
     "notes/2026-01-02 0910.md": "A first short post, a sentence or two long.\n",
     "notes/2026-01-03 1200.md": "A second short post.\n\nWith a second paragraph.\n",
     "notes/2026-01-04 0800.md": "The newest short post.\n",
+    // Five parts, so the listing folds the middle two; each page draws the rest above and below it.
+    "threads/index.md": `---
+title: Threads
+uid: "strm0020"
+children_style: stream
+---
+`,
+    "threads/2026-02-01 0800.md": "The tide came in early, and the ferry waited at the north quay for a crew that was still asleep.\n",
+    "threads/2026-02-02 0800.md": `---
+in_reply_to: "[[2026-02-01 0800]]"
+---
+
+By nine the quay was full of bicycles.
+`,
+    "threads/2026-02-03 0800.md": `---
+title: The third crossing
+in_reply_to: "[[2026-02-02 0800]]"
+---
+
+The third crossing ran half empty, and the gulls followed it all the way over.
+`,
+    "threads/2026-02-04 0800.md": `---
+in_reply_to: "[[2026-02-03 0800]]"
+---
+
+The kettle on board boiled dry somewhere past the buoy.
+`,
+    "threads/2026-02-05 0800.md": `---
+in_reply_to: "[[2026-02-04 0800]]"
+---
+
+Last boat back. Nobody waited for it.
+`,
+    "threads/2026-02-10 0800.md": "A note in no thread.\n",
   },
 };
 

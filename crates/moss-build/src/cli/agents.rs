@@ -35,7 +35,7 @@ fn run_sync() -> i32 {
         eprintln!("error: not in a moss project (no .moss/ directory found at {})", project.display());
         return 1;
     }
-    match sync::sync_project(&project, &sync::bundled_cli_path()) {
+    match sync::sync_project(&project) {
         Ok(report) => {
             for path in &report.written {
                 println!("wrote {path}");

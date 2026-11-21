@@ -82,13 +82,17 @@ jobs:
             test -f "$f" || { echo "::error::missing $f"; exit 1; }
           done
 
+      # --latest=false: Latest must stay the app release, whose latest.json the
+      # app updater fetches from /releases/latest/download/.
       - name: Create the GitHub release and attach plugin assets
         working-directory: packages/obsidian-moss
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          VERSION="${GITHUB_REF_NAME#obsidian-moss-v}"
           gh release create "$GITHUB_REF_NAME" \
             manifest.json main.js styles.css \
             --repo "${{ github.repository }}" \
-            --title "$GITHUB_REF_NAME" \
-            --generate-notes
+            --title "Obsidian plugin $VERSION" \
+            --notes "The moss plugin for Obsidian, version $VERSION. Install it with BRAT, pinned to the tag $GITHUB_REF_NAME." \
+            --latest=false

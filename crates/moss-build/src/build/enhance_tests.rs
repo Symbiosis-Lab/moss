@@ -930,7 +930,7 @@ fn a_pass_in_a_new_process_reads_no_blob_an_earlier_pass_checked() {
     let slots = ResolvedSlots::empty();
     let stores = || {
         let objects = crate::build::cache::ObjectStore::for_slot_pass(&paths);
-        let transforms = crate::build::cache::TransformCache::over(&paths, &objects);
+        let transforms = crate::build::cache::TransformCache::for_slot_pass(&paths, &objects);
         (objects, transforms)
     };
     // The cold pass stores its blobs without checking them, so the second is the one
@@ -980,11 +980,25 @@ fn a_cache_sweep_keeps_the_page_a_slot_record_names() {
 /// still readable once the blob is gone. Without a record the next pass misses
 /// and re-stores the blob whether or not the hit is refused, so the final
 /// assertions would hold for a pass that never cached anything.
+///
+/// It runs over the slot pass's own stores too: those live on this computer,
+/// which may purge a blob, and nothing in the synced cache backs it up.
 #[test]
 fn a_record_naming_a_collected_blob_is_a_miss_that_stores_it_again() {
-    let dir = tempfile::tempdir().unwrap();
     let cache_dir = tempfile::tempdir().unwrap();
-    let (objects, transforms) = slot_test_cache(cache_dir.path());
+    let paths = crate::moss_paths::MossPaths::from_moss_dir(cache_dir.path().join("site/.moss"));
+    let slot_pass = crate::build::cache::ObjectStore::for_slot_pass(&paths);
+    let slot_pass_transforms = crate::build::cache::TransformCache::for_slot_pass(&paths, &slot_pass);
+    for (objects, transforms) in [slot_test_cache(cache_dir.path()), (slot_pass, slot_pass_transforms)] {
+        a_record_naming_a_collected_blob_is_a_miss_over(&objects, &transforms);
+    }
+}
+
+fn a_record_naming_a_collected_blob_is_a_miss_over(
+    objects: &crate::build::cache::ObjectStore,
+    transforms: &crate::build::cache::TransformCache,
+) {
+    let dir = tempfile::tempdir().unwrap();
     // A marker no slot claims: the page is keyed, and injection leaves the stage as it was.
     let html = "<html><head><!-- slot:not-a-slot --></head><body></body></html>";
     std::fs::write(dir.path().join("index.html"), html).unwrap();

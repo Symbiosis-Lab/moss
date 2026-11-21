@@ -150,13 +150,50 @@ pub fn ensure_binary(
     entry: &DerivationEntry,
     on_bytes: Option<&ProgressFn<'_>>,
 ) -> Result<PathBuf, DeriveFailure> {
-    if let Ok(path) = resolve_binary(entry) {
-        return Ok(path);
-    }
-    if let Some(platforms) = crate::plugins::contributions::platform::unserved(&entry.contribution) {
-        return Err(DeriveFailure::new(crate::plugins::contributions::platform::sentence(&entry.plugin_id, &platforms)));
-    }
-    install_into(entry, &home(entry)?, on_bytes)
+    ensure_binary_in(entry, &home(entry)?, on_bytes)
+}
+
+/// [`ensure_binary`] with the version's home named explicitly.
+fn ensure_binary_in(
+    entry: &DerivationEntry,
+    home: &std::path::Path,
+    on_bytes: Option<&ProgressFn<'_>>,
+) -> Result<PathBuf, DeriveFailure> {
+    crate::infra::disposable::mark_used(home);
+    let path = match binary_in(entry, home) {
+        Ok(path) => path,
+        Err(_) => {
+            if let Some(platforms) = crate::plugins::contributions::platform::unserved(&entry.contribution) {
+                return Err(DeriveFailure::new(crate::plugins::contributions::platform::sentence(&entry.plugin_id, &platforms)));
+            }
+            install_into(entry, home, on_bytes)?
+        }
+    };
+    collect_other_versions(home);
+    Ok(path)
+}
+
+/// Removes the derivation's other versions
+/// nothing has run for a while. Another folder may pin an older plugin
+/// version, so a version goes by disuse, never because this one is newer.
+/// One being installed holds its install lock and stays.
+fn collect_other_versions(home: &std::path::Path) {
+    let (Some(parent), Some(this)) = (home.parent(), home.file_name()) else { return };
+    let this = this.to_string_lossy().into_owned();
+    crate::infra::disposable::collect_unused(
+        parent,
+        crate::infra::disposable::UNUSED_FOR,
+        |name| name != this && !name.starts_with('.'),
+        |version| {
+            // allow:raw_write opens an existing install lock to try it, never creates one
+            let lock = std::fs::OpenOptions::new().write(true).open(version.join(".install.lock"));
+            match lock {
+                Ok(file) => file.try_lock().is_ok().then_some(Some(file)),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(None),
+                Err(_) => None,
+            }
+        },
+    );
 }
 
 /// The download-and-unpack half of [`ensure_binary`], into an explicit `root`.
@@ -176,6 +213,8 @@ fn install_into(
     let stack_home = StackHome { root, stack: &stack };
     let artifact = stack_exec::obtain(&stack_home, &cache_dir, on_bytes).map_err(fail)?;
     stack_exec::stage(&stack_home, &artifact, &mut || Ok(()), &mut || {}).map_err(fail)?;
+    // Unpacked, so the archive is not read again.
+    let _ = std::fs::remove_dir_all(&cache_dir);
     binary_in(entry, root)
 }
 

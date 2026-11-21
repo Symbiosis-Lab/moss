@@ -76,7 +76,7 @@ fn only_the_first_subtitle_is_drawn() {
 fn facts_use_the_label_or_the_capitalised_name_and_link_pages_by_the_text_as_written() {
     let mut architect = decl("architect", FieldKind::Page, Place::Facts);
     architect.label = vec![("en".into(), "Architect".into()), ("de".into(), "Architektin".into())];
-    let page = |t: &str, alias: Option<&str>| PageLink { target: t.into(), alias: alias.map(String::from) };
+    let page = |t: &str, alias: Option<&str>| PageLink { target: moss_core::fields::LinkTarget::Page(t.into()), alias: alias.map(String::from) };
     let placed = [
         (architect, TypedValue::Page(page("People/Anna Weber", None))),
         (

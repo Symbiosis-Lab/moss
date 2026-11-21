@@ -198,6 +198,23 @@ fn the_mark_sits_centred_on_the_folder_front_and_not_below_32px() {
 #[ignore = "runs osascript against the window server"]
 fn composes_an_icns_from_the_system_folder() {
     let tag = super::compose::current_tag().unwrap();
-    let icns = super::compose::folder_icns(&tag).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let icns = super::compose::folder_icns(dir.path(), &tag).unwrap();
     assert_eq!(&icns[..4], b"icns");
+}
+
+#[test]
+fn a_cached_icon_removes_what_earlier_os_builds_left() {
+    let dir = tempfile::tempdir().unwrap();
+    let icns = b"icns\0\0\0\x09x".to_vec();
+    std::fs::write(dir.path().join("26B10-aaaaaaaaaaaa.icns"), &icns).unwrap();
+    std::fs::write(dir.path().join("26B10-bbbbbbbbbbbb.icns"), &icns).unwrap();
+    std::fs::write(dir.path().join("26A434-aaaaaaaaaaaa.icns"), &icns).unwrap();
+    std::fs::write(dir.path().join("26A434-aaaaaaaaaaaa.failed"), b"").unwrap();
+
+    assert_eq!(super::compose::folder_icns(dir.path(), "26B10-aaaaaaaaaaaa"), Some(icns));
+
+    let mut left: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+    left.sort();
+    assert_eq!(left, ["26B10-aaaaaaaaaaaa.icns", "26B10-bbbbbbbbbbbb.icns"], "another recipe on this OS build stays");
 }

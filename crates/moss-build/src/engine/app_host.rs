@@ -77,6 +77,17 @@ pub trait AppHost: Send + Sync {
     /// panel slot.
     async fn return_to_editor(&self) -> Result<(), String>;
 
+    /// moss-api `fillEditor`: fill the editor on the page open in the browser
+    /// panel, and answer with what the page reported. `fill` is the raw JSON
+    /// the SDK sent; parsing and the check that the panel is on one of
+    /// `plugin`'s own domains stay app-side.
+    async fn fill_browser_panel(
+        &self,
+        plugin: &str,
+        project_path: &str,
+        fill: serde_json::Value,
+    ) -> Result<serde_json::Value, String>;
+
     // ── moss's own credential modal, opened on a plugin's behalf ─────────────
 
     /// Ask the user for `plugin`'s credential `key` again, in MOSS's modal, and

@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use moss_build::system::derive::site::DeriveMode;
-use moss_build::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+use moss_build::build::{BuildTrigger, PipelineConfig, PluginMode};
 use moss_build::cli::host::cli_host_ports;
 use moss_build::vault_root::VaultRoot;
 
@@ -93,9 +93,11 @@ impl Site {
         fs::read_to_string(self.root().join(".moss/build.nosync/current").join(served)).ok()
     }
 
-    fn build(&self, plugins: PluginMode, mode: DeriveMode) {
+    /// A derive it does not await logs after this returns, so the test holds
+    /// `turn` until that work is done.
+    fn build(&self, turn: &crate::site::Turn, plugins: PluginMode, mode: DeriveMode) {
         let folder = self.root().to_string_lossy().to_string();
-        self.rt.block_on(run_pipeline(PipelineConfig {
+        self.rt.block_on(crate::site::run(turn, PipelineConfig {
             root: VaultRoot::resolve(self.root()),
             progress: moss_build::build::stdout_sink(),
             plugins,
@@ -132,11 +134,12 @@ fn title_of(html: &str) -> String {
 
 #[test]
 fn derived_text_is_rendered_and_names_an_inferring_page() {
+    let turn = crate::site::turn();
     let site = Site::new(&[
         ("a.fake", "bytes"),
         ("page.md", "---\ninferred: [title]\n---\n\nbefore\n\n![[a.fake#text]]\n"),
     ]);
-    site.build(PluginMode::Blocking, DeriveMode::Await);
+    site.build(&turn, PluginMode::Blocking, DeriveMode::Await);
     let html = site.page("page");
     assert!(html.contains("<h2"), "{html}");
     assert!(html.contains("Hello"), "{html}");
@@ -147,8 +150,9 @@ fn derived_text_is_rendered_and_names_an_inferring_page() {
 
 #[test]
 fn ready_text_is_wrapped_and_still_renders_as_markdown_inside() {
+    let turn = crate::site::turn();
     let site = Site::new(&[("a.fake", "bytes"), ("page.md", "before\n\n![[a.fake#text]]\n\nafter\n")]);
-    site.build(PluginMode::Blocking, DeriveMode::Await);
+    site.build(&turn, PluginMode::Blocking, DeriveMode::Await);
     let html = site.page("page");
     let open = html.find("<div class=\"moss-derived\" data-fragment=\"text\"").unwrap_or_else(|| panic!("no wrapper in {html}"));
     let heading = html[open..].find("<h2").map(|at| open + at).expect("the heading renders inside the wrapper");
@@ -173,8 +177,9 @@ fn listed_site() -> Site {
 
 #[test]
 fn a_listing_card_shows_the_derived_words_and_no_wrapper_markup() {
+    let turn = crate::site::turn();
     let site = listed_site();
-    site.build(PluginMode::Blocking, DeriveMode::Await);
+    site.build(&turn, PluginMode::Blocking, DeriveMode::Await);
     let listing = site.page("docs");
     assert!(listing.contains("From Facts"), "the listing names the derived page: {listing}");
     assert!(listing.contains("world"), "the card shows the derived words: {listing}");
@@ -186,12 +191,13 @@ fn a_listing_card_shows_the_derived_words_and_no_wrapper_markup() {
 
 #[test]
 fn an_inferred_description_fills_the_meta_description_and_the_listing_card() {
+    let turn = crate::site::turn();
     let site = Site::new(&[
         ("docs/a.fake", "bytes"),
         ("docs/item.md", "---\ninferred: [title, description]\n---\n\n![[a.fake#text]]\n"),
         ("docs/other.md", "---\ntitle: Other\n---\n\nplain words\n"),
     ]);
-    site.build(PluginMode::Blocking, DeriveMode::Await);
+    site.build(&turn, PluginMode::Blocking, DeriveMode::Await);
     assert_eq!(meta_description(&site.page("docs/item")), "8 pages, scanned");
     let listing = site.page("docs");
     assert!(listing.contains("8 pages, scanned"), "the card shows the derived description: {listing}");
@@ -200,12 +206,13 @@ fn an_inferred_description_fills_the_meta_description_and_the_listing_card() {
 
 #[test]
 fn a_written_description_beats_the_inferred_one() {
+    let turn = crate::site::turn();
     let site = Site::new(&[
         ("docs/a.fake", "bytes"),
         ("docs/item.md", "---\ndescription: Mine\ninferred: [title, description]\n---\n\n![[a.fake#text]]\n"),
         ("docs/other.md", "---\ntitle: Other\n---\n\nplain words\n"),
     ]);
-    site.build(PluginMode::Blocking, DeriveMode::Await);
+    site.build(&turn, PluginMode::Blocking, DeriveMode::Await);
     assert_eq!(meta_description(&site.page("docs/item")), "Mine");
     let listing = site.page("docs");
     assert!(listing.contains("Mine") && !listing.contains("8 pages, scanned"), "{listing}");
@@ -213,8 +220,9 @@ fn a_written_description_beats_the_inferred_one() {
 
 #[test]
 fn without_description_in_inferred_the_description_stays_the_page_text() {
+    let turn = crate::site::turn();
     let site = listed_site();
-    site.build(PluginMode::Blocking, DeriveMode::Await);
+    site.build(&turn, PluginMode::Blocking, DeriveMode::Await);
     let meta = meta_description(&site.page("docs/item"));
     assert!(meta.contains("world") && !meta.contains("scanned"), "{meta}");
     assert!(!site.page("docs").contains("8 pages, scanned"));
@@ -222,8 +230,9 @@ fn without_description_in_inferred_the_description_stays_the_page_text() {
 
 #[test]
 fn llms_txt_carries_the_derived_words_and_no_wrapper_markup() {
+    let turn = crate::site::turn();
     let site = listed_site();
-    site.build(PluginMode::Blocking, DeriveMode::Await);
+    site.build(&turn, PluginMode::Blocking, DeriveMode::Await);
     let llms = site.sealed_file("llms.txt").expect("llms.txt in the sealed generation");
     assert!(llms.contains("world"), "{llms}");
     assert!(!llms.contains("<div") && !llms.contains("</div>") && !llms.contains("moss-derived"), "{llms}");
@@ -231,27 +240,30 @@ fn llms_txt_carries_the_derived_words_and_no_wrapper_markup() {
 
 #[test]
 fn a_written_title_beats_the_inferred_one() {
+    let turn = crate::site::turn();
     let site = Site::new(&[
         ("a.fake", "bytes"),
         ("page.md", "---\ntitle: Mine\ninferred: [title]\n---\n\n![[a.fake#text]]\n"),
     ]);
-    site.build(PluginMode::Blocking, DeriveMode::Await);
+    site.build(&turn, PluginMode::Blocking, DeriveMode::Await);
     let title = title_of(&site.page("page"));
     assert!(title.contains("Mine") && !title.contains("From Facts"), "{title}");
 }
 
 #[test]
 fn without_inferred_the_title_stays_the_filename() {
+    let turn = crate::site::turn();
     let site = Site::new(&[("a.fake", "bytes"), ("page.md", "![[a.fake#text]]\n")]);
-    site.build(PluginMode::Blocking, DeriveMode::Await);
+    site.build(&turn, PluginMode::Blocking, DeriveMode::Await);
     let title = title_of(&site.page("page"));
     assert!(!title.contains("From Facts"), "{title}");
 }
 
 #[test]
 fn a_skipped_file_shows_its_message_in_a_note() {
+    let turn = crate::site::turn();
     let site = Site::new(&[("locked.fake", "bytes"), ("page.md", "![[locked.fake#text]]\n")]);
-    site.build(PluginMode::Blocking, DeriveMode::Await);
+    site.build(&turn, PluginMode::Blocking, DeriveMode::Await);
     let html = site.page("page");
     assert!(html.contains("moss-derived--skipped"), "{html}");
     assert!(html.contains("This &lt;file&gt; is locked."), "{html}");
@@ -259,19 +271,21 @@ fn a_skipped_file_shows_its_message_in_a_note() {
 
 #[test]
 fn a_second_build_reads_the_cache_not_the_deriver() {
+    let turn = crate::site::turn();
     let site = Site::new(&[("a.fake", "bytes"), ("page.md", "![[a.fake#text]]\n")]);
-    site.build(PluginMode::Blocking, DeriveMode::Await);
+    site.build(&turn, PluginMode::Blocking, DeriveMode::Await);
     site.disable_deriver();
-    site.build(PluginMode::Blocking, DeriveMode::Await);
+    site.build(&turn, PluginMode::Blocking, DeriveMode::Await);
     let html = site.page("page");
     assert!(html.contains("Hello"), "{html}");
 }
 
 #[test]
 fn a_failed_read_shows_a_generic_note_and_is_not_retried_in_a_loop() {
+    let turn = crate::site::turn();
     let site = Site::new(&[("a.fake", "bytes"), ("page.md", "![[a.fake#text]]\n")]);
     site.set_deriver("#!/bin/sh\ncat >/dev/null\necho 'not json'\n");
-    site.build(PluginMode::Blocking, DeriveMode::Await);
+    site.build(&turn, PluginMode::Blocking, DeriveMode::Await);
     let html = site.page("page");
     assert!(html.contains("moss-derived--skipped"), "{html}");
     assert!(html.contains("couldn&#x27;t be read") || html.contains("couldn't be read"), "{html}");
@@ -279,11 +293,12 @@ fn a_failed_read_shows_a_generic_note_and_is_not_retried_in_a_loop() {
 
 #[test]
 fn derived_text_cannot_inject_html_into_the_page() {
+    let turn = crate::site::turn();
     let site = Site::new(&[("a.fake", "bytes"), ("page.md", "![[a.fake#text]]\n")]);
     site.set_deriver(
         "#!/bin/sh\ncat >/dev/null\nprintf '%s' '{\"kind\":\"derived\",\"fragments\":{\"text\":\"<img src=x onerror=alert(1)>\"},\"facts\":{}}'\n",
     );
-    site.build(PluginMode::Blocking, DeriveMode::Await);
+    site.build(&turn, PluginMode::Blocking, DeriveMode::Await);
     let html = site.page("page");
     assert!(!html.contains("<img src=x onerror"), "{html}");
     assert!(html.contains("&lt;img src=x onerror=alert(1)&gt;"), "{html}");
@@ -306,12 +321,13 @@ fn wait_for(what: &str, secs: u64, mut done: impl FnMut() -> bool) {
 
 #[test]
 fn adopt_seals_the_placeholder_while_the_read_runs_then_asks_for_a_rebuild() {
+    let turn = crate::site::turn();
     let site = Site::new(&[("a.fake", "bytes"), ("page.md", "![[a.fake#text]]\n")]);
     site.set_deriver(&slow_deriver(6, GOOD_ANSWER));
     let folder = site.root().to_string_lossy().to_string();
     let watcher = moss_build::ops::watch::worker::register(&folder);
 
-    site.build(PluginMode::NonBlocking, DeriveMode::Adopt);
+    site.build(&turn, PluginMode::NonBlocking, DeriveMode::Adopt);
     assert!(site.page("page").contains("moss-derived--pending"));
     assert_eq!(moss_build::system::build_records::records().pending_derivations(&folder), Some(1));
 
@@ -329,7 +345,7 @@ fn adopt_seals_the_placeholder_while_the_read_runs_then_asks_for_a_rebuild() {
     wait_for("the background read to ask for a rebuild", 30, || watcher.slot_occupied());
     // The rebuild the watcher would run: the text comes from the cache.
     watcher.take();
-    site.build(PluginMode::NonBlocking, DeriveMode::Adopt);
+    site.build(&turn, PluginMode::NonBlocking, DeriveMode::Adopt);
     let second = site.page("page");
     assert!(second.contains("Hello") && !second.contains("moss-derived--pending"), "{second}");
     assert_eq!(moss_build::system::build_records::records().pending_derivations(&folder), Some(0));
@@ -340,9 +356,9 @@ const NEW_ANSWER: &str = r###"printf '%s' '{"kind":"derived","fragments":{"text"
 
 /// A site derived once under version 1.0.0, then re-keyed by a version bump
 /// with a deriver that answers `NEW_ANSWER` after a delay.
-fn rekeyed_site(page_bytes_after: Option<&str>) -> Site {
+fn rekeyed_site(turn: &crate::site::Turn, page_bytes_after: Option<&str>) -> Site {
     let site = Site::new(&[("a.fake", "bytes"), ("page.md", "![[a.fake#text]]\n")]);
-    site.build(PluginMode::Blocking, DeriveMode::Await);
+    site.build(turn, PluginMode::Blocking, DeriveMode::Await);
     assert!(site.page("page").contains("world"));
     site.set_deriver(&slow_deriver(4, NEW_ANSWER));
     site.set_version("1.1.0");
@@ -354,11 +370,12 @@ fn rekeyed_site(page_bytes_after: Option<&str>) -> Site {
 
 #[test]
 fn a_re_keyed_source_keeps_its_previous_text_until_the_new_read_lands() {
-    let site = rekeyed_site(None);
+    let turn = crate::site::turn();
+    let site = rekeyed_site(&turn, None);
     let folder = site.root().to_string_lossy().to_string();
     let watcher = moss_build::ops::watch::worker::register(&folder);
 
-    site.build(PluginMode::NonBlocking, DeriveMode::Adopt);
+    site.build(&turn, PluginMode::NonBlocking, DeriveMode::Adopt);
     let html = site.page("page");
     assert!(html.contains("world") && !html.contains("moss-derived--pending"), "{html}");
     // The re-read is still owed: the preview counts it and a publish is held back.
@@ -367,7 +384,7 @@ fn a_re_keyed_source_keeps_its_previous_text_until_the_new_read_lands() {
 
     wait_for("the re-read to ask for a rebuild", 30, || watcher.slot_occupied());
     watcher.take();
-    site.build(PluginMode::NonBlocking, DeriveMode::Adopt);
+    site.build(&turn, PluginMode::NonBlocking, DeriveMode::Adopt);
     let html = site.page("page");
     assert!(html.contains("newer") && !html.contains("world"), "{html}");
     assert_eq!(moss_build::system::build_records::records().pending_derivations(&folder), Some(0));
@@ -376,10 +393,11 @@ fn a_re_keyed_source_keeps_its_previous_text_until_the_new_read_lands() {
 
 #[test]
 fn a_re_keyed_source_whose_bytes_changed_gets_no_older_text() {
-    let site = rekeyed_site(Some("other bytes"));
+    let turn = crate::site::turn();
+    let site = rekeyed_site(&turn, Some("other bytes"));
     let folder = site.root().to_string_lossy().to_string();
     let watcher = moss_build::ops::watch::worker::register(&folder);
-    site.build(PluginMode::NonBlocking, DeriveMode::Adopt);
+    site.build(&turn, PluginMode::NonBlocking, DeriveMode::Adopt);
     let html = site.page("page");
     assert!(html.contains("moss-derived--pending") && !html.contains("world"), "{html}");
     moss_build::ops::watch::worker::deregister(&folder, &watcher);
@@ -387,16 +405,17 @@ fn a_re_keyed_source_whose_bytes_changed_gets_no_older_text() {
 
 #[test]
 fn a_failed_background_read_is_shown_once_and_does_not_loop() {
+    let turn = crate::site::turn();
     let site = Site::new(&[("a.fake", "bytes"), ("page.md", "![[a.fake#text]]\n")]);
     site.set_deriver(&slow_deriver(0, "echo 'not json'"));
     let folder = site.root().to_string_lossy().to_string();
     let watcher = moss_build::ops::watch::worker::register(&folder);
 
-    site.build(PluginMode::NonBlocking, DeriveMode::Adopt);
+    site.build(&turn, PluginMode::NonBlocking, DeriveMode::Adopt);
     wait_for("the background read to ask for a rebuild", 30, || watcher.slot_occupied());
     watcher.take();
 
-    site.build(PluginMode::NonBlocking, DeriveMode::Adopt);
+    site.build(&turn, PluginMode::NonBlocking, DeriveMode::Adopt);
     let html = site.page("page");
     assert!(html.contains("moss-derived--skipped") && !html.contains("moss-derived--pending"), "{html}");
     assert_eq!(moss_build::system::build_records::records().pending_derivations(&folder), Some(0));
@@ -410,6 +429,7 @@ fn a_failed_background_read_is_shown_once_and_does_not_loop() {
 
 #[test]
 fn a_publish_retries_a_read_that_failed_while_previewing() {
+    let turn = crate::site::turn();
     let site = Site::new(&[("a.fake", "bytes"), ("page.md", "![[a.fake#text]]\n")]);
     let flag = site.root().join("fail-now");
     fs::write(&flag, "").unwrap();
@@ -420,27 +440,29 @@ fn a_publish_retries_a_read_that_failed_while_previewing() {
     ));
     let folder = site.root().to_string_lossy().to_string();
     let watcher = moss_build::ops::watch::worker::register(&folder);
-    site.build(PluginMode::NonBlocking, DeriveMode::Adopt);
+    site.build(&turn, PluginMode::NonBlocking, DeriveMode::Adopt);
     wait_for("the background read to ask for a rebuild", 30, || watcher.slot_occupied());
     moss_build::ops::watch::worker::deregister(&folder, &watcher);
 
     // The environment recovers; the same long-lived process now builds to publish.
     fs::remove_file(&flag).unwrap();
-    site.build(PluginMode::Blocking, DeriveMode::Await);
+    site.build(&turn, PluginMode::Blocking, DeriveMode::Await);
     let html = site.page("page");
     assert!(html.contains("Hello") && !html.contains("moss-derived--"), "{html}");
 }
 
 #[test]
 fn with_plugins_off_the_embed_is_left_to_the_viewer() {
+    let turn = crate::site::turn();
     let site = Site::new(&[("a.fake", "bytes"), ("page.md", "![[a.fake#text]]\n")]);
-    site.build(PluginMode::Skip, DeriveMode::Await);
+    site.build(&turn, PluginMode::Skip, DeriveMode::Await);
     let html = site.page("page");
     assert!(!html.contains("Hello") && !html.contains("moss-derived"), "{html}");
 }
 
 #[test]
 fn expand_derives_missing_text_and_writes_it_into_the_page() {
+    let _turn = crate::site::turn();
     let page = "---\ntitle:   Kept  \n---\nintro\n![[a.fake#text]]\n![[locked.fake#text]]\n![[note#Part]]\n";
     let site = Site::new(&[
         ("a.fake", "bytes"),
@@ -498,8 +520,9 @@ fn article(html: &str) -> String {
 
 #[test]
 fn derived_text_renders_as_plain_text_and_ordinary_prose_is_untouched() {
+    let turn = crate::site::turn();
     let site = awkward_site();
-    site.build(PluginMode::Blocking, DeriveMode::Await);
+    site.build(&turn, PluginMode::Blocking, DeriveMode::Await);
     let html = site.page("page");
     let body = &article(&html);
     for expected in [
@@ -518,14 +541,15 @@ fn derived_text_renders_as_plain_text_and_ordinary_prose_is_untouched() {
 
 #[test]
 fn an_expanded_page_renders_as_the_embed_did() {
+    let turn = crate::site::turn();
     let site = awkward_site();
-    site.build(PluginMode::Blocking, DeriveMode::Await);
+    site.build(&turn, PluginMode::Blocking, DeriveMode::Await);
     let before = site.page("page");
 
     let target = site.root().join("page.md");
     moss_build::cli::expand::expand_in(&target, site.root(), false).unwrap();
     assert!(!fs::read_to_string(&target).unwrap().contains("![[a.fake"));
-    site.build(PluginMode::Blocking, DeriveMode::Await);
+    site.build(&turn, PluginMode::Blocking, DeriveMode::Await);
     // Only the wrapper's own two lines differ from the written-out text.
     let unwrapped = article(&before)
         .replacen("<div class=\"moss-derived\" data-fragment=\"text\">\n", "", 1)
@@ -535,11 +559,12 @@ fn an_expanded_page_renders_as_the_embed_did() {
 
 #[test]
 fn an_embed_sharing_its_line_renders_as_before_and_leaks_no_marker() {
+    let turn = crate::site::turn();
     let site = Site::new(&[
         ("a.fake", "bytes"),
         ("page.md", "> ![[a.fake#text]]\n\n- item ![[a.fake#text]]\n\nsee ![[a.fake#text]] now\n"),
     ]);
-    site.build(PluginMode::Blocking, DeriveMode::Await);
+    site.build(&turn, PluginMode::Blocking, DeriveMode::Await);
     // The page may carry the picture viewer, which opens with its own comment.
     let html = site.page("page").replace("<!-- Lightbox -->", "");
     assert!(!html.contains("moss-derived:") && !html.contains("<!--"), "{html}");

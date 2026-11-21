@@ -21,7 +21,10 @@ pub fn mark_moss_folder(root: &Path) {
     #[cfg(target_os = "macos")]
     {
         let Some(tag) = compose::current_tag() else { return };
-        mark_with(root, &tag, || compose::folder_icns(&tag));
+        mark_with(root, &tag, || {
+            let dir = crate::infra::app_data::app_data_dir_early()?.join("folder-icon");
+            compose::folder_icns(&dir, &tag)
+        });
     }
     #[cfg(not(target_os = "macos"))]
     let _ = root;

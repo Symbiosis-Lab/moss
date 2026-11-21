@@ -54,7 +54,7 @@ async fn a_second_serve_on_the_same_folder_is_refused_and_a_third_recovers_after
         joined(&second.stderr)
     );
 
-    // --- Kill the first like a crash: the lock releases, the record does not. ---
+    // --- Kill the first like a crash: the lock releases, the record stays. ---
     first.child.kill().expect("kill the first child");
     let _ = first.child.wait();
     first.join_drain_threads();
@@ -90,6 +90,25 @@ async fn a_second_serve_on_the_same_folder_is_refused_and_a_third_recovers_after
     third.child.kill().expect("kill the third child");
     let _ = third.child.wait();
     third.join_drain_threads();
+
+    // --- A start on another folder removes the killed server's record. ---
+    let other_root = tempfile::tempdir().expect("tempdir for a second site copy");
+    copy_dir_recursive(&fixture_input_dir(), other_root.path());
+    let mut fourth = spawn_served_build(other_root.path(), moss_home.path(), &["--no-plugins"]);
+    let _fourth_access_line = fourth.wait_for_access_line(Duration::from_secs(30));
+    let records: Vec<_> = std::fs::read_dir(moss_home.path().join("servers"))
+        .expect("the servers directory exists")
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(records.len(), 1, "only the running server keeps a record; found {records:?}");
+    let other_owner = moss_build::ops::serve::ownership::find_live_owner(other_root.path())
+        .await
+        .unwrap_or_else(|| panic!("the fourth process names itself"));
+    assert_eq!(other_owner.pid, fourth.child.id());
+
+    fourth.child.kill().expect("kill the fourth child");
+    let _ = fourth.child.wait();
+    fourth.join_drain_threads();
 
     std::env::remove_var("MOSS_HOME");
 }

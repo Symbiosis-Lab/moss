@@ -126,4 +126,48 @@ fn readers_starting_together_on_a_fresh_machine_all_get_the_program() {
         let path = result.expect("every concurrent reader gets the installed program");
         assert!(path.is_file(), "{}", path.display());
     }
+    assert!(!stacks.path().join(".downloads").exists(), "the unpacked archive leaves");
+}
+
+#[test]
+fn a_version_nothing_ran_for_a_month_goes_when_another_resolves() {
+    let derivation = TempDir::new().unwrap();
+    let month_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(40 * 24 * 3600);
+    let version = |name: &str, aged: bool| {
+        let dir = derivation.path().join(name);
+        std::fs::create_dir_all(dir.join("bundle")).unwrap();
+        if aged {
+            filetime::set_file_mtime(&dir, filetime::FileTime::from_system_time(month_ago)).unwrap();
+        }
+        dir
+    };
+    let current = version("2.0.0-bbbbbbbbbbbb", true);
+    let unused = version("1.0.0-aaaaaaaaaaaa", true);
+    let recent = version("1.5.0-cccccccccccc", false);
+    let installing = version("1.9.0-dddddddddddd", true);
+    let held = std::fs::File::create(installing.join(".install.lock")).unwrap();
+    held.lock().unwrap();
+    filetime::set_file_mtime(&installing, filetime::FileTime::from_system_time(month_ago)).unwrap();
+
+    collect_other_versions(&current);
+
+    assert!(!unused.exists(), "a version nothing ran for 40 days goes");
+    assert!(recent.exists(), "a version another folder ran recently stays");
+    assert!(installing.exists(), "a version being installed stays");
+    assert!(current.exists(), "the version in use stays");
+}
+
+#[test]
+fn resolving_a_version_marks_it_used() {
+    let dir = TempDir::new().unwrap();
+    let bin = script(dir.path(), "d.sh", "true");
+    let home = dir.path().join("derive").join("p").join("d").join("1.0.0-aaaaaaaaaaaa");
+    std::fs::create_dir_all(&home).unwrap();
+    let month_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(40 * 24 * 3600);
+    filetime::set_file_mtime(&home, filetime::FileTime::from_system_time(month_ago)).unwrap();
+
+    ensure_binary_in(&entry(&bin, "1.0.0"), &home, None).unwrap();
+
+    let marked = std::fs::metadata(&home).unwrap().modified().unwrap();
+    assert!(marked.elapsed().unwrap() < std::time::Duration::from_secs(3600), "a resolved version is marked in use");
 }

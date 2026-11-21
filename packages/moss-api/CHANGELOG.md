@@ -13,6 +13,13 @@ release heading.
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-11-20
+
+### Added
+
+- `fillEditor`: puts a long article into the network's editor a plugin opened in the panel, as the author would paste it. The plugin gives data only (the editor's elements, the article in parts, and which of moss's fixed reshapings the editor needs: two heading levels, table rows as paragraphs, code lines as paragraphs). moss runs its own script on a page of the plugin's declared domains and answers whether the editor took it.
+- `CopyJob.article.blocks`: the article split at its pictures in reading order, cleaned for an editor (head elements, a leading h1 repeating the title and footnote back-links removed; embeds as links; a heading over the notes). `html` is unchanged.
+
 ## [0.21.0] - 2026-11-19
 
 ### Added

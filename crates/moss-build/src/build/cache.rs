@@ -126,10 +126,19 @@ impl ObjectStore {
         Self::for_site(mp).remembering_verified(&mp.cache_verified_video_blobs())
     }
 
-    /// `mp`'s store for one slot pass, so a new process checks only the page and
-    /// summary blobs whose stat moved since an earlier pass read them.
+    /// `mp`'s store for one slot pass: this computer's, since a build makes its
+    /// page and summary blobs again from the folder, and a site store would
+    /// replicate them into the synced cache. Every site store reads it first.
+    /// A new process checks only the blobs whose stat moved since an earlier
+    /// pass read them.
     pub(crate) fn for_slot_pass(mp: &crate::moss_paths::MossPaths) -> Self {
-        Self::for_site(mp).remembering_verified(&mp.cache_verified_slot_blobs())
+        Self::new(mp.cache_local_objects()).remembering_verified(&mp.cache_verified_slot_blobs())
+    }
+
+    /// `mp`'s store for one asset pass, so an edit or a reopen hashes only the
+    /// cached blobs whose stat moved since an earlier pass read them.
+    pub(crate) fn for_asset_pass(mp: &crate::moss_paths::MossPaths) -> Self {
+        Self::for_site(mp).remembering_verified(&mp.cache_verified_asset_blobs())
     }
 
     fn local_blob_path(&self, oid: &str) -> Option<PathBuf> {
@@ -701,6 +710,12 @@ impl TransformCache {
     /// through that store: one store checks a blob once.
     pub(crate) fn over(mp: &crate::moss_paths::MossPaths, objects: &ObjectStore) -> Self {
         Self { base: mp.cache_transforms(), objects: objects.clone() }
+    }
+
+    /// The slot pass's records, beside its store
+    /// ([`ObjectStore::for_slot_pass`]) on this computer.
+    pub(crate) fn for_slot_pass(mp: &crate::moss_paths::MossPaths, objects: &ObjectStore) -> Self {
+        Self { base: mp.cache_local_transforms(), objects: objects.clone() }
     }
 
     /// The site's local records and blobs, outside the synced folder. `None` for
@@ -1579,15 +1594,16 @@ static LAST_GC: std::sync::LazyLock<std::sync::Mutex<HashMap<PathBuf, (std::time
 
 /// Move a source copy out of the synced store into this machine's. False when
 /// the synced copy should be dropped instead: this machine already holds one,
-/// or the synced copy is still in the cloud. A failed rename keeps it in place.
+/// or the synced copy is still in the cloud. A move that fails keeps it in place.
 fn move_into(blob: &Path, local_objects_dir: &Path, oid: &str) -> bool {
     let local = ObjectStore::blob_path_in(local_objects_dir, oid);
     if local.is_file() || crate::build::icloud::is_still_in_the_cloud(blob) {
         return false;
     }
-    // allow:unlink renames a blob between the site's two CAS stores, never under staging
-    let _ = local.parent().is_some_and(|dir| crate::build::io_utils::create_output_dir_all(dir).is_ok())
-        && fs::rename(blob, &local).is_ok(); // allow:raw_write moves a CAS blob between this site's two stores
+    if local.parent().is_some_and(|dir| crate::build::io_utils::create_output_dir_all(dir).is_ok()) {
+        // allow:unlink moves a blob between the site's two CAS stores, never under staging
+        crate::build::io_utils::move_across_volumes(blob, &local, |from, to| fs::rename(from, to)); // allow:raw_write moves a CAS blob between this site's two stores
+    }
     true
 }
 
@@ -1618,8 +1634,9 @@ fn last_gc_summary(objects_dir: &Path) -> String {
 ///
 /// Then the sweep deletes the condemned records and every blob no mark reached.
 ///
-/// Every mark input must be READABLE. A missing index or `hashes.json` is an
-/// answer (nothing live from it); an index, record, shard directory or
+/// Every mark input must be READABLE. A missing `hashes.json` is an answer
+/// (nothing live from it); a missing index is one only when `hashes.json` is
+/// missing too. An index, record, shard directory or
 /// `hashes.json` that exists and cannot be read or parsed is not, because it
 /// marks less and so deletes more — one unreadable `hash-index.json` makes
 /// every blob garbage. Any such error aborts with nothing deleted.
@@ -1643,9 +1660,15 @@ pub(crate) fn gc(mp: &crate::moss_paths::MossPaths, _token: &crate::build::lifec
     let unreadable = |input: &Path, e: std::io::Error| format!("{} unreadable ({})", input.display(), e);
 
     // The HashIndex names the live source OIDs.
-    let hash_index = HashIndex::load_strict(&hash_index_path)
-        .map_err(|e| unreadable(&hash_index_path, e))?
-        .unwrap_or_else(HashIndex::new);
+    let hash_index = match HashIndex::load_strict(&hash_index_path).map_err(|e| unreadable(&hash_index_path, e))? {
+        Some(index) => index,
+        // The index lives in this computer's store, which the system may purge
+        // while the build it marks stays: then it is not an answer.
+        None if hashes_path.exists() => {
+            return Err(unreadable(&hash_index_path, std::io::Error::from(std::io::ErrorKind::NotFound)))
+        }
+        None => HashIndex::new(),
+    };
     let live_source_oids: std::collections::HashSet<&str> = hash_index
         .entries
         .values()

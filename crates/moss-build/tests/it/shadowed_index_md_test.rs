@@ -3,12 +3,12 @@
 
 use crate::site;
 
-use site::Site;
+use site::{LoggedSite, Site};
 
 const CONFIG: &str = "\n[build]\npassthrough = [\"index.html\", \"fr/index.html\"]\n";
 
-fn site() -> Site {
-    Site::with_config(
+fn site() -> LoggedSite {
+    LoggedSite::with_config(
         CONFIG,
         &[
             ("index.md", "---\ntitle: Old\ndescription: Root meta\n---\n# Old headline\n\nShadowed paragraph zebra.\n"),

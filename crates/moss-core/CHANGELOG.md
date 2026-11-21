@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-11-20
+
+### Added
+
+- `contract::retired`: every class, `data-*` value and `--moss-*` property moss released and no longer writes, with the release it went in, what replaces it (`replaced_by`) and whether moss still writes it beside its replacement (`aliased`). From `ALIAS_FLOOR` on, a retired name with a replacement must stay aliased.
+- `src/contract/released-contract.txt` lists every contract name a release has shipped. A test fails when one is neither live nor retired, and the pre-push hook keeps the file unchanged outside a `release/v*` branch and never lets it lose a line. A release cut adds the live names with `CONTRACT_LOCK=update cargo test -p moss-core --test it contract_lock`.
+- `fields::LinkTarget` names what a page field points at: a page of this site by its wiki-link name (`Page`) or a page elsewhere by its http(s) address (`Outside`), with `as_str` and `page`.
+- `fields::IN_REPLY_TO`, the `in_reply_to` field, and `fields::moss_decls`, the page fields moss declares on every site.
+- The component contract declares `moss-thread`, `moss-in-reply-to`, `moss-stream-thread` and `moss-stream-thread-more`.
+- `frontmatter_typed::SidebarAlias` says what `apply_sidebar_alias` did: `Applied` (a note) or `Ignored` (a problem).
+
+### Changed
+
+- **BREAKING:** `PageLink::target` is a `LinkTarget` instead of a `String`. It serializes as `target` for a page of the site and as `url` for an outside address.
+- **BREAKING:** `apply_sidebar_alias` returns `Option<SidebarAlias>` instead of a `Vec<String>` of warnings.
+- The `cols=` alias and the `---` grid cell divider are reported as advisories instead of warnings, since both still render.
+
+### Removed
+
+- **BREAKING** — `components::Status::Retired`, `ComponentEntry::is_public` and `components::retired_class_names` are gone. `COMPONENTS` now holds only names moss writes; read retired names from `contract::retired::RETIRED`. `moss describe --json` already left retired components out, so its output is unchanged. **Bump the minor.**
+
 ## [0.28.0] - 2026-11-19
 
 ### Added

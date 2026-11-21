@@ -771,12 +771,9 @@ pub(super) fn render_page<'d>(
     let all_docs = context.chrome.documents;
     let project = context.chrome.project;
     let layout_config = context.chrome.layout;
-    let site_lang = context.chrome.site_lang;
     let emit_source_lines = context.chrome.emit_source_lines;
     let dir_overrides = context.dir_overrides;
     let site_url = context.site_url;
-    let output_dir = context.output_dir;
-    let source_root = context.source_root;
     let media_lookup = context.shared.media_lookup;
     let now = context.shared.now;
     let path_resolver = &context.chrome.assets.paths;
@@ -1022,7 +1019,7 @@ pub(super) fn render_page<'d>(
             // stays honest (matches the placeholder removal in year_group /
             // folder_embed).
             let article_list =
-                generate_year_grouped_article_list(all_docs, project, true, site_lang, resolved_typesetting);
+                generate_year_grouped_article_list(all_docs, project, true, context.chrome.site_lang, resolved_typesetting);
             let content = if article_list.is_empty() {
                 String::new()
             } else {
@@ -1211,14 +1208,14 @@ pub(super) fn render_page<'d>(
             doc,
             project,
             path_resolver: &path_resolver,
-            source_root,
+            source_root: context.source_root,
             dir_overrides,
             site_title: &site_title,
             is_homepage,
             is_card_eligible,
             ui_lang,
             vertical_typesetting,
-            output_dir,
+            output_dir: context.output_dir,
         },
         og_outputs.as_deref_mut(),
     );
@@ -1306,10 +1303,9 @@ pub(super) fn render_page<'d>(
         // The `breadcrumb: label` link is chrome around the finished title
         // block, so it goes on last: the splices above see the title at the
         // head of the content and need not step past anything.
+        let label = doc.and_then(|d| crate::build::components::nav::parent_label_segment(d, all_docs, context.chrome.home_breadcrumb));
+        let label = label.and_then(|parent| crate::build::markdown::html_post::prepend_parent_label(&mut finished, &parent));
         if let Some(d) = doc {
-            if let Some(parent) = crate::build::components::nav::parent_label_segment(d, all_docs, context.chrome.home_breadcrumb) {
-                crate::build::markdown::html_post::prepend_parent_label(&mut finished, &parent);
-            }
             crate::build::components::field_places::warn_title_block_unplaced(d, &finished);
         }
         if doc.is_some_and(crate::build::components::field_places::title_block_after_picture) {
@@ -1317,7 +1313,11 @@ pub(super) fn render_page<'d>(
         } else if doc.is_some_and(crate::build::components::field_places::title_block_beside_picture) {
             finished = crate::build::components::field_places::beside_leading_picture(&finished);
         }
+        let thread = doc.map(|d| crate::build::folder_embed::stream::page_thread(d, all_docs, &project.root_path, dir_overrides, resolved_typesetting, now)).unwrap_or_default();
+        // Under the parent label while it still heads the page, else first.
+        finished.insert_str(label.filter(|l| finished.starts_with(l.as_str())).map_or(0, |l| l.len()), &thread.before);
         finished = crate::build::page::default_width::apply(finished, doc.and_then(|d| d.content_width.as_deref()).or(layout_config.content_width.as_deref()));
+        finished.push_str(&thread.after);
         // Calendar links that close the body: a folder's download and subscribe
         // links, and an event's "Add to calendar" when no meta line carries it.
         // A page with its listing off shows no events here; its embedded

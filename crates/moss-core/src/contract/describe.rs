@@ -235,7 +235,6 @@ impl<'a> DescribePayload<'a> {
 
         let components: Vec<ComponentJson> = COMPONENTS
             .iter()
-            .filter(|c| c.is_public())
             .map(|c| ComponentJson {
                 class: c.class,
                 kind: c.kind,
@@ -255,7 +254,6 @@ impl<'a> DescribePayload<'a> {
                 status: match c.status {
                     Status::Confirmed => "confirmed",
                     Status::Emerging => "emerging",
-                    Status::Retired => "retired",
                 },
                 since: c.since,
                 description: c.description,

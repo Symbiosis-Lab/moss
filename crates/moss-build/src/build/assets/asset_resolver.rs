@@ -66,16 +66,36 @@ fn resolve_asset_directory_in(
     on_progress: Option<&DownloadProgress>,
 ) -> Result<PathBuf, String> {
     let asset_dir = managed_directory(assets_root, config)?;
-    if cache_ready(&asset_dir, &config.sha256)? {
-        return Ok(asset_dir.join(CONTENT));
-    }
-    log::info!("Downloading {} from {}...", config.name, config.download_url);
-    if let Some(required) = config.required_disk_space {
-        check_disk_space(assets_root, required)?;
-    }
-    let data = download_with_progress(&config.download_url, DOWNLOAD_TIMEOUT_SECS, on_progress)?;
-    let staged = StagedAsset::extract(&data, assets_root, &config.sha256)?;
-    staged.publish(&asset_dir)
+    crate::infra::disposable::mark_used(&asset_dir);
+    let content = if cache_ready(&asset_dir, &config.sha256)? {
+        asset_dir.join(CONTENT)
+    } else {
+        log::info!("Downloading {} from {}...", config.name, config.download_url);
+        if let Some(required) = config.required_disk_space {
+            check_disk_space(assets_root, required)?;
+        }
+        let data = download_with_progress(&config.download_url, DOWNLOAD_TIMEOUT_SECS, on_progress)?;
+        let staged = StagedAsset::extract(&data, assets_root, &config.sha256)?;
+        staged.publish(&asset_dir)?
+    };
+    collect_other_pins(assets_root, &config.name);
+    Ok(content)
+}
+
+/// Removes this asset's other pins, and its unpinned directory from before
+/// pins, once nothing has resolved them for a while. Takes each one's
+/// publish lock first, so a cache being published stays.
+fn collect_other_pins(assets_root: &Path, name: &str) {
+    let Ok(root) = assets_root.canonicalize() else { return };
+    let pinned = |entry: &str| {
+        entry == name
+            || entry.strip_prefix(name).and_then(|rest| rest.strip_prefix('-'))
+                .is_some_and(|digest| digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit()))
+    };
+    crate::infra::disposable::collect_unused(&root, crate::infra::disposable::UNUSED_FOR, pinned, |path| {
+        let entry = path.file_name()?.to_string_lossy();
+        crate::infra::folder_lock::try_acquire_named(&root, &format!("asset-{entry}")).ok().flatten()
+    });
 }
 
 /// The assets directory is machine state, separate from user design assets.
@@ -276,6 +296,39 @@ mod tests {
         };
         let resolved = resolve_asset_directory_in(tmp.path(), &config, None).unwrap();
         assert_eq!(resolved, asset_dir.join(CONTENT));
+    }
+
+    #[test]
+    fn resolve_removes_other_pins_nothing_has_used_for_a_month() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = zip_of(&[("index.html", b"<html>cached</html>")]);
+        let sha = sha256_hex(&data);
+        extract_zip_to_asset_dir(&data, &tmp.path().join(format!("test-asset-{sha}")), &sha).unwrap();
+        let old_pin = tmp.path().join(format!("test-asset-{}", "a".repeat(64)));
+        let recent_pin = tmp.path().join(format!("test-asset-{}", "b".repeat(64)));
+        let unpinned = tmp.path().join("test-asset");
+        let other_asset = tmp.path().join(format!("test-asset-ext-{}", "c".repeat(64)));
+        let forty_days_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(40 * 24 * 3600);
+        for dir in [&old_pin, &recent_pin, &unpinned, &other_asset] {
+            std::fs::create_dir_all(dir.join(CONTENT)).unwrap();
+            if dir != &recent_pin {
+                filetime::set_file_mtime(dir, filetime::FileTime::from_system_time(forty_days_ago)).unwrap();
+            }
+        }
+
+        let config = AssetConfig {
+            name: "test-asset".to_string(),
+            download_url: "https://127.0.0.1:1/nonexistent.zip".to_string(),
+            sha256: sha.clone(),
+            required_disk_space: None,
+        };
+        resolve_asset_directory_in(tmp.path(), &config, None).unwrap();
+
+        assert!(!old_pin.exists(), "a pin unused for 40 days goes");
+        assert!(!unpinned.exists(), "the directory from before pins goes");
+        assert!(recent_pin.exists(), "a pin another moss used recently stays");
+        assert!(other_asset.exists(), "another asset's pins are not this asset's");
+        assert!(tmp.path().join(format!("test-asset-{sha}")).exists(), "the pin in use stays");
     }
 
     #[test]

@@ -1,10 +1,8 @@
 //! Request signing for moss-seta authentication: BIP-340 Schnorr signatures
 //! (Nostr-compatible) over each request.
 //!
-//! REFACTOR-LATER (keystore): this signs with the identity key directly. The
-//! identity key is one entry in the keystore at the `System` scope
-//! (`identity::keystore`), so this should become a keystore caller, unifying
-//! every signing path, as a change with no behavior difference.
+//! It signs with the folder's identity key from `.moss/identity/`, which is not
+//! a keystore entry: the keystore holds plugin keys only.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -29,13 +27,17 @@ pub fn sign_request_v2(identity: &Identity, method: &str, path_and_query: &str, 
     let nonce = hex::encode(rand::random::<[u8; 16]>());
     let message = message_v2(timestamp, &nonce, method, path_and_query, body);
     let signature = identity.signing_key_loaded()?.sign(message.as_bytes());
-    let header = serde_json::json!({
+    let mut header = serde_json::json!({
         "v": 2,
         "pubkey": identity.pubkey,
         "signature": hex::encode(signature.to_bytes()),
         "timestamp": timestamp,
         "nonce": nonce,
     });
+    // Which computer sent it, signed over the same message.
+    if let Some(machine) = crate::identity::machine::MachineKey::for_folder(&identity.pubkey) {
+        header["machine"] = machine.claim(&message);
+    }
     Ok(format!("Nostr {}", BASE64.encode(header.to_string())))
 }
 
@@ -51,6 +53,20 @@ mod tests {
             "moss-seta-v2\n1700000000\n00112233445566778899aabbccddeeff\nPOST\n/api/sites/a?x=1\n\
              8489a5deb454a360345c7868bca8672de92b446caf3d3b014af6a56e3d549d30"
         );
+    }
+
+    /// The header says which computer sent it, signed over the message the
+    /// folder's key signed.
+    #[test]
+    fn the_header_carries_this_computers_signature_over_the_same_message() {
+        use ed25519_dalek::Verifier;
+        let identity = Identity::generate().unwrap();
+        let header = sign_request_v2(&identity, "POST", "/api/sites/a", b"{}").unwrap();
+        let h: serde_json::Value = serde_json::from_slice(&BASE64.decode(header.trim_start_matches("Nostr ")).unwrap()).unwrap();
+        let message = message_v2(h["timestamp"].as_u64().unwrap(), h["nonce"].as_str().unwrap(), "POST", "/api/sites/a", b"{}");
+        let bytes = |field: &str| hex::decode(h["machine"][field].as_str().expect("the header names the computer")).unwrap();
+        let key = ed25519_dalek::VerifyingKey::from_bytes(&bytes("key").try_into().unwrap()).unwrap();
+        key.verify(message.as_bytes(), &ed25519_dalek::Signature::from_slice(&bytes("sig")).unwrap()).expect("signed over the v2 message");
     }
 
     /// The server's own tests verify this header, made by this signer for

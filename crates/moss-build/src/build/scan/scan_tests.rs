@@ -1260,14 +1260,11 @@ fn test_video_scan_uses_hash_when_index_hits() {
     fs::remove_dir_all(&temp_dir).ok();
 }
 
-/// Images defer their expensive work (full-file SHA-256 + full-decode for
-/// dominant color / LQIP) OFF the blocking scan path. On a cold stat-miss
-/// the scan reads ONLY the dimensions (image header, ~1ms) and leaves
-/// `dominant_color` / `lqip_data_uri` as `None`; the background media phase
-/// computes those from the pixels it already decodes for WebP conversion,
-/// and hashes the file there. This keeps first paint independent of image
-/// count. (Previously images were fully hashed AND decoded here, which made
-/// a 1000-image folder take minutes before the preview could appear.)
+/// Images defer the full decode for dominant color / LQIP OFF the blocking scan
+/// path. On a cold miss the scan reads only the dimensions (image header) and
+/// leaves `dominant_color` / `lqip_data_uri` as `None`; the background media phase
+/// computes those from the pixels it already decodes for WebP conversion. The
+/// hash is recorded here, so the background phase does not read the file again.
 #[test]
 fn test_image_scan_defers_expensive_work_on_stat_miss() {
     let temp_dir =
@@ -1280,7 +1277,7 @@ fn test_image_scan_defers_expensive_work_on_stat_miss() {
     // the full decode.
     let png_path = temp_dir.join("photo.png");
     create_solid_color_png(&png_path, 64, 48, [255, 0, 0]);
-    let file_size = fs::metadata(&png_path).unwrap().len();
+    let stat = FileStat::of(&fs::metadata(&png_path).unwrap());
 
     // Set up empty caches — simulates a first-ever (cold) scan.
     let cache_dir = temp_dir.join(".moss/build.nosync/cache");
@@ -1298,7 +1295,7 @@ fn test_image_scan_defers_expensive_work_on_stat_miss() {
         &png_path,
         "photo.png",
         "png",
-        &FileStat::whole_second(file_size, 1234567890),
+        &stat,
         None,
         None,
         &old_index,
@@ -1327,10 +1324,10 @@ fn test_image_scan_defers_expensive_work_on_stat_miss() {
         "lqip must be deferred off the blocking scan"
     );
 
-    // The full-file SHA-256 is DEFERRED too — no hash entry on the blocking scan.
-    assert!(
-        !new_index.entries.contains_key("photo.png"),
-        "image must NOT be SHA-256 hashed on the blocking scan (deferred to background)"
+    assert_eq!(
+        new_index.lookup("photo.png", &stat),
+        Some(ObjectStore::hash_file(&png_path).unwrap().as_str()),
+        "the scan records the image's hash for the background phase"
     );
 
     fs::remove_dir_all(&temp_dir).ok();
@@ -1798,8 +1795,7 @@ fn a_scan_carries_a_full_stat_entry_forward_so_the_next_collect_still_matches() 
 
 /// An entry recorded for another instant of the file is not this file's hash, and the
 /// scan must not carry it — nor, by re-stamping it with the current stat, turn it into
-/// one that `lookup` would trust. A preview scan (which never hashes an image) leaves
-/// the file out of the new index; a build-mode scan hashes it afresh.
+/// one that `lookup` would trust. Preview and build-mode scans both hash it afresh.
 #[test]
 fn a_scan_does_not_carry_forward_an_entry_recorded_for_a_different_instant() {
     let fx = ScanFixture::new("carry_stale");
@@ -1807,14 +1803,32 @@ fn a_scan_does_not_carry_forward_an_entry_recorded_for_a_different_instant() {
     let earlier = FileStat { mtime_nanos: stat.mtime_nanos.map(|n| (n + 250_000_000) % 1_000_000_000), ..stat };
     let mut old_index = HashIndex::new();
     old_index.update("photo.png".to_string(), &earlier, "hash-of-the-previous-bytes".to_string());
+    let fresh = ObjectStore::hash_file(&fx.png).unwrap();
 
-    let mut preview = HashIndex::new();
-    fx.scan(&stat, &old_index, &mut preview, true);
-    assert!(preview.entries.is_empty(), "preview scan carried forward {:?}", preview.entries);
+    for defer_placeholders in [true, false] {
+        let mut new_index = HashIndex::new();
+        fx.scan(&stat, &old_index, &mut new_index, defer_placeholders);
+        assert_eq!(new_index.lookup("photo.png", &stat), Some(fresh.as_str()), "defer_placeholders={defer_placeholders}");
+    }
+}
 
-    let mut build = HashIndex::new();
-    fx.scan(&stat, &old_index, &mut build, false);
-    assert_eq!(build.lookup("photo.png", &stat), Some(ObjectStore::hash_file(&fx.png).unwrap().as_str()));
+/// A fresh copy of a site (another machine, a re-download) has no hash index and no
+/// stat record, both of which stay on the machine that wrote them, but it carries the
+/// shared store. A preview scan must find the image's colour and LQIP there by its
+/// content hash, or the first build renders every page without placeholders and the
+/// build after the images settle renders them all again.
+#[test]
+fn a_preview_scan_of_a_fresh_copy_finds_the_placeholder_cached_under_the_images_hash() {
+    let fx = ScanFixture::new("fresh_copy");
+    let hash = ObjectStore::hash_file(&fx.png).unwrap();
+    let cached = fx.cache_placeholder_under(&hash);
+    let stat = FileStat::of(&fs::metadata(&fx.png).unwrap());
+    let mut new_index = HashIndex::new();
+
+    let meta = fx.scan(&stat, &HashIndex::new(), &mut new_index, true);
+
+    assert_eq!((meta.dominant_color, meta.lqip_data_uri), (cached.dominant_color, cached.lqip_data_uri));
+    assert_eq!(new_index.lookup("photo.png", &stat), Some(hash.as_str()), "the background worker reads this hash instead of hashing again");
 }
 
 /// A build-mode scan hashes an image it has no entry for, and what it records must be
@@ -1868,9 +1882,9 @@ fn an_evicted_image_keeps_the_placeholder_metadata_cached_under_its_recorded_has
     }
 }
 
-/// The same answer is not given for an image that is on disk: a scan that defers its
-/// placeholder (preview) or hashes it (build) has no need of a hash it cannot vouch
-/// for, and a whole-second hit would carry it into an index the worker trusts.
+/// The same answer is not given for an image that is on disk: the scan hashes it
+/// rather than trust a hash it cannot vouch for, which a whole-second hit would
+/// carry into an index the worker trusts.
 #[test]
 fn an_image_on_disk_is_not_matched_by_the_whole_second_rule() {
     let fx = ScanFixture::new("hydrated_strict");
@@ -1879,7 +1893,8 @@ fn an_image_on_disk_is_not_matched_by_the_whole_second_rule() {
 
     let mut preview = HashIndex::new();
     let meta = fx.scan(&stat, &old_index, &mut preview, true);
-    assert!(preview.entries.is_empty(), "preview scan carried forward {:?}", preview.entries);
+    let recorded: Vec<_> = preview.entries.values().map(|e| e.content_hash.clone()).collect();
+    assert_eq!(recorded, [ObjectStore::hash_file(&fx.png).unwrap()], "preview scan recorded a hash other than its bytes'");
     assert_ne!(meta.lqip_data_uri.as_deref(), Some("data:image/webp;base64,AAAA"), "used a hash the index does not vouch for");
 }
 
@@ -2070,7 +2085,7 @@ impl ScannedVault {
     }
 
     fn index_path(&self) -> std::path::PathBuf {
-        self.dir.path().join(".moss/build.nosync/cache/hash-index.json")
+        crate::moss_paths::MossPaths::new(self.dir.path()).cache_hash_index()
     }
 
     /// Scan, and return `photo.png`'s entry in the index the scan persisted.
@@ -3112,33 +3127,48 @@ fn a_folder_is_walked_in_composed_name_order() {
     assert_eq!(order, sorted);
 }
 
+/// Every path the scan kept, in all of its lists.
+fn kept_paths(found: &ProjectStructure) -> Vec<String> {
+    let files = [&found.markdown_files, &found.html_files, &found.notebook_files, &found.other_files];
+    let media = found.image_files.iter().chain(&found.video_files).map(|f| f.path.clone());
+    files.into_iter().flatten().map(|f| f.path.clone()).chain(media).collect()
+}
+
 /// A folder holding two files whose names differ only by case, or by how an
-/// accented letter is encoded, is refused by the scan every build starts with.
+/// accented letter is encoded, builds with the first of them and a problem
+/// naming both, the same on every machine.
 #[test]
 #[cfg_attr(target_os = "macos", ignore = "an APFS volume cannot hold both names of a pair")]
-fn the_scan_refuses_a_folder_holding_a_colliding_pair() {
+fn the_scan_keeps_one_file_of_a_colliding_pair_and_names_both() {
     let pairs = [("Photo.png", "photo.png"), ("caf\u{e9}.png", "cafe\u{301}.png"), ("caf\u{e9}.md", "cafe\u{301}.md"), ("caf\u{e9}.txt", "cafe\u{301}.txt")];
     for (first, second) in pairs {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("index.md"), "# Home\n").unwrap();
         fs::write(dir.path().join(first), b"one").unwrap();
         fs::write(dir.path().join(second), b"two").unwrap();
-        let refusal = crate::build::scan_folder(dir.path().to_str().unwrap()).unwrap_err();
-        assert!(refusal.contains("differ only by letter case"), "{refusal}");
+        let found = crate::build::scan_folder(dir.path().to_str().unwrap()).unwrap();
+        let problems = found.path_collisions.join(" ");
+        assert!(problems.contains("differ only by letter case") && problems.contains(&format!("leaves out `{second}`")), "{problems}");
+        let kept = kept_paths(&found);
+        assert_eq!(kept.iter().filter(|p| p.to_lowercase() == first.to_lowercase()).count(), 1, "{kept:?}");
+        assert!(!kept.iter().any(|p| p == second), "{kept:?}");
     }
 }
 
 /// Two pictures that would both be published as one WebP, or two videos as
-/// one ladder, are refused on every disk, since both names fit on each.
+/// one ladder, build with the first of them and a problem naming both.
 #[test]
-fn the_scan_refuses_two_sources_published_under_one_name() {
+fn the_scan_keeps_one_of_two_sources_published_under_one_name() {
     for (first, second, name) in [("photo.jpg", "photo.png", "photo.webp"), ("clip.mov", "clip.mp4", "clip.mp4")] {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("index.md"), "# Home\n").unwrap();
         fs::write(dir.path().join(first), b"one").unwrap();
         fs::write(dir.path().join(second), b"two").unwrap();
-        let refusal = crate::build::scan_folder(dir.path().to_str().unwrap()).unwrap_err();
-        assert!(refusal.contains(&format!("rename `{first}` or `{second}`, which are both published as `{name}`")), "{refusal}");
+        let found = crate::build::scan_folder(dir.path().to_str().unwrap()).unwrap();
+        let problems = found.path_collisions.join(" ");
+        assert!(problems.contains(&format!("rename `{first}` or `{second}`, which are both published as `{name}`")), "{problems}");
+        let kept = kept_paths(&found);
+        assert!(kept.iter().any(|p| p == first) && !kept.iter().any(|p| p == second), "{kept:?}");
     }
 }
 

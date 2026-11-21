@@ -195,11 +195,11 @@ fn panel_none_over_a_picture_ink_cannot_read_on_warns_naming_the_hero() {
     let site = Site::new(&[]);
     std::fs::write(site.root.join("mid.png"), picture([120; 3], [120; 3], false)).unwrap();
     site.write("index.md", "---\ntitle: Harbour\n---\n\n:::hero {image=mid.png align=top panel=none}\n## Open all hours today\n:::\n");
-    let logged = site.rebuild().join("\n");
+    let logged = site.rebuild_logged().logged.join("\n");
     assert!(logged.contains("panel=none") && logged.contains("Open all hours today") && logged.contains("4.5:1"), "{logged}");
     // And a picture ink reads on says nothing.
     std::fs::write(site.root.join("mid.png"), picture(SKY, GROUND, false)).unwrap();
-    assert!(!site.rebuild().join("\n").contains("panel=none"));
+    assert!(!site.rebuild_logged().logged.join("\n").contains("panel=none"));
 }
 
 #[test]
@@ -207,7 +207,7 @@ fn plain_ink_on_a_closing_picture_is_noted_by_layout_and_theme() {
     let site = Site::new(&[("index.md", "---\ntitle: Harbour\n---\n\nBody text.\n"), ("footer.md", &HERO.replace("align=top", "align=top panel=none"))]);
     std::fs::write(site.root.join("day.png"), picture(SKY, GROUND, true)).unwrap();
     std::fs::write(site.root.join("night.png"), picture([20, 28, 48], [230, 235, 240], true)).unwrap();
-    let logged = site.rebuild().join("\n");
+    let logged = site.rebuild_logged().logged.join("\n");
     let note = logged.lines().find(|l| l.contains("panel=none")).unwrap_or_default();
     assert!(note.contains("(\"The shelf is open.") && note.contains("needs 4.5:1") && note.contains("from 80rem") && note.contains("the light theme"), "the note names the widths and the theme with the worst ratio: {logged}");
 }
@@ -257,15 +257,15 @@ fn a_faded_closing_picture_is_measured_over_the_themes_page_colour() {
 fn fade_on_a_hero_that_does_not_close_the_page_warns() {
     let site = Site::new(&[("index.md", "---\ntitle: Harbour\n---\n\n:::hero {image=day.png fade=top}\n# Harbour\n:::\n\nBody text.\n")]);
     std::fs::write(site.root.join("day.png"), picture(SKY, GROUND, false)).unwrap();
-    let logged = site.rebuild().join("\n");
+    let logged = site.rebuild_logged().logged.join("\n");
     assert!(logged.contains("fade=top") && logged.contains("closing picture"), "{logged}");
     // Another value is the parser's to report as unrecognized, not this warning's.
     site.write("index.md", "---\ntitle: Harbour\n---\n\n:::hero {image=day.png fade=bottom}\n# Harbour\n:::\n");
-    let logged = site.rebuild().join("\n");
+    let logged = site.rebuild_logged().logged.join("\n");
     assert!(!logged.contains("closing picture"), "{logged}");
     site.write("footer.md", FADED);
     site.write("index.md", "---\ntitle: Harbour\n---\n\nBody text.\n");
-    assert!(!site.rebuild().join("\n").contains("fade=top"));
+    assert!(!site.rebuild_logged().logged.join("\n").contains("fade=top"));
 }
 
 #[test]

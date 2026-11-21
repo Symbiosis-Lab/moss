@@ -259,7 +259,6 @@ export class NavigationManager {
   private readonly unsubscribePageSource: () => void;
   private readonly pageRequest = createGenerationToken();
   private requestedUrl: string | null = null;
-  private morphSequence = 0;
 
   /** Record intent before assigning iframe.src, so late refresh work loses authority. */
   beginNavigation(url: string): void {
@@ -1323,51 +1322,19 @@ export class NavigationManager {
 
   /**
    * Morph the current document in place, preserving scroll, focus and undo.
-   * A matching bridge acknowledgement resolves true; failure or timeout lets
-   * the current request fall back to reload. Each morph has its own id.
+   * False lets the current request fall back to reload.
    */
   async morph(): Promise<boolean> {
-    const target = this.iframe?.contentWindow;
-    if (!target) return false;
-    if (this.requestedUrl) return false;
+    if (!this.rpc || this.requestedUrl) return false;
     const request = this.pageRequest.current();
-    const morphId = ++this.morphSequence;
-    return new Promise<boolean>((resolve) => {
-      let settled = false;
-      let timer = 0;
-      const done = (ok: boolean) => {
-        if (settled) return;
-        settled = true;
-        window.removeEventListener("message", onMessage);
-        clearTimeout(timer);
-        resolve(ok);
-      };
-      const onMessage = (e: MessageEvent) => {
-        const t = e.data?.type;
-        if (t !== "moss-morph-applied" && t !== "moss-morph-failed") return;
-        if (e.source !== target) return;
-        if (e.data?.gen !== morphId) return;
-        if (this.pageRequest.isStale(request)) { done(false); return; }
-        if (t === "moss-morph-applied") {
-          this.applyMorphedTitle(e.data?.title);
-          done(true);
-        } else if (t === "moss-morph-failed") {
-          // `changedScripts` names the scripts behind a `script-changed` verdict.
-          const why = (e.data?.changedScripts as string[] | undefined)?.join(", ");
-          warn(
-            `[NavigationManager] morph failed: ${e.data?.error ?? "unknown"}${why ? ` [${why}]` : ""} → reload fallback`
-          );
-          done(false);
-        }
-      };
-      window.addEventListener("message", onMessage);
-      // Generous budget: bridge fetch + parse + morph on a large page.
-      timer = window.setTimeout(() => {
-        warn("[NavigationManager] morph timed out → reload fallback");
-        done(false);
-      }, 4000);
-      target.postMessage({ type: "moss-morph", gen: morphId }, "*");
-    });
+    const result = await this.rpc.morph();
+    if (this.pageRequest.isStale(request)) return false;
+    if (result.applied) {
+      this.applyMorphedTitle(result.title);
+      return true;
+    }
+    warn(`[NavigationManager] morph failed: ${result.error} → reload fallback`);
+    return false;
   }
 
   /** One call into the previewed page; rejects when it has no bridge. */

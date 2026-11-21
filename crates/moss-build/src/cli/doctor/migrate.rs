@@ -356,7 +356,7 @@ fn output_unchanged(folder: &Path, changes: &[FileChange]) -> Result<bool, Strin
 /// check, and a folder session inside a runtime of its own.
 fn headless_build_sealed(root: &VaultRoot) -> Result<crate::build::manifest::SealedManifest, String> {
     crate::build::cli_output::install_headless_logger();
-    crate::plugins::install::registry_client::enforce::install_headless(crate::infra::app_data::app_data_dir_early().as_deref(), false);
+    crate::plugins::install::registry_client::enforce::install_headless_for_running_app(false);
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

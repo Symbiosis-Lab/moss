@@ -3723,7 +3723,8 @@ fn test_fast_path_rejects_zero_byte_canonical_files() {
         source_mtime,
         "fake_hash_123".to_string(),
     );
-    let hash_index_path = moss_dir.join("build.nosync").join("cache").join("hash-index.json");
+    let hash_index_path = crate::moss_paths::MossPaths::from_moss_dir(moss_dir.clone()).cache_hash_index();
+    fs::create_dir_all(hash_index_path.parent().unwrap()).unwrap();
     let hash_json = serde_json::to_string_pretty(&hash_index).unwrap();
     fs::write(&hash_index_path, hash_json).unwrap();
 

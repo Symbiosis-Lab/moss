@@ -151,7 +151,7 @@ pub(super) async fn track_viewer(
     let html = response.status().is_success()
         && response.headers().get(axum::http::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|v| v.starts_with("text/html"));
     if shell && html {
-        if let Some(folder) = site_dir.read().ok().and_then(|dir| crate::vault_root::VaultRoot::find_containing(&dir)) {
+        if let Some(folder) = site_dir.read().ok().and_then(|dir| crate::moss_paths::served_folder(&dir)) {
             let url = urlencoding::decode(&path).map_or(path.clone(), |p| p.into_owned());
             crate::system::derive::priority::note_viewed(folder.path(), &url);
         }

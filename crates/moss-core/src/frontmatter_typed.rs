@@ -897,34 +897,34 @@ pub fn frontmatter_ref_to_stem(s: &str) -> String {
 /// so the sidebar callsite can apply the legacy default-3 limit on cross-ref.
 ///
 /// If `children:` is `true` or a wikilink, the alias yields and `sidebar:` is
-/// ignored — explicit children intent wins. Returns deprecation/conflict
-/// warnings for the build log.
-pub fn apply_sidebar_alias(fm: &mut FrontMatter) -> Vec<String> {
-    let Some(sidebar_ref) = fm.sidebar.clone() else {
-        return Vec::new();
-    };
-
-    let mut warnings = Vec::new();
+/// ignored — explicit children intent wins.
+pub fn apply_sidebar_alias(fm: &mut FrontMatter) -> Option<SidebarAlias> {
+    let sidebar_ref = fm.sidebar.clone()?;
     let has_positive_children_intent =
         fm.children_source.is_some() || matches!(fm.children, Some(true));
 
     if has_positive_children_intent {
-        warnings.push(
+        return Some(SidebarAlias::Ignored(
             "`sidebar:` ignored because `children:` is set; remove `sidebar:` and use `children_in: sidebar`"
                 .to_string(),
-        );
-    } else {
-        fm.children = Some(true);
-        fm.children_source = Some(sidebar_ref.clone());
-        fm.children_in = Some("sidebar".to_string());
-        fm._from_sidebar_alias = Some(true);
-        warnings.push(format!(
-            "`sidebar:` is deprecated; use `children: {} + children_in: sidebar`",
-            sidebar_ref
         ));
     }
+    fm.children = Some(true);
+    fm.children_source = Some(sidebar_ref.clone());
+    fm.children_in = Some("sidebar".to_string());
+    fm._from_sidebar_alias = Some(true);
+    Some(SidebarAlias::Applied(format!(
+        "`sidebar:` was replaced in moss 0.6.5. The current spelling is `children: {sidebar_ref}` with `children_in: sidebar`."
+    )))
+}
 
-    warnings
+/// What [`apply_sidebar_alias`] tells the build log.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SidebarAlias {
+    /// The alias took effect: a note, not a problem, since the page renders.
+    Applied(String),
+    /// `sidebar:` lost to an explicit `children:`: a problem, since it did nothing.
+    Ignored(String),
 }
 
 /// Whether content opens with simplified frontmatter (no leading `---`) — the

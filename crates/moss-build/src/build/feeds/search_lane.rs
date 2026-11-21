@@ -224,8 +224,8 @@ fn holding_dir(index_dir: &Path, fp: PageSetFp) -> PathBuf {
 /// right after the copy, so an adoption copies only the files whose hash moved
 /// or whose stat no longer vouches: a one-page edit changes a handful of index
 /// chunks and one fragment out of ~440 files.
-fn staged_links(index_dir: &Path, stage_dir: &Path) -> crate::build::lifecycle::cas_heal::StagedLinks {
-    crate::build::lifecycle::cas_heal::StagedLinks::at(index_dir.join("staged-links.json"), stage_dir)
+fn staged_links(links: &Path, stage_dir: &Path) -> crate::build::lifecycle::cas_heal::StagedLinks {
+    crate::build::lifecycle::cas_heal::StagedLinks::at(links.to_path_buf(), stage_dir)
 }
 
 /// Write `produced`'s files into `index_dir/<fp>/`, then the receipt. Older
@@ -439,6 +439,7 @@ impl Begun {
 /// sender before it seals.
 pub struct SearchJob {
     index_dir: PathBuf,
+    links: PathBuf,
     stage_dir: PathBuf,
     read: search::PageRead,
     key: String,
@@ -468,11 +469,11 @@ impl SearchJob {
     /// step fails.
     pub fn finish(self) -> (Adoption, Laid) {
         let _phase = crate::build::phase::PhaseTrace::start("search_index");
-        let SearchJob { index_dir, stage_dir, read, key, t_read } = self;
+        let SearchJob { index_dir, links, stage_dir, read, key, t_read } = self;
         with_holding(&index_dir, |h| {
             let published = search::index_pages(read, t_read)
                 .and_then(|produced| publish_bundle(h, &index_dir, PageSet::UNKNOWN, Some(&key), &produced));
-            lay_indexed(h, &index_dir, &stage_dir, published)
+            lay_indexed(h, &index_dir, &links, &stage_dir, published)
         })
     }
 }
@@ -533,18 +534,19 @@ pub fn begin(
         return Begun::Done(Adoption::Disabled);
     }
     let index_dir = mp.index_dir();
+    let links = mp.staged_links("search");
     // Held across read-receipt → lay → drop-receipt, so a settle cannot GC the
     // holding directory this call is reading, nor have its brand-new receipt
     // deleted by the divergence branch below.
     with_holding(&index_dir, |h| {
         if freshness == Freshness::Now {
-            return read_staging(h, &index_dir, stage_dir, pending);
+            return read_staging(h, &index_dir, &links, stage_dir, pending);
         }
-        Begun::Done(adopt_receipt(h, &index_dir, stage_dir, pending))
+        Begun::Done(adopt_receipt(h, &index_dir, &links, stage_dir, pending))
     })
 }
 
-fn adopt_receipt(h: &Holding, index_dir: &Path, stage_dir: &Path, pending: &mut PendingManifest) -> Adoption {
+fn adopt_receipt(h: &Holding, index_dir: &Path, links: &Path, stage_dir: &Path, pending: &mut PendingManifest) -> Adoption {
     let Some(receipt) = read_receipt(index_dir) else {
         return Adoption::Unindexed;
     };
@@ -553,7 +555,7 @@ fn adopt_receipt(h: &Holding, index_dir: &Path, stage_dir: &Path, pending: &mut 
         return Adoption::Empty;
     }
 
-    match lay(h, index_dir, &receipt, stage_dir) {
+    match lay(h, index_dir, links, &receipt, stage_dir) {
         Some(laid) => {
             laid.register(pending);
             Adoption::Adopted(laid.0.len())
@@ -580,7 +582,7 @@ fn adopt_receipt(h: &Holding, index_dir: &Path, stage_dir: &Path, pending: &mut 
 /// exactly the pages staging holds now, and hand back a [`SearchJob`] over the
 /// pages it read otherwise. A bundle a settle indexed carries no key, so it is
 /// never taken for one.
-fn read_staging(h: &Holding, index_dir: &Path, stage_dir: &Path, pending: &mut PendingManifest) -> Begun {
+fn read_staging(h: &Holding, index_dir: &Path, links: &Path, stage_dir: &Path, pending: &mut PendingManifest) -> Begun {
     let _phase = crate::build::phase::PhaseTrace::start("search_read");
     let t_read = std::time::Instant::now();
     let read = search::read_pages(stage_dir);
@@ -590,24 +592,25 @@ fn read_staging(h: &Holding, index_dir: &Path, stage_dir: &Path, pending: &mut P
         if receipt.files.is_empty() {
             return Begun::Done(Adoption::Empty);
         }
-        if let Some(laid) = lay(h, index_dir, &receipt, stage_dir) {
+        if let Some(laid) = lay(h, index_dir, links, &receipt, stage_dir) {
             laid.register(pending);
             crate::build::phase::record_count("search_bundle_reused", 1);
             return Begun::Done(Adoption::Adopted(laid.0.len()));
         }
     }
-    Begun::Indexing(SearchJob { index_dir: index_dir.to_path_buf(), stage_dir: stage_dir.to_path_buf(), read, key, t_read })
+    Begun::Indexing(SearchJob { index_dir: index_dir.to_path_buf(), links: links.to_path_buf(), stage_dir: stage_dir.to_path_buf(), read, key, t_read })
 }
 
 /// Lay a bundle this build just indexed.
 fn lay_indexed(
     h: &Holding,
     index_dir: &Path,
+    links: &Path,
     stage_dir: &Path,
     published: Result<BundleReceipt, String>,
 ) -> (Adoption, Laid) {
     match published {
-        Ok(receipt) => match lay(h, index_dir, &receipt, stage_dir) {
+        Ok(receipt) => match lay(h, index_dir, links, &receipt, stage_dir) {
             Some(laid) if laid.0.is_empty() => (Adoption::Empty, laid),
             Some(laid) => (Adoption::Indexed(laid.0.len()), laid),
             None => (Adoption::Diverged, Laid::default()),
@@ -643,6 +646,7 @@ fn drop_receipt_if_still(_holding: &Holding, index_dir: &Path, diverged: &Bundle
 fn lay(
     _holding: &Holding,
     index_dir: &Path,
+    links: &Path,
     receipt: &BundleReceipt,
     stage_dir: &Path,
 ) -> Option<Laid> {
@@ -659,7 +663,7 @@ fn lay(
     }
 
     use crate::build::lifecycle::cas_heal::Placement;
-    let mut links = staged_links(index_dir, stage_dir);
+    let mut links = staged_links(links, stage_dir);
     let mut laid = 0;
     for (sp, hash, src) in &planned {
         match links.copy(src, hash, &stage_dir.join(sp.as_str())) {

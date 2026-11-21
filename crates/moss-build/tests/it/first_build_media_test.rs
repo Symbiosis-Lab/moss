@@ -20,29 +20,6 @@ fn ffmpeg_on_path() -> bool {
         .unwrap_or(false)
 }
 
-fn build_sync(folder_path: &str) -> Result<String, String> {
-    use moss_build::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
-    use moss_build::cli::host::cli_host_ports;
-    use moss_build::vault_root::VaultRoot;
-
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(run_pipeline(PipelineConfig {
-        root: VaultRoot::resolve(PathBuf::from(folder_path)),
-        progress: moss_build::build::stdout_sink(),
-        plugins: PluginMode::Skip,
-        watch: false,
-        start_server: false,
-        host: cli_host_ports(folder_path),
-        trigger: BuildTrigger::Full,
-        exits_after_build: true,
-        site_url_override: None,
-        server_port: None,
-        admission_epoch: None,
-        live_port: None,
-        rename_pairs: Vec::new(),
-    }))
-}
-
 /// A 1280x720 clip rich enough in bits (a ladder is only built for a source whose
 /// own bitrate fills more than its bottom rung).
 fn make_clip(dest: &Path) -> bool {
@@ -84,7 +61,7 @@ impl Site {
         html.split("<video").skip(1).map(|v| format!("<video{}", v.split("</video>").next().unwrap_or(v))).collect::<Vec<_>>().join("\n")
     }
     fn build(&self) {
-        build_sync(self.root.to_str().unwrap()).expect("build succeeds");
+        crate::site::build_full(self.root.to_str().unwrap()).expect("build succeeds");
     }
 }
 

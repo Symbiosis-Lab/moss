@@ -14,7 +14,8 @@ fn blob(dir: &Path, bytes: &[u8]) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_build_moves_an_old_tree_into_the_split_layout_before_writing() {
-    use moss_build::build::{null_sink, run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+    let turn = crate::site::turn();
+    use moss_build::build::{null_sink, BuildTrigger, PipelineConfig, PluginMode};
     use moss_build::cli::host::cli_host_ports;
     use moss_build::vault_root::VaultRoot;
 
@@ -30,7 +31,7 @@ async fn a_build_moves_an_old_tree_into_the_split_layout_before_writing() {
     let in_aside = blob(&aside.join("cache").join("objects"), b"encoded before the swap");
 
     let folder_str = folder.to_string_lossy().to_string();
-    run_pipeline(PipelineConfig {
+    crate::site::run(&turn, PipelineConfig {
         root: VaultRoot::resolve(&folder),
         progress: null_sink(),
         plugins: PluginMode::Skip,

@@ -6379,6 +6379,8 @@ body.own-titlebar.controls-trailing .moss-titlebar-traffic-light-space {
   /* .moss-field is a column by default; this row is not. Also drops the
      label's own bottom margin, which is stacking spacing. */
   flex-direction: row;
+  /* In a narrow modal the folder control drops to its own line. */
+  flex-wrap: wrap;
 }
 
 .moss-attachments__label {
@@ -6395,12 +6397,14 @@ body.own-titlebar.controls-trailing .moss-titlebar-traffic-light-space {
   max-width: 100%;
 }
 
-/* Takes the line's remaining width, up to a folder-name's worth. It shrinks
-   rather than overflowing: the select's own minimum is its widest option and
-   cannot give, so in a narrow window this field is what must yield. */
+/* Takes the line's remaining width, up to a folder-name's worth. The select's
+   own minimum is its widest option and cannot give, so in a narrow window this
+   field wraps to its own line rather than shrinking. */
 .moss-attachments__field {
   flex: 1 1 8em;
-  min-width: 0;
+  /* Without a floor the pill shrinks to its own padding and shows as an empty
+     circle. */
+  min-width: 8em;
   max-width: 16em;
 }
 

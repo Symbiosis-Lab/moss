@@ -9,13 +9,14 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 fn build(folder: &Path, preview: bool) {
-    use moss_build::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+    let turn = crate::site::turn();
+    use moss_build::build::{BuildTrigger, PipelineConfig, PluginMode};
     use moss_build::cli::host::cli_host_ports;
     use moss_build::vault_root::VaultRoot;
 
     let folder_path = folder.to_string_lossy().into_owned();
     let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(run_pipeline(PipelineConfig {
+    rt.block_on(crate::site::run(&turn, PipelineConfig {
         root: VaultRoot::resolve(PathBuf::from(&folder_path)),
         progress: moss_build::build::stdout_sink(),
         plugins: PluginMode::Skip,
@@ -117,5 +118,149 @@ fn a_build_without_this_machines_cache_publishes_the_same_pages() {
         let stat_keyed: Vec<String> = synced(&dir).into_keys().filter(|p| p.contains("stat-") || p.contains("stat:")).collect();
         assert_eq!(stat_keyed, Vec::<String>::new(), "preview={preview}");
     }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A comment refresh's outcome is this computer's: a refresh that brings no
+/// new comments (here the server never answers) writes nothing the folder
+/// syncs, however often it is tried.
+#[test]
+fn a_comment_refresh_that_changes_no_comment_writes_nothing_to_the_synced_folder() {
+    let dir = site("comment_refresh");
+    let server = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        format!("http://{}", listener.local_addr().unwrap())
+    };
+    fs::create_dir_all(dir.join(".moss")).unwrap();
+    // A dated page, so the article map names one for the refresh to ask about.
+    fs::write(dir.join("notes.md"), "---\ntitle: Notes\ndate: 2026-01-02\n---\n\nA note.\n").unwrap();
+    fs::write(
+        dir.join(".moss/config.toml"),
+        format!("[site]\ndomain = \"example.com\"\n\n[services.comments]\nprovider = \"artalk\"\nserver_url = \"{server}\"\n"),
+    )
+    .unwrap();
+    settle(&dir, false);
+    let first = synced(&dir);
+    build(&dir, false);
+    assert_eq!(written(&first, &synced(&dir)), Vec::<String>::new());
+    let state = moss_build::build::features::sync::load_comment_sync_state(dir.to_str().unwrap());
+    assert!(state.last_error.is_some(), "the refresh ran and recorded its outcome on this computer");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The agent guidance in `.moss/agents/` as another computer's moss wrote it,
+/// naming that computer's binary: a build here leaves it as it is, so two
+/// computers building one folder stop trading the line.
+#[test]
+fn a_build_leaves_the_agent_guidance_another_computer_wrote() {
+    let dir = site("agent_guidance");
+    settle(&dir, false);
+    let guidance = dir.join(".moss/agents/SKILL.md");
+    let ours = fs::read_to_string(&guidance).expect("a build writes the neutral guidance");
+    let (front, rest) = ours.split_once("<!-- moss:agent-guidance v").unwrap();
+    let (version, rest) = rest.split_once(' ').unwrap();
+    let body = rest.split_once("-->\n").unwrap().1;
+    let after_binding: String = body.split_inclusive('\n').skip_while(|l| l.starts_with("> ")).collect();
+    let theirs_rest = format!(
+        "{front}> Run moss as `/Users/someone-else/dev/moss/target/debug/moss`.\n> Every `moss …` command below means that binary.\n{after_binding}"
+    );
+    let stamp = format!("<!-- moss:agent-guidance v{version} h:{:016x} -->", xxhash_rust::xxh3::xxh3_64(theirs_rest.as_bytes()));
+    let theirs = format!("{front}{stamp}\n{}", theirs_rest.strip_prefix(front).unwrap());
+    fs::write(&guidance, &theirs).unwrap();
+    let first = synced(&dir);
+    build(&dir, false);
+    assert_eq!(written(&first, &synced(&dir)), Vec::<String>::new());
+    assert_eq!(fs::read_to_string(&guidance).unwrap(), theirs);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Every file under `.moss/` that records a file's stat (an mtime, an inode),
+/// build output included. Two records of the build output carry one, and leave
+/// the folder with it: the build manifest and each generation's own listing.
+fn stat_keyed(dir: &Path) -> Vec<String> {
+    let moss = dir.join(".moss");
+    walkdir::WalkDir::new(&moss)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file())
+        .map(|e| e.path().strip_prefix(&moss).unwrap().to_string_lossy().into_owned())
+        .filter(|rel| rel != "build.nosync/hashes.json" && !(rel.starts_with("build.nosync/generations/.") && rel.ends_with(".whole.json")))
+        .filter(|rel| fs::read(moss.join(rel)).is_ok_and(|bytes| bytes.windows(7).any(|w| w == b"\"mtime\"")))
+        .collect()
+}
+
+/// This computer's facts about the folder live outside it: deleting them costs
+/// a hash pass, never a page, and the synced folder does not notice. Nothing
+/// left under `.moss/` is keyed by this computer's stats.
+#[test]
+fn a_build_without_this_computers_facts_publishes_the_same_pages() {
+    let dir = site("facts_gone");
+    let facts = moss_build::moss_paths::MossPaths::new(&dir).facts_dir();
+    for preview in [false, true] {
+        settle(&dir, preview);
+        let page = || fs::read_to_string(dir.join(".moss/build.nosync/staging/index.html")).expect("the home page");
+        let before = (page(), synced(&dir));
+        assert!(facts.join("hash-index.json").exists(), "preview={preview}: the facts are where this test deletes them");
+        fs::remove_dir_all(&facts).unwrap();
+        build(&dir, preview);
+        assert_eq!(page(), before.0, "preview={preview}");
+        assert_eq!(written(&before.1, &synced(&dir)), Vec::<String>::new(), "preview={preview}");
+        assert_eq!(stat_keyed(&dir), Vec::<String>::new(), "preview={preview}");
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Synced files `written` since `before` that the slot pass made: its records
+/// and the page blobs they name.
+fn slot_pass_files(dir: &Path, before: &BTreeMap<String, (u64, i64, i64, u64)>) -> Vec<String> {
+    let moss = dir.join(".moss");
+    let after = synced(dir);
+    after.iter().filter(|(p, s)| before.get(*p) != Some(s)).map(|(p, _)| p)
+        .filter(|rel| {
+            let bytes = fs::read(moss.join(rel)).unwrap_or_default();
+            let head = String::from_utf8_lossy(&bytes[..bytes.len().min(256)]).to_ascii_lowercase();
+            (rel.starts_with("cache/transforms/") && bytes.windows(14).any(|w| w == b"html/slot-page"))
+                || (rel.starts_with("cache/objects/") && head.trim_start().starts_with("<!doctype html"))
+        })
+        .cloned()
+        .collect()
+}
+
+/// The slot pass's page blobs and records are this computer's: a build makes
+/// them again from the folder. A first build leaves none in the synced folder,
+/// and neither does the build after an upgrade, which changes the stylesheet
+/// link on every page (here, the site's own stylesheet changes).
+#[test]
+fn the_slot_pass_writes_nothing_to_the_synced_folder() {
+    let dir = site("slot_pass");
+    let css = dir.join(".moss/theme/style.css");
+    fs::create_dir_all(css.parent().unwrap()).unwrap();
+    fs::write(&css, "body { color: #111; }\n").unwrap();
+    let before = synced(&dir);
+    settle(&dir, false);
+    assert_eq!(slot_pass_files(&dir, &before), Vec::<String>::new(), "first build");
+    let page = || fs::read_to_string(dir.join(".moss/build.nosync/staging/index.html")).expect("the home page");
+    let first_page = page();
+    fs::write(&css, "body { color: #222; }\n").unwrap();
+    let before = synced(&dir);
+    build(&dir, false);
+    assert_ne!(page(), first_page, "the stylesheet link moved, as an upgrade moves it");
+    assert_eq!(slot_pass_files(&dir, &before), Vec::<String>::new(), "upgrade");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A folder an older moss built keeps this computer's facts in
+/// `build.nosync/cache/`. The next build carries them out of the folder.
+#[test]
+fn a_build_moves_out_the_facts_an_older_moss_left_in_the_folder() {
+    let dir = site("facts_left");
+    settle(&dir, false);
+    let paths = moss_build::moss_paths::MossPaths::new(&dir);
+    let old = paths.cache_dir();
+    fs::rename(paths.cache_hash_index(), old.join("hash-index.json")).unwrap();
+    fs::write(old.join("staged-links-pages.json"), "{}").unwrap();
+    build(&dir, false);
+    assert!(!old.join("hash-index.json").exists() && !old.join("staged-links-pages.json").exists());
+    assert!(paths.cache_hash_index().exists());
     let _ = fs::remove_dir_all(&dir);
 }

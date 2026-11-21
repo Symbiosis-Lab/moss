@@ -28,10 +28,8 @@ use tower_http::services::{ServeDir, ServeFile};
 /// `/__moss/source/*path` — serve a project-scoped SOURCE file over HTTP.
 ///
 /// The vault root is derived from the served site directory rather than passed
-/// in: the site dir is `<vault>/.moss/build.nosync/…`, and `VaultRoot::find_containing`
-/// walks up to the nearest ancestor owning a `.moss/`. The `find_` variant is
-/// deliberate — it returns `None` instead of falling back to the starting
-/// directory, so a server pointed somewhere unexpected 404s rather than
+/// in, by [`crate::moss_paths::served_folder`]. It returns `None` instead of
+/// falling back to the starting directory, so a server pointed somewhere unexpected 404s rather than
 /// silently exposing whatever folder it happened to start in.
 ///
 /// `path` arrives percent-DECODED (axum's `Path` extractor decodes once), which
@@ -50,10 +48,32 @@ pub(super) async fn source_asset_route(
         Ok(d) => d.clone(),
         Err(_) => return dress(SourceAssetResponse::not_found()),
     };
-    let Some(vault) = crate::vault::paths::VaultRoot::find_containing(&site_dir) else {
+    let Some(vault) = crate::moss_paths::served_folder(&site_dir) else {
         return dress(SourceAssetResponse::not_found());
     };
     dress(serve_source_asset(vault.path(), &path, query.as_deref()).await)
+}
+
+/// `/__moss/page/<source path>` redirects to the page that source file builds
+/// to, so a host that embeds the preview can follow the file its editor has
+/// open without knowing how moss names pages. A page's address is not secret
+/// (the page itself is served without a token), so this route takes none. A
+/// path that leaves the folder, a file with no page and a page not built yet
+/// all get the same bare 404.
+pub(super) async fn page_for_source_route(
+    site_dir_state: Arc<std::sync::RwLock<std::path::PathBuf>>,
+    path: String,
+) -> Response {
+    let inside_folder = std::path::Path::new(&path).components().all(|c| matches!(c, std::path::Component::Normal(_)));
+    let page = site_dir_state.read().ok().map(|d| d.clone()).filter(|_| inside_folder).and_then(|site_dir| {
+        let vault = crate::moss_paths::served_folder(&site_dir)?;
+        crate::editor::resolve::links::resolve_url_for_file_inner(&path, vault.path(), &site_dir).ok()?
+    });
+    use axum::response::IntoResponse;
+    match page {
+        Some(url) => axum::response::Redirect::temporary(&url).into_response(),
+        None => http::StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 /// A file under the search mount, from the bundle the last settle published.
@@ -68,7 +88,7 @@ pub(super) async fn source_asset_route(
 async fn search_bundle_file(current_dir: &std::path::Path, normalized: &str) -> Option<std::path::PathBuf> {
     use crate::build::feeds::search_lane;
     let rel = normalized.strip_prefix(crate::build::served_path::ServedPath::search_mount_url().trim_start_matches('/'))?;
-    let vault = crate::vault::paths::VaultRoot::find_containing(current_dir)?;
+    let vault = crate::moss_paths::served_folder(current_dir)?;
     let mp = crate::moss_paths::MossPaths::new(vault.path());
     if matches!(rel, "pagefind.js" | "pagefind-entry.json") && search_lane::enabled_for(&mp) {
         let session = crate::system::folder_session::registry().get(&vault.path().to_string_lossy());
@@ -348,12 +368,14 @@ pub async fn start_server(
             )
             .route(
                 "/__moss/source/*path",
-                get(move |axum::extract::Path(p): axum::extract::Path<String>,
-                          axum::extract::RawQuery(query): axum::extract::RawQuery| {
-                    let site_dir = state_for_source.clone();
-                    async move { source_asset_route(site_dir, p, query).await }
+                get(move |axum::extract::Path(p): axum::extract::Path<String>, axum::extract::RawQuery(query): axum::extract::RawQuery| {
+                    source_asset_route(state_for_source.clone(), p, query)
                 }),
             )
+            .route("/__moss/page/*path", get({
+                let site_dir = state.clone();
+                move |axum::extract::Path(p): axum::extract::Path<String>| page_for_source_route(site_dir.clone(), p)
+            }))
             // Preview-only comment stub: receives the comment form POST and
             // returns an Artalk-shaped success without real-server traffic.
             // Registered before .fallback() so a user file cannot shadow it.

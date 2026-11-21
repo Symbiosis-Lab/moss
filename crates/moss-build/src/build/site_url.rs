@@ -261,8 +261,8 @@ pub fn resolve_for_project(
     let site_suffix = crate::build::site_config::resolve_environment(project_path)
         .site_suffix()
         .to_string();
-    // Read apart from `domain_cfg`, whose read errors are survivable: a folder
-    // whose `url` and `domain` disagree must refuse the build, not fall back.
+    // Read apart from `domain_cfg`, whose read errors are survivable: a `url`
+    // that does not parse must refuse the build, not fall back.
     let url = match crate::build::site_config::read_project_config(project_path) {
         Ok(config) => config.site_address().map_err(|e| format!("site URL: {}", e))?,
         Err(e) => {
@@ -651,12 +651,15 @@ mod tests {
     }
 
     #[test]
-    fn url_and_domain_with_different_hosts_refuse_the_build() {
+    fn url_and_domain_with_different_hosts_build_with_url_and_name_both() {
         let tmp = folder_with_site("url = \"https://example.edu/~alice/\"\ndomain = \"example.org\"\n");
-        let err = resolve_for_project(tmp.path().to_str().unwrap(), None).unwrap_err();
-        assert!(err.contains("[site] url") && err.contains("[site] domain"), "{err}");
+        let path = tmp.path().to_str().unwrap();
+        assert_eq!(resolve_for_project(path, None).unwrap().as_str(), "https://example.edu/~alice");
+        let problem = crate::build::site_config::read_project_config(path).unwrap().site_address_conflict().unwrap();
+        assert!(problem.contains("[site] url") && problem.contains("[site] domain"), "{problem}");
         // The same host twice is one address, not a contradiction.
         let tmp = folder_with_site("url = \"https://example.org/notes/\"\ndomain = \"example.org\"\n");
         assert_eq!(resolve_for_project(tmp.path().to_str().unwrap(), None).unwrap().as_str(), "https://example.org/notes");
+        assert!(crate::build::site_config::read_project_config(tmp.path().to_str().unwrap()).unwrap().site_address_conflict().is_none());
     }
 }

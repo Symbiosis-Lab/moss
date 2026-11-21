@@ -694,17 +694,21 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
 
 /// Each page that draws cards through a page field placed at `end` or a grid
 /// link cell, with the page each of those links names (`None` for a link that
-/// names none). Both find their target only while rendering, so no outgoing
-/// link records them.
+/// names none), and each page of a thread with every other page of it. All
+/// find their target only while rendering, so no outgoing link records them.
 fn card_reads<'a>(
     documents: &'a [ParsedDocument],
     graph: Option<&'a moss_core::content_graph::ContentGraph>,
 ) -> Vec<(&'a ParsedDocument, Vec<Option<&'a ParsedDocument>>)> {
+    let by_source: std::collections::HashMap<&str, &ParsedDocument> =
+        documents.iter().filter_map(|d| Some((d.source_path.as_deref()?, d))).collect();
     documents
         .iter()
         .map(|reader| {
+            let thread = reader.thread.iter().filter(|m| Some(m.source_path.as_str()) != reader.source_path.as_deref());
             let targets = crate::build::components::field_places::end_card_targets(reader, documents, graph)
                 .chain(crate::build::render::grid_cells::card_targets(reader, documents, graph))
+                .chain(thread.map(|m| by_source.get(m.source_path.as_str()).copied()))
                 .collect();
             (reader, targets)
         })

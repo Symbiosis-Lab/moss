@@ -329,6 +329,11 @@ pub struct ProjectStructure {
     #[serde(skip)]
     #[specta(skip)]
     pub storage_folders: Vec<String>,
+    /// Problems naming files the scan left out because another file has
+    /// their name on a Mac or Windows disk or publishes under it.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub path_collisions: Vec<String>,
 }
 
 /// User configuration for site generation and publishing.

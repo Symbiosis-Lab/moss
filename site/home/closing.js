@@ -1,9 +1,8 @@
 (() => {
   // The subscriber's newsletter is the language they signed up in: the root
-  // (English) is scope '', each language folder is its own scope. Keep the
-  // folder list in step with scripts/generate-landing-locales.mjs.
+  // (English) is scope '', each language folder is its own scope.
   const subscriptionScope = () => {
-    const locale = window.__landingI18n?.locale() || document.documentElement.lang;
+    const locale = document.documentElement.lang;
     return locale === 'zh-hans' || locale === 'zh-hant' ? locale : '';
   };
   const ready = (fn) => document.readyState === 'loading'
@@ -15,51 +14,22 @@
     if (document.documentElement.dataset.landingWired === 'true') return;
     document.documentElement.dataset.landingWired = 'true';
     const downloads = document.querySelector('#downloads');
-    const release = {
-      macos: 'https://github.com/Symbiosis-Lab/moss/releases/latest/download/moss.dmg',
-    };
     const icon = { macos: 'apple.svg', windows: 'windows.svg', linux: 'linux.svg' };
-    const platformLabel = { macos: 'macOS', windows: 'Windows', linux: 'Linux' };
 
     if (downloads) {
       for (const link of downloads.querySelectorAll('[data-platform]')) {
         const platform = link.dataset.platform;
-        const label = platformLabel[platform];
         const img = document.createElement('img');
         img.src = `assets/platforms/${icon[platform]}`;
         img.alt = '';
         img.setAttribute('aria-hidden', 'true');
-        link.replaceChildren(img, document.createTextNode(label));
-
-        if (platform === 'macos') {
-          link.href = release.macos;
-          link.title = window.__landingI18n?.t('macTitle') || 'Download moss for macOS (universal DMG)';
-        } else {
-          link.title = window.__landingI18n?.t(platform === 'windows' ? 'windowsAria' : 'linuxAria') || `${label} desktop app — Coming soon`;
-          link.setAttribute('aria-label', window.__landingI18n?.t(platform === 'windows' ? 'windowsAria' : 'linuxAria') || `${label} desktop app, Coming soon`);
-        }
+        link.prepend(img);
       }
     }
 
     const commands = document.querySelector('#commands');
-    const commandValues = {
-      npm: 'npm install -g @symbiosis-lab/moss',
-      brew: 'brew install --cask symbiosis-lab/tap/moss',
-    };
-    if (commands) {
-      const rows = [...commands.querySelectorAll('.command')];
-      if (rows[0]) {
-        rows[0].querySelector('code').textContent = commandValues.npm;
-        rows[0].querySelector('[data-copy]').dataset.copy = commandValues.npm;
-      }
-      if (rows[1]) {
-        rows[1].querySelector('code').textContent = commandValues.brew;
-        rows[1].querySelector('[data-copy]').dataset.copy = commandValues.brew;
-        rows[1].querySelector('[data-copy]').setAttribute('aria-label', window.__landingI18n?.t('copyBrew') || 'Copy Homebrew desktop install command');
-      }
-    }
-
-    const copyStatus = document.querySelector('#copy-status');
+    // The messages are in the markup; this only shows the one that applies.
+    const say = (which) => document.querySelectorAll('#copy-status [data-status]').forEach((m) => { m.hidden = m.dataset.status !== which; });
     const selectCommand = (button) => {
       const code = button.closest('.command')?.querySelector('code');
       if (!code) return;
@@ -85,14 +55,14 @@
       }
       if (copied) {
         button.dataset.copied = 'true';
-        copyStatus && (copyStatus.textContent = window.__landingI18n?.t('copied') || 'Copied to clipboard.');
+        say('copied');
         setTimeout(() => {
           delete button.dataset.copied;
-          if (copyStatus) copyStatus.textContent = '';
+          say(null);
         }, 1600);
       } else {
         selectCommand(button);
-        copyStatus && (copyStatus.textContent = window.__landingI18n?.t('selected') || 'Command selected. Press Command-C or Ctrl-C to copy.');
+        say('selected');
       }
     };
     commands?.addEventListener('click', (event) => {

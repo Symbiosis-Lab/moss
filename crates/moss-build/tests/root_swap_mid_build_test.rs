@@ -174,17 +174,16 @@ async fn a_rename_aside_mid_build_still_promotes_under_the_renamed_directory() {
         "the decoy must never receive the build's output"
     );
 
-    // Scan's own cache write (the hash index) must also follow the renamed
-    // root — the one hand-joined `.moss/build.nosync/cache` path this increment
-    // routes through `MossPaths` instead of a bare join.
-    assert!(
-        renamed_dir.join("cache").join("hash-index.json").exists(),
-        "the scan cache must follow the renamed root, not the decoy"
-    );
-    assert!(
-        !build_dir.join("cache").join("hash-index.json").exists(),
-        "the decoy's cache must stay untouched"
-    );
+    // The hash index is a fact about this computer, so it lives in the
+    // folder's store, under neither directory the rename touches.
+    assert!(mp.cache_hash_index().exists(), "the hash index lands in the folder's store");
+    for dir in [&renamed_dir, &build_dir] {
+        assert!(
+            !dir.join("cache").join("hash-index.json").exists(),
+            "no hash index under {}",
+            dir.display()
+        );
+    }
 
     // A live preview request must serve the promoted page.
     use moss_build::ops::serve::{start_server, ServeConfig};

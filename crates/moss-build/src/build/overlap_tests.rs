@@ -69,7 +69,7 @@ use std::sync::{Arc, Mutex};
 /// names. Listing them is what lets
 /// [`assert_every_stage_shipped_entry_is_classified`] fail on any OTHER entry that
 /// has no immutable source.
-const DERIVED: [&str; 7] = [
+const DERIVED: [&str; 8] = [
     // Hover-preview index: one entry per public page, from its title, description
     // and the first 300 characters of its body.
     "_moss/previews.json",
@@ -79,6 +79,8 @@ const DERIVED: [&str; 7] = [
     "rss.xml",
     // The same bytes as rss.xml, at the feed's former address.
     "feed.xml",
+    // The same articles as rss.xml, as JSON Feed.
+    "feed.json",
     // One <loc> per listed page, <lastmod> from its `date`: moves on a page added,
     // removed, renamed, or re-dated — never on a body edit.
     "sitemap.xml",
@@ -687,7 +689,7 @@ async fn a_body_edit_of_a_dated_article_moves_the_feed_too() {
             trigger: || md_only("posts/b.md"),
             on_stage: Some(("posts/b/index.html", "B-BODY")),
         },
-        &["_moss/previews.json", "feed.xml", "llms.txt", "rss.xml"],
+        &["_moss/previews.json", "feed.json", "feed.xml", "llms.txt", "rss.xml"],
     )
     .await;
 }
@@ -702,7 +704,7 @@ async fn re_dating_an_article_moves_the_sitemap_and_the_feed_only() {
             trigger: || md_only("posts/b.md"),
             on_stage: Some(("posts/b/index.html", "2026-03-05")),
         },
-        &["feed.xml", "rss.xml", "sitemap.xml"],
+        &["feed.json", "feed.xml", "rss.xml", "sitemap.xml"],
     )
     .await;
 }
