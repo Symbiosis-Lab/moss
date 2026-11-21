@@ -830,18 +830,16 @@ async fn run_hook(
                 .map_err(|e| format!("{e}"))?;
             let instance: Object = ctx.globals().get("__moss_loaded")
                 .map_err(|e| format!("{e}"))?;
-            // Missing-hook sentinel (pre-merge review Fix 2): fetch the property as a
+            // Missing-hook sentinel: fetch the property as a
             // Value first — an absent hook reads as `undefined` (Ok), and a non-function
             // would FromJs-fail with an rquickjs message the manager can't match. The
-            // sentinel substring MUST stay byte-identical to the webview runtime's
-            // (plugin-runtime.ts:312): manager.rs `execute_configure_domain` matches
-            // `e.contains("Hook function not found")` to gracefully skip deploy
-            // plugins that don't implement the hook.
+            // sentinel must stay byte-identical to the webview runtime's: see
+            // `is_missing_export`.
             let hook_val: Value = instance.get(&hook_name as &str)
                 .map_err(|e| format!("{e}"))?;
             let hook_fn: Function = hook_val
                 .into_function()
-                .ok_or_else(|| format!("Hook function not found: {hook_name}"))?;
+                .ok_or_else(|| format!("{MISSING_EXPORT}: {hook_name}"))?;
             let arg: Value = ctx.json_parse(context_json)
                 .map_err(|e| format!("{e}"))?;
             let ret: Value = match hook_fn.call((arg,)) {
@@ -942,6 +940,15 @@ fn reply_fatal(job: Job, err: &str) {
         #[cfg(any(test, feature = "test-fixtures"))]
         Job::PanicForTest => {}
     }
+}
+
+/// The start of the error a hook call returns when the plugin does not export
+/// that hook. The webview runtime (plugin-runtime.ts) writes the same words.
+const MISSING_EXPORT: &str = "Hook function not found";
+
+/// Whether a hook call failed only because the plugin does not export the hook.
+pub(crate) fn is_missing_export(error: &str) -> bool {
+    error.contains(MISSING_EXPORT)
 }
 
 #[cfg(test)]

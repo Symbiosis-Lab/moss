@@ -510,8 +510,8 @@ pub struct HookConfig {
 /// Check whether a login-capable plugin needs connection for the given project:
 /// the folder records no account for it
 /// ([`account_binding`](crate::plugins::manager::accounts::account_binding))
-/// and the person has not dismissed the sign-in (`login_dismissed` in the
-/// plugin's config).
+/// and the person has neither dismissed the sign-in (`login_dismissed` in the
+/// plugin's config) nor signed the folder out.
 ///
 /// This is the signal the manager's process run reports as
 /// `PipelineEvent::PluginNeedsConnection` before the hooks execute.
@@ -520,7 +520,8 @@ pub fn plugin_needs_connection(project_path: &str, plugin_id: &str) -> bool {
         .ok()
         .and_then(|c| c.get("login_dismissed").and_then(|v| v.as_bool()))
         .unwrap_or(false);
-    crate::plugins::manager::accounts::account_binding(project_path, plugin_id).is_none() && !dismissed
+    use crate::plugins::manager::accounts::{account_binding, marked_signed_out};
+    account_binding(project_path, plugin_id).is_none() && !dismissed && !marked_signed_out(project_path, plugin_id)
 }
 
 // The `[hooks]` writer, `save_hook_config`, lives in `domain::config`
