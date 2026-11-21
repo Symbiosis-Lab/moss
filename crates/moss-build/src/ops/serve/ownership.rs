@@ -947,6 +947,7 @@ mod tests {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
                         use std::io::{Read, Write};
+                        blocking(&stream);
                         let mut buf = [0u8; 1024];
                         let _ = stream.read(&mut buf);
                         let body = format!(
@@ -1027,6 +1028,26 @@ mod tests {
             "nobody recorded, another app, another program, this process, a record that no longer answers"
         );
     }
+    /// On macOS an accepted socket inherits its listener's non-blocking mode, so a
+    /// fixture's read of a request that has not arrived yet fails at once.
+    fn blocking(stream: &std::net::TcpStream) {
+        stream.set_nonblocking(false).unwrap();
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
+    }
+
+    #[test]
+    fn a_fixture_answers_a_request_that_arrives_late() {
+        use std::io::{Read, Write};
+        let folder = tempfile::tempdir().unwrap();
+        let server = FixtureServer::new(legacy_health(folder.path()), false);
+        let mut client = std::net::TcpStream::connect(server.url.trim_start_matches("http://")).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        client.write_all(b"GET /__moss_health/ HTTP/1.1\r\nHost: fixture\r\n\r\n").unwrap();
+        let mut response = String::new();
+        let _ = client.read_to_string(&mut response);
+        assert!(response.starts_with("HTTP/1.1 200 "), "{response}");
+    }
+
     struct FixtureServer {
         url: String,
         credential_requests: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -1050,7 +1071,7 @@ mod tests {
                         std::thread::sleep(std::time::Duration::from_millis(2));
                         continue;
                     };
-                    stream.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
+                    blocking(&stream);
                     let mut buffer = [0; 4096];
                     let mut size = 0;
                     // TCP can split the request line or headers across reads.

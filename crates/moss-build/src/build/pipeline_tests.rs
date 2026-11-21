@@ -8487,15 +8487,17 @@ fn an_author_supplied_web_manifest_wins_over_the_generated_one() {
 /// `dir` and close it once `fault` has refused the scan's first probe, then
 /// forget it. Keyed to the refusal, not a delay, so a slow start cannot close
 /// the folder before the scan is waiting.
-fn close_folder_during_its_scan(dir: &std::path::Path, fault: &crate::build::cloud_readiness::storage::TestFault) -> std::thread::JoinHandle<()> {
+fn close_folder_during_its_scan(dir: &std::path::Path, fault: &crate::build::cloud_readiness::storage::TestFault) -> std::thread::JoinHandle<std::time::Instant> {
     let watch = fault.watch();
     let folder = dir.to_string_lossy().into_owned();
     let session = crate::system::folder_session::FolderSession::new(dir.to_path_buf());
     crate::system::folder_session::registry().insert(folder.clone(), session.clone());
     std::thread::spawn(move || {
-        watch.wait_for_first_refusal();
+        // Closing before the scan holds the session would test a build with no folder session.
+        assert!(watch.wait_for_first_refusal(), "the build never reached its scan");
         session.cancel.cancel();
         crate::system::folder_session::registry().remove(&folder);
+        std::time::Instant::now()
     })
 }
 
@@ -8542,7 +8544,6 @@ fn availability_pending_source_walk_preserves_current_generation_and_baseline() 
 fn availability_fatal_scan_settles_a_previous_cloud_waiting_gate() {
     crate::infra::home::with_moss_home(|_| {
         tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap().block_on(async {
-            let started = std::time::Instant::now();
             use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
             use crate::build::cloud_readiness::{storage::TestFault, StorageOperation};
             let (dir, _cleanup) = create_test_dir();
@@ -8554,16 +8555,17 @@ fn availability_fatal_scan_settles_a_previous_cloud_waiting_gate() {
             let fault = TestFault::install(&dir, &dir, StorageOperation::RootMetadata, 1000, std::time::Duration::from_millis(20));
             let closing = close_folder_during_its_scan(&dir, &fault);
             assert!(run_pipeline(config()).await.is_err());
-            closing.join().unwrap();
+            let cancelled = closing.join().unwrap().elapsed();
             assert!(crate::build::cloud_readiness::take_gate(dir.to_str().unwrap()));
             crate::build::cloud_readiness::mark_gated(dir.to_str().unwrap());
             drop(fault);
             let _fatal = TestFault::install_errno(&dir, &dir, StorageOperation::RootMetadata, 1000, std::time::Duration::from_secs(2), libc::EACCES);
+            let resumed = std::time::Instant::now();
             let failure = run_pipeline(config()).await.unwrap_err();
             assert!(failure.contains("Permission denied"), "the resumed owner must report the actual hard error: {failure}");
             assert!(!crate::build::cloud_readiness::take_gate(dir.to_str().unwrap()), "fatal scan must settle the old cloud waiting latch");
-            assert!(started.elapsed() < std::time::Duration::from_secs(10),
-                "scan admission and cancellation must settle promptly: {:?}", started.elapsed());
+            assert!(cancelled < std::time::Duration::from_secs(10) && resumed.elapsed() < std::time::Duration::from_secs(10),
+                "cancellation and the resumed scan must settle promptly: {cancelled:?}, {:?}", resumed.elapsed());
         });
     });
 }

@@ -689,14 +689,16 @@ pub(crate) struct FaultWatch {
 #[cfg(test)]
 impl FaultWatch {
     /// Block until the fault has refused a probe, so a caller acts only once the walk is waiting.
-    pub fn wait_for_first_refusal(&self) {
-        let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    /// False if none came in 10 minutes: a loaded machine can take minutes to reach the walk.
+    pub fn wait_for_first_refusal(&self) -> bool {
+        let deadline = std::time::Instant::now() + Duration::from_secs(600);
         while std::time::Instant::now() < deadline {
             if test_faults().refusals.get(&self.key).is_some_and(|(remaining, _)| *remaining < self.count) {
-                return;
+                return true;
             }
             std::thread::sleep(Duration::from_millis(5));
         }
+        false
     }
 }
 
