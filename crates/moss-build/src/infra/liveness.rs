@@ -1,4 +1,4 @@
-//! The publish path's stall detector: one process-global progress clock.
+//! The publish path's stall detector: one process-global progress counter.
 //!
 //! # Why this exists
 //!
@@ -9,9 +9,10 @@
 //!
 //! # The shape
 //!
-//! One process-global clock. Anything that *proves the publish is still moving*
-//! calls [`bump`]. A [`watchdog`] samples the clock ~1 Hz and resolves once
-//! nothing has bumped for [`STALL_TIMEOUT`]. Publish duration then becomes a
+//! One process-global bump counter. Anything that *proves the publish is still
+//! moving* calls [`bump`]. A [`watchdog`] samples the counter ~1 Hz and resolves
+//! once it has not moved for [`STALL_TIMEOUT`], timed on the watchdog's own
+//! clock. Publish duration then becomes a
 //! function of the user's link, and only a genuinely stuck publish fails.
 //!
 //! Process-global (rather than per-deploy) is sound because publish is already
@@ -38,8 +39,9 @@
 //! listener that feeds it build progress lives app-side, in `deploy::activity`.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+// The system clock, unless a test runtime has paused it.
+use tokio::time::Instant;
 
 /// How long the whole publish may go without a single proof of progress.
 ///
@@ -66,27 +68,16 @@ pub const STALL_TIMEOUT: Duration = Duration::from_secs(300);
 /// is detected between `STALL_TIMEOUT` and `STALL_TIMEOUT + WATCHDOG_POLL`.
 const WATCHDOG_POLL: Duration = Duration::from_secs(1);
 
-/// Process-start reference for the millisecond clock below. A monotonic
-/// `Instant` cannot be stored in an atomic; the offset from a fixed origin can.
-static ORIGIN: OnceLock<Instant> = OnceLock::new();
-
-/// Milliseconds since [`ORIGIN`] at the last [`bump`].
-static LAST_ACTIVITY_MS: AtomicU64 = AtomicU64::new(0);
-
 /// Monotonic count of bumps. Lets a poller ask "did anything happen since I
-/// last looked?" without comparing wall-clock values (see `wait_until_quiet`).
+/// last looked?" without storing a time, so a bump from a thread on another
+/// clock (a test runtime with paused time) is still progress.
 static BUMPS: AtomicU64 = AtomicU64::new(0);
-
-fn origin() -> Instant {
-    *ORIGIN.get_or_init(Instant::now)
-}
 
 /// Record that the publish just made observable progress.
 ///
-/// Cheap enough (two relaxed atomic stores) to call per uploaded chunk, per
+/// Cheap enough (one relaxed atomic add) to call per uploaded chunk, per
 /// hashed file, and per post-commit step.
 pub fn bump() {
-    LAST_ACTIVITY_MS.store(origin().elapsed().as_millis() as u64, Ordering::Relaxed);
     BUMPS.fetch_add(1, Ordering::Relaxed);
     #[cfg(test)]
     THREAD_BUMPS.with(|c| c.set(c.get() + 1));
@@ -109,12 +100,6 @@ pub(crate) fn thread_bump_count() -> u64 {
     THREAD_BUMPS.with(|c| c.get())
 }
 
-/// How long since the last [`bump`].
-pub fn idle() -> Duration {
-    let now = origin().elapsed().as_millis() as u64;
-    Duration::from_millis(now.saturating_sub(LAST_ACTIVITY_MS.load(Ordering::Relaxed)))
-}
-
 /// Monotonic bump count — a change means progress happened.
 pub fn bump_count() -> u64 {
     BUMPS.load(Ordering::Relaxed)
@@ -126,11 +111,14 @@ pub async fn watchdog(stall: Duration) -> Duration {
     // Sub-second `stall` values exist only in tests; keep the poll under the
     // window so the detection delay stays proportional.
     let poll = std::cmp::min(WATCHDOG_POLL, stall / 4).max(Duration::from_millis(1));
+    let (mut seen, mut since) = (bump_count(), Instant::now());
     loop {
         tokio::time::sleep(poll).await;
-        let idle = idle();
-        if idle >= stall {
-            return idle;
+        let count = bump_count();
+        if count != seen {
+            (seen, since) = (count, Instant::now());
+        } else if since.elapsed() >= stall {
+            return since.elapsed();
         }
     }
 }
@@ -138,7 +126,7 @@ pub async fn watchdog(stall: Duration) -> Duration {
 /// Run `fut` under the stall watchdog: its own result if it finishes, a stall
 /// error if it goes quiet for `stall`.
 ///
-/// The clock is bumped on entry so a caller never inherits a stale window.
+/// Starting the body counts as progress, so it bumps on entry.
 pub async fn bounded_by_stall<T, E: From<String>, F>(fut: F, stall: Duration, what: &str) -> Result<T, E>
 where
     F: std::future::Future<Output = Result<T, E>>,
