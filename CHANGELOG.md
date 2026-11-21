@@ -14,6 +14,10 @@ All notable changes to moss will be documented here.
 
 - A page that no other form of a channel takes goes as its title, the `description` from its front matter and its link. A description that does not fit whole is left out, and moss no longer quotes the page's opening in its place.
 
+### Fixed
+
+- Before a publish, moss no longer warns that folders such as `/assets/` will go offline. This came up after a publish from a ready-made folder, or after the attachment folder was set to `assets`.
+
 ## [0.15.28] - 2026-11-20
 
 ### Fixed

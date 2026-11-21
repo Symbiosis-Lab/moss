@@ -94,3 +94,76 @@ fn a_hand_made_assets_index_is_served_as_written() {
     let served = staged(&dir, "assets/index.html");
     assert!(served.contains("Hand made") && !served.contains("http-equiv=\"refresh\""), "{served}");
 }
+
+/// The folder as an app build sees it after `attachment_folder = "assets"`:
+/// moss writes no forwarding pages under assets/ any more. `docs/` and `hi/`
+/// hold only files.
+fn attachment_site(extra: &[(&'static str, &'static str)]) -> (std::path::PathBuf, impl Drop, crate::build::manifest::SealedManifest) {
+    let mut files = STORAGE.to_vec();
+    files.extend([("docs/guide.pdf", "pdf"), ("hi/card.pdf", "pdf")]);
+    files.extend_from_slice(extra);
+    let (dir, cleanup) = site(&files);
+    fs::create_dir_all(dir.join(".moss")).unwrap();
+    fs::write(dir.join(".moss/config.toml"), "[editor]\nattachment_folder = \"assets\"\n").unwrap();
+    let (_, _, _, now) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+    assert!(!now.files().contains_key("assets/imported/index.html"), "premise: no forwarding page is built");
+    (dir, cleanup, now)
+}
+
+fn removed_paths(baseline: &crate::build::manifest::change_set::PublishedSnapshot, dir: &std::path::Path, now: &crate::build::manifest::SealedManifest) -> Vec<String> {
+    use crate::build::manifest::change_set::removed_addresses;
+    removed_addresses(baseline, now.site_hashes_view(), |src| dir.join(src).exists()).into_iter().map(|r| r.path).collect()
+}
+
+#[test]
+fn after_a_prebuilt_publish_only_pages_are_named_not_the_assets_forwards() {
+    use crate::build::manifest::change_set::{LiveEntry, PublishedSnapshot};
+    let (dir, _cleanup, now) = attachment_site(&[("assets/drafts/plan.md", "---\ntitle: Plan\ndraft: true\n---\n\nSoon.\n")]);
+    // A prebuilt upload's record: the tree it sent, no sources.
+    let files = ["index.html", "assets/index.html", "assets/imported/index.html", "assets/drafts/plan/index.html", "docs/index.html", "gone/index.html", "old.html"];
+    let prebuilt = |triples: Vec<LiveEntry>| PublishedSnapshot {
+        target: "test".into(),
+        files: files.iter().map(|f| (f.to_string(), format!("100644:{f}"))).collect(),
+        triples: Some(triples),
+        ..Default::default()
+    };
+    assert!(now.files().contains_key("docs/guide.pdf") && !now.files().contains_key("docs/index.html"), "premise: docs/ is served with no page");
+    let named = ["assets/drafts/plan/index.html", "docs/index.html", "gone/index.html", "old.html"];
+    assert_eq!(removed_paths(&prebuilt(Vec::new()), &dir, &now), named);
+    // A page the record names under assets/ is still a page.
+    let imported = LiveEntry { uid: "a1".into(), url: "assets/imported/".into(), source_path: "assets/imported/imported.md".into(), title: "Imported".into() };
+    assert!(removed_paths(&prebuilt(vec![imported]), &dir, &now).contains(&"assets/imported/index.html".to_string()));
+}
+
+#[test]
+fn a_recorded_forward_from_an_assets_folder_is_not_a_page_going_offline() {
+    use crate::build::manifest::change_set::PublishedSnapshot;
+    let (dir, _cleanup, now) = attachment_site(&[]);
+    assert!(!now.files().contains_key("assets/index.html"), "premise: no forwarding page is built");
+    let mut last = PendingManifest::new(SiteHashes::default());
+    for out in ["index.html", "notes/hello/index.html", "assets/index.html", "assets/about/index.html", "hi/index.html"] {
+        last.register(&ServedPath::from_source(out).unwrap(), b"forward", crate::build::manifest::HashBucket::Files);
+    }
+    last.register_page_stub("assets/index.html", "index.html");
+    last.register_page_stub("hi/index.html", "notes/hello/index.html");
+    let mut baseline = PublishedSnapshot::from_sealed(&last.seal(), "test", "2026-01-01T00:00:00Z".into());
+    // A page the author wrote under assets/ and has since deleted.
+    baseline.source_to_output.insert("assets/about.md".into(), "assets/about/index.html".into());
+    assert!(!now.files().contains_key("hi/index.html"), "premise: hi/ is served with no page");
+    assert_eq!(removed_paths(&baseline, &dir, &now), ["assets/about/index.html", "hi/index.html"], "pages and their old addresses still count");
+}
+
+#[test]
+fn an_old_address_of_a_page_under_assets_still_counts() {
+    use crate::build::manifest::change_set::PublishedSnapshot;
+    let (dir, _cleanup, now) = attachment_site(&[("assets/notes/x.md", "---\ntitle: X\n---\n\nHi.\n")]);
+    assert!(now.files().contains_key("assets/notes/x/index.html"), "premise: the page is served");
+    let mut last = PendingManifest::new(SiteHashes::default());
+    for out in ["index.html", "assets/notes/x/index.html", "assets/notes/old-x/index.html"] {
+        last.register(&ServedPath::from_source(out).unwrap(), b"page", crate::build::manifest::HashBucket::Files);
+    }
+    last.register_page_stub("assets/notes/old-x/index.html", "assets/notes/x/index.html");
+    let mut baseline = PublishedSnapshot::from_sealed(&last.seal(), "test", "2026-01-01T00:00:00Z".into());
+    baseline.source_to_output.insert("assets/notes/x.md".into(), "assets/notes/x/index.html".into());
+    assert_eq!(removed_paths(&baseline, &dir, &now), ["assets/notes/old-x/index.html"]);
+}
