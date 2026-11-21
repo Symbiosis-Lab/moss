@@ -330,3 +330,39 @@ fn a_build_resolves_its_folders_store_once() {
     let writes = RECORD_WRITES.lock().unwrap().get(&name_for(site.path())).copied();
     assert_eq!(writes, Some(1));
 }
+
+/// `f` on its own thread, or `None` if it has not answered within five seconds.
+fn within_five_seconds<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || tx.send(f()));
+    rx.recv_timeout(std::time::Duration::from_secs(5)).ok()
+}
+
+#[test]
+fn the_sweep_waits_for_no_resolve_while_it_reads_stores_that_stay() {
+    let w = World::new();
+    let stores = std::sync::Arc::new(w.stores(volume_a));
+    stores.resolve(&w.folder("kept")).unwrap();
+    let held = stores.lock().unwrap();
+    let sweeping = stores.clone();
+    let swept = within_five_seconds(move || sweeping.collect(std::time::Duration::ZERO).unwrap());
+    drop(held);
+    assert_eq!(swept, Some(0), "the sweep finished while another process held the stores");
+}
+
+#[test]
+fn a_known_folder_answers_while_another_folder_is_still_resolving() {
+    let (known, new) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let known_store = try_for_folder(known.path()).unwrap();
+    let held = FolderStores::temporary().lock().unwrap();
+    let new_path = new.path().to_path_buf();
+    let resolving = std::thread::spawn(move || try_for_folder(&new_path).map(|s| s.record_dir));
+    // Only orders the calls: started late, the resolve cannot block the lookup
+    // in either version, so a slow machine can only pass this test, never fail it.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let known_path = known.path().to_path_buf();
+    let answered = within_five_seconds(move || try_for_folder(&known_path).unwrap().record_dir);
+    drop(held);
+    assert!(resolving.join().unwrap().is_ok());
+    assert_eq!(answered, Some(known_store.record_dir), "the known folder waited for another folder's resolve");
+}
