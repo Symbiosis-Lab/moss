@@ -19,6 +19,7 @@ All notable changes to moss will be documented here.
 
 - A page that no other form of a channel takes goes as its title, the `description` from its front matter and its link. A description that does not fit whole is left out, and moss no longer quotes the page's opening in its place.
 - A publish right after a build, with nothing changed since, no longer makes every page again: it keeps the pages nothing changed, as `moss build` does. The first build after a publish still makes every page.
+- The plugin catalog shows each plugin as a tile with a round logo. Installing runs a ring round the logo, from a plus into a minus and back.
 
 ### Fixed
 
