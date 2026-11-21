@@ -402,35 +402,40 @@ pub fn for_folder(folder: &Path) -> FolderStore {
 /// [`for_folder`], or why this computer has no store for `folder`. A build
 /// asks this before it writes, so its output never falls back into scratch.
 pub fn try_for_folder(folder: &Path) -> io::Result<FolderStore> {
-    use std::collections::HashMap;
-    use std::sync::{Arc, LazyLock, Mutex, OnceLock};
-    type Answer = Result<FolderStore, (io::ErrorKind, String)>;
-    // One cell per folder, shared by its spellings: a resolve blocks only the
-    // callers asking for the same folder, never every path lookup in the process.
-    static RESOLVED: LazyLock<Mutex<HashMap<PathBuf, Arc<OnceLock<Answer>>>>> = LazyLock::new(Default::default);
+    static RESOLVED: std::sync::LazyLock<Memo> = std::sync::LazyLock::new(Default::default);
+    memoized(&RESOLVED, folder, |canonical| {
+        let resolved = FolderStores::running_for(canonical)
+            .ok_or_else(|| io::Error::other("no app-data directory"))
+            .and_then(|stores| stores.resolve(canonical));
+        collect_gone_once();
+        if let Err(e) = &resolved {
+            log::warn!("no computer store for {} ({e}); this run keeps nothing for it", folder.display());
+        }
+        resolved
+    })
+}
+
+type Answer = Result<FolderStore, (io::ErrorKind, String)>;
+/// One cell per folder, shared by its spellings.
+type Memo = std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Arc<std::sync::OnceLock<Answer>>>>;
+
+/// `folder`'s answer from `memo`, resolving it once. A resolve blocks only the
+/// callers asking for the same folder, never every path lookup in the process.
+fn memoized(memo: &Memo, folder: &Path, resolve: impl FnOnce(&Path) -> io::Result<FolderStore>) -> io::Result<FolderStore> {
     let answer = |known: &Answer| known.clone().map_err(|(kind, message)| io::Error::new(kind, message));
-    let known = RESOLVED.lock().unwrap_or_else(|e| e.into_inner()).get(folder).cloned();
+    let known = memo.lock().unwrap_or_else(|e| e.into_inner()).get(folder).cloned();
     if let Some(found) = known.as_ref().and_then(|cell| cell.get()) {
         return answer(found);
     }
     // Not created yet: try again on the next call.
     let canonical = std::fs::canonicalize(folder)?;
     let cell = {
-        let mut known = RESOLVED.lock().unwrap_or_else(|e| e.into_inner());
+        let mut known = memo.lock().unwrap_or_else(|e| e.into_inner());
         let cell = known.entry(canonical.clone()).or_default().clone();
         known.insert(folder.to_path_buf(), cell.clone());
         cell
     };
-    answer(cell.get_or_init(|| {
-        let resolved = FolderStores::running_for(&canonical)
-            .ok_or_else(|| io::Error::other("no app-data directory"))
-            .and_then(|stores| stores.resolve(&canonical));
-        collect_gone_once();
-        if let Err(e) = &resolved {
-            log::warn!("no computer store for {} ({e}); this run keeps nothing for it", folder.display());
-        }
-        resolved.map_err(|e| (e.kind(), e.to_string()))
-    }))
+    answer(cell.get_or_init(|| resolve(&canonical).map_err(|e| (e.kind(), e.to_string()))))
 }
 
 const UNSTORED_PREFIX: &str = "moss-unstored-";
