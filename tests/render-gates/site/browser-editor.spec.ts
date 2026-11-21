@@ -759,7 +759,7 @@ test(PICTURE_GATE, async ({ page }) => {
     await shown('harbour');
     // A build that seals while the picture still encodes is the one that dropped the
     // sizes, so they are read from the first paint until the encode has staged its files.
-    const encoded = () => readdirSync(join(serve.site, '.moss'), { recursive: true, encoding: 'utf8' }).some((f) => /harbour[^/]*\.webp$/.test(f));
+    const encoded = () => existsSync(serve.buildDir) && readdirSync(serve.buildDir, { recursive: true, encoding: 'utf8' }).some((f) => /harbour[^/]*\.webp$/.test(f));
     for (const until = Date.now() + 120_000; ; ) {
       const [p, done] = [await picture('harbour'), encoded()];
       if (p) expect(p.sources, 'a build made while the picture encodes dropped its sizes').toBeGreaterThan(0);
