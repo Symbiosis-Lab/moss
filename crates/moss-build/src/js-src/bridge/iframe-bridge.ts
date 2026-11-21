@@ -60,7 +60,11 @@ import { installCaptureResponder } from "./capture/responder";
   // geometry must never reach. A published site never carries the bridge;
   // the preview server injects it into every page, embedded or not.
   const embedded = window !== window.top;
-  const isShellMounted = embedded && window.parent === window.top;
+  // The shell's preview iframe carries `name="moss-preview"` in its markup. The
+  // shell may be a frame itself (the browser editor) and lives on another
+  // origin, so the parent cannot be inspected; a frame's name is readable from
+  // inside and survives navigation. A nested site iframe has another name.
+  const isShellMounted = embedded && window.name === "moss-preview";
   const hasFrameClass =
     document.documentElement.classList.contains("moss-shell-frame");
   if (isShellMounted && !hasFrameClass) {
@@ -567,16 +571,17 @@ import { installCaptureResponder } from "./capture/responder";
       // Propagate the shell marker (`__moss_shell`) so the next document
       // also gets the `moss-shell-frame` class server-side and avoids the
       // first-paint flash. We only propagate when WE are shell-mounted
-      // (isShellMounted from the topology check above) — never propagate
+      // (isShellMounted above) — never propagate
       // out of a nested iframe. This keeps nested cover/embed iframes
       // free of the marker even if the bridge were somehow loaded inside
       // them. See `iframe_bridge.rs::SHELL_MARKER` for the contract.
       event.preventDefault();
       const url = new URL(href, window.location.href);
-      if (isShellMounted) url.searchParams.set("__moss_shell", "1");
-      // Not only when shell-mounted: the browser editor nests the shell in a frame of its own.
-      if (loadsDocument(anchor, url, new URL(location.href))) {
-        window.parent.postMessage({ type: "moss-navigation-start", url: url.href }, "*");
+      if (isShellMounted) {
+        url.searchParams.set("__moss_shell", "1");
+        if (loadsDocument(anchor, url, new URL(location.href))) {
+          window.parent.postMessage({ type: "moss-navigation-start", url: url.href }, "*");
+        }
       }
       window.location.href = url.href;
     },

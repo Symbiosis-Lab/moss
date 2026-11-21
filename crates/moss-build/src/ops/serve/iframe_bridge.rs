@@ -248,17 +248,12 @@ to{background-color:transparent}}\
 ///      No flash, no jump.
 ///
 ///   2. **Client-side, defense-in-depth (fallback path):** the bridge
-///      script (`iframe-bridge.ts`) runs a topology check
-///      `window !== window.top && window.parent === window.top` on every
-///      load. If the topology says we're a direct child of the shell and
-///      the class isn't already there (e.g. some user-page JS did
-///      `window.location = "/foo"` without going through the bridge's link
-///      interceptor, so the marker was lost), the script adds the class.
-///      This causes a one-frame flash but recovers correctness on the
-///      next stylesheet recalc. Conversely, if the class IS present but
-///      topology says we're inside a nested iframe (defensive against a
-///      hypothetical bug where the marker leaked into a nested URL), the
-///      script removes the class.
+///      script (`iframe-bridge.ts`) checks on every load whether it runs in
+///      the shell's preview frame, which the shell names `moss-preview` in
+///      its markup (`window.name` is readable from inside a cross-origin
+///      frame and survives navigation). In that frame without the class
+///      (page script navigated and dropped the marker) it adds the class;
+///      in any other frame with the class (a leaked marker) it removes it.
 ///
 /// # Marker propagation
 ///
@@ -277,7 +272,7 @@ to{background-color:transparent}}\
 /// when constructing the URL — the browser fires the request directly
 /// from the parent document's parser. So the marker is never present on
 /// the nested URL, the middleware doesn't add the class, and the bridge's
-/// topology check (running inside the nested iframe) confirms it's not
+/// frame-name check (running inside the nested iframe) confirms it's not
 /// shell-mounted and skips the class-add path. **Result: nested iframes
 /// have no class, no padding, no flash, no inverse-flash. Chrome geometry
 /// cannot leak in.**

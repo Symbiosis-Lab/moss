@@ -65,7 +65,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFile
 import { crc32, deflateSync } from 'node:zlib';
 import { join } from 'node:path';
 import { png } from '../../e2e/helpers/contents-ruler-site';
-import { openEditor as openEditorFrames, useEditServe } from '../../e2e/helpers/edit-serve';
+import { openEditor as openEditorFrames, openShell, useEditServe } from '../../e2e/helpers/edit-serve';
 import { buildPreviewCtxEntries, type PreviewCtxPayload } from '../../../packages/moss-ui/src/ui/preview/preview-context-menu';
 
 // Event pages, each linking to the next: the forms a person writes by hand,
@@ -457,6 +457,19 @@ test("an event's start and end open date and time controls that write what the b
   expect(file()).toBe(fair(''));
   await page.keyboard.press('Enter');
   await expect.poll(file, { timeout: 15_000 }).toBe(fair(`start: ${today}\n`));
+});
+
+test("the shell follows the site's theme and page colour", async ({ page }) => {
+  const { shell, preview } = await openShell(page, serve, 'Hello garden.');
+  const pageColor = () => shell.evaluate(() => document.documentElement.style.getPropertyValue('--moss-page-color'));
+  const siteColor = () => preview.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--moss-color-bg').trim());
+  await expect.poll(pageColor, { timeout: 10_000 }).toBe(await siteColor());
+  const before = await pageColor();
+  const flipped = (await shell.evaluate(() => document.documentElement.dataset.theme)) === 'dark' ? 'light' : 'dark';
+  await preview.click('.nav-theme-btn');
+  await expect.poll(() => shell.evaluate(() => document.documentElement.dataset.theme), { timeout: 10_000 }).toBe(flipped);
+  await expect.poll(pageColor, { timeout: 10_000 }).not.toBe(before);
+  expect(await pageColor()).toBe(await siteColor());
 });
 
 test("a folder's own page listing its folder by name is not marked missing", async ({ page }) => {
