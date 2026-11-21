@@ -1713,28 +1713,33 @@ fn rebuild_event_emits_for_new_page_even_with_no_output_hash_diff() {
     );
 }
 
-/// The stash must describe what the screen shows (build.rs guards the
-/// `record_content_hashes` call with this). A cloud-withheld build
-/// (`publishable == false`) and a cancelled build never switch the preview
-/// (`pipeline::run` only calls `switch_to` under `if publishable`, and the
-/// cancelled early-return precedes both arms), so stashing their hashes made
-/// the watcher's next refresh diff compare against a build the user never
-/// saw — a later publishable build's `changed_output_files` then omitted
-/// pages edited before the withheld build and the preview never refreshed.
+/// The stash and the top-level listing describe what the screen shows. A
+/// withheld build (`publishable == false`) or a cancelled one never switched
+/// the preview: stashing its hashes would make the next refresh diff against
+/// output the user never saw, and recording its listing would make the sweep
+/// skip the rebuild that shows an entry it took.
 #[test]
-fn stash_only_when_the_preview_switched_to_this_build() {
-    use crate::build::should_stash_hashes;
+fn only_a_shown_build_replaces_the_stash_and_the_listing() {
+    use crate::build::stash_shown_build;
+    let folder = "/vault-stash-shown";
+    let records = crate::system::build_records::records();
+    let listing = |name: &str| Some(vec![PathBuf::from(format!("{folder}/{name}"))]);
+    let shown = |records: &crate::system::build_records::BuildRecords| {
+        (records.content_hashes(folder).map(|h| h.files.get("research/index.html").cloned()), records.scanned_listing(folder))
+    };
 
-    // The one combination where the preview switched to this build's output.
-    assert!(should_stash_hashes(true, false));
+    stash_shown_build(folder, true, false, page_at("v1"), listing("first.md"));
+    let first = shown(records);
+    assert_eq!(first.1, Some(vec![PathBuf::from(format!("{folder}/first.md"))]));
 
-    // Withheld: staged but never shown — must not become the baseline.
-    assert!(!should_stash_hashes(false, false));
+    stash_shown_build(folder, false, false, page_at("v2"), listing("withheld.md"));
+    assert_eq!(shown(records), first, "a withheld build changes neither");
+    stash_shown_build(folder, false, true, page_at("v2"), listing("cancelled.md"));
+    stash_shown_build(folder, true, true, page_at("v2"), listing("cancelled.md"));
+    assert_eq!(shown(records), first, "a cancelled build changes neither");
 
-    // Cancelled: pipeline returns publishable=false too, but the guard must
-    // not rely on that coupling holding forever.
-    assert!(!should_stash_hashes(false, true));
-    assert!(!should_stash_hashes(true, true));
+    stash_shown_build(folder, true, false, page_at("v3"), None);
+    assert_eq!(shown(records).1, first.1, "a build whose listing failed keeps the last one");
 }
 
 

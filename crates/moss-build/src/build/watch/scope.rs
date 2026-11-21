@@ -199,6 +199,15 @@ pub fn watch_set_content_change(
     appeared || disappeared
 }
 
+/// The sweep's verdict on a set change between two ticks: rebuild unless the
+/// last shown build already listed this set before its scan, which means the
+/// scan took every entry. No listing yet, or a different one, rebuilds.
+pub fn sweep_rebuilds_for(folder: &str, prev: &[PathBuf], desired: &[PathBuf], root_readable: bool, social: &Path) -> bool {
+    watch_set_content_change(prev, desired, root_readable, social)
+        && crate::system::build_records::records().scanned_listing(folder)
+            .is_none_or(|built| watch_set_content_change(&built, desired, root_readable, social))
+}
+
 /// Returns `true` if any element of `paths` is watchable under moss's
 /// gitignore-style rules. Mirrors the per-event prefilter that used to live
 /// inline in `start_file_watching` before the debouncer refactor.

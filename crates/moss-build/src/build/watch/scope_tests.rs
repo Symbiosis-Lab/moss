@@ -591,3 +591,44 @@ fn the_first_map_pack_grows_the_watch_set() {
     let after: Vec<PathBuf> = watch_targets_with_error(root).unwrap().into_iter().map(|(p, _)| p).collect();
     assert!(watch_set_content_change(&before, &after, true, &social), "{before:?} -> {after:?}");
 }
+
+// ---------------------------------------------------------------------------
+// sweep_rebuilds_for — the set change, checked against the last shown build's
+// listing, taken before its scan.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_sweep_skips_an_entry_the_last_shown_build_listed() {
+    let folder = "/vault-sweep-listed";
+    let prev = vec![PathBuf::from(format!("{folder}/index.md"))];
+    let desired = vec![PathBuf::from(format!("{folder}/index.md")), PathBuf::from(format!("{folder}/clip.mp4"))];
+    let records = crate::system::build_records::records();
+
+    assert!(sweep_rebuilds_for(folder, &prev, &desired, true, &social_dir()), "no build has shown yet: rebuild");
+    records.record_scanned_listing(folder, prev.clone());
+    assert!(sweep_rebuilds_for(folder, &prev, &desired, true, &social_dir()), "the build did not list the new entry: rebuild");
+    records.record_scanned_listing(folder, desired.clone());
+    assert!(!sweep_rebuilds_for(folder, &prev, &desired, true, &social_dir()), "the build listed it, so its scan took it");
+    assert!(!sweep_rebuilds_for(&format!("{folder}/"), &prev, &desired, true, &social_dir()), "the same folder with a trailing slash finds the same listing");
+    assert!(sweep_rebuilds_for(folder, &desired, &prev, true, &social_dir()), "an entry gone since the build's listing: rebuild");
+    assert!(!sweep_rebuilds_for(folder, &desired, &desired, true, &social_dir()), "no change between ticks: nothing");
+}
+
+/// A folder reached through a symlinked parent is another key. It must find
+/// no listing and rebuild, never skip on a listing it cannot see.
+#[cfg(unix)]
+#[test]
+fn a_folder_reached_another_way_rebuilds_rather_than_skipping() {
+    let tmp = TempDir::new().unwrap();
+    let real = tmp.path().join("real");
+    fs::create_dir(&real).unwrap();
+    std::os::unix::fs::symlink(tmp.path(), tmp.path().join("link")).unwrap();
+    let real_str = real.join("site").to_string_lossy().into_owned();
+    let linked_str = tmp.path().join("link/real/site").to_string_lossy().into_owned();
+    let prev = vec![PathBuf::from("/x/index.md")];
+    let desired = vec![PathBuf::from("/x/index.md"), PathBuf::from("/x/clip.mp4")];
+
+    crate::system::build_records::records().record_scanned_listing(&real_str, desired.clone());
+    assert!(!sweep_rebuilds_for(&real_str, &prev, &desired, true, &social_dir()));
+    assert!(sweep_rebuilds_for(&linked_str, &prev, &desired, true, &social_dir()));
+}

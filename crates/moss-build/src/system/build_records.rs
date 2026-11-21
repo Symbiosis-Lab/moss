@@ -127,6 +127,8 @@ pub struct BuildRecords {
     public_scripts: FolderSlot<Vec<String>>,
     /// The last build's file copies and folder redirects, for its seal to write.
     late_redirects: FolderSlot<crate::build::feeds::kept_addresses::LateRedirects>,
+    /// The top-level entries the last shown build listed before its scan.
+    scanned_listing: FolderSlot<Vec<std::path::PathBuf>>,
 }
 
 /// How a build ended, for the publish that follows it.
@@ -175,7 +177,7 @@ impl BuildRecords {
 
     /// Record so the watcher can diff the live screen against race-free data
     /// instead of re-reading the `hashes.json` a detached seal task writes at
-    /// an unpredictable time. Callers must gate this on `should_stash_hashes`
+    /// an unpredictable time. Only a build that shows records one (`build::stash_shown_build`)
     /// — the record must describe what the screen shows, so a withheld or
     /// cancelled build must not write one.
     pub fn record_content_hashes(&self, folder_path: &str, hashes: SiteHashes) {
@@ -190,6 +192,18 @@ impl BuildRecords {
     /// `load_previous_hashes`.
     pub fn content_hashes(&self, folder_path: &str) -> Option<SiteHashes> {
         self.content_hashes.get(&Self::key(folder_path))
+    }
+
+    /// Recorded with the stash, under the same guard: a build that did not
+    /// show leaves the previous listing, so the sweep still rebuilds for what
+    /// it missed.
+    pub fn record_scanned_listing(&self, folder_path: &str, listing: Vec<std::path::PathBuf>) {
+        self.scanned_listing.record(Self::key(folder_path), listing);
+    }
+
+    /// `None` until a build of this folder has shown in this process.
+    pub fn scanned_listing(&self, folder_path: &str) -> Option<Vec<std::path::PathBuf>> {
+        self.scanned_listing.get(&Self::key(folder_path))
     }
 
     /// Install one completed build's publish evidence. The admission epoch is

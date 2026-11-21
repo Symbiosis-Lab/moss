@@ -1544,3 +1544,66 @@ async fn the_sweep_stubs_a_file_the_watcher_never_announced() {
     assert!(!dir.join("reports/kept.md").exists(), "a file already there is not an arrival");
     assert!(!dir.join("misc/other.md").exists(), "an undecided folder gets no stubs");
 }
+
+// ── A top-level entry the last shown build already listed ─────────────────
+
+/// Runs a sweep over `dir` (seeded with its current listing), lets
+/// `between` change the folder, and returns the triggers it dispatched.
+async fn sweep_around(dir: &Path, between: impl FnOnce()) -> Vec<crate::build::BuildTrigger> {
+    let heard = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = heard.clone();
+    let dispatch: crate::ops::watch::RebuildDispatch = std::sync::Arc::new(move |request: crate::ops::watch::worker::RebuildRequest| {
+        sink.lock().unwrap().push(request.trigger);
+        Box::pin(async {})
+    });
+    std::env::set_var("MOSS_TEST_SWEEP_TICK_MS", "100");
+    let session = FolderSession::new(dir.to_path_buf());
+    start(session.clone(), host(dispatch)).await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    between();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    session.cancel.cancel();
+    std::env::remove_var("MOSS_TEST_SWEEP_TICK_MS");
+    let heard = heard.lock().unwrap().clone();
+    heard
+}
+
+/// A new top-level folder rebuilds the site in full, unless the last shown
+/// build listed it before its scan: that build already took it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_top_level_entry_the_last_build_listed_rebuilds_nothing() {
+    let full = |heard: &[crate::build::BuildTrigger]| heard.iter().any(|t| matches!(t, crate::build::BuildTrigger::Full));
+    for listed in [false, true] {
+        let tmp = tempfile::Builder::new().prefix("moss-sweep-listed-").tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        std::fs::write(dir.join("index.md"), "# Home\n").unwrap();
+        let folder = dir.to_string_lossy().into_owned();
+        build_once(&folder).await;
+        let heard = sweep_around(&dir, || {
+            if listed {
+                let mut listing: Vec<PathBuf> = scope::watch_targets_with_error(&dir).unwrap().into_iter().map(|(p, _)| p).collect();
+                listing.push(dir.join("notes"));
+                crate::system::build_records::records().record_scanned_listing(&folder, listing);
+            }
+            std::fs::create_dir(dir.join("notes")).unwrap();
+            std::fs::write(dir.join("notes/a.md"), "# A\n").unwrap();
+        }).await;
+        assert_eq!(full(&heard), !listed, "listed by the last build: {listed}; heard {heard:?}");
+    }
+}
+
+/// A build records the listing it took before its scan, under the key the
+/// sweep reads with.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_shown_build_records_its_listing_for_the_sweep() {
+    let tmp = tempfile::Builder::new().prefix("moss-sweep-records-").tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
+    std::fs::write(dir.join("index.md"), "# Home\n").unwrap();
+    std::fs::create_dir(dir.join("notes")).unwrap();
+    std::fs::write(dir.join("notes/a.md"), "# A\n").unwrap();
+    build_once(&dir.to_string_lossy()).await;
+
+    let session = FolderSession::new(dir.clone());
+    let listed: Vec<PathBuf> = scope::watch_targets_with_error(&session.folder).unwrap().into_iter().map(|(p, _)| p).collect();
+    assert_eq!(crate::system::build_records::records().scanned_listing(&session.folder.to_string_lossy()), Some(listed));
+}
