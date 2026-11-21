@@ -588,31 +588,21 @@ impl PluginManifest {
         Ok(manifest)
     }
 
-    /// The legacy spelling: a bare `capabilities` list with no
-    /// `contributes` block. Each declared capability synthesizes the
-    /// contribution that now grants it, so the fold below can stay the only
-    /// source of capabilities without unloading an installed plugin.
+    /// The legacy spelling: a `capabilities` list. Each declared capability
+    /// adds the contribution that now grants it, so the fold below can stay
+    /// the only source of capabilities without unloading an installed plugin.
     fn synthesize_contributions_from_capabilities(&mut self) {
         if self.capabilities.is_empty() {
             return;
         }
-        let contributes = self.contributes.get_or_insert_with(PluginContributes::default);
-        for capability in &self.capabilities {
-            match capability {
-                Capability::Process => {
-                    contributes.processor.get_or_insert_with(Default::default);
-                }
-                Capability::Deploy => {
-                    contributes.deploy_target.get_or_insert_with(Default::default);
-                }
-                Capability::Syndicate => {
-                    contributes.channel.get_or_insert_with(Default::default);
-                }
-                Capability::Login => {
-                    contributes.channel.get_or_insert_with(Default::default).login = Some(Login::Export);
-                }
-            }
-        }
+        self.contributes.get_or_insert_with(PluginContributes::default).grant_old_capabilities(&self.capabilities);
+    }
+
+    /// The names of the contributions this manifest declares, sorted: what the
+    /// catalog files it under. Read after [`Self::parse`], so an old
+    /// `capabilities` list is already among them.
+    pub fn contribution_names(&self) -> Vec<String> {
+        self.contributes.as_ref().map(PluginContributes::names).unwrap_or_default()
     }
 
     /// Fold the legacy declaration surfaces into `settings` and `needs`.
@@ -811,6 +801,72 @@ impl PluginContributes {
         };
         declared.into_iter().filter(|(_, body)| !body.is_null()).map(|(kind, _)| kind).collect()
     }
+
+    /// Every contribution name this moss reads, sorted: the field names
+    /// serde derives for this struct. A table that files plugins by
+    /// contribution is checked against it, so a new one cannot go unfiled.
+    pub fn every_name() -> Vec<String> {
+        let mut names: Vec<String> = field_names_of::<Self>().iter().map(|n| n.to_string()).collect();
+        names.sort();
+        names
+    }
+
+    /// [`Self::kinds`], sorted, as the registry's index lists them.
+    pub(crate) fn names(&self) -> Vec<String> {
+        let mut names = self.kinds();
+        names.sort();
+        names
+    }
+
+    /// Add the contribution that now grants each capability an old manifest
+    /// lists. The one place an old capability becomes a contribution: manifest
+    /// parse and a registry index entry both call it.
+    pub(crate) fn grant_old_capabilities(&mut self, capabilities: &[Capability]) {
+        for capability in capabilities {
+            match capability {
+                Capability::Process => {
+                    self.processor.get_or_insert_with(Default::default);
+                }
+                Capability::Deploy => {
+                    self.deploy_target.get_or_insert_with(Default::default);
+                }
+                Capability::Syndicate => {
+                    self.channel.get_or_insert_with(Default::default);
+                }
+                Capability::Login => {
+                    self.channel.get_or_insert_with(Default::default).login = Some(Login::Export);
+                }
+            }
+        }
+    }
+}
+
+/// The field names `T`'s derived `Deserialize` asks for, read by handing it a
+/// deserializer that records them and stops.
+fn field_names_of<'de, T: Deserialize<'de>>() -> &'static [&'static str] {
+    struct Recorder<'a>(&'a mut &'static [&'static str]);
+    impl<'de> serde::Deserializer<'de> for Recorder<'_> {
+        type Error = serde::de::value::Error;
+        fn deserialize_any<V: serde::de::Visitor<'de>>(self, _: V) -> Result<V::Value, Self::Error> {
+            Err(serde::de::Error::custom("only fields are recorded"))
+        }
+        fn deserialize_struct<V: serde::de::Visitor<'de>>(
+            self,
+            _: &'static str,
+            fields: &'static [&'static str],
+            _: V,
+        ) -> Result<V::Value, Self::Error> {
+            *self.0 = fields;
+            Err(serde::de::Error::custom("only fields are recorded"))
+        }
+        serde::forward_to_deserialize_any! {
+            bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string bytes byte_buf option unit
+            unit_struct newtype_struct seq tuple tuple_struct map enum identifier ignored_any
+        }
+    }
+    let mut fields: &'static [&'static str] = &[];
+    let _ = T::deserialize(Recorder(&mut fields));
+    fields
 }
 
 /// What a set of contribution kinds lets a plugin do.
@@ -836,6 +892,15 @@ pub fn capabilities_of_kinds<'a>(kinds: impl IntoIterator<Item = &'a str>) -> Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_contribution_name_is_read_from_the_struct() {
+        let names = PluginContributes::every_name();
+        for name in ["channel", "deploy_target", "derivations", "identity", "processor", "site_settings", "stack"] {
+            assert!(names.contains(&name.to_string()), "{name} in {names:?}");
+        }
+        assert_eq!(names.len(), 12, "{names:?}");
+    }
     use moss_core::untrusted_text::{MAX_NAME, MAX_SENTENCE};
 
     fn manifest_with_setup(setup: &str) -> PluginManifest {

@@ -55,7 +55,7 @@ pub struct IndexEntry {
     pub repository: Option<String>,
     #[serde(default)]
     pub capabilities: Vec<String>,
-    /// The names of the kinds the manifest contributes (`channel`,
+    /// The names of the contributions the manifest declares (`channel`,
     /// `deploy_target`, …). Absent in an index published before the registry
     /// listed them.
     #[serde(default)]
@@ -104,19 +104,37 @@ pub struct IndexEntry {
 }
 
 impl IndexEntry {
-    /// What the plugin can do, for a row drawn before it is installed: what
-    /// its contributed kinds grant, plus whatever the old `capabilities` list
-    /// names. Once installed, the manifest on disk answers instead.
-    pub fn granted_capabilities(&self) -> Vec<String> {
-        let kinds = self.contributes.iter().map(String::as_str);
-        let mut granted: Vec<String> = crate::plugins::contributions::capabilities_of_kinds(kinds)
+    /// The contributions the plugin declares, for a row drawn before it is
+    /// installed: the index's `contributes`, plus what its old `capabilities`
+    /// list now grants, as manifest parse folds it. Sorted.
+    pub fn contributions(&self) -> Vec<String> {
+        let old: Vec<crate::plugins::Capability> = self
+            .capabilities
             .iter()
-            .map(|capability| capability.hook_name().to_string())
+            .filter_map(|c| serde_json::from_value(serde_json::Value::String(c.clone())).ok())
             .collect();
-        for declared in &self.capabilities {
-            if !granted.contains(declared) {
-                granted.push(declared.clone());
-            }
+        let mut folded = crate::plugins::contributions::PluginContributes::default();
+        folded.grant_old_capabilities(&old);
+        let mut names = self.contributes.clone();
+        names.extend(folded.names());
+        names.sort();
+        names.dedup();
+        names
+    }
+
+    /// What the plugin can do, for a row drawn before it is installed: what
+    /// its [`Self::contributions`] grant, plus `login` when the old list names
+    /// it (a field of the channel the index cannot carry otherwise). Once
+    /// installed, the manifest on disk answers instead.
+    pub fn granted_capabilities(&self) -> Vec<String> {
+        let contributions = self.contributions();
+        let mut granted: Vec<String> =
+            crate::plugins::contributions::capabilities_of_kinds(contributions.iter().map(String::as_str))
+                .iter()
+                .map(|capability| capability.hook_name().to_string())
+                .collect();
+        if self.capabilities.iter().any(|c| c == "login") {
+            granted.push("login".to_string());
         }
         granted
     }

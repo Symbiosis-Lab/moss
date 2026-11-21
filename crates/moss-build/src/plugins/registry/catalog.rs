@@ -57,6 +57,7 @@ pub(super) fn add_rows_for_the_folder(plugins: &mut Vec<AvailablePlugin>, plugin
             description: String::new(),
             icon_url: None,
             capabilities: manifest.capabilities.iter().map(|c| c.hook_name().to_string()).collect(),
+            contributions: manifest.contribution_names(),
             installed: false,
             source: default_plugin_source(),
             requires_stack: manifest.needs_stack(),
@@ -214,6 +215,7 @@ pub(super) fn merge_registry_rows(plugins: &mut Vec<AvailablePlugin>, entries: &
             // downloaded and sanitized.
             icon_url: None,
             capabilities: entry.granted_capabilities(),
+            contributions: entry.contributions(),
             installed: false,
             source: default_plugin_source(),
             requires_stack: entry.requires_stack,
@@ -276,19 +278,32 @@ mod tests {
 
 
     /// A plugin is offered before install where it will be found after: a
-    /// registry entry and a manifest that declare the same kinds grant the
-    /// same capabilities.
+    /// registry entry and a manifest that declare the same contributions are
+    /// granted the same capabilities and filed under the same contributions,
+    /// an old `capabilities` list included.
     #[test]
     fn a_published_row_is_granted_what_its_manifest_would_be() {
-        let capabilities_of = |kinds: &[&str], legacy: &[&str]| -> (Vec<String>, Vec<String>) {
+        let rows_of = |kinds: &[&str], legacy: &[&str]| -> (AvailablePlugin, crate::plugins::PluginManifest) {
             let mut published = entry("stranger", "1.0.0", None);
             published.contributes = kinds.iter().map(|kind| kind.to_string()).collect();
             published.capabilities = legacy.iter().map(|c| c.to_string()).collect();
             let mut rows = Vec::new();
             merge_registry_rows(&mut rows, &[published]);
 
+            // A stack has required fields; every other contribution here
+            // parses from an empty body.
+            let body = |kind: &str| match kind {
+                "stack" => serde_json::json!({
+                    "id": "stranger", "display_name": "Stranger", "version": "v1",
+                    "sources": [{ "kind": "download", "platform": "darwin-arm64",
+                        "url": "https://example.invalid/s.dmg", "sha256": "0".repeat(64),
+                        "archive_format": "dmg", "executable": "S.app/Contents/MacOS/s" }],
+                    "start": ["start"], "stop": ["quit"],
+                }),
+                _ => serde_json::json!({}),
+            };
             let contributes: serde_json::Map<String, serde_json::Value> =
-                kinds.iter().map(|kind| (kind.to_string(), serde_json::json!({}))).collect();
+                kinds.iter().map(|kind| (kind.to_string(), body(kind))).collect();
             let manifest = crate::plugins::PluginManifest::parse(
                 &serde_json::json!({
                     "name": "stranger", "version": "1.0.0", "entry": "main.js",
@@ -297,8 +312,11 @@ mod tests {
                 .to_string(),
             )
             .unwrap();
-
-            let mut from_index = rows.remove(0).capabilities;
+            (rows.remove(0), manifest)
+        };
+        let capabilities_of = |kinds: &[&str], legacy: &[&str]| -> (Vec<String>, Vec<String>) {
+            let (index, manifest) = rows_of(kinds, legacy);
+            let mut from_index = index.capabilities;
             let mut from_manifest: Vec<String> =
                 manifest.capabilities.iter().map(|c| c.hook_name().to_string()).collect();
             from_index.sort();
@@ -313,10 +331,29 @@ mod tests {
             (&["derivations"], &[]),
             // An index from before entries named their kinds.
             (&[], &["deploy"]),
+            (&["stack"], &["deploy"]),
+            (&[], &["login"]),
         ] {
             let (from_index, from_manifest) = capabilities_of(kinds, legacy);
             assert_eq!(from_index, from_manifest, "kinds {kinds:?}, declared {legacy:?}");
+            let (index, manifest) = rows_of(kinds, legacy);
+            assert_eq!(index.contributions, manifest.contribution_names(), "kinds {kinds:?}, declared {legacy:?}");
+            for row in [&index.contributions, &manifest.contribution_names()] {
+                let has = |name: &str| row.iter().any(|c| c == name);
+                assert_eq!(has("channel"), from_index.contains(&"syndicate".to_string()), "{row:?}");
+                assert_eq!(has("deploy_target"), from_index.contains(&"deploy".to_string()), "{row:?}");
+            }
         }
+        // A name this moss has no capability for is dropped, not guessed.
+        let mut unknown = entry("stranger", "1.0.0", None);
+        unknown.contributes = vec!["channel".into()];
+        unknown.capabilities = vec!["publish".into()];
+        assert_eq!(unknown.contributions(), ["channel"]);
+        assert_eq!(unknown.granted_capabilities(), ["syndicate"]);
+        let (old_host, _) = rows_of(&["stack"], &["deploy"]);
+        assert_eq!(old_host.contributions, ["deploy_target", "stack"]);
+        let (matters, _) = rows_of(&["channel", "jobs"], &["process"]);
+        assert_eq!(matters.contributions, ["channel", "jobs", "processor"]);
 
         let (channel, _) = capabilities_of(&["channel"], &[]);
         let (host, _) = capabilities_of(&["deploy_target"], &[]);
