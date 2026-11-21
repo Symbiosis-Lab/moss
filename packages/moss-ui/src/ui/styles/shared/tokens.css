@@ -461,7 +461,7 @@ body.own-titlebar.platform-linux[data-caption-start="1"] { --moss-traffic-light-
 body.own-titlebar.platform-linux[data-caption-start="2"] { --moss-traffic-light-inset: 76px; }
 body.own-titlebar.platform-linux[data-caption-start="3"] { --moss-traffic-light-inset: 108px; }
 body.own-titlebar.controls-trailing.platform-linux {
-  --moss-caption-zone-width: calc(var(--moss-caption-linux-inset) + var(--moss-caption-end-count) * var(--moss-caption-linux-pitch));
+  --moss-caption-zone-width: calc(var(--moss-caption-linux-inset) + var(--moss-caption-end-count, 0) * var(--moss-caption-linux-pitch));
 }
 
 /* Native fullscreen hides the macOS traffic lights, so the reserved left inset

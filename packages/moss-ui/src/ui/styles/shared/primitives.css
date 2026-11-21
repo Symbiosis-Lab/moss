@@ -1720,10 +1720,10 @@ body.own-titlebar.platform-linux [data-window-button][data-caption-side] {
   color: var(--moss-chrome-icon-color);
 }
 body.own-titlebar.platform-linux [data-window-button][data-caption-side="end"] {
-  inset-inline: auto calc(var(--moss-caption-linux-inset) + var(--moss-caption-slot) * var(--moss-caption-linux-pitch));
+  inset-inline: auto calc(var(--moss-caption-linux-inset) + var(--moss-caption-slot, 0) * var(--moss-caption-linux-pitch));
 }
 body.own-titlebar.platform-linux [data-window-button][data-caption-side="start"] {
-  inset-inline: calc(var(--moss-caption-linux-inset) + var(--moss-caption-slot) * var(--moss-caption-linux-pitch)) auto;
+  inset-inline: calc(var(--moss-caption-linux-inset) + var(--moss-caption-slot, 0) * var(--moss-caption-linux-pitch)) auto;
 }
 body.own-titlebar.platform-linux [data-window-button][data-caption-side]:hover {
   background: var(--moss-active-overlay);

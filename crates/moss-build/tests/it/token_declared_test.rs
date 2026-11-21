@@ -16,6 +16,7 @@ fn no_bare_var_names_an_undeclared_property() {
     let roots = [
         crates.join("moss-build/src/assets"),
         crates.join("moss-core/src/contract"),
+        crates.join("../packages/moss-ui/src"),
     ];
     let comment = Regex::new(r"(?s)/\*.*?\*/").unwrap();
     let marker = Regex::new(r"allow:runtime-token\s+(--moss-[a-zA-Z0-9-]+)\s+\S").unwrap();
