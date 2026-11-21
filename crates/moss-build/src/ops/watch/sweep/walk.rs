@@ -181,7 +181,7 @@ pub(super) fn owned_walk(folder: &Path, budget: Option<std::time::Duration>, cur
     let resume = cursor.clone();
     let owner = crate::build::cloud_readiness::storage::OperationOwner::for_folder(folder);
     let value = await_operation(folder, OperationPolicy::SweepWalk { budget, resume: cursor }, budget.unwrap_or(WALK_DEADLINE) + std::time::Duration::from_secs(2),
-        &|| !owner.active(), &|| {}, std::sync::Arc::new(move || {
+        owner, &|| {}, std::sync::Arc::new(move || {
             walk_with_error(&root, budget.map(|d| Instant::now() + d), resume.as_deref()).map(StorageValue::Sweep)
         }))?;
     let StorageValue::Sweep(snapshot) = value.as_ref() else { unreachable!("sweep operation returns its measurement") };

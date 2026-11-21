@@ -13,6 +13,8 @@ impl SessionGuard {
         crate::system::folder_session::registry().insert(path.clone(), session.clone());
         Self { path, session }
     }
+
+    fn owner(&self) -> OperationOwner { OperationOwner::of(Some(&self.session)) }
 }
 impl Drop for SessionGuard {
     fn drop(&mut self) {
@@ -46,7 +48,7 @@ fn availability_recovers_same_complete_directory_operation() {
         Ok(StorageValue::Directory { entries, hidden: 0 })
     });
     let waited = std::cell::Cell::new(false);
-    let result = await_operation_in(&pool(), root.path(), OperationPolicy::SourceWalk, true, Duration::from_secs(1), &|| false, &|| waited.set(true), attempt).unwrap();
+    let result = await_operation_in(&pool(), root.path(), OperationPolicy::SourceWalk, true, Duration::from_secs(1), OperationOwner::Host, &|| waited.set(true), attempt).unwrap();
     let StorageValue::Directory { entries, .. } = &*result else { panic!("wrong operation result") };
     assert_eq!(entries.len(), 2);
     assert_eq!(count.load(Ordering::SeqCst), 2);
@@ -57,7 +59,7 @@ fn availability_recovers_same_complete_directory_operation() {
 fn availability_local_deadlock_is_immediate_fatal() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().to_path_buf();
-    let result = await_operation_in(&pool(), root.path(), OperationPolicy::SourceWalk, false, Duration::from_secs(1), &|| false, &|| panic!("local errors never wait"), Arc::new(move || Err(refused(&path, StorageOperation::ReadDirOpen))));
+    let result = await_operation_in(&pool(), root.path(), OperationPolicy::SourceWalk, false, Duration::from_secs(1), OperationOwner::Host, &|| panic!("local errors never wait"), Arc::new(move || Err(refused(&path, StorageOperation::ReadDirOpen))));
     assert_eq!(result.unwrap_err().pending, None);
 }
 
@@ -65,7 +67,7 @@ fn availability_local_deadlock_is_immediate_fatal() {
 fn availability_parent_eof_does_not_clear_child_metadata_failure() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("child.md");
-    let result = await_operation_in(&pool(), root.path(), OperationPolicy::SourceWalk, true, Duration::from_millis(20), &|| false, &|| {}, Arc::new(move || Err(refused(&path, StorageOperation::EntryMetadata))));
+    let result = await_operation_in(&pool(), root.path(), OperationPolicy::SourceWalk, true, Duration::from_millis(20), OperationOwner::Host, &|| {}, Arc::new(move || Err(refused(&path, StorageOperation::EntryMetadata))));
     assert_eq!(result.unwrap_err().pending, Some(Settled::TimedOut));
 }
 
@@ -73,7 +75,7 @@ fn availability_parent_eof_does_not_clear_child_metadata_failure() {
 fn availability_cancel_detaches_without_accepting_a_result() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().to_path_buf();
-    let result = await_operation_in(&pool(), root.path(), OperationPolicy::SourceWalk, true, Duration::from_secs(1), &|| true, &|| {}, Arc::new(move || Err(refused(&path, StorageOperation::WalkEntry))));
+    let result = await_operation_in(&pool(), root.path(), OperationPolicy::SourceWalk, true, Duration::from_secs(1), OperationOwner::Folder(std::sync::Weak::new()), &|| {}, Arc::new(move || Err(refused(&path, StorageOperation::WalkEntry))));
     assert_eq!(result.unwrap_err().pending, Some(Settled::Cancelled));
 }
 
@@ -109,14 +111,14 @@ fn availability_fixed_capacity_is_ten_native_calls_and_deduplicates_wedges() {
         Ok(StorageValue::Directory { entries: Vec::new(), hidden: 0 })
     });
     let key = |index| OperationKey { path: PathBuf::from(format!("/structure/{index}")), policy: OperationPolicy::SourceWalk };
-    let task = pool.structural_operation(key(0), operation.clone()).unwrap();
-    pool.structural_operation(key(1), operation.clone()).unwrap();
+    let task = pool.structural_operation(key(0), OperationOwner::Host, operation.clone()).unwrap();
+    pool.structural_operation(key(1), OperationOwner::Host, operation.clone()).unwrap();
     wait_until(|| calls.load(Ordering::SeqCst) == 2);
     for _ in 0..20 {
-        let same = pool.structural_operation(key(0), operation.clone()).unwrap();
+        let same = pool.structural_operation(key(0), OperationOwner::Host, operation.clone()).unwrap();
         assert!(Arc::ptr_eq(&same, &task));
     }
-    for index in 2..20 { pool.structural_operation(key(index), operation.clone()); }
+    for index in 2..20 { pool.structural_operation(key(index), OperationOwner::Host, operation.clone()); }
     assert_eq!(pool.snapshot().in_flight, 10);
     assert_eq!(pool.snapshot().waiting, crate::build::cloud_prefetch::BACKGROUND_WAITING);
     assert_eq!(calls.load(Ordering::SeqCst), 2);
@@ -129,7 +131,7 @@ fn availability_fixed_capacity_is_ten_native_calls_and_deduplicates_wedges() {
 fn availability_detached_waiters_share_native_call_and_emit_one_recovery_arrival() {
     use std::sync::Condvar;
     let root = tempfile::tempdir().unwrap();
-    let _session = SessionGuard::new(root.path());
+    let folder = SessionGuard::new(root.path());
     let path = root.path().to_path_buf();
     let pool = Arc::new(pool());
     let calls = Arc::new(AtomicUsize::new(0));
@@ -146,16 +148,16 @@ fn availability_detached_waiters_share_native_call_and_emit_one_recovery_arrival
         while !*released { released = wake.wait(released).unwrap(); }
         Ok(StorageValue::Directory { entries: Vec::new(), hidden: 0 })
     });
-    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let session = crate::system::folder_session::FolderSession::new(root.path().to_path_buf());
     let worker_pool = pool.clone();
-    let worker_cancel = cancelled.clone();
+    let worker_owner = OperationOwner::of(Some(&session));
     let worker_path = root.path().to_path_buf();
     let worker_operation = operation.clone();
-    let waiter = std::thread::spawn(move || await_operation_in(&worker_pool, &worker_path, OperationPolicy::SourceWalk, true, Duration::from_secs(1), &|| worker_cancel.load(Ordering::SeqCst), &|| {}, worker_operation));
+    let waiter = std::thread::spawn(move || await_operation_in(&worker_pool, &worker_path, OperationPolicy::SourceWalk, true, Duration::from_secs(1), worker_owner, &|| {}, worker_operation));
     wait_until(|| calls.load(Ordering::SeqCst) == 1);
-    cancelled.store(true, Ordering::SeqCst);
+    session.cancel.cancel();
     assert_eq!(waiter.join().unwrap().unwrap_err().pending, Some(Settled::Cancelled));
-    let next = await_operation_in(&pool, root.path(), OperationPolicy::SourceWalk, true, Duration::from_millis(20), &|| false, &|| {}, operation);
+    let next = await_operation_in(&pool, root.path(), OperationPolicy::SourceWalk, true, Duration::from_millis(20), folder.owner(), &|| {}, operation);
     assert_eq!(next.unwrap_err().pending, Some(Settled::TimedOut));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(pool.snapshot().in_flight, 1);
@@ -181,7 +183,7 @@ fn availability_worker_opts_in_without_changing_caller_or_process_policy() {
             if unsafe { getiopolicy_np(3, 1) } != 2 { return Err(refused(&path, StorageOperation::RootMetadata)); }
             Ok(StorageValue::Directory { entries: Vec::new(), hidden: 0 })
         });
-        await_operation_in(&pool, root.path(), OperationPolicy::SourceWalk, true, Duration::from_secs(1), &|| false, &|| {}, operation).unwrap();
+        await_operation_in(&pool, root.path(), OperationPolicy::SourceWalk, true, Duration::from_secs(1), OperationOwner::Host, &|| {}, operation).unwrap();
         assert_eq!(policy(1), 1);
         assert_eq!(policy(0), process);
     }).join().unwrap();
@@ -211,21 +213,21 @@ fn availability_new_request_discards_completion_started_before_source_change() {
         Ok(StorageValue::Directory { entries: vec![(entry, metadata)], hidden: 0 })
     });
     let pool = Arc::new(pool());
-    let cancel = Arc::new(AtomicBool::new(false));
+    let session = crate::system::folder_session::FolderSession::new(root.path().to_path_buf());
     let first_pool = pool.clone();
     let first_path = root.path().to_path_buf();
     let first_op = operation.clone();
-    let first_cancel = cancel.clone();
-    let first = std::thread::spawn(move || await_operation_in(&first_pool, &first_path, OperationPolicy::SourceWalk, true, Duration::from_secs(1), &|| first_cancel.load(Ordering::SeqCst), &|| {}, first_op));
+    let first_owner = OperationOwner::of(Some(&session));
+    let first = std::thread::spawn(move || await_operation_in(&first_pool, &first_path, OperationPolicy::SourceWalk, true, Duration::from_secs(1), first_owner, &|| {}, first_op));
     wait_until(|| begun.load(Ordering::SeqCst));
-    cancel.store(true, Ordering::SeqCst);
+    session.cancel.cancel();
     assert_eq!(first.join().unwrap().unwrap_err().pending, Some(Settled::Cancelled));
     std::fs::write(&child, "new content").unwrap();
     let joining = Arc::new(AtomicBool::new(false));
     let next_joining = joining.clone();
     let next_pool = pool.clone();
     let next_path = root.path().to_path_buf();
-    let next = std::thread::spawn(move || await_operation_in(&next_pool, &next_path, OperationPolicy::SourceWalk, true, Duration::from_secs(1), &|| false, &|| next_joining.store(true, Ordering::SeqCst), operation));
+    let next = std::thread::spawn(move || await_operation_in(&next_pool, &next_path, OperationPolicy::SourceWalk, true, Duration::from_secs(1), OperationOwner::Host, &|| next_joining.store(true, Ordering::SeqCst), operation));
     wait_until(|| joining.load(Ordering::SeqCst));
     std::thread::sleep(Duration::from_millis(20));
     *gate.0.lock().unwrap() = true;
@@ -248,9 +250,9 @@ fn availability_capacity_pending_receives_one_wake_when_other_work_frees_admissi
         Ok(StorageValue::Directory { entries: Vec::new(), hidden: 0 })
     });
     let key = |i| OperationKey { path: PathBuf::from(format!("/unrelated/{i}")), policy: OperationPolicy::SourceWalk };
-    for i in 0..2 { pool.structural_operation(key(i), held.clone()).unwrap(); }
+    for i in 0..2 { pool.structural_operation(key(i), OperationOwner::Host, held.clone()).unwrap(); }
     wait_until(|| pool.snapshot().in_flight == 2);
-    for i in 2..14 { pool.structural_operation(key(i), held.clone()).unwrap(); }
+    for i in 2..14 { pool.structural_operation(key(i), OperationOwner::Host, held.clone()).unwrap(); }
     assert_eq!(pool.snapshot().waiting, crate::build::cloud_prefetch::BACKGROUND_WAITING);
     let root = tempfile::tempdir().unwrap();
     let session = crate::system::folder_session::FolderSession::new(root.path().to_path_buf());
@@ -268,7 +270,7 @@ fn availability_capacity_pending_receives_one_wake_when_other_work_frees_admissi
         }).collect();
         Ok(StorageValue::Directory { entries, hidden: 0 })
     });
-    let result = await_operation_in(&pool, root.path(), OperationPolicy::SourceWalk, true, Duration::from_millis(20), &|| false, &|| {}, source.clone());
+    let result = await_operation_in(&pool, root.path(), OperationPolicy::SourceWalk, true, Duration::from_millis(20), OperationOwner::of(Some(&session)), &|| {}, source.clone());
     assert_eq!(result.unwrap_err().pending, Some(Settled::TimedOut));
     assert_eq!(pool.take_structural_arrivals(root.path()).wake_count(), 0);
     *gate.0.lock().unwrap() = true;
@@ -276,7 +278,7 @@ fn availability_capacity_pending_receives_one_wake_when_other_work_frees_admissi
     wait_until(|| pool.snapshot().waiting == 0 && pool.snapshot().in_flight == 0);
     assert_eq!(pool.take_structural_arrivals(root.path()).wake_count(), 1, "admission refusal must retain a recovery wake");
     assert_eq!(pool.take_structural_arrivals(root.path()).wake_count(), 0);
-    let result = await_operation_in(&pool, root.path(), OperationPolicy::SourceWalk, true, Duration::from_secs(1), &|| false, &|| {}, source).unwrap();
+    let result = await_operation_in(&pool, root.path(), OperationPolicy::SourceWalk, true, Duration::from_secs(1), OperationOwner::of(Some(&session)), &|| {}, source).unwrap();
     let StorageValue::Directory { entries, .. } = &*result else { panic!("wrong operation") };
     assert_eq!(entries.len(), 1);
     crate::system::folder_session::registry().remove(&registered);
@@ -298,12 +300,12 @@ fn availability_returned_refusals_yield_workers_to_a_healthy_third_operation() {
             if !released.load(Ordering::SeqCst) { return Err(refused(&path, StorageOperation::ReadDirOpen)); }
             Ok(StorageValue::Directory { entries: Vec::new(), hidden: 0 })
         });
-        pool.structural_operation(OperationKey { path: PathBuf::from(format!("/stuck/{i}")), policy: OperationPolicy::SourceWalk }, operation).unwrap();
+        pool.structural_operation(OperationKey { path: PathBuf::from(format!("/stuck/{i}")), policy: OperationPolicy::SourceWalk }, OperationOwner::Host, operation).unwrap();
     }
     wait_until(|| calls.load(Ordering::SeqCst) >= 2);
     let healthy = Arc::new(AtomicBool::new(false));
     let completed = healthy.clone();
-    pool.structural_operation(OperationKey { path: PathBuf::from("/healthy"), policy: OperationPolicy::SourceWalk }, Arc::new(move || {
+    pool.structural_operation(OperationKey { path: PathBuf::from("/healthy"), policy: OperationPolicy::SourceWalk }, OperationOwner::Host, Arc::new(move || {
         completed.store(true, Ordering::SeqCst);
         Ok(StorageValue::Directory { entries: Vec::new(), hidden: 0 })
     })).unwrap();
@@ -321,7 +323,7 @@ fn availability_deferred_operation_hard_failure_wakes_its_owner() {
     let (send, receive) = std::sync::mpsc::channel();
     pool.set_settlement_emitter(Arc::new(move |event| { send.send(event).unwrap(); }));
     let root = tempfile::tempdir().unwrap();
-    let _session = SessionGuard::new(root.path());
+    let session = SessionGuard::new(root.path());
     let path = root.path().to_path_buf();
     let attempts = Arc::new(AtomicUsize::new(0));
     let calls = attempts.clone();
@@ -330,7 +332,7 @@ fn availability_deferred_operation_hard_failure_wakes_its_owner() {
         if count < 2 { return Err(refused(&path, StorageOperation::EntryMetadata)); }
         Err(StorageFailure::new(Some(path.clone()), StorageOperation::EntryMetadata, io::Error::from_raw_os_error(libc::EACCES)))
     });
-    let result = await_operation_in(&pool, root.path(), OperationPolicy::SourceWalk, true, Duration::from_millis(20), &|| false, &|| {}, operation.clone());
+    let result = await_operation_in(&pool, root.path(), OperationPolicy::SourceWalk, true, Duration::from_millis(20), session.owner(), &|| {}, operation.clone());
     assert_eq!(result.unwrap_err().pending, Some(Settled::TimedOut));
     wait_until(|| pool.snapshot().in_flight == 0 && pool.snapshot().waiting == 0);
     let arrivals = pool.take_structural_arrivals(root.path());
@@ -339,7 +341,7 @@ fn availability_deferred_operation_hard_failure_wakes_its_owner() {
     assert!(matches!(event, crate::types::events::MossEvent::SourceStructureSettled {
         folder_path, path, outcome: crate::types::events::SourceStructureOutcome::Failed,
     } if folder_path == root.path().to_string_lossy() && path == root.path().to_string_lossy()));
-    let resumed = await_operation_in(&pool, root.path(), OperationPolicy::SourceWalk, true, Duration::from_secs(1), &|| false, &|| panic!("hard errors never wait"), operation).unwrap_err();
+    let resumed = await_operation_in(&pool, root.path(), OperationPolicy::SourceWalk, true, Duration::from_secs(1), session.owner(), &|| panic!("hard errors never wait"), operation).unwrap_err();
     assert_eq!(resumed.pending, None);
     assert_eq!(resumed.failure.raw_os_error(), Some(libc::EACCES));
     assert_eq!(attempts.load(Ordering::SeqCst), 4, "terminal failure cannot keep retrying");
@@ -356,7 +358,7 @@ fn availability_closed_folder_drops_deferred_retry_and_emits_no_old_completion()
     crate::system::folder_session::registry().insert(registered.clone(), session.clone());
     let path = root.path().to_path_buf();
     let operation: Operation = Arc::new(move || Err(refused(&path, StorageOperation::ReadDirOpen)));
-    let result = await_operation_in(&pool, root.path(), OperationPolicy::SourceWalk, true, Duration::from_millis(20), &|| false, &|| {}, operation);
+    let result = await_operation_in(&pool, root.path(), OperationPolicy::SourceWalk, true, Duration::from_millis(20), OperationOwner::of(Some(&session)), &|| {}, operation);
     assert_eq!(result.unwrap_err().pending, Some(Settled::TimedOut));
     session.cancel.cancel();
     let start = Instant::now();
@@ -387,7 +389,7 @@ fn availability_standalone_editor_settles_on_typed_bus_without_a_sweep_or_build(
         if calls.fetch_add(1, Ordering::SeqCst) < 2 { return Err(refused(&path, StorageOperation::ReadDirNext)); }
         Ok(StorageValue::Directory { entries: Vec::new(), hidden: 0 })
     });
-    let result = await_operation_in(&pool, root.path(), OperationPolicy::EditorDirectory { project: root.path().to_path_buf(), show_internal: false }, true, Duration::from_millis(20), &|| false, &|| {}, operation);
+    let result = await_operation_in(&pool, root.path(), OperationPolicy::EditorDirectory { project: root.path().to_path_buf(), show_internal: false }, true, Duration::from_millis(20), OperationOwner::Host, &|| {}, operation);
     assert_eq!(result.unwrap_err().pending, Some(Settled::TimedOut));
     wait_until(|| pool.snapshot().waiting + pool.snapshot().in_flight == 0);
     let event = receive.recv_timeout(Duration::from_secs(1)).expect("standalone tree recovery cannot depend on a sweep or successful build");
@@ -406,9 +408,9 @@ fn availability_full_queue_replays_exact_standalone_editor_policy_and_emits_afte
         while !*release { release = held_gate.1.wait(release).unwrap(); }
         Ok(StorageValue::Directory { entries: Vec::new(), hidden: 0 })
     });
-    for i in 0..2 { pool.structural_operation(OperationKey { path: format!("/occupied/{i}").into(), policy: OperationPolicy::SourceWalk }, held.clone()).unwrap(); }
+    for i in 0..2 { pool.structural_operation(OperationKey { path: format!("/occupied/{i}").into(), policy: OperationPolicy::SourceWalk }, OperationOwner::Host, held.clone()).unwrap(); }
     wait_until(|| pool.snapshot().in_flight == 2);
-    for i in 2..14 { pool.structural_operation(OperationKey { path: format!("/occupied/{i}").into(), policy: OperationPolicy::SourceWalk }, held.clone()).unwrap(); }
+    for i in 2..14 { pool.structural_operation(OperationKey { path: format!("/occupied/{i}").into(), policy: OperationPolicy::SourceWalk }, OperationOwner::Host, held.clone()).unwrap(); }
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("visible.md"), "# visible").unwrap();
     std::fs::create_dir(root.path().join(".moss")).unwrap();
@@ -416,7 +418,7 @@ fn availability_full_queue_replays_exact_standalone_editor_policy_and_emits_afte
     let (send, receive) = std::sync::mpsc::channel();
     pool.set_settlement_emitter(Arc::new(move |event| { send.send(event).unwrap(); }));
     let policy = OperationPolicy::EditorDirectory { project: root.path().into(), show_internal: true };
-    let result = await_operation_in(&pool, root.path(), policy.clone(), true, Duration::from_millis(20), &|| false, &|| {}, directory_operation(root.path(), root.path(), true));
+    let result = await_operation_in(&pool, root.path(), policy.clone(), true, Duration::from_millis(20), OperationOwner::Host, &|| {}, directory_operation(root.path(), root.path(), true));
     assert_eq!(result.unwrap_err().pending, Some(Settled::TimedOut));
     assert!(receive.try_recv().is_err(), "capacity refusal cannot emit settled storage");
     *gate.0.lock().unwrap() = true;
@@ -424,7 +426,7 @@ fn availability_full_queue_replays_exact_standalone_editor_policy_and_emits_afte
     let event = receive.recv_timeout(Duration::from_secs(2)).expect("the owner must re-admit a standalone editor without a sweep");
     assert!(matches!(event, crate::types::events::MossEvent::SourceStructureSettled { outcome: crate::types::events::SourceStructureOutcome::Ready, .. }));
     wait_until(|| pool.snapshot().waiting + pool.snapshot().in_flight == 0);
-    let snapshot = await_operation_in(&pool, root.path(), policy, true, Duration::from_secs(1), &|| false, &|| {}, directory_operation(root.path(), root.path(), true)).unwrap();
+    let snapshot = await_operation_in(&pool, root.path(), policy, true, Duration::from_secs(1), OperationOwner::Host, &|| {}, directory_operation(root.path(), root.path(), true)).unwrap();
     let StorageValue::Directory { entries, .. } = &*snapshot else { panic!("wrong policy") };
     assert_eq!(entries.len(), 2, "replayed show_internal policy must include .moss");
 }
@@ -439,9 +441,9 @@ fn availability_editor_admission_intents_are_bounded_and_closed_owners_are_prune
         while !*release { release = held_gate.1.wait(release).unwrap(); }
         Ok(StorageValue::Directory { entries: Vec::new(), hidden: 0 })
     });
-    for i in 0..2 { pool.structural_operation(OperationKey { path: format!("/bound/{i}").into(), policy: OperationPolicy::SourceWalk }, held.clone()).unwrap(); }
+    for i in 0..2 { pool.structural_operation(OperationKey { path: format!("/bound/{i}").into(), policy: OperationPolicy::SourceWalk }, OperationOwner::Host, held.clone()).unwrap(); }
     wait_until(|| pool.snapshot().in_flight == 2);
-    for i in 2..14 { pool.structural_operation(OperationKey { path: format!("/bound/{i}").into(), policy: OperationPolicy::SourceWalk }, held.clone()).unwrap(); }
+    for i in 2..14 { pool.structural_operation(OperationKey { path: format!("/bound/{i}").into(), policy: OperationPolicy::SourceWalk }, OperationOwner::Host, held.clone()).unwrap(); }
     let root = tempfile::tempdir().unwrap();
     let registered = root.path().join("0").to_string_lossy().into_owned();
     let session = crate::system::folder_session::FolderSession::new(registered.clone().into());
@@ -452,7 +454,8 @@ fn availability_editor_admission_intents_are_bounded_and_closed_owners_are_prune
         std::fs::create_dir(&path).unwrap();
         faults.push(TestFault::install(&path, &path, StorageOperation::ReadDirOpen, 1, Duration::from_millis(20)));
         let policy = OperationPolicy::EditorDirectory { project: path.clone(), show_internal: false };
-        let result = await_operation_in(&pool, &path, policy, true, Duration::from_millis(20), &|| false, &|| {}, directory_operation(&path, &path, false)).unwrap_err();
+        let owner = if i == 0 { OperationOwner::of(Some(&session)) } else { OperationOwner::Host };
+        let result = await_operation_in(&pool, &path, policy, true, Duration::from_millis(20), owner, &|| {}, directory_operation(&path, &path, false)).unwrap_err();
         assert_eq!(result.pending, (i < 12).then_some(Settled::TimedOut), "a request beyond the bounded intent backlog must report admission exhaustion");
     }
     session.cancel.cancel();
@@ -460,7 +463,7 @@ fn availability_editor_admission_intents_are_bounded_and_closed_owners_are_prune
     std::fs::create_dir(&path).unwrap();
     faults.push(TestFault::install(&path, &path, StorageOperation::ReadDirOpen, 1, Duration::from_millis(20)));
     let policy = OperationPolicy::EditorDirectory { project: path.clone(), show_internal: false };
-    let result = await_operation_in(&pool, &path, policy, true, Duration::from_millis(20), &|| false, &|| {}, directory_operation(&path, &path, false)).unwrap_err();
+    let result = await_operation_in(&pool, &path, policy, true, Duration::from_millis(20), OperationOwner::Host, &|| {}, directory_operation(&path, &path, false)).unwrap_err();
     assert_eq!(result.pending, Some(Settled::TimedOut), "a closed owner's lightweight intent cannot consume future admission");
     let old = OperationKey { path: registered.clone().into(), policy: OperationPolicy::EditorDirectory { project: registered.clone().into(), show_internal: false } };
     assert!(!pool.structural_recovery_retained(&old));
@@ -490,7 +493,7 @@ fn availability_wedged_optional_publications_preserve_critical_source_and_foregr
     for i in 6..30 { pool.cache_publication(OperationKey { path: format!("/replica/{i}").into(), policy: OperationPolicy::CachePublication { root: "/replica".into(), kind: crate::build::cloud_readiness::storage::PublicationKind::Blob } }, held.clone()); }
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("complete.md"), "# complete").unwrap();
-    let task = pool.structural_operation(OperationKey { path: root.path().into(), policy: OperationPolicy::SourceWalk }, directory_operation(root.path(), root.path(), false)).unwrap();
+    let task = pool.structural_operation(OperationKey { path: root.path().into(), policy: OperationPolicy::SourceWalk }, OperationOwner::Host, directory_operation(root.path(), root.path(), false)).unwrap();
     pool.read_foreground(Path::new("/foreground/one"));
     pool.read_foreground(Path::new("/foreground/two"));
     let started = Instant::now();
@@ -517,17 +520,17 @@ fn availability_new_candidate_after_old_completion_cannot_wait_without_admission
     }) };
     let old_key = OperationKey { path: "/old-native".into(), policy: OperationPolicy::SourceWalk };
     let operation = blocking(old_gate.clone());
-    let old = pool.structural_operation(old_key.clone(), operation.clone()).unwrap();
+    let old = pool.structural_operation(old_key.clone(), OperationOwner::Host, operation.clone()).unwrap();
     old.state.lock().unwrap().deferred = true;
     let held = blocking(gate.clone());
-    for i in 1..14 { pool.structural_operation(OperationKey { path: format!("/full/{i}").into(), policy: OperationPolicy::SourceWalk }, held.clone()).unwrap(); }
+    for i in 1..14 { pool.structural_operation(OperationKey { path: format!("/full/{i}").into(), policy: OperationPolicy::SourceWalk }, OperationOwner::Host, held.clone()).unwrap(); }
     wait_until(|| pool.snapshot().in_flight == 2);
     let weak = Arc::downgrade(&pool);
     pool.set_settlement_emitter(Arc::new(move |_| {
-        weak.upgrade().unwrap().structural_operation(OperationKey { path: "/replacement-native".into(), policy: OperationPolicy::SourceWalk }, held.clone()).unwrap();
+        weak.upgrade().unwrap().structural_operation(OperationKey { path: "/replacement-native".into(), policy: OperationPolicy::SourceWalk }, OperationOwner::Host, held.clone()).unwrap();
     }));
     let subscriber = pool.clone();
-    let waiter = std::thread::spawn(move || wait_for_operation(&subscriber, &old_key.path, old_key.policy, Duration::from_secs(1), &|| false, &|| {}, operation, Arc::new(refused(Path::new("/old-native"), StorageOperation::WalkEntry))));
+    let waiter = std::thread::spawn(move || wait_for_operation(&subscriber, &old_key.path, old_key.policy, Duration::from_secs(1), OperationOwner::Host, &|| {}, operation, Arc::new(refused(Path::new("/old-native"), StorageOperation::WalkEntry))));
     wait_until(|| old.state.lock().unwrap().waiters == 2);
     *old_gate.0.lock().unwrap() = true;
     old_gate.1.notify_all();
@@ -593,7 +596,7 @@ fn availability_standalone_editor_signals_do_not_accumulate_unconsumed_sweep_rec
             while !*release { release = native_gate.1.wait(release).unwrap(); }
             native()
         });
-        let result = await_operation_in(&pool, &path, OperationPolicy::EditorDirectory { project: path.clone(), show_internal: false }, true, Duration::from_millis(5), &|| false, &|| {}, operation);
+        let result = await_operation_in(&pool, &path, OperationPolicy::EditorDirectory { project: path.clone(), show_internal: false }, true, Duration::from_millis(5), OperationOwner::Host, &|| {}, operation);
         assert_eq!(result.unwrap_err().pending, Some(Settled::TimedOut));
         *gate.0.lock().unwrap() = true;
         gate.1.notify_all();
@@ -626,7 +629,7 @@ fn availability_reopened_same_folder_retains_a_fresh_request_after_old_native_ca
         while !*released { released = native_gate.1.wait(released).unwrap(); }
         Ok(snapshot)
     });
-    pool.structural_operation(OperationKey { path: path.clone(), policy: OperationPolicy::SourceWalk }, operation).unwrap();
+    pool.structural_operation(OperationKey { path: path.clone(), policy: OperationPolicy::SourceWalk }, OperationOwner::of(Some(&old)), operation).unwrap();
     wait_until(|| collected.load(Ordering::Acquire));
     old.cancel.cancel();
     crate::system::folder_session::registry().remove(&folder);
@@ -647,7 +650,7 @@ fn availability_reopened_same_folder_retains_a_fresh_request_after_old_native_ca
     });
     let (send, receive) = std::sync::mpsc::channel();
     pool.set_settlement_emitter(Arc::new(move |event| { send.send(event).unwrap(); }));
-    let result = await_operation_in(&pool, &path, OperationPolicy::SourceWalk, true, Duration::from_millis(20), &|| false, &|| {}, operation);
+    let result = await_operation_in(&pool, &path, OperationPolicy::SourceWalk, true, Duration::from_millis(20), OperationOwner::of(fresh.as_ref()), &|| {}, operation);
     assert_eq!(result.unwrap_err().pending, Some(Settled::TimedOut));
     assert_eq!(pool.snapshot().in_flight, 1, "a reopened session cannot replace a blocked native worker");
     assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -702,7 +705,7 @@ fn availability_new_record_delete_intent_survives_an_older_native_read_error() {
 #[test]
 fn availability_partial_sweep_cannot_emit_a_structural_ready_receipt() {
     let root = tempfile::tempdir().unwrap();
-    let _session = SessionGuard::new(root.path());
+    let session = SessionGuard::new(root.path());
     let pool = pool();
     let events = Arc::new(Mutex::new(Vec::new()));
     let emitted = events.clone();
@@ -715,7 +718,7 @@ fn availability_partial_sweep_cannot_emit_a_structural_ready_receipt() {
         Ok(StorageValue::Sweep(SweepSnapshot { deadline_blown: true, resume: Some("cursor.md".into()), ..Default::default() }))
     });
     let key = OperationKey { path: root.path().into(), policy: OperationPolicy::SweepWalk { budget: Some(Duration::from_millis(40)), resume: None } };
-    let task = pool.structural_operation(key, op).unwrap();
+    let task = pool.structural_operation(key, session.owner(), op).unwrap();
     { let mut state = task.state.lock().unwrap(); state.waiters = 0; state.deferred = true; }
     *gate.0.lock().unwrap() = true;
     gate.1.notify_all();
@@ -737,7 +740,7 @@ fn availability_a_running_walk_reads_quiet_until_its_next_entry() {
         Ok(StorageValue::Directory { entries: Vec::new(), hidden: 0 })
     });
     let key = OperationKey { path: PathBuf::from("/structure/quiet"), policy: OperationPolicy::SourceWalk };
-    let task = pool.structural_operation(key.clone(), operation).unwrap();
+    let task = pool.structural_operation(key.clone(), OperationOwner::Host, operation).unwrap();
     wait_until(|| task.quiet_for().is_some());
     std::thread::sleep(Duration::from_millis(1100));
     note_entry();
@@ -763,10 +766,10 @@ fn availability_a_waiter_alone_gives_up_a_fully_parked_pool() {
     let pool = crate::build::cloud_prefetch::Prefetcher::with_bounds(1, Arc::new(move |_| { bytes(); Ok(()) }), bounds);
     pool.read_foreground(Path::new("/byte/held"));
     let parked: Operation = Arc::new(move || { structure(); Ok(StorageValue::Directory { entries: Vec::new(), hidden: 0 }) });
-    for i in 0..2 { pool.structural_operation(OperationKey { path: format!("/held/{i}").into(), policy: OperationPolicy::SourceWalk }, parked.clone()).unwrap(); }
+    for i in 0..2 { pool.structural_operation(OperationKey { path: format!("/held/{i}").into(), policy: OperationPolicy::SourceWalk }, OperationOwner::Host, parked.clone()).unwrap(); }
     wait_until(|| pool.snapshot().in_flight == 3);
     let answers: Operation = Arc::new(|| Ok(StorageValue::Directory { entries: Vec::new(), hidden: 0 }));
-    let result = wait_for_operation(&pool, Path::new("/answers"), OperationPolicy::SourceWalk, Duration::from_secs(5), &|| false, &|| {}, answers, Arc::new(refused(Path::new("/answers"), StorageOperation::ReadDirOpen)));
+    let result = wait_for_operation(&pool, Path::new("/answers"), OperationPolicy::SourceWalk, Duration::from_secs(5), OperationOwner::Host, &|| {}, answers, Arc::new(refused(Path::new("/answers"), StorageOperation::ReadDirOpen)));
     *gate.0.lock().unwrap() = true;
     gate.1.notify_all();
     assert!(result.is_ok(), "every pool thread was parked and the waiter never gave one up");

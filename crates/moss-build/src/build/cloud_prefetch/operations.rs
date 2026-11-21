@@ -14,8 +14,7 @@ pub(super) fn structural_reader_loop(inner: &Arc<Inner>) {
                     let Some((key, owner)) = q.editor_intents.pop_front() else { break };
                     let OperationPolicy::EditorDirectory { project, show_internal } = &key.policy else { unreachable!("only editor listings retain replay intents") };
                     let attempt = crate::build::cloud_readiness::storage::directory_operation(&key.path, project, *show_internal);
-                    let mut task = OperationTask::new(&key, attempt);
-                    task.request.owner = owner;
+                    let task = OperationTask::from_request(OperationRequest { owner, attempt });
                     {
                         let mut state = task.state.lock().unwrap();
                         state.waiters = 0;
