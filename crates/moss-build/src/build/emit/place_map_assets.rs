@@ -268,10 +268,8 @@ pub fn emit_country_search(documents: &[crate::build::types::ParsedDocument], ou
 /// (see `emit.rs`'s module doc). `render_context` is `Some` exactly when
 /// the caller's own `kind.is_place` test built a `PlaceMapRenderContext` —
 /// `None` gates this out the same way a bool would, but also hands over
-/// the gazetteer already bundled inside it, so there is no second
-/// `load_gazetteer` call at the call site. Decode and emission errors are
-/// logged, never fatal: a broken place-map pack must not fail the whole
-/// build.
+/// the build's pack and gazetteer, so neither is loaded twice. Emission
+/// errors are logged, never fatal.
 pub fn emit_if_place_typed(
     render_context: Option<&place_map::PlaceMapRenderContext>,
     paths: &MossPaths,
@@ -281,17 +279,8 @@ pub fn emit_if_place_typed(
     let Some(render_context) = render_context else {
         return;
     };
-    match place_map::PlaceMapContext::embedded() {
-        Ok(context) => {
-            if let Err(error) = emit_with_layers(&context, render_context.gazetteer(), render_context.layers(), render_context.layer_plans(), paths, output_dir, pending) {
-                crate::build::cli_output::log_warn_problem!("place-map explorer assets could not be emitted: {error}");
-            }
-        }
-        Err(error) => {
-            crate::build::cli_output::log_warn_problem!(
-                "bundled place-map data could not be decoded ({error:?}); omitting explorer assets"
-            );
-        }
+    if let Err(error) = emit_with_layers(render_context.maps(), render_context.gazetteer(), render_context.layers(), render_context.layer_plans(), paths, output_dir, pending) {
+        crate::build::cli_output::log_warn_problem!("place-map explorer assets could not be emitted: {error}");
     }
 }
 

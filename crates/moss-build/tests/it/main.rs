@@ -30,6 +30,7 @@ const OWN_PROCESS: &[&str] = &[
     "no_system_ca_test",
     "parse_cache_kept_test",
     "passthrough_markdown_test",
+    "place_map_pack_test",
     "plugin_admission_test",
     "plugin_install_cli_test",
     "proved_trigger_test",

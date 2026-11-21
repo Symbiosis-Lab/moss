@@ -10,7 +10,7 @@ use super::{AUTHOR_NS, TAGS_NS};
 pub const BUILTIN_DEFAULT_FIELDS: [(&str, &str); 2] = [(AUTHOR_NS, "author"), (TAGS_NS, "tags")];
 
 /// The keys of a `[terms.<key>]` table, for `moss describe`.
-pub const KIND_KEY_RULES: [&str; 9] = [
+pub const KIND_KEY_RULES: [&str; 10] = [
     "`fields`: the frontmatter name-list fields that feed the kind. `[terms.tags]` and `[terms.authors]` may leave it out and keep their built-in field.",
     "`title`: the kind's name, text or a table of text per language.",
     "`count`: a term card's count wording with `{n}`, text, a table per language, or false to hide it.",
@@ -20,6 +20,7 @@ pub const KIND_KEY_RULES: [&str; 9] = [
     "`cards`: true shows the kind's names on listing cards.",
     "`nav`: true adds the kind's root page to the nav bar.",
     "`weight`: an integer placing the kind's nav entry among the pages by weight.",
+    "`landscape`: `\"detail\"` makes a place-typed kind draw from the pack in `.moss/maps/`.",
 ];
 
 /// One `[terms.<key>]` table, or a built-in kind no table declared, before
@@ -59,6 +60,9 @@ pub struct RawKind {
     pub line: Option<bool>,
     /// `[terms.<key>] cards`. `None` when the key is absent and for the two built-ins.
     pub cards: Option<bool>,
+    /// `[terms.<key>] landscape`, unvalidated: the place map's loader reads
+    /// it. `None` when the key is absent and for the two built-ins.
+    pub landscape: Option<String>,
 }
 
 impl RawKind {
@@ -94,6 +98,7 @@ impl RawKind {
             explorer: flag("explorer", warnings),
             line: flag("line", warnings),
             cards: flag("cards", warnings),
+            landscape: read(table.get("landscape"), |v| v.text().cloned(), &format!("{path} landscape"), "text", warnings),
         })
     }
 }
@@ -119,7 +124,7 @@ pub(crate) fn with_builtins(declared: &[RawKind], disabled: &[String]) -> Vec<Ra
             titles: Vec::new(),
             counts: Vec::new(),
             kind_type: None,
-            explorer: None, line: None, cards: None,
+            explorer: None, line: None, cards: None, landscape: None,
         });
         let fields = if disabled.iter().any(|d| d == field) { Vec::new() } else { vec![field.to_string()] };
         kinds.push(RawKind { fields, ..base });

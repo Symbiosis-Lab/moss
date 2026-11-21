@@ -551,7 +551,7 @@ mod tests {
             .and_then(|tables| tables.iter().find(|t| t["name"] == "terms.<key>"))
             .unwrap_or_else(|| panic!("no [terms.<key>] entry: {}", json["config_tables"]));
         let rules = terms["rules"].to_string();
-        for key in ["fields", "title", "count", "type", "explorer", "line", "cards", "nav", "weight"] {
+        for key in ["fields", "title", "count", "type", "explorer", "line", "cards", "nav", "weight", "landscape"] {
             assert!(rules.contains(&format!("`{key}`")), "{key} is missing: {rules}");
         }
     }

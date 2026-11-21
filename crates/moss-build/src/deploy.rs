@@ -529,7 +529,22 @@ pub(crate) fn refuse_before_upload(folder: &std::path::Path, sealed: &crate::bui
     refuse_publish(&folder.to_string_lossy())?;
     let _checks = crate::build::phase::PhaseTrace::start("local_checks");
     gate("foreign_inputs", refuse_foreign_inputs(sealed, folder))?;
-    gate("unresolved_inputs", refuse_unresolved_inputs(sealed))
+    gate("unresolved_inputs", refuse_unresolved_inputs(sealed))?;
+    gate("place_map_pack", refuse_unusable_landscape(folder))
+}
+
+/// A site that asks for the installed place-map pack publishes only with it:
+/// without it the build drew moss's own map instead. A pack still in the cloud
+/// is the seal's to refuse, as pending.
+pub fn refuse_unusable_landscape(folder: &std::path::Path) -> Result<(), String> {
+    use crate::build::place_map::{find_landscape, wanted_landscape, Landscape};
+    let paths = crate::moss_paths::MossPaths::new(folder);
+    let Ok(Some(text)) = crate::build::site_config::read_managed_toml_no_wait(&paths.config()) else { return Ok(()) };
+    let Ok(cfg) = crate::config::ConfigFile::parse(&text) else { return Ok(()) };
+    match find_landscape(&paths.maps_dir(), wanted_landscape(&cfg).as_deref()) {
+        Landscape::Missing(problem) => Err(format!("Nothing published — {problem}.")),
+        _ => Ok(()),
+    }
 }
 
 /// Refuse the exact generation selected for upload when it was rendered with

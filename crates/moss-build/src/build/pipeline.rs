@@ -1395,7 +1395,7 @@ fn build_inner(
         .find(|kind| kind.is_place)
         .map(|kind| (kind.key.clone(), kind.parents.clone(), kind.explorer_enabled()))
         .and_then(|(namespace, parents, explorer)| {
-            match crate::phase!("place_map_decode", { crate::build::place_map::PlaceMapContext::embedded() }) {
+            match crate::phase!("place_map_decode", { crate::build::place_map::PlaceMapContext::load(&paths, cfg.as_ref().and_then(crate::build::place_map::wanted_landscape).as_deref(), &input_evidence) }) {
                 Ok(maps) => {
                     // Pure function of the pack and the gazetteer (see its
                     // own doc), so known before any document is parsed —

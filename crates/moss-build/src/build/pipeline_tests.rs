@@ -6826,6 +6826,47 @@ fn a_duplicate_waiting_on_a_syncing_record_holds_the_publish() {
     assert!(crate::deploy::refuse_unresolved_inputs(&sealed).is_err(), "{:?}", sealed.unresolved_inputs());
 }
 
+/// A place site asking for the installed pack, with the repository's pack
+/// written under the digest of `named`.
+fn map_pack_site(named: &[u8]) -> (std::path::PathBuf, std::path::PathBuf, impl Drop) {
+    let (dir, cleanup) = create_test_dir();
+    let dir = dir.canonicalize().unwrap();
+    fs::create_dir_all(dir.join(".moss")).unwrap();
+    fs::write(dir.join(".moss/config.toml"), "schema_version = 6\n\n[terms.places]\ntype = \"place\"\nfields = [\"location\"]\nlandscape = \"detail\"\n").unwrap();
+    fs::write(dir.join(".moss/places.toml"), "[\"Riverside\"]\nlat = 1.0\nlng = 2.0\nprecision = \"city\"\n").unwrap();
+    fs::write(dir.join("index.md"), "# Notes\n").unwrap();
+    fs::write(dir.join("walk.md"), "---\nlocation: Riverside\n---\nA walk.\n").unwrap();
+    let maps = crate::moss_paths::MossPaths::new(&dir).maps_dir();
+    fs::create_dir_all(&maps).unwrap();
+    let pack = maps.join(format!("landscape-{}.bin.br", hex::encode(<sha2::Sha256 as sha2::Digest>::digest(named))));
+    fs::copy(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/place-map/place-map-v1.bin.br"), &pack).unwrap();
+    (dir, pack, cleanup)
+}
+
+/// A pack still in the cloud is asked for and holds the generation until it
+/// arrives, rather than publishing moss's own map in its place.
+#[test]
+fn a_map_pack_still_in_the_cloud_is_requested_and_holds_the_publish() {
+    let stored = fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/place-map/place-map-v1.bin.br")).unwrap();
+    let (dir, pack, _cleanup) = map_pack_site(&stored);
+    let _cloud = crate::build::icloud::pretend::evicted(&pack);
+
+    let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+
+    assert!(sealed.unresolved_inputs().iter().any(|path| path.contains("landscape-")), "{:?}", sealed.unresolved_inputs());
+    assert!(crate::build::icloud::pretend::requests_for(&pack) >= 1, "the download is asked for");
+}
+
+#[test]
+fn a_map_pack_that_fails_its_digest_stops_the_publish_of_its_build() {
+    let (dir, _pack, _cleanup) = map_pack_site(b"other bytes");
+
+    let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+
+    let refusal = crate::deploy::refuse_before_upload(&dir, &sealed).unwrap_err();
+    assert!(refusal.contains("digest"), "{refusal}");
+}
+
 /// A review's catalogue item the sync client has not downloaded holds the
 /// publish of the build that drew no colophon for it.
 #[test]

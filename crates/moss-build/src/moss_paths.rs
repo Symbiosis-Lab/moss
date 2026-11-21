@@ -298,6 +298,11 @@ impl MossPaths {
         self.root.join("plugins")
     }
 
+    /// `.moss/maps/` — the installed place-map pack, `landscape-<sha256>.bin.br`.
+    pub fn maps_dir(&self) -> PathBuf {
+        self.root.join("maps")
+    }
+
     // ── Data ────────────────────────────────────────────────
 
     /// `.moss/data/` — runtime + imported data.
@@ -1574,7 +1579,7 @@ mod tests {
             (".moss/data/", "site state the site itself owns (imported addresses, plugin data), which moss reads back and writes"),
             (".moss/redirects.json", "the old addresses the site still answers: every checkout and machine must serve the same ones. Its reader keeps unreadable apart from absent (feeds::redirects)"),
             (".moss/plugins/", "installed plugin bundles — re-installable, and an evicted bundle simply fails to load"),
-            (".moss/maps/", "the place-map pack the site draws: a second machine publishes the same maps only with it. Its reader must keep a pack still in the cloud apart from a missing one"),
+            (".moss/maps/", "the place-map pack the site draws: a second machine publishes the same maps only with it. `place_map::find_landscape` keeps a pack still in the cloud apart from a missing one"),
             (".moss/state.toml", "where this site is published: wanted on a second machine, which would otherwise bake localhost into pages"),
             (".moss/config.toml", "the user's own configuration — content, not machine state"),
             (".moss/theme/", "the user's own theme — content"),

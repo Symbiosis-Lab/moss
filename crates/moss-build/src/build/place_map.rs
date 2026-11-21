@@ -518,9 +518,148 @@ pub fn embedded() -> Result<Pack, DecodeError> {
     CACHE.get_or_init(|| decode(&raw_pack_bytes())).clone()
 }
 
+/// The place kind's `landscape` value that draws from the pack in `.moss/maps/`.
+pub const DETAIL_LANDSCAPE: &str = "detail";
+const LANDSCAPE_PREFIX: &str = "landscape-";
+const LANDSCAPE_SUFFIX: &str = ".bin.br";
+// Today's pack decompresses to about 5.3 MB; the cap only keeps a hostile
+// file from inflating without bound before `decode` bounds what it holds.
+const MAX_RAW_PACK_BYTES: u64 = 64 << 20;
+
+/// The place kind's `[terms.<key>] landscape`, from the first place-typed kind.
+pub fn wanted_landscape(cfg: &crate::config::ConfigFile) -> Option<String> {
+    cfg.terms_kinds().into_iter().find(|kind| kind.kind_type.as_deref() == Some("place")).and_then(|kind| kind.landscape)
+}
+
+/// What `.moss/maps/` gives a build that asks for `wanted`.
+#[derive(Debug)]
+pub enum Landscape {
+    /// No `landscape` key: the pack compiled into moss.
+    Embedded,
+    Installed { path: std::path::PathBuf, stored: Vec<u8>, pack: Pack, passed_over: Vec<String> },
+    /// The pack is there but still in the cloud: absent this build, not missing.
+    InCloud(std::path::PathBuf),
+    /// The site asks for a pack this folder cannot give; the text says why.
+    Missing(String),
+}
+
+/// Pick and check the pack. Only a name of exactly `landscape-<64 hex>.bin.br`
+/// counts (a sync client's conflict copy or a temp file never does), and with
+/// two the first by name wins: the choice reads the folder alone, so two
+/// machines on different moss versions draw the same map from it.
+pub fn find_landscape(maps_dir: &std::path::Path, wanted: Option<&str>) -> Landscape {
+    match wanted {
+        None => return Landscape::Embedded,
+        Some(DETAIL_LANDSCAPE) => {}
+        Some(other) => return Landscape::Missing(format!("`landscape = \"{other}\"` is not a landscape; the one there is is \"{DETAIL_LANDSCAPE}\"")),
+    }
+    let mut names: Vec<(String, bool)> = std::fs::read_dir(maps_dir).into_iter().flatten().flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            match crate::build::icloud::icloud_stub_target(&path) {
+                Some(real) => Some((real.file_name()?.to_str()?.to_string(), true)),
+                None => Some((path.file_name()?.to_str()?.to_string(), false)),
+            }
+        })
+        .filter(|(name, _)| landscape_digest(name).is_some())
+        .collect();
+    names.sort();
+    let Some((name, stub)) = names.first().cloned() else {
+        return Landscape::Missing(format!(
+            "the place map asks for the {DETAIL_LANDSCAPE} landscape and {} holds no pack: run `moss migrate --apply`", maps_dir.display()
+        ));
+    };
+    let passed_over = names.into_iter().skip(1).map(|(name, _)| name).collect();
+    let path = maps_dir.join(&name);
+    if stub || crate::build::icloud::is_evicted(&path) {
+        return Landscape::InCloud(path);
+    }
+    let stored = match std::fs::read(&path) {
+        Ok(stored) => stored,
+        Err(e) if crate::build::icloud::is_offline_not_absent(&path, &e) => return Landscape::InCloud(path),
+        Err(e) => return Landscape::Missing(format!("{} could not be read: {e}", path.display())),
+    };
+    let digest = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&stored));
+    if landscape_digest(&name) != Some(digest.as_str()) {
+        return Landscape::Missing(format!("{} does not match the digest in its name: it is damaged or only partly synced", path.display()));
+    }
+    let mut raw = Vec::new();
+    let mut inflate = std::io::Read::take(brotli::Decompressor::new(stored.as_slice(), 4096), MAX_RAW_PACK_BYTES + 1);
+    if let Err(e) = std::io::Read::read_to_end(&mut inflate, &mut raw) {
+        return Landscape::Missing(format!("{} is not a brotli file: {e}", path.display()));
+    }
+    if raw.len() as u64 > MAX_RAW_PACK_BYTES {
+        return Landscape::Missing(format!("{} is larger than any place-map pack", path.display()));
+    }
+    match decode(&raw) {
+        Ok(pack) => Landscape::Installed { path, stored, pack, passed_over },
+        Err(e) => Landscape::Missing(format!("{} is a place-map pack this moss cannot read ({e:?})", path.display())),
+    }
+}
+
+fn landscape_digest(name: &str) -> Option<&str> {
+    let digest = name.strip_prefix(LANDSCAPE_PREFIX)?.strip_suffix(LANDSCAPE_SUFFIX)?;
+    (digest.len() == 64 && digest.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))).then_some(digest)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pack_named_by_its_digest(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join(format!("{LANDSCAPE_PREFIX}{}{LANDSCAPE_SUFFIX}", hex::encode(<sha2::Sha256 as sha2::Digest>::digest(PACK_BROTLI))));
+        std::fs::write(&path, PACK_BROTLI).unwrap();
+        path
+    }
+
+    #[test]
+    fn only_an_exact_pack_name_counts_and_the_first_by_name_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let chosen = pack_named_by_its_digest(dir.path());
+        let later = format!("{LANDSCAPE_PREFIX}{}{LANDSCAPE_SUFFIX}", "f".repeat(64));
+        std::fs::write(dir.path().join(&later), b"never read").unwrap();
+        for stray in ["landscape-abc.bin.br", "landscape-0000.bin.br.part", "landscape (conflicted copy).bin.br"] {
+            std::fs::write(dir.path().join(stray), b"never read").unwrap();
+        }
+        match find_landscape(dir.path(), Some(DETAIL_LANDSCAPE)) {
+            Landscape::Installed { path, pack, passed_over, .. } => {
+                assert_eq!(path, chosen);
+                assert_eq!(pack.fingerprint, embedded().unwrap().fingerprint, "the same bytes draw the same map");
+                assert_eq!(passed_over, [later]);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn without_the_key_the_folder_is_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(format!("{LANDSCAPE_PREFIX}{}{LANDSCAPE_SUFFIX}", "0".repeat(64))), b"bad").unwrap();
+        assert!(matches!(find_landscape(dir.path(), None), Landscape::Embedded));
+        assert!(matches!(find_landscape(dir.path(), Some("relief")), Landscape::Missing(text) if text.contains("relief")));
+    }
+
+    #[test]
+    fn a_pack_in_the_cloud_is_not_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = pack_named_by_its_digest(dir.path());
+        let _cloud = crate::build::icloud::pretend::evicted(&path);
+        assert!(matches!(find_landscape(dir.path(), Some(DETAIL_LANDSCAPE)), Landscape::InCloud(p) if p == path));
+    }
+
+    #[test]
+    fn a_pack_that_is_not_brotli_or_not_a_pack_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut not_a_pack = Vec::new();
+        brotli::BrotliCompress(&mut &b"not a pack"[..], &mut not_a_pack, &Default::default()).unwrap();
+        for (bytes, says) in [(&b"not brotli"[..], "brotli"), (&not_a_pack[..], "cannot read")] {
+            let _ = std::fs::remove_dir_all(dir.path());
+            std::fs::create_dir_all(dir.path()).unwrap();
+            let name = format!("{LANDSCAPE_PREFIX}{}{LANDSCAPE_SUFFIX}", hex::encode(<sha2::Sha256 as sha2::Digest>::digest(bytes)));
+            std::fs::write(dir.path().join(name), bytes).unwrap();
+            assert!(matches!(find_landscape(dir.path(), Some(DETAIL_LANDSCAPE)), Landscape::Missing(text) if text.contains(says)), "{says}");
+        }
+    }
 
     #[test]
     fn embedded_pack_has_both_tiers_and_every_layer_once() {

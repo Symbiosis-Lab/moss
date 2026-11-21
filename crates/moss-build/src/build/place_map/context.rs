@@ -643,6 +643,40 @@ impl PlaceMapContext {
         super::embedded().map(Self::new)
     }
 
+    /// This build's pack: the installed one the site asks for, else moss's
+    /// own. A pack still in the cloud is asked for and holds the generation
+    /// until it arrives; one that is missing or fails its check is a counted
+    /// problem, so `--strict` fails (and `moss deploy` stops on the same text).
+    pub fn load(
+        paths: &crate::moss_paths::MossPaths,
+        wanted: Option<&str>,
+        evidence: &crate::build::cloud_ledger::InputEvidence,
+    ) -> Result<Self, super::DecodeError> {
+        use crate::build::cloud_ledger::InputRole;
+        match super::find_landscape(&paths.maps_dir(), wanted) {
+            super::Landscape::Embedded => Self::embedded(),
+            super::Landscape::Installed { path, stored, pack, passed_over } => {
+                evidence.require(&path, InputRole::SharedConfig);
+                evidence.read_bytes(&path, &stored);
+                for name in passed_over {
+                    crate::build::cli_output::log_note!("{name} is not drawn: {} sorts first", path.display());
+                }
+                Ok(Self::new(pack))
+            }
+            super::Landscape::InCloud(path) => {
+                evidence.require(&path, InputRole::SharedConfig);
+                evidence.pending(&path);
+                crate::build::cloud_readiness::request_download(&path);
+                crate::build::cli_output::log_note!("{} is still in the cloud: the place map waits for it", path.display());
+                Self::embedded()
+            }
+            super::Landscape::Missing(problem) => {
+                crate::build::cli_output::log_warn_problem!("{problem}; drawing moss's own map");
+                Self::embedded()
+            }
+        }
+    }
+
     pub fn pack(&self) -> &Pack {
         &self.pack
     }
