@@ -1,20 +1,23 @@
 /**
- * InstallRing — the plugin tile's install affordance: a plus that bends into a
- * progress ring around the icon and collapses into a minus.
+ * InstallRing — a plugin tile's add/remove badge: a circled plus that bends
+ * into a progress ring on its own circle and collapses into a circled minus.
  *
- * One object, five states, TWO STROKES throughout. Nothing is swapped in or
- * out: the plus's horizontal bar becomes the ring's track and then the minus,
- * and its vertical bar becomes the progress arc and then retracts to nothing.
+ * Two morphing strokes and one static circle. Nothing is swapped in or out:
+ * the plus's vertical bar becomes the progress arc and then retracts to
+ * nothing, and its horizontal bar retracts while the arc runs and returns as
+ * the minus. The circle never changes shape; it is the control's enclosure at
+ * rest and the arc's track while working, so the morph happens inside one
+ * fixed box and cannot move anything around it.
  *
  * Three things about this file specifically:
  *
  *   - The stroke arithmetic — how a stroke becomes a path, and which of length
  *     and shape leads on the way — is `shared/icon-morph.ts`, shared with
- *     every other glyph moss morphs. What is local here is the ring's own
+ *     every other glyph moss morphs. What is local here is the control's
  *     geometry and its five poses.
- *   - The ring is 64 units round the 48px logo, with ~4.5px of air, the way
- *     an iOS app downloads. It is pointer-transparent; the tile keeps the
- *     hit area.
+ *   - The control is a 28-unit box, drawn at 22px as a badge on the tile's
+ *     logo, so its stroke weights are set for that size. It is
+ *     pointer-transparent; the tile it sits in is the target.
  *   - `run()` is the ONLY animation path. Every install, every uninstall,
  *     every channel — bundled copy or six-second download — plays the same
  *     choreography, because a user should not have to learn that a fast
@@ -27,71 +30,67 @@ import {
 
 const TAU = Math.PI * 2;
 
-const BOX = 64;                      // the ring's box, centred on the 48px logo
-const CX = BOX / 2, CY = BOX / 2;
-const R_RING = 28.5;                 // 4.5 units of air round the 48px logo
+const BOX = 28;
+const C: [number, number] = [BOX / 2, BOX / 2];
+const R_RING = 12;
 const K_RING = 1 / R_RING;
 const CIRC = TAU * R_RING;
-/* The plus/minus bar length: short enough to match the ~4.7px/1.5px corner
-   badge the mark replaces. Weight matters as much; see W_REST below. */
-const BAR = 7;
-const ANCHOR_DEG = 135;              // bottom-left — where moss's badge sits
+/* Half the circle's diameter, the proportion of a system ⊕. */
+const BAR = 12;
 /* Stroke weight at the two ends of the morph — see `Marks.draw`, which
    interpolates between them on the same `ringness` term the track opacity
    uses. Written into `--install-ring-w`, read by progress.css. */
-const W_REST = 1.6, W_RING = 2.5;
+const W_REST = 1.9, W_RING = 3.2;
 
 /** A point on the ring, with the clockwise tangent there. */
 function onRing(deg: number): { P: [number, number]; phi: number } {
   const a = (deg * Math.PI) / 180;
-  return { P: [CX + R_RING * Math.cos(a), CY + R_RING * Math.sin(a)], phi: a + Math.PI / 2 };
+  return { P: [C[0] + R_RING * Math.cos(a), C[1] + R_RING * Math.sin(a)], phi: a + Math.PI / 2 };
 }
-const ANCHOR = onRing(ANCHOR_DEG);
-const P0 = ANCHOR.P;
+/* 12 o'clock, filling clockwise, as system progress circles do. */
+const ANCHOR = onRing(-90);
 
 /* ── the poses ─────────────────────────────────────────────────────────
-   Stroke A is present in every state — the bar plus and minus share, so it
-   becomes the track, the part of the ring that is always whole. Stroke B is
-   what distinguishes plus from minus, so it becomes the arc, the part that
-   measures. The plus loses its vertical bar to become a minus, and that is
-   exactly the bar that carried the progress.
+   Stroke B is what distinguishes plus from minus, so it becomes the arc, the
+   part that measures: the plus loses its vertical bar to become a minus, and
+   that is exactly the bar that carried the progress. Stroke A, the bar both
+   share, steps out of the way while the arc runs.
 
-   A bar with bias .5 looks identical at phi and phi+180, so of the two ways
-   to write each one we take the one nearer the ring's tangent (225°): the
-   plus opens with a ±45° roll rather than a 135° spin.                     */
+   The vertical bar is written pointing up (−90°), so it rolls a quarter turn
+   onto the ring's tangent at 12 o'clock as it climbs there.                */
 const pose = {
   plus: (): Pose => ({
-    a: { P: P0, phi: Math.PI,         k: 0, len: BAR, bias: .5, op: 1 },
-    b: { P: P0, phi: 3 * Math.PI / 2, k: 0, len: BAR, bias: .5, op: 1 },
+    a: { P: C, phi: Math.PI,      k: 0, len: BAR, bias: .5, op: 1 },
+    b: { P: C, phi: -Math.PI / 2, k: 0, len: BAR, bias: .5, op: 1 },
   }),
   minus: (): Pose => ({
-    a: { P: P0, phi: Math.PI,         k: 0, len: BAR, bias: .5, op: 1 },
-    b: { P: P0, phi: 3 * Math.PI / 2, k: 0, len: 0,   bias: .5, op: 0 },
+    a: { P: C, phi: Math.PI,      k: 0, len: BAR, bias: .5, op: 1 },
+    b: { P: C, phi: -Math.PI / 2, k: 0, len: 0,   bias: .5, op: 0 },
   }),
   ring: (pct: number): Pose => ({
-    a: { P: P0,       phi: ANCHOR.phi, k: K_RING, len: CIRC,                 bias: .5, op: 1 },
+    a: { P: C,        phi: Math.PI,    k: 0,      len: 0,                    bias: .5, op: 1 },
     b: { P: ANCHOR.P, phi: ANCHOR.phi, k: K_RING, len: CIRC * (pct / 100),   bias: 0,  op: 1 },
   }),
   /* A check is ONE BENT LINE, not a cross — the arms must share an endpoint
      at the elbow. Both at 45°, short arm .45 of the long one (Feather's
      `M20 6L9 17l-5-5` proportions); each arm anchored at its own midpoint,
      half an arm from the elbow, so the ends meet to the unit; the elbow then
-     placed so the mark's BOUNDING BOX centres on the badge point. */
+     placed so the mark's BOUNDING BOX centres on the circle's centre. */
   check: (): Pose => {
-    const LONG = 11.5, SHORT = 5.2, Q = Math.SQRT1_2;
+    const LONG = 10, SHORT = 4.5, Q = Math.SQRT1_2;
     const tipA: [number, number] = [LONG * Q, -LONG * Q];    // elbow → up-right
     const tipB: [number, number] = [-SHORT * Q, -SHORT * Q]; // elbow → up-left
     const mid = (i: 0 | 1) =>
       (Math.min(0, tipA[i], tipB[i]) + Math.max(0, tipA[i], tipB[i])) / 2;
-    const E: [number, number] = [P0[0] - mid(0), P0[1] - mid(1)];
+    const E: [number, number] = [C[0] - mid(0), C[1] - mid(1)];
     return {
       a: { P: [E[0] + tipA[0] / 2, E[1] + tipA[1] / 2], phi: 3 * Math.PI / 4, k: 0, len: LONG,  bias: .5, op: 1 },
       b: { P: [E[0] + tipB[0] / 2, E[1] + tipB[1] / 2], phi: 5 * Math.PI / 4, k: 0, len: SHORT, bias: .5, op: 1 },
     };
   },
   fail: (): Pose => ({
-    a: { P: P0, phi: 5 * Math.PI / 4, k: 0, len: 9, bias: .5, op: 1 },
-    b: { P: P0, phi: 3 * Math.PI / 4, k: 0, len: 9, bias: .5, op: 1 },
+    a: { P: C, phi: 5 * Math.PI / 4, k: 0, len: 10, bias: .5, op: 1 },
+    b: { P: C, phi: 3 * Math.PI / 4, k: 0, len: 10, bias: .5, op: 1 },
   }),
 };
 
@@ -103,6 +102,9 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
+/** The enclosure: the whole circle, the same path in every pose. */
+const TRACK_D = strokeD(ANCHOR.P, ANCHOR.phi, K_RING, CIRC, 0);
+
 class Marks {
   readonly svg: SVGSVGElement;
   private readonly a: SVGPathElement;
@@ -113,26 +115,34 @@ class Marks {
     this.svg.setAttribute('viewBox', `0 0 ${BOX} ${BOX}`);
     this.svg.setAttribute('aria-hidden', 'true');
     this.svg.classList.add('install-ring');
+    const track = document.createElementNS(SVG_NS, 'path');
+    track.setAttribute('class', 'install-ring__mk install-ring__mk--track');
+    track.setAttribute('d', TRACK_D);
     this.a = document.createElementNS(SVG_NS, 'path');
-    this.a.setAttribute('class', 'install-ring__mk install-ring__mk--track');
+    this.a.setAttribute('class', 'install-ring__mk');
     this.b = document.createElementNS(SVG_NS, 'path');
     this.b.setAttribute('class', 'install-ring__mk');
-    this.svg.append(this.a, this.b);
+    this.svg.append(track, this.a, this.b);
     host.appendChild(this.svg);
   }
 
-  /* The track's fade is DERIVED, not passed in: stroke A is at full strength
-     while it is a bar and settles to a quiet track in proportion to how much
-     of the ring's curvature it currently has. Stroke width rides the same
-     term: light while the stroke is a straight mark, full once it is the
-     progress ring, since one weight is heavy as a plus and spidery as an arc. */
+  /* The track's fade and the stroke weight are DERIVED from the pose, not
+     passed in: both follow how much of the ring's curvature stroke B (the
+     arc) has right now. As arguments they were things every call site had to
+     remember, and the ones that forgot produced a track that popped on the
+     first collapse frame.
+
+     The two ends of this morph want different weights: a resting ⊕ or ⊖ is a
+     small quiet mark, and a progress arc is a readout someone watches for six
+     seconds. So the weight rides `ringness` too, interpolating with the shape
+     rather than switching under it. */
   draw(p: Pose): void {
-    const ringness = Math.min(1, Math.abs(p.a.k) / K_RING);
+    const ringness = Math.min(1, Math.abs(p.b.k) / K_RING);
     this.a.setAttribute('d', drawStroke(p.a));
     this.b.setAttribute('d', drawStroke(p.b));
     this.a.style.opacity = String(p.a.op);
     this.b.style.opacity = String(p.b.op);
-    this.a.style.setProperty('--install-ring-track-op', String(lerp(1, .22, ringness)));
+    this.svg.style.setProperty('--install-ring-track-op', String(lerp(1, .3, ringness)));
     this.svg.style.setProperty('--install-ring-w', String(lerp(W_REST, W_RING, ringness)));
   }
 
@@ -155,9 +165,10 @@ class Marks {
    `sawReal` in `play()`. An arc paced by a clock beside a number read off the
    work is two answers to one question, and the picture wins.
 
-   TAU_MS is tuned by measurement: the floor must not run ahead of a slow
-   download and then stall, the most distrusted behaviour a progress
-   indicator has. At 4000 it reads ~17% at 900ms. */
+   TAU_MS is tuned by measurement, not taste: at 1100 the floor read 52% at
+   900ms into a six-second download whose truth was 15% — the arc rushed
+   ahead and then visibly stalled, the single most distrusted behaviour a
+   progress indicator has. At 4000 it reads ~17% there.                     */
 const CEILING = 92, TAU_MS = 4000;
 const MIN_CYCLE = 560;   // floor on how briefly the ring may be on screen
 const CLOSE_FROM = 70;   // where an instant install has grown to before closing

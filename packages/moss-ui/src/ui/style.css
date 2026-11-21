@@ -6569,9 +6569,8 @@ body.own-titlebar.platform-linux:has(.action-panel-open) .moss-titlebar [data-ca
   box-shadow: var(--moss-focus-ring);
 }
 
-/* The whole tile is the target. The padding above the logo and the gap
-   below it are the air the install ring is drawn in, and the percent's line
-   is reserved, so a ring running or a percent appearing moves nothing. */
+/* The whole tile is the target. The percent's line is reserved, so a
+   percent appearing moves nothing. */
 .moss-plugin-catalog-item {
   display: flex;
   flex-direction: column;
@@ -6617,7 +6616,7 @@ body.own-titlebar.platform-linux:has(.action-panel-open) .moss-titlebar [data-ca
 }
 
 /* The logo on a round plate, which gives a light mark and a dark one the same
-   footing. 48px and positioned: the install ring is drawn round it. */
+   footing. Positioned, so the install ring sits on it as a badge. */
 .moss-plugin-catalog-icon {
   position: relative;
   flex: none;
@@ -6638,8 +6637,19 @@ body.own-titlebar.platform-linux:has(.action-panel-open) .moss-titlebar [data-ca
   color: var(--moss-color-text-secondary);
   font-size: 15px;
 }
-/* The ring's plus or minus rests at the lower left, so a mark on the logo
-   takes the upper right. */
+/* The install ring as a badge on the plate's rim at the lower right, on a
+   disc of the page colour so it reads over any logo. Its circle is the
+   progress ring. A mark on the logo takes the upper right. */
+.moss-plugin-catalog-icon .install-ring {
+  position: absolute;
+  inset-block-end: -4px;
+  inset-inline-end: -4px;
+  border-radius: 50%;
+  background-color: var(--moss-color-bg);
+}
+.moss-plugin-catalog-item:not([aria-busy="true"]) .install-ring[data-tone="accent"] .install-ring__mk {
+  stroke: var(--moss-color-text);
+}
 .moss-plugin-catalog-icon .channel-icon-badge {
   inset: 0 0 auto auto;
 }
