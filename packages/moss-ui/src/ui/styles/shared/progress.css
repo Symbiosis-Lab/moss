@@ -16,17 +16,20 @@
 }
 
 /* ── InstallRing (components/install-ring.ts) ───────────────────────────
-   A catalog row's add/remove control: a circled plus that bends into a
-   progress arc on its own circle and collapses into a circled minus. This
-   file styles PAINT ONLY — every bit of geometry is in `d`, rewritten per
-   frame from JS, because CSS `d: path()` is unshipped in stable WebKit.
+   The plugin tile's install affordance: a plus that bends into a ring around
+   the 48px icon and collapses into a minus. This file styles PAINT ONLY —
+   every bit of geometry is in `d`, rewritten per frame from JS, because CSS
+   `d: path()` is unshipped in stable WebKit.
 
-   A 28-unit box at 28px, filling the row's control slot. Pointer-transparent
-   because the row owns the hit area. */
+   64 units over a 48px tile, offset −8px, so the ring encircles the icon with
+   8px of air. `overflow: visible` because the strokes deliberately leave the
+   box; pointer-transparent because the tile owns the hit area. */
 .install-ring {
-  display: block;
-  width: 28px;
-  height: 28px;
+  position: absolute;
+  left: -8px;
+  top: -8px;
+  width: 64px;
+  height: 64px;
   overflow: visible;
   pointer-events: none;
 }
@@ -41,9 +44,9 @@
   stroke: var(--moss-color-accent);
   transition: stroke 180ms ease;
 }
-/* The track is the enclosure circle in the same hue: full at rest, low while
-   the arc runs on it, so it stays correct when the hue is re-pointed per
-   pose. The opacity is written per frame from the pose (see Marks.draw). */
+/* The track is the same hue at low opacity, not a separate neutral — so it
+   stays correct when the hue is re-pointed per pose. The opacity itself is
+   written per frame from the pose (see Marks.draw). */
 .install-ring__mk--track {
   stroke-opacity: var(--install-ring-track-op, 1);
 }
