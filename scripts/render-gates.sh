@@ -62,6 +62,7 @@ GATES_BUILD=(
   nav-split-order
   nav-split-pack
   nav-one-row
+  nav-first-paint
   nav-current-mark
   header-hit-areas
   lightbox-github-shapes

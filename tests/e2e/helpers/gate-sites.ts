@@ -3962,6 +3962,69 @@ lang = "en"
   },
 };
 
+/** A short name and one link, so a short trail fits the 412px row and a long one does not. */
+export const NAV_FIRST_PAINT_GATE: ScratchSiteSpec = {
+  name: "nav-first-paint-gate",
+  files: {
+    "index.md": `---
+title: Atlas
+uid: "nfp00101"
+breadcrumb: true
+---
+
+# Atlas
+`,
+    "About.md": `---
+title: About
+uid: "nfp00102"
+nav: true
+---
+
+# About
+`,
+    "survey/index.md": `---
+title: Harbours And Tides
+uid: "nfp00201"
+---
+
+# Harbours And Tides
+`,
+    "survey/river/index.md": `---
+title: The River Survey Field Notes
+uid: "nfp00202"
+---
+
+# The River Survey Field Notes
+`,
+    "survey/river/fourth-volume.md": `---
+title: The Fourth Volume Of The Survey
+uid: "nfp00203"
+---
+
+# The Fourth Volume Of The Survey
+`,
+    "notes/index.md": `---
+title: Notes
+uid: "nfp00301"
+---
+
+# Notes
+`,
+    "notes/rain.md": `---
+title: Rain
+uid: "nfp00302"
+---
+
+# Rain
+`,
+    ".moss/config.toml": `schema_version = 6
+
+[site]
+lang = "en"
+`,
+  },
+};
+
 export const NAV_SPLIT_PACK_GATE: ScratchSiteSpec = {
   name: "nav-split-pack-gate",
   files: {

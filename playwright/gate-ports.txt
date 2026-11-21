@@ -122,3 +122,4 @@ hosted-bold
 link-card-cover-slot
 address-bar:ui
 address-bar:preview
+nav-first-paint

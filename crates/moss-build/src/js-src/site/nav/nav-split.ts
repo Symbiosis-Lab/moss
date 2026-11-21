@@ -5,7 +5,7 @@
  *
  * The toggles (search, language, theme) are tools for the whole page, so they
  * keep the corner the one-row masthead gives them; only the navigation moves.
- * The shipped CSS cannot do that: it wraps `.nav-right` (links + toggles, one
+ * Flex wrapping cannot do that: it wraps `.nav-right` (links + toggles, one
  * unit) to row 2 when it can't fit beside `.nav-left`.
  *
  * The wanted two-row order — name + toggles / links — is a reordering of the
@@ -13,12 +13,14 @@
  * it places items in sequence and never floats a later sibling back up to an
  * earlier line. So this module measures. When the one-row layout no longer
  * fits, it sets `data-nav-split` on `.nav-content`, and site.css lifts the two
- * groups out of `.nav-right` (`display: contents`) and orders them. Focus
- * order stays the markup's (name, links, toggles), the same at every width.
+ * groups out of `.nav-right` (`display: contents`) and places them on a grid.
+ * Focus order stays the markup's (name, links, toggles), the same at every
+ * width.
  *
- * On a phone (up to 48rem), before splitting it tries a tighter single row:
- * `data-nav-compact` draws the outer and toggle gaps in, and the masthead
- * splits only if that still overflows. Wider, a near-fit splits at once.
+ * On a phone (site.css sets `--moss-nav-phone`), before splitting it tries a
+ * tighter single row: `data-nav-compact` draws the outer and toggle gaps in,
+ * and the masthead splits only if that still overflows. Wider, a near-fit
+ * splits at once.
  *
  * In the hamburger range (≤20rem) the links are an overlay and the name stays
  * beside the menu button and toggles while it reasonably can. A plain name
@@ -34,9 +36,10 @@
  * and the name's lines are counted with the stack cleared. Sizes are read on
  * the masthead's inline axis; on a vertical page its physical width is its
  * block size, which the split itself changes. A theme that keeps `.nav-right`
- * a box is left to the CSS. With JS off nothing here runs and the shipped
- * wrap is the fallback: the name alone on row 1, the links and toggles on
- * row 2.
+ * a box gets the plain wrap from the split's grid. With JS off nothing here
+ * runs: the name is alone on row 1, the links and toggles on row 2. On a
+ * phone site.css holds a trail's two rows at the toggles' height, so the
+ * split this makes after the first paint moves only the toggles.
  */
 
 import { isVertical } from "../writing-mode";
@@ -60,13 +63,28 @@ export interface RowWidths {
 
 /**
  * Would `name | links | toggles` fit on one row? Pure so the decision is
- * testable without layout; +1px absorbs subpixel rounding in offsetWidth.
+ * testable without layout. The widths are fractional, as flex lays them out,
+ * and flex wraps at any overflow: a slack of a whole pixel accepted rows that
+ * then wrapped. 0.01px absorbs only float error in the sum.
  */
 export function oneRowFits(w: RowWidths): boolean {
-  return w.name + w.outerGap + w.links + w.innerGap + w.icons <= w.container + 1;
+  return w.name + w.outerGap + w.links + w.innerGap + w.icons <= w.container + 0.01;
 }
 
-const PHONE_QUERY = "(max-width: 48rem)";
+/** `el`'s border box along the masthead's inline axis, unrounded. */
+function inlineSize(el: HTMLElement, vertical: boolean): number {
+  const r = el.getBoundingClientRect();
+  return vertical ? r.height : r.width;
+}
+
+/** `el`'s content box along the masthead's inline axis, unrounded. */
+function contentSize(el: HTMLElement, vertical: boolean): number {
+  const s = getComputedStyle(el);
+  const edges = vertical
+    ? [s.paddingTop, s.paddingBottom, s.borderTopWidth, s.borderBottomWidth]
+    : [s.paddingLeft, s.paddingRight, s.borderLeftWidth, s.borderRightWidth];
+  return edges.reduce((room, edge) => room - (parseFloat(edge) || 0), inlineSize(el, vertical));
+}
 
 /** Everything the previous `initNavSplit()` bound, undone on the next call. */
 const stack = teardownStack();
@@ -167,27 +185,21 @@ export function initNavSplit(): void {
 
   function layout(): void {
     const vertical = isVertical(navContent!);
-    const size = (el: HTMLElement) => (vertical ? el.offsetHeight : el.offsetWidth);
-    // A theme that keeps `.nav-right` a box has laid out its own wrap, and
-    // the split's ordering would put the toggles ahead of the links inside it.
-    const split = (): void => {
-      setMode(navContent!, "split");
-      if (getComputedStyle(navRight!).display !== "contents") setMode(navContent!, null);
-    };
+    const size = (el: HTMLElement) => inlineSize(el, vertical);
     // ≤20rem the links are the hamburger's overlay panel, not a row: the
     // menu button stands in for them.
     if (hamburger && getComputedStyle(hamburger).display !== "none") {
       setMode(navContent!, null);
       if (trail) {
         const beside = oneRowFits({
-          container: vertical ? navContent!.clientHeight : navContent!.clientWidth,
+          container: contentSize(navContent!, vertical),
           name: trailSize(navLeft!, size, "folded"),
           links: size(hamburger),
           icons: size(icons!),
           outerGap: columnGap(navContent!, 0),
           innerGap: columnGap(navRight!, 0),
         });
-        if (beside) split();
+        if (beside) setMode(navContent!, "split");
       } else if (nameLines(siteName!, vertical) > 2) {
         setMode(navContent!, "stack");
       }
@@ -200,7 +212,7 @@ export function initNavSplit(): void {
       const innerGap = columnGap(navRight!, outerGap);
       const linkWidths = [...links!.children].map((child) => size(child as HTMLElement));
       return oneRowFits({
-        container: vertical ? navContent!.clientHeight : navContent!.clientWidth,
+        container: contentSize(navContent!, vertical),
         name: trail ? trailSize(navLeft!, size, "natural") : size(siteName!),
         links: linkWidths.reduce((sum, w) => sum + w, 0) + linkGap * Math.max(0, linkWidths.length - 1),
         icons: size(icons!),
@@ -211,11 +223,11 @@ export function initNavSplit(): void {
     // Full spacing, then (on a phone) tight gaps, then two rows.
     setMode(navContent!, null);
     if (fitsOneRow()) return;
-    if (window.matchMedia?.(PHONE_QUERY).matches) {
+    if (getComputedStyle(navContent!).getPropertyValue("--moss-nav-phone").trim() === "1") {
       setMode(navContent!, "compact");
       if (fitsOneRow()) return;
     }
-    split();
+    setMode(navContent!, "split");
   }
 
   // The masthead resizes with the window and with the font arriving; the

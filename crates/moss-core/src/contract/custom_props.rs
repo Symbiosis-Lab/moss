@@ -566,6 +566,18 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "How far the lifted footnote sheet sits from its docked position (1 = away, 0 = docked). Written per-element at runtime by sidenotes.ts as the sheet scrolls back into its slot, and removed on dismiss. Not a theme hook: a hand-set value is overwritten on the next scroll frame.",
     },
     CustomProp {
+        name: "--moss-nav-toggle-size",
+        owner: ":root",
+        default: "2.25rem",
+        description: "The box of the header's search, language and theme buttons (the language toggle takes its height only). On a phone a breadcrumb header holds each of its rows at this height too, so the trail and the links stay the buttons' height and moving the buttons up beside the trail shifts nothing below; a theme that resizes the buttons sets it here rather than on each button.",
+    },
+    CustomProp {
+        name: "--moss-nav-phone",
+        owner: ".nav-content",
+        default: "unset",
+        description: "`1` in the header's phone band (wider than 20rem, narrower than 48rem), unset elsewhere: tells nav-split.ts it may try the tightened one-row header there. Not a theme hook.",
+    },
+    CustomProp {
         name: "--moss-nav-width",
         owner: "main-nav",
         default: "var(--moss-content-width)",

@@ -249,6 +249,7 @@
    OS setting regardless. */
 :root {
   color-scheme: light;
+  --moss-nav-toggle-size: 2.25rem; /* the search, language and theme buttons, and a phone trail's rows */
 }
 
 :root[data-theme="dark"] {
@@ -2519,7 +2520,7 @@ article.container > .moss-article-title:has(+ [data-width="screen"][data-header=
    32 / 25 / 29 px — effectively uniform, four items in a row with no group
    break — because the search glyph sat ~9px inside its 36px box while the theme
    glyph, then in a 28px box, sat only ~4px inside its own. The fix was optical,
-   not a gap change: give all three toggles the same 2.25rem box, drop
+   not a gap change: give all three toggles the same --moss-nav-toggle-size box, drop
    .nav-icons's gap to 4px, and pad .nav-lang-toggle by 8px so its bare text
    carries an inset too. See .nav-icons for the resulting arithmetic.
 
@@ -2940,7 +2941,7 @@ body > header .site-name {
      comment above .nav-right for why) so a wrapped multi-row nav-links stack
      sits flush with .nav-icons's last row. But when nav-links is a single
      short line — the common case (1-3 links) — that same flex-end pins it to
-     the bottom of .nav-icons's taller box (every toggle is a fixed 2.25rem
+     the bottom of .nav-icons's taller box (every toggle is a fixed --moss-nav-toggle-size
      box), so the link text reads visibly lower than the icon
      buttons beside it. align-self overrides the inherited flex-end for this
      one item without touching how nav-icons aligns against a genuinely
@@ -3032,7 +3033,7 @@ body > header .site-name {
    from the links.
 
    4px, not --moss-space-sm (16px), because all three children are padded
-   boxes and the gap that matters is ink-to-ink. Each toggle is a 2.25rem
+   boxes and the gap that matters is ink-to-ink. Each toggle is a --moss-nav-toggle-size
    (36px) box, but the two glyphs are NOT the same size, so their insets
    differ: .search-icon is 1.125em → 18px → 9px inset; .theme-toggle-icon is
    1.25em → 20px → 8px inset; the language text sits 8px in behind its
@@ -3068,13 +3069,38 @@ body > header .site-name {
   margin-inline-start: auto;
 }
 
-/* Two-line split (`data-nav-split`, set by nav-split.ts): row 1 is the site name or breadcrumb trail with the toggles at its end edge, row 2 the links alone. The toggles are tools for the whole page, not navigation, so they stay at the corner the one-row masthead gave them. A trail folds into the room row 1 leaves it. */
+/* Two-line split (`data-nav-split`, set by nav-split.ts): row 1 is the site name or breadcrumb trail with the toggles at its end edge, row 2 the links alone. The toggles are tools for the whole page, not navigation, so they stay at the corner the one-row masthead gave them. A trail folds into the room row 1 leaves it.
+
+   The split is a grid of named areas, and the items carry their area names at all times: they mean nothing while .nav-content is a flex row. A theme that keeps .nav-right a box puts that box, links and toggles together, on row 2 through the same names: the plain wrap, in markup order, with or without the script. */
+.nav-left { grid-area: name; }
+.mobile-menu-button { grid-area: button; }
+.nav-icons { grid-area: icons; }
+.nav-right,
+.nav-links { grid-area: links; }
+
+.nav-content[data-nav-split] {
+  display: grid;
+  grid-template: "name icons" "links links" / minmax(0, 1fr) auto;
+}
+
 .nav-content[data-nav-split] .nav-right {
   display: contents;
 }
 
-.nav-content[data-nav-split] .nav-left {
-  flex: 1 1 0;
+/* On a phone a breadcrumb trail usually needs two rows. Before the script
+   runs, the toggles wrap to row 2 with the links; the split lifts them to
+   row 1. Both rows are held at the toggles' height in either layout, so the
+   split moves only the toggles and the page below does not shift. This is the
+   masthead's phone band; `--moss-nav-phone` tells nav-split.ts it may try the
+   compact row. The hamburger range below places its own trail. */
+@media (20rem < width < 48rem) {
+  .nav-content {
+    --moss-nav-phone: 1;
+  }
+
+  .nav-content:has(.breadcrumb-segment) :is(.nav-left, .nav-links) {
+    min-block-size: var(--moss-nav-toggle-size);
+  }
 }
 
 /* A plain name wraps in the room row 1 leaves beside the toggles. The base
@@ -3084,12 +3110,6 @@ body > header .site-name {
   flex-shrink: 1;
   min-inline-size: 0;
   white-space: normal;
-}
-
-/* A full-row basis is what sends the links to a line of their own. */
-.nav-content[data-nav-split] .nav-links {
-  order: 1;
-  flex: 1 1 100%;
 }
 
 /* Tight single row (`data-nav-compact`, set by nav-split.ts): the outer and toggle gaps shrink; the link gap is already at its floor. */
@@ -3107,8 +3127,8 @@ body > header .site-name {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 2.25rem;
-  height: 2.25rem;
+  width: var(--moss-nav-toggle-size);
+  height: var(--moss-nav-toggle-size);
   box-sizing: border-box;
   background: none;
   border: none;
@@ -3216,7 +3236,7 @@ body > header .site-name {
 }
 
 /* Language toggle in nav.
-   Carries the same 2.25rem height as its two button siblings so the cluster
+   Carries the same --moss-nav-toggle-size height as its two button siblings so the cluster
    is one optical family, and an 8px inline padding so its bare text has the
    same ink inset a glyph gets from its box (see .nav-icons for the
    arithmetic). No hover fill: this is a <div>, its `.nav-lang-link` children
@@ -3228,7 +3248,7 @@ body > header .site-name {
   display: flex;
   align-items: center;
   gap: 0.25rem;
-  height: 2.25rem;
+  height: var(--moss-nav-toggle-size);
   padding-inline: 0.5rem;
   box-sizing: border-box;
   font-size: 0.8125rem;
@@ -4265,7 +4285,7 @@ body {
    section's take the room the trail would have had, and the bar keeps its end
    free for the controls (below), as wide as nav-island.ts measures them. */
 .moss-nav-island[data-header="none"] .moss-nav-island-bar {
-  padding-inline-end: calc(var(--moss-nav-island-pad-end) + var(--moss-nav-island-controls, 2.25rem) + 0.25rem);
+  padding-inline-end: calc(var(--moss-nav-island-pad-end) + var(--moss-nav-island-controls, var(--moss-nav-toggle-size)) + 0.25rem);
 }
 
 .moss-nav-island[data-header="none"] .site-name {
@@ -4292,7 +4312,7 @@ body {
   z-index: 100;
   --_top: calc(
     var(--moss-space-sm) + var(--moss-nav-island-edge) + var(--moss-nav-island-pad-block)
-    + (var(--moss-size-lg) + var(--moss-nav-island-control-pad) - 2.25rem) / 2
+    + (var(--moss-size-lg) + var(--moss-nav-island-control-pad) - var(--moss-nav-toggle-size)) / 2
   );
   --_end: calc(
     max(
@@ -6610,6 +6630,11 @@ article a:where(:not(.moss-btn)):focus {
     flex-shrink: 1;
     min-inline-size: 0;
     white-space: normal;
+  }
+
+  /* A trail split here keeps the menu button between it and the toggles. */
+  .nav-content[data-nav-split] {
+    grid-template: "name button icons" "links links links" / minmax(0, 1fr) auto auto;
   }
 
   /* More than two lines there (`data-nav-stack`, set by nav-split.ts): the

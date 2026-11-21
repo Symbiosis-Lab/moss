@@ -23,6 +23,7 @@ All notable changes to moss will be documented here.
 - The preview's page panel no longer says "Preparing…" for about 20 seconds after every save. The page was already up to date; the panel was showing moss waiting for a pause in typing before it keeps a copy of the site for publishing.
 - A picture among an opening hero's words, such as a title drawn as an image, loads with the page and at high priority. It used to wait until after the first paint, so on a slow phone it appeared seconds after the rest of the screen.
 - Each dash of the contents list in the left margin is a 24-pixel target, the size accessibility guidelines ask for; the dashes were 20 pixels apart.
+- On a phone, a header with a breadcrumb trail no longer jumps when the page finishes loading: it keeps its height, and only the search, language and theme buttons move up beside the trail. A trail that just fits one row no longer pushes those buttons below it. A theme that resizes those buttons sets `--moss-nav-toggle-size`.
 
 ### Removed
 
