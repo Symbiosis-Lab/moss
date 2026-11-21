@@ -686,20 +686,6 @@ pub fn process_markdown_file(
     // buttons and gallery BEFORE grid means `::::buttons` inside `:::grid`
     // gets pre-rendered to HTML before grid scans the cell. Reordering breaks
     // nested shortcodes.
-    //
-    // Hero extraction moved into the typed-AST path. apply_typed_shortcodes
-    // intercepts :::hero blocks: it renders them through the resolver and
-    // returns the HTML separately for hoisting into the article template,
-    // substituting the body placeholder with empty.
-    //
-    // Grid shortcodes are processed AFTER the link resolver is built (below),
-    // so grid card links can resolve through the PageMap.
-    // Note: callouts use `> [!type]` syntax handled by callouts.rs
-    //
-    // `:::toc` was removed in the unified grammar migration.
-    // Authors who write `:::toc` now see the moss-unknown-shortcode
-    // fallback and a build warning. TOCs become a theme/template concern.
-    let markdown_content = markdown_content_raw.clone();
 
     // Resolve document language early (needed for url_path computation in link resolver).
     let filename_stem = Path::new(file_path)
@@ -1009,7 +995,7 @@ pub fn process_markdown_file(
     //      degrades to a slightly-off scroll-sync, never a panic.
     // Lines of the file above the parser's line 1: the frontmatter plus any
     // blank lines the body lost after it. Warnings name file lines with this.
-    let raw_body_offset = raw_body_line_offset(content, &markdown_content, frontmatter_line_count);
+    let raw_body_offset = raw_body_line_offset(content, &markdown_content_raw, frontmatter_line_count);
     let source_line_offset = {
         // Lines the EDITOR's frontmatter parser strips before CM6 line 1.
         // Derive it from the ACTUAL buffer the editor loads —
@@ -1039,7 +1025,7 @@ pub fn process_markdown_file(
         hard_line_breaks: site.hard_line_breaks,
         blocks: site.blocks.map(|plan| &plan.names),
     };
-    let mut doc = moss_core::ast::parse_with_config(&markdown_content, &parse_config);
+    let mut doc = moss_core::ast::parse_with_config(&markdown_content_raw, &parse_config);
     let (block_assets, placement_problems) = site.blocks.map(|plan| plan.place(&mut doc)).unwrap_or_default();
     // Mirrors the `frontmatter:` warning line above: a misspelled shortcode
     // used to leave no trace but a `moss-unknown-shortcode` div in the output.
@@ -1089,6 +1075,11 @@ pub fn process_markdown_file(
         );
     }
     let outgoing_links = resolution.outgoing;
+    // A page's own body may open with a wide picture that is its banner; a
+    // slot or a footer keeps its picture where it is written.
+    let banner = if is_slot_only || injects_into_every_page { None } else {
+        moss_core::ast::promote_wide_banner(&mut doc, &markdown_content_raw, &parse_config, crate::build::media::dimensions::snapshot_or_empty(media_lookup))
+    };
 
     // A footer that ends in a hero closes the page with it.
     let closes_page = fills_footer && crate::build::footer::ends_in_hero(&doc);
@@ -1268,6 +1259,11 @@ pub fn process_markdown_file(
     // The injected `<h1 class="moss-article-title">` carries a stable class so
     // themes/sites can target it.
 
+    // The title rules read the body the article holds: without a lifted banner's line.
+    let titled_body: std::borrow::Cow<str> = match &banner {
+        Some(line) => moss_core::heading::body_without_banner(&markdown_content_raw, line.clone()).into(),
+        None => markdown_content_raw.as_str().into(),
+    };
 
     // Single source of truth: compute() resolves heading text + visibility +
     // source. Both the injected H1 and the chrome label cascade for ARTICLE
@@ -1281,7 +1277,7 @@ pub fn process_markdown_file(
     let heading_inputs = moss_core::heading::HeadingInputs {
         file_path,
         frontmatter_title: frontmatter.title.as_deref(),
-        body_markdown: &markdown_content_raw,
+        body_markdown: &titled_body,
         root_folder_name: Some(root_folder_name),
         is_home_override: is_index_by_home_override,
         slot_only: is_slot_only,
@@ -1362,7 +1358,7 @@ pub fn process_markdown_file(
     // The declarations with a `place` that this page has a value for, in
     // declaration order. The render stage draws them: a page link needs the
     // target's title, which only it knows. A folder index and a slot take none.
-    let opening_heading = moss_core::heading::opening_heading_beyond_title(&markdown_content_raw, &title);
+    let opening_heading = moss_core::heading::opening_heading_beyond_title(&titled_body, &title);
     let placed_fields = crate::build::components::field_places::placed_for_page(site.fields, file_path, &title, field_source.as_ref(), format, &declared, &field_errors, is_index_file || is_slot_only);
     let has_field_places = !placed_fields.is_empty();
 

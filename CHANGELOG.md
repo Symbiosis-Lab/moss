@@ -9,6 +9,7 @@ All notable changes to moss will be documented here.
 - A channel plugin's copy job names the site the post lives on (`site.url`, `site.name`), and a long article carries the page's plain text (`article.text`, without its title or link back), so a network that keeps an article as a record of its own can store the full text and point back to the site.
 - A plugin can sign with ECDSA P-256 in `crypto.subtle` (generate a key, export it as a public JWK or a PKCS#8 private key, import it back, sign), so a sign-in that binds its tokens to a key on the computer, as Bluesky's does, completes in moss.
 - A channel plugin can state the longest article its network holds (`max_article_chars` in its `syndication` block); a longer page goes in the next form the channel takes.
+- A page that opens with a wide picture directly above its only `# Heading` shows that picture as its banner, as if it were written inside `:::hero`: window-wide under the header, loaded first and used as the share picture, its description kept for screen readers. A picture is wide when it is wider than tall and at least 1200 pixels wide. A logo, a portrait or a smaller picture stays in the text column with its caption, as before, and so does a picture with a width word (`![Harbour|body](harbour.jpg)`), a caption line under it, text between it and the heading, or a page with a second `# Heading`.
 
 ### Changed
 

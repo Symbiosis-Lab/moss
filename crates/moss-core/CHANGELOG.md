@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `ast::promote_wide_banner` and `ast::extract_hero::BANNER_MIN_WIDTH`: after URL resolution, a page body that opens with one wordless picture directly above its only `# Heading` gets that picture as the `Shortcode::Hero` the `:::hero` around it parses to, when the asset snapshot gives it as wider than tall and at least 1200 pixels wide. It returns the picture line's byte range, and `heading::body_without_banner` cuts it so the title rules read the body the article holds. `page::render_page` and `source_edit::compute_heading_state_inner` know no picture sizes, so they keep such a picture in the body and read the title rules over the body as written.
+
 ## [0.29.0] - 2026-11-20
 
 ### Added

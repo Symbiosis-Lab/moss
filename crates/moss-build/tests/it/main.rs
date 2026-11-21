@@ -117,6 +117,7 @@ mod no_string_emits;
 mod no_tokio_spawn_in_tauri_context_test;
 mod no_vendor_ui_launch_test;
 mod one_resolver_test;
+mod opening_picture_banner_test;
 mod output_write_invariant_test;
 mod own_listing_test;
 mod page_chrome_none_test;
