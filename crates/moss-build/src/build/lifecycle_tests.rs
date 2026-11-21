@@ -83,6 +83,22 @@ fn late_ready_render_is_revealed_once_and_stale_tails_cannot_switch_stage() {
     assert!(newer.reveal_if_latest());
 }
 
+/// An older render's tail must not replace the baseline of a newer render the
+/// preview shows; a newer render that was withheld leaves this one on screen.
+#[test]
+fn only_the_shown_render_runs_while_shown() {
+    let (_tmp, mp) = vault(&[]);
+    let older = show_render(&mp, true).0;
+    let withheld = show_render(&mp, false).0;
+    let ran = |render: &Render| { let mut ran = false; render.while_shown(|| ran = true); ran };
+    assert!(ran(&older), "a withheld newer render took the screen from the shown one");
+    assert!(!ran(&withheld), "a withheld render was treated as shown");
+
+    let newer = show_render(&mp, true).0;
+    assert!(!ran(&older), "an older tail ran over a newer shown render");
+    assert!(ran(&newer));
+}
+
 #[test]
 fn late_ready_tail_cannot_repoint_shared_cell_after_another_folder_adopts_it() {
     let (_tmp_a, mp_a) = vault(&[]);

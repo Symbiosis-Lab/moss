@@ -383,6 +383,16 @@ impl Render {
         self.record.state().newest_sealed.is_some_and(|newest| newest > self.seq)
     }
 
+    /// Run `f` only while the preview shows this render, shown at once or
+    /// revealed by its tail. The record stays held across the check and `f`,
+    /// so no newer render can be shown in between.
+    pub(crate) fn while_shown(&self, f: impl FnOnce()) {
+        let state = self.record.state();
+        if state.shown_render == Some(self.seq) {
+            f();
+        }
+    }
+
     /// Reveal this render once its required outputs became ready after its
     /// initial preview decision. A detached tail may do this only while its
     /// render is still the newest admitted one.

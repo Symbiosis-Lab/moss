@@ -719,29 +719,27 @@ pub fn sample_cache_keys() -> crate::build::ports::CacheKeyInputs {
     }
 }
 
-/// Makes this build's in-memory content hashes the watcher's refresh
-/// baseline, only when the build actually became what the preview shows.
+/// Makes `hashes` the watcher's refresh baseline, only while `render` is what
+/// the preview shows.
 ///
-/// The stash must describe what the screen shows. The pipeline shows this
-/// build's staging output only when `publishable` is true
-/// (`lifecycle::show_render`), and a cancelled build early-returns before it
-/// (with `publishable: false, cancelled: true`). Stashing a non-switched
-/// build's hashes poisons the baseline: the next publishable build's
-/// `changed_output_files` diff (`watch::RefreshPlan`) then compares
-/// against output the user never saw, drops pages edited before the withheld
-/// build, and the preview silently never refreshes.
+/// A withheld render was never shown and a cancelled build has no render.
+/// Stashing either's hashes poisons the baseline: the next build's
+/// `changed_output_files` diff (`watch::RefreshPlan`) then compares against
+/// output the user never saw, drops pages edited before it, and the preview
+/// silently never refreshes. An older render's tail is refused the same way
+/// once a newer render is shown.
 ///
 /// The top-level listing the build took before its scan rides the same guard:
 /// the sweep skips an entry-set change only when a shown build listed it.
-pub(crate) fn stash_shown_build(folder_path: &str, publishable: bool, cancelled: bool, hashes: crate::types::content::SiteHashes, listing: Option<Vec<PathBuf>>) {
-    if !publishable || cancelled {
-        return;
-    }
-    let records = crate::system::build_records::records();
-    records.record_content_hashes(folder_path, hashes);
-    if let Some(listing) = listing {
-        records.record_scanned_listing(folder_path, listing);
-    }
+pub(crate) fn stash_shown_build(folder_path: &str, render: Option<&crate::build::lifecycle::Render>, hashes: crate::types::content::SiteHashes, listing: Option<Vec<PathBuf>>) {
+    let Some(render) = render else { return };
+    render.while_shown(|| {
+        let records = crate::system::build_records::records();
+        records.record_content_hashes(folder_path, hashes);
+        if let Some(listing) = listing {
+            records.record_scanned_listing(folder_path, listing);
+        }
+    });
 }
 
 /// Run one build end to end, then log the single `build.summary` INFO line
@@ -1332,16 +1330,8 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // watcher's refresh diff and the admission-time content-hash gate. Were a
     // failed build's hashes stashed, the user's edit could compare "unchanged"
     // against output that never rendered and the retry be gated out forever.
-    // Pinned by `a_failed_build_leaves_the_previous_stash_as_the_gate_baseline`
-    // (watch_tests.rs); do not move this block ahead of the error return.
-    //
-    // Guarded in `stash_shown_build`: the stash must describe what the
-    // screen shows. A withheld (`publishable == false`) or cancelled build
-    // never switched the preview, so stashing its hashes would make the
-    // watcher diff the next build against output the user never saw — and a
-    // page edited before the withheld build would then read as "unchanged"
-    // and never refresh.
-    stash_shown_build(&folder_path, publishable, cancelled, content_hashes, scanned_listing);
+    // Do not move this block ahead of the error return.
+    stash_shown_build(&folder_path, render.as_ref(), content_hashes, scanned_listing);
 
     // Install this completed build's full publish evidence as one ordered
     // snapshot. An empty vector is the answer that unblocks publish; the
@@ -2246,6 +2236,10 @@ async fn advertise_sealed(
             ports.events.report(&crate::build::progress::PipelineEvent::FileChanged(event));
         }
     }
+    // The show's stash lacks what landed after it (deferred share cards) and
+    // the repairs; while the preview still shows this render, its sealed view
+    // is the next build's baseline, or a save that changes nothing reloads.
+    stash_shown_build(folder_path, render.as_ref(), view.clone(), None);
 
     // Everything from here down needs a materialized generation (or needs to
     // know whether one exists) — handed to the materialize phase, which runs

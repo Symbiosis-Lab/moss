@@ -511,6 +511,6 @@ async fn a_saved_builds_completion_says_whether_the_preview_reloads() {
     };
 
     assert_eq!(build().await, vec![Some(true)], "a first build shows every page");
-    build().await; // shows the share card the first build wrote after its show
+    assert_eq!(build().await, vec![Some(false)], "the share card the first build drew after its show reloads again");
     assert_eq!(build().await, vec![Some(false)], "a build that changed nothing reloads nothing");
 }

@@ -1714,32 +1714,45 @@ fn rebuild_event_emits_for_new_page_even_with_no_output_hash_diff() {
 }
 
 /// The stash and the top-level listing describe what the screen shows. A
-/// withheld build (`publishable == false`) or a cancelled one never switched
-/// the preview: stashing its hashes would make the next refresh diff against
+/// withheld render or a cancelled build (no render) never switched the
+/// preview: stashing its hashes would make the next refresh diff against
 /// output the user never saw, and recording its listing would make the sweep
-/// skip the rebuild that shows an entry it took.
+/// skip the rebuild that shows an entry it took. A withheld render its tail
+/// revealed is on screen, so its sealed view is the baseline.
 #[test]
 fn only_a_shown_build_replaces_the_stash_and_the_listing() {
+    use crate::build::lifecycle::{adopt_server, show_render};
     use crate::build::stash_shown_build;
-    let folder = "/vault-stash-shown";
+    let tmp = tempfile::tempdir().unwrap();
+    let mp = crate::moss_paths::MossPaths::new(tmp.path());
+    let folder = tmp.path().to_str().unwrap();
+    let _record = adopt_server(&mp, &crate::moss_paths::Served::test_cell(PathBuf::new()));
     let records = crate::system::build_records::records();
     let listing = |name: &str| Some(vec![PathBuf::from(format!("{folder}/{name}"))]);
     let shown = |records: &crate::system::build_records::BuildRecords| {
         (records.content_hashes(folder).map(|h| h.files.get("research/index.html").cloned()), records.scanned_listing(folder))
     };
 
-    stash_shown_build(folder, true, false, page_at("v1"), listing("first.md"));
+    let first_render = show_render(&mp, true).0;
+    stash_shown_build(folder, Some(&first_render), page_at("v1"), listing("first.md"));
     let first = shown(records);
     assert_eq!(first.1, Some(vec![PathBuf::from(format!("{folder}/first.md"))]));
 
-    stash_shown_build(folder, false, false, page_at("v2"), listing("withheld.md"));
+    let withheld = show_render(&mp, false).0;
+    stash_shown_build(folder, Some(&withheld), page_at("v2"), listing("withheld.md"));
     assert_eq!(shown(records), first, "a withheld build changes neither");
-    stash_shown_build(folder, false, true, page_at("v2"), listing("cancelled.md"));
-    stash_shown_build(folder, true, true, page_at("v2"), listing("cancelled.md"));
+    stash_shown_build(folder, None, page_at("v2"), listing("cancelled.md"));
     assert_eq!(shown(records), first, "a cancelled build changes neither");
 
-    stash_shown_build(folder, true, false, page_at("v3"), None);
+    assert!(withheld.reveal_if_latest());
+    stash_shown_build(folder, Some(&withheld), page_at("v3"), None);
+    assert_eq!(shown(records).0, Some(Some("100644:v3".to_string())), "a revealed render's sealed view is not the baseline");
     assert_eq!(shown(records).1, first.1, "a build whose listing failed keeps the last one");
+
+    let newer = show_render(&mp, true).0;
+    stash_shown_build(folder, Some(&newer), page_at("v4"), None);
+    stash_shown_build(folder, Some(&withheld), page_at("v3"), None);
+    assert_eq!(shown(records).0, Some(Some("100644:v4".to_string())), "an older tail replaced a newer shown render's baseline");
 }
 
 
