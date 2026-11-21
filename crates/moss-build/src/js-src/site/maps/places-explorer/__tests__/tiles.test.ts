@@ -10,7 +10,7 @@
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, test, expect, vi } from "vitest";
+import { afterEach, describe, test, expect, vi, type MockInstance } from "vitest";
 import { EDGE_FADE } from "./explorer-fit";
 import { detailMaxZoom, MIN_ZOOM, screenScale } from "../camera";
 import { WORLD_RASTER_ZOOM_CAP } from "../raster";
@@ -1027,7 +1027,11 @@ describe("TileLayer — rivers moved out of the land wrapper", () => {
     for (let i = 0; i < 4; i++) await new Promise((resolve) => setTimeout(resolve, 0));
   };
 
+  let raf: MockInstance<typeof window.requestAnimationFrame>;
+
   function setup(riversContainer?: HTMLElement) {
+    // Padding [11,5] waits two real frames, and a slow flush outlasts them; hold it so only the view's cell loads.
+    raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
     rasterizeOrFallbackSpy.mockImplementation(async () => ({ el: document.createElementNS("http://www.w3.org/2000/svg", "svg"), release() {} }));
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, text: () => Promise.resolve(TILE_SVG) }) as unknown as Response));
     const container = document.createElement("div");
@@ -1035,7 +1039,10 @@ describe("TileLayer — rivers moved out of the land wrapper", () => {
     return { container, layer };
   }
 
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    raf.mockRestore();
+    vi.unstubAllGlobals();
+  });
 
   test("without a container the rivers stay inside the land wrapper", async () => {
     const { container, layer } = setup();
