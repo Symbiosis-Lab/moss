@@ -2408,7 +2408,7 @@ pub fn generate_blocking_content_for_build(
     // Generate RSS feed and sitemap (only if a real https URL was resolved)
     if has_rss {
         let url = site_url.as_str();
-        crate::build::feeds::emit(&documents, url, site_lang, output_dir, pending)?;
+        crate::build::feeds::emit(&documents, url, site_lang, &dir_overrides, output_dir, pending)?;
 
         // sitemap.xml is emitted further down, once every page is registered.
 

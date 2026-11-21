@@ -16,7 +16,7 @@ fn article(title: &str, date: &str, url_path: &str, html: &str) -> ParsedDocumen
 }
 
 fn feed(documents: &[ParsedDocument]) -> Value {
-    serde_json::from_str(&generate_json_feed(documents, "A site", SITE, "en")).expect("valid JSON")
+    serde_json::from_str(&generate_json_feed(documents, "A site", SITE, "en", &Default::default())).expect("valid JSON")
 }
 
 #[test]
@@ -51,7 +51,7 @@ fn a_derived_note_id_gives_way_to_the_address() {
 fn an_item_carries_what_rss_has_no_element_for() {
     let mut a = article("Spring", "2026-03-01", "notes/spring/index.html", "<p>Hi</p>");
     a.description = Some("The first warm day.".into());
-    a.cover = Some("/notes/spring/bank.webp".into());
+    a.cover = Some("notes/spring/bank.webp".into());
     a.tags = Some(vec!["flood".into()]);
     let item = feed(&[a])["items"][0].clone();
     assert_eq!(item["summary"], "The first warm day.");

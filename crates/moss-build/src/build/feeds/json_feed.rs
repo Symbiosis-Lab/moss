@@ -3,24 +3,26 @@
 //! tags, language) and a stable item id, so a reader or a service following
 //! the site can tell a new article from an edited one.
 
+use std::collections::HashMap;
+
 use serde_json::{json, Map, Value};
 
 use super::rss::{article_url, feed_articles, item_html};
 use crate::build::types::ParsedDocument;
-use crate::syndication::shape::absolute;
 
 /// The feed for a site at `site_url`. Each item's `id` is the page's note id
 /// once the page carries it or a publish recorded it, so it follows the page
 /// through renames; a derived note id changes with every edit, so until then
-/// the id is the page's address.
-pub fn generate_json_feed(documents: &[ParsedDocument], site_title: &str, site_url: &str, site_lang: &str) -> String {
+/// the id is the page's address. `dir_overrides` maps source folders to the
+/// served ones, so a cover's address is the one the page itself shares.
+pub fn generate_json_feed(documents: &[ParsedDocument], site_title: &str, site_url: &str, site_lang: &str, dir_overrides: &HashMap<String, String>) -> String {
     let mut scopes = crate::build::folder_embed::inline_body::IdScopes::default();
     let items: Vec<Value> = feed_articles(documents)
         .into_iter()
         .enumerate()
         .map(|(index, article)| {
             let url = article_url(site_url, &article.url_path);
-            item(article, &url, item_html(article, index, &mut scopes, site_url, str::to_string), site_url)
+            item(article, &url, item_html(article, index, &mut scopes, site_url, str::to_string), site_url, dir_overrides)
         })
         .collect();
     let feed_url = article_url(site_url, crate::build::served_path::ServedPath::for_json_feed().as_str());
@@ -35,7 +37,7 @@ pub fn generate_json_feed(documents: &[ParsedDocument], site_title: &str, site_u
     serde_json::to_string(&feed).expect("a JSON value serializes")
 }
 
-fn item(article: &ParsedDocument, url: &str, content_html: String, site_url: &str) -> Value {
+fn item(article: &ParsedDocument, url: &str, content_html: String, site_url: &str, dir_overrides: &HashMap<String, String>) -> Value {
     let mut item = Map::new();
     let id = article.uid.as_deref().filter(|_| !article.uid_derived).unwrap_or(url);
     item.insert("id".into(), json!(id));
@@ -45,8 +47,8 @@ fn item(article: &ParsedDocument, url: &str, content_html: String, site_url: &st
     if let Some(summary) = article.description.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         item.insert("summary".into(), json!(summary));
     }
-    if let Some(cover) = article.cover.as_deref().filter(|c| !c.is_empty()) {
-        item.insert("image".into(), json!(absolute(cover, url, site_url)));
+    if let Some(cover) = article.cover.as_deref().map(|c| moss_core::media::split_pipe(c).0).filter(|c| !c.is_empty()) {
+        item.insert("image".into(), json!(cover_url(cover, site_url, dir_overrides)));
     }
     if let Some(date) = article.date.as_deref().and_then(rfc3339) {
         item.insert("date_published".into(), json!(date));
@@ -57,6 +59,16 @@ fn item(article: &ParsedDocument, url: &str, content_html: String, site_url: &st
     let lang = article.lang_tag.as_deref().unwrap_or(article.lang.as_bcp47_attr());
     item.insert("language".into(), json!(lang));
     Value::Object(item)
+}
+
+/// A page's cover is a path from the site's root (or a full address), never
+/// from the page, so it is not resolved against the item's URL.
+fn cover_url(cover: &str, site_url: &str, dir_overrides: &HashMap<String, String>) -> String {
+    if cover.starts_with("http://") || cover.starts_with("https://") {
+        return cover.to_string();
+    }
+    let path = moss_core::resolve::output_url::pinned_url(cover, dir_overrides);
+    format!("{}{path}", site_url.trim_end_matches('/'))
 }
 
 /// A feed date carries the day only, as the RSS feed's does.

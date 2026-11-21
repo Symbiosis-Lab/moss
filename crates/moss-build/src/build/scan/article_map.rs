@@ -540,12 +540,16 @@ pub fn build_article_map(
         }
         let mut frontmatter = doc.raw_frontmatter.clone();
 
-        // Resolve cover path through dir_overrides so plugins get URL-ready paths
-        if let Some(Value::String(cover_val)) = frontmatter.get("cover") {
-            if !cover_val.starts_with("http://") && !cover_val.starts_with("https://") {
-                let resolved = crate::build::render::resolve_path_with_overrides(cover_val, dir_overrides);
-                frontmatter.insert("cover".to_string(), Value::String(resolved));
-            }
+        // The cover as written may be relative to the page or carry display
+        // words; its readers take a served path from the site's root, so it
+        // comes from the parsed cover, mapped through dir_overrides.
+        if let Some(cover) = doc.cover.as_deref().map(|c| moss_core::media::split_pipe(c).0) {
+            let resolved = if cover.starts_with("http://") || cover.starts_with("https://") {
+                cover.to_string()
+            } else {
+                crate::build::render::resolve_path_with_overrides(cover, dir_overrides)
+            };
+            frontmatter.insert("cover".to_string(), Value::String(resolved));
         }
 
         let tags = extract_tags(&frontmatter);
