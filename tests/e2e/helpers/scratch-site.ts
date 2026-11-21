@@ -22,6 +22,7 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { openCrateDir } from "../../support/crate-paths";
 import { resolveMossBin } from "../../support/moss-bin";
+import { pruneUnnamed } from "./prune-unnamed.mjs";
 
 // The dirs moss-build embeds its site scripts from, two of the outputs of
 // `scripts/build-backend-scripts.mjs`'s BUNDLES table, so the stamp below
@@ -101,7 +102,7 @@ export function buildScratchSite(spec: ScratchSiteSpec): string {
   const stampPath = path.join(siteDir, ".moss/build-stamp.json");
   // The stamp hashes only the spec, so output built with a page now pruned
   // would pass as fresh; without a stamp every process waits for a rebuild.
-  if (pruneUnnamed(siteDir, spec.files)) fs.rmSync(stampPath, { force: true });
+  if (pruneUnnamed(siteDir, Object.keys(spec.files))) fs.rmSync(stampPath, { force: true });
   for (const [rel, content] of Object.entries(spec.files)) {
     writeOrRemove(path.join(siteDir, rel), content);
   }
@@ -334,26 +335,6 @@ export function syntheticBusyImage(width: number, height: number): Buffer {
     `-f lavfi -i "color=c=yellow:s=${width}x${height},drawgrid=w=8:h=8:t=3:c=black@1.0" -frames:v 1 -update 1`,
     `the ${width}x${height} busy image`,
   );
-}
-
-/** A renamed or dropped page would otherwise still be built. True when it
- *  removed one. */
-function pruneUnnamed(siteDir: string, files: ScratchSiteSpec["files"]): boolean {
-  if (!fs.existsSync(siteDir)) return false;
-  let pruned = false;
-  const named = new Set(Object.keys(files).map((rel) => path.normalize(rel)));
-  for (const rel of fs.readdirSync(siteDir, { recursive: true }) as string[]) {
-    if (rel.split(path.sep).some((part) => part.startsWith("."))) continue;
-    // moss's build writes the folder's Finder stamp here; pruning it would
-    // drop the build stamp and rebuild a folder its server already owns.
-    if (rel === "Icon\r") continue;
-    const abs = path.join(siteDir, rel);
-    if (!named.has(rel) && fs.statSync(abs).isFile()) {
-      fs.rmSync(abs);
-      pruned = true;
-    }
-  }
-  return pruned;
 }
 
 function writeOrRemove(filePath: string, content: string | Buffer | null): void {
