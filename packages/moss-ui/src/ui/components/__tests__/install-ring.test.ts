@@ -54,6 +54,13 @@ describe("install ring poses", () => {
     expect(pose.ring(50).a.len).toBeCloseTo(CIRC, 6);   // the track is always whole
   });
 
+  it("the arc starts at the lower left, where the plus rests", () => {
+    const b = pose.ring(25).b;
+    const [start] = ends(strokeD(b.P, b.phi, b.k, b.len, b.bias));
+    const r = 28.5, q = Math.SQRT1_2;
+    expect(dist(start, [32 - r * q, 32 + r * q])).toBeLessThan(0.1);
+  });
+
   it("a round trip through the ring returns byte-identical path data", () => {
     // The invariant behind "the affordance is one element": if plus → ring →
     // plus does not land on the exact same `d`, the tile settles a hair off

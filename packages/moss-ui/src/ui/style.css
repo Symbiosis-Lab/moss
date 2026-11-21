@@ -6576,7 +6576,6 @@ body.own-titlebar.platform-linux:has(.action-panel-open) .moss-titlebar [data-ca
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 11px;
   padding: 12px 2px 2px;
   border: 0;
   border-radius: 12px;
@@ -6649,6 +6648,7 @@ body.own-titlebar.platform-linux:has(.action-panel-open) .moss-titlebar [data-ca
    scale. */
 .moss-plugin-catalog-name {
   max-inline-size: 100%;
+  margin-block-start: 11px;
   font-size: 0.78rem;
   line-height: 1rem;
   text-align: center;
@@ -6658,7 +6658,6 @@ body.own-titlebar.platform-linux:has(.action-panel-open) .moss-titlebar [data-ca
 
 .moss-plugin-catalog-pct {
   min-block-size: 0.875rem;
-  margin-block-start: -9px;
   font-size: 0.6875rem;
   line-height: 0.875rem;
   white-space: nowrap;

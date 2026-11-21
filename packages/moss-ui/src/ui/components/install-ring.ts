@@ -27,7 +27,8 @@ import {
 
 const TAU = Math.PI * 2;
 
-const CX = 32, CY = 32;
+const BOX = 64;                      // the ring's box, centred on the 48px logo
+const CX = BOX / 2, CY = BOX / 2;
 const R_RING = 28.5;                 // 4.5 units of air round the 48px logo
 const K_RING = 1 / R_RING;
 const CIRC = TAU * R_RING;
@@ -75,8 +76,7 @@ const pose = {
      at the elbow. Both at 45°, short arm .45 of the long one (Feather's
      `M20 6L9 17l-5-5` proportions); each arm anchored at its own midpoint,
      half an arm from the elbow, so the ends meet to the unit; the elbow then
-     placed so the mark's BOUNDING BOX centres on the badge point. Eyeballed
-     offsets gave a cross. */
+     placed so the mark's BOUNDING BOX centres on the badge point. */
   check: (): Pose => {
     const LONG = 11.5, SHORT = 5.2, Q = Math.SQRT1_2;
     const tipA: [number, number] = [LONG * Q, -LONG * Q];    // elbow → up-right
@@ -110,7 +110,7 @@ class Marks {
 
   constructor(host: HTMLElement) {
     this.svg = document.createElementNS(SVG_NS, 'svg');
-    this.svg.setAttribute('viewBox', '0 0 64 64');
+    this.svg.setAttribute('viewBox', `0 0 ${BOX} ${BOX}`);
     this.svg.setAttribute('aria-hidden', 'true');
     this.svg.classList.add('install-ring');
     this.a = document.createElementNS(SVG_NS, 'path');
@@ -123,20 +123,9 @@ class Marks {
 
   /* The track's fade is DERIVED, not passed in: stroke A is at full strength
      while it is a bar and settles to a quiet track in proportion to how much
-     of the ring's curvature it currently has. Passed in, every call site
-     would have to remember it, and one that forgot gives a
-     check with one pale arm and a track that pops on the first collapse
-     frame. A property of the pose belongs to the pose.
-
-     STROKE WIDTH is derived from the same term, and for a reason the opacity
-     does not share: the two ends of this morph want different weights. A
-     resting plus or minus is a small mark on a quiet tile and should be as
-     light as the badge it replaced; a progress arc is a readout someone
-     watches for six seconds and must hold its own around a 48px icon. One
-     constant cannot be both: 2.5 makes the plus heavy, 1.6 makes the download
-     arc spidery. So the weight rides `ringness` too: 1.6 wherever the
-     stroke is straight (plus, minus, ✓, ✗ — all k=0) and 2.5 once it is the
-     ring, interpolating with the shape rather than switching under it. */
+     of the ring's curvature it currently has. Stroke width rides the same
+     term: light while the stroke is a straight mark, full once it is the
+     progress ring, since one weight is heavy as a plus and spidery as an arc. */
   draw(p: Pose): void {
     const ringness = Math.min(1, Math.abs(p.a.k) / K_RING);
     this.a.setAttribute('d', drawStroke(p.a));
@@ -168,7 +157,7 @@ class Marks {
 
    TAU_MS is tuned by measurement: the floor must not run ahead of a slow
    download and then stall, the most distrusted behaviour a progress
-   indicator has. At 4000 it reads ~17% at 900ms; 1100 read 52% there.                     */
+   indicator has. At 4000 it reads ~17% at 900ms. */
 const CEILING = 92, TAU_MS = 4000;
 const MIN_CYCLE = 560;   // floor on how briefly the ring may be on screen
 const CLOSE_FROM = 70;   // where an instant install has grown to before closing

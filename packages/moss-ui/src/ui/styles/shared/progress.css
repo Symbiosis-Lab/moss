@@ -21,13 +21,14 @@
    every bit of geometry is in `d`, rewritten per frame from JS, because CSS
    `d: path()` is unshipped in stable WebKit.
 
-   64 units over a 48px tile, offset −8px, so the ring encircles the icon with
-   8px of air. `overflow: visible` because the strokes deliberately leave the
+   A 64px box centred on the 48px logo, so the ring encircles it with 4.5px
+   of air. `overflow: visible` because the strokes deliberately leave the
    box; pointer-transparent because the tile owns the hit area. */
 .install-ring {
   position: absolute;
-  left: -8px;
-  top: -8px;
+  left: 50%;
+  top: 50%;
+  translate: -50% -50%;
   width: 64px;
   height: 64px;
   overflow: visible;
