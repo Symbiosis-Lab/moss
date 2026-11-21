@@ -25,8 +25,8 @@
 
 import { teardownStack } from "./teardown";
 
-/** A dash's row, at rest. */
-export const REST_ROW = 20;
+/** A dash's row, at rest: site.css `--moss-contents-row`. */
+export const REST_ROW = 24;
 /** An open row far from the focus: its name on one line. */
 export const OPEN_ROW = 26;
 /** The focused row: its name and its picture. */

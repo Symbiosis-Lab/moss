@@ -23,7 +23,7 @@ const BROKEN_PAGE = '/essays/broken/';
 const BAND_PAGE = '/essays/band/';
 const BAND_OKLCH_PAGE = '/essays/bandoklch/';
 /** contents-lens.ts: rest, open and focused row heights, and the pointer travel per row. */
-const REST = 20;
+const REST = 24;
 const OPEN_ROW = 26;
 const FOCUS_ROW = 74;
 const PITCH = 34;
@@ -542,9 +542,13 @@ test.describe('without motion', () => {
   });
 });
 
-test.describe('forty sections, open taller than the window', () => {
+test.describe('eighty sections, open taller than the window', () => {
   test('the list fills the window without a gap and the focused row stays on screen', async ({ page }) => {
-    const height = 1100;
+    // The ruler is up only while its rest list (24px rows) fits inside the 110px
+    // scroll clearance at both ends, and the open list (26px rows) grows by just
+    // 2px a row, so it outgrows a window that shows the ruler only past about 66
+    // sections. Eighty need 2160px for the ruler; open, they pass 2188px.
+    const height = 2170;
     await open(page, MANY_PAGE, 1360, height);
     await intoPage(page);
     expect((await rows(page)).length).toBe(MANY);

@@ -395,7 +395,7 @@ test.describe('a contents: pictures page reserves a lane for its list', () => {
       const s = await state(page);
       expect(s.lane).toBe(true);
       expect(s.textLeft - s.listRight, 'the text starts a gutter past the list').toBeGreaterThanOrEqual(24 - 0.5);
-      expect(s.textLeft, 'the column narrowed to keep the lane').toBeLessThan(92 + 48);
+      expect(s.textLeft, 'the column narrowed to keep the lane').toBeLessThan(96 + 48);
 
       const start = await page.evaluate(() => scrollY);
       const end = await page.evaluate(() => document.documentElement.scrollHeight - innerHeight);

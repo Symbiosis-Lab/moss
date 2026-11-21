@@ -3998,7 +3998,7 @@ body {
   --moss-contents-inset: 32px;
   --moss-contents-pad: 8px;
   --moss-contents-dash: 10px;
-  --moss-contents-row: 20px;
+  --moss-contents-row: 24px;
   --moss-contents-gutter: 24px;
 }
 
@@ -4536,8 +4536,10 @@ body:has(> .nav-icons) main > article:is(:has(> h1:not(.visually-hidden):first-c
    rule below is the whole "not here" story. Below the island (z-index 100) and
    far below the lightbox and the search overlay.
 
-   Every row is 20px tall, at rest and open. Rows that re-spaced on hover would
-   move the one under the pointer and the click would land on a neighbour. */
+   Every row is 24px tall (WCAG 2.5.8's target minimum), at rest and open;
+   a test holds contents-lens.ts REST_ROW to it. Rows that re-spaced on hover
+   would move the one under the pointer and the click would land on a
+   neighbour. */
 .moss-contents-ruler {
   position: fixed;
   --moss-contents-measure: 34ch;

@@ -1849,10 +1849,16 @@ mod tests {
     #[test]
     fn site_css_sets_the_type_the_words_are_modelled_in() {
         let css = crate::build::emit::stylesheet::CORE_CSS;
-        for rule in ["margin: 0 0 var(--moss-hero-words-gap, var(--moss-space-sm));", "margin-block-start: var(--moss-hero-words-gap, var(--moss-space-sm));", "font-size: var(--moss-hero-title-size, 2.5rem);", "font-size: var(--moss-hero-title-size, 1.75rem);", "font-size: var(--moss-hero-title-size, 1.4rem);", "font-size: var(--moss-hero-link-size, 1em);", "padding: var(--moss-hero-link-padding, 0.5em 1.2em);", "font-size: var(--moss-size-lg);", "--moss-words-pad: 5%;", "font-weight: 500;", "padding-block: 0 0.875rem;", "--moss-credit-end: calc(var(--moss-words-inset) - 0.5rem);", "padding-block-start: clamp(8px, 2vw, 24px);", "line-height: 1.08;", "--moss-words-pad: var(--moss-space-md);", "--moss-contents-inset: 32px;", "--moss-contents-pad: 8px;", "--moss-contents-row: 20px;", "--moss-contents-gutter: 24px;"] {
+        for rule in ["margin: 0 0 var(--moss-hero-words-gap, var(--moss-space-sm));", "margin-block-start: var(--moss-hero-words-gap, var(--moss-space-sm));", "font-size: var(--moss-hero-title-size, 2.5rem);", "font-size: var(--moss-hero-title-size, 1.75rem);", "font-size: var(--moss-hero-title-size, 1.4rem);", "font-size: var(--moss-hero-link-size, 1em);", "padding: var(--moss-hero-link-padding, 0.5em 1.2em);", "font-size: var(--moss-size-lg);", "--moss-words-pad: 5%;", "font-weight: 500;", "padding-block: 0 0.875rem;", "--moss-credit-end: calc(var(--moss-words-inset) - 0.5rem);", "padding-block-start: clamp(8px, 2vw, 24px);", "line-height: 1.08;", "--moss-words-pad: var(--moss-space-md);"] {
             assert!(css.contains(rule), "{rule}");
         }
-        assert_eq!(32.0 + 2.0 * 8.0 + 20.0 + 24.0, words::LANE_PX);
+        let px = |name: &str| -> f32 {
+            let decl = format!("{name}: ");
+            let rest = &css[css.find(&decl).unwrap_or_else(|| panic!("{name}")) + decl.len()..];
+            rest[..rest.find("px;").unwrap()].parse().unwrap()
+        };
+        let lane = px("--moss-contents-inset") + 2.0 * px("--moss-contents-pad") + px("--moss-contents-row") + px("--moss-contents-gutter");
+        assert_eq!(lane, words::LANE_PX);
     }
 
     /// What the `closing-picture` render gate asserts the real heading and link

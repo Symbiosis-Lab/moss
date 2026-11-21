@@ -135,6 +135,20 @@ for (const [width, height] of [
       expect(await background()).toEqual(['rgba(0, 0, 0, 0)', 'rgba(0, 0, 0, 0)']);
     });
 
+    test('every row is a 24px target, the WCAG 2.5.8 minimum, at rest', async ({ page }) => {
+      const links = await page.evaluate(() =>
+        [...document.querySelectorAll('.moss-contents-ruler a')].map((a) => {
+          const r = a.getBoundingClientRect();
+          return { width: r.width, height: r.height };
+        }),
+      );
+      expect(links.length).toBeGreaterThan(1);
+      for (const [k, r] of links.entries()) {
+        expect(r.height, `row ${k} height`).toBeGreaterThanOrEqual(24);
+        expect(r.width, `row ${k} width`).toBeGreaterThanOrEqual(24);
+      }
+    });
+
     test('the link under the pointer is the section it points at, on the dash and on the label', async ({ page }) => {
       const g = await geometry(page);
       const n = g.ids.length;
