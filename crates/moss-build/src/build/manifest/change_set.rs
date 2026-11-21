@@ -701,7 +701,7 @@ fn composes_to_served(out: &str, files: &HashMap<String, String>) -> bool {
 /// kept answering for one of those pages counts as the page while the page is
 /// served, moved to where it is now. An old address the new build still serves
 /// (a redirect stub, an alias) is not removed; nothing under `_moss/` is
-/// public.
+/// public, and a storage folder's own address is moss's, not a page.
 ///
 /// `AuthorRemoved` needs evidence: the recorded source of the output no longer
 /// exists, and for an HTML file, no address new to this build serves its
@@ -774,9 +774,22 @@ pub fn removed_addresses(
         }
         written.get(page.as_str())?.iter().find_map(|src| current.source_to_output.get(*src)).cloned()
     };
+    // A storage folder's address served what moss made there (a listing, or
+    // the forward home), never a page. Read only where the record names no
+    // source for it: a prebuilt record's HTML files, and forwards filed to the home page.
+    let triple_pages: std::collections::HashSet<&str> = baseline.triples.iter().flatten().map(|t| t.url.as_str()).collect();
+    let pages_now: Vec<&str> = current.source_to_output.keys().map(String::as_str).collect();
+    let moss_made = |out: &str| {
+        let Some(dir) = out.strip_suffix("/index.html") else { return false };
+        crate::build::scan::classify::holds_only_storage(dir, &pages_now)
+            && written.get(out).is_none_or(Vec::is_empty)
+            && baseline.page_stubs.get(out).is_none_or(|to| to == "index.html")
+            && !withheld.contains(out)
+            && !triple_pages.contains(format!("{dir}/").as_str())
+    };
     let mut removed: Vec<RemovedAddress> = vanished_outputs(baseline, current)
         .into_iter()
-        .filter(|(out, _)| is_public_address(out) && !composes_to_served(out, &files))
+        .filter(|(out, _)| is_public_address(out) && !composes_to_served(out, &files) && !moss_made(out))
         // An address that became members-only still answers, for members.
         .filter(|(out, _)| !files.contains_key(&format!("{GATED_PREFIX}{out}")))
         .filter_map(|(out, is_page)| {

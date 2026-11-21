@@ -4,6 +4,10 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Before a publish, moss no longer warns that folders such as `/assets/` will go offline. This came up after a publish from a ready-made folder, or after the attachment folder was set to `assets`.
+
 ## [0.15.28] - 2026-11-20
 
 ### Fixed
