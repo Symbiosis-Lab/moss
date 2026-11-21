@@ -18,6 +18,16 @@ workspace = true
 name = "moss-cli"
 path = "src/main.rs"
 
+# Runs a plugin's bundle in the engine with a scripted person (see
+# `moss_build::plugins::manager::contract`). Never part of a release.
+[[bin]]
+name = "moss-contract"
+path = "src/contract.rs"
+required-features = ["contract"]
+
+[features]
+contract = ["moss-build/contract"]
+
 [dependencies]
 moss-build = { path = "../moss-build" }
 # The app binary loads `.env` before dispatch (the desktop app's `main.rs`), so a

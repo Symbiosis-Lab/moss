@@ -11,6 +11,8 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 pub mod accounts;
+#[cfg(any(test, feature = "contract"))]
+pub mod contract;
 pub mod copies;
 pub mod engine_adapter;
 pub mod listing;

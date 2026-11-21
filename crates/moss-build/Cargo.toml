@@ -16,6 +16,10 @@ workspace = true
 # the desktop app's `[dev-dependencies]`, so it stays absent from every shipped build.
 test-fixtures = []
 
+# `plugins::manager::contract` and the `moss-contract` binary: a plugin's bundle run in
+# this engine with a scripted person. Enabled only by that binary.
+contract = []
+
 # No tauri or wry, direct or transitive — enforced by scripts/check-crate-dag.mjs
 # (rule armed on this crate's existence). Likewise no dependency on the app crate.
 [dependencies]
