@@ -103,12 +103,14 @@ impl ScriptedPerson {
             match step.action.as_str() {
                 "emit" => {
                     let payload = step.payload.to_string();
-                    note("person-emitted", json!({ "event": step.event }));
+                    let mut heard = 0;
                     for (name, handler) in listeners.lock().unwrap().values() {
                         if *name == step.event {
                             handler(&payload);
+                            heard += 1;
                         }
                     }
+                    note("person-emitted", json!({ "event": step.event, "listeners": heard }));
                 }
                 "follow" => {
                     let got = tokio::task::spawn_blocking(move || ureq::get(&url).call().map(|r| r.status()).map_err(|e| e.to_string())).await;
