@@ -275,8 +275,11 @@ fn phases(log: &[String]) -> serde_json::Value {
         if line.contains("full render:") {
             out.insert("full_render_cause".into(), line.split("full render:").nth(1).unwrap_or("").trim().into());
         }
-        // The verdict line, not the debug list of reparsed pages after it.
-        if line.starts_with("[incremental] parse cache") && !line.starts_with("[incremental] parse cache reparsed") {
+        // The verdict line, not the debug list of reparsed pages or the save line after it.
+        if line.starts_with("[incremental] parse cache")
+            && !line.starts_with("[incremental] parse cache reparsed")
+            && !line.starts_with("[incremental] parse cache: kept ")
+        {
             out.insert("parse_cache".into(), line.clone().into());
         }
     }
