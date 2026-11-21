@@ -92,7 +92,10 @@ pub fn is_os_metadata_file(name: &str) -> bool {
 /// moss-listing hash colliding with the verbatim copy, and seeding nested dirs
 /// would inject listing pages the app never had. An attachment folder is
 /// storage — where the editor drops a page's images — so it is not a section:
-/// no listing page, no listing row, no nav entry.
+/// no listing page, no listing row, no nav entry. A directory under the
+/// site-root `assets/` is left to [`holds_only_storage`] whatever the setting:
+/// its addresses keep forwarding home, and a page written there makes it a
+/// section as on any site.
 ///
 /// Asked once, in the scan (together with [`holds_only_prebuilt_apps`]), so `ProjectStructure.dirs` already means "the
 /// directories that get an index page" by the time the render reads it.
@@ -112,7 +115,11 @@ pub fn gets_index_page(
     // normalised `passthrough_roots`, not just its descendants (see
     // `compute_passthrough_roots`).
     !is_in_passthrough(&format!("{relative_path}/"), passthrough_roots)
-        && !moss_core::attachment::is_attachment_dir(attachment_folder, relative_path)
+        && (is_storage_path(relative_path) || !moss_core::attachment::is_attachment_dir(attachment_folder, relative_path))
+}
+
+fn is_storage_path(dir: &str) -> bool {
+    dir == "assets" || dir.starts_with("assets/")
 }
 
 /// Whether `dir` only carries pre-built apps: a passthrough subtree lives
@@ -137,9 +144,8 @@ pub fn holds_only_prebuilt_apps(
 /// section like any other. The exact lowercase name is the documented one;
 /// `Assets/` stays an ordinary folder.
 pub fn holds_only_storage(dir: &str, page_paths: &[&str]) -> bool {
-    let is_storage = dir == "assets" || dir.starts_with("assets/");
     let prefix = format!("{dir}/");
-    is_storage && !page_paths.iter().any(|p| p.starts_with(&prefix))
+    is_storage_path(dir) && !page_paths.iter().any(|p| p.starts_with(&prefix))
 }
 
 /// Directories whose `index.html` is copied verbatim: those holding a source

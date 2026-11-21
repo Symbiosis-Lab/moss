@@ -30,6 +30,7 @@ All notable changes to moss will be documented here.
 - On a phone, a header with a breadcrumb trail no longer jumps when the page finishes loading: it keeps its height, and only the search, language and theme buttons move up beside the trail. A trail that just fits one row no longer pushes those buttons below it. A theme that resizes those buttons sets `--moss-nav-toggle-size`.
 - Signing in to a channel whose plugin stores its token under a name with `:` (Matters keeps one per account) works on Windows. Secret and key names are now stored under a file name Windows accepts, the same on every computer; tokens and keys stored by earlier versions on macOS and Linux keep working, and signing out removes both copies. A name may be any text up to 128 bytes except one containing `/`, `\`, NUL or `..`, or a Windows device name such as `con` or `com1`; each character other than an ASCII letter, digit, `.`, `_` or `-` counts three bytes or more toward a limit of 200.
 - A comment that a plugin fetches during a build now appears on the page in that same build. It used to appear one build later.
+- Setting the attachment folder to `assets` no longer stops a published site's `/assets/` addresses from answering: they keep forwarding to the home page, as they do without the setting.
 
 ### Removed
 
