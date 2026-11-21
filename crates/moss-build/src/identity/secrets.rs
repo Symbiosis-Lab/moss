@@ -22,8 +22,15 @@
 //! shared Google Drive folder, and a shared folder is the wrong place for a
 //! credential. This store lives beside `app-config.json` in the app-support
 //! directory, which no vault syncs.
+//!
+//! **Any name a plugin picks.** A key is any string up to 128 bytes except one
+//! holding `/`, `\`, NUL or `..`, or a Windows device name (`con`, `com1`).
+//! The file it is stored under is percent-encoded the same on every OS
+//! ([`EntryName`]), so `access_token:alice` works on Windows too; a byte other
+//! than an ASCII letter, digit, `.`, `_` or `-` takes three of the file
+//! name's 200.
 
-use super::keystore::{KeystoreError, Scope};
+use super::keystore::{EntryName, KeystoreError, Scope};
 use std::path::{Path, PathBuf};
 
 /// The store's directory name under the app-support directory.
@@ -62,11 +69,12 @@ impl SecretStore {
         })
     }
 
-    /// One secret's file. Key naming is the keystore's rule, for the same
-    /// reason: the name becomes a path segment.
+    fn dir(&self, scope: &Scope) -> PathBuf {
+        self.root.join(scope.dir_segment())
+    }
+
     fn path(&self, scope: &Scope, key: &str) -> Result<PathBuf, KeystoreError> {
-        super::keystore::validate_entry_name(key)?;
-        Ok(self.root.join(scope.dir_segment()).join(key))
+        Ok(EntryName::new(key)?.path_in(&self.dir(scope), Path::exists))
     }
 
     /// The stored value, or `None` if this plugin has no secret under `key`.
@@ -116,13 +124,20 @@ impl SecretStore {
     /// Rejection *erases* rather than flagging, so "moss has no usable token"
     /// has exactly one representation and the setup gate has one question to
     /// ask. Same shape as git-credential's `erase`.
+    ///
+    /// The raw-named file an older moss wrote goes too, or a sign-out would
+    /// leave a live token on disk.
     pub fn remove(&self, scope: &Scope, key: &str) -> Result<(), KeystoreError> {
-        let path = self.path(scope, key)?;
-        match std::fs::remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(_) => Err(KeystoreError::Io),
+        let entry = EntryName::new(key)?;
+        let dir = self.dir(scope);
+        for path in std::iter::once(dir.join(&entry.file)).chain(entry.legacy_in(&dir)) {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err(KeystoreError::Io),
+            }
         }
+        Ok(())
     }
 }
 
@@ -203,6 +218,83 @@ mod tests {
             assert_eq!(store.set(&plugin("ipfs"), bad, "x"), Err(KeystoreError::InvalidName));
             assert_eq!(store.get(&plugin("ipfs"), bad), Err(KeystoreError::InvalidName));
         }
+    }
+
+    fn scope_files(dir: &Path, scope: &str) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir.join(SECRETS_DIRNAME).join(scope))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// NTFS refuses these characters, control bytes and a trailing dot or
+    /// space, and reads `a:b` as a stream of the file `a`.
+    #[test]
+    fn any_key_name_is_stored_under_a_file_name_windows_accepts() {
+        for key in ["access_token:alice", "a*b", "a?b", "a\"b", "a<b>", "a|b", "trail.", "trail ", "\x01x"] {
+            let dir = tempdir().unwrap();
+            let store = SecretStore::in_app_data(dir.path());
+            store.set(&plugin("matters"), key, "tok").unwrap();
+            assert_eq!(store.get(&plugin("matters"), key).unwrap().as_deref(), Some("tok"), "{key:?}");
+            let files = scope_files(dir.path(), "matters");
+            assert_eq!(files.len(), 1, "{key:?}: {files:?}");
+            let file = &files[0];
+            assert!(
+                !file.contains(['<', '>', ':', '"', '|', '?', '*'])
+                    && !file.chars().any(char::is_control)
+                    && !file.ends_with(['.', ' ']),
+                "{key:?} is stored as {file:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_escaped_name_and_its_escape_are_two_secrets() {
+        let dir = tempdir().unwrap();
+        let store = SecretStore::in_app_data(dir.path());
+        store.set(&plugin("p"), "a:b", "colon").unwrap();
+        store.set(&plugin("p"), "a%3Ab", "percent").unwrap();
+        assert_eq!(store.get(&plugin("p"), "a:b").unwrap().as_deref(), Some("colon"));
+        assert_eq!(store.get(&plugin("p"), "a%3Ab").unwrap().as_deref(), Some("percent"));
+        assert_eq!(scope_files(dir.path(), "p").len(), 2);
+    }
+
+    #[test]
+    fn a_windows_device_name_is_refused_everywhere() {
+        let dir = tempdir().unwrap();
+        let store = SecretStore::in_app_data(dir.path());
+        for bad in ["con", "NUL", "com1", "lpt9.x"] {
+            assert_eq!(store.set(&plugin("p"), bad, "x"), Err(KeystoreError::InvalidName), "{bad:?}");
+        }
+        assert!(store.set(&plugin("p"), "console", "x").is_ok());
+    }
+
+    /// Each escaped byte is three in the file name, which has 200.
+    #[test]
+    fn a_name_is_bounded_by_its_stored_form() {
+        let dir = tempdir().unwrap();
+        let store = SecretStore::in_app_data(dir.path());
+        assert!(store.set(&plugin("p"), &":".repeat(66), "x").is_ok());
+        assert_eq!(store.set(&plugin("p"), &":".repeat(67), "x"), Err(KeystoreError::InvalidName));
+    }
+
+    /// macOS and Linux stored the raw name before it was encoded, and those
+    /// tokens are on disk in the wild.
+    #[cfg(unix)]
+    #[test]
+    fn a_token_stored_under_its_raw_name_still_signs_in_and_signs_out() {
+        let dir = tempdir().unwrap();
+        let store = SecretStore::in_app_data(dir.path());
+        let scope_dir = dir.path().join(SECRETS_DIRNAME).join("matters");
+        std::fs::create_dir_all(&scope_dir).unwrap();
+        std::fs::write(scope_dir.join("access_token:alice"), "tok").unwrap();
+        assert_eq!(store.get(&plugin("matters"), "access_token:alice").unwrap().as_deref(), Some("tok"));
+        assert_eq!(scope_files(dir.path(), "matters"), ["access_token%3Aalice"]);
+        std::fs::write(scope_dir.join("access_token:alice"), "older").unwrap();
+        store.remove(&plugin("matters"), "access_token:alice").unwrap();
+        assert!(scope_files(dir.path(), "matters").is_empty());
     }
 
     #[cfg(unix)]

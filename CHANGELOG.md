@@ -24,6 +24,7 @@ All notable changes to moss will be documented here.
 - A picture among an opening hero's words, such as a title drawn as an image, loads with the page and at high priority. It used to wait until after the first paint, so on a slow phone it appeared seconds after the rest of the screen.
 - Each dash of the contents list in the left margin is a 24-pixel target, the size accessibility guidelines ask for; the dashes were 20 pixels apart.
 - On a phone, a header with a breadcrumb trail no longer jumps when the page finishes loading: it keeps its height, and only the search, language and theme buttons move up beside the trail. A trail that just fits one row no longer pushes those buttons below it. A theme that resizes those buttons sets `--moss-nav-toggle-size`.
+- Signing in to a channel whose plugin stores its token under a name with `:` (Matters keeps one per account) works on Windows. Secret and key names are now stored under a file name Windows accepts, the same on every computer; tokens and keys stored by earlier versions on macOS and Linux keep working, and signing out removes both copies. A name may be any text up to 128 bytes except one containing `/`, `\`, NUL or `..`, or a Windows device name such as `con` or `com1`; each character other than an ASCII letter, digit, `.`, `_` or `-` counts three bytes or more toward a limit of 200.
 
 ### Removed
 

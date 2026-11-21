@@ -7,7 +7,7 @@
 //! answer a run already asks for. Reading it never asks the channel, because
 //! asking can be a billed call.
 
-use crate::identity::keystore::validate_entry_name;
+use crate::identity::keystore::EntryName;
 use crate::plugins::manager::copies::Account;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -55,8 +55,8 @@ impl SignIns {
     }
 
     fn path(&self, channel: &str) -> Result<PathBuf, String> {
-        validate_entry_name(channel).map_err(|_| format!("'{channel}' is not a channel name"))?;
-        Ok(self.root.join(format!("{channel}.json")))
+        let entry = EntryName::new(channel).map_err(|_| format!("'{channel}' is not a channel name"))?;
+        Ok(self.root.join(format!("{}.json", entry.file)))
     }
 
     /// The channel's record; `None` when it has never answered on this computer.

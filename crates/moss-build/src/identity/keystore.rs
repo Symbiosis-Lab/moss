@@ -55,13 +55,10 @@ impl Algorithm {
 pub struct Scope(String);
 
 impl Scope {
-    /// Refuses an id that is not one filesystem-safe path segment, since it
-    /// names the scope's storage directory.
+    /// The id names the scope's directory, by the same rule as an entry name.
+    /// Install names are already safe file names, so no older directory moves.
     pub fn plugin(id: &str) -> Result<Self, KeystoreError> {
-        if id.is_empty() || id.contains(['/', '\\', '\0']) || id.contains("..") {
-            return Err(KeystoreError::InvalidScope);
-        }
-        Ok(Self(id.to_string()))
+        EntryName::new(id).map(|e| Self(e.file)).map_err(|_| KeystoreError::InvalidScope)
     }
 
     pub(crate) fn dir_segment(&self) -> &str {
@@ -92,17 +89,121 @@ pub struct KeyInfo {
 /// the bytes (see the module header). A test in `build.rs` pins the coupling.
 pub const KEYS_DIRNAME: &str = "keys";
 
-/// An entry name that is about to become one path segment, in either store.
-/// Shared with [`super::secrets`] — the same name, the same rule.
-pub(crate) fn validate_entry_name(name: &str) -> Result<(), KeystoreError> {
-    if name.is_empty()
-        || name.contains(['/', '\\', '\0'])
-        || name.contains("..")
-        || name.len() > 128
-    {
-        return Err(KeystoreError::InvalidName);
+/// A name a plugin chose (scope, key, secret, channel) and the one file name
+/// it is stored under, in every store. A name is any string up to 128 bytes
+/// except one holding `/`, `\`, NUL or `..` (the trust boundary) or a Windows
+/// device name, whose stored form fits in 200 bytes. The file name percent-encodes every byte outside
+/// `[A-Za-z0-9._-]` and a trailing `.`, so it is legal on NTFS and the same
+/// on every OS: `.moss/keys` syncs between machines.
+pub(crate) struct EntryName {
+    pub(crate) file: String,
+    /// The name as macOS and Linux stored it before encoding, when that differs.
+    legacy: Option<String>,
+}
+
+const MAX_NAME_BYTES: usize = 128;
+/// Leaves `.<file>.pending.<pid>.<seq>` (the atomic write's temp name) under
+/// the 255-byte limit.
+const MAX_FILE_BYTES: usize = 200;
+
+impl EntryName {
+    pub(crate) fn new(name: &str) -> Result<Self, KeystoreError> {
+        if name.is_empty()
+            || name.contains(['/', '\\', '\0'])
+            || name.contains("..")
+            || name.len() > MAX_NAME_BYTES
+            || is_device_name(name)
+        {
+            return Err(KeystoreError::InvalidName);
+        }
+        let mut file = String::with_capacity(name.len());
+        for &b in name.as_bytes() {
+            if b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-') {
+                file.push(b as char);
+            } else {
+                file.push_str(&format!("%{b:02X}"));
+            }
+        }
+        if file.ends_with('.') {
+            file.pop();
+            file.push_str("%2E");
+        }
+        if file.len() > MAX_FILE_BYTES {
+            return Err(KeystoreError::InvalidName);
+        }
+        // A raw name holding `%` could be another name's encoding, so it is
+        // never read as legacy; no stored name has one.
+        let legacy = (file != name && !name.contains('%')).then(|| name.to_string());
+        Ok(Self { file, legacy })
     }
-    Ok(())
+
+    /// The entry's path in `dir`, renaming a file stored under the raw name
+    /// (macOS and Linux) to the encoded one first; `present` is the caller's
+    /// existence check, so a store that counts a cloud placeholder as present
+    /// does here too. A rename that fails (an evicted placeholder) reads the
+    /// old file in place. Windows never opens a raw name: `a:b` there names a
+    /// stream of the file `a`.
+    pub(crate) fn path_in(&self, dir: &Path, present: impl Fn(&Path) -> bool) -> PathBuf {
+        let path = dir.join(&self.file);
+        if let Some(old) = self.legacy_in(dir) {
+            if !present(&path) && present(&old) {
+                return if std::fs::rename(&old, &path).is_ok() { path } else { old };
+            }
+        }
+        path
+    }
+
+    /// The raw-named file a store must also clear when it forgets the entry.
+    pub(crate) fn legacy_in(&self, dir: &Path) -> Option<PathBuf> {
+        if cfg!(unix) {
+            self.legacy.as_ref().map(|raw| dir.join(raw))
+        } else {
+            None
+        }
+    }
+
+    /// The name a stored file name stands for; a legacy raw name is itself.
+    pub(crate) fn decode(file: &str) -> String {
+        let bytes = file.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            let escaped = (bytes[i] == b'%')
+                .then(|| bytes.get(i + 1..i + 3))
+                .flatten()
+                .and_then(|hex| std::str::from_utf8(hex).ok())
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+            match escaped {
+                Some(b) => {
+                    out.push(b);
+                    i += 3;
+                }
+                None => {
+                    out.push(bytes[i]);
+                    i += 1;
+                }
+            }
+        }
+        String::from_utf8(out).unwrap_or_else(|_| file.to_string())
+    }
+}
+
+/// `CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`, `LPT0`-`LPT9`, in any case and
+/// with any extension: Windows opens the device instead of a file.
+fn is_device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or("").to_ascii_uppercase();
+    match stem.as_str() {
+        "CON" | "PRN" | "AUX" | "NUL" => true,
+        s => {
+            s.len() == 4
+                && (s.starts_with("COM") || s.starts_with("LPT"))
+                && s.as_bytes()[3].is_ascii_digit()
+        }
+    }
+}
+
+fn key_present(path: &Path) -> bool {
+    path.exists() || crate::build::icloud::is_still_in_the_cloud(path)
 }
 
 /// The keystore rooted at a project's `.moss/`.
@@ -121,10 +222,7 @@ impl Keystore {
     }
 
     fn key_path(&self, scope: &Scope, name: &str) -> Result<PathBuf, KeystoreError> {
-        validate_entry_name(name)?;
-        // `<name>.<algo>` — the algorithm is part of the filename so a key's
-        // algorithm is fixed at creation and a mismatched request is caught.
-        Ok(self.key_dir(scope).join(name))
+        Ok(EntryName::new(name)?.path_in(&self.key_dir(scope), key_present))
     }
 }
 
@@ -145,7 +243,7 @@ impl Keystore {
         // `exists()` reads the user's key as absent and the branch below mints
         // a replacement over it — the same key-loss shape `Identity::exists`
         // guards against (the identity-file bug).
-        if path.exists() || crate::build::icloud::is_still_in_the_cloud(&path) {
+        if key_present(&path) {
             let stored = StoredKey::load(&path)?;
             if stored.algorithm != algorithm {
                 return Err(KeystoreError::AlgorithmMismatch);
@@ -171,7 +269,7 @@ impl Keystore {
             if !path.is_file() {
                 continue;
             }
-            let name = entry.file_name().to_string_lossy().into_owned();
+            let name = EntryName::decode(&entry.file_name().to_string_lossy());
             let stored = StoredKey::load(&path)?;
             out.push(stored.info(name));
         }
@@ -190,7 +288,7 @@ impl Keystore {
         let path = self.key_path(scope, name)?;
         // See `get_or_create`: an evicted key is not a missing key, and
         // reporting `NotFound` for one would tell a plugin its identity is gone.
-        if !path.exists() && !crate::build::icloud::is_still_in_the_cloud(&path) {
+        if !key_present(&path) {
             return Err(KeystoreError::NotFound);
         }
         StoredKey::load(&path)?.sign(payload)
@@ -363,6 +461,29 @@ mod tests {
             ks.get_or_create(&scope, "k", Algorithm::Secp256k1Schnorr),
             Err(KeystoreError::AlgorithmMismatch),
         );
+    }
+
+    #[test]
+    fn list_names_a_key_as_it_was_created() {
+        let (_t, ks) = store();
+        let scope = Scope::plugin("p").unwrap();
+        let made = ks.get_or_create(&scope, "a:b", Algorithm::Ed25519).unwrap();
+        let listed = ks.list(&scope).unwrap();
+        assert_eq!(listed, [made]);
+    }
+
+    /// Minting a fresh key over one stored under its raw name would lose the
+    /// user's key.
+    #[cfg(unix)]
+    #[test]
+    fn a_key_stored_under_its_raw_name_is_the_same_key() {
+        let (tmp, ks) = store();
+        let scope = Scope::plugin("p").unwrap();
+        let made = ks.get_or_create(&scope, "id:alice", Algorithm::Ed25519).unwrap();
+        let dir = tmp.path().join(".moss").join("keys").join("p");
+        std::fs::rename(dir.join("id%3Aalice"), dir.join("id:alice")).unwrap();
+        let again = ks.get_or_create(&scope, "id:alice", Algorithm::Ed25519).unwrap();
+        assert_eq!(again.public_key, made.public_key);
     }
 
     #[test]
