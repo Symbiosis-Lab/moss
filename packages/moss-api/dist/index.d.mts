@@ -1383,7 +1383,9 @@ declare class SignInCancelled extends Error {
  * Start a sign-in that finishes in the person's own browser, where they are
  * usually signed in already: the OAuth flow RFC 8252 asks native apps to use.
  * moss listens on this computer for the provider's redirect, once; starting
- * another sign-in ends this one.
+ * another sign-in ends this one. moss hands back whatever reached the
+ * redirect: the caller sends a fresh `state` and refuses a reply whose
+ * `state` differs, since only it knows which request it made.
  *
  * Only in the moss app; elsewhere it rejects with "Sign in from the moss app".
  *
