@@ -2022,6 +2022,27 @@ describe("ProgressPanel", () => {
       expect(tasks[0].label).toBe("Optimizing images (8/12)");
     });
 
+    it("a pending seal adds no row, and still logs its start and end", async () => {
+      const { info } = await import("../../../log");
+      vi.mocked(info).mockClear();
+
+      fireMossEvent({
+        kind: "BackgroundProgress",
+        payload: { task: "sealing", message: "Preparing...", current: 0, total: 1, completed: false },
+      });
+
+      expect(panel.getActiveTasks()).toHaveLength(0);
+      expect(document.body.textContent).not.toContain("Preparing");
+      expect(vi.mocked(info)).toHaveBeenCalledWith("[bg-job] start kind=sealing");
+
+      fireMossEvent({
+        kind: "BackgroundProgress",
+        payload: { task: "sealing", message: "Sealed", current: 1, total: 1, completed: true },
+      });
+      const ended = vi.mocked(info).mock.calls.map((c) => String(c[0]));
+      expect(ended.some((m) => /^\[bg-job\] end kind=sealing duration_ms=\d+$/.test(m))).toBe(true);
+    });
+
     // Background
     // job start/end with kind and duration, keyed on the raw task string
     // (not `bg:<task>`, since videos skip the row's own arrival tracking).

@@ -249,7 +249,9 @@ export function compilingLabelInput(pages: PageProgress | undefined): StageLabel
 /**
  * Decide the `bg:<task>` row (if any) for a `BackgroundProgress` tick the
  * primary bar does not already count — `null` when `PAGE_PHASE_BY_TASK`
- * covers it (markdown/html_pages) or the tick is advisory-only. A listed
+ * covers it (markdown/html_pages), the tick is advisory-only, or the task is
+ * `sealing`, which stays open through the materialize debounce while the
+ * preview is already current. A listed
  * task gets a plain-language phrase; an unlisted one falls back to the
  * wire's own formatted `message` (Rust `format_progress_message`), so a
  * future emitter needs no frontend change to get *a* row.
@@ -271,7 +273,7 @@ export function bgTaskRowDecision(p: {
   isAdvisoryOnly: boolean;
   parentId: string | undefined;
 }): { task: ProgressTask; skipArrival: boolean } | null {
-  if (p.isAdvisoryOnly || PAGE_PHASE_BY_TASK[p.task]) return null;
+  if (p.isAdvisoryOnly || PAGE_PHASE_BY_TASK[p.task] || p.task === 'sealing') return null;
   const base = { source: 'moss' as const, ambient: true, parentId: p.parentId };
   if (p.task === 'videos') {
     return {

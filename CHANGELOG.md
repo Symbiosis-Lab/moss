@@ -17,6 +17,7 @@ All notable changes to moss will be documented here.
 ### Fixed
 
 - Before a publish, moss no longer warns that folders such as `/assets/` will go offline. This came up after a publish from a ready-made folder, or after the attachment folder was set to `assets`.
+- The preview's page panel no longer says "Preparing…" for about 20 seconds after every save. The page was already up to date; the panel was showing moss waiting for a pause in typing before it keeps a copy of the site for publishing.
 
 ## [0.15.28] - 2026-11-20
 

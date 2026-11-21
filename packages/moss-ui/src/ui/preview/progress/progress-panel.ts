@@ -23,8 +23,8 @@
  *   If no, SECONDARY-TASK — its own bg:<id> row, independent of the
  *   primary pipeline:
  *     - BackgroundProgress for every OTHER task (images, videos, assets,
- *       notebooks, sealing, …) — `bgTaskRowDecision` in progress-panel-stage.ts
- *       decides the row
+ *       notebooks, …) except `sealing` — `bgTaskRowDecision` in
+ *       progress-panel-stage.ts decides the row
  *     - PluginProgress (site deploy hooks running concurrently)
  *     - VideoConversionProgress — enriches bg:videos with filename + phase
  *     - the Domain Job (Preview-scope `PanelTaskUpdate`, DNS readiness
