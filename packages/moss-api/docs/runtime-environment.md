@@ -19,30 +19,32 @@ Available:
 | `crypto.randomUUID()` | The **only** member of `crypto` |
 | `setTimeout` / `setInterval` (+ clears) | Backed by host timers |
 | `URL` | Constructable, standard behavior |
+| `crypto.subtle` | Part of it — see [crypto.subtle](#cryptosubtle) below |
 | `fetch` | Buffered, minimal — see [fetch limitations](#fetch-limitations) below |
 | `globalThis` / `window` | Aliased to each other |
 
 Not available — and no polyfill is planned:
 
 - **Web Streams**: `ReadableStream`, `WritableStream`, `TransformStream`
-- **WebCrypto**: `crypto.subtle`, `crypto.getRandomValues`
+- **WebCrypto** beyond the part below: `crypto.getRandomValues`, encryption, key derivation, `verify`
 - `Blob`, `File`, `FormData`, `XMLHttpRequest`, `WebSocket`, `EventSource`
 - `DOMParser`, `document`, any DOM API
 - `localStorage` / `sessionStorage` / `indexedDB` (use [plugin storage](api/README.md))
 - `process`, `process.env`, Node built-ins (see [environment variables](#environment-variables))
 
-Practical consequence: many npm packages assume at least one of these.
-Libraries built for browsers or Node (streaming parsers, WebCrypto-based
-hashing, multipart builders on `FormData`) will load-fail or throw at runtime.
-Before adding a dependency, search its code for the globals above; prefer
-pure-computation libraries, or do the work through an SDK function where moss's
-Rust side already provides it.
+Practical consequence: many npm packages assume at least one of these. Libraries built for browsers or Node (streaming parsers, crypto libraries that reach for `getRandomValues` or encryption, multipart builders on `FormData`) will load-fail or throw at runtime. Before adding a dependency, search its code for the globals above; prefer pure-computation libraries, or do the work through an SDK function where moss's Rust side already provides it.
 
-One thing the missing `crypto.subtle` does *not* cost you is signing. moss
-holds keys and signs on request — your plugin gets its own keys from the
-keystore (`getKey`, `signWithKey` in `@symbiosis-lab/moss-api`) and never
-receives private bytes. The keys are scoped to your plugin automatically and
-need no manifest declaration. The plugin guide covers the keystore.
+## crypto.subtle
+
+`crypto.subtle` has what signing requests and OAuth sign-ins need, with the shapes and error names it has in browsers and Node, so the same code runs under a test runner:
+
+- `digest` with SHA-1, SHA-256, SHA-384 or SHA-512.
+- HMAC: `importKey("raw", …)` and `sign`.
+- ECDSA on P-256 with SHA-256, as DPoP proofs use: `generateKey`, `exportKey("jwk", publicKey)`, `exportKey("pkcs8", privateKey)` of an extractable key, `importKey("pkcs8", …, ["sign"])`, and `sign`, which answers the 64-byte r ‖ s signature Web Crypto returns.
+
+Another algorithm, curve or format throws `NotSupportedError`; a method not listed here (`verify`, `encrypt`, `deriveKey`) does not exist, so calling it fails with "not a function". Key bytes stay in moss: a key object holds no bytes, and a key imported as not extractable cannot be exported.
+
+For a key that never leaves the computer at all, moss's keystore holds keys and signs on request: your plugin gets its own keys from it (`getKey`, `signWithKey` in `@symbiosis-lab/moss-api`) and never receives private bytes. The keys are scoped to your plugin automatically and need no manifest declaration. The plugin guide covers the keystore.
 
 ## fetch limitations
 
@@ -172,13 +174,7 @@ const config = { ...DEFAULTS, ...context.config };
 
 ## Testing caveat: mocks run in Node
 
-The `@symbiosis-lab/moss-api/testing` mocks run your plugin under Node (e.g.
-vitest), where Web Streams, `crypto.subtle`, spec-complete `fetch`, and every
-Node built-in exist. **A green test suite does not prove QuickJS
-compatibility.** Before shipping, check your built bundle for references to
-the missing globals listed above — a plain grep for `ReadableStream`,
-`crypto.subtle`, `getRandomValues`, `FormData`, and `process.env` catches most
-incompatibilities — and exercise the plugin once in a real moss.
+The `@symbiosis-lab/moss-api/testing` mocks run your plugin under Node (e.g. vitest), where Web Streams, all of `crypto.subtle`, spec-complete `fetch`, and every Node built-in exist. **A green test suite does not prove QuickJS compatibility.** Before shipping, check your built bundle for references to the missing globals listed above — a plain grep for `ReadableStream`, `getRandomValues`, `FormData`, and `process.env` catches most incompatibilities, and each `crypto.subtle` call should be one [listed above](#cryptosubtle) — and exercise the plugin once in a real moss.
 
 ## There is no escape hatch
 

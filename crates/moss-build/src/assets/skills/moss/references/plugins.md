@@ -37,6 +37,8 @@ esbuild src/main.ts --bundle --format=iife --global-name=<Name>Plugin \
 `global_name` in the manifest must match `--global-name`. Import host helpers
 from the `moss-api` package (published as `@symbiosis-lab/moss-api` on npm).
 
+The bundle runs in QuickJS, not a browser or Node. Its web globals are `console`, `atob`/`btoa`, `TextEncoder`/`TextDecoder`, timers, `URL`, a buffered `fetch`, `crypto.randomUUID` and part of `crypto.subtle`: `digest`, HMAC (`importKey("raw")`, `sign`) and ECDSA P-256 with SHA-256 (`generateKey`, `exportKey` as a public `jwk` or a `pkcs8` private key, `importKey("pkcs8")`, `sign`), enough for a DPoP sign-in. There is no `crypto.getRandomValues`, no `subtle.verify`, no DOM and no Web Streams; a call outside this list throws, so a plugin whose tests pass under Node can still fail in moss.
+
 ## Capabilities (the hooks)
 
 `capabilities` is a list; each maps to a JS hook function of the same name. For
