@@ -1,9 +1,9 @@
 import { describe, test, expect, vi } from 'vitest';
-import { EditorSelection, EditorState } from '@codemirror/state';
+import { EditorSelection, EditorState, type EditorStateConfig } from '@codemirror/state';
 import { cursorCharLeft, cursorCharRight, cursorLineBoundaryBackward, deleteCharBackward, selectCharLeft } from '@codemirror/commands';
 import { EditorView, runScopeHandlers, type DecorationSet } from '@codemirror/view';
 import { markdown } from '@codemirror/lang-markdown';
-import { syntaxHighlighting, syntaxTree } from '@codemirror/language';
+import { ensureSyntaxTree, syntaxHighlighting, syntaxTree } from '@codemirror/language';
 import { GFM, Table } from '@lezer/markdown';
 import { wikilinkConfig, mathConfig, footnoteConfig } from '@symbiosis-lab/moss-syntax';
 import { mossHighlight } from '@symbiosis-lab/moss-syntax/cm6';
@@ -17,8 +17,16 @@ import { setLocale } from "../../i18n/index";
 // grammars. One shared helper keeps every test in this file describing the
 // same parser the running editor actually uses (cm-editor.ts wires the same
 // set via moss-syntax's wikilinkConfig/mathConfig + GFM).
+// A new state parses only as far as a 20 ms budget allows, and a bare state never parses further,
+// so on a loaded machine it can hold a tree that stops partway. Every state here is parsed to the end.
+function parsedState(config: EditorStateConfig): EditorState {
+  const state = EditorState.create(config);
+  ensureSyntaxTree(state, state.doc.length, 10_000);
+  return state.update({}).state;
+}
+
 function decosFor(doc: string): { from: number; to: number; cls?: string }[] {
-  const state = EditorState.create({
+  const state = parsedState({
     doc,
     extensions: [markdown({ extensions: [GFM, wikilinkConfig, mathConfig, footnoteConfig] })],
   });
@@ -122,7 +130,7 @@ describe('thematic break', () => {
   });
   test('lists replace nothing either: every decoration is a class, or a zero-width widget that hides no text', () => {
     const doc = ['- a', '  - nested', '    - deeper wrapped item', '    lazy tail', '1. one', '10. ten', '- [ ] task', '- [x] done', '\t- tab nested', '-\ttab after marker', '> - quoted', '- # heading item', '  continued', ''].join('\n');
-    const state = EditorState.create({ doc, extensions: [markdown({ extensions: [GFM, wikilinkConfig, mathConfig, footnoteConfig] })] });
+    const state = parsedState({ doc, extensions: [markdown({ extensions: [GFM, wikilinkConfig, mathConfig, footnoteConfig] })] });
     const set = buildMarkdownStyleDecorations(state, [{ from: 0, to: doc.length }]);
     let widgets = 0, lists = 0;
     for (const cur = set.iter(); cur.value; cur.next()) {
@@ -269,7 +277,7 @@ describe('done-task muting', () => {
 
 describe('table styling comes from mossHighlight, not this module', () => {
   test('table pipes and header row already come from mossHighlight, not this module', () => {
-    const state = EditorState.create({
+    const state = parsedState({
       doc: '| a | b |\n| - | - |\n| 1 | 2 |',
       extensions: [markdown({ extensions: [Table] }), syntaxHighlighting(mossHighlight)],
     });
@@ -307,7 +315,7 @@ describe('caret invariance', () => {
       '$x$',
       '~~strike~~',
     ].join('\n');
-    const state = EditorState.create({
+    const state = parsedState({
       doc: corpus,
       extensions: [markdown({ extensions: [GFM, wikilinkConfig, mathConfig] })],
     });
@@ -322,7 +330,7 @@ describe('caret invariance', () => {
     };
     const baseline = flatten(
       buildMarkdownStyleDecorations(
-        EditorState.create({ doc: corpus, extensions: [markdown({ extensions: [GFM, wikilinkConfig, mathConfig] })] }),
+        parsedState({ doc: corpus, extensions: [markdown({ extensions: [GFM, wikilinkConfig, mathConfig] })] }),
         [{ from: 0, to: corpus.length }],
       ),
     );
@@ -346,7 +354,7 @@ describe('no needless rebuild', () => {
     // instance itself (not a facet-provided DecorationSet) is what we ask
     // for an identity from.
     const plugin = markdownStylePlugin;
-    const state = EditorState.create({ doc: '# H1\n\nsome text', extensions: [markdown(), markdownStyleExtension()] });
+    const state = parsedState({ doc: '# H1\n\nsome text', extensions: [markdown(), markdownStyleExtension()] });
     const dom = document.createElement('div');
     const view = new EditorView({ state, parent: dom });
     const before = view.plugin(plugin as never) as { decorations: DecorationSet } | null;
@@ -365,7 +373,7 @@ describe('the caret rules read one line, never the document', () => {
   test('a keystroke asks the tree about the typed line only', () => {
     const doc = Array.from({ length: 200 }, (_, i) => (i % 5 === 0 ? `## Heading ${i}` : `> quote ${i}`)).join('\n');
     const view = new EditorView({
-      state: EditorState.create({ doc, extensions: [markdown({ extensions: [GFM] }), markdownStyleExtension()] }),
+      state: parsedState({ doc, extensions: [markdown({ extensions: [GFM] }), markdownStyleExtension()] }),
       parent: document.body,
     });
     const line = view.state.doc.line(100);
@@ -392,7 +400,7 @@ describe('CSS: cm-hang/cm-hung base rule', () => {
 
 describe('a hung indicator is not a caret position', () => {
   function viewFor(doc: string, anchor: number): EditorView {
-    const state = EditorState.create({
+    const state = parsedState({
       doc,
       selection: { anchor },
       extensions: [markdown({ extensions: [GFM, wikilinkConfig, mathConfig] }), markdownStyleExtension()],
@@ -506,7 +514,7 @@ describe('a hung indicator is not a caret position', () => {
 
 describe('the caret filter pins the text side inside the transaction', () => {
   function viewWith(doc: string, selection: EditorSelection): EditorView {
-    const state = EditorState.create({
+    const state = parsedState({
       doc,
       selection,
       extensions: [markdown({ extensions: [GFM, wikilinkConfig, mathConfig] }), markdownStyleExtension()],
@@ -630,7 +638,7 @@ describe('ArrowDown/ArrowUp handler (moveLine)', () => {
   // jsdom has no layout, so the pixel probe is stubbed: what is under test is
   // what the handler does with the answer, not where CM6 puts it.
   function setup(doc = 'one\n\ntwo') {
-    const state = EditorState.create({ doc, selection: EditorSelection.single(1), extensions: [markdown({ extensions: [GFM] }), markdownStyleExtension()] });
+    const state = parsedState({ doc, selection: EditorSelection.single(1), extensions: [markdown({ extensions: [GFM] }), markdownStyleExtension()] });
     const view = new EditorView({ state, parent: document.body });
     const moved = vi.spyOn(view, 'moveVertically').mockReturnValue(EditorSelection.cursor(6, 1, 1));
     vi.spyOn(view, 'coordsAtPos').mockReturnValue({ left: 10, right: 10, top: 0, bottom: 10 });
@@ -707,7 +715,7 @@ describe('an indicator tooltip follows the app language', () => {
   const tooltip = (view: EditorView) => view.dom.querySelector('.cm-hang')?.getAttribute('data-tooltip');
   test('switching language relabels the tooltip without an edit, and stops listening when the view is destroyed', () => {
     const view = new EditorView({
-      state: EditorState.create({ doc: '## Title', extensions: [markdown({ extensions: [GFM] }), markdownStyleExtension()] }),
+      state: parsedState({ doc: '## Title', extensions: [markdown({ extensions: [GFM] }), markdownStyleExtension()] }),
       parent: document.body,
     });
     try {
