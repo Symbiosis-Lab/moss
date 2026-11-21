@@ -341,7 +341,7 @@ mod tests {
 <p data-source-line="2">See <a href="../other/">other</a>.</p><img src="bank.webp" alt="Bank">"#;
         let docs = vec![create_test_document("Spring", Some("2026-03-01"), "notes/spring/index.html", html)];
         let rss = generate_rss_feed(&docs, "A site", "https://example.org", None, None);
-        let json = crate::build::feeds::json_feed::generate_json_feed(&docs, "A site", "https://example.org", "en");
+        let json = crate::build::feeds::json_feed::generate_json_feed(&docs, "A site", "https://example.org", "en", &Default::default());
         for feed in [&rss, &json] {
             assert!(!feed.contains("data-source"), "{feed}");
             assert!(!feed.contains("moss-article-title"), "{feed}");

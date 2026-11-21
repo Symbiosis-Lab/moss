@@ -26,6 +26,7 @@ pub(crate) fn emit(
     documents: &[crate::build::types::ParsedDocument],
     url: &str,
     site_lang: crate::i18n::Language,
+    dir_overrides: &std::collections::HashMap<String, String>,
     output_dir: &std::path::Path,
     pending: &mut PendingManifest,
 ) -> Result<(), String> {
@@ -53,6 +54,7 @@ pub(crate) fn emit(
         rss_site_title,
         url,
         site_lang.as_bcp47_attr(),
+        dir_overrides,
     )
     .into_bytes();
     let json_path = ServedPath::for_json_feed();

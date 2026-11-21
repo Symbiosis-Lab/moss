@@ -960,6 +960,7 @@ fn test_build_article_map_resolves_cover_paths_through_dir_overrides() {
         "cover".to_string(),
         Value::String("图片/配图/286b63.jpg".to_string()),
     );
+    doc.cover = Some("图片/配图/286b63.jpg".to_string());
 
     let mut dir_overrides = HashMap::new();
     dir_overrides.insert("图片".to_string(), "image".to_string());
@@ -1055,6 +1056,7 @@ fn test_build_article_map_leaves_http_covers_unchanged() {
         "cover".to_string(),
         Value::String("https://example.com/cover.jpg".to_string()),
     );
+    doc.cover = Some("https://example.com/cover.jpg".to_string());
 
     let dir_overrides = HashMap::new();
     let documents = vec![doc];
