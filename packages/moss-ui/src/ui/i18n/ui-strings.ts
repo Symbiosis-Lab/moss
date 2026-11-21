@@ -529,6 +529,10 @@ const EN = {
   'dialog.cancel': 'Cancel',
   'dialog.ok': 'OK',
   'panel.unsaved_close': 'You have unsaved changes. Discard and close?',
+  'panel.toolbar': 'Panel',
+  'panel.close': 'Close panel',
+  'panel.secure': 'Secure connection',
+  'panel.not_secure': 'Not secure',
 
   // Inline task status
   'status.working': 'Working…',
@@ -2337,6 +2341,10 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'dialog.cancel': 'Abbrechen',
     'dialog.ok': 'OK',
     'panel.unsaved_close': 'Du hast ungespeicherte Änderungen. Verwerfen und schließen?',
+    'panel.toolbar': 'Bereich',
+    'panel.close': 'Bereich schließen',
+    'panel.secure': 'Sichere Verbindung',
+    'panel.not_secure': 'Nicht sicher',
     'status.working': 'Läuft …',
     'status.complete': '{title} abgeschlossen',
     'status.done': 'Fertig',
@@ -3953,6 +3961,10 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'dialog.cancel': '取消',
     'dialog.ok': '好',
     'panel.unsaved_close': '有未保存的更改。放弃并关闭？',
+    'panel.toolbar': '面板',
+    'panel.close': '关闭面板',
+    'panel.secure': '安全连接',
+    'panel.not_secure': '不安全',
 
     'status.working': '处理中…',
     'status.complete': '{title}完成',
@@ -5625,6 +5637,10 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'dialog.cancel': '取消',
     'dialog.ok': '好',
     'panel.unsaved_close': '有未儲存的變更。放棄並關閉？',
+    'panel.toolbar': '面板',
+    'panel.close': '關閉面板',
+    'panel.secure': '安全連線',
+    'panel.not_secure': '不安全',
 
     'status.working': '處理中…',
     'status.complete': '{title}完成',
