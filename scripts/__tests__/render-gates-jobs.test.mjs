@@ -1,5 +1,6 @@
 // render-gates.sh --jobs: how many browsers run at once, and which gates never share the machine.
-// A stub `npx` stands in for Playwright and logs when each gate starts and ends.
+// A stub `npx` stands in for Playwright and logs when each gate starts and ends; a stub `getconf` sets the CPU count.
+// The memory grant is fixed so the lane count does not depend on the machine the tests run on.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
@@ -21,8 +22,9 @@ for a in "$@"; do case $a in playwright/*) g=$(basename "$a" .config.ts);; esac;
 echo "start $g $w $$" >> "${log}"; [ "$g" = "$KILL_LANE" ] && kill -9 $PPID; sleep ${sleep}; echo "end $g" >> "${log}"
 [ "$g" = "${red}" ] && exit 1; exit 0
 `, { mode: 0o755 });
+  fs.writeFileSync(path.join(dir, 'getconf'), '#!/bin/bash\necho "${STUB_CPUS:-16}"\n', { mode: 0o755 });
   const env = {
-    ...process.env, PATH: `${dir}:${process.env.PATH}`, MOSS_BIN: '/usr/bin/true', RENDER_GATES_MEM_GB: '',
+    ...process.env, PATH: `${dir}:${process.env.PATH}`, MOSS_BIN: '/usr/bin/true', RENDER_GATES_MEM_GB: '32',
     RENDER_GATES_TIMES: path.join(dir, 'times.tsv'), RENDER_GATES_LOGS: path.join(dir, 'logs'),
   };
   const events = () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').map((l) => l.split(' ')) : []);
@@ -71,13 +73,26 @@ test('a red gate turns the run red and is named', () => {
 });
 
 test('RENDER_GATES_MEM_GB, by default half the machine, caps --jobs N and sizes --jobs auto', () => {
-  const capped = run(['--jobs', '6', ...SPREAD], { RENDER_GATES_MEM_GB: '4' });
-  assert.match(capped.stderr, /running 2/);
-  assert.ok(peak(capped.events) <= 2, `at most 2 at once, saw ${peak(capped.events)}`);
-  const auto = run(['--jobs', 'auto', ...SPREAD], { RENDER_GATES_MEM_GB: '6' });
-  assert.match(auto.stdout, /on 3 lanes/);
-  const unset = run(['--jobs', '100000', 'nav-island']);
+  const capped = run(['--jobs', '6', ...SPREAD], { RENDER_GATES_MEM_GB: '17' });
+  assert.match(capped.stderr, /running 3/);
+  assert.ok(peak(capped.events) <= 3, `at most 3 at once, saw ${peak(capped.events)}`);
+  assert.match(run(['--jobs', '6', ...SPREAD], { RENDER_GATES_MEM_GB: '8' }).stderr, /running 1/, 'under one heavy lane, one lane');
+  assert.match(run(['--jobs', 'auto', ...SPREAD], { RENDER_GATES_MEM_GB: '25' }).stdout, /on 5 lanes/);
+  assert.match(run(['--jobs', 'auto', ...SPREAD], { RENDER_GATES_MEM_GB: '29' }).stdout, /on 6 lanes/);
+  const auto = run(['--jobs', 'auto', ...SPREAD], { RENDER_GATES_MEM_GB: '13' });
+  assert.match(auto.stdout, /on 2 lanes/);
+  const unset = run(['--jobs', '100000', 'nav-island'], { RENDER_GATES_MEM_GB: '' });
   assert.match(unset.stderr, /running \d+$/m, 'with no memory set, half the machine caps --jobs N');
+});
+
+test('--jobs auto takes no more lanes than CPUs', () => {
+  assert.match(run(['--jobs', 'auto', ...SPREAD], { RENDER_GATES_MEM_GB: '29', STUB_CPUS: '4' }).stdout, /on 4 lanes/);
+});
+
+test('a fractional grant sizes workers like its whole part', () => {
+  const { status, events } = run(['nav-island'], { RENDER_GATES_MEM_GB: '5.5' });
+  assert.equal(status, 0);
+  assert.deepEqual(events.filter(([k]) => k === 'start').map(([, g, w]) => `${g}:${w}`), ['nav-island:2']);
 });
 
 test('one lane runs the gates in order with a capped worker count', () => {
@@ -93,6 +108,12 @@ test('a grant of one lane runs one browser, whatever --jobs asks', () => {
     assert.equal(status, 0);
     assert.deepEqual(events.filter(([k]) => k === 'start').map(([, g, w]) => `${g}:${w}`), ['nav-island:1', 'marquee:1'], args.join(' '));
   }
+});
+
+test('the grant sizes a gate run alone by worker, apart from the lanes', () => {
+  const { status, events } = run(['nav-island'], { RENDER_GATES_MEM_GB: '8' });
+  assert.equal(status, 0);
+  assert.deepEqual(events.filter(([k]) => k === 'start').map(([, g, w]) => `${g}:${w}`), ['nav-island:4']);
 });
 
 test('the pool starts the gates the last run timed longest first', () => {
