@@ -239,6 +239,14 @@ pub struct EngineHost<'a> {
     pub declared: Option<&'a Declared>,
 }
 
+/// A page the plugin opened holds the watchdog off until the panel closes
+/// (the adapter's `browser-closed` listener) or the hook ends.
+fn window_opened(host: &EngineHost<'_>) {
+    if let Some(plugin) = host.plugin {
+        host.state.hooks.window_opened(plugin);
+    }
+}
+
 fn need_app<'a>(host: &EngineHost<'a>, cmd: &str) -> std::result::Result<&'a dyn AppHost, String> {
     host.app.ok_or_else(|| format!("{cmd} requires an app handle (not available in this test host)"))
 }
@@ -592,14 +600,14 @@ async fn dispatch_command_core(
                 .transpose()?;
             let title = args.get("title").and_then(|v| v.as_str()).map(String::from);
             let below = args.get("belowTitlebar").and_then(|v| v.as_bool()).unwrap_or(true);
-            app.open_action_panel(url, title, below, host.plugin.map(String::from)).await?;
+            app.open_action_panel(url, title, below, host.plugin.map(String::from)).await.map(|()| window_opened(&host))?;
             Ok("null".into())
         }
         "set_action_panel_html" => {
             let app = need_app(&host, "set_action_panel_html")?;
             let html = req_str(&args, "html")?;
             let title = args.get("title").and_then(|v| v.as_str()).map(String::from);
-            app.set_action_panel_html(html, title, host.plugin.map(String::from)).await?;
+            app.set_action_panel_html(html, title, host.plugin.map(String::from)).await.map(|()| window_opened(&host))?;
             Ok("null".into())
         }
         "close_action_panel" => {

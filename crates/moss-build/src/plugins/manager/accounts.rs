@@ -623,4 +623,145 @@ mod tests {
         assert!(matches!(state_with(failed, Some("@ada")).await, AccountState::Unread { name: Some(n), why: Some(_) } if n == "@ada"), "a failed read is neither signed in nor signed out");
         assert!(matches!(state_with(failed, None).await, AccountState::Unread { name: None, why: Some(_) }));
     }
+
+    /// The desktop as a sign-in page sees it: one browser panel, and an event
+    /// bus whose `browser-closed` fires however the panel closes.
+    #[derive(Default)]
+    struct Desk {
+        pages: std::sync::Mutex<Vec<String>>,
+        closes: std::sync::atomic::AtomicUsize,
+        listeners: std::sync::Mutex<Vec<(String, std::sync::Arc<dyn Fn(&str) + Send + Sync>)>>,
+    }
+
+    impl Desk {
+        fn fire(&self, name: &str, payload: &str) {
+            let handlers: Vec<_> = self.listeners.lock().unwrap().iter().filter(|(n, _)| n == name).map(|(_, h)| h.clone()).collect();
+            for handler in handlers {
+                handler(payload);
+            }
+        }
+
+        fn closes(&self) -> usize {
+            self.closes.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        /// Until the plugin has its page open and listens for the click on it.
+        async fn page_waiting_for(&self, event: &str) {
+            for _ in 0..500 {
+                let listening = self.listeners.lock().unwrap().iter().any(|(n, _)| n == event);
+                if listening && !self.pages.lock().unwrap().is_empty() {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            panic!("the sign-in never opened its page and listened for {event}");
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::engine::app_host::AppHost for Desk {
+        async fn get_plugin_cookies(&self, _: &str, _: &str) -> Result<String, String> { unreachable!() }
+        async fn set_plugin_cookies(&self, _: &str, _: &str, _: Value) -> Result<(), String> { unreachable!() }
+        async fn clear_plugin_cookies(&self, _: &str, _: &str) -> Result<(), String> { unreachable!() }
+        async fn open_action_panel(&self, _: Option<String>, _: Option<String>, _: bool, _: Option<String>) -> Result<(), String> { unreachable!() }
+        async fn set_action_panel_html(&self, html: String, _: Option<String>, _: Option<String>) -> Result<(), String> {
+            self.pages.lock().unwrap().push(html);
+            Ok(())
+        }
+        async fn close_action_panel(&self) -> Result<(), String> {
+            self.closes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.fire("browser-closed", r#"{"reason":"programmatic"}"#);
+            Ok(())
+        }
+        async fn open_system_browser(&self, _: String) -> Result<(), String> { unreachable!() }
+        async fn return_to_editor(&self) -> Result<(), String> { unreachable!() }
+        async fn fill_browser_panel(&self, _: &str, _: &str, _: Value) -> Result<Value, String> { unreachable!() }
+        async fn prompt_credential(&self, _: &str, _: &str, _: &str, _: Option<String>) -> Result<Option<String>, String> { unreachable!() }
+        fn listen(&self, name: String, handler: Box<dyn Fn(&str) + Send + Sync + 'static>) -> crate::engine::app_host::ListenerId {
+            let mut listeners = self.listeners.lock().unwrap();
+            listeners.push((name, handler.into()));
+            listeners.len() as u32
+        }
+        fn unlisten(&self, _: crate::engine::app_host::ListenerId) {}
+        fn emit_plugin_event(&self, _: &str, _: Option<String>) {}
+    }
+
+    fn manager_at_desk(project: &str) -> (PluginManager, Plugin, std::sync::Arc<Desk>) {
+        let desk = std::sync::Arc::new(Desk::default());
+        let host = AdapterHost {
+            state: crate::engine::host_fns::HostState::standalone(),
+            app: Some(desk.clone()),
+            reporter: crate::build::ports::reporter::discard_owned(),
+            spawner: std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner),
+        };
+        let watchdog = HookWatchdog { limit: std::time::Duration::from_secs(1), check: std::time::Duration::from_millis(100) };
+        let manager = PluginManager::new(project, host).unwrap().with_watchdog(watchdog);
+        let plugin = manager.plugins().into_iter().find(|p| p.manifest.name == "social").unwrap();
+        (manager, plugin, desk)
+    }
+
+    /// What a channel's server picker does: open the page, then wait for the
+    /// person's click on it, with no host call in flight meanwhile.
+    const PICKS_A_SERVER: &str = r#"
+        await globalThis.__TAURI__.core.invoke("set_action_panel_html", { html: "<button>Continue</button>" });
+        const server = await new Promise((picked) => { globalThis.__TAURI__.event.listen("picker:continue", (e) => picked(e.payload.server)); });"#;
+
+    /// The person takes longer than the watchdog's (shortened) limit to click.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_sign_in_waiting_on_its_page_outlives_the_watchdog_and_finishes_on_the_click() {
+        let (_dir, project) = folder_with_channel(&format!(r#"{PICKS_A_SERVER}
+            return {{ status: "completed", account: {{ id: server + "/1", name: "@ada" }} }};"#));
+        let (manager, plugin, desk) = manager_at_desk(&project);
+        let ctx = context(&project);
+        let (signed_in, ()) = tokio::join!(manager.sign_in(&plugin, &ctx), async {
+            desk.page_waiting_for("picker:continue").await;
+            tokio::time::sleep(std::time::Duration::from_millis(1600)).await;
+            desk.fire("picker:continue", r#"{"server":"social.example.net"}"#);
+        });
+        assert_eq!(signed_in.unwrap().outcome, completed("social.example.net/1", Some("@ada")));
+        assert_eq!(desk.closes(), 1, "the sign-in's page closes with it");
+    }
+
+    /// However the sign-in ends, its page does not outlive it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_sign_in_that_ends_closes_its_page() {
+        for ending in [r#"return { status: "completed", account: { id: "s/1" } };"#, r#"throw new Error("server refused");"#, r#"return { status: "cancelled" };"#] {
+            let (_dir, project) = folder_with_channel(&format!(r#"await globalThis.__TAURI__.core.invoke("set_action_panel_html", {{ html: "<p>Pick</p>" }}); {ending}"#));
+            let (manager, plugin, desk) = manager_at_desk(&project);
+            let _ = manager.sign_in(&plugin, &context(&project)).await;
+            assert_eq!(desk.closes(), 1, "{ending}");
+            assert!(!manager.host.state.hooks.is_making_progress("social", "login"), "{ending}");
+        }
+    }
+
+    /// The person closing the page ends the wait: a sign-in still waiting for
+    /// a click on it is cut off at the watchdog's limit instead of hanging.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_person_closing_the_page_puts_the_sign_in_back_under_the_watchdog() {
+        let (_dir, project) = folder_with_channel(&format!(r#"{PICKS_A_SERVER} return {{ status: "cancelled" }};"#));
+        let (manager, plugin, desk) = manager_at_desk(&project);
+        let ctx = context(&project);
+        let waiting = tokio::time::timeout(std::time::Duration::from_secs(10), manager.sign_in(&plugin, &ctx));
+        let (signed_in, ()) = tokio::join!(waiting, async {
+            desk.page_waiting_for("picker:continue").await;
+            desk.fire("browser-closed", r#"{"reason":"user"}"#);
+        });
+        assert_eq!(signed_in.expect("a closed page must not hold the sign-in forever").unwrap_err(), "Hook 'social::login' timed out - no progress for 1 seconds");
+        assert_eq!(desk.closes(), 0, "a page already closed is not closed again");
+    }
+
+    /// A channel that declares its one hidden secret keeps everything a
+    /// sign-in learns inside it; a key per server is refused.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_sign_in_may_write_only_the_secret_its_manifest_declares() {
+        let (_dir, project) = folder_with_channel(r#"
+            await globalThis.__TAURI__.core.invoke("set_plugin_secret", { key: "app-social.example.net", value: "client" });
+            return { status: "completed", account: { id: "s/1" } };"#);
+        write(&project, ".moss/plugins/social/manifest.json", r#"{"name":"social","version":"0.1.0","entry":"main.bundle.js",
+            "global_name":"Social","contributes":{"channel":{"login":true,
+            "setup":{"settings":[{"key":"session","type":"secret","label":"Session","hidden":true}]}}}}"#);
+        let err = try_sign_in(&project).await.unwrap_err();
+        assert!(err.contains("does not declare 'app-social.example.net' as a hidden `secret` setting"), "{err}");
+        assert_eq!(account_binding(&project, "social"), None);
+    }
 }

@@ -144,6 +144,12 @@ pub struct PluginHookState {
     /// preview's `process` still running when the page emit calls `listing`).
     runs: Arc<Mutex<HashMap<String, (AskedBy, usize)>>>,
     run_ended: Arc<tokio::sync::Notify>,
+    /// The page each plugin has open in the browser panel. A page that waits
+    /// for a click (a server picker) returns to the plugin at once, so no call
+    /// is in flight while the person reads it; the open page itself is the
+    /// person-wait. One per plugin: a second page replaces the first in the
+    /// same panel.
+    windows: Arc<Mutex<HashMap<String, PersonWaitGuard>>>,
 }
 
 /// Who asked for a hook run, which decides where in the folder it may write.
@@ -187,6 +193,7 @@ impl PluginHookState {
             in_flight_hooks: Arc::new(Singleflight::new()),
             runs: Arc::new(Mutex::new(HashMap::new())),
             run_ended: Arc::new(tokio::sync::Notify::new()),
+            windows: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -417,6 +424,28 @@ impl PluginHookState {
             map.entry(plugin_name.to_string()).or_default().person_waits += 1;
         }
         PersonWaitGuard { state: self.clone(), plugin_name: plugin_name.to_string() }
+    }
+
+    /// The plugin opened a page in the browser panel: the person is being
+    /// waited on until it closes. Opening another page keeps the one wait.
+    pub fn window_opened(&self, plugin_name: &str) {
+        let mut windows = self.windows.lock().unwrap_or_else(|e| e.into_inner());
+        if !windows.contains_key(plugin_name) {
+            windows.insert(plugin_name.to_string(), self.begin_person_wait(plugin_name));
+        }
+    }
+
+    /// The browser panel closed. There is one panel, so whoever's page it
+    /// held is no longer waiting on the person.
+    pub fn windows_closed(&self) {
+        let closed: Vec<_> = self.windows.lock().unwrap_or_else(|e| e.into_inner()).drain().collect();
+        drop(closed);
+    }
+
+    /// Forget `plugin_name`'s page, answering whether it had one open.
+    pub fn take_window(&self, plugin_name: &str) -> bool {
+        let taken = self.windows.lock().unwrap_or_else(|e| e.into_inner()).remove(plugin_name);
+        taken.is_some()
     }
 
     /// True while this plugin has been continuously inside host calls for less
@@ -658,6 +687,24 @@ mod tests {
             !state.is_making_progress("ipfs", "deploy"),
             "the answer puts the hook back under the clock"
         );
+    }
+
+    /// An open page waits on the person until the panel closes or its hook
+    /// takes it back; a second page in the same panel is still one wait.
+    #[test]
+    fn an_open_page_holds_the_watchdog_off_until_it_closes() {
+        let state = PluginHookState::default();
+        state.register_executing_hook("social", "login");
+        state.window_opened("social");
+        state.window_opened("social");
+        assert!(state.is_making_progress("social", "login"));
+        assert!(state.take_window("social"));
+        assert!(!state.is_making_progress("social", "login"), "one page, one wait");
+        assert!(!state.take_window("social"));
+
+        state.window_opened("social");
+        state.windows_closed();
+        assert!(!state.is_making_progress("social", "login"), "the panel closing ends it");
     }
 
     /// A question asked of one plugin's user says nothing about another plugin.

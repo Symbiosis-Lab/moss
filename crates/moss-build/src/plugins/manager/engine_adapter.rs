@@ -176,6 +176,10 @@ pub struct QuickJsEngineAdapter {
     /// Bridged host→engine listen registrations (Task 11b) — shared with the
     /// host dispatch task, drained at teardown.
     bridged: BridgedListeners,
+    /// The host's own `browser-closed` listener, which ends a plugin's page
+    /// wait however the panel closed (the person, the plugin, a folder close).
+    /// Not in `bridged`: a respawn drains that, and this one outlives engines.
+    panel_closed: Option<ListenerId>,
 }
 
 impl QuickJsEngineAdapter {
@@ -202,6 +206,10 @@ impl QuickJsEngineAdapter {
             bridged.clone(),
             grants.clone(),
         );
+        let panel_closed = host.app.as_ref().map(|app| {
+            let hooks = host.state.hooks.clone();
+            app.listen("browser-closed".into(), Box::new(move |_| hooks.windows_closed()))
+        });
         Self {
             engine: slot,
             bundles,
@@ -211,6 +219,7 @@ impl QuickJsEngineAdapter {
             host,
             bridged,
             grants,
+            panel_closed,
         }
     }
 
@@ -278,6 +287,7 @@ impl QuickJsEngineAdapter {
             host,
             bridged,
             grants: crate::engine::host_fns::GrantRegistry::default(),
+            panel_closed: None,
         }
     }
 
@@ -636,7 +646,7 @@ impl PluginEngine for QuickJsEngineAdapter {
         if let Some(app) = &self.host.app {
             let ids: Vec<ListenerId> =
                 self.bridged.lock().unwrap().drain().map(|(_, id)| id).collect();
-            for id in ids {
+            for id in ids.into_iter().chain(self.panel_closed) {
                 app.unlisten(id);
             }
         }

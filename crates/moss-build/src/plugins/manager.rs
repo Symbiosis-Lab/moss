@@ -964,6 +964,18 @@ impl PluginManager {
         // future invocation of a different hook name for this plugin starts clean.
         hook_state.unregister_executing_hook(&plugin.manifest.name);
 
+        // A page left open waits on nobody once its hook is over. A sign-in's
+        // page is also closed: a click on it would reach a listener that died
+        // with the hook.
+        let page_left_open = hook_state.take_window(&plugin.manifest.name);
+        if page_left_open && hook_name == crate::plugins::types::Capability::Login.hook_name() {
+            if let Some(app) = &self.host.app {
+                if let Err(e) = app.close_action_panel().await {
+                    log::warn!(target: "plugin", "{}: could not close the sign-in page: {e}", plugin.manifest.name);
+                }
+            }
+        }
+
         // Signal the shell that this hook's progress task is done
         self.host.reporter.report(&crate::build::progress::PipelineEvent::PluginProgress(
             crate::plugins::types::PluginProgressEvent {
