@@ -127,20 +127,26 @@ pub fn credential_root() -> Option<PathBuf> {
 /// Whether this process is a test binary, which must never reach a real app
 /// data root.
 pub(crate) fn in_test_binary() -> bool {
-    std::env::current_exe().is_ok_and(|exe| is_test_binary_path(&exe))
+    static IN_TEST: OnceLock<bool> = OnceLock::new();
+    *IN_TEST.get_or_init(|| std::env::current_exe().is_ok_and(|exe| is_test_binary_path(&exe)))
 }
 
 /// Cargo runs every test binary, unit and integration, from
 /// `<profile>/deps/`, or under its newer build-dir layout from
-/// `<profile>/build/<package>/<hash>/out/`. A binary a person runs is
-/// copied up to `<profile>/` or installed elsewhere, so it is neither.
+/// `<profile>/build/<package>/<hash>/out/`, and names it `<crate>-<16 hex>`.
+/// A binary a person runs is copied up to `<profile>/` or installed elsewhere
+/// under its own name, so a hand install in a folder named `deps` is not one.
 fn is_test_binary_path(exe: &Path) -> bool {
+    let named_by_cargo = exe.file_stem().and_then(|s| s.to_str()).and_then(|s| s.rsplit_once('-')).is_some_and(|(name, hash)| {
+        !name.is_empty() && hash.len() == 16 && hash.bytes().all(|b| b.is_ascii_hexdigit())
+    });
     let mut dirs = exe.ancestors().skip(1).map(|dir| dir.file_name().unwrap_or_default());
-    match dirs.next() {
-        Some(parent) if parent == "deps" => true,
-        Some(parent) if parent == "out" => dirs.nth(2).is_some_and(|dir| dir == "build"),
-        _ => false,
-    }
+    named_by_cargo
+        && match dirs.next() {
+            Some(parent) if parent == "deps" => true,
+            Some(parent) if parent == "out" => dirs.nth(2).is_some_and(|dir| dir == "build"),
+            _ => false,
+        }
 }
 
 #[cfg(test)]
@@ -149,11 +155,13 @@ mod tests {
 
     #[test]
     fn a_test_binary_is_known_in_both_cargo_layouts_and_a_shipped_one_is_not() {
-        assert!(is_test_binary_path(Path::new("/w/target/debug/deps/moss_build-0123abcd")));
-        assert!(is_test_binary_path(Path::new("/w/target/debug/build/moss-build/0123abcd/out/moss_build-0123abcd")));
+        assert!(is_test_binary_path(Path::new("/w/target/debug/deps/moss_build-0123456789abcdef")));
+        assert!(is_test_binary_path(Path::new("/w/target/debug/build/moss-build/0123abcd/out/moss_build-0123456789abcdef")));
         assert!(!is_test_binary_path(Path::new("/w/target/debug/moss")));
         assert!(!is_test_binary_path(Path::new("/Applications/moss.app/Contents/MacOS/moss")));
         assert!(!is_test_binary_path(Path::new("/w/out/moss")));
+        assert!(!is_test_binary_path(Path::new("/home/a/deps/moss")), "a hand install in a folder named deps");
+        assert!(!is_test_binary_path(Path::new("/home/a/deps/moss-cli")));
     }
 
     #[test]
