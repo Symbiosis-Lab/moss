@@ -50,6 +50,7 @@ pub mod host_fns;
 pub(crate) mod loader;
 pub(crate) mod marshal;
 pub mod tauri_bridge;
+pub(crate) mod subtle;
 pub(crate) mod url_shim;
 pub(crate) mod web_shims;
 
@@ -609,7 +610,7 @@ async fn engine_loop(
                             .map_err(|e| format!("install_console error: {e}"))?;
                         self::web_shims::install_base64(&ctx)
                             .map_err(|e| format!("install_base64 error: {e}"))?;
-                        self::web_shims::install_crypto(&ctx)
+                        self::subtle::install_crypto(&ctx)
                             .map_err(|e| format!("install_crypto error: {e}"))?;
                         self::web_shims::install_text_codec(&ctx)
                             .map_err(|e| format!("install_text_codec error: {e}"))?;
