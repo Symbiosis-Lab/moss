@@ -24,7 +24,7 @@
 import { keymap } from '@codemirror/view';
 import type { EditorView, Command } from '@codemirror/view';
 import type { EditorState, Extension } from '@codemirror/state';
-import { syntaxTree } from '@codemirror/language';
+import { ensureSyntaxTree, syntaxTree } from '@codemirror/language';
 import { foldGutter, codeFolding } from '@codemirror/language';
 import { linter, lintGutter } from '@codemirror/lint';
 import { jsonParseLinter } from '@codemirror/lang-json';
@@ -60,7 +60,9 @@ export function jsonItemDeleteRange(
   state: EditorState,
   pos: number,
 ): { from: number; to: number } | null {
-  const tree = syntaxTree(state);
+  // syntaxTree alone holds only what the background parser has reached, which on a
+  // busy machine may stop before the cursor.
+  const tree = ensureSyntaxTree(state, state.doc.length, 200) ?? syntaxTree(state);
 
   // Walk up from the cursor to find a node whose direct parent is Array or Object.
   let node: JsonNode | null = tree.resolveInner(pos, 1);

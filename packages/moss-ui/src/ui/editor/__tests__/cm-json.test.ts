@@ -332,3 +332,14 @@ describe('exact deletion range offsets', () => {
     expect(r).toEqual({ from: 1, to: 3 });
   });
 });
+
+// ── A document the first parse does not reach the end of ────────────────────
+
+describe('a long document', () => {
+  test('the last element is found even where the background parse has not reached', () => {
+    const items = Array.from({ length: 5_000 }, (_, i) => `  "item-${i}"`);
+    const doc = `[\n${items.join(',\n')}\n]`;
+    const result = applyDelete(doc, doc.lastIndexOf('"item-4999"') + 1);
+    expect(result).toBe(`[\n${items.slice(0, -1).join(',\n')}\n]`);
+  });
+});
