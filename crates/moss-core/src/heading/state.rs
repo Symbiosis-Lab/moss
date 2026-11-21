@@ -257,6 +257,41 @@ pub(crate) fn comment_only(html: &str) -> bool {
     rest.is_empty()
 }
 
+/// Where the picture line sits in a body that may open with a banner: one
+/// picture alone in its paragraph, with no words or options of its own,
+/// directly above a level-1 heading, after any leading comments. Whether it
+/// becomes the banner depends on its size and on that heading being the
+/// page's only one, which [`crate::ast::promote_wide_banner`] checks. A width
+/// word, a caption or prose before the heading keeps it a figure.
+pub(crate) fn banner_line(body: &str) -> Option<std::ops::Range<usize>> {
+    let after_comments = skip_leading_comments(body);
+    let mut at = body.len() - after_comments.len();
+    let mut lines = after_comments.split_inclusive('\n').map(|raw| {
+        let start = at;
+        at += raw.len();
+        (start, raw.trim_end_matches(['\n', '\r']))
+    }).filter(|(_, line)| !line.trim().is_empty());
+    let (start, picture) = lines.next().filter(|(_, line)| !line.starts_with([' ', '\t']))?;
+    h1_text(lines.next()?.1)?;
+    let media = crate::ast::extract_hero::hero_media_line_span(picture)?;
+    // Rejected because the parser would not read one bare picture: a pipe,
+    // bracket or backslash in the alt; a space, parenthesis or quote in a
+    // markdown address; a bracket in a wikilink target (a second embed).
+    let wikilink = picture.starts_with("![[");
+    let bare = !media.path.contains(|c: char| matches!(c, '[' | ']') || !wikilink && (c.is_whitespace() || matches!(c, '(' | ')' | '"')));
+    let wordless = media.is_token && media.attrs.is_empty() && !media.alt.contains(['|', '[', ']', '\\']) && bare;
+    let ext = crate::path_ext::path_extension_lower(&media.path);
+    let is_image = crate::resolve::ext_kind::reference_kind_for_ext(&ext) == crate::resolve::ext_kind::ExtKind::Image;
+    (wordless && is_image).then(|| start..start + picture.len())
+}
+
+/// `body` without the banner's picture line at `line` (from
+/// [`crate::ast::promote_wide_banner`]): the body the article holds, which the
+/// title rules read so the heading under the banner opens it.
+pub fn body_without_banner(body: &str, line: std::ops::Range<usize>) -> String {
+    format!("{}{}", body.get(..line.start).unwrap_or_default(), body.get(line.end..).unwrap_or_default())
+}
+
 /// True when the body supplies a real heading: an ATX level-1 heading
 /// (`# Title`, not `##` or `#tag`) anywhere outside a code fence, including
 /// one inside a `:::hero` block. "Anywhere", not "first line": a page that
@@ -1101,6 +1136,42 @@ mod tests {
     fn title_inside_an_opening_hero_under_a_comment_has_no_injected_title() {
         let body = "<!-- note -->\n:::hero {image=hall.jpg}\n# Custom\n:::\n\ntext";
         assert_eq!(article_title_outcome(article_inputs(body, Some("Custom")), false), TitleOutcome::None);
+    }
+
+    fn under_banner(body: &str) -> String {
+        banner_line(body).map_or_else(|| body.to_string(), |line| body_without_banner(body, line))
+    }
+
+    /// Under a banner the title rules read the body without the picture, so
+    /// the heading under it is the page's one title; a picture left in the
+    /// column keeps the title above it, and a body of any other shape is read
+    /// as written.
+    #[test]
+    fn title_under_a_banner_has_no_injected_title() {
+        for picture in ["![Hall](hall.jpg)", "![[hall.jpg]]", "\n![](hall.jpg)\n", "<!-- note -->\n![Hall](hall.jpg)"] {
+            let body = format!("{picture}\n\n# Custom\n\ntext\n\n## Part\n\n```\nCode\n===\n```\n\nA rule under a blank line:\n\n===\n");
+            assert_eq!(article_title_outcome(article_inputs(&under_banner(&body), Some("Custom")), false), TitleOutcome::None, "{picture}");
+            assert_eq!(article_title_outcome(article_inputs(&body, Some("Custom")), false), TitleOutcome::Visible, "{picture}");
+        }
+        for body in [
+            "![Hall](hall.jpg)\n*The hall in 1884*\n\n# Custom\n",
+            "![Hall|body](hall.jpg)\n\n# Custom\n",
+            "![[hall.jpg|The hall]]\n\n# Custom\n",
+            "![Hall](hall.jpg)\n\nA line.\n\n# Custom\n",
+            "![[notes.pdf]]\n\n# Custom\n",
+            // Not a picture to the parser: the address holds a space, the
+            // alt a link or a stray bracket, the line a second embed.
+            "![Hall](my hall.jpg)\n\n# Custom\n",
+            "![a [b](hall.jpg)\n\n# Custom\n",
+            "![a]b](hall.jpg)\n\n# Custom\n",
+            "![a\\](hall.jpg)\n\n# Custom\n",
+            // A visible line or a code block to the parser, not a comment.
+            "<!-- a --> <!-- b\nc -->\n![Hall](hall.jpg)\n\n# Custom\n",
+            "    <!-- a -->\n![Hall](hall.jpg)\n\n# Custom\n",
+            "![[hall.jpg]] ![[lake.jpg]]\n\n# Custom\n",
+        ] {
+            assert_eq!(banner_line(body), None, "{body}");
+        }
     }
 
     #[test]

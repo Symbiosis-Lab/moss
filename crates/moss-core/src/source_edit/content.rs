@@ -65,7 +65,9 @@ pub fn bootstrap_source_path(
 /// Core of `compute_heading_state`: the JSON `Value` → `HeadingInputs` bridge
 /// over `crate::heading::compute` — the single source of truth shared with
 /// the build pipeline's `<h1 class="moss-article-title">` injection gate
-/// (`build::markdown::pipeline`).
+/// (`build::markdown::pipeline`). It reads the body as written: under a
+/// banner the build lifts from a wide opening picture it knows no sizes for,
+/// so it may report an injected title the built page does not show.
 pub fn compute_heading_state_inner(
     file_path: &str,
     frontmatter: &serde_json::Value,

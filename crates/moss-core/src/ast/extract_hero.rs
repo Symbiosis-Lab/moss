@@ -37,6 +37,7 @@ use super::shortcode::{HeroShortcode, Shortcode};
 use super::shortcode::ShortcodeSource;
 use super::shortcode_extract::{config_at_body_line, fragment_parts, source_fragment, Diagnostics};
 use super::url::Url;
+use crate::asset_snapshot::AssetSnapshot;
 
 /// Captured Hero data after extraction.
 ///
@@ -237,6 +238,50 @@ pub(crate) fn hero_body_has_overlay_content(args: &str, body: &str) -> bool {
     let lines: Vec<&str> = body.lines().collect();
     let run = hero_media_run(&lines);
     run.overlay.iter().any(|&k| !lines[k].trim().is_empty())
+}
+
+/// The narrowest picture that opens a page as its banner. A narrower one, or
+/// one taller than wide (a logo, a portrait), stays in the column.
+pub const BANNER_MIN_WIDTH: u32 = 1200;
+
+/// Make the opening picture of a page body its banner when the body opens
+/// with one by shape ([`crate::heading::state::banner_line`]) above its only
+/// level-1 heading and the picture
+/// is wide: wider than tall and at least [`BANNER_MIN_WIDTH`] pixels. The
+/// banner is the hero `:::hero` around the picture parses to, with the
+/// picture's resolved address, so it is lifted, drawn and shared like the
+/// fenced one. Runs after URL resolution, which the size lookup needs; a
+/// picture of unknown size stays where it is. Returns where the promoted
+/// picture's line sits in `markdown`, for the title rules to read past.
+pub fn promote_wide_banner(doc: &mut Document, markdown: &str, config: &ParseConfig, assets: &AssetSnapshot) -> Option<std::ops::Range<usize>> {
+    let range = crate::heading::state::banner_line(markdown)?;
+    let mut titles = 0;
+    super::visit::visit_blocks(doc, |b| {
+        titles += usize::from(matches!(b, Block::Heading { level: 1, .. }));
+        true
+    });
+    if titles != 1 {
+        return None;
+    }
+    let start = doc.blocks.iter().position(|b| !is_comment(b))?;
+    let [picture, Block::Heading { level: 1, .. }, ..] = &mut doc.blocks[start..] else { return None };
+    let src = match picture {
+        Block::Figure { image: Inline::Image { src, .. }, .. } => src,
+        Block::Paragraph(inlines) => match inlines.as_mut_slice() {
+            [Inline::Image { src, .. }] => src,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let Url::Resolved(resolved) = src else { return None };
+    let (w, h) = crate::render::image::lookup_dims(assets, &resolved.href)?;
+    if !(w > h && w >= BANNER_MIN_WIDTH) {
+        return None;
+    }
+    let mut hero = parse_hero("", markdown.get(range.clone())?, config).0;
+    hero.image = Some(src.clone());
+    *picture = Block::Shortcode(Shortcode::Hero(hero));
+    Some(range)
 }
 
 /// Parse a `:::hero` block in any of three syntactic forms.
@@ -771,11 +816,5 @@ mod tests;
 
 /// A block that holds only HTML comments, which a reader never sees.
 pub fn is_comment(block: &Block) -> bool {
-    let Block::Other(html) = block else { return false };
-    let mut rest = html.trim();
-    while let Some(after) = rest.strip_prefix("<!--") {
-        let Some((_, tail)) = after.split_once("-->") else { return false };
-        rest = tail.trim_start();
-    }
-    rest.is_empty()
+    matches!(block, Block::Other(html) if crate::heading::state::comment_only(html))
 }

@@ -266,3 +266,106 @@ fn a_comment_above_the_hero_does_not_stop_it_opening_the_page() {
     let drawn = extraction.drawn_from.expect("a from= hero is kept for its second render");
     assert_eq!(drawn.shortcode.header.as_deref(), Some("over"));
 }
+
+/// A page body parsed and resolved, its opening picture `size` pixels, then given
+/// [`promote_wide_banner`]'s chance.
+fn banner_page(markdown: &str, size: (u32, u32)) -> (Document, bool) {
+    let config = ParseConfig::default();
+    let mut doc = super::super::parser::parse_with_config(markdown, &config);
+    let mut assets = AssetSnapshot::new();
+    for name in ["hall.jpg", "assets/hall.jpg", "my hall (1).jpg"] {
+        assets.dimensions.insert(name.into(), size);
+    }
+    super::super::resolve_document(&mut doc, &assets, None, "page.md", true, &|raw| raw.to_string());
+    let promoted = promote_wide_banner(&mut doc, markdown, &config, &assets).is_some();
+    (doc, promoted)
+}
+
+fn banner(markdown: &str, size: (u32, u32)) -> Option<HeroShortcode> {
+    let (doc, promoted) = banner_page(markdown, size);
+    match doc.blocks.into_iter().find(|b| !is_comment(b))? {
+        Block::Shortcode(Shortcode::Hero(mut hero)) => {
+            assert!(promoted);
+            hero.source = Default::default();
+            Some(hero)
+        }
+        _ => None,
+    }
+}
+
+const WIDE: (u32, u32) = (1600, 900);
+
+#[test]
+fn a_wide_picture_above_the_only_title_is_the_fenced_hero() {
+    for picture in ["![A hall](assets/hall.jpg)", "![[hall.jpg]]", "![](hall.jpg)", "![Hall (1884) \"east\"](hall.jpg)", "![[my hall (1).jpg]]"] {
+        let plain = format!("{picture}\n\n# Page Title\n\nText.\n\n## Part\n");
+        let fenced = format!(":::hero\n{picture}\n:::\n\n# Page Title\n\nText.\n\n## Part\n");
+        let (fenced_doc, _) = banner_page(&fenced, WIDE);
+        let Block::Shortcode(Shortcode::Hero(mut want)) = fenced_doc.blocks[0].clone() else { panic!("{:?}", fenced_doc.blocks) };
+        want.source = Default::default();
+        assert_eq!(banner(&plain, WIDE), Some(want), "{picture}");
+        assert_eq!(banner_page(&plain, WIDE).0.blocks[1..], fenced_doc.blocks[1..], "{picture}");
+    }
+}
+
+/// Wider than tall and at least 1200 pixels wide, each on its own: a small
+/// logo, a square and a portrait stay figures, and so does a picture whose
+/// size is not known.
+#[test]
+fn only_a_wide_picture_becomes_the_banner() {
+    let page = "![Hall](hall.jpg)\n\n# Page Title\n";
+    for (size, wide) in [((1200, 800), true), ((400, 200), false), ((1199, 600), false), ((1400, 2000), false), ((1600, 1600), false), ((0, 0), false)] {
+        assert_eq!(banner(page, size).is_some(), wide, "{size:?}");
+    }
+    let (doc, promoted) = banner_page("![Hall](elsewhere.jpg)\n\n# Page Title\n", WIDE);
+    assert!(!promoted && matches!(doc.blocks[0], Block::Figure { .. }), "{:?}", doc.blocks[0]);
+}
+
+/// `extract_hero` looks past leading comments, so the picture after them opens the page.
+#[test]
+fn a_comment_above_the_picture_does_not_stop_it() {
+    for markdown in ["<!-- note -->\n![Hall](hall.jpg)\n\n# Title\n", "<!--\n# Draft\n-->\n![Hall](hall.jpg)\n\n# Title\n"] {
+        assert!(banner(markdown, WIDE).is_some(), "{markdown}");
+    }
+}
+
+/// A click on the banner in the preview reaches the picture's own line.
+#[test]
+fn the_banner_sits_on_the_pictures_line() {
+    let config = ParseConfig { emit_source_lines: true, ..ParseConfig::default() };
+    let markdown = "\n\n![Hall](hall.jpg)\n\n# Page Title\n";
+    let mut doc = super::super::parser::parse_with_config(markdown, &config);
+    let mut assets = AssetSnapshot::new();
+    assets.dimensions.insert("hall.jpg".into(), WIDE);
+    super::super::resolve_document(&mut doc, &assets, None, "page.md", true, &|raw| raw.to_string());
+    assert_eq!(promote_wide_banner(&mut doc, markdown, &config, &assets), Some(2..19));
+    assert_eq!(doc.block_meta[0].source_line, Some(3));
+    let Block::Shortcode(Shortcode::Hero(hero)) = &doc.blocks[0] else { panic!("{:?}", doc.blocks) };
+    assert_eq!(hero.source.extra_lines, 0);
+}
+
+#[test]
+fn near_misses_keep_the_picture_in_the_body() {
+    for markdown in [
+        // Numbered sections written as level-1 headings: none is the title.
+        "![Hall](hall.jpg)\n\n# 1.\n\nText.\n\n# 2.\n\nText.\n",
+        "![Hall](hall.jpg)\n*The hall in 1884*\n\n# Page Title\n",
+        "![[hall.jpg|The hall in 1884]]\n\n# Page Title\n",
+        "![Hall|body](hall.jpg)\n\n# Page Title\n",
+        "![Hall|screen](hall.jpg)\n\n# Page Title\n",
+        "![Hall](hall.jpg)\n\nA line of text.\n\n# Page Title\n",
+        "![Hall](hall.jpg) ![Lake](lake.jpg)\n\n# Page Title\n",
+        "[![Hall](hall.jpg)](https://example.org)\n\n# Page Title\n",
+        "![Hall](hall.jpg)\n\n## Page Title\n",
+        "# Page Title\n\n![Hall](hall.jpg)\n",
+        "![[film.mp4]]\n\n# Page Title\n",
+        "![Hall](my hall.jpg)\n\n# Page Title\n",
+        "![[hall.jpg]] ![[lake.jpg]]\n\n# Page Title\n",
+        "![Hall](hall.jpg \"The hall\")\n\n# Page Title\n",
+        "![Hall](hall.jpg)\n\nPage Title\n===\n\n# Other\n",
+        "![Hall](hall.jpg)\n\n# Page Title\n\nText.\n\nPart Two\n========\n",
+        "![Hall](hall.jpg)\n\n# Page Title\n\nText.\n\n#two\n===\n",
+    ] {
+        assert!(banner(markdown, WIDE).is_none(), "{markdown}");
+    }
+}
