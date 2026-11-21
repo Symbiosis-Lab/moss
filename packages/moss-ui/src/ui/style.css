@@ -6514,11 +6514,16 @@ body.own-titlebar.controls-trailing .moss-titlebar-traffic-light-space {
   gap: 2px;
   max-inline-size: 560px;
 }
-.moss-plugin-catalog-list + .moss-plugin-catalog-list {
+.moss-plugin-catalog-list:not([hidden]) ~ .moss-plugin-catalog-list:not([hidden]) {
   margin-block-start: 14px;
 }
+/* A segment hides the rows outside it; `display: flex` would show them. */
+.moss-plugin-catalog-list[hidden],
+.moss-plugin-catalog-row[hidden] {
+  display: none;
+}
 
-/* The catalog's filter: which kind of plugin the list shows, every choice on
+/* The catalog's filter: which segment of plugins the list shows, every choice on
    screen. The selected segment wears the settings rail's selected fill; a
    segment whose rows are off screen and need attention wears the rail's lamp. */
 .moss-plugin-catalog-views {
