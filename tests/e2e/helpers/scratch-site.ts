@@ -290,19 +290,31 @@ export function syntheticTestClip(
 ): Buffer {
   // The original 2 s `testsrc` clip keeps its cache name, so existing caches stay valid.
   const tag = seconds === 2 && source === "testsrc" && !rich ? "" : `-${source}-${seconds}s${rich ? "-rich" : ""}`;
-  const cachePath = path.join(WORKTREE, `target/test-tmp/fixtures/clip-${width}x${height}${tag}.mp4`);
+  return cachedFfmpeg(
+    `clip-${width}x${height}${tag}.mp4`,
+    `-f lavfi -i "${source}=size=${width}x${height}:rate=15${rich ? ",noise=alls=25:allf=t" : ""}" -t ${seconds} ` +
+      `${rich ? "-c:v libx264 -preset veryfast -b:v 3500k -maxrate 3500k -bufsize 7000k " : ""}-pix_fmt yuv420p`,
+    `the ${width}x${height} test clip`,
+  );
+}
+
+/**
+ * `ffmpeg <args> <output>` once per worktree, cached under target/test-tmp/fixtures.
+ * Gates running in parallel can ask for the same file, so ffmpeg writes a file of
+ * this process's own and renames it into place: no reader sees half a file.
+ */
+function cachedFfmpeg(name: string, args: string, what: string): Buffer {
+  const cachePath = path.join(WORKTREE, "target/test-tmp/fixtures", name);
   if (fs.existsSync(cachePath)) return fs.readFileSync(cachePath);
   fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+  // The extension stays last: ffmpeg picks the output format from it.
+  const tmp = path.join(path.dirname(cachePath), `.${process.pid}-${name}`);
   try {
-    execSync(
-      `ffmpeg -y -f lavfi -i "${source}=size=${width}x${height}:rate=15${rich ? ",noise=alls=25:allf=t" : ""}" -t ${seconds} ` +
-        `${rich ? "-c:v libx264 -preset veryfast -b:v 3500k -maxrate 3500k -bufsize 7000k " : ""}-pix_fmt yuv420p "${cachePath}"`,
-      { stdio: "pipe" },
-    );
+    execSync(`ffmpeg -y ${args} "${tmp}"`, { stdio: "pipe" });
+    fs.renameSync(tmp, cachePath);
   } catch (e) {
-    throw new Error(
-      `could not generate the ${width}x${height} test clip — is ffmpeg on PATH? (${(e as Error).message})`,
-    );
+    fs.rmSync(tmp, { force: true });
+    throw new Error(`could not generate ${what} — is ffmpeg on PATH? (${(e as Error).message})`);
   }
   return fs.readFileSync(cachePath);
 }
@@ -314,25 +326,14 @@ export function syntheticTestClip(
  * on. For the hero-overlay-legibility gate, which needs a real decoded
  * image (moss's dominant-colour scan reads actual pixels) rather than the
  * hand-set `data-hero-tone` the hero-tone gate above uses. Shells out to
- * `ffmpeg`'s `drawgrid` filter — same dependency and caching shape as
- * `syntheticTestClip` above, which already requires it be on PATH.
+ * `ffmpeg`'s `drawgrid` filter, cached like `syntheticTestClip`.
  */
 export function syntheticBusyImage(width: number, height: number): Buffer {
-  const cachePath = path.join(WORKTREE, `target/test-tmp/fixtures/busy-${width}x${height}.png`);
-  if (fs.existsSync(cachePath)) return fs.readFileSync(cachePath);
-  fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-  try {
-    execSync(
-      `ffmpeg -y -f lavfi -i "color=c=yellow:s=${width}x${height},drawgrid=w=8:h=8:t=3:c=black@1.0" ` +
-        `-frames:v 1 -update 1 "${cachePath}"`,
-      { stdio: "pipe" },
-    );
-  } catch (e) {
-    throw new Error(
-      `could not generate the ${width}x${height} busy image — is ffmpeg on PATH? (${(e as Error).message})`,
-    );
-  }
-  return fs.readFileSync(cachePath);
+  return cachedFfmpeg(
+    `busy-${width}x${height}.png`,
+    `-f lavfi -i "color=c=yellow:s=${width}x${height},drawgrid=w=8:h=8:t=3:c=black@1.0" -frames:v 1 -update 1`,
+    `the ${width}x${height} busy image`,
+  );
 }
 
 /** A renamed or dropped page would otherwise still be built. True when it

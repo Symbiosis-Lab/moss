@@ -146,7 +146,8 @@ export function defineGateConfig(options: GateConfigOptions) {
     testDir: `../tests/render-gates/${testDir}`,
     testMatch: new RegExp(`${specName}\\.spec\\.ts$`),
     fullyParallel,
-    ...(fullyParallel ? {} : { workers: 1 }),
+    // RENDER_GATES_WORKERS caps a parallel gate's browsers; render-gates.sh sets it.
+    workers: fullyParallel ? (Number(process.env.RENDER_GATES_WORKERS) || undefined) : 1,
     reporter: 'list',
     outputDir: options.outputDir ?? `../target/test-tmp/playwright-${options.gate}`,
     ...(options.timeout ? { timeout: options.timeout } : {}),
