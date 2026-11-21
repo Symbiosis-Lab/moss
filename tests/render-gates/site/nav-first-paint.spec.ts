@@ -26,6 +26,7 @@ interface Masthead {
   header: number;
   trail: Band;
   links: Band;
+  link: Band;
   icons: Band;
   linksStart: number;
   iconsStart: number;
@@ -43,6 +44,7 @@ async function masthead(page: Page, forceSplit = false): Promise<Masthead> {
       header: box("header").height,
       trail: band(".nav-left"),
       links: band(".nav-links"),
+      link: band(".nav-links a"),
       icons: band(".nav-icons"),
       linksStart: box(".nav-links").left,
       iconsStart: box(".nav-icons").left,
@@ -177,10 +179,10 @@ for (const javaScriptEnabled of [false, true]) {
 }
 
 // The script's fit test must agree with the layout it predicts: whenever the
-// masthead is not split, the toggles share the trail's row. Fractional widths
-// make a near-fit row wrap at some widths and not others, so every width is tried.
+// masthead is not split, the toggles share the trail's row, level with a link
+// beside them. Fractional widths make a near-fit row wrap at some widths and not others, so every width is tried.
 for (const path of [LONG_TRAIL, SHORT_TRAIL]) {
-  test(`on ${path} the toggles share the trail's row at every width`, async ({ page }) => {
+  test(`on ${path} the toggles share the trail's row, level with any link beside them, at every width`, async ({ page }) => {
     await page.setViewportSize({ width: 1000, height: 900 });
     await page.goto(path, { waitUntil: "load" });
     await settle(page);
@@ -190,6 +192,8 @@ for (const path of [LONG_TRAIL, SHORT_TRAIL]) {
       await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
       const m = await masthead(page);
       if (!overlaps(m.icons, m.trail)) misfits.push(`${width}px ${m.mode}`);
+      const dy = (m.link[0] + m.link[1] - m.icons[0] - m.icons[1]) / 2;
+      if (overlaps(m.link, m.icons) && Math.abs(dy) > 1.5) misfits.push(`${width}px link ${dy.toFixed(1)}`);
     }
     expect(misfits).toEqual([]);
   });

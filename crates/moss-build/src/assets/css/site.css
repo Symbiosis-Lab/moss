@@ -2936,16 +2936,10 @@ body > header .site-name {
   /* Baseline, not center: a link's own border or padding never lifts its text off the line. */
   align-items: baseline;
   flex-wrap: wrap;
+  /* A line shorter than the box (the phone band holds a trail masthead's rows at the toggles' height) centres in it, level with the toggles. */
+  align-content: center;
   gap: var(--moss-space-xs) clamp(var(--moss-space-sm), 2vw, var(--moss-space-md));
-  /* .nav-right bottom-aligns its children (align-items: flex-end — see the
-     comment above .nav-right for why) so a wrapped multi-row nav-links stack
-     sits flush with .nav-icons's last row. But when nav-links is a single
-     short line — the common case (1-3 links) — that same flex-end pins it to
-     the bottom of .nav-icons's taller box (every toggle is a fixed --moss-nav-toggle-size
-     box), so the link text reads visibly lower than the icon
-     buttons beside it. align-self overrides the inherited flex-end for this
-     one item without touching how nav-icons aligns against a genuinely
-     wrapped nav-links stack. */
+  /* .nav-right bottom-aligns its children; one short line of links would read lower than the toggles' taller boxes. */
   align-self: center;
 }
 
