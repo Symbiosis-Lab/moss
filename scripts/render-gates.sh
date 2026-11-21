@@ -388,21 +388,23 @@ fi
 # another, once the rest are done. Each run keeps its logs in a folder under
 # target/test-tmp/render-gates, named on the lanes' header line, and prints them in
 # the order of GATES when it ends. A fullyParallel config run alone keeps four
-# workers, or one per lane a smaller RENDER_GATES_MEM_GB allows
+# workers, or one per WORKER_GB a smaller RENDER_GATES_MEM_GB allows
 # (RENDER_GATES_WORKERS, read by playwright/define-gate-config.ts). A
 # RENDER_GATES_WORKERS already in the environment wins over the grant.
 #
 # RENDER_GATES_MEM_GB is the memory the run may use (default half the
-# machine's), at RENDER_GATES_SHARD_GB (default 2) a lane: it caps --jobs N, and
-# --jobs auto takes as many lanes as it allows, one per CPU at most.
-SHARD_GB="${RENDER_GATES_SHARD_GB:-2}"
+# machine's). One lane needs LANE_FIRST_GB, since the heaviest gate peaks near
+# that at one worker; each further lane needs LANE_MORE_GB, a lane's measured
+# share when lanes run together. That caps --jobs N, and --jobs auto takes as
+# many lanes as it allows, one per CPU at most.
+WORKER_GB=2 LANE_FIRST_GB=9 LANE_MORE_GB=4
 TIMES="${RENDER_GATES_TIMES:-target/render-gate-times.tsv}"
 granted="${RENDER_GATES_MEM_GB:-}"
 if [ -z "${RENDER_GATES_MEM_GB:-}" ] && [ "$JOBS" != 1 ]; then
   if [ -r /proc/meminfo ]; then RENDER_GATES_MEM_GB=$(awk '/^MemTotal:/ { print int($2 / 2097152) }' /proc/meminfo)
   else RENDER_GATES_MEM_GB=$(( $(sysctl -n hw.memsize) / 2147483648 )); fi
 fi
-max_lanes=$(awk -v m="${RENDER_GATES_MEM_GB:-$SHARD_GB}" -v g="$SHARD_GB" 'BEGIN { n = int(m / g); print (n < 1 ? 1 : n) }')
+max_lanes=$(awk -v m="${RENDER_GATES_MEM_GB:-0}" -v h="$LANE_FIRST_GB" -v l="$LANE_MORE_GB" 'BEGIN { n = 1 + int((m - h) / l); print (n < 1 ? 1 : n) }')
 case "$JOBS" in
   auto)
     JOBS=$max_lanes
@@ -412,11 +414,11 @@ case "$JOBS" in
   *[!0-9]* | "" | 0) echo "--jobs wants a positive number or auto, not '$JOBS'" >&2; exit 1 ;;
 esac
 if [ "$JOBS" -gt "$max_lanes" ]; then
-  echo "── --jobs $JOBS needs more than RENDER_GATES_MEM_GB=$RENDER_GATES_MEM_GB at $SHARD_GB GB a lane: running $max_lanes" >&2
+  echo "── --jobs $JOBS needs more than RENDER_GATES_MEM_GB=$RENDER_GATES_MEM_GB ($LANE_FIRST_GB GB for one lane, $LANE_MORE_GB more for each further one): running $max_lanes" >&2
   JOBS=$max_lanes
 fi
 # A grant also caps the browsers a gate run alone may start.
-if [ -n "$granted" ]; then workers=$(( max_lanes < 4 ? max_lanes : 4 )); else workers=4; fi
+workers=$(awk -v g="${granted:-8}" -v w="$WORKER_GB" 'BEGIN { n = int(g / w); print (n > 4 ? 4 : (n < 1 ? 1 : n)) }')
 export RENDER_GATES_WORKERS="${RENDER_GATES_WORKERS:-$workers}"
 
 # One gate: its Playwright run(s), then exit 0 green, 1 red, 2 skipped by --select.
