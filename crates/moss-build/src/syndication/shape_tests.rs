@@ -94,15 +94,26 @@ fn too_long_for_the_network_becomes_a_link_post_that_never_quotes_the_page() {
 
 #[test]
 fn an_article_longer_than_the_networks_article_form_goes_as_a_link_post() {
-    let mut p = post("Autumn", &"A sentence about autumn. ".repeat(20));
+    // A list's plain text is longer than its markdown: each item gets a marker and a blank line.
+    let mut p = post("Autumn", "- a\n- b\n");
+    p.html_content = Some(format!("<ul>{}</ul>", "<li>leaf</li>".repeat(50)));
     p.frontmatter.insert("description".into(), serde_json::json!("About the season."));
-    let mut channel = spec(&[Form::Short, Form::Long, Form::Teaser], 100);
+    let mut channel = spec(&[Form::Long, Form::Teaser], 200);
+    channel.name = Some("Threads".into());
     channel.max_article_chars = Some(10_000);
     assert_eq!(shape(&p, &channel, SITE).unwrap().form, Form::Long);
-    channel.max_article_chars = Some(400);
+    channel.max_article_chars = Some(300);
     let s = shape(&p, &channel, SITE).unwrap();
     assert_eq!(s.form, Form::Teaser);
     assert_eq!(s.parts[0].text, format!("Autumn\n\nAbout the season.\n\n{PAGE}"));
+    channel.forms = vec![Form::Long];
+    assert_eq!(shape(&p, &channel, SITE).unwrap_err(), "Threads takes articles of up to 300 characters; this one is longer.");
+}
+
+#[test]
+fn an_articles_plain_text_puts_each_block_and_item_on_its_own_line() {
+    let html = "<h2>One</h2><p>It <em>ends</em> &amp; begins.<br>Again.</p><figure><img src=\"x\"></figure><ul><li>a</li><li>b</li></ul>";
+    assert_eq!(plain_text(html), "One\n\nIt ends & begins.\nAgain.\n\n- a\n\n- b");
 }
 
 #[test]

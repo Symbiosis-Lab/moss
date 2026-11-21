@@ -141,25 +141,19 @@ pub fn shape_with(post: &ArticleInfo, spec: &ChannelSpec, site_url: &str, opts: 
         }
         if spec.takes(Form::Thread) && parts.len() > 1 && parts.iter().all(|p| spec.fits(&p.text)) {
             (Form::Thread, parts, None, None)
-        } else if spec.takes_article(&whole.text) {
-            let (html, included, omitted) = super::pictures::article_html(post, site_url, opts, spec.max_article_images());
-            let mut html = super::pictures::clean(&html, &post.title);
+        } else if let Some((article, included, omitted)) = long_article(post, &page, site_url, spec, opts) {
             included_pictures = included;
             omitted_pictures = omitted;
-            if opts.link_back {
-                let escape = crate::build::features::html_escape;
-                let name = escape(site_name(opts, site_url).as_deref().unwrap_or(&page));
-                let url = escape(&page);
-                let lang = super::record::effective_language(post, None, opts.lang.as_deref());
-                let (prefix, stop) = footer(lang.as_deref().unwrap_or(""));
-                html.push_str(&format!("\n<p>{prefix} <a href=\"{url}\">{name}</a>{stop}</p>"));
-            }
-            (Form::Long, Vec::new(), None, Some(Article { title: post.title.clone(), blocks: super::pictures::blocks(&html), html, text: lower(&post.content, &page, site_url).text, description: described(post), cover: cover(post, site_url) }))
+            (Form::Long, Vec::new(), None, Some(article))
         } else if spec.takes(Form::Teaser) {
             let (teaser, part) = teaser(post, spec, &page, site_url)?;
             (Form::Teaser, vec![part], Some(teaser), None)
         } else {
-            return Err(format!("{} doesn't take articles.", spec.name.as_deref().unwrap_or("This channel")));
+            let name = spec.name.as_deref().unwrap_or("This channel");
+            return Err(match spec.max_article_chars.filter(|_| spec.takes(Form::Long)) {
+                Some(max) => format!("{name} takes articles of up to {max} characters; this one is longer."),
+                None => format!("{name} doesn't take articles."),
+            });
         }
     };
     let pictures = if form == Form::Long { Vec::new() } else {
@@ -169,6 +163,57 @@ pub fn shape_with(post: &ArticleInfo, spec: &ChannelSpec, site_url: &str, opts: 
         pictures
     };
     Ok(Shaped { form, parts, teaser, article, pictures, included_pictures, omitted_pictures })
+}
+
+/// The article, where the channel takes one this long. The limit is checked
+/// on the article as plain text with its link back, as a network that takes
+/// no markup receives it.
+fn long_article(post: &ArticleInfo, page: &str, site_url: &str, spec: &ChannelSpec, opts: &ShapeOptions) -> Option<(Article, usize, usize)> {
+    if !spec.takes(Form::Long) { return None; }
+    let (html, included, omitted) = super::pictures::article_html(post, site_url, opts, spec.max_article_images());
+    let mut html = super::pictures::clean(&html, &post.title);
+    if opts.link_back {
+        let escape = crate::build::features::html_escape;
+        let name = escape(site_name(opts, site_url).as_deref().unwrap_or(page));
+        let url = escape(page);
+        let lang = super::record::effective_language(post, None, opts.lang.as_deref());
+        let (prefix, stop) = footer(lang.as_deref().unwrap_or(""));
+        html.push_str(&format!("\n<p>{prefix} <a href=\"{url}\">{name}</a>{stop}</p>"));
+    }
+    if !spec.article_fits(&plain_text(&html)) { return None; }
+    let article = Article { title: post.title.clone(), blocks: super::pictures::blocks(&html), html, text: lower(&post.content, page, site_url).text, description: described(post), cover: cover(post, site_url) };
+    Some((article, included, omitted))
+}
+
+/// HTML as plain text: each block and list item on its own line, a list
+/// item marked `- `, pictures and markup dropped.
+fn plain_text(html: &str) -> String {
+    use scraper::{Html, Node};
+    fn walk(node: ego_tree::NodeRef<'_, Node>, out: &mut String) {
+        match node.value() {
+            Node::Text(t) => out.push_str(t),
+            Node::Element(e) => {
+                let name = e.name();
+                if matches!(name, "script" | "style" | "figure") { return; }
+                if name == "br" { out.push('\n'); }
+                if name == "li" { out.push_str("- "); }
+                for child in node.children() { walk(child, out); }
+                if matches!(name, "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "li" | "blockquote" | "pre" | "div" | "ul" | "ol") { out.push_str("\n\n"); }
+            }
+            _ => for child in node.children() { walk(child, out); },
+        }
+    }
+    let mut out = String::new();
+    walk(Html::parse_fragment(html).tree.root(), &mut out);
+    let mut text = String::new();
+    let mut blank = 0;
+    for line in out.lines().map(str::trim_end) {
+        if line.is_empty() { blank += 1; continue; }
+        if !text.is_empty() { text.push_str(if blank > 0 { "\n\n" } else { "\n" }); }
+        blank = 0;
+        text.push_str(line);
+    }
+    text
 }
 
 /// Assess with the same selector as sends. An unknown publish address cannot
@@ -346,10 +391,11 @@ fn teaser(post: &ArticleInfo, spec: &ChannelSpec, page_url: &str, site_url: &str
     };
     // Before a publish address exists, only the final address is left out of the count.
     let fits = |desc: &str| spec.fits(&compose(desc, if site_url.is_empty() { "" } else { page_url }));
-    let description = described(post).map(|d| d.trim().to_string()).filter(|d| fits(d)).unwrap_or_default();
-    if !fits(&description) {
-        return Err("the post's title and address alone are longer than this network allows".to_string());
-    }
+    let description = match described(post).map(|d| d.trim().to_string()).filter(|d| fits(d)) {
+        Some(d) => d,
+        None if fits("") => String::new(),
+        None => return Err("the post's title and address alone are longer than this network allows".to_string()),
+    };
     let cover = cover(post, site_url);
     let text = compose(&description, page_url);
     let part = Part { links: addresses(&text), text };

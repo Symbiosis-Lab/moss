@@ -52,11 +52,11 @@ A channel is a plugin with `contributes.channel` in its manifest, as today; post
 }
 ```
 
-- `forms`: the shapes of copy the network takes. `short` is a post's whole text; `thread` is a post written in parts, posted as replies to the first; `long` is a whole article, where the network has an article format; `teaser` is the article's description or opening, cut at a sentence end that fits, with a link to the original. How a copy is shaped says nothing about who posts it: a network the author posts to by hand declares its forms like any other (below).
+- `forms`: the shapes of copy the network takes. `short` is a post's whole text; `thread` is a post written in parts, posted as replies to the first; `long` is a whole article, where the network has an article format; `teaser` is a link post: the title, the page's `description:` (left out when absent or when it does not fit whole, never cut) and a link to the original. How a copy is shaped says nothing about who posts it: a network the author posts to by hand declares its forms like any other (below).
 - `max_chars`, `counting` (`graphemes`, `chars`, `utf16` as a JavaScript string's length counts, or `weighted`, where a CJK character counts two), `link_chars` (what every address counts as, where the network counts it so: 23 on X and Mastodon, assumed for `weighted`) and `images` bound a copy. moss checks them, so a plugin is never handed a copy its network would refuse.
 - `host_setting`: for a network on the author's own server (a Mastodon instance), the setting that holds the server's address. Its host joins the manifest's `domains` as a host the channel's copies live on, so a copy listed by hand there is adopted.
 - `long_setting`: for a network whose article format only some accounts have (a paid plan), the on/off setting that says this account has it. The channel takes `long` only while that setting is on; otherwise a long page becomes the next form the channel declares. An article already posted stays as posted when the setting goes off. The field goes once a channel's connection can say what its account has.
-- `max_article_chars`: the longest article the network's article form holds, counted by `counting`. A longer page becomes the next form the channel declares, as when `long_setting` is off.
+- `max_article_chars`: the longest article the network's article form holds, counted by `counting` over the article's HTML as plain text with its link back (blocks and list items on their own lines, markup and pictures dropped), as a network that takes no markup receives it. A longer page becomes the next form the channel declares, as when `long_setting` is off.
 - `idempotent`: the plugin passes the job's `idempotency_key` to its network (a record key, an `Idempotency-Key` header), so a retry cannot make a second copy. It changes what moss does after a crash; see below.
 
 The plugin exports up to three functions, one per operation, each handling exactly one copy, and optionally a fourth that says which account it is signed in to. Whether a channel can edit its copies is read from which of them it exports, the way moss already detects every other hook.
@@ -118,7 +118,7 @@ moss picks each copy's form from the page's content and what the channel declare
 1. `short`: the whole page as one post, when it fits the network's limit. A page with a title of its own starts with the title on its own line; a file named only by its date has none.
 2. `thread`: the page in parts, each a reply to the one before, when the page is written in parts (a thematic break, a line holding only `---` between blank lines, outside code blocks) and every part fits.
 3. `long`: the whole page as an article, where the network has an article format. A page with no title of its own takes the label moss already gives it from its opening words.
-4. `teaser`: the page's `description:`, or its opening cut at a sentence end that fits (or at a word where no sentence end does), with a link card to the page.
+4. `teaser`: the title, the page's `description:` when it fits whole, and a link card to the page. The page's own text is never quoted.
 
 A page that fits none of the forms a channel takes is not copied there. The host asks the planner before Publish, so the app shows that channel greyed out on the page, with the reason. A picture is never such a reason: a network that takes pictures gets them, up to its limit and with their alt text, and one that does not gets the text and the link. Lengths are measured with the title and the link back included.
 
@@ -128,7 +128,7 @@ A copy keeps the form it was first posted in. When an edited page no longer fits
 
 The author sees no screen for any network except the newsletter. Copies go out on their own after the site is live, so moss owes the author that nothing about them is a surprise:
 
-- **Before Publish**, each channel button on the page says what that network will get: the account, the form (one post, a thread, an article, a teaser) and anything left out (pictures it cannot carry, text cut with a link to the page). A channel that cannot take the page is greyed out, with the reason.
+- **Before Publish**, each channel button on the page says what that network will get: the account, the form (one post, a thread, an article, a link post) and anything left out (pictures it cannot carry, a description too long for the post). A channel that cannot take the page is greyed out, with the reason.
 - **Preview copies** shows each copy read-only, built from exactly what will be sent; a change to the page or to a channel's settings rebuilds it.
 - **Every cut links back** to the page, and every loss of pictures or formatting is named in the preview and on the button.
 - **The receipt names each copy's outcome**, including a send whose answer was lost, which is looked up, never blindly sent again.
