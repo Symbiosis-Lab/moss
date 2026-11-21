@@ -78,8 +78,9 @@
 //! a wait. `build::lifecycle::tree_migration` moves an older moss's output out
 //! of the folder at build start.
 //!
-//! **Fully gitignored.** `.moss/` is not tracked by git. Cloud sync is the
-//! portability mechanism for settings across machines.
+//! **Tracked by git, except the rows marked `gitignore`.** Settings, theme and
+//! deploy records travel in a site's repository; identity, keys, caches and
+//! re-fetchable binaries do not (see [`moss_gitignore`]).
 //!
 //! ## config.toml vs state.toml
 //!
@@ -926,7 +927,8 @@ pub struct MossPathRule {
     /// below makes an authoritative synced path write down why sharing it is
     /// right.
     pub cloud: CloudPolicy,
-    /// May reach the file watcher. False for everything moss writes.
+    /// May reach the file watcher. False for what moss writes, except where a
+    /// moss write must refresh the preview (`data/social/`, `maps/`).
     pub watched: bool,
     /// moss READS these bytes and cannot regenerate them, so the cloud
     /// supervisor asks the provider for them when they are evicted
@@ -1007,6 +1009,10 @@ pub const MOSS_PATH_RULES: &[MossPathRule] = &[
     // Plugin bundles are moss-written but not regenerable without a re-install,
     // and a plugin whose bundle is evicted simply fails to load.
     r(".moss/plugins/", by("moss plugin"), false, CloudPolicy::Synced, false, true),
+    // Place-map packs. Watched, so a pack that lands while the app previews
+    // rebuilds every map page instead of letting a markdown-only batch skip
+    // them; gitignored, because it is a binary fetched again by its digest.
+    r(".moss/maps/", by("moss map"), true, CloudPolicy::Synced, true, true),
     // The record of where this site is published. Read as empty, a deployed
     // site looks undeployed and the build bakes localhost into every page.
     r(".moss/state.toml", by("moss deploy"), false, CloudPolicy::Synced, false, true),
@@ -1531,7 +1537,7 @@ mod tests {
     fn gitignore_matches_the_shipped_contents() {
         assert_eq!(
             moss_gitignore(),
-            "identity/\nkeys/\ndata/*\nagents/\nhistory/\ncache/\n",
+            "identity/\nkeys/\ndata/*\nagents/\nhistory/\ncache/\nmaps/\n",
             "the generated .moss/.gitignore changed — if that is intended, note \
              that it lands in every existing project on its next build"
         );
@@ -1568,6 +1574,7 @@ mod tests {
             (".moss/data/", "site state the site itself owns (imported addresses, plugin data), which moss reads back and writes"),
             (".moss/redirects.json", "the old addresses the site still answers: every checkout and machine must serve the same ones. Its reader keeps unreadable apart from absent (feeds::redirects)"),
             (".moss/plugins/", "installed plugin bundles — re-installable, and an evicted bundle simply fails to load"),
+            (".moss/maps/", "the place-map pack the site draws: a second machine publishes the same maps only with it. Its reader must keep a pack still in the cloud apart from a missing one"),
             (".moss/state.toml", "where this site is published: wanted on a second machine, which would otherwise bake localhost into pages"),
             (".moss/config.toml", "the user's own configuration — content, not machine state"),
             (".moss/theme/", "the user's own theme — content"),
@@ -2222,7 +2229,7 @@ history/
         // single build.
         assert_eq!(
             after,
-            format!("{SITE_THAT_COMMITS_ITS_REDIRECTS}cache/\n"),
+            format!("{SITE_THAT_COMMITS_ITS_REDIRECTS}cache/\nmaps/\n"),
             "only a rule this file is actually missing may be added"
         );
         ensure_moss_gitignore(&moss_root).unwrap();
@@ -2266,9 +2273,9 @@ history/
 
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
-            format!("{workaround}cache/\n"),
+            format!("{workaround}cache/\nmaps/\n"),
             "a live site's pushed .moss/.gitignore must survive a build byte-for-byte, \
-             gaining only the two lines the split tree needs"
+             gaining only the lines the split tree needs"
         );
     }
 
@@ -2291,7 +2298,7 @@ history/
 
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
-            format!("{old}cache/\n"),
+            format!("{old}cache/\nmaps/\n"),
             "`data/` already excludes everything `data/*` does; rewriting or \
              duplicating it would edit a file moss promised only to add to"
         );

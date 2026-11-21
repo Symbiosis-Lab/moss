@@ -576,3 +576,18 @@ fn watch_targets_follow_what_the_scan_reads_at_the_root() {
         assert!(!targets.contains(&root.join(left_out)), "{left_out}");
     }
 }
+
+/// The first pack lands where no `.moss/maps/` existed, so no watch was there
+/// to hear it: the sweep sees the target set grow and rebuilds in full.
+#[test]
+fn the_first_map_pack_grows_the_watch_set() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    fs::create_dir_all(root.join(".moss")).unwrap();
+    let social = MossPaths::new(root).social_dir();
+    let before: Vec<PathBuf> = watch_targets_with_error(root).unwrap().into_iter().map(|(p, _)| p).collect();
+    fs::create_dir_all(root.join(".moss/maps")).unwrap();
+    fs::write(root.join(".moss/maps").join(format!("landscape-{}.bin.br", "a".repeat(64))), b"pack").unwrap();
+    let after: Vec<PathBuf> = watch_targets_with_error(root).unwrap().into_iter().map(|(p, _)| p).collect();
+    assert!(watch_set_content_change(&before, &after, true, &social), "{before:?} -> {after:?}");
+}

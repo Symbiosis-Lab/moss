@@ -269,3 +269,43 @@ fn a_write_moss_makes_to_the_config_asks_for_a_config_build() {
     let drift = sweep::request_for_drift(&root, &report, &[".moss/config.toml".into()], None);
     assert_eq!(drift.reason, Some(Config));
 }
+
+/// A place-map pack replaced while the preview runs reaches the rebuild as a
+/// non-markdown path, so a markdown edit in the same batch cannot skip the
+/// pages that name the old pack's map folder.
+#[tokio::test]
+async fn a_replaced_map_pack_refuses_the_render_skip_of_a_markdown_batch() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let maps = root.join(".moss/maps");
+    std::fs::create_dir_all(&maps).unwrap();
+    let (old, new) = (maps.join(format!("landscape-{}.bin.br", "a".repeat(64))), maps.join(format!("landscape-{}.bin.br", "b".repeat(64))));
+    std::fs::write(&new, b"pack").unwrap();
+    std::fs::write(root.join("other.md"), "# Other\n").unwrap();
+    let (emit, _events) = recording_relay();
+    let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let dispatch: RebuildDispatch = {
+        let requests = requests.clone();
+        Arc::new(move |request| {
+            requests.lock().unwrap().push(request);
+            Box::pin(async {})
+        })
+    };
+    handle_debounced_batch(
+        vec![
+            event(EventKind::Modify(ModifyKind::Name(RenameMode::Both)), vec![root.join(".moss/landscape.part"), new]),
+            event(EventKind::Remove(notify::event::RemoveKind::File), vec![old]),
+            event(EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Content)), vec![root.join("other.md")]),
+        ],
+        root.to_str().unwrap(),
+        &emit,
+        &dispatch,
+    )
+    .await;
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 1, "one batch, one rebuild");
+    let proof = crate::build::incremental_gates::ChangeProof::for_build(
+        &requests[0].trigger, &root, "test", &crate::build::incremental_gates::LastSeal::default(),
+    );
+    assert!(!proof.allows_incremental_skip(), "the pack swap must render every page: {:?}", requests[0].trigger);
+}
