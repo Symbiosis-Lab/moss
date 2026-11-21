@@ -59,6 +59,41 @@
   display: none;
 }
 
+/* A header button whose press is not answered yet: a ring in place of its icon, from 0.1s on so an answer that comes at once does not flash. */
+.workspace-leaf-content[data-type="moss-preview"] .view-action[aria-busy="true"] {
+  position: relative;
+  pointer-events: none;
+}
+
+.workspace-leaf-content[data-type="moss-preview"] .view-action[aria-busy="true"] > svg {
+  animation: moss-busy-hide 0s 0.1s forwards;
+}
+
+.workspace-leaf-content[data-type="moss-preview"] .view-action[aria-busy="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  box-sizing: border-box;
+  inline-size: var(--icon-size);
+  block-size: var(--icon-size);
+  border: var(--icon-stroke) solid currentColor;
+  border-block-start-color: transparent;
+  border-radius: 50%;
+  opacity: 0;
+  animation: moss-busy-show 0s 0.1s forwards, moss-busy-turn 0.8s linear infinite;
+}
+
+@keyframes moss-busy-hide { to { visibility: hidden; } }
+@keyframes moss-busy-show { to { opacity: 1; } }
+@keyframes moss-busy-turn { to { transform: rotate(1turn); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-leaf-content[data-type="moss-preview"] .view-action[aria-busy="true"]::after {
+    animation: moss-busy-show 0s 0.1s forwards;
+  }
+}
+
 .moss-preview-message {
   padding: 2em 1em;
   text-align: center;

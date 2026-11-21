@@ -41,7 +41,12 @@ export class DesktopCommands {
       publish: () => void this.publishInApp(),
     });
     this.app.workspace.onLayoutReady(() => void publish.update());
-    this.plugin.registerView(MOSS_PREVIEW_VIEW_TYPE, (leaf) => new MossPreviewView(leaf, () => this.stopPreview(false)));
+    this.plugin.registerView(MOSS_PREVIEW_VIEW_TYPE, (leaf) => new MossPreviewView(leaf, {
+      closed: () => this.stopPreview(false),
+      openInBrowser: () => this.openInBrowser(),
+      // The pane's folder, whatever note is open.
+      publish: () => this.publishInApp(this.session?.root),
+    }));
     this.plugin.addCommand({ id: "preview", name: "Preview this folder", callback: () => void this.runPreview() });
     this.plugin.addCommand({
       id: "stop-preview",
@@ -50,6 +55,15 @@ export class DesktopCommands {
         // Not while only the first-preview question is open: nothing runs yet.
         if (!this.session || !this.mossProcess.running) return false;
         if (!checking) this.stopPreview(true);
+        return true;
+      },
+    });
+    this.plugin.addCommand({
+      id: "open-in-browser",
+      name: "Open in browser",
+      checkCallback: (checking) => {
+        if (!this.session?.url) return false;
+        if (!checking) void this.openInBrowser();
         return true;
       },
     });
@@ -78,6 +92,8 @@ export class DesktopCommands {
 
     this.statusEl = this.plugin.addStatusBarItem();
     this.statusEl.addClass("mod-clickable");
+    // The plugin has two status items; this names the preview's.
+    this.statusEl.addClass("moss-preview-status");
     this.plugin.registerDomEvent(this.statusEl, "click", () => void this.openPreviewLeaf());
     this.setStatus(null);
   }
@@ -237,12 +253,24 @@ export class DesktopCommands {
     if (!session.failure) this.openPreviewView()?.showMessage(PREVIEW_STOPPED);
   }
 
-  private async publishInApp(): Promise<void> {
-    const site = await this.siteFor(this.findBinary());
+  /** The page the pane shows, in the person's browser. */
+  private async openInBrowser(): Promise<void> {
+    const session = this.session;
+    const address = await this.openPreviewView()?.address();
+    if (!session?.url || !address) return;
+    // What the page says is opened only when it is one of the preview's own pages.
+    const own = address.showing !== undefined && origin(address.showing) === origin(session.url);
+    await shell.openExternal(own ? address.showing! : address.set);
+  }
+
+  /** `root` is the folder to publish; otherwise the open note decides. */
+  private async publishInApp(root?: string): Promise<void> {
+    const vault = this.vaultPath();
+    const site = await this.siteFor(this.findBinary(), root && vault ? path.relative(vault, root) : undefined);
     if (!site) return;
     const folder = path.basename(site.root);
     new Notice(publishNotice(folder, site.address));
-    shell.openExternal(publishInAppUrl(site.root)).catch(() => {
+    await shell.openExternal(publishInAppUrl(site.root)).catch(() => {
       new Notice(`Get moss at mosspub.com to publish ${folder}.`, 10000);
     });
   }
@@ -288,6 +316,14 @@ interface Session {
   failure?: string;
   /** The first-preview question while it is open; ending the session closes it. */
   modal?: FirstPreviewModal;
+}
+
+function origin(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
 }
 
 function runCli(binary: string, args: string[], timeout = 0): Promise<string> {

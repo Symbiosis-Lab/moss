@@ -5,8 +5,16 @@ export const MOSS_PREVIEW_VIEW_TYPE = "moss-preview";
 
 export const PREVIEW_STOPPED = "Not previewing. Choose “Preview this folder” to start.";
 
+/** What the pane hands back to the plugin. A press's promise settles once the press is answered. */
+export interface PreviewActions {
+  /** The pane closed, so the server it was showing can stop. */
+  closed(): void;
+  openInBrowser(): Promise<void>;
+  publish(): Promise<void>;
+}
+
 /**
- * Right-leaf pane holding the site preview in an iframe pointed at the local
+ * The pane holding the site preview in an iframe pointed at the local
  * server the moss CLI starts, as HTML Preview and Custom Frames do. The view
  * owns no process: the plugin sets and clears the URL.
  */
@@ -17,10 +25,12 @@ export class MossPreviewView extends ItemView {
   /** Talks to moss's own script in the previewed page. */
   private bridge: IframeRPC | null = null;
 
-  /** `onClosed` lets the plugin stop the server this pane was showing. */
+  /** The header's buttons, there only while a page shows. */
+  private buttons: HTMLElement[] = [];
+
   constructor(
     leaf: WorkspaceLeaf,
-    private onClosed: () => void = () => {},
+    private actions: PreviewActions,
   ) {
     super(leaf);
   }
@@ -56,13 +66,33 @@ export class MossPreviewView extends ItemView {
     container.addClass("moss-preview-container");
     // A pane Obsidian restores at startup has no server behind it.
     this.messageEl = container.createDiv({ cls: "moss-preview-message", text: PREVIEW_STOPPED });
+    // Obsidian puts each new button before the last.
+    this.buttons = [
+      this.button("upload-cloud", "Publish this folder", () => this.actions.publish()),
+      this.button("external-link", "Open in browser", () => this.actions.openInBrowser()),
+    ];
+    this.showButtons(false);
+  }
+
+  /** A header button that is busy from the press until `run` settles; `styles.css` draws the wait. */
+  private button(icon: string, label: string, run: () => Promise<void>): HTMLElement {
+    const el = this.addAction(icon, label, () => {
+      if (el.ariaBusy === "true") return;
+      el.ariaBusy = "true";
+      void run().catch(() => {}).finally(() => { el.ariaBusy = null; });
+    });
+    return el;
+  }
+
+  private showButtons(show: boolean): void {
+    for (const button of this.buttons) button.toggle(show);
   }
 
   async onClose(): Promise<void> {
     this.dropFrame();
     this.messageEl = null;
     this.contentEl.empty();
-    this.onClosed();
+    this.actions.closed();
   }
 
   /** Point the pane at the running preview server. */
@@ -81,6 +111,7 @@ export class MossPreviewView extends ItemView {
     if (this.iframe.src !== url) {
       this.iframe.src = url;
     }
+    this.showButtons(true);
   }
 
   /** Takes a rebuild into the page where it stands; a page that cannot (its scripts changed) loads again. */
@@ -96,9 +127,18 @@ export class MossPreviewView extends ItemView {
     this.bridge?.call("scrollToSourceLine", line, false, false, true).catch(() => {});
   }
 
-  /** The current iframe URL, or null before the server is up. */
-  get url(): string | null {
-    return this.iframe?.src ?? null;
+  /**
+   * The address the pane was last pointed at, and the one its page says it is on now: a link
+   * followed inside the page moves the second only. `showing` is absent when the page gives no answer.
+   */
+  async address(): Promise<{ set: string; showing?: string } | null> {
+    const { iframe, bridge } = this;
+    if (!iframe || !bridge) return null;
+    const set = iframe.src;
+    // A page without the bridge would hold the press for the bridge's own five seconds.
+    const unanswered = new Promise<undefined>((resolve) => setTimeout(resolve, 300));
+    const showing = await Promise.race([bridge.getLocationHref().catch(() => undefined), unanswered]);
+    return { set, showing };
   }
 
   private dropFrame(): void {
@@ -111,6 +151,7 @@ export class MossPreviewView extends ItemView {
   /** Replace the pane content with a status/error message. */
   showMessage(text: string): void {
     this.dropFrame();
+    this.showButtons(false);
     if (!this.messageEl) {
       this.messageEl = this.contentEl.createDiv({ cls: "moss-preview-message" });
     }

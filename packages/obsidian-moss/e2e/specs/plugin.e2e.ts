@@ -77,7 +77,7 @@ describe("moss plugin", () => {
     await browser.$(".modal button:not(.mod-cta)").click();
     await browser.pause(1000);
     expect(await browser.$("iframe.moss-preview-iframe").isExisting()).toBe(false);
-    expect(await browser.$(".status-bar-item.plugin-moss").isDisplayed()).toBe(false);
+    expect(await browser.$(".status-bar-item.moss-preview-status").isDisplayed()).toBe(false);
   });
 
   it("runs Preview this folder: spawns the CLI, parses the URL, shows the page", async () => {
@@ -108,7 +108,7 @@ describe("moss plugin", () => {
     }
 
     // Status bar reflects the running server (the plugin's own item).
-    const status = browser.$(".status-bar-item.plugin-moss");
+    const status = browser.$(".status-bar-item.moss-preview-status");
     await status.waitForExist({ timeout: 10000 });
     expect(await status.getText()).toContain("Previewing");
 
@@ -124,7 +124,7 @@ describe("moss plugin", () => {
 
   it("stops the server when the preview pane is closed", async () => {
     await startPreview();
-    const status = browser.$(".status-bar-item.plugin-moss");
+    const status = browser.$(".status-bar-item.moss-preview-status");
     await browser.waitUntil(async () => (await status.getText()).includes("Previewing"), {
       timeout: 30000,
       timeoutMsg: "preview never started",

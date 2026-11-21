@@ -29,6 +29,7 @@ Then, in Obsidian, open Settings → Community plugins, turn off Restricted mode
 On desktop:
 
 - "moss: Preview this folder" or the globe in the ribbon previews the open note's site; "Preview with moss" in a folder's menu previews that folder's site, or the folder itself when no site holds it. The site shows in a pane beside the note, on the page of the note you have open: it follows you to another note in the same site, shows an edit once Obsidian has saved it, and keeps the passage you are writing in view. Pin the pane to hold its page. A moss folder carries the moss mark in the file tree. While the preview runs, the status bar says so; click it to show the pane. "moss: Stop preview" or closing the pane stops it.
+- The pane's header has two buttons while a page shows. "Open in browser" opens that page in your browser, and is also the command "moss: Open in browser". "Publish this folder" hands the previewed site to the moss app.
 - "moss: Publish this folder" hands the open note's site to the moss app, which publishes it to its address, or to mosspub.com the first time. The plugin itself publishes nothing.
 
 ## What gets published

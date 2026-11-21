@@ -14,6 +14,7 @@ All notable changes to moss will be documented here.
 - A channel whose accounts live on many servers, such as Mastodon, names the account's server when its sign-in completes, and moss takes a `syndicated:` address on that server as the channel's copy without a server setting.
 - A place-typed kind with `landscape = "detail"` draws its maps from the pack in the folder's `.moss/maps/` (`landscape-<sha256>.bin.br`, checked against the digest in its name). A pack still in the cloud is downloaded before the site publishes; a missing or damaged one is a problem under `--strict` and stops `moss deploy`, and the build draws moss's own map meanwhile.
 - `moss migrate --apply` gives a place-typed kind `landscape = "detail"` and copies moss's place-map pack into `.moss/maps/`, so the site's maps stay as they are once moss stops carrying the pack. It never replaces a usable pack already there, and a second run writes nothing. Until a site is migrated, its builds say so.
+- In the Obsidian plugin, the preview pane's header has two buttons while a page shows: "Open in browser" opens that page in your browser (also the command "moss: Open in browser"), and "Publish this folder" hands the previewed site to the moss app, whatever note is open.
 
 ### Changed
 

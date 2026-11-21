@@ -36,6 +36,38 @@ const shows = (page: string) => browser.waitUntil(async () => (await pagePath())
   timeout: 30000, timeoutMsg: `the pane never showed ${page}`,
 });
 
+/** The pane's own header buttons that show, left to right. */
+const headerButtons = () => browser.execute(() =>
+  [...document.querySelectorAll('.workspace-leaf-content[data-type="moss-preview"] .view-header .clickable-icon')]
+    .filter((button) => (button as HTMLElement).offsetParent !== null)
+    .map((button) => button.getAttribute("aria-label")));
+
+/** Presses a header button and reads what the press left on it in the same turn, then how it looks 150ms on. */
+const press = (label: string) => browser.execute(async (label) => {
+  const button = document.querySelector<HTMLElement>(`.workspace-leaf-content[data-type="moss-preview"] .view-action[aria-label="${label}"]`);
+  if (!button) throw new Error(`no ${label} button`);
+  button.click();
+  const atOnce = button.ariaBusy;
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  return { atOnce, ring: getComputedStyle(button, "::after").opacity, pressable: getComputedStyle(button).pointerEvents };
+}, label);
+
+type Opens = { urls: string[]; release: (() => void)[] };
+
+/** Stands in for the system's opener, which would leave Obsidian; each address waits until `release`. */
+const holdOpens = () => browser.execute(() => {
+  const opens: Opens = { urls: [], release: [] };
+  (window as unknown as { mossOpens: Opens }).mossOpens = opens;
+  const { shell } = (window as unknown as { require(name: string): { shell: { openExternal(url: string): Promise<void> } } }).require("electron");
+  shell.openExternal = (url) => {
+    opens.urls.push(url);
+    return new Promise((done) => opens.release.push(done));
+  };
+});
+const opened = () => browser.execute(() => (window as unknown as { mossOpens: Opens }).mossOpens.urls);
+const release = () => browser.execute(() => (window as unknown as { mossOpens: Opens }).mossOpens.release.splice(0).forEach((done) => done()));
+const busy = () => browser.execute(() => [...document.querySelectorAll('.view-action[aria-busy="true"]')].length);
+
 async function startPreview(): Promise<void> {
   await browser.executeObsidianCommand("moss:preview");
   const proceed = browser.$(".modal button.mod-cta");
@@ -109,14 +141,11 @@ describe("a moss folder inside a vault", () => {
         tabTypes: [...(tabs?.querySelectorAll(".workspace-tab-header") ?? [])].map((tab) => tab.getAttribute("data-type")),
         tabTitle: tabs?.querySelector(".workspace-tab-header.is-active .workspace-tab-header-inner-title")?.textContent,
         headerTitle: leaf?.querySelector(".view-header-title")?.textContent,
-        headerButtons: [...(leaf?.querySelectorAll(".view-header .clickable-icon") ?? [])]
-          .filter((button) => (button as HTMLElement).offsetParent !== null)
-          .map((button) => button.getAttribute("aria-label")),
       };
     }, FRAME);
     expect(pane.inSidebar).toBe(false);
     expect(pane.tabTypes).toEqual(["moss-preview"]);
-    expect(pane.headerButtons).toEqual(["More options"]);
+    expect(await headerButtons()).toEqual(["Open in browser", "Publish this folder", "More options"]);
     expect(pane.headerTitle).toBe("Preview: site");
     expect(pane.tabTitle).toBe("Preview: site");
     // The person goes on writing: the note keeps the focus.
@@ -190,6 +219,45 @@ describe("a moss folder inside a vault", () => {
       await pin(false);
       await obsidianPage.openFile("site/index.md");
       await browser.waitUntil(async () => (await pagePath()) === "/", { timeout: 30000, timeoutMsg: "the unpinned pane never followed" });
+    });
+
+    it("opens the page that is showing in the browser, and answers the press at once", async () => {
+      await holdOpens();
+      await obsidianPage.openFile("site/posts/first-frost.md");
+      await shows("first-frost");
+      const origin = await inPage(() => location.origin);
+      expect(await press("Open in browser")).toEqual({ atOnce: "true", ring: "1", pressable: "none" });
+      await screenshot("button-waiting");
+      expect((await opened()).map((url) => [new URL(url).origin, new URL(url).pathname])).toEqual([[origin, await pagePath()]]);
+      await release();
+      await browser.waitUntil(async () => (await busy()) === 0, { timeoutMsg: "the button stayed busy after its answer" });
+
+      // A link followed inside the page: the pane was never pointed there.
+      await inPage(() => location.assign(location.pathname.replace("first-frost", "tide-tables")));
+      await shows("tide-tables");
+      await press("Open in browser");
+      expect(new URL((await opened())[1]).pathname).toContain("tide-tables");
+      await release();
+    });
+
+    it("publishes the pane's folder, whatever note is open", async () => {
+      await holdOpens();
+      await obsidianPage.openFile("Daily notes/2026-11-19.md");
+      expect((await press("Publish this folder")).atOnce).toBe("true");
+      await browser.waitUntil(async () => (await opened()).length === 1, { timeout: 15000, timeoutMsg: "Publish this folder opened nothing" });
+      const vault = await browser.executeObsidian(({ app }) => (app.vault.adapter as unknown as { getBasePath(): string }).getBasePath());
+      const handed = new URL((await opened())[0]);
+      expect(handed.protocol + handed.host).toBe("moss:deploy");
+      expect(fs.realpathSync(handed.searchParams.get("path") ?? "")).toBe(fs.realpathSync(path.join(vault, "site")));
+      await release();
+      await browser.waitUntil(async () => (await busy()) === 0, { timeoutMsg: "the button stayed busy after its answer" });
+      await screenshot("header-buttons");
+    });
+
+    it("carries no moss button once the preview stops", async () => {
+      await browser.executeObsidianCommand("moss:stop-preview");
+      await browser.$(".moss-preview-message").waitForExist({ timeout: 15000 });
+      expect(await headerButtons()).toEqual(["More options"]);
     });
   });
 });
