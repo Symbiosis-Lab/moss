@@ -251,42 +251,47 @@ impl FolderStores {
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(0),
             Err(e) => return Err(e),
         };
-        let _held = self.lock()?;
         let old = |path: &Path| old_by(path, grace);
+        let gone = |name: &str| {
+            if name.contains(".replaced-") {
+                old(&self.record_root.join(name))
+            } else {
+                self.read(name).is_some_and(|rec| old(&self.record_root.join(name).join(RECORD)) && self.folder_gone(&rec))
+            }
+        };
         let mut removed = 0;
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with('.') {
+            // Judged unlocked, since every process sweeps once and most entries
+            // stay; judged again under the lock, where a resolve may have revived it.
+            if name.starts_with('.') || !gone(&name) {
                 continue;
             }
-            let gone = if name.contains(".replaced-") {
-                old(&self.record_root.join(&name))
-            } else {
-                match self.read(&name) {
-                    Some(rec) => old(&self.record_root.join(&name).join(RECORD)) && self.folder_gone(&rec),
-                    None => false,
-                }
-            };
-            if gone {
-                for root in [&self.cache_root, &self.record_root] {
-                    // allow:unlink this computer's store for a folder that no longer exists
-                    match std::fs::remove_dir_all(root.join(&name)) {
-                        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
-                        _ => {}
-                    }
-                }
-                removed += 1;
+            let _held = self.lock()?;
+            if !gone(&name) {
+                continue;
             }
+            for root in [&self.cache_root, &self.record_root] {
+                // allow:unlink this computer's store for a folder that no longer exists
+                match std::fs::remove_dir_all(root.join(&name)) {
+                    Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+                    _ => {}
+                }
+            }
+            removed += 1;
         }
         // Written for a folder before it existed, and the folder never came.
         let orphan_grace = grace.max(std::time::Duration::from_secs(24 * 3600));
+        let orphan = |path: &Path, name: &str| !name.starts_with('.') && !self.record_root.join(name).exists() && old_by(path, orphan_grace);
         for entry in std::fs::read_dir(&self.cache_root).into_iter().flatten().flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if !name.starts_with('.') && !self.record_root.join(&name).exists() && old_by(&entry.path(), orphan_grace) {
-                // allow:unlink this computer's cache for a folder that was never made
-                if std::fs::remove_dir_all(entry.path()).is_ok() {
-                    removed += 1;
-                }
+            if !orphan(&entry.path(), &name) {
+                continue;
+            }
+            let _held = self.lock()?;
+            // allow:unlink this computer's cache for a folder that was never made
+            if orphan(&entry.path(), &name) && std::fs::remove_dir_all(entry.path()).is_ok() {
+                removed += 1;
             }
         }
         Ok(removed)
@@ -305,7 +310,7 @@ impl FolderStores {
         (self.volume_of)(existing).is_some_and(|v| v.id == recorded.id)
     }
 
-    /// Held for one resolve, across every folder: resolves are rare and short.
+    /// Held for one resolve or one removal, across every folder.
     fn lock(&self) -> io::Result<std::fs::File> {
         // allow:raw_write this computer's per-folder stores, outside any synced folder
         std::fs::create_dir_all(&self.record_root)?;
@@ -377,7 +382,7 @@ fn collect_gone_once() {
     });
 }
 
-/// `folder`'s stores for this process, resolved once per path spelling.
+/// `folder`'s stores for this process, resolved once per folder.
 ///
 /// A folder not created yet gets the place its stores will have. When no
 /// store can be resolved otherwise, the folder gets a scratch store for this
@@ -398,36 +403,34 @@ pub fn for_folder(folder: &Path) -> FolderStore {
 /// asks this before it writes, so its output never falls back into scratch.
 pub fn try_for_folder(folder: &Path) -> io::Result<FolderStore> {
     use std::collections::HashMap;
-    use std::sync::{Mutex, OnceLock};
-    type Known = HashMap<PathBuf, Result<FolderStore, (io::ErrorKind, String)>>;
-    static RESOLVED: OnceLock<Mutex<Known>> = OnceLock::new();
-    let memo = RESOLVED.get_or_init(Default::default);
-    let answer = |known: &Result<FolderStore, (io::ErrorKind, String)>| {
-        known.clone().map_err(|(kind, message)| io::Error::new(kind, message))
-    };
-    if let Some(known) = memo.lock().unwrap_or_else(|e| e.into_inner()).get(folder) {
-        return answer(known);
+    use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+    type Answer = Result<FolderStore, (io::ErrorKind, String)>;
+    // One cell per folder, shared by its spellings: a resolve blocks only the
+    // callers asking for the same folder, never every path lookup in the process.
+    static RESOLVED: LazyLock<Mutex<HashMap<PathBuf, Arc<OnceLock<Answer>>>>> = LazyLock::new(Default::default);
+    let answer = |known: &Answer| known.clone().map_err(|(kind, message)| io::Error::new(kind, message));
+    let known = RESOLVED.lock().unwrap_or_else(|e| e.into_inner()).get(folder).cloned();
+    if let Some(found) = known.as_ref().and_then(|cell| cell.get()) {
+        return answer(found);
     }
     // Not created yet: try again on the next call.
     let canonical = std::fs::canonicalize(folder)?;
-    let mut known = memo.lock().unwrap_or_else(|e| e.into_inner());
-    // Another spelling of the same folder resolved it already.
-    if let Some(found) = known.get(&canonical).cloned() {
-        known.insert(folder.to_path_buf(), found.clone());
-        return answer(&found);
-    }
-    // Held across the resolve, so two threads never resolve one folder twice.
-    let resolved = FolderStores::running_for(&canonical)
-        .ok_or_else(|| io::Error::other("no app-data directory"))
-        .and_then(|stores| stores.resolve(&canonical));
-    collect_gone_once();
-    if let Err(e) = &resolved {
-        log::warn!("no computer store for {} ({e}); this run keeps nothing for it", folder.display());
-    }
-    let kept = resolved.as_ref().map(Clone::clone).map_err(|e| (e.kind(), e.to_string()));
-    known.insert(canonical, kept.clone());
-    known.insert(folder.to_path_buf(), kept);
-    resolved
+    let cell = {
+        let mut known = RESOLVED.lock().unwrap_or_else(|e| e.into_inner());
+        let cell = known.entry(canonical.clone()).or_default().clone();
+        known.insert(folder.to_path_buf(), cell.clone());
+        cell
+    };
+    answer(cell.get_or_init(|| {
+        let resolved = FolderStores::running_for(&canonical)
+            .ok_or_else(|| io::Error::other("no app-data directory"))
+            .and_then(|stores| stores.resolve(&canonical));
+        collect_gone_once();
+        if let Err(e) = &resolved {
+            log::warn!("no computer store for {} ({e}); this run keeps nothing for it", folder.display());
+        }
+        resolved.map_err(|e| (e.kind(), e.to_string()))
+    }))
 }
 
 const UNSTORED_PREFIX: &str = "moss-unstored-";
