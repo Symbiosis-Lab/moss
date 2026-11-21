@@ -12,6 +12,12 @@ import { host } from '../host';
 import { isMacPlatform } from './kbd-label';
 import { uiPlatform } from './platform';
 
+declare global {
+  interface Window {
+    __MOSS_BUTTON_LAYOUT__?: string;
+  }
+}
+
 let installed = false;
 
 /**
@@ -79,17 +85,78 @@ export function __resetFullscreenClassForTest(): void {
  * outright (`decorations(false)`) and draws both the `[icon] moss` pair AND
  * its own minimize/close — `own-titlebar` AND `controls-trailing`, since
  * Windows' own caption buttons sit trailing.
- * Linux keeps its native caption (which already shows the app name) but its
- * window controls also sit trailing, so it gets `controls-trailing` alone.
+ * Linux hides the window manager's title bar too (an empty GTK titlebar keeps
+ * the client-side frame) and draws the buttons the desktop's layout names, on
+ * the side and in the order it gives (`placeWindowButtons`): `platform-linux`
+ * styles them, and `controls-trailing` holds only when some sit trailing.
  *
  * `isMacPlatform()` (kbd-label.ts) answers the own-titlebar half for
  * keyboard-shortcut labels too. Call once at boot in every window: the
  * launcher, the app shell and the editor.
  */
-export function applyOwnTitlebarClass(): void {
-  const mac = isMacPlatform();
-  document.body.classList.toggle('own-titlebar', mac || uiPlatform() === 'win');
-  document.body.classList.toggle('controls-trailing', !mac);
+export function applyOwnTitlebarClass(
+  layout: string | undefined = window.__MOSS_BUTTON_LAYOUT__,
+): void {
+  // Only the Linux host names a layout, so its presence is what says Linux.
+  const linux = layout !== undefined;
+  const placed = linux ? placeWindowButtons(layout) : undefined;
+  document.body.classList.toggle('own-titlebar', linux || isMacPlatform() || uiPlatform() === 'win');
+  document.body.classList.toggle('controls-trailing', placed ? placed.end > 0 : !isMacPlatform());
+  document.body.classList.toggle('platform-linux', linux);
+}
+
+export type WindowButton = 'minimize' | 'maximize' | 'close';
+
+/**
+ * GTK's `gtk-decoration-layout`, e.g. `appmenu:close` or
+ * `close,minimize,maximize:`: the buttons before the colon sit at the start of
+ * the title bar, those after it at the end, each list in reading order. Names
+ * moss draws no button for (`appmenu`, `menu`, `icon`, `spacer`) are dropped.
+ */
+export function parseButtonLayout(layout: string): { start: WindowButton[]; end: WindowButton[] } {
+  const [start = '', end = ''] = layout.split(':');
+  return { start: buttons(start), end: buttons(end) };
+}
+
+const isWindowButton = (name: string | undefined): name is WindowButton =>
+  name === 'minimize' || name === 'maximize' || name === 'close';
+
+const buttons = (side: string): WindowButton[] => side.split(',').map((name) => name.trim()).filter(isWindowButton);
+
+/**
+ * Give each `[data-window-button]` in this document the side and slot (counted
+ * from that side's window edge) `layout` puts it in, and leave a button it does
+ * not name without a side, which hides it. A window draws only some buttons
+ * (the launcher has no maximize), so slots count the buttons present. A close
+ * button the layout leaves out goes at the end, by the window edge, as GNOME's
+ * own `appmenu:close` has it: otherwise the window could not be closed. Each
+ * side's count goes on <body> for its reserve in tokens.css.
+ */
+export function placeWindowButtons(layout: string): { start: number; end: number } {
+  const buttons = new Map<WindowButton, HTMLElement>();
+  for (const b of document.querySelectorAll<HTMLElement>('[data-window-button]')) {
+    if (isWindowButton(b.dataset.windowButton)) buttons.set(b.dataset.windowButton, b);
+  }
+  const sides = parseButtonLayout(layout);
+  const start = sides.start.filter((name) => buttons.has(name));
+  const end = sides.end.filter((name) => buttons.has(name)).reverse();
+  if (buttons.has('close') && !start.includes('close') && !end.includes('close')) end.unshift('close');
+  const placed = new Map<WindowButton, readonly ['start' | 'end', number]>([
+    ...start.map((name, slot) => [name, ['start', slot]] as const),
+    ...end.map((name, slot) => [name, ['end', slot]] as const),
+  ]);
+  for (const [name, button] of buttons) {
+    const place = placed.get(name);
+    if (place) {
+      button.dataset.captionSide = place[0];
+      button.style.setProperty('--moss-caption-slot', String(place[1]));
+    } else {
+      delete button.dataset.captionSide;
+    }
+  }
+  document.body.dataset.captionStart = String(start.length);
+  document.body.style.setProperty('--moss-caption-end-count', String(end.length));
+  return { start: start.length, end: end.length };
 }
 
 /**

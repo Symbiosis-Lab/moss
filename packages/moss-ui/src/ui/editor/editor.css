@@ -237,10 +237,15 @@ body.fullscreen-mode .nav-grid { --ft-base: 16px; }
 .nav-caption {
   display: none;
 }
-body.own-titlebar.controls-trailing.owns-caption .nav-caption {
+body.own-titlebar.controls-trailing.owns-caption .nav-caption,
+body.own-titlebar.platform-linux .nav-caption {
   display: block;
   position: absolute;
   top: 0;
+  height: var(--moss-titlebar-height);
+  z-index: var(--z-panel); /* above .nav-right's z-index 2 */
+}
+body.own-titlebar.controls-trailing.owns-caption:not(.platform-linux) .nav-caption {
   inset-inline-end: 0;
   /* Explicit, not shrink-to-fit: every button inside is itself position:absolute
      (removed from flow so their own right:0/46/92 offsets work), so an
@@ -249,8 +254,20 @@ body.own-titlebar.controls-trailing.owns-caption .nav-caption {
      screen. Same reserved-zone width .nav-right's widened reserve already
      assumes (--moss-caption-zone-width, tokens.css: 3 * --moss-caption-btn-w). */
   width: var(--moss-caption-zone-width);
-  height: var(--moss-titlebar-height);
-  z-index: var(--z-panel); /* above .nav-right's raw 2 (the panel tier, tokens.css, is 20) — same reason .moss-titlebar's row needs no z-index of its own, this IS the row's positioned ancestor */
+}
+
+/* Linux: buttons may sit at either edge, so the row spans the bar and lets
+   clicks through to the toolbar under it. This webview is the window's start
+   edge whenever it shows; it owns the end edge only with owns-caption. */
+body.own-titlebar.platform-linux .nav-caption {
+  inset-inline: 0;
+  pointer-events: none;
+}
+body.own-titlebar.platform-linux .nav-caption [data-caption-side] {
+  pointer-events: auto;
+}
+body.own-titlebar.platform-linux:not(.owns-caption) .nav-caption [data-caption-side="end"] {
+  display: none;
 }
 
 /* .nav-right sits beside the window buttons, not under them: this row IS the

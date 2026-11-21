@@ -447,6 +447,23 @@ body.own-titlebar.controls-trailing {
   --moss-title-end-reserve: var(--moss-caption-zone-width);
 }
 
+/* Linux: each window button is a --moss-space-md circle on a pitch of one more
+   --moss-space-xs, inset to centre it in the title row. A side's reserve is
+   the inset plus a pitch per button there (placeWindowButtons counts them).
+   The start reserve is --moss-traffic-light-inset, which the editor's file
+   tree reads as a number, so it is written in px: 12 + 32 per button. */
+body.own-titlebar.platform-linux {
+  --moss-caption-linux-pitch: calc(var(--moss-space-md) + var(--moss-space-xs));
+  --moss-caption-linux-inset: calc((var(--moss-caption-btn-h) - var(--moss-space-md)) / 2);
+  --moss-traffic-light-inset: 0px;
+}
+body.own-titlebar.platform-linux[data-caption-start="1"] { --moss-traffic-light-inset: 44px; }
+body.own-titlebar.platform-linux[data-caption-start="2"] { --moss-traffic-light-inset: 76px; }
+body.own-titlebar.platform-linux[data-caption-start="3"] { --moss-traffic-light-inset: 108px; }
+body.own-titlebar.controls-trailing.platform-linux {
+  --moss-caption-zone-width: calc(var(--moss-caption-linux-inset) + var(--moss-caption-end-count) * var(--moss-caption-linux-pitch));
+}
+
 /* Native fullscreen hides the macOS traffic lights, so the reserved left inset
    is dead space — collapse it to 0 (one source for every title bar in both the
    shell and the editor webview, which each toggle `fullscreen-mode` on <body> via

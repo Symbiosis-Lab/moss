@@ -2518,6 +2518,16 @@ body.own-titlebar.controls-trailing .moss-titlebar-traffic-light-space {
   display: none;
 }
 
+/* Linux: the spacer holds the start-side window buttons. With the action panel
+   open, the editor's webview is the window's start edge and draws them. */
+body.own-titlebar.platform-linux:not([data-caption-start="0"]) .moss-titlebar-traffic-light-space {
+  display: block;
+}
+body.own-titlebar.platform-linux:has(.action-panel-open) .moss-titlebar-traffic-light-space,
+body.own-titlebar.platform-linux:has(.action-panel-open) .moss-titlebar [data-caption-side="start"] {
+  display: none;
+}
+
 /* .moss-caption-btn* (minimize/maximize/close) moved to
    styles/shared/primitives.css, already imported above. The
    editor webview has its own caption row (full-width and document mode) sharing

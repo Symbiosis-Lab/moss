@@ -28,6 +28,8 @@ const nativeWindow = {
 import {
   installFullscreenBodyClass,
   applyOwnTitlebarClass,
+  parseButtonLayout,
+  placeWindowButtons,
   applyCaptionOwnerClass,
   __resetFullscreenClassForTest,
 } from '../fullscreen-class';
@@ -116,7 +118,8 @@ function withPlatform(value: string, run: () => void): void {
 
 describe('applyOwnTitlebarClass', () => {
   afterEach(() => {
-    document.body.classList.remove('own-titlebar', 'controls-trailing');
+    document.body.classList.remove('own-titlebar', 'controls-trailing', 'platform-linux');
+    document.body.innerHTML = '';
     delete (navigator as Navigator & { userAgentData?: unknown }).userAgentData;
   });
 
@@ -136,21 +139,53 @@ describe('applyOwnTitlebarClass', () => {
     });
   });
 
-  test('Linux: controls-trailing only — native caption stays, but its controls sit trailing', () => {
+  test('Linux: draws the buttons GNOME names, trailing', () => {
+    document.body.innerHTML = '<button data-window-button="minimize"></button><button data-window-button="close"></button>';
     withPlatform('Linux x86_64', () => {
-      applyOwnTitlebarClass();
-      expect(document.body.classList.contains('own-titlebar')).toBe(false);
+      applyOwnTitlebarClass('appmenu:close');
+      expect(document.body.classList.contains('own-titlebar')).toBe(true);
       expect(document.body.classList.contains('controls-trailing')).toBe(true);
+      expect(document.body.classList.contains('platform-linux')).toBe(true);
     });
   });
 
-  test('removes a stale own-titlebar class when called again on a non-mac UA', () => {
-    // toggle(), not add(): a second call on a different platform must be able
-    // to retract the class, not just set it once.
+  test('Linux: buttons all at the start leave controls-trailing off', () => {
+    document.body.innerHTML = '<button data-window-button="close"></button>';
+    withPlatform('Linux x86_64', () => applyOwnTitlebarClass('close:'));
+    expect(document.body.classList.contains('controls-trailing')).toBe(false);
+    expect(document.body.dataset.captionStart).toBe('1');
+  });
+
+  test('Linux: a desktop that names no button still gets a close button, trailing', () => {
+    document.body.innerHTML = '<button data-window-button="minimize"></button><button data-window-button="close"></button>';
+    withPlatform('Linux x86_64', () => applyOwnTitlebarClass(''));
+    const [minimize, close] = document.querySelectorAll<HTMLElement>('[data-window-button]');
+    expect([close.dataset.captionSide, minimize.dataset.captionSide]).toEqual(['end', undefined]);
+    expect(document.body.classList.contains('controls-trailing')).toBe(true);
+  });
+
+  test('a page on Linux with no host layout is not drawn as the Linux app', () => {
     withPlatform('MacIntel', () => applyOwnTitlebarClass());
-    expect(document.body.classList.contains('own-titlebar')).toBe(true);
     withPlatform('Linux x86_64', () => applyOwnTitlebarClass());
+    expect(document.body.classList.contains('platform-linux')).toBe(false);
     expect(document.body.classList.contains('own-titlebar')).toBe(false);
+  });
+
+  test('Linux: a launcher whose layout names none of its buttons still gets a close button at the edge', () => {
+    document.body.innerHTML = '<button data-window-button="minimize"></button><button data-window-button="close"></button>';
+    const [minimize, close] = document.querySelectorAll<HTMLElement>('[data-window-button]');
+    withPlatform('Linux x86_64', () => applyOwnTitlebarClass('maximize:'));
+    expect([close.dataset.captionSide, minimize.dataset.captionSide]).toEqual(['end', undefined]);
+    withPlatform('Linux x86_64', () => applyOwnTitlebarClass(':minimize'));
+    expect([close.dataset.captionSide, close.style.getPropertyValue('--moss-caption-slot')]).toEqual(['end', '0']);
+    expect([minimize.dataset.captionSide, minimize.style.getPropertyValue('--moss-caption-slot')]).toEqual(['end', '1']);
+  });
+
+  test('removes a stale platform-linux class when called again elsewhere', () => {
+    withPlatform('Linux x86_64', () => applyOwnTitlebarClass(''));
+    expect(document.body.classList.contains('platform-linux')).toBe(true);
+    withPlatform('Win32', () => applyOwnTitlebarClass());
+    expect(document.body.classList.contains('platform-linux')).toBe(false);
   });
 
   test('removes a stale controls-trailing class when called again on macOS', () => {
@@ -188,5 +223,47 @@ describe('applyCaptionOwnerClass', () => {
     applyCaptionOwnerClass(true);
     applyCaptionOwnerClass(false);
     expect(document.body.classList.contains('owns-caption')).toBe(false);
+  });
+});
+
+describe('parseButtonLayout', () => {
+  test('splits the sides at the colon, keeps reading order, drops what moss does not draw', () => {
+    expect(parseButtonLayout('appmenu:close')).toEqual({ start: [], end: ['close'] });
+    expect(parseButtonLayout('icon:minimize,maximize,close')).toEqual({ start: [], end: ['minimize', 'maximize', 'close'] });
+    expect(parseButtonLayout('close,minimize,maximize:')).toEqual({ start: ['close', 'minimize', 'maximize'], end: [] });
+    expect(parseButtonLayout('close:spacer,maximize')).toEqual({ start: ['close'], end: ['maximize'] });
+  });
+
+  test('a layout with no colon is all start', () => {
+    expect(parseButtonLayout('close,minimize')).toEqual({ start: ['close', 'minimize'], end: [] });
+    expect(parseButtonLayout('appmenu:')).toEqual({ start: [], end: [] });
+  });
+});
+
+describe('placeWindowButtons', () => {
+  const button = (name: string) => document.querySelector<HTMLElement>(`[data-window-button="${name}"]`)!;
+  beforeEach(() => {
+    document.body.innerHTML = ['minimize', 'maximize', 'close'].map((n) => `<button data-window-button="${n}"></button>`).join('');
+  });
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  test('slots count from each side\'s own edge, and a button left out has no side', () => {
+    expect(placeWindowButtons('close,minimize:maximize')).toEqual({ start: 2, end: 1 });
+    expect([button('close').dataset.captionSide, button('close').style.getPropertyValue('--moss-caption-slot')]).toEqual(['start', '0']);
+    expect([button('minimize').dataset.captionSide, button('minimize').style.getPropertyValue('--moss-caption-slot')]).toEqual(['start', '1']);
+    expect([button('maximize').dataset.captionSide, button('maximize').style.getPropertyValue('--moss-caption-slot')]).toEqual(['end', '0']);
+    expect(placeWindowButtons(':minimize,close')).toEqual({ start: 0, end: 2 });
+    expect(button('close').style.getPropertyValue('--moss-caption-slot')).toBe('0');
+    expect(button('minimize').style.getPropertyValue('--moss-caption-slot')).toBe('1');
+    expect(button('maximize').dataset.captionSide).toBeUndefined();
+  });
+
+  test('a button this window lacks takes no slot', () => {
+    button('maximize').remove();
+    placeWindowButtons(':minimize,maximize,close');
+    expect(button('minimize').style.getPropertyValue('--moss-caption-slot')).toBe('1');
+    expect(document.body.style.getPropertyValue('--moss-caption-end-count')).toBe('2');
   });
 });
