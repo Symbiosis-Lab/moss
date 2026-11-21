@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 use crate::vault_root::{resolve_input, VaultRoot};
 
 mod import_sources;
+mod landscape;
 mod lift;
 mod list;
 mod translation_keys;
@@ -132,6 +133,10 @@ It compares the built site only: the scratch builds run the site's plugins as
 a build does, but a tool that reads translationKey from the files themselves is
 not checked, and a page renamed later pairs by key and not by path.
 
+It also gives a place-typed kind without one `landscape = \"detail\"` and
+copies moss's place-map pack into .moss/maps/, so the site's maps stay as they
+are once moss stops carrying the pack.
+
 --lift <class> --as <field> moves each `::: {.class}` div holding one paragraph
 of plain text into the page's frontmatter as <field>, declares <field> in
 .moss/config.toml if it is not, and lists the pages it left as written.
@@ -217,6 +222,8 @@ struct Report {
     /// The version saved before writing, when `--apply` wrote.
     saved: Option<String>,
     applied: bool,
+    /// moss's place-map pack is (to be) copied into `.moss/maps/`.
+    pack: bool,
 }
 
 fn migrate(folder: &Path, args: &Args) -> Result<Report, String> {
@@ -245,6 +252,15 @@ fn migrate(folder: &Path, args: &Args) -> Result<Report, String> {
     }
     report.saved = Some(id);
     write_all(folder, &mut report.changes, &mut report.skipped);
+    if report.pack {
+        match crate::build::place_map::install_landscape(&crate::moss_paths::MossPaths::new(folder), crate::build::place_map::embedded_stored()) {
+            Ok(wrote) => report.pack = wrote,
+            Err(e) => {
+                report.pack = false;
+                report.skipped.push(Skipped { path: ".moss/maps/".to_string(), line: None, reason: format!("could not be written: {e}") });
+            }
+        }
+    }
     report.applied = true;
     Ok(report)
 }
@@ -316,7 +332,17 @@ fn plan(folder: &Path, args: &Args) -> Result<Report, String> {
         }
     };
 
-    let mut report = Report { changes, skipped, notes, check, saved: None, applied: false };
+    let mut report = Report { changes, skipped, notes, check, saved: None, applied: false, pack: false };
+    if args.lift.is_none() {
+        let landscape_config = landscape::plan(&config_text)?;
+        report.pack = landscape::needs_pack(folder, landscape_config.as_deref().unwrap_or(&config_text));
+        if let Some(after) = landscape_config {
+            report.changes.push(FileChange { path: CONFIG.to_string(), before: config_text, after });
+        }
+        if report.pack {
+            report.notes.push("Copies moss's place-map pack into .moss/maps/.".to_string());
+        }
+    }
     if report.check == Check::DifferentOutput {
         report.notes.push("Removing these would change the built site, so they stay as written.".to_string());
     }
@@ -326,7 +352,7 @@ fn plan(folder: &Path, args: &Args) -> Result<Report, String> {
 fn plan_import_sources(folder: &Path, pages: &[(String, String)], list: &str) -> Result<Report, String> {
     let plan = import_sources::plan(pages, &import_sources::load(list)?, &import_sources::copy_addresses(folder));
     let notes = if plan.unmatched.is_empty() { Vec::new() } else { vec![format!("No page's syndicated: holds {}.", plan.unmatched.join(", "))] };
-    Ok(Report { changes: plan.changes, skipped: plan.skipped, notes, check: Check::NotNeeded, saved: None, applied: false })
+    Ok(Report { changes: plan.changes, skipped: plan.skipped, notes, check: Check::NotNeeded, saved: None, applied: false, pack: false })
 }
 
 /// Write every change whose file still holds the text it was planned from,
@@ -445,7 +471,7 @@ fn site_relative(folder: &Path, file: &Path) -> String {
 
 impl Report {
     fn writable(&self) -> bool {
-        self.check != Check::DifferentOutput && !self.changes.is_empty()
+        self.check != Check::DifferentOutput && (!self.changes.is_empty() || self.pack)
     }
 
     fn to_text(&self) -> String {
@@ -465,7 +491,7 @@ impl Report {
         }
         let files = |n: usize| if n == 1 { "1 file".to_string() } else { format!("{n} files") };
         out.push('\n');
-        out.push_str(&match (&self.saved, self.changes.len(), &self.check) {
+        out.push_str(&match (&self.saved, self.changes.len() + usize::from(self.pack), &self.check) {
             (_, 0, _) if self.skipped.is_empty() && self.notes.is_empty() => "Nothing to rewrite.\n".to_string(),
             (_, _, Check::DifferentOutput) => "Nothing was written.\n".to_string(),
             (Some(id), n, _) if self.applied => format!(
@@ -489,6 +515,7 @@ impl Report {
             "notes": self.notes,
             "same_output": match self.check { Check::NotNeeded => serde_json::Value::Null, Check::SameOutput => true.into(), Check::DifferentOutput => false.into() },
             "applied": self.applied,
+            "pack": self.pack,
             "saved_version": self.saved,
         })
     }

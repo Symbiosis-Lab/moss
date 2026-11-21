@@ -38,17 +38,13 @@ fn repository_pack() -> Vec<u8> {
     fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("data/place-map/place-map-v1.bin.br")).unwrap()
 }
 
-fn digest(bytes: &[u8]) -> String {
-    hex::encode(<sha2::Sha256 as sha2::Digest>::digest(bytes))
-}
-
 /// Writes `stored` as the folder's one pack, under the digest it would have
 /// if `named` were its bytes.
 fn install(root: &Path, stored: &[u8], named: &[u8]) -> PathBuf {
     let maps = MossPaths::new(root).maps_dir();
     let _ = fs::remove_dir_all(&maps);
     fs::create_dir_all(&maps).unwrap();
-    let path = maps.join(format!("landscape-{}.bin.br", digest(named)));
+    let path = maps.join(moss_build::build::place_map::landscape_file_name(named));
     fs::write(&path, stored).unwrap();
     path
 }

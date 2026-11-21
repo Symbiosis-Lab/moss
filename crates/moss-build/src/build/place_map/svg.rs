@@ -1993,8 +1993,9 @@ mod tests {
         }
     }
 
-    /// The basic landscape has the same layers as the detail pack, all but
-    /// land empty: every renderer must draw it without a flag for it.
+    /// A pack whose fine layers other than land are empty, as a smaller
+    /// pack in the same format would be, draws with every renderer and no
+    /// flag for it.
     #[test]
     fn every_renderer_draws_a_pack_whose_detail_layers_are_empty() {
         let mut pack = crate::build::place_map::embedded().unwrap();
@@ -2024,9 +2025,7 @@ mod tests {
         ];
         for (renderer, svg) in &drawn {
             for name in ["lakes", "rivers", "ice", "salt", "reefs", "built-up"] {
-                if svg.contains(&format!("data-map-layer=\"{name}\"")) {
-                    assert!(!layer_body(svg, name).contains("<path"), "{renderer} draws an empty {name}");
-                }
+                assert!(!layer_body(svg, name).contains("<path"), "{renderer} draws an empty {name}");
             }
         }
         assert!(layer_body(&drawn[2].1, "land").contains("<use"), "the locator still draws land");

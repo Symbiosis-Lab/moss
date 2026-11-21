@@ -6838,7 +6838,7 @@ fn map_pack_site(named: &[u8]) -> (std::path::PathBuf, std::path::PathBuf, impl 
     fs::write(dir.join("walk.md"), "---\nlocation: Riverside\n---\nA walk.\n").unwrap();
     let maps = crate::moss_paths::MossPaths::new(&dir).maps_dir();
     fs::create_dir_all(&maps).unwrap();
-    let pack = maps.join(format!("landscape-{}.bin.br", hex::encode(<sha2::Sha256 as sha2::Digest>::digest(named))));
+    let pack = maps.join(crate::build::place_map::landscape_file_name(named));
     fs::copy(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/place-map/place-map-v1.bin.br"), &pack).unwrap();
     (dir, pack, cleanup)
 }
@@ -6858,7 +6858,7 @@ fn a_map_pack_still_in_the_cloud_is_requested_and_holds_the_publish() {
 }
 
 #[test]
-fn a_map_pack_that_fails_its_digest_stops_the_publish_of_its_build() {
+fn a_map_pack_that_fails_its_digest_stops_the_publish() {
     let (dir, _pack, _cleanup) = map_pack_site(b"other bytes");
 
     let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();

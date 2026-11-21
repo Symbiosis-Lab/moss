@@ -13,6 +13,7 @@ All notable changes to moss will be documented here.
 - `moss root <file> --json` also says what an editor shows beside a page: its address on the site, whether it is a draft, whether it is published and changed since, where its copies went, and the settings it takes from a folder's `cascade:`. `moss describe --json` lists moss's own shortcodes with their attributes, for completion in an editor.
 - A channel whose accounts live on many servers, such as Mastodon, names the account's server when its sign-in completes, and moss takes a `syndicated:` address on that server as the channel's copy without a server setting.
 - A place-typed kind with `landscape = "detail"` draws its maps from the pack in the folder's `.moss/maps/` (`landscape-<sha256>.bin.br`, checked against the digest in its name). A pack still in the cloud is downloaded before the site publishes; a missing or damaged one is a problem under `--strict` and stops `moss deploy`, and the build draws moss's own map meanwhile.
+- `moss migrate --apply` gives a place-typed kind `landscape = "detail"` and copies moss's place-map pack into `.moss/maps/`, so the site's maps stay as they are once moss stops carrying the pack. It never replaces a usable pack already there, and a second run writes nothing. Until a site is migrated, its builds say so.
 
 ### Changed
 

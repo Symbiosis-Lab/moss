@@ -551,7 +551,7 @@ pub fn find_landscape(maps_dir: &std::path::Path, wanted: Option<&str>) -> Lands
     match wanted {
         None => return Landscape::Embedded,
         Some(DETAIL_LANDSCAPE) => {}
-        Some(other) => return Landscape::Missing(format!("`landscape = \"{other}\"` is not a landscape; the one there is is \"{DETAIL_LANDSCAPE}\"")),
+        Some(other) => return Landscape::Missing(format!("`landscape = \"{other}\"` is not recognized; use \"{DETAIL_LANDSCAPE}\"")),
     }
     let mut names: Vec<(String, bool)> = std::fs::read_dir(maps_dir).into_iter().flatten().flatten()
         .filter_map(|entry| {
@@ -597,6 +597,44 @@ pub fn find_landscape(maps_dir: &std::path::Path, wanted: Option<&str>) -> Lands
     }
 }
 
+/// moss's own pack as stored, the bytes `install_landscape` copies.
+pub fn embedded_stored() -> &'static [u8] {
+    PACK_BROTLI
+}
+
+/// Install `stored` as the folder's pack, unless a valid one is there (or one
+/// still in the cloud, which may be valid), so two machines on different
+/// moss versions never take turns replacing each other's. The bytes go to an
+/// unwatched temp file under `.moss/` and are renamed into `maps/` before
+/// the older packs are removed, so a watcher sees one batch. `Ok(false)`:
+/// nothing was written.
+pub fn install_landscape(paths: &crate::moss_paths::MossPaths, stored: &[u8]) -> std::io::Result<bool> {
+    let maps = paths.maps_dir();
+    if matches!(find_landscape(&maps, Some(DETAIL_LANDSCAPE)), Landscape::Installed { .. } | Landscape::InCloud(_)) {
+        return Ok(false);
+    }
+    let name = landscape_file_name(stored);
+    let temp = paths.root().join(format!("{name}.part"));
+    // allow:raw_write a temp file in .moss/, not build output, renamed into maps/ below
+    std::fs::write(&temp, stored)?;
+    std::fs::create_dir_all(&maps)?;
+    // allow:unlink the pack's temp under .moss/ moves into the folder's .moss/maps/, not staging
+    std::fs::rename(&temp, maps.join(&name))?;
+    for entry in std::fs::read_dir(&maps)?.flatten() {
+        let old = entry.file_name();
+        if old.to_str().is_some_and(|old| old != name && landscape_digest(old).is_some()) {
+            // allow:unlink an older pack in the folder's .moss/maps/, not staging
+            std::fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(true)
+}
+
+/// The name a pack is stored under: its own digest.
+pub fn landscape_file_name(stored: &[u8]) -> String {
+    format!("{LANDSCAPE_PREFIX}{}{LANDSCAPE_SUFFIX}", hex::encode(<sha2::Sha256 as sha2::Digest>::digest(stored)))
+}
+
 fn landscape_digest(name: &str) -> Option<&str> {
     let digest = name.strip_prefix(LANDSCAPE_PREFIX)?.strip_suffix(LANDSCAPE_SUFFIX)?;
     (digest.len() == 64 && digest.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))).then_some(digest)
@@ -607,7 +645,7 @@ mod tests {
     use super::*;
 
     fn pack_named_by_its_digest(dir: &std::path::Path) -> std::path::PathBuf {
-        let path = dir.join(format!("{LANDSCAPE_PREFIX}{}{LANDSCAPE_SUFFIX}", hex::encode(<sha2::Sha256 as sha2::Digest>::digest(PACK_BROTLI))));
+        let path = dir.join(landscape_file_name(PACK_BROTLI));
         std::fs::write(&path, PACK_BROTLI).unwrap();
         path
     }
@@ -629,6 +667,29 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn installing_replaces_only_a_pack_that_is_not_usable() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::moss_paths::MossPaths::new(dir.path());
+        let maps = paths.maps_dir();
+        std::fs::create_dir_all(&maps).unwrap();
+        std::fs::write(maps.join(format!("{LANDSCAPE_PREFIX}{}{LANDSCAPE_SUFFIX}", "0".repeat(64))), b"damaged").unwrap();
+        let stray = "landscape (conflicted copy).bin.br";
+        std::fs::write(maps.join(stray), b"not ours").unwrap();
+        let listing = |dir: &std::path::Path| {
+            let mut names: Vec<String> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+            names.sort();
+            names
+        };
+
+        assert!(install_landscape(&paths, PACK_BROTLI).unwrap());
+        assert_eq!(listing(&maps), [stray.to_string(), landscape_file_name(PACK_BROTLI)]);
+        assert_eq!(listing(paths.root()), ["maps"], "no temp file is left behind");
+        assert!(!install_landscape(&paths, PACK_BROTLI).unwrap(), "a second run writes nothing");
+        assert!(!install_landscape(&paths, b"other bytes").unwrap(), "a valid pack is never replaced");
+        assert_eq!(listing(&maps), [stray.to_string(), landscape_file_name(PACK_BROTLI)]);
     }
 
     #[test]
@@ -655,8 +716,7 @@ mod tests {
         for (bytes, says) in [(&b"not brotli"[..], "brotli"), (&not_a_pack[..], "cannot read")] {
             let _ = std::fs::remove_dir_all(dir.path());
             std::fs::create_dir_all(dir.path()).unwrap();
-            let name = format!("{LANDSCAPE_PREFIX}{}{LANDSCAPE_SUFFIX}", hex::encode(<sha2::Sha256 as sha2::Digest>::digest(bytes)));
-            std::fs::write(dir.path().join(name), bytes).unwrap();
+            std::fs::write(dir.path().join(landscape_file_name(bytes)), bytes).unwrap();
             assert!(matches!(find_landscape(dir.path(), Some(DETAIL_LANDSCAPE)), Landscape::Missing(text) if text.contains(says)), "{says}");
         }
     }

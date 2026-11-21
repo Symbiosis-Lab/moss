@@ -654,7 +654,10 @@ impl PlaceMapContext {
     ) -> Result<Self, super::DecodeError> {
         use crate::build::cloud_ledger::InputRole;
         match super::find_landscape(&paths.maps_dir(), wanted) {
-            super::Landscape::Embedded => Self::embedded(),
+            super::Landscape::Embedded => {
+                crate::build::cli_output::log_note!("the place map will need its pack in .moss/maps/: run `moss migrate --apply`");
+                Self::embedded()
+            }
             super::Landscape::Installed { path, stored, pack, passed_over } => {
                 evidence.require(&path, InputRole::SharedConfig);
                 evidence.read_bytes(&path, &stored);

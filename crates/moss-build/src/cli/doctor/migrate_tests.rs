@@ -21,6 +21,26 @@ fn args(list: &[&str]) -> Args {
 }
 
 #[test]
+fn a_place_kind_gets_the_landscape_key_and_moss_s_pack_once() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), ".moss/config.toml", "# places\n[terms.places]\ntype = \"place\"\nfields = [\"location\"]\n");
+    let maps = crate::moss_paths::MossPaths::new(dir.path()).maps_dir();
+
+    let dry = migrate(dir.path(), &args(&[])).unwrap();
+    assert!(dry.pack && !dry.applied && !maps.exists(), "{}", dry.to_text());
+
+    let applied = migrate(dir.path(), &args(&["--apply"])).unwrap();
+    assert!(applied.applied && applied.pack, "{}", applied.to_text());
+    let config = std::fs::read_to_string(dir.path().join(".moss/config.toml")).unwrap();
+    assert!(config.starts_with("# places\n") && config.contains("landscape = \"detail\""), "{config}");
+    let stored = crate::build::place_map::embedded_stored();
+    assert_eq!(std::fs::read(maps.join(crate::build::place_map::landscape_file_name(stored))).unwrap(), stored);
+
+    let again = migrate(dir.path(), &args(&["--apply"])).unwrap();
+    assert!(again.changes.is_empty() && !again.pack, "{}", again.to_text());
+}
+
+#[test]
 fn a_dry_run_lift_lists_every_change_and_writes_nothing() {
     let dir = site();
     let before = std::fs::read_to_string(dir.path().join("Piers/p1.md")).unwrap();
