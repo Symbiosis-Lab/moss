@@ -24,7 +24,7 @@
 //! **A bump must be evidence of progress, not evidence of a timer.** The upload
 //! phase runs a 250 ms ticker that re-emits `Uploading` progress whether or not
 //! the byte counters moved (`deploy.rs`); bumping from that emit would advance
-//! the clock 4×/second for the whole upload phase and the watchdog could never
+//! the counter 4×/second for the whole upload phase and the watchdog could never
 //! fire where stalls actually happen. So the upload phase bumps on the **byte
 //! credit itself** (`deploy::credit_upload_bytes`), never on the emit — pinned
 //! by `the_upload_progress_ticker_is_not_a_liveness_bump` in `deploy_tests.rs`.
@@ -34,7 +34,7 @@
 //! `deploy::activity::is_build_liveness_event` whitelists build-progress event
 //! kinds instead of accepting any `MossEvent`.
 //!
-//! The clock lives here rather than app-side because the seta client bumps it
+//! The counter lives here rather than app-side because the seta client bumps it
 //! from every retry boundary and every uploaded chunk. Only the Tauri event
 //! listener that feeds it build progress lives app-side, in `deploy::activity`.
 
@@ -64,7 +64,7 @@ use tokio::time::Instant;
 /// `spawn_blocking` credits nothing and now fails at 300 s, not 900 s.
 pub const STALL_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// Watchdog sampling period. The clock's resolution, not its accuracy: a stall
+/// Watchdog sampling period. The watchdog's resolution, not its accuracy: a stall
 /// is detected between `STALL_TIMEOUT` and `STALL_TIMEOUT + WATCHDOG_POLL`.
 const WATCHDOG_POLL: Duration = Duration::from_secs(1);
 
@@ -125,13 +125,10 @@ pub async fn watchdog(stall: Duration) -> Duration {
 
 /// Run `fut` under the stall watchdog: its own result if it finishes, a stall
 /// error if it goes quiet for `stall`.
-///
-/// Starting the body counts as progress, so it bumps on entry.
 pub async fn bounded_by_stall<T, E: From<String>, F>(fut: F, stall: Duration, what: &str) -> Result<T, E>
 where
     F: std::future::Future<Output = Result<T, E>>,
 {
-    bump();
     tokio::select! {
         result = fut => result,
         idle = watchdog(stall) => {
@@ -155,7 +152,7 @@ pub(crate) fn stalled_message(stall: Duration) -> String {
     )
 }
 
-/// Serializes every test that reads the process-global clock. The clock is one
+/// Serializes every test that reads the process-global bump counter. It is one
 /// counter for the whole process, so a test asserting "nothing bumped for N ms"
 /// observes any concurrently-running test that bumps.
 ///
@@ -163,7 +160,7 @@ pub(crate) fn stalled_message(stall: Duration) -> String {
 /// compiles only into its own crate's test binary, so neither crate can see the
 /// other's lock and each needs one; they are never live together.
 #[cfg(test)]
-pub(crate) static CLOCK_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) static BUMP_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 #[path = "liveness_tests.rs"]

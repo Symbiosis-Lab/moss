@@ -1,8 +1,8 @@
 use super::*;
 
-/// Take the global clock lock, tolerating a previous test's panic.
+/// Take the bump counter's lock, tolerating a previous test's panic.
 fn lock() -> std::sync::MutexGuard<'static, ()> {
-    CLOCK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    BUMP_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 // ── the bound itself ─────────────────────────────────────────
@@ -43,7 +43,7 @@ async fn watchdog_fires_once_nothing_bumps() {
         watchdog(Duration::from_millis(120)),
     )
     .await
-    .expect("watchdog must fire on a silent clock");
+    .expect("watchdog must fire on a silent counter");
     assert!(idle >= Duration::from_millis(100), "reported idle: {idle:?}");
 }
 
