@@ -8,8 +8,10 @@
 //! emitter in the desktop app's codegen binary, CI-diff-gated like
 //! `bindings.ts` — so the fact lives in Rust, once.
 //!
-//! Presentation (labels, hints, translations) is deliberately NOT here: hosts
-//! overlay their own i18n on the structural catalog.
+//! Presentation (labels, hints, translations) is NOT here, with one exception:
+//! a one-line English `summary` for hosts with no strings of their own (an
+//! editor plugin reading `moss describe`). Hosts that have their own i18n
+//! overlay it.
 //!
 //! The `entry()` match is total over [`ShortcodeKind`] — adding a variant
 //! fails compilation HERE until the catalog describes it.
@@ -18,6 +20,7 @@ use crate::ast::shortcode::ShortcodeKind;
 use crate::resolve::ext_kind::ExtKind;
 
 /// One attribute a shortcode accepts on its opening fence line.
+#[derive(serde::Serialize)]
 pub struct ShortcodeAttrSpec {
     /// Attribute name as written in `{name=…}`.
     pub name: &'static str,
@@ -46,6 +49,8 @@ pub struct ShortcodeCatalogEntry {
     pub canonical_template: &'static str,
     /// Whether editors offer this shortcode to authors — every kind today..
     pub authorable: bool,
+    /// What the block is, in a few English words, for a completion list.
+    pub summary: &'static str,
 }
 
 /// The catalog, in [`ShortcodeKind::all`] order (stable, deterministic).
@@ -144,6 +149,19 @@ fn entry(kind: ShortcodeKind) -> ShortcodeCatalogEntry {
         asset_attr,
         canonical_template,
         authorable: true,
+        summary: summary(kind),
+    }
+}
+
+fn summary(kind: ShortcodeKind) -> &'static str {
+    match kind {
+        ShortcodeKind::Subscribe => "Email signup form",
+        ShortcodeKind::Buttons => "Row of link buttons",
+        ShortcodeKind::Gallery => "Photo grid",
+        ShortcodeKind::Hero => "Full-width banner with image and text",
+        ShortcodeKind::Grid => "Columns of text and images",
+        ShortcodeKind::Recent => "List of recent posts",
+        ShortcodeKind::Form => "Request form, one field per line",
     }
 }
 

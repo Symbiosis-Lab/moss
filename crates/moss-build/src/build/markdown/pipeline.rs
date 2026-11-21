@@ -1678,6 +1678,7 @@ pub fn process_markdown_file(
         breadcrumb,
         footer,
         cascade,
+        inherited: Vec::new(),
         also_in: frontmatter.also_in,
         comments: frontmatter.comments,
         media_items,

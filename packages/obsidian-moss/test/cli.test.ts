@@ -173,6 +173,23 @@ describe("parseRootJson", () => {
     expect(parseRootJson('{"root":"/v/Garden"}')).toEqual({ root: "/v/Garden", address: undefined });
   });
 
+  it("reads a page's facts and the copies posted so far", () => {
+    const out = JSON.stringify({
+      root: "/v/Garden", address: "garden.example",
+      page: { path: "/notes/walk/", draft: false, published: true, changed: true, channels: ["mastodon", "bluesky"], copies: { mastodon: "https://m.example/@g/1", bluesky: 7 } },
+    });
+    expect(parseRootJson(out).page).toEqual({
+      path: "/notes/walk/", draft: false, published: true, changed: true,
+      channels: ["mastodon", "bluesky"], copies: { mastodon: "https://m.example/@g/1" },
+    });
+    expect(parseRootJson('{"root":"/v/Garden","page":{"draft":true}}').page).toBeUndefined();
+  });
+
+  it("keeps a publish state moss could not read as unknown, not as unpublished", () => {
+    const page = parseRootJson('{"root":"/v/Garden","page":{"path":"/walk/","draft":false,"channels":[],"copies":{}}}').page;
+    expect([page?.published, page?.changed]).toEqual([undefined, undefined]);
+  });
+
   it("reads a failed run as no site and an unknown address", () => {
     expect(parseRootJson("")).toEqual({ root: null, address: undefined });
     expect(parseRootJson('{"root":3}')).toEqual({ root: null, address: undefined });

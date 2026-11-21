@@ -252,6 +252,7 @@ impl SavedDoc {
             breadcrumb: _,
             footer: _,
             cascade,
+            inherited: _,
             also_in: _,
             comments: _,
             thread: _,

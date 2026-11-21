@@ -6585,15 +6585,57 @@ fn the_first_publish_stamps_live_pages_and_a_later_rename_keeps_the_uid() {
 
 /// Land `sealed` as a publish to `moss:site-1`.
 fn publish(dir: &Path, sealed: &crate::build::manifest::SealedManifest) {
+    publish_to(dir, sealed, "moss:site-1");
+}
+
+fn publish_to(dir: &Path, sealed: &crate::build::manifest::SealedManifest, target: &str) {
     let history_dir = tempfile::tempdir().unwrap();
     let history = crate::deploy::history::HistoryStore::at(history_dir.path().to_path_buf());
     tokio::runtime::Runtime::new().unwrap().block_on(crate::deploy::landed::record_landed(
         dir,
         sealed,
-        "moss:site-1",
+        target,
         &crate::deploy::one_shot::HeadlessDeployPorts,
         &history,
     ));
+}
+
+/// A page a real publish carried reads as published and unchanged, until it is edited.
+#[test]
+fn a_page_status_after_a_real_publish_is_published_and_unchanged_until_edited() {
+    use crate::build::emit::inventory::page_status_for_source;
+    let (dir, _cleanup) = create_test_dir();
+    fs::create_dir_all(dir.join("posts")).unwrap();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\nHi").unwrap();
+    fs::write(dir.join("posts/a.md"), "---\ntitle: A\n---\nText").unwrap();
+    let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+    publish(&dir, &sealed);
+
+    let config = crate::config::deployment::DomainDeploymentConfig { site_id: Some("site-1".into()), ..Default::default() };
+    let (page, unknown) = page_status_for_source(&dir, "posts/a.md", Ok(&config)).unwrap();
+    assert_eq!((page.path.as_str(), page.published, page.changed), ("/posts/a/", Some(true), Some(false)), "{unknown:?}");
+    fs::write(dir.join("posts/a.md"), "---\ntitle: A\n---\nText, edited").unwrap();
+    assert_eq!(page_status_for_source(&dir, "posts/a.md", Ok(&config)).unwrap().0.changed, Some(true));
+}
+
+/// `moss root` reads the publish target from the folder's own state: a folder
+/// that has published to two hosts has a record for each, and only the target
+/// says which one is live.
+#[test]
+fn moss_root_reads_a_page_as_published_by_the_folders_own_target() {
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\nHi").unwrap();
+    fs::write(dir.join("a.md"), "---\ntitle: A\n---\nText").unwrap();
+    let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+    publish_to(&dir, &sealed, "github");
+    publish(&dir, &sealed);
+    let records: Vec<_> = fs::read_dir(crate::moss_paths::MossPaths::new(&dir).deploy_records_dir()).unwrap().flatten().map(|e| e.file_name()).collect();
+    assert_eq!(records.len(), 2, "{records:?}");
+    let live = crate::config::deployment::DomainDeploymentConfig { site_id: Some("site-1".into()), ..Default::default() };
+    crate::vault::deployment_state::save_domain_config(dir.to_str().unwrap(), &live).unwrap();
+
+    let (out, unknown) = crate::cli::root::answer(&dir.join("a.md"));
+    assert_eq!(out["page"]["published"], serde_json::json!(true), "{out} {unknown:?}");
 }
 
 /// The page-state view over a real build: every document that makes a page

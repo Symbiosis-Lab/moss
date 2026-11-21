@@ -10,6 +10,7 @@ All notable changes to moss will be documented here.
 - A plugin can sign with ECDSA P-256 in `crypto.subtle` (generate a key, export it as a public JWK or a PKCS#8 private key, import it back, sign), so a sign-in that binds its tokens to a key on the computer, as Bluesky's does, completes in moss.
 - A channel plugin can state the longest article its network holds (`max_article_chars` in its `syndication` block); a longer page goes in the next form the channel takes.
 - A page that opens with a wide picture directly above its only `# Heading` shows that picture as its banner, as if it were written inside `:::hero`: window-wide under the header, loaded first and used as the share picture, its description kept for screen readers. A picture is wide when it is wider than tall and at least 1200 pixels wide. A logo, a portrait or a smaller picture stays in the text column with its caption, as before, and so does a picture with a width word (`![Harbour|body](harbour.jpg)`), a caption line under it, text between it and the heading, or a page with a second `# Heading`.
+- `moss root <file> --json` also says what an editor shows beside a page: its address on the site, whether it is a draft, whether it is published and changed since, where its copies went, and the settings it takes from a folder's `cascade:`. `moss describe --json` lists moss's own shortcodes with their attributes, for completion in an editor.
 
 ### Changed
 

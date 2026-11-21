@@ -34,6 +34,9 @@ pub struct DescribePayload<'a> {
     /// the `moss migrate` rewrite that brings a folder off it, or `null` when
     /// the feature is gone and nothing replaces it.
     pub retired: Vec<RetiredJson>,
+    /// moss's own shortcodes, for an editor's completion list. A plugin's
+    /// `:::` blocks are its `contributes.blocks`. Additive.
+    pub shortcodes: Vec<ShortcodeJson>,
     /// Every language code that makes a directory or filename suffix a
     /// language edition (`zh-hant/about.md`, `about.zh-hans.md`).
     ///
@@ -156,6 +159,26 @@ pub struct CliCommandInfo {
     pub args: &'static str,
     /// One-line description.
     pub description: &'static str,
+}
+
+/// One shortcode an author can write.
+#[derive(Serialize)]
+pub struct ShortcodeJson {
+    pub name: &'static str,
+    pub summary: &'static str,
+    /// The text inserted after `:::`, in snippet syntax (`${1:placeholder}`).
+    pub template: &'static str,
+    /// Attributes the opening line accepts; a `flag` is a bare keyword (`{wide}`).
+    pub attrs: &'static [crate::contract::shortcodes::ShortcodeAttrSpec],
+}
+
+/// moss's own shortcodes an author can write.
+pub fn shortcodes() -> Vec<ShortcodeJson> {
+    crate::contract::shortcodes::catalog()
+        .into_iter()
+        .filter(|e| e.authorable)
+        .map(|e| ShortcodeJson { name: e.name, summary: e.summary, template: e.canonical_template, attrs: e.attrs })
+        .collect()
 }
 
 #[derive(Serialize)]
@@ -353,6 +376,7 @@ impl<'a> DescribePayload<'a> {
                 .collect(),
             frontmatter: frontmatter_fields(),
             retired: retired_rows(),
+            shortcodes: shortcodes(),
             languages: crate::home::known_language_codes(),
             // Populated by moss-build's CLI layer (`cli::describe`), which
             // has access to moss-build's own plugin types. Callers using

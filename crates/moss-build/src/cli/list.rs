@@ -350,6 +350,9 @@ mod tests {
             resolved: Default::default(),
             translations: Vec::new(),
             position: None,
+            uid: None,
+            channels: Vec::new(),
+            inherited: Vec::new(),
         }
     }
 

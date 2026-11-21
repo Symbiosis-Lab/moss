@@ -292,3 +292,21 @@ fn describe_lists_each_retired_name_with_its_migration_or_null_when_gone() {
     assert_eq!(row("--moss-font-size")["migration"]["id"], "property:--moss-font-size");
     assert_eq!(row("moss-visual")["migration"], serde_json::Value::Null);
 }
+
+#[test]
+fn describe_lists_every_shortcode_an_author_can_write_with_its_attributes() {
+    let tokens = load_tokens().expect("tokens");
+    let json = serde_json::to_value(DescribePayload::new(&tokens)).expect("serialize");
+    let shortcodes = json["shortcodes"].as_array().expect("shortcodes");
+    let names: Vec<&str> = shortcodes.iter().filter_map(|b| b["name"].as_str()).collect();
+    let kinds: Vec<&str> = moss_core::ast::shortcode::ShortcodeKind::all().map(|k| k.name()).collect();
+    assert_eq!(names, kinds);
+    for shortcode in shortcodes {
+        assert!(!shortcode["summary"].as_str().unwrap().is_empty(), "{shortcode}");
+        assert!(shortcode["template"].as_str().unwrap().starts_with(shortcode["name"].as_str().unwrap()), "{shortcode}");
+    }
+    let attrs = |name: &str| shortcodes.iter().find(|b| b["name"] == name).unwrap()["attrs"].as_array().unwrap().clone();
+    let image = attrs("hero").into_iter().find(|a| a["name"] == "image").expect("hero takes an image");
+    assert_eq!(image, serde_json::json!({"name": "image", "asset_kinds": ["Image", "Video"], "flag": false}));
+    assert!(attrs("gallery").contains(&serde_json::json!({"name": "wide", "asset_kinds": [], "flag": true})), "a bare keyword says it is one");
+}

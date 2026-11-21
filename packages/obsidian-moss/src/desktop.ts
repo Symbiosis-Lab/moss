@@ -12,12 +12,14 @@ import {
   publishNotice,
   siteRoot,
   type DetectEnv,
+  type PageStatus,
   type SiteAddress,
 } from "./desktop/cli";
 import { FirstPreviewModal } from "./desktop/first-build-modal";
 import { MossPreviewView, MOSS_PREVIEW_VIEW_TYPE, PREVIEW_STOPPED } from "./desktop/preview-view";
 import { MossProcess, type SpawnFn } from "./desktop/process";
 import { pageFor, watchRebuilds } from "./desktop/server";
+import { PublishState } from "./desktop/publish-state";
 import { MossSettingTab } from "./settings";
 import type MossPlugin from "./main";
 
@@ -34,6 +36,11 @@ export class DesktopCommands {
 
   load(): void {
     this.plugin.addSettingTab(new MossSettingTab(this.app, this.plugin, this));
+    const publish = new PublishState(this.plugin, (file) => this.siteFor(this.findBinary(), file.path), {
+      preview: () => void this.runPreview(),
+      publish: () => void this.publishInApp(),
+    });
+    this.app.workspace.onLayoutReady(() => void publish.update());
     this.plugin.registerView(MOSS_PREVIEW_VIEW_TYPE, (leaf) => new MossPreviewView(leaf, () => this.stopPreview(false)));
     this.plugin.addCommand({ id: "preview", name: "Preview this folder", callback: () => void this.runPreview() });
     this.plugin.addCommand({
@@ -114,15 +121,16 @@ export class DesktopCommands {
    * The moss site that owns `target` (a vault path) or else the open note, as
    * `moss root` finds it. When none does, a clicked folder becomes the site;
    * otherwise the vault. Without the program the vault is all there is to say.
+   * For a page the last build made, `page` says what moss knows of it.
    */
-  private async siteFor(binary: string | null, target?: string): Promise<{ root: string; address: SiteAddress } | null> {
+  private async siteFor(binary: string | null, target?: string): Promise<{ root: string; address: SiteAddress; page?: PageStatus } | null> {
     const vault = this.vaultPath();
     if (!vault) return null;
     if (!binary) return { root: siteRoot(path, vault, undefined, null), address: undefined };
     const at = path.join(vault, target ?? this.app.workspace.getActiveFile()?.path ?? "");
     // A CLI without `moss root` fails here and reads as no site found.
     const found = parseRootJson(await runCli(binary, ["root", at, "--json"], 5000).catch(() => ""));
-    return { root: siteRoot(path, vault, target, found.root), address: found.address };
+    return { root: siteRoot(path, vault, target, found.root), address: found.address, page: found.page };
   }
 
   /** A folder moss has not previewed gains `.moss/`; ask once before that. */

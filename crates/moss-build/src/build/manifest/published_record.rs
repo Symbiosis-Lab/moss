@@ -60,11 +60,32 @@ pub fn path_for(paths: &MossPaths, target: &str) -> PathBuf {
 /// record on disk answers; with two there is no sole record and picking one
 /// would be a guess about where the next publish goes.
 pub fn load_for(paths: &MossPaths, target: Option<&str>) -> Option<PublishedSnapshot> {
-    let Some(target) = target else { return sole_record(paths) };
-    read(&path_for(paths, target))
-        .or_else(|| same_method_record(paths, target))
-        .or_else(|| read(&legacy_path(paths)))
-        .filter(|snap| snap.describes_target(target))
+    let Ok(found) = select(paths, target, &|path| Ok::<_, std::convert::Infallible>(read(path)));
+    found
+}
+
+/// [`load_for`] for a read that must not wait on a download: a record still
+/// in the cloud, or one that cannot be read or parsed, is an error, which
+/// means unknown; only an absent record is `Ok(None)`.
+pub fn load_for_no_wait(paths: &MossPaths, target: Option<&str>) -> Result<Option<PublishedSnapshot>, String> {
+    select(paths, target, &crate::build::cloud_readiness::read_json_no_wait)
+}
+
+/// The record [`load_for`] chooses, each file read with `read`.
+fn select<E>(
+    paths: &MossPaths,
+    target: Option<&str>,
+    read: &dyn Fn(&Path) -> Result<Option<PublishedSnapshot>, E>,
+) -> Result<Option<PublishedSnapshot>, E> {
+    let Some(target) = target else { return sole_record(paths, read) };
+    let found = match read(&path_for(paths, target))? {
+        Some(snap) => Some(snap),
+        None => match same_method_record(paths, target, read)? {
+            Some(snap) => Some(snap),
+            None => read(&legacy_path(paths))?,
+        },
+    };
+    Ok(found.filter(|snap| snap.describes_target(target)))
 }
 
 /// The record the removed-address check compares against: the current
@@ -108,9 +129,13 @@ fn instant(published_at: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> 
 /// The method slug rides in front of every filename, so scan the directory
 /// for that prefix and let `describes_target` decide — one small dir, read
 /// only after a primary miss. Retires with `legacy_path`.
-fn same_method_record(paths: &MossPaths, target: &str) -> Option<PublishedSnapshot> {
+fn same_method_record<E>(
+    paths: &MossPaths,
+    target: &str,
+    read: &dyn Fn(&Path) -> Result<Option<PublishedSnapshot>, E>,
+) -> Result<Option<PublishedSnapshot>, E> {
     if target.contains(':') {
-        return None; // moss slots kept their key shape; only plugin slots moved
+        return Ok(None); // moss slots kept their key shape; only plugin slots moved
     }
     let prefix = format!("{}-", method_slug(target));
     std::fs::read_dir(paths.deploy_records_dir())
@@ -123,11 +148,17 @@ fn same_method_record(paths: &MossPaths, target: &str) -> Option<PublishedSnapsh
                 .and_then(|n| n.to_str())
                 .is_some_and(|n| n.starts_with(&prefix) && n.ends_with(".json"))
         })
-        .filter_map(|p| read(&p))
-        .filter(|snap| snap.describes_target(target))
-        // Several pre-slot records can share a method (a content-addressed
-        // target left one per publish); the newest is the live baseline.
-        .max_by(|a, b| a.published_at.cmp(&b.published_at))
+        .map(|p| read(&p))
+        .collect::<Result<Vec<_>, E>>()
+        .map(|snaps| {
+            snaps
+                .into_iter()
+                .flatten()
+                .filter(|snap| snap.describes_target(target))
+                // Several pre-slot records can share a method (a content-addressed
+                // target left one per publish); the newest is the live baseline.
+                .max_by(|a, b| a.published_at.cmp(&b.published_at))
+        })
 }
 
 /// `.moss/deploy/last-published.json` — the single record moss kept before the
@@ -196,7 +227,10 @@ fn method_slug(method: &str) -> String {
 /// Falls back to the pre-keyed single slot only when there are no keyed records
 /// at all: once one exists the legacy file is stale by definition, and `save`
 /// has already deleted it.
-fn sole_record(paths: &MossPaths) -> Option<PublishedSnapshot> {
+fn sole_record<E>(
+    paths: &MossPaths,
+    read: &dyn Fn(&Path) -> Result<Option<PublishedSnapshot>, E>,
+) -> Result<Option<PublishedSnapshot>, E> {
     let mut records: Vec<PathBuf> = std::fs::read_dir(paths.deploy_records_dir())
         .into_iter()
         .flatten()
@@ -204,10 +238,10 @@ fn sole_record(paths: &MossPaths) -> Option<PublishedSnapshot> {
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|x| x == "json"))
         .collect();
-    match records.len() {
-        0 => read(&legacy_path(paths)),
-        1 => read(&records.pop()?),
-        _ => None,
+    match records.pop() {
+        None => read(&legacy_path(paths)),
+        Some(only) if records.is_empty() => read(&only),
+        Some(_) => Ok(None),
     }
 }
 

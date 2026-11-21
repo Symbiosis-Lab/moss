@@ -15,6 +15,8 @@ export class Plugin {
   register() {}
   addCommand(command: unknown) { this.commands.push(command); }
   addRibbonIcon() { return {}; }
+  addStatusBarItem() { return { setText() {}, addClass() {} }; }
+  registerDomEvent() {}
 }
 export class PluginSettingTab {
   containerEl: unknown = null;
@@ -55,4 +57,6 @@ export class Modal {
 export const Platform = { isDesktopApp: false };
 export class Events {}
 export class MarkdownView {}
-export { editorInfoField } from "./editor-info-stub";
+export { editorInfoField, editorLivePreviewField } from "./editor-info-stub";
+export class Menu {}
+export const debounce = <T extends unknown[]>(fn: (...args: T) => unknown) => (...args: T) => void fn(...args);

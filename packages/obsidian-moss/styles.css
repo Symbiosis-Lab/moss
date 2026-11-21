@@ -85,3 +85,31 @@
   -webkit-mask: var(--moss-mark) center / contain no-repeat;
   mask: var(--moss-mark) center / contain no-repeat;
 }
+
+/* `:::` blocks in Live Preview (src/cm-blocks.ts) */
+.moss-block-widget {
+  margin: var(--size-4-2) 0;
+  border-radius: var(--radius-m);
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.moss-block-open {
+  position: relative;
+  border-top-left-radius: var(--radius-s);
+  border-top-right-radius: var(--radius-s);
+}
+
+.moss-block-open::after {
+  content: attr(data-moss-block);
+  position: absolute;
+  right: var(--size-4-2);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 0 var(--size-4-2);
+  border-radius: var(--radius-s);
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.6;
+}

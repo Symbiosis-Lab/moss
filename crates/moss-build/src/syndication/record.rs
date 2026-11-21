@@ -329,6 +329,12 @@ impl Records {
         read(&path)
     }
 
+    /// [`Self::get`] without waiting on a download: a record still in the
+    /// cloud or unreadable is an error; only an absent one is `Ok(None)`.
+    pub fn get_no_wait(&self, uid: &str, channel: &str) -> Result<Option<CopyRecord>, String> {
+        crate::build::cloud_readiness::read_json_no_wait(&self.path(uid, channel)?)
+    }
+
     /// Every readable record. A file that does not parse is skipped with a
     /// warning rather than treated as absent-and-due, which would repost.
     pub fn all(&self) -> Vec<CopyRecord> {

@@ -567,9 +567,7 @@ pub fn build_article_map(
             date: doc.date.clone(),
             tags,
             uid: doc.uid.clone(),
-            // A copy posted elsewhere names the page to everyone, so a page
-            // reached only by its link posts none, whatever a folder cascades.
-            syndicate: if doc.hidden_from_search_engines() { Some(Vec::new()) } else { doc.syndicate.clone() },
+            syndicate: doc.channels(),
             untitled: doc.untitled,
         };
         map.articles.insert(pretty_url, article_info);

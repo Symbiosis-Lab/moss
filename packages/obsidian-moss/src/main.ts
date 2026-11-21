@@ -1,5 +1,10 @@
 import type { Extension } from "@codemirror/state";
 import { Events, MarkdownView, Notice, Platform, Plugin } from "obsidian";
+import { BlockSuggest } from "./syntax/block-suggest";
+import { blockExtension } from "./syntax/cm-blocks";
+import { renderBlock } from "./syntax/block-render";
+import { registerEditorActions } from "./editor-actions";
+import { showMossFields } from "./property-types";
 import { contextChanged, frontmatterExtension } from "./cm-frontmatter";
 import { initializeCore, MossSite } from "./core";
 import { MossFieldSuggest } from "./field-suggest";
@@ -21,7 +26,13 @@ export default class MossPlugin extends Plugin {
   private rebuildTimer?: ReturnType<typeof setTimeout>;
   private generation = 0;
   private disposed = false;
-  private readonly aids = [frontmatterExtension(() => this.schema, () => this.site), shortcodeExtension()];
+  private readonly aids = [
+    frontmatterExtension(() => this.schema, () => this.site), shortcodeExtension(),
+    blockExtension((markdown, doc) => {
+      const file = this.app.workspace.getActiveFile();
+      return file && renderBlock(this.site, this.app.vault.adapter, file.path, markdown, doc);
+    }),
+  ];
   /** The registered editor extensions: the aids in a moss folder, none elsewhere. */
   private editorAids: Extension[] = [];
   private marked: ReadonlySet<string> = new Set();
@@ -30,6 +41,7 @@ export default class MossPlugin extends Plugin {
 
   async onload(): Promise<void> {
     const saved = ((await this.loadData()) ?? {}) as Partial<MossSettings>;
+    // Only the keys this version knows; a saved key from an older one is dropped.
     this.settings = { binaryPath: saved.binaryPath ?? DEFAULT_SETTINGS.binaryPath };
     initializeCore();
     this.site = new MossSite(JSON.stringify(NO_SITE));
@@ -42,6 +54,16 @@ export default class MossPlugin extends Plugin {
     if (this.disposed) return;
     this.registerEditorExtension(this.editorAids);
     this.registerEditorSuggest(new MossFieldSuggest(this, () => this.schema));
+    this.registerEditorSuggest(new BlockSuggest(this.app));
+    registerEditorActions(this);
+    this.addCommand({
+      id: "show-fields",
+      name: "Show moss fields in Properties",
+      callback: async () => {
+        const added = await showMossFields(this.app, this.schema);
+        if (added) new Notice(added.length ? `Typed ${added.length} fields.` : "Fields already typed.");
+      },
+    });
     this.registerView(PAGE_PREVIEW_VIEW_TYPE, (leaf) => new PagePreviewView(leaf, this));
     for (const event of ["create", "delete", "rename"] as const) {
       this.registerEvent((this.app.vault as Events).on(event, () => this.scheduleRebuild()));

@@ -513,6 +513,10 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub cascade: Option<std::collections::BTreeMap<String, serde_yaml::Value>>,
+    /// What cascade filled in on this page, for the inventory.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub inherited: Vec<crate::build::emit::inventory::Inherited>,
     /// Folder paths where this article also appears in lists
     pub also_in: Option<Vec<String>>,
     /// Whether to show comments on this page (default: true)
@@ -1044,6 +1048,13 @@ impl ParsedDocument {
     /// `search_engines: false`, the page's own or its folder home's.
     pub fn hidden_from_search_engines(&self) -> bool {
         self.search_engines == Some(false) || self.hidden_home.is_some()
+    }
+
+    /// Where this page's copies go. A copy posted elsewhere names the page to
+    /// everyone, so a page reached only by its link posts none, whatever a
+    /// folder cascades.
+    pub fn channels(&self) -> Option<Vec<String>> {
+        if self.hidden_from_search_engines() { Some(Vec::new()) } else { self.syndicate.clone() }
     }
 }
 

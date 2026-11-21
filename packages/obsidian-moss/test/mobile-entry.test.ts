@@ -50,11 +50,12 @@ it("imports main and loads on mobile with Electron and every Node module forbidd
       getAllLoadedFiles: () => [{ path: "/", children: [] }, { path: "notes", children: [] }, ...files],
       on: (name: string, callback: (...args: unknown[]) => void) => { events[name] = callback; return {}; },
     },
-    workspace: { iterateAllLeaves() {}, onLayoutReady() {}, detachLeavesOfType() {}, updateOptions() {}, on() {}, getLeavesOfType: () => [] },
+    workspace: { iterateAllLeaves() {}, onLayoutReady() {}, detachLeavesOfType() {}, updateOptions() {}, on: () => ({}), getLeavesOfType: () => [] },
+    metadataCache: { on: () => ({}) },
   };
   const plugin = new sandbox.module.exports.default(app);
   await plugin.onload();
-  expect(plugin.commands.map((command) => command.id)).toEqual(["preview-page"]);
+  expect(plugin.commands.map((command) => command.id)).toEqual(["show-fields", "preview-page"]);
   expect(sandbox.desktopLoaded).toBe(false);
   // Not a moss folder: no editor aid and no field to suggest.
   const [aids] = plugin.registeredExtensions;
@@ -64,7 +65,7 @@ it("imports main and loads on mobile with Electron and every Node module forbidd
   hidden[".moss/config.toml"] = "";
   events.raw(".moss/config.toml");
   await vi.advanceTimersByTimeAsync(250);
-  expect(aids).toHaveLength(2);
+  expect(aids).toHaveLength(3);
   // The vault is the moss folder, so its name carries the mark.
   expect(vaultName.marked).toBe(true);
   expect(plugin.schema.fields.has("title")).toBe(true);
