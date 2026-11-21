@@ -156,13 +156,10 @@ pub struct Pack {
     /// Named cities, mountain ranges, peaks and rivers decoded from the
     /// schema-4 label payload appended after `tiles` -- see [`Labels`].
     pub labels: Labels,
-    /// The label payload's exact raw bytes, kept alongside the decoded
-    /// [`Self::labels`] (not re-derived from it) so a caller that needs a
-    /// stable fingerprint of "the label set, or the generator that produced
-    /// it, changed" (`emit::place_map_assets::assets_hash`'s own directory
-    /// hash is exactly this) can hash these bytes directly rather than
-    /// re-serializing the parsed struct and hoping that stays byte-stable.
-    pub labels_bytes: Vec<u8>,
+    /// SHA-256 of the pack's own decoded bytes. Anything cached or served
+    /// from the pack is keyed by it, so a regenerated pack moves every key
+    /// even when its sources, and so `header.manifest_sha256`, did not.
+    pub fingerprint: [u8; 32],
 }
 
 struct Reader<'a> {
@@ -488,10 +485,7 @@ pub fn decode(bytes: &[u8]) -> Result<Pack, DecodeError> {
     if labels_len as usize > MAX_LABELS_BYTES {
         return Err(DecodeError::InvalidLength("labels length"));
     }
-    let labels_bytes = reader
-        .take(labels_len as usize, "labels payload")?
-        .to_vec();
-    let labels = labels::decode(&labels_bytes)?;
+    let labels = labels::decode(reader.take(labels_len as usize, "labels payload")?)?;
     if reader.position != bytes.len() {
         return Err(DecodeError::InvalidLength("trailing pack bytes"));
     }
@@ -509,7 +503,7 @@ pub fn decode(bytes: &[u8]) -> Result<Pack, DecodeError> {
         tiers,
         tiles,
         labels,
-        labels_bytes,
+        fingerprint: <sha2::Sha256 as sha2::Digest>::digest(bytes).into(),
     })
 }
 
@@ -565,6 +559,14 @@ mod tests {
         let mut bytes = raw_pack_bytes();
         bytes[HEADER_LEN + 10] = 3;
         assert_eq!(decode(&bytes).unwrap_err(), DecodeError::UnknownLayer(3));
+    }
+
+    #[test]
+    fn fingerprint_is_the_digest_of_the_packs_own_bytes() {
+        use sha2::{Digest, Sha256};
+        let bytes = raw_pack_bytes();
+        let expected: [u8; 32] = Sha256::digest(&bytes).into();
+        assert_eq!(decode(&bytes).unwrap().fingerprint, expected);
     }
 
     #[test]

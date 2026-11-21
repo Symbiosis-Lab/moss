@@ -647,22 +647,10 @@ impl PlaceMapContext {
         &self.pack
     }
 
-    /// The embedded pack's raw schema-4 label-payload bytes -- a stable
-    /// fingerprint of "the label set, or the generator that produced it,
-    /// changed" for a caller that needs one (`emit::place_map_assets::
-    /// assets_hash` folds this into the `_moss/map.<hash>/` directory name
-    /// so `labels.json`, served from that same directory, is named
-    /// correctly whenever either changes). Unlike [`Self::pack_fingerprint`],
-    /// this is NOT derived from the source manifest's digest: a generator
-    /// change that encodes different label bytes from the SAME pinned
-    /// sources would leave the manifest digest untouched, so these raw
-    /// bytes are hashed directly instead.
-    pub fn labels_bytes(&self) -> &[u8] {
-        &self.pack.labels_bytes
-    }
-
+    /// The key everything drawn from the pack is cached and served under
+    /// (see [`Pack::fingerprint`]).
     pub fn pack_fingerprint(&self) -> [u8; 32] {
-        self.pack.header.manifest_sha256
+        self.pack.fingerprint
     }
 
     /// Resolve declared `location:` values in declaration order. A missing
