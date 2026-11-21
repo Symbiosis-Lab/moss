@@ -224,7 +224,7 @@ pub enum BuildTrigger {
     /// first. The gates may prove from the last sealed manifest what changed
     /// since (`incremental_gates::ChangeProof`), and render everything when
     /// they cannot. Opt-in: `Full` stays the answer for a caller that needs
-    /// every page rendered, such as a publish.
+    /// every page rendered, such as `moss build --strict`.
     Unobserved,
     /// Pictures the last render could not finish have settled (their blur and
     /// colour, `media::promise`). Proved from the last seal like `Unobserved`,
@@ -815,8 +815,8 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // hole on the way.
     config.host.store.run_vault_migrations(&config.root);
     // Before anything below reads `.moss/`. A later write there (a
-    // migration of the build tree, a process hook) moves the next build's
-    // record, which costs that build one full render, never a stale page.
+    // migration of the build tree) moves the next build's record, which costs
+    // that build one full render, never a stale page; process hooks remeasure.
     let options = crate::build::inputs::options(config.site_url_override.as_deref(), matches!(pass.plugins, PluginMode::Skip));
     let mut last_seal = incremental_gates::LastSeal::read(config.source(), options.clone(), config.exits_after_build && !config.defers_image_placeholders());
 
@@ -946,11 +946,10 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
 
     // Below the server launch: a serving build that stops has already put the
     // sealed generation on screen.
-    let at_entry = match incremental_gates::stop_at_entry(config, pass, &mut last_seal, options, port_now()).await {
+    let at_entry = match incremental_gates::stop_at_entry(config, pass, &mut last_seal, options.clone(), port_now()).await {
         Ok(outcome) => return Ok(outcome),
         Err(at_entry) => at_entry,
     };
-    let last_seal = std::sync::Arc::new(last_seal);
 
     // --- SCAN ONCE at pipeline start ---
     // Build ProjectInfo + ProjectStructure once; shared by all consumers
@@ -1044,6 +1043,9 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             }
             let waited_ms = await_start.elapsed().as_millis();
             progress::announce_process_hook_done(&config.progress, waited_ms, port_now());
+            // This build renders what the hook wrote under `.moss/`, so it
+            // proves from a measurement taken after it.
+            last_seal.remeasure(config.source(), options);
         } else {
             // Live preview (NonBlocking + running server): honor the contract —
             // do NOT await. `spawn_process_hooks` already runs the hook in its
@@ -1060,6 +1062,8 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             drop(handle);
         }
     }
+
+    let last_seal = std::sync::Arc::new(last_seal);
 
     // Sample the cache keys here, and only here.
     //

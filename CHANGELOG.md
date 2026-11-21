@@ -16,6 +16,7 @@ All notable changes to moss will be documented here.
 ### Changed
 
 - A page that no other form of a channel takes goes as its title, the `description` from its front matter and its link. A description that does not fit whole is left out, and moss no longer quotes the page's opening in its place.
+- A publish right after a build, with nothing changed since, no longer makes every page again: it keeps the pages nothing changed, as `moss build` does. The first build after a publish still makes every page.
 
 ### Fixed
 
@@ -25,6 +26,7 @@ All notable changes to moss will be documented here.
 - Each dash of the contents list in the left margin is a 24-pixel target, the size accessibility guidelines ask for; the dashes were 20 pixels apart.
 - On a phone, a header with a breadcrumb trail no longer jumps when the page finishes loading: it keeps its height, and only the search, language and theme buttons move up beside the trail. A trail that just fits one row no longer pushes those buttons below it. A theme that resizes those buttons sets `--moss-nav-toggle-size`.
 - Signing in to a channel whose plugin stores its token under a name with `:` (Matters keeps one per account) works on Windows. Secret and key names are now stored under a file name Windows accepts, the same on every computer; tokens and keys stored by earlier versions on macOS and Linux keep working, and signing out removes both copies. A name may be any text up to 128 bytes except one containing `/`, `\`, NUL or `..`, or a Windows device name such as `con` or `com1`; each character other than an ASCII letter, digit, `.`, `_` or `-` counts three bytes or more toward a limit of 200.
+- A comment that a plugin fetches during a build now appears on the page in that same build. It used to appear one build later.
 
 ### Removed
 

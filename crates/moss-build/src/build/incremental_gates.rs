@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 pub struct IncrementalGates {
     /// May the page-render loop carry forward pages whose
     /// fingerprint did not move? `false` without evidence of what changed
-    /// (deploy renders every page) and whenever `MOSS_NO_INCREMENTAL` is set.
+    /// (a `Full` build renders every page) and whenever `MOSS_NO_INCREMENTAL` is set.
     pub render_skip: bool,
     /// May Loop A replay the previous build's `ParsedDocument`s?
     /// Same entry-point and kill-switch rules; the difference is which changed
@@ -52,14 +52,15 @@ impl IncrementalGates {
 }
 
 /// The last sealed manifest, and this build's `.moss/` measurement against
-/// its record. Taken once, at the entry point, before anything in the build
+/// its record. Taken at the entry point, before anything in the build
 /// reads `.moss/`: the proof compares the measurement and the manifest
 /// records it, so a file edited during the build moves the next record.
 ///
 /// Some inputs are fetched or written and then rendered in the same build:
-/// link cards a build fetches before rendering, the comments an exiting build
-/// refreshes before its slots, and whatever a blocking process hook writes.
-/// Each lands after this measurement, so the next build renders in full once.
+/// link cards a build fetches before rendering and the comments an exiting
+/// build refreshes before its slots. Each lands after this measurement, so the
+/// next build renders in full once. A blocking process hook's writes are
+/// measured again after it ([`LastSeal::remeasure`]).
 /// A move the build makes itself and renders from (an older link card taken
 /// into the site folder, the redirect history) is recorded at its seal
 /// instead; see [`crate::build::inputs::restamp`].
@@ -84,7 +85,7 @@ impl LastSeal {
     /// Measure `.moss/` again, against the same record, after something wrote
     /// to it; whether it still holds. A build proves from one measurement,
     /// taken after the last such write.
-    fn remeasure(&mut self, folder: &Path, options: std::collections::BTreeMap<String, String>) -> bool {
+    pub(super) fn remeasure(&mut self, folder: &Path, options: std::collections::BTreeMap<String, String>) -> bool {
         self.moss = crate::build::inputs::measure(folder, self.manifest.as_ref().and_then(|m| m.build_inputs.as_ref()), options);
         self.moss.holds
     }
@@ -187,7 +188,8 @@ impl ChangeProof {
     ///    `None` under it). The kill switch ships with the first skip, not
     ///    after it — it is the bisect tool for the first stale-page report.
     ///    Any value counts.
-    /// 2. The batch is the watcher's. Deploy and the other entry points that
+    /// 2. The batch is the watcher's, or the proof is [`ChangeProof::Manifest`]
+    ///    (an `Unobserved` build: `moss build`, a deploy). Entry points that
     ///    pass `Full` render everything. A `Structural` batch (create, remove,
     ///    rename) is admitted: the parse re-asks every page's links, and the
     ///    render verdict judges a page entering or leaving by the digests of
@@ -488,7 +490,7 @@ impl PipelineConfig {
     pub(crate) fn may_stop_at_entry(&self, pass: crate::build::media::promise::Pass) -> bool {
         use crate::build::PluginMode;
         matches!(self.trigger, BuildTrigger::Unobserved)
-            && (self.start_server || (self.exits_after_build && !self.defers_image_placeholders() && !self.host.shell_attached))
+            && (self.start_server || (self.exits_after_build && !self.defers_image_placeholders() && !self.host.shell_attached && !self.host.announcer.needs_a_seal()))
             && !pass.repeat
             && (matches!(pass.plugins, PluginMode::Skip | PluginMode::SlotsOnly) || !self.host.plugins.get_or_create(self.root.as_str()).is_ok_and(|m| m.has_process_hooks()))
     }

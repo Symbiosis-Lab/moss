@@ -345,10 +345,9 @@ fn a_build_that_carries_from_no_record_leaves_the_next_one_unproved() {
 }
 
 /// A process hook that writes its own state under `.moss/plugins/<name>/` on
-/// every build moves a measured `.moss/` input after the build measured it, so
-/// the next build cannot prove anything and renders every page. The same holds
-/// for anything a build fetches and renders in one go: its record is the
-/// state before the write.
+/// every build moves a measured `.moss/` input during each build: the build
+/// measures again after the hook, finds its record broken and renders every
+/// page, recording the state the hook left.
 #[test]
 fn a_process_hook_that_rewrites_its_state_every_build_keeps_the_build_full() {
     use moss_build::build::PluginMode;
@@ -361,7 +360,7 @@ fn a_process_hook_that_rewrites_its_state_every_build_keeps_the_build_full() {
     }
     build_with(site.root(), BuildTrigger::Unobserved, PluginMode::Blocking, None);
     let first = fs::read_to_string(site.root().join(STATE)).expect("the hook ran");
-    assert!(recorded_moss_input(&site, STATE).is_none(), "the first build measured before its hook wrote");
+    assert!(recorded_moss_input(&site, STATE).is_some(), "the first build measured after its hook wrote");
     let record = build_with(site.root(), BuildTrigger::Unobserved, PluginMode::Blocking, None);
     let second = fs::read_to_string(site.root().join(STATE)).unwrap();
     assert_ne!(first, second, "the hook writes new bytes every build");
