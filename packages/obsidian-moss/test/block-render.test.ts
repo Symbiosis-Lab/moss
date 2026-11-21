@@ -55,4 +55,12 @@ describe("blockMarkup", () => {
     expect(html).not.toMatch(/java\s*script:/i);
     expect(html).toContain("https://example.com/");
   });
+
+  it("drops vbscript: and data: URLs, but keeps a data: image in an img", () => {
+    const page = '<html><body><article><a href=" VBScript:msgbox(1)">a</a><a href="data:text/html,<script>1</script>">b</a>'
+      + '<iframe src="DATA:text/html,x"></iframe><img src="data:image/png;base64,AAAA"></article></body></html>';
+    const { html } = blockMarkup(page, "app://vault/posts/");
+    expect(html).not.toMatch(/vbscript:|data:text/i);
+    expect(html).toContain('<img src="data:image/png;base64,AAAA">');
+  });
 });

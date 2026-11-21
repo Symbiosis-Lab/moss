@@ -39,10 +39,14 @@ function sheetFor(doc: Document, css: string): CSSStyleSheet {
 
 const URL_ATTRS = new Set(["href", "src", "action", "formaction"]);
 
-// Browsers drop tab, CR and LF inside a URL, so `java\nscript:` is `javascript:`.
-const isScriptUrl = (value: string) => value.replace(/[\t\n\r]/g, "").trim().toLowerCase().startsWith("javascript:");
+// Browsers drop tab, CR and LF inside a URL, so `java\nscript:` is `javascript:`. An image cannot run its data: URL.
+const runsScript = ({ name, value, ownerElement }: Attr) => {
+  const url = value.replace(/[\t\n\r]/g, "").trim().toLowerCase();
+  if (url.startsWith("data:image/") && name === "src" && ownerElement?.localName === "img") return false;
+  return url.startsWith("javascript:") || url.startsWith("vbscript:") || url.startsWith("data:");
+};
 
-const executes = ({ name, value }: Attr) => name.startsWith("on") || name === "srcdoc" || (URL_ATTRS.has(name) && isScriptUrl(value));
+const executes = (attr: Attr) => attr.name.startsWith("on") || attr.name === "srcdoc" || (URL_ATTRS.has(attr.name) && runsScript(attr));
 
 /** The page's markup without what must not run or repeat inside a note. */
 export function blockMarkup(pageHtml: string, base: string): { css: string; html: string } {
