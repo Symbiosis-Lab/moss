@@ -15,10 +15,19 @@
  *          Quick taps navigate normally (no playback triggered).
  *          Per-element listeners — no global hit-testing needed.
  *
+ * In view: unless the visitor asks for reduced motion, a cover plays muted
+ *          while half of it is on screen and pauses when it leaves, so touch
+ *          and keyboard visitors see it move too. It plays on its own, apart
+ *          from the one-at-a-time hover and long-press preview.
+ *
  * Race-safe: pause() is deferred until the pending play() promise settles,
  * avoiding the browser's "play() was interrupted by pause()" AbortError.
- * Only one cover video plays at a time (activeStop singleton).
+ * Only one hover or long-press preview plays at a time (activeStop
+ * singleton); in-view covers play beside it, at most MAX_IN_VIEW at once.
  */
+
+/** Covers that play on their own at once; the rest wait for a free place the next time they scroll into view. */
+const MAX_IN_VIEW = 3;
 
 export function initCardVideos(): void {
   const covers = document.querySelectorAll<HTMLElement>(
@@ -27,7 +36,11 @@ export function initCardVideos(): void {
   if (!covers.length) return;
 
   const hasHover = window.matchMedia("(hover: hover)").matches;
+  let playingInView = 0;
   let activeStop: ((showThumb: boolean) => void) | null = null;
+  const autoplays =
+    "IntersectionObserver" in window &&
+    !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   covers.forEach((cover) => {
     const v = cover.querySelector<HTMLVideoElement>("video");
@@ -38,10 +51,16 @@ export function initCardVideos(): void {
 
     let wantsPlay = false;
     let hasPlayed = false;
+    let inView = false;
     let playPromise: Promise<void> | null = null;
 
     const stop = (showThumb: boolean) => {
       wantsPlay = false;
+      if (inView) {
+        // Still on screen: the preview ends, the cover keeps playing.
+        if (activeStop === stop) activeStop = null;
+        return;
+      }
       if (showThumb) thumb.classList.remove("is-playing");
       if (activeStop === stop) activeStop = null;
       const p = playPromise;
@@ -65,6 +84,33 @@ export function initCardVideos(): void {
         })
         .catch(() => {});
     };
+
+    if (autoplays) {
+      v.muted = true;
+      v.playsInline = true;
+      new IntersectionObserver((entries) => {
+        const visible = entries[entries.length - 1].isIntersecting;
+        if (visible === inView) return;
+        inView = visible;
+        if (visible) {
+          if (playingInView >= MAX_IN_VIEW) { inView = false; return; }
+          playingInView++;
+          playPromise = v.play();
+          playPromise
+            .then(() => {
+              hasPlayed = true;
+              if (inView) thumb.classList.add("is-playing");
+            })
+            .catch(() => {});
+        } else {
+          playingInView--;
+          if (wantsPlay) return;
+          const p = playPromise;
+          if (p) p.then(() => { if (!inView && !wantsPlay) v.pause(); }).catch(() => {});
+          else v.pause();
+        }
+      }, { threshold: 0.5 }).observe(cover);
+    }
 
     if (hasHover) {
       // Hover-intent dwell (design-vocabulary.md "Hover is a glance"):

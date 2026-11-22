@@ -155,6 +155,7 @@ GATES_BUILD=(
 # no display wrapper, no artifact to wait for.
 GATES_NOBUILD=(
   ambient-video
+  card-video-in-view
   bridge-capture
   iframe-open-url
   grid-block-rhythm

@@ -43,11 +43,11 @@ function createCard(): {
 }
 
 /** Mock matchMedia to control hover detection */
-function mockHover(hasHover: boolean) {
+function mockHover(hasHover: boolean, reducedMotion = false) {
   Object.defineProperty(window, "matchMedia", {
     writable: true,
     value: vi.fn().mockImplementation((query: string) => ({
-      matches: query === "(hover: hover)" ? hasHover : false,
+      matches: query === "(hover: hover)" ? hasHover : query === "(prefers-reduced-motion: reduce)" ? reducedMotion : false,
       media: query,
       onchange: null,
       addListener: vi.fn(),
@@ -400,5 +400,95 @@ describe("initCardVideos — mobile (no hover) — per-element touch", () => {
     const eventTypes = addSpy.mock.calls.map((c) => c[0]);
     expect(eventTypes).not.toContain("mouseenter");
     expect(eventTypes).not.toContain("mouseleave");
+  });
+});
+
+describe("initCardVideos — in view", () => {
+  let observers: { cb: IntersectionObserverCallback; target: Element }[];
+
+  const see = (isIntersecting: boolean) =>
+    observers.forEach((o) => o.cb([{ isIntersecting } as IntersectionObserverEntry], {} as IntersectionObserver));
+
+  beforeEach(() => {
+    document.body.innerHTML = "";
+    observers = [];
+    class FakeIntersectionObserver {
+      constructor(private cb: IntersectionObserverCallback) {}
+      observe(target: Element) { observers.push({ cb: this.cb, target }); }
+      disconnect() {}
+    }
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = "";
+    vi.unstubAllGlobals();
+  });
+
+  test.each([[true], [false]])("a cover plays muted once in view and pauses out of view (hover: %s)", async (hover) => {
+    mockHover(hover);
+    const { video, thumb } = createCard();
+    video.play = vi.fn().mockReturnValue(Promise.resolve());
+    video.pause = vi.fn();
+    video.muted = false;
+
+    initCardVideos();
+    expect(video.play).not.toHaveBeenCalled();
+
+    see(true);
+    await Promise.resolve();
+    expect(video.play).toHaveBeenCalledTimes(1);
+    expect(video.muted).toBe(true);
+    expect(thumb.classList.contains("is-playing")).toBe(true);
+
+    see(false);
+    await Promise.resolve();
+    expect(video.pause).toHaveBeenCalled();
+  });
+
+  test("prefers-reduced-motion keeps the cover still", () => {
+    mockHover(false, true);
+    const { video } = createCard();
+    video.play = vi.fn().mockReturnValue(Promise.resolve());
+
+    initCardVideos();
+    see(true);
+
+    expect(observers).toHaveLength(0);
+    expect(video.play).not.toHaveBeenCalled();
+  });
+
+  test("the end of a hover preview does not pause a cover that is still in view", async () => {
+    mockHover(true);
+    vi.useFakeTimers();
+    const { card, video } = createCard();
+    video.play = vi.fn().mockReturnValue(Promise.resolve());
+    video.pause = vi.fn();
+
+    initCardVideos();
+    see(true);
+    card.dispatchEvent(new Event("mouseenter"));
+    vi.advanceTimersByTime(150);
+    await Promise.resolve();
+    card.dispatchEvent(new Event("mouseleave"));
+    await Promise.resolve();
+
+    expect(video.pause).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  test("no more than three covers play on their own at once", async () => {
+    mockHover(false);
+    const videos = [1, 2, 3, 4].map(() => {
+      const { video } = createCard();
+      video.play = vi.fn().mockReturnValue(Promise.resolve());
+      return video;
+    });
+
+    initCardVideos();
+    see(true);
+    await Promise.resolve();
+
+    expect(videos.filter((v) => (v.play as ReturnType<typeof vi.fn>).mock.calls.length > 0)).toHaveLength(3);
   });
 });
