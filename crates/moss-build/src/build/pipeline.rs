@@ -1441,7 +1441,7 @@ fn build_inner(
     // Read site-level config from .moss/config.toml [site] section
     // Declarations are data, read even when plugin code is skipped, so a CI
     // build ships what the app's build does.
-    let enabled_plugins = crate::plugins::discovery::plugins_declaring_for_build(folder_path);
+    let crate::plugins::discovery::Declaring { loaded: enabled_plugins, untrusted } = crate::plugins::discovery::plugins_declaring_for_build(folder_path);
     let (public_files, withheld) = crate::plugins::contributions::public_data::project(
         &enabled_plugins,
         cfg.as_ref().unwrap_or(&crate::config::ConfigFile::empty()),
@@ -1508,7 +1508,7 @@ fn build_inner(
         site_url_override,
         declared_redirects: cfg.as_ref().map(|c| c.declared_redirects()).unwrap_or_default(),
         ai: crate::build::feeds::robots::AiSettings::from_config(cfg.as_ref()),
-        identity: crate::config::site_identity::SiteIdentity::from_config(cfg.as_ref(), &crate::plugins::discovery::plugins_declaring_identity(folder_path)),
+        identity: crate::config::site_identity::SiteIdentity::from_config(cfg.as_ref(), &[enabled_plugins.as_slice(), untrusted.as_slice()].concat()),
         // One switch: the per-site Services-tab toggle, absent key = off
         // (graduated out of `experimental.preview_features` 2026-08-31).
         // Resolved here into the ONE value the nav button

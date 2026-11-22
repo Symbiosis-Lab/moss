@@ -166,21 +166,28 @@ pub fn scan_installed_plugins(project_path: &str) -> Result<InstalledPlugins, St
 /// settings disable, since discovery itself treats every installed plugin as
 /// active. The build decides which declarations a build that skips plugin
 /// hooks still reads.
-pub fn plugins_declaring_for_build(project_path: &str) -> Vec<Plugin> {
-    let Ok(installed) = scan_installed_plugins(project_path) else { return Vec::new() };
-    installed.loaded.into_iter().filter(|p| not_switched_off(project_path, p)).collect()
+pub fn plugins_declaring_for_build(project_path: &str) -> Declaring {
+    let Ok(installed) = scan_installed_plugins(project_path) else { return Declaring::default() };
+    // `enforce::refused_only_for_trust`, not the installed admission check, on
+    // purpose: that check is what refuses an untrusted folder.
+    let untrusted = installed.refused.iter()
+        .filter_map(|(dir, _)| read_plugin(dir).ok().filter(|p| crate::plugins::install::registry_client::enforce::refused_only_for_trust(&p.manifest, dir)));
+    Declaring {
+        loaded: installed.loaded.iter().cloned().filter(|p| not_switched_off(project_path, p)).collect(),
+        untrusted: untrusted.filter(|p| not_switched_off(project_path, p)).collect(),
+    }
 }
 
-/// [`plugins_declaring_for_build`] plus the plugins of a folder the user has
-/// not trusted, for the identity proofs only: a proof is a value the person
-/// wrote in their own `[services]` table, not code, so an untrusted folder's
-/// site still says who owns it. Nothing else reads these.
-pub fn plugins_declaring_identity(project_path: &str) -> Vec<Plugin> {
-    let Ok(entries) = fs::read_dir(Path::new(project_path).join(".moss").join("plugins")) else { return Vec::new() };
-    entries.filter_map(Result::ok).map(|e| e.path()).filter(|p| p.is_dir())
-        .filter_map(|dir| read_plugin(&dir).ok().filter(|p| crate::plugins::install::registry_client::enforce::refused_only_for_trust(&p.manifest, &dir)))
-        .filter(|p| not_switched_off(project_path, p))
-        .collect()
+/// What [`plugins_declaring_for_build`] found.
+#[derive(Default)]
+pub struct Declaring {
+    /// Plugins that may run.
+    pub loaded: Vec<Plugin>,
+    /// Plugins of a folder the user has not trusted. Only the identity proofs
+    /// read them: a proof is a value the person wrote in their own
+    /// `[services]` table, not code, so an untrusted folder's site still says
+    /// who owns it.
+    pub untrusted: Vec<Plugin>,
 }
 
 fn not_switched_off(project_path: &str, plugin: &Plugin) -> bool {
