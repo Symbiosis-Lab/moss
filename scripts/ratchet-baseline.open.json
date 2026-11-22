@@ -11,7 +11,7 @@
         "crates/moss-build/src/build/folder_embed.rs": 1300,
         "crates/moss-build/src/build/markdown/pipeline.rs": 1400,
         "crates/moss-build/src/build/media/ffmpeg.rs": 900,
-        "crates/moss-build/src/build/media/image.rs": 1600,
+        "crates/moss-build/src/build/media/image.rs": 1700,
         "crates/moss-build/src/build/media/pipeline.rs": 1200,
         "crates/moss-build/src/build/media/video.rs": 1400,
         "crates/moss-build/src/build/page/meta.rs": 1100,

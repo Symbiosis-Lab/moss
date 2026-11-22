@@ -67,9 +67,19 @@ pub enum AssetState {
 }
 
 /// Shared state for tracking asset processing status during staged build.
+///
+/// A build fills a registry of its own and puts it in place with
+/// [`replace_with`](Self::replace_with) once its promises are made, so the
+/// preview never reads an empty one in between.
 #[derive(Debug, Default)]
 pub struct AssetRegistry {
-    pub assets: std::sync::RwLock<std::collections::HashMap<String, AssetState>>,
+    entries: std::sync::RwLock<Entries>,
+}
+
+/// Both maps behind one lock, so replacing them is one write.
+#[derive(Debug, Default)]
+struct Entries {
+    assets: std::collections::HashMap<String, AssetState>,
     /// Source-passthrough map: output-URL → ABSOLUTE source file path.
     ///
     /// Populated in the same `set_pending` loops (blocking.rs) that register a
@@ -85,8 +95,7 @@ pub struct AssetRegistry {
     /// so the passthrough never surfaces bytes the deploy won't reproduce. The
     /// value is a pre-registered absolute path (never client-joined), so the
     /// router hand-off is path-traversal-safe.
-    pub source_passthrough:
-        std::sync::RwLock<std::collections::HashMap<String, std::path::PathBuf>>,
+    source_passthrough: std::collections::HashMap<String, std::path::PathBuf>,
 }
 
 /// Why a promised asset will never arrive. The only ways in are the named
@@ -120,24 +129,21 @@ impl Failure {
 
 impl AssetRegistry {
     pub fn new() -> Self {
-        Self {
-            assets: std::sync::RwLock::new(std::collections::HashMap::new()),
-            source_passthrough: std::sync::RwLock::new(std::collections::HashMap::new()),
-        }
+        Self::default()
     }
     /// Register the ABSOLUTE source path that backs a promised variant URL.
     /// Called alongside `set_pending` so passthrough parity is automatic:
     /// every Pending variant has an original the preview server can serve.
     pub fn set_source_passthrough(&self, output_url: String, source_abs: std::path::PathBuf) {
-        let mut map = self.source_passthrough.write().unwrap();
-        map.insert(output_url, source_abs);
+        self.entries.write().unwrap().source_passthrough.insert(output_url, source_abs);
     }
     /// Look up the absolute source path registered for `path` (an output URL).
     /// Mirrors `is_registered`'s tolerance for the leading-slash form so a
     /// request path (`/assets/x.webp`) matches a bare-keyed entry
     /// (`assets/x.webp`) and vice-versa.
     pub fn source_passthrough(&self, path: &str) -> Option<std::path::PathBuf> {
-        let map = self.source_passthrough.read().unwrap();
+        let entries = self.entries.read().unwrap();
+        let map = &entries.source_passthrough;
         if let Some(p) = map.get(path) {
             return Some(p.clone());
         }
@@ -154,8 +160,7 @@ impl AssetRegistry {
         dimensions: Option<(u32, u32)>,
         dominant_color: Option<String>,
     ) {
-        let mut assets = self.assets.write().unwrap();
-        assets.insert(
+        self.entries.write().unwrap().assets.insert(
             path,
             AssetState::Pending(AssetPlaceholder {
                 dimensions,
@@ -169,7 +174,7 @@ impl AssetRegistry {
     /// should gate on the return so they don't re-emit for an already-real
     /// asset on every unchanged rebuild.
     pub fn set_ready(&self, path: String) -> bool {
-        let mut assets = self.assets.write().unwrap();
+        let assets = &mut self.entries.write().unwrap().assets;
         let was_pending = matches!(assets.get(&path), Some(AssetState::Pending(_)));
         assets.insert(path, AssetState::Ready);
         was_pending
@@ -185,21 +190,20 @@ impl AssetRegistry {
     /// rule: when materialization fails, the promise must be retracted, not
     /// silently swallowed.
     pub fn set_failed(&self, path: String, why: Failure) {
-        let mut assets = self.assets.write().unwrap();
-        assets.insert(path, AssetState::Failed(why.message().to_string()));
+        self.entries.write().unwrap().assets.insert(path, AssetState::Failed(why.message().to_string()));
     }
     pub fn get(&self, path: &str) -> Option<AssetState> {
-        let assets = self.assets.read().unwrap();
-        assets.get(path).cloned()
+        self.entries.read().unwrap().assets.get(path).cloned()
     }
     /// Snapshot of every registry key currently in the terminal `Failed`
     /// state. Used by the post-seal degrade-failed-variants pass
     /// to decide which `<source>` srcset candidates to drop from sealed HTML
     /// before publish.
     pub fn failed_keys(&self) -> std::collections::HashSet<String> {
-        self.assets
+        self.entries
             .read()
             .unwrap()
+            .assets
             .iter()
             .filter(|(_, s)| matches!(s, AssetState::Failed(_)))
             .map(|(k, _)| k.clone())
@@ -211,23 +215,22 @@ impl AssetRegistry {
     /// this build's own in-flight encode" apart from a pre-existing broken
     /// link, the one distinction a page-vs-manifest diff alone cannot see.
     pub fn pending_keys(&self) -> std::collections::HashSet<String> {
-        self.assets
+        self.entries
             .read()
             .unwrap()
+            .assets
             .iter()
             .filter(|(_, s)| matches!(s, AssetState::Pending(_)))
             .map(|(k, _)| k.clone())
             .collect()
     }
 
-    pub fn clear(&self) {
-        let mut assets = self.assets.write().unwrap();
-        assets.clear();
-        // Clear the passthrough map in lock-step: registry.clear() runs at
-        // build start (blocking.rs), and a stale source path from a prior
-        // build must never back a freshly-promised variant.
-        let mut passthrough = self.source_passthrough.write().unwrap();
-        passthrough.clear();
+    /// Put a build's own registry in place of this one, both maps at once. A
+    /// `set_ready` an earlier build's worker makes before the swap is dropped
+    /// with the rest, so each build settles every key it promises (see
+    /// `register_joined_images`).
+    pub fn replace_with(&self, fresh: AssetRegistry) {
+        *self.entries.write().unwrap() = fresh.entries.into_inner().unwrap();
     }
 
     /// Returns true if `request_path` is known to the registry, regardless
@@ -235,7 +238,8 @@ impl AssetRegistry {
     /// Checks both the bare path (`img/hero.webp`) and the slash-prefixed form
     /// (`/img/hero.webp`) because call sites differ in how they store keys.
     pub fn is_registered(&self, request_path: &str) -> bool {
-        let assets = self.assets.read().unwrap();
+        let entries = self.entries.read().unwrap();
+        let assets = &entries.assets;
         let stripped = request_path.trim_start_matches('/');
         // Check exact form as given (handles slash-prefixed keys).
         if assets.contains_key(request_path) {
@@ -276,7 +280,8 @@ impl AssetRegistry {
         use std::collections::HashMap;
         use std::path::PathBuf;
 
-        let assets = self.assets.read().unwrap();
+        let entries = self.entries.read().unwrap();
+        let assets = &entries.assets;
         let mut by_stem: HashMap<PathBuf, VariantKindSet> = HashMap::new();
         for (url, state) in assets.iter() {
             // Skip Failed entries.
@@ -436,16 +441,18 @@ mod asset_registry_tests {
     }
 
     #[test]
-    fn clear_wipes_source_passthrough_too() {
-        // registry.clear() runs at build start; a stale source path from a
-        // prior build must never back a freshly-promised variant.
+    fn replace_with_takes_both_maps_from_the_fresh_registry() {
         let r = AssetRegistry::new();
-        r.set_source_passthrough(
-            "assets/hero.webp".into(),
-            std::path::PathBuf::from("/tmp/hero.jpg"),
-        );
-        r.clear();
-        assert_eq!(r.source_passthrough("assets/hero.webp"), None);
+        r.set_failed("assets/old.webp".into(), Failure::encode("encode error"));
+        r.set_source_passthrough("assets/old.webp".into(), std::path::PathBuf::from("/tmp/old.jpg"));
+        let fresh = AssetRegistry::new();
+        fresh.set_pending("assets/hero.webp".into(), None, None);
+        fresh.set_source_passthrough("assets/hero.webp".into(), std::path::PathBuf::from("/tmp/hero.jpg"));
+        r.replace_with(fresh);
+        assert!(r.get("assets/old.webp").is_none());
+        assert_eq!(r.source_passthrough("assets/old.webp"), None);
+        assert!(matches!(r.get("assets/hero.webp"), Some(AssetState::Pending(_))));
+        assert_eq!(r.source_passthrough("assets/hero.webp"), Some(std::path::PathBuf::from("/tmp/hero.jpg")));
     }
 
     #[test]

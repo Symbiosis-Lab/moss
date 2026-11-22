@@ -2950,7 +2950,7 @@ pub(crate) fn dispatch_image_conversions_at(
                     advisories: carried_advisories,
                 });
             }
-            return register_joined_images(ctx, joined_images, &tx, &heal_objects);
+            return register_joined_images(svc, ctx, joined_images, &tx, &heal_objects);
         }
         if to_dispatch.len() < total_items {
             log::info!(
@@ -3031,7 +3031,7 @@ pub(crate) fn dispatch_image_conversions_at(
             redispatch_note::settle(&run_ctx.moss_dir, &run_ctx.staging_dir, &redispatched, clock(), cancelled);
         }
         // Last, after this build's own encodes are under way.
-        register_joined_images(ctx, joined_images, &joined_tx, &heal_objects)
+        register_joined_images(svc, ctx, joined_images, &joined_tx, &heal_objects)
     }
 }
 
@@ -3045,7 +3045,9 @@ struct JoinedImages<'a> {
 }
 
 /// Wait for the workers a dispatch joined, then register what they staged
-/// through this build's channel, so its seal holds them.
+/// through this build's channel, so its seal holds them, and settle them as Ready
+/// in this build's registry: the joined worker settles the one it started with,
+/// which this build's own promises have replaced.
 ///
 /// Each item's mark ends as it finishes, and its worker saves the hash index
 /// only once its whole run ends, so nothing vouches for these outputs by oid
@@ -3055,7 +3057,7 @@ struct JoinedImages<'a> {
 ///
 /// A build that stops waiting (see [`wait_for_joined_images`]) registers
 /// nothing and answers [`BuildError::LeftToNewerBuild`](crate::build::background::BuildError::LeftToNewerBuild).
-fn register_joined_images(ctx: &BackgroundContext, joined: JoinedImages, tx: &Option<mpsc::Sender<EmitMessage>>,
+fn register_joined_images(svc: &BuildServices, ctx: &BackgroundContext, joined: JoinedImages, tx: &Option<mpsc::Sender<EmitMessage>>,
     objects: &crate::build::cache::ObjectStore) -> Result<(), crate::build::background::BuildError> {
     if joined.marks.is_empty() {
         return Ok(());
@@ -3069,6 +3071,13 @@ fn register_joined_images(ctx: &BackgroundContext, joined: JoinedImages, tx: &Op
         joined.keys.iter().filter(|key| crate::build::io_utils::output_present(&ctx.staging_dir.join(key))).map(|key| (key.clone(), None)).collect();
     super::output_emit::OutputEmit { kind: &IMAGE_OUTPUTS, root: Path::new(&ctx.source_path), tx, staging_dir: &ctx.staging_dir,
         objects, suppressed: &Default::default(), registry: None }.run(&staged);
+    if let Some(registry) = svc.assets.as_deref() {
+        for (key, _) in staged {
+            if registry.set_ready(key.clone()) {
+                svc.reporter.report(&PipelineEvent::AssetReady { path: key, asset_type: "image".to_string() });
+            }
+        }
+    }
     Ok(())
 }
 

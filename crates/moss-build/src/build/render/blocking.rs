@@ -2708,11 +2708,12 @@ pub fn generate_blocking_content_for_build(
         None,
     );
 
-    // Reset before ANY producer registers: the app shares one process-lifetime
-    // `Arc`, and a stale `Failed` strips a live `<source>` in build.rs's tail.
-    if let Some(registry) = services.and_then(|s| s.assets.as_deref()) {
-        registry.clear();
-    }
+    // This build's promises go into a registry of its own, which replaces the
+    // shared one after the last promise below: the preview reads the shared one
+    // meanwhile, and a stale `Failed` there would strip a live `<source>` in
+    // build.rs's tail.
+    let shared_registry = services.and_then(|s| s.assets.as_deref());
+    let build_registry = shared_registry.map(|_| crate::types::assets::AssetRegistry::new());
 
     // Non-blocking video conversion:
     // Collect video items for background processing instead of converting inline.
@@ -2728,7 +2729,7 @@ pub fn generate_blocking_content_for_build(
 
             // Populate AssetRegistry with pending assets for placeholder support.
             // This allows the preview server to serve SVG placeholders while videos convert
-            if let Some(registry) = services.and_then(|s| s.assets.as_deref()) {
+            if let Some(registry) = build_registry.as_ref() {
                 for item in &items {
                     // Map source path through dir_overrides, then derive mp4 key.
                     // This ensures registry keys match HTML <video src> paths.
@@ -3308,7 +3309,7 @@ pub fn generate_blocking_content_for_build(
         // paint, and a source this build cannot encode is settled instead:
         // `media/promise.rs`.
         let items = crate::build::media::promise::promise_image_variants(
-            services.and_then(|s| s.assets.as_deref()),
+            build_registry.as_ref(),
             pending,
             items,
             project_structure,
@@ -3316,6 +3317,11 @@ pub fn generate_blocking_content_for_build(
             &rung_plan,
             source_path,
         );
+        // No page of this build is servable yet: pages reach the stage only in
+        // `emit::slots::apply_to_stage_and_manifest`, after this function returns.
+        if let (Some(shared), Some(own)) = (shared_registry, build_registry) {
+            shared.replace_with(own);
+        }
 
         (items, rung_plan)
     };

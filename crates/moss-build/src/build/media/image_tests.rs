@@ -7656,6 +7656,27 @@ async fn a_build_that_joins_a_running_worker_seals_with_what_that_worker_stages(
     assert_eq!(registered, ["pic.webp"], "the joining build did not register the picture the worker it joined staged");
 }
 
+/// A build settles every key it promised, including one it left to a worker it
+/// joined: that worker settles the registry it was started with, which a later
+/// build's promises replace, so the joining build marks what it staged as Ready
+/// itself. Left Pending, the preview stands in for a picture that is already there.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_build_that_joins_a_running_worker_settles_the_keys_it_promised() {
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    let workers = std::sync::Arc::new(HeldSpawner::default());
+    vault.dispatch(vault.collect(), workers.services()).await;
+
+    let promised = std::sync::Arc::new(AssetRegistry::new());
+    promised.set_pending("pic.webp".to_string(), Some((24, 24)), None);
+    let joining = vault.dispatch_joining(vault.collect(), BuildServices { assets: Some(promised.clone()), ..workers.services() }, None, None).await;
+    workers.run_held().await;
+    joining.await.unwrap().unwrap();
+
+    assert!(promised.pending_keys().is_empty(), "the joining build left its promises pending: {:?}", promised.pending_keys());
+    assert!(matches!(promised.get("pic.webp"), Some(AssetState::Ready)));
+}
+
 /// A build waiting on a joined image leaves it to a newer build that waits on it
 /// too, and does not seal: the newer one seals with the image. Rapid saves during
 /// a batch then hold one waiting build, not one per save.

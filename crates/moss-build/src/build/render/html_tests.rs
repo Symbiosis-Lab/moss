@@ -10513,3 +10513,51 @@ fn one_build_clock_decides_upcoming_for_the_page_and_every_card() {
         }
     }
 }
+
+/// The preview reads the shared registry while a build renders. A build fills a
+/// registry of its own and puts it in place once its promises are made, so a
+/// request in between still finds what the previous build promised; emptying the
+/// shared one at the start made a picture still encoding answer 404 until then.
+#[test]
+fn a_build_replaces_the_shared_asset_registry_only_once_its_promises_are_made() {
+    use crate::build::ports::reporter::BuildReporter;
+    use crate::build::progress::PipelineEvent;
+    use crate::types::assets::{AssetRegistry, AssetState, Failure};
+    struct Probe(std::sync::Arc<AssetRegistry>, std::sync::Mutex<Vec<(u8, bool)>>);
+    impl BuildReporter for Probe {
+        fn report(&self, event: &PipelineEvent) {
+            if let PipelineEvent::Progress { percentage, .. } = event {
+                self.1.lock().unwrap().push((*percentage, self.0.is_registered("door.webp")));
+            }
+        }
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let site = tmp.path();
+    std::fs::write(site.join("index.md"), "---\ntitle: Home\n---\n![Door](door.png)\n").unwrap();
+    image::RgbImage::from_pixel(24, 24, image::Rgb([200, 30, 30])).save(site.join("door.png")).unwrap();
+    let output_dir = MossPaths::new(site).build_dir().join("site");
+    std::fs::create_dir_all(&output_dir).unwrap();
+
+    let shared = std::sync::Arc::new(AssetRegistry::new());
+    shared.set_pending("door.webp".into(), Some((24, 24)), None);
+    shared.set_failed("gone.webp".into(), Failure::encode("a previous build's encode error"));
+    shared.set_source_passthrough("gone.webp".into(), site.join("gone.png"));
+    let services = crate::types::services::BuildServices { assets: Some(shared.clone()), ..crate::types::services::BuildServices::headless() };
+    let probe = Probe(shared.clone(), Default::default());
+
+    let project_structure = crate::build::scan_folder(site.to_str().unwrap()).expect("scan_folder should succeed");
+    let mut pending = crate::build::manifest::PendingManifest::for_build(crate::types::content::SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(site));
+    crate::build::render::generate_blocking_content_for_build(
+        &crate::vault::paths::VaultRoot::resolve(site), &project_structure, &output_dir, Some(&services), Some(&probe),
+        true, crate::build::render::blocking::SiteConfig::default(), &mut pending, false, false, crate::build::inputs::build_instant(),
+    )
+    .expect("the render succeeds");
+
+    let seen = probe.1.lock().unwrap();
+    assert!(seen.iter().any(|(pct, _)| *pct == 92), "premise: no progress was reported between the build's first promise and its last: {seen:?}");
+    assert!(seen.iter().all(|(_, registered)| *registered), "the previous build's promise went missing while this one rendered: {seen:?}");
+    assert!(matches!(shared.get("door.webp"), Some(AssetState::Pending(_))), "this build's own promise is not in place");
+    assert!(shared.get("gone.webp").is_none(), "a previous build's failure outlived the build that replaced it");
+    assert_eq!(shared.source_passthrough("gone.webp"), None, "a previous build's source path outlived the build that replaced it");
+}
