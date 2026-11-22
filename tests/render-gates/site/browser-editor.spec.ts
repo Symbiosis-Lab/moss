@@ -65,7 +65,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFile
 import { crc32, deflateSync } from 'node:zlib';
 import { join } from 'node:path';
 import { png } from '../../e2e/helpers/contents-ruler-site';
-import { openEditor as openEditorFrames, openShell, useEditServe } from '../../e2e/helpers/edit-serve';
+import { frameOf, openEditor as openEditorFrames, openShell, useEditServe } from '../../e2e/helpers/edit-serve';
 import { buildPreviewCtxEntries, type PreviewCtxPayload } from '../../../packages/moss-ui/src/ui/preview/preview-context-menu';
 
 // Event pages, each linking to the next: the forms a person writes by hand,
@@ -766,6 +766,36 @@ for (const [what, leave] of LEAVINGS) test(`the editor opening the page on scree
   const { preview } = await openEditor(page);
   await leave(preview);
   await expect(preview.locator('body')).toContainText('你好，花园。', { timeout: 15_000 });
+  expect(new URL(preview.url()).pathname).toBe('/zh-hans/');
+});
+
+// The editor opens before the shell knows the page's file, and a build adds a file in the meantime: the shell's answer still decides what opens.
+test('a file added while the editor waits on the page leaves the editor and the preview on that page', async ({ page }) => {
+  const { shell, preview } = await openShell(page, serve, 'Hello garden');
+  let holding = false;
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route((url) => url.pathname === '/__moss/read/resolve_page_source', async (route) => {
+    if (holding && route.request().frame() === shell) await held;
+    await route.continue().catch(() => {});
+  });
+  const created: string[] = [];
+  page.on('console', (m) => m.text().includes('green-flash: +') && created.push(m.text()));
+
+  holding = true;
+  await preview.click('a:has-text("To the Chinese pages")');
+  await expect.poll(() => new URL(preview.url()).pathname, { timeout: 15_000 }).toBe('/zh-hans/');
+  const editor = await frameOf(page, 'moss-editor-frame');
+  await shell.click('#moss-edit-button');
+  await expect(page.locator('#moss-frames')).toHaveAttribute('data-editor', 'split', { timeout: 10_000 });
+  writeFileSync(join(serve.site, 'arrived while waiting.md'), '# Arrived\n');
+  await expect.poll(() => created.length, { timeout: 30_000, message: 'the editor heard of the new file' }).toBeGreaterThan(0);
+  // Time for a wrong decision to show: the editor opening the home page and the preview following it.
+  await page.waitForTimeout(2_000);
+  release();
+
+  await expect(editor.locator('.cm-content')).toContainText('你好，花园。', { timeout: 15_000 });
+  await expect(preview.locator('body')).toContainText('你好，花园。');
   expect(new URL(preview.url()).pathname).toBe('/zh-hans/');
 });
 

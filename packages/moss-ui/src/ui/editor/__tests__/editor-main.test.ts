@@ -52,6 +52,13 @@ async function bootEditorMain() {
   return import('../editor-main');
 }
 
+/** The shell answers the editor's page request with a generated page (a feed, an archive). */
+async function answerWithGeneratedPage(): Promise<void> {
+  await vi.waitFor(() => expect(mockEmit).toHaveBeenCalledWith('editor:request-page', {}));
+  await listenCallbacks.get('editor:load-source')!({ sourcePath: null, isRoot: false, takeover: null, pending: null });
+  expect(document.getElementById('moss-editor-cm')!.getAttribute('data-editor-surface')).toBe('generated');
+}
+
 // ---------------------------------------------------------------------------
 // Hoisted mocks — vi.mock factories are hoisted above imports, so we must
 // use vi.hoisted() for any variables referenced inside them.
@@ -3741,16 +3748,7 @@ describe('editor-main import-refresh on FileChanged', () => {
     }
   }
 
-  test('files arriving on an empty folder (no file open, no home) refresh the tree, flash, and re-decide off root-empty to the root-home takeover', async () => {
-    // getFirstFile() is called in two places:
-    //   1. init() URL-params tail (line 1116): `isFolderEmpty: fileTree.getFirstFile() == null`
-    //      — this is the FIRST call; must be null so that init() sets 'generated' (no URL
-    //      params → sourcePath=null → generated node via decideEditorSurface).
-    //   2. onboardingRefresh in the FileChanged handler: `wasEmpty = fileTree?.getFirstFile() == null`
-    //      — must also be null so wasEmpty=true and resolveAndApplyRootSurface() is called.
-    // After both null reads, all subsequent reads (resolveAndApplyRootSurface check) return
-    // 'article-one.md' to simulate a freshly populated folder.
-    mockGetFirstFile.mockReturnValueOnce(null).mockReturnValueOnce(null).mockReturnValue('article-one.md');
+  test('files arriving under a generated page, with no home, refresh the tree, flash, and offer the root-home takeover', async () => {
     // Source-truth resolve: no home file on disk → source_path null, so the
     // surface stays the create-home CTA (not an opened content page).
     mockCommands.resolvePageSource.mockResolvedValue({ status: 'ok', data: { source_path: null, is_article: false, syndicated: [], takeover: { kind: 'root-home', display: 'blog', files: [{ dir: '/Users/test/blog', name: 'blog.md', frontmatter: { home: true } }] } } });
@@ -3759,14 +3757,8 @@ describe('editor-main import-refresh on FileChanged', () => {
     // The FileChanged handler subscribes to 'moss-event' via onMossEvent during init.
     await vi.waitFor(() => expect(listenCallbacks.has('moss-event')).toBe(true));
 
-    // Wait for init() to fully complete. init()'s tail (URL-params branch) runs
-    // asynchronously after listener registration; it calls applyEditorSurface() which
-    // sets data-editor-surface to 'generated' (no URL params → sourcePath=null → generated
-    // node). We MUST let init() finish before firing dispatchFileChanged so the
-    // resolveAndApplyRootSurface() call inside onboardingRefresh sets the takeover LAST
-    // and is not later overwritten by init()'s URL-params tail.
     const cm = document.getElementById('moss-editor-cm')!;
-    await vi.waitFor(() => expect(mockEmit).toHaveBeenCalledWith('editor:request-page', {}));
+    await answerWithGeneratedPage();
 
     await dispatchFileChanged(['article-one.md', 'article-two.md']);
 
@@ -3775,8 +3767,7 @@ describe('editor-main import-refresh on FileChanged', () => {
     // handler note in editor-main.ts (enterDirMode had no visible effect).
     expect(mockRefreshAndRender).toHaveBeenCalledTimes(1);
 
-    // Surface re-decided off root-empty: with a populated folder + isRoot but no
-    // home file, the editor leaves the four cards for the root-home takeover.
+    // No home file: the root resolves to the take-over offer.
     expect(cm.getAttribute('data-editor-surface')).toBe('takeover');
 
     // Green arrival flash: no visible tree row/breadcrumb target (mock returns
@@ -3785,12 +3776,6 @@ describe('editor-main import-refresh on FileChanged', () => {
   });
 
   test('files arriving with a home file present OPEN the home (loadFile), not the create-CTA', async () => {
-    // getFirstFile() reads, in deterministic order (init completes before the
-    // dispatch — see the surface waitFor below):
-    //   1. init()'s URL-params tail (`isFolderEmpty` read) → null
-    //   2. onboardingRefresh's `wasEmpty` read → null (still empty pre-refresh)
-    //   3+. post-refresh reads → 'index.md' (folder now populated)
-    mockGetFirstFile.mockReturnValueOnce(null).mockReturnValueOnce(null).mockReturnValue('index.md');
     // Home file exists on disk → resolvePageSource('/') returns its absolute path.
     mockCommands.resolvePageSource.mockResolvedValue({ status: 'ok', data: { source_path: '/Users/test/blog/index.md', is_article: false, syndicated: [], takeover: null } });
     // loadFile parses the home file's frontmatter/body.
@@ -3799,11 +3784,7 @@ describe('editor-main import-refresh on FileChanged', () => {
     await bootEditorMain();
     await vi.waitFor(() => expect(listenCallbacks.has('moss-event')).toBe(true));
 
-    // Let init() fully complete (its tail sets the boot surface) before firing
-    // the FileChanged, so the getFirstFile read order above is deterministic —
-    // same pattern as the empty-folder sibling test above.
-    const cmBoot = document.getElementById('moss-editor-cm')!;
-    await vi.waitFor(() => expect(mockEmit).toHaveBeenCalledWith('editor:request-page', {}));
+    await answerWithGeneratedPage();
 
     await dispatchFileChanged(['index.md']);
 
@@ -3863,11 +3844,9 @@ describe('editor-main import-refresh on FileChanged', () => {
   });
 
   test('files arriving on an already populated folder refresh its canonical surface and flash', async () => {
-    // Folder was already non-empty before the event — getFirstFile is non-null
-    // on both reads, so the empty→populated re-decide branch never runs.
-    mockGetFirstFile.mockReturnValue('existing.md');
     await bootEditorMain();
     await vi.waitFor(() => expect(listenCallbacks.has('moss-event')).toBe(true));
+    await answerWithGeneratedPage();
 
     await dispatchFileChanged(['article-three.md']);
 
@@ -3878,6 +3857,21 @@ describe('editor-main import-refresh on FileChanged', () => {
     // FIX 4: the download flash DOES fire on every arrival (user-approved rule),
     // falling back to the nav-surface when no visible row/breadcrumb targets it.
     expect(document.getElementById('nav-surface')!.classList.contains('moss-just-committed')).toBe(true);
+  });
+
+  test('files arriving before the shell answers the page leave the surface to that answer', async () => {
+    mockCommands.resolvePageSource.mockResolvedValue({ status: 'ok', data: { source_path: '/Users/test/blog/index.md', is_article: false, syndicated: [], takeover: null } });
+    await bootEditorMain();
+    await vi.waitFor(() => expect(listenCallbacks.has('moss-event')).toBe(true));
+    await vi.waitFor(() => expect(mockEmit).toHaveBeenCalledWith('editor:request-page', {}));
+
+    await dispatchFileChanged(['index.md', 'posts/a.md']);
+    for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
+
+    expect(mockRefreshAndRender).toHaveBeenCalledTimes(1);
+    // Home is neither resolved nor opened over the page the shell is loading.
+    expect(mockCommands.resolvePageSource).not.toHaveBeenCalled();
+    expect(MockCmEditor).not.toHaveBeenCalled();
   });
 
   test('FIX 4: a new file under a visible folder row flashes that ROW (coalesced once), not the nav-surface', async () => {
@@ -4635,12 +4629,11 @@ describe('a failed file open is visible and never leaves the tree lying', () => 
   test('a home file that fails to open does not move the preview on the root resolve either', async () => {
     // The SECOND route from a load straight into a preview navigation: the
     // root resolve (resolveAndApplyRootSurface → loadContentPageDeduped →
-    // previewFollower.navigate). Reached here through the onboarding refresh —
-    // files land in a folder that had none, so moss resolves the site home and
+    // previewFollower.navigate). Reached here through the onboarding refresh:
+    // files land under a generated page, so moss resolves the site home and
     // opens it. If that home is unreadable (iCloud-evicted mid-arrival is the
     // realistic case), the editor stays on a non-content surface, so the
     // preview must stay put too.
-    mockGetFirstFile.mockReturnValueOnce(null).mockReturnValueOnce(null).mockReturnValue('index.md');
     mockCommands.resolvePageSource.mockResolvedValue({
       status: 'ok',
       data: { source_path: '/Users/test/blog/index.md', is_article: false, syndicated: [], takeover: null },
@@ -4652,10 +4645,8 @@ describe('a failed file open is visible and never leaves the tree lying', () => 
 
     await initEditor();
     await vi.waitFor(() => expect(listenCallbacks.has('moss-event')).toBe(true));
-    // Let init's tail settle so the getFirstFile read order above is
-    // deterministic (same pattern as the import-refresh tests).
     const cm = document.getElementById('moss-editor-cm')!;
-    await vi.waitFor(() => expect(mockEmit).toHaveBeenCalledWith('editor:request-page', {}));
+    await answerWithGeneratedPage();
     mockEmit.mockClear();
 
     await listenCallbacks.get('moss-event')!({ kind: 'FileChanged', payload: { source_creates: ['index.md'] } });

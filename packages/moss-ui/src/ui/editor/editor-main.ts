@@ -830,7 +830,7 @@ async function init(): Promise<void> {
           await applyFolderFromDisk(lastSurface.folder);
         } else if (lastSurface?.kind === 'takeover') {
           await applyFolderFromDisk(lastSurface.takeover);
-        } else if ((fce.source_creates?.length ?? 0) > 0) {
+        } else if ((fce.source_creates?.length ?? 0) > 0 && !awaitsPageAnswer()) {
           await resolveAndApplyRootSurface();
         }
       },
@@ -2074,6 +2074,14 @@ function keepsCurrentSurface(surface: EditorSurface): boolean {
   // over whatever page the preview has moved to. One waiting on the page
   // re-asks the live page, so it stays.
   return shown === 'pending' && lastSurface?.kind === 'pending' && (lastSurface.reason === 'lookup' || lastSurface.sourcePath === null);
+}
+
+/**
+ * No surface yet, or a pane waiting on the page: the shell's answer is still
+ * coming and opens the right file, so nothing else may decide the surface.
+ */
+function awaitsPageAnswer(): boolean {
+  return lastSurface === null || (lastSurface.kind === 'pending' && lastSurface.reason === 'lookup');
 }
 
 function applyEditorSurface(surface: Exclude<EditorSurface, { kind: 'content' }>): void {
