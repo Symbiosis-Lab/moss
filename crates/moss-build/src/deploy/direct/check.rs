@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use super::server::{self, Keys, Settings};
 use super::sftp::{self, Refusal, SftpDestination};
-use super::{Allow, Body, Destination, Published};
+use super::{Allow, Body, Published};
 use crate::build::manifest::SealedManifest;
 use crate::deploy::progress::DeploySink;
 use crate::plugins::types::DeploymentInfo;
@@ -247,7 +247,7 @@ pub async fn publish_sealed(
         dns_target: None,
         addresses: Vec::new(),
     };
-    crate::deploy::landed::record_publish_landed(folder, &sealed, &deployment, None, ports).await;
+    crate::deploy::landed::record_publish_landed(folder, sealed, &deployment, None, ports).await;
     Ok((deployment, published))
 }
 
