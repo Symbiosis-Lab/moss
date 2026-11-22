@@ -12,7 +12,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { InstallRing, __testing } from "../install-ring";
 
-const { strokeD, pose, lerpPose, floorAt, arcValue, CIRC, R_RING, Marks, W_RING, W_REST } = __testing;
+const { strokeD, pose, lerpPose, floorAt, arcValue, CIRC, R_BADGE, ANCHOR, Marks } = __testing;
 
 /** Endpoints of a rendered stroke, whether it is a bar or an arc. */
 function ends(d: string): [[number, number], [number, number]] {
@@ -48,39 +48,43 @@ describe("install ring poses", () => {
     expect(c.b.len).toBeLessThan(c.a.len * 0.6);
   });
 
-  it("the ring's arc is a fraction of its circle, and 100% is the whole circle", () => {
+  it("the ring's arc is a fraction of its track, and 100% is the whole circle", () => {
     expect(pose.ring(100).b.len).toBeCloseTo(CIRC, 6);
     expect(pose.ring(25).b.len).toBeCloseTo(CIRC / 4, 6);
-    expect(pose.ring(50).a.len).toBe(0);   // the shared bar steps aside while the arc runs
+    expect(pose.ring(50).a.len).toBeCloseTo(CIRC, 6);   // the track is always whole
   });
 
-  it("the arc runs on the enclosure circle, starting at 12 o'clock", () => {
-    const b = pose.ring(25).b;
-    const [start] = ends(strokeD(b.P, b.phi, b.k, b.len, b.bias));
-    expect(start[0]).toBeCloseTo(14, 3);
-    expect(start[1]).toBeCloseTo(14 - R_RING, 3);
-    expect(1 / b.k).toBeCloseTo(R_RING, 6);
+  it("the badge's circle rests round the sign at the lower left and leaves as the ring forms", () => {
+    const host = document.createElement("div");
+    const marks = new Marks(host);
+    const circle = host.querySelector<SVGCircleElement>(".install-ring__circle")!;
+    expect(Number(circle.getAttribute("cx"))).toBeCloseTo(ANCHOR.P[0], 6);
+    expect(Number(circle.getAttribute("cy"))).toBeCloseTo(ANCHOR.P[1], 6);
+    expect(Number(circle.getAttribute("r"))).toBe(R_BADGE);
+    const badge = () => host.querySelector<SVGGElement>(".install-ring__badge")!.style.opacity;
+    for (const rest of [pose.plus(), pose.minus(), pose.check(), pose.fail()]) {
+      marks.draw(rest);
+      expect(badge()).toBe("1");
+    }
+    marks.draw(pose.ring(30));
+    expect(badge()).toBe("0");
   });
 
-  it("a resting plus and minus sit inside the circle, centred on it", () => {
-    for (const p of [pose.plus(), pose.check(), pose.fail()]) {
+  it("the check and the cross fit inside the badge's circle", () => {
+    for (const p of [pose.check(), pose.fail()]) {
       for (const s of [p.a, p.b]) {
-        for (const pt of ends(strokeD(s.P, s.phi, s.k, s.len, s.bias))) {
-          expect(dist(pt, [14, 14])).toBeLessThan(R_RING - 1);
+        for (const e of ends(strokeD(s.P, s.phi, s.k, s.len, s.bias))) {
+          expect(dist(e, ANCHOR.P)).toBeLessThan(R_BADGE - 1.6);
         }
       }
     }
   });
 
-  it("the stroke weight and track fade follow the arc, not the shared bar", () => {
-    // The arc is stroke B. Reading ringness off A, which never curves, would
-    // leave a working ring at resting weight with its track at full strength.
-    const host = document.createElement("div");
-    const m = new Marks(host);
-    m.draw(pose.ring(50));
-    expect(m.svg.style.getPropertyValue("--install-ring-w")).toBe(String(W_RING));
-    m.draw(pose.minus());
-    expect(m.svg.style.getPropertyValue("--install-ring-w")).toBe(String(W_REST));
+  it("the arc starts at the lower left, where the plus rests", () => {
+    const b = pose.ring(25).b;
+    const [start] = ends(strokeD(b.P, b.phi, b.k, b.len, b.bias));
+    const r = 28.5, q = Math.SQRT1_2;
+    expect(dist(start, [32 - r * q, 32 + r * q])).toBeLessThan(0.1);
   });
 
   it("a round trip through the ring returns byte-identical path data", () => {
