@@ -513,6 +513,13 @@ fn column_gap_floor(rule: &str) -> f32 {
     if !cur.is_empty() { parts.push(cur); }
 
     let column = parts.last().expect("gap should have a value");
+    // A custom property the rule declares itself, as `.nav-content` does its group gap.
+    let own = column
+        .strip_prefix("var(")
+        .and_then(|v| v.strip_suffix(')'))
+        .and_then(|name| rule.lines().find_map(|l| l.trim().strip_prefix(&format!("{}:", name.trim()))))
+        .map(|v| v.trim().trim_end_matches(';').trim().to_string());
+    let column = own.as_deref().unwrap_or(column);
     // A `clamp(a, b, c)` contributes its terms; a bare length contributes
     // itself. Viewport-relative terms (`4vw`) are skipped — they are the ramp
     // between the floor and the ceiling, not either of them.
@@ -584,8 +591,8 @@ fn test_css_nav_toggle_cluster_is_tighter_than_the_group_gap() {
     //
     // Asserted as a ratio, not as literal values: the exact spacing is a design
     // call that may be re-tuned, but 1.5x on ink at the narrow end is the floor
-    // the .nav-right comment commits to and must not silently erode.
-    let right = get_css_rule(DEFAULT_CSS, ".nav-right").expect(".nav-right CSS rule should exist");
+    // the .nav-icons comment commits to and must not silently erode.
+    let content = get_css_rule(DEFAULT_CSS, ".nav-content").expect(".nav-content CSS rule should exist");
     let icons = get_css_rule(DEFAULT_CSS, ".nav-icons").expect(".nav-icons CSS rule should exist");
     let theme =
         get_css_rule(DEFAULT_CSS, ".nav-theme-btn").expect(".nav-theme-btn CSS rule should exist");
@@ -643,7 +650,7 @@ fn test_css_nav_toggle_cluster_is_tighter_than_the_group_gap() {
     ]
     .into_iter()
     .fold(f32::MIN, f32::max);
-    let between_groups = column_gap_floor(&right) + edge_inset;
+    let between_groups = column_gap_floor(&content) + edge_inset;
 
     // The bound computed above is an ENVELOPE, not a rendering: pairing the
     // smallest edge inset with the widest internal pair describes no real
@@ -657,52 +664,40 @@ fn test_css_nav_toggle_cluster_is_tighter_than_the_group_gap() {
     // Consequence: only ~1.6% separates the envelope from the 1.5x floor. If
     // you have just tripped this, you crossed the line rather than ate slack
     // that was there for you. Re-tune the cluster's own gap or the toggles'
-    // insets, or move the floor deliberately here and in the .nav-right
+    // insets, or move the floor deliberately here and in the .nav-icons
     // comment that commits to it.
     assert!(
         between_groups >= 1.5 * within_toggles,
         "the ink gap between the links and the toggles ({}px) must stay at least \
          1.5x the ink gap inside the cluster ({}px, the widest pair) — currently \
          {:.3}x — or the header stops reading as two groups.\n\
-         insets: search {}, theme {}, language {}\n.nav-right: {}\n.nav-icons: {}",
+         insets: search {}, theme {}, language {}\n.nav-content: {}\n.nav-icons: {}",
         between_groups,
         within_toggles,
         between_groups / within_toggles,
         search_inset,
         theme_inset,
         lang_inset,
-        right,
+        content,
         icons
     );
 }
 
 #[test]
-fn test_css_nav_right_edge_aligns_toggles_when_it_wraps() {
-    // When a long breadcrumb pushes .nav-right to its own row it grows to fill
-    // that row, and these two declarations are what then put the links at the
-    // start edge and the toggles at the end edge. Without them the pair stays
-    // clumped against the right gutter with a ragged hole under the links.
-    // `margin-inline-start: auto` also covers the no-nav-links case, where
-    // space-between alone would leave a lone icon cluster at the start edge.
+fn test_css_nav_toggles_end_the_row_when_it_wraps() {
+    // The toggles come first in the markup. When a long breadcrumb pushes the
+    // links to row 2, `order: 1` keeps the toggles after them and .nav-right's
+    // growth fills the row, so the links start at the start edge and the
+    // toggles end at the end edge.
     let right = get_css_rule(DEFAULT_CSS, ".nav-right").expect(".nav-right CSS rule should exist");
     let icons = get_css_rule(DEFAULT_CSS, ".nav-icons").expect(".nav-icons CSS rule should exist");
-
-    assert!(
-        right.contains("justify-content: space-between"),
-        ".nav-right should space-between its two groups, got: {}",
-        right
-    );
     assert!(
         right.contains("flex: 1 1 auto"),
         ".nav-right must be able to grow to fill row 2 (and must NOT use a 100% \
          basis, which forces a wrap even when the content fits), got: {}",
         right
     );
-    assert!(
-        icons.contains("margin-inline-start: auto"),
-        ".nav-icons should end-anchor inside nav-right, got: {}",
-        icons
-    );
+    assert!(icons.contains("order: 1"), ".nav-icons must follow the links in a flex row, got: {}", icons);
 }
 
 #[test]
@@ -710,7 +705,7 @@ fn test_css_nav_split_name_and_toggles_on_row_one_then_links() {
     // `data-nav-split` (set by nav-split.ts on a masthead that has to wrap)
     // re-stacks the nav as a grid of named areas: the name and the toggles
     // share row 1, and the links take row 2 alone. `display: contents` lifts
-    // the two groups out of .nav-right so they can be placed independently.
+    // the links out of .nav-right so they can be placed on their own row.
     // Where the groups actually land is the nav-split-order render gate's
     // concern.
     let content = get_css_rule(DEFAULT_CSS, ".nav-content[data-nav-split]")
@@ -727,7 +722,7 @@ fn test_css_nav_split_name_and_toggles_on_row_one_then_links() {
     );
     assert!(
         right.contains("display: contents"),
-        "split mode must lift links + icons out of .nav-right, got: {}",
+        "split mode must lift the links out of .nav-right, got: {}",
         right
     );
     for placement in [
@@ -3873,7 +3868,7 @@ fn gallery_rows_uses_ratio_fallback_wherever_it_reads_ar() {
 fn compact_masthead_never_widens_the_link_gap() {
     // The links' default column gap floors at --moss-space-sm; any value a
     // compact rule sets there can exceed it on a phone and widen the row.
-    assert!(DEFAULT_CSS.contains("[data-nav-compact] .nav-right"));
+    assert!(DEFAULT_CSS.contains(".nav-content[data-nav-compact] {"));
     assert!(
         !DEFAULT_CSS.contains("[data-nav-compact] .nav-links"),
         "compact mode must leave .nav-links' own clamp()ed column gap alone"

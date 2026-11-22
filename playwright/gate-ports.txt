@@ -125,3 +125,5 @@ address-bar:preview
 nav-first-paint
 progress-line:ui
 progress-line:preview
+nav-split-order:nav
+nav-split-order:short

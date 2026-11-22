@@ -203,7 +203,7 @@ impl PageChromeContext<'_, '_> {
             colophon_credit: self.layout.colophon_credit.clone(),
             // A bare page keeps only the controls, loose where a headerless
             // site's island would put them at the top of the page.
-            nav_island: if bare { nav.nav_icons_html() } else if shows_nav_island(self.layout, doc) { nav.generate_nav_island() } else { String::new() },
+            nav_island: if bare { nav.nav_icons_html("") } else if shows_nav_island(self.layout, doc) { nav.generate_nav_island() } else { String::new() },
             footer: (!bare).then(|| nav.generate_footer(self.show_rss_in_footer)),
             favicon: Some(paths.favicon_link()),
             apple_touch_icon: paths.apple_touch_icon_link(),

@@ -290,6 +290,12 @@ impl<'a> NavigationBuilder<'a> {
     /// through one shape-defining seam. Byte shape is preserved exactly:
     /// `<img class="site-logo" src="..." alt="" aria-hidden="true">`.
     fn logo_html(&self) -> String {
+        // Editor preview: name the `logo:` field — only when this page owns it
+        // (see `fm_logo`).
+        self.logo_img(self.fm_logo.then_some(r#"data-source-fm="logo""#))
+    }
+
+    fn logo_img(&self, extra_attrs: Option<&'static str>) -> String {
         // Without a snapshot the logo is synthesized with an empty one, so its
         // size is unknown and the bare shape comes out.
         let empty;
@@ -306,12 +312,7 @@ impl<'a> NavigationBuilder<'a> {
                 "",
                 assets,
                 moss_core::render::image::ImageContext::SiteLogo,
-                &moss_core::render::image::ImageRenderOptions {
-                    // Editor preview: name the `logo:` field — only when this
-                    // page owns it (see `fm_logo`).
-                    extra_attrs: self.fm_logo.then_some(r#"data-source-fm="logo""#),
-                    ..Default::default()
-                },
+                &moss_core::render::image::ImageRenderOptions { extra_attrs, ..Default::default() },
             )
         }).unwrap_or_default()
     }
@@ -330,17 +331,8 @@ impl<'a> NavigationBuilder<'a> {
         let logo_html = self.logo_html();
         let nav_mode = self.header_mode == HeaderMode::Nav;
 
-        // Build nav-left: breadcrumb trail or plain site name (nav/breadcrumb.rs)
-        // — omitted entirely under `[site].header = "nav"`, which drops the
-        // brand from the masthead in favor of the Home link below. Omitting
-        // the `<div>` outright (not just its content) is what matters here:
-        // `.nav-left` claims 999/1000 of row 1's free space by design (see
-        // its own comment), so an EMPTY-but-present div would still crowd
-        // `.nav-right` over to the right edge. With no `.nav-left` sibling at
-        // all, `.nav-right` becomes `.nav-content`'s only flex child and
-        // takes the full row; `.nav-icons`'s own `margin-inline-start: auto`
-        // then pins it to the end edge and the link list falls in at the
-        // start, with no CSS of its own for this mode.
+        // `.nav-left` is the trail or the plain name (nav/breadcrumb.rs), left out
+        // whole under `[site].header = "nav"`: an empty one would still claim row 1.
         let site_name = if nav_mode {
             String::new()
         } else {
@@ -464,20 +456,32 @@ impl<'a> NavigationBuilder<'a> {
             String::new()
         };
 
+        // A hidden copy of the logo opens both floats. The theme sizes it as it
+        // sizes the logo, so a logo taller than the toggles makes each float as
+        // tall and the toggles and links centre on it, as in a flex row.
+        let strut = if !nav_mode && self.logo_path.is_some() {
+            format!(r#"<span class="nav-logo-strut" aria-hidden="true">{}</span>"#, self.logo_img(None))
+        } else {
+            String::new()
+        };
+
         // Nav links (only if nav items exist). `id="nav-links"` is the
         // aria-controls target above; theme.ts also uses it to toggle `inert`
         // on the closed mobile menu so its (invisible) links leave the tab
         // order (WCAG 2.4.7/2.4.3).
         let nav_links = if has_nav_items {
-            format!(r#"<div class="nav-links" id="nav-links">{}</div>"#, page_items.join(""))
+            format!(r#"<div class="nav-links" id="nav-links">{}{}</div>"#, strut, page_items.join(""))
         } else {
             String::new()
         };
 
-        let nav_icons = self.nav_icons_html();
-        let nav_right = format!(r#"<div class="nav-right">{}{}{}</div>"#, hamburger, nav_links, nav_icons);
+        // The toggles come first so a plain name can wrap beside them as a
+        // float from the first paint; site.css orders them to the end edge
+        // wherever the row is flex or grid. Focus follows this order.
+        let nav_icons = self.nav_icons_html(&strut);
+        let nav_right = format!(r#"<div class="nav-right">{}{}</div>"#, hamburger, nav_links);
 
-        format!("{}{}", site_name, nav_right)
+        format!("{}{}{}", nav_icons, site_name, nav_right)
     }
 
 }

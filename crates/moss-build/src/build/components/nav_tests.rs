@@ -320,9 +320,9 @@ fn test_navigation_structure() {
 
     let nav = nav_builder.generate_navigation();
 
-    assert!(nav.contains("nav-left"), "Should have nav-left container");
-    assert!(nav.contains("nav-right"), "Should have nav-right container");
-    assert!(nav.contains("nav-icons"), "Should have nav-icons container");
+    // Toggles first: site.css floats them beside a plain name, and focus follows this order.
+    let at = |class: &str| nav.find(&format!(r#"class="{class}""#)).unwrap_or_else(|| panic!("no .{class} in {nav}"));
+    assert!(at("nav-icons") < at("nav-left") && at("nav-left") < at("nav-right"), "{nav}");
     assert!(
         nav.contains("nav-theme-btn"),
         "Should include nav theme button"

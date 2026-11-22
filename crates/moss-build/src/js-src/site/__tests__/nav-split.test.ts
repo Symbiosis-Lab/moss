@@ -31,17 +31,17 @@ beforeEach(() => {
 });
 
 describe("oneRowFits — the split decision", () => {
-  const row = { name: 180, links: 300, icons: 108, outerGap: 24, innerGap: 32 };
+  const row = { name: 180, links: 300, icons: 108, gap: 28 };
 
   test("splits exactly when name + gaps + links + icons exceed the row", () => {
-    // 180+24+300+32+108 = 644.
+    // 180+28+300+28+108 = 644.
     expect(oneRowFits({ ...row, container: 644 })).toBe(true);
     expect(oneRowFits({ ...row, container: 643.5 })).toBe(false);
   });
 
   test("a row over by a fraction of a pixel wraps, so it does not fit", () => {
     // A trail page at 412px: 206.09 + 8 + 58.19 + 8 + 100.41 = 380.69 into 380.
-    expect(oneRowFits({ container: 380, name: 206.09, outerGap: 8, links: 58.19, innerGap: 8, icons: 100.41 })).toBe(false);
+    expect(oneRowFits({ container: 380, name: 206.09, gap: 8, links: 58.19, icons: 100.41 })).toBe(false);
   });
 
   test("a wider toggle cluster tips the same row over", () => {

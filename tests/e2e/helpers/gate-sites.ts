@@ -3864,6 +3864,58 @@ precision = "city"
   },
 };
 
+/** The same site under `[site].header = "nav"`: no name in the masthead, the Home link first. */
+export const NAV_SPLIT_ORDER_NAV_GATE: ScratchSiteSpec = {
+  name: "nav-split-order-nav-gate",
+  files: {
+    ...NAV_SPLIT_ORDER_GATE.files,
+    ".moss/config.toml": (NAV_SPLIT_ORDER_GATE.files[".moss/config.toml"] as string).replace('[site]\nlang = "en"\n', '[site]\nlang = "en"\nheader = "nav"\n'),
+  },
+};
+
+/** A short plain name with three links: one row, the links ending a group gap before the toggles. */
+export const NAV_SPLIT_ORDER_SHORT_GATE: ScratchSiteSpec = {
+  name: "nav-split-order-short-gate",
+  files: {
+    "index.md": `---
+title: Garden
+uid: "nss00101"
+---
+
+# Garden
+`,
+    "Essays.md": `---
+title: Essays
+uid: "nss00102"
+nav: true
+---
+
+# Essays
+`,
+    "Notes.md": `---
+title: Notes
+uid: "nss00103"
+nav: true
+---
+
+# Notes
+`,
+    "About.md": `---
+title: About
+uid: "nss00104"
+nav: true
+---
+
+# About
+`,
+    ".moss/config.toml": `schema_version = 6
+
+[site]
+lang = "en"
+`,
+  },
+};
+
 export const NAV_ONE_ROW_GATE: ScratchSiteSpec = {
   name: "nav-one-row-gate",
   files: {
@@ -3902,6 +3954,14 @@ nav: true
 ---
 
 # Visit
+`,
+    "Scroll.md": `---
+title: Scroll
+uid: "nor00105"
+typesetting: vertical
+---
+
+# Scroll
 `,
     "index.zh-hans.md": `---
 title: 示例

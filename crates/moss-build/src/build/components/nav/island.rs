@@ -92,7 +92,7 @@ impl<'a> NavigationBuilder<'a> {
             // end by position alone, so they are never hidden with the bar.
             let site_name = self.site_name_link_html(&self.home_path(), &self.logo_html());
             let bar = [site_name, if sections { self.sections_button_html() } else { String::new() }];
-            return format!("{}{}", self.island_frame(true, &bar), self.nav_icons_html());
+            return format!("{}{}", self.island_frame(true, &bar), self.nav_icons_html(""));
         }
         // `nav` header mode carries no breadcrumb trail — a home segment
         // would reintroduce the brand link this mode exists to drop, in the

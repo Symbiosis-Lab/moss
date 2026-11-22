@@ -14,6 +14,7 @@
  */
 
 import { test, expect, type Page, newPage } from "../../support/browser-test";
+import { holdScript, settle, shifts, themeKeepsNavRightABox } from "./first-paint";
 
 const LONG_TRAIL = "/survey/river/fourth-volume/";
 const SHORT_TRAIL = "/notes/rain/";
@@ -50,61 +51,6 @@ async function masthead(page: Page, forceSplit = false): Promise<Masthead> {
       iconsStart: box(".nav-icons").left,
     };
   }, forceSplit);
-}
-
-async function settle(page: Page): Promise<void> {
-  await page.evaluate(() => document.fonts.ready);
-  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-}
-
-/** Delays the site script so the first frame paints before it runs, as on a slow phone. */
-async function holdScript(page: Page): Promise<void> {
-  await page.route(/\/theme\.[^/]*js(\?|$)/, async (route) => {
-    await new Promise((r) => setTimeout(r, 700));
-    await route.continue();
-  });
-}
-
-/** A theme that keeps `.nav-right` a box: an unlayered rule outranks every moss layer. */
-async function themeKeepsNavRightABox(page: Page): Promise<void> {
-  await page.route(/\.css(\?|$)/, async (route) => {
-    const response = await route.fetch();
-    await route.fulfill({ response, body: `${await response.text()}\n.nav-right { display: flex; }\n` });
-  });
-}
-
-interface Shifts {
-  total: number;
-  /** Each shift, with the elements it moved: the reason a total is what it is. */
-  entries: string[];
-  /** Whether the first contentful paint came before the script arrived; without one there is nothing to shift. */
-  paintedFirst: boolean;
-}
-
-async function shifts(page: Page): Promise<Shifts> {
-  return page.evaluate(
-    () =>
-      new Promise<Shifts>((resolve) => {
-        const fcp = performance.getEntriesByName("first-contentful-paint")[0]?.startTime ?? Infinity;
-        const script = (performance.getEntriesByType("resource") as PerformanceResourceTiming[]).find((r) => /\/theme\.[^/]*js/.test(r.name));
-        let total = 0;
-        const entries: string[] = [];
-        type Shift = PerformanceEntry & { value: number; hadRecentInput: boolean; sources: Array<{ node?: Node; previousRect: DOMRectReadOnly; currentRect: DOMRectReadOnly }> };
-        new PerformanceObserver((list) => {
-          for (const entry of list.getEntries() as Shift[]) {
-            if (entry.hadRecentInput) continue;
-            total += entry.value;
-            const moved = entry.sources.map((src) => {
-              const el = src.node as Element | undefined;
-              const r = (x: DOMRectReadOnly) => `${Math.round(x.x)},${Math.round(x.y)} ${Math.round(x.width)}x${Math.round(x.height)}`;
-              return `${el?.className || el?.nodeName}: ${r(src.previousRect)} -> ${r(src.currentRect)}`;
-            });
-            entries.push(`${entry.value.toFixed(4)} @${Math.round(entry.startTime)}ms ${moved.join("; ")}`);
-          }
-        }).observe({ type: "layout-shift", buffered: true });
-        setTimeout(() => resolve({ total, entries, paintedFirst: script !== undefined && fcp < script.responseEnd }), 300);
-      }),
-  );
 }
 
 // 412 is a phone; 700 is high in the phone band, where a foldable trail fits
@@ -161,20 +107,29 @@ test("the scripted split keeps the header the stylesheet laid out, and moves onl
   expect(wide.links[0], JSON.stringify(wide)).toBeGreaterThanOrEqual(wide.icons[1] - 1);
 });
 
+// The toggles are not inside .nav-right, so a theme that keeps it a box
+// leaves the masthead exactly as moss lays it out.
 for (const javaScriptEnabled of [false, true]) {
-  test(`a theme that keeps .nav-right a box gets the plain wrap in markup order, scripts ${javaScriptEnabled ? "on" : "off"}`, async ({ browser }, testInfo) => {
-    const page = await newPage(browser, {
-      baseURL: testInfo.project.use.baseURL,
-      javaScriptEnabled,
-      viewport: { width: 412, height: 900 },
-    });
-    await themeKeepsNavRightABox(page);
-    await page.goto(LONG_TRAIL, { waitUntil: "load" });
-    if (javaScriptEnabled) await settle(page);
-    const m = await masthead(page);
-    await page.close();
-    expect(m.iconsStart, JSON.stringify(m)).toBeGreaterThan(m.linksStart);
-    expect(overlaps(m.links, m.icons), JSON.stringify(m)).toBe(true);
+  test(`a theme that keeps .nav-right a box leaves the masthead as it is, scripts ${javaScriptEnabled ? "on" : "off"}`, async ({ browser }, testInfo) => {
+    const read = async (themed: boolean) => {
+      const page = await newPage(browser, {
+        baseURL: testInfo.project.use.baseURL,
+        javaScriptEnabled,
+        viewport: { width: 412, height: 900 },
+      });
+      if (themed) await themeKeepsNavRightABox(page);
+      await page.goto(LONG_TRAIL, { waitUntil: "load" });
+      if (javaScriptEnabled) await settle(page);
+      const m = await masthead(page);
+      await page.close();
+      return m;
+    };
+    const themed = await read(true);
+    const plain = await read(false);
+    const where = JSON.stringify({ themed, plain });
+    expect(themed.header, where).toBeCloseTo(plain.header, 0);
+    expect(themed.icons, where).toEqual(plain.icons);
+    expect(themed.links, where).toEqual(plain.links);
   });
 }
 

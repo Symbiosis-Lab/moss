@@ -6,8 +6,8 @@
 use super::NavigationBuilder;
 
 impl<'a> NavigationBuilder<'a> {
-    /// `<div class="nav-icons">` with the controls this page carries.
-    pub(crate) fn nav_icons_html(&self) -> String {
+    /// `<div class="nav-icons">` with the controls this page carries, after `lead`.
+    pub(crate) fn nav_icons_html(&self, lead: &str) -> String {
         // Icon items: search (left), language toggle, theme toggle (right).
         // Left to right the cluster runs from the most content-related control
         // to the most presentation-related one: search sits nearest the nav
@@ -74,6 +74,6 @@ impl<'a> NavigationBuilder<'a> {
                 theme_label,
             ));
         }
-        format!(r#"<div class="nav-icons">{}</div>"#, icon_items.join(""))
+        format!(r#"<div class="nav-icons">{}{}</div>"#, lead, icon_items.join(""))
     }
 }
