@@ -1827,6 +1827,9 @@ const EN = {
   'login.failure.tls_error': "Connection to matters.town couldn't be secured.",         // Controls ok, TLS error → encryption failed
   'login.failure.loaded_blank': 'The page loaded but looks empty.',      // All ok but page body empty
   'login.failure.retry': 'Retry',             // Retry button label
+  'login.closing.in': 'Signed in · closing in {n}',
+  'login.closing.said': 'Signed in. Closing in {n} seconds.',
+  'login.closing.keep': 'Keep open',
 
   // [plugin settings — connection status row]
   // Shown for login-capable plugins in their settings section.
@@ -3459,6 +3462,9 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'login.failure.tls_error': 'Die Verbindung zu matters.town konnte nicht gesichert werden.',
     'login.failure.loaded_blank': 'Die Seite wurde geladen, wirkt aber leer.',
     'login.failure.retry': 'Erneut versuchen',
+    'login.closing.in': 'Angemeldet · schließt in {n}',
+    'login.closing.said': 'Angemeldet. Schließt in {n} Sekunden.',
+    'login.closing.keep': 'Offen lassen',
     'plugin.connection.connected': 'Angemeldet als {user}',
     'plugin.connection.signed_in': 'Angemeldet',
     'plugin.connection.connect': 'Bei {name} anmelden',
@@ -5128,6 +5134,9 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'login.failure.tls_error': '与 matters.town 的连接无法建立加密。',
     'login.failure.loaded_blank': '页面已加载但似乎为空。',
     'login.failure.retry': '重试',
+    'login.closing.in': '已登录 · {n} 秒后关闭',
+    'login.closing.said': '已登录。{n} 秒后关闭。',
+    'login.closing.keep': '保持打开',
 
     // [plugin settings — connection status row]
     'plugin.connection.connected': '已登录：{user}',
@@ -6801,6 +6810,9 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'login.failure.tls_error': '與 matters.town 的連線無法建立加密。',
     'login.failure.loaded_blank': '頁面已載入但似乎為空。',
     'login.failure.retry': '重試',
+    'login.closing.in': '已登入 · {n} 秒後關閉',
+    'login.closing.said': '已登入。{n} 秒後關閉。',
+    'login.closing.keep': '保持開啟',
 
     // [plugin settings — connection status row]
     'plugin.connection.connected': '已登入：{user}',
