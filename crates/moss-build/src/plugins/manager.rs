@@ -970,7 +970,10 @@ impl PluginManager {
         let page_left_open = hook_state.take_window(&plugin.manifest.name);
         if page_left_open && hook_name == crate::plugins::types::Capability::Login.hook_name() {
             if let Some(app) = &self.host.app {
-                if let Err(e) = app.close_action_panel().await {
+                use accounts::LoginOutcome;
+                let signed_in = matches!(&result, Ok((_, returned)) if matches!(LoginOutcome::from_returned(returned.as_ref()), LoginOutcome::Completed(_) | LoginOutcome::Unsaid));
+                let closed = if signed_in { app.close_signed_in_page().await } else { app.close_action_panel().await };
+                if let Err(e) = closed {
                     log::warn!(target: "plugin", "{}: could not close the sign-in page: {e}", plugin.manifest.name);
                 }
             }

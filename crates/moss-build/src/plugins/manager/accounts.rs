@@ -630,6 +630,7 @@ mod tests {
     struct Desk {
         pages: std::sync::Mutex<Vec<String>>,
         closes: std::sync::atomic::AtomicUsize,
+        signed_in_closes: std::sync::atomic::AtomicUsize,
         listeners: std::sync::Mutex<Vec<(String, std::sync::Arc<dyn Fn(&str) + Send + Sync>)>>,
     }
 
@@ -643,6 +644,10 @@ mod tests {
 
         fn closes(&self) -> usize {
             self.closes.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        fn signed_in_closes(&self) -> usize {
+            self.signed_in_closes.load(std::sync::atomic::Ordering::SeqCst)
         }
 
         /// Until the plugin has its page open and listens for the click on it.
@@ -671,6 +676,10 @@ mod tests {
         async fn close_action_panel(&self) -> Result<(), String> {
             self.closes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.fire("browser-closed", r#"{"reason":"programmatic"}"#);
+            Ok(())
+        }
+        async fn close_signed_in_page(&self) -> Result<(), String> {
+            self.signed_in_closes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(())
         }
         async fn open_system_browser(&self, _: String) -> Result<(), String> { unreachable!() }
@@ -719,17 +728,25 @@ mod tests {
             desk.fire("picker:continue", r#"{"server":"social.example.net"}"#);
         });
         assert_eq!(signed_in.unwrap().outcome, completed("social.example.net/1", Some("@ada")));
-        assert_eq!(desk.closes(), 1, "the sign-in's page closes with it");
+        assert_eq!(desk.signed_in_closes(), 1, "the sign-in's page closes with it");
     }
 
-    /// However the sign-in ends, its page does not outlive it.
+    /// However the sign-in ends, its page does not outlive it; only a sign-in
+    /// that worked closes it as signed in.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_sign_in_that_ends_closes_its_page() {
-        for ending in [r#"return { status: "completed", account: { id: "s/1" } };"#, r#"throw new Error("server refused");"#, r#"return { status: "cancelled" };"#] {
+        let endings = [
+            (r#"return { status: "completed", account: { id: "s/1" } };"#, true),
+            ("return;", true),
+            (r#"throw new Error("server refused");"#, false),
+            (r#"return { status: "cancelled" };"#, false),
+            (r#"return { status: "failed", message: "no" };"#, false),
+        ];
+        for (ending, signed_in) in endings {
             let (_dir, project) = folder_with_channel(&format!(r#"await globalThis.__TAURI__.core.invoke("set_action_panel_html", {{ html: "<p>Pick</p>" }}); {ending}"#));
             let (manager, plugin, desk) = manager_at_desk(&project);
             let _ = manager.sign_in(&plugin, &context(&project)).await;
-            assert_eq!(desk.closes(), 1, "{ending}");
+            assert_eq!((desk.signed_in_closes(), desk.closes()), if signed_in { (1, 0) } else { (0, 1) }, "{ending}");
             assert!(!manager.host.state.hooks.is_making_progress("social", "login"), "{ending}");
         }
     }

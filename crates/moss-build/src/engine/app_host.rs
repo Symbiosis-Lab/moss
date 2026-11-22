@@ -70,6 +70,12 @@ pub trait AppHost: Send + Sync {
 
     async fn close_action_panel(&self) -> Result<(), String>;
 
+    /// Close the page of a sign-in that succeeded. A host may first show the
+    /// person that it worked, then close; the panel's ✕ still closes at once.
+    async fn close_signed_in_page(&self) -> Result<(), String> {
+        self.close_action_panel().await
+    }
+
     async fn open_system_browser(&self, url: String) -> Result<(), String>;
 
     /// Switch the main shell back to the editor view — plugins call this after
