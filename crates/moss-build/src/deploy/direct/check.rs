@@ -120,39 +120,50 @@ async fn open(folder: &Path, keys: &Keys, settings: &Settings, trust: Option<&st
 /// the site's address. Without a folder, the usual web folders are tried, and
 /// the one the address shows is saved.
 pub async fn check(folder: &Path, keys: &Keys, trust: Option<&str>) -> Result<Checked, String> {
-    let settings = server::settings(folder)?.ok_or("Set the server first.")?;
-    let host = &settings.server.host;
-    let candidates = sftp::WEB_FOLDERS.iter().map(|f| f.replace("{host}", host)).collect::<Vec<_>>();
-    check_among(folder, keys, trust, &candidates).await
+    check_among(folder, keys, trust, &sftp::WEB_FOLDERS.iter().map(|f| f.to_string()).collect::<Vec<_>>()).await
 }
 
 pub(super) async fn check_among(folder: &Path, keys: &Keys, trust: Option<&str>, candidates: &[String]) -> Result<Checked, String> {
     let mut settings = server::settings(folder)?.ok_or("Set the server first.")?;
     let config = crate::build::site_config::read_project_config(&folder.to_string_lossy())?;
-    let address = config.site_address()?.unwrap_or_else(|| derived_address(&settings.server.host));
+    let address = config.site_address()?.unwrap_or_else(|| settings.server.web_address());
     let mut folders = Vec::new();
     let refused = match open(folder, keys, &settings, trust).await? {
         Err(refusal) => Some(refusal),
         Ok(dest) if !settings.server.folder.is_empty() => probe(&dest, &address).await.err(),
         Ok(mut dest) => {
-            folders = dest.folders(candidates).await;
-            let mut found = None;
-            for candidate in &folders {
-                dest.move_to(candidate);
-                if probe(&dest, &address).await.is_ok() {
-                    found = Some(candidate.clone());
-                    break;
+            // Only a miss at the address moves on to the next folder; any other
+            // refusal means moss could not publish there.
+            let (mut served, mut writable, mut stop) = (None, Vec::new(), None);
+            let candidates = candidates.iter().map(|f| f.replace("{host}", &settings.server.host)).collect::<Vec<_>>();
+            for candidate in dest.folders(&candidates).await {
+                dest.move_to(&candidate);
+                match probe(&dest, &address).await {
+                    Ok(()) => {
+                        served = Some(candidate);
+                        break;
+                    }
+                    Err(Refusal::NotServed { .. }) => writable.push(candidate),
+                    Err(refusal) => {
+                        stop.get_or_insert(refusal);
+                    }
                 }
             }
-            match found {
-                Some(found) => {
-                    settings.server.folder = found;
-                    server::save_server(folder, &settings.server)?;
-                    folders.clear();
-                    None
+            // One writable folder is the folder: the address is then the question.
+            let only = (writable.len() == 1).then(|| writable[0].clone());
+            if let Some(found) = served.clone().or(only) {
+                settings.server.folder = found;
+                server::save_server(folder, &settings.server)?;
+            }
+            match (served, writable.len(), stop) {
+                (Some(_), ..) => None,
+                (None, 1, _) => Some(Refusal::NotServed { address: address.clone() }),
+                (None, 0, Some(refusal)) => Some(refusal),
+                (None, 0, None) => Some(Refusal::NoWebFolder { host: settings.server.host.clone() }),
+                (None, ..) => {
+                    folders = writable;
+                    Some(Refusal::WhichFolder { host: settings.server.host.clone() })
                 }
-                None if folders.is_empty() => Some(Refusal::NoWebFolder { host: settings.server.host.clone() }),
-                None => Some(Refusal::WhichFolder { host: settings.server.host.clone() }),
             }
         }
     };
@@ -179,10 +190,6 @@ pub(super) async fn check_among(folder: &Path, keys: &Keys, trust: Option<&str>,
 }
 
 /// The address of a folder that names none: its server's.
-fn derived_address(host: &str) -> String {
-    if host.contains(':') { format!("https://[{host}]/") } else { format!("https://{host}/") }
-}
-
 /// Write a file, rename it over itself, fetch it at `address`, and remove it.
 /// A failed fetch is [`Refusal::NotServed`], returned after the file is gone.
 async fn probe(dest: &SftpDestination, address: &str) -> Result<(), Refusal> {
@@ -211,7 +218,7 @@ async fn shows(address: &str, name: &str, token: &str) -> bool {
 /// upload passes. Both binaries enter here: the app with the seal its watcher
 /// made, `moss deploy` through [`build_and_publish`]. Records the landing as
 /// every publish does, and returns it with what changed there; its address is
-/// the folder's `[site].url`, or the server folder when it names none.
+/// the one the check fetches.
 pub async fn publish_sealed(
     folder: &Path,
     sealed: Option<&SealedManifest>,
@@ -226,7 +233,7 @@ pub async fn publish_sealed(
         return Err(format!("Check {} first, to trust its key: moss deploy --check", settings.server.host));
     }
     let config = crate::build::site_config::read_project_config(&folder.to_string_lossy())?;
-    let url = config.site_address()?.unwrap_or_else(|| settings.server.to_url());
+    let url = config.site_address()?.unwrap_or_else(|| settings.server.web_address());
     let sealed = crate::deploy::plugin_push::sealed_for_upload(folder, sealed).await?;
     let site_dir = crate::moss_paths::MossPaths::new(folder).generation_dir(sealed.generation_id());
     let dest = open(folder, keys, &settings, None).await?.map_err(|r| r.to_string())?;

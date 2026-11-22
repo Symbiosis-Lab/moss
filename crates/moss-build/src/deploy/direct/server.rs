@@ -62,9 +62,18 @@ impl Server {
 
     /// The one shape the config stores.
     pub fn to_url(&self) -> String {
-        let host = if self.host.contains(':') { format!("[{}]", self.host) } else { self.host.clone() };
         let port = if self.port == 22 { String::new() } else { format!(":{}", self.port) };
-        format!("sftp://{}@{host}{port}{}", self.user, self.folder)
+        format!("sftp://{}@{}{port}{}", self.user, self.authority(), self.folder)
+    }
+
+    /// Where the site is served when the folder names no address of its own.
+    pub fn web_address(&self) -> String {
+        format!("https://{}/", self.authority())
+    }
+
+    /// The host as a URL writes it: an IPv6 address goes in brackets.
+    fn authority(&self) -> String {
+        if self.host.contains(':') { format!("[{}]", self.host) } else { self.host.clone() }
     }
 }
 

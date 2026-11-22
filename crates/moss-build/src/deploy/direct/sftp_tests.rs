@@ -441,7 +441,7 @@ async fn a_folder_built_and_published_to_its_server_sends_only_what_changed_the_
     );
 
     let (landed, first) = publish().await.unwrap();
-    assert_eq!(landed.url, sshd.server().to_url());
+    assert_eq!(landed.url, sshd.server().web_address());
     let state = crate::build::site_config::read_deployment_state(&folder.path().to_string_lossy()).unwrap();
     assert_eq!(state.targets["server"].last_deployment_url.as_deref(), Some(landed.url.as_str()), "the landing is recorded");
     assert!(first.uploaded > 2, "{first:?}");
@@ -555,19 +555,44 @@ async fn a_folder_left_out_is_the_one_the_address_shows() {
 }
 
 /// When the address shows none of the web folders found, the person picks
-/// one, and nothing is saved for them.
+/// among several, and nothing is saved for them; a single one is the folder,
+/// and the address is the question.
 #[tokio::test]
 async fn web_folders_the_address_does_not_show_are_offered_to_pick() {
     let Some(sshd) = Sshd::start("ed25519") else { return };
     let nowhere = format!("http://127.0.0.1:{}/", free_port());
     let folder = site_without_folder(&sshd, &nowhere);
-    let candidates = [sshd.www.display().to_string()];
+    let other = sshd.dir.path().join("public_html");
+    std::fs::create_dir(&other).unwrap();
+    let both = [sshd.www.clone(), other].map(|p| p.display().to_string());
 
-    let checked = check::check_among(folder.path(), &sshd.keys, None, &candidates).await.unwrap();
+    let checked = check::check_among(folder.path(), &sshd.keys, None, &both).await.unwrap();
     assert!(!checked.passed());
     assert!(matches!(checked.steps.last().and_then(|s| s.refusal.clone()), Some(Refusal::WhichFolder { .. })), "{checked:?}");
-    assert_eq!(checked.folders.len(), 1);
+    assert_eq!(checked.folders.len(), 2);
     assert_eq!(server::settings(folder.path()).unwrap().unwrap().server.folder, "");
+
+    let one = check::check_among(folder.path(), &sshd.keys, None, &both[..1]).await.unwrap();
+    assert!(one.passed() && one.folders.is_empty(), "{one:?}");
+    assert!(matches!(one.steps.last().and_then(|s| s.refusal.clone()), Some(Refusal::NotServed { .. })), "{one:?}");
+    let saved = server::settings(folder.path()).unwrap().unwrap().server.folder;
+    assert_eq!(Path::new(&saved).canonicalize().unwrap(), sshd.www.canonicalize().unwrap());
+}
+
+/// A web folder moss cannot write to is refused as that, not offered to pick.
+#[tokio::test]
+async fn a_web_folder_moss_cannot_write_to_keeps_its_refusal() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(sshd) = Sshd::start("ed25519") else { return };
+    let folder = site_without_folder(&sshd, &serve(&sshd.www));
+    let locked = sshd.dir.path().join("htdocs");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    let checked = check::check_among(folder.path(), &sshd.keys, None, &[locked.display().to_string()]).await.unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(matches!(checked.steps.last().and_then(|s| s.refusal.clone()), Some(Refusal::CannotWrite { .. })), "{checked:?}");
+    assert!(checked.folders.is_empty());
 
     let none = check::check_among(folder.path(), &sshd.keys, None, &[sshd.dir.path().join("absent").display().to_string()]).await.unwrap();
     assert!(matches!(none.steps.last().and_then(|s| s.refusal.clone()), Some(Refusal::NoWebFolder { .. })), "{none:?}");

@@ -287,6 +287,7 @@ impl SftpDestination {
         }
     }
 
+    /// The folder's real path, as the server named it.
     pub fn root(&self) -> &str {
         &self.root
     }
