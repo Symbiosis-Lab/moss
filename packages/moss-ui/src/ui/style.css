@@ -2700,29 +2700,29 @@ body.own-titlebar.platform-linux:has(.action-panel-open) .moss-titlebar [data-ca
   z-index: 1; /* paint above the centered identity absolute block */
 }
 
-/* ── Login failure overlay ────────────────────────────────────
+/* ── Panel cover ───────────────────────────────────────────────
  *
- * Shell-owned div rendered over the panel region below the 48 px titlebar when
- * the login webview renders blank (GFW / network failure).  The login webview is
- * hidden (webview.hide()) so the shell region below the titlebar is fully exposed,
- * and this overlay covers exactly that region.
- *
- * Positioned: fixed, top = titlebar height, left = 0, width = --action-panel-width,
- * height = remaining window height.  Stays behind the titlebar (z-index < titlebar).
- *
- * The Matters titlebar chrome stays visible throughout.
+ * A shell-owned surface over the panel region below the titlebar while the
+ * panel's page is hidden: the view of a sign-in page that rendered blank, and
+ * the countdown after a sign-in works. It stays below the titlebar, whose
+ * chrome remains visible.
  */
-.moss-login-failure-overlay {
-  display: none; /* hidden until .moss-login-failure-overlay--visible */
+.moss-panel-cover {
   position: fixed;
   top: var(--moss-titlebar-height, 48px);
   left: 0;
   width: var(--action-panel-width, 440px);
   bottom: 0;
-  z-index: var(--z-modal); /* it IS a modal surface: covers the panel until dismissed */
+  z-index: var(--z-modal); /* a modal surface: covers the panel until dismissed */
   background: var(--moss-color-bg);
+  display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+}
+
+.moss-login-failure-overlay {
+  display: none; /* hidden until .moss-login-failure-overlay--visible */
 }
 
 .moss-login-failure-overlay--visible {
@@ -2751,12 +2751,9 @@ body.own-titlebar.platform-linux:has(.action-panel-open) .moss-titlebar [data-ca
   margin: 0;
 }
 
-/* Neutral (grayscale) recovery action — a failure state doesn't warrant the
-   brand accent; the accent is reserved for meaningful, affirmative moments.
-   Uses moss's standard neutral-button idiom (surface fill + border-medium),
-   matching the quiet gray icon + gray message above it. Tokens only. */
-.moss-login-failure-overlay__retry {
-  margin-top: 4px;
+/* A neutral button for a panel cover's one action: the accent is kept for
+   affirmative moments, and neither a failed nor a finished sign-in is one. */
+.moss-quiet-button {
   padding: 8px 22px;
   border-radius: 8px;
   border: 1px solid var(--moss-border-medium);
@@ -2768,8 +2765,12 @@ body.own-titlebar.platform-linux:has(.action-panel-open) .moss-titlebar [data-ca
   transition: background 120ms, border-color 120ms;
 }
 
-.moss-login-failure-overlay__retry:hover {
+.moss-quiet-button:hover {
   border-color: var(--moss-color-text-secondary);
+}
+
+.moss-login-failure-overlay__retry {
+  margin-top: 4px;
 }
 
 /* Vertical divider in titlebar - absolutely positioned to align with webview divider.
