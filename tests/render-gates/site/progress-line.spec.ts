@@ -75,15 +75,43 @@ async function pinPanel(shell: Frame, site: string): Promise<void> {
 
 const lines = (shell: Frame) => shell.evaluate(() => (window as unknown as { __lines?: Line[] }).__lines ?? []);
 
-/** Waits until the line has not changed for `quietMs`. */
-async function settle(shell: Frame, quietMs = 5000): Promise<Line[]> {
+const count = (text: string, re: RegExp) => text.match(re)?.length ?? 0;
+
+/**
+ * Waits for the end of a case rather than for a quiet spell, so the gate takes
+ * as long as the builds do, under load or not: the server's log since `from`
+ * shows every rebuild it began ended (plus `serverDone`, for work the server
+ * starts on its own, such as the rebuild after a video settles), and the line's
+ * last text recorded from index `since` on says so too ("Updated", or `ends`
+ * for a failure), since the line hears of a build after the log does.
+ */
+async function settle(shell: Frame, from: number, since: number, opts: { serverDone?: (log: string) => boolean; ends?: RegExp } = {}): Promise<Line[]> {
+  const ends = opts.ends ?? /^Updated/;
   await expect.poll(async () => {
-    const seen = await lines(shell);
-    const now = await shell.evaluate(() => Math.round(performance.now()));
-    return now - (seen.at(-1)?.t ?? 0);
-  }, { timeout: 120_000, intervals: [500] }).toBeGreaterThan(quietMs);
+    const log = serve.output.slice(from);
+    const began = count(log, /Rebuild triggered by/g);
+    if (began === 0 || count(log, /build\.summary outcome=/g) < began) return 'building';
+    if (opts.serverDone && !opts.serverDone(log)) return 'server busy';
+    const said = (await lines(shell)).slice(since).filter((l) => l.text);
+    return said.at(-1)?.text ?? '';
+  }, { timeout: 120_000, intervals: [250] }).toMatch(ends);
   return lines(shell);
 }
+
+/** Pins the panel, starts the record and waits out the pin's own save; the record's index to read a case from. */
+async function ready(shell: Frame): Promise<number> {
+  const from = serve.output.length;
+  await pinPanel(shell, serve.site);
+  await record(shell);
+  // The pin's "Updated" may be gone before the record starts: anything but "Updating…" is at rest.
+  return (await settle(shell, from, 0, { ends: /^(?!Updating)/ })).length - 1;
+}
+
+/** A new video's poster has landed and the rebuild it asks for (its own, or one it joined) has ended; that rebuild must not re-announce itself. */
+const videoSettled = (log: string) => {
+  const at = log.lastIndexOf('media settle:');
+  return at >= 0 && log.includes('build.summary outcome=', at);
+};
 
 /** The record from the first "Updating…": it reaches "Updated" with no blank between, and does not end on "Updating…". */
 function expectUpdatingThenUpdated(seen: Line[]): void {
@@ -106,74 +134,70 @@ test.describe('progress line', () => {
 
   test('a save with search on reads Updating… then Updated', async ({ page }, testInfo) => {
     const { shell, preview } = await openShell(page, serve, 'Hello garden.');
-    await pinPanel(shell, serve.site);
-    await record(shell);
-    const mark = (await settle(shell)).length - 1;
+    const mark = await ready(shell);
+    const from = serve.output.length;
     writeFileSync(join(serve.site, 'index.md'), '---\ntitle: Garden\n---\nHello garden, in spring.\n\n[Beds](beds.md)\n');
     await preview.waitForFunction(() => document.body?.innerText.includes('in spring'), null, { timeout: 30_000 });
-    const seen = (await settle(shell)).slice(mark);
+    const seen = (await settle(shell, from, mark + 1)).slice(mark);
     await testInfo.attach('lines.json', { body: JSON.stringify(seen, null, 1), contentType: 'application/json' });
     expectUpdatingThenUpdated(seen);
   });
 
   test('a save that adds a video reads Updating… then Updated', async ({ page }, testInfo) => {
     const { shell, preview } = await openShell(page, serve, 'Hello garden.');
-    await pinPanel(shell, serve.site);
-    await record(shell);
-    const mark = (await settle(shell)).length - 1;
+    const mark = await ready(shell);
+    const from = serve.output.length;
     copyFileSync(CLIP, join(serve.site, 'clip.mp4'));
     writeFileSync(join(serve.site, 'index.md'), '---\ntitle: Garden\n---\nHello garden, on film.\n\n![[clip.mp4]]\n\n[Beds](beds.md)\n');
     await preview.waitForFunction(() => document.body?.innerText.includes('on film'), null, { timeout: 30_000 });
-    const seen = (await settle(shell)).slice(mark);
+    const seen = (await settle(shell, from, mark + 1, { serverDone: videoSettled })).slice(mark);
     await testInfo.attach('lines.json', { body: JSON.stringify(seen, null, 1), contentType: 'application/json' });
     expectUpdatingThenUpdated(seen);
   });
 
   test('a second save inside 2.5 s reads Updating… until its own paint, then Updated', async ({ page }, testInfo) => {
     const { shell, preview } = await openShell(page, serve, 'Hello garden.');
-    await pinPanel(shell, serve.site);
-    await record(shell);
-    const mark = (await settle(shell)).length - 1;
+    const mark = await ready(shell);
+    const from = serve.output.length;
     writeFileSync(join(serve.site, 'index.md'), '---\ntitle: Garden\n---\nHello garden, once.\n\n[Beds](beds.md)\n');
     await page.waitForTimeout(1200);
     writeFileSync(join(serve.site, 'index.md'), '---\ntitle: Garden\n---\nHello garden, twice.\n\n[Beds](beds.md)\n');
     await preview.waitForFunction(() => document.body?.innerText.includes('twice'), null, { timeout: 30_000 });
-    const seen = (await settle(shell)).slice(mark);
+    const seen = (await settle(shell, from, mark + 1)).slice(mark);
     await testInfo.attach('lines.json', { body: JSON.stringify(seen, null, 1), contentType: 'application/json' });
     expectUpdatingThenUpdated(seen);
   });
 
   test('a save no paint follows, then a save whose build runs past 1.5 s, reads Updating… to the second paint', async ({ page }, testInfo) => {
     const { shell, preview } = await openShell(page, serve, 'Hello garden.');
-    await pinPanel(shell, serve.site);
-    await record(shell);
-    const mark = (await settle(shell)).length - 1;
+    const mark = await ready(shell);
+    const from = serve.output.length;
     // The preview shows the home page, so a change to another page paints nothing.
     writeFileSync(join(serve.site, 'beds.md'), '---\ntitle: Beds\n---\nBeds are dug in May.\n');
     await page.waitForTimeout(500);
     copyFileSync(CLIP, join(serve.site, 'clip.mp4'));
     writeFileSync(join(serve.site, 'index.md'), '---\ntitle: Garden\n---\nHello garden, on film.\n\n![[clip.mp4]]\n\n[Beds](beds.md)\n');
     await preview.waitForFunction(() => document.body?.innerText.includes('on film'), null, { timeout: 30_000 });
-    const seen = (await settle(shell)).slice(mark);
+    const seen = (await settle(shell, from, mark + 1, { serverDone: videoSettled })).slice(mark);
     await testInfo.attach('lines.json', { body: JSON.stringify(seen, null, 1), contentType: 'application/json' });
     expectUpdatingThenUpdated(seen);
   });
 
   test('a save whose build changes no output still ends on Updated', async ({ page }, testInfo) => {
     const { shell } = await openShell(page, serve, 'Hello garden.');
-    await pinPanel(shell, serve.site);
-    await record(shell);
+    let mark = await ready(shell);
     const index = join(serve.site, 'index.md');
     const body = readFileSync(index, 'utf8');
     const suppressed = () => serve.output.split('→ SUPPRESS').length - 1;
     // A trailing blank line changes the source and no page. The first such save
     // still reloads once, for the share cards written after the last build.
     const quietSave = async (extra: string): Promise<Line[]> => {
-      const mark = (await settle(shell)).length;
+      const from = serve.output.length;
       writeFileSync(index, body + extra);
-      // No text appears in the preview to wait on; wait for the line itself.
-      await expect.poll(async () => (await lines(shell)).length, { timeout: 30_000 }).toBeGreaterThan(mark);
-      return (await settle(shell)).slice(mark - 1);
+      const all = await settle(shell, from, mark + 1);
+      const seen = all.slice(mark);
+      mark = all.length - 1;
+      return seen;
     };
     await quietSave('\n');
     const before = suppressed();
@@ -185,14 +209,14 @@ test.describe('progress line', () => {
 
   test('a save whose rebuild fails does not end on Updating…', async ({ page }, testInfo) => {
     const { shell } = await openShell(page, serve, 'Hello garden.');
-    await pinPanel(shell, serve.site);
-    await record(shell);
-    const mark = (await settle(shell)).length - 1;
+    const mark = await ready(shell);
+    const from = serve.output.length;
     const config = join(serve.site, '.moss', 'config.toml');
     const good = readFileSync(config, 'utf8');
     writeFileSync(config, good + '\n[site\n');
     writeFileSync(join(serve.site, 'beds.md'), '---\ntitle: Beds\n---\nBeds are dug in April.\n');
-    const seen = (await settle(shell, 8000)).slice(mark);
+    // One retry, on its own timer, must leave the failure standing.
+    const seen = (await settle(shell, from, mark + 1, { ends: /^Couldn't update: /, serverDone: (log) => log.includes('Build failed (2 in a row)') })).slice(mark);
     await testInfo.attach('lines.json', { body: JSON.stringify(seen, null, 1), contentType: 'application/json' });
     // A config that fails to parse stops the build before its first tick, so the failure may replace the blank line directly.
     const failed = seen.findIndex((l) => /^Couldn't update: /.test(l.text ?? ''));
@@ -202,11 +226,10 @@ test.describe('progress line', () => {
 
     // The fix is the next save: the line leaves the failure for "Updated".
     const fixedMark = mark + seen.length;
+    const fixFrom = serve.output.length;
     writeFileSync(config, good);
     writeFileSync(join(serve.site, 'beds.md'), '---\ntitle: Beds\n---\nBeds are dug in May.\n');
-    // The line has been quiet since the failure, so settle alone would return at once.
-    await expect.poll(async () => (await lines(shell)).length, { timeout: 30_000 }).toBeGreaterThan(fixedMark);
-    const fixed = (await settle(shell, 8000)).slice(fixedMark);
+    const fixed = (await settle(shell, fixFrom, fixedMark, { serverDone: (log) => log.includes('build.summary outcome=ok') })).slice(fixedMark);
     await testInfo.attach('fixed.json', { body: JSON.stringify(fixed, null, 1), contentType: 'application/json' });
     expectUpdatingThenUpdated(fixed);
   });
