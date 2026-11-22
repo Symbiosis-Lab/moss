@@ -11,7 +11,7 @@
  * Fixture: playwright/contents-ruler.config.ts → tests/e2e/helpers/contents-ruler-site.ts
  * Run via: bash scripts/render-gates.sh contents-ruler
  */
-import { test, expect, type Page } from '../../support/browser-test';
+import { test, expect, type Page, newPage } from '../../support/browser-test';
 import { gatePort } from '../../../playwright/gate-ports';
 import { SECTIONS, SHORT_SECTIONS, LONG_CJK_TITLE, LONG_LATIN_TITLE, OPEN_SECTIONS, OPEN_WITH_IMAGE } from '../../e2e/helpers/contents-ruler-site';
 
@@ -358,7 +358,7 @@ test.describe('when it shows', () => {
 
   test('under reduced motion it has no transitions', async ({ browser }) => {
     const context = await browser.newContext({ reducedMotion: 'reduce', viewport: { width: 1600, height: 900 } });
-    const page = await context.newPage();
+    const page = await newPage(context);
     await page.goto(ARTICLE);
     await page.waitForSelector('.moss-contents-ruler', { state: 'attached' });
     const durations = await page.evaluate(() =>

@@ -1,7 +1,7 @@
 // A footer.md that ends in a `:::hero` closes the page: the picture spans the
 // viewport (whatever the body's own padding), nothing paints below it, and its
 // words stay on it at every width, in both themes.
-import { test, expect, Page } from '../../support/browser-test';
+import { test, expect, Page, newPage } from '../../support/browser-test';
 import { contrastRatio, luminanceOfCss, parseColor, relativeLuminance, worstCaseContrast } from '../../e2e/helpers/wcag-contrast';
 import { CREDIT, GROUND, SKY, SKY_NIGHT, capAt } from '../../e2e/helpers/closing-picture-site';
 import { gatePort } from '../../../playwright/gate-ports';
@@ -226,7 +226,7 @@ const shownPictures = (page: Page) =>
 for (const [system, chosen] of [['light', 'dark'], ['dark', 'light']] as const) {
   test(`the toggle wins over the system: system ${system}, theme ${chosen}`, async ({ browser }) => {
     const context = await browser.newContext({ colorScheme: system, viewport: { width: 1360, height: 800 } });
-    const page = await context.newPage();
+    const page = await newPage(context);
     await page.goto('/', { waitUntil: 'load' });
     expect(await shownPictures(page)).toEqual([system]);
     await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), chosen);
@@ -314,7 +314,7 @@ for (const scheme of SCHEMES) {
   for (const width of [1360, 390]) {
     test(`busy foot, ${scheme}, ${width}px: the credit is legible on its own panel`, async ({ browser }) => {
       const context = await browser.newContext({ colorScheme: scheme, viewport: { width, height: 800 } });
-      const page = await context.newPage();
+      const page = await newPage(context);
       await page.goto(BUSY, { waitUntil: 'load' });
       const credit = await page.evaluate(() => {
         const el = document.querySelector('footer .moss-hero-closing .moss-hero-credit')!;
@@ -383,7 +383,7 @@ test.describe('a picture taller than the window', () => {
 for (const scheme of SCHEMES) {
   test(`phone, ${scheme}: a kept panel fades into the picture around the words`, async ({ browser }) => {
     const context = await browser.newContext({ colorScheme: scheme, viewport: { width: 390, height: 800 } });
-    const page = await context.newPage();
+    const page = await newPage(context);
     await page.goto(SKY_PAGE, { waitUntil: 'load' });
     await page.evaluate(() => scrollTo(0, 1e6));
     const m = await page.evaluate(() => {
@@ -552,7 +552,7 @@ for (const theme of THEMES) {
   for (const width of [2560, 1360, 768, 390]) {
     test(`faded closing picture, ${theme.name}, ${width}px: the top fades into the page, the words and credit read on it`, async ({ browser }) => {
       const context = await browser.newContext({ colorScheme: theme.system, viewport: { width, height: width > 2000 ? 1300 : 800 } });
-      const page = await context.newPage();
+      const page = await newPage(context);
       await openFaded(page, theme.toggle);
       const m = await fadedBoxes(page);
       expect(m.shown, 'the theme picks the picture').toBe(theme.dark ? 'dark' : 'light');
@@ -651,7 +651,7 @@ for (const scheme of SCHEMES) {
   for (const width of [400, 1360]) {
     test(`a closing picture with no words, ${scheme}, ${width}px: credit at the foot, top faded, foot kept`, async ({ browser }) => {
       const context = await browser.newContext({ colorScheme: scheme, viewport: { width, height: 800 } });
-      const page = await context.newPage();
+      const page = await newPage(context);
       await openFaded(page, null, WORDLESS);
       const m = await page.evaluate(() => {
         const hero = document.querySelector('footer .moss-hero-closing')!;
@@ -687,7 +687,7 @@ for (const scheme of SCHEMES) {
   for (const width of [390, 900]) {
     test(`busy faded picture, ${scheme}, ${width}px: the words keep their panel, the credit its own at the foot`, async ({ browser }) => {
       const context = await browser.newContext({ colorScheme: scheme, viewport: { width, height: 800 } });
-      const page = await context.newPage();
+      const page = await newPage(context);
       await page.goto(BUSY_FADE, { waitUntil: 'load' });
       const m = await page.evaluate(() => {
         const hero = document.querySelector('footer .moss-hero-closing')!;
@@ -734,7 +734,7 @@ for (const width of [1360, 390]) {
 for (const theme of THEMES) {
   test(`a faded closing picture's words are the page's text colour, ${theme.name}`, async ({ browser }) => {
     const context = await browser.newContext({ colorScheme: theme.system, viewport: { width: 1360, height: 800 } });
-    const page = await context.newPage();
+    const page = await newPage(context);
     await openFaded(page, theme.toggle);
     const m = await fadedBoxes(page);
     expect(parseColor(m.words.panel).a, 'in ink, no panel').toBe(0);
@@ -750,7 +750,7 @@ for (const scheme of SCHEMES) {
   for (const width of [390, 1360]) {
     test(`panel=none over a busy picture, ${scheme}, ${width}px: plain ink, no panel behind the words or the credit`, async ({ browser }) => {
       const context = await browser.newContext({ colorScheme: scheme, viewport: { width, height: 800 } });
-      const page = await context.newPage();
+      const page = await newPage(context);
       await page.goto(PLAIN, { waitUntil: 'load' });
       const m = await page.evaluate(() => {
         const hero = document.querySelector('footer .moss-hero-closing')!;
@@ -781,7 +781,7 @@ for (const theme of THEMES) {
   for (const width of [1360, 1100, 900, 768, 390]) {
     test(`capped faded closing picture, ${theme.name}, ${width}px: measured as shown, words and credit in ink on the picture`, async ({ browser }) => {
       const context = await browser.newContext({ colorScheme: theme.system, viewport: { width, height: 800 } });
-      const page = await context.newPage();
+      const page = await newPage(context);
       await openFaded(page, theme.toggle, CAPPED);
       const m = await fadedBoxes(page);
       const extra = await page.evaluate(() => {
@@ -836,7 +836,7 @@ for (const theme of THEMES) {
   for (const width of [1360, 768, 390]) {
     test(`pale-sky closing picture, ${theme.name}, ${width}px: words and credit in ink, no panel`, async ({ browser }) => {
       const context = await browser.newContext({ colorScheme: theme.system, viewport: { width, height: 800 } });
-      const page = await context.newPage();
+      const page = await newPage(context);
       await openFaded(page, theme.toggle, LANDSCAPE);
       const m = await fadedBoxes(page);
       expect(parseColor(m.words.panel).a, 'no panel behind the words').toBe(0);
@@ -992,7 +992,7 @@ const gapsOf = (page: import('@playwright/test').Page) =>
 for (const width of [1360, 390]) {
   test(`the closing words keep their gaps, set by --moss-hero-words-gap, ${width}px`, async ({ browser }) => {
     for (const [url, text] of [[BUSY_FADE, true], [`http://localhost:${gatePort('closing-picture')}/`, false]] as const) {
-      const page = await browser.newPage({ viewport: { width, height: 800 } });
+      const page = await newPage(browser, { viewport: { width, height: 800 } });
       await page.goto(url, { waitUntil: 'load' });
       const rest = await gapsOf(page);
       const gaps = text ? 1 : 2; // a heading straight before the links is the heading's gap and the link's

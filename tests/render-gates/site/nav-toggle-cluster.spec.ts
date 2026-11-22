@@ -35,7 +35,7 @@
  *   npx playwright test -c playwright/nav-toggle-cluster.config.ts
  */
 
-import { test, expect, type Page } from "../../support/browser-test";
+import { test, expect, type Page, newPage } from "../../support/browser-test";
 
 /** Computed background-color of a throwaway element painted with `value`. */
 async function resolveColor(page: Page, value: string): Promise<string> {
@@ -136,7 +136,7 @@ test("a wrapped nav row puts the links at the start edge and the toggles at the 
   // so any wrap here is driven by the breadcrumb's measured width and not by a
   // media query. This is the width at which the old ≤32rem-scoped rules failed.
   const context = await browser.newContext({ baseURL, javaScriptEnabled: false, viewport: { width: 1024, height: 900 } });
-  const page = await context.newPage();
+  const page = await newPage(context);
   await page.goto(
     "/programmes-and-long-form-reporting/field-notes-from-a-very-long-section-title/",
     { waitUntil: "load" },
@@ -210,7 +210,7 @@ test("opening search does not move the page sideways under a classic scrollbar",
   test.skip(browserName !== "chromium", "only Chromium can be told to draw classic scrollbars");
   const browser = await playwright.chromium.launch({ ignoreDefaultArgs: ["--hide-scrollbars"] });
   try {
-    const page = await browser.newPage({ baseURL, viewport: { width: 1024, height: 240 } });
+    const page = await newPage(browser, { baseURL, viewport: { width: 1024, height: 240 } });
     await page.goto("/", { waitUntil: "load" });
     // A styled scrollbar takes layout width whatever the OS shows; macOS's
     // default overlays one whenever a trackpad is in use.

@@ -10,7 +10,7 @@
  * Run via:
  *   npx playwright test -c playwright/places-explorer-embed.config.ts
  */
-import { test, expect, type Frame, type Page } from "../../support/browser-test";
+import { test, expect, type Frame, type Page, newPage } from "../../support/browser-test";
 import { gotoFramed } from "../../support/framed-page";
 
 const POSTER = "[data-moss-place-embed]";
@@ -522,7 +522,7 @@ test.describe("style:map embed", () => {
 
     const touchContext = await browser.newContext({ baseURL, hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
     try {
-      const touchPage = await touchContext.newPage();
+      const touchPage = await newPage(touchContext);
       await touchPage.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
       await waitForSettled(touchPage);
       await expect(touchPage.locator(".immersive-fullscreen-btn")).toHaveCSS("opacity", "1");
@@ -1226,7 +1226,7 @@ test.describe("hydration degrades to the static poster", () => {
     const url = page.url();
     const browser = page.context().browser();
     if (!browser) throw new Error("browser context is unavailable");
-    const noJsPage = await browser.newPage({ javaScriptEnabled: false });
+    const noJsPage = await newPage(browser, { javaScriptEnabled: false });
     try {
       await noJsPage.goto(url, { waitUntil: "domcontentloaded" });
       // A static map whose dots link to place pages is a labelled figure of links;

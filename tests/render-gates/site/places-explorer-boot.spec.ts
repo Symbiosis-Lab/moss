@@ -10,7 +10,7 @@
  * Run via:
  *   npx playwright test -c playwright/places-explorer-boot.config.ts
  */
-import { test, expect } from "../../support/browser-test";
+import { test, expect, newPage } from "../../support/browser-test";
 
 const FIGURE = ".moss-place-map[data-moss-places-explorer]";
 
@@ -128,7 +128,7 @@ test("a work missing byline, cover, date and description still reaches ready and
 
 test("without JavaScript, the static figure remains and nothing swaps in", async ({ browser, baseURL }) => {
   const context = await browser.newContext({ javaScriptEnabled: false });
-  const page = await context.newPage();
+  const page = await newPage(context);
   await page.goto(`${baseURL}places/`, { waitUntil: "domcontentloaded" });
   const figure = page.locator(FIGURE);
   await expect(figure.locator("> svg")).toHaveCount(1);

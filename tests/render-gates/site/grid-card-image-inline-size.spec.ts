@@ -33,7 +33,7 @@
  * turns `implicit_figure` off to test the plain-`<p>` shape, and this gate
  * needs a real `<figure class="moss-image">` around the image.
  */
-import { test, expect, type Page } from "../../support/browser-test";
+import { test, expect, type Page, newPage } from "../../support/browser-test";
 
 const DESKTOP = { width: 1280, height: 900 };
 
@@ -459,7 +459,7 @@ test("a long row's count keeps one width as it changes, so nothing beside it mov
 test("mounting a long row's indicator does not push the page below it", async ({ browser, baseURL }) => {
   const after = async (javaScriptEnabled: boolean) => {
     const context = await browser.newContext({ baseURL, viewport: DESKTOP, javaScriptEnabled });
-    const page = await context.newPage();
+    const page = await newPage(context);
     await page.goto("/scroll-row-count/");
     if (javaScriptEnabled) await expect(page.locator(".moss-scroll-dots")).toBeVisible();
     // From the top of `main`: the masthead's own layout differs with scripts

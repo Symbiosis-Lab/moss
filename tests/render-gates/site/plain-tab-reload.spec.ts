@@ -9,7 +9,7 @@
  *
  *   npx playwright test -c playwright/plain-tab-reload.config.ts
  */
-import { test, expect, type Frame, type Page, type Request } from "../../support/browser-test";
+import { test, expect, type Frame, type Page, type Request, newPage } from "../../support/browser-test";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { gatePort } from "../../../playwright/gate-ports";
@@ -88,7 +88,7 @@ test("seven tabs of one browser all load, and each follows an edit by reloading 
   const isStream = (r: Request) => r.url().endsWith("/__moss/reload");
   const openStreams = () => [...streams].filter((r) => !r.frame().page().isClosed()).length;
   for (let tab = 0; tab < 7; tab++) {
-    const page = await context.newPage();
+    const page = await newPage(context);
     loads.push(0);
     page.on("load", () => loads[tab]++);
     page.on("request", (r) => isStream(r) && streams.add(r));

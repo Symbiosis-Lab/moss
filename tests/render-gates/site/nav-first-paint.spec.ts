@@ -13,7 +13,7 @@
  *   npx playwright test -c playwright/nav-first-paint.config.ts
  */
 
-import { test, expect, type Page } from "../../support/browser-test";
+import { test, expect, type Page, newPage } from "../../support/browser-test";
 
 const LONG_TRAIL = "/survey/river/fourth-volume/";
 const SHORT_TRAIL = "/notes/rain/";
@@ -132,7 +132,7 @@ for (const [name, path, themeBox] of CASES) {
 }
 
 test("the scripted split keeps the header the stylesheet laid out, and moves only the toggles", async ({ browser, page }, testInfo) => {
-  const off = await browser.newPage({
+  const off = await newPage(browser, {
     baseURL: testInfo.project.use.baseURL,
     javaScriptEnabled: false,
     viewport: { width: 412, height: 900 },
@@ -163,7 +163,7 @@ test("the scripted split keeps the header the stylesheet laid out, and moves onl
 
 for (const javaScriptEnabled of [false, true]) {
   test(`a theme that keeps .nav-right a box gets the plain wrap in markup order, scripts ${javaScriptEnabled ? "on" : "off"}`, async ({ browser }, testInfo) => {
-    const page = await browser.newPage({
+    const page = await newPage(browser, {
       baseURL: testInfo.project.use.baseURL,
       javaScriptEnabled,
       viewport: { width: 412, height: 900 },
