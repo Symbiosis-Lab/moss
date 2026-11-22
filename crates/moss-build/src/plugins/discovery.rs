@@ -168,10 +168,24 @@ pub fn scan_installed_plugins(project_path: &str) -> Result<InstalledPlugins, St
 /// hooks still reads.
 pub fn plugins_declaring_for_build(project_path: &str) -> Vec<Plugin> {
     let Ok(installed) = scan_installed_plugins(project_path) else { return Vec::new() };
-    installed.loaded.into_iter().filter(|p| {
-        get_plugin_config(project_path, &p.manifest.name)
-            .map_or(true, |config| config.get("enabled") != Some(&serde_json::Value::Bool(false)))
-    }).collect()
+    installed.loaded.into_iter().filter(|p| not_switched_off(project_path, p)).collect()
+}
+
+/// [`plugins_declaring_for_build`] plus the plugins of a folder the user has
+/// not trusted, for the identity proofs only: a proof is a value the person
+/// wrote in their own `[services]` table, not code, so an untrusted folder's
+/// site still says who owns it. Nothing else reads these.
+pub fn plugins_declaring_identity(project_path: &str) -> Vec<Plugin> {
+    let Ok(entries) = fs::read_dir(Path::new(project_path).join(".moss").join("plugins")) else { return Vec::new() };
+    entries.filter_map(Result::ok).map(|e| e.path()).filter(|p| p.is_dir())
+        .filter_map(|dir| read_plugin(&dir).ok().filter(|p| crate::plugins::install::registry_client::enforce::refused_only_for_trust(&p.manifest, &dir)))
+        .filter(|p| not_switched_off(project_path, p))
+        .collect()
+}
+
+fn not_switched_off(project_path: &str, plugin: &Plugin) -> bool {
+    get_plugin_config(project_path, &plugin.manifest.name)
+        .map_or(true, |config| config.get("enabled") != Some(&serde_json::Value::Bool(false)))
 }
 
 /// Load a single plugin from a directory
@@ -183,6 +197,29 @@ pub fn plugins_declaring_for_build(project_path: &str) -> Vec<Plugin> {
 /// * `Ok(Plugin)` - Loaded plugin
 /// * `Err(String)` - Error message if loading fails
 pub fn load_plugin(plugin_dir: &Path) -> Result<Plugin, String> {
+    let plugin = read_plugin(plugin_dir)?;
+    let manifest = &plugin.manifest;
+
+    // Whether this plugin may run at all is the app's call, not the build
+    // tree's, and it is asked before anything else touches the plugin. Here
+    // rather than in `discover_installed_plugins` because four of this
+    // function's callers never go through that list — see `super::admission`.
+    if let Some(refusal) = super::admission::refusal(manifest, plugin_dir) {
+        return Err(refusal);
+    }
+
+    // Validate entry point exists (a derivation-only plugin has none)
+    if let Some(entry) = &manifest.entry {
+        if !plugin_dir.join(entry).exists() {
+            return Err(format!("Entry point '{entry}' not found"));
+        }
+    }
+
+    Ok(plugin)
+}
+
+/// A plugin's manifest and folder, before anyone has asked whether it may run.
+fn read_plugin(plugin_dir: &Path) -> Result<Plugin, String> {
     let manifest_path = plugin_dir.join("manifest.json");
 
     // Check if manifest.json exists
@@ -205,21 +242,6 @@ pub fn load_plugin(plugin_dir: &Path) -> Result<Plugin, String> {
     // publish, so it never loads.
     if crate::config::deployment::is_built_in_target(&manifest.name) {
         return Err(format!("\"{}\" is the name of a host built into moss; a plugin cannot use it", manifest.name));
-    }
-
-    // Whether this plugin may run at all is the app's call, not the build
-    // tree's, and it is asked before anything else touches the plugin. Here
-    // rather than in `discover_installed_plugins` because four of this
-    // function's callers never go through that list — see `super::admission`.
-    if let Some(refusal) = super::admission::refusal(&manifest, plugin_dir) {
-        return Err(refusal);
-    }
-
-    // Validate entry point exists (a derivation-only plugin has none)
-    if let Some(entry) = &manifest.entry {
-        if !plugin_dir.join(entry).exists() {
-            return Err(format!("Entry point '{entry}' not found"));
-        }
     }
 
     // Plugins are always active once discovered

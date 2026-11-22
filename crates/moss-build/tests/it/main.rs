@@ -40,6 +40,7 @@ const OWN_PROCESS: &[&str] = &[
     "shortcode_attr_warning_test",
     "snapshot_tests",
     "unknown_place_test",
+    "untrusted_folder_identity_test",
     "welcome_email_test",
     "wordpress_import_test",
 ];
