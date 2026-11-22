@@ -767,6 +767,9 @@ export class PreviewManager {
     this.navigationManager.navigateToPage(urlPath);
   }
 
+  /** A page load has started and no page has reported in yet. */
+  isNavigationPending(): boolean { return this.navigationManager.isNavigationPending(); }
+
   /**
    * Say that the navigation about to happen is to a page the author has only
    * just created, so the build that produces it cannot have run yet.

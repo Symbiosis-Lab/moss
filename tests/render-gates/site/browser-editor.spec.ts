@@ -743,6 +743,32 @@ for (const [what, leave] of LEAVINGS) test(`a build landing while ${what} loads 
   await expect(preview.locator('body')).toContainText('你好，花园。', { timeout: 15_000 });
 });
 
+// The editor opens the file of the page on screen and asks the preview to show that page; the request must not undo a load started since.
+for (const [what, leave] of LEAVINGS) test(`the editor opening the page on screen as ${what} loads does not send the preview back`, async ({ page }) => {
+  // The editor's request lands while the next page is in flight: its address is answered only once that load has begun, which waits for the answer.
+  let left!: () => void;
+  const leaving = new Promise<void>((resolve) => (left = resolve));
+  let answered!: () => void;
+  const answer = new Promise<void>((resolve) => (answered = resolve));
+  await page.route((url) => url.pathname === '/__moss/read/resolve_url_for_file', async (route) => {
+    await leaving;
+    await route.fulfill({ response: await route.fetch() });
+    answered();
+  });
+  await page.route('**/zh-hans/**', async (route) => {
+    if (route.request().isNavigationRequest()) {
+      left();
+      await answer;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    await route.continue().catch(() => {}); // a navigation the frame cancelled has nothing to continue
+  });
+  const { preview } = await openEditor(page);
+  await leave(preview);
+  await expect(preview.locator('body')).toContainText('你好，花园。', { timeout: 15_000 });
+  expect(new URL(preview.url()).pathname).toBe('/zh-hans/');
+});
+
 // The places explorer writes its view into the address at every pan's end; that loads nothing, so the next build still shows.
 test('a build after a site script rewrites the address in place still refreshes the page', async ({ page }) => {
   const { preview } = await openEditor(page);

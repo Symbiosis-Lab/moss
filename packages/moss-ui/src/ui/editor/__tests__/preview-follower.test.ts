@@ -112,6 +112,31 @@ describe('PreviewFollower', () => {
     expect(mockResolveUrlForFile).toHaveBeenCalledWith('/tmp/proj/posts/hello.md');
   });
 
+  test("following the file the editor opens for the preview's page is an echo, after a build too; any other open is not", async () => {
+    const registry = new EntryRegistry();
+    const page = registry.upsert('posts/hello.md', false);
+    const draft = registry.upsert('posts/draft.md', false);
+    const other = registry.upsert('posts/other.md', false);
+    mockResolveUrlForFile.mockImplementation(async (p: string) => ({ status: 'ok', data: p.endsWith('draft.md') ? null : '/posts/x/' }));
+    const follower = mkFollower(registry);
+    follower.start();
+
+    await follower.openingPreviewPage('/tmp/proj/posts/hello.md', async () => registry.setActive(page));
+    await vi.waitFor(() => expect(mockEmit).toHaveBeenCalledWith('editor:navigate-preview', { urlPath: '/posts/x/', echo: true }));
+
+    await follower.openingPreviewPage('/tmp/proj/posts/draft.md', async () => registry.setActive(draft));
+    await vi.waitFor(() => expect(fileChangedCallbacks).toHaveLength(1));
+    mockResolveUrlForFile.mockResolvedValue({ status: 'ok', data: '/posts/draft/' });
+    fireFileChanged();
+    await vi.waitFor(() => expect(mockEmit).toHaveBeenLastCalledWith('editor:navigate-preview', { urlPath: '/posts/draft/', echo: true }));
+
+    await follower.openingPreviewPage('/tmp/proj/posts/hello.md', async () => registry.setActive(other));
+    await vi.waitFor(() => expect(mockEmit).toHaveBeenLastCalledWith('editor:navigate-preview', { urlPath: '/posts/draft/' }));
+    registry.setActive(page);
+    await vi.waitFor(() => expect(mockEmit).toHaveBeenCalledTimes(4));
+    expect(mockEmit).toHaveBeenLastCalledWith('editor:navigate-preview', { urlPath: '/posts/draft/' });
+  });
+
   test('start() emits for an already-active entry (initial sync)', async () => {
     const registry = new EntryRegistry();
     const id = registry.upsert('posts/hello.md', false);

@@ -1,6 +1,6 @@
 import type { EntryRegistry } from './entry-registry';
 import type { SourceRole } from '@symbiosis-lab/moss-ui';
-import { toAbsolute } from './path-domain';
+import { normalizePath, toAbsolute, toRelative } from './path-domain';
 import type { EngineResult } from '@symbiosis-lab/moss-ui';
 import {
   previewProspect,
@@ -63,6 +63,8 @@ type DescribeSourceRole = (filePath: string) => Promise<EngineResult<SourceRole>
 type EmitFn = (event: string, payload: unknown) => Promise<void>;
 type RebuildHandler = (msg: { kind: 'FileChanged' }) => void;
 type OnMossEvent = (kind: 'FileChanged', handler: RebuildHandler) => Promise<() => void>;
+/** A follow's payload; `echo` only when set, so an ordinary follow says what it always did. */
+const follow = (urlPath: string, echo: boolean) => (echo ? { urlPath, echo } : { urlPath });
 
 export interface PreviewFollowerOptions {
   registry: EntryRegistry;
@@ -97,6 +99,10 @@ export class PreviewFollower {
   private readonly gen: GenerationToken = createGenerationToken();
   /** Cleanup for any in-flight FileChanged subscription. */
   private pendingBuildUnsub: (() => void) | null = null;
+  /** The file the editor is opening because the preview shows its page, as the registry names it. */
+  private openingFromPreview: string | null = null;
+  /** The generation of the follow that answers that load. */
+  private echoGen: number | null = null;
 
   constructor(opts: PreviewFollowerOptions) {
     this.registry = opts.registry;
@@ -180,6 +186,21 @@ export class PreviewFollower {
     }
   }
 
+  /**
+   * Run the editor's load of `sourcePath`, the file of the page the preview shows.
+   * Following that load only answers the preview, so its navigation is marked
+   * `echo`: the shell must not let it override a load the preview started since.
+   */
+  async openingPreviewPage<T>(sourcePath: string, load: () => Promise<T>): Promise<T> {
+    const path = normalizePath(toRelative(sourcePath, this.projectRoot));
+    this.openingFromPreview = path;
+    try {
+      return await load();
+    } finally {
+      if (this.openingFromPreview === path) this.openingFromPreview = null;
+    }
+  }
+
   private onPathChanged(newPath: string | null): void {
     const gen = this.bumpGeneration(newPath);
     if (newPath === null) return;
@@ -189,6 +210,7 @@ export class PreviewFollower {
       this.setNote(null);
       return;
     }
+    if (normalizePath(newPath) === this.openingFromPreview) this.echoGen = gen;
     void this.attempt('path change', () => this.resolveAndEmit(gen, newPath));
   }
 
@@ -306,7 +328,7 @@ export class PreviewFollower {
         unsub();
         this.pendingBuildUnsub = null;
       }
-      await this.emit('editor:navigate-preview', { urlPath: result.data });
+      await this.emit('editor:navigate-preview', follow(result.data, gen === this.echoGen));
       return;
     }
     // New pages may navigate before a build, but the canonical answer owns
@@ -343,6 +365,6 @@ export class PreviewFollower {
     // Got URL. Unsubscribe from FileChanged (we're done) and emit.
     this.pendingBuildUnsub?.();
     this.pendingBuildUnsub = null;
-    await this.emit('editor:navigate-preview', { urlPath: result.data });
+    await this.emit('editor:navigate-preview', follow(result.data, gen === this.echoGen));
   }
 }

@@ -1235,7 +1235,7 @@ async function init(): Promise<void> {
   // in the same domain.
   pendingListeners.push(
     uiHost.bus.on<EditorNodeWire>('editor:load-source', async (payload) => {
-      await applyResolvedNode(payload);
+      await applyResolvedNode(payload, true);
     }),
   );
 
@@ -2275,9 +2275,10 @@ async function flushPendingSave(): Promise<boolean> {
  * body of the 'editor:load-source' listener and the eval-driven open entry
  * point (window.__moss_editor_open). Re-bakes an answer into the document
  * query (history.replaceState) so an HMR full reload or the navigate fallback
- * stays consistent with the live surface.
+ * stays consistent with the live surface. `previewsPage`: the node is the page
+ * the preview shows, so following the file it opens only answers the preview.
  */
-async function applyResolvedNode(wire: EditorNodeWire): Promise<void> {
+async function applyResolvedNode(wire: EditorNodeWire, previewsPage = false): Promise<void> {
   let { node, homeFromDisk } = readEditorNode(wire);
   // Kept means untouched, a load in flight included: it may be the user's own open.
   if (!homeFromDisk && keepsCurrentSurface(decideEditorSurface(node))) return;
@@ -2295,7 +2296,8 @@ async function applyResolvedNode(wire: EditorNodeWire): Promise<void> {
   debug(`[editor] applyResolvedNode surface=${surface.kind}${surface.kind === 'content' ? ` sourcePath=${surface.sourcePath}` : ''}`); // empty-state surfaces look identical whether correct or a stale/failed resolve
 
   if (surface.kind === 'content') {
-    await loadContentPageDeduped(surface.sourcePath);
+    const load = () => loadContentPageDeduped(surface.sourcePath);
+    await (previewsPage && previewFollower ? previewFollower.openingPreviewPage(surface.sourcePath, load) : load());
     return;
   }
   applyEditorSurface(surface);
@@ -2340,7 +2342,7 @@ async function openFromWarmReopen(wire: EditorNodeWire): Promise<void> {
   // lead the user left it with. The panel's grow animation is about to reflow
   // it; that must not move the preview the user opened the editor from.
   followPreview();
-  await applyResolvedNode(wire);
+  await applyResolvedNode(wire, true);
   // The native open carries no verdict; the shell's answer arrives through the handshake.
   if (!wire.sourcePath && !wire.takeover) uiHost.bus.emit('editor:request-page', {});
   followPreviewPosition();
