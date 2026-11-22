@@ -194,8 +194,12 @@ pub fn load_plugin(plugin_dir: &Path) -> Result<Plugin, String> {
     let manifest_content = crate::build::cloud_readiness::read_to_string_with_materialize_wait(&manifest_path, crate::build::cloud_readiness::INTERACTIVE_DEADLINE)
         .map_err(|e| format!("Failed to read manifest.json: {}", e))?;
 
-    let manifest: PluginManifest = PluginManifest::parse(&manifest_content)
-        .map_err(|e| format!("Failed to parse manifest.json: {}", e))?;
+    // A manifest written for a newer moss fails the full parse; its floor says why.
+    let manifest: PluginManifest = PluginManifest::parse(&manifest_content).map_err(|e| {
+        super::bundled::ManifestFloor::parse(&manifest_content)
+            .and_then(|floor| floor.unmet())
+            .unwrap_or_else(|| format!("Failed to parse manifest.json: {}", e))
+    })?;
 
     // A plugin named after a built-in target would be shadowed by it at
     // publish, so it never loads.
@@ -637,6 +641,24 @@ mod tests {
 
         let refused = load_plugin(&plugin_dir).err().expect("refused");
         assert!(refused.contains("built into moss"), "{refused}");
+    }
+
+    #[test]
+    fn a_manifest_from_a_newer_moss_is_refused_by_its_floor() {
+        let temp_dir = TempDir::new().unwrap();
+        let plugin_dir = temp_dir.path().join("social");
+        fs::create_dir(&plugin_dir).unwrap();
+        let manifest = |floor: &str| format!(r#"{{"name":"social","version":"2.0.0","entry":"main.js","min_moss_version":"{floor}",
+            "contributes":{{"site_settings":{{"settings":[{{"key":"account","type":"a-type-from-the-future"}}]}}}}}}"#);
+
+        fs::write(plugin_dir.join("manifest.json"), manifest("98.0.0")).unwrap();
+        let refused = load_plugin(&plugin_dir).err().expect("refused");
+        assert!(refused.starts_with("social 2.0.0 needs moss 98.0.0 or newer"), "{refused}");
+
+        // A floor this moss meets leaves the parse error, the real fault.
+        fs::write(plugin_dir.join("manifest.json"), manifest("0.0.1")).unwrap();
+        let refused = load_plugin(&plugin_dir).err().expect("refused");
+        assert!(refused.starts_with("Failed to parse manifest.json"), "{refused}");
     }
 
     #[test]

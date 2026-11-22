@@ -318,9 +318,7 @@ impl Refusal {
             Refusal::Revoked { reason } => {
                 format!("{name} {version} was withdrawn by the plugin registry: {reason}")
             }
-            Refusal::Incompatible { needs, host } => {
-                format!("{name} {version} needs moss {needs} or newer, and this is moss {host}")
-            }
+            Refusal::Incompatible { needs, host } => incompatible_sentence(&name, &version, needs, host),
             Refusal::Untrusted => format!("{name} {version} is off until you trust this folder"),
             Refusal::Unavailable { platforms } => {
                 crate::plugins::contributions::platform::sentence(&name, platforms)
@@ -590,6 +588,13 @@ fn registry_status_in(
 
 fn canonical(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// "needs moss X", in English for a log or an error. Every plugin-authored
+/// value is bounded here, so a caller cannot forget to.
+pub(crate) fn incompatible_sentence(name: &str, version: &str, needs: &str, host: &str) -> String {
+    let (name, version, needs) = (bounded(name, MAX_NAME), bounded(version, MAX_NAME), bounded(needs, MAX_NAME));
+    format!("{name} {version} needs moss {needs} or newer, and this is moss {host}")
 }
 
 /// The refusal when a plugin needs a newer moss than this one.
