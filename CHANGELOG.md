@@ -4,6 +4,8 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
+## [0.15.29] - 2026-11-22
+
 ### New
 
 - A channel plugin's copy job names the site the post lives on (`site.url`, `site.name`), and a long article carries the page's plain text (`article.text`, without its title or link back), so a network that keeps an article as a record of its own can store the full text and point back to the site.
@@ -15,6 +17,11 @@ All notable changes to moss will be documented here.
 - A place-typed kind with `landscape = "detail"` draws its maps from the pack in the folder's `.moss/maps/` (`landscape-<sha256>.bin.br`, checked against the digest in its name). A pack still in the cloud is downloaded before the site publishes; a missing or damaged one is a problem under `--strict` and stops `moss deploy`, and the build draws moss's own map meanwhile.
 - `moss migrate --apply` gives a place-typed kind `landscape = "detail"` and copies moss's place-map pack into `.moss/maps/`, so the site's maps stay as they are once moss stops carrying the pack. It never replaces a usable pack already there, and a second run writes nothing. Until a site is migrated, its builds say so.
 - In the Obsidian plugin, the preview pane's header has two buttons while a page shows: "Open in browser" opens that page in your browser (also the command "moss: Open in browser"), and "Publish this folder" hands the previewed site to the moss app, whatever note is open.
+- A theme that still uses a class, `data-*` value or `--moss-*` property moss no longer writes gets a build warning that names the release it went in and what to use instead, or says nothing replaces it. Before, a renamed property fell back to the browser default with no message, and a class that left without notice was reported only as "not a moss component".
+- A short note can continue an earlier one: write `in_reply_to: "[[name]]"` in its frontmatter, and every page of the thread shows the others, the earlier ones above its title and the later ones after its body. A stream listing shows a thread as one unit, folded to its first part and last two when it is longer than three. `in_reply_to` can also name a post elsewhere by its address, shown as "In reply to" above the page, and any page field now takes an address as well as a page of the site.
+- Every site has a JSON Feed at `/feed.json` beside `rss.xml`, with each article's summary, picture, tags and language. Once a page is published its item keeps one id through renames, so a reader can tell a new article from an edited one.
+- Settings choose the site-wide asset folder with the system folder picker, and refuse a folder outside the site.
+- For a network with no posting API, its plugin can put a long article into the network's own editor in moss's browser panel: the text is pasted at once and each picture lands in its place.
 
 ### Changed
 
@@ -22,6 +29,12 @@ All notable changes to moss will be documented here.
 - A publish right after a build, with nothing changed since, no longer makes every page again: it keeps the pages nothing changed, as `moss build` does. The first build after a publish still makes every page.
 - A site on moss hosting takes its address from what the hosting service answers at publish, kept in `.moss/state.toml`, instead of always assuming `<site>.mosspub.com`. The next build writes that address into canonical links, `og:url`, the sitemap and feeds, and `moss deploy` prints it; a build still makes no network request. An authored `[site] url` ranks above it as before, and a folder that has not published since updating keeps the assumed address.
 - The plugin catalog shows each plugin as a tile with a round logo. A circled plus on the logo adds it: the circle fills while it installs and lands as a minus.
+- A folder holding two files whose names differ only by letter case or accent encoding, two pictures or videos that would publish under one name, or a `[site] url` and `[site] domain` naming different hosts builds again, as it did before 0.15.21. The build keeps one file of each pair, the same on every computer, and `url` over `domain`, and counts a problem naming both, so publishing stays refused until one is renamed or removed.
+- The built site is kept on your computer, in its cache folder, instead of in `.moss/build.nosync/` inside the site folder, so a synced folder (iCloud Drive, Google Drive, Dropbox) no longer holds thousands of generated files. The first build of a folder moves the old output out, and the preview opens on the last build at once when it can. Use one version of moss on a computer at a time: an older one still builds into the folder. If the system clears its cache, the next build makes the site again.
+- When moss signs in or publishes, it tells the hosting service which computer it is running on: a random key kept in moss's local app data on that computer, different for each folder, with the kind of computer (MacBook Pro, a Windows PC). Nothing is refused or asked because of it, and a CI run sends none. The privacy page says what is kept.
+- `cols=`, a grid's `---` divider and `sidebar:` still render as their current spelling and now give a note naming it instead of a problem, so `moss build --strict` passes a folder written for an older moss. `:::apply` and `:::toc`, which no longer render, stay problems and name the release that removed them.
+- What a build knows only about one computer (file hashes and stats, the preview server's token, each page's filled bytes, the last comment refresh) now lives in moss's cache folder on that computer instead of in the site folder. A copied or moved folder no longer carries facts that are wrong on its new disk, and a sync client no longer uploads a copy of every page when the stylesheet changes. The first build after updating moves what an older moss left there. Stores on the computer drop what no folder or moss version still uses.
+- A program that writes through the preview server finds its token file from the server's stderr: each time the server publishes a token it prints `HTTP carrier token file: <JSON-encoded path>`, also with `--quiet`. The file is no longer under `.moss/build.nosync/`.
 
 ### Fixed
 
@@ -34,15 +47,6 @@ All notable changes to moss will be documented here.
 - A comment that a plugin fetches during a build now appears on the page in that same build. It used to appear one build later.
 - Setting the attachment folder to `assets` no longer stops a published site's `/assets/` addresses from answering: they keep forwarding to the home page, as they do without the setting.
 - A sign-in that shows its own page in moss, such as a server picker, no longer stops after a minute while the page is open: moss waits for the person until the page closes. When the sign-in ends, its page closes with it, so a click can no longer go to a sign-in that has already stopped.
-
-### Removed
-
-- The `at_sign_in` setting flag. A channel asks what its sign-in needs inside its own sign-in page; a manifest that still declares the flag draws the field as an ordinary setting.
-
-## [0.15.28] - 2026-11-20
-
-### Fixed
-
 - On a window wide enough for the contents list in the left margin, scrolling back up anywhere in a long page brings the floating bar, without its sections button while that list is on screen. The bar used to stay away until the end of the article, so it seemed to appear only at the bottom of the page.
 - A copy of a site opened on another computer, or downloaded again, shows its pictures' colour placeholders in the preview at once, instead of decoding every picture again to find them.
 - A feed reader gets each article as a reader of the page sees it: the title is not repeated at the top, and links and pictures work in RSS readers too.
@@ -56,22 +60,9 @@ All notable changes to moss will be documented here.
 - `moss history --restore --at` takes the commit a version's row in `moss history` shows, not only the version id. An id that starts with the text still wins, and a commit shared by two versions is refused as ambiguous.
 - The site's Versions screen lists the site's saved versions. It showed "No versions yet" however many there were.
 
-### New
+### Removed
 
-- A theme that still uses a class, `data-*` value or `--moss-*` property moss no longer writes gets a build warning that names the release it went in and what to use instead, or says nothing replaces it. Before, a renamed property fell back to the browser default with no message, and a class that left without notice was reported only as "not a moss component".
-- A short note can continue an earlier one: write `in_reply_to: "[[name]]"` in its frontmatter, and every page of the thread shows the others, the earlier ones above its title and the later ones after its body. A stream listing shows a thread as one unit, folded to its first part and last two when it is longer than three. `in_reply_to` can also name a post elsewhere by its address, shown as "In reply to" above the page, and any page field now takes an address as well as a page of the site.
-- Every site has a JSON Feed at `/feed.json` beside `rss.xml`, with each article's summary, picture, tags and language. Once a page is published its item keeps one id through renames, so a reader can tell a new article from an edited one.
-- Settings choose the site-wide asset folder with the system folder picker, and refuse a folder outside the site.
-- For a network with no posting API, its plugin can put a long article into the network's own editor in moss's browser panel: the text is pasted at once and each picture lands in its place.
-
-### Changed
-
-- A folder holding two files whose names differ only by letter case or accent encoding, two pictures or videos that would publish under one name, or a `[site] url` and `[site] domain` naming different hosts builds again, as it did before 0.15.21. The build keeps one file of each pair, the same on every computer, and `url` over `domain`, and counts a problem naming both, so publishing stays refused until one is renamed or removed.
-- The built site is kept on your computer, in its cache folder, instead of in `.moss/build.nosync/` inside the site folder, so a synced folder (iCloud Drive, Google Drive, Dropbox) no longer holds thousands of generated files. The first build of a folder moves the old output out, and the preview opens on the last build at once when it can. Use one version of moss on a computer at a time: an older one still builds into the folder. If the system clears its cache, the next build makes the site again.
-- When moss signs in or publishes, it tells the hosting service which computer it is running on: a random key kept in moss's local app data on that computer, different for each folder, with the kind of computer (MacBook Pro, a Windows PC). Nothing is refused or asked because of it, and a CI run sends none. The privacy page says what is kept.
-- `cols=`, a grid's `---` divider and `sidebar:` still render as their current spelling and now give a note naming it instead of a problem, so `moss build --strict` passes a folder written for an older moss. `:::apply` and `:::toc`, which no longer render, stay problems and name the release that removed them.
-- What a build knows only about one computer (file hashes and stats, the preview server's token, each page's filled bytes, the last comment refresh) now lives in moss's cache folder on that computer instead of in the site folder. A copied or moved folder no longer carries facts that are wrong on its new disk, and a sync client no longer uploads a copy of every page when the stylesheet changes. The first build after updating moves what an older moss left there. Stores on the computer drop what no folder or moss version still uses.
-- A program that writes through the preview server finds its token file from the server's stderr: each time the server publishes a token it prints `HTTP carrier token file: <JSON-encoded path>`, also with `--quiet`. The file is no longer under `.moss/build.nosync/`.
+- The `at_sign_in` setting flag. A channel asks what its sign-in needs inside its own sign-in page; a manifest that still declares the flag draws the field as an ordinary setting.
 
 ## [0.15.27] - 2026-11-19
 

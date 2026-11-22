@@ -7,18 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-11-22
+
 ### Added
 
 - `ast::promote_wide_banner` and `ast::extract_hero::BANNER_MIN_WIDTH`: after URL resolution, a page body that opens with one wordless picture directly above its only `# Heading` gets that picture as the `Shortcode::Hero` the `:::hero` around it parses to, when the asset snapshot gives it as wider than tall and at least 1200 pixels wide. It returns the picture line's byte range, and `heading::body_without_banner` cuts it so the title rules read the body the article holds. `page::render_page` and `source_edit::compute_heading_state_inner` know no picture sizes, so they keep such a picture in the body and read the title rules over the body as written.
-
-### Changed
-
-- `--moss-contents-lane` is 96px wide (was 92px): each row of the contents ruler is now a 24 px target.
-
-## [0.29.0] - 2026-11-20
-
-### Added
-
 - `contract::retired`: every class, `data-*` value and `--moss-*` property moss released and no longer writes, with the release it went in, what replaces it (`replaced_by`) and whether moss still writes it beside its replacement (`aliased`). From `ALIAS_FLOOR` on, a retired name with a replacement must stay aliased.
 - `src/contract/released-contract.txt` lists every contract name a release has shipped. A test fails when one is neither live nor retired, and the pre-push hook keeps the file unchanged outside a `release/v*` branch and never lets it lose a line. A release cut adds the live names with `CONTRACT_LOCK=update cargo test -p moss-core --test it contract_lock`.
 - `fields::LinkTarget` names what a page field points at: a page of this site by its wiki-link name (`Page`) or a page elsewhere by its http(s) address (`Outside`), with `as_str` and `page`.
@@ -28,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `--moss-contents-lane` is 96px wide (was 92px): each row of the contents ruler is now a 24 px target.
 - **BREAKING:** `PageLink::target` is a `LinkTarget` instead of a `String`. It serializes as `target` for a page of the site and as `url` for an outside address.
 - **BREAKING:** `apply_sidebar_alias` returns `Option<SidebarAlias>` instead of a `Vec<String>` of warnings.
 - The `cols=` alias and the `---` grid cell divider are reported as advisories instead of warnings, since both still render.
