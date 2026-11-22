@@ -251,6 +251,7 @@ mod tests {
             date: Some("2024-12-22".into()),
             publisher: Some("Example Times".into()),
             lang: Some("en".into()),
+            lang_from_html_attr: false,
             cover: Some("./assets/imported/abcd.jpg".into()),
             og_image: None,
             chrome_images: Vec::new(),

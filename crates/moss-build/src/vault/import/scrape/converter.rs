@@ -140,6 +140,8 @@ pub fn extract_article_with_snapshot(
         }
     };
 
+    drop_contradicted_html_lang(&mut metadata, &markdown);
+
     let mut media_urls: HashSet<String> = HashSet::new();
     let mut raw_to_resolved: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
@@ -193,6 +195,25 @@ pub fn extract_article_with_snapshot(
         media_urls,
         metadata,
         widgets,
+    }
+}
+
+/// Drop a `lang` that only the bare `<html lang>` attribute declared when the
+/// body is written in the other script family (CJK vs not): CMS installs ship
+/// a default `en-US` over any content. `lang:` left out lets the build detect
+/// the language from the text.
+fn drop_contradicted_html_lang(metadata: &mut ArticleMetadata, body: &str) {
+    if !metadata.lang_from_html_attr {
+        return;
+    }
+    let declared_cjk = metadata
+        .lang
+        .as_deref()
+        .is_some_and(|l| ["zh", "ja", "ko"].iter().any(|c| l.split('-').next() == Some(c)));
+    if let Some(detected) = crate::i18n::detect::detect_language(body) {
+        if detected.is_cjk() != declared_cjk {
+            metadata.lang = None;
+        }
     }
 }
 
@@ -376,6 +397,40 @@ static WIKILINK_EMBED_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    const ZH_BODY: &str = "<article><h1>今天的聚会</h1><p>我们在周六下午聚集在公园里,一起讨论这个社区花园的新计划,并且分享了很多有用的经验。</p><p>大家决定每个月组织一次活动,邀请邻居们一同参与种植和维护。</p></article>";
+    const EN_BODY: &str = "<article><h1>Saturday meetup</h1><p>We gathered in the park on Saturday afternoon to talk about the new plans for the community garden and share what we have learned.</p><p>Everyone agreed to organise an event each month and invite the neighbours.</p></article>";
+
+    fn lang_of(head: &str, lang_attr: &str, body: &str) -> Option<String> {
+        let html = format!(r#"<!doctype html><html{lang_attr}><head><title>T</title>{head}</head><body>{body}</body></html>"#);
+        extract_article(&html, "https://example.com/p").metadata.lang
+    }
+
+    #[test]
+    fn html_lang_default_over_chinese_body_is_dropped() {
+        assert_eq!(lang_of("", r#" lang="en-US""#, ZH_BODY), None);
+    }
+
+    #[test]
+    fn schema_in_language_is_kept_over_contradicting_body() {
+        let head = r#"<script type="application/ld+json">{"@type":"Article","headline":"T","inLanguage":"en-US"}</script>"#;
+        assert_eq!(lang_of(head, r#" lang="en-US""#, ZH_BODY).as_deref(), Some("en"));
+    }
+
+    #[test]
+    fn html_lang_is_kept_for_japanese_kana_and_traditional_chinese_bodies_and_empty_bodies() {
+        let ja = "<article><h1>きょうのあつまり</h1><p>わたしたちはどようびのごごにこうえんであつまって、ちいきのはなばたけのあたらしいけいかくについてはなしあいました。</p></article>";
+        assert_eq!(lang_of("", r#" lang="ja""#, ja).as_deref(), Some("ja"));
+        assert_eq!(lang_of("", r#" lang="en-US""#, "<h1>Hello</h1>").as_deref(), Some("en"));
+        assert_eq!(lang_of("", r#" lang="en-US""#, "").as_deref(), Some("en"));
+        assert_eq!(lang_of("", r#" lang="zh-Hant""#, ZH_BODY).as_deref(), Some("zh-hant"));
+    }
+
+    #[test]
+    fn html_lang_matching_body_is_kept() {
+        assert_eq!(lang_of("", r#" lang="en""#, EN_BODY).as_deref(), Some("en"));
+        assert_eq!(lang_of("", r#" lang="zh-CN""#, ZH_BODY).as_deref(), Some("zh-cn"));
+    }
 
     #[test]
     fn extracts_realistic_article() {
