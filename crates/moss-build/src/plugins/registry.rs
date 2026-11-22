@@ -24,8 +24,8 @@ use super::install::registry_client::index::IndexEntry;
 mod catalog;
 
 use catalog::{
-    add_rows_for_the_folder, annotate_available_updates, drop_offers_this_moss_would_refuse, identity_follows_the_bytes,
-    merge_registry_rows,
+    add_rows_for_the_folder, annotate_available_updates, drop_offers_this_moss_would_refuse, merge_registry_rows,
+    read_copy_on_disk, runnable_kept_copy,
 };
 
 /// Where a channel comes from — invisible to the user, used internally
@@ -317,30 +317,16 @@ pub fn get_available_plugins_with_status(project_path: &str) -> Vec<AvailablePlu
     // Every published id gets a row here; which of them are *offers* is
     // decided below, once there is an answer about what is on disk.
     merge_registry_rows(&mut plugins, &entries);
-    let plugins_dir = crate::moss_paths::MossPaths::new(std::path::Path::new(project_path)).plugins_dir();
-    add_rows_for_the_folder(&mut plugins, &plugins_dir);
+    let paths = crate::moss_paths::MossPaths::new(std::path::Path::new(project_path));
+    let (plugins_dir, removed_dir) = (paths.plugins_dir(), paths.removed_plugins_dir());
+    add_rows_for_the_folder(&mut plugins, &plugins_dir, |_| true);
+    add_rows_for_the_folder(&mut plugins, &removed_dir, |dir| runnable_kept_copy(dir).is_some());
 
     for plugin in &mut plugins {
-        // The INSTALLED manifest, not just its existence: revocation is per
-        // version, and the version the user has is the only one a badge can
-        // honestly describe. Reading it here is also what makes the badge and
-        // the loader's refusal agree — `load_plugin` reads this same file, so
-        // asking the kill list about the bundled version instead would badge a
-        // working plugin, or leave a refused one looking fine.
-        let dir = plugins_dir.join(&plugin.id);
-        if let Some(installed) = crate::plugins::bundled::read_installed_manifest(&dir) {
-            plugin.installed = true;
-            plugin.version = installed.version.clone();
-            plugin.contributions = installed.contribution_names();
-            plugin.capabilities = installed.capabilities.iter().map(|c| c.hook_name().to_string()).collect();
-            // The same call the loader makes, on the same manifest and
-            // directory, so the tile explains exactly what the refusal will
-            // say — including which reason wins when more than one applies.
-            plugin.refusal = enforce::verdict(&installed, &dir);
-            if !enforce::vouched_for(&installed, &dir) {
-                identity_follows_the_bytes(plugin, &installed);
-            }
-        } else if let Some(bundled) = crate::plugins::bundled::get_bundled_plugin_info(&plugin.id) {
+        if read_copy_on_disk(plugin, &plugins_dir, &removed_dir) {
+            continue;
+        }
+        if let Some(bundled) = crate::plugins::bundled::get_bundled_plugin_info(&plugin.id) {
             // Nothing on disk: nothing to approve, and installing copies the
             // binary's own bytes, so only a published withdrawal can refuse
             // this row. A revoked registry row is dropped a moment later, so
@@ -639,6 +625,23 @@ pub fn install_plugin_allowing(plugin_id: &str, project_path: &str, preview_on: 
         return Ok(());
     }
 
+    // A copy this folder removed comes back as it was, before any offer is
+    // asked: the version the person had may be newer than anything published,
+    // and the update badge still offers what is. The loader judges it as it
+    // judges any copy in the folder.
+    let kept = removed_copy(project_path, plugin_id);
+    if runnable_kept_copy(&kept).is_some() {
+        if let Some(parent) = plugin_dir.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create plugins directory: {e}"))?;
+        }
+        return std::fs::rename(&kept, &plugin_dir).map_err(|e| format!("Failed to restore {plugin_id}: {e}"));
+    }
+    // A kept copy the loader would refuse (withdrawn, or built for a newer
+    // moss) is not worth keeping: what is published replaces it.
+    if kept.exists() {
+        std::fs::remove_dir_all(&kept).map_err(|e| format!("Failed to drop the kept copy of {plugin_id}: {e}"))?;
+    }
+
     // Which bytes exist decides where they come from. A plugin moss ships is
     // copied out of the binary; anything else is fetched, hash-checked against
     // what review pinned, and unpacked by `registry_client::artifact`. One command
@@ -769,11 +772,24 @@ pub fn uninstall_plugin(plugin_id: &str, project_path: &str) -> Result<(), Strin
         log::warn!("could not strip '{plugin_id}' from {}: {e}", config_path.display());
     }
 
-    // Remove plugin directory
-    std::fs::remove_dir_all(&plugin_dir)
-        .map_err(|e| format!("Failed to remove plugin directory: {}", e))?;
+    // Kept, not deleted: adding the plugin back restores this copy. Only the
+    // last removal is kept.
+    let kept = removed_copy(project_path, plugin_id);
+    if kept.exists() {
+        std::fs::remove_dir_all(&kept).map_err(|e| format!("Failed to replace the kept copy of {plugin_id}: {e}"))?;
+    }
+    if let Some(parent) = kept.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
+    }
+    std::fs::rename(&plugin_dir, &kept).map_err(|e| format!("Failed to remove plugin directory: {e}"))?;
 
     Ok(())
+}
+
+/// `.moss/plugins-removed/<id>`: where [`uninstall_plugin`] keeps a removed
+/// plugin and [`install_plugin_allowing`] restores it from.
+pub(crate) fn removed_copy(project_path: &str, plugin_id: &str) -> std::path::PathBuf {
+    crate::moss_paths::MossPaths::new(std::path::Path::new(project_path)).removed_plugins_dir().join(plugin_id)
 }
 
 /// Drop `plugin_id` from `[hooks]` and `[channels]` in `config.toml`, through
@@ -1040,26 +1056,45 @@ mod tests {
         assert!(withdrawn.contains("not in this build or the catalog"), "{withdrawn}");
     }
 
+    /// Nothing publishes this plugin and its manifest says preview, so only
+    /// the kept copy can bring it back, and the row must still be drawn.
     #[test]
-    fn test_uninstall_plugin_removes_directory() {
+    fn a_removed_plugin_comes_back_at_the_folders_version() {
         let temp = tempdir().unwrap();
         let project_path = temp.path().to_str().unwrap();
-
-        // Create installed plugin
-        let plugin_dir = temp.path().join(".moss").join("plugins").join("test-plugin");
+        let plugin_dir = temp.path().join(".moss").join("plugins").join("kept-plugin");
         fs::create_dir_all(&plugin_dir).unwrap();
-        fs::write(plugin_dir.join("manifest.json"), r#"{"name":"test-plugin"}"#).unwrap();
+        fs::write(plugin_dir.join("manifest.json"), r#"{"name":"kept-plugin","version":"9.9.9","entry":"main.js","preview":true}"#).unwrap();
         fs::write(plugin_dir.join("main.js"), "// plugin code").unwrap();
 
-        // Verify it exists
-        assert!(plugin_dir.exists());
+        uninstall_plugin("kept-plugin", project_path).unwrap();
+        assert!(!plugin_dir.exists(), "removed from the plugins folder");
 
-        // Uninstall
-        let result = uninstall_plugin("test-plugin", project_path);
-        assert!(result.is_ok(), "Uninstall should succeed: {:?}", result.err());
+        let row = get_available_plugins_with_status(project_path).into_iter().find(|p| p.id == "kept-plugin").expect("a row to add it back from");
+        assert!(!row.installed);
+        assert_eq!(row.version, "9.9.9");
+        assert!(channel_is_listed(&row, false), "listed with preview features off");
 
-        // Verify it's gone
-        assert!(!plugin_dir.exists(), "Plugin directory should be removed");
+        install_plugin_allowing("kept-plugin", project_path, false, None).unwrap();
+        let back = crate::plugins::bundled::read_installed_manifest(&plugin_dir).expect("restored");
+        assert_eq!(back.version, "9.9.9");
+        assert_eq!(fs::read_to_string(plugin_dir.join("main.js")).unwrap(), "// plugin code");
+    }
+
+    /// A kept copy built for a newer moss would be refused by the loader, so
+    /// it is not offered and not restored: adding the plugin back drops it.
+    #[test]
+    fn a_kept_copy_the_loader_would_refuse_is_neither_offered_nor_restored() {
+        let temp = tempdir().unwrap();
+        let project_path = temp.path().to_str().unwrap();
+        let kept = removed_copy(project_path, "kept-plugin");
+        fs::create_dir_all(&kept).unwrap();
+        fs::write(kept.join("manifest.json"), r#"{"name":"kept-plugin","version":"9.9.9","entry":"main.js","min_moss_version":"99.0.0"}"#).unwrap();
+
+        assert!(get_available_plugins_with_status(project_path).iter().all(|p| p.id != "kept-plugin"), "no tile for it");
+        assert!(install_plugin_allowing("kept-plugin", project_path, false, None).is_err(), "nothing published to take");
+        assert!(!kept.exists(), "the refused copy is dropped");
+        assert!(!temp.path().join(".moss/plugins/kept-plugin").exists(), "and not restored");
     }
 
     #[test]

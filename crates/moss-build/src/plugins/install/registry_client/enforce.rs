@@ -343,6 +343,12 @@ pub fn verdict(manifest: &PluginManifest, plugin_dir: &Path) -> Option<Refusal> 
     verdict_when(manifest, plugin_dir, false)
 }
 
+/// Whether the loader would run this copy once the folder is trusted: its
+/// [`verdict`] is nothing, or only that the folder is not trusted yet.
+pub fn refused_only_for_trust(manifest: &PluginManifest, plugin_dir: &Path) -> bool {
+    matches!(verdict(manifest, plugin_dir), None | Some(Refusal::Untrusted))
+}
+
 /// [`verdict`] with consent already given (`--allow-plugins`): the
 /// same two withholding grounds, and the folder's answer not asked.
 fn verdict_when(manifest: &PluginManifest, plugin_dir: &Path, consent_given: bool) -> Option<Refusal> {
@@ -472,7 +478,9 @@ fn code_of(manifest: &PluginManifest, plugin_dir: &Path) -> Option<Code> {
 pub fn folder_of(plugin_dir: &Path) -> Option<PathBuf> {
     let plugins = plugin_dir.parent()?;
     let moss = plugins.parent()?;
-    (plugins.file_name()? == "plugins" && moss.file_name()? == ".moss").then(|| moss.parent().map(Path::to_path_buf))?
+    // `plugins-removed` holds the copies a removal kept, in the same folder.
+    let kept_or_installed = matches!(plugins.file_name()?.to_str()?, "plugins" | "plugins-removed");
+    (kept_or_installed && moss.file_name()? == ".moss").then(|| moss.parent().map(Path::to_path_buf))?
 }
 
 /// Whether the user trusts `folder`, or nothing enforces trust.

@@ -298,6 +298,12 @@ impl MossPaths {
         self.root.join("plugins")
     }
 
+    /// `.moss/plugins-removed/` — the last removed copy of each plugin, so
+    /// adding it back restores the version this folder had.
+    pub fn removed_plugins_dir(&self) -> PathBuf {
+        self.root.join("plugins-removed")
+    }
+
     /// `.moss/maps/` — the installed place-map pack, `landscape-<sha256>.bin.br`.
     pub fn maps_dir(&self) -> PathBuf {
         self.root.join("maps")

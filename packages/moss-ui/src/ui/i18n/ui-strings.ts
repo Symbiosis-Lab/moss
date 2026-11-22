@@ -800,6 +800,7 @@ const EN = {
   'channels.removing': 'Removing {name}…',                     // {name}
   'channels.adding': 'Adding {name}…',                       // {name}
   'channels.click_to_remove': 'Remove {name}',              // {name}
+  'channels.remove_confirm': 'Remove {name}?',              // {name}
   'channels.click_to_add': 'Add {name}',                 // {name}
   'channels.revoked_tooltip': '{name} was withdrawn by the plugin registry and will not run: {reason}',              // {name} {reason}
   'channels.incompatible_tooltip': '{name} needs moss {needs} or newer and will not run until you update. This is moss {host}.',         // {name} {needs} {host}
@@ -2614,6 +2615,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'channels.removing': '{name} wird entfernt …',
     'channels.adding': '{name} wird hinzugefügt …',
     'channels.click_to_remove': '{name} entfernen',
+    'channels.remove_confirm': '{name} entfernen?',
     'channels.click_to_add': '{name} hinzufügen',
     'channels.revoked_tooltip': '{name} wurde vom Plugin-Verzeichnis zurückgezogen und wird nicht ausgeführt: {reason}',
     'channels.incompatible_tooltip': '{name} braucht moss {needs} oder neuer und läuft erst, wenn du aktualisierst. Du hast moss {host}.',
@@ -4284,6 +4286,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'channels.removing': '正在移除 {name}…',
     'channels.adding': '正在添加 {name}…',
     'channels.click_to_remove': '移除 {name}',
+    'channels.remove_confirm': '移除 {name}？',
     'channels.click_to_add': '添加 {name}',
     'channels.revoked_tooltip': '{name} 已被插件仓库下架，不会运行：{reason}',
     'channels.incompatible_tooltip': '{name} 需要青苔 {needs} 或更新版本，更新后才会运行。当前版本为 {host}。',
@@ -6000,6 +6003,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'channels.removing': '正在移除 {name}…',
     'channels.adding': '正在新增 {name}…',
     'channels.click_to_remove': '移除 {name}',
+    'channels.remove_confirm': '移除 {name}？',
     'channels.click_to_add': '新增 {name}',
     'channels.revoked_tooltip': '{name} 已被插件倉庫下架，不會執行：{reason}',
     'channels.incompatible_tooltip': '{name} 需要青苔 {needs} 或更新版本，更新後才會執行。目前版本為 {host}。',
