@@ -86,14 +86,10 @@ fn contract_lock_every_released_name_is_live_or_retired() {
 #[test]
 fn contract_lock_retired_names_are_not_live() {
     let live = live();
-    let kind_word = |k: RetiredKind| match k {
-        RetiredKind::Class => "class",
-        RetiredKind::Data => "data",
-        RetiredKind::Property => "property",
-    };
     let reused: Vec<String> = RETIRED
         .iter()
-        .map(|r| format!("{} {}", kind_word(r.kind), r.name))
+        .filter(|r| !r.aliased)
+        .map(|r| format!("{} {}", r.kind.slug(), r.name))
         .filter(|l| live.contains(l))
         .collect();
     assert!(
@@ -119,6 +115,50 @@ fn contract_lock_a_rename_from_the_alias_floor_on_stays_aliased() {
     );
 }
 
+/// A release's date in the CHANGELOG, or `None` while it is unreleased.
+fn released_on(changelog: &str, v: &str) -> Option<(u32, u32, u32)> {
+    let head = format!("## [{v}] - ");
+    let line = changelog.lines().find_map(|l| l.strip_prefix(head.as_str()))?;
+    date(line.trim())
+}
+
+fn date(s: &str) -> Option<(u32, u32, u32)> {
+    let mut parts = s.splitn(3, '-').map(|n| n.parse().ok());
+    Some((parts.next()??, parts.next()??, parts.next()??))
+}
+
+/// A feature leaves only after a year of notes saying it is going: a removal
+/// from the alias floor on names the day the notes began, at least 12 months
+/// before its release. An unreleased removal counts from today, which is
+/// never later than its release.
+#[test]
+fn contract_lock_a_removal_had_twelve_months_notice() {
+    let changelog = include_str!("../../../../CHANGELOG.md");
+    let today = {
+        let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+        let (y, m, d) = moss_core::date::civil_from_days(secs.div_euclid(86_400));
+        (y as u32, m, d)
+    };
+    let early: Vec<String> = RETIRED
+        .iter()
+        .filter(|r| !r.aliased)
+        .filter(|r| r.retired_in.is_some_and(|v| version(v) >= version(ALIAS_FLOOR)))
+        .filter(|r| {
+            let gone = released_on(changelog, r.retired_in.unwrap()).unwrap_or(today);
+            match r.deprecated_on.and_then(date) {
+                Some((y, m, d)) => (y + 1, m, d) > gone,
+                None => true,
+            }
+        })
+        .map(|r| r.id())
+        .collect();
+    assert!(
+        early.is_empty(),
+        "removed without 12 months of notice: {early:?}. Set the row's deprecated_on to the day the build \
+         first said it was going, and remove it no sooner than a year after."
+    );
+}
+
 /// A replacement names classes and properties that exist, so the warning
 /// never sends an author to another dead name.
 #[test]
@@ -134,13 +174,14 @@ fn contract_lock_replacements_name_live_classes() {
                     dead.push(format!("{} -> {now}", r.name));
                 }
             }
-            _ => {
+            RetiredKind::Class | RetiredKind::Data => {
                 for c in class_ref.captures_iter(now) {
                     if !live.contains(&format!("class {}", &c[1])) {
                         dead.push(format!("{} -> .{}", r.name, &c[1]));
                     }
                 }
             }
+            _ => {}
         }
     }
     assert!(dead.is_empty(), "retired rows point at names moss does not write:\n  {}", dead.join("\n  "));

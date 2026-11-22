@@ -20,6 +20,7 @@
 //!   (pulldown-cmark passes HTML comments through `Event::Html` as
 //!   `Block::HtmlBlock`).
 
+use crate::contract::retired::{self, RetiredKind};
 use super::attrs::{gather_multi_line_attrs, html_attribute_name};
 use super::cells::split_cells;
 use super::document::{BlockMeta, Document};
@@ -257,9 +258,12 @@ fn parse_shortcode_by_name(
             let (sc, legacy, fragment_warnings) = parse_grid(args, body, config);
             let mut warns = fragment_warnings;
             if let Some(body_line) = legacy {
+                let r = retired::row(RetiredKind::Syntax, "---");
                 warns.advisories.push(format!(
-                    "`---` on line {} divides `:::grid` cells, a spelling moss replaced with `+++` in 0.6.5.",
-                    config.warning_line_offset + body_line + 1
+                    "`---` on line {} divides `:::grid` cells, a spelling moss replaced with `{}` {}.",
+                    config.warning_line_offset + body_line + 1,
+                    r.renamed_to(),
+                    r.when()
                 ));
             }
             (Some(Shortcode::Grid(sc)), warns)
@@ -314,9 +318,12 @@ fn per_line_attr<'a>(parsed: &'a super::attrs::AttrBlock) -> (Option<&'a str>, b
 /// the message can't drift between the two shortcodes. An advisory, not a
 /// problem: the alias still renders, so `--strict` must not fail on it.
 fn cols_alias_warning(shortcode_name: &str) -> String {
+    let r = retired::row(RetiredKind::ShortcodeAttr, "cols");
     format!(
-        "shortcode `:::{shortcode_name}` uses `cols=`, renamed in moss 0.15.1. \
-         The current spelling is `per-line=`, or the positional form `:::{shortcode_name} 3`."
+        "shortcode `:::{shortcode_name}` uses `cols=`, renamed {}. \
+         The current spelling is `{}=`, or the positional form `:::{shortcode_name} 3`.",
+        r.when(),
+        r.renamed_to()
     )
 }
 
@@ -1797,8 +1804,10 @@ fn extract_with_state(
                     "`:::{name}` on line {line_number} is declared by more than one plugin, so only its content is shown; write {} instead",
                     owners.iter().map(|o| format!("`:::{o}`")).collect::<Vec<_>>().join(" or ")
                 ),
-                _ if name == "apply" || name == "toc" => format!("`:::{name}` on line {line_number} was removed in moss {}, so only its content is shown. Nothing replaces it.", if name == "apply" { "0.15.13" } else { "0.6.5" }),
-                _ => format!("unknown shortcode `:::{name}` on line {line_number}"),
+                _ => match retired::find(RetiredKind::Shortcode, name) {
+                    Some(r) => format!("`:::{name}` on line {line_number} was removed {}, so only its content is shown. Nothing replaces it.", r.when()),
+                    None => format!("unknown shortcode `:::{name}` on line {line_number}"),
+                },
             });
             let mut classes = vec!["moss-unknown-shortcode".to_string()];
             classes.extend(parsed.classes.iter().cloned());

@@ -53,6 +53,10 @@ fn problems_for(attrs: &str) -> usize {
 
 /// Build a one-page site whose home page is `page` and count its problems.
 fn problems_in(page: &str) -> usize {
+    problems_with(page, "[site]\nurl = \"https://example.com/\"\n")
+}
+
+fn problems_with(page: &str, config: &str) -> usize {
     // The problem count is process-wide, so the builds in this binary take turns.
     static ONE_BUILD: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _turn = ONE_BUILD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -66,7 +70,7 @@ fn problems_in(page: &str) -> usize {
     }
     let _cleanup = Cleanup(tmp.clone());
 
-    write(&tmp, ".moss/config.toml", b"[site]\ndomain = \"example.com\"\n");
+    write(&tmp, ".moss/config.toml", config.as_bytes());
     write(&tmp, "photos/harbor.png", PNG);
     write(&tmp, "index.md", page.as_bytes());
     let _ = take_cli_problems();
@@ -85,17 +89,29 @@ fn unparseable_hero_attributes_are_a_build_problem_and_quoted_ones_are_not() {
     assert!(unquoted_short >= 1, "unquoted `|cover` must warn, got {unquoted_short}");
 }
 
-/// An older spelling that still renders is a note, not a problem, so a
-/// folder written for an earlier release keeps passing `--strict`.
+/// Every older spelling moss still reads (an aliased content row in
+/// `contract::retired`) builds with no problem, so a folder written for an
+/// earlier release keeps passing `--strict`. A new alias needs a case here.
 #[test]
 fn deprecated_spellings_that_still_render_are_not_problems() {
-    let cases = [
-        "---\ntitle: Home\n---\n\n:::grid {cols=2}\nA\n+++\nB\n:::\n",
-        "---\ntitle: Home\n---\n\n:::gallery {cols=2}\nphotos/harbor.png\n:::\n",
-        "---\ntitle: Home\n---\n\n:::grid 2\nA\n---\nB\n:::\n",
-        "---\ntitle: Home\nsidebar: \"[[Home]]\"\n---\n\nText.\n",
+    use moss_core::contract::retired::{RetiredKind, RETIRED};
+    const URL: &str = "[site]\nurl = \"https://example.com/\"\n";
+    let cases: &[(&str, &str, &str)] = &[
+        ("shortcode-attr:cols", "---\ntitle: Home\n---\n\n:::grid {cols=2}\nA\n+++\nB\n:::\n", URL),
+        ("shortcode-attr:cols", "---\ntitle: Home\n---\n\n:::gallery {cols=2}\nphotos/harbor.png\n:::\n", URL),
+        ("syntax:---", "---\ntitle: Home\n---\n\n:::grid 2\nA\n---\nB\n:::\n", URL),
+        ("front-matter:sidebar", "---\ntitle: Home\nsidebar: \"[[Home]]\"\n---\n\nText.\n", URL),
+        ("config-key:site.domain", "---\ntitle: Home\n---\n\nText.\n", "[site]\ndomain = \"example.com\"\n"),
     ];
-    for page in cases {
-        assert_eq!(problems_in(page), 0, "{page}");
+    let theme = [RetiredKind::Class, RetiredKind::Data, RetiredKind::Property];
+    let uncovered: Vec<String> = RETIRED
+        .iter()
+        .filter(|r| r.aliased && !theme.contains(&r.kind))
+        .map(|r| r.id())
+        .filter(|id| !cases.iter().any(|(case, _, _)| case == id))
+        .collect();
+    assert!(uncovered.is_empty(), "aliased spellings with no old-form case: {uncovered:?}");
+    for (id, page, config) in cases {
+        assert_eq!(problems_with(page, config), 0, "{id}: {page}");
     }
 }

@@ -913,8 +913,11 @@ pub fn apply_sidebar_alias(fm: &mut FrontMatter) -> Option<SidebarAlias> {
     fm.children_source = Some(sidebar_ref.clone());
     fm.children_in = Some("sidebar".to_string());
     fm._from_sidebar_alias = Some(true);
+    let r = crate::contract::retired::row(crate::contract::retired::RetiredKind::FrontMatter, "sidebar");
     Some(SidebarAlias::Applied(format!(
-        "`sidebar:` was replaced in moss 0.6.5. The current spelling is `children: {sidebar_ref}` with `children_in: sidebar`."
+        "`sidebar:` was replaced {}. The current spelling is `{}: {sidebar_ref}` with `children_in: sidebar`.",
+        r.when(),
+        r.renamed_to()
     )))
 }
 
