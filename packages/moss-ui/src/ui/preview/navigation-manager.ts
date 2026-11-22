@@ -588,14 +588,16 @@ export class NavigationManager {
       return;
     }
 
-    // Navigation messages from the bridge: the start of a link click, and the page that reported in.
+    // Navigation messages from the bridge: a page load starting, and the page that reported in.
     window.addEventListener("message", (event) => {
       if (event.data?.type === "moss-navigation" && this.isFromPreview(event)) {
         this.handleNavigationUpdate(event.data);
       }
-      // A link click the bridge is about to follow: recorded before the frame unloads, so a build that
-      // lands meanwhile yields to it instead of reloading the page being left.
-      if (event.data?.type === "moss-navigation-start" && this.isFromPreview(event) && this.onPreviewOrigin(event.data.url)) {
+      // A page load the bridge saw start: recorded before the frame unloads, so a build that lands
+      // meanwhile yields to it instead of reloading the page being left. The shell's own loads are
+      // announced too, and one already under way changes nothing.
+      if (event.data?.type === "moss-navigation-start" && this.isFromPreview(event) && this.onPreviewOrigin(event.data.url)
+        && !(this.requestedUrl && this.sameRoute(this.requestedUrl, event.data.url))) {
         this.beginNavigation(event.data.url);
       }
 

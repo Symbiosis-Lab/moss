@@ -713,7 +713,12 @@ test('an edit to a page in the feed updates it in place, not by a reload', async
 });
 
 // Red only in WebKit without the fix: Chromium's in-place refresh succeeds mid-navigation, WebKit's fails and falls back to a reload.
-test('a build landing while a clicked page loads does not send the preview back', async ({ page }) => {
+// A site script leaves the page with no click to read (search, the series keys, forms).
+const LEAVINGS: [string, (preview: Frame) => Promise<unknown>][] = [
+  ['a clicked page', (preview) => preview.click('a:has-text("To the Chinese pages")')],
+  ['a page a site script opens', (preview) => preview.evaluate(() => location.assign('/zh-hans/'))],
+];
+for (const [what, leave] of LEAVINGS) test(`a build landing while ${what} loads does not send the preview back`, async ({ page }) => {
   const { preview } = await openEditor(page);
   await expect.poll(() => serve.output, { timeout: 60_000, message: 'the first build promoted' }).toMatch(/promoted generation \S+ to current/);
   // Hold the clicked page's response so the build below always lands mid-navigation.
@@ -726,7 +731,7 @@ test('a build landing while a clicked page loads does not send the preview back'
   const refreshes: string[] = [];
   page.on('console', (m) => m.text().startsWith('[preview-refresh]') && refreshes.push(m.text()));
 
-  await preview.click('a:has-text("To the Chinese pages")');
+  await leave(preview);
   // Both the page being left and the page being loaded change, so the shell refreshes whichever it watches.
   for (const file of ['index.md', join('zh-hans', 'index.md')]) {
     writeFileSync(join(serve.site, file), readFileSync(join(serve.site, file), 'utf8') + '\nA held line.\n');
@@ -736,6 +741,16 @@ test('a build landing while a clicked page loads does not send the preview back'
 
   await expect.poll(() => new URL(preview.url()).pathname, { timeout: 15_000 }).toBe('/zh-hans/');
   await expect(preview.locator('body')).toContainText('你好，花园。', { timeout: 15_000 });
+});
+
+// The places explorer writes its view into the address at every pan's end; that loads nothing, so the next build still shows.
+test('a build after a site script rewrites the address in place still refreshes the page', async ({ page }) => {
+  const { preview } = await openEditor(page);
+  await expect.poll(() => serve.output, { timeout: 60_000, message: 'the first build promoted' }).toMatch(/promoted generation \S+ to current/);
+  await expect(preview.locator('body')).toContainText('Hello garden', { timeout: 15_000 });
+  await preview.evaluate(() => history.replaceState(null, '', '?z=4'));
+  writeFileSync(join(serve.site, 'index.md'), readFileSync(join(serve.site, 'index.md'), 'utf8') + '\nA line after the pan.\n');
+  await expect(preview.locator('body')).toContainText('A line after the pan', { timeout: 15_000 });
 });
 
 test('the address copied from a page just made carries no reload stamp', async ({ page }) => {
