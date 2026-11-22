@@ -4636,8 +4636,7 @@ body.own-titlebar.platform-linux:has(.action-panel-open) .moss-titlebar [data-ca
        - overflow-wrap: anywhere — a pathologically-long single token (URL, path,
                              content hash) still wraps rather than overflowing the
                              panel (break-all's original intent), but only when it
-                             genuinely can't fit. Same pattern as
-                             .moss-unavailable-images-list__filename in this file.
+                             genuinely can't fit.
      Intentionally NOT `html[lang^="zh"]`-gated to restore justify: the gate keys
      on UI locale, but the detail under a zh locale is still predominantly
      English, so a locale-keyed justify would re-break the exact reported bug.
@@ -6498,38 +6497,6 @@ body.own-titlebar.platform-linux:has(.action-panel-open) .moss-titlebar [data-ca
   margin-bottom: var(--moss-space-sm);
   font-size: 0.8125rem;
   color: var(--moss-color-text-secondary);
-}
-
-/* Matters "Unavailable Images" list (PluginSection.buildUnavailableImagesSection).
-   Peers separate via the container's own `gap` (xs, 8px) rather than per-item
-   margin — the gap-model's default. Each entry stacks its filename above its
-   source-file reference (own `gap`, 2xs/4px — tighter, since they're one
-   unit) instead of one run-on line; a hash-like filename has no natural break
-   point, so it wraps at any character (`overflow-wrap: anywhere`) instead of
-   being ellipsis-truncated, which would make it useless for identifying the
-   broken file. */
-.moss-unavailable-images-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--moss-space-xs);
-}
-
-.moss-unavailable-images-list__entry {
-  display: flex;
-  flex-direction: column;
-  gap: var(--moss-space-2xs);
-}
-
-.moss-unavailable-images-list__filename {
-  font-size: 0.875rem;
-  color: var(--moss-color-text);
-  overflow-wrap: anywhere;
-}
-
-.moss-unavailable-images-list__source {
-  font-size: 0.8125rem;
-  color: var(--moss-color-text-secondary);
-  overflow-wrap: anywhere;
 }
 
 /* Deploy-target Host row: pill-combo trigger (shared primitive) + chevron; the

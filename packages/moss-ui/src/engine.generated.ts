@@ -187,26 +187,7 @@ what: string;
 /**
  * The recovery affordance, expressed as data.
  */
-action: Action; 
-/**
- * How long the app keeps it.
- */
-lifetime?: AdvisoryLifetime }
-
-/**
- * How long the app keeps an advisory once raised.
- */
-export type AdvisoryLifetime = 
-/**
- * A condition of this build: the next build start clears it.
- */
-"Build" | 
-/**
- * Kept across build starts until its own task's next tick, for an
- * advisory that a rebuild not running its task cannot speak for (a
- * plugin's Sync offer: save-rebuilds run no process hook).
- */
-"UntilTaskRestates"
+action: Action }
 
 /**
  * The quantity a Job reports on success: "142 pages", "3 posts". Present iff
@@ -245,11 +226,7 @@ export type AppOp =
 /**
  * Download a command-line tool moss needs, after the user asked for it; `args` is `{"tool": "ffmpeg"|"git"}`.
  */
-"DownloadTool" | 
-/**
- * Run a plugin's process hook as the person's own act, which may write the folder; `args` is `{"plugin": "<id>"}`, and the app names the plugin from its manifest.
- */
-"RunPluginProcess"
+"DownloadTool"
 
 /**
  * One condition under which a field takes effect.

@@ -1149,7 +1149,6 @@ mod tests {
 
     fn test_advisory(what: &str) -> crate::advisory::Advisory {
         crate::advisory::Advisory {
-            lifetime: Default::default(),
             scope: crate::advisory::Scope::File,
             severity: crate::advisory::Severity::ShippedDegraded,
             item: Some("a.mov".to_string()),

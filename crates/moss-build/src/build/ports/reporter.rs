@@ -379,7 +379,6 @@ mod background_progress_lines_tests {
 
     fn advisory(what: &str) -> Advisory {
         Advisory {
-            lifetime: Default::default(),
             scope: Scope::Config,
             severity: Severity::NeedsAction,
             item: None,

@@ -1901,7 +1901,6 @@ const EN = {
   // [plugin settings — unavailable images list]
   // Section title in the Matters settings page listing images whose download
   // permanently failed (403/404/410). {count} placeholder.
-  'plugin.unavailable_images_title': 'Unavailable Images ({count})', // "Unavailable Images ({count})"
 
   // [plugin settings — what the plugin is allowed to run]
   // `requires` is the only declared field the host enforces, and it is
@@ -1920,10 +1919,6 @@ const EN = {
   'download_tool.downloading': 'Downloading {name}…',
   'download_tool.done': '{name} is installed.',
   'download_tool.failed': "Couldn't download {name}: {error}",
-  'run_plugin.waiting': 'Waiting for {name} to finish…',
-  'run_plugin.running': 'Syncing {name}…',
-  'run_plugin.done': '{name} is synced.',
-  'run_plugin.failed': "Couldn't sync {name}: {error}",
 };
 
 export type UiStringMap = { [K in keyof typeof EN]: string };
@@ -3565,17 +3560,12 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'plugin.remove_failed': '{name} konnte nicht entfernt werden',
     'plugin.version.updating': 'Wird aktualisiert …',
     'plugin.version.update_failed': 'Aktualisierung fehlgeschlagen. Das Plugin ist unverändert.',
-    'plugin.unavailable_images_title': 'Nicht verfügbare Bilder ({count})',
     'plugin.runs_binaries': 'Führt diese Programme auf deinem Computer aus: {binaries}',
     'plugin.runs_any_binary': 'Kann beliebige Programme auf deinem Computer ausführen.',
     'editor.open_failed': '{file} konnte nicht geöffnet werden: {error}',
     'download_tool.downloading': '{name} wird heruntergeladen …',
     'download_tool.done': '{name} ist installiert.',
     'download_tool.failed': '{name} konnte nicht heruntergeladen werden: {error}',
-    'run_plugin.waiting': 'Warte, bis {name} fertig ist …',
-    'run_plugin.running': '{name} wird synchronisiert …',
-    'run_plugin.done': '{name} ist synchronisiert.',
-    'run_plugin.failed': '{name} konnte nicht synchronisiert werden: {error}',
   },
 
   'zh-hans': {
@@ -5280,7 +5270,6 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'plugin.remove_failed': '无法移除 {name}',
     'plugin.version.updating': '正在更新…',
     'plugin.version.update_failed': '没能更新，插件保持原样。',
-    'plugin.unavailable_images_title': '无法获取的图片 ({count})',
     'plugin.runs_binaries': '会在你的电脑上运行这些程序：{binaries}',
     'plugin.runs_any_binary': '可以在你的电脑上运行任何程序。',
     'editor.open_failed': '无法打开 {file}：{error}',
@@ -5289,10 +5278,6 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'download_tool.downloading': '正在下载 {name}…',
     'download_tool.done': '{name} 已安装。',
     'download_tool.failed': '无法下载 {name}：{error}',
-    'run_plugin.waiting': '正在等待 {name} 完成……',
-    'run_plugin.running': '正在同步 {name}……',
-    'run_plugin.done': '{name} 已同步。',
-    'run_plugin.failed': '无法同步 {name}：{error}',
   },
 
   'zh-hant': {
@@ -6997,7 +6982,6 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'plugin.remove_failed': '無法移除 {name}',
     'plugin.version.updating': '正在更新…',
     'plugin.version.update_failed': '沒能更新，插件保持原樣。',
-    'plugin.unavailable_images_title': '無法取得的圖片 ({count})',
     'plugin.runs_binaries': '會在你的電腦上執行這些程式：{binaries}',
     'plugin.runs_any_binary': '可以在你的電腦上執行任何程式。',
     'editor.open_failed': '無法開啟 {file}：{error}',
@@ -7006,10 +6990,6 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'download_tool.downloading': '正在下載 {name}…',
     'download_tool.done': '{name} 已安裝。',
     'download_tool.failed': '無法下載 {name}：{error}',
-    'run_plugin.waiting': '正在等待 {name} 完成……',
-    'run_plugin.running': '正在同步 {name}……',
-    'run_plugin.done': '{name} 已同步。',
-    'run_plugin.failed': '無法同步 {name}：{error}',
   },
 };
 

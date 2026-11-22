@@ -48,6 +48,7 @@ All notable changes to moss will be documented here.
 ### Removed
 
 - The `at_sign_in` setting flag. A channel asks what its sign-in needs inside its own sign-in page; a manifest that still declares the flag draws the field as an ordinary setting.
+- The Sync button a plugin could show after a build. moss only sends posts out to other platforms and never fills the folder from them; pages that came in earlier stay as ordinary pages. A manifest's `imports` key is still read without error.
 
 ## [0.15.28] - 2026-11-20
 

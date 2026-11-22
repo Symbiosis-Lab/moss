@@ -379,26 +379,6 @@ impl PluginManager {
             .and_then(|name| self.find_plugin_by_name(&name))
     }
 
-    /// What a build's run of the plugin found for the person to start
-    /// (`HookResult::offer`). Nothing stores it: the app keeps it until the
-    /// plugin's next process run restates it, and its action runs the hook as
-    /// the person's own act.
-    pub(crate) fn plugin_offer_advisory(plugin: &Plugin, title: String) -> crate::advisory::Advisory {
-        use crate::advisory::{Action, Advisory, AdvisoryLifetime, AppOp, Scope, Severity};
-        Advisory {
-            lifetime: AdvisoryLifetime::UntilTaskRestates,
-            scope: Scope::Remote,
-            severity: Severity::NeedsAction,
-            item: None,
-            what: title,
-            action: Action::InApp {
-                op: AppOp::RunPluginProcess,
-                args: serde_json::json!({ "plugin": plugin.manifest.name }),
-                label: crate::infra::app_advisory::t("plugin_offer_sync"),
-            },
-        }
-    }
-
     /// Build an advisory for a plugin process-hook sync failure.
     ///
     /// Scope: Remote — the hook ran but reported a sync failure, typically a
@@ -409,7 +389,6 @@ impl PluginManager {
     pub(crate) fn plugin_hook_failure_advisory(plugin_name: &str, err: &str) -> crate::advisory::Advisory {
         use crate::advisory::{Action, Advisory, Scope, Severity};
         Advisory {
-            lifetime: Default::default(),
             scope: Scope::Remote,
             severity: Severity::NeedsAction,
             item: None,
@@ -478,7 +457,7 @@ impl PluginManager {
                 &context_json,
                 asked_by,
             ).await {
-                Ok((result, _)) => self.restate_offer(plugin, asked_by, result),
+                Ok(_) => {}
                 Err(e) => {
                     log::warn!(target: "plugin", "⚠️ Plugin '{}' process hook failed: {}", plugin.manifest.name, e);
                     if !has_login {
@@ -528,37 +507,13 @@ impl PluginManager {
 
         // Execute the hook
         let asked_by = AskedBy::of(context.trigger);
-        let result = self.execute_plugin_javascript(
+        self.execute_plugin_javascript(
             &plugin,
             Capability::Process.hook_name(),
             &context_json,
             asked_by,
-        ).await?.0;
-        self.restate_offer(&plugin, asked_by, result);
+        ).await?;
         Ok(())
-    }
-
-    /// Every run of a plugin's process hook re-states its offer on the
-    /// plugin's own `plugin-offer-<name>` task: a build's run with what it
-    /// found, the person's run with nothing, which clears the offer its Sync
-    /// answered. The app keeps the offer across rebuilds that run no process
-    /// hook and drops it at this task's next tick.
-    fn restate_offer(&self, plugin: &Plugin, asked_by: AskedBy, result: Option<HookResult>) {
-        // A build's run that returned nothing (skipped while the person's run
-        // was busy, or a hook with no result) says nothing about the offer.
-        if asked_by == AskedBy::Build && result.is_none() {
-            return;
-        }
-        let offer = result.and_then(|r| r.offer).filter(|_| asked_by == AskedBy::Build);
-        let advisories: Vec<_> = offer.map(|o| Self::plugin_offer_advisory(plugin, o.title)).into_iter().collect();
-        self.host.reporter.report(&crate::build::progress::PipelineEvent::BackgroundProgress {
-            task: format!("plugin-offer-{}", plugin.manifest.name),
-            current: 0,
-            total: 0,
-            message: advisories.first().map(|a| a.what.clone()).unwrap_or_default(),
-            completed: true,
-            advisories,
-        });
     }
 
 
@@ -1090,7 +1045,6 @@ mod tests {
             deployment: None,
             setup: None,
             copy: None,
-            offer: None,
         };
         let with_message = CompletionResult {
             success: false,

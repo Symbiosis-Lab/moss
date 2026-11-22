@@ -22,6 +22,10 @@ release heading.
 - `SignInCancelled`: `BrowserSignIn.open` rejects with it when the person closes the sign-in or another one starts, so `login` can answer `cancelled` rather than fail.
 - `EditorFill.editor.upload`: a file field for a network whose post starts from pictures. moss gives the pictures to it first, as many as it allows and of the kinds it accepts, naming the rest in `missing`, then fills the editor once it appears.
 
+### Removed
+
+- `HookResult.offer`. moss drops it at run time, so a plugin that still returns it keeps working; a typed `HookResult` literal that sets it fails its type check from this version.
+
 ## [0.22.0] - 2026-11-20
 
 ### Added

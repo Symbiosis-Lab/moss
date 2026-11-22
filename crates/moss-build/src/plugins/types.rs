@@ -728,18 +728,6 @@ pub struct HookResult {
     #[serde(default)]
     pub copy: Option<crate::syndication::record::CopyOutcome>,
 
-    /// Work a process hook a build started found but may not do, because it
-    /// would write the person's folder. Read only from such a run; moss shows
-    /// it with one action that runs the hook again as the person's own act.
-    #[serde(default)]
-    pub offer: Option<Offer>,
-}
-
-/// See [`HookResult::offer`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
-pub struct Offer {
-    /// What is waiting, in the person's words: "3 new posts on Matters".
-    pub title: String,
 }
 
 /// Plugin hook progress payload — carried by `MossEvent::PluginProgress`.
@@ -820,7 +808,6 @@ pub fn clamp_plugin_advisory(p: PluginAdvisory) -> crate::advisory::Advisory {
     };
     let item = p.item.filter(|item| is_site_relative(item));
     crate::advisory::Advisory {
-        lifetime: Default::default(),
         scope: p.scope,
         severity,
         item,

@@ -34,7 +34,6 @@
   },
   "contributes": {
     "channel": {
-      "imports": true,
       "login": true
     },
     "jobs": {
