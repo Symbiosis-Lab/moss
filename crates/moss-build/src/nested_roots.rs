@@ -139,9 +139,39 @@ impl Default for ScanLimits {
 /// moss's own home (`MOSS_HOME`, by default `~/.moss`) is tooling, not a site
 /// marker, so its parent is never a site, through a symlink either.
 pub fn owns_moss(dir: &Path) -> bool {
-    let marker = dir.join(".moss");
-    marker.is_dir() && !is_moss_home(&marker)
+    dir.join(".moss").is_dir() && owns_moss_below(dir, account_home().as_deref())
 }
+
+/// [`owns_moss`] with the account's home passed in. The `.moss` beside the
+/// account's real home is moss's machine state whichever `MOSS_HOME` or `HOME`
+/// this process was started with, so a launch that points either at a scratch
+/// folder does not turn the user's home into a site.
+fn owns_moss_below(dir: &Path, account_home: Option<&Path>) -> bool {
+    let marker = dir.join(".moss");
+    marker.is_dir() && !is_moss_home(&marker) && !account_home.is_some_and(|h| same_dir(dir, h))
+}
+
+fn same_dir(a: &Path, b: &Path) -> bool {
+    a == b || matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b)
+}
+
+/// The home folder the operating system lists for this user, read from the
+/// account database rather than `$HOME`.
+#[cfg(unix)]
+fn account_home() -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut buf = vec![0u8; 4096];
+    let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut found: *mut libc::passwd = std::ptr::null_mut();
+    // SAFETY: `buf` outlives every read of `pwd`, and `found` is only read after the call.
+    let rc = unsafe { libc::getpwuid_r(libc::geteuid(), &mut pwd, buf.as_mut_ptr().cast(), buf.len(), &mut found) };
+    if rc != 0 || found.is_null() || pwd.pw_dir.is_null() { return None; }
+    let dir = unsafe { std::ffi::CStr::from_ptr(pwd.pw_dir) };
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(dir.to_bytes())))
+}
+
+#[cfg(not(unix))]
+fn account_home() -> Option<PathBuf> { dirs::home_dir() }
 
 fn is_moss_home(marker: &Path) -> bool {
     let Ok(home) = crate::infra::home::moss_home() else { return false };

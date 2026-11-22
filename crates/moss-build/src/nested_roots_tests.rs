@@ -655,3 +655,24 @@ fn a_set_aside_that_is_here_but_cannot_be_read_says_so() {
         assert!(report.moss_copies[0].is_site_data(), "{file}");
     }
 }
+
+#[test]
+fn the_account_home_is_not_a_site_when_moss_home_points_elsewhere() {
+    let tmp = tempfile::tempdir().unwrap();
+    let user = tmp.path().join("user");
+    fs::create_dir_all(user.join(".moss")).unwrap();
+    let _home = crate::infra::home::thread_moss_home(&tmp.path().join("scratch-moss-home"));
+    assert!(owns_moss_below(&user, None), "with no account home known, a `.moss` folder is a marker");
+    assert!(!owns_moss_below(&user, Some(&user)), "the account's home is never a site");
+
+    let site = user.join("site");
+    fs::create_dir_all(site.join(".moss")).unwrap();
+    assert!(owns_moss_below(&site, Some(&user)), "a site inside the home still is one");
+}
+
+#[cfg(unix)]
+#[test]
+fn the_account_home_comes_from_the_account_database_not_the_environment() {
+    let home = account_home().expect("this user has a home folder");
+    assert!(home.is_absolute() && home.is_dir(), "{home:?}");
+}
