@@ -186,8 +186,7 @@ const LEGACY_BINDING_KEYS: [&str; 3] = ["boundUserId", "boundUserName", "boundUs
 /// Forget which account this folder is signed in to on `plugin`. A folder
 /// with nothing to forget is left byte for byte as it was.
 pub fn unbind_account(project_path: &str, plugin: &str) -> Result<(), String> {
-    let config = Path::new(project_path).join(".moss").join("plugins").join(plugin).join("config.json");
-    let forgot_legacy = forget_legacy_binding(&config)?;
+    let forgot_legacy = forget_legacy_binding(&Path::new(project_path).join(".moss").join("plugins").join(plugin))?;
     if recorded(project_path, plugin).is_none() && !forgot_legacy {
         return Ok(());
     }
@@ -197,8 +196,27 @@ pub fn unbind_account(project_path: &str, plugin: &str) -> Result<(), String> {
     })
 }
 
-/// Whether `config` held a legacy binding, now removed.
-fn forget_legacy_binding(config: &Path) -> Result<bool, String> {
+/// Whether the plugin's folder held a legacy binding, now removed. The
+/// binding is read from `config.json` and `config.toml` together, so both
+/// are cleared.
+fn forget_legacy_binding(plugin_dir: &Path) -> Result<bool, String> {
+    let json = forget_legacy_json(&plugin_dir.join("config.json"))?;
+    let toml = forget_legacy_toml(&plugin_dir.join("config.toml"))?;
+    Ok(json || toml)
+}
+
+fn forget_legacy_toml(config: &Path) -> Result<bool, String> {
+    let Ok(text) = std::fs::read_to_string(config) else { return Ok(false) };
+    let Ok(mut table) = toml::from_str::<toml::Table>(&text) else { return Ok(false) };
+    if LEGACY_BINDING_KEYS.iter().filter_map(|k| table.remove(*k)).count() == 0 {
+        return Ok(false);
+    }
+    let out = crate::infra::toml_rewrite::apply_changes(&text, &table)?;
+    crate::infra::atomic_write::write_atomic(config, &out).map_err(|e| format!("could not clear {}: {e}", config.display()))?;
+    Ok(true)
+}
+
+fn forget_legacy_json(config: &Path) -> Result<bool, String> {
     let Ok(text) = std::fs::read_to_string(config) else { return Ok(false) };
     let Ok(Value::Object(mut map)) = serde_json::from_str::<Value>(&text) else { return Ok(false) };
     if LEGACY_BINDING_KEYS.iter().filter_map(|k| map.remove(*k)).count() == 0 {
@@ -542,6 +560,20 @@ mod tests {
         assert!(!plugin_needs_connection(project, "social"), "a build after Sign out does not open the sign-in");
         bind_account(project, "social", &AccountBinding { id: "acct:2".into(), name: None, host: None }).unwrap();
         assert!(!marked_signed_out(project, "social"), "signing in again lifts it");
+    }
+
+    #[test]
+    fn signing_out_forgets_a_binding_the_settings_file_still_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().to_str().unwrap();
+        let settings = "# the person's own note\nlanguage = 'zh'\nboundUserName = \"@ada\"\n";
+        write(project, ".moss/plugins/social/config.toml", settings);
+        write(project, ".moss/plugins/social/config.json", "{\"signedOut\": false}");
+        assert!(account_binding(project, "social").is_some());
+        unbind_account(project, "social").unwrap();
+        assert_eq!(account_binding(project, "social"), None, "the row names no account after Sign out");
+        assert!(marked_signed_out(project, "social"));
+        assert_eq!(std::fs::read_to_string(dir.path().join(".moss/plugins/social/config.toml")).unwrap(), "# the person's own note\nlanguage = 'zh'\n");
     }
 
     #[test]
