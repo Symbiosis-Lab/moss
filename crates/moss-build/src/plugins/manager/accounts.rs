@@ -751,6 +751,31 @@ mod tests {
         }
     }
 
+    /// Keep open shows a finished sign-in's page again; a click on it reaches a
+    /// listener that ended with the hook, and the next sign-in runs as usual.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_click_on_a_signed_in_page_kept_open_reaches_nothing() {
+        let (_dir, project) = folder_with_channel(&format!(r#"{PICKS_A_SERVER}
+            return {{ status: "completed", account: {{ id: server + "/1" }} }};"#));
+        let (manager, plugin, desk) = manager_at_desk(&project);
+        let ctx = context(&project);
+        let (first, ()) = tokio::join!(manager.sign_in(&plugin, &ctx), async {
+            desk.page_waiting_for("picker:continue").await;
+            desk.fire("picker:continue", r#"{"server":"one.example"}"#);
+        });
+        assert_eq!(first.unwrap().outcome, completed("one.example/1", None));
+        desk.fire("picker:continue", r#"{"server":"stale.example"}"#);
+        let again = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            tokio::join!(manager.sign_in(&plugin, &ctx), async {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                desk.fire("picker:continue", r#"{"server":"two.example"}"#);
+            })
+        });
+        let (second, ()) = again.await.expect("a stale click must not wedge the next sign-in");
+        assert_eq!(second.unwrap().outcome, completed("two.example/1", None));
+        assert_eq!(desk.signed_in_closes(), 2);
+    }
+
     /// The person closing the page ends the wait: a sign-in still waiting for
     /// a click on it is cut off at the watchdog's limit instead of hanging.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
