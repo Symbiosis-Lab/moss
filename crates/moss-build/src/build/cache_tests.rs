@@ -2862,11 +2862,14 @@ impl log::Log for Capture {
     }
     fn log(&self, record: &log::Record) {
         LOG_LINES.lock().unwrap_or_else(|e| e.into_inner()).push((record.level(), record.args().to_string(), record.target().to_string()));
+        crate::plugins::manager::contract::forward(record);
     }
     fn flush(&self) {}
 }
 
-fn install_capture() {
+/// The process's one logger in this crate's tests: a second `set_logger` would
+/// lose to whichever test ran first. It also feeds the plugin contract's recorders.
+pub(crate) fn install_capture() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         let _ = log::set_logger(&Capture);

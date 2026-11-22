@@ -1665,49 +1665,25 @@ mod tests {
         assert_eq!(p.binary_path, "echo");
     }
 
-    /// Stands in for the desktop seam and records the `url` that
-    /// `open_action_panel` receives (`None` for "no page", `Some` for a page)
-    /// and what the system browser was asked to open.
-    #[derive(Default)]
-    struct PanelRecorder {
-        panel: std::sync::Mutex<Option<Option<String>>>,
-        browser: std::sync::Mutex<Vec<String>>,
-        fill: std::sync::Mutex<Option<(String, String, serde_json::Value)>>,
+    use crate::plugins::manager::contract::ScriptedPerson;
+
+    /// What the system browser was asked to open, in order.
+    fn browser(desk: &ScriptedPerson) -> Vec<String> {
+        desk.seen("browser-opened").iter().map(|b| b["url"].as_str().unwrap().to_string()).collect()
     }
 
-    #[async_trait::async_trait]
-    impl crate::engine::app_host::AppHost for PanelRecorder {
-        async fn get_plugin_cookies(&self, _: &str, _: &str) -> std::result::Result<String, String> { unreachable!() }
-        async fn set_plugin_cookies(&self, _: &str, _: &str, _: serde_json::Value) -> std::result::Result<(), String> { unreachable!() }
-        async fn clear_plugin_cookies(&self, _: &str, _: &str) -> std::result::Result<(), String> { unreachable!() }
-        async fn open_action_panel(&self, url: Option<String>, _: Option<String>, _: bool, _: Option<String>) -> std::result::Result<(), String> {
-            *self.panel.lock().unwrap() = Some(url);
-            Ok(())
-        }
-        async fn set_action_panel_html(&self, _: String, _: Option<String>, _: Option<String>) -> std::result::Result<(), String> { unreachable!() }
-        async fn close_action_panel(&self) -> std::result::Result<(), String> { unreachable!() }
-        async fn open_system_browser(&self, url: String) -> std::result::Result<(), String> {
-            self.browser.lock().unwrap().push(url);
-            Ok(())
-        }
-        async fn return_to_editor(&self) -> std::result::Result<(), String> { unreachable!() }
-        async fn fill_browser_panel(&self, plugin: &str, project_path: &str, fill: serde_json::Value) -> std::result::Result<serde_json::Value, String> {
-            *self.fill.lock().unwrap() = Some((plugin.to_string(), project_path.to_string(), fill));
-            Ok(serde_json::json!({ "filled": true }))
-        }
-        async fn prompt_credential(&self, _: &str, _: &str, _: &str, _: Option<String>) -> std::result::Result<Option<String>, String> { unreachable!() }
-        fn listen(&self, _: String, _: Box<dyn Fn(&str) + Send + Sync + 'static>) -> crate::engine::app_host::ListenerId { unreachable!() }
-        fn unlisten(&self, _: crate::engine::app_host::ListenerId) { unreachable!() }
-        fn emit_plugin_event(&self, _: &str, _: Option<String>) { unreachable!() }
+    /// The `url` the last `open_action_panel` received: `None` if none opened, `Some(None)` for "no page".
+    fn panel(desk: &ScriptedPerson) -> Option<Option<String>> {
+        desk.seen("panel-opened").last().map(|p| p["url"].as_str().map(str::to_string))
     }
 
-    async fn browser_call(desk: &PanelRecorder, cmd: &str, args: serde_json::Value) -> std::result::Result<String, String> {
+    async fn browser_call(desk: &ScriptedPerson, cmd: &str, args: serde_json::Value) -> std::result::Result<String, String> {
         browser_call_as(desk, "mastodon", cmd, args).await
     }
 
     /// Sign-ins are keyed by plugin across the process, so a test that waits
     /// on one uses a plugin no parallel test does.
-    async fn browser_call_as(desk: &PanelRecorder, plugin: &str, cmd: &str, args: serde_json::Value) -> std::result::Result<String, String> {
+    async fn browser_call_as(desk: &ScriptedPerson, plugin: &str, cmd: &str, args: serde_json::Value) -> std::result::Result<String, String> {
         let state = HostState::standalone();
         let host = EngineHost { app: Some(desk), state: &state, project_path: "/tmp/none", plugin: Some(plugin), asked_by: None, declared: None };
         dispatch_command_core(host, cmd, &args.to_string()).await
@@ -1717,26 +1693,26 @@ mod tests {
     /// both ways in: the plain open and the sign-in.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_system_browser_opens_only_web_pages() {
-        let desk = PanelRecorder::default();
+        let desk = ScriptedPerson::default();
         for refused in ["file:///etc/passwd", "javascript:alert(1)", "moss://open?path=/"] {
             assert!(browser_call(&desk, "open_system_browser", serde_json::json!({ "url": refused })).await.is_err(), "{refused}");
             browser_call(&desk, "browser_sign_in_start", serde_json::json!({})).await.unwrap();
             let waited = browser_call(&desk, "browser_sign_in_wait", serde_json::json!({ "url": refused })).await;
             assert!(waited.is_err(), "{refused}");
         }
-        assert!(desk.browser.lock().unwrap().is_empty(), "nothing may reach the browser: {:?}", desk.browser.lock().unwrap());
+        assert!(browser(&desk).is_empty(), "nothing may reach the browser: {:?}", browser(&desk));
         browser_call(&desk, "open_system_browser", serde_json::json!({ "url": "https://example.com/a" })).await.unwrap();
-        assert_eq!(*desk.browser.lock().unwrap(), vec!["https://example.com/a".to_string()]);
+        assert_eq!(browser(&desk), vec!["https://example.com/a".to_string()]);
     }
 
     /// The fill goes to the plugin that called, whatever name it passes.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fill_browser_panel_reaches_the_app_as_the_calling_plugin() {
-        let desk = PanelRecorder::default();
+        let desk = ScriptedPerson::default();
         let fill = serde_json::json!({ "editor": { "body": ".editor" }, "parts": [{ "html": "<p>a</p>" }] });
         let reply = browser_call(&desk, "fill_browser_panel", serde_json::json!({ "pluginName": "matters", "fill": fill })).await.unwrap();
         assert_eq!(reply, r#"{"filled":true}"#);
-        assert_eq!(*desk.fill.lock().unwrap(), Some(("mastodon".to_string(), "/tmp/none".to_string(), fill)));
+        assert_eq!(desk.seen("panel-filled"), vec![serde_json::json!({ "plugin": "mastodon", "project": "/tmp/none", "fill": fill })]);
     }
 
     /// A plugin tells a cancel from a failure by this text alone, so the
@@ -1744,14 +1720,14 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_superseded_sign_in_rejects_with_the_text_moss_api_reads_as_cancelled() {
         use crate::plugins::runtime::browser_sign_in::CANCELLED;
-        let desk = std::sync::Arc::new(PanelRecorder::default());
+        let desk = std::sync::Arc::new(ScriptedPerson::default());
         browser_call_as(&desk, "cancel-probe", "browser_sign_in_start", serde_json::json!({})).await.unwrap();
         let waiting = {
             let desk = desk.clone();
             tokio::spawn(async move { browser_call_as(&desk, "cancel-probe", "browser_sign_in_wait", serde_json::json!({ "url": "https://example.com/authorize" })).await })
         };
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            while desk.browser.lock().unwrap().is_empty() {
+            while browser(&desk).is_empty() {
                 tokio::time::sleep(std::time::Duration::from_millis(5)).await;
             }
         })
@@ -1775,7 +1751,7 @@ mod tests {
     /// with `invoke_args` as its argument object, and returns what the desktop
     /// seam received.
     async fn open_panel_url_from_bundle(invoke_args: &str) -> Option<Option<String>> {
-        let desk = std::sync::Arc::new(PanelRecorder::default());
+        let desk = std::sync::Arc::new(ScriptedPerson::default());
         let (engine, mut dispatch_rx) = crate::engine::QuickJsEngine::new(None);
         let desk2 = desk.clone();
         tokio::spawn(async move {
@@ -1805,8 +1781,7 @@ mod tests {
             .await
             .expect("bundle must run");
         engine.shutdown().await;
-        let got = desk.panel.lock().unwrap().clone();
-        got
+        panel(&desk)
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1823,7 +1798,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn open_action_panel_refuses_a_non_string_url_without_opening() {
-        let desk = PanelRecorder::default();
+        let desk = ScriptedPerson::default();
         let host = EngineHost {
             app: Some(&desk),
             state: &HostState::standalone(),
@@ -1836,7 +1811,7 @@ mod tests {
             .await
             .expect_err("a numeric url must be refused");
         assert!(err.contains("must be a string or null"), "got: {err}");
-        assert_eq!(*desk.panel.lock().unwrap(), None, "the panel must not open");
+        assert_eq!(panel(&desk), None, "the panel must not open");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
