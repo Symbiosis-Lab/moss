@@ -158,6 +158,7 @@ GATES_NOBUILD=(
   bridge-capture
   iframe-open-url
   grid-block-rhythm
+  newpage-stall
   term-index-layout
   site-elevation
   card-media-track
