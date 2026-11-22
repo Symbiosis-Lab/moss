@@ -47,11 +47,13 @@ pub struct Checked {
     /// The line to add to the server's `authorized_keys`, when it refused
     /// moss's key.
     pub authorized_key: Option<String>,
-    /// The web folders found, when none showed at the address: the person
-    /// picks one.
+    /// The web folders that take files, when there are several and none
+    /// showed at the address: the person picks one.
     pub folders: Vec<String>,
     /// The address the last step fetched.
     pub address: String,
+    /// The folder checked: the one found and saved when none was given.
+    pub folder: String,
 }
 
 impl Checked {
@@ -186,7 +188,7 @@ pub(super) async fn check_among(folder: &Path, keys: &Keys, trust: Option<&str>,
         Some(Refusal::KeyRefused { .. }) => Some(keys.public_line(&server::publisher(folder)?, &label(folder))?),
         _ => None,
     };
-    Ok(Checked { steps, trust, authorized_key, folders, address })
+    Ok(Checked { steps, trust, authorized_key, folders, address, folder: settings.server.folder })
 }
 
 /// The address of a folder that names none: its server's.

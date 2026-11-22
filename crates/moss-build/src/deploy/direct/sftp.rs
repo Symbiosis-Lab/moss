@@ -56,8 +56,8 @@ pub enum Refusal {
     NoFolder { folder: String },
     /// No folder given, and none of the usual web folders is on the server.
     NoWebFolder { host: String },
-    /// No folder given, and the web folders found don't show at the
-    /// address: the person picks one.
+    /// No folder given, and several web folders take files but none shows
+    /// at the address: the person picks one.
     WhichFolder { host: String },
     CannotWrite { folder: String },
     /// The folder takes files, but the address doesn't serve them (yet).

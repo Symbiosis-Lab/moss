@@ -577,6 +577,7 @@ async fn web_folders_the_address_does_not_show_are_offered_to_pick() {
     assert!(matches!(one.steps.last().and_then(|s| s.refusal.clone()), Some(Refusal::NotServed { .. })), "{one:?}");
     let saved = server::settings(folder.path()).unwrap().unwrap().server.folder;
     assert_eq!(Path::new(&saved).canonicalize().unwrap(), sshd.www.canonicalize().unwrap());
+    assert_eq!(one.folder, saved, "the check names the folder it kept");
 }
 
 /// A web folder moss cannot write to is refused as that, not offered to pick.
