@@ -28,6 +28,7 @@ impl Fixture {
             render,
             root: self.dir.path().to_path_buf(),
             folder: self.folder.clone(),
+            gate: crate::system::derive::test_support::own_gate(),
             jobs: vec![self.demand.clone()],
         }
     }
@@ -157,7 +158,7 @@ fn last_file_read_first(arrived: bool, viewed: Option<&str>, page: &str, watcher
         .collect();
     let reporter = Finished::default();
     let stop = || reporter.0.load(Ordering::SeqCst);
-    let results = read_all(&paths, dir.path(), &demands, Some(&reporter), &stop, false);
+    let results = read_all(&paths, dir.path(), &demands, &crate::system::derive::test_support::own_gate(), Some(&reporter), &stop, false);
     results.iter().any(|(p, _)| p == "last.xyz")
 }
 

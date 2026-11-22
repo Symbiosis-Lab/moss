@@ -419,7 +419,7 @@ pub async fn expand_derived(host: &dyn CommandHost, a: ExpandDerivedArgs) -> Res
     let root_str = root.to_str().ok_or("the site path is not valid UTF-8")?;
     let structure = crate::build::scan::scan::scan_folder_with_dedup_emit(root_str, None, None, true)?;
     let graph = crate::build::scan::scan::build_content_graph(&structure);
-    let site = crate::system::derive::site::DerivedSite::load(true, root);
+    let site = crate::system::derive::site::DerivedSite::load(true, root, Default::default());
     let empty = DerivedTable::new();
     let read_derived = |path: &str, fragment: &str| match &site {
         Some(site) => site.read(path, fragment),

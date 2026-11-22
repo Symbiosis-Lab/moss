@@ -31,6 +31,7 @@ use crate::moss_paths::MossPaths;
 use crate::system::derive::priority::{self, Schedule};
 use crate::system::derive::registry::{DerivationEntry, DerivationRegistry};
 use crate::system::derive::{self as derive, batch::DeriveJob, DeriveFailure, DeriveOutcome};
+use crate::system::folder_session::{DerivedWorkGate, Encoder};
 
 /// What a build does about derived text it does not have yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +68,8 @@ pub struct DerivedSite {
     root: PathBuf,
     folder: String,
     mode: DeriveMode,
+    /// Whose cores each batched read holds while it runs.
+    gate: DerivedWorkGate,
     slots: Mutex<HashMap<String, Arc<Slot>>>,
     background: Mutex<Vec<Demand>>,
     /// Files whose block this build rendered as a placeholder or a failure
@@ -94,7 +97,7 @@ impl DerivedSite {
     /// The derivations of the plugins this folder carries, or `None` when
     /// plugins are off or none declares one. Admission is the loader's:
     /// a refused plugin is not in the list.
-    pub fn load(plugins_on: bool, folder: &Path) -> Option<Arc<Self>> {
+    pub fn load(plugins_on: bool, folder: &Path, gate: DerivedWorkGate) -> Option<Arc<Self>> {
         if !plugins_on {
             return None;
         }
@@ -133,6 +136,7 @@ impl DerivedSite {
             root: folder.to_path_buf(),
             folder: folder_str,
             mode,
+            gate,
             slots: Mutex::default(),
             background: Mutex::default(),
             unready: Mutex::default(),
@@ -217,8 +221,11 @@ impl DerivedSite {
                 None => derive::lookup_previous(&self.paths, entry, &input).map_or(Slot::Pending, Slot::Previous),
             },
             DeriveMode::Await => {
-                let result = derive::binary::ensure_binary(entry, None)
-                    .and_then(|_| derive::derive_cached(&self.paths, entry, &input));
+                // First in line: the build waits on it, on a render worker.
+                let result = derive::binary::ensure_binary(entry, None).and_then(|_| {
+                    let _cores = self.gate.take_cores_first(Encoder::Deriver, &|| false);
+                    derive::derive_cached(&self.paths, entry, &input)
+                });
                 match result {
                     Ok(outcome) => Slot::Outcome(outcome),
                     Err(failure) => {
@@ -292,7 +299,7 @@ impl DerivedSite {
             }
             return;
         }
-        let results = read_all(&self.paths, &self.root, &misses, reporter, &|| false, false);
+        let results = read_all(&self.paths, &self.root, &misses, &self.gate, reporter, &|| false, false);
         if let Ok(mut slots) = self.slots.lock() {
             for (path, result) in results {
                 let slot = match result {
@@ -316,6 +323,7 @@ impl DerivedSite {
             render,
             root: self.root.clone(),
             folder: self.folder.clone(),
+            gate: self.gate.clone(),
             jobs,
         })
     }
@@ -359,6 +367,7 @@ fn read_all(
     paths: &MossPaths,
     root: &Path,
     jobs: &[Demand],
+    gate: &DerivedWorkGate,
     reporter: Option<&dyn BuildReporter>,
     stop: &(dyn Fn() -> bool + Sync),
     remember: bool,
@@ -400,7 +409,7 @@ fn read_all(
         .map(|d| derive::lookup_previous(paths, &d.entry, &on_disk(root, &d.path)).is_none() || priority::arrived_in_session(root, &d.path, &d.pages))
         .collect();
     let schedule = Arc::new(Schedule::new(root, runnable.iter().map(|d| d.pages.clone()).collect(), arrived));
-    let derived = derive::derive_batch_by(paths, &batch, remember, stop, Arc::new(move |job| schedule.tier(job)), |done, total| {
+    let derived = derive::derive_batch_by(paths, &batch, remember, gate, stop, Arc::new(move |job| schedule.tier(job)), |done, total| {
         report_progress(reporter, &noun, done, total)
     });
     let read: Vec<&str> = runnable.iter().zip(&derived).filter(|(_, r)| r.is_some()).map(|(d, _)| d.path.as_str()).collect();
@@ -420,6 +429,7 @@ pub struct BackgroundDerive {
     paths: MossPaths,
     root: PathBuf,
     folder: String,
+    gate: DerivedWorkGate,
     jobs: Vec<Demand>,
     /// The render this read belongs to.
     render: crate::build::lifecycle::Render,
@@ -436,7 +446,7 @@ impl BackgroundDerive {
     pub fn run(self, reporter: Option<&dyn BuildReporter>, cancel: &std::sync::atomic::AtomicBool) {
         let superseded = || !self.render.is_latest();
         let stop = || cancel.load(Ordering::SeqCst) || superseded();
-        let results = read_all(&self.paths, &self.root, &self.jobs, reporter, &stop, true);
+        let results = read_all(&self.paths, &self.root, &self.jobs, &self.gate, reporter, &stop, true);
         let cancelled = cancel.load(Ordering::SeqCst);
         if stop() {
             // A stopped read sends no last count, and a listener would show it

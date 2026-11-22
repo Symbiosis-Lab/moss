@@ -7685,7 +7685,7 @@ async fn parked_pic_encoded_after_rebuild_of<G>(rebuilt: &[&str], setup: impl Fn
     vault.write_named("other.png", [30, 200, 30]);
     let pool = CorePool::own();
     let all = std::thread::available_parallelism().map_or(1, |n| n.get());
-    let busy: Vec<_> = (0..all).map(|_| pool.take(|| all, Encoder::Picture, &|| false).unwrap()).collect();
+    let busy: Vec<_> = (0..all).map(|_| pool.take(|| all, Encoder::Picture, false, &|| false).unwrap()).collect();
     let workers = std::sync::Arc::new(HeldSpawner::default());
     let services = || BuildServices { encode_pool: Some(pool), ..workers.services() };
 
@@ -7717,7 +7717,7 @@ async fn the_last_image_leaving_the_site_while_its_worker_waits_for_a_core_is_no
     vault.write_pic([200, 30, 30]);
     let pool = CorePool::own();
     let all = std::thread::available_parallelism().map_or(1, |n| n.get());
-    let busy: Vec<_> = (0..all).map(|_| pool.take(|| all, Encoder::Picture, &|| false).unwrap()).collect();
+    let busy: Vec<_> = (0..all).map(|_| pool.take(|| all, Encoder::Picture, false, &|| false).unwrap()).collect();
     let workers = std::sync::Arc::new(HeldSpawner::default());
     let services = || BuildServices { encode_pool: Some(pool), ..workers.services() };
 

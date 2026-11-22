@@ -1134,7 +1134,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
 
     // Derivations come from the same admitted plugins the hooks above ran
     // from, read after them: a hook may have installed one.
-    let derived_site = crate::system::derive::site::DerivedSite::load(!skip_plugins, std::path::Path::new(&folder_path));
+    let derived_site = crate::system::derive::site::DerivedSite::load(!skip_plugins, std::path::Path::new(&folder_path), config.host.services.derived_work_gate());
 
     crate::build::template_check::warn_template_problems(Path::new(&folder_path));
 

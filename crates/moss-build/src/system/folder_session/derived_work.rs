@@ -17,10 +17,10 @@
 //! constant `Live` one (`moss build --serve --watch`), so its gate is always
 //! open.
 //!
-//! The gate also owns the core budget of picture and video encodes. Once a
-//! cadence is attached the folder is open beside whatever else the person is
-//! doing, so the encodes share a quarter of the cores; a publish, which waits
-//! on them, gets all of them. See [`DerivedWorkGate::cores`].
+//! The gate also owns the core budget of picture and video encodes and of
+//! plugin derivers. Once a cadence is attached the folder is open beside
+//! whatever else the person is doing, so they share a quarter of the cores;
+//! a publish, which waits on them, gets all of them. See [`DerivedWorkGate::cores`].
 
 use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -62,6 +62,12 @@ impl DerivedWorkGate {
     #[cfg(test)]
     pub(crate) fn drawing_from(self, pool: &'static CorePool) -> Self {
         Self { pool, ..self }
+    }
+
+    /// How many takers wait ahead of the rest.
+    #[cfg(test)]
+    pub(crate) fn urgent_waiting(&self) -> usize {
+        self.pool.lock().urgent
     }
 
     /// The gate of `session`, or an open one when there is no session.
@@ -122,7 +128,14 @@ impl DerivedWorkGate {
     /// Take `encoder`'s share of the core budget, waiting until it is free;
     /// `None` once `stop` turns true while waiting.
     pub fn take_cores(&self, encoder: Encoder, stop: &dyn Fn() -> bool) -> Option<Cores<'static>> {
-        self.pool.take(|| self.cores(), encoder, stop)
+        self.pool.take(|| self.cores(), encoder, false, stop)
+    }
+
+    /// [`take_cores`](Self::take_cores) ahead of every other waiter, for work
+    /// someone is waiting on: a read of the page on screen, or one a build
+    /// cannot finish without.
+    pub fn take_cores_first(&self, encoder: Encoder, stop: &dyn Fn() -> bool) -> Option<Cores<'static>> {
+        self.pool.take(|| self.cores(), encoder, true, stop)
     }
 }
 
@@ -136,10 +149,10 @@ fn budget(all: usize, attached: bool, publishing: bool) -> usize {
 
 static ALL_CORES: LazyLock<usize> = LazyLock::new(|| std::thread::available_parallelism().map_or(1, |n| n.get()));
 
-/// The one pool every picture and video encode in the process draws from,
-/// and outside tests the only one there is. Each gate sets its own budget
-/// against it, so a session with no cadence (every core) can fill it while a
-/// session with one waits. A test may give a build its own ([`CorePool::own`]).
+/// The one pool every picture and video encode and every plugin deriver in
+/// the process draws from, and outside tests the only one there is. Each gate
+/// sets its own budget against it, so a session with no cadence (every core)
+/// can fill it while a session with one waits. A test may give a build its own ([`CorePool::own`]).
 static POOL: CorePool = CorePool::new();
 
 /// How often a waiter re-reads the budget: a publish that starts while
@@ -151,17 +164,19 @@ const RECHECK: Duration = Duration::from_millis(100);
 /// encode that runs for minutes never holds every core while the pictures a
 /// page shows wait. Pictures come first: a picture retakes a freed core
 /// before a waiting video gathers its half, so a video starts once the
-/// picture batch thins out.
+/// picture batch thins out. A plugin's deriver, an outside program reading
+/// one file, takes one like a picture.
 #[derive(Clone, Copy, Debug)]
 pub enum Encoder {
     Picture,
     Video,
+    Deriver,
 }
 
 impl Encoder {
     fn share(self, budget: usize) -> usize {
         match self {
-            Encoder::Picture => 1,
+            Encoder::Picture | Encoder::Deriver => 1,
             Encoder::Video => (budget / 2).max(1),
         }
     }
@@ -170,8 +185,16 @@ impl Encoder {
 /// A counting semaphore whose size is read at every take.
 #[derive(Debug)]
 pub(crate) struct CorePool {
-    in_use: Mutex<usize>,
+    load: Mutex<Load>,
     freed: Condvar,
+}
+
+#[derive(Debug)]
+struct Load {
+    in_use: usize,
+    /// Takers waiting for work someone is waiting on; while any wait, nobody
+    /// else is granted a core.
+    urgent: usize,
 }
 
 /// Cores held from a [`CorePool`], given back on drop. A running ffmpeg keeps
@@ -190,14 +213,14 @@ impl Cores<'_> {
 
 impl Drop for Cores<'_> {
     fn drop(&mut self) {
-        *self.pool.lock() -= self.held;
+        self.pool.lock().in_use -= self.held;
         self.pool.freed.notify_all();
     }
 }
 
 impl CorePool {
     const fn new() -> Self {
-        Self { in_use: Mutex::new(0), freed: Condvar::new() }
+        Self { load: Mutex::new(Load { in_use: 0, urgent: 0 }), freed: Condvar::new() }
     }
 
     /// A pool no other build draws from, for a test whose encodes must not
@@ -207,24 +230,34 @@ impl CorePool {
         Box::leak(Box::new(Self::new()))
     }
 
-    fn lock(&self) -> MutexGuard<'_, usize> {
-        self.in_use.lock().unwrap_or_else(PoisonError::into_inner)
+    fn lock(&self) -> MutexGuard<'_, Load> {
+        self.load.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    pub(crate) fn take(&self, budget: impl Fn() -> usize, encoder: Encoder, stop: &dyn Fn() -> bool) -> Option<Cores<'_>> {
-        let mut in_use = self.lock();
-        loop {
+    /// Wait for `encoder`'s share. An `urgent` taker is served before every
+    /// other waiter.
+    pub(crate) fn take(&self, budget: impl Fn() -> usize, encoder: Encoder, urgent: bool, stop: &dyn Fn() -> bool) -> Option<Cores<'_>> {
+        let mut load = self.lock();
+        load.urgent += usize::from(urgent);
+        let cores = loop {
             if stop() {
-                return None;
+                break None;
             }
-            let budget = budget();
-            let want = encoder.share(budget);
-            if *in_use + want <= budget {
-                *in_use += want;
-                return Some(Cores { pool: self, held: want });
+            if let Some(cores) = self.grant(&mut load, budget(), encoder, urgent) {
+                break Some(cores);
             }
-            in_use = self.freed.wait_timeout(in_use, RECHECK).unwrap_or_else(PoisonError::into_inner).0;
-        }
+            load = self.freed.wait_timeout(load, RECHECK).unwrap_or_else(PoisonError::into_inner).0;
+        };
+        load.urgent -= usize::from(urgent);
+        cores
+    }
+
+    fn grant(&self, load: &mut Load, budget: usize, encoder: Encoder, urgent: bool) -> Option<Cores<'_>> {
+        let want = encoder.share(budget);
+        ((urgent || load.urgent == 0) && load.in_use + want <= budget).then(|| {
+            load.in_use += want;
+            Cores { pool: self, held: want }
+        })
     }
 }
 

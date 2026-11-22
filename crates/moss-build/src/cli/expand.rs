@@ -72,7 +72,7 @@ pub fn expand_in(target: &Path, cwd: &Path, dry_run: bool) -> Result<Vec<String>
         return Err(format!("no markdown pages at {}", abs.display()));
     }
 
-    let site = DerivedSite::load(true, &root_path);
+    let site = DerivedSite::load(true, &root_path, Default::default());
     if let Some(site) = &site {
         site.prepare(site.demands(&pages, &graph), None);
     }
