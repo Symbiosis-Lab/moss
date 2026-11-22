@@ -1608,22 +1608,19 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
         emit_build_complete(&config.progress, port_now(), _is_empty, reloads); // port: again about NOW
     }
 
-    let folder_name = config.root.name_opt().unwrap_or("unnamed-site");
+    let port = port_now();
+    Ok(PassOutcome { message: generated_message(config, port), owed: media_rerender_owed, is_empty: _is_empty, port })
+}
 
-    let site_paths = crate::moss_paths::MossPaths::new(config.source());
-    let current_output = site_paths.current_ptr();
-    let base_message = crate::ops::serve::ownership::generated_line(folder_name, &current_output, &site_paths.staging_dir(), port_now().is_some());
-
-    if let Some(p) = port_now() {
-        let preview_url = format!("http://localhost:{}", p);
-        Ok(PassOutcome {
-            message: format!("{}\n{}", base_message, crate::ops::serve::ownership::preview_ready_line(&preview_url)),
-            owed: media_rerender_owed,
-            is_empty: _is_empty,
-            port: Some(p),
-        })
-    } else {
-        Ok(PassOutcome { message: base_message, owed: media_rerender_owed, is_empty: _is_empty, port: None })
+/// What a finished build says it generated, and the preview's address when it
+/// serves one.
+fn generated_message(config: &PipelineConfig, port: Option<u16>) -> String {
+    use crate::ops::serve::ownership::{generated_line, preview_ready_line};
+    let paths = crate::moss_paths::MossPaths::new(config.source());
+    let generated = generated_line(config.root.name_opt().unwrap_or("unnamed-site"), &paths.current_ptr(), &paths.staging_dir(), port.is_some());
+    match port {
+        Some(port) => format!("{generated}\n{}", preview_ready_line(&format!("http://localhost:{port}"))),
+        None => generated,
     }
 }
 

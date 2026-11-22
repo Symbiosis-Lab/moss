@@ -376,6 +376,19 @@ async fn search_entry(port: u16) -> Result<String, String> {
     .unwrap()
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_open_that_stops_at_its_entry_still_gives_the_preview_address() {
+    let vault = Vault::new();
+    // The first seal leaves its media unsettled; the second open settles it.
+    for _ in 0..2 {
+        vault.open().await;
+        settle(&vault.mp).await;
+    }
+    let message = vault.open().await;
+    assert!(message.starts_with("Unchanged since the last build."), "the open stopped: {message}");
+    assert!(message.contains("http://localhost:47312"), "no preview address: {message}");
+}
+
 /// A search read after a session's last edit publishes a bundle no build has
 /// adopted, so staging still holds the bundle before it, and an open that
 /// stops builds nothing that would adopt it. The search mount answers from
