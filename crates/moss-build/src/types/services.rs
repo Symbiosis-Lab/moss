@@ -223,9 +223,10 @@ pub struct BuildServices {
     /// Singleflight dedup for image conversion keyed by source_oid.
     /// When multiple concurrent rebuilds try to convert the same image to WebP,
     /// only the first runs the encoder — all others block until the first completes
-    /// and then receive a clone of its outcome. Generalizes the video-only dedup
-    /// pattern to all pipeline tasks.
-    pub in_flight_images: std::sync::Arc<crate::build::cache::Singleflight<crate::build::media::image::ImageConversionOutcome>>,
+    /// and then receive a clone of its outcome. An outcome of `None` means the
+    /// converter's picture was withdrawn before it encoded; a waiter still
+    /// wanted runs the encode itself.
+    pub in_flight_images: std::sync::Arc<crate::build::cache::Singleflight<Option<crate::build::media::image::ImageConversionOutcome>>>,
     /// Singleflight dedup for metadata extraction keyed by "meta:{content_hash}".
     /// When multiple concurrent scans (build + plugin hooks) hit a TransformCache miss
     /// for the same file, only the first runs the actual extraction (image dimensions,

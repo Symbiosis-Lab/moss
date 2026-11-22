@@ -7489,6 +7489,38 @@ async fn a_worker_finishing_an_image_that_has_left_the_site_does_not_vouch_for_i
     assert!(!vouched("pic.png"), "the worker vouched for an image the site no longer lists");
 }
 
+/// An image taken off the site while its worker waits for a core is not encoded: the
+/// dispatch that dropped it ended its mark, and the worker reads that before it
+/// encodes, also while it is parked on the core budget.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_image_that_leaves_the_site_while_its_worker_waits_for_a_core_is_not_encoded() {
+    use crate::system::folder_session::{CorePool, Encoder};
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    vault.write_named("other.png", [30, 200, 30]);
+    let pool = CorePool::own();
+    let all = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let busy: Vec<_> = (0..all).map(|_| pool.take(|| all, Encoder::Picture, &|| false).unwrap()).collect();
+    let workers = std::sync::Arc::new(HeldSpawner::default());
+    let services = || BuildServices { encode_pool: Some(pool), ..workers.services() };
+
+    vault.dispatch(vault.collect_of(&["pic.png", "other.png"]), services()).await;
+    let running = tokio::spawn({
+        let workers = workers.clone();
+        async move { workers.run_held().await }
+    });
+    // Long enough for the worker to reach the core budget and park on it.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let joining = vault.dispatch_joining(vault.collect_of(&["other.png"]), services(), None, None).await;
+    drop(busy);
+    running.await.unwrap();
+    joining.await.unwrap().unwrap();
+
+    let staged = |name: &str| vault.moss_dir.join("build/staging").join(name).exists();
+    assert!(staged("other.webp"), "premise: the image that stayed was encoded");
+    assert!(!staged("pic.webp"), "the worker encoded an image the site no longer lists");
+}
+
 /// A worker vouches for the source its dispatch saw. One that read the file later has
 /// looked at bytes nobody fingerprinted, and when the blocking phase had already handed it
 /// the hash of the OLD bytes (a stat-matched index entry, so no read) it encoded nothing of
@@ -8031,4 +8063,29 @@ fn image_work_counts_every_mark_until_it_ends() {
     retain_image_item_fingerprints(&folder, &std::collections::HashSet::new());
     assert_eq!(image_work_in(&folder), work(3, 3), "its page went");
     assert!(image_work().queued >= 3, "the process total includes this folder");
+}
+
+/// Two paths with the same bytes share one encode. When the converter's own
+/// picture is withdrawn while it waits for a core, the other path, still
+/// wanted, runs the encode itself instead of inheriting nothing.
+#[test]
+fn a_still_wanted_picture_encodes_itself_when_the_encode_it_waited_on_is_withdrawn() {
+    let flight = crate::build::cache::Singleflight::<Option<ImageConversionOutcome>>::new();
+    let encoded = || Some(ImageConversionOutcome { webp_oid: Some("webp".into()), webp_size: 1, original_size: 2, error: None, rungs: Vec::new() });
+    let (started, converter_started) = std::sync::mpsc::channel();
+    std::thread::scope(|s| {
+        let converter = s.spawn(|| {
+            convert_unless_withdrawn(&flight, "same-bytes", &|| true, || {
+                started.send(()).unwrap();
+                // Long enough for the waiter to join this flight.
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                None
+            })
+        });
+        converter_started.recv().unwrap();
+        let waiter = convert_unless_withdrawn(&flight, "same-bytes", &|| false, encoded);
+        assert!(converter.join().unwrap().is_none(), "the withdrawn picture encodes nothing");
+        let Some((Some(outcome), _)) = waiter else { panic!("the waiter got {waiter:?}") };
+        assert_eq!(outcome.webp_oid.as_deref(), Some("webp"));
+    });
 }

@@ -138,6 +138,12 @@ impl ImageConversionItem {
             end_image_item(folder, &self.source_path.to_string_lossy(), fingerprint, delivered, advisories);
         }
     }
+
+    /// A later dispatch no longer wants this item's encode: the picture left
+    /// every page, or was queued again over other bytes.
+    fn withdrawn(&self, folder: &str) -> bool {
+        self.fingerprint.as_ref().is_some_and(|mine| !image_mark_stands(folder, &self.source_path.to_string_lossy(), mine))
+    }
 }
 
 /// Outcome of converting a single image to WebP.
@@ -1576,6 +1582,31 @@ pub(crate) fn end_image_item(folder: &str, path: &str, queued_as: &Arc<ImageFing
     })
 }
 
+/// `do_work` of `convert` for `flight`, or `None` once `withdrawn`. A converter
+/// whose own item is withdrawn while it waits for a core returns `None` from
+/// `convert`; a waiter on it that is still wanted runs the work itself.
+fn convert_unless_withdrawn(
+    images: &crate::build::cache::Singleflight<Option<ImageConversionOutcome>>,
+    flight: &str,
+    withdrawn: &dyn Fn() -> bool,
+    convert: impl Fn() -> Option<ImageConversionOutcome>,
+) -> Option<(Option<ImageConversionOutcome>, bool)> {
+    loop {
+        match images.do_work(flight, &convert) {
+            (Some(None), _) if withdrawn() => return None,
+            (Some(None), _) => continue,
+            (result, shared) => return Some((result.flatten(), shared)),
+        }
+    }
+}
+
+/// Whether `mark` is still the ledger's mark for `path`. Read-only, so it wakes
+/// no joined build: a worker parked on the core budget asks it on every recheck.
+fn image_mark_stands(folder: &str, path: &str, mark: &Arc<ImageFingerprint>) -> bool {
+    let ledgers = IMAGE_LEDGERS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    ledgers.get(folder).and_then(|ledger| ledger.pending.get(path)).is_some_and(|marked| Arc::ptr_eq(marked, mark))
+}
+
 /// The advisories recorded for `path` alongside its last delivered
 /// fingerprint — what a skip-carried image still has to say, re-emitted by
 /// `dispatch_image_conversions` in that image's stead when it carries the
@@ -2170,44 +2201,44 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
             crate::build::scan::scan::image_meta_stat_key(&rel_source_str, m.len(), mtime)
         });
 
-        let (sf_result, was_shared) = {
-            // Singleflight dedups concurrent duplicate-content conversions so a
-            // repeated image decodes once (waiters block on its condvar and reuse
-            // the result). do_work is correct under concurrency — the earlier
-            // wedge that looked like a do_work deadlock was actually the OS
-            // OOM-killing the process; the MegapixelBudget fixes that root cause.
-            //
-            // The megapixel permit is acquired INSIDE the converter closure, so
-            // ONLY the actual converter reserves budget. A waiting duplicate
-            // holds no budget while parked, so it can't starve its own converter
-            // (which would deadlock the budget). do_work wraps the closure in
-            // catch_unwind, and the permit drops as the panic unwinds, so a
-            // panicking encode cannot wedge the budget.
-            services.in_flight_images.do_work(&ctx.rung_plan.flight(&source_oid, &relative_webp), || {
-                // Before the permit: a picture waiting for its download holds
-                // no encode capacity.
-                ticket.fetch(&transforms, &source_oid, "image/", &cancelled);
-                // Cores before megapixels, never the reverse. Cancelled while
-                // waiting, the converter sees the flag and returns at once.
-                let _cores = gate.take_cores(crate::system::folder_session::Encoder::Picture, &cancelled);
-                let _permit = mp_budget.acquire(item_megapixels(item));
-                let before = super::encodes_on_this_thread();
-                let outcome = convert_single_image(
-                    &source_file,
-                    &source_oid,
-                    &relative_webp,
-                    &temp_dir,
-                    &ctx.staging_dir,
-                    &objects,
-                    &transforms,
-                    &ctx.config,
-                    cancel_flag,
-                    meta_stat_key.as_deref(),
-                    &ctx.rung_plan,
-                );
-                encodes.fetch_add(super::encodes_on_this_thread() - before, Ordering::Relaxed);
-                outcome
-            })
+        // Singleflight dedups concurrent duplicate-content conversions so a
+        // repeated image decodes once (waiters block on its condvar and reuse
+        // the result).
+        //
+        // The megapixel permit is acquired INSIDE the converter closure, so
+        // ONLY the actual converter reserves budget. A waiting duplicate
+        // holds no budget while parked, so it can't starve its own converter
+        // (which would deadlock the budget). do_work wraps the closure in
+        // catch_unwind, and the permit drops as the panic unwinds, so a
+        // panicking encode cannot wedge the budget.
+        let withdrawn = || item.withdrawn(&ctx.source_path);
+        let Some((sf_result, was_shared)) = convert_unless_withdrawn(&services.in_flight_images, &ctx.rung_plan.flight(&source_oid, &relative_webp), &withdrawn, || {
+            // Before the permit: a picture waiting for its download holds
+            // no encode capacity.
+            ticket.fetch(&transforms, &source_oid, "image/", &cancelled);
+            // Cores before megapixels, never the reverse. Cancelled while
+            // waiting, the converter sees the flag and returns at once.
+            let cores = gate.take_cores(crate::system::folder_session::Encoder::Picture, &|| cancelled() || withdrawn());
+            if cores.is_none() && !cancelled() { return None }
+            let _permit = mp_budget.acquire(item_megapixels(item));
+            let before = super::encodes_on_this_thread();
+            let outcome = convert_single_image(
+                &source_file,
+                &source_oid,
+                &relative_webp,
+                &temp_dir,
+                &ctx.staging_dir,
+                &objects,
+                &transforms,
+                &ctx.config,
+                cancel_flag,
+                meta_stat_key.as_deref(),
+                &ctx.rung_plan,
+            );
+            encodes.fetch_add(super::encodes_on_this_thread() - before, Ordering::Relaxed);
+            Some(outcome)
+        }) else {
+            return ItemStep::nothing_shipped(Vec::new());
         };
 
         if was_shared {
