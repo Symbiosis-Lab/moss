@@ -185,14 +185,7 @@ pub fn stamp_inline_subscribe_scopes(
         let Some(plan) = doc.body_plan.as_mut() else { continue };
         let mut stamped = false;
         for form in plan.subscribe_forms_mut() {
-            form.html = render_hosted_subscribe_form(
-                site_id,
-                lang,
-                &scope,
-                form.args.placeholder.as_deref(),
-                form.args.button.as_deref(),
-                seta_base,
-            );
+            form.html = render_subscribe_block(&form.args, &form.form_id, site_id, lang, &scope, seta_base);
             if let (Some(members), Some(id)) = (form.args.members, &form.members_lead) {
                 form.html = with_members_lead(&form.html, lang, members, id);
             } else if let Some(id) = &form.labelled_by {
@@ -282,39 +275,55 @@ fn subscribe_form_inner(
     button_override: Option<&str>,
 ) -> String {
     let c = moss_subscribe_copy(lang);
-    let label = match button_override {
-        Some(s) if !s.is_empty() => html_escape(s),
-        _ => c.label.to_string(),
-    };
     let placeholder = match placeholder_override {
         Some(s) if !s.is_empty() => html_escape(s),
         _ => c.placeholder.to_string(),
     };
-    let envelope_svg = r##"<svg class="moss-subscribe-status__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l8 6 8-6M4 7v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V7M4 7l1-1h14l1 1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
     format!(
         r#"<input type="email" name="email" autocomplete="email" class="moss-input" placeholder="{placeholder}" aria-label="{input_label}" required>
-  <span class="moss-btn-slot">
+{tail}"#,
+        input_label = c.input_label,
+        tail = subscribe_tail(&c, button_override, ""),
+    )
+}
+
+/// What every subscribe form ends with: the button, `between` (the questions
+/// form's summary line), the status the script fills, and the subscribed line.
+/// The status takes focus when it replaces a form's questions.
+fn subscribe_tail(c: &MossSubscribeCopy, button_override: Option<&str>, between: &str) -> String {
+    let label = match button_override {
+        Some(s) if !s.is_empty() => html_escape(s),
+        _ => c.label.to_string(),
+    };
+    let envelope_svg = r##"<svg class="moss-subscribe-status__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l8 6 8-6M4 7v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V7M4 7l1-1h14l1 1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
+    format!(
+        r#"  <span class="moss-btn-slot">
     <button type="submit" class="moss-btn">
       <span class="moss-btn__label">{label}</span>
       <span class="moss-btn__spinner" aria-hidden="true"></span>
       <span class="moss-btn__check" aria-hidden="true">{check_svg}</span>
     </button>
-  </span>
-  <div class="moss-subscribe-status" aria-live="polite">
+  </span>{between}
+  <div class="moss-subscribe-status" aria-live="polite" tabindex="-1">
     {envelope_svg}
     <span data-copy="check-email" hidden>{check_email}</span>
     <span data-copy="error" hidden>{error}</span>
   </div>
   <span class="moss-subscribe-subscribed">{subscribed}</span>"#,
-        placeholder = placeholder,
-        input_label = c.input_label,
-        label = label,
         check_email = c.check_email,
         subscribed = c.subscribed,
         error = c.error,
-        envelope_svg = envelope_svg,
         check_svg = CHECK_SVG,
     )
+}
+
+/// The data-…-override attributes, set where the author wrote their own words,
+/// so subscribe.ts leaves them alone.
+fn override_attrs(placeholder: Option<&str>, button: Option<&str>) -> String {
+    let marker = |authored: Option<&str>, attr: &'static str| {
+        if authored.map(str::trim).is_some_and(|s| !s.is_empty()) { attr } else { "" }
+    };
+    [marker(placeholder, r#" data-placeholder-override="true""#), marker(button, r#" data-button-override="true""#)].concat()
 }
 
 /// The line above a members page's subscribe form saying who the page is for,
@@ -387,14 +396,7 @@ pub fn render_hosted_subscribe_form(
     let site = site_id.map(str::trim).filter(|s| !s.is_empty());
     let (action, pending_attr) =
         super::hosted_action(site.map(|id| format!("{}/sites/{}/subscribe", seta_base, html_escape(id))));
-    let marker = |authored: Option<&str>, attr: &'static str| {
-        if authored.map(str::trim).is_some_and(|s| !s.is_empty()) { attr } else { "" }
-    };
-    let override_attr = [
-        marker(placeholder_override, r#" data-placeholder-override="true""#),
-        marker(button_override, r#" data-button-override="true""#),
-    ]
-    .concat();
+    let override_attr = override_attrs(placeholder_override, button_override);
     format!(
         r#"<div class="moss-subscribe" data-state="idle">
   <form class="moss-subscribe-form" data-position="inline" data-moss-hosted="true"{pending_attr}{override_attr} method="post" action="{action}">
@@ -407,6 +409,81 @@ pub fn render_hosted_subscribe_form(
         action = action,
         scope = html_escape(scope),
         inner = inner,
+    )
+}
+
+/// A `:::subscribe` block as written: the one-line email form, or, when the
+/// block lists questions, the same form with each question under the email.
+///
+/// `id` prefixes the ids of the questions form's elements, unique on the page.
+pub fn render_subscribe_block(
+    args: &moss_core::ast::SubscribeShortcode,
+    id: &str,
+    site_id: Option<&str>,
+    lang: Language,
+    scope: &str,
+    seta_base: &str,
+) -> String {
+    if args.fields.is_empty() {
+        return render_hosted_subscribe_form(site_id, lang, scope, args.placeholder.as_deref(), args.button.as_deref(), seta_base);
+    }
+    render_subscribe_with_questions(args, id, site_id, lang, scope, seta_base)
+}
+
+/// The subscribe form that asks questions: a labelled email field, the
+/// questions in `:::form`'s markup, then the button and the status line. It
+/// keeps the subscribe form's classes and states, so the one script and the
+/// site's own rules for `.moss-subscribe` still apply.
+fn render_subscribe_with_questions(
+    args: &moss_core::ast::SubscribeShortcode,
+    id: &str,
+    site_id: Option<&str>,
+    lang: Language,
+    scope: &str,
+    seta_base: &str,
+) -> String {
+    let c = moss_subscribe_copy(lang);
+    let site = site_id.map(str::trim).filter(|s| !s.is_empty());
+    let (action, pending_attr) =
+        super::hosted_action(site.map(|id| format!("{}/sites/{}/subscribe", seta_base, html_escape(id))));
+    let override_attr = override_attrs(args.placeholder.as_deref(), args.button.as_deref());
+    let placeholder = args.placeholder.as_deref().filter(|p| !p.is_empty()).map(|p| format!(r#" placeholder="{}""#, html_escape(p))).unwrap_or_default();
+    // The list's first email item is the subscribe field, in its place and with
+    // its words; with none, a field labelled in the site's language comes first.
+    let email_at = args.fields.iter().position(|f| f.kind == moss_core::ast::FieldKind::Email || f.name == "email");
+    let email_label = email_at.map(|i| html_escape(&args.fields[i].label)).unwrap_or_else(|| c.input_label.to_string());
+    let email_field = format!(
+        r#"  <div class="moss-form__field" data-field="email">
+    <label class="moss-form__label" for="{id}-email">{email_label}</label>
+    <input class="moss-input" type="email" id="{id}-email" name="email" autocomplete="email" spellcheck="false" required{placeholder}>
+    <p class="moss-form__error" id="{id}-email-error" hidden></p>
+  </div>"#
+    );
+    let mut parts: Vec<String> = args
+        .fields
+        .iter()
+        .enumerate()
+        .map(|(i, f)| if Some(i) == email_at { email_field.clone() } else { super::forms::render_field(id, f, lang) })
+        .collect();
+    if email_at.is_none() {
+        parts.insert(0, email_field);
+    }
+    let questions = parts.join("\n");
+    let copy = [("required", "form_required"), ("format", "form_format"), ("email", "form_email"), ("pick_one", "form_pick_one"), ("left", "form_left")]
+        .iter()
+        .map(|(k, key)| format!(r#"<span data-copy="{k}">{}</span>"#, crate::i18n::t(lang, key)))
+        .collect::<String>();
+    format!(
+        r#"<div class="moss-subscribe moss-form" data-state="idle">
+<form class="moss-subscribe-form" data-position="stacked" data-moss-hosted="true"{pending_attr}{override_attr} method="post" action="{action}">
+  <input type="hidden" name="scope" value="{scope}">
+{questions}
+{tail}
+  <div hidden>{copy}</div>
+</form>
+</div>"#,
+        scope = html_escape(scope),
+        tail = subscribe_tail(&c, args.button.as_deref(), "\n  <p class=\"moss-form__status\" aria-live=\"polite\"></p>"),
     )
 }
 
@@ -1064,6 +1141,38 @@ mod tests {
             "must use zh-hans default button label: {html}");
     }
 
+    fn questions() -> moss_core::ast::SubscribeShortcode {
+        let md = ":::subscribe {button=\"訂閱\"}\n- 怎麼稱呼你 *\n- 電子郵件 * {type=email}\n- 從哪裡知道 *\n  - [ ] 朋友\n  - [ ] 其他\n    - 從哪裡\n- 想說的話 {type=textarea}\n:::\n";
+        match moss_core::ast::shortcode_extract::extract_shortcodes(md).extracted.remove(0).shortcode {
+            moss_core::ast::Shortcode::Subscribe(s) => s,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_subscribe_block_with_questions_is_a_form_with_the_email_in_its_place() {
+        let html = render_subscribe_block(&questions(), "f", Some("s"), Language::ZhHant, "", "https://api.test");
+        assert!(html.starts_with(r#"<div class="moss-subscribe moss-form""#), "{html}");
+        assert!(html.contains(r#"action="https://api.test/sites/s/subscribe""#), "{html}");
+        let name = html.find("怎麼稱呼你").unwrap();
+        let email = html.find(r#"name="email""#).unwrap();
+        let group = html.find("從哪裡知道").unwrap();
+        assert!(name < email && email < group, "{html}");
+        assert!(html.contains(">電子郵件</label>"), "{html}");
+        assert!(html.contains(r#"data-required="true""#), "{html}");
+        assert!(html.contains(r#"class="moss-form__other""#) && html.contains(">從哪裡</label>"), "{html}");
+        assert!(html.contains("可複選。"), "{html}");
+        assert!(html.contains("moss-subscribe-subscribed"), "{html}");
+    }
+
+    #[test]
+    fn a_subscribe_block_with_no_questions_renders_as_before() {
+        let plain = moss_core::ast::SubscribeShortcode { button: Some("Go".into()), ..Default::default() };
+        assert_eq!(
+            render_subscribe_block(&plain, "f", Some("s"), Language::En, "en", "https://api.test"),
+            render_hosted_subscribe_form(Some("s"), Language::En, "en", None, Some("Go"), "https://api.test")
+        );
+    }
 }
 
 #[cfg(test)]

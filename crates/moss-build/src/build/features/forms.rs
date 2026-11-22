@@ -24,7 +24,7 @@ fn described_by(help_id: &Option<String>) -> String {
     help_id.as_ref().map(|id| format!(r#" aria-describedby="{id}""#)).unwrap_or_default()
 }
 
-fn render_field(form: &str, f: &FormField, lang: Language) -> String {
+pub(crate) fn render_field(form: &str, f: &FormField, lang: Language) -> String {
     let id = format!("{form}-{}", f.name);
     let help_id = f.help.as_ref().map(|_| format!("{id}-help"));
     let name = html_escape(&f.name);
@@ -54,9 +54,18 @@ fn render_field(form: &str, f: &FormField, lang: Language) -> String {
             .enumerate()
             .map(|(i, c)| {
                 let v = html_escape(c);
-                format!(
+                let choice = format!(
                     r#"      <div class="moss-form__choice"><input type="{kind}" id="{id}-{i}" name="{name}" value="{v}"{req}><label for="{id}-{i}">{v}</label></div>"#
-                )
+                );
+                match f.other.as_ref().filter(|o| o.choice == i) {
+                    // Hidden by CSS until its choice is picked, so it works with no script.
+                    Some(o) => format!(
+                        "{choice}\n      <div class=\"moss-form__other\"><label class=\"moss-form__label\" for=\"{id}-{i}-other\">{l}</label><input class=\"moss-input\" type=\"text\" id=\"{id}-{i}-other\" name=\"{n}\"></div>",
+                        l = html_escape(&o.label),
+                        n = html_escape(&o.name)
+                    ),
+                    None => choice,
+                }
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -65,8 +74,16 @@ fn render_field(form: &str, f: &FormField, lang: Language) -> String {
         FieldKind::Radio | FieldKind::Checkbox if !f.choices.is_empty() => {
             let kind = if f.kind == FieldKind::Radio { "radio" } else { "checkbox" };
             let req = if f.kind == FieldKind::Radio { required } else { "" };
+            // The browser cannot require one of several boxes; the script reads this.
+            let group_req = if f.required { r#" data-required="true""# } else { "" };
+            // A pick-several group says so, under its question.
+            let hint = if f.kind == FieldKind::Checkbox && f.help.is_none() {
+                format!("\n    <p class=\"moss-form__help\">{}</p>", t(lang, "form_pick_several"))
+            } else {
+                String::new()
+            };
             format!(
-                "  <fieldset class=\"moss-form__field moss-form__group\" data-field=\"{name}\"{describe}>\n    <legend>{label}{optional}</legend>\n{}{help}{error}\n  </fieldset>",
+                "  <fieldset class=\"moss-form__field moss-form__group\" data-field=\"{name}\"{group_req}{describe}>\n    <legend>{label}{optional}</legend>{hint}\n{}{help}{error}\n  </fieldset>",
                 choice_inputs(kind, req)
             )
         }
@@ -87,7 +104,7 @@ fn render_field(form: &str, f: &FormField, lang: Language) -> String {
                 other => format!(r#"<input class="moss-input" type="{}"{attr}>"#, input_type(other)),
             };
             format!(
-                "  <div class=\"moss-form__field\" data-field=\"{name}\">\n    <label class=\"moss-form__label\" for=\"{id}\">{label}{optional}</label>\n    {control}{help}{error}\n  </div>"
+                "  <div class=\"moss-form__field\" data-field=\"{name}\">\n    <label class=\"moss-form__label\" for=\"{id}\">{label}{optional}</label>{help}\n    {control}{error}\n  </div>"
             )
         }
     }

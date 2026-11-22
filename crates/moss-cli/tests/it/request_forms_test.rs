@@ -112,7 +112,6 @@ fn each_build_problem_is_a_warning_and_fails_under_strict() {
         ("two fields, one name", ":::form {#booking next=/booking/received/}\n- A\n- A\n:::\n"),
         ("too few choices", ":::form {#booking next=/booking/received/}\n- A {type=select}\n  - Only\n:::\n"),
         ("choices on text", ":::form {#booking next=/booking/received/}\n- A\n  - x\n  - y\n:::\n"),
-        ("no Latin letters", ":::form {#booking next=/booking/received/}\n- 姓名\n:::\n"),
         ("reserved name", ":::form {#booking next=/booking/received/}\n- A {name=_hp}\n:::\n"),
         ("bad form name", ":::form {#Booking_1 next=/booking/received/}\n- A\n:::\n"),
         ("next is not a path", ":::form {#booking next=https://elsewhere.test/}\n- A\n:::\n"),

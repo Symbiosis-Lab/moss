@@ -3,16 +3,18 @@
 //! by the site's URL.
 //! On the moss host it also carries `subscribe.turnstile: true`: this build's
 //! subscribe script can pass the host's bot check, so the host may require it.
+//! And `subscribe.fields`, the questions the site's subscribe forms ask, keyed
+//! by the edition scope each form posts, so the host can check the answers.
 //!
 //! Written when the site has a form, a `[services.forms]` setting, a
 //! `[services.booking]` offer, or a moss host site id. It sits under `_moss/`,
 //! which the publish removal gate does not guard, so removing the last form
 //! never refuses a publish.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
-use moss_core::ast::FormShortcode;
+use moss_core::ast::{FieldKind, FormField, FormShortcode, SubscribeShortcode};
 
 use crate::build::context::BuildContext;
 use crate::build::manifest::{link_audit, HashBucket, PendingManifest, SealedManifest};
@@ -22,38 +24,104 @@ use crate::config::services::BookingService;
 
 pub const COMMERCE_PATH: &str = "_moss/commerce.json";
 
-/// Every form of every page, in page order, repeated names included.
-fn site_forms(documents: &[ParsedDocument]) -> Vec<FormShortcode> {
-    documents
+/// Every form of every page, in page order, repeated names included; and every
+/// subscribe form that asks questions, with its page's edition scope and URL
+/// path. Each page is parsed once for both.
+fn site_forms(documents: &[ParsedDocument]) -> (Vec<FormShortcode>, Vec<(String, String, SubscribeShortcode)>) {
+    let scopes = crate::build::features::email::site_scopes(documents);
+    let mut forms = Vec::new();
+    let mut subscribes = Vec::new();
+    for d in documents.iter().filter(|d| d.features.forms) {
+        let ast = moss_core::ast::parse(&d.content);
+        forms.extend(moss_core::ast::forms_recursive(&ast));
+        let scope = crate::build::features::email::detect_page_scope(&d.url_path, &scopes);
+        subscribes.extend(moss_core::ast::question_subscribes_recursive(&ast).into_iter().map(|s| (scope.clone(), d.url_path.clone(), s)));
+    }
+    (forms, subscribes)
+}
+
+/// The fields as a service reads them; a choice's "Other" box follows its
+/// field as a text field whose `other_of` names that field, with the box's
+/// own words as its `label`, since a reader of the answers sees no page.
+fn described(fields: &[&FormField]) -> Vec<serde_json::Value> {
+    fields
         .iter()
-        .filter(|d| d.features.forms)
-        .flat_map(|d| moss_core::ast::forms_recursive(&moss_core::ast::parse(&d.content)))
+        .flat_map(|field| {
+            let mut o = serde_json::json!({"name": field.name, "type": field.kind, "required": field.required});
+            if !field.choices.is_empty() {
+                o["options"] = serde_json::json!(field.choices);
+            }
+            let other = field.other.as_ref().map(|b| serde_json::json!({"name": b.name, "label": b.label, "type": FieldKind::Text, "required": false, "other_of": field.name}));
+            std::iter::once(o).chain(other)
+        })
         .collect()
 }
 
-fn json(forms: &[FormShortcode], booking: Option<&BookingService>, hosted: bool) -> String {
+/// `subscribe.fields`: per scope, every question its subscribe forms ask, the
+/// subscribe address left out. Choices are the union across the forms and a
+/// question is required only where every form asks it as required; forms that
+/// disagree on a question's kind or choices are a problem.
+fn subscribe_fields(subscribes: &[(String, String, SubscribeShortcode)]) -> (serde_json::Value, Vec<String>) {
+    let mut by_scope: BTreeMap<&str, (usize, Vec<(serde_json::Value, usize, &str)>)> = BTreeMap::new();
+    let mut problems = Vec::new();
+    for (scope, page, sub) in subscribes {
+        let email_at = sub.fields.iter().position(|f| f.kind == FieldKind::Email || f.name == "email");
+        let asked: Vec<&FormField> = sub.fields.iter().enumerate().filter(|(i, _)| Some(*i) != email_at).map(|(_, f)| f).collect();
+        let (forms, fields) = by_scope.entry(scope.as_str()).or_default();
+        *forms += 1;
+        for field in described(&asked) {
+            let Some((known, required, first)) = fields.iter_mut().find(|(f, _, _)| f["name"] == field["name"]) else {
+                let required = usize::from(field["required"] == true);
+                fields.push((field, required, page.as_str()));
+                continue;
+            };
+            *required += usize::from(field["required"] == true);
+            if known["type"] != field["type"] || known["options"] != field["options"] {
+                problems.push(format!(
+                    "The subscribe forms on `{first}` and `{page}` both ask `{}`, with different kinds or choices; a question asked twice in one edition must be asked the same way.",
+                    field["name"].as_str().unwrap_or_default()
+                ));
+            }
+            for choice in field["options"].as_array().into_iter().flatten() {
+                let options = known["options"].as_array_mut();
+                if let Some(options) = options.filter(|o| !o.contains(choice)) {
+                    options.push(choice.clone());
+                }
+            }
+        }
+    }
+    let fields = by_scope
+        .into_iter()
+        .map(|(scope, (forms, fields))| {
+            let described: Vec<_> = fields
+                .into_iter()
+                .map(|(mut f, required, _)| {
+                    f["required"] = serde_json::Value::Bool(required == forms);
+                    f
+                })
+                .collect();
+            (scope.to_string(), serde_json::Value::Array(described))
+        })
+        .collect::<serde_json::Map<_, _>>();
+    (serde_json::Value::Object(fields), problems)
+}
+
+fn json(forms: &[FormShortcode], subscribe_fields: serde_json::Value, booking: Option<&BookingService>, hosted: bool) -> String {
     let mut seen = HashSet::new();
     let described: serde_json::Map<String, serde_json::Value> = forms
         .iter()
         .filter_map(|f| f.name.as_ref().filter(|n| seen.insert((*n).clone())).map(|n| (n, f)))
         .map(|(name, f)| {
-            let fields: Vec<_> = f
-                .fields
-                .iter()
-                .map(|field| {
-                    let mut o = serde_json::json!({"name": field.name, "type": field.kind, "required": field.required});
-                    if !field.choices.is_empty() {
-                        o["options"] = serde_json::json!(field.choices);
-                    }
-                    o
-                })
-                .collect();
+            let fields = described(&f.fields.iter().collect::<Vec<_>>());
             (name.clone(), serde_json::json!({"fields": fields, "next": f.next, "turnstile": false}))
         })
         .collect();
     let mut out = serde_json::json!({ "forms": described });
     if hosted {
         out["subscribe"] = serde_json::json!({"turnstile": true});
+        if subscribe_fields.as_object().is_some_and(|f| !f.is_empty()) {
+            out["subscribe"]["fields"] = subscribe_fields;
+        }
     }
     if let Some(booking) = booking {
         out["booking"] = serde_json::to_value(booking).expect("a booking offer serializes");
@@ -89,8 +157,9 @@ pub fn emit(
     output_dir: &Path,
     pending: &mut PendingManifest,
 ) -> Result<(), String> {
-    let forms = site_forms(documents);
-    for problem in problems(&forms, endpoint, booking) {
+    let (forms, subscribes) = site_forms(documents);
+    let (subscribe_fields, disagreements) = subscribe_fields(&subscribes);
+    for problem in problems(&forms, endpoint, booking).into_iter().chain(disagreements) {
         crate::build::cli_output::log_warn_problem!("{problem}");
     }
     let booking = booking.and_then(|b| b.as_ref().ok());
@@ -98,7 +167,7 @@ pub fn emit(
         return Ok(());
     }
     BuildContext::for_render(output_dir, pending)
-        .emit_held(&ServedPath::for_commerce_json(), json(&forms, booking, hosted).into_bytes(), HashBucket::Files)
+        .emit_held(&ServedPath::for_commerce_json(), json(&forms, subscribe_fields, booking, hosted).into_bytes(), HashBucket::Files)
         .map_err(|e| format!("Failed to emit {COMMERCE_PATH}: {e}"))
 }
 

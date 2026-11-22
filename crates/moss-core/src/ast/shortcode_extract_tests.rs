@@ -94,6 +94,20 @@ fn subscribe_legacy_body_keys_no_longer_parsed() {
 }
 
 #[test]
+fn subscribe_takes_questions_in_the_form_grammar() {
+    let md = ":::subscribe {button=\"訂閱\"}\n- 怎麼稱呼你 *\n- 電子郵件 * {type=email}\n- 從哪裡知道 *\n  - [ ] 朋友\n  - [ ] 其他\n    - 從哪裡\n:::\n";
+    let result = extract_shortcodes(md);
+    match &result.extracted[0].shortcode {
+        Shortcode::Subscribe(args) => {
+            let names: Vec<_> = args.fields.iter().map(|f| f.name.as_str()).collect();
+            assert_eq!(names, ["怎麼稱呼你", "電子郵件", "從哪裡知道"]);
+            assert_eq!(args.button.as_deref(), Some("訂閱"));
+        }
+        other => panic!("expected Subscribe, got {other:?}"),
+    }
+}
+
+#[test]
 fn subscribe_inside_code_fence_is_not_extracted() {
     // Adversarial: `:::subscribe` inside a fenced code block is just
     // documentation text. The extractor must not treat it as a

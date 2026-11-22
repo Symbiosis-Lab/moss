@@ -77,11 +77,52 @@ fn a_checkbox_with_no_nested_list_is_one_box_and_with_one_is_a_group() {
 }
 
 #[test]
-fn name_sets_the_field_name_and_a_label_without_latin_letters_must_set_it() {
-    let (form, problems) = parse_form("{#a next=/a/}", "- 姓名 * {name=full_name}\n- 电话\n");
+fn name_sets_the_field_name_and_a_label_without_latin_letters_is_its_own_key() {
+    let (form, problems) = parse_form("{#a next=/a/}", "- 姓名 * {name=full_name}\n- 电话\n- 你 好\n");
     assert_eq!(form.fields[0].name, "full_name");
+    assert_eq!(form.fields[1].name, "电话");
     assert_eq!(problems.len(), 1, "{problems:?}");
-    assert!(problems[0].contains("电话") && problems[0].contains("name="), "{problems:?}");
+    assert!(problems[0].contains("你 好") && problems[0].contains("name="), "{problems:?}");
+}
+
+#[test]
+fn task_list_choices_make_a_pick_several_group() {
+    let (form, problems) = parse_form("{#a next=/a/}", "- 從哪裡知道 *\n  - [ ] 朋友\n  - [ ] 活動\n");
+    assert!(problems.is_empty(), "{problems:?}");
+    let f = &form.fields[0];
+    assert_eq!((f.kind, f.name.as_str(), f.required), (FieldKind::Checkbox, "從哪裡知道", true));
+    assert_eq!(f.choices, ["朋友", "活動"]);
+}
+
+#[test]
+fn a_one_line_item_under_a_choice_is_its_box() {
+    let (form, problems) = parse_form("{#a next=/a/}", "- Where *\n  - [ ] A friend\n  - [ ] Other\n    - Where else\n");
+    assert!(problems.is_empty(), "{problems:?}");
+    let f = &form.fields[0];
+    assert_eq!(f.choices, ["A friend", "Other"]);
+    assert_eq!(f.other, Some(OtherBox { choice: 1, label: "Where else".into(), name: "where_other".into() }));
+}
+
+#[test]
+fn a_second_box_in_one_group_is_a_problem_and_the_first_is_kept() {
+    let body = "- Where\n  - [ ] A friend\n    - Who\n  - [ ] Other\n    - Where else\n";
+    let (form, problems) = parse_form("{#a next=/a/}", body);
+    assert_eq!(form.fields[0].other.as_ref().map(|o| o.label.as_str()), Some("Who"));
+    assert!(problems.len() == 1 && problems[0].contains("second box") && problems[0].contains("Other"), "{problems:?}");
+}
+
+#[test]
+fn a_box_whose_name_another_field_has_is_a_problem() {
+    let body = "- Where\n  - [ ] A friend\n  - [ ] Other\n    - Where else\n- Note {name=where_other}\n";
+    let (form, problems) = parse_form("{#a next=/a/}", body);
+    assert_eq!(form.fields[0].other, None);
+    assert!(problems.len() == 1 && problems[0].contains("`where_other`"), "{problems:?}");
+}
+
+#[test]
+fn a_select_takes_no_box() {
+    let (form, _) = parse_form("{#a next=/a/}", "- Size {type=select}\n  - S\n  - M\n    - Note\n");
+    assert_eq!(form.fields[0].other, None);
 }
 
 #[test]

@@ -66,7 +66,7 @@ pub use dispatch_wikilink_embeds::{dispatch_wikilink_embeds, WikilinkDispatchRes
 pub use document::{BlockMeta, Document};
 pub use extract_hero::{extract_hero, is_comment, promote_wide_banner, HeroDrawnFrom, HeroExtraction};
 pub use grid_parts::{card_parts, render_grid_parts, GridCellParts, GridParts};
-pub use extract_form::{FieldKind, FormField, FormShortcode};
+pub use extract_form::{FieldKind, FormField, FormShortcode, OtherBox};
 pub use crate::heading::anchor_rule::{shows_heading_anchors, wants_contents_list, wants_heading_anchors};
 pub use hooks::{DefaultHooks, HeadingAnchors, HookStrings, RenderHooks, RequestFormFn, SubscribeFormFn};
 pub use node::{is_link_row, is_text_link_row, Block, CalloutKind, Fold, HeadingNumber, Inline};
@@ -81,5 +81,5 @@ pub use shortcode::{
 };
 pub use tags::extract_inline_tags;
 pub use url::{ResolvedUrl, Url, UrlKind};
-pub use visit::{visit_plugin_blocks_mut, for_each_child_sequence, forms_recursive, has_callout_recursive, has_diagram_recursive, is_diagram_lang, has_scroll_row_recursive, has_marquee_recursive, has_shortcode_recursive, visit_block_raw_html_mut, visit_blocks, visit_urls_mut};
+pub use visit::{visit_plugin_blocks_mut, for_each_child_sequence, forms_recursive, question_subscribes_recursive, has_callout_recursive, has_form_fields_recursive, has_diagram_recursive, is_diagram_lang, has_scroll_row_recursive, has_marquee_recursive, has_shortcode_recursive, visit_block_raw_html_mut, visit_blocks, visit_urls_mut};
 

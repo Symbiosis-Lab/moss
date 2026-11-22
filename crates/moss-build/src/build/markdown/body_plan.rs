@@ -125,6 +125,8 @@ pub struct SubscribeEmission {
     /// The id of the members notice above the form, kept when the form is
     /// rendered again with its section's scope.
     pub members_lead: Option<String>,
+    /// The id prefix of the form's own elements, kept the same way.
+    pub form_id: String,
 }
 
 /// A `:::grid` block as both the HTML that was emitted and the typed cells it
@@ -633,6 +635,10 @@ pub trait SegmentHooks: RenderHooks {
     fn take_members_lead(&self) -> Option<String> {
         None
     }
+    /// The id prefix of the last subscribe form drawn, unique on the page.
+    fn take_form_id(&self) -> Option<String> {
+        None
+    }
 }
 
 impl SegmentHooks for moss_core::ast::DefaultHooks<'_> {}
@@ -708,12 +714,17 @@ pub fn render_segmented<H: SegmentHooks + ?Sized>(doc: &Document, hooks: &H) -> 
                 let mut html = String::new();
                 moss_core::ast::render_block_with_meta(hooks, &mut html, block, &meta, &mut fnotes);
                 let members_lead = hooks.take_members_lead();
+                let form_id = hooks.take_form_id();
                 let above_is_paragraph = matches!(i.checked_sub(1).and_then(|p| doc.blocks.get(p)), Some(Block::Paragraph(_)));
                 let labelled_by = doc.subscribe_labels.get(&i).filter(|_| !above_is_paragraph || std::mem::take(&mut tagged_prompt)).cloned();
                 if let Some(id) = &labelled_by {
                     html = crate::build::features::email::label_subscribe_input(&html, id);
                 }
-                segments.push(BodySegment::Subscribe(SubscribeEmission { args: args.clone(), html, labelled_by, members_lead }));
+                match form_id {
+                    Some(form_id) => segments.push(BodySegment::Subscribe(SubscribeEmission { args: args.clone(), html, labelled_by, members_lead, form_id })),
+                    // Hooks that mint no id drew a form with no ids of its own to re-render under a scope.
+                    None => buf.push_str(&html),
+                }
             }
             _ => moss_core::ast::render_block_with_meta(hooks, &mut buf, block, &meta, &mut fnotes),
         }

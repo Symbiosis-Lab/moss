@@ -64,7 +64,7 @@ fn a_required_field_has_required_and_an_optional_one_says_optional() {
 #[test]
 fn choice_groups_are_fieldsets_with_a_legend() {
     let h = html(Some("https://f.example"));
-    assert!(h.contains(r#"<fieldset class="moss-form__field moss-form__group" data-field="session">"#), "{h}");
+    assert!(h.contains(r#"<fieldset class="moss-form__field moss-form__group" data-field="session" data-required="true">"#), "{h}");
     assert!(h.contains("<legend>Session</legend>"), "{h}");
     assert!(h.contains(r#"<legend>Interests <span class="moss-form__optional">Optional</span></legend>"#), "{h}");
     assert!(h.contains(r#"type="radio" id="booking-session-0" name="session" value="Portrait" required"#), "{h}");
@@ -84,6 +84,15 @@ fn autocomplete_tokens_help_and_describedby() {
     assert!(h.contains(r#"name="email" required autocomplete="email""#), "{h}");
     assert!(h.contains(r#"<p class="moss-form__help" id="booking-anything_we_should_know-help">Who is coming.</p>"#), "{h}");
     assert!(h.contains(r#"aria-describedby="booking-anything_we_should_know-help""#), "{h}");
+}
+
+/// The hint is read before the field is filled, so it sits between the label and the control.
+#[test]
+fn a_hint_comes_before_its_control() {
+    let h = html(Some("https://f.example"));
+    let hint = h.find(r#"id="booking-anything_we_should_know-help">"#).expect("hint");
+    let control = h.find(r#"id="booking-anything_we_should_know" name="#).expect("control");
+    assert!(hint < control, "{h}");
 }
 
 #[test]

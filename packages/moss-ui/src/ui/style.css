@@ -6214,6 +6214,34 @@ body.own-titlebar.platform-linux:has(.action-panel-open) .moss-titlebar [data-ca
   color: var(--moss-color-text-secondary);
 }
 
+/* A reader's answers to the subscribe form's questions, under her address */
+.moss-subscribers__answers {
+  margin: 4px 0 0;
+  font-size: 0.8125rem;
+}
+
+.moss-subscribers__answers div {
+  display: flex;
+  gap: 0.5em;
+}
+
+.moss-subscribers__answers dt {
+  flex: none;
+  color: var(--moss-color-text-secondary);
+}
+
+/* A long answer keeps its row to two lines; the export carries it whole. */
+.moss-subscribers__answers dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
 .moss-subscribers__td-actions {
   width: 2rem;
   text-align: right;

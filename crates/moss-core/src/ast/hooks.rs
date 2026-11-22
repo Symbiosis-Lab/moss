@@ -2403,6 +2403,7 @@ mod tests {
             placeholder: None,
             button: None,
             members: None,
+            ..Default::default()
         });
         let mut out = String::new();
         let hooks = DefaultHooks::new();

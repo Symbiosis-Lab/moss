@@ -57,6 +57,16 @@
     margin-inline-start: auto;
   }
 
+  /* A subscribe form that asks questions takes the form's measure, so long
+     choices keep to one line; in a footer it takes a row of its own. */
+  .moss-subscribe.moss-form {
+    max-width: 36rem;
+  }
+  footer .moss-subscribe.moss-form {
+    flex-basis: 100%;
+    margin-inline: 0;
+  }
+
   .moss-subscribe-form[data-position="inline"] {
     display: flex;
     gap: var(--moss-space-sm);

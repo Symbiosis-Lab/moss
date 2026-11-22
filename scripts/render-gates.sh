@@ -139,6 +139,7 @@ GATES_BUILD=(
   wcag-output
   archival-footer
   subscribed-state
+  subscribe-questions
   type-defaults
   diagrams
   browser-editor

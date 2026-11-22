@@ -361,6 +361,16 @@ pub fn has_shortcode_recursive(doc: &Document, kind: ShortcodeKind) -> bool {
     any_block(doc, |block| matches!(block, Block::Shortcode(sc) if sc.kind() == Some(kind)))
 }
 
+/// True if the document has a form with fields: a `:::form`, or a
+/// `:::subscribe` that asks questions. Gates the form styles.
+pub fn has_form_fields_recursive(doc: &Document) -> bool {
+    any_block(doc, |block| match block {
+        Block::Shortcode(Shortcode::Form(_)) => true,
+        Block::Shortcode(Shortcode::Subscribe(s)) => !s.fields.is_empty(),
+        _ => false,
+    })
+}
+
 /// Every `:::form` in the document, nested ones included, in source order.
 pub fn forms_recursive(doc: &Document) -> Vec<super::extract_form::FormShortcode> {
     let mut forms = Vec::new();
@@ -371,6 +381,20 @@ pub fn forms_recursive(doc: &Document) -> Vec<super::extract_form::FormShortcode
         true
     });
     forms
+}
+
+/// Every `:::subscribe` that asks questions, nested ones included, in source order.
+pub fn question_subscribes_recursive(doc: &Document) -> Vec<super::shortcode::SubscribeShortcode> {
+    let mut subscribes = Vec::new();
+    visit_blocks(doc, |block| {
+        if let Block::Shortcode(Shortcode::Subscribe(s)) = block {
+            if !s.fields.is_empty() {
+                subscribes.push(s.clone());
+            }
+        }
+        true
+    });
+    subscribes
 }
 
 /// True if any `:::grid` in the document is a scroll row at all — see

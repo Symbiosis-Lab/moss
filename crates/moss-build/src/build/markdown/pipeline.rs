@@ -940,6 +940,8 @@ pub fn process_markdown_file(
         page: file_path,
         members_leads: std::cell::Cell::new(0),
         members_lead: std::cell::Cell::new(None),
+        subscribe_forms: std::cell::Cell::new(0),
+        form_id: std::cell::Cell::new(None),
     };
 
     // 0. Parse markdown into the typed AST. Sees `:::shortcode` blocks
@@ -1233,7 +1235,7 @@ pub fn process_markdown_file(
     // SCRIPT (the sidenotes bundle) rather than a stylesheet partial.
     let has_footnotes = !moss_core::ast::footnotes::FootnoteIndex::build(&doc.blocks).is_empty();
     let has_scroll_row = moss_core::ast::has_scroll_row_recursive(&doc);
-    let has_forms = moss_core::ast::has_shortcode_recursive(&doc, moss_core::ast::ShortcodeKind::Form);
+    let has_forms = moss_core::ast::has_form_fields_recursive(&doc);
     let has_viewer = moss_core::ast::has_viewable_picture_recursive(&doc);
 
     // `:::toc` was removed in the unified grammar migration; the post-pass
@@ -2115,6 +2117,8 @@ fn render_markdown_to_html_with_config(
         page: "",
         members_leads: std::cell::Cell::new(0),
         members_lead: std::cell::Cell::new(None),
+        subscribe_forms: std::cell::Cell::new(0),
+        form_id: std::cell::Cell::new(None),
     };
 
     moss_core::ast::render_document(&doc, &pipeline_hooks)
@@ -2198,6 +2202,10 @@ struct PipelineHooks<'a> {
     members_leads: std::cell::Cell<usize>,
     /// The id of the notice the last subscribe form drew, for the segmented render.
     members_lead: std::cell::Cell<Option<String>>,
+    /// How many subscribe forms the page has drawn, and the last one's id
+    /// prefix, kept so a re-render with the page's scope keeps its ids.
+    subscribe_forms: std::cell::Cell<usize>,
+    form_id: std::cell::Cell<Option<String>>,
 }
 
 impl<'a> PipelineHooks<'a> {
@@ -2209,21 +2217,23 @@ impl<'a> PipelineHooks<'a> {
     /// pending form, consistent with the auto-injected footer form.
     fn render_subscribe_form(&self, args: &moss_core::ast::SubscribeShortcode) -> String {
         use moss_core::frontmatter::members::Members;
-        let form = crate::build::features::email::render_hosted_subscribe_form(
+        use sha2::Digest;
+        // A stream listing shows many pages' forms on one page.
+        let page = sha2::Sha256::digest(self.page.as_bytes());
+        let form_id = format!("moss-subscribe-{:02x}{:02x}{:02x}{:02x}-{}", page[0], page[1], page[2], page[3], self.subscribe_forms.replace(self.subscribe_forms.get() + 1));
+        let form = crate::build::features::email::render_subscribe_block(
+            args,
+            &form_id,
             Some(self.site_id).filter(|s| !s.is_empty()),
             self.lang,
             "",
-            args.placeholder.as_deref(),
-            args.button.as_deref(),
             self.seta_base,
         );
+        self.form_id.set(Some(form_id));
         let Some(members) = args.members.filter(|m| *m != Members::Public) else {
             self.members_lead.set(None);
             return form;
         };
-        // A stream listing shows many pages' notices on one page.
-        use sha2::Digest;
-        let page = sha2::Sha256::digest(self.page.as_bytes());
         let n = self.members_leads.replace(self.members_leads.get() + 1);
         let id = format!("moss-members-lead-{:02x}{:02x}{:02x}{:02x}-{n}", page[0], page[1], page[2], page[3]);
         let html = crate::build::features::email::with_members_lead(&form, self.lang, members, &id);
@@ -2251,6 +2261,9 @@ impl<'a> PipelineHooks<'a> {
 impl super::body_plan::SegmentHooks for PipelineHooks<'_> {
     fn take_members_lead(&self) -> Option<String> {
         self.members_lead.take()
+    }
+    fn take_form_id(&self) -> Option<String> {
+        self.form_id.take()
     }
 }
 

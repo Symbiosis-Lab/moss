@@ -16,6 +16,7 @@ import { COPY, langBucket, type Lang, type SubscribeCopy } from './i18n.js';
 import { autoHydrate, claim, inPreview, lockSlotWidth, setState } from './hosted-form.js';
 import { observeCaptcha, prewarmCaptcha, solveCaptcha } from './captcha.js';
 import { watchReader } from './reader.js';
+import { answersOf, checkQuestions, showAddress, watchQuestions } from './questions.js';
 
 type StatusKey = 'check-email' | 'error';
 
@@ -59,19 +60,23 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
   // lang where that differs (a zh-hans article on a mixed-language site),
   // except a field the author wrote: `:::subscribe {button="..."
   // placeholder="..."}` marks each one it sets, independently.
-  if (form.dataset.placeholderOverride !== 'true') input.placeholder = copy.placeholder;
+  // A form that asks questions labels its email field, so it needs no placeholder.
+  const asks = form.closest('.moss-form') !== null;
+  if (form.dataset.placeholderOverride !== 'true' && !asks) input.placeholder = copy.placeholder;
   const labelEl = btn.querySelector<HTMLElement>('.moss-btn__label');
   if (labelEl && form.dataset.buttonOverride !== 'true') labelEl.textContent = copy.label;
   const subscribedEl = form.querySelector<HTMLElement>('.moss-subscribe-subscribed');
   if (subscribedEl) subscribedEl.textContent = copy.subscribed;
+  // A form with questions is checked by moss before it is sent.
+  if (asks) watchQuestions(form);
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (form.dataset.state === 'loading') return;
 
     const email = (input.value ?? '').trim();
-    if (!email) {
-      input.focus();
+    if (asks ? !checkQuestions(form) : !email) {
+      if (!asks) input.focus();
       return;
     }
 
@@ -91,6 +96,7 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
         // Mirror the real success path (status copy + state), so preview
         // shows the same confirmation the live site does.
         showStatus(form, 'check-email', copy);
+        if (asks) showAddress(form, email);
         setState(form, 'success', btn);
       }, 600);
       return;
@@ -104,6 +110,7 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
       scope: form.querySelector<HTMLInputElement>('input[name="scope"]')?.value,
       lang,
       return: location.pathname + location.search + location.hash,
+      ...(asks ? { answers: answersOf(form) } : {}),
     };
 
     let firstPost = true;
@@ -137,6 +144,7 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
         return;
       }
       showStatus(form, 'check-email', copy);
+      if (asks) showAddress(form, email);
       setState(form, 'success', btn);
       if (data.observation_url && !signals.turnstile_token) observeCaptcha(data.observation_url);
     } catch {
@@ -148,7 +156,7 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
   // Success stays up until the reader acts: tap the circle (clears the field)
   // or type again (keeps what they typed).
   btn.addEventListener('click', (e) => {
-    if (form.dataset.state !== 'success') return;
+    if (form.dataset.state !== 'success' || asks) return;
     e.preventDefault(); // always prevent submit from re-firing on success
     input.value = '';
     setState(form, 'idle');
@@ -181,12 +189,9 @@ function showStatus(
     }
   });
   container.dataset.state = key;
-  // on success, focus the status region so screen-readers announce it.
-  // Guard tabIndex — the element needs a non-negative tabIndex (e.g. tabindex="-1")
-  // to be programmably focusable; a plain div without one silently ignores focus().
-  if (key === 'check-email') {
-    if (container.tabIndex >= 0) container.focus();
-  }
+  // A form that asks questions is replaced by its status on success, so the
+  // status takes the focus the pressed button had; the one-line form keeps it.
+  if (key === 'check-email' && form.closest('.moss-form')) container.focus();
 }
 
 function copyFor(key: StatusKey, copy: SubscribeCopy): string {

@@ -11,22 +11,22 @@ fn booking() -> FormShortcode {
 
 #[test]
 fn commerce_lists_fields_options_next_and_a_false_turnstile_and_no_labels() {
-    let v: serde_json::Value = serde_json::from_str(&json(&[booking()], None, false)).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&json(&[booking()], serde_json::json!({}), None, false)).unwrap();
     let b = &v["forms"]["booking"];
     assert_eq!(b["next"], "/booking/received/");
     assert_eq!(b["turnstile"], serde_json::Value::Bool(false));
     assert_eq!(b["fields"][0], serde_json::json!({"name": "your_name", "type": "text", "required": true}));
     assert_eq!(b["fields"][1]["options"], serde_json::json!(["Portrait", "Family"]));
     assert_eq!(b["fields"][1]["type"], "radio");
-    assert!(!json(&[booking()], None, false).contains("Help words") && !json(&[booking()], None, false).contains("Your name"));
-    assert_eq!(json(&[], None, false), r#"{"forms":{}}"#);
+    assert!(!json(&[booking()], serde_json::json!({}), None, false).contains("Help words") && !json(&[booking()], serde_json::json!({}), None, false).contains("Your name"));
+    assert_eq!(json(&[], serde_json::json!({}), None, false), r#"{"forms":{}}"#);
 }
 
 #[test]
 fn a_site_on_the_moss_host_asks_for_the_subscribe_bot_check() {
-    let v: serde_json::Value = serde_json::from_str(&json(&[], None, true)).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&json(&[], serde_json::json!({}), None, true)).unwrap();
     assert_eq!(v["subscribe"], serde_json::json!({"turnstile": true}));
-    assert!(!json(&[booking()], None, false).contains("subscribe"));
+    assert!(!json(&[booking()], serde_json::json!({}), None, false).contains("subscribe"));
 }
 
 #[test]
@@ -51,10 +51,44 @@ fn a_booking_offer_sits_beside_the_forms() {
     .unwrap();
     assert!(problems(&[], None, Some(&Ok(offer.clone()))).is_empty(), "a valid offer is no problem");
     assert!(problems(&[], None, Some(&Err("[services.booking]: unknown field `pagez`".into())))[0].contains("pagez"));
-    let v: serde_json::Value = serde_json::from_str(&json(&[booking()], Some(&offer), false)).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&json(&[booking()], serde_json::json!({}), Some(&offer), false)).unwrap();
     assert_eq!(v["booking"]["services"]["intro"]["minutes"], 30);
     assert_eq!(v["booking"]["open"]["mon"][0], "09:00-17:00");
     assert!(v["forms"]["booking"].is_object(), "the forms stay as they were");
-    let none: serde_json::Value = serde_json::from_str(&json(&[], None, false)).unwrap();
+    let none: serde_json::Value = serde_json::from_str(&json(&[], serde_json::json!({}), None, false)).unwrap();
     assert!(none.get("booking").is_none(), "no offer, no booking key");
+}
+
+fn subscribe(scope: &str, page: &str, body: &str) -> (String, String, SubscribeShortcode) {
+    let doc = moss_core::ast::parse(&format!(":::subscribe\n{body}:::\n"));
+    let sub = moss_core::ast::question_subscribes_recursive(&doc).remove(0);
+    (scope.to_string(), page.to_string(), sub)
+}
+
+#[test]
+fn subscribe_fields_are_keyed_by_scope_without_the_address_and_carry_other_boxes() {
+    let zh = subscribe("", "subscribe", "- 電郵 * {type=email}\n- 怎麼稱呼你 *\n- 從哪裡知道 *\n  - [ ] Facebook\n  - [ ] 其他\n    - 其他管道\n");
+    let en = subscribe("en", "en/subscribe", "- Name *\n");
+    let (fields, problems) = subscribe_fields(&[zh, en]);
+    assert!(problems.is_empty(), "{problems:?}");
+    assert_eq!(fields["en"], serde_json::json!([{"name": "name", "type": "text", "required": true}]));
+    let names: Vec<_> = fields[""].as_array().unwrap().iter().map(|f| f["name"].as_str().unwrap().to_string()).collect();
+    assert_eq!(names, ["怎麼稱呼你", "從哪裡知道", "從哪裡知道_other"]);
+    assert_eq!(fields[""][1]["type"], "checkbox");
+    assert_eq!(fields[""][2], serde_json::json!({"name": "從哪裡知道_other", "label": "其他管道", "type": "text", "required": false, "other_of": "從哪裡知道"}));
+    let v: serde_json::Value = serde_json::from_str(&json(&[], fields.clone(), None, true)).unwrap();
+    assert_eq!(v["subscribe"]["fields"], fields);
+    assert_eq!(v["subscribe"]["turnstile"], true);
+}
+
+#[test]
+fn two_subscribe_forms_in_one_scope_union_choices_require_only_what_both_require_and_report_a_disagreement() {
+    let a = subscribe("", "a", "- Name *\n- City * {type=radio}\n  - Paris\n  - Rome\n");
+    let b = subscribe("", "b", "- Name\n- City * {type=radio}\n  - Paris\n  - Oslo\n");
+    let (fields, problems) = subscribe_fields(&[a, b]);
+    assert_eq!(fields[""][0]["required"], false);
+    assert_eq!(fields[""][1]["required"], true);
+    assert_eq!(fields[""][1]["options"], serde_json::json!(["Paris", "Rome", "Oslo"]));
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(problems[0].contains("`a`") && problems[0].contains("`b`") && problems[0].contains("city"), "{problems:?}");
 }

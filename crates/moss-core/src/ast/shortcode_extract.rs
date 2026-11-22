@@ -183,7 +183,12 @@ fn parse_shortcode_by_name(
     config: &ParseConfig,
 ) -> (Option<Shortcode>, Diagnostics) {
     match name {
-        "subscribe" => (Some(Shortcode::Subscribe(parse_subscribe_args(args))), Diagnostics::default()),
+        "subscribe" => {
+            let mut sc = parse_subscribe_args(args);
+            let mut problems = Vec::new();
+            sc.fields = super::extract_form::parse_fields("`:::subscribe`", &["scope", "lang", "return", "_hp"], body, &mut problems);
+            (Some(Shortcode::Subscribe(sc)), Diagnostics { warnings: problems, ..Default::default() })
+        }
         "buttons" => {
             let (sc, warnings) = parse_buttons_body(args, body);
             (Some(Shortcode::Buttons(sc)), Diagnostics { warnings, ..Default::default() })
@@ -1517,6 +1522,7 @@ fn parse_subscribe_args(args: &str) -> SubscribeShortcode {
         placeholder,
         button,
         members,
+        fields: Vec::new(),
     }
 }
 

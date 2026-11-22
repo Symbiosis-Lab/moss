@@ -134,7 +134,8 @@ for (const scheme of ['light', 'dark'] as const) {
 <div class="lightbox"><button class="lightbox-close">&times;</button><button class="lightbox-nav lightbox-prev">&lsaquo;</button><button class="lightbox-nav lightbox-next">&rsaquo;</button></div>
 <div class="moss-ambient-video"><button class="moss-ambient-toggle">II</button></div>
 <div class="immersive-fs-active"><button class="immersive-fullscreen-btn">x</button></div>
-<div class="media-item" data-type="video" style="position:relative;width:200px;height:120px"></div>`,
+<div class="media-item" data-type="video" style="position:relative;width:200px;height:120px"></div>
+<label class="moss-form__choice"><input id="choice-radio" type="radio" name="q" checked><span>Yes</span></label>`,
           ),
         );
         await page.locator('#dot').focus();
@@ -263,6 +264,8 @@ const ROUND_MARKS: Record<string, { at: string; pseudo?: string; from?: number }
   '.lightbox-nav': [{ at: '.lightbox-prev', from: 768 }, { at: '.lightbox-next', from: 768 }],
   '.moss-ambient-toggle': [{ at: '.moss-ambient-toggle' }],
   '.immersive-fs-active .immersive-fullscreen-btn': [{ at: '.immersive-fullscreen-btn' }],
+  '.moss-form__choice input[type="radio"]': [{ at: '#choice-radio' }],
+  '.moss-form__choice input[type="radio"]::before': [{ at: '#choice-radio', pseudo: '::before' }],
 };
 // Measured above against the real script instead.
 const COVERED_ELSEWHERE = ['.moss-subscribe-form[data-state="success"] .moss-btn-slot .moss-btn'];
