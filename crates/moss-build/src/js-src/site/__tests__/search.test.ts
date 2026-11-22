@@ -39,9 +39,22 @@ const searchInput = () => document.querySelector<HTMLInputElement>(".moss-search
 const status = () => document.querySelector<HTMLElement>(".moss-search__status");
 
 /** Let the debounce fire and any pending microtasks settle. */
-async function settle(ms = 200): Promise<void> {
-  await new Promise((r) => setTimeout(r, ms));
+async function settle(): Promise<void> {
+  await new Promise((r) => setTimeout(r, 200));
 }
+
+/** Wait for a state the runtime reaches asynchronously, however loaded the machine is. */
+const eventually = (check: () => void) => vi.waitFor(check, { timeout: 3000 });
+
+/**
+ * Mirrors the runtime's index version: it bumps once per `moss-morph-patched`
+ * and tags each import as `?v=<version>` (none for version 0).
+ */
+let morphs = 0;
+document.addEventListener("moss-morph-patched", () => {
+  morphs += 1;
+});
+const versionOf = (url: string) => Number(new URL(url).searchParams.get("v") ?? 0);
 
 /**
  * Spy on the "index unavailable" warning, which is one line per attempted
@@ -49,18 +62,19 @@ async function settle(ms = 200): Promise<void> {
  * *attempted* rather than served from a memoized result. Returns the attempted
  * URLs in order.
  *
- * The leading `settle` is not decoration: earlier tests click the trigger
- * without awaiting, so their load rejections can land after this spy is
- * installed and be miscounted as this test's.
+ * Earlier tests click the trigger without awaiting, so their load rejections
+ * can land after this spy is installed. Every test starts with a morph, so
+ * those loads carry an older version and are dropped.
  */
-async function watchIndexLoads(): Promise<{ attempts: () => string[]; restore: () => void }> {
-  await settle(20);
+function watchIndexLoads(): { attempts: () => string[]; restore: () => void } {
+  const since = morphs;
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   return {
     attempts: () =>
       warn.mock.calls
         .filter((c) => c[0] === "[moss] search index unavailable")
-        .map((c) => String(c[1])),
+        .map((c) => String(c[1]))
+        .filter((url) => versionOf(url) >= since),
     restore: () => warn.mockRestore(),
   };
 }
@@ -143,9 +157,7 @@ describe("site search runtime", () => {
     // The IME resolves to 在 — now, and only now, one query runs.
     el.value = "在";
     el.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
-    await settle();
-    expect(status()!.textContent).not.toBe(idle);
-    expect(status()!.textContent).toContain("在");
+    await eventually(() => expect(status()!.textContent).toContain("在"));
   });
 
   test("closing mid-composition doesn't permanently gate the next open's queries", async () => {
@@ -168,8 +180,7 @@ describe("site search runtime", () => {
     el = searchInput()!;
     el.value = "garden";
     el.dispatchEvent(new Event("input", { bubbles: true }));
-    await settle();
-    expect(status()!.textContent).not.toBe(idle);
+    await eventually(() => expect(status()!.textContent).not.toBe(idle));
   });
 
   test("a morph mid-composition also clears the gate, not just Esc-close", async () => {
@@ -185,8 +196,7 @@ describe("site search runtime", () => {
     const el = searchInput()!;
     el.value = "garden";
     el.dispatchEvent(new Event("input", { bubbles: true }));
-    await settle();
-    expect(status()!.textContent).not.toBe(idle);
+    await eventually(() => expect(status()!.textContent).not.toBe(idle));
   });
 
   test("an emptied query returns to the idle state, not to a no-matches line", async () => {
@@ -198,15 +208,17 @@ describe("site search runtime", () => {
 
     el.value = "garden";
     el.dispatchEvent(new Event("input", { bubbles: true }));
-    await settle();
-    expect(status()!.hidden).toBe(false);
-    expect(status()!.textContent).not.toBe("");
+    await eventually(() => {
+      expect(status()!.hidden).toBe(false);
+      expect(status()!.textContent).not.toBe("");
+    });
 
     el.value = "";
     el.dispatchEvent(new Event("input", { bubbles: true }));
-    await settle();
-    expect(status()!.hidden).toBe(true);
-    expect(status()!.textContent).toBe("");
+    await eventually(() => {
+      expect(status()!.hidden).toBe(true);
+      expect(status()!.textContent).toBe("");
+    });
   });
 
   test("panel strings come from the resolved <html lang> table", () => {
@@ -244,17 +256,15 @@ describe("site search runtime", () => {
    * one per open is the fix, exactly one ever is the bug.
    */
   test("a failed index load is retried on the next open, not cached forever", async () => {
-    const { attempts, restore } = await watchIndexLoads();
+    const { attempts, restore } = watchIndexLoads();
 
     const trigger = () => document.querySelector<HTMLButtonElement>(".nav-search-btn")!;
     trigger().click();
-    await settle(20);
-    expect(attempts()).toHaveLength(1);
+    await eventually(() => expect(attempts()).toHaveLength(1));
 
     overlay()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     trigger().click();
-    await settle(20);
-    expect(attempts()).toHaveLength(2);
+    await eventually(() => expect(attempts()).toHaveLength(2));
 
     restore();
   });
@@ -266,10 +276,10 @@ describe("site search runtime", () => {
    * though the overlay itself is untouched by a reindex.
    */
   test("a morph re-imports the index under a fresh cache-busting version", async () => {
-    const { attempts, restore } = await watchIndexLoads();
+    const { attempts, restore } = watchIndexLoads();
 
     document.querySelector<HTMLButtonElement>(".nav-search-btn")!.click();
-    await settle(20);
+    await eventually(() => expect(attempts()).toHaveLength(1));
 
     // The overlay survives — a reindex is not a DOM change — so the reset must
     // not be conditional on the overlay having been stripped.
@@ -278,10 +288,9 @@ describe("site search runtime", () => {
 
     overlay()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     document.querySelector<HTMLButtonElement>(".nav-search-btn")!.click();
-    await settle(20);
+    await eventually(() => expect(attempts()).toHaveLength(2));
 
     const tried = attempts();
-    expect(tried).toHaveLength(2);
     expect(tried[1]).toContain("?v=");
     expect(tried[1]).not.toBe(tried[0]);
 
