@@ -67,9 +67,9 @@ export function previewProspect(relPath: string, role: PageVerdict | null): Prev
 }
 
 /**
- * True when no amount of rebuilding will produce a page URL, so the follower
- * must not arm its FileChanged retry loop.
+ * True when no amount of rebuilding will give the file an address in the
+ * preview, so the follower must not arm its FileChanged retry loop.
  */
 export function isStructurallyPermanentMiss(prospect: PreviewProspect): boolean {
-  return prospect !== 'page';
+  return prospect !== 'page' && prospect !== 'asset';
 }

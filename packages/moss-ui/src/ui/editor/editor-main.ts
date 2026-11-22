@@ -1031,6 +1031,7 @@ async function init(): Promise<void> {
           registry,
           projectRoot: projectRoot!,
           resolveUrlForFile: engine.resolveUrlForFile,
+          resolveAssetUrlForFile: engine.resolveAssetUrlForFile,
           // What it says (navigate the preview, reveal a slot) is for the shell: the bus.
           emit: async (name, payload) => uiHost.bus.emit(name, payload),
           onMossEvent,
@@ -2207,18 +2208,11 @@ async function openSelectedEntry(filePath: string, isNewFile = false): Promise<v
   const id = registry?.getByPath(loadedPath) ?? null;
   // A newer selection may supersede this open before its caller resumes.
   if (id === null || id !== currentEntryId()) return;
-  const category = detectFileCategory(filePath);
-  if (category === 'text') {
-    // Untitled-first pages focus the heading; homes/templates focus the body.
-    // Ordinary navigation never steals focus from the preview or file tree.
-    if (isNewFile && !createFlow?.consumeHeadingFocus(loadedPath)) cmEditor?.getView()?.focus();
-    await previewFollower?.navigate(filePath, isNewFile ? engine.resolveExpectedUrlForFile : undefined);
-  } else {
-    const result = await engine.resolveAssetUrlForFile(toAbsolute(filePath, projectRoot ?? ''));
-    if (id === currentEntryId() && result.status === 'ok' && result.data) {
-      uiHost.bus.emit('editor:navigate-preview', { urlPath: result.data });
-    }
-  }
+  const newPage = isNewFile && detectFileCategory(filePath) === 'text';
+  // Untitled-first pages focus the heading; homes/templates focus the body.
+  // Ordinary navigation never steals focus from the preview or file tree.
+  if (newPage && !createFlow?.consumeHeadingFocus(loadedPath)) cmEditor?.getView()?.focus();
+  await previewFollower?.navigate(filePath, newPage ? engine.resolveExpectedUrlForFile : undefined);
 }
 
 // ── File Loading ───────────────────────────────────────────────────────

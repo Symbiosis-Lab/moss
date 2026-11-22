@@ -5,6 +5,7 @@ import { PreviewFollower } from '../preview-follower';
 const PROJECT_ROOT = '/tmp/proj';
 
 let mockResolveUrlForFile: ReturnType<typeof vi.fn>;
+let mockResolveAssetUrlForFile: ReturnType<typeof vi.fn>;
 let mockEmit: ReturnType<typeof vi.fn>;
 let mockOnMossEvent: ReturnType<typeof vi.fn>;
 let fileChangedCallbacks: Array<(msg: { kind: 'FileChanged' }) => void>;
@@ -12,6 +13,7 @@ let fileChangedCallbacks: Array<(msg: { kind: 'FileChanged' }) => void>;
 beforeEach(() => {
   fileChangedCallbacks = [];
   mockResolveUrlForFile = vi.fn();
+  mockResolveAssetUrlForFile = vi.fn();
   mockEmit = vi.fn().mockResolvedValue(undefined);
   mockOnMossEvent = vi.fn().mockImplementation(
     async (_kind: string, cb: (msg: { kind: 'FileChanged' }) => void) => {
@@ -36,6 +38,7 @@ function mkFollower(
     registry,
     projectRoot: PROJECT_ROOT,
     resolveUrlForFile: mockResolveUrlForFile,
+    resolveAssetUrlForFile: mockResolveAssetUrlForFile,
     emit: mockEmit,
     onMossEvent: mockOnMossEvent,
     describeSourceRole,
@@ -160,6 +163,41 @@ describe('PreviewFollower', () => {
     debugSpy.mockRestore();
   });
 
+  test('an asset opened before the build records it follows on the next FileChanged', async () => {
+    const registry = new EntryRegistry();
+    const id = registry.upsert('doc.pdf', false);
+    mockResolveAssetUrlForFile
+      .mockResolvedValueOnce({ status: 'ok', data: null })
+      .mockResolvedValueOnce({ status: 'ok', data: '/doc.pdf' });
+
+    const follower = mkFollower(registry);
+    follower.start();
+    registry.setActive(id);
+    void follower.navigate('doc.pdf');
+    await vi.waitFor(() => expect(mockResolveAssetUrlForFile).toHaveBeenCalledTimes(1));
+    expect(mockEmit).not.toHaveBeenCalled();
+
+    fireFileChanged();
+    await vi.waitFor(() => expect(mockEmit).toHaveBeenCalledWith('editor:navigate-preview', { urlPath: '/doc.pdf' }));
+    expect(mockEmit).toHaveBeenCalledTimes(1);
+    expect(mockResolveUrlForFile).not.toHaveBeenCalled();
+  });
+
+  test('selecting an asset leaves the preview on its page, after a build too', async () => {
+    const registry = new EntryRegistry();
+    const id = registry.upsert('room.png', false);
+    mockResolveAssetUrlForFile.mockResolvedValue({ status: 'ok', data: '/room.webp' });
+
+    const follower = mkFollower(registry);
+    follower.start();
+    registry.setActive(id);
+    fireFileChanged();
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+
+    expect(mockResolveAssetUrlForFile).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
   test('keeps retrying on each FileChanged until URL resolves', async () => {
     const registry = new EntryRegistry();
     const id = registry.upsert('posts/hello.md', false);
@@ -248,10 +286,9 @@ describe('PreviewFollower', () => {
 
   // What the generation token guards against: A's own resolveUrlForFile
   // call — not a FileChanged retry — is still in flight when B supersedes it. A's
-  // late completion must never emit, even though it resolves successfully. Uses
-  // asset paths (permanent misses) so no FileChanged subscription is in play —
-  // the generation check is the ONLY guard standing between this stale result
-  // and an emit.
+  // late completion must never emit, even though it resolves successfully. No
+  // FileChanged fires here, so the generation check is the ONLY guard standing
+  // between this stale result and an emit.
   test('a slow initial resolve for a superseded asset path never emits, even once it returns', async () => {
     const registry = new EntryRegistry();
     const idA = registry.upsert('a.png', false);
@@ -259,7 +296,7 @@ describe('PreviewFollower', () => {
 
     let releaseA!: (v: { status: 'ok'; data: string | null }) => void;
     const slowA = new Promise<{ status: 'ok'; data: string | null }>((resolve) => { releaseA = resolve; });
-    mockResolveUrlForFile.mockImplementation((path: string) =>
+    mockResolveAssetUrlForFile.mockImplementation((path: string) =>
       path.endsWith('a.png') ? slowA : Promise.resolve({ status: 'ok', data: '/b.png' }),
     );
 
@@ -267,11 +304,13 @@ describe('PreviewFollower', () => {
     follower.start();
 
     registry.setActive(idA);
+    void follower.navigate('a.png');
     await vi.waitFor(() =>
-      expect(mockResolveUrlForFile).toHaveBeenCalledWith(expect.stringContaining('a.png')),
+      expect(mockResolveAssetUrlForFile).toHaveBeenCalledWith(expect.stringContaining('a.png')),
     );
 
     registry.setActive(idB);
+    void follower.navigate('b.png');
     await vi.waitFor(() =>
       expect(mockEmit).toHaveBeenCalledWith('editor:navigate-preview', { urlPath: '/b.png' }),
     );
@@ -297,7 +336,7 @@ describe('PreviewFollower', () => {
 
   test('navigate() with unresolvable URL does NOT emit "/" fallback', async () => {
     const registry = new EntryRegistry();
-    mockResolveUrlForFile.mockResolvedValue({ status: 'ok', data: null });
+    mockResolveAssetUrlForFile.mockResolvedValue({ status: 'ok', data: null });
 
     const follower = mkFollower(registry);
     follower.start();
