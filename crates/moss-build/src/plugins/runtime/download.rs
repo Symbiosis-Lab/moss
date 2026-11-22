@@ -586,7 +586,9 @@ fn run_binary(
     stdin_data: Option<String>,
     timeout: std::time::Duration,
 ) -> Result<BinaryExecutionResult, String> {
+    use crate::system::bounded_command::{inherit_env, InheritedEnv};
     let mut cmd = std::process::Command::new(binary_path);
+    inherit_env(&mut cmd, InheritedEnv::Tools);
     cmd.args(args).current_dir(dir).envs(env_vars);
     let output = crate::system::bounded_command::run_bounded_feeding(
         &mut cmd,
@@ -787,6 +789,22 @@ mod execute_binary_tests {
             assert_eq!(output.exit_code, 0);
             assert!(output.stdout.contains("hello"));
         }
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn the_apps_agent_socket_and_tokens_do_not_reach_a_plugins_binary() {
+        // Names no other test reads; an agent socket already set is left as is.
+        std::env::set_var("MOSS_PLUGIN_ENV_TEST_TOKEN", "s3cret");
+        if std::env::var_os("SSH_AUTH_SOCK").is_none() {
+            std::env::set_var("SSH_AUTH_SOCK", "/nonexistent/agent.sock");
+        }
+        let script = r#"echo "agent=[$SSH_AUTH_SOCK] token=[$MOSS_PLUGIN_ENV_TEST_TOKEN] home=[$HOME] mine=[$GIT_TERMINAL_PROMPT]""#;
+        let env = HashMap::from([("GIT_TERMINAL_PROMPT".to_string(), "0".to_string())]);
+        let out = run("/bin/sh", &["-c", script], Some(env), None).await.unwrap();
+        assert!(out.stdout.contains("agent=[] token=[]"), "{out:?}");
+        assert!(!out.stdout.contains("home=[]"), "HOME stays for git and the like: {out:?}");
+        assert!(out.stdout.contains("mine=[0]"), "the plugin's own variables still apply: {out:?}");
     }
 
     #[tokio::test]

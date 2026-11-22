@@ -37,6 +37,7 @@ All notable changes to moss will be documented here.
 - A sign-in that shows its own page in moss, such as a server picker, no longer stops after a minute while the page is open: moss waits for the person until the page closes. When the sign-in ends, its page closes with it, so a click can no longer go to a sign-in that has already stopped.
 - A folder lists its children in the same order as cards (`children_style: grid`) and as a stream as it does in rows: subfolders first, then the pages. Cards and streams used to mix subfolders in among the pages by date. A subfolder that holds only subfolders, with no pages of its own to count, leads with the other subfolders too; it used to sink below them, out of its `weight:` place. A folder of pictures alone still lists as a page.
 - A folder whose home page types its order (`sort: [first, second]`) lists its children in that order in every style, subfolders included. Rows used to lift the subfolders above the pages and regroup the pages under year headings; `children_group: year` still asks for the headings, and puts the subfolders back above them.
+- Security: a program a plugin runs no longer inherits moss's whole environment. It gets the path, home, user, locale, temp directory, proxy and certificate settings and what the plugin sets itself, so an SSH agent (`SSH_AUTH_SOCK`), tokens and other credentials you have exported stay out of its reach.
 
 ### Removed
 

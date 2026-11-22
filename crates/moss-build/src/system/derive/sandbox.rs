@@ -57,17 +57,9 @@ pub fn command(binary: &Path, scratch: &Path, cache: Option<&Path>) -> Command {
     };
     #[cfg(not(target_os = "macos"))]
     let mut cmd = Command::new(binary);
-    // Nothing of the build's environment reaches the binary: tokens and
-    // credentials the user has exported are not its business. PATH stays so a
-    // deriver can run a helper it ships beside itself; locale variables keep
-    // its text handling the same as a terminal run.
-    cmd.env_clear();
-    for (key, value) in std::env::vars_os() {
-        let name = key.to_string_lossy();
-        if name == "PATH" || name == "LANG" || name.starts_with("LC_") {
-            cmd.env(&key, value);
-        }
-    }
+    // PATH stays so a deriver can run a helper it ships beside itself; locale
+    // variables keep its text handling the same as a terminal run.
+    crate::system::bounded_command::inherit_env(&mut cmd, crate::system::bounded_command::InheritedEnv::Confined);
     cmd.env("TMPDIR", scratch).env("HOME", scratch);
     if let Some(cache) = cache {
         cmd.env("MOSS_CACHE_DIR", cache);

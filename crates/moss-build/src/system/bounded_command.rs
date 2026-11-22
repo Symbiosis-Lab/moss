@@ -540,6 +540,45 @@ pub fn run_bounded(
     run_bounded_with_tick(cmd, timeout, what, || {})
 }
 
+/// How much of moss's own environment a child written by someone else (a
+/// plugin's binary, a plugin's stack, a derivation) inherits. Everything else
+/// the user exported, tokens and `SSH_AUTH_SOCK` included, is not passed on.
+#[derive(Clone, Copy)]
+pub enum InheritedEnv {
+    /// `PATH` and the locale only: a confined run that sets its own `HOME`
+    /// and `TMPDIR`.
+    Confined,
+    /// What a program the user could run in a terminal needs to work as it
+    /// does there: their home and identity (git finds its config and
+    /// credential helper through `HOME`), the temp directory, the proxy and
+    /// CA bundle the network is reached through, and the variables Windows
+    /// programs cannot start without.
+    Tools,
+}
+
+const CONFINED_ENV: &[&str] = &["PATH", "LANG"];
+const TOOLS_ENV: &[&str] = &[
+    "HOME", "USER", "LOGNAME", "TMPDIR",
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR",
+    "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP",
+    "USERPROFILE", "USERNAME", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA",
+];
+
+/// Whether `name` passes `reach`. Case-insensitive: Windows names are, and
+/// curl reads only the lowercase `http_proxy`.
+fn inherits(name: &std::ffi::OsStr, reach: InheritedEnv) -> bool {
+    let name = name.to_string_lossy().to_ascii_uppercase();
+    let listed = |list: &[&str]| list.contains(&name.as_str());
+    name.starts_with("LC_") || listed(CONFINED_ENV) || (matches!(reach, InheritedEnv::Tools) && listed(TOOLS_ENV))
+}
+
+/// Clear `cmd`'s environment down to what `reach` lets through from moss's
+/// own. Variables the caller sets on `cmd` afterwards are its own choice.
+pub fn inherit_env(cmd: &mut std::process::Command, reach: InheritedEnv) {
+    cmd.env_clear();
+    cmd.envs(std::env::vars_os().filter(|(name, _)| inherits(name, reach)));
+}
+
 #[cfg(all(test, windows))]
 #[path = "bounded_command_windows_tests.rs"]
 mod windows_tests;
@@ -548,6 +587,19 @@ mod windows_tests;
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn only_the_listed_variables_are_inherited() {
+        let passes = |name: &str, reach| inherits(std::ffi::OsStr::new(name), reach);
+        for reach in [InheritedEnv::Confined, InheritedEnv::Tools] {
+            assert!(passes("PATH", reach) && passes("LC_ALL", reach));
+            for secret in ["SSH_AUTH_SOCK", "GITHUB_TOKEN", "AWS_SECRET_ACCESS_KEY", "GIT_ASKPASS"] {
+                assert!(!passes(secret, reach), "{secret}");
+            }
+        }
+        assert!(passes("http_proxy", InheritedEnv::Tools) && passes("SystemRoot", InheritedEnv::Tools));
+        assert!(!passes("HOME", InheritedEnv::Confined) && !passes("HTTPS_PROXY", InheritedEnv::Confined));
+    }
 
     #[test]
     #[cfg(unix)]
