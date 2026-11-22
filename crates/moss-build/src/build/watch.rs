@@ -914,12 +914,28 @@ pub fn should_rebuild_for_paths(
             None if abs.symlink_metadata().is_err_and(|e| crate::build::icloud::is_definitely_absent(abs, &e)) => continue,
             None => return true, // unknown to manifest → fail open
         };
+        // Only a metadata-only event brings a non-page path here (see
+        // `pump_gate`), and its record may describe the build before last, so
+        // it is never hashed against: only the untouched inode suppresses.
+        if !crate::build::scan::classify::is_page_path(abs) {
+            if metadata_untouched(meta, abs, hashes.captured_at) {
+                continue;
+            }
+            return true;
+        }
         match source_metadata_matches_at(meta, abs, hashes.captured_at) {
             SourceCheck::Unchanged => continue,
             SourceCheck::Changed | SourceCheck::Unknown => return true,
         }
     }
     false
+}
+
+/// Whether `abs` is still the inode and write `meta` recorded, by stat alone.
+fn metadata_untouched(meta: &SourceMetadata, abs: &Path, captured_at: Option<u64>) -> bool {
+    let Ok(md) = std::fs::metadata(abs) else { return false };
+    !crate::build::stat::mtime_is_racy(meta.stat.mtime, captured_at)
+        && meta.stat.same_inode_and_write(&FileStat::of(&md), captured_at)
 }
 
 /// Whether the platform watcher told us it lost events and we must re-scan.
@@ -1028,8 +1044,12 @@ pub fn pump_gate(kind: notify::EventKind, folder_path: &str, paths: &[PathBuf]) 
     // background coordinator after that stash, so their entries can still
     // describe the previous build. Gating one of those modifies can therefore
     // discard an edit or undo while staging serves different bytes.
-    let all_markdown = !paths.is_empty() && paths.iter().all(|path| crate::build::scan::classify::is_page_path(path));
-    if !all_markdown {
+    // A bare inode-metadata change is the exception: cloud providers set flags
+    // on files they have just synced, and admission lets one through only when
+    // the inode and its write are the ones last recorded, never on a hash.
+    let all_markdown = paths.iter().all(|path| crate::build::scan::classify::is_page_path(path));
+    let metadata_only = matches!(kind, EventKind::Modify(ModifyKind::Metadata(notify::event::MetadataKind::Any)));
+    if paths.is_empty() || !(all_markdown || metadata_only) {
         return PumpGate::Proceed;
     }
     PumpGate::DeferHashCheck
