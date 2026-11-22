@@ -388,17 +388,15 @@ pub(super) async fn stop_at_entry(config: &PipelineConfig, pass: Pass, seal: &mu
         return Err(at_entry);
     }
     if !config.start_server {
-        return Ok(unchanged_at_entry(config));
+        return Ok(unchanged_at_entry(config, None));
     }
     serve_unchanged(config, pass, seal, port).await.ok_or(AtEntry::Build { comments_refreshed: false })
 }
 
 /// What a build that ended at its entry reports: the generation it kept.
-fn unchanged_at_entry(config: &PipelineConfig) -> PassOutcome {
+fn unchanged_at_entry(config: &PipelineConfig, port: Option<u16>) -> PassOutcome {
     crate::build::phase::record_value("unchanged_at_entry", 1);
-    let paths = crate::moss_paths::MossPaths::new(config.source());
-    let generated = crate::ops::serve::ownership::generated_line(config.root.name_opt().unwrap_or("unnamed-site"), &paths.current_ptr(), &paths.staging_dir(), false);
-    PassOutcome { message: format!("Unchanged since the last build.\n{generated}"), owed: false, is_empty: false, port: None }
+    PassOutcome { message: format!("Unchanged since the last build.\n{}", super::generated_message(config, port)), owed: false, is_empty: false, port }
 }
 
 /// What a serving build that stopped at its entry still owes the open: staging
@@ -428,7 +426,7 @@ async fn serve_unchanged(config: &PipelineConfig, pass: Pass, seal: &LastSeal, p
         crate::build::features::sync::start_background_sync(folder.to_string(), domain, config.host.events.clone(), &*config.host.spawner);
     }
     super::emit_build_complete(&config.progress, port, false, None);
-    Some(PassOutcome { port, ..unchanged_at_entry(config) })
+    Some(unchanged_at_entry(config, port))
 }
 
 /// The passes a stopped build still owes the site, since they read from
