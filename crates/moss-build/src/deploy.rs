@@ -566,21 +566,23 @@ pub(crate) fn refuse_before_upload(folder: &std::path::Path, sealed: &crate::bui
     let _checks = crate::build::phase::PhaseTrace::start("local_checks");
     gate("foreign_inputs", refuse_foreign_inputs(sealed, folder))?;
     gate("unresolved_inputs", refuse_unresolved_inputs(sealed))?;
-    gate("place_map_pack", refuse_unusable_landscape(folder))
+    gate("place_map_pack", refuse_unusable_landscape(folder, sealed))
 }
 
-/// A site that asks for the installed place-map pack publishes only with it:
-/// without it the build drew moss's own map instead. A pack still in the cloud
-/// is the seal's to refuse, as pending.
-pub fn refuse_unusable_landscape(folder: &std::path::Path) -> Result<(), String> {
-    use crate::build::place_map::{find_landscape, wanted_landscape, Landscape};
+/// A site that asks for the installed place-map pack publishes only a
+/// generation drawn with it; otherwise that build drew moss's own map. Judged
+/// from the seal, so a pack repaired after the build still needs a rebuild. A
+/// pack still in the cloud is refused earlier, as an unresolved input.
+pub fn refuse_unusable_landscape(folder: &std::path::Path, sealed: &crate::build::manifest::SealedManifest) -> Result<(), String> {
     let paths = crate::moss_paths::MossPaths::new(folder);
     let Ok(Some(text)) = crate::build::site_config::read_managed_toml_no_wait(&paths.config()) else { return Ok(()) };
     let Ok(cfg) = crate::config::ConfigFile::parse(&text) else { return Ok(()) };
-    match find_landscape(&paths.maps_dir(), wanted_landscape(&cfg).as_deref()) {
-        Landscape::Missing(problem) => Err(format!("Nothing published — {problem}.")),
-        _ => Ok(()),
+    if crate::build::place_map::wanted_landscape(&cfg).is_none()
+        || sealed.input_evidence().is_some_and(crate::build::place_map::drew_installed_pack)
+    {
+        return Ok(());
     }
+    Err("Nothing published — this build drew moss's own place map, not the pack in .moss/maps/ the site asks for. Install the pack with `moss migrate --apply`, build again, then publish.".to_string())
 }
 
 /// Refuse the exact generation selected for upload when it was rendered with

@@ -133,7 +133,7 @@ fn a_replaced_pack_re_renders_the_place_page_on_the_next_one_shot_build() {
 }
 
 #[test]
-fn a_pack_that_fails_its_digest_fails_every_strict_build_and_stops_a_publish() {
+fn a_pack_that_fails_its_digest_fails_every_strict_build() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let dir = site();
     let root = dir.path().canonicalize().unwrap();
@@ -144,19 +144,4 @@ fn a_pack_that_fails_its_digest_fails_every_strict_build_and_stops_a_publish() {
         build(&root, BuildTrigger::Full);
         assert!(moss_build::build::cli_output::take_cli_problems() >= 1, "the {attempt} --strict build counts the bad pack");
     }
-    let refusal = moss_build::deploy::refuse_unusable_landscape(&root).unwrap_err();
-    assert!(refusal.contains("digest"), "{refusal}");
-
-    let pack = repository_pack();
-    install(&root, &pack, &pack);
-    assert_eq!(moss_build::deploy::refuse_unusable_landscape(&root), Ok(()));
-}
-
-#[test]
-fn a_site_that_asks_for_a_pack_it_does_not_have_is_told_how_to_get_it() {
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = site();
-    let root = dir.path().canonicalize().unwrap();
-    let refusal = moss_build::deploy::refuse_unusable_landscape(&root).unwrap_err();
-    assert!(refusal.contains("moss migrate --apply"), "{refusal}");
 }

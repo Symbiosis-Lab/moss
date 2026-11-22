@@ -6865,7 +6865,44 @@ fn a_map_pack_that_fails_its_digest_stops_the_publish() {
     let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
 
     let refusal = crate::deploy::refuse_before_upload(&dir, &sealed).unwrap_err();
-    assert!(refusal.contains("digest"), "{refusal}");
+    assert!(refusal.contains("moss migrate --apply"), "{refusal}");
+}
+
+/// A site that asks for the pack and has none is told how to install it.
+#[test]
+fn a_site_that_asks_for_a_map_pack_it_does_not_have_is_told_how_to_get_it() {
+    let (dir, pack, _cleanup) = map_pack_site(b"unused");
+    fs::remove_file(&pack).unwrap();
+    let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+
+    let refusal = crate::deploy::refuse_unusable_landscape(&dir, &sealed).unwrap_err();
+    assert!(refusal.contains("moss migrate --apply"), "{refusal}");
+}
+
+/// The publish judges the generation it ships, not the folder: repairing the
+/// pack after a build that drew moss's own map still needs a rebuild.
+#[test]
+fn a_map_pack_repaired_after_its_build_still_stops_that_build_s_publish() {
+    let (dir, pack, _cleanup) = map_pack_site(b"other bytes");
+    let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+
+    let stored = fs::read(&pack).unwrap();
+    fs::rename(&pack, pack.with_file_name(crate::build::place_map::landscape_file_name(&stored))).unwrap();
+
+    assert!(crate::deploy::refuse_unusable_landscape(&dir, &sealed).is_err());
+}
+
+/// A good build stays publishable when its pack is damaged afterwards: the
+/// generation already carries the map drawn from it.
+#[test]
+fn a_map_pack_damaged_after_a_good_build_does_not_stop_its_publish() {
+    let stored = fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/place-map/place-map-v1.bin.br")).unwrap();
+    let (dir, pack, _cleanup) = map_pack_site(&stored);
+    let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+
+    fs::write(&pack, b"damaged").unwrap();
+
+    assert_eq!(crate::deploy::refuse_unusable_landscape(&dir, &sealed), Ok(()));
 }
 
 /// A review's catalogue item the sync client has not downloaded holds the

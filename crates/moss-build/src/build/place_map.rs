@@ -522,6 +522,8 @@ pub fn embedded() -> Result<Pack, DecodeError> {
 pub const DETAIL_LANDSCAPE: &str = "detail";
 const LANDSCAPE_PREFIX: &str = "landscape-";
 const LANDSCAPE_SUFFIX: &str = ".bin.br";
+/// `MossPaths::maps_dir` as an input-evidence key: folder-relative, `/`-separated.
+const MAPS_DIR_KEY: &str = ".moss/maps";
 // Today's pack decompresses to about 5.3 MB; the cap only keeps a hostile
 // file from inflating without bound before `decode` bounds what it holds.
 const MAX_RAW_PACK_BYTES: u64 = 64 << 20;
@@ -628,6 +630,14 @@ pub fn install_landscape(paths: &crate::moss_paths::MossPaths, stored: &[u8]) ->
         }
     }
     Ok(true)
+}
+
+/// Whether a build drew an installed pack: its input evidence holds a read of
+/// one in `.moss/maps/`. A pack that was missing or failed its check is never
+/// read, so the evidence alone says whether the generation carries it.
+pub fn drew_installed_pack(evidence: &std::collections::BTreeMap<String, crate::build::cloud_ledger::InputEntry>) -> bool {
+    evidence.iter().any(|(key, entry)| matches!(entry.state, crate::build::cloud_ledger::InputState::Read { .. })
+        && key.rsplit_once('/').is_some_and(|(dir, name)| dir == MAPS_DIR_KEY && landscape_digest(name).is_some()))
 }
 
 /// The name a pack is stored under: its own digest.
