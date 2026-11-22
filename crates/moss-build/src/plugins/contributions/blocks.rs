@@ -267,8 +267,8 @@ fn invalid_because(field: &BlockAttribute, value: &str) -> Option<String> {
     if !field.options.is_empty() && !field.options.iter().any(|o| o == value) {
         return Some(format!("it is not one of the options of `{}`", field.key));
     }
-    let pattern = field.pattern.as_deref().and_then(|p| regex::Regex::new(p).ok())?;
-    (!pattern.is_match(value)).then(|| field.pattern_message.clone().unwrap_or_else(|| "it does not match the declared pattern".to_string()))
+    super::settings::pattern_refuses(field.pattern.as_deref(), value)
+        .then(|| field.pattern_message.clone().unwrap_or_else(|| "it does not match the declared pattern".to_string()))
 }
 
 /// The head tags for a set of block assets. Addresses carry a content version,

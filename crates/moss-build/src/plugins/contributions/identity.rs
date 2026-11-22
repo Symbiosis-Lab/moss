@@ -144,6 +144,7 @@ pub fn supplied(plugins: &[Plugin], config: &ConfigFile) -> (Vec<Supplied>, Vec<
         let Some(proofs) = plugin.manifest.contributes.as_ref().and_then(|c| c.identity.as_ref()) else { continue };
         let name = &plugin.manifest.name;
         let Some(table) = config.section(&["services", name]) else { continue };
+        let declared: &[Field] = plugin.manifest.contributes.as_ref().and_then(|c| c.site_settings.as_ref()).map_or(&[], |s| &s.settings);
         let mut bad = Vec::new();
         let mut get = |key: &Key| -> Option<String> {
             let raw = table.get(&key.name)?.as_str()?.trim();
@@ -151,6 +152,11 @@ pub fn supplied(plugins: &[Plugin], config: &ConfigFile) -> (Vec<Supplied>, Vec<
                 return None;
             }
             if raw.len() > MAX_VALUE || raw.chars().any(char::is_control) {
+                bad.push(key.name.clone());
+                return None;
+            }
+            let pattern = declared.iter().find(|f| f.key == key.name).and_then(|f| f.pattern.as_deref());
+            if super::settings::pattern_refuses(pattern, raw) {
                 bad.push(key.name.clone());
                 return None;
             }
@@ -340,5 +346,27 @@ mod tests {
         for bad in ["ana", "@ana", "ana@", "a@b@c", "ana@host/x"] {
             assert_eq!(super::split_acct(bad), None, "{bad}");
         }
+    }
+
+    fn did_plugin() -> crate::plugins::types::Plugin {
+        let settings = json!([{"key":"did","type":"string","label":"DID","pattern":"^did:[a-z]+:[A-Za-z0-9._:%-]+$","pattern_message":"A DID looks like did:plc:abc"}]);
+        let proofs = json!([{"file":".well-known/atproto-did","body":"{did}"}]);
+        crate::plugins::types::Plugin { manifest: parse(settings, proofs).unwrap(), path: std::path::PathBuf::new() }
+    }
+
+    fn supplied_with(did: &str) -> (Vec<super::Supplied>, Vec<String>) {
+        let config = crate::config::ConfigFile::parse(&format!("[services.net]\ndid = \"{did}\"\n")).unwrap();
+        super::supplied(&[did_plugin()], &config)
+    }
+
+    #[test]
+    fn a_value_off_its_settings_pattern_writes_no_proof_and_says_why() {
+        let (proofs, problems) = supplied_with("not a did");
+        assert!(proofs.is_empty(), "{proofs:?}");
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("`did`"), "{problems:?}");
+
+        let (proofs, problems) = supplied_with("did:plc:abc123");
+        assert_eq!((proofs.len(), problems.len()), (1, 0));
     }
 }

@@ -583,6 +583,12 @@ pub(crate) fn fill_site_defaults(fields: &mut [Field]) {
     }
 }
 
+/// Does a declared `pattern` refuse `value`? A pattern that does not compile
+/// refuses nothing: the manifest check has already rejected it.
+pub(super) fn pattern_refuses(pattern: Option<&str>, value: &str) -> bool {
+    pattern.and_then(|p| regex::Regex::new(p).ok()).is_some_and(|re| !re.is_match(value))
+}
+
 fn key_ok(key: &str) -> bool {
     let mut bytes = key.bytes();
     key.len() <= 40
