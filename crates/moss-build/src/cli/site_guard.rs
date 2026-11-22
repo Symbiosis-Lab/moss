@@ -151,7 +151,7 @@ pub fn default_limits() -> ScanLimits {
 /// moss roots, or the folder is suspicious/uncheckable (provider root, home,
 /// truncated scan). A folder that IS a root always proceeds.
 pub fn guard_cli_open(folder_path: &str, subcommand: &str) -> Result<(), String> {
-    guard_cli_open_in(folder_path, subcommand, dirs::home_dir().as_deref())
+    guard_cli_open_in(folder_path, subcommand, crate::infra::home::account_home().as_deref())
 }
 
 /// [`guard_cli_open`] with the home folder passed in.

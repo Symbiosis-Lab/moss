@@ -669,10 +669,3 @@ fn the_account_home_is_not_a_site_when_moss_home_points_elsewhere() {
     fs::create_dir_all(site.join(".moss")).unwrap();
     assert!(owns_moss_below(&site, Some(&user)), "a site inside the home still is one");
 }
-
-#[cfg(unix)]
-#[test]
-fn the_account_home_comes_from_the_account_database_not_the_environment() {
-    let home = account_home().expect("this user has a home folder");
-    assert!(home.is_absolute() && home.is_dir(), "{home:?}");
-}

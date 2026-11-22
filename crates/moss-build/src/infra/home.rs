@@ -40,6 +40,24 @@ pub(crate) fn thread_moss_home(home: &std::path::Path) -> impl Drop {
     Restore(THREAD_HOME.with(|slot| slot.borrow_mut().replace(home.to_path_buf())))
 }
 
+/// The home folder the operating system lists for this user, read from the
+/// account database rather than `$HOME`.
+#[cfg(unix)]
+pub fn account_home() -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut buf = vec![0u8; 4096];
+    let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut found: *mut libc::passwd = std::ptr::null_mut();
+    // SAFETY: `buf` outlives every read of `pwd`, and `found` is only read after the call.
+    let rc = unsafe { libc::getpwuid_r(libc::geteuid(), &mut pwd, buf.as_mut_ptr().cast(), buf.len(), &mut found) };
+    if rc != 0 || found.is_null() || pwd.pw_dir.is_null() { return None; }
+    let dir = unsafe { std::ffi::CStr::from_ptr(pwd.pw_dir) };
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(dir.to_bytes())))
+}
+
+#[cfg(not(unix))]
+pub fn account_home() -> Option<PathBuf> { dirs::home_dir() }
+
 fn resolve(over: Option<std::ffi::OsString>, default: Option<PathBuf>) -> Result<PathBuf, String> {
     match over {
         Some(over) => Ok(PathBuf::from(over)),
@@ -120,6 +138,13 @@ pub(crate) fn without_moss_home<T>(f: impl FnOnce() -> T) -> T {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn the_account_home_comes_from_the_account_database_not_the_environment() {
+        let home = account_home().expect("this user has a home folder");
+        assert!(home.is_absolute() && home.is_dir(), "{home:?}");
+    }
 
     #[test]
     fn moss_home_is_the_override_else_the_default() {
