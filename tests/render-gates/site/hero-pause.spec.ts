@@ -16,7 +16,7 @@
  *
  * Site: tests/e2e/helpers/gate-sites.ts -> HERO_PAUSE_GATE.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 const PAUSE = ".moss-hero-pause";
 const INPUT = ".moss-hero-pause input";

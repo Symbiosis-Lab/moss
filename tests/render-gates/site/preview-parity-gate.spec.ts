@@ -35,7 +35,7 @@
  *
  *   npx playwright test -c playwright/preview-parity-gate.config.ts
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 import { gatePort } from "../../../playwright/gate-ports";
 
 const STATIC_BASE = `http://localhost:${gatePort("preview-parity-gate:static")}/`;

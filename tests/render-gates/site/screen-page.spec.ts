@@ -10,7 +10,7 @@
 // Only an engine can say whether the rung it picks covers the box the CSS
 // draws: the pictures here are eager, which is also how an engine without
 // `sizes=auto` reads every picture.
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../../support/browser-test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

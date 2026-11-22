@@ -9,7 +9,7 @@
  *
  *   npx playwright test -c playwright/plain-tab-reload.config.ts
  */
-import { test, expect, type Frame, type Page, type Request } from "@playwright/test";
+import { test, expect, type Frame, type Page, type Request } from "../../support/browser-test";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { gatePort } from "../../../playwright/gate-ports";

@@ -6,7 +6,7 @@
  * (just above the 20rem sheet), where the CJK parent sits at the row's end and
  * its panel is wider than the room to its right.
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../../support/browser-test';
 
 const toggle = (page: Page) => page.locator('.moss-nav-sub-toggle');
 const panel = (page: Page) => page.locator('.moss-nav-sub');

@@ -25,7 +25,7 @@
  * Run via:
  *   npx playwright test -c playwright/ui-accent-seam.config.ts
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../support/browser-test";
 import { gatePort } from "../../../playwright/gate-ports";
 
 const DEFAULT_BASE = `http://localhost:${gatePort("ui-accent-seam:default")}/`;

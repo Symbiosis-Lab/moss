@@ -34,7 +34,7 @@
 // clickable area into the words or the neighbor link beside it. Nav links
 // and a footer markdown list get no such exception — both are short
 // discrete labels with room on either side, not prose.
-import { test, expect, Page, Locator } from '@playwright/test';
+import { test, expect, Page, Locator } from '../../support/browser-test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mossBuildAssets } from '../../support/crate-paths';

@@ -33,7 +33,7 @@
  * turns `implicit_figure` off to test the plain-`<p>` shape, and this gate
  * needs a real `<figure class="moss-image">` around the image.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 const DESKTOP = { width: 1280, height: 900 };
 

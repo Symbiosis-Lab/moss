@@ -11,7 +11,7 @@
  * pictures on `/`, a mixed collage with a linked lead, a `contain` picture and
  * a short and a long quote on `/mixed/`, an upright lead on `/upright/`).
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 import { contrastRatio, parseColor, relativeLuminance } from "../../e2e/helpers/wcag-contrast";
 
 const COUNTS = [3, 4, 5, 6, 7, 8, 9];

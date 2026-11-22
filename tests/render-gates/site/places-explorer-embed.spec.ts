@@ -10,7 +10,7 @@
  * Run via:
  *   npx playwright test -c playwright/places-explorer-embed.config.ts
  */
-import { test, expect, type Frame, type Page } from "@playwright/test";
+import { test, expect, type Frame, type Page } from "../../support/browser-test";
 import { gotoFramed } from "../../support/framed-page";
 
 const POSTER = "[data-moss-place-embed]";

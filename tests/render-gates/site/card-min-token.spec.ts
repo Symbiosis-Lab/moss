@@ -4,7 +4,7 @@
  * collapses a listing to one column only for its own defaults. A minimum wider
  * than the container still fits it rather than overflowing, at any width.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 const LISTINGS = ["shelf", "roster"] as const;
 

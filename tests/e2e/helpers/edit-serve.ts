@@ -4,7 +4,7 @@
  * the shell nests. Ports come from playwright/gate-ports.ts, keys
  * `<gate>:ui` and `<gate>:preview`.
  */
-import { test, expect, type Frame, type Page, type TestInfo } from '@playwright/test';
+import { test, expect, type Frame, type Page, type TestInfo } from '../../support/browser-test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';

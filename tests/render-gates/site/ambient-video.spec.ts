@@ -19,7 +19,7 @@
  * via page.evaluate.
  */
 
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../support/browser-test";
 
 // Minimal CSS matching what site.css emits for ambient video
 const AMBIENT_CSS = `

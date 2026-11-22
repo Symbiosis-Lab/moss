@@ -7,7 +7,7 @@
  *
  * See tests/e2e/helpers/gate-sites.ts → THEME_FLOOR_HOOKS_GATE.
  */
-import { test, expect, Page } from "@playwright/test";
+import { test, expect, Page } from "../../support/browser-test";
 
 const css = (page: Page, sel: string, prop: "color" | "backgroundColor" | "borderBlockEndColor") =>
   page.evaluate(

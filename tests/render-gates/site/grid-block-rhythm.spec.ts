@@ -4,7 +4,7 @@
 // sides from lg to md; this restores only the bottom edge to lg — the grid's
 // trailing edge is still a real section break — leaving the heading-bound top
 // and every .moss-gallery value exactly as 3bb545d0 left them.
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../support/browser-test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { tokenBlock } from './tokens-block';

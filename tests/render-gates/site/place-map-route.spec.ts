@@ -15,7 +15,7 @@
  * Fixture: PLACE_MAP_ROUTE_GATE (tests/e2e/helpers/gate-sites.ts). Run via:
  *   npx playwright test -c playwright/place-map-route.config.ts
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 // The static figure's own svg, not any svg inside the locator: a live-map embed adds a fullscreen button whose icon is an svg too.
 const MAP_SVG = ".moss-place-locator figure > svg";

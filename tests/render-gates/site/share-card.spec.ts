@@ -25,7 +25,7 @@
  * landscape band across the top, columns below it, a reading-end meta block,
  * a corner QR seal) and is sampled for exactly that.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 /** The card's warm paper background, light palette (`buildPalette`). */
 const PAPER: RGB = [0xf5, 0xf0, 0xe6];

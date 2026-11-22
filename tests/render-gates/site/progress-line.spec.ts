@@ -15,7 +15,7 @@
  * Ports: playwright/gate-ports.ts, keys `progress-line:ui` /
  * `progress-line:preview`. Config: playwright/progress-line.config.ts.
  */
-import { test, expect, type Frame } from '@playwright/test';
+import { test, expect, type Frame } from '../../support/browser-test';
 import { copyFileSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';

@@ -6,7 +6,7 @@
  * Fixture: playwright/folded-callouts.config.ts → tests/e2e/helpers/folded-callouts-site.ts
  * Run via: bash scripts/render-gates.sh folded-callouts
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../../support/browser-test';
 
 const grouped = (page: Page) => page.locator('.moss-accordion details.callout');
 const supportsMotion = (page: Page) =>

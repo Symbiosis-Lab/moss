@@ -13,7 +13,7 @@
  *   npx playwright test -c playwright/nav-first-paint.config.ts
  */
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 const LONG_TRAIL = "/survey/river/fourth-volume/";
 const SHORT_TRAIL = "/notes/rain/";

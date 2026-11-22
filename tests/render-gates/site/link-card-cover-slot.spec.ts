@@ -9,7 +9,7 @@
  * `{rows=equal}`. In a shared grid the no-picture card keeps an empty box
  * the size of its siblings', so the words in the row start below one line.
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../../support/browser-test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { openCrateDir } from '../../support/crate-paths';

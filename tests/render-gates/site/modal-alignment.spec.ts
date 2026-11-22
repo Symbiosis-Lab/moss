@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../support/browser-test';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 

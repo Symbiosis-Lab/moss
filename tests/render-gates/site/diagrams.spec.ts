@@ -7,7 +7,7 @@
 // "skipped" count is the inconclusive count.
 //
 // DIAGRAM_GATE_PAGES (comma-separated paths) points the same checks at another built site.
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../../support/browser-test';
 import { createRequire } from 'node:module';
 import type { AxeResults } from 'axe-core';
 import { gatePort } from '../../../playwright/gate-ports';

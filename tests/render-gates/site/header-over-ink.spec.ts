@@ -5,7 +5,7 @@
  * Fixture: playwright/header-over-ink.config.ts → tests/e2e/helpers/header-over-ink-site.ts
  * Run via: bash scripts/render-gates.sh header-over-ink
  */
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../support/browser-test';
 import { probes } from '../../e2e/helpers/header-ink-probe';
 import { PAGES } from '../../e2e/helpers/header-over-ink-site';
 import { contrastRatio, luminanceOfCss } from '../../e2e/helpers/wcag-contrast';

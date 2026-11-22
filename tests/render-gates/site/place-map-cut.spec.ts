@@ -7,7 +7,7 @@
  * Run via:
  *   npx playwright test -c playwright/place-map-cut.config.ts
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 const SIZES = [{ width: 390, height: 844 }, { width: 1280, height: 860 }];
 

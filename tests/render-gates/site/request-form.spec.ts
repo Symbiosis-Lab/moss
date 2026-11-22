@@ -2,7 +2,7 @@
 // sideways, keeps every control inside the form and the button 44px tall, shows
 // a focus ring a keyboard user can see, marks a refused field in a colour that
 // reads as text, and keeps the honeypot out of sight and out of the tab order.
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../../support/browser-test';
 import { gatePort } from '../../../playwright/gate-ports';
 import { expectFocusOnOwnEdge, expectNothingPaintedOutside } from './field-focus-edge';
 

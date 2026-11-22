@@ -10,7 +10,7 @@
  * Run via:
  *   npx playwright test -c playwright/places-explorer-boot.config.ts
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../support/browser-test";
 
 const FIGURE = ".moss-place-map[data-moss-places-explorer]";
 

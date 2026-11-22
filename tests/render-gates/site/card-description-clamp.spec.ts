@@ -23,7 +23,7 @@
 // No binary and no scratch site: injects the branch's real site.css (and,
 // for the vertical case, site/vertical.css) straight into `page.setContent`,
 // the same idiom as card-cover-fit.spec.ts / footer-subscribe-alignment.spec.ts.
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../support/browser-test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mossBuildAssets } from '../../support/crate-paths';

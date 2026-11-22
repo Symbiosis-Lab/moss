@@ -11,7 +11,7 @@
  * one; a level-1 title never does. The selection tests run against `/page/`;
  * the home page is checked separately.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../support/browser-test";
 
 test.describe("heading anchor", () => {
   test("selecting a heading does not select its permalink", async ({

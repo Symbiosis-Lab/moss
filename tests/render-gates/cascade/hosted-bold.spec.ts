@@ -11,7 +11,7 @@
  *   npx playwright test -c playwright/hosted-bold.config.ts
  */
 
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../support/browser-test";
 
 test("bold text draws in the hosted family's Bold and the page title keeps its Regular", async ({ page }) => {
   await page.goto("hosted/", { waitUntil: "load" });

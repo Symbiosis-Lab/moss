@@ -20,7 +20,7 @@
  * Run via:
  *   npx playwright test -c playwright/place-map-tokens.config.ts
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../support/browser-test";
 
 const WATER_RECT = '[data-map-layer="water"] rect';
 

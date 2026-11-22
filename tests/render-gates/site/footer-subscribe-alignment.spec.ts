@@ -19,7 +19,7 @@
 // outranks site.css's own `shortcodes` layer — alongside site.css +
 // vertical.css, on top of the real footer markup this was found against
 // (auto-injected `:::subscribe` form beside a link list).
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../support/browser-test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { openCrateDir } from '../../support/crate-paths';

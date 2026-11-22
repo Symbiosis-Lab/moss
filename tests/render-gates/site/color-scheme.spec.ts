@@ -11,7 +11,7 @@
 // scheme is a light document: on a light page it stays transparent, on a dark
 // page the browser gives it an opaque white canvas so its dark text can be
 // read, whatever the OS setting.
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../../support/browser-test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mossBuildAssets } from '../../support/crate-paths';

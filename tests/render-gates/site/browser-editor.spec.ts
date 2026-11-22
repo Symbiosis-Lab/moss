@@ -60,7 +60,7 @@
  * Ports: playwright/gate-ports.ts, keys `browser-editor:ui` /
  * `browser-editor:preview`. Config: playwright/browser-editor.config.ts.
  */
-import { test, expect, type Frame, type Page } from '@playwright/test';
+import { test, expect, type Frame, type Page } from '../../support/browser-test';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { crc32, deflateSync } from 'node:zlib';
 import { join } from 'node:path';

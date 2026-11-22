@@ -22,7 +22,7 @@
  *   npx playwright test -c playwright/heading-weight.config.ts
  */
 
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../support/browser-test";
 
 // Relative, so the port lives in exactly one place — the config's baseURL.
 // It was hardcoded to 8744 here, which is comments-cascade's port; the two

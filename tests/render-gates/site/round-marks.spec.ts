@@ -2,7 +2,7 @@
 // shortcodes layer are appended the same way, and the comments sheet stays
 // unlayered, as it is linked. The subscribe script is moss's real bundle against
 // a mocked service.
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../../support/browser-test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mossBuildAssets } from '../../support/crate-paths';

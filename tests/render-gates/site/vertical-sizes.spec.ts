@@ -15,7 +15,7 @@
 // whether the rung it picks covers the box the CSS actually draws. The second
 // also pins drift: if `--moss-vertical-column` ever outgrows `100vh - 4rem`,
 // the chosen rung falls short here.
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../../support/browser-test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

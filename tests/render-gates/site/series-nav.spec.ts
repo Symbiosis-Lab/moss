@@ -4,7 +4,7 @@
  * never painted. They stay in the link's name for screen readers. The arrow
  * sits on the title's first line, a word's gap from it.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 /** The arrow's gap needs to read as a space between words at least. */
 const MIN_GAP = 8;

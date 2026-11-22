@@ -3,7 +3,7 @@
 // attribute the renderer emits, or a layout. axe-core covers the mechanical
 // criteria over the real cascade in both themes and at phone width; the
 // checks after it cover what axe does not judge.
-import { test, expect, type Locator, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '../../support/browser-test';
 import { createRequire } from 'node:module';
 import type { AxeResults } from 'axe-core';
 import { gatePort } from '../../../playwright/gate-ports';

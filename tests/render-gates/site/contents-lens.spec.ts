@@ -10,7 +10,7 @@
  * Fixture: playwright/contents-lens.config.ts -> tests/e2e/helpers/contents-lens-site.ts
  * Run via: bash scripts/render-gates.sh contents-lens
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../../support/browser-test';
 import { gatePort } from '../../../playwright/gate-ports';
 import { contrastRatio, relativeLuminance } from '../../e2e/helpers/wcag-contrast';
 import { BAND_DARK, BAND_LIGHT, BAND_OKLCH_DARK, BAND_OKLCH_LIGHT, BROKEN_SECTIONS, FOCAL_ROW, FOCUS_POINT, FULL_SECTIONS, LENS_SECTIONS, LENS_WITH_IMAGE, MANY, SHORT_NAME } from '../../e2e/helpers/contents-lens-site';

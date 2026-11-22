@@ -26,7 +26,7 @@
  * Config:  playwright/nav-island.config.ts
  * Run via: pnpm run test:render-gates nav-island
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../../support/browser-test';
 
 const URL = '/playwright/fixtures/nav-island/live-css.html';
 

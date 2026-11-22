@@ -35,7 +35,7 @@
  *   npx playwright test -c playwright/nav-toggle-cluster.config.ts
  */
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 /** Computed background-color of a throwaway element painted with `value`. */
 async function resolveColor(page: Page, value: string): Promise<string> {

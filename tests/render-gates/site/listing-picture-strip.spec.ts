@@ -3,7 +3,7 @@
  * real engine can say the pictures are painted in one row and that the strip
  * does not widen the page.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../support/browser-test";
 
 const WIDE = { width: 1280, height: 900 };
 const PHONE = { width: 390, height: 844 };

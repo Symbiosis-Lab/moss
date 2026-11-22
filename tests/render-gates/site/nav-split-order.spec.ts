@@ -13,7 +13,7 @@
  *   npx playwright test -c playwright/nav-split-order.config.ts
  */
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 interface Band {
   top: number;

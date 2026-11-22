@@ -10,7 +10,7 @@
  * Run via:
  *   npx playwright test -c playwright/places-explorer-vertical.config.ts
  */
-import { test, expect, type FrameLocator, type Page } from "@playwright/test";
+import { test, expect, type FrameLocator, type Page } from "../../support/browser-test";
 
 const FIGURE = "figure[data-moss-places-explorer]";
 const POSTER = "[data-moss-place-embed]";

@@ -1,7 +1,7 @@
 // An archival site's footer: the edition block is not a footer.md column, so
 // the footer keeps the article's box and the block fills it; the moss mark
 // sits at the end of the edition line, inked, rather than in a band below.
-import { test, expect, Page } from '@playwright/test';
+import { test, expect, Page } from '../../support/browser-test';
 
 const PAGES = ['/', '/prints/pier/'];
 const WIDTHS = [

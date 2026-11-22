@@ -6,7 +6,7 @@
  * Run via:
  *   npx playwright test -c playwright/cluster-layer-zoom.config.ts
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 async function open(page: Page): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 800 });

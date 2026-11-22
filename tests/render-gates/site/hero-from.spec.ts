@@ -10,7 +10,7 @@
  * Site: tests/e2e/helpers/gate-sites.ts → HERO_FROM_GATE. The event ends in
  * 2099, so the build always draws it; the ended case moves the browser's clock.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../support/browser-test";
 
 test.describe("hero drawn from an event", () => {
   test("while the event is upcoming, one hero is drawn and the fallback is not", async ({ page }) => {

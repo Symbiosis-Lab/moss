@@ -3,7 +3,7 @@
  * track count because their inline axis follows viewport height. Ratios must
  * remain theme-overridable, and both image syntaxes must fill the same box.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 const MOBILE = { width: 390, height: 844 };
 const DESKTOP = { width: 1280, height: 900 };

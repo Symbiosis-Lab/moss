@@ -6,7 +6,7 @@
  * Fixture: PLACE_DOT_LINKS_GATE (tests/e2e/helpers/gate-sites.ts). Run via:
  *   npx playwright test -c playwright/place-dot-links.config.ts
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 const LOCATOR_LINK = ".moss-place-locator .moss-place-map a";
 

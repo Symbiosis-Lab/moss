@@ -16,7 +16,7 @@
  *   npx playwright test -c playwright/customization-cascade.config.ts
  */
 
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../support/browser-test";
 
 // Expected values — both browsers must agree.
 const EXPECTED_BG = "rgb(171, 205, 239)"; // #abcdef

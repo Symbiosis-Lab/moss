@@ -9,7 +9,7 @@
  * Config: playwright/address-bar.config.ts. With SHOTS set to a directory, the
  * highlighted row is photographed there in the light and dark schemes.
  */
-import { test, expect, type Frame, type Page } from '@playwright/test';
+import { test, expect, type Frame, type Page } from '../../support/browser-test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { openShell as openEditServe, useEditServe } from '../../e2e/helpers/edit-serve';

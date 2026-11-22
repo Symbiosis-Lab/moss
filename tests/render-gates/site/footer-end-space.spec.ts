@@ -7,7 +7,7 @@
 //
 // Only a rendered cascade resolves `--moss-footer-end` (a different value at
 // phone width) and the margin/padding arithmetic, so this measures boxes.
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../support/browser-test';
 import { gatePort } from '../../../playwright/gate-ports';
 
 const hiddenUrl = `http://localhost:${gatePort('footer-end-space:hidden')}/`;

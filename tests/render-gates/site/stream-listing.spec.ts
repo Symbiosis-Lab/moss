@@ -4,7 +4,7 @@
  * posts: the space between two posts is the hairline's padding on each side,
  * and the listing ends on the last post's date.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 const PHONE = { width: 390, height: 844 };
 const WIDE = { width: 1440, height: 900 };

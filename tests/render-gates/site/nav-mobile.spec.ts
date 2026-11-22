@@ -16,7 +16,7 @@
  * `MOBILE_MENU_QUERY` in crates/moss-build/src/js-src/site/theme.ts mirrors
  * to decide when the closed menu is `inert`.
  */
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../support/browser-test';
 
 /** Rounded left edge of each nav link — one distinct value means one column. */
 async function linkColumns(page) {

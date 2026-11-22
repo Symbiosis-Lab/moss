@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 // Verifies the fix for: clicking a footnote backlink scrolled the marker
 // under the floating nav island with no visual indication of which note

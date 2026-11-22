@@ -6,7 +6,7 @@
  * Fixture: playwright/header-over-band.config.ts → tests/e2e/helpers/header-over-band-site.ts
  * Run via: bash scripts/render-gates.sh header-over-band
  */
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../support/browser-test';
 import { probes } from '../../e2e/helpers/header-ink-probe';
 import { BAND_PAGES } from '../../e2e/helpers/header-over-band-site';
 import { contrastRatio, luminanceOfCss } from '../../e2e/helpers/wcag-contrast';

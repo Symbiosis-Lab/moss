@@ -26,7 +26,7 @@
  * Run via:
  *   npx playwright test -c playwright/places-explorer-ring.config.ts
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 const LISBON_CAMERA = "p=patterson&z=18&x=399.6415&y=144.8651";
 

@@ -25,7 +25,7 @@
  * Run via:
  *   npx playwright test -c playwright/prose-spacing-ladder.config.ts
  */
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../support/browser-test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { tokenBlock } from './tokens-block';

@@ -24,7 +24,7 @@
  * is portrait (400×800) against a desktop viewport, the shape where cover and
  * contain disagree most.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../support/browser-test";
 
 const CAPTION = ".moss-hero-caption";
 

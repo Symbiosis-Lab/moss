@@ -3,7 +3,7 @@
 // session; the form's inline script reads it before the body paints, sets
 // `data-moss-subscribed` on the root, then asks /_moss/account/session, and
 // only a 401 brings the form back. With no hint nothing is asked.
-import { test, expect, type BrowserContext, type Page } from '@playwright/test';
+import { test, expect, type BrowserContext, type Page } from '../../support/browser-test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildScratchSite } from '../../e2e/helpers/scratch-site';

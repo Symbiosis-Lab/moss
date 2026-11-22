@@ -6,7 +6,7 @@
  * Boxes are only known once the engine lays them out, so this is a render
  * gate. Site: gate-sites.ts → heroCaptionStackGate (end / start / stacked).
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 type Box = { x: number; y: number; width: number; height: number };
 

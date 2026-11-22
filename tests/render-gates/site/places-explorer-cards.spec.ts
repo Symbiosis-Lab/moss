@@ -16,7 +16,7 @@
  * Run via:
  *   npx playwright test -c playwright/places-explorer-cards.config.ts
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 async function gotoReady(page: Page, search = ""): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 800 });

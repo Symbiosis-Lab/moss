@@ -3,7 +3,7 @@
  * on a site the CLI built. Fixture: tests/e2e/helpers/type-defaults-site.ts.
  * Run via: bash scripts/render-gates.sh type-defaults
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../../support/browser-test';
 
 const CARD_FIGURE = ".moss-grid-card figure.moss-image";
 

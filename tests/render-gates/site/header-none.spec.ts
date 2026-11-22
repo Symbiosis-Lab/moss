@@ -6,7 +6,7 @@
  * Fixture: playwright/header-none.config.ts → tests/e2e/helpers/header-none-site.ts
  * Run via: bash scripts/render-gates.sh header-none
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../../support/browser-test';
 import { gatePort } from '../../../playwright/gate-ports';
 import { AFTER_END, BAND_PATH, BAND_SECTIONS, CLOSING_PATH, COLLECTIONS, LONG_TITLE, LONG_TITLE_PATH, BAND_TINT, PICTURES_PATH, UPRIGHT_PATH, PICTURE_SECTIONS, SITE_SUBTITLE } from '../../e2e/helpers/header-none-site';
 

@@ -7,7 +7,7 @@
  * Site: tests/e2e/helpers/gate-sites.ts → PAGE_CHROME_NONE_GATE.
  * Run via: bash scripts/render-gates.sh page-chrome-none
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../../support/browser-test';
 
 async function open(page: Page, url: string, width: number): Promise<void> {
   await page.setViewportSize({ width, height: 800 });

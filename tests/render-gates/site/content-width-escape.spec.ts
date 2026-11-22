@@ -12,7 +12,7 @@
  *
  * Site: tests/e2e/helpers/gate-sites.ts → CONTENT_WIDTH_ESCAPE_GATE.
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../../support/browser-test';
 
 type Box = { left: number; right: number; top: number; bottom: number; width: number; height: number };
 

@@ -8,7 +8,7 @@
  * Run via:
  *   npx playwright test -c playwright/places-explorer-camera.config.ts
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 import { decodePng as decodeAnyPng } from "../../e2e/helpers/decode-png";
 import { untilRendering } from "./rendering";
 

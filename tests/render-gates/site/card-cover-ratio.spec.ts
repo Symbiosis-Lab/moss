@@ -36,7 +36,7 @@
  * exists so the landscape-vs-portrait claim has one small, dedicated place to
  * fail and be read on its own).
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../support/browser-test";
 
 const DESKTOP = { width: 1280, height: 900 };
 // Well under the 36rem (576px) container-query breakpoint, matching the

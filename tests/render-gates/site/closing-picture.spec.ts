@@ -1,7 +1,7 @@
 // A footer.md that ends in a `:::hero` closes the page: the picture spans the
 // viewport (whatever the body's own padding), nothing paints below it, and its
 // words stay on it at every width, in both themes.
-import { test, expect, Page } from '@playwright/test';
+import { test, expect, Page } from '../../support/browser-test';
 import { contrastRatio, luminanceOfCss, parseColor, relativeLuminance, worstCaseContrast } from '../../e2e/helpers/wcag-contrast';
 import { CREDIT, GROUND, SKY, SKY_NIGHT, capAt } from '../../e2e/helpers/closing-picture-site';
 import { gatePort } from '../../../playwright/gate-ports';

@@ -43,7 +43,7 @@
  * Run via:
  *   npx playwright test -c playwright/header-hit-areas.config.ts
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../../support/browser-test";
 
 async function setTheme(page: Page, theme: "light" | "dark") {
   await page.evaluate((t) => localStorage.setItem("moss-theme", t), theme);

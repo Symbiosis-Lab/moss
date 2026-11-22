@@ -15,7 +15,7 @@
  * has resolved, and "is this element clipped" is a layout question jsdom
  * cannot answer.
  */
-import { test, expect, Page } from "@playwright/test";
+import { test, expect, Page } from "../../support/browser-test";
 import { decodePng } from "../../e2e/helpers/decode-png";
 import { parseColor, worstCaseContrast } from "../../e2e/helpers/wcag-contrast";
 

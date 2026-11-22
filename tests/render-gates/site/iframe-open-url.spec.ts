@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from '../../support/browser-test';
 
 test('updates the full-page link while the embedded iframe keeps its camera state', async ({ page }) => {
   await page.goto('/playwright/fixtures/iframe-open-url/live.html');

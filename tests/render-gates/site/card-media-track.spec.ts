@@ -12,7 +12,7 @@
 // sized by the real covers in that row and collapses to zero when there are
 // none. Both paths ship, so both are proved here, in both engines.
 //
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../../support/browser-test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mossBuildAssets } from '../../support/crate-paths';

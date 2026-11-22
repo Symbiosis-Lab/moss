@@ -11,7 +11,7 @@
  * Fixture: playwright/contents-ruler.config.ts → tests/e2e/helpers/contents-ruler-site.ts
  * Run via: bash scripts/render-gates.sh contents-ruler
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from '../../support/browser-test';
 import { gatePort } from '../../../playwright/gate-ports';
 import { SECTIONS, SHORT_SECTIONS, LONG_CJK_TITLE, LONG_LATIN_TITLE, OPEN_SECTIONS, OPEN_WITH_IMAGE } from '../../e2e/helpers/contents-ruler-site';
 
