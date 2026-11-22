@@ -809,7 +809,11 @@ pub fn removed_addresses(
             } else {
                 RemovalReason::Unexplained
             };
-            Some(RemovedAddress { path: out.to_string(), reason, moved_to, source: srcs.first().map(|s| s.to_string()) })
+            // A record with no sources still names a file published as-is: one
+            // in the folder at its address, such as an alias the build skipped.
+            let source = srcs.first().map(|s| s.to_string())
+                .or_else(|| (srcs.is_empty() && source_exists(out)).then(|| out.to_string()));
+            Some(RemovedAddress { path: out.to_string(), reason, moved_to, source })
         })
         .collect();
     removed.extend(opened_addresses(&baseline.files, &files).into_iter().map(|path| RemovedAddress {
