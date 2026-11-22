@@ -223,6 +223,24 @@ test('a file the browser loads through the static server is an input', async () 
   assert.equal(check(t.root, 'demo-gate', '', { env: t.env }), null, 'a served script changed: runs');
 });
 
+test('the static server exits when the process that started it is killed', async () => {
+  const server = fileURLToPath(new URL('../../tests/support/static-server.py', import.meta.url));
+  const { spawn } = await import('node:child_process');
+  const port = 20000 + ((process.pid + 7) % 20000);
+  const parent = spawn('/bin/sh', ['-c', `/usr/bin/python3 "${server}" ${port} >/dev/null 2>&1 & echo $!; exec sleep 60`], { stdio: ['ignore', 'pipe', 'ignore'] });
+  const pid = Number(await new Promise((r) => parent.stdout.once('data', (d) => r(String(d).trim()))));
+  const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  try {
+    await new Promise((r) => setTimeout(r, 500));
+    assert.ok(alive(), 'the server started');
+    parent.kill('SIGKILL');
+    for (let i = 0; i < 50 && alive(); i++) await new Promise((r) => setTimeout(r, 100));
+    assert.ok(!alive(), 'the server outlived its parent');
+  } finally {
+    if (alive()) process.kill(pid, 'SIGKILL');
+  }
+});
+
 test('a site whose rebuild fails is not taken for its last green build', async () => {
   const t = tree();
   // Fails when the spec names a file called `fail`, else builds one page and reports it as `build --json` does.
