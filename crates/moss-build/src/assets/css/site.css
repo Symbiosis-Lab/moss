@@ -3080,7 +3080,7 @@ body > header .site-name {
   }
 
   .nav-content:not(:has(.breadcrumb-segment)) .nav-links {
-    margin-block-end: var(--moss-nav-drop-clear, 0);
+    margin-block-end: var(--moss-nav-drop-clear);
   }
 
   /* With a mouse, links beside a second name line go under the toggles to the end edge: the toggles exclude other floats only as far as line 1 reaches. Where hit areas are enlarged (a touch screen, or a narrow window) they stay before the toggles, since a link's reach there would take taps meant for the toggles. */
