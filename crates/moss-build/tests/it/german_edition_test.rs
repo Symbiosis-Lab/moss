@@ -152,7 +152,7 @@ fn on_a_root_that_only_chooses_a_language_the_site_language_tree_is_an_edition_t
     ]);
 
     let (en_nav, en_main) = site.links("en/index.html");
-    assert_eq!(en_nav.first().map(String::as_str), Some("/en/"), "the site name leads to the English home: {en_nav:?}");
+    assert_eq!(site_name_link(&site, "en/index.html").as_deref(), Some("/en/"), "the site name leads to the English home: {en_nav:?}");
     assert!(en_nav.contains(&"/en/about/".to_string()), "{en_nav:?}");
     assert!(en_main.contains(&"/en/posts/a/".to_string()), "{en_main:?}");
 
@@ -172,7 +172,7 @@ fn a_root_with_a_page_of_its_own_or_a_single_tree_does_not_only_choose_a_languag
         ("en/About.md", "---\ntitle: About\n---\n\nText.\n"),
         ("de/index.md", "---\ntitle: Start\n---\n\nHallo.\n"),
     ];
-    let en_home = |files: &[(&str, &str)]| Site::new(files).links("en/index.html").0.first().cloned();
+    let en_home = |files: &[(&str, &str)]| site_name_link(&Site::new(files), "en/index.html");
     assert_eq!(en_home(&chooser).as_deref(), Some("/en/"), "a footer is no page of the root's own");
 
     let mut with_html = chooser.to_vec();
@@ -218,4 +218,12 @@ fn the_roots_nav_leaves_an_edition_without_nav_items_its_breadcrumb_trail() {
     ]);
     assert!(has_bar(&site, "notes/first/index.html") && !has_trail(&site, "notes/first/index.html"));
     assert!(has_trail(&site, ZH_NOTE), "an edition with no nav items keeps the trail");
+}
+
+/// Where the page's site name links: the first link in `.nav-left`, which the
+/// toggles precede in the markup.
+fn site_name_link(site: &Site, rel: &str) -> Option<String> {
+    let html = site.html(rel);
+    let from = html.find(r#"<div class="nav-left""#)?;
+    site::hrefs_in(&html[from..]).first().map(|h| h.to_string())
 }
