@@ -114,10 +114,6 @@ fn the_only_exemption_is_the_one_we_reasoned_about() {
     assert_eq!(
         marked,
         vec![
-            // Routes on event KIND, hands the payload to a math-aware
-            // collector; pulldown emits no math event inside a code fence
-            // or HTML block, so the walker is blind by construction there.
-            "src/build/feeds/llms_txt.rs".to_string(),
             // `non_prose_view`: routes on event kind to mark skip-lines and
             // redaction spans; the excerpt's text comes from the redacted
             // SOURCE string, never from rebuilding the event stream.

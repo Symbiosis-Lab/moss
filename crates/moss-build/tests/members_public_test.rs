@@ -203,12 +203,13 @@ fn malformed_ancestor_members_never_expose_descendant_bodies() {
         ("library/article.md", &article),
         ("library/free.md", "---\ntitle: Free article\ndate: 2026-02-02\nmembers: public\n---\nPublic override preview.\n<!--members-only-->\nExplicit public body."),
     ]);
-    for path in ["library/article/index.html", "rss.xml", "llms.txt", "_moss/source/library/article.md"] {
+    assert!(!site.html("llms.txt").contains(SECRET), "private body leaked into llms.txt");
+    for path in ["library/article/index.html", "rss.xml", "_moss/source/library/article.md"] {
         let output = site.html(path);
         assert!(!output.contains(SECRET), "private body leaked into {path}");
         assert!(output.contains("Visible inherited preview."), "missing public preview in {path}");
     }
-    for path in ["library/free/index.html", "rss.xml", "llms.txt", "_moss/source/library/free.md"] {
+    for path in ["library/free/index.html", "rss.xml", "_moss/source/library/free.md"] {
         assert!(site.html(path).contains("Explicit public body."), "missing public override in {path}");
     }
     assert_public(&site);

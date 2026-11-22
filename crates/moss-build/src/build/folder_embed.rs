@@ -1506,27 +1506,6 @@ fn order_listed<'a>(
     members::order(pages, target_doc, is_flatten, parsed.sort, style.as_ref(), group.as_ref(), parsed.limit, parsed.when, math, now)
 }
 
-/// The pages a folder-list marker shows, in the listing's order; `None` when it
-/// draws something other than a page list (a static index, a missing folder).
-pub(crate) fn marker_pages<'a>(
-    body: &str,
-    from_md_path: &str,
-    all_docs: &'a [ParsedDocument],
-    project: &ProjectStructure,
-    dir_overrides: &std::collections::HashMap<String, String>,
-    math: bool,
-    now: chrono::NaiveDateTime,
-) -> Option<Vec<&'a ParsedDocument>> {
-    let parsed = parse_marker_body(body)?;
-    let from = if parsed.from.is_empty() { from_md_path } else { parsed.from };
-    match list_pages(&parsed, from, all_docs, project, dir_overrides, now).ok()? {
-        Listed::Iframe(_) => None,
-        Listed::Pages { target_doc, is_flatten, pages, .. } => {
-            Some(order_listed(&parsed, &pages, target_doc, is_flatten, math, now).limited)
-        }
-    }
-}
-
 /// Render a single resolved marker. `Err` carries the plain-text problem when
 /// the target does not resolve; the caller renders the placeholder and reports it. `is_embed` — see [`resolve_markers_impl`] — passes
 /// straight through to [`generate_children`], which is where it actually
@@ -1788,7 +1767,7 @@ fn resolve_more_link_target<'a>(
     from: &str,
     all_docs: &'a [ParsedDocument],
 ) -> Option<&'a ParsedDocument> {
-    let source_of = |d: &ParsedDocument| d.source_path.as_deref().map(|p| p.replace('\\', "/"));
+    let source_of = |d: &ParsedDocument| d.source_path_slashed();
     let edition = all_docs
         .iter()
         .find(|d| source_of(d).as_deref() == Some(from))

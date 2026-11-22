@@ -8,7 +8,7 @@ use site::Site;
 const OUT: &str = r#"<p class="moss-external-link"><a href="https://www.archive.example.org/field/">archive.example.org<span aria-hidden="true"> ↗&#xFE0E;</span>"#;
 
 fn site() -> Site {
-    Site::new(&[
+    Site::with_config("domain = \"example.com\"\n", &[
         ("index.md", "---\ntitle: Home\n---\n\nWelcome.\n\n![[work/]]\n"),
         ("work/index.md", "---\ntitle: Work\n---\n"),
         ("work/field.md", "---\ntitle: Field Archive\nexternal_url: https://www.archive.example.org/field/\n---\n\nA survey kept by the archive.\n"),
@@ -47,6 +47,5 @@ fn a_page_published_elsewhere_links_out_without_the_author_writing_it() {
 #[test]
 fn llms_txt_gives_a_page_published_elsewhere_its_address_there() {
     let llms = site().html("llms.txt");
-    assert!(llms.contains("## Field Archive\n\n<https://www.archive.example.org/field/>\n"), "{llms}");
-    assert!(llms.contains("- [Field Archive](https://www.archive.example.org/field/)"), "the listing row points there too: {llms}");
+    assert!(llms.contains("- [Field Archive](https://www.archive.example.org/field/)"), "{llms}");
 }

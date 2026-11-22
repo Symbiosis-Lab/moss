@@ -969,6 +969,12 @@ impl ParsedDocument {
         self.is_listable_in("")
     }
 
+    /// The source path with `/` separators, which every comparison and split
+    /// of it expects. `None` for a generated page.
+    pub fn source_path_slashed(&self) -> Option<String> {
+        self.source_path.as_deref().map(moss_core::slug::normalize_separators)
+    }
+
     /// Whether a listing of the folder `folder` (`a/b/`, URL space; `""` for
     /// the root) may show this document. False when **any** exclusion fires:
     ///

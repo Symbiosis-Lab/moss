@@ -50,15 +50,22 @@ fn allowing_every_use_keeps_the_files_and_drops_the_tag() {
     );
     assert!(robots_tags(&site.html("about/index.html")).is_empty());
     assert_eq!(robots_tags(&site.html("draft/index.html")), vec![r#"<meta name="robots" content="noindex">"#]);
-    assert!(site.html("llms.txt").contains("second step"));
+    assert!(site.html("llms.txt").contains("- [About](https://example.com/about/)"));
     assert!(site.html(".well-known/tdmrep.json").contains("\"tdm-reservation\": 0"));
     assert!(site.html("robots.txt").contains("Sitemap: https://example.com/sitemap.xml"));
 }
 
 #[test]
+fn no_llms_txt_without_a_real_address() {
+    let site = Site::with_config("ai_answers = true\n", PAGES);
+    assert!(!site.output("llms.txt").exists(), "its links would point at localhost");
+    assert!(!site.output("sitemap.xml").exists());
+}
+
+#[test]
 fn turning_ai_answers_off_removes_llms_txt_on_the_next_build() {
     let site = Site::with_config("domain = \"example.com\"\nai_answers = true\n", PAGES);
-    assert!(site.html("llms.txt").contains("second step"));
+    assert!(site.html("llms.txt").contains("- [About](https://example.com/about/)"));
     site.write(".moss/config.toml", "schema_version = 6\n\n[site]\nlang = \"en\"\ndomain = \"example.com\"\nai_answers = false\n");
     site.rebuild();
     assert!(!site.output("llms.txt").exists());

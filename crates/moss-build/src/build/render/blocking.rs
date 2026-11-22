@@ -2445,35 +2445,24 @@ pub fn generate_blocking_content_for_build(
     // after `generate_blocking_content` returns, using `BackgroundContext::search_enabled`
     // (set below). See `build/feeds/search.rs`.
 
-    // llms.txt: the whole site's text, unless AI answers are asked not to.
-    if site_config.ai.publishes_llms_txt() {
+    // llms.txt: an index of the listed pages, unless AI answers are asked not to.
+    // Its links are absolute, so like the sitemap it waits for a real address.
+    if has_rss && site_config.ai.publishes_llms_txt() {
         let llms_site_title = documents
             .iter()
             .find(|d| d.url_path == "index.html")
             .map(|d| d.title.as_str())
             .unwrap_or(crate::i18n::t(site_lang, "site"));
-        // Plain text: llms.txt's own body is deliberately raw markdown (see
-        // that module's doc comment), but this one line is a one-sentence
-        // site blurb quoted in a header line, not page content — reduced the
-        // same way the SPA/og/twitter description tags are, so `_..._`
-        // doesn't ship its markers into a file whose whole point is to read
-        // cleanly.
+        // Plain text: a one-sentence site blurb quoted in a header line,
+        // reduced the way the share-card description tags are, so `_..._`
+        // doesn't ship its markers.
         let homepage_desc: Option<String> = documents
             .iter()
             .find(|d| d.url_path == "index.html")
             .and_then(|d| d.description.as_deref())
             .map(crate::build::page::meta::strip_markdown_inline)
             .filter(|s| !s.trim().is_empty());
-        let llms_content = crate::build::feeds::llms_txt::generate_llms_txt(
-            &documents,
-            llms_site_title,
-            homepage_desc.as_deref(),
-            |body, host| {
-                let from = host.source_path.as_deref().unwrap_or(&host.url_path);
-                crate::build::folder_embed::marker_pages(body, from, &documents, project_structure, &dir_overrides, site_config.math, now)
-            },
-        );
-        // Site 14 (Pattern A): emit llms.txt.
+        let llms_content = crate::build::feeds::llms_txt::generate_llms_txt(&documents, llms_site_title, homepage_desc.as_deref(), site_url.as_str());
         BuildContext::for_render(output_dir, pending)
             .emit_held(&ServedPath::for_llms_txt(), llms_content.into_bytes(), HashBucket::Files)
             .map_err(|e| format!("Failed to emit llms.txt: {}", e))?;

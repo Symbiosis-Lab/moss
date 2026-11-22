@@ -230,16 +230,6 @@ fn without_description_in_inferred_the_description_stays_the_page_text() {
 }
 
 #[test]
-fn llms_txt_carries_the_derived_words_and_no_wrapper_markup() {
-    let turn = crate::site::turn();
-    let site = listed_site();
-    site.build(&turn, PluginMode::Blocking, DeriveMode::Await);
-    let llms = site.sealed_file("llms.txt").expect("llms.txt in the sealed generation");
-    assert!(llms.contains("world"), "{llms}");
-    assert!(!llms.contains("<div") && !llms.contains("</div>") && !llms.contains("moss-derived"), "{llms}");
-}
-
-#[test]
 fn a_written_title_beats_the_inferred_one() {
     let turn = crate::site::turn();
     let site = Site::new(&[

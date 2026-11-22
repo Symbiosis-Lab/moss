@@ -285,12 +285,7 @@ pub fn resolve_duplicate_slugs_with_lang(
             // output paths resolve from the source directory, not from
             // `url_path`, so the two trees still overwrite each other.
             let Some(blocker) = blocked_by else { continue };
-            let source_of = |i: usize| {
-                documents[i]
-                    .source_path
-                    .clone()
-                    .unwrap_or_else(|| documents[i].url_path.clone())
-            };
+            let source_of = |i: usize| documents[i].source_path_slashed().unwrap_or_else(|| documents[i].url_path.clone());
             let loser = source_of(doc_idx);
             let cascades_over = (documents[doc_idx].kind == PageKind::Folder)
                 .then(|| parent_dir(&loser).to_string());
