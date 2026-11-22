@@ -1494,6 +1494,63 @@ fn pump_gate_does_not_hash_gate_background_passthrough_sources() {
     }
 }
 
+fn image_record(path: &std::path::Path, bytes: &[u8]) -> crate::types::content::SiteHashes {
+    let mut hashes = crate::types::content::SiteHashes::new();
+    hashes.sources.insert(
+        "cover.png".into(),
+        SourceMetadata { hash: gate_sha256_hex(bytes), stat: FileStat::of(&std::fs::metadata(path).unwrap()) },
+    );
+    hashes
+}
+
+fn metadata_any() -> EventKind {
+    EventKind::Modify(ModifyKind::Metadata(notify::event::MetadataKind::Any))
+}
+
+#[test]
+fn a_metadata_only_change_on_an_image_defers_to_admission() {
+    let dir = tempfile::tempdir().unwrap();
+    let image = dir.path().join("cover.png");
+    assert_eq!(pump_gate(metadata_any(), dir.path().to_str().unwrap(), &[image]), PumpGate::DeferHashCheck);
+}
+
+/// A sync provider setting flags on a file it has just synced moves ctime and
+/// nothing else; the image's last build already has those bytes.
+#[cfg(unix)]
+#[test]
+fn an_attribute_change_on_a_recorded_image_is_suppressed() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let image = gate_write_file(dir.path(), "cover.png", b"png bytes");
+    let hashes = image_record(&image, b"png bytes");
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::set_permissions(&image, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    assert!(!should_rebuild_for_paths(dir.path().to_str().unwrap(), &[image], Some(&hashes)));
+}
+
+/// The record may describe the build before last, so equal bytes prove
+/// nothing for an image: a replaced file builds even when its hash matches.
+#[test]
+fn a_replaced_image_builds_even_with_a_matching_hash() {
+    let dir = tempfile::tempdir().unwrap();
+    let image = gate_write_file(dir.path(), "cover.png", b"png bytes");
+    let hashes = image_record(&image, b"png bytes");
+    let temp = gate_write_file(dir.path(), "cover.tmp", b"png bytes");
+    std::fs::rename(&temp, &image).unwrap();
+
+    assert!(should_rebuild_for_paths(dir.path().to_str().unwrap(), &[image], Some(&hashes)));
+}
+
+#[test]
+fn a_metadata_only_change_on_an_unrecorded_image_builds() {
+    let dir = tempfile::tempdir().unwrap();
+    let image = gate_write_file(dir.path(), "cover.png", b"png bytes");
+    let hashes = crate::types::content::SiteHashes::new();
+
+    assert!(should_rebuild_for_paths(dir.path().to_str().unwrap(), &[image], Some(&hashes)));
+}
+
 /// A root agent-instruction file is excluded from watch triggers regardless
 /// of who wrote it — the author's own edit to it must not rebuild the site
 /// any more than moss's own guidance sync would, were it still writing here.

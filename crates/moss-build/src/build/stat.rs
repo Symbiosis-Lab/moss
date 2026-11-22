@@ -116,17 +116,28 @@ impl FileStat {
     /// platforms that report those, short of a platform (Windows) that reports
     /// neither.
     pub(crate) fn vouches_for(&self, current: &FileStat, recorded_at: Option<u64>) -> bool {
-        let same_write = match (self.mtime_nanos, current.mtime_nanos) {
+        self.same_write(current, recorded_at)
+            && self.ctime_agrees(current, recorded_at)
+            && !identity_disagrees(self.inode, current.inode)
+    }
+
+    /// Whether `current` is the same inode holding the same write, with ctime
+    /// left out: an attribute change (flags, xattrs, ownership) moves ctime and
+    /// nothing else. Proof only for a change the watcher reported as
+    /// metadata-only, since an in-place rewrite that restores mtime also moves
+    /// only ctime but reports a data change too. Both sides must report an inode.
+    pub(crate) fn same_inode_and_write(&self, current: &FileStat, recorded_at: Option<u64>) -> bool {
+        self.same_write(current, recorded_at) && self.inode.is_some() && self.inode == current.inode
+    }
+
+    fn same_write(&self, current: &FileStat, recorded_at: Option<u64>) -> bool {
+        let same_stamp = match (self.mtime_nanos, current.mtime_nanos) {
             (Some(a), Some(b)) if a != b => false,
             (Some(0), Some(0)) => zero_stamp_settled(self.mtime, recorded_at),
             (Some(_), Some(_)) => true,
             _ => false,
         };
-        self.size == current.size
-            && self.mtime == current.mtime
-            && same_write
-            && self.ctime_agrees(current, recorded_at)
-            && !identity_disagrees(self.inode, current.inode)
+        self.size == current.size && self.mtime == current.mtime && same_stamp
     }
 
     /// Reported ctimes must agree to the nanosecond; a missing part is no proof.
