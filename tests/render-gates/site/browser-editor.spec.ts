@@ -783,7 +783,7 @@ test('the address copied from a page just made carries no reload stamp', async (
 test(PICTURE_GATE, async ({ page }) => {
   test.setTimeout(240_000);
   const { editor, preview } = await openEditor(page);
-  await editor.click('.seg.bc[data-path=""]');
+  await openTreeRoot(editor);
   await editor.click('.seg[data-path="album.md"]');
   await preview.waitForFunction(() => document.body?.innerText.includes('An album'), null, { timeout: 30_000 });
   await editor.waitForSelector('.cm-line:has-text("Last line.")', { timeout: 30_000 });
