@@ -1712,7 +1712,7 @@ pub(crate) fn gc(mp: &crate::moss_paths::MossPaths, _token: &crate::build::lifec
                 let Some(source_oid) = file_path.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".json")) else {
                     continue; // not a transform record
                 };
-                if !live_source_oids.contains(source_oid) && older_than(&file_path, RECORD_TTL) {
+                if crate::nested_roots::is_sync_copy(source_oid) || (!live_source_oids.contains(source_oid) && older_than(&file_path, RECORD_TTL)) {
                     condemned_records.push(file_path);
                     continue;
                 }

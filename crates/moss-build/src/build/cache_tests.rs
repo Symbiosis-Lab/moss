@@ -2637,6 +2637,36 @@ fn gc_keeps_another_machines_record_and_its_blobs_until_the_record_ages_out() {
     assert_eq!(result.objects_removed, 2);
 }
 
+/// A sync client's conflict copy of a record (`<oid> (1).json`, `<oid> 2.json`)
+/// is never read: lookup opens the exact name. GC removes it at any age, and
+/// the output only it named goes with it; the record it copies stays.
+#[test]
+fn gc_removes_conflict_copies_of_records_and_keeps_the_record() {
+    let (mp, objects_dir, transforms_dir) = make_gc_test_dir("gc_record_conflict_copies");
+    let record = record_with(&"aaaa".repeat(16), &"bbbb".repeat(16));
+    put_transform(&transforms_dir, &record);
+    let shard = transforms_dir.join("aa").join("aa");
+    for (copy, output) in [("(1)", "cccc"), ("2", "dddd"), ("(conflicted copy 2026-11-20)", "eeee")] {
+        let json = serde_json::to_string(&record_with(&record.source_oid, &output.repeat(16))).unwrap();
+        fs::write(shard.join(format!("{} {copy}.json", record.source_oid)), json).unwrap();
+    }
+    for oid in ["bbbb", "cccc", "dddd", "eeee"] {
+        put_object(&objects_dir, &oid.repeat(16), oid.as_bytes());
+    }
+
+    let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test()).expect("readable");
+
+    let mut left: Vec<String> = fs::read_dir(&shard).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+    left.sort();
+    assert_eq!(left, [format!("{}.json", record.source_oid)], "only the record itself is left");
+    assert_eq!(result.transforms_removed, 3);
+    let store = ObjectStore::new(objects_dir);
+    assert!(store.blob_path(&"bbbb".repeat(16)).exists(), "the record's output stays");
+    for oid in ["cccc", "dddd", "eeee"] {
+        assert!(!store.blob_path(&oid.repeat(16)).exists(), "an output only a conflict copy named goes");
+    }
+}
+
 /// Older versions filed a stat-keyed record under its key's own path, below the
 /// two shard levels. GC reaches it there: a young one keeps its blob (an older
 /// moss on another machine still reads it), an aged one goes, and so does the

@@ -416,6 +416,12 @@ pub fn is_sync_copy_of(name: &str, base: &str) -> bool {
         || (rest.len() > 2 && rest.starts_with('(') && rest.ends_with(')'))
 }
 
+/// A sync client's copy (see [`is_sync_copy_of`]) of an entry whose own name has
+/// no space, such as a content hash.
+pub fn is_sync_copy(name: &str) -> bool {
+    [" ", ".sync-conflict-"].iter().any(|mark| name.split_once(mark).is_some_and(|(base, _)| is_sync_copy_of(name, base)))
+}
+
 /// What a copy says about itself, read without downloading. A directory the
 /// cloud has not listed onto this computer is unknown, never empty: inside it,
 /// a file reads as absent.
