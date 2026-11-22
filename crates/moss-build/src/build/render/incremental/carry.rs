@@ -1,6 +1,7 @@
 //! Output-side proof for leaving a verdict-approved page on disk.
 
 use std::path::Path;
+use moss_core::page::site_page::SitePage;
 
 use crate::build::manifest::{HashBucket, PendingManifest, StageBytes};
 use crate::build::media::qr;

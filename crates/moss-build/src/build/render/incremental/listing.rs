@@ -402,22 +402,17 @@ pub fn groups_read_by(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Opt
     }
 
     // (e) A series-chain step reads its parent folder's listing for prev/next
-    //     ordering (`sequence_siblings`, `render/html.rs`): the key (a) builds
+    //     ordering (`moss_core::page::series::chain`): the key (a) builds
     //     for the parent's own folder index, since `select_children_by_slug`
     //     is the same membership call either way.
-    if is_series_member(doc, documents) {
-        let parent_folder = series_parent_folder(doc);
-        if let Some(parent_doc) =
-            documents.iter().find(|pd| pd.url_path == format!("{parent_folder}/index.html"))
-        {
-            keys.push(GroupKey {
-                folder_slug: parent_folder,
-                depth: Depth::from_frontmatter(parent_doc.children_depth.as_deref(), false),
-                scope_default_tree: false,
-                exclude_nav: false,
-                edition: doc.edition.clone(),
-            });
-        }
+    if let Some(parent_doc) = moss_core::page::series::series_parent(doc, documents) {
+        keys.push(GroupKey {
+            folder_slug: parent_doc.url_path.trim_end_matches("/index.html").to_string(),
+            depth: Depth::from_frontmatter(parent_doc.children_depth.as_deref(), false),
+            scope_default_tree: false,
+            exclude_nav: false,
+            edition: doc.edition.clone(),
+        });
     }
 
     // A host that matched the predicate but no arm above (e.g. a home-override
@@ -431,47 +426,19 @@ pub fn groups_read_by(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Opt
     }
 }
 
-/// `doc`'s parent folder, in the same shape `render/html.rs`'s series-nav
-/// block derives it from a direct-child URL (`"series/part-1/index.html"` ->
-/// `"series"`). Callers must have already checked `parts.len() >= 3` (via
-/// [`is_series_member`], which shares this exact derivation) before trusting
-/// the result.
-fn series_parent_folder(doc: &ParsedDocument) -> String {
-    let parts: Vec<&str> = doc.url_path.split('/').collect();
-    parts[..parts.len() - 2].join("/")
-}
-
-/// True when `doc` is a step in a parent folder's series prev/next chain —
-/// the exact membership `sequence_siblings` (`render/html.rs`) walks when it
-/// builds that chrome. A `label`/`weight`/`date`/`series` edit on any one
-/// member can reorder or relabel every other member's prev/next block, and
-/// nothing about that reaches the dependency graph (no link, no listing
-/// host) or the ordinary per-page facade diff.
+/// True when `doc` is a step in a parent folder's series prev/next chain. A
+/// `label`/`weight`/`date`/`series` edit on any one member can reorder or
+/// relabel every other member's prev/next block, and nothing about that
+/// reaches the dependency graph (no link, no listing host) or the ordinary
+/// per-page facade diff. Asks the series navigation's own
+/// [`moss_core::page::series::series_parent`], so the two cannot disagree.
 ///
 /// Deliberately does not re-derive the resolved shell type (`ShellType`,
 /// `page/shell.rs`) that decides whether `doc` actually renders the series
 /// block — over-approximating past that costs one extra render, never a
-/// stale one, and re-deriving it here would duplicate render/html.rs's own
-/// resolution instead of asking it.
+/// stale one.
 pub fn is_series_member(doc: &ParsedDocument, documents: &[ParsedDocument]) -> bool {
-    if !crate::build::render::html::is_sequence_step(doc) {
-        return false;
-    }
-    let parts: Vec<&str> = doc.url_path.split('/').collect();
-    if parts.len() < 3 {
-        return false;
-    }
-    let parent_folder = series_parent_folder(doc);
-    let Some(parent_doc) =
-        documents.iter().find(|pd| pd.url_path == format!("{parent_folder}/index.html"))
-    else {
-        return false;
-    };
-    // `is_sequence_step` above already excludes a member that opted itself
-    // out with `series: false`; what's left is whether the PARENT's chrome
-    // is on at all, the one precedence decision `render::html::series_chrome_on`
-    // owns.
-    crate::build::render::html::series_chrome_on(parent_doc)
+    moss_core::page::series::series_parent(doc, documents).is_some()
 }
 
 /// Mirrors the sidebar source resolution in `render/html.rs`: the provenance

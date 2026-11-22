@@ -3176,12 +3176,7 @@ mod children_field_tests {
             html.find(&format!("serial/{slug}/\""))
                 .unwrap_or_else(|| panic!("{slug} missing from the sidebar: {html}"))
         });
-        let chain: Vec<String> = super::super::sequence_siblings(
-            &all_docs,
-            "serial/index.html",
-            "serial/",
-            &folder_index.resolve_for_direct_children(),
-        )
+        let chain: Vec<String> = moss_core::page::series::chain(&all_docs, &folder_index)
         .iter()
         .map(|d| d.url_path.trim_start_matches("serial/").trim_end_matches("/index.html").to_string())
         .collect();
@@ -9537,7 +9532,6 @@ mod lang_tree_root_home_tests {
 /// must NOT be reachable as a neighbour: a subfolder's own index page, and a
 /// page that opted out with `series: false`.
 mod sequence_siblings_tests {
-    use super::super::sequence_siblings;
     use crate::build::types::ParsedDocument;
     use crate::build::types::SeriesField;
     use moss_core::PageKind;
@@ -9587,7 +9581,8 @@ mod sequence_siblings_tests {
     }
 
     fn chain_sorted(docs: &[ParsedDocument], sort: &ResolvedSort) -> Vec<String> {
-        sequence_siblings(docs, "guide/index.html", "guide/", sort)
+        let parent = ParsedDocument { direct_children_sort: Some(sort.clone()), ..parent() };
+        moss_core::page::series::chain(docs, &parent)
             .iter()
             .map(|d| d.clean_stem.clone())
             .collect()
@@ -9746,12 +9741,7 @@ mod sequence_siblings_tests {
                     .unwrap_or_else(|| panic!("{slug} missing from the {style}/{group} listing: {listing}"))
             });
 
-            let chain: Vec<String> = sequence_siblings(
-                &docs,
-                "serial/index.html",
-                "serial/",
-                &index.resolve_for_direct_children(),
-            )
+            let chain: Vec<String> = moss_core::page::series::chain(&docs, &index)
             .iter()
             .map(|d| d.url_path.trim_start_matches("serial/").trim_end_matches("/index.html").to_string())
             .collect();

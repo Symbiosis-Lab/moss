@@ -1866,7 +1866,7 @@ fn template_marks_series_nav_as_source_none_in_preview_mode() {
     let mut vars = make_test_vars(false);
     vars.body_attrs = " data-moss-preview".to_string();
     // Simulate the series-nav HTML that the build pipeline injects via
-    // components::series_nav::render (exact opening tag must match).
+    // moss_core::page::series::render (exact opening tag must match).
     vars.post_article =
         r#"<nav class="moss-series-nav"><div class="moss-series-nav-links"></div></nav>"#
             .to_string();

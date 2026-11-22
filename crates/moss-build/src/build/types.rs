@@ -7,6 +7,7 @@
 //! `crate::types` back-compat re-exports were removed 2026-08-12 (M5a landing 3).
 
 use serde::{Deserialize, Serialize};
+use moss_core::page::site_page::SitePage;
 use specta::Type;
 
 // SeriesField moved to moss-core. Re-exported for backward compat.
@@ -901,34 +902,6 @@ impl ParsedDocument {
         }
     }
 
-    /// Cache hit: return the scan-time inference over the folder's direct
-    /// children. Use this when the renderer iterates direct children
-    /// (`children_depth: direct`, or folder index with shallow listing,
-    /// or series-nav over direct-sibling pages).
-    ///
-    /// Fallback axis is `Date` (matches the default-when-uncertain
-    /// elsewhere in this module). This fallback is reached in two
-    /// situations:
-    ///
-    /// 1. Test paths that construct `ParsedDocument` by hand without
-    ///    seeding the cache.
-    /// 2. Production lookup paths where `sort_source_doc` resolves to a
-    ///    synthetic auto-index folder — those are constructed in
-    ///    `render/blocking.rs` AFTER `populate_direct_children_sorts` has
-    ///    run, so their cache is intentionally `None`. The generated-index
-    ///    loop passes `generate_children` no sort for the same reason, and
-    ///    this helper's Date fallback matches it.
-    ///
-    /// If a caller needs a different fallback (e.g. series-chrome
-    /// historically wanted Title), it must set up the cache explicitly.
-    pub fn resolve_for_direct_children(&self) -> moss_core::sort::ResolvedSort {
-        self.direct_children_sort.clone().unwrap_or(moss_core::sort::ResolvedSort {
-            axis: moss_core::sort::SortAxis::Date,
-            explicit_order: None,
-            series_default: false,
-        })
-    }
-
     /// Re-compute axis on a flattened render scope. Use this when the
     /// renderer flattens descendants (`children_depth: all`): the scan
     /// cache only reflects direct-children inference and misrepresents
@@ -975,31 +948,6 @@ impl ParsedDocument {
         self.source_path.as_deref().map(moss_core::slug::normalize_separators)
     }
 
-    /// Whether a listing of the folder `folder` (`a/b/`, URL space; `""` for
-    /// the root) may show this document. False when **any** exclusion fires:
-    ///
-    /// 1. `draft == Some(true)` — rendered for the preview, never published.
-    /// 2. `listed == Some(false)` — a finished page curated *off-feed*, still
-    ///    a public page (see `is_public_page`).
-    /// 3. `search_engines == Some(false)` — a page reached only by its link.
-    /// 4. `slot_only == true` — layout chrome (e.g. `footer.md`) or a partial.
-    /// 5. `is_not_found_page()` — the site's `404.md`.
-    /// 6. The page sits in a hidden folder ([`Self::hidden_home`]) that
-    ///    `folder` is outside of.
-    ///
-    /// All list-emitting sites call this helper so any future visibility flag
-    /// is added in one place.
-    pub fn is_listable_in(&self, folder: &str) -> bool {
-        self.draft != Some(true) && self.listed != Some(false) && self.search_engines != Some(false)
-            && !self.slot_only && !self.is_not_found_page() && self.reaches(folder)
-    }
-
-    /// Whether a listing of `folder` may name this page at all: false only for
-    /// a page in a hidden folder that `folder` is outside of.
-    pub fn reaches(&self, folder: &str) -> bool {
-        self.hidden_home.as_deref().is_none_or(|home| folder.starts_with(home))
-    }
-
     /// An authored `partial: true` file that is not a draft. Read from the
     /// frontmatter, not `slot_only`: `footer.md` is slot-only too and is
     /// neither a header link nor a listing row.
@@ -1015,13 +963,6 @@ impl ParsedDocument {
     /// count) keeps to [`Self::is_listable`].
     pub fn is_pageless_entry(&self) -> bool {
         self.is_partial() && self.listed == Some(true)
-    }
-
-    /// The site's `404.md`: the page a host shows for an unknown address. It
-    /// is a page at `/404/` and a copy at `/404.html`, and it is no part of
-    /// the site's content, so no listing surface carries it.
-    pub fn is_not_found_page(&self) -> bool {
-        self.url_path == crate::build::served_path::NOT_FOUND_PAGE
     }
 
     /// The page names a `start` that moss could not read as a date, an empty
@@ -1366,6 +1307,17 @@ impl SourceMetadata {
     pub(crate) fn vouches_for(&self, current: &crate::build::stat::FileStat, captured_at: Option<u64>) -> bool {
         !crate::build::stat::mtime_is_racy(self.stat.mtime, captured_at) && self.stat.vouches_for(current, captured_at)
     }
+}
+
+impl moss_core::page::site_page::SitePage for ParsedDocument {
+    fn layout(&self) -> Option<&str> { self.layout.as_deref() }
+    fn series(&self) -> Option<&SeriesField> { self.series.as_ref() }
+    fn draft(&self) -> Option<bool> { self.draft }
+    fn listed(&self) -> Option<bool> { self.listed }
+    fn search_engines(&self) -> Option<bool> { self.search_engines }
+    fn slot_only(&self) -> bool { self.slot_only }
+    fn hidden_home(&self) -> Option<&str> { self.hidden_home.as_deref() }
+    fn direct_children_sort(&self) -> Option<&moss_core::sort::ResolvedSort> { self.direct_children_sort.as_ref() }
 }
 
 impl moss_core::sort::SortableDoc for ParsedDocument {

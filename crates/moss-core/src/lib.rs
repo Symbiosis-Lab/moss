@@ -105,6 +105,7 @@ pub mod frontmatter_union;
 pub mod frontmatter_typed;
 pub mod heading;
 pub mod html_entities;
+pub mod i18n;
 pub use heading::{extract_headings, HeadingInfo};
 pub mod inert_regions;
 pub mod link_completions;

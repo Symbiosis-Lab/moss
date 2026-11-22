@@ -6,6 +6,7 @@
 //! `BackgroundContext` and handled by the background phase in `pipeline.rs`.
 
 use crate::build::scan::path_collision::{logical_path, on_disk};
+use moss_core::page::site_page::SitePage;
 use crate::build::cloud_readiness;
 use crate::build::phase::PhaseTrace;
 use crate::build::cli_output::log_warn_problem;

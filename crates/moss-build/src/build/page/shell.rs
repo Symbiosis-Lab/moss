@@ -49,23 +49,6 @@ impl ShellRegistry {
         }
     }
 
-    /// Did the author write `layout: article` on this page?
-    ///
-    /// This is the *authored intent*, not the resolved template. It is a much
-    /// narrower question than `select_shell_type(..) == Article`, which is
-    /// also true of every ordinary nested page that said nothing at all.
-    ///
-    /// Ask this — never the resolved `ShellType` — when the behaviour should
-    /// follow from the author calling the page a piece. Series navigation is the
-    /// case that forced the distinction: a folder index is skipped by
-    /// its siblings' prev/next chain *because it is a doorway*, and `layout:
-    /// article` is how an author says this particular one is a step instead. If
-    /// that had been keyed on the resolved template, every nested folder index
-    /// on an organized site would have become a step by accident.
-    pub fn is_article_layout(doc: &ParsedDocument) -> bool {
-        doc.layout.as_deref() == Some("article")
-    }
-
     /// Determines the appropriate template type for a given document and context.
     ///
     /// Adaptive selection based on site mode:
@@ -92,7 +75,7 @@ impl ShellRegistry {
             Some(doc) => {
                 // Frontmatter override wins
                 if doc.layout.as_deref() == Some("page") { return ShellType::Page; }
-                if Self::is_article_layout(doc) { return ShellType::Article; }
+                if moss_core::page::site_page::SitePage::is_article_layout(doc) { return ShellType::Article; }
                 // Homepage and folder index files are always Pages (unless the
                 // layout override above applies) — the clean Page shell, not
                 // blog-Article chrome.

@@ -202,3 +202,96 @@ fn direction_words_are_hidden_from_sight_but_not_from_screen_readers() {
         assert_eq!(html.matches(r#"class="moss-series-nav-arrow" aria-hidden="true""#).count(), 2, "{lang:?}: Got: {html}");
     }
 }
+
+/// A page as a host knows it: the passes run over any [`SitePage`].
+#[derive(Default)]
+struct Page {
+    url: &'static str,
+    label: &'static str,
+    folder: bool,
+    weight: Option<i32>,
+    date: Option<&'static str>,
+    series: Option<SeriesField>,
+    layout: Option<&'static str>,
+    draft: Option<bool>,
+    sort: Option<ResolvedSort>,
+}
+
+impl crate::sort::SortableDoc for Page {
+    fn url_path(&self) -> &str { self.url }
+    fn date(&self) -> Option<&str> { self.date }
+    fn weight(&self) -> Option<i32> { self.weight }
+    fn declared_sort(&self) -> Option<&crate::sort::SortField> { None }
+    fn clean_stem(&self) -> &str { self.label }
+    fn is_folder_index(&self) -> bool { self.folder }
+}
+
+impl crate::sort::SortableLabel for Page {
+    fn label(&self) -> &str { self.label }
+}
+
+impl SitePage for Page {
+    fn layout(&self) -> Option<&str> { self.layout }
+    fn series(&self) -> Option<&SeriesField> { self.series.as_ref() }
+    fn draft(&self) -> Option<bool> { self.draft }
+    fn listed(&self) -> Option<bool> { None }
+    fn search_engines(&self) -> Option<bool> { None }
+    fn slot_only(&self) -> bool { false }
+    fn hidden_home(&self) -> Option<&str> { None }
+    fn direct_children_sort(&self) -> Option<&ResolvedSort> { self.sort.as_ref() }
+}
+
+fn by_weight() -> Option<ResolvedSort> {
+    Some(ResolvedSort { axis: SortAxis::Weight, explicit_order: None, series_default: true })
+}
+
+fn weighted_series() -> Vec<Page> {
+    vec![
+        Page { url: "guide/index.html", label: "Guide", folder: true, sort: by_weight(), ..Default::default() },
+        Page { url: "guide/two/index.html", label: "Two", weight: Some(2), ..Default::default() },
+        Page { url: "guide/one/index.html", label: "One", weight: Some(1), ..Default::default() },
+        Page { url: "guide/draft/index.html", label: "Draft", weight: Some(3), draft: Some(true), ..Default::default() },
+        Page { url: "guide/deep/more/index.html", label: "Deeper", weight: Some(0), ..Default::default() },
+        Page { url: "about/index.html", label: "About", ..Default::default() },
+    ]
+}
+
+#[test]
+fn a_weighted_folder_chains_its_listable_direct_children_in_weight_order() {
+    let pages = weighted_series();
+    let parent = series_parent(&pages[1], &pages).expect("a step in a weighted folder");
+    assert_eq!(parent.url, "guide/index.html");
+    let labels: Vec<&str> = chain(&pages, parent).iter().map(|p| p.label).collect();
+    assert_eq!(labels, ["One", "Two"], "a draft and a grandchild are not steps");
+}
+
+#[test]
+fn a_dated_folder_reads_forward_in_time() {
+    let mut pages = vec![
+        Page { url: "log/index.html", label: "Log", folder: true, series: Some(SeriesField::Flag(true)), ..Default::default() },
+        Page { url: "log/new/index.html", label: "New", date: Some("2026-02-01"), ..Default::default() },
+        Page { url: "log/old/index.html", label: "Old", date: Some("2026-01-01"), ..Default::default() },
+    ];
+    let labels: Vec<&str> = chain(&pages, &pages[0]).iter().map(|p| p.label).collect();
+    assert_eq!(labels, ["Old", "New"]);
+    pages[0].series = None;
+    assert!(series_parent(&pages[1], &pages).is_none(), "a dated folder that says nothing has no series chrome");
+}
+
+#[test]
+fn an_opted_out_page_and_a_top_level_page_have_no_series_parent() {
+    let mut pages = weighted_series();
+    pages[1].series = Some(SeriesField::Flag(false));
+    assert!(series_parent(&pages[1], &pages).is_none());
+    assert!(chain(&pages, &pages[0]).iter().all(|p| p.label != "Two"), "the opt-out leaves the whole chain");
+    assert!(series_parent(&pages[5], &pages).is_none(), "about/index.html has no folder above its own");
+}
+
+#[test]
+fn a_folder_home_is_a_step_only_when_laid_out_as_an_article() {
+    let mut pages = weighted_series();
+    pages.push(Page { url: "guide/part/index.html", label: "Part", folder: true, weight: Some(4), ..Default::default() });
+    assert!(series_parent(&pages[6], &pages).is_none());
+    pages[6].layout = Some("article");
+    assert_eq!(series_parent(&pages[6], &pages).map(|p| p.url), Some("guide/index.html"));
+}

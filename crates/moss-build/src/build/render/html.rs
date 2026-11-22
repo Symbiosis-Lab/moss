@@ -4,6 +4,7 @@
 //! into a complete HTML page using the template system.
 
 use crate::build::render::incremental::listing::draws_own_listing;
+use moss_core::page::site_page::SitePage;
 use crate::build::types::ParsedDocument;
 #[cfg(test)]
 use crate::types::content::ProjectStructure;
@@ -721,26 +722,15 @@ fn with_colophon(mut html: String, doc: &ParsedDocument, emit_source_lines: bool
 /// neighbours become adjacent. Silencing only its own nav would leave the page
 /// before it pointing "next" at a page that leads nowhere back.
 fn series_nav_html<'d>(context: &RenderCtx<'_, 'd>, d: &ParsedDocument, typesetting: Option<&str>) -> Option<String> {
+    use moss_core::page::series;
     let all_docs = context.chrome.documents;
     let path_resolver = &context.chrome.assets.paths;
-    let parts: Vec<&str> = d.url_path.split('/').collect();
-    if parts.len() < 3 {
-        return None;
-    }
-    // "series/part-1/index.html" -> parent folder "series"
-    let parent_folder = parts[..parts.len() - 2].join("/");
-    let parent_index = format!("{}/index.html", parent_folder);
-    let parent_doc = all_docs.iter().find(|pd| pd.url_path == parent_index)?;
-    // The nav walks direct siblings only, so a flatten scope would be wrong.
-    let resolved = parent_doc.resolve_for_direct_children();
-    let page_opted_out = matches!(&d.series, Some(crate::build::types::SeriesField::Flag(false)));
-    if !series_chrome_on(parent_doc) || page_opted_out {
-        return None;
-    }
-    let parent_prefix = format!("{}/", parent_folder);
-    let siblings = context.shared.sequences.chain(&parent_index, || sequence_siblings(
-        all_docs, &parent_index, &parent_prefix, &resolved,
-    ));
+    let parent_doc = series::series_parent(d, all_docs)?;
+    let siblings = context.shared.sequences.chain(&parent_doc.url_path, || {
+        #[cfg(test)]
+        tests::SEQUENCES_ORDERED.with(|n| n.set(n.get() + 1));
+        series::chain(all_docs, parent_doc)
+    });
     // By url_path: every folder index's clean_stem is "index".
     let pos = siblings.iter().position(|pd| pd.url_path == d.url_path)?;
     // Labels are chrome: plain text.
@@ -748,8 +738,8 @@ fn series_nav_html<'d>(context: &RenderCtx<'_, 'd>, d: &ParsedDocument, typesett
     let neighbour = |i: usize| (siblings[i].label.clone(), clean_url(&siblings[i].url_path));
     let prev = (pos > 0).then(|| neighbour(pos - 1));
     let next = (pos + 1 < siblings.len()).then(|| neighbour(pos + 1));
-    let resolved_parent = clean_url(&parent_index);
-    let html = components::series_nav::render(
+    let resolved_parent = clean_url(&parent_doc.url_path);
+    let html = series::render(
         &parent_doc.label,
         &resolved_parent,
         prev.as_ref().map(|(t, u)| (t.as_str(), u.as_str())),
@@ -892,7 +882,7 @@ pub(super) fn render_page<'d>(
                 let h1_text = &doc.title;
                 // `layout: article` reads as a plain article: no auto-inserted
                 // cover component, even when `cover:` is set.
-                let is_article_layout = doc.layout.as_deref() == Some("article");
+                let is_article_layout = moss_core::page::site_page::SitePage::is_article_layout(doc);
                 // `byline:` under the title; skipped when `is_article_page`,
                 // because a `layout: article` folder runs through both
                 // assemblies and the article path below emits both.
@@ -1115,7 +1105,7 @@ pub(super) fn render_page<'d>(
                 })
                 // Sidebar always shows direct children only, regardless of children_depth.
                 // Nested subfolder articles are excluded from sidebar listings.
-                .filter(|d| is_direct_child(&d.url_path, &target_prefix))
+                .filter(|d| moss_core::page::series::is_direct_child(&d.url_path, &target_prefix))
                 .map(|d| {
                     let (date_display, date_raw, _explicit) = components::extract_date_from_doc(d, &project.root_path);
                     components::ArticleListItemProps {
@@ -1551,90 +1541,6 @@ pub(super) fn render_page<'d>(
         crate::build::cli_output::log_warn_problem!("[{name}] a folder listing was left unexpanded in the built page");
     }
     Ok(page)
-}
-
-/// Is this page a **step in the reading order** — one of the pages the series
-/// nav walks a reader through, prev by prev?
-///
-/// That is a different question from "does this page show up in the folder's
-/// listing?" (`is_listable`), even though the two agree for every page that
-/// says nothing. They part ways in exactly two places:
-///
-/// 1. **A subfolder's own index page that said nothing.** It belongs in the
-///    listing — it is how a reader reaches the subfolder — but by default it
-///    is a doorway, not a step, so it is not threaded into its siblings'
-///    prev/next chain. `layout: article` overrides that: the author has said
-///    "this is a piece", and a piece that happens to own an appendix folder is
-///    still something you read in order. Kind comes from the kind-aware
-///    `SortableDoc::is_folder_index`, never the URL — under pretty URLs *every*
-///    article also ends with `<stem>/index.html`.
-/// 2. **`series: false` on a leaf page.** It stays in the listing but steps
-///    out of the sequence, so no sibling may point at it as prev or next. This
-///    is the whole-chain half of the opt-out; the page's own nav is separately
-///    suppressed by `nav_enabled` at the call site.
-///
-/// Every page that sets neither answers exactly as `is_listable_in` its own
-/// folder does: a chain runs among siblings, so a hidden folder holding the
-/// page holds the whole chain, and the page's own address lies inside it.
-pub(crate) fn is_sequence_step(pd: &ParsedDocument) -> bool {
-    use moss_core::sort::SortableDoc;
-    pd.is_listable_in(&pd.url_path)
-        && (!pd.is_folder_index() || ShellRegistry::is_article_layout(pd))
-        && !matches!(&pd.series, Some(crate::build::types::SeriesField::Flag(false)))
-}
-
-/// Whether `parent_doc`'s series prev/next chrome is on for its children —
-/// the chrome-trigger precedence: an explicit `series:` on the parent wins
-/// (`Flag(true)`/`Flag(false)`, or the legacy `Ordered(_)` list form, which
-/// always means on); otherwise the resolved sort's own `series_default`
-/// (weight axis, or an explicit list order) decides. Shared by the two
-/// places that need this one precedence decision on a parent folder: this
-/// module's own series-nav block (a leaf's own opt-out, `page_opted_out`
-/// below, is a separate, per-leaf check on top of it) and
-/// `render::incremental::listing::is_series_member`, which needs the same
-/// answer to know whether an edit anywhere in the chain can move any
-/// sibling's rendered chrome.
-pub(crate) fn series_chrome_on(parent_doc: &ParsedDocument) -> bool {
-    match &parent_doc.series {
-        Some(crate::build::types::SeriesField::Flag(b)) => *b,
-        Some(crate::build::types::SeriesField::Ordered(_)) => true,
-        None => parent_doc.resolve_for_direct_children().series_default,
-    }
-}
-
-/// The ordered prev/next chain for the folder at `parent_prefix`: its direct
-/// children that are steps in the reading order, sorted by the folder's
-/// resolved sort. Excludes the folder's own index (`parent_index`).
-fn sequence_siblings<'a>(
-    all_docs: &'a [ParsedDocument],
-    parent_index: &str,
-    parent_prefix: &str,
-    resolved: &moss_core::sort::ResolvedSort,
-) -> Vec<&'a ParsedDocument> {
-    #[cfg(test)]
-    tests::SEQUENCES_ORDERED.with(|n| n.set(n.get() + 1));
-    let siblings: Vec<&ParsedDocument> = all_docs.iter()
-        .filter(|pd| {
-            pd.url_path != parent_index
-                && pd.url_path.starts_with(parent_prefix)
-                && is_sequence_step(pd)
-        })
-        .filter(|pd| is_direct_child(&pd.url_path, parent_prefix))
-        .collect();
-    // However a folder lists its pages, a series is read forward in time: next is the newer page.
-    let forward = (resolved.axis == moss_core::sort::SortAxis::Date && resolved.explicit_order.is_none())
-        .then(|| moss_core::sort::ResolvedSort { axis: moss_core::sort::SortAxis::DateAsc, ..resolved.clone() });
-    moss_core::sort::sort_by_resolved(&siblings, forward.as_ref().unwrap_or(resolved))
-}
-
-/// Is `url_path` a direct child of `prefix` — one segment below it, tolerating
-/// the pretty-URL `<slug>/index.html` form? False when it is not below it at all.
-fn is_direct_child(url_path: &str, prefix: &str) -> bool {
-    url_path.strip_prefix(prefix).is_some_and(|rem| {
-        !rem.trim_end_matches("/index.html")
-            .trim_end_matches('/')
-            .contains('/')
-    })
 }
 
 #[cfg(test)]

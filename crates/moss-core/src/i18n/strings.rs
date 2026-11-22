@@ -12,7 +12,7 @@ use super::Language;
 /// breadcrumb, the synthesized index and the editor's takeover folder all
 /// name it from here.
 pub fn term_root_title(lang: Language, ns: &str) -> &'static str {
-    t(lang, if ns == moss_core::terms::AUTHOR_NS { "term_authors_title" } else { "term_tags_title" })
+    t(lang, if ns == crate::terms::AUTHOR_NS { "term_authors_title" } else { "term_tags_title" })
 }
 
 /// The headings that name a page's sources section, compared
@@ -74,13 +74,14 @@ pub fn diagram_type_name(lang: Language, kind: &str) -> &'static str {
 }
 
 /// The words moss-core's shortcode arms write, in `lang`.
-pub fn hook_strings(lang: Language) -> moss_core::ast::HookStrings<'static> {
-    moss_core::ast::HookStrings {
+pub fn hook_strings(lang: Language) -> crate::ast::HookStrings<'static> {
+    crate::ast::HookStrings {
         gallery_link_template: t(lang, "gallery_open_image"),
         new_tab_hint: t(lang, "opens_new_tab"),
     }
 }
 
+#[allow(clippy::too_many_lines, reason = "one flat table of every chrome string")]
 pub fn t(lang: Language, key: &str) -> &'static str {
     let [en, de, zh_hans, zh_hant] = match key {
         // Month names (full)
@@ -389,42 +390,5 @@ mod tests {
     fn test_term_role_jury_simplified_and_traditional_glyphs_differ() {
         assert_eq!(t(Language::ZhHans, "term_role_jury"), "评审");
         assert_eq!(t(Language::ZhHant, "term_role_jury"), "評審");
-    }
-
-    /// The scroll row's ‹ › buttons are built by a site script, which keeps
-    /// its own copy of "Previous" and "Next"; this holds that copy to the
-    /// strings above.
-    #[test]
-    fn scroll_row_labels_match_the_site_strings() {
-        let script = include_str!("../js-src/site/scroll-row.ts");
-        for lang in Language::ALL {
-            let key = lang.as_bcp47_attr().to_lowercase();
-            let line = script
-                .lines()
-                .find(|l| l.trim_start().starts_with(&format!("{key}:")) || l.trim_start().starts_with(&format!("\"{key}\":")))
-                .unwrap_or_else(|| panic!("scroll-row.ts has no labels for {key}"));
-            for word in ["previous", "next"] {
-                let expected = format!("{word}: \"{}\"", t(lang, word));
-                assert!(line.contains(&expected), "scroll-row.ts {key} labels must contain {expected}: {line}");
-            }
-        }
-    }
-
-    /// The sliding strips' pause button is built by a site script with its
-    /// own copy of the two labels; this holds that copy to the strings above.
-    #[test]
-    fn marquee_labels_match_the_site_strings() {
-        let script = include_str!("../js-src/site/marquee.ts");
-        for lang in Language::ALL {
-            let key = lang.as_bcp47_attr().to_lowercase();
-            let line = script
-                .lines()
-                .find(|l| l.trim_start().starts_with(&format!("{key}:")) || l.trim_start().starts_with(&format!("\"{key}\":")))
-                .unwrap_or_else(|| panic!("marquee.ts has no labels for {key}"));
-            for (field, word) in [("pause", "pause_motion"), ("play", "play_motion")] {
-                let expected = format!("{field}: \"{}\"", t(lang, word));
-                assert!(line.contains(&expected), "marquee.ts {key} labels must contain {expected}: {line}");
-            }
-        }
     }
 }

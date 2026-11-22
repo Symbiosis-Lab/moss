@@ -5,6 +5,7 @@
 //! - Year-grouped article lists for homepages and indexes
 
 use crate::build::scan::article_map;
+use moss_core::page::site_page::SitePage;
 use crate::build::components::{self, extract_date_from_doc, ArticleListItemProps};
 use crate::i18n::Language;
 use crate::build::types::ParsedDocument;

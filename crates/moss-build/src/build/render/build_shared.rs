@@ -7,6 +7,7 @@
 //! re-rendering every page after a nav edit.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
+use moss_core::page::site_page::SitePage;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use crate::build::assets::theme_modules::ThemeModules;

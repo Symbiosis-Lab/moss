@@ -328,7 +328,7 @@ const EN = {
   // Launcher window
   // The window saying its own name, beside the mark, in the macOS title bar.
   // The same three spellings the site's colophon uses (`colophon_name` in
-  // crates/moss-build/src/i18n/strings.rs); mark_sync_test holds the two
+  // crates/moss-core/src/i18n/strings.rs); mark_sync_test holds the two
   // tables to each other, because a product with two names is not one brand.
   'launcher.wordmark': 'moss',
   'launcher.tagline': 'Your folder, your site.',

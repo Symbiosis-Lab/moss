@@ -23,6 +23,7 @@
 //! [`ParsedDocument`]: crate::build::types::ParsedDocument
 
 use serde::{Deserialize, Serialize};
+use moss_core::page::site_page::SitePage;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 

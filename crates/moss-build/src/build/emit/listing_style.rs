@@ -10,6 +10,7 @@
 //! page.
 
 use std::collections::{BTreeMap, HashSet};
+use moss_core::page::site_page::SitePage;
 use std::path::Path;
 use std::sync::Arc;
 

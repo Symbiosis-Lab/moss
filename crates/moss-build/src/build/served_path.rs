@@ -39,8 +39,7 @@ use std::fmt;
 /// trigger (`build.rs`), both of which recognize cards by this prefix alone.
 pub const OG_CARD_PREFIX: &str = "_moss/og/";
 
-/// Where the not-found page is built: the page at `/404/`.
-pub const NOT_FOUND_PAGE: &str = "404/index.html";
+pub use moss_core::page::site_page::NOT_FOUND_PAGE;
 
 /// Where a static host looks for the page to show for an unknown address: a copy
 /// of the not-found page at the site root.

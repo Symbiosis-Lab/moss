@@ -4,6 +4,7 @@
 //! one module, so they cannot disagree about a listing's pages.
 
 use moss_core::sort::{ResolvedSort, SortAxis};
+use moss_core::page::site_page::SitePage;
 use moss_core::PageKind;
 
 use super::{effective_group, resolve_children_config, select_children_by_slug, upcoming};
