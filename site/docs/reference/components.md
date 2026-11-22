@@ -367,6 +367,7 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.moss-form__label` | instance | A field's visible label. |
 | `.moss-form__optional` | instance | Marks a field the reader may skip, beside its label. |
 | `.moss-form__choice` | instance | One radio button or checkbox with its label. |
+| `.moss-form__other` | instance | The text field after the choice that asks for its own answer, such as "Other"; hidden until that choice is picked. |
 | `.moss-form__help` | instance | A field's help text, tied to it with `aria-describedby`. |
 | `.moss-form__error` | instance | The message for a field the service refused; filled and shown by the form script. |
 | `.moss-form__status` | instance | The one live line under the button for errors that are not about a single field. |

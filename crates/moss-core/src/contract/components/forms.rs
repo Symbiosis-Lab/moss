@@ -85,6 +85,17 @@ pub(super) const ENTRIES: &[ComponentEntry] = &[
         description: "One radio button or checkbox with its label.",
     },
     ComponentEntry {
+        class: "moss-form__other",
+        kind: "instance",
+        parent: "moss-form",
+        data_attrs: &[],
+        example_html: r#"<div class="moss-form__other"><label class="moss-form__label" for="a-other">Where</label><input class="moss-input" type="text" id="a-other" name="where"></div>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "0",
+        description: "The text field after the choice that asks for its own answer, such as \"Other\"; hidden until that choice is picked.",
+    },
+    ComponentEntry {
         class: "moss-form__help",
         kind: "instance",
         parent: "moss-form",
