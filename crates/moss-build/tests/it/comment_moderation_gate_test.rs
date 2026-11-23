@@ -66,3 +66,29 @@ fn a_copy_without_its_identity_builds_but_never_publishes() {
     assert!(err.contains(".moss/identity/public.json"), "{err}");
     assert_eq!(refuse_prebuilt(&real.root, &real.output("")), Ok(()));
 }
+
+#[test]
+fn a_prebuilt_dry_run_reports_the_refusal_the_upload_meets() {
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let dry_run = |folder: &Site, tree: &Site| {
+        rt.block_on(moss_build::deploy::dry_run::run_prebuilt_dry_run(&folder.root, &tree.output(""), None, false, false)).unwrap()
+    };
+    // A first publish needs a hosting environment; local keeps the server unasked.
+    let publishable = |site: Site| {
+        let config = site.root.join(".moss/config.toml");
+        let text = std::fs::read_to_string(&config).unwrap();
+        std::fs::write(&config, format!("environment = \"local\"\n{text}")).unwrap();
+        site
+    };
+    let copy = publishable(moderated_site());
+    std::fs::remove_dir_all(copy.root.join(".moss/identity")).unwrap();
+    copy.rebuild();
+    let real = publishable(moderated_site());
+
+    let dry = dry_run(&real, &copy);
+    assert_eq!(dry.refusal.map(|r| r.kind), Some(RefusalKind::ModerationUnverified));
+    let dry = dry_run(&copy, &real);
+    assert_eq!(dry.refusal.map(|r| r.kind), Some(RefusalKind::ModerationUnverified));
+    let dry = dry_run(&real, &real);
+    assert!(dry.refusal.as_ref().is_none_or(|r| r.kind != RefusalKind::ModerationUnverified), "{:?}", dry.refusal);
+}

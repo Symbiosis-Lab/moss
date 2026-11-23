@@ -502,8 +502,8 @@ fn kept_as_redirect(folder: &str) -> Vec<Kept> {
 }
 
 /// Describe the publish of a prebuilt folder: the folder is read as it is,
-/// with the same manifest the upload hashes and the same record and removal
-/// check the upload's gate uses. Sends and writes nothing.
+/// with the same manifest the upload hashes and the same moderation, record
+/// and removal checks the upload's gate uses. Sends and writes nothing.
 pub async fn run_prebuilt_dry_run(
     folder: &Path,
     dir: &Path,
@@ -540,7 +540,14 @@ pub async fn run_prebuilt_dry_run(
         None => (Transfer::NoRecord, None),
     };
     let (owner, server) = ask_server(folder, &local, overwrite_newer).await;
-    let local_refusal = local.not_signed_in.map(|t| crate::deploy::Refusal::new(crate::deploy::RefusalKind::NotSignedIn, t)).or(refusal);
+    let moderation = crate::build::features::comment::link_block::refuse_prebuilt(folder, dir)
+        .err()
+        .map(|t| crate::deploy::Refusal::new(crate::deploy::RefusalKind::ModerationUnverified, t));
+    let local_refusal = local
+        .not_signed_in
+        .map(|t| crate::deploy::Refusal::new(crate::deploy::RefusalKind::NotSignedIn, t))
+        .or(moderation)
+        .or(refusal);
     let refusal = first_refusal(server, local_refusal);
     Ok(DryRun {
         change_set: ChangeSet::default(),
