@@ -5440,3 +5440,42 @@ After.
 `,
   },
 };
+
+// A masthead held to one 64px row by its theme, the way a client theme does it: one row, no wrap, with
+// the theme's own menu button below 48rem. From 48rem until about 900px the links do not fit.
+export const NAV_NOWRAP_GATE: ScratchSiteSpec = {
+  name: "nav-nowrap-gate",
+  files: {
+    "index.md": `---
+title: Harbour Watch
+uid: "nnw00101"
+---
+
+# Harbour Watch
+`,
+    ...Object.fromEntries(
+      ["Training", "Veterans", "Application", "Contact", "Request A Consultation"].map((title, i) => [
+        `${title.replace(/ /g, "")}.md`,
+        `---\ntitle: ${title}\nuid: "nnw0020${i}"\nnav: true\nweight: ${i + 2}\n---\n\n# ${title}\n`,
+      ]),
+    ),
+    "Services/index.md": `---\ntitle: Services\nuid: "nnw00301"\nnav: true\nweight: 9\n---\n\n# Services\n`,
+    "Services/Patrol.md": `---\ntitle: Evening patrol\nuid: "nnw00302"\nnav: true\n---\n\n# Evening patrol\n`,
+    "Services/Gate.md": `---\ntitle: Gate watch\nuid: "nnw00303"\nnav: true\n---\n\n# Gate watch\n`,
+    ".moss/theme/style.css": `header { padding: 0; }
+.main-nav { max-inline-size: none; padding: 0; margin: 0; }
+.nav-content { inline-size: min(100% - 48px, 1264px); max-inline-size: none; margin-inline: auto; block-size: 64px; min-block-size: 64px; flex-wrap: nowrap; align-items: center; padding: 0; border: 0; }
+.nav-left { flex: none; }
+.nav-right { flex: 1; justify-content: flex-end; align-items: center; gap: 16px; flex-wrap: nowrap; }
+.site-name { font: 800 23px/1 sans-serif; text-transform: uppercase; white-space: nowrap; }
+.nav-links { gap: 8px; flex-wrap: nowrap; margin-inline-start: auto; }
+.nav-icons { display: none; }
+.nav-links a { font: 500 12px monospace; text-transform: uppercase; letter-spacing: .09em; padding: 12px; white-space: nowrap; }
+@media (max-width: 48rem) {
+  .mobile-menu-button { display: inline-flex; min-inline-size: 44px; min-block-size: 44px; order: 3; }
+  .nav-right { gap: 4px; min-inline-size: 0; }
+  .nav-links > :not(:last-child) { display: none; }
+}
+`,
+  },
+};

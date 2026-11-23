@@ -61,6 +61,7 @@ GATES_BUILD=(
   nav-toggle-cluster
   nav-split-order
   nav-split-pack
+  nav-nowrap
   nav-one-row
   nav-first-paint
   nav-current-mark

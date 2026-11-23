@@ -3112,6 +3112,34 @@ body > header .site-name {
   column-gap: var(--moss-space-xs);
 }
 
+/* One row the theme will not wrap (`data-nav-scroll`, set by nav-split.ts in
+   place of the split when .nav-content is `flex-wrap: nowrap`): the links
+   scroll inline inside the row. The padding keeps a focused link's outline
+   inside the scroller and the matching negative margin keeps the row's
+   height. A group goes static so its submenu takes .nav-content as its
+   containing block and hangs below the row instead of being clipped by the
+   scroller; with no inline offset it stays under its own entry. */
+.nav-content[data-nav-scroll] .nav-right {
+  min-inline-size: 0;
+}
+
+.nav-content[data-nav-scroll] .nav-links {
+  min-inline-size: 0;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+  padding: 0.25rem;
+  margin-block: -0.25rem;
+}
+
+.nav-content[data-nav-scroll] .moss-nav-group {
+  position: static;
+}
+
+.nav-content[data-nav-scroll] .moss-nav-sub {
+  inset-inline-start: auto;
+}
+
 /* Same box as .nav-search-btn (search.css): a 2.25rem pill, transparent at
    rest, filled only on hover. The two buttons are the same control family and
    must not differ in height or in resting weight — a bare glyph beside a

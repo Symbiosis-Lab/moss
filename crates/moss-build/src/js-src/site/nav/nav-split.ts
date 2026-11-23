@@ -20,7 +20,9 @@
  * On a phone (site.css sets `--moss-nav-phone`), before splitting it tries a
  * tighter single row: `data-nav-compact` draws the outer and toggle gaps in,
  * and the masthead splits only if that still overflows. Wider, a near-fit
- * splits at once.
+ * splits at once. A theme that sets `flex-wrap: nowrap` on `.nav-content`
+ * gets `data-nav-scroll` instead of the split: one row, its links scrolling
+ * inline.
  *
  * In the hamburger range (≤20rem) the links are an overlay and the name stays
  * beside the menu button and toggles while it reasonably can. A plain name
@@ -90,10 +92,11 @@ function contentSize(el: HTMLElement, vertical: boolean): number {
 const stack = teardownStack();
 const { on } = stack;
 
-function setMode(el: HTMLElement, mode: "compact" | "split" | "stack" | null): void {
+function setMode(el: HTMLElement, mode: "compact" | "split" | "stack" | "scroll" | null): void {
   el.removeAttribute("data-nav-split");
   el.removeAttribute("data-nav-compact");
   el.removeAttribute("data-nav-stack");
+  el.removeAttribute("data-nav-scroll");
   if (mode) el.setAttribute(`data-nav-${mode}`, "");
 }
 
@@ -227,7 +230,10 @@ export function initNavSplit(): void {
       setMode(navContent!, "compact");
       if (fitsOneRow()) return;
     }
-    setMode(navContent!, "split");
+    // A theme that holds the masthead to one row (`flex-wrap: nowrap`, often
+    // with a fixed height) has no room for a second: the links scroll inside
+    // that row instead.
+    setMode(navContent!, getComputedStyle(navContent!).flexWrap === "nowrap" ? "scroll" : "split");
   }
 
   // The masthead resizes with the window and with the font arriving; the
