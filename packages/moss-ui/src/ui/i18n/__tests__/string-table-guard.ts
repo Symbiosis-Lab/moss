@@ -28,6 +28,8 @@ const ALLOWLIST = new Set<string>(
     'schema.site_id_placeholder', // sample slug ("my-blog")
     'audience.breakdown_segment', // pure interpolation: "{name} · {count}"
     'pubmgr.lamp.tooltip', // pure interpolation: "{name} — {state} · {hint}"
+    'newsletter_service.connected', // pure interpolation: "{service} · {list}"
+    'newsletter_service.seta', // the service's name
     'pubmgr.lamp.tooltip_short', // pure interpolation: "{name} · {state}"
     'upload.size_pair', // pure interpolation: "{done}/{total} {unit}" — kB/MB/GB stay Latin in Chinese technical UI
     'upload.size_one', // pure interpolation: "{n} {unit}" — same reason as the pair
@@ -104,6 +106,9 @@ const GERMAN_IDENTICAL = [
   'chip.route.label',
   // slash-menu block name, WordPress de_DE keeps "Buttons"
   'slash.buttons.label',
+  // the service's name, and a pure interpolation: "{service} · {list}"
+  'newsletter_service.seta',
+  'newsletter_service.connected',
 ].map((key) => `de:${key}`);
 for (const k of GERMAN_IDENTICAL) ALLOWLIST.add(k);
 
@@ -123,6 +128,9 @@ const BRAND_ALLOWLIST = new Set<string>(
     'device.needs_https',
     'browser.signed_out',
     'browser.no_folder',
+    // Mail not sent through the site's own service goes out under the sender name "moss".
+    'newsletter_service.sending_from_moss',
+    'newsletter_service.sender_refused',
   ].flatMap((key) => [`zh-hans:${key}`, `zh-hant:${key}`]),
 );
 

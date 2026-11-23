@@ -780,6 +780,7 @@ const EN = {
   'newsletter_service.reconnect_to_send': 'Reconnect to send from {service}',
   'newsletter_service.sender_refused': '{service} refused the sender. The issue is waiting; confirmations go from moss.',
   'newsletter_service.sender_saved_toast': 'Sending from {address}',
+  'newsletter_service.more_services': 'More services…',
 
   // Analytics settings section
   'analytics.title': 'Analytics',
@@ -874,6 +875,7 @@ const EN = {
   'channels.view_all': 'All',
   'channels.view_channels': 'Channels',
   'channels.view_tools': 'Tools',
+  'channels.view_services': 'Newsletter services',
   'channels.downloading_tooltip': '{name} (installing… {percent}%)',      // {name} {percent}
   'channels.downloading_step_tooltip': '{name} (installing… {percent}%) — {step}', // {name} {percent} {step}
   'channels.installing_tooltip': '{name} (installing…)',       // {name} — no numeric claim yet
@@ -2662,6 +2664,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'newsletter_service.reconnect_to_send': 'Neu verbinden, um über {service} zu senden',
     'newsletter_service.sender_refused': '{service} hat den Absender abgelehnt. Die Ausgabe wartet; Bestätigungen gehen von moss.',
     'newsletter_service.sender_saved_toast': 'Wird von {address} gesendet',
+    'newsletter_service.more_services': 'Weitere Dienste…',
     'analytics.title': 'Statistiken',
     'analytics.title_unavailable': 'Statistiken nicht verfügbar',
     'analytics.unauthorized_desc': "Dieser Ordner ist bei seiner Website nicht angemeldet.",
@@ -2749,6 +2752,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'channels.view_all': 'Alle',
     'channels.view_channels': 'Kanäle',
     'channels.view_tools': 'Werkzeuge',
+    'channels.view_services': 'Newsletter-Dienste',
     'channels.downloading_tooltip': '{name} (wird installiert … {percent} %)',
     'channels.downloading_step_tooltip': '{name} (wird installiert … {percent} %) – {step}',
     'channels.installing_tooltip': '{name} (wird installiert …)',
@@ -4360,7 +4364,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'newsletter_service.key_unknown': '{service} 不认识这个密钥。新建一个再粘贴。',
     'newsletter_service.key_not_full': '这个密钥需要 {permission}。新建一个，或请账户管理员新建。',
     'newsletter_service.no_answer': '{service} 没有回应。',
-    'newsletter_service.unreachable': '连不上 moss。请再试一次。',
+    'newsletter_service.unreachable': '连不上青苔。请再试一次。',
     'newsletter_service.try_again': '再试一次',
     'newsletter_service.list': '名单',
     'newsletter_service.new_list': '新名单',
@@ -4392,6 +4396,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'newsletter_service.reconnect_to_send': '重新连接，改由 {service} 发送',
     'newsletter_service.sender_refused': '{service} 拒绝了发件人。这期在等待；确认信由 moss 发送。',
     'newsletter_service.sender_saved_toast': '由 {address} 发送',
+    'newsletter_service.more_services': '更多服务…',
 
     'analytics.title': '流量统计',
     'analytics.title_unavailable': '流量统计不可用',
@@ -4481,6 +4486,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'channels.view_all': '全部',
     'channels.view_channels': '渠道',
     'channels.view_tools': '工具',
+    'channels.view_services': '电子报服务',
     'channels.downloading_tooltip': '{name}（正在安装… {percent}%）',
     'channels.downloading_step_tooltip': '{name}（正在安装… {percent}%）— {step}',
     'channels.installing_tooltip': '{name}（正在安装…）',
@@ -6138,7 +6144,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'newsletter_service.key_unknown': '{service} 不認得這個金鑰。新建一個再貼上。',
     'newsletter_service.key_not_full': '這個金鑰需要 {permission}。新建一個，或請帳戶管理員新建。',
     'newsletter_service.no_answer': '{service} 沒有回應。',
-    'newsletter_service.unreachable': '連不上 moss。請再試一次。',
+    'newsletter_service.unreachable': '連不上青苔。請再試一次。',
     'newsletter_service.try_again': '再試一次',
     'newsletter_service.list': '名單',
     'newsletter_service.new_list': '新名單',
@@ -6170,6 +6176,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'newsletter_service.reconnect_to_send': '重新連接，改由 {service} 寄送',
     'newsletter_service.sender_refused': '{service} 拒絕了寄件人。這期在等待；確認信由 moss 寄送。',
     'newsletter_service.sender_saved_toast': '由 {address} 寄送',
+    'newsletter_service.more_services': '更多服務…',
 
     'analytics.title': '流量統計',
     'analytics.title_unavailable': '流量統計不可用',
@@ -6259,6 +6266,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'channels.view_all': '全部',
     'channels.view_channels': '管道',
     'channels.view_tools': '工具',
+    'channels.view_services': '電子報服務',
     'channels.downloading_tooltip': '{name}（正在安裝… {percent}%）',
     'channels.downloading_step_tooltip': '{name}（正在安裝… {percent}%）— {step}',
     'channels.installing_tooltip': '{name}（正在安裝…）',
