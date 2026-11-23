@@ -117,6 +117,30 @@ pub(crate) fn has_cmyk_profile(path: &Path) -> bool {
     }
 }
 
+/// Whether the file is a HEIF picture (HEIC and kin), read from its `ftyp`
+/// brands rather than its extension. AVIF shares the container and often lists
+/// `mif1`/`msf1` among its compatible brands, so an `avif`/`avis` brand
+/// anywhere decides first: AVIF stays with the image crate.
+pub(crate) fn is_heif(path: &Path) -> bool {
+    let Some(head) = read_head(path, 64) else { return false };
+    heif_brands(&head)
+}
+
+fn heif_brands(head: &[u8]) -> bool {
+    if head.len() < 16 || &head[4..8] != b"ftyp" {
+        return false;
+    }
+    let size = (u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize).min(head.len());
+    // The major brand, then the compatible brands after the minor version.
+    let brands: Vec<&[u8]> = std::iter::once(&head[8..12])
+        .chain(head.get(16..size).unwrap_or_default().chunks_exact(4))
+        .collect();
+    if brands.iter().any(|b| matches!(*b, b"avif" | b"avis")) {
+        return false;
+    }
+    brands.iter().any(|b| matches!(*b, b"heic" | b"heix" | b"heim" | b"heis" | b"hevc" | b"hevx" | b"mif1" | b"msf1"))
+}
+
 #[cfg(test)]
 #[path = "sniff_tests.rs"]
 mod tests;

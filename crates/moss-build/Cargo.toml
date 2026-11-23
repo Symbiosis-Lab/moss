@@ -74,6 +74,8 @@ fast_image_resize = "5.5"
 fast_qr = { version = "0.12", default-features = false, features = ["svg"] }
 flate2 = "1"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "tiff"] }
+# HEIF dimensions (applying `irot`) without a decoder; already in the tree through usvg.
+imagesize = "0.12"
 # Already in the tree transitively via jieba-rs; version must keep matching
 # what Cargo.lock resolves there (`cargo tree -d` is the check).
 include-flate = "0.3.4"

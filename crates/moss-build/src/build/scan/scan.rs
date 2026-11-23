@@ -111,6 +111,11 @@ pub fn extract_image_dimensions(path: &Path) -> Option<(u32, u32)> {
     // extension lies about its format (a PNG saved as `x.jpg`) still decodes
     // correctly instead of silently returning `None` and falling back to an
     // 800x600 placeholder box downstream.
+    // HEIF carries its rotation in `irot`, which `imagesize` applies; its EXIF
+    // orientation says the same turn again, so it is never read here as well.
+    if crate::build::media::sniff::is_heif(path) {
+        return imagesize::size(path).ok().and_then(|s| Some((u32::try_from(s.width).ok()?, u32::try_from(s.height).ok()?)));
+    }
     match crate::build::media::decode::sniff_dimensions(path) {
         Ok((width, height)) => {
             // EXIF orientation 5-8 (a 90°/270° rotation) swaps the DISPLAY

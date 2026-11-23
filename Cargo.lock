@@ -2892,6 +2892,7 @@ dependencies = [
  "htmd",
  "http-body-util",
  "image",
+ "imagesize",
  "include-flate",
  "include_dir",
  "jieba-rs",
