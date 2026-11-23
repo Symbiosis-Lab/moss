@@ -5,7 +5,7 @@
  * `<gate>:ui` and `<gate>:preview`.
  */
 import { test, expect, type Frame, type Page, type TestInfo } from '../../support/browser-test';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -36,6 +36,15 @@ export function useEditServe(gate: string, writeSite: (site: string, testInfo: T
     state.home = realpathSync(mkdtempSync(join(tmpdir(), `moss-${gate}-home-`)));
     mkdirSync(join(state.home, 'moss'));
     writeSite(state.site, testInfo);
+    // moss can only say a port is taken; name the process that holds it.
+    for (const key of ['ui', 'preview']) {
+      const port = gatePort(`${gate}:${key}`);
+      const pids = spawnSync('lsof', ['-t', '-nP', `-iTCP:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' }).stdout?.trim();
+      if (pids) {
+        const who = spawnSync('ps', ['-o', 'pid=,ppid=,etime=,command=', '-p', pids.split('\n').join(',')], { encoding: 'utf8' }).stdout;
+        state.output += `port ${port} (${gate}:${key}) already held at this case's start by:\n${who}`;
+      }
+    }
     // MOSS_HOME and the search root keep the binary from finding, or handing
     // the folder to, an installed desktop app. TMPDIR is Node's: with it unset,
     // Rust's temporary directory is another one, so moss would not see the site
