@@ -6,6 +6,7 @@ All notable changes to moss will be documented here.
 
 ### New
 
+- A site on mosspub.com can send its subscribers, with their answers to the subscribe form, on to a mailing-list service: write `service = "sendgrid"` under `[channels.email]` in `.moss/config.toml`.
 - A channel plugin's copy job names the site the post lives on (`site.url`, `site.name`), and a long article carries the page's plain text (`article.text`, without its title or link back), so a network that keeps an article as a record of its own can store the full text and point back to the site.
 - A plugin can sign with ECDSA P-256 in `crypto.subtle` (generate a key, export it as a public JWK or a PKCS#8 private key, import it back, sign), so a sign-in that binds its tokens to a key on the computer, as Bluesky's does, completes in moss.
 - A channel plugin can state the longest article its network holds (`max_article_chars` in its `syndication` block); a longer page goes in the next form the channel takes.

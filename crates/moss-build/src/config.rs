@@ -232,6 +232,18 @@ impl ConfigFile {
             .unwrap_or(true)
     }
 
+    /// `[channels.email] service`: the newsletter service the site's subscribers
+    /// also go to. `None` when unset or empty, which keeps them with moss alone.
+    /// The host owns which services exist, so moss checks only that it is a name.
+    pub fn newsletter_service(&self) -> Option<Result<String, String>> {
+        let value = self.section(&["channels", "email", "service"])?;
+        match value.as_str().map(str::trim) {
+            Some("") => None,
+            Some(service) => Some(Ok(service.to_string())),
+            None => Some(Err(format!("[channels.email] service must be a name such as \"sendgrid\", not {value}"))),
+        }
+    }
+
     /// The top-level `environment` key. Top-level rather than under `[site]`
     /// so it never collides with `state.toml`'s `[deployment]` section.
     pub fn environment(&self) -> Option<&str> {

@@ -790,6 +790,17 @@ fields = { about = "optional" }
 
 `open` lists, for each day, the windows a booking may start in. `timezone` is a time zone name such as `America/Los_Angeles`, checked against the time zone list moss carries. `pages` are the site's own booking page, the page a client returns to after paying, and the page the emailed manage link opens, each a path on the site that the build must write. A paid service may take a share first: `deposit = { percent = 50, hold_hours = 12, balance_days_before = 7 }` holds half at booking, keeps it after 12 hours unless the booking is declined, and charges the rest 7 days before the start; a site with a deposit also names `pages.desk`, the page staff open from the link in each booking email to see a booking and decline it. `enabled = false` turns the table off. A misspelt key or a rule the offer breaks (an hourly service with no `hours`, a window such as `9:00-17:00`, a page such as `//elsewhere.example/`) is a build problem naming it, and the offer stays out of `commerce.json` until it is fixed, so the service never charges from a broken description; the site's forms and other services are not affected.
 
+### Newsletter service
+
+A site on mosspub.com whose subscribers should also reach a mailing-list service names it under the email channel. Each new subscriber, with their answers to the subscribe form's questions, is sent on to that service, and an unsubscribe there reaches the site too:
+
+```toml
+[channels.email]
+service = "sendgrid"
+```
+
+The list, the fields for the answers and the unsubscribe group are set up when the service is connected, never in the folder, and so is the service's API key. Without the line, or with it empty, subscribers stay with moss alone. The line on a site published elsewhere, or a value that is not a name, is a build problem; it is left out and the build goes on.
+
 ### Welcome email
 
 A `welcome-email.md` at the top of the site is the email each new subscriber gets once, right after they confirm. It is not a page: it has no address and no nav item. Write it in `zh-hans/welcome-email.md` (or any other language folder) for subscribers of that language; a subscriber of a language without its own file gets the top-level letter.

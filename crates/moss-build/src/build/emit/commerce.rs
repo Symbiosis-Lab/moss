@@ -5,6 +5,8 @@
 //! subscribe script can pass the host's bot check, so the host may require it.
 //! And `subscribe.fields`, the questions the site's subscribe forms ask, keyed
 //! by the edition scope each form posts, so the host can check the answers.
+//! And `subscribe.newsletter`, the service `[channels.email] service` names,
+//! for the host to send each subscriber on to.
 //!
 //! Written when the site has a form, a `[services.forms]` setting, a
 //! `[services.booking]` offer, or a moss host site id. It sits under `_moss/`,
@@ -106,7 +108,7 @@ fn subscribe_fields(subscribes: &[(String, String, SubscribeShortcode)]) -> (ser
     (serde_json::Value::Object(fields), problems)
 }
 
-fn json(forms: &[FormShortcode], subscribe_fields: serde_json::Value, booking: Option<&BookingService>, hosted: bool) -> String {
+fn json(forms: &[FormShortcode], subscribe_fields: serde_json::Value, newsletter: Option<serde_json::Value>, booking: Option<&BookingService>, hosted: bool) -> String {
     let mut seen = HashSet::new();
     let described: serde_json::Map<String, serde_json::Value> = forms
         .iter()
@@ -122,6 +124,9 @@ fn json(forms: &[FormShortcode], subscribe_fields: serde_json::Value, booking: O
         if subscribe_fields.as_object().is_some_and(|f| !f.is_empty()) {
             out["subscribe"]["fields"] = subscribe_fields;
         }
+        if let Some(newsletter) = newsletter {
+            out["subscribe"]["newsletter"] = newsletter;
+        }
     }
     if let Some(booking) = booking {
         out["booking"] = serde_json::to_value(booking).expect("a booking offer serializes");
@@ -130,8 +135,8 @@ fn json(forms: &[FormShortcode], subscribe_fields: serde_json::Value, booking: O
 }
 
 /// The problems only the whole site can see: a name used by two forms, forms
-/// with nowhere to post, and a booking offer that cannot be published.
-fn problems(forms: &[FormShortcode], endpoint: Option<&str>, booking: Option<&Result<BookingService, String>>) -> Vec<String> {
+/// with nowhere to post, and a booking offer or newsletter service that cannot be published.
+fn problems(forms: &[FormShortcode], endpoint: Option<&str>, booking: Option<&Result<BookingService, String>>, newsletter: Option<&Result<serde_json::Value, String>>) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut out: Vec<String> = forms
         .iter()
@@ -145,7 +150,18 @@ fn problems(forms: &[FormShortcode], endpoint: Option<&str>, booking: Option<&Re
     if let Some(Err(problem)) = booking {
         out.push(format!("{problem}; the offer is left out of {COMMERCE_PATH} until it is fixed."));
     }
+    if let Some(Err(problem)) = newsletter {
+        out.push(format!("{problem}; the newsletter service is left out of {COMMERCE_PATH} until it is fixed."));
+    }
     out
+}
+
+/// `subscribe.newsletter` as published, or why it is left out.
+fn destination(service: &Result<String, String>, hosted: bool) -> Result<serde_json::Value, String> {
+    match service {
+        Ok(_) if !hosted => Err("[channels.email] service is read only by the moss host, and this site is published elsewhere".to_string()),
+        s => s.clone().map(|provider| serde_json::json!({ "provider": provider })),
+    }
 }
 
 /// The stage hook: reports the site's form problems and writes the description.
@@ -153,13 +169,15 @@ pub fn emit(
     documents: &[ParsedDocument],
     endpoint: Option<&str>,
     booking: Option<&Result<BookingService, String>>,
+    newsletter: Option<&Result<String, String>>,
     hosted: bool,
     output_dir: &Path,
     pending: &mut PendingManifest,
 ) -> Result<(), String> {
     let (forms, subscribes) = site_forms(documents);
     let (subscribe_fields, disagreements) = subscribe_fields(&subscribes);
-    for problem in problems(&forms, endpoint, booking).into_iter().chain(disagreements) {
+    let newsletter = newsletter.map(|n| destination(n, hosted));
+    for problem in problems(&forms, endpoint, booking, newsletter.as_ref()).into_iter().chain(disagreements) {
         crate::build::cli_output::log_warn_problem!("{problem}");
     }
     let booking = booking.and_then(|b| b.as_ref().ok());
@@ -167,7 +185,7 @@ pub fn emit(
         return Ok(());
     }
     BuildContext::for_render(output_dir, pending)
-        .emit_held(&ServedPath::for_commerce_json(), json(&forms, subscribe_fields, booking, hosted).into_bytes(), HashBucket::Files)
+        .emit_held(&ServedPath::for_commerce_json(), json(&forms, subscribe_fields, newsletter.and_then(Result::ok), booking, hosted).into_bytes(), HashBucket::Files)
         .map_err(|e| format!("Failed to emit {COMMERCE_PATH}: {e}"))
 }
 
