@@ -7,7 +7,8 @@
  * until the row fits there is no room for every link. It runs once with a
  * plain site name and once with a logo. A second row would
  * hang below the 64px box over the page, and one unbroken row would push the
- * page wider than the window; neither may happen.
+ * page wider than the window; neither may happen. The masthead is the
+ * theme's, so moss's float layout for a plain name stays off it.
  *
  * Run via:
  *   npx playwright test -c playwright/nav-nowrap.config.ts
@@ -22,7 +23,7 @@ const SITES = [
 ] as const;
 
 for (const [masthead, home] of SITES) {
-  for (const width of [767, 768, 769, 840, 1280]) {
+  for (const width of [320, 375, 412, 767, 768, 769, 840, 1280]) {
     test(`a nowrap masthead with ${masthead} keeps its links inside the header at ${width}px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
       await page.goto(home, { waitUntil: "load" });
@@ -33,7 +34,10 @@ for (const [masthead, home] of SITES) {
         const links = [...document.querySelectorAll<HTMLElement>(".nav-links a")]
           .map((a) => a.getBoundingClientRect())
           .filter((r) => r.width > 0 && r.height > 0);
+        const content = document.querySelector(".nav-content")!;
         return {
+          owned: content.hasAttribute("data-nav-owned"),
+          floated: getComputedStyle(document.querySelector(".nav-links")!).float !== "none",
           headerTop: header.top,
           headerBottom: header.bottom,
           linkTop: Math.min(...links.map((r) => r.top)),
@@ -44,6 +48,11 @@ for (const [masthead, home] of SITES) {
         };
       });
       const where = JSON.stringify(m);
+      expect(m.scrollWidth, where).toBeLessThanOrEqual(m.innerWidth);
+      // ≤20rem the links are moss's menu overlay.
+      if (width <= 320) return;
+      expect(m.owned, where).toBe(true);
+      expect(m.floated, where).toBe(false);
       expect(m.visible, where).toBeGreaterThan(0);
       expect(m.linkTop, where).toBeGreaterThanOrEqual(m.headerTop - 0.5);
       expect(m.linkBottom, where).toBeLessThanOrEqual(m.headerBottom + 0.5);

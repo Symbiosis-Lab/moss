@@ -59,6 +59,7 @@ const CASES: Array<[string, string, boolean]> = [
   ["a long trail", LONG_TRAIL, false],
   ["a short trail", SHORT_TRAIL, false],
   ["a theme box", LONG_TRAIL, true],
+  ["a plain name", "/", false],
 ];
 for (const [name, path, themeBox] of CASES) {
   for (const width of [412, 700, 900]) {
@@ -73,6 +74,8 @@ for (const [name, path, themeBox] of CASES) {
       const where = `${shift.entries.join("\n")}\n${JSON.stringify(await masthead(page))}`;
       expect(shift.paintedFirst, `the first paint must come before the script: ${where}`).toBe(true);
       expect(shift.total, where).toBeLessThan(0.01);
+      const owned = await page.evaluate(() => document.querySelector(".nav-content")!.hasAttribute("data-nav-owned"));
+      expect(owned, `moss's own masthead is never handed to the theme: ${where}`).toBe(false);
     });
   }
 }

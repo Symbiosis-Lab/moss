@@ -5,9 +5,18 @@
  * The toggles (search, language, theme) are tools for the whole page, so they
  * keep the corner the one-row masthead gives them; only the navigation moves.
  * The markup puts them first, and focus follows the markup on every page:
- * skip link, toggles, name or trail, menu button, links. A plain site name
- * needs nothing from here above the hamburger range: site.css floats the
- * toggles and the name wraps beside them from the first paint.
+ * skip link, toggles, name or trail, menu button, links. moss's own masthead
+ * with a plain site name needs nothing from here above the hamburger range:
+ * site.css floats the toggles and the name wraps beside them from the first
+ * paint.
+ *
+ * A theme that flattens `.nav-right` (`display: contents`) or holds
+ * `.nav-content` to one row (`flex-wrap: nowrap`) lays the masthead out
+ * itself. Such a masthead gets `data-nav-owned`, which takes it out of the
+ * float, and is measured like a trail's: flattened, it gets only
+ * `data-nav-flat`, which lets a plain name wrap as the theme's white-space
+ * says; held to one row, the links that do not fit scroll inline in it
+ * (`data-nav-scroll`) where a trail would split.
  *
  * A trail is laid in a flex row (trail | links | toggles), and flex wrapping
  * cannot lift the toggles back up once the links wrap. So this module
@@ -32,11 +41,7 @@
  * name's lines are counted with the stack cleared. Sizes are read on the
  * masthead's inline axis; on a vertical page its physical width is its block
  * size, which the split itself changes. A theme that keeps `.nav-right` a box
- * gets the plain wrap from the split's grid; one that flattens it (`display:
- * contents`) has laid a trail's masthead out itself and is left alone. A theme
- * that sets `flex-wrap: nowrap` on `.nav-content` gets `data-nav-scroll` where
- * the links would leave its one row, a plain name's float layout included: the
- * row stays, its links scrolling inline. With JS off nothing here runs: a
+ * gets the plain wrap from the split's grid. With JS off nothing here runs: a
  * trail is alone on row 1, the links and toggles on row 2. On a phone site.css
  * holds a trail's two rows at the toggles' height, so the split this makes
  * after the first paint moves only the toggles.
@@ -88,12 +93,14 @@ function contentSize(el: HTMLElement, vertical: boolean): number {
 const stack = teardownStack();
 const { on } = stack;
 
-function setMode(el: HTMLElement, mode: "compact" | "split" | "stack" | "scroll" | null): void {
-  el.removeAttribute("data-nav-split");
-  el.removeAttribute("data-nav-compact");
-  el.removeAttribute("data-nav-stack");
-  el.removeAttribute("data-nav-scroll");
+const MODES = ["compact", "split", "stack", "scroll", "flat"] as const;
+type Mode = (typeof MODES)[number];
+
+/** The one writer of `.nav-content`'s `data-nav-*`: at most one mode, plus `data-nav-owned` for a masthead its theme lays out. */
+function setMode(el: HTMLElement, mode: Mode | null, owned = false): void {
+  for (const m of MODES) el.removeAttribute(`data-nav-${m}`);
   if (mode) el.setAttribute(`data-nav-${mode}`, "");
+  el.toggleAttribute("data-nav-owned", owned);
 }
 
 /**
@@ -157,13 +164,6 @@ function nameLines(name: HTMLElement, vertical: boolean): number {
   return lineCount(extents);
 }
 
-/** Whether the floated links start below the masthead's first line, which is where a float that fits sits. */
-function linksDropped(navContent: HTMLElement, links: HTMLElement): boolean {
-  const s = getComputedStyle(navContent);
-  const top = navContent.getBoundingClientRect().top + (parseFloat(s.borderTopWidth) || 0) + (parseFloat(s.paddingTop) || 0);
-  return links.getBoundingClientRect().top > top + 0.5;
-}
-
 function columnGap(el: Element, fallback: number): number {
   const parsed = parseFloat(getComputedStyle(el).columnGap);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -192,13 +192,19 @@ export function initNavSplit(): void {
   function layout(): void {
     const vertical = isVertical(navContent!);
     const size = (el: HTMLElement) => inlineSize(el, vertical);
-    setMode(navContent!, null);
-    // A theme that holds the masthead to one row (`flex-wrap: nowrap`, often
-    // with a fixed height) has no room for a second: links that do not fit
-    // scroll inside that row instead.
+    // A theme that flattens `.nav-right` or holds the masthead to one row
+    // (`flex-wrap: nowrap`, often with a fixed height) lays the masthead out
+    // itself. Its signals are read with the float layout off, since the float
+    // flattens `.nav-right` too, and on every call: a theme may flatten only
+    // below some width, and may show the menu button above 20rem.
+    setMode(navContent!, null, true);
+    const flattened = navRight !== null && getComputedStyle(navRight).display === "contents";
     const oneRow = getComputedStyle(navContent!).flexWrap === "nowrap";
-    // ≤20rem the links are the hamburger's overlay panel, not a row: the
-    // menu button stands in for them.
+    const owned = flattened || oneRow;
+    const mode = (m: Mode | null) => setMode(navContent!, m, owned);
+    mode(null);
+    // Where the menu button shows (≤20rem, or wider where a theme shows it)
+    // the links are its overlay panel, not a row: the button stands in for them.
     if (hamburger && getComputedStyle(hamburger).display !== "none") {
       if (trail) {
         const beside = oneRowFits({
@@ -208,28 +214,27 @@ export function initNavSplit(): void {
           icons: size(icons!),
           gap: columnGap(navContent!, 0),
         });
-        if (beside) setMode(navContent!, "split");
+        if (beside) mode("split");
       } else if (nameLines(siteName!, vertical) > 2) {
-        setMode(navContent!, "stack");
+        mode("stack");
       }
       return;
     }
-    // Above it a plain name floats beside the toggles in CSS alone (site.css),
-    // and links that do not fit beside its last line drop below it.
-    if (!trail) {
-      if (oneRow && !vertical && linksDropped(navContent!, links!)) setMode(navContent!, "scroll");
+    // Flattened, the links and toggles are already siblings of the name or
+    // trail, and the split would only undo that.
+    if (flattened) {
+      mode("flat");
       return;
     }
-    // A theme that flattens `.nav-right` itself has placed the links and
-    // toggles beside the trail; the split would only undo that. Read with no
-    // mode set: the split flattens it too.
-    if (navRight && getComputedStyle(navRight).display === "contents") return;
+    // Otherwise a plain name floats beside the toggles in CSS alone (site.css),
+    // and links that do not fit beside its last line drop below it.
+    if (!trail && !owned) return;
     const fitsOneRow = (): boolean => {
       const linkGap = columnGap(links!, 0);
       const linkWidths = [...links!.children].map((child) => size(child as HTMLElement));
       return oneRowFits({
         container: contentSize(navContent!, vertical),
-        name: trailSize(navLeft!, size, "natural"),
+        name: trail ? trailSize(navLeft!, size, "natural") : size(siteName!),
         links: linkWidths.reduce((sum, w) => sum + w, 0) + linkGap * Math.max(0, linkWidths.length - 1),
         icons: size(icons!),
         gap: columnGap(navContent!, 0),
@@ -238,10 +243,11 @@ export function initNavSplit(): void {
     // Full spacing, then (on a phone) tight gaps, then two rows.
     if (fitsOneRow()) return;
     if (getComputedStyle(navContent!).getPropertyValue("--moss-nav-phone").trim() === "1") {
-      setMode(navContent!, "compact");
+      mode("compact");
       if (fitsOneRow()) return;
     }
-    setMode(navContent!, oneRow ? "scroll" : "split");
+    // A one-row theme has no room for a second: its links scroll in the row.
+    mode(oneRow ? "scroll" : "split");
   }
 
   // The masthead resizes with the window and with the font arriving; the
