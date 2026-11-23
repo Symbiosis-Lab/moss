@@ -937,6 +937,8 @@ fn snapshot_folder_note_site() { run_snapshot_test("folder-note-site"); }
 #[test]
 fn snapshot_hooks_site() { run_snapshot_test("hooks-site"); }
 #[test]
+fn snapshot_forms_site() { run_snapshot_test("forms-site"); }
+#[test]
 fn snapshot_immersive_site() { run_snapshot_test("immersive-site"); }
 #[test]
 fn snapshot_media_site() { run_snapshot_test("media-site"); }

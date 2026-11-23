@@ -1,0 +1,2 @@
+[services.forms]
+endpoint = "https://forms.example.com/submit"
