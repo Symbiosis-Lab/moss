@@ -36,7 +36,7 @@ const ALLOWLIST = new Set<string>(
     'channels.name.matters', // brand name — identical in every locale (email IS localized)
     'channels.name.github', // brand name — identical in every locale
     'channels.name.onionpress', // brand name — identical in every locale
-    'deployment.host.moss', // brand name — the hosting destination is mosspub.com in every locale
+    'deployment.host.moss', // brand name — the hosting service is seta in every locale
   ].flatMap((key) => [`zh-hans:${key}`, `zh-hant:${key}`]),
 );
 

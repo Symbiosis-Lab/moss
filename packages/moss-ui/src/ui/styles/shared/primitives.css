@@ -1309,8 +1309,9 @@
 }
 .moss-domain-pill-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 6px 10px;
   min-width: 0;
 }
 .moss-domain-pill-row > .moss-pill-input {
@@ -1322,12 +1323,15 @@
    it is a fact about the domain, and everything below it is subordinate
    detail. An earlier draft gave it its own row above the ledger, at the same
    left edge and with the same dot, so "Connected" read as the ledger's first
-   entry rather than as its headline. */
+   entry rather than as its headline. When the line is too narrow for it, the
+   state moves under the pill whole, so the time after the word stays legible. */
 .moss-domain-state {
   display: inline-flex;
   align-items: center;
   gap: 7px;
   font-size: var(--moss-size-sm);
+  flex-shrink: 0;
+  max-width: 100%;
   min-width: 0;
 }
 .moss-domain-dot {
@@ -1360,6 +1364,9 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.moss-domain-state-detail.moss-caption-warn {
+  color: var(--moss-color-danger, #c85450);
 }
 
 /* The freshness stamp IS the recheck control — no separate "Check now" chrome
