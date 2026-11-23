@@ -215,3 +215,43 @@ fn spam_on_a_hidden_comment_still_blocks_and_unblock_lifts_it() {
     assert_eq!(run_in(&d, &["unblock", "https://WWW.spam.example/"]), 0);
     assert!(blocked_now(ps).is_empty());
 }
+
+#[tokio::test]
+async fn blocked_shows_each_hosts_drop_count_from_the_hosting_service() {
+    let d = spam_site();
+    with_key(&d);
+    assert_eq!(run_in(&d, &["spam", "11"]), 0);
+    let hosts = blocked_now(d.path().to_str().unwrap());
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/api/sites/site-x/comments/blocked")
+        .with_status(200)
+        .with_body(r#"{"hosts":[{"host":"spam.example","dropped":14,"last":1795435200},{"host":"gone.example","dropped":3,"last":1795435200}]}"#)
+        .create_async()
+        .await;
+    let identity = crate::identity::keypair::Identity::load_for_signing(d.path()).unwrap();
+    let client = crate::seta::client::MossSetaClient::with_identity_and_url(&identity, &server.url());
+    assert_eq!(
+        blocked_report(&hosts, &client, "site-x", false).await,
+        "New comments dropped in the last 90 days:\nspam.example · 14 dropped · last 2026-11-23\n"
+    );
+    let json: serde_json::Value = serde_json::from_str(&blocked_report(&hosts, &client, "site-x", true).await).unwrap();
+    assert_eq!(json, serde_json::json!({ "hosts": [{ "host": "spam.example", "dropped": 14, "last": "2026-11-23" }], "drops_unavailable": null }));
+    mock.expect(2).assert_async().await;
+}
+
+#[test]
+fn blocked_lists_hosts_when_counts_are_unavailable() {
+    let hosts = ["quiet.example".to_string(), "spam.example".to_string()];
+    let ok = || Ok(vec![HostDrops { host: "spam.example".into(), dropped: 2, last: 1795435200 }]);
+    assert_eq!(
+        render_blocked(&hosts, ok(), false),
+        "New comments dropped in the last 90 days:\nquiet.example · 0 dropped\nspam.example · 2 dropped · last 2026-11-23\n"
+    );
+    assert_eq!(
+        render_blocked(&hosts, Err("no site_id — deploy this folder first (moss deploy <folder>)".into()), false),
+        "quiet.example\nspam.example\nDrop counts unavailable: no site_id — deploy this folder first (moss deploy <folder>)\n"
+    );
+    assert_eq!(render_blocked(&[], Ok(vec![]), false), "No blocked hosts.\n");
+    assert_eq!(render_blocked(&[], Ok(vec![]), true), "{\"drops_unavailable\":null,\"hosts\":[]}\n");
+}

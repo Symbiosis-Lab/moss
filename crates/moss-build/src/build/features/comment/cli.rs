@@ -2,8 +2,9 @@
 //! from the command line, and list and unblock the link hosts spam blocked.
 //!
 //! Hiding is a signed event appended to `moderation.jsonl` (see
-//! [`super::moderation`]); nothing is erased and nothing is sent anywhere, so
-//! `unhide` is just a later event. The command lives beside the comment
+//! [`super::moderation`]); nothing is erased or sent anywhere, so `unhide` is
+//! just a later event. Only `blocked` asks the hosting service, for how many
+//! comments it dropped per blocked host. The command lives beside the comment
 //! feature rather than in `cli/`, which is at its file budget.
 
 use std::collections::{BTreeSet, HashSet};
@@ -30,8 +31,8 @@ fn usage() -> &'static str {
 list shows every comment, newest first, and marks the hidden ones; it needs no build.
 hide and unhide change what the next publish shows: nothing is erased, and `unhide` reverses `hide`.
 spam hides the comments and blocks every link host in them, except the site's own and any a comment you
-unhid links to: the next publish hides other comments linking to those hosts and the comment form refuses them.
-blocked lists the blocked hosts; unblock removes one.
+unhid links to: the next publish hides other comments linking to those hosts and the comment form drops new ones.
+blocked lists the blocked hosts and how many new comments each had dropped in the last 90 days; unblock removes one.
 Hiding needs the site's own signing key (.moss/identity) and never creates one.
 <id> is a comment id from `list`; pass --source when the same id exists under two sources.
 adopt-key keeps the hides of this site's earlier key in force after its key was replaced along with
@@ -336,18 +337,81 @@ fn blocked_now(project_path: &str) -> Vec<String> {
     active_blocks(&load_mod_events(project_path), &owners).into_keys().map(str::to_string).collect()
 }
 
+/// One blocked host's comments the hosting service dropped in its 90-day window; `last` is unix seconds.
+#[derive(serde::Deserialize)]
+struct HostDrops {
+    host: String,
+    dropped: u64,
+    last: i64,
+}
+
+#[derive(serde::Deserialize)]
+struct DropsAnswer {
+    hosts: Vec<HostDrops>,
+}
+
 fn run_blocked(project_path: &str, json: bool) -> i32 {
     let hosts = blocked_now(project_path);
-    if json {
-        println!("{}", serde_json::json!(hosts));
-    } else if hosts.is_empty() {
-        println!("No blocked hosts.");
-    } else {
-        for h in &hosts {
-            println!("{}", safe(h));
+    if hosts.is_empty() {
+        print!("{}", render_blocked(&hosts, Ok(Vec::new()), json));
+        return 0;
+    }
+    let folder = Path::new(project_path);
+    let site = crate::cli::client_for_folder(folder)
+        .and_then(|client| crate::build::site_config::site_id_for_folder(folder).map(|id| (client, id)));
+    match site {
+        Ok((client, site_id)) => crate::cli::run_async(async move {
+            print!("{}", blocked_report(&hosts, &client, &site_id, json).await);
+            0
+        }),
+        Err(e) => {
+            print!("{}", render_blocked(&hosts, Err(e), json));
+            0
         }
     }
-    0
+}
+
+/// The blocked hosts with the hosting service's drop counts for `site_id`.
+async fn blocked_report(hosts: &[String], client: &crate::seta::client::MossSetaClient, site_id: &str, json: bool) -> String {
+    let drops = client
+        .get_json::<DropsAnswer>(&format!("/api/sites/{site_id}/comments/blocked"))
+        .await
+        .map(|a| a.hosts)
+        .map_err(|e| e.to_string());
+    render_blocked(hosts, drops, json)
+}
+
+fn render_blocked(hosts: &[String], drops: Result<Vec<HostDrops>, String>, json: bool) -> String {
+    let day = |at: i64| chrono::DateTime::from_timestamp(at, 0).map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default();
+    let count = |h: &str| drops.as_ref().ok().map(|d| d.iter().find(|x| x.host == h).map_or((0, None), |x| (x.dropped, Some(day(x.last)))));
+    if json {
+        let rows: Vec<_> = hosts
+            .iter()
+            .map(|h| match count(h) {
+                Some((dropped, last)) => serde_json::json!({ "host": h, "dropped": dropped, "last": last }),
+                None => serde_json::json!({ "host": h, "dropped": null, "last": null }),
+            })
+            .collect();
+        return format!("{}\n", serde_json::json!({ "hosts": rows, "drops_unavailable": drops.as_ref().err() }));
+    }
+    if hosts.is_empty() {
+        return "No blocked hosts.\n".into();
+    }
+    let mut out = String::new();
+    if drops.is_ok() {
+        out.push_str("New comments dropped in the last 90 days:\n");
+    }
+    for h in hosts {
+        out.push_str(&match count(h) {
+            Some((n, Some(last))) => format!("{} · {n} dropped · last {last}\n", safe(h)),
+            Some((n, None)) => format!("{} · {n} dropped\n", safe(h)),
+            None => format!("{}\n", safe(h)),
+        });
+    }
+    if let Err(e) = &drops {
+        out.push_str(&format!("Drop counts unavailable: {}\n", safe(e)));
+    }
+    out
 }
 
 fn run_unblock(project_path: &str, parsed: &Parsed) -> i32 {
