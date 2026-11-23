@@ -82,14 +82,19 @@ impl SiteFiles {
         self.declare(&[Kind::Rss, Kind::JsonFeed]);
     }
 
-    /// `llms.txt`: the whole site's text.
+    /// `llms.txt`: an index of the listed pages.
     pub(crate) fn llms(&mut self) {
         self.declare(&[Kind::Llms]);
     }
 
-    pub(crate) fn sitemap(&mut self, pages: BTreeSet<String>) {
-        self.sitemap_pages = pages;
+    /// Declared before the redirect table, which keeps copies only of what is
+    /// declared; its pages are known only after the table ([`Self::list_in_sitemap`]).
+    pub(crate) fn sitemap(&mut self) {
         self.declare(&[Kind::Sitemap]);
+    }
+
+    pub(crate) fn list_in_sitemap(&mut self, pages: BTreeSet<String>) {
+        self.sitemap_pages = pages;
     }
 
     /// The addresses of the declared files, for the redirect table, which

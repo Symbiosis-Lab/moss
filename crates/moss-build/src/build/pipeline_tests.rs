@@ -2307,7 +2307,9 @@ async fn a_rebuild_storm_enters_the_encoder_once_and_stops_on_its_own() {
 /// staging only once the render the preview shows has been promoted.
 ///
 /// Build 2 starts after build 1's seal tail promoted build 1's render, so it
-/// parks on `current` and sweeps an orphan out of staging. Then a render is put
+/// parks on `current` and sweeps an orphan out of staging: residue of a build,
+/// in another process, that entered after that tail swept and died before
+/// sealing. Then a render is put
 /// on screen that nothing has promoted — what a rebuild meets when it starts
 /// before the last tail lands — and build 3 must leave the orphan intact.
 /// The preview may use the immutable prior route while staging is rewritten.
@@ -2375,6 +2377,7 @@ async fn a_rebuild_sweeps_staging_only_when_the_render_on_screen_is_promoted() {
     assert!(mp.current_ptr().exists(), "build 1's tail promoted its render");
 
     let orphan = mp.staging_dir().join("orphan.txt");
+    crate::build::lifecycle::unless_tail_swept(&mp, 1, None);
     fs::write(&orphan, "left behind").unwrap();
     build().await.expect("build 2");
     assert!(!orphan.exists(), "a caught-up rebuild sweeps what no manifest names");
@@ -5483,11 +5486,9 @@ fn build_test_sealed_at(folder_path: &str, site_url: Option<&str>) -> Result<Vec
 /// orphaned `.webp` → reclaim what the prune orphaned → write `hashes.json`
 /// → promote. Mirrors `build.rs`'s `exits_after_build` branch, which is the
 /// only place all of these run in order — this harness has no next build in
-/// its own process either, so it calls `ship::reclaim_staging_now` exactly
-/// where that branch does (moss#… the 2026-09-16 regression: without this
-/// call a single call here left an orphan's `.webp` sitting in staging, which
-/// every assertion below would have missed since none of them ran a SECOND
-/// build to let `pipeline::sweep_staging` cover for it).
+/// its own process either, so it calls `pipeline::sweep_staging` exactly
+/// where that branch does: without it an orphan's `.webp` stays in staging,
+/// and no assertion below runs a second build to sweep it.
 ///
 /// `build_test` and `build_test_sealed` both stop at the seal, so neither can
 /// observe anything the tail decides — and the tail is where the staging tree
@@ -5548,7 +5549,7 @@ fn build_test_shipped(
         // arm: this harness never has a next build in the same process
         // either, so without this call staging would hold orphaned bytes no
         // test here could ever observe going away.
-        crate::build::ship::reclaim_staging_now(&stage_dir, &sealed, &crate::build::lifecycle::permit_for_test());
+        super::sweep_staging(&stage_dir, sealed.site_hashes_view(), Some(&crate::build::lifecycle::permit_for_test()));
         let _ = sealed.write_to_disk(&mp.hashes());
         crate::build::ship::materialize_and_promote(
             &sealed,
@@ -5636,7 +5637,7 @@ fn build_test_with_focus(
             .map_err(|e| format!("test seal+persist failed: {}", e))?;
         let mp = crate::moss_paths::MossPaths::new(root.path());
         let stage_dir = mp.staging_dir();
-        crate::build::ship::reclaim_staging_now(&stage_dir, &sealed, &crate::build::lifecycle::permit_for_test());
+        super::sweep_staging(&stage_dir, sealed.site_hashes_view(), Some(&crate::build::lifecycle::permit_for_test()));
         let mut keys: Vec<String> = sealed.files().keys().cloned().collect();
         keys.sort();
         let verdict = crate::build::ship::ShipVerdict::after_presence_pass(&sealed, keys.len(), 0);
@@ -6185,10 +6186,10 @@ fn a_build_that_changes_nothing_does_nothing() {
 /// snapshot-test fixture are all one-shot: the process exits
 /// after this one build, so a next build that would do the sweeping never
 /// comes, and the orphaned bytes shipped in anything that read `stage_dir`
-/// directly. `ship::reclaim_staging_now` closes that gap for exactly the
+/// directly. The seal tail's `pipeline::sweep_staging` closes that gap for exactly the
 /// build shape that proves nobody is left to read `stage_dir` afterward.
 ///
-/// Ablate by commenting out the `reclaim_staging_now` call in
+/// Ablate by commenting out the `seal_reclaim` sweep in
 /// `build_test_shipped` above: `gone.webp` then survives on disk after build
 /// 2 and the last assertion here goes red.
 #[test]

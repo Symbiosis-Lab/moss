@@ -12,7 +12,8 @@ fn declared(folder: &Path) -> SiteFiles {
         &HashMap::new(),
     );
     files.feeds();
-    files.sitemap(BTreeSet::from(["index.html".to_string()]));
+    files.sitemap();
+    files.list_in_sitemap(BTreeSet::from(["index.html".to_string()]));
     files.keep_copy(ServedPath::from_source("feed.xml").unwrap(), "rss.xml");
     files
 }

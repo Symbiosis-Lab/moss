@@ -3010,6 +3010,9 @@ pub fn generate_blocking_content_for_build(
         folder_plan.passthrough_stubs.clone(),
     ]
     .concat();
+    if has_rss {
+        site_files.sitemap();
+    }
     let table_inputs = crate::build::feeds::redirects::TableInputs {
         term_stubs,
         has_deployed_url: site_url.is_deployed(),
@@ -3064,7 +3067,7 @@ pub fn generate_blocking_content_for_build(
             listed.then(|| sp.as_str().to_string())
         }));
         sitemap_pages.extend(notebook_viewers.iter().map(|sp| sp.as_str().to_string()));
-        site_files.sitemap(sitemap_pages);
+        site_files.list_in_sitemap(sitemap_pages);
     }
     site_files.promise(pending);
 

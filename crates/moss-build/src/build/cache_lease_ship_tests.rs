@@ -158,7 +158,6 @@ async fn advertise_sealed_drops_the_cache_lease_before_collect_build_store() {
         Some(crate::build::lifecycle::Render::numbered(&mp, 1)),
         &folder_path,
         SealGuards {
-            final_sweep: None,
             cache_lease: Some(lease),
             ..Default::default()
         },
@@ -284,7 +283,7 @@ async fn the_seals_per_build_half_holds_its_own_activity() {
         1,
         Some(crate::build::lifecycle::Render::numbered(&mp, 1)),
         &folder_path,
-        SealGuards { final_sweep: None, ..Default::default() },
+        SealGuards::default(),
     );
     let probe = async {
         let mut held = 0;

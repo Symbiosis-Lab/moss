@@ -1423,6 +1423,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             // Held for the tail's life so a folder switch cannot evict this
             // folder's lifecycle record (and its promotion epoch) under it.
             let lifecycle_record = crate::build::lifecycle::lock_for(&mp);
+            let encodes = config.host.services.cancellation.clone();
 
             // Dropping the returned Joining DETACHES the task (the runtime
             // aborts only via an explicit `.abort()`), which is exactly what
@@ -1464,9 +1465,10 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                             &folder_path_for_mat,
                             SealGuards {
                                 // Detached: the app or a `--serve --watch`
-                                // process outlives this task, and may still
-                                // be reading `stage_dir`. Never reclaim here.
-                                final_sweep: None,
+                                // process outlives this task and may still be
+                                // reading `stage_dir`, so lifecycle licenses
+                                // the sweep, or not.
+                                sweep: crate::build::lifecycle::SealSweep::Serving(encodes),
                                 cache_lease,
                                 // Long-lived runtime: the materialize is
                                 // debounced (`build::seal_phase`), and the
@@ -1560,7 +1562,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                             // this process's own second pass, which starts from
                             // the manifest sealed here; the sweep keeps what
                             // that manifest names. Reclaim now or never.
-                            final_sweep: Some(crate::build::lifecycle::final_build_permit(&mp)),
+                            sweep: crate::build::lifecycle::SealSweep::Final(crate::build::lifecycle::final_build_permit(&mp)),
                             cache_lease,
                             handoff: Handoff::Caller,
                         },
@@ -1809,12 +1811,8 @@ pub(crate) struct SealPorts {
 /// `advertise_sealed`, on its own schedule.
 #[derive(Default)]
 pub(crate) struct SealGuards {
-    /// `Some` only from the `exits_after_build` call site (CLI / `build_sync` /
-    /// the snapshot-test harness), whose caller drops the runtime as soon as
-    /// this returns: no later build will sweep what this one orphaned (a second
-    /// pass in the same process starts from the sealed manifest, so it inherits
-    /// the sweep), so the tail reclaims it now (`ship::reclaim_staging_now`).
-    pub final_sweep: Option<crate::build::lifecycle::SweepPermit>,
+    /// How the tail sweeps staging against the sealed manifest.
+    pub sweep: crate::build::lifecycle::SealSweep,
     /// The build's `lifecycle::CacheWriteLease`, handed back by
     /// `BackgroundHandle::await_completion` instead of being dropped there.
     /// Held across `materialize_and_promote` (`ship_phase`) in
@@ -2002,7 +2000,7 @@ async fn advertise_sealed(
     // step-7b call into `trigger_media_settle_rerender` below.
     folder_path: &str,
     // The seal tail's one-off RAII permits — see `SealGuards` for what each
-    // field is and when it is read or dropped. `final_sweep` is consumed
+    // field is and when it is read or dropped. `sweep` is consumed
     // below, inline; `cache_lease` travels into the returned `PendingSeal`
     // for the materialize phase to drop.
     guards: SealGuards,
@@ -2057,7 +2055,7 @@ async fn advertise_sealed(
     //
     // It serializes WRITERS. It is not, and cannot be, a reader-side guard:
     // the preview server takes no lock, so the rule that keeps it whole is
-    // that nothing in this phase unlinks from `stage_dir`.
+    // that this phase unlinks only what the render on screen does not name.
     let _stage_write_guard = match &session {
         Some(s) => Some(crate::phase!("lock_wait", { s.lock_stage_write().await })),
         None => None,
@@ -2147,10 +2145,14 @@ async fn advertise_sealed(
     let verdict = presence_verdict;
 
     // `sealed` is now final — every pass that can drop a manifest entry has
-    // run, so a one-shot build reclaims its orphans against it.
-    if let Some(permit) = &guards.final_sweep {
-        crate::phase!("seal_reclaim", { crate::build::ship::reclaim_staging_now(stage_dir, &sealed, permit) });
+    // run, so the earlier builds' residue is swept against it.
+    let guarded_ship = _stage_write_guard.is_some() && verdict == crate::build::ship::ShipVerdict::Ship;
+    let serving = guards.sweep.serving_permit(render.as_ref().filter(|_| guarded_ship), std::path::Path::new(folder_path), guards.cache_lease.is_some());
+    if let Some(permit) = guards.sweep.final_permit().or(serving.as_ref()) {
+        crate::phase!("seal_reclaim", { crate::build::pipeline::sweep_staging(stage_dir, sealed.site_hashes_view(), Some(permit)) });
+        crate::build::lifecycle::note_tail_swept(mp, locked_at_nanos);
     }
+    drop(serving);
 
     // Last moment the manifest and the stage agree on what shipped — the one
     // place a whole-site link check can run. Advisory for almost

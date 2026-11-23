@@ -149,18 +149,93 @@ pub(crate) fn adopt_server(mp: &MossPaths, cell: &ServedCell) -> Arc<LifecycleCe
     record
 }
 
-/// Proof that nothing reads the staged tree this build is about to unlink from,
-/// and that no earlier build's workers are still writing it.
+/// Proof that nothing still needs what this sweep unlinks from staging: no
+/// reader of the staged tree, or only the render on screen, whose manifest the
+/// sweep keeps; and no earlier build's workers still writing it.
 ///
 /// A detached encode outlives its build, so the permit also carries what such
 /// encodes own in staging: the outputs of every video still running, and what
 /// a finished run put there that no build has registered yet.
 pub(crate) struct SweepPermit {
-    _record: Arc<LifecycleCell>,
+    record: Arc<LifecycleCell>,
     encode_outputs: std::collections::HashSet<String>,
+    /// A serving tail's hold on the folder build lock, against another
+    /// process's build writing staging under the sweep.
+    _folder_lock: Option<crate::infra::folder_lock::Held>,
 }
 
+/// Staging's sweep stamp, shared by every process that builds the folder: the
+/// lock stamp of the last build to enter, then `swept` once that build's seal
+/// tail swept staging against the manifest it sealed. Read and written only
+/// under the folder build lock. Anything unreadable reads as not swept.
+fn sweep_stamp(mp: &MossPaths) -> PathBuf {
+    mp.build_dir().join("staging-swept")
+}
+
+fn read_sweep_stamp(mp: &MossPaths) -> (Option<u64>, bool) {
+    let text = std::fs::read_to_string(sweep_stamp(mp)).unwrap_or_default();
+    let mut words = text.split_whitespace();
+    (words.next().and_then(|w| w.parse().ok()), words.next() == Some("swept"))
+}
+
+/// `permit`, unless the seal tail of the last build to enter swept staging
+/// against the manifest this build inherits, so sweeping again removes
+/// nothing. Records this build's entry first, so a build that writes staging
+/// and then fails, in any process, leaves the next one sweeping.
+pub(crate) fn unless_tail_swept<'a>(mp: &MossPaths, locked_at: u64, permit: Option<&'a SweepPermit>) -> Option<&'a SweepPermit> {
+    let (_, swept) = read_sweep_stamp(mp);
+    if let Err(e) = crate::infra::atomic_write::write_atomic(&sweep_stamp(mp), locked_at.to_string()) {
+        log::warn!("staging sweep stamp: {e}");
+        let _ = std::fs::remove_file(sweep_stamp(mp));
+        return permit;
+    }
+    permit.filter(|_| !swept)
+}
+
+/// Record that the seal tail of the build that entered at `locked_at` swept
+/// staging, unless another build has entered since.
+pub(crate) fn note_tail_swept(mp: &MossPaths, locked_at: u64) {
+    if read_sweep_stamp(mp).0 == Some(locked_at) {
+        if let Err(e) = crate::infra::atomic_write::write_atomic(&sweep_stamp(mp), format!("{locked_at} swept")) {
+            log::warn!("staging sweep stamp: {e}");
+        }
+    }
+}
+
+/// The seal tail's staging sweep, by call site.
+#[derive(Default)]
+pub(crate) enum SealSweep {
+    #[default]
+    None,
+    /// The `exits_after_build` call site (CLI / `build_sync` / the
+    /// snapshot-test harness), whose caller drops the runtime as soon as this
+    /// returns: no later build will sweep what this one orphaned (a second
+    /// pass in the same process starts from the sealed manifest, so it
+    /// inherits the sweep), so the tail reclaims it now.
+    Final(SweepPermit),
+    /// The serving call site: the encodes whose outputs the sweep keeps, read
+    /// when it sweeps (`Render::seal_sweep_permit`). Only a shipping seal
+    /// sweeps: a withheld one leaves the previous manifest as the next build's
+    /// baseline, which may name what this one dropped.
+    Serving(std::sync::Arc<crate::types::runtime::VideoConversionState>),
+}
+
+impl SealSweep {
+    pub(crate) fn final_permit(&self) -> Option<&SweepPermit> {
+        match self { Self::Final(permit) => Some(permit), _ => None }
+    }
+
+    /// The serving tail's permit for `render`, passed only when its seal ships
+    /// under the stage write lock.
+    pub(crate) fn serving_permit(&self, render: Option<&Render>, folder: &Path, holds_lease: bool) -> Option<SweepPermit> {
+        let (Self::Serving(encodes), Some(render)) = (self, render) else { return None };
+        render.seal_sweep_permit(folder, holds_lease, encodes)
+    }
+}
+
+
 impl SweepPermit {
+
     /// Whether the sweep must keep `key` for a running or finished encode:
     /// the output itself, or a `.tmp.`/`.pending.` sibling it is being written
     /// through.
@@ -188,7 +263,7 @@ impl SweepPermit {
 /// manifest names, so that pass finds exactly what it would after a restart.
 /// Minted at exactly that call site (`staging_unlink_invariant_test` pins it).
 pub(crate) fn final_build_permit(mp: &MossPaths) -> SweepPermit {
-    SweepPermit { _record: lock_for(mp), encode_outputs: Default::default() }
+    SweepPermit { record: lock_for(mp), encode_outputs: Default::default(), _folder_lock: None }
 }
 
 /// A GC token for tests that drive `cache::gc` directly, on a record of their
@@ -208,7 +283,7 @@ pub(crate) fn stale_html_for_test(keys: &[String]) -> StaleHtml {
 /// A permit for tests that drive a sweep directly.
 #[cfg(test)]
 pub(crate) fn permit_for_test() -> SweepPermit {
-    SweepPermit { _record: Arc::new(LifecycleCell::default()), encode_outputs: Default::default() }
+    SweepPermit { record: Arc::new(LifecycleCell::default()), encode_outputs: Default::default(), _folder_lock: None }
 }
 
 /// The stale page HTML a build may unlink from staging, spent only by
@@ -270,7 +345,7 @@ pub(crate) fn park_for_rebuild(
     let current_gen = mp.current_generation_id().unwrap_or_else(|_| "none".to_string());
     let record = lock_for(mp);
     let st = record.state();
-    let others_writing = st.build_writers.saturating_sub(usize::from(holds_lease));
+    let others_writing = others_writing(&st, holds_lease);
     let on_staging = st.served.as_ref().is_some_and(|cell| read(cell).dir == staging);
     let caught_up = matches!((st.shown_render, st.current_render), (Some(s), Some(c)) if c >= s);
     let render = |r: Option<u64>| r.map_or("none".to_string(), |r| r.to_string());
@@ -285,7 +360,7 @@ pub(crate) fn park_for_rebuild(
             current_gen,
             render(st.current_render)
         );
-        return Some(SweepPermit { _record: record.clone(), encode_outputs });
+        return Some(SweepPermit { record: record.clone(), encode_outputs, _folder_lock: None });
     }
     log::info!(
         "serve: rebuild left preview on {} (shows render #{}, current gen {} is render #{}; {} earlier build(s) still writing) — no unlinks this build",
@@ -296,6 +371,13 @@ pub(crate) fn park_for_rebuild(
         others_writing
     );
     None
+}
+
+/// Builds other than the caller still between `run_pipeline` entry and their
+/// seal tail's promotion: a withheld or slow build's workers outlive its
+/// render and are still writing staging.
+fn others_writing(st: &FolderLifecycle, holds_lease: bool) -> usize {
+    st.build_writers.saturating_sub(usize::from(holds_lease))
 }
 
 /// Keep an exact prior route on the immutable current generation while a
@@ -381,6 +463,35 @@ impl Render {
     /// land after it and roll it back.
     pub(crate) fn newer_sealed(&self) -> bool {
         self.record.state().newest_sealed.is_some_and(|newest| newest > self.seq)
+    }
+
+    /// The licence for this render's seal tail to unlink from staging what its
+    /// sealed manifest does not name: while the preview shows this render, no
+    /// newer one has been minted and no other build is writing.
+    ///
+    /// What can still ask for a condemned file is a page older than the one on
+    /// screen: a second tab, or a lazy image of a page the preview has since
+    /// morphed. Every tab was told to reload when this render was shown, so
+    /// each such request is from a page about to be replaced, and a 404 there
+    /// is what the reload would show. Encode outputs are kept as under
+    /// [`park_for_rebuild`].
+    ///
+    /// The caller holds the stage write lock. Renders are minted under it, and
+    /// the one exception, an unchanged entry revealing staging, needs a park
+    /// permit, which this tail's open lease refuses; so nothing newer starts
+    /// writing between this check and the unlink. The folder build lock is only
+    /// tried: `build_inner` takes it before the stage write lock, so waiting
+    /// here could deadlock, and whoever holds it is building, and sweeps for
+    /// itself. The permit holds it until the sweep is done.
+    pub(crate) fn seal_sweep_permit(&self, folder: &Path, holds_lease: bool, encodes: &crate::types::runtime::VideoConversionState) -> Option<SweepPermit> {
+        let folder_lock = crate::infra::folder_lock::try_acquire_named(folder, "build").ok().flatten()?;
+        let encode_outputs = encodes.protected_outputs();
+        let st = self.record.state();
+        let newest_on_screen = st.next_render == self.seq && st.shown_render == Some(self.seq);
+        if !newest_on_screen || others_writing(&st, holds_lease) > 0 {
+            return None;
+        }
+        Some(SweepPermit { record: self.record.clone(), encode_outputs, _folder_lock: Some(folder_lock) })
     }
 
     /// Run `f` only while the preview shows this render, shown at once or

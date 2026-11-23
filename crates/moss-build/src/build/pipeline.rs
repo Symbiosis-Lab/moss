@@ -30,7 +30,7 @@
 //!    (`sweep_staging`) — `staging/` itself is deliberately never deleted; it
 //!    persists between rebuilds so mtime+size checks can skip unchanged
 //!    bytes. A one-shot CLI build gets no next build to sweep on, so its exit
-//!    path runs the same removal once, immediately (`ship::reclaim_staging_now`).
+//!    path runs the same removal once, immediately, in its seal tail.
 //!
 //! The server rests on `staging/` (annotated) while a preview session is live;
 //! `current` is always clean production HTML. Background workers write their
@@ -1258,7 +1258,7 @@ fn build_inner(
         .map_err(|e| format!("Failed to create staging directory: {}", e))?;
 
     // Step 2b: sweep the previous build's residue out of staging.
-    crate::phase!("staging_sweep", { sweep_staging(&stage_dir, &previous_hashes, sweep_permit.as_ref()) });
+    crate::phase!("staging_sweep", { sweep_staging(&stage_dir, &previous_hashes, crate::build::lifecycle::unless_tail_swept(&paths, locked_at_nanos, sweep_permit.as_ref())) });
 
     // Step 3: Build to staging directory using internal generator
     //
@@ -2204,14 +2204,19 @@ pub(crate) fn reveal_sealed_staging(paths: &MossPaths, sealed: &SiteHashes, gene
 /// Staging is the tree the preview reads, so this needs a
 /// `lifecycle::SweepPermit`. Without one it does nothing: the leftovers never
 /// reach a generation, because `ship_phase` copies `sealed.files()` and
-/// nothing else, but the preview serves them until the next caught-up build.
+/// nothing else, but the preview serves them until a build may sweep.
 /// The one leftover that must not wait, the page of a deleted source, goes
-/// through `lifecycle::StaleHtml` instead. A one-shot build
-/// never gets a next build, so `ship::reclaim_staging_now` is its last chance.
+/// through `lifecycle::StaleHtml` instead.
+///
+/// The seal tail sweeps against the manifest it just sealed; a build sweeps
+/// before it renders unless the tail of the last build to enter swept, and an
+/// unchanged entry before it reveals staging. The pre-render sweep must
+/// stay: a producer trusts a file already at its address, so a stub the
+/// presence pass dropped has to go before render.
 ///
 /// An empty previous manifest (first build, or one that could not be read)
 /// authorizes nothing either.
-fn sweep_staging(
+pub(crate) fn sweep_staging(
     stage_dir: &Path,
     previous: &SiteHashes,
     permit: Option<&crate::build::lifecycle::SweepPermit>,

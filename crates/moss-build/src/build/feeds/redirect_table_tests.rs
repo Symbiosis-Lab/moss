@@ -220,6 +220,16 @@ fn a_declared_page_address_gets_a_stub_in_each_spelling() {
     assert_eq!(b.problems, 0);
 }
 
+/// The sitemap is written after the preview paints; a former address of it
+/// is a copy the same worker writes from the bytes it holds.
+#[test]
+fn a_declared_address_of_the_sitemap_is_a_copy_of_it() {
+    let cfg = config(r#""/old-sitemap.xml" = "/sitemap.xml""#);
+    let b = build(&[ABOUT, (".moss/config.toml", &cfg)]);
+    assert_eq!(b.read("old-sitemap.xml"), b.read("sitemap.xml"));
+    assert_eq!(b.problems, 0);
+}
+
 #[test]
 fn a_declared_file_address_is_a_byte_copy_of_its_target() {
     let cfg = config(r#""/data.csv" = "/assets/data.csv""#);
