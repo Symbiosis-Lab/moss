@@ -1685,7 +1685,7 @@ fn a_frontmatter_title_cannot_close_the_title_element() {
 
 #[test]
 fn a_language_tag_cannot_break_out_of_the_html_lang_attribute() {
-    // Second lock behind the allowlist in `resolve_site_default_lang`: if a
+    // Second lock behind the allowlist in `resolve_site_lang`: if a
     // future producer ever reaches `<html lang>` without passing it, the value
     // still cannot close the attribute and open a tag.
     let processor = ShellProcessor::new();

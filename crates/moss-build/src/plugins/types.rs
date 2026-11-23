@@ -542,7 +542,7 @@ impl ProjectInfo {
             // 2026-09-01 this was content sampling alone, so a site with an
             // explicit `[site] lang` handed its plugins the detected language
             // and its pages the declared one — one question, two answers.
-            lang: crate::i18n::detect::resolve_site_default_lang(
+            lang: crate::i18n::detect::resolve_site_lang(
                 crate::build::site_config::get_site_lang(&ps.root_path)
                     .ok()
                     .flatten()
@@ -550,7 +550,7 @@ impl ProjectInfo {
                 ps.homepage_file.as_deref(),
                 &ps.markdown_files,
                 &ps.root_path,
-            ),
+            ).code,
         }
     }
 }

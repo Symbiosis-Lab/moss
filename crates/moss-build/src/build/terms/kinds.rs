@@ -254,9 +254,9 @@ mod tests {
         let home = "---\nlang: ' FR '\n---\nHome";
         std::fs::write(root.path().join("index.md"), home).unwrap();
         let cfg = crate::config::ConfigFile::parse(config).unwrap();
-        let lang = crate::i18n::detect::resolve_site_default_lang(
+        let lang = crate::i18n::detect::resolve_site_lang(
             cfg.site_lang(), Some("index.md"), &[], root.path().to_str().unwrap(),
-        );
+        ).code;
         let (bundle, _) = moss_core::page::site_bundle(moss_core::page::SiteSources {
             files: vec!["index.md".into()],
             texts: std::collections::HashMap::from([("index.md".into(), home.into())]),

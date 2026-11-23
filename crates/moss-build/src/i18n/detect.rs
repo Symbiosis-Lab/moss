@@ -468,18 +468,10 @@ pub(crate) fn site_language_vote(texts: &[&str]) -> Option<Language> {
 /// themselves and fall back to English there, where a missing translation is
 /// what the fallback actually means. Returning `Language` here would collapse
 /// both jobs onto the languages moss ships and lose `fr`.
-pub fn resolve_site_default_lang(
-    explicit: Option<&str>,
-    homepage_file: Option<&str>,
-    markdown_files: &[crate::types::content::FileInfo],
-    root_path: &str,
-) -> String {
-    resolve_site_lang(explicit, homepage_file, markdown_files, root_path).code
-}
-
-/// [`resolve_site_default_lang`], with whether the first two rungs answered:
-/// a declared site language holds on every page, so no folder's prose may
-/// outvote it (`build::scan::page_map::folder_lang`).
+///
+/// `declared` says whether the first two rungs answered: a declared site
+/// language holds on every page, so no folder's prose may outvote it
+/// (`build::scan::page_map::folder_lang`).
 pub fn resolve_site_lang(
     explicit: Option<&str>,
     homepage_file: Option<&str>,
@@ -912,7 +904,7 @@ mod tests {
     fn test_detect_project_lang_empty_has_no_basis() {
         let files: Vec<crate::types::content::FileInfo> = vec![];
         // `None`, not English: an empty vault has no evidence, and it is
-        // `resolve_site_default_lang` that decides what to do with that (its
+        // `resolve_site_lang` that decides what to do with that (its
         // own no-signal default, per its own tests) — the sampler does not guess.
         assert_eq!(detect_project_language(&files, "/nonexistent", &never_evicted), None);
     }
@@ -1015,13 +1007,13 @@ mod tests {
         // There is no OS-value argument here any more to feed a different
         // answer through even if one wanted to.
         let files: Vec<crate::types::content::FileInfo> = vec![];
-        assert_eq!(resolve_site_default_lang(None, None, &files, "/nonexistent"), "en");
+        assert_eq!(resolve_site_lang(None, None, &files, "/nonexistent").code, "en");
     }
 
     #[test]
     fn site_default_lang_prefers_explicit_config_over_everything() {
         let files: Vec<crate::types::content::FileInfo> = vec![];
-        assert_eq!(resolve_site_default_lang(Some("zh-hant"), None, &files, "/nonexistent"), "zh-hant");
+        assert_eq!(resolve_site_lang(Some("zh-hant"), None, &files, "/nonexistent").code, "zh-hant");
     }
 
     #[test]
@@ -1033,12 +1025,12 @@ mod tests {
         // French site English on the way out. The render path does that
         // collapse itself, where "no translation" is what English means.
         let files: Vec<crate::types::content::FileInfo> = vec![];
-        assert_eq!(resolve_site_default_lang(Some("fr"), None, &files, "/nonexistent"), "fr");
+        assert_eq!(resolve_site_lang(Some("fr"), None, &files, "/nonexistent").code, "fr");
 
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("index.md"), "---\nlang: ja\n---\nbody").unwrap();
         assert_eq!(
-            resolve_site_default_lang(None, Some("index.md"), &files, dir.path().to_str().unwrap()),
+            resolve_site_lang(None, Some("index.md"), &files, dir.path().to_str().unwrap()).code,
             "ja"
         );
     }
@@ -1059,7 +1051,7 @@ mod tests {
             size: 0,
             modified: None,
         }];
-        assert_eq!(resolve_site_default_lang(None, None, &files, dir.path().to_str().unwrap()), "zh-hans");
+        assert_eq!(resolve_site_lang(None, None, &files, dir.path().to_str().unwrap()).code, "zh-hans");
     }
 
     #[test]
@@ -1081,10 +1073,10 @@ mod tests {
             modified: None,
         }];
         let root = dir.path().to_str().unwrap();
-        assert_eq!(resolve_site_default_lang(None, Some("index.md"), &files, root), "zh-hant");
+        assert_eq!(resolve_site_lang(None, Some("index.md"), &files, root).code, "zh-hant");
         // …and `[site] lang` still outranks the declaration, so an author who
         // sets it in config is not overruled by an old homepage line.
-        assert_eq!(resolve_site_default_lang(Some("en"), Some("index.md"), &files, root), "en");
+        assert_eq!(resolve_site_lang(Some("en"), Some("index.md"), &files, root).code, "en");
     }
 
     #[test]
@@ -1104,7 +1096,7 @@ mod tests {
             modified: None,
         }];
         assert_eq!(
-            resolve_site_default_lang(None, Some("index.md"), &files, dir.path().to_str().unwrap()),
+            resolve_site_lang(None, Some("index.md"), &files, dir.path().to_str().unwrap()).code,
             "zh-hans"
         );
     }

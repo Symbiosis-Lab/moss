@@ -391,7 +391,7 @@ impl ShellProcessor {
         };
         let values: std::collections::HashMap<&'static str, String> = std::collections::HashMap::from([
             // Escaped like every other attribute value here. The allowlist in
-            // `resolve_site_default_lang` is what actually closes this today;
+            // `resolve_site_lang` is what actually closes this today;
             // this is the second lock, so a future producer that reaches
             // `<html lang>` without passing the allowlist cannot break out of
             // the attribute.
