@@ -270,6 +270,30 @@ fn containing_never_walks_up_into_the_home_directory() {
 }
 
 #[test]
+fn a_site_under_the_account_home_is_not_re_rooted_to_it_when_home_points_elsewhere() {
+    // The walk is bounded at `tmp`, above the fake account home, so it never
+    // reaches the real one when the temp folder sits under it.
+    let tmp = tempfile::tempdir().unwrap();
+    let account = tmp.path().join("account");
+    let scratch_home = tmp.path().join("scratch-home");
+    let unowned = account.join("jobs").join("site");
+    let nested = account.join("work").join("site");
+    fs::create_dir_all(account.join(".moss")).unwrap();
+    fs::create_dir_all(&scratch_home).unwrap();
+    fs::create_dir_all(&unowned).unwrap();
+    fs::create_dir_all(nested.join(".moss")).unwrap();
+    let _account = crate::infra::home::thread_account_home(&account);
+    let _moss_home = crate::infra::home::thread_moss_home(&scratch_home.join(".moss"));
+
+    assert_eq!(VaultRoot::find_containing_below(&unowned, &unowned, Some(tmp.path())), None);
+    assert_eq!(
+        VaultRoot::find_containing_below(&nested.join("notes"), &nested, Some(tmp.path()))
+            .map(|v| v.path().to_path_buf()),
+        Some(resolve_input(&nested)),
+    );
+}
+
+#[test]
 fn containing_walks_up_from_a_file_to_the_marker() {
     let project = tmp("file_walkup");
     fs::create_dir_all(project.join(".moss")).unwrap();

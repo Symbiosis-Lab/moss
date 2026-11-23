@@ -151,15 +151,15 @@ fn owns_moss_below(dir: &Path, account_home: Option<&Path>) -> bool {
     marker.is_dir() && !is_moss_home(&marker) && !account_home.is_some_and(|h| same_dir(dir, h))
 }
 
-fn same_dir(a: &Path, b: &Path) -> bool {
+/// Equal as written or once canonical: on Windows an ancestor can surface as an
+/// 8.3 short path (`C:\Users\RUNNER~1`) while the home is the long form.
+pub(crate) fn same_dir(a: &Path, b: &Path) -> bool {
     a == b || matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b)
 }
 
 fn is_moss_home(marker: &Path) -> bool {
     let Ok(home) = crate::infra::home::moss_home() else { return false };
-    let home = crate::vault_root::resolve_input(home);
-    home == marker
-        || matches!((marker.canonicalize(), home.canonicalize()), (Ok(m), Ok(h)) if m == h)
+    same_dir(marker, &crate::vault_root::resolve_input(home))
 }
 
 /// Is this path under a known cloud-storage mount? Substring shape match,
