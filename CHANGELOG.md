@@ -38,6 +38,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A theme that lays out its own header by flattening `.nav-right` (`display: contents`) keeps that layout at every width. Since 0.15.28's work on the header, moss moved the search and theme buttons up beside the site name whenever the links did not fit on one row with it.
 - A theme that keeps its header to one row (`flex-wrap: nowrap` on `.nav-content`, often with a fixed height) no longer has its links drop below the header onto the page when they do not fit. They stay on the row and scroll sideways inside it, and an open submenu still hangs below the header.
 - `moss build --serve` on a folder with nothing new since the last build prints the preview's address again ("Preview server ready! Access at …"). Since 0.15.27 it said only "Unchanged since the last build."
 - Before a publish, moss no longer warns that folders such as `/assets/` will go offline. This came up after a publish from a ready-made folder, or after the attachment folder was set to `assets`.

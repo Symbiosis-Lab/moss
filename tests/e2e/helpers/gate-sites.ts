@@ -5479,3 +5479,34 @@ uid: "nnw00101"
 `,
   },
 };
+
+// A theme that lays the masthead out itself: `.nav-right` flattened, the name alone on row 1 at a full-row basis,
+// the links at the start of row 2 and the toggles at its end, through `order`. The one-row sum overflows at every
+// width, so the split would otherwise take over everywhere.
+export const NAV_FLATTENED_GATE: ScratchSiteSpec = {
+  name: "nav-flattened-gate",
+  files: {
+    "index.md": `---
+title: Fifty Stations of the Coast Road
+uid: "nfl00101"
+---
+
+# Fifty Stations of the Coast Road
+`,
+    ...Object.fromEntries(
+      ["Prints", "Browse", "Map", "Weather", "Essays", "About"].map((title, i) => [
+        `${title}.md`,
+        `---\ntitle: ${title}\nuid: "nfl0020${i}"\nnav: true\nweight: ${i + 2}\n---\n\n# ${title}\n`,
+      ]),
+    ),
+    ".moss/theme/style.css": `.nav-content { gap: 0 20px; padding-block-end: 0; }
+.nav-content .nav-left { flex: 1 1 100%; padding-block: 22px 8px; }
+.nav-content .nav-right { display: contents; }
+.nav-content .nav-links { order: 1; flex: 1 1 0; justify-content: flex-start; gap: 0 28px; }
+.nav-content .nav-icons { order: 2; margin-inline-start: auto; }
+.site-name { font: 500 clamp(24px, 3.4vw, 34px) / 1.15 serif; white-space: normal; }
+.main-nav .nav-links a { font: 500 15px/1 sans-serif; padding-block: 15px 12px; }
+@media (max-width: 40rem) { .nav-content .nav-links { gap: 0 14px; } .main-nav .nav-links a { font-size: 14px; } .nav-content .nav-icons { gap: 4px; } }
+`,
+  },
+};

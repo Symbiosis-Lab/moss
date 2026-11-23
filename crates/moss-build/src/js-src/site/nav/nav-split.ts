@@ -38,7 +38,8 @@
  * and the name's lines are counted with the stack cleared. Sizes are read on
  * the masthead's inline axis; on a vertical page its physical width is its
  * block size, which the split itself changes. A theme that keeps `.nav-right`
- * a box gets the plain wrap from the split's grid. With JS off nothing here
+ * a box gets the plain wrap from the split's grid; one that flattens it
+ * (`display: contents`) has laid the masthead out itself and is left alone. With JS off nothing here
  * runs: the name is alone on row 1, the links and toggles on row 2. On a
  * phone site.css holds a trail's two rows at the toggles' height, so the
  * split this makes after the first paint moves only the toggles.
@@ -189,10 +190,14 @@ export function initNavSplit(): void {
   function layout(): void {
     const vertical = isVertical(navContent!);
     const size = (el: HTMLElement) => inlineSize(el, vertical);
+    setMode(navContent!, null);
+    // A theme that flattens `.nav-right` itself has placed the links and
+    // toggles as siblings of the name; the split would only undo that. Read
+    // with no mode set: the split flattens it too.
+    if (getComputedStyle(navRight!).display === "contents") return;
     // ≤20rem the links are the hamburger's overlay panel, not a row: the
     // menu button stands in for them.
     if (hamburger && getComputedStyle(hamburger).display !== "none") {
-      setMode(navContent!, null);
       if (trail) {
         const beside = oneRowFits({
           container: contentSize(navContent!, vertical),
@@ -224,7 +229,6 @@ export function initNavSplit(): void {
       });
     };
     // Full spacing, then (on a phone) tight gaps, then two rows.
-    setMode(navContent!, null);
     if (fitsOneRow()) return;
     if (getComputedStyle(navContent!).getPropertyValue("--moss-nav-phone").trim() === "1") {
       setMode(navContent!, "compact");

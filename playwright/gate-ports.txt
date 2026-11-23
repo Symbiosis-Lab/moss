@@ -126,3 +126,4 @@ nav-first-paint
 progress-line:ui
 progress-line:preview
 nav-nowrap
+nav-flattened
