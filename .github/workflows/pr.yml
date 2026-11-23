@@ -453,6 +453,9 @@ jobs:
       - name: Scratch-site prune tests
         run: node --test scripts/__tests__/scratch-site-prune.test.mjs
 
+      - name: Scratch-site build lock tests
+        run: node --test scripts/__tests__/build-lock.test.mjs
+
       - name: Merge driver tests
         run: node --test scripts/__tests__/merge-drivers.test.mjs
 

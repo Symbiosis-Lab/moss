@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import { openCrateDir } from "../../support/crate-paths";
 import { resolveMossBin } from "../../support/moss-bin";
 import { pruneUnnamed } from "./prune-unnamed.mjs";
+import { takeOrAwait } from "./build-lock.mjs";
 
 // The dirs moss-build embeds its site scripts from, two of the outputs of
 // `scripts/build-backend-scripts.mjs`'s BUNDLES table, so the stamp below
@@ -130,12 +131,8 @@ export function buildScratchSite(spec: ScratchSiteSpec): string {
   if (fresh) return fresh;
 
   const lock = `${stampPath}.lock`;
-  try {
-    fs.mkdirSync(path.dirname(lock), { recursive: true });
-    fs.mkdirSync(lock); // atomic: throws if another process is already building
-  } catch {
-    return awaitStamp(stampPath, stamp, tag);
-  }
+  const taken = takeOrAwait(lock, () => readStamp(stampPath, stamp), { tag });
+  if (!taken.held) return taken.value;
   try {
     // A failed build must leave no stamp: the old one would let a gate's
     // input check hash the last good build and skip the gate.
@@ -222,19 +219,6 @@ function readStamp(stampPath: string, stamp: string): string | null {
   } catch {
     return null; // absent or malformed — rebuild
   }
-}
-
-/** Block until the process holding the lock publishes a matching stamp. */
-function awaitStamp(stampPath: string, stamp: string, tag: string): string {
-  const deadline = Date.now() + 150_000;
-  while (Date.now() < deadline) {
-    const built = readStamp(stampPath, stamp);
-    if (built) return built;
-    // Sync sleep: playwright parses configs synchronously, so there is no
-    // event loop to yield to here.
-    execSync("sleep 0.5");
-  }
-  throw new Error(`${tag} timed out waiting for another process to build the scratch site`);
 }
 
 /**
