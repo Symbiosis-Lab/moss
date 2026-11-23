@@ -2,10 +2,87 @@
 //! the language set, the string table and Chinese numerals. Pure tables, so
 //! the build and every host draw the same words.
 
+pub mod filename;
 pub mod numerals;
+pub mod path;
 mod strings;
 
 pub use strings::{diagram_type_name, hook_strings, sources_headings, t, term_root_title};
+
+/// Strip a filename's language suffix and return just the clean stem.
+///
+/// For callers that only need the stem (e.g. URL slug computation, page-map
+/// pre-scan) and don't care about the resolved language. Equivalent to
+/// dropping the lang half of [`resolve_document_language`]'s return tuple,
+/// without the noise of passing dummy site-default and ancestor-lang
+/// arguments at the call site.
+pub fn clean_stem_only(filename_stem: &str) -> String {
+    filename::parse_filename_stem(filename_stem).stem
+}
+
+/// The folder rung of a page's language: the language a folder above the page
+/// is named after, else `inferred`, the language the page's own folder
+/// declares in its index or is inferred to be written in
+/// (the build's folder-language pass). A slot-only file is
+/// never a page, so it takes no inferred language: outside a language tree its
+/// chrome is the site's.
+pub fn folder_language(file_path: &str, inferred: Option<Language>, slot_only: bool) -> Option<Language> {
+    path::ancestor_lang_from_path(file_path).or(if slot_only { None } else { inferred })
+}
+
+/// Resolve the language for a document using the priority chain:
+/// 1. Explicit `lang` frontmatter value
+/// 2. Filename language suffix (e.g. `post.zh-hans.md`)
+/// 3. Ancestor folder lang (e.g. `en/post.md` inherits English from `en/`)
+/// 4. Site default language (passed in)
+///
+/// A document's language is a pure function of its path plus its
+/// frontmatter — it never reads the document's own body. Per-page content
+/// detection would let a typo fix flip the language, feed a fingerprint, and
+/// force a full site render.
+///
+/// `ancestor_lang` is precomputed by the caller and is a RICHER slot
+/// than its name alone suggests: it's `Some` either because the folder is
+/// literally *named* after a language (via
+/// [`path::ancestor_lang_from_path`]), or because the folder carries no
+/// naming convention and the caller inferred one FOR THE WHOLE FOLDER, ONCE,
+/// in the scan/reduce phase (the build's folder-language pass) —
+/// content detection still happens, just upstream of this function and
+/// keyed to the folder's file *set* rather than any one page's bytes, so it
+/// does not move on a body edit. This function does not need to know
+/// which case it's in; both are "the folder says so," stronger than the
+/// site default. Pass `None` when the caller has neither (e.g. most unit
+/// tests, in-memory previews).
+///
+/// Returns `(resolved_language, clean_stem_without_suffix)`.
+pub fn resolve_document_language(
+    frontmatter_lang: Option<&str>,
+    filename_stem: &str,
+    site_default: Language,
+    ancestor_lang: Option<Language>,
+) -> (Language, String) {
+    let parsed = filename::parse_filename_stem(filename_stem);
+
+    // 1. Frontmatter lang (highest priority)
+    if let Some(code) = frontmatter_lang {
+        if let Some(lang) = Language::from_code(code) {
+            return (lang, parsed.stem);
+        }
+    }
+
+    // 2. Filename suffix
+    if let Some(lang) = parsed.lang {
+        return (lang, parsed.stem);
+    }
+
+    // 3. Ancestor folder — named, or folder-inferred (see doc comment above)
+    if let Some(lang) = ancestor_lang {
+        return (lang, parsed.stem);
+    }
+
+    // 4. Site default
+    (site_default, parsed.stem)
+}
 
 /// Chinese numerals: a vertical-typesetting page in a CJK language. Counts,
 /// dates, year headings and the series position all ask this one question.

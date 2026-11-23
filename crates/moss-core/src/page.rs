@@ -7,6 +7,7 @@ pub mod site_config;
 pub mod listing_style;
 pub mod series;
 pub mod site_page;
+pub mod page_map;
 pub use site_sources::{site_bundle, site_text_paths, home_file, SiteSources, PluginSource, Admission};
 
 use crate::ast::{self, DefaultHooks, ParseConfig};

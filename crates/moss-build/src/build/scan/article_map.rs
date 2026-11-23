@@ -24,33 +24,7 @@ use specta::Type;
 use std::collections::HashMap;
 use std::path::Path;
 
-/// Convert file path to pretty URL format.
-///
-/// Must match frontend `extractDisplayPath()` behavior exactly:
-/// - `foo/bar/index.html` → `foo/bar/` (WITH trailing slash for directory-style)
-/// - `foo/bar.html` → `foo/bar` (NO trailing slash for file-style)
-/// - Leading slashes are stripped
-///
-/// # Examples
-/// ```ignore
-/// assert_eq!(to_pretty_url("news/article/index.html"), "news/article/");
-/// assert_eq!(to_pretty_url("posts/hello.html"), "posts/hello");
-/// ```
-pub fn to_pretty_url(file_path: &str) -> String {
-    let path = file_path.trim_start_matches('/');
-    if path == "index.html" {
-        // Root homepage: "index.html" -> "" (becomes "/" when nav prepends slash)
-        String::new()
-    } else if path.ends_with("/index.html") {
-        // "foo/bar/index.html" -> "foo/bar/"
-        path.strip_suffix("index.html").unwrap().to_string()
-    } else if path.ends_with(".html") {
-        // "foo/bar.html" -> "foo/bar" (NO trailing slash!)
-        path.strip_suffix(".html").unwrap().to_string()
-    } else {
-        path.to_string()
-    }
-}
+pub use moss_core::resolve::output_url::to_pretty_url;
 
 // Lived in `plugins/types.rs` until 2026-08-17 because its *readers* are the
 // syndication plugins. But the build is what fills it and what persists it —

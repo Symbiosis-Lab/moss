@@ -93,6 +93,33 @@ pub fn reference_output_url(
     relative_asset_path(&from_out, &target_out)
 }
 
+/// Convert file path to pretty URL format.
+///
+/// - `foo/bar/index.html` → `foo/bar/` (WITH trailing slash for directory-style)
+/// - `foo/bar.html` → `foo/bar` (NO trailing slash for file-style)
+/// - Leading slashes are stripped
+///
+/// # Examples
+/// ```ignore
+/// assert_eq!(to_pretty_url("news/article/index.html"), "news/article/");
+/// assert_eq!(to_pretty_url("posts/hello.html"), "posts/hello");
+/// ```
+pub fn to_pretty_url(file_path: &str) -> String {
+    let path = file_path.trim_start_matches('/');
+    if path == "index.html" {
+        // Root homepage: "index.html" -> "" (becomes "/" when nav prepends slash)
+        String::new()
+    } else if path.ends_with("/index.html") {
+        // "foo/bar/index.html" -> "foo/bar/"
+        path.strip_suffix("index.html").unwrap_or(path).to_string()
+    } else if path.ends_with(".html") {
+        // "foo/bar.html" -> "foo/bar" (NO trailing slash!)
+        path.strip_suffix(".html").unwrap_or(path).to_string()
+    } else {
+        path.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

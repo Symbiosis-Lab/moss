@@ -80,23 +80,7 @@ pub fn generate_uid(relative_path: &str, discriminator: &str) -> String {
     hasher.finalize()[..4].iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// One document that lost a URL contest, and what it lost.
-///
-/// The repair is always an edit to the **loser's** `url:` — the keeper is
-/// named only so the author can see which pair is in conflict. Produced by
-/// [`resolve_duplicate_slugs_with_lang`] and reported at the frontmatter
-/// field and as a build problem.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
-pub struct UrlCollision {
-    /// Source path of the file whose `url:` must change.
-    pub loser: String,
-    /// Source path of the file keeping the contested address.
-    pub keeper: String,
-    /// The address both wanted, in served form (`awards/comics/`).
-    pub wanted: String,
-    /// Where the loser is published instead, in served form.
-    pub moved_to: String,
-}
+pub use moss_core::page::page_map::UrlCollision;
 
 /// Windows reserved device names — `CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`,
 /// `LPT1`-`LPT9` — matched case-insensitively and regardless of any
@@ -181,161 +165,24 @@ pub(crate) fn admit_unless_reserved_device_output(
 /// disk. `compute_url_path` returns `.../index.html` on every branch; the root
 /// home (`index.html`) is the one page with no directory of its own, and gets
 /// one here, so the result is directory-shaped unconditionally.
-fn numbered(url_path: &str, n: u32) -> String {
-    match url_path.strip_suffix("/index.html") {
-        Some(dir) => format!("{}-{}/index.html", dir, n),
-        None => format!("{}-{}/index.html", url_path.trim_end_matches(".html"), n),
-    }
-}
-
-/// Resolves duplicate URL paths with language awareness.
-///
-/// When multiple documents share the same `url_path`, the document whose
-/// language matches `site_lang` keeps the primary slot; folder indexes outrank
-/// both. Within a tier, filesystem order (slice order) is preserved.
-///
-/// Every loser then *claims* a URL: its preferred one — lang-prefixed when its
-/// language differs from the keeper's, the original otherwise — or, if that is
-/// already spoken for, the next free numbered directory. One claim rule rather
-/// than one per branch, because the branches had drifted: the lang-prefix path
-/// carried no counter (three `zh-hans` documents against one `en` primary all
-/// landed on `zh-hans/about/index.html`) and never checked whether a real page
-/// already sat at the prefixed address.
-///
-/// Returns the collisions an author must settle: those where numbering was
-/// needed, minus the ones a numbered ancestor already explains. A
-/// cross-language pair resolved by its prefix is the designed outcome and is
-/// not a collision.
+/// [`moss_core::page::page_map::resolve_duplicate_slugs`] over the build's
+/// documents, writing each moved page's new address.
 pub fn resolve_duplicate_slugs_with_lang(
     documents: &mut [ParsedDocument],
     site_lang: crate::i18n::Language,
 ) -> Vec<UrlCollision> {
-    use crate::build::scan::article_map::to_pretty_url;
-    use std::collections::HashMap;
-
-    // Who holds each URL. Seeded with every document so a preferred
-    // lang-prefixed address that belongs to a REAL page (a site with a literal
-    // `zh-hans/` folder) is seen as taken instead of being clobbered.
-    let mut holder: HashMap<String, usize> = HashMap::new();
-    let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
-    for (i, doc) in documents.iter().enumerate() {
-        // Never emitted (a `partial: true` source, `footer.md`), so it holds no address.
-        if doc.slot_only {
-            continue;
-        }
-        holder.entry(doc.url_path.clone()).or_insert(i);
-        groups.entry(doc.url_path.clone()).or_default().push(i);
+    let entries: Vec<moss_core::page::page_map::SlugEntry<'_>> = documents.iter().map(|d| moss_core::page::page_map::SlugEntry {
+        url_path: &d.url_path,
+        is_folder: d.kind == PageKind::Folder,
+        lang: d.lang,
+        slot_only: d.slot_only,
+        source_path: d.source_path.as_deref(),
+    }).collect();
+    let (moved, collisions) = moss_core::page::page_map::resolve_duplicate_slugs(&entries, site_lang);
+    for (i, url_path) in moved {
+        documents[i].url_path = url_path;
     }
-
-    // `groups` is a HashMap, so sort by path to keep assignment (and therefore
-    // which page gets `-2`) stable across builds.
-    let mut collisions: Vec<(&String, &Vec<usize>)> =
-        groups.iter().filter(|(_, idx)| idx.len() > 1).collect();
-    collisions.sort_by(|a, b| a.0.cmp(b.0));
-
-    // Reported collisions, each paired with the directory it cascades over
-    // (`Some` only for a folder index, the only kind whose `url:` cascades).
-    let mut found: Vec<(UrlCollision, Option<String>)> = Vec::new();
-
-    for (path, indices) in collisions {
-        // Rank so the canonical doc comes first. `sort_by_key` is stable, so
-        // filesystem order still decides within a tier: folder indexes (home
-        // file winners keep the primary URL slot), then site_lang docs, then
-        // the rest.
-        let mut sorted_indices: Vec<usize> = indices.clone();
-        sorted_indices.sort_by_key(|&i| {
-            if documents[i].kind == PageKind::Folder {
-                0u8
-            } else if documents[i].lang == site_lang {
-                1
-            } else {
-                2
-            }
-        });
-
-        let keeper_idx = sorted_indices[0];
-        let original_path = documents[keeper_idx].url_path.clone();
-        let primary_lang = documents[keeper_idx].lang;
-        holder.insert(original_path.clone(), keeper_idx);
-
-        for &doc_idx in sorted_indices.iter().skip(1) {
-            let preferred = if documents[doc_idx].lang != primary_lang {
-                format!("{}/{}", documents[doc_idx].lang.code(), original_path)
-            } else {
-                original_path.clone()
-            };
-
-            // Claim `preferred`, or the first free numbered directory under it.
-            // Numbering means someone else already answers at that address, and
-            // that someone is the keeper the author needs named.
-            let blocked_by = holder.get(&preferred).copied();
-            let assigned = match blocked_by {
-                None => preferred.clone(),
-                Some(_) => (2u32..)
-                    .map(|n| numbered(&preferred, n))
-                    .find(|cand| !holder.contains_key(cand))
-                    .expect("numbering is unbounded"),
-            };
-            holder.insert(assigned.clone(), doc_idx);
-            documents[doc_idx].url_path = assigned.clone();
-
-            // A prefixed cross-language page is the designed outcome; only a
-            // page that had to be NUMBERED is one the author must settle.
-            // Renaming keeps it reachable but cannot save its images: asset
-            // output paths resolve from the source directory, not from
-            // `url_path`, so the two trees still overwrite each other.
-            let Some(blocker) = blocked_by else { continue };
-            let source_of = |i: usize| documents[i].source_path_slashed().unwrap_or_else(|| documents[i].url_path.clone());
-            let loser = source_of(doc_idx);
-            let cascades_over = (documents[doc_idx].kind == PageKind::Folder)
-                .then(|| parent_dir(&loser).to_string());
-            found.push((
-                UrlCollision {
-                    loser,
-                    keeper: source_of(blocker),
-                    wanted: to_pretty_url(&preferred),
-                    moved_to: to_pretty_url(&assigned),
-                },
-                cascades_over,
-            ));
-        }
-    }
-
-    root_causes(found)
-}
-
-/// The directory part of a source path (`a/b/c.md` → `a/b`, `c.md` → ``).
-fn parent_dir(source_path: &str) -> &str {
-    source_path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("")
-}
-
-/// Drop every collision a numbered folder above it already explains.
-///
-/// A folder's `url:` cascades to its descendants, so one duplicated folder
-/// produces a collision for the folder AND for every page beneath it — the
-/// 河灣·週刊 report was ~20 of them for a single copied folder. Every deeper
-/// one is a consequence, and reporting them all buries the single edit that
-/// fixes the lot: the children's own `url:` segments are relative and correct,
-/// so changing the parent's resolves them untouched.
-fn root_causes(found: Vec<(UrlCollision, Option<String>)>) -> Vec<UrlCollision> {
-    // Paired with its own index: a folder note lives INSIDE the directory it
-    // cascades over (`評選/散文組/散文組.md`), so a collision compared against
-    // its own directory would suppress itself and report nothing at all.
-    let cascading: Vec<(usize, String)> = found
-        .iter()
-        .enumerate()
-        .filter_map(|(i, (_, dir))| dir.as_ref().map(|d| (i, format!("{}/", d))))
-        .collect();
-    found
-        .iter()
-        .enumerate()
-        .filter(|(i, (c, _))| {
-            !cascading
-                .iter()
-                .any(|(j, dir)| j != i && c.loser.starts_with(dir.as_str()))
-        })
-        .map(|(_, (c, _))| c.clone())
-        .collect()
+    collisions
 }
 
 pub(crate) fn collision_messages(collisions: &[UrlCollision]) -> Vec<String> {

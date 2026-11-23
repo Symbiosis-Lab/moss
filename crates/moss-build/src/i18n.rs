@@ -27,14 +27,13 @@
 //! returned stem is identical.
 
 pub mod detect;
-pub mod filename;
 pub mod link;
-pub mod path;
 pub mod site_languages;
 #[cfg(test)]
 mod site_script_strings_tests;
 pub use moss_core::i18n::numerals;
 
+pub use moss_core::i18n::{filename, path, clean_stem_only, folder_language, resolve_document_language};
 pub use moss_core::i18n::{Language, use_cjk_numerals, diagram_type_name, hook_strings, sources_headings, t, term_root_title};
 
 /// A folder card's article count as displayed text — `3 articles`, `三篇`.
@@ -75,81 +74,6 @@ pub fn card_count_label(
     setting.render(count, &number)
 }
 
-/// The one predicate that decides whether a piece of UI chrome is written in
-/// Strip a filename's language suffix and return just the clean stem.
-///
-/// For callers that only need the stem (e.g. URL slug computation, page-map
-/// pre-scan) and don't care about the resolved language. Equivalent to
-/// dropping the lang half of [`resolve_document_language`]'s return tuple,
-/// without the noise of passing dummy site-default and ancestor-lang
-/// arguments at the call site.
-pub fn clean_stem_only(filename_stem: &str) -> String {
-    filename::parse_filename_stem(filename_stem).stem
-}
-
-/// The folder rung of a page's language: the language a folder above the page
-/// is named after, else `inferred`, the language the page's own folder
-/// declares in its index or is inferred to be written in
-/// (`build::scan::page_map::resolve_folder_languages`). A slot-only file is
-/// never a page, so it takes no inferred language: outside a language tree its
-/// chrome is the site's.
-pub fn folder_language(file_path: &str, inferred: Option<Language>, slot_only: bool) -> Option<Language> {
-    path::ancestor_lang_from_path(file_path).or(if slot_only { None } else { inferred })
-}
-
-/// Resolve the language for a document using the priority chain:
-/// 1. Explicit `lang` frontmatter value
-/// 2. Filename language suffix (e.g. `post.zh-hans.md`)
-/// 3. Ancestor folder lang (e.g. `en/post.md` inherits English from `en/`)
-/// 4. Site default language (passed in)
-///
-/// A document's language is a pure function of its path plus its
-/// frontmatter — it never reads the document's own body. Per-page content
-/// detection would let a typo fix flip the language, feed a fingerprint, and
-/// force a full site render.
-///
-/// `ancestor_lang` is precomputed by the caller and is a RICHER slot
-/// than its name alone suggests: it's `Some` either because the folder is
-/// literally *named* after a language (via
-/// [`path::ancestor_lang_from_path`]), or because the folder carries no
-/// naming convention and the caller inferred one FOR THE WHOLE FOLDER, ONCE,
-/// in the scan/reduce phase (`build::scan::page_map::folder_lang`) —
-/// content detection still happens, just upstream of this function and
-/// keyed to the folder's file *set* rather than any one page's bytes, so it
-/// does not move on a body edit. This function does not need to know
-/// which case it's in; both are "the folder says so," stronger than the
-/// site default. Pass `None` when the caller has neither (e.g. most unit
-/// tests, in-memory previews).
-///
-/// Returns `(resolved_language, clean_stem_without_suffix)`.
-pub fn resolve_document_language(
-    frontmatter_lang: Option<&str>,
-    filename_stem: &str,
-    site_default: Language,
-    ancestor_lang: Option<Language>,
-) -> (Language, String) {
-    let parsed = filename::parse_filename_stem(filename_stem);
-
-    // 1. Frontmatter lang (highest priority)
-    if let Some(code) = frontmatter_lang {
-        if let Some(lang) = Language::from_code(code) {
-            return (lang, parsed.stem);
-        }
-    }
-
-    // 2. Filename suffix
-    if let Some(lang) = parsed.lang {
-        return (lang, parsed.stem);
-    }
-
-    // 3. Ancestor folder — named, or folder-inferred (see doc comment above)
-    if let Some(lang) = ancestor_lang {
-        return (lang, parsed.stem);
-    }
-
-    // 4. Site default
-    (site_default, parsed.stem)
-}
 
 /// The `<html lang>` tag for a language CODE — the one canonicalizer, so a
 /// site's declaration and a page's declaration cannot disagree about the same
