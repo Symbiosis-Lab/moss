@@ -559,7 +559,7 @@ pub(crate) fn pages_before_dedup(
     markdown_files: &[crate::types::content::FileInfo],
     root: &crate::vault::paths::VaultRoot,
     reserved: &std::collections::HashSet<String>,
-    site_lang: crate::i18n::Language,
+    site: &crate::i18n::detect::SiteLang,
     locate: &dyn Fn(&str) -> std::path::PathBuf,
     is_evicted: &dyn Fn(&Path) -> bool,
 ) -> Vec<crate::build::types::ParsedDocument> {
@@ -571,14 +571,14 @@ pub(crate) fn pages_before_dedup(
     let (entries, _, _) = frontmatter_cache::assemble_page_map(markdown_files, &scanned, root.name(), &winners, &overrides);
     let mut folder_cache = FolderLangCache::load(&crate::moss_paths::MossPaths::new(root.path()).cache_folder_lang());
     let folder_langs =
-        folder_lang::resolve_folder_languages_with(markdown_files, locate, is_evicted, &mut folder_cache, &scan);
+        folder_lang::resolve_folder_languages_with(markdown_files, locate, is_evicted, &mut folder_cache, &scan, site.declared);
 
     let mut pages = Vec::new();
     for (path, url_path, is_index) in entries {
         let stem = Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("untitled");
         let slot_only = crate::build::footer::is_slot_only(&path, crate::build::footer::ShipFacts { partial: scan.is_partial(&path) });
         let folder = crate::i18n::folder_language(&path, folder_langs.get(&folder_of(&path)).copied(), slot_only);
-        let (lang, _) = crate::i18n::resolve_document_language(scan.declared_lang(&path), stem, site_lang, folder);
+        let (lang, _) = crate::i18n::resolve_document_language(scan.declared_lang(&path), stem, site.language(), folder);
         let page = crate::build::types::ParsedDocument {
             url_path,
             kind: if is_index { moss_core::PageKind::Folder } else { moss_core::PageKind::Article },

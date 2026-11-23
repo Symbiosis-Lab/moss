@@ -508,7 +508,7 @@ pub fn generate_blocking_content_for_build(
     // pass above has just filled for every file — hence the ordering.
     let folder_languages = resolve_folder_languages(
         &project_structure.markdown_files, source_path_buf,
-        &mut folder_lang_cache, &frontmatter_scan_cache,
+        &mut folder_lang_cache, &frontmatter_scan_cache, site_config.lang_declared,
     );
     if let Err(e) = folder_lang_cache.save(&folder_lang_cache_path) {
         log::info!("failed to persist folder-lang cache: {}", e);

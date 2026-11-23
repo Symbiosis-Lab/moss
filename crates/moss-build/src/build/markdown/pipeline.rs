@@ -455,12 +455,8 @@ impl Default for PageContext<'_> {
 /// `content` and `page.authored_source` are the page's public view
 /// (`MemberCascade::public_source`); this function never restricts them.
 ///
-/// `site_lang` is the site's default language, used as the final fallback
-/// when a document has no `lang:` frontmatter, no filename suffix, no
-/// ancestor lang folder, and content too short for `whatlang` to detect.
-/// The five-step priority chain (frontmatter > filename suffix > ancestor
-/// folder > content detection > site default) lives in
-/// [`crate::i18n::resolve_document_language`].
+/// `site_lang` is the language of a page with no `lang:`, filename suffix or
+/// folder language; the order is [`crate::i18n::resolve_document_language`]'s.
 pub fn process_markdown_file(
     file_path: &str,
     content: &str,

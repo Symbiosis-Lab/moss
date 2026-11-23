@@ -4,6 +4,7 @@
 //! and maps results to our Language enum.
 
 use super::Language;
+pub use moss_core::page::site_sources::SiteLang;
 use crate::build::scan::path_collision::on_disk;
 use regex::Regex;
 use std::collections::HashMap;
@@ -473,19 +474,31 @@ pub fn resolve_site_default_lang(
     markdown_files: &[crate::types::content::FileInfo],
     root_path: &str,
 ) -> String {
-    let is_evicted = &crate::build::icloud::is_evicted_and_requested;
-    resolve_site_default_lang_with(explicit, homepage_file, markdown_files, root_path, is_evicted)
+    resolve_site_lang(explicit, homepage_file, markdown_files, root_path).code
 }
 
-/// [`resolve_site_default_lang`] with an injectable eviction predicate.
-pub(crate) fn resolve_site_default_lang_with(
+/// [`resolve_site_default_lang`], with whether the first two rungs answered:
+/// a declared site language holds on every page, so no folder's prose may
+/// outvote it (`build::scan::page_map::folder_lang`).
+pub fn resolve_site_lang(
+    explicit: Option<&str>,
+    homepage_file: Option<&str>,
+    markdown_files: &[crate::types::content::FileInfo],
+    root_path: &str,
+) -> SiteLang {
+    let is_evicted = &crate::build::icloud::is_evicted_and_requested;
+    resolve_site_lang_with(explicit, homepage_file, markdown_files, root_path, is_evicted)
+}
+
+/// [`resolve_site_lang`] with an injectable eviction predicate.
+pub(crate) fn resolve_site_lang_with(
     explicit: Option<&str>,
     homepage_file: Option<&str>,
     markdown_files: &[crate::types::content::FileInfo],
     root_path: &str,
     is_evicted: &dyn Fn(&std::path::Path) -> bool,
-) -> String {
-    moss_core::page::site_sources::resolve_site_default_lang(
+) -> SiteLang {
+    moss_core::page::site_sources::resolve_site_lang(
         explicit,
         || homepage_frontmatter_lang(homepage_file, root_path, is_evicted),
         || detect_project_language(markdown_files, root_path, is_evicted).map(|lang| lang.code().to_string()),

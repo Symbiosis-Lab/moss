@@ -97,22 +97,23 @@ pub(crate) fn folder_of(file_path: &str) -> String {
 }
 
 /// Resolve the inferred language for every folder in `markdown_files` that
-/// carries no language-naming convention. Folders a naming convention
-/// already answers for (`ancestor_lang_from_path` is `Some`) get no entry
-/// here — the caller doesn't need one, rung 3 is already satisfied by the
-/// path alone. Returns `folder_path -> Language` for the rest, omitting any
-/// folder whose files yielded no confident detection at all (callers fall
-/// through to the site default, same as an undetectable single page used
-/// to).
+/// carries no language-naming convention. A folder's own declaration always
+/// counts; its prose is read only when `site_lang_declared` is false, since a
+/// declared site language holds on every page whose words lean another way.
+/// Folders a naming convention already answers for (`ancestor_lang_from_path`
+/// is `Some`) get no entry: the path alone settles them. Returns
+/// `folder_path -> Language` for the rest, omitting any folder with neither a
+/// declaration nor a confident vote (its pages take the site language).
 pub(crate) fn resolve_folder_languages(
     markdown_files: &[crate::types::content::FileInfo],
     source_path: &Path,
     cache: &mut FolderLangCache,
     declarations: &super::frontmatter_cache::FrontmatterScanCache,
+    site_lang_declared: bool,
 ) -> HashMap<String, Language> {
     let locate = |p: &str| on_disk(source_path, p);
     let is_evicted = &crate::build::icloud::is_evicted_and_requested;
-    resolve_folder_languages_with(markdown_files, &locate, is_evicted, cache, declarations)
+    resolve_folder_languages_with(markdown_files, &locate, is_evicted, cache, declarations, site_lang_declared)
 }
 
 /// [`resolve_folder_languages`] with each file read from `locate(path)` and
@@ -123,6 +124,7 @@ pub(super) fn resolve_folder_languages_with(
     is_evicted: &dyn Fn(&Path) -> bool,
     cache: &mut FolderLangCache,
     declarations: &super::frontmatter_cache::FrontmatterScanCache,
+    site_lang_declared: bool,
 ) -> HashMap<String, Language> {
     let mut by_folder: HashMap<String, Vec<&crate::types::content::FileInfo>> = HashMap::new();
     for file_info in markdown_files {
@@ -158,6 +160,7 @@ pub(super) fn resolve_folder_languages_with(
                 continue;
             }
             Declaration::Unrepresentable => continue,
+            Declaration::None if site_lang_declared => continue,
             Declaration::None => {}
         }
 
@@ -300,7 +303,7 @@ mod tests {
     ) -> HashMap<String, Language> {
         let scanned =
             super::super::frontmatter_cache::FrontmatterScanCache::scanned_for_test(files, root);
-        resolve_folder_languages(files, root, cache, &scanned)
+        resolve_folder_languages(files, root, cache, &scanned, false)
     }
 
     fn file(path: &str) -> FileInfo {
@@ -380,10 +383,10 @@ mod tests {
         let evicted = |p: &Path| p.ends_with("b.md");
 
         let mut cache = FolderLangCache::default();
-        resolve_folder_languages_with(&files, &locate, &evicted, &mut cache, &scanned);
+        resolve_folder_languages_with(&files, &locate, &evicted, &mut cache, &scanned, false);
         assert!(cache.entries.is_empty(), "a partial read must not be recorded");
 
-        resolve_folder_languages_with(&files, &locate, &|_| false, &mut cache, &scanned);
+        resolve_folder_languages_with(&files, &locate, &|_| false, &mut cache, &scanned, false);
         assert!(cache.entries.contains_key("half"), "a whole read is recorded");
     }
 
@@ -428,6 +431,31 @@ mod tests {
             .unwrap();
         let typo = resolve(&files, dir.path(), &mut cache);
         assert_eq!(typo.get("notes"), Some(&Language::En));
+    }
+
+    /// On a site that declares its language only declarations speak: the
+    /// folder's prose is not read, its index's `lang:` still is.
+    #[test]
+    fn a_declared_site_language_silences_the_vote_but_not_a_folder_declaration() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("notes")).unwrap();
+        std::fs::write(
+            dir.path().join("notes/one.md"),
+            "This is a note about software engineering and web development, \
+             written at some length so that it clears the floor and votes.",
+        )
+        .unwrap();
+        let index = dir.path().join("notes/index.md");
+        std::fs::write(&index, "---\ntitle: Notes\n---\n\nA folder of notes.").unwrap();
+        let files = vec![file("notes/index.md"), file("notes/one.md")];
+        let scanned = || super::super::frontmatter_cache::FrontmatterScanCache::scanned_for_test(&files, dir.path());
+
+        let quiet = resolve_folder_languages(&files, dir.path(), &mut FolderLangCache::default(), &scanned(), true);
+        assert_eq!(quiet.get("notes"), None);
+
+        std::fs::write(&index, "---\ntitle: Notes\nlang: en\n---\n\nA folder of notes.").unwrap();
+        let declared = resolve_folder_languages(&files, dir.path(), &mut FolderLangCache::default(), &scanned(), true);
+        assert_eq!(declared.get("notes"), Some(&Language::En));
     }
 
     /// A folder with no naming convention and mixed-language files

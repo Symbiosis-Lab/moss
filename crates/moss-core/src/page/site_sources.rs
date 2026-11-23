@@ -68,19 +68,41 @@ pub fn declared_lang_in_text(text: &str) -> Option<String> {
     crate::home::is_known_language_code(lang).then(|| lang.to_string())
 }
 
+/// A site's language, and whether its author declared it. A declared language
+/// holds on every page; a guessed one leaves room for each folder's own guess.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SiteLang {
+    pub code: String,
+    pub declared: bool,
+}
+
+impl SiteLang {
+    /// The interface language; English where moss has no table for the code.
+    pub fn language(&self) -> crate::i18n::Language {
+        crate::i18n::Language::from_code(&self.code).unwrap_or(crate::i18n::Language::En)
+    }
+}
+
 /// Explicit configuration, home frontmatter, detected prose, then English; the
 /// first known code wins, and a later rung is read only when every earlier one fails.
 /// Lowercased because consumers compare the code as a string, though validation folds case.
-pub fn resolve_site_default_lang(explicit: Option<&str>, home: impl FnOnce() -> Option<String>,
-    detected: impl FnOnce() -> Option<String>) -> String {
+pub fn resolve_site_lang(explicit: Option<&str>, home: impl FnOnce() -> Option<String>,
+    detected: impl FnOnce() -> Option<String>) -> SiteLang {
     let known = |code: &str| {
         let code = code.trim();
         crate::home::is_known_language_code(code).then(|| code.to_lowercase())
     };
-    explicit.and_then(known)
-        .or_else(|| home().as_deref().and_then(known))
-        .or_else(|| detected().as_deref().and_then(known))
-        .unwrap_or_else(|| "en".to_string())
+    if let Some(code) = explicit.and_then(known).or_else(|| home().as_deref().and_then(known)) {
+        return SiteLang { code, declared: true };
+    }
+    let code = detected().as_deref().and_then(known).unwrap_or_else(|| "en".to_string());
+    SiteLang { code, declared: false }
+}
+
+/// [`resolve_site_lang`]'s code alone.
+pub fn resolve_site_default_lang(explicit: Option<&str>, home: impl FnOnce() -> Option<String>,
+    detected: impl FnOnce() -> Option<String>) -> String {
+    resolve_site_lang(explicit, home, detected).code
 }
 
 pub fn site_bundle(mut sources: SiteSources) -> (SiteBundle, Vec<String>) {

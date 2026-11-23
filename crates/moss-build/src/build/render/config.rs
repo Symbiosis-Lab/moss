@@ -31,6 +31,10 @@ pub struct SiteConfig {
     /// the render path maps it to a `Language` and falls back to English
     /// itself, where the fallback means "no translation table".
     pub lang: String,
+    /// Whether the author declared `lang` (`[site] lang` or the home page's
+    /// `lang:`). A declared language holds on every page; only a guessed one
+    /// lets each folder's prose decide its own.
+    pub lang_declared: bool,
     pub typesetting: Option<String>,
     pub content_width: Option<String>,
     pub comments: Option<bool>,
@@ -202,6 +206,7 @@ impl Default for SiteConfig {
     fn default() -> Self {
         Self {
             lang: "en".to_string(),
+            lang_declared: false,
             // Every other field keeps the derived zero it has always had —
             // written out rather than `..Default::default()` (which cannot
             // recurse) so a new field is a compile error here, not a silent

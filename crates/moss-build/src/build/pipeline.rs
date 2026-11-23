@@ -1322,7 +1322,7 @@ fn build_inner(
     // ONE resolve for the whole build, off the ONE config parse above (see
     // `site_comments` just below too) — two ladders that could drift is how
     // this presented before, as English email chrome on a Chinese site.
-    let site_lang = crate::i18n::detect::resolve_site_default_lang(
+    let crate::i18n::detect::SiteLang { code: site_lang, declared: site_lang_declared } = crate::i18n::detect::resolve_site_lang(
         cfg.as_ref().and_then(|c| c.site_lang()),
         project_structure.homepage_file.as_deref(),
         &project_structure.markdown_files,
@@ -1452,6 +1452,7 @@ fn build_inner(
     }
     let site_config = crate::build::render::SiteConfig {
         lang: site_lang.clone(),
+        lang_declared: site_lang_declared,
         typesetting: site_str("typesetting"),
         content_width: site_str("content_width"),
         comments: site_comments,

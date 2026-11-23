@@ -68,6 +68,10 @@ fn language_ladder_normalizes_and_falls_through() {
     }
     let lang = resolve_site_default_lang(Some("de"), || panic!("home read"), || panic!("prose detected"));
     assert_eq!(lang, "de", "a later rung is never read once an earlier one holds");
+    for (explicit, home, declared) in [(Some("zh-tw"), None, true), (Some("invalid"), Some("ja"), true), (Some("invalid"), Some("invalid"), false), (None, None, false)] {
+        let site = resolve_site_lang(explicit, || home.map(str::to_string), || Some("zh-hans".to_string()));
+        assert_eq!(site.declared, declared, "{explicit:?} {home:?}");
+    }
     assert_eq!(declared_lang_in_text("---\nlang: ' FR '\n---").as_deref(), Some("FR"));
     assert_eq!(declared_lang_in_text("---\nlang: invalid\n---"), None);
 }

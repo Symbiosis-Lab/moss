@@ -51,6 +51,7 @@ All notable changes to moss will be documented here.
 - A channel not yet signed in shows only its Sign in action in settings, instead of "Couldn't check …": a plugin's `copy_account` refusal with cause `auth` now means signed out.
 - A heading inside a grid cell (a figure's number, a card's title) is no longer listed in the page's contents; a page whose only `##` headings are in cells lists its `###` sections.
 - On a wide screen, a page's contents stay in the left margin from the top of the page to the bottom. Before, near the end of a long article they faded out and moved back into the floating nav's sections button.
+- A site that declares its language (`[site] lang`, or `lang:` on the home page) keeps it on every page. A Chinese page full of English names or bios was built as English (`<html lang="en">` and English interface text) because moss guessed its folder's language from the text. Now only a page's own `lang:`, a folder index's `lang:`, a language folder or a filename suffix overrides the site, and the guess is made only on a site that declares no language. A site that relied on the guess to make a folder another language sets `lang:` in that folder's `index.md`.
 
 ### Removed
 
