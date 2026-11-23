@@ -16,6 +16,7 @@
 import { COPY, langBucket, type Lang, type SubscribeCopy } from './i18n.js';
 import { claim, inPreview, lockSlotWidth, setState } from './hosted-form.js';
 import { observeCaptcha, prewarmCaptcha, solveCaptcha } from './captcha.js';
+import { clearField, markField } from '../forms/fields.js';
 import { answersOf, checkQuestions, showAddress, watchQuestions } from './questions.js';
 
 type StatusKey = 'check-email' | 'error';
@@ -125,6 +126,15 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
           return;
         }
         [res, data] = await post();
+      }
+      // The service's own address check marks the field as the browser's would.
+      const emailField = form.querySelector<HTMLElement>('[data-field="email"]');
+      if (res.status === 400 && data.error === 'Invalid email address' && asks && emailField) {
+        clearField(emailField);
+        markField(form, emailField, 'email');
+        input.focus();
+        setState(form, 'idle', btn);
+        return;
       }
       // A 2xx that does not say the address is subscribed (an empty or
       // unreadable body, a proxy's page) is not a subscription.

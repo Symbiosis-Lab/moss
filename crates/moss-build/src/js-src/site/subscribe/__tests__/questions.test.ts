@@ -12,10 +12,12 @@ function mount(): HTMLFormElement {
         <div class="moss-form__field" data-field="email">
           <label class="moss-form__label" for="f-email">電郵</label>
           <input class="moss-input" type="email" id="f-email" name="email" required>
+          <p class="moss-form__error" id="f-email-error" hidden></p>
         </div>
         <div class="moss-form__field" data-field="name">
           <label class="moss-form__label" for="f-name">怎麼稱呼你</label>
           <input class="moss-input" type="text" id="f-name" name="name" required>
+          <p class="moss-form__error" id="f-name-error" hidden></p>
         </div>
         <fieldset class="moss-form__field moss-form__group" data-field="source" data-required="true">
           <legend>從哪裡知道</legend>
@@ -32,6 +34,7 @@ function mount(): HTMLFormElement {
         </fieldset>
         <span class="moss-btn-slot"><button type="submit" class="moss-btn"><span class="moss-btn__label"></span></button></span>
         <p class="moss-form__status"></p>
+        <div hidden><span data-copy="required">此項必填。</span><span data-copy="email">請輸入電子郵件地址。</span><span data-copy="pick_one">請至少選一項。</span><span data-copy="left">還要填寫：</span><span data-copy="sep">、</span></div>
         <div class="moss-subscribe-status" aria-live="polite" tabindex="-1"><span data-copy="check-email" hidden></span><span data-copy="error" hidden></span></div>
       </form>
     </div>`;
@@ -97,4 +100,44 @@ test('on success the status takes the focus, and the one-line form keeps it on i
     await vi.waitFor(() => expect(form.dataset.state).toBe('success'));
     expect(document.activeElement).toBe(asks ? form.querySelector('.moss-subscribe-status') : button);
   }
+});
+
+const submitWith = (form: HTMLFormElement, email: string, name: string) => {
+  set(form, 'f-email', email);
+  set(form, 'f-name', name);
+  set(form, 'f-s1', true);
+  form.requestSubmit();
+};
+
+test('the server refusing the address marks the email field with its own message, not the generic error', async () => {
+  fetchSpy.mockImplementation(async () => new Response(JSON.stringify({ error: 'Invalid email address' }), { status: 400 }));
+  const form = mount();
+  hydrateSubscribeForm(form);
+  submitWith(form, 'reader@example.com', '小明');
+  const email = form.querySelector<HTMLInputElement>('#f-email')!;
+  await vi.waitFor(() => expect(email.getAttribute('aria-invalid')).toBe('true'));
+  expect(form.querySelector('#f-email-error')!.textContent).toBe('請輸入電子郵件地址。');
+  expect(document.activeElement).toBe(email);
+  expect(form.dataset.state).toBe('idle');
+  expect(form.querySelector<HTMLElement>('.moss-subscribe-status')!.dataset.state).toBeUndefined();
+});
+
+test('a filled-in malformed address is called invalid, not listed as still to fill in', () => {
+  const form = mount();
+  hydrateSubscribeForm(form);
+  set(form, 'f-email', 'not-an-address');
+  set(form, 'f-s1', true);
+  form.requestSubmit();
+  const status = form.querySelector('.moss-form__status')!;
+  expect(status.textContent).toBe('還要填寫： 怎麼稱呼你');
+  expect(form.querySelector('#f-email-error')!.textContent).toBe('請輸入電子郵件地址。');
+  expect(fetchSpy).not.toHaveBeenCalled();
+});
+
+test('the still-to-fill-in list joins names with the page language separator', () => {
+  const form = mount();
+  form.querySelector('[data-copy="sep"]')!.textContent = ', ';
+  hydrateSubscribeForm(form);
+  form.requestSubmit();
+  expect(form.querySelector('.moss-form__status')!.textContent).toBe('還要填寫： 電郵, 怎麼稱呼你, 從哪裡知道');
 });

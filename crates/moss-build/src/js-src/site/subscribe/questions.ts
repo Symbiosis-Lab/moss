@@ -45,19 +45,22 @@ function nameOf(field: HTMLElement): string {
 export function checkQuestions(form: HTMLFormElement): boolean {
   const status = form.querySelector<HTMLElement>('.moss-form__status');
   const wrong: HTMLElement[] = [];
+  const missing: HTMLElement[] = [];
   form.querySelectorAll<HTMLElement>('[data-field]').forEach((field) => {
     clear(field);
     const key = problem(field);
     if (key) {
       mark(form, field, key);
       wrong.push(field);
+      if (key !== 'email') missing.push(field);
     }
   });
   if (status) status.replaceChildren();
   if (!wrong.length) return true;
-  if (status) {
+  // A malformed value is told by its own line; only what is empty is "still to fill in".
+  if (status && missing.length) {
     status.append(copy(form, 'left'), ' ');
-    wrong.forEach((field, i) => {
+    missing.forEach((field, i) => {
       const link = document.createElement('a');
       const target = openOther(field) ?? controls(field)[0];
       link.href = `#${target?.id ?? ''}`;
@@ -66,7 +69,7 @@ export function checkQuestions(form: HTMLFormElement): boolean {
         e.preventDefault();
         target?.focus();
       });
-      if (i) status.append('、');
+      if (i) status.append(copy(form, 'sep'));
       status.append(link);
     });
   }

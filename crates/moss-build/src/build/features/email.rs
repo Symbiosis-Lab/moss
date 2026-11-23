@@ -463,7 +463,7 @@ fn render_subscribe_with_questions(
         parts.insert(0, email_field);
     }
     let questions = parts.join("\n");
-    let copy = super::forms::copy_block(lang, &[("required", "form_required"), ("format", "form_format"), ("email", "form_email"), ("pick_one", "form_pick_one"), ("left", "form_left")]);
+    let copy = super::forms::copy_block(lang, &[("required", "form_required"), ("format", "form_format"), ("email", "form_email"), ("pick_one", "form_pick_one"), ("left", "form_left"), ("sep", "name_separator")]);
     format!(
         r#"<div class="moss-subscribe moss-form" data-state="idle">
 <form class="moss-subscribe-form" data-position="stacked" data-moss-hosted="true"{pending_attr}{override_attr} method="post" action="{action}">

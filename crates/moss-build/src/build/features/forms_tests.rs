@@ -118,3 +118,10 @@ fn author_text_is_escaped() {
     let h = render_form(&f, Language::En, None);
     assert!(!h.contains("<b>") && h.contains("&lt;b&gt;"), "{h}");
 }
+
+#[test]
+fn copy_block_carries_the_page_languages_list_separator() {
+    let spans = |lang| copy_block(lang, &[("sep", "name_separator")]);
+    assert!(spans(Language::En).contains(r#"<span data-copy="sep">, </span>"#));
+    assert!(spans(Language::ZhHant).contains(r#"<span data-copy="sep">、</span>"#));
+}
