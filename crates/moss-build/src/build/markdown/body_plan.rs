@@ -116,7 +116,7 @@ pub enum BodySegment {
 
 /// An inline `:::subscribe` form as its typed arguments and the HTML they
 /// rendered to.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SubscribeEmission {
     pub args: SubscribeShortcode,
     pub html: String,
