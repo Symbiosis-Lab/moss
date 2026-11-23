@@ -116,9 +116,14 @@ impl Seta {
 }
 
 /// A folder with a fresh identity, and `MOSS_SETA_URL` pointing at the mock.
+///
+/// It also holds the publish latch's test lock, taken before the environment
+/// lock as every publishing test does: a publish here widens the encode core
+/// budget, which the encode tests that hold that lock pin.
 pub(crate) struct Folder {
     pub(crate) dir: tempfile::TempDir,
     _env: std::sync::MutexGuard<'static, ()>,
+    _publishing: std::sync::MutexGuard<'static, ()>,
     prev_url: Option<String>,
 }
 
@@ -133,12 +138,13 @@ impl Drop for Folder {
 
 impl Folder {
     pub(crate) fn new(seta: &Seta) -> Folder {
+        let publishing = crate::deploy::freeze::single_flight_tests::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         crate::identity::Identity::generate().unwrap().save(dir.path()).unwrap();
         let prev_url = std::env::var("MOSS_SETA_URL").ok();
         std::env::set_var("MOSS_SETA_URL", &seta.url);
-        Folder { dir, _env: env, prev_url }
+        Folder { dir, _env: env, _publishing: publishing, prev_url }
     }
 
     fn pubkey(&self) -> String {
