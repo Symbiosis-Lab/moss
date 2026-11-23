@@ -565,6 +565,33 @@ async fn title_cards_do_not_block_preview_and_settle_in_pipeline_seal() {
     assert!(stage.join(cards[0]).exists());
 }
 
+/// A build whose site has no picture left still sweeps the advisory the last one
+/// left in this process.
+#[tokio::test]
+async fn a_build_with_no_pictures_left_sweeps_the_last_ones_advisory() {
+    use crate::advisory::{Action, Advisory, Scope, Severity};
+    use crate::build::media::image::{compute_image_item_fingerprint, end_image_item, image_item_advisories, mark_image_items_pending, ImageCompressionConfig};
+    let folder = TempDir::new().unwrap();
+    fs::write(folder.path().join("index.md"), "# Home\n").unwrap();
+    image::RgbImage::from_pixel(40, 30, image::Rgb([200, 30, 30])).save(folder.path().join("gone.png")).unwrap();
+    let root = crate::vault::paths::VaultRoot::resolve(folder.path());
+    let fingerprint = std::sync::Arc::new(compute_image_item_fingerprint(root.as_str(), std::path::Path::new("gone.png"), &ImageCompressionConfig::default()).unwrap());
+    let advisory = Advisory::for_source(Scope::File, Severity::ShippedDegraded, "gone.png", "800w: rung encode failed".to_string(), Action::None);
+    let _marks = mark_image_items_pending(root.as_str(), [("gone.png".to_string(), fingerprint.clone())]);
+    end_image_item(root.as_str(), "gone.png", &fingerprint, true, &[advisory]);
+    fs::remove_file(folder.path().join("gone.png")).unwrap();
+
+    let project = scan_folder(root.as_str()).unwrap();
+    let port = crate::build::ports::port_of_this_build(None, None);
+    let services = BuildServices::headless();
+    let result = run(&root, None, None, &port, Some(&services), None, &project, None,
+        crate::build::render::IncrementalGates::default(),
+        crate::build::feeds::search_lane::Freshness::Now, &test_cache_keys()).unwrap();
+    result.bg_handle.unwrap().await_completion().await.unwrap();
+
+    assert!(image_item_advisories(root.as_str(), "gone.png").is_empty(), "the removed picture's advisory outlived the build");
+}
+
 #[test]
 fn test_build_empty_folder_returns_true() {
     let (test_dir, _cleanup) = create_test_dir();

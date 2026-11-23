@@ -1940,7 +1940,6 @@ fn build_inner(
 
     let bg_handle = {
         // Clone what we need before consuming background_ctx by video dispatch.
-        let image_items_empty = background_ctx.image_items.is_empty();
         let og_requests = std::mem::take(&mut background_ctx.og_requests);
         let og_output = background_ctx.staging_dir.clone();
         let og_session = services.and_then(|s| s.session.clone());
@@ -2033,7 +2032,8 @@ fn build_inner(
             // run_image_conversion completes. When it joined another build's worker,
             // this worker stays until that work is done, so the seal holds it too,
             // or leaves it to a newer build and this build does not seal.
-            if !image_items_empty {
+            // Also with no pictures: the dispatch ends what the ones that left had marked.
+            {
                 let ctx_for_image = background_ctx.clone();
                 let tx_image = tx.clone();
                 crate::build::background::spawn_traced_worker(workers, move || {

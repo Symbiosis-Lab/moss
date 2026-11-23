@@ -1607,6 +1607,13 @@ fn image_mark_stands(folder: &str, path: &str, mark: &Arc<ImageFingerprint>) -> 
     ledgers.get(folder).and_then(|ledger| ledger.pending.get(path)).is_some_and(|marked| Arc::ptr_eq(marked, mark))
 }
 
+/// Whether `folder`'s ledger still marks or advises on any image. Read-only, so
+/// a folder that never had a picture gets no ledger.
+fn image_ledger_records_any(folder: &str) -> bool {
+    IMAGE_LEDGERS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(folder)
+        .is_some_and(|ledger| !ledger.pending.is_empty() || !ledger.advisories.is_empty())
+}
+
 /// The advisories recorded for `path` alongside its last delivered
 /// fingerprint — what a skip-carried image still has to say, re-emitted by
 /// `dispatch_image_conversions` in that image's stead when it carries the
@@ -2603,8 +2610,9 @@ fn heal_and_verify_variant(
 /// the same `BackgroundContext`. We clone only what we need into an owned
 /// `ImageRunContext` for the `'static` spawn.
 ///
-/// Empty `image_items` → return early. Terminal receipts are not this worker's
-/// concern at all — see `BuildTerminalBarrier`.
+/// Returns early when there is no image and the folder's ledger records none
+/// (see the guard). Terminal receipts are not this worker's concern at all —
+/// see `BuildTerminalBarrier`.
 ///
 /// When `tx` is `Some`, each produced `.webp` path is registered via the
 /// coordinator channel instead of the legacy `update_image_hashes` disk write.
@@ -2658,11 +2666,10 @@ pub(crate) fn dispatch_image_conversions_at(
     render: Option<u64>,
 ) -> Result<(), crate::build::background::BuildError> {
     let prelude = crate::build::phase::PhaseTrace::start("media_prelude");
-    if ctx.image_items.is_empty() {
-        return Ok(());
-    }
-
-    let Some(svc) = services else { return Ok(()) };
+    // A site whose last picture just left still ends that picture's mark and
+    // sweeps its advisory, so only a folder with nothing recorded returns here.
+    let has_work = !ctx.image_items.is_empty() || image_ledger_records_any(&ctx.source_path);
+    let Some(svc) = services.filter(|_| has_work) else { return Ok(()) };
 
     let config = ImageCompressionConfig::default();
 

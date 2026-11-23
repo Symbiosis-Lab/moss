@@ -7521,6 +7521,33 @@ async fn an_image_that_leaves_the_site_while_its_worker_waits_for_a_core_is_not_
     assert!(!staged("pic.webp"), "the worker encoded an image the site no longer lists");
 }
 
+/// The same when the picture that leaves is the site's last: a dispatch with no
+/// pictures left still ends the marks of the ones it dropped.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_last_image_leaving_the_site_while_its_worker_waits_for_a_core_is_not_encoded() {
+    use crate::system::folder_session::{CorePool, Encoder};
+    let vault = RewriteVault::new();
+    vault.write_pic([200, 30, 30]);
+    let pool = CorePool::own();
+    let all = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let busy: Vec<_> = (0..all).map(|_| pool.take(|| all, Encoder::Picture, &|| false).unwrap()).collect();
+    let workers = std::sync::Arc::new(HeldSpawner::default());
+    let services = || BuildServices { encode_pool: Some(pool), ..workers.services() };
+
+    vault.dispatch(vault.collect_of(&["pic.png"]), services()).await;
+    let running = tokio::spawn({
+        let workers = workers.clone();
+        async move { workers.run_held().await }
+    });
+    // Long enough for the worker to reach the core budget and park on it.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    vault.dispatch(Vec::new(), services()).await;
+    drop(busy);
+    running.await.unwrap();
+
+    assert!(!vault.moss_dir.join("build/staging/pic.webp").exists(), "the worker encoded the last image after the site dropped it");
+}
+
 /// A worker vouches for the source its dispatch saw. One that read the file later has
 /// looked at bytes nobody fingerprinted, and when the blocking phase had already handed it
 /// the hash of the OLD bytes (a stat-matched index entry, so no read) it encoded nothing of
