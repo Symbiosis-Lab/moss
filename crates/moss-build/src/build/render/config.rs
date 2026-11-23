@@ -157,6 +157,8 @@ pub struct SiteConfig {
     pub booking: Option<Result<crate::config::services::BookingService, String>>,
     /// Who may subscribe, which is what opens members pages.
     pub members: crate::config::services::MembersConfig,
+    /// The folder's moderation as the build reads it; `None` with comments off.
+    pub comment_moderation: Option<crate::build::features::comment::link_block::CommentModeration>,
     /// Decoded geography, gazetteer, place namespace and locator preference.
     pub place_maps: Option<crate::build::place_map::PlaceMapRenderContext>,
     /// What this build may reuse from the last one. Both bits are
@@ -228,6 +230,7 @@ impl Default for SiteConfig {
             forms_endpoint: None,
             booking: None,
             members: Default::default(),
+            comment_moderation: None,
             place_maps: None,
             incremental: IncrementalGates::default(),
             derivations: None,

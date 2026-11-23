@@ -1,14 +1,15 @@
-//! `moss comments` — list, hide and unhide a site's comments from the
-//! command line.
+//! `moss comments` — list, hide, unhide and mark as spam a site's comments
+//! from the command line, and list and unblock the link hosts spam blocked.
 //!
 //! Hiding is a signed event appended to `moderation.jsonl` (see
 //! [`super::moderation`]); nothing is erased and nothing is sent anywhere, so
 //! `unhide` is just a later event. The command lives beside the comment
 //! feature rather than in `cli/`, which is at its file budget.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 
+use super::link_block::{active_blocks, comment_hosts, host_of, own_hosts, LINK_SOURCE};
 use super::moderation::{append_owner_event, load_mod_events, site_value, ModKind};
 use super::reduce::resolve_detailed;
 use super::{load_all_social_comments, MATTERS_DOMAIN_FALLBACK};
@@ -21,10 +22,16 @@ fn usage() -> &'static str {
   moss comments list [<folder>] [--json]
   moss comments hide [<folder>] <id>... [--source <name>] [--json]
   moss comments unhide [<folder>] <id>... [--source <name>] [--json]
+  moss comments spam [<folder>] <id>... [--source <name>] [--json]
+  moss comments blocked [<folder>] [--json]
+  moss comments unblock [<folder>] <host>... [--json]
   moss comments adopt-key [<folder>] <pubkey> [--json]
 
 list shows every comment, newest first, and marks the hidden ones; it needs no build.
 hide and unhide change what the next publish shows: nothing is erased, and `unhide` reverses `hide`.
+spam hides the comments and blocks every link host in them, except the site's own and any a comment you
+unhid links to: the next publish hides other comments linking to those hosts and the comment form refuses them.
+blocked lists the blocked hosts; unblock removes one.
 Hiding needs the site's own signing key (.moss/identity) and never creates one.
 <id> is a comment id from `list`; pass --source when the same id exists under two sources.
 adopt-key keeps the hides of this site's earlier key in force after its key was replaced along with
@@ -46,6 +53,8 @@ struct Row {
     hidden: bool,
     /// Hidden by an event on this very comment, not only through its parent.
     directly_hidden: bool,
+    /// The link hosts the comment carries.
+    hosts: BTreeSet<String>,
 }
 
 impl Row {
@@ -122,19 +131,12 @@ fn collect(project_path: &str) -> (Vec<Row>, bool) {
     let mut rows = Vec::new();
     let mut unresolved = false;
     for (uid, comments) in &all {
-        let (visible, direct): (Option<HashSet<(&str, &str)>>, HashSet<(&str, &str)>) =
-            if !owners.is_empty() && !events.is_empty() {
-                let (shown, direct) = resolve_detailed(comments, &events, &owners);
-                (Some(shown.iter().map(|c| (c.source.as_str(), c.id.as_str())).collect()), direct)
-            } else {
-                (None, HashSet::new())
-            };
+        let (shown, direct) = resolve_detailed(comments, &events, &owners);
+        let visible: HashSet<(&str, &str)> = shown.iter().map(|c| (c.source.as_str(), c.id.as_str())).collect();
         let article = by_uid.get(uid.as_str());
         unresolved |= article.is_none();
         for c in comments {
-            let hidden = visible
-                .as_ref()
-                .is_some_and(|v| !v.contains(&(c.source.as_str(), c.id.as_str())));
+            let hidden = !visible.contains(&(c.source.as_str(), c.id.as_str()));
             let directly_hidden = direct.contains(&(c.source.as_str(), c.id.as_str()));
             rows.push(Row {
                 id: c.id.clone(),
@@ -152,6 +154,7 @@ fn collect(project_path: &str) -> (Vec<Row>, bool) {
                 text: excerpt(&c.content),
                 hidden,
                 directly_hidden,
+                hosts: comment_hosts(c),
             });
         }
     }
@@ -254,7 +257,7 @@ pub fn run(args: &[String]) -> i32 {
         println!("{}", usage());
         return 0;
     }
-    if !matches!(action.as_str(), "list" | "hide" | "unhide" | "adopt-key") {
+    if !matches!(action.as_str(), "list" | "hide" | "unhide" | "spam" | "blocked" | "unblock" | "adopt-key") {
         eprintln!("error: unknown comments subcommand '{action}'\n{}", usage());
         return 1;
     }
@@ -289,6 +292,18 @@ pub fn run(args: &[String]) -> i32 {
         }
         return run_list(project_path, parsed.json);
     }
+    if action == "blocked" {
+        if !parsed.ids.is_empty() || parsed.source.is_some() {
+            return fail("`moss comments blocked` takes only a folder and --json", parsed.json);
+        }
+        return run_blocked(project_path, parsed.json);
+    }
+    if action == "unblock" {
+        if parsed.ids.is_empty() {
+            return fail("`moss comments unblock` needs at least one host; `moss comments blocked` lists them", parsed.json);
+        }
+        return run_unblock(project_path, &parsed);
+    }
     if action == "adopt-key" {
         let [pubkey] = parsed.ids.as_slice() else {
             return fail("`moss comments adopt-key` takes one public key", parsed.json);
@@ -309,7 +324,208 @@ pub fn run(args: &[String]) -> i32 {
             parsed.json,
         );
     }
+    if action == "spam" {
+        return run_spam(project_path, &parsed);
+    }
     run_moderate(project_path, action == "hide", &parsed)
+}
+
+/// The hosts blocked now, sorted.
+fn blocked_now(project_path: &str) -> Vec<String> {
+    let owners = crate::identity::keypair::Identity::read_trusted_pubkeys(Path::new(project_path));
+    active_blocks(&load_mod_events(project_path), &owners).into_keys().map(str::to_string).collect()
+}
+
+fn run_blocked(project_path: &str, json: bool) -> i32 {
+    let hosts = blocked_now(project_path);
+    if json {
+        println!("{}", serde_json::json!(hosts));
+    } else if hosts.is_empty() {
+        println!("No blocked hosts.");
+    } else {
+        for h in &hosts {
+            println!("{}", safe(h));
+        }
+    }
+    0
+}
+
+fn run_unblock(project_path: &str, parsed: &Parsed) -> i32 {
+    let blocked = blocked_now(project_path);
+    let mut hosts = Vec::new();
+    for raw in &parsed.ids {
+        let Some(host) = host_of(raw) else {
+            return fail(&format!("'{}' is not a host; nothing was changed", safe(raw)), parsed.json);
+        };
+        if !blocked.contains(&host) {
+            return fail(&format!("{host} is not blocked; nothing was changed. `moss comments blocked` lists the blocked hosts"), parsed.json);
+        }
+        if !hosts.contains(&host) {
+            hosts.push(host);
+        }
+    }
+    let site = site_of(project_path);
+    for host in &hosts {
+        if let Err(e) = append_owner_event(project_path, ModKind::Unblock, LINK_SOURCE, host, "", &site) {
+            return fail(&e, parsed.json);
+        }
+    }
+    if parsed.json {
+        println!("{}", serde_json::json!({ "unblocked": hosts }));
+    } else {
+        println!("Unblocked {}. The change takes effect at the next publish.", hosts.join(", "));
+    }
+    0
+}
+
+/// The rows `ids` name, or the message for the first that names none or
+/// several. Every id is checked before anything is written.
+fn find_rows<'r>(rows: &'r [Row], parsed: &Parsed) -> Result<Vec<&'r Row>, String> {
+    let mut found = Vec::new();
+    let mut seen = HashSet::new();
+    for id in &parsed.ids {
+        if !seen.insert(id.as_str()) {
+            continue;
+        }
+        let matches: Vec<&Row> = rows
+            .iter()
+            .filter(|r| &r.id == id && parsed.source.as_deref().is_none_or(|s| r.source == s))
+            .collect();
+        let mut sources: Vec<&str> = matches.iter().map(|r| r.source.as_str()).collect();
+        sources.sort();
+        sources.dedup();
+        match (matches.first(), sources.len()) {
+            (None, _) => {
+                let scope = parsed.source.as_deref().map(|s| format!(" from source '{s}'")).unwrap_or_default();
+                return Err(format!("no comment with id '{id}'{scope}; nothing was changed. `moss comments list` shows the ids"));
+            }
+            (Some(_), n) if n > 1 => {
+                return Err(format!(
+                    "id '{id}' exists under several sources ({}); say which with --source <name>. Nothing was changed",
+                    sources.join(", ")
+                ));
+            }
+            (Some(row), _) => found.push(*row),
+        }
+    }
+    Ok(found)
+}
+
+/// What Spam did, for the line or toast that names it and for Undo.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SpamOutcome {
+    /// `(source, id)` of each comment this call hid; one already hidden is not here.
+    pub hidden: Vec<(String, String)>,
+    pub blocked: BTreeSet<String>,
+    /// Hosts left unblocked because a comment the owner unhid links to them.
+    pub not_blocked: BTreeSet<String>,
+    /// Other comments the new blocks hide.
+    pub also_hidden: usize,
+}
+
+impl SpamOutcome {
+    /// `Spam · a.example, b.example blocked · 4 more comments hidden`.
+    pub fn line(&self) -> String {
+        let mut line = String::from("Spam");
+        if !self.blocked.is_empty() {
+            line.push_str(&format!(" · {} blocked", self.blocked.iter().map(String::as_str).collect::<Vec<_>>().join(", ")));
+        }
+        match self.also_hidden {
+            0 => {}
+            1 => line.push_str(" · 1 more comment hidden"),
+            n => line.push_str(&format!(" · {n} more comments hidden")),
+        }
+        line
+    }
+}
+
+/// Spam: hide each `(source, id)` (already hidden ones included) and block
+/// every host they link to that is not the site's own, not already blocked,
+/// and not linked from a comment the owner unhid: other comments still shown
+/// with the same host are usually the same spammer, and the line names what
+/// was blocked so a wrong host is seen and undone.
+pub fn mark_spam(project_path: &str, targets: &[(String, String)]) -> Result<SpamOutcome, String> {
+    let (rows, _) = collect(project_path);
+    let events = load_mod_events(project_path);
+    let owners = crate::identity::keypair::Identity::read_trusted_pubkeys(Path::new(project_path));
+    let unhid: HashSet<(&str, &str)> = super::link_block::latest_by_target(&events, &owners, ["hide", "unhide"])
+        .into_iter()
+        .filter(|(_, e)| e.kind == "unhide")
+        .map(|(k, _)| k)
+        .collect();
+    let is_target = |r: &Row| targets.iter().any(|(source, id)| *id == r.id && *source == r.source);
+    let chosen: Vec<&Row> = rows.iter().filter(|r| is_target(r)).collect();
+    if let Some((source, id)) = targets.iter().find(|(s, i)| !chosen.iter().any(|r| r.source == *s && r.id == *i)) {
+        return Err(format!("no comment with id '{id}' from source '{source}'; nothing was changed"));
+    }
+    let own = own_hosts(project_path);
+    let blocked: BTreeSet<String> = blocked_now(project_path).into_iter().collect();
+    let kept_hosts: BTreeSet<&String> = rows
+        .iter()
+        .filter(|r| !r.hidden && !is_target(r) && unhid.contains(&(r.source.as_str(), r.id.as_str())))
+        .flat_map(|r| &r.hosts)
+        .collect();
+    let mut outcome = SpamOutcome::default();
+    for host in chosen.iter().flat_map(|r| &r.hosts).filter(|h| !own.contains(*h) && !blocked.contains(*h)) {
+        let into = if kept_hosts.contains(host) { &mut outcome.not_blocked } else { &mut outcome.blocked };
+        into.insert(host.clone());
+    }
+
+    let site = site_of(project_path);
+    for row in chosen.iter().filter(|r| !r.directly_hidden) {
+        append_owner_event(project_path, ModKind::Hide, &row.source, &row.id, &row.page_uid, &site)?;
+        outcome.hidden.push((row.source.clone(), row.id.clone()));
+    }
+    for host in &outcome.blocked {
+        append_owner_event(project_path, ModKind::Block, LINK_SOURCE, host, "", &site)?;
+    }
+    let before: HashSet<(&str, &str)> = rows.iter().filter(|r| r.hidden).map(|r| (r.source.as_str(), r.id.as_str())).collect();
+    outcome.also_hidden = collect(project_path)
+        .0
+        .iter()
+        .filter(|r| r.hidden && !is_target(r) && !before.contains(&(r.source.as_str(), r.id.as_str())))
+        .count();
+    Ok(outcome)
+}
+
+/// Undo of [`mark_spam`]: unhide what it hid and unblock what it blocked.
+pub fn undo_spam(project_path: &str, outcome: &SpamOutcome) -> Result<(), String> {
+    let site = site_of(project_path);
+    let (rows, _) = collect(project_path);
+    for (source, id) in &outcome.hidden {
+        let page = rows.iter().find(|r| r.source == *source && r.id == *id).map_or("", |r| r.page_uid.as_str());
+        append_owner_event(project_path, ModKind::Unhide, source, id, page, &site)?;
+    }
+    for host in &outcome.blocked {
+        append_owner_event(project_path, ModKind::Unblock, LINK_SOURCE, host, "", &site)?;
+    }
+    Ok(())
+}
+
+fn run_spam(project_path: &str, parsed: &Parsed) -> i32 {
+    let (rows, _) = collect(project_path);
+    let targets: Vec<(String, String)> = match find_rows(&rows, parsed) {
+        Ok(found) => found.iter().map(|r| (r.source.clone(), r.id.clone())).collect(),
+        Err(e) => return fail(&e, parsed.json),
+    };
+    let outcome = match mark_spam(project_path, &targets) {
+        Ok(o) => o,
+        Err(e) => return fail(&e, parsed.json),
+    };
+    if parsed.json {
+        println!("{}", serde_json::to_string_pretty(&outcome).unwrap_or_default());
+        return 0;
+    }
+    println!("{}", outcome.line());
+    if !outcome.not_blocked.is_empty() {
+        println!(
+            "Not blocked, a comment you unhid links to it: {}",
+            outcome.not_blocked.iter().map(String::as_str).collect::<Vec<_>>().join(", ")
+        );
+    }
+    println!("The change takes effect at the next publish.");
+    0
 }
 
 /// The site value moderation events carry for this folder.
@@ -353,43 +569,14 @@ fn run_moderate(project_path: &str, hide: bool, parsed: &Parsed) -> i32 {
 
     // Validate every id before appending anything: a call applies to all of
     // its ids or to none.
+    let found = match find_rows(&rows, parsed) {
+        Ok(f) => f,
+        Err(e) => return fail(&e, parsed.json),
+    };
     let mut targets: Vec<&Row> = Vec::new();
     let mut unchanged: Vec<(&Row, &str)> = Vec::new();
-    let mut seen = HashSet::new();
-    for id in &parsed.ids {
-        if !seen.insert(id.as_str()) {
-            continue;
-        }
-        let matches: Vec<&Row> = rows
-            .iter()
-            .filter(|r| &r.id == id && parsed.source.as_deref().is_none_or(|s| r.source == s))
-            .collect();
-        let sources: HashSet<&str> = matches.iter().map(|r| r.source.as_str()).collect();
-        let row = match (matches.first(), sources.len()) {
-            (None, _) => {
-                let scope = parsed
-                    .source
-                    .as_deref()
-                    .map(|s| format!(" from source '{s}'"))
-                    .unwrap_or_default();
-                return fail(
-                    &format!("no comment with id '{id}'{scope}; nothing was changed. `moss comments list` shows the ids"),
-                    parsed.json,
-                );
-            }
-            (Some(_), n) if n > 1 => {
-                let mut names: Vec<&str> = sources.into_iter().collect();
-                names.sort();
-                return fail(
-                    &format!(
-                        "id '{id}' exists under several sources ({}); say which with --source <name>. Nothing was changed",
-                        names.join(", ")
-                    ),
-                    parsed.json,
-                );
-            }
-            (Some(row), _) => *row,
-        };
+    for row in found {
+        let id = &row.id;
         if hide && row.hidden {
             unchanged.push((row, "already hidden"));
         } else if !hide && !row.directly_hidden {

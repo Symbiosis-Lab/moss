@@ -108,6 +108,7 @@ pub struct BuildRecords {
     /// placeholder because their text was still being read. A publish waits
     /// for zero: a placeholder is not something to put on the web.
     pending_derivations: FolderSlot<usize>,
+    unverifiable_moderation: FolderSlot<usize>,
     /// How the newest build ended, with its build generation.
     build_end: FolderSlot<Option<(u64, BuildEnd)>>,
     /// What the last seal found going offline, and what the author accepted
@@ -243,6 +244,16 @@ impl BuildRecords {
     /// `None` means no render has recorded an answer yet.
     pub fn pending_derivations(&self, folder_path: &str) -> Option<usize> {
         self.pending_derivations.get(&Self::key(folder_path))
+    }
+
+    /// How many moderation events the last build found with no trusted key
+    /// verifying any of them; zero when the log verifies or comments are off.
+    pub fn record_unverifiable_moderation(&self, folder_path: &str, events: usize) {
+        self.unverifiable_moderation.record(Self::key(folder_path), events);
+    }
+
+    pub fn unverifiable_moderation(&self, folder_path: &str) -> Option<usize> {
+        self.unverifiable_moderation.get(&Self::key(folder_path))
     }
 
     /// `build_generation` orders the answers: a failed build can end after the

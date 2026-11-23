@@ -211,6 +211,8 @@ async fn push_prebuilt_inner(
         &crate::infra::app_advisory::t("preparing_publish"),
     );
 
+    crate::build::features::comment::link_block::refuse_prebuilt(project_folder, prebuilt_dir)?;
+
     // 1. Hash the directory into a manifest.
     let mut manifest = build_manifest_from_dir(prebuilt_dir)?;
     super::profile::count("manifest_files", manifest.len() as u64);

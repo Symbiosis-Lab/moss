@@ -353,19 +353,14 @@ pub fn generate_native_slots<'m>(
             })
             .collect();
 
-        // Apply owner moderation: signed hide/unhide events (moderation.jsonl) decide
-        // visibility, replacing the legacy replica-tombstone path. No events → no-op
-        // (the identity is not even loaded).
+        // Owner moderation: signed events in moderation.jsonl decide visibility.
+        // Events no trusted key verifies apply nothing; `link_block::emit`
+        // reports them and the publish gate refuses a log none of whose events verify.
         let mod_events = comment::moderation::load_mod_events(project_path);
         if !mod_events.is_empty() {
             let owners = crate::identity::keypair::Identity::read_trusted_pubkeys(std::path::Path::new(project_path));
-            if !owners.is_empty() {
-                for key in comment::moderation::untrusted_signers(&mod_events, &owners) {
-                    log::warn!(target: "comments", "moderation signed by {key} is ignored: not one of this folder's keys; `moss comments list` says how to keep it");
-                }
-                for comments in all_comments.values_mut() {
-                    comment::reduce::retain_visible(comments, &mod_events, &owners);
-                }
+            for comments in all_comments.values_mut() {
+                comment::reduce::retain_visible(comments, &mod_events, &owners);
             }
         }
         // site_name must match the artalk site identifier (deploy_config.site_id),

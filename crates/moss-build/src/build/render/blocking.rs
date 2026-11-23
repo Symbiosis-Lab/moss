@@ -2475,6 +2475,7 @@ pub fn generate_blocking_content_for_build(
     crate::plugins::contributions::public_data::emit(&site_config.public_data, output_dir, pending)?;
     crate::build::emit::commerce::emit(&documents, site_config.forms_endpoint.as_deref(), site_config.booking.as_ref(), on_moss_host, output_dir, pending)?;
     crate::build::emit::members::emit(&site_config.members, output_dir, pending)?;
+    crate::build::features::comment::link_block::emit(site_config.comment_moderation.as_ref(), output_dir, pending)?;
     let own_icon = (!favicon.used_default).then_some(crate::build::site_meta::site_identity::OwnIcon { file: &favicon_filename, raster_sizes: &favicon_raster_sizes });
     crate::build::site_meta::site_identity::emit(&layout_config, own_icon, user_css_content.as_deref(), output_dir, pending)?;
     drop(site_files_phase);

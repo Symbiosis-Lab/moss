@@ -163,3 +163,55 @@ fn adopt_key_brings_back_the_hides_of_a_key_lost_with_its_identity_folder() {
     assert_ne!(run_in(&d, &["adopt-key", &old]), 0, "a trusted key is refused");
     assert_ne!(run_in(&d, &["adopt-key"]), 0, "a key is required");
 }
+
+/// Invented spam: 10 and 11 link to spam.example (10 also gives the site's own
+/// address), 12 is a real comment, 13 a real comment the owner hid and unhid
+/// that also links to shared.example.
+fn spam_site() -> tempfile::TempDir {
+    let d = site();
+    std::fs::write(d.path().join(".moss/config.toml"), "schema_version = 6\n\n[site]\nurl = \"https://own.example/\"\n").unwrap();
+    std::fs::write(
+        d.path().join(".moss/data/social/douban.json"),
+        r#"{"articles":{"pg2":{"comments":[
+            {"id":"10","content":"<p>see https://spam.example/x and https://shared.example/</p>","createdAt":"2026-03-05T10:00:00Z","author":{"displayName":"S","url":"https://www.own.example/"}},
+            {"id":"11","content":"<p>hi</p>","createdAt":"2026-03-06T10:00:00Z","author":{"displayName":"S2","url":"http://spam.example"}},
+            {"id":"12","content":"<p>real</p>","createdAt":"2026-03-07T10:00:00Z","author":{"displayName":"R","url":"https://friend.example"}},
+            {"id":"13","content":"<p>me too https://shared.example</p>","createdAt":"2026-03-08T10:00:00Z","author":{"displayName":"R2"}}]}}}"#,
+    )
+    .unwrap();
+    d
+}
+
+#[test]
+fn spam_hides_blocks_its_hosts_and_undo_reverses_all_of_it() {
+    let d = spam_site();
+    with_key(&d);
+    assert_eq!(run_in(&d, &["hide", "13"]), 0);
+    assert_eq!(run_in(&d, &["unhide", "13"]), 0);
+    let ps = d.path().to_str().unwrap().to_string();
+    let outcome = crate::infra::home::with_moss_home(|_| mark_spam(&ps, &[("douban".into(), "10".into())])).unwrap();
+    assert_eq!(outcome.hidden, [("douban".to_string(), "10".to_string())]);
+    assert_eq!(outcome.blocked.iter().collect::<Vec<_>>(), ["spam.example"], "never the site's own host");
+    assert_eq!(outcome.not_blocked.iter().collect::<Vec<_>>(), ["shared.example"], "a comment the owner unhid links to it");
+    assert_eq!(outcome.also_hidden, 1);
+    assert_eq!(outcome.line(), "Spam · spam.example blocked · 1 more comment hidden");
+    let hidden = |ps: &str| collect(ps).0.into_iter().filter(|r| r.hidden).map(|r| r.id).collect::<BTreeSet<_>>();
+    assert_eq!(hidden(&ps), ["10".to_string(), "11".to_string()].into());
+
+    crate::infra::home::with_moss_home(|_| undo_spam(&ps, &outcome)).unwrap();
+    assert!(hidden(&ps).is_empty());
+    assert!(blocked_now(&ps).is_empty());
+}
+
+#[test]
+fn spam_on_a_hidden_comment_still_blocks_and_unblock_lifts_it() {
+    let d = spam_site();
+    with_key(&d);
+    assert_eq!(run_in(&d, &["hide", "10", "11"]), 0);
+    assert_eq!(run_in(&d, &["spam", "11"]), 0);
+    let ps = d.path().to_str().unwrap();
+    assert_eq!(blocked_now(ps), ["spam.example"]);
+    assert_eq!(run_in(&d, &["unblock", "nothing.example"]), 1);
+    assert_eq!(run_in(&d, &["unblock", "https://WWW.spam.example/"]), 0);
+    assert!(blocked_now(ps).is_empty());
+}

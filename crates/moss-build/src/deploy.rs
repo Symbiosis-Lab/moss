@@ -449,6 +449,8 @@ pub enum RefusalKind {
     StaleCopy,
     /// A folder with a site, or one that was signed in, has no usable key.
     NotSignedIn,
+    /// The folder's moderation log has events and no trusted key verifies any.
+    ModerationUnverified,
 }
 
 impl Refusal {
@@ -533,6 +535,12 @@ pub fn publish_refusal(folder_path: &str) -> Option<Refusal> {
         if !promised.links.is_empty() {
             return Some(Refusal::new(RefusalKind::LinksInFlight, in_flight_refusal_text(promised.links.len())));
         }
+    }
+    if let Some(events) = records.unverifiable_moderation(folder_path).filter(|n| *n > 0) {
+        return Some(Refusal::new(
+            RefusalKind::ModerationUnverified,
+            crate::build::features::comment::link_block::unverifiable_text(events),
+        ));
     }
     if let Some(pending) = records.pending_derivations(folder_path).filter(|n| *n > 0) {
         return Some(Refusal::new(RefusalKind::PendingDerivations, derivations_refusal_text(pending)));

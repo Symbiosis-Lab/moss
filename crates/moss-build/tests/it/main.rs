@@ -60,6 +60,7 @@ mod cascade_author_test;
 mod channel_choice_test;
 mod closing_picture_theme_note_test;
 mod colophon_switch_test;
+mod comment_moderation_gate_test;
 mod comment_refresh_on_request_test;
 mod composed_asset_name_test;
 mod copy_dir;
