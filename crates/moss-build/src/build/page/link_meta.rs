@@ -1017,9 +1017,7 @@ mod tests {
 
     #[test]
     fn test_cache_write_and_read() {
-        let tmp = std::env::temp_dir().join("moss_link_meta_test_cache");
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
+        let (_site, tmp) = site_moss();
 
         let meta = LinkMeta {
             url: "https://example.com".to_string(),
@@ -1032,30 +1030,20 @@ mod tests {
         assert!(read_back.is_some());
         let read_back = read_back.unwrap();
         assert_eq!(read_back.title.as_deref(), Some("Test Title"));
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// Use a unique tempdir per test so concurrent test runs don't trample each other.
-    fn unique_tmp(label: &str) -> std::path::PathBuf {
-        let p = std::env::temp_dir().join(format!(
-            "moss_link_meta_{}_{}_{}",
-            label,
-            std::process::id(),
-            // Nanos give per-test uniqueness even within the same process.
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        let _ = std::fs::remove_dir_all(&p);
-        std::fs::create_dir_all(&p).unwrap();
-        p
+    /// A `.moss` inside a folder of its own, removed when the guard drops. The
+    /// folder names the build store, so no two tests share one.
+    fn site_moss() -> (tempfile::TempDir, PathBuf) {
+        let site = tempfile::tempdir().unwrap();
+        let moss = site.path().join(".moss");
+        std::fs::create_dir_all(&moss).unwrap();
+        (site, moss)
     }
 
     #[test]
     fn read_link_meta_from_cache_returns_cached_or_empty_no_io_side_effect() {
-        let tmp = unique_tmp("read");
+        let (_site, tmp) = site_moss();
 
         // Pre-populate cache for one URL only.
         let cached = LinkMeta {
@@ -1077,18 +1065,15 @@ mod tests {
             None,
             "uncached URL gets empty meta (URL-only card, not a hang or panic)"
         );
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn a_card_with_no_entry_is_waiting_and_a_fetched_one_without_a_picture_is_not() {
-        let tmp = unique_tmp("state");
+        let (_site, tmp) = site_moss();
         save_fetched(&tmp, &LinkMeta { url: "https://no-picture.example".into(), title: Some("No picture".into()), ..Default::default() });
         let cards = read_link_meta_from_cache(&["https://no-picture.example", "https://not-fetched.example"], &tmp, None);
         assert_eq!((cards["https://no-picture.example"].state, cards["https://no-picture.example"].cover.as_deref()), (CardState::Fetched, None));
         assert_eq!(cards["https://not-fetched.example"].state, CardState::NotYet);
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// A card whose fetched page names a picture that did not download.
@@ -1107,7 +1092,7 @@ mod tests {
 
     #[test]
     fn a_gone_picture_closes_the_card_up_after_one_retry() {
-        let tmp = unique_tmp("gone_picture");
+        let (_site, tmp) = site_moss();
         let url = "https://gone-picture.example/";
         let (base, server) = spawn_404_server();
         seed_failed_picture(&tmp, url, &format!("{base}/cover.png"));
@@ -1120,12 +1105,11 @@ mod tests {
         assert_eq!(card.cover_slot(), CoverSlot::None);
         // The 404 server answered once; a second retry would fail to connect and leave it waiting.
         assert!(is_settled(&tmp, url));
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn a_picture_that_cannot_be_reached_leaves_its_entry_as_it_was() {
-        let tmp = unique_tmp("unreachable_picture");
+        let (_site, tmp) = site_moss();
         let url = "https://unreachable-picture.example/";
         let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
         seed_failed_picture(&tmp, url, &format!("http://{closed}/cover.png"));
@@ -1136,7 +1120,6 @@ mod tests {
         let after = (std::fs::read(&card_path).unwrap(), std::fs::metadata(&card_path).unwrap().modified().unwrap());
         assert_eq!(after, before, "the entry is not written, so no watch event rebuilds the page");
         assert!(!is_settled(&tmp, url), "it is asked for again next time");
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -1363,14 +1346,7 @@ mod tests {
 
     #[test]
     fn test_fetch_all_parallel_skips_fresh() {
-        let tmp = std::env::temp_dir().join(format!(
-            "moss_parallel_fresh_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&tmp).unwrap();
+        let (_site, tmp) = site_moss();
         seed_fresh_cache(&tmp, "https://x.example.test/", "X");
         seed_fresh_cache(&tmp, "https://y.example.test/", "Y");
         // All URLs fresh → fetched count is 0, no thread is spawned (loop
@@ -1383,7 +1359,6 @@ mod tests {
             read_cache(&tmp, "https://x.example.test/", None).and_then(|m| m.title),
             Some("X".to_string())
         );
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// Minimal HTTP server for tests. Serves a fixed response for any GET
@@ -1426,14 +1401,7 @@ mod tests {
         let url2 = format!("{url}/b");
         let url3 = format!("{url}/c");
 
-        let tmp = std::env::temp_dir().join(format!(
-            "moss_parallel_cold_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&tmp).unwrap();
+        let (_site, tmp) = site_moss();
 
         // Three cold URLs → parallel fetcher actually spawns workers.
         let urls = [url1.as_str(), url2.as_str(), url3.as_str()];
@@ -1451,14 +1419,13 @@ mod tests {
         assert_eq!(refetch, 0, "hot cache must produce zero fetches");
 
         let _ = server.join();
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// An entry an older moss kept in `build.nosync` moves into the site folder
     /// once, picture included, and is served without a fetch however old it is.
     #[test]
     fn an_old_entry_moves_into_the_site_folder_without_a_fetch() {
-        let tmp = unique_tmp("old");
+        let (_site, tmp) = site_moss();
         let url = "https://old.example.test/";
         seed_old_cache(&tmp, url, "Old Title", Some(b"old picture"));
         assert_eq!(fetch_all_link_meta_parallel(&[url], &tmp, |_| {}), 0);
@@ -1469,14 +1436,13 @@ mod tests {
         let cover = snapshot.cover.expect("its picture comes along");
         assert_eq!(std::fs::read(link_snapshot::cover_path(&tmp, &cover)).unwrap(), b"old picture");
         assert!(!cache_dir(&tmp).join(format!("{}.json", link_snapshot::url_key(url))).exists());
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// A picture this machine no longer holds is not fetched again: the card
     /// moves without one.
     #[test]
     fn an_old_entry_whose_picture_is_gone_moves_without_one() {
-        let tmp = unique_tmp("old_no_cover");
+        let (_site, tmp) = site_moss();
         let url = "https://old.example.test/";
         seed_old_cache(&tmp, url, "Old Title", Some(b"old picture"));
         let store = crate::build::cache::ObjectStore::for_site(&MossPaths::from_moss_dir(tmp.clone()));
@@ -1484,14 +1450,13 @@ mod tests {
         std::fs::remove_file(store.blob_path(&oid)).unwrap();
         let served = read_cache(&tmp, url, None).unwrap();
         assert_eq!((served.title.as_deref(), served.cover), (Some("Old Title"), None));
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// An old entry whose move cannot be written is served and kept, so the
     /// next build tries the move again rather than losing the card.
     #[test]
     fn an_old_entry_stays_until_its_move_is_written() {
-        let tmp = unique_tmp("old_unwritable");
+        let (_site, tmp) = site_moss();
         let url = "https://old.example.test/";
         seed_old_cache(&tmp, url, "Old Title", None);
         let social = MossPaths::from_moss_dir(tmp.clone()).social_dir();
@@ -1499,28 +1464,26 @@ mod tests {
         std::fs::write(social.join("links"), b"a file where the folder belongs").unwrap();
         assert_eq!(read_cache(&tmp, url, None).unwrap().title.as_deref(), Some("Old Title"));
         assert!(cache_dir(&tmp).join(format!("{}.json", link_snapshot::url_key(url))).exists());
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// Deleting a card's entry fetches it again: nothing left in
     /// `build.nosync` brings the old title back.
     #[test]
     fn a_deleted_entry_is_not_restored_from_the_local_cache() {
-        let tmp = unique_tmp("refresh");
+        let (_site, tmp) = site_moss();
         let url = "https://old.example.test/";
         seed_old_cache(&tmp, url, "Old Title", None);
         assert!(read_cache(&tmp, url, None).is_some());
         let entry = MossPaths::from_moss_dir(tmp.clone()).social_dir().join("links").join(format!("{}.json", link_snapshot::url_key(url)));
         std::fs::remove_file(entry).unwrap();
         assert!(read_cache(&tmp, url, None).is_none());
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// What a build derived from a picture is read back only for that
     /// picture, and only while the picture is on this machine.
     #[test]
     fn derived_fields_follow_the_picture_they_were_made_from() {
-        let tmp = unique_tmp("derived");
+        let (_site, tmp) = site_moss();
         let url = "https://x.example.test/";
         let first = link_snapshot::store_cover(&tmp, b"first", "png");
         let mut meta = LinkMeta { cover: first.clone(), cover_width: Some(3), ..empty(url) };
@@ -1530,14 +1493,13 @@ mod tests {
         meta.cover = link_snapshot::store_cover(&tmp, b"second", "png");
         save_fetched(&tmp, &meta);
         assert_eq!(read_cache(&tmp, url, None).unwrap().cover_width, None);
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[cfg(unix)]
     #[test]
     fn saving_the_same_derived_fields_leaves_the_file_alone() {
         use std::os::unix::fs::MetadataExt;
-        let tmp = unique_tmp("derived_unchanged");
+        let (_site, tmp) = site_moss();
         let cover = link_snapshot::store_cover(&tmp, b"picture", "png");
         let mut meta = LinkMeta { cover: cover.clone(), cover_width: Some(3), ..empty("https://x.example.test/") };
         let path = derived_path(&tmp, cover.as_deref().unwrap());
@@ -1548,14 +1510,13 @@ mod tests {
         meta.cover_width = Some(4);
         save_derived(&tmp, &meta);
         assert!(std::fs::read_to_string(&path).unwrap().contains('4'), "a changed save still lands");
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// A card whose picture has not reached this machine renders without one,
     /// even where an earlier build here derived files from it.
     #[test]
     fn a_card_draws_no_picture_while_its_picture_is_missing() {
-        let tmp = unique_tmp("missing_picture");
+        let (_site, tmp) = site_moss();
         let url = "https://x.example.test/";
         let cover = link_snapshot::store_cover(&tmp, b"picture", "png");
         let meta = LinkMeta { cover: cover.clone(), cover_served_path: Some("_moss/link/x.png".into()), ..empty(url) };
@@ -1564,13 +1525,12 @@ mod tests {
         std::fs::remove_file(link_snapshot::cover_path(&tmp, &cover.unwrap())).unwrap();
         let card = &read_link_meta_from_cache(&[url], &tmp, None)[url];
         assert_eq!((card.title.as_deref(), card.cover_served_path.as_deref()), (None, None));
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// A card in the cloud is requested and held from publish, not fetched.
     #[test]
     fn a_card_in_the_cloud_is_requested_not_fetched() {
-        let tmp = unique_tmp("card_in_cloud");
+        let (_site, tmp) = site_moss();
         let moss_dir = tmp.join(".moss");
         let url = "https://x.example.test/";
         seed_fresh_cache(&moss_dir, url, "Title");
@@ -1581,13 +1541,12 @@ mod tests {
         assert_eq!(crate::build::icloud::pretend::requests_for(&entry), 1);
         assert_eq!(evidence.unresolved_structural(), [format!(".moss/data/social/links/{}.json", link_snapshot::url_key(url))]);
         assert_eq!(fetch_all_link_meta_parallel(&[url], &moss_dir, |_| panic!("fetched a card the cloud holds")), 0);
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// A picture in the cloud is not drawn from an earlier build's files.
     #[test]
     fn a_picture_in_the_cloud_is_not_drawn() {
-        let tmp = unique_tmp("picture_in_cloud");
+        let (_site, tmp) = site_moss();
         let url = "https://x.example.test/";
         let cover = link_snapshot::store_cover(&tmp, b"picture", "png");
         let meta = LinkMeta { cover: cover.clone(), cover_served_path: Some("_moss/link/x.png".into()), ..empty(url) };
@@ -1595,22 +1554,9 @@ mod tests {
         save_derived(&tmp, &meta);
         let _cloud = crate::build::icloud::pretend::evicted(&link_snapshot::cover_path(&tmp, &cover.unwrap()));
         assert_eq!(read_cache(&tmp, url, None).unwrap().cover_served_path, None);
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     // ── build-time fetch: budget, per-request timeout, response cap ────────
-
-    fn fresh_tmp(label: &str) -> PathBuf {
-        let tmp = std::env::temp_dir().join(format!(
-            "moss_{label}_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&tmp).unwrap();
-        tmp
-    }
 
     /// A server that sleeps `delay_ms` before responding, `requests` times —
     /// each accepted connection handled on its OWN thread, so the client's
@@ -1663,7 +1609,7 @@ mod tests {
         let (base, server) = spawn_slow_test_server(html, 300, url_count);
         let urls: Vec<String> = (0..url_count).map(|i| format!("{base}/{i}")).collect();
         let url_refs: Vec<&str> = urls.iter().map(String::as_str).collect();
-        let tmp = fresh_tmp("short_budget");
+        let (_site, tmp) = site_moss();
 
         let fetched = fetch_all_link_meta_parallel_bounded(
             &url_refs,
@@ -1685,7 +1631,6 @@ mod tests {
         // Joining it here would hang the test on exactly the behavior being
         // proven correct.
         drop(server);
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -1712,7 +1657,7 @@ mod tests {
             })
         };
         let urls = [url.as_str()];
-        let tmp = fresh_tmp("never_waits");
+        let (_site, tmp) = site_moss();
 
         let fetched = fetch_all_link_meta_parallel_bounded(
             &urls,
@@ -1726,7 +1671,6 @@ mod tests {
         assert_eq!(fetched, 0);
         let _ = release.send(());
         let _ = server.join();
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -1742,7 +1686,7 @@ mod tests {
             }
         });
         let url = format!("http://127.0.0.1:{port}/silent");
-        let tmp = fresh_tmp("silent_host");
+        let (_site, tmp) = site_moss();
 
         let start = std::time::Instant::now();
         let fetched = fetch_all_link_meta_parallel_bounded(
@@ -1759,7 +1703,6 @@ mod tests {
             elapsed < std::time::Duration::from_secs(5),
             "a silent host must cost about its request timeout, not the budget: {elapsed:?}"
         );
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -1822,12 +1765,11 @@ mod tests {
     #[test]
     fn a_response_far_over_the_cap_still_yields_the_title_that_fits_near_the_front() {
         let (base, server) = spawn_oversized_test_server(4 * 1024 * 1024, 1);
-        let tmp = fresh_tmp("oversized_ok");
+        let (_site, tmp) = site_moss();
         let url = format!("{base}/big");
         let meta = fetch_link_meta_with_timeout(&url, &tmp, std::time::Duration::from_secs(10));
         assert_eq!(meta.title.as_deref(), Some("Oversized"));
         let _ = server.join();
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     // ── og:image download ───────────────────────────────────────────────
@@ -1889,24 +1831,22 @@ mod tests {
     fn download_og_image_stores_a_real_image_and_returns_its_oid_and_format() {
         let png = tiny_png_bytes();
         let (base, server) = spawn_byte_server(png.clone(), Some("image/png"));
-        let tmp = fresh_tmp("download_og_image_ok");
+        let (_site, tmp) = site_moss();
         let result = download_og_image(&format!("{base}/cover.png"), &tmp, std::time::Duration::from_secs(5));
         let Ok(cover) = result else { panic!("a real PNG must download and decode: {result:?}") };
         assert!(cover.ends_with(".png"), "{cover}");
         let stored = link_snapshot::cover_path(&tmp, &cover);
         assert_eq!(std::fs::read(stored).unwrap(), png, "stored in the site folder, identical to the download");
         let _ = server.join();
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn a_page_answering_for_the_picture_is_tried_again() {
         let (base, server) = spawn_byte_server(b"<html>Sign in to the Wi-Fi</html>".to_vec(), Some("text/html"));
-        let tmp = fresh_tmp("download_og_image_wrong_ct");
+        let (_site, tmp) = site_moss();
         let result = download_og_image(&format!("{base}/cover.png"), &tmp, std::time::Duration::from_secs(5));
         assert_eq!(result, Err(PictureFailed::Retry), "a captive portal must not make a card forget its picture");
         let _ = server.join();
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -1914,21 +1854,19 @@ mod tests {
         // A server can claim any Content-Type it likes — the sniff+decode
         // is the real gate, not the header.
         let (base, server) = spawn_byte_server(b"this is not image data at all".to_vec(), Some("image/jpeg"));
-        let tmp = fresh_tmp("download_og_image_fake_ct");
+        let (_site, tmp) = site_moss();
         let result = download_og_image(&format!("{base}/fake.jpg"), &tmp, std::time::Duration::from_secs(5));
         assert_eq!(result, Err(PictureFailed::Gone), "a lying Content-Type must not bypass the decode check");
         let _ = server.join();
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn download_og_image_returns_none_on_404() {
         let (base, server) = spawn_404_server();
-        let tmp = fresh_tmp("download_og_image_404");
+        let (_site, tmp) = site_moss();
         let result = download_og_image(&format!("{base}/missing.png"), &tmp, std::time::Duration::from_secs(5));
         assert_eq!(result, Err(PictureFailed::Gone), "a 404 picture is gone");
         let _ = server.join();
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     // ── unsafe fetch targets (SSRF-style guard) ─────────────────────────
@@ -2024,7 +1962,7 @@ mod tests {
     fn fetch_link_meta_with_timeout_refuses_a_private_target_without_a_cache_entry() {
         // 169.254.169.254 is unreachable from here either way, so `None` alone
         // cannot tell a refusal from a connection that failed: count requests.
-        let tmp = fresh_tmp("unsafe_target_no_cache");
+        let (_site, tmp) = site_moss();
         let before = GET_CHECKED_CALLS.with(|n| n.get());
         let meta = fetch_link_meta_with_timeout(
             "http://169.254.169.254/latest/meta-data/",
@@ -2034,12 +1972,11 @@ mod tests {
         assert_eq!(meta.title, None, "an unsafe target must never be fetched");
         assert!(read_cache(&tmp, "http://169.254.169.254/latest/meta-data/", None).is_none());
         assert_eq!(GET_CHECKED_CALLS.with(|n| n.get()), before, "must reject before calling get_checked");
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn download_og_image_refuses_a_private_target() {
-        let tmp = fresh_tmp("unsafe_image_target");
+        let (_site, tmp) = site_moss();
         let start = std::time::Instant::now();
         let result = download_og_image(
             "http://169.254.169.254/latest/meta-data/iam/",
@@ -2052,7 +1989,6 @@ mod tests {
             elapsed < std::time::Duration::from_millis(200),
             "must reject before attempting any connection, not after timing one out: {elapsed:?}"
         );
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     // ── og:image decompression-bomb guard ───────────────────────────────
@@ -2083,22 +2019,20 @@ mod tests {
         // Real image, but its declared width alone (5x the cap) already
         // dwarfs anything a real og:image needs — the point of the test.
         let (base, server) = spawn_byte_server(bomb, Some("image/png"));
-        let tmp = fresh_tmp("og_image_over_cap");
+        let (_site, tmp) = site_moss();
         let result = download_og_image(&format!("{base}/wide.png"), &tmp, std::time::Duration::from_secs(5));
         assert_eq!(result, Err(PictureFailed::Gone), "a canvas over MAX_OG_IMAGE_DIMENSION must be rejected");
         let _ = server.join();
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn download_og_image_accepts_a_real_image_well_under_the_dimension_cap() {
         // Guards against an over-tight cap breaking the ordinary case.
         let (base, server) = spawn_byte_server(tiny_png_bytes(), Some("image/png"));
-        let tmp = fresh_tmp("og_image_normal");
+        let (_site, tmp) = site_moss();
         let result = download_og_image(&format!("{base}/cover.png"), &tmp, std::time::Duration::from_secs(5));
         assert!(result.is_ok(), "an ordinary small image must still download");
         let _ = server.join();
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[tokio::test]
@@ -2133,7 +2067,7 @@ mod tests {
             .create_async()
             .await;
         let url = format!("{}/old", server.url());
-        let tmp = fresh_tmp("redirect_followed");
+        let (_site, tmp) = site_moss();
         let meta = tokio::task::spawn_blocking(move || {
             fetch_link_meta_with_timeout(&url, &tmp, std::time::Duration::from_secs(5))
         })
