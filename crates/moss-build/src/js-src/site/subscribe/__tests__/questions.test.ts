@@ -110,7 +110,7 @@ const submitWith = (form: HTMLFormElement, email: string, name: string) => {
 };
 
 test('the server refusing the address marks the email field with its own message, not the generic error', async () => {
-  fetchSpy.mockImplementation(async () => new Response(JSON.stringify({ error: 'Invalid email address' }), { status: 400 }));
+  fetchSpy.mockImplementation(async () => new Response(JSON.stringify({ error: 'any wording', code: 'invalid_email' }), { status: 400 }));
   const form = mount();
   hydrateSubscribeForm(form);
   submitWith(form, 'reader@example.com', '小明');

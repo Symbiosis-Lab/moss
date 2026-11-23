@@ -27,6 +27,7 @@ type SubscribeResponse = {
   subscribed?: boolean;
   confirmationSent?: boolean;
   error?: string;
+  code?: string;
   need_captcha?: boolean;
   captcha_url?: string;
   observation_url?: string;
@@ -140,7 +141,7 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
       }
       // The service's own address check marks the field as the browser's would.
       const emailField = form.querySelector<HTMLElement>('[data-field="email"]');
-      if (res.status === 400 && data.error === 'Invalid email address' && asks && emailField) {
+      if (res.status === 400 && data.code === 'invalid_email' && asks && emailField) {
         clearField(emailField);
         markField(form, emailField, 'email');
         input.focus();
