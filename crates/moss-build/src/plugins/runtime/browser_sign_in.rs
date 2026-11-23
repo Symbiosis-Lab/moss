@@ -77,14 +77,16 @@ pub async fn start(plugin: &str) -> Result<String, String> {
     let (mut reply_tx, reply) = oneshot::channel();
     let (stop_tx, stop) = oneshot::channel::<()>();
 
+    let plugin_name = plugin.to_string();
     let router = axum::Router::new().route(
         CALLBACK_PATH,
         axum::routing::get(move |axum::extract::RawQuery(query): axum::extract::RawQuery| {
-            let got_tx = got_tx.clone();
+            let (got_tx, plugin) = (got_tx.clone(), plugin_name.clone());
             async move {
                 use axum::response::IntoResponse;
                 let params: Query = url::form_urlencoded::parse(query.unwrap_or_default().as_bytes()).into_owned().collect();
                 if !params.iter().any(|(k, _)| k == "code" || k == "error") {
+                    log::info!(target: "plugin", "{plugin}: a request reached the sign-in redirect without a code or an error");
                     return axum::http::StatusCode::NOT_FOUND.into_response();
                 }
                 let _ = got_tx.try_send(params);
@@ -95,12 +97,30 @@ pub async fn start(plugin: &str) -> Result<String, String> {
     let plugin_name = plugin.to_string();
     tokio::spawn(async move {
         let ended = async move {
+            // One fixed line per ending, its own call site each, so a support
+            // log says whether the browser ever came back.
             let outcome = tokio::select! {
-                Some(query) = got.recv() => Ok(query),
-                _ = stop => Err(CANCELLED.to_string()),
+                Some(query) = got.recv() => {
+                    if query.iter().any(|(k, _)| k == "code") {
+                        log::info!(target: "plugin", "{plugin_name}: the sign-in redirect arrived with a code");
+                    } else {
+                        log::info!(target: "plugin", "{plugin_name}: the sign-in redirect arrived with an error");
+                    }
+                    Ok(query)
+                }
+                _ = stop => {
+                    log::info!(target: "plugin", "{plugin_name}: the sign-in ended before its redirect arrived");
+                    Err(CANCELLED.to_string())
+                }
                 // The waiter gave up: a refused address, a browser that would not open.
-                _ = reply_tx.closed() => Err(CANCELLED.to_string()),
-                _ = tokio::time::sleep(SIGN_IN_LIMIT) => Err(TOO_LONG.to_string()),
+                _ = reply_tx.closed() => {
+                    log::info!(target: "plugin", "{plugin_name}: the sign-in stopped waiting before its redirect arrived");
+                    Err(CANCELLED.to_string())
+                }
+                _ = tokio::time::sleep(SIGN_IN_LIMIT) => {
+                    log::warn!(target: "plugin", "{plugin_name}: no sign-in redirect arrived in ten minutes");
+                    Err(TOO_LONG.to_string())
+                }
             };
             let mut map = sign_ins();
             if map.get(&plugin_name).is_some_and(|s| s.token == token) {
@@ -190,8 +210,11 @@ mod tests {
         false
     }
 
+    use crate::build::cache::tests::{install_capture, logged_count};
+
     #[tokio::test]
     async fn browser_sign_in_brings_back_the_redirect_with_a_code() {
+        install_capture();
         let redirect = start("browser-sign-in-reply").await.unwrap();
         assert!(redirect.starts_with("http://127.0.0.1:") && redirect.ends_with("/callback"), "{redirect}");
         let (browser_tx, browser) = oneshot::channel();
@@ -215,14 +238,32 @@ mod tests {
         assert_eq!((wrong_path, no_code, status), (404, 404, 200), "only a /callback with a code or an error is answered");
         assert!(body.contains("<p>You can close this tab.</p>"), "{body}");
         assert!(stops_listening(&redirect).await);
+        assert_eq!(logged_count(log::Level::Info, "browser-sign-in-reply: a request reached the sign-in redirect without a code or an error"), 1);
+        assert_eq!(logged_count(log::Level::Info, "browser-sign-in-reply: the sign-in redirect arrived with a code"), 1);
+    }
+
+    #[tokio::test]
+    async fn a_redirect_with_an_error_is_logged_as_one() {
+        install_capture();
+        let redirect = start("browser-sign-in-denied").await.unwrap();
+        let got = wait("browser-sign-in-denied", "https://example.com/", move |_| async move {
+            tokio::spawn(async move { get(&format!("{redirect}?error=access_denied")).await });
+            Ok(())
+        })
+        .await
+        .unwrap();
+        assert_eq!(got, vec![("error".into(), "access_denied".into())]);
+        assert_eq!(logged_count(log::Level::Info, "browser-sign-in-denied: the sign-in redirect arrived with an error"), 1);
     }
 
     #[tokio::test]
     async fn browser_sign_in_ends_at_a_refused_address() {
+        install_capture();
         let redirect = start("browser-sign-in-refused").await.unwrap();
         let refused = wait("browser-sign-in-refused", "file:///etc/passwd", |_| async { panic!("must not open") }).await;
         assert!(refused.is_err());
         assert!(stops_listening(&redirect).await, "no listener may be left up");
+        assert_eq!(logged_count(log::Level::Info, "browser-sign-in-refused: the sign-in stopped waiting before its redirect arrived"), 1);
     }
 
     async fn soon(waiting: tokio::task::JoinHandle<Result<Query, String>>) -> Result<Query, String> {
@@ -231,12 +272,14 @@ mod tests {
 
     #[tokio::test]
     async fn browser_sign_in_cancel_ends_the_wait() {
+        install_capture();
         start("browser-sign-in-cancel").await.unwrap();
         assert!(!end_wait("browser-sign-in-cancel"), "a sign-in not yet in the browser is not ended");
         let waiting = tokio::spawn(wait("browser-sign-in-cancel", "https://example.com/", |_| async { Ok(()) }));
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(end_wait("browser-sign-in-cancel"));
         assert_eq!(soon(waiting).await, Err(CANCELLED.to_string()));
+        assert_eq!(logged_count(log::Level::Info, "browser-sign-in-cancel: the sign-in ended before its redirect arrived"), 1);
     }
 
     /// A second start ends the first sign-in, waited on or not, and the reply
@@ -265,9 +308,11 @@ mod tests {
     /// sign-in is gone afterwards.
     #[tokio::test(start_paused = true)]
     async fn browser_sign_in_stops_at_the_limit() {
+        install_capture();
         start("browser-sign-in-limit").await.unwrap();
         let outcome = tokio::time::timeout(SIGN_IN_LIMIT * 2, wait("browser-sign-in-limit", "https://example.com/", |_| async { Ok(()) })).await;
         assert_eq!(outcome, Ok(Err(TOO_LONG.to_string())));
         assert!(!sign_ins().contains_key("browser-sign-in-limit"));
+        assert_eq!(logged_count(log::Level::Warn, "browser-sign-in-limit: no sign-in redirect arrived in ten minutes"), 1);
     }
 }
