@@ -49,7 +49,10 @@ struct Row {
     page_title: Option<String>,
     author: String,
     created_at: String,
-    text: String,
+    /// The text, markup stripped, at the length the editor shows.
+    body: String,
+    /// The host of the writer's website field.
+    website: Option<String>,
     /// Not shown on the site: hidden itself, or under a hidden parent.
     hidden: bool,
     /// Hidden by an event on this very comment, not only through its parent.
@@ -59,6 +62,11 @@ struct Row {
 }
 
 impl Row {
+    /// The start of the text, for one line of a terminal.
+    fn short(&self) -> String {
+        self.body.chars().take(60).collect()
+    }
+
     fn page_label(&self) -> String {
         safe(self.page_url.as_deref().unwrap_or(&self.page_uid))
     }
@@ -72,7 +80,7 @@ impl Row {
             "pageTitle": self.page_title,
             "author": self.author,
             "createdAt": self.created_at,
-            "text": self.text,
+            "text": self.short(),
             "hidden": self.hidden,
         })
     }
@@ -85,15 +93,13 @@ impl Row {
             safe(&self.source),
             safe(&self.author),
             self.page_label(),
-            safe(&self.text)
+            safe(&self.short())
         )
     }
 }
 
-/// The first 60 characters of a comment's text, markup stripped.
-fn excerpt(html: &str) -> String {
-    crate::build::markdown::html_post::strip_html_tags(html).chars().take(60).collect()
-}
+/// Enough of a comment for its owner to tell spam from a reader.
+const BODY_CHARS: usize = 400;
 
 /// Comment text, author names and ids are written by strangers and printed to
 /// the owner's terminal, so every human-readable output goes through this:
@@ -116,9 +122,9 @@ fn safe(s: &str) -> String {
 
 /// Every comment of the site, newest first, with its visibility as the build
 /// would resolve it. Reads the synced social files, the moderation log and the
-/// last build's article map; needs no build. The flag says whether some page
-/// could not be named from the article map.
-fn collect(project_path: &str) -> (Vec<Row>, bool) {
+/// last build's article map; needs no build. `page` keeps one page's comments
+/// only. The flag says whether some page could not be named from the article map.
+fn collect(project_path: &str, page: Option<&str>) -> (Vec<Row>, bool) {
     let all = load_all_social_comments(project_path, MATTERS_DOMAIN_FALLBACK);
     let events = load_mod_events(project_path);
     // Read-only: `Identity::load` would migrate an old-format identity in place.
@@ -131,7 +137,7 @@ fn collect(project_path: &str) -> (Vec<Row>, bool) {
 
     let mut rows = Vec::new();
     let mut unresolved = false;
-    for (uid, comments) in &all {
+    for (uid, comments) in all.iter().filter(|(uid, _)| page.is_none_or(|p| p == uid.as_str())) {
         let (shown, direct) = resolve_detailed(comments, &events, &owners);
         let visible: HashSet<(&str, &str)> = shown.iter().map(|c| (c.source.as_str(), c.id.as_str())).collect();
         let article = by_uid.get(uid.as_str());
@@ -152,7 +158,8 @@ fn collect(project_path: &str) -> (Vec<Row>, bool) {
                     .or_else(|| c.author.name.clone())
                     .unwrap_or_default(),
                 created_at: c.created_at.clone(),
-                text: excerpt(&c.content),
+                body: crate::build::markdown::html_post::strip_html_tags(&c.content).chars().take(BODY_CHARS).collect(),
+                website: c.author.url.as_deref().and_then(host_of),
                 hidden,
                 directly_hidden,
                 hosts: comment_hosts(c),
@@ -184,7 +191,7 @@ fn render_table(rows: &[Row]) -> String {
                 safe(&r.created_at),
                 safe(&r.author),
                 page,
-                safe(&r.text),
+                safe(&r.short()),
             ]
         })
         .collect();
@@ -475,8 +482,23 @@ fn find_rows<'r>(rows: &'r [Row], parsed: &Parsed) -> Result<Vec<&'r Row>, Strin
     Ok(found)
 }
 
+/// The comment `(source, id)`, whose row carries the page a moderation event records.
+fn row_of<'r>(rows: &'r [Row], source: &str, id: &str) -> Result<&'r Row, String> {
+    rows.iter()
+        .find(|r| r.source == source && r.id == id)
+        .ok_or_else(|| format!("no comment with id '{id}' from source '{source}'; nothing was changed"))
+}
+
+/// Hide or unhide the comment `(source, id)`; the event records its page and
+/// the site, as `moss comments hide` does.
+pub fn set_hidden(project_path: &str, kind: ModKind, source: &str, id: &str) -> Result<u64, String> {
+    let (rows, _) = collect(project_path, None);
+    let page = &row_of(&rows, source, id)?.page_uid;
+    append_owner_event(project_path, kind, source, id, page, &site_of(project_path))
+}
+
 /// What Spam did, for the line or toast that names it and for Undo.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SpamOutcome {
     /// `(source, id)` of each comment this call hid; one already hidden is not here.
@@ -485,7 +507,7 @@ pub struct SpamOutcome {
     /// Hosts left unblocked because a comment the owner unhid links to them.
     pub not_blocked: BTreeSet<String>,
     /// Other comments the new blocks hide.
-    pub also_hidden: usize,
+    pub also_hidden: u32,
 }
 
 impl SpamOutcome {
@@ -493,7 +515,10 @@ impl SpamOutcome {
     pub fn line(&self) -> String {
         let mut line = String::from("Spam");
         if !self.blocked.is_empty() {
-            line.push_str(&format!(" · {} blocked", self.blocked.iter().map(String::as_str).collect::<Vec<_>>().join(", ")));
+            line.push_str(&format!(" · {} blocked", join(&self.blocked)));
+        }
+        if !self.not_blocked.is_empty() {
+            line.push_str(&format!(" · {} not blocked, a comment you showed links to it", join(&self.not_blocked)));
         }
         match self.also_hidden {
             0 => {}
@@ -504,13 +529,17 @@ impl SpamOutcome {
     }
 }
 
+fn join(hosts: &BTreeSet<String>) -> String {
+    hosts.iter().map(String::as_str).collect::<Vec<_>>().join(", ")
+}
+
 /// Spam: hide each `(source, id)` (already hidden ones included) and block
 /// every host they link to that is not the site's own, not already blocked,
 /// and not linked from a comment the owner unhid: other comments still shown
 /// with the same host are usually the same spammer, and the line names what
 /// was blocked so a wrong host is seen and undone.
 pub fn mark_spam(project_path: &str, targets: &[(String, String)]) -> Result<SpamOutcome, String> {
-    let (rows, _) = collect(project_path);
+    let (rows, _) = collect(project_path, None);
     let events = load_mod_events(project_path);
     let owners = crate::identity::keypair::Identity::read_trusted_pubkeys(Path::new(project_path));
     let unhid: HashSet<(&str, &str)> = super::link_block::latest_by_target(&events, &owners, ["hide", "unhide"])
@@ -519,9 +548,12 @@ pub fn mark_spam(project_path: &str, targets: &[(String, String)]) -> Result<Spa
         .map(|(k, _)| k)
         .collect();
     let is_target = |r: &Row| targets.iter().any(|(source, id)| *id == r.id && *source == r.source);
-    let chosen: Vec<&Row> = rows.iter().filter(|r| is_target(r)).collect();
-    if let Some((source, id)) = targets.iter().find(|(s, i)| !chosen.iter().any(|r| r.source == *s && r.id == *i)) {
-        return Err(format!("no comment with id '{id}' from source '{source}'; nothing was changed"));
+    let mut chosen: Vec<&Row> = Vec::new();
+    for (source, id) in targets {
+        let row = row_of(&rows, source, id)?;
+        if !chosen.iter().any(|r| std::ptr::eq(*r, row)) {
+            chosen.push(row);
+        }
     }
     let own = own_hosts(project_path);
     let blocked: BTreeSet<String> = blocked_now(project_path).into_iter().collect();
@@ -545,20 +577,20 @@ pub fn mark_spam(project_path: &str, targets: &[(String, String)]) -> Result<Spa
         append_owner_event(project_path, ModKind::Block, LINK_SOURCE, host, "", &site)?;
     }
     let before: HashSet<(&str, &str)> = rows.iter().filter(|r| r.hidden).map(|r| (r.source.as_str(), r.id.as_str())).collect();
-    outcome.also_hidden = collect(project_path)
+    outcome.also_hidden = collect(project_path, None)
         .0
         .iter()
         .filter(|r| r.hidden && !is_target(r) && !before.contains(&(r.source.as_str(), r.id.as_str())))
-        .count();
+        .count() as u32;
     Ok(outcome)
 }
 
 /// Undo of [`mark_spam`]: unhide what it hid and unblock what it blocked.
 pub fn undo_spam(project_path: &str, outcome: &SpamOutcome) -> Result<(), String> {
     let site = site_of(project_path);
-    let (rows, _) = collect(project_path);
+    let (rows, _) = collect(project_path, None);
     for (source, id) in &outcome.hidden {
-        let page = rows.iter().find(|r| r.source == *source && r.id == *id).map_or("", |r| r.page_uid.as_str());
+        let page = row_of(&rows, source, id).map_or("", |r| r.page_uid.as_str());
         append_owner_event(project_path, ModKind::Unhide, source, id, page, &site)?;
     }
     for host in &outcome.blocked {
@@ -568,7 +600,7 @@ pub fn undo_spam(project_path: &str, outcome: &SpamOutcome) -> Result<(), String
 }
 
 fn run_spam(project_path: &str, parsed: &Parsed) -> i32 {
-    let (rows, _) = collect(project_path);
+    let (rows, _) = collect(project_path, None);
     let targets: Vec<(String, String)> = match find_rows(&rows, parsed) {
         Ok(found) => found.iter().map(|r| (r.source.clone(), r.id.clone())).collect(),
         Err(e) => return fail(&e, parsed.json),
@@ -582,12 +614,6 @@ fn run_spam(project_path: &str, parsed: &Parsed) -> i32 {
         return 0;
     }
     println!("{}", outcome.line());
-    if !outcome.not_blocked.is_empty() {
-        println!(
-            "Not blocked, a comment you unhid links to it: {}",
-            outcome.not_blocked.iter().map(String::as_str).collect::<Vec<_>>().join(", ")
-        );
-    }
     println!("The change takes effect at the next publish.");
     0
 }
@@ -609,7 +635,7 @@ fn run_list(project_path: &str, json: bool) -> i32 {
             );
         }
     }
-    let (rows, unresolved) = collect(project_path);
+    let (rows, unresolved) = collect(project_path, None);
     if json {
         let list: Vec<_> = rows.iter().map(Row::to_json).collect();
         println!("{}", serde_json::to_string_pretty(&list).unwrap_or_else(|_| "[]".into()));
@@ -629,7 +655,7 @@ fn run_list(project_path: &str, json: bool) -> i32 {
 
 fn run_moderate(project_path: &str, hide: bool, parsed: &Parsed) -> i32 {
     let kind = if hide { ModKind::Hide } else { ModKind::Unhide };
-    let (rows, _) = collect(project_path);
+    let (rows, _) = collect(project_path, None);
 
     // Validate every id before appending anything: a call applies to all of
     // its ids or to none.
@@ -691,6 +717,9 @@ fn run_moderate(project_path: &str, hide: bool, parsed: &Parsed) -> i32 {
     }
     0
 }
+
+mod page;
+pub use page::{page_comments, PageComment, PageComments};
 
 #[cfg(test)]
 #[path = "cli_tests.rs"]

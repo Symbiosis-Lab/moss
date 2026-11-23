@@ -8,7 +8,7 @@
  * Read a member where it is used, never at module scope: a host fills the
  * record after this module has evaluated.
  */
-import type { EngineOut, EngineResult, EngineTransport, ProgressUpdate, Takeover, WikilinkCompletion } from '@symbiosis-lab/moss-ui';
+import type { EngineOut, EngineResult, EngineTransport, ProgressUpdate, SpamOutcome, Takeover, WikilinkCompletion } from '@symbiosis-lab/moss-ui';
 import type { ToastSurface } from './shared/ui/toast/app-toast-render';
 
 /** What the empty folder's starter picker needs from the folder it opens in. */
@@ -119,7 +119,17 @@ export type Unlisten = () => void;
 
 
 /** A comment on a published page, as its owner hides or shows it. */
-export type CommentAction = (folder: string, source: string, id: string, pageKey: string, siteName: string) => Promise<EngineResult<null>>;
+export type CommentAction = (folder: string, source: string, id: string) => Promise<EngineResult<null>>;
+
+/** The owner's moderation of their site's comments; each takes effect at the next publish. */
+export interface CommentModeration {
+  hide: CommentAction;
+  unhide: CommentAction;
+  /** Hides a comment and blocks every link host in it. */
+  spam: (folder: string, source: string, id: string) => Promise<EngineResult<SpamOutcome>>;
+  /** Reverses exactly what one Spam wrote. */
+  undoSpam: (folder: string, outcome: SpamOutcome) => Promise<EngineResult<null>>;
+}
 
 /**
  * How the UI's own parts talk to each other (the shell, the preview's
@@ -288,8 +298,8 @@ export interface UiHost {
   importSite?: (url: string, folder: string) => Promise<{ status: 'ok'; data: ImportOutcome } | { status: 'error'; error: ImportError }>;
   /** Opens the plugins view. */
   openPluginsView?: (folder: string) => Promise<EngineResult<null>>;
-  hideComment?: CommentAction;
-  unhideComment?: CommentAction;
+  /** Absent where the folder's owner key cannot sign, so nothing offers to moderate. */
+  comments?: CommentModeration;
   /** The host's queued app-level toasts, drawn by the editor while it is what the person sees. */
   toasts?: Pick<ToastSurface, 'take' | 'onAction'>;
   /** Tells the host which page the preview wants first, so its build serves that one early. */

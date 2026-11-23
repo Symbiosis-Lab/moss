@@ -29,6 +29,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("compute_heading_state", json!({ "filePath": "a.md", "frontmatter": {}, "body": "" })),
         ("describe_source_role", json!({ "filePath": "a.md" })),
         ("page_facts", json!({ "filePath": "a.md" })),
+        ("page_comments", json!({ "filePath": "a.md" })),
         ("resolve_url_for_file", json!({ "filePath": "a.md" })),
         ("validate_content", json!({ "filePath": "a.md" })),
         ("get_publish_preflight", json!({ "folderPath": "/open/folder" })),
@@ -770,6 +771,8 @@ fn render_contract() -> String {
         crate::deploy::progress::DeployProgress::reference(&mut types, &[]);
         crate::advisory::AppOp::reference(&mut types, &[]);
         crate::i18n::AppLanguage::reference(&mut types, &[]);
+        // A host's Spam answers what it did, and its Undo takes it back.
+        crate::build::features::comment::cli::SpamOutcome::reference(&mut types, &[]);
         // Hosts without the engine get these from moss-core's page bindings.
         moss_core::page::PagePreview::reference(&mut types, &[]);
         moss_core::page::FieldSpan::reference(&mut types, &[]);
@@ -855,11 +858,7 @@ fn the_contract_matches_the_command_table() {
         return;
     }
     let on_disk = std::fs::read_to_string(&path).unwrap_or_default();
-    assert!(
-        on_disk == rendered,
-        "{} is stale; regenerate it with UPDATE_ENGINE_CONTRACT=1 cargo test -p moss-build --lib commands::tests::the_contract",
-        path.display()
-    );
+    assert!(on_disk == rendered, "{} is stale; regenerate it with UPDATE_ENGINE_CONTRACT=1 cargo test -p moss-build --lib commands::tests::the_contract", path.display());
 }
 
 /// moss's own files are judged in any letter case, since a folder's file

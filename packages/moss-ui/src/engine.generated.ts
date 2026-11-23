@@ -1695,6 +1695,33 @@ export type NewFile = { dir: string; name: string; frontmatter: { [key in string
 export type NoArgs = Record<string, never>
 
 /**
+ * One comment under its page, for its owner to hide, show or mark as spam.
+ */
+export type PageComment = { source: string; id: string; author: string; 
+/**
+ * The host of the writer's website field.
+ */
+website: string | null; createdAt: string; 
+/**
+ * Plain text, markup stripped, cut at a few hundred characters.
+ */
+text: string; 
+/**
+ * Not shown on the site, by its own hide, a hidden parent or a blocked host.
+ */
+hidden: boolean; 
+/**
+ * Hidden by its own hide or a blocked host, not only a hidden parent, so Show brings it back.
+ */
+directlyHidden: boolean }
+
+export type PageComments = { 
+/**
+ * Newest first.
+ */
+comments: PageComment[] }
+
+/**
  * What the last build knows about one source file, for an editor's add list:
  * where the page sits, which decides the fields that apply, and the value the
  * build gave each field the file leaves out.
@@ -2623,6 +2650,23 @@ line: number }
 export type SourceStructureOutcome = "Ready" | "Failed"
 
 /**
+ * What Spam did, for the line or toast that names it and for Undo.
+ */
+export type SpamOutcome = { 
+/**
+ * `(source, id)` of each comment this call hid; one already hidden is not here.
+ */
+hidden: ([string, string])[]; blocked: string[]; 
+/**
+ * Hosts left unblocked because a comment the owner unhid links to them.
+ */
+notBlocked: string[]; 
+/**
+ * Other comments the new blocks hide.
+ */
+alsoHidden: number }
+
+/**
  * A file's role on the site, beyond being a page or an asset. The editor
  * explains it before opening the file, so the tree says it rather than the
  * editor guessing from names.
@@ -3308,6 +3352,7 @@ export type EngineCommands = {
 	compute_heading_state: { args: HeadingStateArgs; out: HeadingState };
 	describe_source_role: { args: FileArgs; out: SourceRole };
 	page_facts: { args: FileArgs; out: PageFacts };
+	page_comments: { args: FileArgs; out: PageComments };
 	resolve_url_for_file: { args: FileArgs; out: string | null };
 	validate_content: { args: FileArgs; out: EditorDiagnostic[] };
 	get_publish_preflight: { args: FolderArgs; out: PublishPreflightProjection | null };
@@ -3370,6 +3415,7 @@ export const ENGINE_TIER = {
 	compute_heading_state: "session_read",
 	describe_source_role: "session_read",
 	page_facts: "session_read",
+	page_comments: "session_read",
 	resolve_url_for_file: "session_read",
 	validate_content: "session_read",
 	get_publish_preflight: "session_read",
@@ -3432,6 +3478,7 @@ export type EngineParams = {
 	compute_heading_state: [filePath: VaultPath, frontmatter: JsonValue, body: string];
 	describe_source_role: [filePath: VaultPath];
 	page_facts: [filePath: VaultPath];
+	page_comments: [filePath: VaultPath];
 	resolve_url_for_file: [filePath: VaultPath];
 	validate_content: [filePath: VaultPath];
 	get_publish_preflight: [folderPath: string];
@@ -3492,6 +3539,7 @@ export const ENGINE_PARAMS = {
 	compute_heading_state: ["filePath", "frontmatter", "body"],
 	describe_source_role: ["filePath"],
 	page_facts: ["filePath"],
+	page_comments: ["filePath"],
 	resolve_url_for_file: ["filePath"],
 	validate_content: ["filePath"],
 	get_publish_preflight: ["folderPath"],

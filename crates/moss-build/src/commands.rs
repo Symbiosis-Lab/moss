@@ -388,6 +388,7 @@ tier! {
         compute_heading_state => reads::compute_heading_state,
         describe_source_role => reads::describe_source_role,
         page_facts => reads::page_facts,
+        page_comments => reads::page_comments,
         resolve_url_for_file => reads::resolve_url_for_file,
         validate_content => reads::validate_content,
         get_publish_preflight => reads::get_publish_preflight,

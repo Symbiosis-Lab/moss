@@ -51,22 +51,19 @@ const VIEWPORTS = [
 // can add to a served page, enumerated from
 // crates/moss-build/src/ops/serve/iframe_bridge.rs. This gate hits the
 // preview server directly with no `__moss_shell` query param, so
-// `shell_mounted` is false and the owner-controls / shell-frame branches
-// never fire in practice — the selector still lists them, so a future call
-// site that DOES set the marker stays excluded rather than silently failing
-// this gate on chrome that was never meant to be compared.
+// `shell_mounted` is false and the shell-frame branch never fires in
+// practice — the selector still lists it, so a future call site that DOES
+// set the marker stays excluded rather than silently failing this gate on
+// chrome that was never meant to be compared.
 const PREVIEW_ONLY_SELECTOR = [
   "#moss-bridge",
   "#moss-comment-preview-shim",
-  "#moss-comment-owner-style",
-  "#moss-comment-owner-controls",
   "#moss-img-fallback-style",
   "#moss-img-fallback",
   "style#moss-preview-tooltip",
   "style#moss-preview-slot-reveal",
   ".moss-shell-frame",
   ".moss-fm-flash",
-  "[data-moss-hide-comment]",
 ].join(", ");
 
 interface Box {

@@ -304,6 +304,11 @@ pub fn page_facts_for_source(project_root: &Path, rel_path: &str) -> PageFacts {
     row_for_source(project_root, rel_path).map(|r| PageFacts { position: r.position, auto: r.resolved }).unwrap_or_default()
 }
 
+/// The uid the last build gave the source at `rel_path`, which keys its comments.
+pub fn page_uid_for_source(project_root: &Path, rel_path: &str) -> Option<String> {
+    row_for_source(project_root, rel_path).and_then(|r| r.uid)
+}
+
 /// The last build's row for the source at `rel_path`, matched as the content
 /// graph matches paths.
 fn row_for_source(project_root: &Path, rel_path: &str) -> Option<InventoryEntry> {

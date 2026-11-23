@@ -8,6 +8,7 @@
 import { installLogBridge } from "../lib/install-log-bridge";
 import type { ParsedFrontmatter } from '@symbiosis-lab/moss-ui';
 import { engine } from '../engine';
+import { mountPageComments, type PageCommentsFoot } from './page-comments';
 installLogBridge('action-panel');
 
 // [diag] Energy + layout-shift diagnostics → moss.log. Dev-default-on; set
@@ -201,21 +202,21 @@ function currentEntryId(): EntryId | null {
 /** Live registry-derived active path; never cache across an await. */
 function currentFilePath(): string | null {
   const id = currentEntryId();
-  if (id === null) return null;
-  return registry?.getById(id)?.path ?? null;
+  return id === null ? null : registry?.getById(id)?.path ?? null;
 }
-
-function activeDocumentPath(): string | null { return currentFilePath(); }
 
 /** Tell the chip bar where the open page sits and what the build picks for its fields. */
 async function refreshPageFacts(): Promise<void> {
-  const bar = chipBar, path = activeDocumentPath();
+  const bar = chipBar, path = currentFilePath();
   if (!bar || !path || !projectRoot) return;
   // A failure offers every field, with no hints.
   const result = await engine.pageFacts(toAbsolute(path, projectRoot))
     .catch((e: unknown) => { console.warn('[editor] pageFacts failed:', e); return null; });
   if (bar === chipBar) bar.setPageFacts(result?.status === 'ok' ? result.data : NO_PAGE_FACTS);
 }
+
+/** The open page's comments, under the article. */
+let commentsFoot: PageCommentsFoot | null = null;
 
 /**
  * A project file's standard-form destination from the open page: the engine's
@@ -224,7 +225,7 @@ async function refreshPageFacts(): Promise<void> {
  * the file, which the command requires.
  */
 const destinationFor: DestinationFor = async (target) => {
-  const page = activeDocumentPath();
+  const page = currentFilePath();
   if (!page || !projectRoot) return null;
   return (await host.assetRefForPath?.(toAbsolute(target, projectRoot), page))?.insert ?? null;
 };
@@ -746,6 +747,7 @@ async function init(): Promise<void> {
   // The other tone renderers (Narrator/Awaiting/Toast) stay in app.ts
   // where their anchors live (titlebar slot, toast container).
   void mountInlineStatus();
+  commentsFoot = mountPageComments(document.getElementById('moss-editor-root')!, () => projectRoot);
 
   // Observability: report when a click fails to focus an editable editor — a
   // covering overlay would otherwise leave the editor silently un-clickable
@@ -2692,6 +2694,7 @@ async function loadFileBody(
     : undefined;
   const unsavedResume = resumed?.unsaved === true && resumed.base !== null;
 
+  void commentsFoot?.show(isMarkdown && projectRoot ? toAbsolute(filePath, projectRoot) : null);
   // Render form (markdown only — non-markdown files have no frontmatter)
   if (isMarkdown) {
     // The store holds no path: saveActiveDocument, the single writer, reads the live
@@ -2702,15 +2705,13 @@ async function loadFileBody(
     frontmatterStore.subscribe((values) => {
       invalidatePublishPreflightPresentation();
       const p = currentFilePath();
-      if (p) {
-        void applyHeadingState(p, values);
-      }
+      if (p) void applyHeadingState(p, values);
     });
 
     // Slots keep a store so hidden frontmatter survives saves; only their
     // chips are read-only.
     chipBar = new ChipBar(schema!, frontmatterStore, {
-      getActivePath: () => activeDocumentPath() ?? '',
+      getActivePath: () => currentFilePath() ?? '',
       getProjectRoot: () => projectRoot ?? undefined,
       afterVaultImport: () => afterVaultImport(fileTree),
       slotRole,
@@ -2779,7 +2780,7 @@ async function loadFileBody(
     // Link validation + Cmd+Click nav now pull from the shared reference cache
     // (cm-reference-resolver, driven by editorResolveReferences). No separate
     // link-resolution RPC is wired from here.
-    getFromFile: () => activeDocumentPath() ?? filePath,
+    getFromFile: () => currentFilePath() ?? filePath,
     // The reference card's link/image providers: a page-link
     // card's backend call and an image card's Replace… picker both need the
     // project root, the same accessor shape the insert bar's media picker
@@ -2788,7 +2789,7 @@ async function loadFileBody(
     revealFile: (path) => fileTree?.revealNewFile(path),
     getCurrentArticle: () => ({
       title: headingController?.saved()?.text ?? '',
-      path: activeDocumentPath() ?? filePath,
+      path: currentFilePath() ?? filePath,
       locations: toNameList(frontmatterStore?.getValues().location),
       revealLocations: () => { chipBar?.revealField('location'); },
     }),
@@ -2824,13 +2825,13 @@ async function loadFileBody(
       },
       // Project-root-relative path of the active file (or null), for [[#
       // same-page heading lookup.
-      getCurrentPath: () => activeDocumentPath(),
+      getCurrentPath: () => currentFilePath(),
     } : undefined,
     // "Browse files…" on the asset-completion tooltip. Same import
     // follow-through an OS drop gets: a copy that never reaches the tree is
     // invisible until some unrelated refresh.
     assetBrowse: isMarkdown ? {
-      pagePath: () => activeDocumentPath(),
+      pagePath: () => currentFilePath(),
       projectRoot: () => projectRoot ?? null,
       afterImport: () => afterVaultImport(fileTree),
     } : undefined,
@@ -2839,7 +2840,7 @@ async function loadFileBody(
     // next to the open file) and hand cm-paste the stored path, which it
     // writes as `![](path)` from the page.
     pasteImage: async (suggestedName, dataBase64) => {
-      const path = activeDocumentPath();
+      const path = currentFilePath();
       if (!path) return null;
       const dir = await attachmentDirFor(path);
       const rel = childPath(dir, suggestedName);
@@ -3027,7 +3028,7 @@ async function saveActiveDocument(reason: 'autosave' | 'forced' = 'autosave'): P
     let conflicts = 0;
     do {
       saveQueued = false;
-      const path = activeDocumentPath();
+      const path = currentFilePath();
       const editor = cmEditor;
       const base = documentBase;
       if (!path || !editor || !base) break;

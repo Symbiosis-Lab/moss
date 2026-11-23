@@ -73,7 +73,7 @@ fn hiding_twice_appends_one_event_and_unhide_restores() {
     assert_eq!(run_in(&d, &["unhide", "1"]), 0);
     assert_eq!(run_in(&d, &["unhide", "1"]), 0);
     assert_eq!(events(&d), 2);
-    let (rows, _) = collect(d.path().to_str().unwrap());
+    let (rows, _) = collect(d.path().to_str().unwrap(), None);
     assert!(rows.iter().all(|r| !r.hidden));
 }
 
@@ -82,12 +82,12 @@ fn list_marks_hidden_comments_and_works_before_any_build() {
     let d = site();
     with_key(&d);
     assert_eq!(run_in(&d, &["hide", "1"]), 0);
-    let (rows, unresolved) = collect(d.path().to_str().unwrap());
+    let (rows, unresolved) = collect(d.path().to_str().unwrap(), None);
     assert!(unresolved, "no build yet: pages are named by uid");
     let hidden: Vec<(&str, bool)> = rows.iter().filter(|r| r.hidden).map(|r| (r.id.as_str(), r.directly_hidden)).collect();
     // The parent is hidden directly; its reply only through it.
     assert_eq!(hidden, vec![("2", false), ("1", true)]);
-    assert_eq!(rows.iter().find(|r| r.id == "1").unwrap().text, "Cheap watches & more at example.com");
+    assert_eq!(rows.iter().find(|r| r.id == "1").unwrap().short(), "Cheap watches & more at example.com");
     assert_eq!(rows[0].id, "5", "newest first");
     assert_eq!(run_in(&d, &["list"]), 0);
     // A reply hidden only through its parent cannot be unhidden on its own.
@@ -110,7 +110,7 @@ fn control_characters_never_reach_the_terminal_but_survive_in_json() {
         "{\"articles\":{\"pg1\":{\"comments\":[{\"id\":\"9\",\"content\":\"<p>wipe\\u001b[2J bell\\u0007 c1\\u009b alm\\u061c</p>\",\"createdAt\":\"2026-03-01T10:00:00Z\",\"author\":{\"displayName\":\"Eve\\u001b]0;pwned\\u0007\"}}]}}}",
     )
     .unwrap();
-    let (rows, _) = collect(d.path().to_str().unwrap());
+    let (rows, _) = collect(d.path().to_str().unwrap(), None);
     let has_control = |s: &str| s.chars().any(|c| (c.is_control() && c != '\n') || c == '\u{61c}');
     assert!(!has_control(&render_table(&rows)), "list output");
     let eve = rows.iter().find(|r| r.id == "9").unwrap();
@@ -155,7 +155,7 @@ fn adopt_key_brings_back_the_hides_of_a_key_lost_with_its_identity_folder() {
     // The whole of .moss/identity is lost and a new key made, so nothing remembers the old key.
     std::fs::remove_dir_all(d.path().join(".moss/identity")).unwrap();
     with_key(&d);
-    let hidden = || collect(d.path().to_str().unwrap()).0.iter().any(|r| r.id == "1" && r.hidden);
+    let hidden = || collect(d.path().to_str().unwrap(), None).0.iter().any(|r| r.id == "1" && r.hidden);
     assert!(!hidden(), "the old key's hide no longer applies");
 
     assert_eq!(run_in(&d, &["adopt-key", &old]), 0);
@@ -194,8 +194,8 @@ fn spam_hides_blocks_its_hosts_and_undo_reverses_all_of_it() {
     assert_eq!(outcome.blocked.iter().collect::<Vec<_>>(), ["spam.example"], "never the site's own host");
     assert_eq!(outcome.not_blocked.iter().collect::<Vec<_>>(), ["shared.example"], "a comment the owner unhid links to it");
     assert_eq!(outcome.also_hidden, 1);
-    assert_eq!(outcome.line(), "Spam · spam.example blocked · 1 more comment hidden");
-    let hidden = |ps: &str| collect(ps).0.into_iter().filter(|r| r.hidden).map(|r| r.id).collect::<BTreeSet<_>>();
+    assert_eq!(outcome.line(), "Spam · spam.example blocked · shared.example not blocked, a comment you showed links to it · 1 more comment hidden");
+    let hidden = |ps: &str| collect(ps, None).0.into_iter().filter(|r| r.hidden).map(|r| r.id).collect::<BTreeSet<_>>();
     assert_eq!(hidden(&ps), ["10".to_string(), "11".to_string()].into());
 
     crate::infra::home::with_moss_home(|_| undo_spam(&ps, &outcome)).unwrap();
@@ -254,4 +254,31 @@ fn blocked_lists_hosts_when_counts_are_unavailable() {
     );
     assert_eq!(render_blocked(&[], Ok(vec![]), false), "No blocked hosts.\n");
     assert_eq!(render_blocked(&[], Ok(vec![]), true), "{\"drops_unavailable\":null,\"hosts\":[]}\n");
+}
+
+#[test]
+fn spam_line_names_what_it_blocked_kept_and_hid() {
+    let hosts = |h: &[&str]| h.iter().map(|s| s.to_string()).collect::<BTreeSet<_>>();
+    let mut o = SpamOutcome { blocked: hosts(&["b.example", "a.example"]), also_hidden: 4, ..Default::default() };
+    assert_eq!(o.line(), "Spam · a.example, b.example blocked · 4 more comments hidden");
+    o.also_hidden = 1;
+    o.not_blocked = hosts(&["kept.example"]);
+    assert_eq!(o.line(), "Spam · a.example, b.example blocked · kept.example not blocked, a comment you showed links to it · 1 more comment hidden");
+    assert_eq!(SpamOutcome::default().line(), "Spam");
+}
+
+#[test]
+fn hide_and_unhide_by_source_and_id_record_the_comments_page_and_the_site() {
+    let d = site();
+    std::fs::write(d.path().join(".moss/state.toml"), "[deployment]\nsite_id = \"garden\"\n").unwrap();
+    with_key(&d);
+    let ps = d.path().to_str().unwrap().to_string();
+    crate::infra::home::with_moss_home(|_| set_hidden(&ps, ModKind::Hide, "matters", "5")).unwrap();
+    crate::infra::home::with_moss_home(|_| set_hidden(&ps, ModKind::Unhide, "matters", "5")).unwrap();
+    let logged: Vec<_> = load_mod_events(&ps).into_iter().map(|e| (e.kind, e.source, e.target, e.page, e.site)).collect();
+    let row = |kind: &str| (kind.to_string(), "matters".to_string(), "5".to_string(), "pg1".to_string(), "garden".to_string());
+    assert_eq!(logged, [row("hide"), row("unhide")]);
+    let err = crate::infra::home::with_moss_home(|_| set_hidden(&ps, ModKind::Hide, "matters", "1")).unwrap_err();
+    assert!(err.contains("no comment with id '1' from source 'matters'"), "{err}");
+    assert_eq!(events(&d), 2);
 }

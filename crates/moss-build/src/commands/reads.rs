@@ -160,6 +160,15 @@ pub async fn page_facts(
     Ok(crate::build::emit::inventory::page_facts_for_source(root, &rel))
 }
 
+/// The comments of the page built from `filePath`, for its owner to moderate.
+pub async fn page_comments(
+    host: &dyn CommandHost,
+    a: FileArgs,
+) -> Result<crate::build::features::comment::cli::PageComments, String> {
+    let (root, rel) = site_relative(host, &a.file_path)?;
+    Ok(crate::build::features::comment::cli::page_comments(root, &rel))
+}
+
 /// A field the schema does not know is a warning, never silently accepted.
 pub async fn validate_content(host: &dyn CommandHost, a: FileArgs) -> Result<Vec<EditorDiagnostic>, String> {
     let path = resolve(host, &a.file_path)?;

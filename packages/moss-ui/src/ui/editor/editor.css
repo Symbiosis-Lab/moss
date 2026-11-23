@@ -1894,3 +1894,27 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
 
 /* --moss-border-radius and the --z-* scale both live in tokens.css (imported
    above), so the toast rules below need no local restating of either. */
+
+/* The open page's comments, under the article (page-comments.ts). */
+.pc-bar { flex-shrink: 0; display: flex; flex-direction: column; max-height: 56%;
+  border-top: 1px solid var(--moss-border-light); background: var(--moss-color-surface); }
+.pc-bar[hidden] { display: none; }
+.pc-toggle { display: flex; align-items: center; gap: 8px; min-height: 40px; width: 100%; padding: 0 16px;
+  background: none; border: 0; font: inherit; font-size: 14px; color: var(--moss-color-text-secondary);
+  cursor: pointer; text-align: start; }
+.pc-toggle:focus-visible, .pc-row button:focus-visible { outline: 2px solid var(--moss-color-accent); outline-offset: 2px; }
+.pc-chev { margin-inline-start: auto; transition: transform var(--moss-transition-fast, .12s); }
+.pc-bar[data-open] .pc-chev { transform: rotate(90deg); }
+.pc-bar:not([data-open]) .pc-list { display: none; }
+.pc-list { list-style: none; margin: 0; padding: 0 16px 8px; overflow: auto; }
+.pc-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 16px; align-items: center;
+  padding: 10px 0; border-top: 1px solid var(--moss-border-light); }
+.pc-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; font-size: 13px; color: var(--moss-color-muted); }
+.pc-author { color: var(--moss-color-text); font-weight: 600; }
+.pc-text { grid-column: 1; margin: 0; font-size: 14px; line-height: 1.45; color: var(--moss-color-text);
+  overflow-wrap: anywhere; }
+.pc-actions { grid-column: 2; grid-row: 1 / span 2; display: flex; gap: 6px; }
+/* WCAG 2.5.8: each control at least 24 by 24 CSS px. */
+.pc-actions button { min-width: 24px; min-height: 24px; }
+.pc-row.is-hidden .pc-head, .pc-row.is-hidden .pc-text { opacity: .5; }
+@media (prefers-reduced-motion: reduce) { .pc-chev { transition: none; } }

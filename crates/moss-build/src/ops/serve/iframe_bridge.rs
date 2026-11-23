@@ -57,27 +57,6 @@ font:500 .8125rem/1.4 system-ui,sans-serif;color:#143c82;background:#f4f1ec}\
 /// only served by the preview server.
 const COMMENT_PREVIEW_SHIM: &str = include_str!("js/comment-preview-shim.js");
 
-/// Preview-only JS that decorates each comment `<li>` with a hover-revealed
-/// Hide button and posts `{type:"moss-hide-comment", source, id, pageKey,
-/// siteName}` to `window.parent` on click. Injected ONLY when `shell_mounted`
-/// — NEVER present in deployed output.
-const COMMENT_OWNER_CONTROLS_SCRIPT: &str =
-    include_str!("js/comment-owner-controls.js");
-
-/// Preview-only CSS for the owner Hide button. Attribute-selector scoped
-/// (`[data-moss-hide-comment]`) so it never collides with site CSS.
-/// Uses `inset-inline-end` (RTL-safe) and design tokens. Injected ONLY
-/// when `shell_mounted` — NEVER present in deployed output.
-const COMMENT_OWNER_CONTROLS_STYLE: &str = "\
-li.comment-item{position:relative}\
-li.comment-item [data-moss-hide-comment]{position:absolute;top:.25rem;inset-inline-end:.25rem;\
-opacity:0;transition:opacity .12s ease;font:inherit;font-size:.75rem;line-height:1;\
-padding:.2rem .45rem;cursor:pointer;border-radius:4px;\
-color:var(--moss-color-muted,#716d69);\
-background:var(--moss-color-surface,#fff);border:1px solid var(--moss-border-light,#ddd)}\
-li.comment-item:hover [data-moss-hide-comment],\
-li.comment-item [data-moss-hide-comment]:focus-visible{opacity:1}";
-
 /// Query parameter the shell stamps onto preview-iframe URLs so the server
 /// knows the document is mounted directly inside the moss app shell (not a
 /// nested cover/embed iframe loaded by previewed content). When present, the
@@ -556,18 +535,9 @@ fn ensure_preview_body_attr(html: &str) -> String {
     html.to_string()
 }
 
-/// Inject all preview-only assets (style, tooltip, bridge script, comment shim,
-/// and — when `shell_mounted` — the owner-controls Hide button) before `</body>`.
-///
-/// This is a pure function so it can be unit-tested without spinning up axum.
-/// The middleware calls it after all the server-side HTML rewrites are done.
-///
-/// # Invariant
-///
-/// The owner-controls `<style>` and `<script>` are ONLY emitted when
-/// `shell_mounted` is `true`. Deployed output never carries the shell marker,
-/// so the controls are never present in published artifacts.
-fn inject_preview_assets(html: &str, shell_mounted: bool) -> String {
+/// Inject all preview-only assets (style, tooltip, bridge script, comment shim)
+/// before `</body>`. A pure function, called after the server-side rewrites.
+fn inject_preview_assets(html: &str) -> String {
     let Some((before, after)) = html.rsplit_once("</body>") else {
         // No </body> — return unchanged (mirrors the middleware's fallback).
         return html.to_string();
@@ -583,18 +553,9 @@ fn inject_preview_assets(html: &str, shell_mounted: bool) -> String {
         "<script type=\"text/javascript\" id=\"moss-comment-preview-shim\" data-moss-permanent>\n{}\n</script>\n",
         COMMENT_PREVIEW_SHIM
     );
-
-    let owner_controls = if shell_mounted {
-        format!(
-            "<style id=\"moss-comment-owner-style\">{COMMENT_OWNER_CONTROLS_STYLE}</style>\
-             <script type=\"text/javascript\" id=\"moss-comment-owner-controls\" data-moss-permanent>{COMMENT_OWNER_CONTROLS_SCRIPT}</script>"
-        )
-    } else {
-        String::new()
-    };
     format!(
         "{before}{style_tag}{tooltip_style}{PREVIEW_SLOT_REVEAL_STYLE}\
-         {script_tag}{shim_tag}{owner_controls}</body>{after}"
+         {script_tag}{shim_tag}</body>{after}"
     )
 }
 
@@ -715,11 +676,7 @@ pub async fn inject_iframe_bridge(
         html
     };
 
-    // Inject minimal iframe-side CSS, preview tooltip, bridge script, comment
-    // shim, and (when shell_mounted) the owner-controls Hide button, before
-    // </body>. See `inject_preview_assets` for the full injection logic and
-    // the shell-marker gate that keeps owner controls out of deployed output.
-    let html = inject_preview_assets(&html, shell_mounted);
+    let html = inject_preview_assets(&html);
 
     // Last: the blueprint placeholder, into <head> rather than before </body>
     // (see `inject_placeholder_into_head`). Preview-only — a published site
