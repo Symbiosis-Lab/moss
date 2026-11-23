@@ -731,25 +731,8 @@ fn series_nav_html<'d>(context: &RenderCtx<'_, 'd>, d: &ParsedDocument, typesett
         tests::SEQUENCES_ORDERED.with(|n| n.set(n.get() + 1));
         series::chain(all_docs, parent_doc)
     });
-    // By url_path: every folder index's clean_stem is "index".
-    let pos = siblings.iter().position(|pd| pd.url_path == d.url_path)?;
-    // Labels are chrome: plain text.
-    let clean_url = |path: &str| path_resolver.resolve_url(&crate::build::scan::article_map::to_pretty_url(path));
-    let neighbour = |i: usize| (siblings[i].label.clone(), clean_url(&siblings[i].url_path));
-    let prev = (pos > 0).then(|| neighbour(pos - 1));
-    let next = (pos + 1 < siblings.len()).then(|| neighbour(pos + 1));
-    let resolved_parent = clean_url(&parent_doc.url_path);
-    let html = series::render(
-        &parent_doc.label,
-        &resolved_parent,
-        prev.as_ref().map(|(t, u)| (t.as_str(), u.as_str())),
-        next.as_ref().map(|(t, u)| (t.as_str(), u.as_str())),
-        // Where you are, over the same set the arrows walk. A lone page gets
-        // no ordinal: "1 of 1" is noise, not orientation.
-        if siblings.len() > 1 { Some((pos + 1, siblings.len())) } else { None },
-        d.lang, typesetting,
-    );
-    (!html.is_empty()).then_some(html)
+    let url = |path: &str| path_resolver.resolve_url(&crate::build::scan::article_map::to_pretty_url(path));
+    series::nav(d, parent_doc, &siblings[..], &url, d.lang, typesetting)
 }
 
 pub(super) fn render_page<'d>(

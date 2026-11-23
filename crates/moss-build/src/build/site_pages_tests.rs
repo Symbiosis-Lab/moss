@@ -117,11 +117,8 @@ fn core_site_pages_match_the_builds_pages_on_every_fixture() {
         let (bundle, _) = moss_core::page::site_bundle(moss_core::page::SiteSources {
             files, texts: texts.clone(), config_toml, folder_langs: captured.folder_langs.clone(), ..Default::default()
         });
-        let core: BTreeMap<String, PageFacts> = moss_core::page::site_page::site_pages(&texts, &bundle, &captured.root_name)
-            .into_iter()
-            .zip(texts.keys().cloned().collect::<std::collections::BTreeSet<_>>().into_iter().filter(|p| moss_core::source_edit::policy::is_page_path(Path::new(p))))
-            .map(|(facts, path)| (path, facts))
-            .collect();
+        let site = moss_core::page::site_page::site_pages(&texts, &bundle, &captured.root_name);
+        let core: BTreeMap<String, PageFacts> = site.paths.into_iter().zip(site.pages).collect();
         assert!(!captured.pages.is_empty() || texts.is_empty(), "{name}: the build captured no pages");
         compared += captured.pages.len();
         let mut fields: BTreeMap<String, usize> = BTreeMap::new();

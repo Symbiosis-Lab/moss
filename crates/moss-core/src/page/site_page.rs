@@ -153,7 +153,7 @@ impl SitePage for PageFacts {
 /// site-relative path; the bundle supplies the language and what the last
 /// build inferred. `root_name` is the site folder's own name, which the
 /// root's home may be named after.
-pub fn site_pages(texts: &HashMap<String, String>, bundle: &super::SiteBundle, root_name: &str) -> Vec<PageFacts> {
+pub fn site_pages(texts: &HashMap<String, String>, bundle: &super::SiteBundle, root_name: &str) -> SitePages {
     use super::page_map::{apply_cascading_dir_overrides, home_file_winners, home_overrides, page_map_entry, HomeClaim};
     let site_lang = Language::from_code(&bundle.lang).unwrap_or(Language::En);
     let mut paths: Vec<&str> = texts.keys().map(String::as_str).filter(|p| crate::source_edit::policy::is_page_path(std::path::Path::new(p))).collect();
@@ -223,7 +223,28 @@ pub fn site_pages(texts: &HashMap<String, String>, bundle: &super::SiteBundle, r
     for (i, sort) in sorts {
         pages[i].direct_children_sort = Some(sort);
     }
-    pages
+    SitePages { paths: paths.into_iter().map(str::to_string).collect(), pages, langs }
+}
+
+/// Every page of a site, in the build's walk order: each one's source path,
+/// facts and language at the same index.
+#[derive(Debug, Clone, Default)]
+pub struct SitePages {
+    pub paths: Vec<String>,
+    pub pages: Vec<PageFacts>,
+    pub langs: Vec<Language>,
+}
+
+impl SitePages {
+    /// The series navigation drawn on the page at `path`, as the build draws it.
+    /// `url` turns a url path into a link.
+    pub fn series_nav(&self, path: &str, url: &dyn Fn(&str) -> String, typesetting: Option<&str>) -> Option<String> {
+        use super::series;
+        let i = self.paths.iter().position(|p| p == path)?;
+        let page = &self.pages[i];
+        let parent = series::series_parent(page, &self.pages)?;
+        series::nav(page, parent, &series::chain(&self.pages, parent), url, self.langs[i], typesetting)
+    }
 }
 
 /// The `title` and `date` a page lists under `inferred:`, filled from the

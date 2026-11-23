@@ -169,3 +169,22 @@ fn sources_json_round_trip_into_a_site() {
     assert_eq!(crate::site_text_paths(r#"["z.MD","child/index.md","index.md","photo.jpg"]"#).unwrap(), r#"["index.md","z.MD"]"#);
     assert!(crate::site_text_paths("{}").is_err());
 }
+
+#[test]
+fn preview_draws_the_series_navigation_at_the_folder_s_own_address() {
+    let texts = json!({
+        "guide/index.md": "---\ntitle: Guide\nurl: handbook\nsort: weight\nseries: true\n---\n",
+        "guide/one.md": "---\nweight: 1\n---\n# One\n",
+        "guide/two.md": "---\nweight: 2\n---\n# Two\n",
+    });
+    let files = json!(["guide/index.md", "guide/one.md", "guide/two.md"]);
+    let mut site = Site::from_json(&json!({"files": files, "lang": "en"}).to_string()).unwrap();
+    let html = |site: &Site| json_value(&site.preview("guide/two.md", texts["guide/two.md"].as_str().unwrap(), "/"))["html"].as_str().unwrap().to_string();
+    assert!(!html(&site).contains(r#"rel="prev""#), "no pages known yet");
+
+    site.set_texts(&texts.to_string(), "site").unwrap();
+    let html = html(&site);
+    assert!(html.contains(r#"<a href="handbook/" class="moss-series-nav-collection">Guide</a>"#), "{html}");
+    assert!(html.contains(r#"href="handbook/one/" rel="prev""#), "{html}");
+    assert!(!html.contains(r#"rel="next""#), "{html}");
+}

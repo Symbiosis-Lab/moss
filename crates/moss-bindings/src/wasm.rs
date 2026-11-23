@@ -32,6 +32,11 @@ impl MossSite {
         self.0.set_notes(notes_json).map_err(|e| JsValue::from_str(&e))
     }
 
+    #[wasm_bindgen(js_name = setTexts)]
+    pub fn set_texts(&mut self, texts_json: &str, root_name: &str) -> Result<(), JsValue> {
+        self.0.set_texts(texts_json, root_name).map_err(|e| JsValue::from_str(&e))
+    }
+
     pub fn preview(&self, path: &str, text: &str, base_href: &str) -> String {
         self.0.preview(path, text, base_href)
     }

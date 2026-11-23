@@ -16,6 +16,8 @@ uniffi::setup_scaffolding!();
 pub struct Site {
     inputs: SiteInputs,
     css: String,
+    bundle: SiteBundle,
+    pages: page::site_page::SitePages,
 }
 
 /// moss's page stylesheet, kept equal to the build's by a moss-build test.
@@ -25,7 +27,15 @@ impl Site {
     pub fn from_json(site_json: &str) -> Result<Self, String> {
         let bundle: SiteBundle = serde_json::from_str(site_json).map_err(|e| e.to_string())?;
         let css = format!("{PAGE_CSS}\n{}", bundle.theme_css);
-        Ok(Self { inputs: bundle.inputs(), css })
+        Ok(Self { inputs: bundle.clone().inputs(), css, bundle, pages: Default::default() })
+    }
+
+    /// Replace every page's text, by site-relative path, and derive the site's
+    /// pages from them once. `root_name` is the site folder's own name.
+    pub fn set_texts(&mut self, texts_json: &str, root_name: &str) -> Result<(), String> {
+        let texts = serde_json::from_str(texts_json).map_err(|e| e.to_string())?;
+        self.pages = page::site_page::site_pages(&texts, &self.bundle, root_name);
+        Ok(())
     }
 
     /// The effective schema used by this site's checks.
@@ -52,7 +62,12 @@ impl Site {
 
     /// A full document, its title, and the renderer's diagnostics. Use `check` for validation.
     pub fn preview(&self, path: &str, text: &str, base_href: &str) -> String {
-        let page = page::render_page(path, text, &self.inputs);
+        let mut page = page::render_page(path, text, &self.inputs);
+        let typesetting = moss_core::frontmatter::read_page(text).0.typesetting;
+        let url = |url_path: &str| moss_core::resolve::output_url::to_pretty_url(url_path);
+        if let Some(nav) = self.pages.series_nav(path, &url, typesetting.as_deref()) {
+            page.body_html.push_str(&nav);
+        }
         let html = page::preview_document(&page, &self.inputs.lang, &self.css, base_href);
         serde_json::to_string(&page::PagePreview {
             revision: page::content_hash(text.as_bytes()),

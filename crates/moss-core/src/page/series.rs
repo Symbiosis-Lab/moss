@@ -148,6 +148,35 @@ pub fn series_parent<'a, P: SitePage>(page: &P, pages: &'a [P]) -> Option<&'a P>
     chrome_on(parent).then_some(parent)
 }
 
+/// The series navigation drawn on `page`, a step in `parent`'s `chain`, or
+/// `None` when it draws nothing. `url` turns a page's url path into its link;
+/// labels are chrome, so plain text.
+pub fn nav<P: SitePage>(
+    page: &P,
+    parent: &P,
+    chain: &[&P],
+    url: &dyn Fn(&str) -> String,
+    lang: crate::i18n::Language,
+    typesetting: Option<&str>,
+) -> Option<String> {
+    // By url path: every folder home's clean stem is "index".
+    let pos = chain.iter().position(|p| p.url_path() == page.url_path())?;
+    let neighbour = |i: usize| (chain[i].label().to_string(), url(chain[i].url_path()));
+    let prev = (pos > 0).then(|| neighbour(pos - 1));
+    let next = (pos + 1 < chain.len()).then(|| neighbour(pos + 1));
+    let html = render(
+        parent.label(),
+        &url(parent.url_path()),
+        prev.as_ref().map(|(t, u)| (t.as_str(), u.as_str())),
+        next.as_ref().map(|(t, u)| (t.as_str(), u.as_str())),
+        // Where you are, over the same set the arrows walk. A lone page gets
+        // no ordinal: "1 of 1" is noise, not orientation.
+        (chain.len() > 1).then_some((pos + 1, chain.len())),
+        lang, typesetting,
+    );
+    (!html.is_empty()).then_some(html)
+}
+
 /// `"series/part-1/index.html"` -> `"series"`: the path with its last two
 /// segments removed, or `None` when it has fewer than three.
 fn parent_folder(url_path: &str) -> Option<&str> {

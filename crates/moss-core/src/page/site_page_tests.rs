@@ -8,7 +8,7 @@ fn pages(texts: &[(&str, &str)], other_files: &[&str], bundle: SiteBundle) -> Ve
     let texts: HashMap<String, String> = texts.iter().map(|(p, t)| (p.to_string(), t.to_string())).collect();
     let mut files: Vec<String> = texts.keys().cloned().chain(other_files.iter().map(|f| f.to_string())).collect();
     files.sort();
-    site_pages(&texts, &SiteBundle { files, lang: "en".into(), ..bundle }, "site")
+    site_pages(&texts, &SiteBundle { files, lang: "en".into(), ..bundle }, "site").pages
 }
 
 fn label_of<'a>(pages: &'a [PageFacts], url: &str) -> &'a str {
