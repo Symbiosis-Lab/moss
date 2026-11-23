@@ -927,3 +927,108 @@ async fn phase4_retire_and_cancel_concurrent() {
 
     engine.shutdown().await;
 }
+
+/// A cancelled hook's JS keeps running when a host reply lands after its
+/// Context was torn down. That JS must fail on its own: no panic left in the
+/// runtime for another plugin's listener or hook to rethrow, no further host
+/// call, and the engine keeps answering.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_hook_resuming_after_teardown_harms_no_other_hook() {
+    let (engine, mut dispatch_rx) = QuickJsEngine::new(None);
+    let host_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = host_calls.clone();
+    let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = server.local_addr().unwrap().port();
+    let fetched = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let accepted = fetched.clone();
+    std::thread::spawn(move || {
+        for _ in server.incoming().flatten() {
+            accepted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    });
+    tokio::spawn(async move {
+        while let Some(req) = dispatch_rx.recv().await {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                let _ = req.reply.send(Ok("null".into()));
+            });
+        }
+    });
+    let bundle: &'static str = Box::leak(r#"var P = {
+        async login() {
+            const { core, event } = window.__TAURI__;
+            await core.invoke("set_action_panel_html", { html: "" });
+            // Resumed after teardown: each host surface on its own.
+            try { await core.invoke("set_action_panel_html", { html: "" }); } catch {}
+            try { await event.listen("browser-closed", () => {}); } catch {}
+            try { await event.emit("plugin-message", { message: "late" }); } catch {}
+            try { await fetch("http://127.0.0.1:__PORT__/late"); } catch {}
+            try { setTimeout(() => {}, 1); } catch {}
+            return "resumed";
+        },
+        async watch() {
+            const ev = window.__TAURI__.event;
+            await ev.listen("x", () => { throw new Error("listener failure"); });
+            await ev.listen("x", () => { globalThis.heard = true; });
+        },
+        async heard() { return globalThis.heard === true; },
+        async fail() { throw new Error("plain failure"); },
+    };"#.replace("__PORT__", &port.to_string()).into_boxed_str());
+    let run = |plugin: &'static str, hook: &'static str, cancel: tokio_util::sync::CancellationToken| {
+        let engine = engine.clone();
+        tokio::spawn(async move {
+            engine
+                .dispatch_hook_with_cancel(plugin, bundle, "P", hook, "{}", "", "", crate::plugins::hook_state::AskedBy::Person, cancel)
+                .await
+        })
+    };
+
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let login = run("a", "login", cancel.clone());
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    cancel.cancel();
+    let err = login.await.unwrap().expect_err("a cancelled login is an error");
+    assert!(err.contains("cancelled"), "got: {err}");
+    // The engine tears a poisoned Context down when its next job arrives.
+    engine.deliver_event("a", "browser-closed", "null");
+    let calls_at_teardown = host_calls.load(std::sync::atomic::Ordering::SeqCst);
+    // The panel call's late reply lands after the teardown and resumes the login.
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    assert_eq!(host_calls.load(std::sync::atomic::Ordering::SeqCst), calls_at_teardown, "an ended run reaches the host");
+    assert_eq!(fetched.load(std::sync::atomic::Ordering::SeqCst), 0, "an ended run reaches the network");
+
+    run("b", "watch", Default::default()).await.unwrap().expect("listening");
+    engine.deliver_event("b", "x", "null");
+    let heard = run("b", "heard", Default::default()).await.unwrap();
+    assert_eq!(heard.as_deref(), Ok("true"), "the listener after the throwing one must run");
+    let err = run("b", "fail", Default::default())
+        .await
+        .unwrap()
+        .expect_err("the hook throws");
+    assert!(err.contains("plain failure") && !err.contains("panicked"), "got: {err}");
+    engine.shutdown().await;
+}
+
+/// A host function panicking under an event listener is reported, and the
+/// engine thread survives it to run the next hook.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_panic_under_an_event_listener_leaves_the_engine_running() {
+    let (engine, mut dispatch_rx) = QuickJsEngine::new(None);
+    tokio::spawn(async move {
+        while let Some(req) = dispatch_rx.recv().await {
+            let _ = req.reply.send(Ok("null".into()));
+        }
+    });
+    let bundle = r#"var P = {
+        async watch() { await window.__TAURI__.event.listen("x", () => { __moss_test_panic(); }); },
+        async ping() { return "pong"; },
+    };"#;
+    let run = |hook: &'static str| {
+        engine.dispatch_hook_with_cancel("p", bundle, "P", hook, "{}", "", "", crate::plugins::hook_state::AskedBy::Person, Default::default())
+    };
+    run("watch").await.expect("listening");
+    engine.deliver_event("p", "x", "null");
+    assert_eq!(run("ping").await.as_deref(), Ok("\"pong\""));
+    engine.shutdown().await;
+}

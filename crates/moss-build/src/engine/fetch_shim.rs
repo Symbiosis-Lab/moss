@@ -73,8 +73,19 @@ async fn json_body<'js>(ctx: Ctx<'js>, body: Vec<u8>) -> Result<rquickjs::Value<
 }
 
 /// Install globalThis.fetch.
-pub fn install_fetch(ctx: &Ctx<'_>) -> Result<()> {
-    ctx.globals().set("fetch", Func::from(Async(host_fetch)))?;
+pub fn install_fetch<'js>(ctx: &Ctx<'js>, ended: std::rc::Rc<std::cell::Cell<bool>>) -> Result<()> {
+    ctx.globals().set(
+        "fetch",
+        Func::from(Async(move |ctx: Ctx<'js>, url: String, init: rquickjs::function::Opt<Object<'js>>| {
+            let ended = ended.get();
+            async move {
+                if ended {
+                    return Err(super::web_shims::run_ended(&ctx));
+                }
+                host_fetch(ctx, url, init).await
+            }
+        })),
+    )?;
     Ok(())
 }
 
@@ -157,7 +168,7 @@ pub(crate) mod tests {
                 let rt = AsyncRuntime::new().unwrap();
                 let ctx = AsyncContext::full(&rt).await.unwrap();
                 async_with!(ctx => |ctx| {
-                    install_fetch(&ctx).unwrap();
+                    install_fetch(&ctx, Default::default()).unwrap();
                     let redirect = if option.is_empty() { String::new() } else { format!(", redirect: '{option}'") };
                     let code = format!("let outcome; try {{ outcome = String((await fetch('{url}', {{method: 'POST', body: 'payload'{redirect}}})).status); }} catch (e) {{ outcome = 'rejected'; }} outcome");
                     let promise: rquickjs::Promise = ctx.eval_promise(code.as_bytes()).unwrap();
@@ -189,7 +200,7 @@ pub(crate) mod tests {
             let rt = AsyncRuntime::new().unwrap();
             let ctx = AsyncContext::full(&rt).await.unwrap();
             async_with!(ctx => |ctx| {
-                install_fetch(&ctx).unwrap();
+                install_fetch(&ctx, Default::default()).unwrap();
                 let code = format!("(await fetch('http://127.0.0.1:{port}/posts/7', {{ method: 'DELETE' }})).status");
                 let promise: rquickjs::Promise = ctx.eval_promise(code.as_bytes()).unwrap();
                 let envelope: Object = promise.into_future().await.unwrap();
@@ -208,7 +219,7 @@ pub(crate) mod tests {
             let rt = AsyncRuntime::new().unwrap();
             let ctx = AsyncContext::full(&rt).await.unwrap();
             let (ok, login, scopes): (bool, String, String) = async_with!(ctx => |ctx| {
-                install_fetch(&ctx).unwrap();
+                install_fetch(&ctx, Default::default()).unwrap();
                 // Top-level await: with `promise: true` (eval_promise) the eval result
                 // promise resolves to the async-eval envelope `{ value: <completion> }`
                 // — QuickJS's JS_EVAL_FLAG_ASYNC shape. The fetch/json host-fn promises

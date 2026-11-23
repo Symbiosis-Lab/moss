@@ -380,11 +380,15 @@ struct PluginRuntime {
     /// on the next iteration (rides D2's retire machinery so sibling in-flight
     /// hooks on the same Context are not orphaned).
     poisoned: Rc<Cell<bool>>,
+    /// Set at teardown. A cancelled hook's JS can still be resumed after it
+    /// (a late host reply), and every host shim then throws instead of acting.
+    ended: Rc<Cell<bool>>,
 }
 
 /// Full single-runtime teardown ordering (timers → TIMERS thread-local entry →
 /// listener Persistents WHILE the runtime is alive → caller drops the Context).
 async fn teardown_one(pr: &PluginRuntime) {
+    pr.ended.set(true);
     pr.timers.borrow_mut().cancel_all();
     let ctx = pr.ctx.clone();
     let _ = async_with!(ctx => |ctx| {
@@ -595,8 +599,17 @@ async fn engine_loop(
                             continue;
                         }
                     };
-                    let timers = Rc::new(RefCell::new(self::web_shims::TimerRegistry::default()));
-                    let hub = Rc::new(RefCell::new(self::tauri_bridge::EventHub::default()));
+                    let pr = PluginRuntime {
+                        ctx,
+                        timers: Rc::new(RefCell::new(self::web_shims::TimerRegistry::default())),
+                        hub: Rc::new(RefCell::new(self::tauri_bridge::EventHub::default())),
+                        fingerprint: fp,
+                        asked_by,
+                        in_flight: Rc::new(Cell::new(0)),
+                        poisoned: Rc::new(Cell::new(false)),
+                        ended: Rc::new(Cell::new(false)),
+                    };
+                    let ctx = pr.ctx.clone();
                     // Clone for the init block: project_path is also used by run_hook
                     // later in this arm, so the outer binding must stay alive.
                     let project_path_for_init = project_path.clone();
@@ -614,20 +627,21 @@ async fn engine_loop(
                             .map_err(|e| format!("install_crypto error: {e}"))?;
                         self::web_shims::install_text_codec(&ctx)
                             .map_err(|e| format!("install_text_codec error: {e}"))?;
-                        self::web_shims::install_timers(&ctx, timers.clone())
+                        self::web_shims::install_timers(&ctx, pr.timers.clone())
                             .map_err(|e| format!("install_timers error: {e}"))?;
                         self::url_shim::install_url(&ctx)
                             .map_err(|e| format!("install_url error: {e}"))?;
-                        self::fetch_shim::install_fetch(&ctx)
+                        self::fetch_shim::install_fetch(&ctx, pr.ended.clone())
                             .map_err(|e| format!("install_fetch error: {e}"))?;
-                        self::host_fns::install_invoke(&ctx, bridge.clone(), &plugin, asked_by)
+                        self::host_fns::install_invoke(&ctx, bridge.clone(), &plugin, asked_by, pr.ended.clone())
                             .map_err(|e| format!("install_invoke error: {e}"))?;
                         self::tauri_bridge::install_event(
                             &ctx,
                             app_for_engine.clone(),
-                            hub.clone(),
+                            pr.hub.clone(),
                             bridge.clone(),
                             &plugin,
+                            pr.ended.clone(),
                         )
                         .map_err(|e| format!("install_event error: {e}"))?;
                         // Test-only panic trigger: exercises the hook-task catch_unwind path
@@ -659,32 +673,11 @@ async fn engine_loop(
                     .await
                     .map_err(|e| format!("plugin {plugin} init error: {e}"));
                     if let Err(e) = init {
-                        // Mirror teardown_plugins' order for the half-built Context:
-                        // cancel timers, clear this Context's thread-local TIMERS entry
-                        // (raw-pointer keyed — a leaked entry gets silently ADOPTED by a
-                        // future Context allocated at the same address), drop Persistents
-                        // while the runtime is alive, THEN drop the Context.
-                        timers.borrow_mut().cancel_all();
-                        let _ = async_with!(ctx => |ctx| {
-                            self::web_shims::clear_context_timers(&ctx);
-                        })
-                        .await;
-                        hub.borrow_mut().listeners.clear();
+                        teardown_one(&pr).await;
                         let _ = reply.send(Err(e));
                         continue;
                     }
-                    plugins.insert(
-                        plugin.clone(),
-                        PluginRuntime {
-                            ctx,
-                            timers,
-                            hub,
-                            fingerprint: fp,
-                            asked_by,
-                            in_flight: Rc::new(Cell::new(0)),
-                            poisoned: Rc::new(Cell::new(false)),
-                        },
-                    );
+                    plugins.insert(plugin.clone(), pr);
                 }
 
                 let pr = plugins.get(&plugin).unwrap();
@@ -727,11 +720,7 @@ async fn engine_loop(
                         // then this arm fires on the next re-poll.
                         _ = cancel.cancelled() => Err(format!("hook {hook_for_task} cancelled by host")),
                         r = hook_fut => r.unwrap_or_else(|panic| {
-                            let msg = panic
-                                .downcast_ref::<&str>()
-                                .map(|s| s.to_string())
-                                .or_else(|| panic.downcast_ref::<String>().cloned())
-                                .unwrap_or_else(|| "non-string panic payload".into());
+                            let msg = panic_text(&*panic);
                             log::error!(target: "plugin", "hook {hook_for_task} PANICKED: {msg}");
                             Err(format!("hook {hook_for_task} panicked: {msg}"))
                         }),
@@ -761,10 +750,18 @@ async fn engine_loop(
                     // deliver task would stall. `deliver` is quick (restore Persistent +
                     // call handler), so the brief inline await is fine and lands the
                     // event the instant the loop dequeues it — while the hook is parked.
-                    let _ = async_with!(ctx => |ctx| {
-                        self::tauri_bridge::deliver(&ctx, &hub, &name, &payload_json)
-                    })
+                    // A panic parked in the runtime by any earlier callback is
+                    // rethrown by the next failing call, a listener's included;
+                    // uncaught here it would end the engine thread.
+                    use futures::FutureExt;
+                    let delivered = std::panic::AssertUnwindSafe(async_with!(ctx => |ctx| {
+                        self::tauri_bridge::deliver(&ctx, &hub, &plugin, &name, &payload_json)
+                    }))
+                    .catch_unwind()
                     .await;
+                    if let Err(panic) = delivered {
+                        log::error!(target: "plugin", "event '{name}' for {plugin} PANICKED: {}", panic_text(&*panic));
+                    }
                 }
             }
 
@@ -802,6 +799,14 @@ async fn engine_loop(
         teardown_one(&pr).await;
     }
     teardown_plugins(&mut plugins).await;
+}
+
+fn panic_text(panic: &(dyn std::any::Any + Send)) -> String {
+    panic
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| panic.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "non-string panic payload".into())
 }
 
 /// Run one hook on its plugin Context and marshal the resolved return value to JSON.

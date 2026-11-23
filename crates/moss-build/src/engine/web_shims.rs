@@ -183,25 +183,33 @@ fn ctx_key(ctx: &Ctx<'_>) -> usize {
     ctx.as_raw().as_ptr() as usize
 }
 
-/// Look up the registry installed for `ctx`. Panics if `install_timers` wasn't
-/// called for this Context first (the JS globals only exist after install, so a
-/// timer call without a registry is a host bug).
-fn registry_for(ctx: &Ctx<'_>) -> Rc<RefCell<TimerRegistry>> {
+/// The registry installed for `ctx`; `None` once the Context is torn down. A
+/// cancelled hook's JS can still run then (a host reply resumes it), so this is
+/// an ordinary case, never a panic: rquickjs parks a callback's panic in the
+/// runtime and rethrows it from whichever unrelated call fails next.
+fn registry_for(ctx: &Ctx<'_>) -> Option<Rc<RefCell<TimerRegistry>>> {
     let key = ctx_key(ctx);
-    TIMERS.with(|t| {
-        t.borrow()
-            .get(&key)
-            .cloned()
-            .expect("timer registry not installed for this Context")
-    })
+    TIMERS.with(|t| t.borrow().get(&key).cloned())
+}
+
+/// The error every host shim throws into the JS of a torn-down Context.
+pub(crate) fn run_ended(ctx: &Ctx<'_>) -> rquickjs::Error {
+    rquickjs::Exception::throw_internal(ctx, "this plugin run has ended")
+}
+
+fn alloc_timer(ctx: &Ctx<'_>) -> Result<(u64, CancellationToken)> {
+    match registry_for(ctx) {
+        Some(timers) => Ok(timers.borrow_mut().alloc()),
+        None => Err(run_ended(ctx)),
+    }
 }
 
 fn set_timeout_fn<'js>(
     ctx: Ctx<'js>,
     cb: rquickjs::Function<'js>,
     ms: rquickjs::function::Opt<f64>,
-) -> u64 {
-    let (id, token) = registry_for(&ctx).borrow_mut().alloc();
+) -> Result<u64> {
+    let (id, token) = alloc_timer(&ctx)?;
     let ms = ms.0.unwrap_or(0.0).max(0.0);
     ctx.spawn(async move {
         tokio::select! {
@@ -211,12 +219,12 @@ fn set_timeout_fn<'js>(
             }
         }
     });
-    id
+    Ok(id)
 }
 
-fn clear_timeout_fn(ctx: Ctx<'_>, id: rquickjs::function::Opt<f64>) {
-    if let Some(id) = id.0 {
-        registry_for(&ctx).borrow_mut().cancel(id as u64);
+fn clear_timer_fn(ctx: Ctx<'_>, id: rquickjs::function::Opt<f64>) {
+    if let (Some(id), Some(timers)) = (id.0, registry_for(&ctx)) {
+        timers.borrow_mut().cancel(id as u64);
     }
 }
 
@@ -224,8 +232,8 @@ fn set_interval_fn<'js>(
     ctx: Ctx<'js>,
     cb: rquickjs::Function<'js>,
     ms: rquickjs::function::Opt<f64>,
-) -> u64 {
-    let (id, token) = registry_for(&ctx).borrow_mut().alloc();
+) -> Result<u64> {
+    let (id, token) = alloc_timer(&ctx)?;
     let ms = ms.0.unwrap_or(0.0).max(1.0);
     ctx.spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs_f64(ms / 1000.0));
@@ -240,13 +248,7 @@ fn set_interval_fn<'js>(
             }
         }
     });
-    id
-}
-
-fn clear_interval_fn(ctx: Ctx<'_>, id: rquickjs::function::Opt<f64>) {
-    if let Some(id) = id.0 {
-        registry_for(&ctx).borrow_mut().cancel(id as u64);
-    }
+    Ok(id)
 }
 
 /// Install setTimeout/clearTimeout/setInterval/clearInterval backed by tokio,
@@ -258,9 +260,9 @@ pub fn install_timers(ctx: &Ctx<'_>, timers: Rc<RefCell<TimerRegistry>>) -> Resu
     TIMERS.with(|t| t.borrow_mut().insert(ctx_key(ctx), timers));
 
     ctx.globals().set("setTimeout", Func::from(set_timeout_fn))?;
-    ctx.globals().set("clearTimeout", Func::from(clear_timeout_fn))?;
+    ctx.globals().set("clearTimeout", Func::from(clear_timer_fn))?;
     ctx.globals().set("setInterval", Func::from(set_interval_fn))?;
-    ctx.globals().set("clearInterval", Func::from(clear_interval_fn))?;
+    ctx.globals().set("clearInterval", Func::from(clear_timer_fn))?;
     Ok(())
 }
 

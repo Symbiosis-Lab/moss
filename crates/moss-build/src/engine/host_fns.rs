@@ -102,7 +102,13 @@ async fn invoke_call<'js>(
 /// invoke(cmd, args?) -> Promise<any>. The SYNCHRONOUS PRELUDE (lock held) reads the
 /// `args` object and serializes it to a JSON String via `js_to_json`; the spawned
 /// async body holds only that String + the bridge and forwards to [`invoke_call`].
-pub fn install_invoke<'js>(ctx: &Ctx<'js>, bridge: DispatchBridge, plugin: &str, asked_by: AskedBy) -> Result<()> {
+pub fn install_invoke<'js>(
+    ctx: &Ctx<'js>,
+    bridge: DispatchBridge,
+    plugin: &str,
+    asked_by: AskedBy,
+    ended: std::rc::Rc<std::cell::Cell<bool>>,
+) -> Result<()> {
     let core = Object::new(ctx.clone())?;
     // Bind the bridge to THIS Context's plugin so the host can gate privileged
     // commands per-plugin. A Context is per-plugin, so this binding is
@@ -123,7 +129,11 @@ pub fn install_invoke<'js>(ctx: &Ctx<'js>, bridge: DispatchBridge, plugin: &str,
                 None => Ok("null".to_string()),
             };
             let cmd_owned = cmd;
+            let ended = ended.get();
             async move {
+                if ended {
+                    return Err(super::web_shims::run_ended(&ctx));
+                }
                 let args_json = args_json?;
                 invoke_call(ctx, bridge, cmd_owned, args_json).await
             }
