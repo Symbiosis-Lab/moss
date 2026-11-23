@@ -1,21 +1,21 @@
 /**
- * moss-hosted subscribe form — inline state machine.
+ * moss-hosted subscribe form: its state machine, bound by forms.ts.
  *
- * Intercepts submit on any `form.moss-subscribe-form[data-moss-hosted="true"]`,
+ * Intercepts submit on a `form.moss-subscribe-form[data-moss-hosted="true"]`,
  * POSTs JSON to the form's action URL, and drives the form's `data-state`
  * attribute through `idle → loading → success | error`. All visual transitions
  * (button morph, input fade, status slide-in) are handled by CSS selectors
  * keyed on that attribute — this module is presentation-agnostic aside from
  * the DOM shape it expects.
  *
- * No JS fallback: if the script fails to load, the browser's native form POST
- * still works. The user lands on the raw-JSON page — ugly but not broken.
+ * With no script the browser posts the form itself, and the service answers
+ * in JSON: a one-line form is subscribed when no bot check is asked, while a
+ * form with questions loses its answers and a bot check cannot be shown.
  */
 
 import { COPY, langBucket, type Lang, type SubscribeCopy } from './i18n.js';
-import { autoHydrate, claim, inPreview, lockSlotWidth, setState } from './hosted-form.js';
+import { claim, inPreview, lockSlotWidth, setState } from './hosted-form.js';
 import { observeCaptcha, prewarmCaptcha, solveCaptcha } from './captcha.js';
-import { watchReader } from './reader.js';
 import { answersOf, checkQuestions, showAddress, watchQuestions } from './questions.js';
 
 type StatusKey = 'check-email' | 'error';
@@ -197,6 +197,3 @@ function showStatus(
 function copyFor(key: StatusKey, copy: SubscribeCopy): string {
   return key === 'check-email' ? copy.checkEmail : copy.error;
 }
-
-autoHydrate<HTMLFormElement>('form.moss-subscribe-form[data-moss-hosted="true"]', hydrateSubscribeForm);
-watchReader();

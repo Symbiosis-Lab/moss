@@ -9285,3 +9285,22 @@ async fn a_build_holds_its_activity_while_it_reports_progress() {
     crate::platform::activity::HELD.scope(std::cell::Cell::new(0), build).await.expect("build completes");
     assert!(seen.0.load(Ordering::SeqCst) >= 1, "no activity held while the build reported progress");
 }
+
+/// The footer's subscribe form and an inline `:::subscribe` are bound by `forms.js`,
+/// so a site with either and no `:::form` still ships it, and a site with neither does not.
+#[test]
+fn every_subscribe_form_ships_the_form_script() {
+    for (channel, page, ships) in [
+        ("\n[channels.email]\n", "# Home\n", true),
+        ("", "# Home\n\n:::subscribe\n:::\n", true),
+        ("", "# Home\n", false),
+    ] {
+        let (test_dir, _cleanup) = create_test_dir();
+        fs::write(test_dir.join("index.md"), page).unwrap();
+        fs::create_dir_all(test_dir.join(".moss")).unwrap();
+        fs::write(test_dir.join(".moss/config.toml"), format!("schema_version = {}\n{channel}", crate::config::migrations::CURRENT_VERSION)).unwrap();
+        build_test(test_dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty()).unwrap();
+        let html = fs::read_to_string(MossPaths::new(&test_dir).staging_dir().join("index.html")).unwrap();
+        assert_eq!(html.contains("/_moss/js/forms."), ships, "channel {channel:?}, page {page:?}");
+    }
+}

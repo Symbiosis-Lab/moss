@@ -1,4 +1,6 @@
 import { autoHydrate, claim, inPreview, lockSlotWidth, setState } from '../subscribe/hosted-form.js';
+import { hydrateSubscribeForm } from '../subscribe/subscribe.js';
+import { clearField, controls, copy, markField } from './fields.js';
 
 type Answer = {
   ok?: boolean;
@@ -13,39 +15,12 @@ export const navigation = {
   },
 };
 
-const text = (form: HTMLFormElement, key: string): string =>
-  form.querySelector<HTMLElement>(`[data-copy="${key}"]`)?.textContent ?? '';
-
 const root = (form: HTMLFormElement): HTMLElement => form.closest<HTMLElement>('.moss-form') ?? form;
 
 const status = (form: HTMLFormElement, message: string): void => {
   const line = form.querySelector<HTMLElement>('.moss-form__status');
   if (line) line.textContent = message;
 };
-
-const fieldBox = (form: HTMLFormElement, name: string): HTMLElement | null =>
-  form.querySelector<HTMLElement>(`[data-field="${CSS.escape(name)}"]`);
-
-const controlsOf = (box: HTMLElement): HTMLElement[] =>
-  Array.from(box.querySelectorAll<HTMLElement>('input, select, textarea')).filter(
-    (c) => (c as HTMLInputElement).type !== 'hidden',
-  );
-
-function clearField(box: HTMLElement): void {
-  const error = box.querySelector<HTMLElement>('.moss-form__error');
-  if (error) {
-    error.hidden = true;
-    error.textContent = '';
-  }
-  for (const c of controlsOf(box)) {
-    c.removeAttribute('aria-invalid');
-    if (error && c.getAttribute('aria-describedby')) {
-      const ids = c.getAttribute('aria-describedby')!.split(' ').filter((id) => id !== error.id);
-      if (ids.length) c.setAttribute('aria-describedby', ids.join(' '));
-      else c.removeAttribute('aria-describedby');
-    }
-  }
-}
 
 function clearErrors(form: HTMLFormElement): void {
   form.querySelectorAll<HTMLElement>('[data-field]').forEach(clearField);
@@ -58,22 +33,10 @@ function showFieldErrors(form: HTMLFormElement, fields: Record<string, string>):
   form.querySelectorAll<HTMLElement>('[data-field]').forEach((box) => {
     const code = fields[box.dataset.field ?? ''];
     if (!code) return;
-    const error = box.querySelector<HTMLElement>('.moss-form__error');
-    if (error) {
-      error.textContent = text(form, code === 'required' ? 'required' : 'format');
-      error.hidden = false;
-    }
-    for (const c of controlsOf(box)) {
-      c.setAttribute('aria-invalid', 'true');
-      if (error) {
-        const ids = (c.getAttribute('aria-describedby') ?? '').split(' ').filter(Boolean);
-        if (!ids.includes(error.id)) ids.push(error.id);
-        c.setAttribute('aria-describedby', ids.join(' '));
-      }
-    }
+    markField(form, box, code === 'required' ? 'required' : 'format');
     refused.push(box);
   });
-  const first = refused[0] && controlsOf(refused[0])[0];
+  const first = refused[0] && controls(refused[0])[0];
   if (first) first.focus();
   return refused.length > 0;
 }
@@ -112,13 +75,13 @@ async function send(form: HTMLFormElement): Promise<void> {
     }
     setState(root(form), 'error');
     if (res.status === 422 && answer.fields && showFieldErrors(form, answer.fields)) return;
-    if (res.status === 422) status(form, text(form, 'invalid'));
-    else if (res.status === 429) status(form, text(form, 'rate_limited'));
-    else if (res.status === 404) status(form, text(form, 'unknown_form'));
-    else status(form, text(form, 'network'));
+    if (res.status === 422) status(form, copy(form, 'invalid'));
+    else if (res.status === 429) status(form, copy(form, 'rate_limited'));
+    else if (res.status === 404) status(form, copy(form, 'unknown_form'));
+    else status(form, copy(form, 'network'));
   } catch {
     setState(root(form), 'error');
-    status(form, text(form, 'network'));
+    status(form, copy(form, 'network'));
   }
 }
 
@@ -132,13 +95,13 @@ export function prefill(form: HTMLFormElement, search: string): void {
   for (const name of new Set(params.keys())) {
     if (name === '_next' || name === '_hp') continue;
     const values = params.getAll(name);
-    const controls = Array.from(form.elements).filter(
+    const targets = Array.from(form.elements).filter(
       (el): el is HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement =>
         (el as HTMLInputElement).name === name &&
         (el as HTMLInputElement).type !== 'hidden' &&
         !el.closest('.moss-form__hp'),
     );
-    for (const el of controls) {
+    for (const el of targets) {
       const type = (el as HTMLInputElement).type;
       if (type === 'radio' || type === 'checkbox') {
         if (values.includes((el as HTMLInputElement).value)) (el as HTMLInputElement).checked = true;
@@ -168,4 +131,6 @@ export function hydrateForm(form: HTMLFormElement, search: string = window.locat
   form.addEventListener('change', clear);
 }
 
+// The one script for every moss form: a request form and a subscribe form.
 autoHydrate<HTMLFormElement>('form[data-moss-form]', (f) => hydrateForm(f));
+autoHydrate<HTMLFormElement>('form.moss-subscribe-form[data-moss-hosted="true"]', hydrateSubscribeForm);

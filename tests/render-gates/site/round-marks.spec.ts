@@ -1,6 +1,6 @@
 // Stylesheet injection, no site built: the partials the build appends inside the
 // shortcodes layer are appended the same way, and the comments sheet stays
-// unlayered, as it is linked. The subscribe script is moss's real bundle against
+// unlayered, as it is linked. The form script is moss's real bundle against
 // a mocked service.
 import { test, expect, type Page } from '../../support/browser-test';
 import fs from 'node:fs';
@@ -14,7 +14,7 @@ const SITE = read('css/site.css');
 const PARTIALS = ['forms', 'search', 'country-map'].map((n) => read(`css/site/${n}.css`)).join('\n');
 const COMMENTS = read('css/comments.css');
 const EMAIL = read('css/email.css');
-const SUBSCRIBE_JS = read('js/subscribe.js');
+const FORMS_JS = read('js/forms.js');
 
 const PALETTE = {
   light: { bg: '#fff', text: '#2c2825', muted: '#716d69', accent: '#2d5a2d', strong: '#8e8b85', surface: '#f4f1ec' },
@@ -75,7 +75,7 @@ async function mockService(page: Page, answer: { status: number; body: object })
 async function openSubscribe(page: Page, scheme: 'light' | 'dark', css: string, placement: 'card' | 'footer' = 'card') {
   const card = `<div class="moss-subscribe">${SUBSCRIBE_FORM}</div>`;
   await page.setContent(document_(scheme, placement === 'footer' ? `<footer>${card}</footer>` : `<main>${card}</main>`, css));
-  await page.addScriptTag({ content: SUBSCRIBE_JS });
+  await page.addScriptTag({ content: FORMS_JS });
 }
 
 const settled = (page: Page, state: string) =>

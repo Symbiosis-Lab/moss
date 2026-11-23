@@ -33,7 +33,7 @@ export const BUNDLES = [
   { entry: "crates/moss-build/src/js-src/site/link-preview.ts", out: "crates/moss-build/src/assets/js/preview.js" },
   { entry: "crates/moss-build/src/js-src/site/selection.ts", out: "crates/moss-build/src/assets/js/selection.js" },
   { entry: "crates/moss-build/src/js-src/site/comments/artalk.ts", out: "crates/moss-build/src/assets/js/comments-artalk.js" },
-  { entry: "crates/moss-build/src/js-src/site/subscribe/subscribe.ts", out: "crates/moss-build/src/assets/js/subscribe.js" },
+  { entry: "crates/moss-build/src/js-src/site/subscribe/hint.ts", out: "crates/moss-build/src/assets/js/subscribe-hint.js" },
   { entry: "crates/moss-build/src/js-src/site/forms/forms.ts", out: "crates/moss-build/src/assets/js/forms.js" },
   { entry: "crates/moss-build/src/js-src/site/heading-anchor.ts", out: "crates/moss-build/src/assets/js/heading-anchor.js" },
   // Site search runtime. `external: ["/_moss/pagefind/*"]` is not needed — the
@@ -67,7 +67,7 @@ export const BUNDLES = [
   // Not embedded: the project's hand-built landing page signs readers up with
   // the hosted subscribe form, so its states and its bot check come from the
   // same module every moss site ships.
-  { entry: "crates/moss-build/src/js-src/site/subscribe/subscribe.ts", out: "site/home/subscribe.js", globalName: "mossSubscribe" },
+  { entry: "crates/moss-build/src/js-src/site/subscribe/standalone.ts", out: "site/home/subscribe.js", globalName: "mossSubscribe" },
 ];
 
 /**

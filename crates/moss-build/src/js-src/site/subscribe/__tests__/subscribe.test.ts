@@ -1,5 +1,6 @@
 import { beforeEach, afterEach, describe, expect, test, vi, type MockInstance } from 'vitest';
 import { hydrateSubscribeForm } from '../subscribe.js';
+import '../../forms/forms.js';
 import { COPY, langBucket } from '../i18n.js';
 import { QUIET_MS, VERIFYING } from '../captcha.js';
 

@@ -497,11 +497,9 @@ pub fn generate_native_slots<'m>(
             if let Some(note) = email::subscribe_elsewhere_note(deploy_config) {
                 crate::build::cli_output::log_warn_problem!("{note}");
             }
-            // CSS as a <link> (see `build::emit::feature_styles`); the
-            // subscribe script stays inline. The script is ~2 KB and its
-            // absence breaks the form outright, so the extra round trip buys
-            // less than it costs — the file/inline line is drawn on size and
-            // site-wideness, not on principle.
+            // CSS as a <link> (see `build::emit::feature_styles`). Only the
+            // reader check is inline, since `forms.js`, which binds the form,
+            // loads at the end of the body, after the form has painted.
             let css_result = EnhanceResult {
                 success: true,
                 slots: HashMap::from([(
@@ -510,7 +508,7 @@ pub fn generate_native_slots<'m>(
                         html: format!(
                             "{}<script class=\"moss-subscribe-script\">{}</script>",
                             slots.link_feature_style("email"),
-                            email::SUBSCRIBE_JS
+                            email::SUBSCRIBE_HINT_JS
                         ),
                     },
                 )]),

@@ -1508,6 +1508,7 @@ pub fn generate_blocking_content_for_build(
             colophon_credit: site_config.colophon_credit.is_some(),
             selection_tools: site_config.selection_tools,
             selection_comments: site_config.selection_comments,
+            subscribe: site_config.email_installed,
             // `search`, `link_preview`, `heading_anchors` and `math` already
             // live here, written by the config phase above. Re-reading them
             // from `site_config` would be a second copy of the same four

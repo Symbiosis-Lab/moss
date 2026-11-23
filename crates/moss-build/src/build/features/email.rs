@@ -1,7 +1,7 @@
 //! Email newsletter feature: the moss-hosted subscribe form, its page scopes
 //! and the confirmation landing pages.
 
-use super::{html_escape, CHECK_SVG};
+use super::html_escape;
 use crate::build::assets::paths::PathResolver;
 use crate::i18n::Language;
 
@@ -297,13 +297,7 @@ fn subscribe_tail(c: &MossSubscribeCopy, button_override: Option<&str>, between:
     };
     let envelope_svg = r##"<svg class="moss-subscribe-status__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l8 6 8-6M4 7v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V7M4 7l1-1h14l1 1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
     format!(
-        r#"  <span class="moss-btn-slot">
-    <button type="submit" class="moss-btn">
-      <span class="moss-btn__label">{label}</span>
-      <span class="moss-btn__spinner" aria-hidden="true"></span>
-      <span class="moss-btn__check" aria-hidden="true">{check_svg}</span>
-    </button>
-  </span>{between}
+        r#"{button}{between}
   <div class="moss-subscribe-status" aria-live="polite" tabindex="-1">
     {envelope_svg}
     <span data-copy="check-email" hidden>{check_email}</span>
@@ -313,7 +307,7 @@ fn subscribe_tail(c: &MossSubscribeCopy, button_override: Option<&str>, between:
         check_email = c.check_email,
         subscribed = c.subscribed,
         error = c.error,
-        check_svg = CHECK_SVG,
+        button = super::forms::button_slot(&label),
     )
 }
 
@@ -469,17 +463,14 @@ fn render_subscribe_with_questions(
         parts.insert(0, email_field);
     }
     let questions = parts.join("\n");
-    let copy = [("required", "form_required"), ("format", "form_format"), ("email", "form_email"), ("pick_one", "form_pick_one"), ("left", "form_left")]
-        .iter()
-        .map(|(k, key)| format!(r#"<span data-copy="{k}">{}</span>"#, crate::i18n::t(lang, key)))
-        .collect::<String>();
+    let copy = super::forms::copy_block(lang, &[("required", "form_required"), ("format", "form_format"), ("email", "form_email"), ("pick_one", "form_pick_one"), ("left", "form_left")]);
     format!(
         r#"<div class="moss-subscribe moss-form" data-state="idle">
 <form class="moss-subscribe-form" data-position="stacked" data-moss-hosted="true"{pending_attr}{override_attr} method="post" action="{action}">
   <input type="hidden" name="scope" value="{scope}">
 {questions}
 {tail}
-  <div hidden>{copy}</div>
+{copy}
 </form>
 </div>"#,
         scope = html_escape(scope),
@@ -487,10 +478,10 @@ fn render_subscribe_with_questions(
     )
 }
 
-/// The bundled subscribe.js IIFE — produced by vite.config.js from
-/// `crates/moss-build/src/js-src/site/subscribe/subscribe.ts`. Embed once per page that
-/// contains a moss-hosted subscribe form.
-pub const SUBSCRIBE_JS: &str = include_str!("../../assets/js/subscribe.js");
+/// The reader check from `js-src/site/subscribe/hint.ts`, inlined in the head
+/// so a signed-in reader's "Subscribed" is there on the first frame. The form
+/// itself is bound by `forms.js`, which loads at the end of the body.
+pub const SUBSCRIBE_HINT_JS: &str = include_str!("../../assets/js/subscribe-hint.js");
 
 /// The site-local URL path seta redirects readers to after a successful
 /// double-opt-in confirmation. Wire contract — must stay in sync with
@@ -992,11 +983,11 @@ mod tests {
 
     #[test]
     fn test_subscribe_js_embed_not_empty() {
-        // Sanity: the vite build must have produced the bundled subscribe.js.
+        // Sanity: the vite build must have produced the bundled subscribe-hint.js.
         // Empty file would silently leave subscribe forms un-hydrated in prod.
         assert!(
-            !SUBSCRIBE_JS.trim().is_empty(),
-            "SUBSCRIBE_JS is empty — did vite run? Rebuild with `pnpm install && pnpm run build` or start `pnpm run dev`."
+            !SUBSCRIBE_HINT_JS.trim().is_empty(),
+            "SUBSCRIBE_HINT_JS is empty — did vite run? Rebuild with `pnpm install && pnpm run build` or start `pnpm run dev`."
         );
     }
 

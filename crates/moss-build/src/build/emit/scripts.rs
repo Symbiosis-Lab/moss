@@ -167,7 +167,7 @@ pub const SITE_SCRIPTS: &[SiteScript] = &[
         name: "forms",
         dev_path: "src/assets/js/forms.js",
         source: || include_str!("../../assets/js/forms.js"),
-        gate: |a| a.forms,
+        gate: |a| a.forms || a.subscribe,
         load: Load::Shell { defer: false },
     },
     SiteScript {

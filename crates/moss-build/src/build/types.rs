@@ -1042,9 +1042,9 @@ pub struct PageFeatures {
     /// places, nested ones included. Sorted, so each loads once.
     pub block_assets: std::collections::BTreeSet<crate::plugins::contributions::blocks::BlockAsset>,
     /// True if the page contains a `:::subscribe` inline shortcode block.
-    /// When any page in a build has this set, the email feature pass injects
-    /// `SUBSCRIBE_JS` + `email.css` even if `[channels.email]` is not
-    /// configured.
+    /// When any page in a build has this set, the subscribe form's CSS and reader
+    /// check ship even without `[channels.email]` (the email feature pass), and so
+    /// does `forms.js` (`SiteAssets::subscribe`).
     pub inline_subscribe: bool,
     /// True if the page contains an Obsidian-style callout (`> [!note]`),
     /// nested ones included. Gates the `callouts` stylesheet partial via
@@ -1152,6 +1152,9 @@ impl PageFeatures {
 pub struct SiteAssets {
     /// Any page has a `:::form`. Gates the `forms` stylesheet partial and `forms.js`.
     pub forms: bool,
+    /// A subscribe form can be on a page: the email channel is installed or a
+    /// page has `:::subscribe`. Gates `forms.js`, which binds it.
+    pub subscribe: bool,
     /// Any page has a callout block.
     pub callouts: bool,
     /// Any page defines a footnote. Gates the sidenote runtime script — the
@@ -1240,7 +1243,9 @@ impl SiteAssets {
     /// compile, and the failure mode is shipping `math-copy.js` on the flag
     /// that was meant to gate the search overlay. `callouts` and `vertical`
     /// are ignored — this function derives them from `pages` — so
-    /// `..SiteAssets::default()` is the idiomatic tail.
+    /// `..SiteAssets::default()` is the idiomatic tail. `subscribe` goes in as
+    /// "the email channel is installed" and comes out as "a subscribe form can
+    /// be on a page", through `features::should_inject_subscribe_assets`.
     pub fn of(
         pages: &[ParsedDocument],
         site_typesetting: Option<&str>,
@@ -1250,6 +1255,7 @@ impl SiteAssets {
         // and this runs once per build over every page in the site.
         let mut out = Self {
             forms: false,
+            subscribe: crate::build::features::should_inject_subscribe_assets(pages, from_config.subscribe),
             callouts: false,
             has_footnotes: false,
             scroll_rows: false,

@@ -118,37 +118,52 @@ pub fn render_form(form: &FormShortcode, lang: Language, endpoint: Option<&str>)
     let next = html_escape(form.next.as_deref().unwrap_or(""));
     let label = form.button.as_deref().filter(|b| !b.is_empty()).map(html_escape).unwrap_or_else(|| t(lang, "form_send").to_string());
     let fields = form.fields.iter().map(|f| render_field(name, f, lang)).collect::<Vec<_>>().join("\n");
-    let copy = [
-        ("required", "form_required"),
-        ("format", "form_format"),
-        ("invalid", "form_invalid"),
-        ("rate_limited", "form_rate_limited"),
-        ("unknown_form", "form_unknown"),
-        ("network", "form_network"),
-    ]
-    .iter()
-    .map(|(k, key)| format!(r#"<span data-copy="{k}">{}</span>"#, t(lang, key)))
-    .collect::<String>();
+    let copy = copy_block(
+        lang,
+        &[
+            ("required", "form_required"),
+            ("format", "form_format"),
+            ("invalid", "form_invalid"),
+            ("rate_limited", "form_rate_limited"),
+            ("unknown_form", "form_unknown"),
+            ("network", "form_network"),
+        ],
+    );
     format!(
         r#"<div class="moss-form" data-state="idle"{pending}>
 <form method="post" action="{action}" data-moss-form="{name}" data-next="{next}">
 {fields}
   <input type="hidden" name="_next" value="{next}">
   <div class="moss-form__hp" aria-hidden="true"><label for="{name}-hp">{hp}</label><input type="text" id="{name}-hp" name="_hp" value="" tabindex="-1" autocomplete="off"></div>
-  <span class="moss-btn-slot">
+{button}
+  <p class="moss-form__status" aria-live="polite"></p>
+{copy}
+</form>
+</div>"#,
+        action = html_escape(&action),
+        button = button_slot(&label),
+        hp = t(lang, "form_hp_label"),
+    )
+}
+
+/// The submit button every form ends with: its label, the spinner while the
+/// post waits and the check once it is sent.
+pub(super) fn button_slot(label: &str) -> String {
+    format!(
+        r#"  <span class="moss-btn-slot">
     <button type="submit" class="moss-btn">
       <span class="moss-btn__label">{label}</span>
       <span class="moss-btn__spinner" aria-hidden="true"></span>
       <span class="moss-btn__check" aria-hidden="true">{CHECK_SVG}</span>
     </button>
-  </span>
-  <p class="moss-form__status" aria-live="polite"></p>
-  <div hidden>{copy}</div>
-</form>
-</div>"#,
-        action = html_escape(&action),
-        hp = t(lang, "form_hp_label"),
+  </span>"#
     )
+}
+
+/// The hidden words the form script shows, one `data-copy` span per `(key, i18n key)`.
+pub(super) fn copy_block(lang: Language, keys: &[(&str, &str)]) -> String {
+    let spans = keys.iter().map(|(k, key)| format!(r#"<span data-copy="{k}">{}</span>"#, t(lang, key))).collect::<String>();
+    format!("  <div hidden>{spans}</div>")
 }
 
 #[cfg(test)]

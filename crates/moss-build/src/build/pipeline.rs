@@ -1528,6 +1528,7 @@ fn build_inner(
         term_nav: cfg.as_ref().map(|c| c.terms_nav()).unwrap_or_default(),
         field_decls,
         forms_endpoint,
+        email_installed: cfg.as_ref().is_some_and(|c| c.channels().is_installed("email")),
         blocks: std::sync::Arc::new(crate::plugins::contributions::blocks::BlockPlan::from_plugins(&enabled_plugins)),
         public_data: public_files,
         booking: core_booking(cfg.as_ref(), &enabled_plugins),

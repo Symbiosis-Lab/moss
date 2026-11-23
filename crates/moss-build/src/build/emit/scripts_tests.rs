@@ -5,6 +5,7 @@ fn all_on() -> SiteAssets {
     SiteAssets {
         callouts: true,
         forms: true,
+        subscribe: true,
         link_preview: true,
         heading_anchors: true,
         selection_tools: true,
@@ -42,7 +43,7 @@ fn every_embedded_script_has_a_row() {
     const NOT_EMITTED: &[&str] = &[
         "beacon",          // written by emit::beacon with the site's endpoint
         "comments-artalk", // inlined by features::comment::render
-        "subscribe",       // inlined by features (email::SUBSCRIBE_JS)
+        "subscribe-hint",  // inlined by features (email::SUBSCRIBE_HINT_JS)
     ];
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/assets/js");
     let in_table: BTreeSet<&str> = SITE_SCRIPTS.iter().map(|s| s.name).collect();
@@ -140,6 +141,8 @@ fn each_gate_reads_a_distinct_fact() {
         (&["selection"], |a| a.selection_comments = true),
         (&["fullscreen"], |a| a.media_pages = true),
         (&["fullscreen"], |a| a.viewer = true),
+        (&["forms"], |a| a.forms = true),
+        (&["forms"], |a| a.subscribe = true),
     ];
     for (name, set) in fields {
         let mut assets = SiteAssets::default();

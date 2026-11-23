@@ -4,15 +4,9 @@
  * require) is checked like every other field, and every error looks the same.
  */
 
+import { clearField as clear, controls, copy, markField as mark } from '../forms/fields.js';
+
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-const copy = (form: HTMLFormElement, key: string): string =>
-  form.querySelector<HTMLElement>(`[data-copy="${key}"]`)?.textContent ?? '';
-
-const controls = (field: Element): HTMLInputElement[] =>
-  Array.from(field.querySelectorAll<HTMLInputElement>('input, select, textarea')).filter(
-    (c) => c.type !== 'hidden' && !c.closest('.moss-form__other'),
-  );
 
 /** The "Other" box of a group while its choice is picked, else null. */
 function openOther(field: Element): HTMLInputElement | null {
@@ -42,36 +36,6 @@ function nameOf(field: HTMLElement): string {
   const own = label?.cloneNode(true) as HTMLElement | undefined;
   own?.querySelector('.moss-form__optional')?.remove();
   return own?.textContent?.trim() ?? '';
-}
-
-function clear(field: HTMLElement): void {
-  const error = field.querySelector<HTMLElement>(':scope > .moss-form__error');
-  if (error) {
-    error.hidden = true;
-    error.textContent = '';
-  }
-  for (const c of controls(field)) {
-    c.removeAttribute('aria-invalid');
-    const ids = (c.getAttribute('aria-describedby') ?? '').split(' ').filter((i) => i && i !== error?.id);
-    if (ids.length) c.setAttribute('aria-describedby', ids.join(' '));
-    else c.removeAttribute('aria-describedby');
-  }
-}
-
-function mark(form: HTMLFormElement, field: HTMLElement, key: string): void {
-  const error = field.querySelector<HTMLElement>(':scope > .moss-form__error');
-  if (error) {
-    error.textContent = copy(form, key);
-    error.hidden = false;
-  }
-  for (const c of controls(field)) {
-    c.setAttribute('aria-invalid', 'true');
-    if (error) {
-      const ids = (c.getAttribute('aria-describedby') ?? '').split(' ').filter(Boolean);
-      if (!ids.includes(error.id)) ids.push(error.id);
-      c.setAttribute('aria-describedby', ids.join(' '));
-    }
-  }
 }
 
 /**

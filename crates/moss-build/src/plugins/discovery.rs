@@ -13,6 +13,16 @@ pub struct ChannelsConfig {
 }
 
 impl ChannelsConfig {
+    /// The `[channels.<id>]` tables of a migrated config. A non-table value still counts as installed.
+    pub fn from_raw(raw: &toml::Table) -> Self {
+        let channels = raw
+            .get("channels")
+            .and_then(|v| v.as_table())
+            .map(|t| t.iter().map(|(id, v)| (id.clone(), v.as_table().cloned().unwrap_or_default())).collect())
+            .unwrap_or_default();
+        Self { channels }
+    }
+
     pub fn is_installed(&self, id: &str) -> bool {
         self.channels.contains_key(id)
     }
@@ -90,14 +100,7 @@ pub fn get_channels_config(project_path: &str) -> Result<ChannelsConfig, String>
     let Some(raw) = read_and_migrate_raw(project_path)? else {
         return Ok(ChannelsConfig::default());
     };
-    let mut channels = BTreeMap::new();
-    if let Some(channels_table) = raw.get("channels").and_then(|v| v.as_table()) {
-        for (id, value) in channels_table {
-            let table = value.as_table().cloned().unwrap_or_default();
-            channels.insert(id.clone(), table);
-        }
-    }
-    Ok(ChannelsConfig { channels })
+    Ok(ChannelsConfig::from_raw(&raw))
 }
 /// Everything `discover_plugins` does except installing bundled plugins first.
 ///

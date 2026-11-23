@@ -149,6 +149,8 @@ pub struct SiteConfig {
     /// `[services.forms] endpoint`, without a trailing slash: where request
     /// forms post. `None` leaves forms pending.
     pub forms_endpoint: Option<String>,
+    /// `[channels.email]` is installed: every page carries the subscribe form's script.
+    pub email_installed: bool,
     /// The blocks the enabled plugins declare, resolved once per build.
     pub blocks: std::sync::Arc<crate::plugins::contributions::blocks::BlockPlan>,
     /// The settings the enabled plugins publish.
@@ -228,6 +230,7 @@ impl Default for SiteConfig {
             term_nav: Vec::new(),
             field_decls: Vec::new(),
             forms_endpoint: None,
+            email_installed: false,
             booking: None,
             members: Default::default(),
             comment_moderation: None,

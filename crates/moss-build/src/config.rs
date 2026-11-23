@@ -143,6 +143,11 @@ impl ConfigFile {
         self.core.site_lang()
     }
 
+    /// The installed channels, read by the same reader as `plugins::discovery::get_channels_config`.
+    pub fn channels(&self) -> crate::plugins::discovery::ChannelsConfig {
+        crate::plugins::discovery::ChannelsConfig::from_raw(&self.root)
+    }
+
     /// A string field under `[site]`, e.g. `typesetting`.
     pub fn site_str(&self, field: &str) -> Option<&str> {
         self.root
