@@ -83,8 +83,9 @@ pub struct CopyOutcome {
     pub name: Option<String>,
     /// `copy_account` only: a definite answer that the channel has no usable
     /// session or credential (it was read and holds none, or the service
-    /// refused authentication). A read that failed or is not available here
-    /// is a failed call instead, which leaves the sign-in as it was.
+    /// refused authentication). A refusal with cause `Auth` means the same.
+    /// A read that failed or is not available here is a failed call with any
+    /// other cause, which leaves the sign-in as it was.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub signed_out: bool,
     /// Why the network refused, with `success: false`.

@@ -45,6 +45,7 @@ All notable changes to moss will be documented here.
 - Security: a program a plugin runs no longer inherits moss's whole environment. It gets the path, home, user, locale, temp directory, proxy and certificate settings and what the plugin sets itself, so an SSH agent (`SSH_AUTH_SOCK`), tokens and other credentials you have exported stay out of its reach.
 - A site with a long name keeps its header still while the page loads: the search, language and theme buttons sit at the end of the first line from the first paint, and the name wraps beside them. The header used to rearrange itself once the page's script ran, moving everything below it.
 - A publish never changes a `uid:` already in a page. A duplicated note's copy used to have the original's uid replaced in its file; it now keeps it, and is published under a uid of its own that it keeps when renamed unedited.
+- A channel not yet signed in shows only its Sign in action in settings, instead of "Couldn't check …": a plugin's `copy_account` refusal with cause `auth` now means signed out.
 
 ### Removed
 
