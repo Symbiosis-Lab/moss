@@ -50,7 +50,7 @@ fn build(files: &[(&str, &str)]) -> Built {
         .ok()
         .map(|text| crate::config::ConfigFile::parse(&text).unwrap().declared_redirects())
         .unwrap_or_default();
-    crate::build::render::generate_blocking_content_for_build(
+    let mut output = crate::build::render::generate_blocking_content_for_build(
         &crate::vault::paths::VaultRoot::resolve(dir.path()),
         &structure,
         &out,
@@ -68,6 +68,8 @@ fn build(files: &[(&str, &str)]) -> Built {
         crate::build::inputs::build_instant(),
     )
     .unwrap();
+    // The background phase writes the site files and their copies.
+    crate::build::render::blocking::write_site_files_now(&mut output, &out, &mut pending).unwrap();
     crate::build::emit::slots::write_as_rendered(&out, pending.take_unwritten_pages()).unwrap();
     // The seal writes the file copies and folder moves, from what is served.
     let mut sealed = pending.seal();

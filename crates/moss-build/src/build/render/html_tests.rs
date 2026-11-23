@@ -41,7 +41,7 @@ fn render_with_evidence(
     let project_structure =
         crate::build::scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");
     let mut pending = crate::build::manifest::PendingManifest::for_build(crate::types::content::SiteHashes::default(), evidence);
-    crate::build::render::generate_blocking_content_for_build(
+    let mut output = crate::build::render::generate_blocking_content_for_build(
         &crate::vault::paths::VaultRoot::resolve(test_dir),
         &project_structure,
         &output_dir,
@@ -55,6 +55,7 @@ fn render_with_evidence(
         instant,
     )
     .expect("generate_blocking_content_for_build should succeed");
+    crate::build::render::blocking::write_site_files_now(&mut output, &output_dir, &mut pending).unwrap();
     crate::build::emit::slots::write_as_rendered(&output_dir, pending.take_unwritten_pages()).unwrap();
     output_dir
 }

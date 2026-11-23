@@ -1470,7 +1470,7 @@ fn walk_superseded(tx: &mpsc::Sender<EmitMessage>, stats: AssetPipelineRunStats,
     let encodes = crate::build::media::encodes_on_this_thread() - encodes_before;
     log::info!("[background-assets] walk stopped after {encodes} fallback rasters: a newer render or a cancel");
     crate::build::phase::record_count("fallback_encodes", encodes);
-    if let Err(e) = tx.blocking_send(EmitMessage::WalkSuperseded) {
+    if let Err(e) = tx.blocking_send(EmitMessage::Superseded) {
         log::info!("[background-assets] Failed to send to coordinator: {e}");
     }
     stats

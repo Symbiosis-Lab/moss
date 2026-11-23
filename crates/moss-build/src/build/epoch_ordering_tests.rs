@@ -479,7 +479,7 @@ async fn a_render_whose_walk_was_superseded_never_promotes() {
     crate::build::seal_phase::settle(mp).await;
     assert_eq!(current(), whole_gen);
 
-    let half = sealed_page_with(&mp.staging_dir(), b"<html><body>half</body></html>", |p| p.mark_walk_superseded());
+    let half = sealed_page_with(&mp.staging_dir(), b"<html><body>half</body></html>", |p| p.mark_superseded());
     assert!(tail(mp, session, half, 2, lane()).await.is_none());
     crate::build::seal_phase::settle(mp).await;
     assert_eq!(current(), whole_gen, "a half-walked render is not shown");

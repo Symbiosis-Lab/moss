@@ -194,6 +194,10 @@ pub struct TableInputs {
     pub written_later: std::collections::BTreeSet<String>,
 }
 
+/// A copy of a file the background phase writes, `(old address, target)`:
+/// that phase writes it from the bytes it holds for the target.
+pub(crate) type LaterCopy = (crate::build::served_path::ServedPath, String);
+
 /// Build-time entry point: detect renames, write every redirect into `pending`,
 /// and persist `redirects.json`.
 ///
@@ -212,7 +216,7 @@ pub fn emit_redirect_table(
     inputs: &TableInputs,
     output_dir: &Path,
     pending: &mut crate::build::manifest::PendingManifest,
-) -> Result<BaselineHealth, String> {
+) -> Result<(BaselineHealth, Vec<LaterCopy>), String> {
     use super::redirect_table::{self as table, Candidate, Form, Probe};
     use crate::build::context::BuildContext;
     use crate::build::manifest::HashBucket;
@@ -309,10 +313,13 @@ pub fn emit_redirect_table(
     // folder file's copy waits for the seal, which has its served bytes (a
     // picture the image pipeline re-encoded after this table was planned).
     let mut copies: Vec<super::kept_addresses::KeptCopy> = Vec::new();
+    let mut later_copies: Vec<LaterCopy> = Vec::new();
     for p in planned.iter().filter(|p| p.form == Form::Copy) {
         let table::Target::Internal(t, _) = &p.to else { continue };
         let staged = output_dir.join(t.key());
-        if pending.is_registered(t.key()) && staged.is_file() {
+        if inputs.written_later.contains(t.key()) {
+            later_copies.push((p.from.served_path().clone(), t.key().to_string()));
+        } else if pending.is_registered(t.key()) && staged.is_file() {
             let bytes = std::fs::read(&staged).map_err(|e| format!("Failed to read '{}': {}", staged.display(), e))?;
             BuildContext::for_render(output_dir, pending)
                 .emit_held(p.from.served_path(), bytes, HashBucket::Files)
@@ -346,7 +353,7 @@ pub fn emit_redirect_table(
         log::debug!("build: emitted {} redirect(s) into pending manifest", planned.len());
     }
 
-    Ok(BaselineHealth::of(paths, &baseline))
+    Ok((BaselineHealth::of(paths, &baseline), later_copies))
 }
 
 /// What the caller should tell the user about the live-record baseline.
@@ -475,7 +482,7 @@ mod tests {
         output_dir: &Path,
         pending: &mut crate::build::manifest::PendingManifest,
     ) -> Result<BaselineHealth, String> {
-        let health = emit_redirect_table(paths, map, inputs, output_dir, pending)?;
+        let (health, _) = emit_redirect_table(paths, map, inputs, output_dir, pending)?;
         crate::build::emit::slots::write_as_rendered(output_dir, pending.take_unwritten_pages()).map_err(crate::build::outcome::BuildStopped::into_message)?;
         Ok(health)
     }

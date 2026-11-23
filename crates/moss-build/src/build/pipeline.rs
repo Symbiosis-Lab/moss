@@ -859,7 +859,7 @@ fn run_notebook_processing(
 pub struct PipelineRunOutput {
     pub is_empty: bool,
     pub bg_handle: Option<BackgroundHandle>,
-    pub build_documents: Vec<ParsedDocument>,
+    pub build_documents: std::sync::Arc<Vec<ParsedDocument>>,
     pub content_hashes: SiteHashes,
     /// Missing authored asset evidence from this exact build. Empty is the
     /// completed clean answer and is meaningful.
@@ -1705,7 +1705,7 @@ fn build_inner(
         return Ok(PipelineRunOutput {
             is_empty,
             bg_handle: None,
-            build_documents: documents,
+            build_documents: std::sync::Arc::new(documents),
             content_hashes: content_hashes_for_watch,
             missing_references: missing_references_for_publish,
             unresolved_inputs: input_evidence.unresolved_structural(),
@@ -1939,9 +1939,12 @@ fn build_inner(
          migrate to #[tokio::test]"
     );
 
+    // Shared with the site-files worker; nothing changes a page after render.
+    let documents = std::sync::Arc::new(documents);
     let bg_handle = {
         // Clone what we need before consuming background_ctx by video dispatch.
         let og_requests = std::mem::take(&mut background_ctx.og_requests);
+        let site_files = background_ctx.site_files.take().and_then(|files| files.after_paint(&documents, &background_ctx.staging_dir, services.and_then(|s| s.session.clone())));
         let og_output = background_ctx.staging_dir.clone();
         let og_session = services.and_then(|s| s.session.clone());
         let video_items_empty = background_ctx.video_items.is_empty();
@@ -1959,15 +1962,10 @@ fn build_inner(
         // caches its id on the shared `build_parent` cell. A content-only rebuild
         // never reaches that → no parent → zero Jobs (invariant #6 / the heartbeat).
         //
-        // Stash the render-phase `html_total` (= `documents.len()`, the html_pages
-        // task total) into the shared atomic so the post-join barrier sources the
-        // Build receipt's `Amount { count, "pages" }` from the SAME count the legacy
-        // media-less frontend receipt reports (FIX 3 — page-count consistency). The
-        // narrower `SiteResult.page_count` would diverge with vs without media.
-        let html_total = documents.len();
+        // The Build receipt's page count is every rendered document, the same
+        // count the media-less receipt reports; `SiteResult.page_count` is narrower.
         if let Some(s) = services {
-            s.page_count
-                .store(html_total, std::sync::atomic::Ordering::Relaxed);
+            s.page_count.store(documents.len(), std::sync::atomic::Ordering::Relaxed);
         }
 
         // Owned Arc<BuildServices> handles for the 'static worker closures.
@@ -2017,6 +2015,7 @@ fn build_inner(
             if let Some(job) = search_job {
                 job.spawn(workers, tx.clone());
             }
+            if let Some(job) = site_files { job.spawn(workers, tx.clone(), render.clone()); }
             if !og_requests.is_empty() {
                 let tx_cards = tx.clone();
                 crate::build::background::spawn_traced_worker(workers, move || {

@@ -117,11 +117,12 @@ pub enum HashBucket {
 // PendingManifest
 // ---------------------------------------------------------------------------
 
-/// How far the asset walk got. A walk stops early when a newer render of the
-/// folder is admitted; it registers its assets only at the end, so such a
-/// render's generation lacks them and must never be promoted.
+/// Whether a newer render of the folder was admitted before this render's
+/// background work finished. The asset walk then stops early and registers
+/// nothing, and the site-files worker writes nothing, so such a render's
+/// generation lacks them and must never be promoted.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) enum WalkOutcome {
+pub(crate) enum RenderOutcome {
     #[default]
     Complete,
     Superseded,
@@ -230,8 +231,13 @@ pub struct PendingManifest {
     /// generation carrying any of these is withheld — see
     /// `ship::ShipVerdict`.
     unverified: std::collections::BTreeMap<String, String>,
-    /// Whether the asset walk reached the end; see [`WalkOutcome`].
-    walk: WalkOutcome,
+    /// Outputs the render declared and a background worker writes. One this
+    /// build never wrote is unverified at seal: the previous build's entry
+    /// would otherwise drop out of the generation, and publishing it would
+    /// take the file off the site.
+    promised: std::collections::BTreeSet<String>,
+    /// See [`RenderOutcome`].
+    outcome: RenderOutcome,
     /// The article map this render built, which its generation's publish reads
     /// (`publish_view::read_articles`).
     articles: Option<std::sync::Arc<crate::build::scan::article_map::ArticleMap>>,
@@ -331,9 +337,9 @@ pub(crate) fn is_reload_tracked_source_key(src: &str) -> bool {
 }
 
 impl PendingManifest {
-    /// The asset walk stopped before the end; this render must not promote.
-    pub(crate) fn mark_walk_superseded(&mut self) {
-        self.walk = WalkOutcome::Superseded;
+    /// A newer render superseded this one's background work; it must not promote.
+    pub(crate) fn mark_superseded(&mut self) {
+        self.outcome = RenderOutcome::Superseded;
     }
 
     pub(crate) fn record_output_collisions(&mut self, messages: Vec<String>) {
@@ -404,7 +410,8 @@ impl PendingManifest {
             carried_page_sources,
             page_sources: HashSet::new(),
             unverified: std::collections::BTreeMap::new(),
-            walk: WalkOutcome::Complete,
+            promised: std::collections::BTreeSet::new(),
+            outcome: RenderOutcome::Complete,
             articles: None,
             ship_sources: HashMap::new(),
             unwritten_pages: std::collections::BTreeMap::new(),
@@ -453,6 +460,11 @@ impl PendingManifest {
     /// Record that `rel_path`'s output could not be verified this build.
     pub(crate) fn mark_unverified(&mut self, rel_path: String, detail: String) {
         self.unverified.insert(rel_path, detail);
+    }
+
+    /// Expect a background worker to register `path` before the seal.
+    pub(crate) fn promise(&mut self, path: &crate::build::served_path::ServedPath) {
+        self.promised.insert(path.as_str().to_string());
     }
 
     pub(crate) fn record_articles(&mut self, articles: std::sync::Arc<crate::build::scan::article_map::ArticleMap>) {
@@ -1012,6 +1024,12 @@ impl PendingManifest {
             }
         }
         let touched = self.touched;
+        let mut unverified = self.unverified;
+        // Superseded or not: a tail that does not yield to the newer render
+        // seals this one, and must find it unverified.
+        for key in self.promised.into_iter().filter(|key| !touched.contains(key)) {
+            unverified.entry(key).or_insert_with(|| "promised by the render and never written".to_string());
+        }
         // A page the previous build hashed and this build neither re-read nor
         // carried forward is a deleted page. Its hash must go with it, or the
         // classifier reports the same deletion on every publish forever.
@@ -1046,8 +1064,8 @@ impl PendingManifest {
             waiting_link_cards: self.waiting_link_cards,
             blocking_keys: self.blocking_keys,
             generation_id,
-            unverified: self.unverified,
-            walk: self.walk,
+            unverified,
+            outcome: self.outcome,
             articles: self.articles,
             ship_sources,
             late: self.late,
@@ -1083,7 +1101,7 @@ pub struct SealedManifest {
     /// Every output a producer or the presence pass could not verify, with the
     /// error — never persisted; it exists to withhold this generation.
     unverified: std::collections::BTreeMap<String, String>,
-    walk: WalkOutcome,
+    outcome: RenderOutcome,
     /// The render's own article map, written beside the generation when it is
     /// materialized; never persisted with the manifest.
     articles: Option<std::sync::Arc<crate::build::scan::article_map::ArticleMap>>,
@@ -1194,9 +1212,9 @@ impl SealedManifest {
         &self.unverified
     }
 
-    /// Whether this render's asset walk reached the end.
-    pub(crate) fn walk(&self) -> WalkOutcome {
-        self.walk
+    /// See [`RenderOutcome`].
+    pub(crate) fn outcome(&self) -> RenderOutcome {
+        self.outcome
     }
 
     /// Record an output the presence pass could not verify. Its entry is kept:

@@ -208,6 +208,8 @@ const PHASE_BUDGETS_MS: &[(&str, u64)] = &[
     ("render_homepage", 2_000),
     // Background sharing-card generation; diagnostic budget, not a preview deadline.
     ("render_sharing_cards", 20_000),
+    // The feeds, llms.txt and sitemap.xml, written after the preview paints.
+    ("background_site_files", 5_000),
     // Shadow mode: facade hashing + DepGraph build + cache diff over
     // all documents. In-memory hashing/diffing only (no I/O beyond a small
     // JSON cache load/save), so this should stay far under render_html_pages
@@ -1003,7 +1005,8 @@ mod tests {
                 watch: false, start_server: false,
                 host,
                 trigger: BuildTrigger::Full, reason: None, exits_after_build: true,
-                site_url_override: None, server_port: None, admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
+                // An address, so the site files the background phase writes exist.
+                site_url_override: Some("https://example.com".to_string()), server_port: None, admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
             }).await.expect("fixture builds");
             let generation = paths.generation_dir(&paths.current_generation_id().unwrap());
             let output: std::collections::BTreeMap<_, _> = walkdir::WalkDir::new(&generation).into_iter()
@@ -1021,7 +1024,7 @@ mod tests {
             assert_eq!(record["outcome"], "ok");
             let phases = record["phases"].as_array().unwrap();
             // The fixture has no search index, so search_index and its counts are covered by the serializer test.
-            for name in ["config_reads", "render_inputs", "render_parse_setup", "reduce", "render_site_files", "render_site_records", "render_redirects_sitemap", "render_handoff", "slot_injection", "media_prelude", "background_asset_copy", "seal_persist", "seal_promote"] {
+            for name in ["config_reads", "render_inputs", "render_parse_setup", "reduce", "render_site_files", "render_site_records", "render_redirects_sitemap", "render_handoff", "slot_injection", "media_prelude", "background_asset_copy", "background_site_files", "seal_persist", "seal_promote"] {
                 assert!(phases.iter().any(|p| p["name"] == name), "missing {name}: {record}");
             }
             assert!(phases.iter().all(|p| p["pass"].as_u64().unwrap() >= 1));

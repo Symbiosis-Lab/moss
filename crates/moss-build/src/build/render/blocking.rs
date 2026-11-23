@@ -294,14 +294,29 @@ pub fn generate_blocking_content(
     // care about it. `pipeline::run`'s real build path calls
     // `generate_blocking_content_for_build` instead, so this name's contract
     // ("just render the site") never quietly changed under existing callers.
-    let output = generate_blocking_content_for_build(
+    let mut output = generate_blocking_content_for_build(
         root, project_structure, output_dir, services, progress_sender, emit_source_lines,
         site_config, pending, false, false,
         crate::build::inputs::build_instant(),
     )?;
+    // No background phase follows either.
+    write_site_files_now(&mut output, output_dir, pending)?;
     // No slot pass follows this entry point, so its pages are written as rendered.
     crate::build::emit::slots::write_as_rendered(output_dir, pending.take_unwritten_pages())?;
     Ok(output)
+}
+
+/// What the background phase writes after paint (the feeds, llms.txt,
+/// sitemap.xml), written now, for a caller that runs no background phase.
+pub(crate) fn write_site_files_now(
+    output: &mut BlockingContentOutput,
+    output_dir: &Path,
+    pending: &mut PendingManifest,
+) -> Result<(), String> {
+    match output.1.site_files.take() {
+        Some(site_files) => site_files.write_now(&output.2, output_dir, pending),
+        None => Ok(()),
+    }
 }
 
 /// Same as [`generate_blocking_content`], with the synchronous link-metadata
@@ -316,6 +331,7 @@ pub fn generate_blocking_content(
 /// plans sharing cards for the background phase; standalone callers pass false.
 /// `instant` is the moment the build is as of; every past/upcoming decision
 /// reads the day it falls on in the site's zone (`inputs::effective_now`).
+
 pub fn generate_blocking_content_for_build(
     root: &crate::vault::paths::VaultRoot,
     project_structure: &ProjectStructure,
@@ -2403,12 +2419,12 @@ pub fn generate_blocking_content_for_build(
     // The `timing` checkpoints below are cumulative from `total_start`.
     let site_files_phase = PhaseTrace::start("render_site_files");
 
-    // Generate RSS feed and sitemap (only if a real https URL was resolved)
+    // The feeds, llms.txt and sitemap.xml are written after the preview paints.
+    let mut site_files = crate::build::feeds::site_files::SiteFiles::new(Path::new(source_path), site_url.as_str(), site_lang, &dir_overrides);
+    // Only with a real https URL.
     if has_rss {
         let url = site_url.as_str();
-        crate::build::feeds::emit(&documents, url, site_lang, &dir_overrides, output_dir, pending)?;
-
-        // sitemap.xml is emitted further down, once every page is registered.
+        site_files.feeds();
 
         // Generate robots.txt (user's own will overwrite during background asset copy)
         let robots_content = site_config.ai.robots_txt(url);
@@ -2449,24 +2465,7 @@ pub fn generate_blocking_content_for_build(
     // llms.txt: an index of the listed pages, unless AI answers are asked not to.
     // Its links are absolute, so like the sitemap it waits for a real address.
     if has_rss && site_config.ai.publishes_llms_txt() {
-        let llms_site_title = documents
-            .iter()
-            .find(|d| d.url_path == "index.html")
-            .map(|d| d.title.as_str())
-            .unwrap_or(crate::i18n::t(site_lang, "site"));
-        // Plain text: a one-sentence site blurb quoted in a header line,
-        // reduced the way the share-card description tags are, so `_..._`
-        // doesn't ship its markers.
-        let homepage_desc: Option<String> = documents
-            .iter()
-            .find(|d| d.url_path == "index.html")
-            .and_then(|d| d.description.as_deref())
-            .map(crate::build::page::meta::strip_markdown_inline)
-            .filter(|s| !s.trim().is_empty());
-        let llms_content = crate::build::feeds::llms_txt::generate_llms_txt(&documents, llms_site_title, homepage_desc.as_deref(), site_url.as_str());
-        BuildContext::for_render(output_dir, pending)
-            .emit_held(&ServedPath::for_llms_txt(), llms_content.into_bytes(), HashBucket::Files)
-            .map_err(|e| format!("Failed to emit llms.txt: {}", e))?;
+        site_files.llms();
     }
     // Only the moss host keeps `.moss-email/` private; any other host would
     // publish the templates and the Reply-to.
@@ -3014,7 +3013,7 @@ pub fn generate_blocking_content_for_build(
         term_stubs,
         has_deployed_url: site_url.is_deployed(),
         declared: site_config.declared_redirects.clone(),
-        written_later: static_pages.iter().map(|(sp, _)| sp).chain(&notebook_viewers).map(|sp| sp.as_str().to_string()).collect(),
+        written_later: static_pages.iter().map(|(sp, _)| sp).chain(&notebook_viewers).map(|sp| sp.as_str().to_string()).chain(site_files.addresses()).collect(),
     };
     match crate::build::feeds::redirects::emit_redirect_table(
         &paths,
@@ -3034,8 +3033,11 @@ pub fn generate_blocking_content_for_build(
         // the previous `article_map` on disk with `current_article_map` before
         // `article_map.save()` overwrites it. Deferred deliberately, not
         // forgotten (2026-08-29).
-        Ok(health) => {
+        Ok((health, later_copies)) => {
             use crate::build::feeds::redirects::BaselineHealth;
+            for (from, to) in later_copies {
+                site_files.keep_copy(from, &to);
+            }
             // A missing record is a note: it says nothing about the content, and
             // the next publish ends it. A record that exists and cannot be used
             // stays a problem.
@@ -3061,13 +3063,9 @@ pub fn generate_blocking_content_for_build(
             listed.then(|| sp.as_str().to_string())
         }));
         sitemap_pages.extend(notebook_viewers.iter().map(|sp| sp.as_str().to_string()));
-        let entries = crate::build::feeds::sitemap::entries_for_pages(&sitemap_pages, &documents);
-        let sitemap_content = crate::build::feeds::sitemap::generate_sitemap(&entries, site_url.as_str());
-        // Site 11 (Pattern A): emit sitemap.xml.
-        BuildContext::for_render(output_dir, pending)
-            .emit_held(&ServedPath::for_sitemap(), sitemap_content.into_bytes(), HashBucket::Files)
-            .map_err(|e| format!("Failed to emit sitemap.xml: {}", e))?;
+        site_files.sitemap(sitemap_pages);
     }
+    site_files.promise(pending);
 
     // Debug-only safety net for the publish classifier's lockstep invariant:
     // every source that got an output mapping also got a source hash. A page
@@ -3332,6 +3330,7 @@ pub fn generate_blocking_content_for_build(
     // Thread ffmpeg_bin_path from scan so build.rs doesn't re-download
     let background_ctx = BackgroundContext {
         og_requests,
+        site_files: Some(site_files),
         video_items,
         image_items,
         source_path: source_path.to_string(),

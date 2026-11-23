@@ -2067,7 +2067,7 @@ async fn advertise_sealed(
     // wait its turn or land after it and roll it back. A render whose asset
     // walk stopped for a newer one leaves too: its generation lacks what the
     // walk never reached, and the preview keeps its last whole one.
-    if yields && (sealed.walk() == crate::build::manifest::WalkOutcome::Superseded || render.as_ref().is_some_and(crate::build::lifecycle::Render::newer_sealed)) {
+    if yields && (sealed.outcome() == crate::build::manifest::RenderOutcome::Superseded || render.as_ref().is_some_and(crate::build::lifecycle::Render::newer_sealed)) {
         log::info!("seal tail for render #{} left to a newer render", render_seq.unwrap_or_default());
         return None;
     }

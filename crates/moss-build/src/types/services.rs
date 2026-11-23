@@ -45,6 +45,8 @@ use super::runtime::{
 pub struct BackgroundContext {
     /// Title-only sharing cards planned during HTML rendering.
     pub og_requests: Vec<crate::build::page::og_card::deferred::CardRequest>,
+    /// The feeds, llms.txt and sitemap.xml, written after the preview paints.
+    pub(crate) site_files: Option<crate::build::feeds::site_files::SiteFiles>,
     /// Videos that need MOV→MP4 conversion
     pub video_items: Vec<String>,
     /// Images that need WebP variant generation
@@ -121,6 +123,7 @@ impl BackgroundContext {
     pub(crate) fn for_test() -> Self {
         Self {
             og_requests: Vec::new(),
+            site_files: None,
             video_items: Vec::new(),
             image_items: Vec::new(),
             source_path: String::new(),
