@@ -530,7 +530,7 @@ const EN = {
   'dialog.ok': 'OK',
   'panel.unsaved_close': 'You have unsaved changes. Discard and close?',
   'panel.toolbar': 'Panel',
-  'panel.close': 'Close panel',
+  'panel.divider': 'Resize or close the panel',
   'panel.secure': 'Secure connection',
   'panel.not_secure': 'Not secure',
 
@@ -2385,7 +2385,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'dialog.ok': 'OK',
     'panel.unsaved_close': 'Du hast ungespeicherte Änderungen. Verwerfen und schließen?',
     'panel.toolbar': 'Bereich',
-    'panel.close': 'Bereich schließen',
+    'panel.divider': 'Größe ändern oder Bereich schließen',
     'panel.secure': 'Sichere Verbindung',
     'panel.not_secure': 'Nicht sicher',
     'status.working': 'Läuft …',
@@ -4048,7 +4048,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'dialog.ok': '好',
     'panel.unsaved_close': '有未保存的更改。放弃并关闭？',
     'panel.toolbar': '面板',
-    'panel.close': '关闭面板',
+    'panel.divider': '调整或关闭面板',
     'panel.secure': '安全连接',
     'panel.not_secure': '不安全',
 
@@ -5767,7 +5767,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'dialog.ok': '好',
     'panel.unsaved_close': '有未儲存的變更。放棄並關閉？',
     'panel.toolbar': '面板',
-    'panel.close': '關閉面板',
+    'panel.divider': '調整或關閉面板',
     'panel.secure': '安全連線',
     'panel.not_secure': '不安全',
 
