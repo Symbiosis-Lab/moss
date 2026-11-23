@@ -9,12 +9,10 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct NewsletterServiceContribution {
-    /// Name shown to the user; defaults to the plugin's display name.
-    #[serde(default)]
-    pub display_name: Option<String>,
     pub key: ServiceKey,
     /// What the person does in the service's own window, in its own words. The
-    /// first step is the link to `key.url`. `{name}` stands for `key.name`.
+    /// first step is the link to `key.url`. `{name}` stands for
+    /// [`KEY_NAME`] and `{permission}` for `key.permission`.
     pub steps: Vec<String>,
     /// The service's page where its webhooks are listed, for a plan that has
     /// no webhook left.
@@ -34,11 +32,20 @@ pub struct ServiceKey {
     pub prefix: String,
     /// Every key of this service is this many characters long.
     pub length: u32,
-    /// The name the steps give the key; the service may delete a pasted key
-    /// only when it carries this name.
+    /// Always [`KEY_NAME`]; a manifest cannot set it.
+    #[serde(skip_deserializing, default = "key_name")]
     pub name: String,
     /// The service's word for the access the key needs, such as "Full Access".
     pub permission: String,
+}
+
+/// The name moss's steps give a pasted key. moss's server deletes a pasted key
+/// only when it carries this name, since a key named otherwise may serve
+/// another app.
+pub const KEY_NAME: &str = "moss";
+
+fn key_name() -> String {
+    KEY_NAME.to_string()
 }
 
 impl NewsletterServiceContribution {
@@ -59,17 +66,10 @@ impl NewsletterServiceContribution {
         if !(key.prefix.len() as u32 + 1..=512).contains(&key.length) {
             return Err("newsletter_service: key.length is longer than the prefix and at most 512".into());
         }
-        let name_ok = !key.name.is_empty() && key.name.len() <= 40 && key.name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
-        if !name_ok {
-            return Err("newsletter_service: key.name is lowercase letters, digits and hyphens".into());
-        }
         if !(1..=5).contains(&self.steps.len()) {
             return Err("newsletter_service: steps holds 1 to 5 steps".into());
         }
         key.permission = bounded(&key.permission, MAX_NAME);
-        if let Some(name) = &mut self.display_name {
-            *name = bounded(name, MAX_NAME);
-        }
         for step in &mut self.steps {
             *step = bounded(step, MAX_SENTENCE);
         }
@@ -84,9 +84,8 @@ mod tests {
 
     fn sendgrid() -> Value {
         json!({"name":"sendgrid","version":"1.0.0","contributes":{"newsletter_service":{
-            "display_name":"SendGrid",
-            "key":{"url":"https://app.sendgrid.com/settings/api_keys","prefix":"SG.","length":69,"name":"moss","permission":"Full Access"},
-            "steps":["Open API Keys in SendGrid","Create API Key, name it {name}, keep Full Access, then Create & View","Copy the key and paste it here"]}}})
+            "key":{"url":"https://app.sendgrid.com/settings/api_keys","prefix":"SG.","length":69,"permission":"Full Access"},
+            "steps":["Open API Keys in SendGrid","Create API Key, name it {name}, keep {permission}, then Create & View","Copy the key and paste it here"]}}})
     }
 
     fn parse(manifest: Value) -> Result<PluginManifest, String> {
@@ -101,12 +100,19 @@ mod tests {
     }
 
     #[test]
+    fn the_key_name_is_moss_s_whatever_the_manifest_says() {
+        let mut m = sendgrid();
+        m["contributes"]["newsletter_service"]["key"]["name"] = json!("other");
+        let service = parse(m).unwrap().contributes.unwrap().newsletter_service.unwrap();
+        assert_eq!(service.key.name, super::KEY_NAME);
+    }
+
+    #[test]
     fn a_key_moss_could_not_check_or_a_page_off_https_is_refused() {
         for (path, value) in [
             ("url", json!("http://app.sendgrid.com/keys")),
             ("prefix", json!("")),
             ("length", json!(3)),
-            ("name", json!("Moss Key")),
         ] {
             let mut m = sendgrid();
             m["contributes"]["newsletter_service"]["key"][path] = value;

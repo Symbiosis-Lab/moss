@@ -160,15 +160,14 @@ A mailing service a site's subscribers can be copied to declares `contributes.ne
 
 ```json
 "newsletter_service": {
-  "display_name": "SendGrid",
-  "key": { "url": "https://app.sendgrid.com/settings/api_keys", "prefix": "SG.", "length": 69, "name": "moss", "permission": "Full Access" },
-  "steps": ["Open API Keys in SendGrid", "Create API Key, name it {name}, keep Full Access, then Create & View", "Copy the key and paste it here"],
+  "key": { "url": "https://app.sendgrid.com/settings/api_keys", "prefix": "SG.", "length": 69, "permission": "Full Access" },
+  "steps": ["Open API Keys in SendGrid", "Create API Key, name it {name}, keep {permission}, then Create & View", "Copy the key and paste it here"],
   "webhooks_url": "https://app.sendgrid.com/settings/mail_settings/webhook_settings",
   "senders_url": "https://app.sendgrid.com/settings/sender_auth"
 }
 ```
 
-The steps are written in the service's own words, since the person reads them beside the service's window; the first is the link to `key.url`, and `{name}` stands for `key.name`, the name the server looks for before it deletes the pasted key. `permission` is the service's word for the access the key needs. Every address is `https`. The steps are translated through the manifest's `translations` table, keyed by the English text.
+The steps are written in the service's own words, since the person reads them beside the service's window; the first is the link to `key.url`. `{name}` stands for `moss`, the name the server looks for before it deletes the pasted key, and `{permission}` for `key.permission`, the service's word for the access the key needs, which stays in the service's words in every translation. The service is shown by the manifest's `display_name`. Every address is `https`. The steps are translated through the manifest's `translations` table, keyed by the English text.
 
 ## Setup: declare, don't build UI
 
