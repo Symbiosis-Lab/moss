@@ -654,6 +654,11 @@ mod tests {
         let failed = r#"{ success: false, error: "rate limited" }"#;
         assert!(matches!(state_with(failed, Some("@ada")).await, AccountState::Unread { name: Some(n), why: Some(_) } if n == "@ada"), "a failed read is neither signed in nor signed out");
         assert!(matches!(state_with(failed, None).await, AccountState::Unread { name: None, why: Some(_) }));
+        let refused = r#"{ success: false, message: "Sign in first", copy: { refused: { cause: "auth", message: "Sign in first" } } }"#;
+        assert_eq!(state_with(refused, None).await, AccountState::NoAccount, "a refusal for want of a credential is signed out, not an error");
+        assert_eq!(state_with(refused, Some("@ada")).await, AccountState::SignedOut { name: "@ada".into() });
+        let offline = r#"{ success: false, message: "offline", copy: { refused: { cause: "network" } } }"#;
+        assert_eq!(state_with(offline, None).await, AccountState::Unread { name: None, why: Some("offline".into()) }, "any other refusal keeps the channel's own words");
     }
 
     /// The desktop as a sign-in page sees it: one browser panel, and an event
