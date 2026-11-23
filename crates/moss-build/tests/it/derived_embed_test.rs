@@ -116,6 +116,12 @@ impl Site {
         .expect("the build must succeed");
     }
 
+    /// The evidence the last seal kept for a build that ends at its entry.
+    fn sealed_evidence(&self) -> serde_json::Value {
+        let manifest: serde_json::Value = serde_json::from_str(&fs::read_to_string(MossPaths::new(self.root()).hashes()).unwrap()).unwrap();
+        manifest["build_inputs"]["evidence"].clone()
+    }
+
     fn page(&self, slug: &str) -> String {
         let staging = MossPaths::new(self.root()).staging_dir();
         for candidate in [format!("{slug}/index.html"), format!("{slug}.html")] {
@@ -328,6 +334,7 @@ fn adopt_seals_the_placeholder_while_the_read_runs_then_asks_for_a_rebuild() {
         site.sealed_page("page").is_some_and(|html| html.contains("moss-derived--pending"))
     });
     assert!(!watcher.slot_occupied(), "the read finished before the generation sealed");
+    assert!(site.sealed_evidence().is_null(), "a seal with a pending block is never handed over");
     assert!(
         moss_build::deploy::refuse_publish(&folder).is_err(),
         "a pending block must hold back a publish"
@@ -340,6 +347,8 @@ fn adopt_seals_the_placeholder_while_the_read_runs_then_asks_for_a_rebuild() {
     let second = site.page("page");
     assert!(second.contains("Hello") && !second.contains("moss-derived--pending"), "{second}");
     assert_eq!(moss_build::system::build_records::records().pending_derivations(&folder), Some(0));
+    wait_for("the text generation to seal", 20, || site.sealed_page("page").is_some_and(|html| html.contains("Hello")));
+    assert!(site.sealed_evidence().is_object(), "the settled seal keeps its evidence");
     moss_build::ops::watch::worker::deregister(&folder, &watcher);
 }
 

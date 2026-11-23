@@ -54,6 +54,46 @@ pub struct BuildInputs {
     /// `.moss/config.toml` reuses the last build's pages only while this holds.
     #[serde(default)]
     pub config_rest: Option<String>,
+    /// What the publish gate needs to know of this generation, so a build
+    /// that ends at its entry can hand it over. `None` when the seal left
+    /// something that can clear without the folder changing (a derivation
+    /// pending, a promise in flight, an input unread): such a seal is never
+    /// handed over, and the next build renders.
+    #[serde(default)]
+    pub evidence: Option<SealEvidence>,
+}
+
+/// [`BuildInputs::evidence`]: the lasting refusals and report lines of a seal
+/// with nothing transient left. Only a folder change can clear any of them,
+/// and a folder change never stops at entry.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SealEvidence {
+    pub missing_references: Vec<crate::build::types::MissingReferenceOccurrence>,
+    pub drafts_linked: Vec<crate::build::types::DraftLinkOccurrence>,
+    /// Scripts a members folder published to everyone; `None` when the build
+    /// recorded no list.
+    pub public_scripts: Option<Vec<String>>,
+    /// `(old, served)` output paths the seal kept answering.
+    pub kept: Vec<(String, String)>,
+    /// What the render read and how: the publish refuses a generation without it.
+    pub inputs: BTreeMap<String, crate::build::cloud_ledger::InputEntry>,
+    /// The folder the seal read: a kept seal answers for it, not for wherever it is read.
+    pub root: Option<std::path::PathBuf>,
+    pub restricts_pages: bool,
+}
+
+impl SealEvidence {
+    /// The render's half, or `None` when it left something transient; `settled`
+    /// is the render's own part of that answer.
+    pub(crate) fn of_render(folder: &str, settled: bool, missing: &[crate::build::types::MissingReferenceOccurrence], drafts: &[crate::build::types::DraftLinkOccurrence]) -> Option<Self> {
+        let records = crate::system::build_records::records();
+        (settled && records.unverifiable_moderation(folder).is_none_or(|n| n == 0)).then(|| Self {
+            missing_references: missing.to_vec(),
+            drafts_linked: drafts.to_vec(),
+            public_scripts: records.public_scripts(folder),
+            ..Default::default()
+        })
+    }
 }
 
 /// `.moss/config.toml` keys whose effect on each page is in that page's own

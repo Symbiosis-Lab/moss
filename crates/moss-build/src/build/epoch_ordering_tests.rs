@@ -402,6 +402,7 @@ async fn tail_with(
         Some(render),
         &mp.project_root().to_string_lossy(),
         guards,
+        None,
     )
     .await
 }

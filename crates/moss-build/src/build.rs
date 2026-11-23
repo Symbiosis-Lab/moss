@@ -1336,17 +1336,15 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // Install this completed build's full publish evidence as one ordered
     // snapshot. An empty vector is the answer that unblocks publish; the
     // generation guard prevents an older completion from erasing newer work.
+    let drafts_linked = crate::build::manifest::link_audit::drafts::drafts_linked(
+        &build_documents,
+        |src| std::fs::read_to_string(config.source().join(src)).ok(),
+    );
+    // Under the folder lock, so the records are this render's own.
+    let seal_evidence = crate::build::inputs::SealEvidence::of_render(&folder_path, !cancelled && unresolved_inputs.is_empty() && unready_derivations.pending == 0, &missing_references, &drafts_linked);
     crate::system::build_records::records().install_publish_preflight(
         &folder_path,
-        crate::build::types::PublishPreflightProjection {
-            build_generation,
-            missing_references,
-            unresolved_inputs,
-            drafts_linked: crate::build::manifest::link_audit::drafts::drafts_linked(
-                &build_documents,
-                |src| std::fs::read_to_string(config.source().join(src)).ok(),
-            ),
-        },
+        crate::build::types::PublishPreflightProjection { build_generation, missing_references, unresolved_inputs, drafts_linked },
     );
 
     // Beside the other seal-time gate records: how many derived-text blocks
@@ -1476,6 +1474,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                                 // drops once the per-build half is done.
                                 handoff: Handoff::Lane,
                             },
+                            seal_evidence,
                         )
                         .await;
                         debug_assert!(handed_back.is_none(), "the lane hand-off keeps nothing for its caller");
@@ -1566,6 +1565,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                             cache_lease,
                             handoff: Handoff::Caller,
                         },
+                        seal_evidence,
                     )
                     .await
                     else {
@@ -2004,6 +2004,8 @@ async fn advertise_sealed(
     // below, inline; `cache_lease` travels into the returned `PendingSeal`
     // for the materialize phase to drop.
     guards: SealGuards,
+    // The render's half of `BuildInputs::evidence`; this tail adds its own.
+    evidence: Option<crate::build::inputs::SealEvidence>,
 ) -> Option<crate::build::seal_phase::PendingSeal> {
     // The seal's per-build half, which a detached tail runs after `run_pipeline`
     // has returned; the lane's materialize and promotion stay paced.
@@ -2089,7 +2091,7 @@ async fn advertise_sealed(
     } else {
         Vec::new()
     };
-    crate::system::build_records::records().record_kept(folder_path, kept);
+    crate::system::build_records::records().record_kept(folder_path, kept.clone());
     // Background assets have drained. Validate only the selected page's
     // direct local CSS/script outputs before writing hashes.json or scheduling
     // promotion; media and unrelated pages do not affect preview readiness.
@@ -2160,7 +2162,7 @@ async fn advertise_sealed(
     // still-unfulfilled promise, which `record_promise_gate` below carries to
     // `refuse_publish` — see that function's doc and `link_audit`'s module
     // docs on the publish/media race this closes.
-    crate::phase!("seal_link_audit", { record_promise_gate(stage_dir, &sealed, assets.as_ref(), folder_path) });
+    let unfulfilled = crate::phase!("seal_link_audit", { record_promise_gate(stage_dir, &sealed, assets.as_ref(), folder_path) });
 
     // The addresses this build stops serving, for the publish gate. Recorded
     // on every seal, empty included, like the promise verdict above.
@@ -2183,6 +2185,7 @@ async fn advertise_sealed(
     // tail leaves before this write, so the write that stands is the newest
     // sealed render's.
     sealed.set_media_settled(previous_hashes.as_ref().is_some_and(|previous| media_outputs(previous) == media_outputs(sealed.site_hashes_view())));
+    sealed.set_evidence(evidence.filter(|_| unfulfilled.is_empty()).map(|evidence| crate::build::inputs::SealEvidence { kept, ..evidence }));
     if verdict == crate::build::ship::ShipVerdict::Ship {
         if let Err(e) = crate::phase!("seal_write", { sealed.write_to_disk(hashes_path) }) {
             log::info!("advertise_sealed: failed to write hashes.json: {}", e);

@@ -219,3 +219,56 @@ fn a_follow_up_rebuild_clears_the_refusal() {
         "the follow-up rebuild's clean seal must clear the earlier refusal"
     );
 }
+
+/// Seals one page that links `/videos/clip.mp4` through the real
+/// `advertise_sealed`, with that video still pending when `promised`, and
+/// returns whether the adopted manifest kept the render's evidence.
+async fn seal_keeps_evidence(promised: bool) -> bool {
+    let tmp = stage_dir();
+    let mp = crate::moss_paths::MossPaths::new(tmp.path());
+    std::fs::create_dir_all(mp.staging_dir()).unwrap();
+    std::fs::write(mp.staging_dir().join("index.html"), VIDEO_PAGE).unwrap();
+    let mut pending = PendingManifest::for_build(SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(tmp.path()));
+    pending.register(&ServedPath::from_source("index.html").unwrap(), VIDEO_PAGE, HashBucket::Files);
+    pending.set_build_inputs(Some(crate::build::inputs::BuildInputs::default()), None);
+    let sealed = pending.seal();
+
+    let assets = std::sync::Arc::new(AssetRegistry::new());
+    if promised {
+        assets.set_pending("videos/clip.mp4".into(), None, None);
+    }
+    let mut host = crate::build::ports::host::test_host_ports();
+    let adopted = crate::deploy::one_shot::capture_seal(&mut host);
+    let ports = SealPorts { events: crate::build::null_sink(), announcer: host.announcer.clone(), server_diff: None };
+    let folder = mp.project_root().to_string_lossy().to_string();
+    let tail = advertise_sealed(
+        &ports,
+        &mp,
+        &mp.hashes(),
+        &mp.staging_dir(),
+        sealed,
+        Some(assets),
+        std::sync::Arc::new(|_: &str| false),
+        Some(crate::system::folder_session::FolderSession::new(mp.project_root().to_path_buf())),
+        crate::build::ship::next_promotion_epoch(),
+        1,
+        Some(crate::build::lifecycle::Render::numbered(&mp, 1)),
+        &folder,
+        SealGuards::default(),
+        Some(crate::build::inputs::SealEvidence::default()),
+    )
+    .await
+    .expect("the caller hand-off returns the seal");
+    crate::build::seal_phase::run_now(tail).await;
+    let adopted = adopted.lock().unwrap().take().expect("the tail adopts its manifest");
+    adopted.site_hashes_view().build_inputs.as_ref().is_some_and(|inputs| inputs.evidence.is_some())
+}
+
+/// A seal whose page links an asset it promised and did not deliver keeps no
+/// evidence, so a deploy with nothing changed renders again instead of
+/// handing over a generation with a dead link.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_seal_with_an_unfulfilled_promise_keeps_no_evidence() {
+    assert!(seal_keeps_evidence(false).await, "fixture: the same seal without the promise keeps its evidence");
+    assert!(!seal_keeps_evidence(true).await);
+}

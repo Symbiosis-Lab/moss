@@ -33,12 +33,6 @@ use crate::build::manifest::SealedManifest;
 
 #[async_trait::async_trait]
 pub trait SealAnnouncer: Send + Sync {
-    /// The caller acts on the manifest this build seals, so the build may not
-    /// end at its entry, which seals nothing and finds no problems.
-    fn needs_a_seal(&self) -> bool {
-        false
-    }
-
     /// `current` now points at this generation. Called only for a real swap —
     /// `Superseded`, `Withheld` and a failed materialize all leave `current`
     /// where it was, and none of them may claim otherwise.

@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum InputState {
     Read { hash: String },
     Pending { retained: bool },
@@ -17,7 +17,7 @@ pub enum InputState {
     ConfirmedAbsent,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum InputRole {
     DirectoryStructure,
     PageMetadata,
@@ -33,7 +33,7 @@ impl InputRole {
     pub fn required_for_publish(self) -> bool { !matches!(self, Self::Media) }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct InputEntry {
     pub role: InputRole,
     pub state: InputState,

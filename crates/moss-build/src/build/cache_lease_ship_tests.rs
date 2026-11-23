@@ -161,6 +161,7 @@ async fn advertise_sealed_drops_the_cache_lease_before_collect_build_store() {
             cache_lease: Some(lease),
             ..Default::default()
         },
+        None,
     )
     .await
     .expect("the caller hand-off returns the seal");
@@ -242,6 +243,7 @@ async fn advertise_sealed_ships_held_bytes_then_hands_deploy_a_manifest_without_
         // on the same requirement.
         &mp.project_root().to_string_lossy(),
         SealGuards::default(),
+        None,
     )
     .await
     .expect("the caller hand-off returns the seal");
@@ -284,6 +286,7 @@ async fn the_seals_per_build_half_holds_its_own_activity() {
         Some(crate::build::lifecycle::Render::numbered(&mp, 1)),
         &folder_path,
         SealGuards::default(),
+        None,
     );
     let probe = async {
         let mut held = 0;

@@ -215,6 +215,27 @@ impl BuildRecords {
         self.publish_preflight.install_if_newer(Self::key(folder_path), projection);
     }
 
+    /// Every record the publish gate reads, as the kept seal left them, for a
+    /// build that ended at its entry. Each slot starts empty in a new process,
+    /// and an empty slot would permit the publish.
+    pub(crate) fn install_kept_seal(&self, folder_path: &str, evidence: &crate::build::inputs::SealEvidence) {
+        let build_generation = crate::build::ship::next_promotion_epoch();
+        self.install_publish_preflight(folder_path, PublishPreflightProjection {
+            build_generation,
+            missing_references: evidence.missing_references.clone(),
+            unresolved_inputs: Vec::new(),
+            drafts_linked: evidence.drafts_linked.clone(),
+        });
+        self.record_promised_dead_links(folder_path, PromisedDeadLinks::default());
+        self.record_pending_derivations(folder_path, 0);
+        self.record_unverifiable_moderation(folder_path, 0);
+        self.record_build_end(folder_path, build_generation, BuildEnd::Publishable);
+        self.record_kept(folder_path, evidence.kept.clone());
+        if let Some(scripts) = &evidence.public_scripts {
+            self.record_public_scripts(folder_path, scripts.clone());
+        }
+    }
+
     /// The last completed build's atomic publish evidence. `None` means no
     /// build has finished in this process — which is not a clean verdict.
     pub fn publish_preflight(&self, folder_path: &str) -> Option<PublishPreflightProjection> {
@@ -381,6 +402,20 @@ impl BuildRecords {
     /// screen is not one.
     pub fn forget_content_hashes(&self, folder_path: &str) {
         self.content_hashes.forget(&Self::key(folder_path));
+    }
+
+    /// Every slot the publish gate reads, as a new process finds them.
+    #[cfg(test)]
+    pub(crate) fn forget_folder(&self, folder_path: &str) {
+        let key = Self::key(folder_path);
+        self.publish_preflight.forget(&key);
+        self.promised_dead_links.forget(&key);
+        self.pending_derivations.forget(&key);
+        self.unverifiable_moderation.forget(&key);
+        self.build_end.forget(&key);
+        self.removals.forget(&key);
+        self.kept.forget(&key);
+        self.public_scripts.forget(&key);
     }
 
     pub fn record_late_redirects(&self, folder_path: &str, late: crate::build::feeds::kept_addresses::LateRedirects) {

@@ -1372,6 +1372,41 @@ impl SealedManifest {
         }
     }
 
+    /// See [`BuildInputs::evidence`](crate::build::inputs::BuildInputs::evidence).
+    /// The render's half comes in; the seal's own reads and members flag are
+    /// added here, and a seal without read evidence keeps none.
+    pub(crate) fn set_evidence(&mut self, evidence: Option<crate::build::inputs::SealEvidence>) {
+        let (read, root, restricts_pages) = (self.input_evidence.clone(), self.input_root.clone(), self.restricts_pages);
+        if let Some(inputs) = self.inner.build_inputs.as_mut() {
+            inputs.evidence = evidence.zip(read).map(|(evidence, read)| crate::build::inputs::SealEvidence { inputs: read, root, restricts_pages, ..evidence });
+        }
+    }
+
+    /// The generation the last seal kept, as a build that ended at its entry
+    /// hands it over: `None` unless that seal left its evidence.
+    pub(crate) fn kept(inner: SiteHashes) -> Option<Self> {
+        let evidence = inner.build_inputs.as_ref()?.evidence.clone()?;
+        let generation_id = compute_manifest_generation_id(&inner.files);
+        Some(SealedManifest {
+            inner,
+            input_root: evidence.root,
+            input_evidence: Some(evidence.inputs),
+            preview_embeds: Default::default(),
+            preview_uses_places: false,
+            preview_originals: Default::default(),
+            restricts_pages: evidence.restricts_pages,
+            page_stubs: Default::default(),
+            waiting_link_cards: Default::default(),
+            blocking_keys: Default::default(),
+            generation_id,
+            unverified: Default::default(),
+            outcome: RenderOutcome::default(),
+            articles: None,
+            ship_sources: Default::default(),
+            late: None,
+        })
+    }
+
     /// Serialize `inner` as pretty JSON and write to `path`.
     ///
     /// Matches the format written by the existing pipeline

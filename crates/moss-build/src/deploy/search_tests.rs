@@ -95,6 +95,15 @@ async fn deploy_search_removes_deleted_authored_html_on_the_second_build() {
     assert_eq!(output_unchanged(dir.path()), 0);
 }
 
+/// A deploy build that renders though nothing changed: one with nothing
+/// changed ends at its entry and compares no output.
+async fn rendered_build(root: &Path) -> crate::build::manifest::SealedManifest {
+    std::env::set_var("MOSS_NO_INCREMENTAL", "1");
+    let sealed = deploy_build(root).await;
+    std::env::remove_var("MOSS_NO_INCREMENTAL");
+    sealed
+}
+
 fn output_unchanged(root: &Path) -> u64 {
     let profile = std::fs::read_to_string(crate::moss_paths::MossPaths::new(root).profile()).unwrap();
     let record: serde_json::Value = profile.lines().rev()
@@ -110,7 +119,7 @@ async fn an_authored_html_only_edit_reports_output_changes() {
     let dir = source_site();
     let _session = crate::system::folder_session::register_session(&dir.path().to_string_lossy());
     deploy_build(dir.path()).await;
-    deploy_build(dir.path()).await;
+    rendered_build(dir.path()).await;
     assert_eq!(output_unchanged(dir.path()), 1, "an unchanged build establishes the comparison baseline");
     write_page(dir.path(), "guide/index.html", "Current guide ultramarine");
     deploy_build(dir.path()).await;
@@ -154,7 +163,7 @@ async fn unchanged_rebuild_with_a_folder_redirect_reports_no_output_change() {
     let _session = crate::system::folder_session::register_session(&dir.path().to_string_lossy());
     let first = deploy_build(dir.path()).await;
     assert!(first.files().contains_key("old/extra.html"), "the folder redirect forwards the page under it");
-    let second = deploy_build(dir.path()).await;
+    let second = rendered_build(dir.path()).await;
     assert_eq!(output_unchanged(dir.path()), 1, "a forwarding page written after seal is not a deleted page");
     assert!(second.files().contains_key("old/extra.html"));
     std::fs::write(dir.path().join("notes.md"), "---\ntitle: Notes\n---\nNew notes.\n").unwrap();
