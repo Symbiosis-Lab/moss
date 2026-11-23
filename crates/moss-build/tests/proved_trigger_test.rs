@@ -964,3 +964,33 @@ fn a_floating_nav_toggle_renders_only_the_pages_it_changes() {
     assert!(rendered_everything(&record), "{record}");
     assert_publishes_a_full_render(&site);
 }
+
+fn deployment_state(at: &str, url: &str, site_url: &str) -> String {
+    format!(
+        "[deployment]\nsite_id = \"site-1\"\n\n[deployment.observed]\nchecked_at = \"{at}\"\n\n\
+         [deployment.observed.dns_target]\nrecords = [{{ record_type = \"A\", name = \"@\", value = \"{url}\" }}]\n\n\
+         [deployment.targets.\"moss:site-1\"]\nlast_deployment_at = \"{at}\"\nlast_deployment_url = \"https://{url}\"\nsite_url = \"https://{site_url}\"\n"
+    )
+}
+
+/// A publish rewrites its own bookkeeping in `.moss/state.toml` (when and where
+/// it published, the DNS it saw). No page reads it, so the build after it stops
+/// at entry and serves what a full render does. The address the site is
+/// published under still renders every page.
+#[test]
+fn a_publish_rewriting_its_bookkeeping_leaves_the_last_seal_standing() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let site = Site::new();
+    site.write(".moss/state.toml", &deployment_state("2026-11-01T00:00:00Z", "a.example.net", "site-1.example.org"));
+    site.sealed();
+
+    site.write(".moss/state.toml", &deployment_state("2026-11-02T00:00:00Z", "b.example.net", "site-1.example.org"));
+    let record = build(site.root(), BuildTrigger::Unobserved);
+    assert!(stopped(&record), "{record}");
+    assert_publishes_a_full_render(&site);
+
+    site.write(".moss/state.toml", &deployment_state("2026-11-02T00:00:00Z", "b.example.net", "site-2.example.org"));
+    let record = build(site.root(), BuildTrigger::Unobserved);
+    assert!(rendered_everything(&record), "{record}");
+    assert_publishes_a_full_render(&site);
+}

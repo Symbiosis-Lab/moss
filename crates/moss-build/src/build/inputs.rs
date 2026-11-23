@@ -61,6 +61,11 @@ pub struct BuildInputs {
     /// handed over, and the next build renders.
     #[serde(default)]
     pub evidence: Option<SealEvidence>,
+    /// [`state_rest`] as this build measured it. `.moss/state.toml` is proved
+    /// through this digest instead of its bytes, so a publish that rewrites
+    /// only its own bookkeeping leaves the last seal standing.
+    #[serde(default)]
+    pub state_rest: Option<String>,
 }
 
 /// [`BuildInputs::evidence`]: the lasting refusals and report lines of a seal
@@ -123,6 +128,44 @@ pub(crate) fn config_rest(folder: &Path) -> Option<String> {
     Some(value_hash(Some(&serde_json::to_string(&table).ok()?)))
 }
 
+/// Keys of `.moss/state.toml` that a publish rewrites and no page reads, by
+/// table: the DNS it observed and when, and each target's address. Each
+/// target's `last_deployment_at` counts only as set or unset, which is what the
+/// redirect advisory reads. `last_deployed_generation_id` is not here: it names
+/// the published records the build reads. A key of the same name in any other
+/// table counts.
+const OBSERVED_BOOKKEEPING: &[&str] = &["checked_at", "dns_target"];
+const TARGET_BOOKKEEPING: &[&str] = &["last_deployment_url"];
+
+/// A digest of `.moss/state.toml` without the publish's bookkeeping, keyed and
+/// read like [`config_rest`]. Every other key counts, so a key added later
+/// reaches the proof until a test shows no page reads it.
+pub(crate) fn state_rest(folder: &Path) -> Option<String> {
+    fn table<'a>(parent: &'a mut toml::Table, key: &str) -> Option<&'a mut toml::Table> {
+        parent.get_mut(key).and_then(toml::Value::as_table_mut)
+    }
+    fn strip(state: &mut toml::Table) {
+        let Some(deployment) = table(state, "deployment") else { return };
+        if let Some(observed) = table(deployment, "observed") {
+            OBSERVED_BOOKKEEPING.iter().for_each(|key| { observed.remove(*key); });
+        }
+        for target in table(deployment, "targets").into_iter().flat_map(|t| t.iter_mut().map(|(_, v)| v)).filter_map(toml::Value::as_table_mut) {
+            TARGET_BOOKKEEPING.iter().for_each(|key| { target.remove(*key); });
+            if let Some(at) = target.get_mut("last_deployment_at") {
+                *at = toml::Value::Boolean(true);
+            }
+        }
+    }
+    let path = crate::moss_paths::MossPaths::new(folder).state();
+    let mut table: toml::Table = match std::fs::read_to_string(&path) {
+        Ok(text) => text.parse().ok()?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => toml::Table::new(),
+        Err(_) => return None,
+    };
+    strip(&mut table);
+    Some(value_hash(Some(&serde_json::to_string(&table).ok()?)))
+}
+
 /// [`BuildInputs::day`]: the date [`effective_now`] gave, and the site zone it
 /// was given (`None` is UTC).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -171,7 +214,9 @@ pub(crate) fn measure(folder: &Path, previous: Option<&BuildInputs>, options: BT
         value_hash(std::env::var(name).ok().as_deref())
     };
     let env_holds = previous.is_some_and(|p| p.env.iter().all(|(name, seen)| now(name) == *seen));
-    Measured { holds: unchanged && env_holds, record: Some(BuildInputs { moss, env: options, taken_at, config_rest: config_rest(folder), ..Default::default() }) }
+    let state_rest = state_rest(folder);
+    let state_holds = state_rest.is_some() && previous.is_some_and(|p| p.state_rest == state_rest);
+    Measured { holds: unchanged && env_holds && state_holds, record: Some(BuildInputs { moss, env: options, taken_at, config_rest: config_rest(folder), state_rest, ..Default::default() }) }
 }
 
 /// The build's own options that reach a page, hashed like a variable: the
@@ -251,7 +296,8 @@ fn record_key(folder: &Path, link_meta: &Path, path: &Path) -> Option<String> {
         return is_card_name(&card.to_string_lossy()).then(|| format!("link-meta/{}", card.to_string_lossy()));
     }
     let rel = moss_core::slug::normalize_separators(&path.strip_prefix(folder).ok()?.to_string_lossy());
-    crate::moss_paths::is_materialized_rel(&rel).then_some(rel)
+    // Proved through `state_rest` instead.
+    (crate::moss_paths::is_materialized_rel(&rel) && rel != ".moss/state.toml").then_some(rel)
 }
 
 /// Re-records the `.moss/` files this build wrote or removed after it was
@@ -356,6 +402,36 @@ pub(crate) fn now() -> chrono::NaiveDateTime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_publish_time_counts_only_as_set() {
+        let folder = tempfile::tempdir().unwrap();
+        let rest = |text: &str| {
+            std::fs::create_dir_all(folder.path().join(".moss")).unwrap();
+            std::fs::write(folder.path().join(".moss/state.toml"), text).unwrap();
+            state_rest(folder.path()).unwrap()
+        };
+        let target = "[deployment.targets.\"moss:site-1\"]\n";
+        let first = rest(&format!("{target}last_deployment_at = \"2026-11-01T00:00:00Z\"\n"));
+        assert_eq!(first, rest(&format!("{target}last_deployment_at = \"2026-11-02T00:00:00Z\"\n")));
+        assert_ne!(first, rest(target), "never published");
+    }
+
+    #[test]
+    fn a_bookkeeping_name_outside_its_table_still_counts() {
+        let folder = tempfile::tempdir().unwrap();
+        let rest = |text: &str| {
+            std::fs::create_dir_all(folder.path().join(".moss")).unwrap();
+            std::fs::write(folder.path().join(".moss/state.toml"), text).unwrap();
+            state_rest(folder.path()).unwrap()
+        };
+        let observed = "[deployment.observed]\nchecked_at = \"2026-11-01T00:00:00Z\"\n";
+        assert_eq!(rest(observed), rest("[deployment.observed]\nchecked_at = \"2026-11-02T00:00:00Z\"\n"));
+        for (key, table) in [("checked_at", "accounts.mastodon"), ("dns_target", "deployment"), ("last_deployment_url", "deployment"), ("last_deployment_at", "accounts.mastodon")] {
+            let at = |value: &str| rest(&format!("[{table}]\n{key} = \"{value}\"\n"));
+            assert_ne!(at("one"), at("two"), "{table}.{key}");
+        }
+    }
 
     #[test]
     fn the_build_day_is_the_sites_not_the_machines() {
