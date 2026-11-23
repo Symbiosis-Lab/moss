@@ -7036,6 +7036,51 @@ fn a_published_page_holds_its_uid_and_the_next_build_has_nothing_to_publish() {
     assert!(left.pages.is_empty(), "{:?}", left.pages);
 }
 
+/// The build after a publish renders the generation that was published. If it
+/// did not, the next deploy would upload a different site with nothing changed
+/// in the folder, and could drop the stub of a page that moved before it.
+#[test]
+fn the_build_after_a_publish_renders_the_published_generation() {
+    let (dir, _cleanup) = create_test_dir();
+    let folder_path = dir.to_str().unwrap();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\nHi\n").unwrap();
+    fs::write(dir.join("moved.md"), "---\ntitle: Moved\n---\n![A square](square.png)\n").unwrap();
+    fs::write(dir.join("gone.md"), "---\ntitle: Gone\n---\nText\n").unwrap();
+    image::RgbImage::from_pixel(24, 24, image::Rgb([23, 45, 67])).save(dir.join("square.png")).unwrap();
+    let history = tempfile::tempdir().unwrap();
+    let history = crate::deploy::history::HistoryStore::at(history.path().to_path_buf());
+    let publish = |sealed: &crate::build::manifest::SealedManifest| {
+        let ports = crate::deploy::one_shot::HeadlessDeployPorts;
+        tokio::runtime::Runtime::new().unwrap().block_on(crate::deploy::landed::record_landed(&dir, sealed, "moss:site-1", &ports, &history));
+        crate::vault::deployment_state::record_publish(folder_path, crate::vault::deployment_state::PublishOutcome {
+            url: "https://site-1.example.org".to_string(),
+            deployed_at: chrono::Utc::now().to_rfc3339(),
+            generation_id: Some(sealed.generation_id().to_string()),
+            ..Default::default()
+        })
+        .unwrap();
+    };
+
+    let (_, _, _, before) = build_test_promoted_or_withheld(folder_path).unwrap();
+    publish(&before);
+    fs::create_dir(dir.join("section")).unwrap();
+    fs::rename(dir.join("moved.md"), dir.join("section/moved.md")).unwrap();
+    fs::rename(dir.join("square.png"), dir.join("section/square.png")).unwrap();
+    fs::remove_file(dir.join("gone.md")).unwrap();
+    let (_, _, _, published) = build_test_promoted_or_withheld(folder_path).unwrap();
+    assert!(published.all_files().contains_key("moved/index.html"), "the moved page leaves a stub: {:?}", published.all_files().keys().collect::<Vec<_>>());
+    publish(&published);
+
+    let (_, _, _, again) = build_test_promoted_or_withheld(folder_path).unwrap();
+    let mut differ: Vec<_> = published.all_files().iter()
+        .filter(|(path, hash)| again.all_files().get(*path) != Some(*hash))
+        .map(|(path, _)| path.clone())
+        .chain(again.all_files().keys().filter(|path| !published.all_files().contains_key(*path)).cloned())
+        .collect();
+    differ.sort();
+    assert!(differ.is_empty(), "the rebuild differs from the published generation in {differ:?}");
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn an_arrival_after_scan_needs_a_new_render_before_it_clears_publish() {
