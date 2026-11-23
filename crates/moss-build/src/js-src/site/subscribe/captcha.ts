@@ -20,12 +20,12 @@ export const VERIFYING: Record<Lang, string> = {
  * Resolves true on `passed`, false when the visitor closes the modal (backdrop
  * click, or Escape in this page or in the frame). Rejects on `failed`, after
  * `QUIET_MS` with nothing from the page before `interactive` (Turnstile never
- * loaded or never answered), and two minutes after `interactive`. An expired
+ * loaded or never answered), and a minute after `interactive`. An expired
  * check can return `retry`: the caller must repeat its original request and
  * handle a new challenge URL, without treating the old check as clearance.
  */
 export const QUIET_MS = 20000;
-const OPEN_MS = 120000;
+export const OPEN_MS = 60000;
 
 export function solveCaptcha(pageUrl: string): Promise<boolean | "retry"> {
   const label = VERIFYING[langBucket(document.documentElement.lang)];

@@ -2,7 +2,7 @@ import { beforeEach, afterEach, describe, expect, test, vi, type MockInstance } 
 import { hydrateSubscribeForm } from '../subscribe.js';
 import '../../forms/forms.js';
 import { COPY, langBucket } from '../i18n.js';
-import { QUIET_MS, VERIFYING } from '../captcha.js';
+import { OPEN_MS, QUIET_MS, VERIFYING } from '../captcha.js';
 
 function mount(lang = 'en'): HTMLFormElement {
   document.documentElement.lang = lang;
@@ -490,12 +490,21 @@ describe('the service asks for its bot check', () => {
     expect(dialog()!.contains(document.activeElement)).toBe(true);
   });
 
+  test('every send gives up after thirty seconds, so a stalled request ends in the error', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    await submit();
+    expect(timeout).toHaveBeenCalledWith(30000);
+    expect((fetchSpy.mock.calls[0][1] as RequestInit).signal).toBeInstanceOf(AbortSignal);
+    timeout.mockRestore();
+  });
+
   test('a failed check shows the form error, with no retry', async () => {
     const form = await submit();
     tell('failed');
     await vi.advanceTimersByTimeAsync(0);
     expect(posts).toBe(1);
     expect(form.dataset.state).toBe('error');
+    expect(form.querySelector<HTMLElement>('[data-copy="error"]')!.textContent).toBe(COPY.en.verifyFailed);
     expect(dialog()).toBeNull();
   });
 
@@ -506,6 +515,7 @@ describe('the service asks for its bot check', () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(form.dataset.state).toBe('error');
     expect(form.querySelector<HTMLElement>('[data-copy="error"]')!.hidden).toBe(false);
+    expect(form.querySelector<HTMLElement>('[data-copy="error"]')!.textContent).toBe(COPY.en.verifyFailed);
     expect(dialog()).toBeNull();
 
     form.requestSubmit();
@@ -514,14 +524,16 @@ describe('the service asks for its bot check', () => {
     expect(form.dataset.state).toBe('success');
   });
 
-  test('a reader with the puzzle open keeps it past that wait, up to two minutes', async () => {
+  test('a reader with the puzzle open keeps it past that wait, up to a minute, then sees why it ended', async () => {
     const form = await submit();
     tell('interactive');
     await vi.advanceTimersByTimeAsync(QUIET_MS * 2);
     expect(dialog()).not.toBeNull();
     expect(form.dataset.state).toBe('loading');
-    await vi.advanceTimersByTimeAsync(120000 - QUIET_MS * 2);
+    expect(OPEN_MS).toBeLessThanOrEqual(60000);
+    await vi.advanceTimersByTimeAsync(OPEN_MS - QUIET_MS * 2);
     expect(form.dataset.state).toBe('error');
+    expect(form.querySelector<HTMLElement>('[data-copy="error"]')!.textContent).toBe(COPY.en.verifyFailed);
     expect(dialog()).toBeNull();
   });
 

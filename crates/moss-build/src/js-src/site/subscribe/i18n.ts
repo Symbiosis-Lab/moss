@@ -20,6 +20,8 @@ export interface SubscribeCopy {
   subscribed: string;
   /** Shown on network / server error. */
   error: string;
+  /** Shown when the bot check fails or never answers. */
+  verifyFailed: string;
 }
 
 export const COPY: Record<Lang, SubscribeCopy> = {
@@ -29,6 +31,7 @@ export const COPY: Record<Lang, SubscribeCopy> = {
     checkEmail: 'Check your email.',
     subscribed: 'Subscribed',
     error: 'Something went wrong. Try again?',
+    verifyFailed: 'Verification failed. Try again.',
   },
   de: {
     placeholder: 'ihre@email.de',
@@ -36,6 +39,7 @@ export const COPY: Record<Lang, SubscribeCopy> = {
     checkEmail: 'Bitte prüfen Sie Ihre E-Mail.',
     subscribed: 'Abonniert',
     error: 'Es ist ein Fehler aufgetreten. Bitte versuchen Sie es erneut.',
+    verifyFailed: 'Überprüfung fehlgeschlagen. Bitte versuchen Sie es erneut.',
   },
   'zh-hans': {
     placeholder: '邮箱',
@@ -43,6 +47,7 @@ export const COPY: Record<Lang, SubscribeCopy> = {
     checkEmail: '请查收邮件',
     subscribed: '已订阅',
     error: '出错了，请重试。',
+    verifyFailed: '验证失败，请重试。',
   },
   'zh-hant': {
     placeholder: '電子郵件',
@@ -50,6 +55,7 @@ export const COPY: Record<Lang, SubscribeCopy> = {
     checkEmail: '請查收郵件',
     subscribed: '已訂閱',
     error: '出錯了，請重試。',
+    verifyFailed: '驗證失敗，請重試。',
   },
 };
 

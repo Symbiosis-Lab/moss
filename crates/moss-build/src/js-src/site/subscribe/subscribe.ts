@@ -19,6 +19,8 @@ import { observeCaptcha, prewarmCaptcha, solveCaptcha } from './captcha.js';
 import { clearField, markField } from '../forms/fields.js';
 import { answersOf, checkQuestions, showAddress, watchQuestions } from './questions.js';
 
+const POST_MS = 30000;
+
 type StatusKey = 'check-email' | 'error';
 
 type SubscribeResponse = {
@@ -111,6 +113,7 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({ ...jsonBody, ...signals, turnstile_token: firstPost ? signals.turnstile_token : undefined }),
+        signal: AbortSignal.timeout(POST_MS),
       });
       firstPost = false;
       return [res, await res.json().catch(() => ({}))];
@@ -121,7 +124,15 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
       // The service asks for its bot check on a site that publishes
       // `subscribe.turnstile`; the button keeps spinning while the modal is open.
       while (res.status === 403 && data.need_captcha && data.captcha_url) {
-        if (!(await solveCaptcha(data.captcha_url))) {
+        let solved: boolean | 'retry';
+        try {
+          solved = await solveCaptcha(data.captcha_url);
+        } catch {
+          showStatus(form, 'error', copy, copy.verifyFailed);
+          setState(form, 'error', btn);
+          return;
+        }
+        if (!solved) {
           setState(form, 'idle', btn);
           return;
         }
@@ -175,6 +186,7 @@ function showStatus(
   form: HTMLFormElement,
   key: StatusKey,
   copy: SubscribeCopy,
+  text?: string,
 ): void {
   const container = form.querySelector<HTMLElement>('.moss-subscribe-status');
   if (!container) return;
@@ -183,7 +195,7 @@ function showStatus(
     const k = span.dataset.copy;
     if (k === key) {
       span.hidden = false;
-      span.textContent = copyFor(key, copy);
+      span.textContent = text ?? copyFor(key, copy);
     } else {
       span.hidden = true;
     }
