@@ -81,20 +81,20 @@ test('inside a slot, --jobs above 1 without a declared grant is refused', () => 
 });
 
 test('RENDER_GATES_MEM_GB, by default half the machine, caps --jobs N and sizes --jobs auto', () => {
-  const capped = run(['--jobs', '6', ...SPREAD], { RENDER_GATES_MEM_GB: '17' });
+  const capped = run(['--jobs', '6', ...SPREAD], { RENDER_GATES_MEM_GB: '13' });
   assert.match(capped.stderr, /running 3/);
   assert.ok(peak(capped.events) <= 3, `at most 3 at once, saw ${peak(capped.events)}`);
   assert.match(run(['--jobs', '6', ...SPREAD], { RENDER_GATES_MEM_GB: '8' }).stderr, /running 1/, 'under one heavy lane, one lane');
-  assert.match(run(['--jobs', 'auto', ...SPREAD], { RENDER_GATES_MEM_GB: '25' }).stdout, /on 5 lanes/);
-  assert.match(run(['--jobs', 'auto', ...SPREAD], { RENDER_GATES_MEM_GB: '29' }).stdout, /on 6 lanes/);
-  const auto = run(['--jobs', 'auto', ...SPREAD], { RENDER_GATES_MEM_GB: '13' });
+  assert.match(run(['--jobs', 'auto', ...SPREAD], { RENDER_GATES_MEM_GB: '17' }).stdout, /on 5 lanes/);
+  assert.match(run(['--jobs', 'auto', ...SPREAD], { RENDER_GATES_MEM_GB: '19' }).stdout, /on 6 lanes/);
+  const auto = run(['--jobs', 'auto', ...SPREAD], { RENDER_GATES_MEM_GB: '11' });
   assert.match(auto.stdout, /on 2 lanes/);
   const unset = run(['--jobs', '100000', 'nav-island'], { RENDER_GATES_MEM_GB: '' });
   assert.match(unset.stderr, /running \d+$/m, 'with no memory set, half the machine caps --jobs N');
 });
 
 test('--jobs auto takes no more lanes than CPUs', () => {
-  assert.match(run(['--jobs', 'auto', ...SPREAD], { RENDER_GATES_MEM_GB: '29', STUB_CPUS: '4' }).stdout, /on 4 lanes/);
+  assert.match(run(['--jobs', 'auto', ...SPREAD], { RENDER_GATES_MEM_GB: '19', STUB_CPUS: '4' }).stdout, /on 4 lanes/);
 });
 
 test('a fractional grant sizes workers like its whole part', () => {

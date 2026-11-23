@@ -403,7 +403,7 @@ fi
 # each further lane needs LANE_MORE_GB, a lane's measured share when lanes run
 # together. That caps --jobs N, and --jobs auto takes as
 # many lanes as it allows, one per CPU at most.
-WORKER_GB=2 LANE_FIRST_GB=9 LANE_MORE_GB=4
+WORKER_GB=2 LANE_FIRST_GB=9 LANE_MORE_GB=2
 TIMES="${RENDER_GATES_TIMES:-target/render-gate-times.tsv}"
 granted="${RENDER_GATES_MEM_GB:-}"
 if [ -z "${RENDER_GATES_MEM_GB:-}" ] && [ "$JOBS" != 1 ]; then
