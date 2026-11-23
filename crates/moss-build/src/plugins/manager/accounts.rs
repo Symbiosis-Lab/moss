@@ -132,11 +132,12 @@ fn recorded(project_path: &str, plugin: &str) -> Option<AccountBinding> {
 
 /// The account `plugin` is signed in to in this folder, if any.
 pub fn account_binding(project_path: &str, plugin: &str) -> Option<BoundAccount> {
-    recorded(project_path, plugin).map(BoundAccount::from).or_else(|| {
+    let bound = recorded(project_path, plugin).map(BoundAccount::from).or_else(|| {
         let config = crate::plugins::discovery::get_plugin_config(project_path, plugin).ok()?;
         let bound = BoundAccount { id: text(config.get("boundUserId"), true), name: text(config.get("boundUserName"), true) };
         (bound.id.is_some() || bound.name.is_some()).then_some(bound)
-    })
+    })?;
+    Some(BoundAccount { name: super::copies::shown_name(bound.name, bound.id.as_deref()), ..bound })
 }
 
 /// The server of the account `plugin` is signed in to in this folder, when
@@ -228,23 +229,26 @@ fn forget_legacy_json(config: &Path) -> Result<bool, String> {
 }
 
 /// What a channel's account row shows: the folder's binding read against the
-/// session this computer holds.
+/// session this computer holds. A `name` is only ever a name the channel or
+/// the binding gave: an account id is never shown in its place.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 #[serde(tag = "state", rename_all = "kebab-case")]
 pub enum AccountState {
-    SignedIn { name: String },
-    /// The folder is bound to `name`, and this computer has no session for it.
-    SignedOut { name: String },
+    SignedIn { name: Option<String> },
+    /// The folder is bound, to `name` when it has one, and this computer has
+    /// no session for it.
+    SignedOut { name: Option<String> },
     /// This computer could not read its session: `why` is the channel's error,
-    /// or none when no runtime here may run the channel. `name` is the
-    /// binding's, if the folder has one.
-    Unread { name: Option<String>, why: Option<String> },
+    /// or none when no runtime here may run the channel. `bound` says the
+    /// folder has a binding, and `name` is its name, if it has one.
+    Unread { name: Option<String>, bound: bool, why: Option<String> },
     NoAccount,
 }
 
 /// The row for a channel whose session was not read, from the binding alone.
 pub fn account_unread(project_path: &str, plugin: &str, why: Option<String>) -> AccountState {
-    AccountState::Unread { name: account_binding(project_path, plugin).and_then(|b| b.name.or(b.id)), why }
+    let bound = account_binding(project_path, plugin);
+    AccountState::Unread { bound: bound.is_some(), name: bound.and_then(|b| b.name), why }
 }
 
 impl PluginManager {
@@ -253,15 +257,14 @@ impl PluginManager {
     /// the last word, and a channel without one is taken at its binding.
     pub async fn account_state(&self, plugin: &str) -> AccountState {
         let bound = account_binding(&self.project_path, plugin);
-        let shown = |b: &BoundAccount| b.name.clone().or_else(|| b.id.clone());
         match self.copy_account(plugin).await {
             super::copies::Account::Known { id, name } => {
-                let same = bound.as_ref().filter(|b| b.id.as_deref() == Some(id.as_str()));
-                AccountState::SignedIn { name: name.or_else(|| same.and_then(shown)).unwrap_or(id) }
+                let same = bound.filter(|b| b.id.as_deref() == Some(id.as_str()));
+                AccountState::SignedIn { name: name.or_else(|| same.and_then(|b| b.name)) }
             }
-            super::copies::Account::SignedOut => bound.as_ref().and_then(shown).map_or(AccountState::NoAccount, |name| AccountState::SignedOut { name }),
+            super::copies::Account::SignedOut => bound.map_or(AccountState::NoAccount, |b| AccountState::SignedOut { name: b.name }),
             super::copies::Account::Unknown(why) => account_unread(&self.project_path, plugin, Some(why)),
-            super::copies::Account::Unsaid => bound.as_ref().and_then(shown).map_or(AccountState::NoAccount, |name| AccountState::SignedIn { name }),
+            super::copies::Account::Unsaid => bound.map_or(AccountState::NoAccount, |b| AccountState::SignedIn { name: b.name }),
         }
     }
 
@@ -631,34 +634,56 @@ mod tests {
         assert!(!marked_signed_out(&project, "social"));
     }
 
-    async fn state_with(copy_account: &str, bound: Option<&str>) -> AccountState {
+    async fn state_with(copy_account: &str, bound: Option<Option<&str>>) -> AccountState {
         let (_dir, project) = folder_with_hooks(&format!("async copy_account(q) {{ return {copy_account}; }}"));
         if let Some(name) = bound {
-            bind_account(&project, "social", &AccountBinding { id: "acct:1".into(), name: Some(name.into()), host: None }).unwrap();
+            bind_account(&project, "social", &AccountBinding { id: "acct:1".into(), name: name.map(Into::into), host: None }).unwrap();
         }
         manager(&project).0.account_state("social").await
+    }
+
+    const ADA: Option<Option<&str>> = Some(Some("@ada"));
+    const ID_ONLY: Option<Option<&str>> = Some(None);
+
+    fn named(name: &str) -> Option<String> {
+        Some(name.into())
     }
 
     #[tokio::test]
     async fn the_account_row_reads_the_binding_against_this_computers_session() {
         let signed_out = r#"{ success: true, copy: { signed_out: true } }"#;
-        assert_eq!(state_with(signed_out, Some("@ada")).await, AccountState::SignedOut { name: "@ada".into() });
+        assert_eq!(state_with(signed_out, ADA).await, AccountState::SignedOut { name: named("@ada") });
         assert_eq!(state_with(signed_out, None).await, AccountState::NoAccount);
         let same = r#"{ success: true, copy: { account: "acct:1" } }"#;
-        assert_eq!(state_with(same, Some("@ada")).await, AccountState::SignedIn { name: "@ada".into() });
+        assert_eq!(state_with(same, ADA).await, AccountState::SignedIn { name: named("@ada") });
         let other = r#"{ success: true, copy: { account: "acct:9" } }"#;
-        assert_eq!(state_with(other, Some("@ada")).await, AccountState::SignedIn { name: "acct:9".into() }, "another account's session is not shown under this binding's name");
+        assert_eq!(state_with(other, ADA).await, AccountState::SignedIn { name: None }, "another account's session is neither shown under this binding's name nor by its id");
         let (_dir, project) = folder_with_hooks("");
         bind_account(&project, "social", &AccountBinding { id: "acct:1".into(), name: Some("@ada".into()), host: None }).unwrap();
-        assert_eq!(manager(&project).0.account_state("social").await, AccountState::SignedIn { name: "@ada".into() }, "no copy_account: the binding");
+        assert_eq!(manager(&project).0.account_state("social").await, AccountState::SignedIn { name: named("@ada") }, "no copy_account: the binding");
         let failed = r#"{ success: false, error: "rate limited" }"#;
-        assert!(matches!(state_with(failed, Some("@ada")).await, AccountState::Unread { name: Some(n), why: Some(_) } if n == "@ada"), "a failed read is neither signed in nor signed out");
-        assert!(matches!(state_with(failed, None).await, AccountState::Unread { name: None, why: Some(_) }));
+        assert!(matches!(state_with(failed, ADA).await, AccountState::Unread { name: Some(n), bound: true, why: Some(_) } if n == "@ada"), "a failed read is neither signed in nor signed out");
+        assert!(matches!(state_with(failed, None).await, AccountState::Unread { name: None, bound: false, why: Some(_) }));
         let refused = r#"{ success: false, message: "Sign in first", copy: { refused: { cause: "auth", message: "Sign in first" } } }"#;
         assert_eq!(state_with(refused, None).await, AccountState::NoAccount, "a refusal for want of a credential is signed out, not an error");
-        assert_eq!(state_with(refused, Some("@ada")).await, AccountState::SignedOut { name: "@ada".into() });
+        assert_eq!(state_with(refused, ADA).await, AccountState::SignedOut { name: named("@ada") });
         let offline = r#"{ success: false, message: "offline", copy: { refused: { cause: "network" } } }"#;
-        assert_eq!(state_with(offline, None).await, AccountState::Unread { name: None, why: Some("offline".into()) }, "any other refusal keeps the channel's own words");
+        assert_eq!(state_with(offline, None).await, AccountState::Unread { name: None, bound: false, why: Some("offline".into()) }, "any other refusal keeps the channel's own words");
+    }
+
+    #[tokio::test]
+    async fn an_account_row_never_shows_an_id_as_its_name() {
+        let same = r#"{ success: true, copy: { account: "acct:1" } }"#;
+        assert_eq!(state_with(same, ID_ONLY).await, AccountState::SignedIn { name: None }, "a binding without a name");
+        let echoed = r#"{ success: true, copy: { account: "acct:1", name: "acct:1" } }"#;
+        assert_eq!(state_with(echoed, None).await, AccountState::SignedIn { name: None }, "a channel that answers its id as the name");
+        let signed_out = r#"{ success: true, copy: { signed_out: true } }"#;
+        assert_eq!(state_with(signed_out, ID_ONLY).await, AccountState::SignedOut { name: None });
+        let failed = r#"{ success: false, error: "rate limited" }"#;
+        assert!(matches!(state_with(failed, ID_ONLY).await, AccountState::Unread { name: None, bound: true, why: Some(_) }), "an unread row keeps its binding without a name");
+        let (_dir, project) = folder_with_hooks("");
+        bind_account(&project, "social", &AccountBinding { id: "acct:1".into(), name: Some("acct:1".into()), host: None }).unwrap();
+        assert_eq!(manager(&project).0.account_state("social").await, AccountState::SignedIn { name: None }, "a binding whose name is its id");
     }
 
     /// The desktop as a sign-in page sees it: one browser panel, and an event

@@ -40,6 +40,12 @@ pub(super) fn refusal_is_an_answer(hook: &str) -> bool {
     hook == "copy_account" || Op::ALL.iter().any(|op| op.hook() == hook)
 }
 
+/// `name` as a person may be shown it: none when empty or when it is the
+/// account's id.
+pub(super) fn shown_name(name: Option<String>, id: Option<&str>) -> Option<String> {
+    name.filter(|n| !n.is_empty() && Some(n.as_str()) != id)
+}
+
 /// The channel's `syndication` block, when it posts through the copy contract.
 pub fn copy_spec(manifest: &PluginManifest) -> Option<&ChannelSpec> {
     manifest.contributes.as_ref()?.channel.as_ref()?.syndication.as_ref()
@@ -123,7 +129,7 @@ impl PluginManager {
             CopyCall::Answered(r) => match r.copy {
                 Some(c) if c.signed_out => Account::SignedOut,
                 Some(c) => match c.account.filter(|a| !a.is_empty()) {
-                    Some(id) => Account::Known { id, name: c.name.filter(|n| !n.is_empty()) },
+                    Some(id) => Account::Known { name: shown_name(c.name, Some(&id)), id },
                     None => Account::Unsaid,
                 },
                 None => Account::Unsaid,
