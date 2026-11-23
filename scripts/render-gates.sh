@@ -398,14 +398,17 @@ fi
 # RENDER_GATES_WORKERS already in the environment wins over the grant.
 #
 # RENDER_GATES_MEM_GB is the memory the run may use (default half the
-# machine's). One lane needs LANE_FIRST_GB, since the heaviest gate peaks near
-# that at one worker; each further lane needs LANE_MORE_GB, a lane's measured
-# share when lanes run together. That caps --jobs N, and --jobs auto takes as
+# machine's; inside a slot, --jobs above 1 needs a declared grant). One lane
+# needs LANE_FIRST_GB, since the heaviest gate peaks near that at one worker;
+# each further lane needs LANE_MORE_GB, a lane's measured share when lanes run
+# together. That caps --jobs N, and --jobs auto takes as
 # many lanes as it allows, one per CPU at most.
 WORKER_GB=2 LANE_FIRST_GB=9 LANE_MORE_GB=4
 TIMES="${RENDER_GATES_TIMES:-target/render-gate-times.tsv}"
 granted="${RENDER_GATES_MEM_GB:-}"
 if [ -z "${RENDER_GATES_MEM_GB:-}" ] && [ "$JOBS" != 1 ]; then
+  # Inside heavy-slot.sh the slot reserved less than half the machine; cargo-slot exports the grant only when --mem-gb was declared.
+  [ -z "${MOSS_SLOT_HELD:-}" ] || { echo "--jobs $JOBS inside a slot needs its memory declared: pass --mem-gb to heavy-slot.sh" >&2; exit 2; }
   if [ -r /proc/meminfo ]; then RENDER_GATES_MEM_GB=$(awk '/^MemTotal:/ { print int($2 / 2097152) }' /proc/meminfo)
   else RENDER_GATES_MEM_GB=$(( $(sysctl -n hw.memsize) / 2147483648 )); fi
 fi

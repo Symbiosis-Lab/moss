@@ -72,6 +72,14 @@ test('a red gate turns the run red and is named', () => {
   assert.doesNotMatch(stdout, /^RED nav-island$/m);
 });
 
+test('inside a slot, --jobs above 1 without a declared grant is refused', () => {
+  const r = run(['--jobs', '6', ...SPREAD], { RENDER_GATES_MEM_GB: '', MOSS_SLOT_HELD: '/tmp/moss-heavy-slots/slot1' });
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /pass --mem-gb to heavy-slot\.sh/);
+  assert.equal(r.events.length, 0, 'no gate starts');
+  assert.equal(run(['--jobs', '6', ...SPREAD], { MOSS_SLOT_HELD: '/tmp/moss-heavy-slots/slot1' }).status, 0, 'a declared grant runs');
+});
+
 test('RENDER_GATES_MEM_GB, by default half the machine, caps --jobs N and sizes --jobs auto', () => {
   const capped = run(['--jobs', '6', ...SPREAD], { RENDER_GATES_MEM_GB: '17' });
   assert.match(capped.stderr, /running 3/);
