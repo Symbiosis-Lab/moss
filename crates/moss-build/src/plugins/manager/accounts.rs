@@ -301,6 +301,15 @@ impl PluginManager {
     pub async fn sign_in(&self, plugin: &Plugin, context_json: &str) -> Result<SignedIn, String> {
         let name = &plugin.manifest.name;
         let before = account_binding(&self.project_path, name).is_some();
+        // A press while this login waits on the browser starts it again rather
+        // than joining it. The old run is cancelled, as the watchdog would, since
+        // its code may catch the cancellation and keep waiting. The engine's
+        // answer to the cancel must reach the old run, and its teardown (which
+        // closes the panel) must finish, before the new run registers.
+        if crate::plugins::runtime::browser_sign_in::end_wait(name) {
+            self.engine.cancel_hook(name, "login");
+            self.host.state.hooks.in_flight_hooks.settled(&super::singleflight_key(name, "login", super::AskedBy::Person)).await;
+        }
         let (_, returned) = self.execute_plugin_javascript(plugin, "login", context_json, super::AskedBy::Person).await?;
         let outcome = LoginOutcome::from_returned(returned.as_ref());
         if let LoginOutcome::Completed(account) = &outcome {
@@ -489,12 +498,16 @@ mod tests {
     /// A channel whose bundle is `body` (the members of its global), with one
     /// hidden secret, `token`.
     fn folder_with_hooks(body: &str) -> (tempfile::TempDir, String) {
+        folder_with_plugin("social", body)
+    }
+
+    fn folder_with_plugin(name: &str, body: &str) -> (tempfile::TempDir, String) {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().to_str().unwrap().to_string();
-        write(&project, ".moss/plugins/social/manifest.json", r#"{"name":"social","version":"0.1.0","entry":"main.bundle.js",
-            "global_name":"Social","contributes":{"channel":{"login":true,
-            "setup":{"settings":[{"key":"token","type":"secret","label":"Token","hidden":true}]}}}}"#);
-        write(&project, ".moss/plugins/social/main.bundle.js", &format!("var Social = {{ {body} }};"));
+        write(&project, &format!(".moss/plugins/{name}/manifest.json"), &format!(r#"{{"name":"{name}","version":"0.1.0","entry":"main.bundle.js",
+            "global_name":"Social","contributes":{{"channel":{{"login":true,
+            "setup":{{"settings":[{{"key":"token","type":"secret","label":"Token","hidden":true}}]}}}}}}}}"#));
+        write(&project, &format!(".moss/plugins/{name}/main.bundle.js"), &format!("var Social = {{ {body} }};"));
         (dir, project)
     }
 
@@ -693,6 +706,8 @@ mod tests {
         pages: std::sync::Mutex<Vec<String>>,
         closes: std::sync::atomic::AtomicUsize,
         signed_in_closes: std::sync::atomic::AtomicUsize,
+        /// Addresses opened in the person's own browser.
+        browsed: std::sync::Mutex<Vec<String>>,
         listeners: std::sync::Mutex<Vec<(String, std::sync::Arc<dyn Fn(&str) + Send + Sync>)>>,
     }
 
@@ -744,7 +759,10 @@ mod tests {
             self.signed_in_closes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(())
         }
-        async fn open_system_browser(&self, _: String) -> Result<(), String> { unreachable!() }
+        async fn open_system_browser(&self, url: String) -> Result<(), String> {
+            self.browsed.lock().unwrap().push(url);
+            Ok(())
+        }
         async fn return_to_editor(&self) -> Result<(), String> { unreachable!() }
         async fn fill_browser_panel(&self, _: &str, _: &str, _: Value) -> Result<Value, String> { unreachable!() }
         async fn prompt_credential(&self, _: &str, _: &str, _: &str, _: Option<String>) -> Result<Option<String>, String> { unreachable!() }
@@ -758,6 +776,10 @@ mod tests {
     }
 
     fn manager_at_desk(project: &str) -> (PluginManager, Plugin, std::sync::Arc<Desk>) {
+        manager_of_at_desk(project, "social")
+    }
+
+    fn manager_of_at_desk(project: &str, name: &str) -> (PluginManager, Plugin, std::sync::Arc<Desk>) {
         let desk = std::sync::Arc::new(Desk::default());
         let host = AdapterHost {
             state: crate::engine::host_fns::HostState::standalone(),
@@ -767,7 +789,7 @@ mod tests {
         };
         let watchdog = HookWatchdog { limit: std::time::Duration::from_secs(1), check: std::time::Duration::from_millis(100) };
         let manager = PluginManager::new(project, host).unwrap().with_watchdog(watchdog);
-        let plugin = manager.plugins().into_iter().find(|p| p.manifest.name == "social").unwrap();
+        let plugin = manager.plugins().into_iter().find(|p| p.manifest.name == name).unwrap();
         (manager, plugin, desk)
     }
 
@@ -852,6 +874,130 @@ mod tests {
         });
         assert_eq!(signed_in.expect("a closed page must not hold the sign-in forever").unwrap_err(), "Hook 'social::login' timed out - no progress for 1 seconds");
         assert_eq!(desk.closes(), 0, "a page already closed is not closed again");
+    }
+
+    /// `startBrowserSignIn` as moss-api writes it, over the same host calls.
+    const BROWSER_SIGN_IN: &str = r#"
+        const startBrowserSignIn = async () => {
+            const { redirectUri } = await globalThis.__TAURI__.core.invoke("browser_sign_in_start", {});
+            return { redirectUri, open: async (url) => {
+                try {
+                    const { params } = await globalThis.__TAURI__.core.invoke("browser_sign_in_wait", { url });
+                    return Object.fromEntries(params);
+                } catch (e) {
+                    const message = e instanceof Error ? e.message : String(e);
+                    if (message !== "sign-in cancelled") throw e;
+                    const cancelled = new Error(message);
+                    cancelled.name = "SignInCancelled";
+                    throw cancelled;
+                }
+            } };
+        };
+        const authorize = (s) => "https://social.example.net/authorize?redirect_uri=" + encodeURIComponent(s.redirectUri);"#;
+
+    /// The person closes the browser tab, which tells moss nothing, and presses
+    /// Sign in again: the press starts a fresh sign-in instead of joining the
+    /// one left waiting, for each shape a channel's login takes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_press_after_the_browser_tab_closed_starts_a_fresh_sign_in() {
+        // One test with its own plugin name: a waiting sign-in is kept per plugin
+        // name for the whole process, so any other test's press would end it.
+        let shapes = [
+            // Every failure caught and returned as a refusal.
+            ("bluesky", format!(r#"{BROWSER_SIGN_IN}
+                try {{
+                    const s = await startBrowserSignIn();
+                    const reply = await s.open(authorize(s));
+                    return {{ status: "completed", account: {{ id: "did:" + reply.code }} }};
+                }} catch (e) {{ return {{ success: false, message: e.message }}; }}"#)),
+            // A cancelled wait answered as a cancelled sign-in.
+            ("threads", format!(r#"{BROWSER_SIGN_IN}
+                try {{
+                    const s = await startBrowserSignIn();
+                    const reply = await s.open(authorize(s));
+                    return {{ status: "completed", account: {{ id: "threads/" + reply.code }} }};
+                }} catch (e) {{
+                    if (e.name === "SignInCancelled") return {{ status: "cancelled" }};
+                    return {{ status: "failed", message: e.message }};
+                }}"#)),
+            // A cancellation caught, then a page of its own that waits on the person.
+            ("lingers", format!(r#"{BROWSER_SIGN_IN}
+                try {{
+                    const s = await startBrowserSignIn();
+                    const reply = await s.open(authorize(s));
+                    return {{ status: "completed", account: {{ id: "lingers/" + reply.code }} }};
+                }} catch (e) {{
+                    await globalThis.__TAURI__.core.invoke("set_action_panel_html", {{ html: "<p>Stopped</p>" }});
+                    return await new Promise(() => {{}});
+                }}"#)),
+            // A server picked on moss's own page first, then the browser.
+            ("mastodon", format!(r#"{BROWSER_SIGN_IN} {PICKS_A_SERVER}
+                try {{
+                    const s = await startBrowserSignIn();
+                    const reply = await s.open(authorize(s));
+                    return {{ status: "completed", account: {{ id: server + "/" + reply.code }} }};
+                }} catch (e) {{
+                    if (e.name === "SignInCancelled") return {{ status: "cancelled" }};
+                    return {{ status: "failed", message: e.message }};
+                }}"#)),
+        ];
+        for (shape, login) in shapes {
+            let (_dir, project) = folder_with_plugin("browsing", &format!("async login(ctx) {{ {login} }}"));
+            let (manager, plugin, desk) = manager_of_at_desk(&project, "browsing");
+            let ctx = context(&project);
+            let picks = shape == "mastodon";
+            let browsed = |n: usize| {
+                let desk = desk.clone();
+                async move {
+                    for _ in 0..500 {
+                        if let Some(url) = desk.browsed.lock().unwrap().get(n - 1) {
+                            return url::Url::parse(url).unwrap().query_pairs().find(|(k, _)| k == "redirect_uri").map(|(_, v)| v.into_owned()).unwrap();
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                    panic!("{shape}: sign-in {n} never opened the browser");
+                }
+            };
+            let pick = |n: usize| {
+                let desk = desk.clone();
+                async move {
+                    if !picks {
+                        return;
+                    }
+                    for _ in 0..500 {
+                        if desk.pages.lock().unwrap().len() >= n {
+                            desk.fire("picker:continue", r#"{"server":"social.example.net"}"#);
+                            return;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                    panic!("{shape}: sign-in {n} never opened its picker");
+                }
+            };
+            let presses = async {
+                let (first, (abandoned, second)) = tokio::join!(manager.sign_in(&plugin, &ctx), async {
+                    pick(1).await;
+                    let abandoned = browsed(1).await;
+                    let (second, ()) = tokio::join!(manager.sign_in(&plugin, &ctx), async {
+                        pick(2).await;
+                        let redirect = browsed(2).await;
+                        let client = crate::system::proxy_reqwest::client_builder().no_proxy().build().unwrap();
+                        client.get(format!("{redirect}?code=again")).send().await.unwrap_or_else(|e| panic!("{shape}: the second sign-in's redirect: {e:?}"));
+                    });
+                    (abandoned, second)
+                });
+                (first, abandoned, second)
+            };
+            let (first, abandoned, second) = tokio::time::timeout(std::time::Duration::from_secs(20), presses)
+                .await
+                .unwrap_or_else(|_| panic!("{shape}: the second press joined the sign-in left in the closed tab"));
+            let id = match shape { "mastodon" => "social.example.net/again".to_string(), "bluesky" => "did:again".to_string(), _ => format!("{shape}/again") };
+            assert_eq!(second.unwrap().outcome, completed(&id, None), "{shape}");
+            assert!(!matches!(first.map(|s| s.outcome), Ok(LoginOutcome::Completed(_))), "{shape}: the abandoned sign-in finishes nothing");
+            let port = abandoned.trim_start_matches("http://").split('/').next().unwrap().to_string();
+            assert!(tokio::net::TcpStream::connect(&port).await.is_err(), "{shape}: the abandoned sign-in stopped listening");
+            assert_eq!(account_binding(&project, "browsing").and_then(|b| b.id), Some(id), "{shape}");
+        }
     }
 
     /// A channel that declares its one hidden secret keeps everything a

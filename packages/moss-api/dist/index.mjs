@@ -486,7 +486,7 @@ async function openSystemBrowser(url) {
 /** The text moss ends a cancelled sign-in with. */
 const CANCELLED = "sign-in cancelled";
 /**
-* The person stopped the sign-in: they closed it, or another sign-in started.
+* The person stopped the sign-in: they pressed Sign in again, or another sign-in started.
 * A `login` answers `{ status: "cancelled" }` for it rather than a failure.
 *
 * @example

@@ -685,7 +685,7 @@ impl PluginManager {
         //
         // Keyed by who asked too: a Sync the person clicks must not quietly
         // take the result of a build's run, which may not write the folder.
-        let singleflight_key = format!("{}::{}::{:?}", plugin.manifest.name, hook_name, asked_by);
+        let singleflight_key = singleflight_key(&plugin.manifest.name, hook_name, asked_by);
         let (is_first, mut rx) = hook_state.in_flight_hooks.try_start(&singleflight_key);
 
         if !is_first {
@@ -961,6 +961,11 @@ impl PluginManager {
 enum HookRun {
     NeverRan(String),
     Finished(Result<(Option<HookResult>, Option<serde_json::Value>), String>),
+}
+
+/// The key concurrent calls of one hook share a run under.
+fn singleflight_key(plugin: &str, hook_name: &str, asked_by: AskedBy) -> String {
+    format!("{plugin}::{hook_name}::{asked_by:?}")
 }
 
 /// Derive the JavaScript global name from a plugin name.

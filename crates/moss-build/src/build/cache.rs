@@ -1379,45 +1379,31 @@ impl<V: Clone + Send + Sync + 'static> Singleflight<V> {
         }
     }
 
-    /// Signal successful completion, delivering `value` to all waiters.
-    ///
-    /// Sends `Some(value)` through the watch channel (async waiters) and
-    /// notifies the condvar (sync waiters), then removes the key from the
-    /// in-flight map.
-    pub fn complete(&self, key: &str, value: V) {
-        let slot = {
-            let mut map = self.in_flight.lock().unwrap();
-            map.remove(key)
-        };
-        if let Some(slot) = slot {
-            // Signal async waiters via watch channel.
-            let _ = slot.tx.send(Some(value.clone()));
-            // Signal sync waiters via condvar.
-            {
-                let mut guard = slot.state.lock().unwrap();
-                *guard = (true, Some(value));
-            }
-            slot.condvar.notify_all();
+    /// Until no call for `key` is in flight.
+    pub async fn settled(&self, key: &str) {
+        let rx = self.in_flight.lock().unwrap().get(key).map(|slot| slot.tx.subscribe());
+        if let Some(mut rx) = rx {
+            let _ = rx.changed().await;
         }
     }
 
+    /// Signal successful completion, delivering `value` to all waiters.
+    pub fn complete(&self, key: &str, value: V) {
+        self.finish(key, Some(value));
+    }
+
     /// Signal failure/cancellation, waking all waiters with `None`.
-    ///
-    /// Sends `None` through the watch channel and notifies the condvar,
-    /// then removes the key from the in-flight map.
     pub fn abort(&self, key: &str) {
-        let slot = {
-            let mut map = self.in_flight.lock().unwrap();
-            map.remove(key)
-        };
+        self.finish(key, None);
+    }
+
+    /// Remove `key` from the in-flight map and wake its async waiters (the
+    /// watch channel) and sync waiters (the condvar) with `value`.
+    fn finish(&self, key: &str, value: Option<V>) {
+        let slot = self.in_flight.lock().unwrap().remove(key);
         if let Some(slot) = slot {
-            // Re-send None to trigger changed() for async waiters.
-            let _ = slot.tx.send(None);
-            // Signal sync waiters via condvar.
-            {
-                let mut guard = slot.state.lock().unwrap();
-                *guard = (true, None);
-            }
+            let _ = slot.tx.send(value.clone());
+            *slot.state.lock().unwrap() = (true, value);
             slot.condvar.notify_all();
         }
     }

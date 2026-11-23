@@ -131,9 +131,16 @@ where
     reply.await.unwrap_or_else(|_| Err("the sign-in stopped listening".to_string()))
 }
 
-/// End `plugin`'s sign-in. The person closed the sign-in panel.
-pub fn cancel(plugin: &str) {
-    sign_ins().remove(plugin);
+/// End `plugin`'s sign-in if it is waiting on the browser, answering whether
+/// it was. The browser tells moss nothing when its tab closes, so a press on
+/// Sign in while one waits is the person's only sign that they left it.
+pub fn end_wait(plugin: &str) -> bool {
+    let mut map = sign_ins();
+    let waiting = map.get(plugin).is_some_and(|s| s.reply.is_none());
+    if waiting {
+        map.remove(plugin);
+    }
+    waiting
 }
 
 /// The page the browser lands on, before the plugin has checked the reply.
@@ -225,9 +232,10 @@ mod tests {
     #[tokio::test]
     async fn browser_sign_in_cancel_ends_the_wait() {
         start("browser-sign-in-cancel").await.unwrap();
+        assert!(!end_wait("browser-sign-in-cancel"), "a sign-in not yet in the browser is not ended");
         let waiting = tokio::spawn(wait("browser-sign-in-cancel", "https://example.com/", |_| async { Ok(()) }));
         tokio::time::sleep(Duration::from_millis(50)).await;
-        cancel("browser-sign-in-cancel");
+        assert!(end_wait("browser-sign-in-cancel"));
         assert_eq!(soon(waiting).await, Err(CANCELLED.to_string()));
     }
 
