@@ -5487,11 +5487,11 @@ export const NAV_FLATTENED_GATE: ScratchSiteSpec = {
   name: "nav-flattened-gate",
   files: {
     "index.md": `---
-title: Fifty Stations of the Coast Road
+title: Fifty-three Stations of the Coast Road at Dawn
 uid: "nfl00101"
 ---
 
-# Fifty Stations of the Coast Road
+# Fifty-three Stations of the Coast Road at Dawn
 `,
     ...Object.fromEntries(
       ["Prints", "Browse", "Map", "Weather", "Essays", "About"].map((title, i) => [
@@ -5507,6 +5507,38 @@ uid: "nfl00101"
 .site-name { font: 500 clamp(24px, 3.4vw, 34px) / 1.15 serif; white-space: normal; }
 .main-nav .nav-links a { font: 500 15px/1 sans-serif; padding-block: 15px 12px; }
 @media (max-width: 40rem) { .nav-content .nav-links { gap: 0 14px; } .main-nav .nav-links a { font-size: 14px; } .nav-content .nav-icons { gap: 4px; } }
+`,
+  },
+};
+
+/** A theme that flattens `.nav-right` on a phone and seats the name beside the toggles, the links below; the long name has to wrap there. */
+export const NAV_FLATTENED_BESIDE_GATE: ScratchSiteSpec = {
+  name: "nav-flattened-beside-gate",
+  files: {
+    "index.md": `---
+title: The Harbour Almanac of the Northern Coast, 1921–1938
+uid: "nfb00101"
+---
+
+# The Harbour Almanac of the Northern Coast, 1921–1938
+`,
+    ...Object.fromEntries(
+      ["Projects", "Partners", "About the sources"].map((title, i) => [
+        `${title.replace(/ /g, "-")}.md`,
+        `---\ntitle: ${title}\nuid: "nfb0020${i}"\nnav: true\nweight: ${i + 2}\n---\n\n# ${title}\n`,
+      ]),
+    ),
+    ".moss/theme/style.css": `@media (max-width: 48rem) {
+  .nav-content .nav-right { display: contents; }
+  .nav-content .nav-left { flex: 1 1 0; min-inline-size: 0; }
+  .nav-content .site-name { white-space: normal; }
+  .nav-content .nav-icons { order: 2; margin-inline-start: 0; }
+  .nav-content .nav-links { order: 3; flex: 1 1 100%; justify-content: flex-start; }
+}
+@media (max-width: 20rem) {
+  .nav-content .nav-left { flex: revert-layer; }
+  .nav-content .nav-icons { margin-inline-start: revert-layer; }
+}
 `,
   },
 };

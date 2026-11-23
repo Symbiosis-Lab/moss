@@ -38,8 +38,10 @@
  * and the name's lines are counted with the stack cleared. Sizes are read on
  * the masthead's inline axis; on a vertical page its physical width is its
  * block size, which the split itself changes. A theme that keeps `.nav-right`
- * a box gets the plain wrap from the split's grid; one that flattens it
- * (`display: contents`) has laid the masthead out itself and is left alone. With JS off nothing here
+ * a box gets the plain wrap from the split's grid. One that flattens it
+ * (`display: contents`) has laid the masthead out itself: above the hamburger
+ * range it gets no split, only `data-nav-flat`, which lets a plain name wrap
+ * as the theme's own white-space says. With JS off nothing here
  * runs: the name is alone on row 1, the links and toggles on row 2. On a
  * phone site.css holds a trail's two rows at the toggles' height, so the
  * split this makes after the first paint moves only the toggles.
@@ -93,11 +95,12 @@ function contentSize(el: HTMLElement, vertical: boolean): number {
 const stack = teardownStack();
 const { on } = stack;
 
-function setMode(el: HTMLElement, mode: "compact" | "split" | "stack" | "scroll" | null): void {
+function setMode(el: HTMLElement, mode: "compact" | "split" | "stack" | "scroll" | "flat" | null): void {
   el.removeAttribute("data-nav-split");
   el.removeAttribute("data-nav-compact");
   el.removeAttribute("data-nav-stack");
   el.removeAttribute("data-nav-scroll");
+  el.removeAttribute("data-nav-flat");
   if (mode) el.setAttribute(`data-nav-${mode}`, "");
 }
 
@@ -191,10 +194,6 @@ export function initNavSplit(): void {
     const vertical = isVertical(navContent!);
     const size = (el: HTMLElement) => inlineSize(el, vertical);
     setMode(navContent!, null);
-    // A theme that flattens `.nav-right` itself has placed the links and
-    // toggles as siblings of the name; the split would only undo that. Read
-    // with no mode set: the split flattens it too.
-    if (getComputedStyle(navRight!).display === "contents") return;
     // ≤20rem the links are the hamburger's overlay panel, not a row: the
     // menu button stands in for them.
     if (hamburger && getComputedStyle(hamburger).display !== "none") {
@@ -211,6 +210,13 @@ export function initNavSplit(): void {
       } else if (nameLines(siteName!, vertical) > 2) {
         setMode(navContent!, "stack");
       }
+      return;
+    }
+    // A theme that flattens `.nav-right` itself has placed the links and
+    // toggles as siblings of the name; the split would only undo that. Read
+    // with no mode set: the split flattens it too.
+    if (getComputedStyle(navRight!).display === "contents") {
+      setMode(navContent!, "flat");
       return;
     }
     const fitsOneRow = (): boolean => {

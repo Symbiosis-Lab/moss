@@ -3106,6 +3106,14 @@ body > header .site-name {
   white-space: normal;
 }
 
+/* A theme that flattens .nav-right (`data-nav-flat`, set by nav-split.ts) lays
+   the masthead out itself; the name only loses the one-line hold, and the
+   theme's own white-space decides whether it wraps. */
+.nav-content[data-nav-flat]:not(:has(.breadcrumb-segment)) .site-name {
+  flex-shrink: 1;
+  min-inline-size: 0;
+}
+
 /* Tight single row (`data-nav-compact`, set by nav-split.ts): the outer and toggle gaps shrink; the link gap is already at its floor. */
 .nav-content[data-nav-compact],
 .nav-content[data-nav-compact] .nav-right {
