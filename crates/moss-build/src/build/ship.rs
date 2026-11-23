@@ -806,6 +806,8 @@ pub(crate) fn prune_orphaned_webp_before_ship(
         .filter(|k| !referenced.contains(k))
         .collect();
     verdict.extend(removed_keys.iter().cloned());
+    // A promised variant nothing references is judged too, so the next build does not make it.
+    verdict.extend(sealed.promised_variants().filter(|k| !referenced.contains(*k)).map(str::to_string));
     sealed.set_pruned_image_outputs(verdict);
     removed_keys
 }
@@ -1166,6 +1168,34 @@ mod tests {
             "a prune that did not run has judged nothing — recording a verdict \
              here carries the blindness into the next build's producers"
         );
+    }
+
+    /// A picture whose embed left while it waited was never encoded, so its
+    /// variants are in no output list; the verdict still names them, or the
+    /// next build encodes them. Removal stays empty: nothing was made.
+    #[test]
+    fn the_verdict_names_a_promised_variant_that_was_never_encoded() {
+        let vault = tempdir().unwrap();
+        let mp = crate::moss_paths::MossPaths::new(vault.path());
+        let stage = mp.staging_dir();
+        std::fs::create_dir_all(&stage).unwrap();
+        std::fs::write(stage.join("index.html"), br#"<img srcset="assets/kept.webp">"#).unwrap();
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        for (url, source) in [
+            ("assets/gone.webp", "assets/gone.png"),
+            ("assets/gone.w800.webp", "assets/gone.png"),
+            ("assets/kept.webp", "assets/kept.png"),
+            ("assets/own.w800.webp", "assets/own.webp"),
+        ] {
+            pending.register_preview_original(url.to_string(), source.to_string());
+        }
+        let mut sealed = pending.seal();
+        let scan = crate::build::media::orphan_prune::scan_stage(&stage, None);
+
+        assert!(prune_orphaned_webp_before_ship(&mp, &mut sealed, &scan).is_empty());
+        let verdict = &sealed.site_hashes_view().pruned_image_outputs;
+        let expected: std::collections::HashSet<String> = ["assets/gone.webp", "assets/gone.w800.webp"].map(String::from).into();
+        assert_eq!(*verdict, expected);
     }
 
     /// Seal a manifest naming exactly `entries`, so a test states what the

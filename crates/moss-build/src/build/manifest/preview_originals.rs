@@ -105,6 +105,15 @@ impl PendingManifest {
 }
 
 impl SealedManifest {
+    /// Every `.webp` URL this generation promised as a variant of a picture,
+    /// leaving out a `.webp` source and its rungs, which are the person's own.
+    pub(crate) fn promised_variants(&self) -> impl Iterator<Item = &str> {
+        self.preview_originals.iter().filter_map(|(url, source)| {
+            let source = source.as_deref()?;
+            (url.ends_with(".webp") && !source.to_ascii_lowercase().ends_with(".webp")).then_some(url.as_str())
+        })
+    }
+
     pub(crate) fn write_preview_originals(&self, generations: &Path) -> std::io::Result<()> {
         let images = self.preview_originals.iter().filter_map(|(url, source)| {
             let source = source.as_ref()?;

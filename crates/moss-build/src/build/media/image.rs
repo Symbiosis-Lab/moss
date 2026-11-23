@@ -2691,7 +2691,6 @@ pub(crate) fn dispatch_image_conversions_at(
         // file under the vault, and the prune keeps only what something
         // points at. See `orphan_prune::suppressed_variants`.
         let heal_suppressed = suppressed_variants_for(&heal_paths, &ctx.staging_dir);
-
         let total_items = ctx.image_items.len();
         // No `Option<String>` is ever a fresh oid here — this is the
         // carry-forward skip path (`rematerialize` relinks a cached blob but
@@ -2702,8 +2701,7 @@ pub(crate) fn dispatch_image_conversions_at(
         let mut to_dispatch: Vec<ImageConversionItem> = Vec::new();
         // The workers this dispatch joined, and the outputs they will stage: registered
         // once those workers are done, so this build's seal holds them.
-        let mut joined_marks: Vec<(String, Arc<ImageFingerprint>)> = Vec::new();
-        let mut joined_keys: Vec<String> = Vec::new();
+        let mut parked: Vec<(String, Arc<ImageFingerprint>, Vec<String>)> = Vec::new();
         let mut current_paths: HashSet<String> = HashSet::new();
         let mut healed_count: usize = 0;
         // Sizes sent back to the worker to be produced; see `redispatch_note`.
@@ -2743,8 +2741,8 @@ pub(crate) fn dispatch_image_conversions_at(
             // megapixel budget of its own — and a heal here would put this dispatch's
             // link on a target that worker is about to link.
             if let Some(mark) = fingerprint.as_ref().and_then(|fp| pending_image_mark(&ctx.source_path, &rel_source, fp)) {
-                joined_marks.push((rel_source, mark));
-                joined_keys.extend(std::iter::once(relative_webp).chain(promised_rungs(item, &mapped, &ctx.rung_plan).into_iter().map(|(_, key)| key)));
+                let keys: Vec<String> = std::iter::once(relative_webp).chain(promised_rungs(item, &mapped, &ctx.rung_plan).into_iter().map(|(_, key)| key)).collect();
+                parked.push((rel_source, mark, keys));
                 continue;
             }
             // The skip candidate's origin: a STRICT stat comparison against the
@@ -2886,6 +2884,18 @@ pub(crate) fn dispatch_image_conversions_at(
                 to_dispatch.push(ImageConversionItem { fingerprint: fingerprint.map(Arc::new), ..item.clone() });
             }
         }
+
+        // A parked picture no page and no file of the folder names leaves the
+        // set, so the retain below ends its worker's mark and the worker skips it.
+        // A feed a worker writes after this scan costs the picture this build only:
+        // the ship-time scan reads the finished stage and keeps it out of its verdict.
+        if !parked.is_empty() {
+            let unnamed = crate::build::media::orphan_prune::unnamed_sources(&ctx.staging_dir, &heal_paths.memo_dir(), Path::new(&ctx.source_path), parked.iter().map(|(source, _, keys)| (source.as_str(), keys.as_slice())));
+            parked.retain(|(source, _, _)| !unnamed.contains(source));
+            current_paths.retain(|path| !unnamed.contains(path));
+        }
+        let joined_marks: Vec<(String, Arc<ImageFingerprint>)> = parked.iter().map(|(source, mark, _)| (source.clone(), mark.clone())).collect();
+        let joined_keys: Vec<String> = parked.into_iter().flat_map(|(_, _, keys)| keys).collect();
 
         // Drop stored fingerprints for images no longer in the current set,
         // so a removed-then-re-added image starts fresh rather than

@@ -7055,6 +7055,13 @@ impl RewriteVault {
         fs::read(self.moss_dir.join("build/staging/pic.webp")).expect("the rebuild staged pic.webp")
     }
 
+    /// Stages `html` as the build's only page, before any worker has made the stage.
+    fn stage_page(&self, html: &str) {
+        let stage = self.moss_dir.join("build/staging");
+        fs::create_dir_all(&stage).unwrap();
+        fs::write(stage.join("index.html"), html).unwrap();
+    }
+
     /// Two solid colours whose PNGs are the same number of bytes, so a rewrite
     /// from one to the other is a same-size rewrite.
     fn write_pic(&self, rgb: [u8; 3]) {
@@ -7438,6 +7445,7 @@ async fn a_second_dispatch_before_the_worker_ran_joins_it_instead_of_spawning_an
     vault.rebuild(true).await;
     let first = vault.webp();
     vault.rewrite_in_the_same_second([30, 30, 200]);
+    vault.stage_page(r#"<img src="pic.webp">"#);
 
     let workers = std::sync::Arc::new(HeldSpawner::default());
     vault.dispatch(vault.collect(), workers.services()).await;
@@ -7507,6 +7515,84 @@ async fn a_worker_finishing_an_image_that_has_left_the_site_does_not_vouch_for_i
 /// encodes, also while it is parked on the core budget.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_image_that_leaves_the_site_while_its_worker_waits_for_a_core_is_not_encoded() {
+    assert!(!parked_pic_encoded_after_rebuild_of(&["other.png"], |_| ()).await, "the worker encoded an image the site no longer lists");
+}
+
+/// The file stays in the folder, so the rebuild still lists it, but no page of
+/// that rebuild names its copies: its worker must not encode it either.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_image_whose_embed_leaves_while_its_worker_waits_for_a_core_is_not_encoded() {
+    assert!(!parked_pic_encoded_after_rebuild_of(&["pic.png", "other.png"], |_| ()).await, "the worker encoded a picture no page names");
+}
+
+/// A stylesheet of the folder still names the copy, and the build may not have
+/// copied that stylesheet into staging yet: the picture is still encoded.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_image_only_a_stylesheet_names_is_still_encoded_when_its_embed_leaves() {
+    for named in ["pic.webp", "pic.png"] {
+        let css = format!("body {{ background: url({named}) }}");
+        assert!(parked_pic_encoded_after_rebuild_of(&["pic.png", "other.png"], |vault| fs::write(vault.root.join("site.css"), &css).unwrap()).await, "a picture the folder's stylesheet names as {named} was not encoded");
+    }
+}
+
+/// Takes a path's permissions away until dropped.
+#[cfg(unix)]
+struct Denied(PathBuf);
+
+#[cfg(unix)]
+impl Denied {
+    fn new(path: PathBuf) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        Denied(path)
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Denied {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+/// A judgement that cannot read every staged page, every folder of the vault
+/// or every file without waiting on the cloud, judges nothing unnamed.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_image_stays_encoded_when_a_staged_page_cannot_be_read() {
+    assert!(parked_pic_encoded_after_rebuild_of(&["pic.png", "other.png"], |vault| Denied::new(vault.moss_dir.join("build/staging/index.html"))).await, "an unreadable staged page was judged not to name the picture");
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_image_stays_encoded_when_a_folder_of_the_vault_cannot_be_read() {
+    let encoded = parked_pic_encoded_after_rebuild_of(&["pic.png", "other.png"], |vault| {
+        fs::create_dir(vault.root.join("notes")).unwrap();
+        Denied::new(vault.root.join("notes"))
+    })
+    .await;
+    assert!(encoded, "an unreadable folder was judged not to name the picture");
+}
+
+/// The cloud placeholder holds no bytes that name the picture: the check is
+/// what keeps the judgement from reading, and so waiting on, the file.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_image_stays_encoded_when_a_stylesheet_is_in_the_cloud() {
+    let encoded = parked_pic_encoded_after_rebuild_of(&["pic.png", "other.png"], |vault| {
+        let css = vault.root.join("site.css");
+        fs::write(&css, "body { color: red }").unwrap();
+        crate::build::icloud::pretend::evicted(&css)
+    })
+    .await;
+    assert!(encoded, "a stylesheet in the cloud was read to judge the picture");
+}
+
+/// Queues pic.png and other.png on a worker parked on the core budget, then
+/// rebuilds with `rebuilt` listed and a staged page naming only other.webp.
+/// `setup` then prepares the vault, and what it returns is held until the
+/// rebuild is done. Says whether pic.webp was encoded.
+async fn parked_pic_encoded_after_rebuild_of<G>(rebuilt: &[&str], setup: impl FnOnce(&RewriteVault) -> G) -> bool {
     use crate::system::folder_session::{CorePool, Encoder};
     let vault = RewriteVault::new();
     vault.write_pic([200, 30, 30]);
@@ -7524,14 +7610,16 @@ async fn an_image_that_leaves_the_site_while_its_worker_waits_for_a_core_is_not_
     });
     // Long enough for the worker to reach the core budget and park on it.
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    let joining = vault.dispatch_joining(vault.collect_of(&["other.png"]), services(), None, None).await;
+    vault.stage_page(r#"<picture><source srcset="other.webp"><img src="other.png"></picture>"#);
+    let _held = setup(&vault);
+    let joining = vault.dispatch_joining(vault.collect_of(rebuilt), services(), None, None).await;
     drop(busy);
     running.await.unwrap();
     joining.await.unwrap().unwrap();
 
     let staged = |name: &str| vault.moss_dir.join("build/staging").join(name).exists();
     assert!(staged("other.webp"), "premise: the image that stayed was encoded");
-    assert!(!staged("pic.webp"), "the worker encoded an image the site no longer lists");
+    staged("pic.webp")
 }
 
 /// The same when the picture that leaves is the site's last: a dispatch with no
