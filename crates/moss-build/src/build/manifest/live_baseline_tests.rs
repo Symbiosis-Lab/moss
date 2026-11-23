@@ -299,6 +299,24 @@ fn the_earliest_landed_record_names_a_pages_uid() {
     assert_eq!(uids["b.md"], "cccc3333");
 }
 
+/// A page published by one record and republished with other bytes by a later
+/// one: both versions count as published from that path.
+#[test]
+fn every_records_bytes_for_a_page_are_kept() {
+    let dir = tmp();
+    let paths = MossPaths::new(dir.path());
+    let mut earlier = record_with_triples("onionpress:abc.onion", &[("a.md", "a/index.html", "aaaa1111")]);
+    earlier.published_at = "2026-09-01T00:00:00Z".into();
+    let mut later = record_with_triples("moss:site-1", &[("a.md", "a/index.html", "aaaa1111")]);
+    later.published_at = "2026-09-02T00:00:00Z".into();
+    later.sources.insert("a.md".into(), "h-edited".into());
+    published_record::save(&paths, &earlier).unwrap();
+    published_record::save(&paths, &later).unwrap();
+
+    let Baseline::Present(live) = load(&paths) else { panic!("readable") };
+    assert_eq!(live.hashes["a.md"], ["h".to_string(), "h-edited".to_string()].into_iter().collect());
+}
+
 /// Until the migration has run, the old file is the only baseline a folder
 /// published by an earlier moss has — and ignoring it would miss every rename
 /// made since, which 404s for good rather than recovering on the next build.

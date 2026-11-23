@@ -11,9 +11,10 @@
 //! The two things are: record what went live, and **recompute** what is left to
 //! publish. Recompute, not discard — a landed publish moves one of the change
 //! set's two inputs, so it owes the same re-derivation a seal does. Recording
-//! includes writing each published page's uid into the page itself: a build
-//! never writes a source, so the publish is the first moment a uid is anchored
-//! to something outside the folder.
+//! includes writing the uid into a published page whose frontmatter has none: a
+//! build never writes a source, so the publish is the first moment a uid is
+//! anchored to something outside the folder. A uid already in a file is never
+//! changed.
 //!
 //! **Call only once the publish is known to have landed.** Each path has its
 //! own proof of that — the server's commit returning 200, or the plugin
@@ -225,10 +226,13 @@ struct Stamps {
     failed: HashMap<String, String>,
 }
 
-/// Write each published page's uid into its frontmatter, creating the block
-/// when the note has none, so from now on the uid moves with the file through
-/// renames. The uid is the one the sealed generation was built under, so the
-/// file and its live comment thread agree.
+/// Write the uid each published page was built under into its frontmatter when
+/// it names none, creating the block if needed, so from then on the uid moves
+/// with the file through renames.
+///
+/// A uid already in a file is the author's and is never changed, even where the
+/// page was built under another (a duplicated note's copy): the record keeps
+/// that one, and the copy is built under it again (`uid_dedup`).
 ///
 /// Only a file that still holds the bytes that were published is stamped: one
 /// edited since the build may carry a newer uid, or an edit the record must
@@ -268,7 +272,7 @@ async fn stamp_published_uids(folder: &Path, sealed: &SealedManifest) -> Stamps 
 
 /// Write `uid` into the page at `source_path` if it still holds the published
 /// bytes: the stamped bytes' hash, or `None` when the page was edited since
-/// the build or already names the uid.
+/// the build or already names a uid.
 fn stamp_one(root: &Path, source_path: &str, uid: &str, published_hash: &str) -> Result<Option<String>, String> {
     let hash = |b: &[u8]| crate::build::render::blocking::source_metadata(None, b).hash;
     let written = crate::build::cloud_readiness::rewrite_input(&on_disk(root, source_path), |bytes| {
@@ -276,7 +280,7 @@ fn stamp_one(root: &Path, source_path: &str, uid: &str, published_hash: &str) ->
             return Ok(None);
         }
         let before = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
-        if crate::build::markdown::parse_typed_frontmatter(before).uid.as_deref() == Some(uid) {
+        if crate::build::markdown::parse_typed_frontmatter(before).uid.is_some() {
             return Ok(None);
         }
         let set = moss_core::frontmatter::FieldEdit::Set { key: "uid".into(), value: serde_yaml::Value::String(uid.to_string()) };

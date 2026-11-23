@@ -44,6 +44,7 @@ All notable changes to moss will be documented here.
 - A folder whose home page types its order (`sort: [first, second]`) lists its children in that order in every style, subfolders included. Rows used to lift the subfolders above the pages and regroup the pages under year headings; `children_group: year` still asks for the headings, and puts the subfolders back above them.
 - Security: a program a plugin runs no longer inherits moss's whole environment. It gets the path, home, user, locale, temp directory, proxy and certificate settings and what the plugin sets itself, so an SSH agent (`SSH_AUTH_SOCK`), tokens and other credentials you have exported stay out of its reach.
 - A site with a long name keeps its header still while the page loads: the search, language and theme buttons sit at the end of the first line from the first paint, and the name wraps beside them. The header used to rearrange itself once the page's script ran, moving everything below it.
+- A publish never changes a `uid:` already in a page. A duplicated note's copy used to have the original's uid replaced in its file; it now keeps it, and is published under a uid of its own that it keeps when renamed unedited.
 
 ### Removed
 

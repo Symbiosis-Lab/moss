@@ -8,7 +8,7 @@
 use super::*;
 use crate::build::manifest::live_baseline::{Baseline, LiveBaseline, LiveEntry, Unreadable};
 use crate::build::types::ParsedDocument;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Build a `ParsedDocument` carrying only the fields the resolver reads.
 fn doc(source_path: &str, uid: &str, date: Option<&str>) -> ParsedDocument {
@@ -32,6 +32,7 @@ fn deployed(entries: &[(&str, &str)]) -> Baseline {
                 title: String::new(),
             })
             .collect(),
+        hashes: HashMap::new(),
     })
 }
 
@@ -59,7 +60,7 @@ fn resolve_fresh(
     built_under: impl Fn(&str, &str) -> bool,
 ) -> UidResolution {
     let baseline = std::cell::OnceCell::new();
-    resolve_duplicate_uids(documents, || baseline.get_or_init(load), built_under)
+    resolve_duplicate_uids(documents, || baseline.get_or_init(load), built_under, |_| None)
 }
 
 /// Write a markdown file with the given uid + date frontmatter into `root`.
@@ -433,6 +434,46 @@ fn ambiguous_basename_falls_back_to_the_heuristic_and_flags_the_live_risk() {
 // ---------------------------------------------------------------
 // The user-facing surface
 // ---------------------------------------------------------------
+
+/// The original and a copy of it, both published (the copy under `copy_uid`,
+/// from `copy.md`, whose bytes the record holds as `h-copy`), the copy since
+/// renamed to `moved.md`; and the uid the copy is now built under, given the
+/// renamed file's bytes hash to `moved_hash` and the record also lists `extra`.
+fn copy_renamed(moved_hash: &str, extra: &[(&str, &str, &str)]) -> String {
+    let mut docs = vec![doc("a.md", "aaaa1111", Some("2026-01-01")), doc("moved.md", "aaaa1111", Some("2026-01-01"))];
+    let Baseline::Present(mut live) = deployed(&[("a.md", "aaaa1111"), ("copy.md", "cccc3333")]) else { unreachable!() };
+    live.hashes = HashMap::from([("a.md".into(), HashSet::from(["h-a".into()])), ("copy.md".into(), HashSet::from(["h-copy".into()]))]);
+    for (path, uid, hash) in extra {
+        live.entries.push(LiveEntry { uid: (*uid).into(), url: format!("{path}/"), source_path: (*path).into(), title: String::new() });
+        live.hashes.insert((*path).into(), HashSet::from([(*hash).into()]));
+    }
+    let baseline = Baseline::Present(live);
+    let hash = moved_hash.to_string();
+    resolve_duplicate_uids(&mut docs, || &baseline, |_, _| false, |path| (path == "moved.md").then(|| hash.clone()));
+    assert_eq!(docs[0].uid.as_deref(), Some("aaaa1111"), "the published original keeps its uid");
+    docs[1].uid.clone().unwrap()
+}
+
+/// A copy keeps the uid it was duplicated with in its file, so after a rename
+/// only its unchanged bytes lead back to the uid it was published under.
+#[test]
+fn a_renamed_copy_keeps_the_uid_it_was_published_under_by_its_exact_bytes() {
+    assert_eq!(copy_renamed("h-copy", &[]), "cccc3333");
+}
+
+#[test]
+fn a_renamed_copy_edited_since_its_publish_gets_a_new_uid() {
+    let uid = copy_renamed("h-edited", &[]);
+    assert!(uid != "cccc3333" && uid != "aaaa1111", "{uid}");
+}
+
+/// Two gone pages published with the same bytes under different uids: the
+/// bytes cannot say which one the copy was, so neither is taken.
+#[test]
+fn a_renamed_copy_matching_two_published_uids_takes_neither() {
+    let uid = copy_renamed("h-copy", &[("other.md", "dddd4444", "h-copy")]);
+    assert!(!["cccc3333", "dddd4444", "aaaa1111"].contains(&uid.as_str()), "{uid}");
+}
 
 /// Shorthand for advisory-shape tests.
 fn reassignment(keeper: &str, dup: &str, live_thread_at_risk: bool) -> UidReassignment {

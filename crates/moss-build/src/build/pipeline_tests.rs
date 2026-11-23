@@ -6700,24 +6700,53 @@ fn every_page_a_publish_built_reads_back_as_served_or_held_back() {
     assert_eq!(last_publish_state(&dir, "footer.md"), PublishState::Absent, "a slot file makes no page");
 }
 
-/// A duplicated note carries the original's uid; the copy is built under a new
-/// one, and the publish that puts it online replaces the copied uid in its file.
-#[test]
-fn a_duplicate_is_published_under_its_own_uid_and_its_file_follows() {
-    let (dir, _cleanup) = create_test_dir();
+/// Publish a note, then a copy of it made by duplicating the file: the copy
+/// carries the original's uid. Returns the copy's bytes and the uid it was
+/// published under.
+fn publish_a_duplicate(dir: &Path) -> (String, String) {
     fs::write(dir.join("index.md"), "---\ntitle: Home\n---\nHi").unwrap();
     fs::write(dir.join("a.md"), "---\ntitle: A\nuid: \"aaaa1111\"\n---\nOriginal").unwrap();
     let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
-    publish(&dir, &sealed);
-    fs::write(dir.join("copy.md"), "---\ntitle: Copy\nuid: \"aaaa1111\"\n---\nCopied").unwrap();
-
+    publish(dir, &sealed);
+    let copied = "---\ntitle: Copy\nuid: \"aaaa1111\"\n---\nCopied".to_string();
+    fs::write(dir.join("copy.md"), &copied).unwrap();
     let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
-    publish(&dir, &sealed);
+    publish(dir, &sealed);
+    let built = built_uid(&sealed, "copy.md");
+    (copied, built)
+}
 
-    let file_uid = |name: &str| crate::build::markdown::parse_typed_frontmatter(&fs::read_to_string(dir.join(name)).unwrap()).uid;
-    assert_eq!(file_uid("a.md").as_deref(), Some("aaaa1111"), "the published original keeps its uid");
-    let copy = file_uid("copy.md").expect("the copy keeps a uid");
-    assert_ne!(copy, "aaaa1111", "the copy's file now holds the uid it was published under");
+fn built_uid(sealed: &crate::build::manifest::SealedManifest, source: &str) -> String {
+    sealed.published_uids().find(|(s, _)| *s == source).and_then(|(_, page)| page.uid.clone()).expect(source)
+}
+
+/// The copy is published under a uid of its own, and its file keeps the uid it
+/// was copied with: a uid already in a file is never changed.
+#[test]
+fn a_duplicate_is_published_under_its_own_uid_and_its_file_is_left_alone() {
+    let (dir, _cleanup) = create_test_dir();
+    let (copied, built) = publish_a_duplicate(&dir);
+
+    assert_ne!(built, "aaaa1111", "the copy is published under its own uid");
+    assert_eq!(fs::read_to_string(dir.join("copy.md")).unwrap(), copied);
+    let original = crate::build::markdown::parse_typed_frontmatter(&fs::read_to_string(dir.join("a.md")).unwrap()).uid;
+    assert_eq!(original.as_deref(), Some("aaaa1111"));
+
+    let (_, _, _, rebuilt) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+    assert_eq!(built_uid(&rebuilt, "copy.md"), built, "the next build keeps the copy's published uid");
+}
+
+/// Renaming the copy keeps the uid it was published under: its file still
+/// names the original's, and its unchanged bytes match the publish record.
+#[test]
+fn a_renamed_duplicate_keeps_its_published_uid() {
+    let (dir, _cleanup) = create_test_dir();
+    let (_, built) = publish_a_duplicate(&dir);
+    fs::rename(dir.join("copy.md"), dir.join("moved.md")).unwrap();
+
+    let (_, _, _, rebuilt) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+    assert_eq!(built_uid(&rebuilt, "moved.md"), built);
+    assert_eq!(built_uid(&rebuilt, "a.md"), "aaaa1111");
 }
 
 /// An edit made between the build and its publish was not published: the

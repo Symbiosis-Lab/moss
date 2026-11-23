@@ -114,7 +114,8 @@ async fn a_publish_of_a_site_with_no_tracked_pages_leaves_a_baseline() {
     let history = crate::deploy::history::HistoryStore::at(history_dir.path().to_path_buf());
     record_what_is_live(&mp, &manifest, TARGET, &history).await;
 
-    assert_eq!(live_baseline::load(&mp), Baseline::Present(live_baseline::LiveBaseline::default()));
+    let Baseline::Present(live) = live_baseline::load(&mp) else { panic!("the record reads as a baseline") };
+    assert!(live.entries.is_empty(), "{live:?}");
 }
 
 /// The article map is regenerable build output, so a build can legitimately

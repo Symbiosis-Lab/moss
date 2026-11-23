@@ -6,9 +6,10 @@
 //! A uid is the join key for things outside the folder (below). None of those
 //! exist until the page is published, so a build never writes a uid into a
 //! source file. The publish that first puts a page online writes the uid it was
-//! built under into the page's frontmatter (`deploy::landed`), creating the
-//! block if the note has none, and from then on the uid travels with the file
-//! through renames. Until then a page is built under, in order:
+//! built under into the page's frontmatter (`deploy::landed`) when the note
+//! names none, and from then on the uid travels with the file through renames;
+//! a uid already in a file is never changed. Until then a page is built under,
+//! in order:
 //!
 //! 1. the `uid:` in its own frontmatter;
 //! 2. the uid the publish record says was live from this source path, unless
@@ -57,6 +58,12 @@
 //! neither file published, or both under one uid — does the date/path
 //! heuristic decide, and only when the record could be READ at all.
 //!
+//! The copy that loses keeps the contested uid in its file, so every build
+//! reassigns it again. Its uid is derived from its path, which stays put until
+//! the copy is renamed; then the one recorded for a source path gone from the
+//! folder whose published bytes are exactly the copy's is the uid it was
+//! published under, and it keeps that ([`moved_from`]).
+//!
 //! ## Picking a keeper and reporting the risk are separate questions
 //!
 //! The two joins are not the same evidence at different confidences, and
@@ -85,7 +92,7 @@
 //! user (`progress::make_duplicate_uid_advisory`); a silent identity change is
 //! how this class of bug stays invisible.
 
-use crate::build::manifest::live_baseline::{Baseline, Unreadable};
+use crate::build::manifest::live_baseline::{Baseline, LiveBaseline, Unreadable};
 use crate::build::types::ParsedDocument;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
@@ -142,8 +149,8 @@ pub(crate) fn assign_note_ids(
     let load = std::cell::Cell::new(Some(load_deployed));
     let deployed = || baseline.get_or_init(|| load.take().map_or(Baseline::Absent, |load| load()));
     let mut taken: HashSet<String> = documents.iter().filter_map(|doc| doc.uid.clone()).collect();
-    assign_missing(documents, &mut taken, || published_uids(deployed()), source_hash);
-    resolve_duplicate_uids(documents, deployed, built_under)
+    assign_missing(documents, &mut taken, || published_uids(deployed()), &source_hash);
+    resolve_duplicate_uids(documents, deployed, built_under, source_hash)
 }
 
 /// The publish record's `source path → uid`, empty when nothing is published
@@ -329,6 +336,7 @@ pub(crate) fn resolve_duplicate_uids<'a>(
     documents: &mut [ParsedDocument],
     load_deployed: impl FnOnce() -> &'a Baseline,
     built_under: impl Fn(&str, &str) -> bool,
+    source_hash: impl Fn(&str) -> Option<String>,
 ) -> UidResolution {
     // BTreeMap, not HashMap: collision groups are processed in a stable uid
     // order so a multi-collision build produces the same result every run.
@@ -478,13 +486,21 @@ pub(crate) fn resolve_duplicate_uids<'a>(
             // Derived from the path and the contested uid, skipping any uid a
             // page already carries, so every machine reassigns the same one.
             let in_use = |candidate: &str| documents.iter().any(|d| d.uid.as_deref() == Some(candidate));
-            let new_uid = (0u32..)
-                .map(|attempt| crate::build::markdown::generate_uid(&reassigned_path, &format!("{uid}\0{attempt}")))
-                .find(|candidate| !in_use(candidate))
-                .expect("an unused uid within 2^32 attempts");
+            let recorded = match baseline {
+                Baseline::Present(live) => source_hash(&reassigned_path)
+                    .and_then(|hash| moved_from(live, &hash, documents))
+                    .filter(|recorded| !in_use(recorded)),
+                Baseline::Absent | Baseline::Unreadable(_) => None,
+            };
+            let new_uid = recorded.unwrap_or_else(|| {
+                (0u32..)
+                    .map(|attempt| crate::build::markdown::generate_uid(&reassigned_path, &format!("{uid}\0{attempt}")))
+                    .find(|candidate| !in_use(candidate))
+                    .expect("an unused uid within 2^32 attempts")
+            });
             documents[idx].uid = Some(new_uid.clone());
             documents[idx].uid_derived = true;
-            // Built under the same new uid until a publish stamps it: told once.
+            // Built under the same new uid by the last build: told already.
             if built_under(&reassigned_path, &new_uid) {
                 continue;
             }
@@ -519,6 +535,27 @@ pub(crate) fn resolve_duplicate_uids<'a>(
 /// Lower-cased final path component — the rename-tolerant join key for the
 /// deployed-snapshot fallback (case-insensitive because APFS is, and a
 /// case-only rename is one of the actions the fallback exists to survive).
+/// The uid a copy was published under before it was renamed: the one recorded
+/// for the single source path that is gone from the folder and whose recorded
+/// bytes are exactly `hash`. A copy keeps the uid it was duplicated with in its
+/// file, so after a rename only its bytes can lead back to its published uid.
+/// `None` when nothing matches or the matches were published under different
+/// uids; an edited copy matches nothing.
+fn moved_from(live: &LiveBaseline, hash: &str, documents: &[ParsedDocument]) -> Option<String> {
+    let present: HashSet<&str> = documents.iter().filter_map(|d| d.source_path.as_deref()).collect();
+    let mut uids = live
+        .entries
+        .iter()
+        .filter(|e| !present.contains(e.source_path.as_str()) && live.hashes.get(&e.source_path).is_some_and(|h| h.contains(hash)))
+        .map(|e| e.uid.as_str())
+        .collect::<HashSet<_>>()
+        .into_iter();
+    match (uids.next(), uids.next()) {
+        (Some(uid), None) => Some(uid.to_string()),
+        _ => None,
+    }
+}
+
 fn basename_lower(path: &str) -> Option<String> {
     Path::new(path)
         .file_name()

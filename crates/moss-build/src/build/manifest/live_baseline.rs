@@ -72,6 +72,9 @@ pub struct LiveBaseline {
     /// In a deterministic order, whichever record was read first: as loaded
     /// ([`load`]), the earliest-landed record's entries come first.
     pub entries: Vec<LiveEntry>,
+    /// Source path → the hash of every version of its bytes a record holds as
+    /// published. Only [`load`] fills it, for duplicate-uid resolution.
+    pub hashes: HashMap<String, HashSet<String>>,
 }
 
 /// Why a baseline that exists could not be turned into entries.
@@ -280,7 +283,11 @@ pub fn load(paths: &MossPaths) -> Baseline {
     });
 
     let mut entries: Vec<LiveEntry> = Vec::new();
+    let mut hashes: HashMap<String, HashSet<String>> = HashMap::new();
     for record in &records {
+        for (path, hash) in &record.sources {
+            hashes.entry(path.clone()).or_default().insert(hash.clone());
+        }
         match record_facts(record) {
             RecordFacts::Entries(mut e) => entries.append(&mut e),
             // A record that contradicts itself is unusable for the same
@@ -323,7 +330,7 @@ pub fn load(paths: &MossPaths) -> Baseline {
     if entries.is_empty() && records.is_empty() {
         return Baseline::Absent;
     }
-    Baseline::Present(LiveBaseline { entries })
+    Baseline::Present(LiveBaseline { entries, hashes })
 }
 
 /// Every publish record on disk, or why none of them could be trusted.
@@ -455,7 +462,7 @@ pub fn from_sealed(sealed: &crate::build::manifest::SealedManifest) -> LiveBasel
 
 fn sorted(mut entries: Vec<LiveEntry>) -> LiveBaseline {
     entries.sort_by(|a, b| a.url.cmp(&b.url).then_with(|| a.uid.cmp(&b.uid)));
-    LiveBaseline { entries }
+    LiveBaseline { entries, hashes: HashMap::new() }
 }
 
 /// Two independent one-time upgrades, both run on every build because neither
