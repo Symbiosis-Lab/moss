@@ -148,6 +148,45 @@ for (const scheme of ['light', 'dark'] as const) {
         await page.screenshot({ path: `target/test-tmp/subscribe-questions-fail-${scheme}-${width}.png`, fullPage: true });
       });
 
+      test('the service refusing the address marks the email field and returns focus to it', async ({ page, context }) => {
+        await serve(context, json(400, { error: 'any wording', code: 'invalid_email' }));
+        await page.goto(`${ORIGIN}/`, { waitUntil: 'load' });
+        await fill(page);
+        await page.locator('.moss-subscribe-form button[type=submit]').click();
+        const email = page.locator('.moss-subscribe-form input[type=email]');
+        await expect(email).toHaveAttribute('aria-invalid', 'true');
+        await expect(email).toBeFocused();
+        await expect(page.locator('[data-field="email"] .moss-form__error')).toBeVisible();
+        await expect(page.locator('[data-field="email"] .moss-form__error')).not.toBeEmpty();
+        expect(await state(page)).toBe('idle');
+        await page.screenshot({ path: `target/test-tmp/subscribe-questions-refused-email-${scheme}-${width}.png`, fullPage: true });
+      });
+
+      test('a malformed address is marked on its field and nothing is sent', async ({ page, context }) => {
+        const posts = await serve(context, json(200, {}));
+        await page.goto(`${ORIGIN}/`, { waitUntil: 'load' });
+        await fill(page);
+        await page.locator('.moss-subscribe-form input[type=email]').fill('not-an-address');
+        await page.locator('.moss-subscribe-form button[type=submit]').click();
+        await expect(page.locator('.moss-subscribe-form input[type=email]')).toHaveAttribute('aria-invalid', 'true');
+        await expect(page.locator('[data-field="email"] .moss-form__error')).toBeVisible();
+        expect(posts).toHaveLength(0);
+      });
+
+      test('a send the service never answers gives up after 30 s and shows the error line', async ({ page, context }) => {
+        await page.clock.install();
+        await serve(context, () => new Promise<void>(() => {}));
+        await page.goto(`${ORIGIN}/`, { waitUntil: 'load' });
+        await fill(page);
+        await page.locator('.moss-subscribe-form button[type=submit]').click();
+        await expect.poll(() => state(page)).toBe('loading');
+        await page.clock.runFor(29_000);
+        expect(await state(page)).toBe('loading');
+        await page.clock.runFor(2_000);
+        await expect.poll(() => state(page)).toBe('error');
+        await expect(page.locator('.moss-subscribe-status')).toBeVisible();
+      });
+
       test("the English edition's form posts its own scope and the questions published for it", async ({ page, context }) => {
         const posts = await serve(context, json(200, { subscribed: true, confirmationSent: true }));
         await page.goto(`${ORIGIN}/en/`, { waitUntil: 'load' });
