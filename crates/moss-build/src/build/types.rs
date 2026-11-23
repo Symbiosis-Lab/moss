@@ -1013,15 +1013,11 @@ impl ParsedDocument {
 /// folder pages generated after. The site root is not such a home: the whole
 /// site's switch is `[site] search_engines`.
 pub(crate) fn mark_hidden_folders(docs: &mut [ParsedDocument]) {
-    let homes: Vec<String> = docs.iter()
-        .filter(|doc| doc.kind == moss_core::PageKind::Folder && doc.search_engines == Some(false))
-        .filter_map(|doc| doc.url_path.strip_suffix("/index.html").map(|dir| format!("{dir}/")))
-        .collect();
-    for doc in docs.iter_mut() {
-        doc.hidden_home = homes.iter()
-            .filter(|home| doc.url_path.strip_prefix(home.as_str()).is_some_and(|rest| rest != "index.html"))
-            .max_by_key(|home| home.len())
-            .cloned();
+    let homes = moss_core::page::inherit::hidden_homes(
+        docs.iter().map(|d| (d.url_path.as_str(), d.kind == moss_core::PageKind::Folder && d.search_engines == Some(false))),
+    );
+    for (doc, home) in docs.iter_mut().zip(homes) {
+        doc.hidden_home = home;
     }
 }
 

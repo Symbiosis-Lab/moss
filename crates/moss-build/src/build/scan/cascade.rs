@@ -43,65 +43,18 @@ const CASCADE_KEYS: &[&str] = &[
 /// This runs as a pre-processing pass after all documents are parsed and before
 /// HTML generation, modifying the `Vec<ParsedDocument>` in place.
 pub(crate) fn apply_cascade(docs: &mut Vec<ParsedDocument>, fields: &[moss_core::fields::FieldDecl]) {
-    // Collect cascade sources: (folder_prefix, source page, cascade_map)
-    let cascades: Vec<(String, String, std::collections::BTreeMap<String, serde_yaml::Value>)> = {
-        let mut v: Vec<_> = docs
-            .iter()
-            .filter_map(|doc| {
-                doc.cascade.as_ref().map(|c| {
-                    report_cascade_values(doc, c, fields);
-                    let page = doc.source_path.as_deref().unwrap_or(doc.url_path.as_str()).to_string();
-                    let folder_prefix = if doc.url_path == "index.html" {
-                        // Root index cascades to everything
-                        String::new()
-                    } else if doc.url_path.ends_with("/index.html") {
-                        // Folder index cascades to its subtree
-                        doc.url_path
-                            .trim_end_matches("index.html")
-                            .to_string()
-                    } else {
-                        // Non-index files don't have descendants — skip them
-                        // by using a prefix that won't match anything useful.
-                        // Actually, we just won't emit a cascade for non-index pages.
-                        return None;
-                    };
-                    Some((folder_prefix, page, c.clone()))
-                })?
-            })
-            .collect();
-
-        // Deepest first: the first cascade to set a value keeps it.
-        v.sort_by_key(|(prefix, _, _)| std::cmp::Reverse(prefix.matches('/').count()));
-        v
-    };
-
-    // Apply each cascade to matching descendants
-    for (prefix, page, cascade) in &cascades {
-        for doc in docs.iter_mut() {
-            // A doc is a descendant if its url_path starts with the folder prefix.
-            // For root cascade (prefix == ""), every doc is a descendant.
-            let is_descendant = if prefix.is_empty() {
-                true
-            } else {
-                doc.url_path.starts_with(prefix)
-            };
-
-            if !is_descendant {
-                continue;
-            }
-
-            // Don't cascade to the source document itself
-            let is_self = if prefix.is_empty() {
-                doc.url_path == "index.html"
-            } else {
-                doc.url_path == format!("{}index.html", prefix)
-            };
-
-            if is_self {
-                continue;
-            }
-
-            apply_cascade_values(doc, page, &format!("/{prefix}"), cascade, fields);
+    for doc in docs.iter() {
+        if let Some(c) = &doc.cascade {
+            report_cascade_values(doc, c, fields);
+        }
+    }
+    let plan = moss_core::page::inherit::cascade_plan(docs.iter().map(|d| (d.url_path.as_str(), d.cascade.is_some())));
+    for step in plan {
+        let source = &docs[step.source];
+        let page = source.source_path.as_deref().unwrap_or(source.url_path.as_str()).to_string();
+        let Some(cascade) = source.cascade.clone() else { continue };
+        for i in step.targets {
+            apply_cascade_values(&mut docs[i], &page, &step.from, &cascade, fields);
         }
     }
 
