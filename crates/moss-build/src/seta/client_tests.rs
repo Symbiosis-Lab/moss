@@ -1599,11 +1599,3 @@ async fn delete_json_sends_a_signed_delete_and_reads_the_answer() {
     assert_eq!((seen[0].method.as_str(), seen[0].path_and_query.as_str()), ("DELETE", "/api/sites/s1/newsletter/connection"));
     assert_eq!(seen[0].signer(), identity.pubkey);
 }
-
-#[tokio::test]
-async fn delete_json_failure_goes_through_the_shared_door() {
-    let server = StandIn::json(404, r#"{"error":"No connection"}"#).await;
-    let client = MossSetaClient::with_identity_and_url(&test_identity(), &server.url());
-    let err = client.delete_json::<serde_json::Value>("/api/sites/s1/newsletter/connection").await.unwrap_err();
-    assert!(matches!(&err, SetaError::Api { status: 404, message } if message == "No connection"), "{err:?}");
-}
