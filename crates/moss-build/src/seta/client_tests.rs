@@ -1587,3 +1587,23 @@ fn an_error_with_a_detail_keeps_it() {
     assert_eq!(extract_api_error_message(body), "key_shared: this folder's key also publishes second-site");
     assert_eq!(extract_api_error_message(r#"{"error":"forbidden"}"#), "forbidden");
 }
+
+#[tokio::test]
+async fn delete_json_sends_a_signed_delete_and_reads_the_answer() {
+    let server = StandIn::json(200, r#"{"removed":true}"#).await;
+    let identity = test_identity();
+    let client = MossSetaClient::with_identity_and_url(&identity, &server.url());
+    let answer: serde_json::Value = client.delete_json("/api/sites/s1/newsletter/connection").await.unwrap();
+    assert_eq!(answer["removed"], true);
+    let seen = server.requests();
+    assert_eq!((seen[0].method.as_str(), seen[0].path_and_query.as_str()), ("DELETE", "/api/sites/s1/newsletter/connection"));
+    assert_eq!(seen[0].signer(), identity.pubkey);
+}
+
+#[tokio::test]
+async fn delete_json_failure_goes_through_the_shared_door() {
+    let server = StandIn::json(404, r#"{"error":"No connection"}"#).await;
+    let client = MossSetaClient::with_identity_and_url(&test_identity(), &server.url());
+    let err = client.delete_json::<serde_json::Value>("/api/sites/s1/newsletter/connection").await.unwrap_err();
+    assert!(matches!(&err, SetaError::Api { status: 404, message } if message == "No connection"), "{err:?}");
+}

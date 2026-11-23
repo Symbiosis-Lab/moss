@@ -885,6 +885,11 @@ impl MossSetaClient {
         self.send_json(self.signed_json(Method::POST, path, body)?).await
     }
 
+    /// Signed DELETE → deserialize JSON response.
+    pub async fn delete_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, SetaError> {
+        self.send_json(self.signed(Method::DELETE, path, Bytes::new())?).await
+    }
+
     // ========== Auth Endpoints ==========
 
     /// Request a sign-in link. `lang` (a BCP 47-shaped tag such as
