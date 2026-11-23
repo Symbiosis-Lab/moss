@@ -62,6 +62,30 @@ pub fn normalize_separators(s: &str) -> String {
     s.replace('\\', "/")
 }
 
+/// Two names in composed (NFC) order, falling back to their bytes when they
+/// compose alike. Every walk and list whose order reaches the output sorts by
+/// this, so a folder reads in one order on every machine whatever its disk
+/// lists first and however its sync client spelled the names.
+pub fn nfc_order(a: &str, b: &str) -> std::cmp::Ordering {
+    a.nfc().cmp(b.nfc()).then_with(|| a.cmp(b))
+}
+
+/// Two `/`-separated paths in the order a depth-first walk of the folder
+/// visits them, siblings in [`nfc_order`]: a folder's contents come right
+/// after its name, so `a/x.md` precedes `a-b.md` although `-` sorts before `/`.
+pub fn walk_order(a: &str, b: &str) -> std::cmp::Ordering {
+    let (mut a, mut b) = (a.split('/'), b.split('/'));
+    loop {
+        match (a.next(), b.next()) {
+            (Some(x), Some(y)) => match nfc_order(x, y) {
+                std::cmp::Ordering::Equal => continue,
+                other => return other,
+            },
+            (x, y) => return x.is_some().cmp(&y.is_some()),
+        }
+    }
+}
+
 /// Apply slug rules to every separator-delimited segment of a path.
 ///
 /// `News/Sub Section` → `news/sub-section`. Backslash separators are normalized
@@ -90,6 +114,14 @@ pub fn slugify_url_override(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn walk_order_visits_a_folder_right_after_its_name() {
+        let mut paths = vec!["a-b.md", "b.md", "a/x.md", "a.md", "a/b/c.md", "\u{e9}.md", "f.md"];
+        paths.sort_by(|a, b| walk_order(a, b));
+        assert_eq!(paths, ["a/b/c.md", "a/x.md", "a-b.md", "a.md", "b.md", "f.md", "\u{e9}.md"]);
+        assert_eq!(walk_order("e\u{301}/x.md", "f.md"), std::cmp::Ordering::Greater);
+    }
 
     #[test]
     fn nfd_and_nfc_spellings_give_the_same_slug() {

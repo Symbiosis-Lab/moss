@@ -544,6 +544,15 @@ pub(in crate::resolve) fn lower_embed(
     Some(format!("<!-- {marker_prefix}:{target_path}{query} -->"))
 }
 
+/// `content` with its frontmatter's `[[wikilinks]]` resolved to source paths
+/// and its body as written: the frontmatter every page fact is read from.
+pub fn with_frontmatter_links_resolved(content: &str, graph: &ContentGraph, source_path: &str) -> String {
+    match split_frontmatter(content) {
+        (Some(fm), body) => format!("{}{}", resolve_frontmatter_wikilinks(fm, graph, source_path).content, body),
+        (None, _) => content.to_string(),
+    }
+}
+
 pub struct FrontmatterResolveResult {
     /// The frontmatter text with `[[wikilinks]]` replaced by resolved paths.
     pub content: String,

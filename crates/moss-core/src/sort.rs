@@ -124,6 +124,49 @@ pub fn resolve_folder_sort<D: SortableDoc>(
     resolve_folder_sort_with_undated(folder, children).0
 }
 
+/// The name an explicit `sort: [a, b]` matches a page by: its clean stem, or
+/// for a folder home the folder's own directory name as written on disk
+/// (`京都・鎌倉`, not its slug), falling back to the url segment and then the stem.
+pub fn order_match_name<'a>(is_folder: bool, source_path: Option<&'a str>, url_path: &'a str, clean_stem: &'a str) -> &'a str {
+    if !is_folder {
+        return clean_stem;
+    }
+    source_path
+        .and_then(|p| p.rsplit('/').nth(1))
+        .or_else(|| url_path.trim_end_matches("index.html").trim_end_matches('/').rsplit('/').next())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(clean_stem)
+}
+
+/// Each folder home in `docs` (by index), the sort its direct children
+/// resolve to, and the children [`resolve_folder_sort_with_undated`] reports
+/// as undated. A direct child is a page or a subfolder's home one level
+/// below the folder; the root's home (`index.html`) holds the top level.
+pub fn direct_children_sorts<D: SortableDoc>(docs: &[D]) -> Vec<(usize, ResolvedSort, Vec<&D>)> {
+    let is_home = |url: &str| url == "index.html" || url.ends_with("/index.html");
+    docs.iter()
+        .enumerate()
+        .filter(|(_, d)| is_home(d.url_path()))
+        .map(|(fi, folder)| {
+            let prefix = folder.url_path().trim_end_matches("index.html");
+            let children: Vec<&D> = docs
+                .iter()
+                .enumerate()
+                .filter(|&(i, d)| {
+                    i != fi
+                        && d.url_path().strip_prefix(prefix).is_some_and(|rem| {
+                            let name = rem.trim_end_matches("/index.html").trim_end_matches('/');
+                            !name.is_empty() && !name.contains('/')
+                        })
+                })
+                .map(|(_, d)| d)
+                .collect();
+            let (resolved, undated) = resolve_folder_sort_with_undated(folder, &children);
+            (fi, resolved, undated)
+        })
+        .collect()
+}
+
 /// [`resolve_folder_sort`] plus the children whose missing date made an
 /// undeclared sort fall back to title order: empty unless no `sort:` is
 /// declared, no child has a weight, at least one child is dated (a folder of

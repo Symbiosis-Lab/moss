@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `ast::promote_wide_banner` and `ast::extract_hero::BANNER_MIN_WIDTH`: after URL resolution, a page body that opens with one wordless picture directly above its only `# Heading` gets that picture as the `Shortcode::Hero` the `:::hero` around it parses to, when the asset snapshot gives it as wider than tall and at least 1200 pixels wide. It returns the picture line's byte range, and `heading::body_without_banner` cuts it so the title rules read the body the article holds. `page::render_page` and `source_edit::compute_heading_state_inner` know no picture sizes, so they keep such a picture in the body and read the title rules over the body as written.
+- `page::site_page::site_pages` derives every page's whole-site facts from the site's texts and its `SiteBundle`: each page's URL, language, order, label, layout, series and visibility as a `PageFacts`, and `SitePages::series_nav` draws a page's series navigation. It is the pass the build runs, so a host holding only the texts gets the same pages.
+- `page::page_map` (the page map, folder homes, cascading folder overrides and duplicate-slug resolution), `page::inherit` (the cascade plan and hidden folder homes) and `page::excerpt` (descriptions, excerpts and previews) move here from moss-build.
+- `i18n::filename`, `i18n::path`, `i18n::clean_stem_only`, `i18n::folder_language` and `i18n::resolve_document_language` settle a page's language from its field, filename and folders. `i18n::vote::{language_vote, folder_languages, Detected}` settle a folder's language from what a host detects in each page; a declared site language holds over the vote.
+- `SiteBundle` gains `detected`, `lang_declared`, `derived`, `derivable`, `passthrough` and `math`, the inputs `site_pages` reads beyond the texts. `SiteConfig::math` and `SiteConfig::passthrough` read the last two.
+- `PageContributions::derivations` with `DerivationClaim`: the derivations a plugin's manifest claims.
+- `frontmatter::{typed, read_page, normalize_body}`, `resolve::with_frontmatter_links_resolved`, `resolve::output_url::to_pretty_url`, `slug::{nfc_order, walk_order}`, `sort::{order_match_name, direct_children_sorts}`, `source_edit::policy::{is_excluded_from_pages, verbatim_index_dirs, reserved_home_dirs}`, `page::series::nav` and `resolve::embeds::derived::DerivedRecord`, the pieces `site_pages` shares with the build's page pass.
 
 ### Changed
 

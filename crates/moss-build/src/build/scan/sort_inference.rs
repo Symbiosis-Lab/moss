@@ -25,57 +25,22 @@ use crate::build::types::ParsedDocument;
 /// Must run after `apply_cascade` so that cascaded `sort:` values are visible
 /// to the inference (see `resolve_folder_sort` reading `folder.declared_sort()`).
 pub(crate) fn populate_direct_children_sorts(docs: &mut [ParsedDocument]) {
-    let folder_idxs: Vec<usize> = docs
-        .iter()
-        .enumerate()
-        .filter(|(_, d)| d.url_path == "index.html" || d.url_path.ends_with("/index.html"))
-        .map(|(i, _)| i)
+    let sorts: Vec<(usize, moss_core::sort::ResolvedSort, Vec<String>)> = moss_core::sort::direct_children_sorts(docs)
+        .into_iter()
+        .map(|(fi, resolved, undated)| {
+            (fi, resolved, undated.iter().map(|d| d.source_path.clone().unwrap_or_else(|| d.url_path.clone())).collect())
+        })
         .collect();
-
-    for fi in folder_idxs {
-        // Prefix of this folder. Root index has empty prefix (everything is
-        // a descendant); nested folders use their parent path with a trailing
-        // slash, e.g. "blog/" for "blog/index.html".
-        let prefix = if docs[fi].url_path == "index.html" {
-            String::new()
-        } else {
-            docs[fi].url_path.trim_end_matches("index.html").to_string()
-        };
-
-        let resolved = {
-            let children: Vec<&ParsedDocument> = docs
-                .iter()
-                .enumerate()
-                .filter(|(i, d)| {
-                    if *i == fi {
-                        return false;
-                    }
-                    // Strip the folder prefix and any trailing "/index.html"
-                    // (so "blog/post/index.html" -> "post") or trailing "/"
-                    // (defensive). If the remaining path contains a "/", the
-                    // doc is a grandchild, not a direct child — exclude it.
-                    let Some(rem) = d.url_path.strip_prefix(prefix.as_str()) else {
-                        return false;
-                    };
-                    let clean = rem
-                        .trim_end_matches("/index.html")
-                        .trim_end_matches('/');
-                    !clean.is_empty() && !clean.contains('/')
-                })
-                .map(|(_, d)| d)
-                .collect();
-            let (resolved, undated) = moss_core::sort::resolve_folder_sort_with_undated(&docs[fi], &children);
-            // The site's home page is not a dated stream, and `children: false` lists nothing.
-            if !undated.is_empty() && !prefix.is_empty() && docs[fi].children != Some(false) {
-                let names: Vec<&str> = undated.iter().map(|d| d.source_path.as_deref().unwrap_or(&d.url_path)).collect();
-                crate::build::cli_output::log_warn_problem!(
-                    "folder `{}` lists by title, not date, because only some of its pages have a `date:`; add one to {} or set `sort: title` on the folder's home page to keep this order",
-                    prefix.trim_end_matches('/'),
-                    names.join(", ")
-                );
-            }
-            resolved
-        };
+    for (fi, resolved, undated) in sorts {
+        let prefix = docs[fi].url_path.trim_end_matches("index.html");
+        // The site's home page is not a dated stream, and `children: false` lists nothing.
+        if !undated.is_empty() && !prefix.is_empty() && docs[fi].children != Some(false) {
+            crate::build::cli_output::log_warn_problem!(
+                "folder `{}` lists by title, not date, because only some of its pages have a `date:`; add one to {} or set `sort: title` on the folder's home page to keep this order",
+                prefix.trim_end_matches('/'),
+                undated.join(", ")
+            );
+        }
         docs[fi].direct_children_sort = Some(resolved);
     }
 }

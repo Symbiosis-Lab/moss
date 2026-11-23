@@ -86,10 +86,7 @@ pub use moss_core::source_edit::policy::language_tree_split;
 /// The file is still parsed through the standard markdown pipeline so its
 /// rendered HTML can be collected by `collect_footer_slots_by_language`; this
 /// predicate is consulted at page-emission time only.
-pub fn is_excluded_from_pages(rel_path: &str) -> bool {
-    let (_, within_tree) = language_tree_split(rel_path);
-    slot_from_filename(within_tree).is_some() || within_tree == WELCOME_EMAIL_FILE
-}
+pub use moss_core::source_edit::policy::is_excluded_from_pages;
 
 /// Reserved filename of the welcome email at a language-tree root. It is
 /// slot-only like `footer.md` but fills no slot: it feeds

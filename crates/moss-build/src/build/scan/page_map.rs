@@ -100,11 +100,8 @@ pub(crate) fn compute_home_overrides_with_evicted(
                 continue;
             }
         };
-        let (home, translation_key) = if crate::build::markdown::is_simplified_frontmatter(&content) {
-            let (fm, _) = crate::build::markdown::parse_simplified_frontmatter(&content);
-            (fm.home, fm.translation_key)
-        } else {
-            let fm = crate::build::markdown::parse_typed_frontmatter(&content);
+        let (home, translation_key) = {
+            let fm = moss_core::frontmatter::typed(&content);
             (fm.home, fm.translation_key)
         };
         read.push((fi.path.clone(), home, translation_key));
@@ -275,12 +272,7 @@ pub(crate) fn build_page_map_with_evicted(
         };
 
         // Parse frontmatter to get url override (ONE parser).
-        let frontmatter_url: Option<String> = if crate::build::markdown::is_simplified_frontmatter(&content) {
-            let (fm, _) = crate::build::markdown::parse_simplified_frontmatter(&content);
-            fm.url
-        } else {
-            crate::build::markdown::parse_typed_frontmatter(&content).url
-        };
+        let frontmatter_url: Option<String> = moss_core::frontmatter::typed(&content).url;
 
         let (url_path, is_index, dir_override) = page_map_entry(
             file_path,
@@ -398,12 +390,7 @@ pub(crate) fn build_external_url_map_with_evicted(
         };
 
         // ONE parser: same path the editor + build pipeline use.
-        let external_url: Option<String> = if crate::build::markdown::is_simplified_frontmatter(&content) {
-            let (fm, _) = crate::build::markdown::parse_simplified_frontmatter(&content);
-            fm.external_url
-        } else {
-            crate::build::markdown::parse_typed_frontmatter(&content).external_url
-        };
+        let external_url: Option<String> = moss_core::frontmatter::typed(&content).external_url;
 
         if let Some(url) = external_url {
             // http(s) only — same safety guard as the card-href substitution

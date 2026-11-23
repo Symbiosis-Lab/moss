@@ -29,13 +29,7 @@ use moss_core::asset_paths::published_paths;
 
 use crate::types::content::ProjectStructure;
 
-/// Two names in composed (NFC) order, falling back to their bytes when they
-/// compose alike. Every walk and list whose order reaches the output sorts by
-/// this, so a folder reads in one order on every machine whatever its disk
-/// lists first and however its sync client spelled the names.
-pub(crate) fn nfc_order(a: &str, b: &str) -> Ordering {
-    a.nfc().cmp(b.nfc()).then_with(|| a.cmp(b))
-}
+pub(crate) use moss_core::slug::nfc_order;
 
 /// [`nfc_order`] for a directory walk: `WalkDir::new(dir).sort_by(nfc_name_order)`.
 pub(crate) fn nfc_name_order(a: &walkdir::DirEntry, b: &walkdir::DirEntry) -> Ordering {

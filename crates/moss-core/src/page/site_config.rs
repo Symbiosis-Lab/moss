@@ -105,6 +105,8 @@ pub struct CoreConfig {
     /// The legacy `[terms] author = false` / `tags = false` switches.
     disabled: Vec<String>,
     nav: Vec<(String, Option<i32>)>,
+    math: Option<bool>,
+    passthrough: Vec<String>,
 }
 
 impl CoreConfig {
@@ -117,6 +119,12 @@ impl CoreConfig {
         let site = read(table.get("site"), ConfigValue::table, "[site]", "a table", &mut warnings);
         config.lang = site.and_then(|site| read(site.get("lang"), |v| v.text().cloned(),
             "[site] lang", "text", &mut warnings));
+        config.math = site.and_then(|site| read(site.get("math"), ConfigValue::boolean,
+            "[site] math", "true or false", &mut warnings));
+        let build = read(table.get("build"), ConfigValue::table, "[build]", "a table", &mut warnings);
+        config.passthrough = build.and_then(|b| read(b.get("passthrough"), ConfigValue::array,
+            "[build] passthrough", "a list", &mut warnings))
+            .into_iter().flatten().filter_map(|v| v.text().cloned()).collect();
         let terms = read(table.get("terms"), ConfigValue::table, "[terms]", "a table", &mut warnings);
         for (key, value) in terms.into_iter().flatten() {
             match value {
@@ -140,6 +148,16 @@ impl CoreConfig {
 
     pub fn site_lang(&self) -> Option<&str> {
         self.lang.as_deref()
+    }
+
+    /// `[site].math`, on unless set to false.
+    pub fn math(&self) -> bool {
+        self.math.unwrap_or(true)
+    }
+
+    /// `[build].passthrough` in order; entries that are not text are dropped.
+    pub fn passthrough(&self) -> &[String] {
+        &self.passthrough
     }
 
     pub fn terms_kinds(&self) -> Vec<RawKind> {

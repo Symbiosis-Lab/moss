@@ -29,6 +29,7 @@ mod tests;
 /// field under `inferred` takes it from the first ready derivation that gave
 /// one. Fields a deriver does not know are ignored on the way in.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct DerivedFacts {
     #[serde(default)]
     pub title: Option<String>,
@@ -37,6 +38,17 @@ pub struct DerivedFacts {
     /// A calendar date as `YYYY-MM-DD`; anything else is ignored.
     #[serde(default)]
     pub date: Option<String>,
+}
+
+/// A derivation's record for one file as the derive cache holds it: the
+/// fragments it produced and its facts. A host finds it by the file's current
+/// content, so an edited file has none until it is derived again.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub struct DerivedRecord {
+    pub fragments: Vec<String>,
+    #[serde(default)]
+    pub facts: DerivedFacts,
 }
 
 impl DerivedFacts {

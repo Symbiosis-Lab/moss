@@ -25,7 +25,7 @@ use crate::validation::{self, Diagnostic, Severity};
 /// shape for every host: unknown fields are ignored, so it can grow.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct SiteBundle {
-    /// Changes whenever any other field does, so a host refetches only then.
+    /// Set by a host that versions the bundles it hands out; `site_bundle` leaves it unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     pub files: Vec<String>,
@@ -44,6 +44,28 @@ pub struct SiteBundle {
     pub theme_css: String,
     #[serde(default)]
     pub notes: HashMap<String, String>,
+    /// Each folder's inferred language code, keyed by folder path, as the
+    /// last build voted it over the folder's pages. Empty for a folder never built.
+    #[serde(default)]
+    pub folder_langs: std::collections::BTreeMap<String, String>,
+    /// The derive cache's record for each embedded file whose current content
+    /// has been derived, keyed by its site-relative path. A host fills it at
+    /// call time: it hashes each embedded file's current bytes and reads the
+    /// synced derive cache by that hash and `derive:<plugin>/<derivation>`, so an
+    /// edited file reads as pending. Never persisted.
+    #[serde(default)]
+    pub derived: std::collections::BTreeMap<String, crate::resolve::embeds::derived::DerivedRecord>,
+    /// Each file extension a plugin derives text from, with the fragments
+    /// its derivation may produce: the first plugin by name, then the first
+    /// derivation by id, to accept the extension owns it.
+    #[serde(default)]
+    pub derivable: std::collections::BTreeMap<String, Vec<String>>,
+    /// `[site].math`; unset means on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub math: Option<bool>,
+    /// `[build].passthrough`, in order.
+    #[serde(default)]
+    pub passthrough: Vec<String>,
 }
 
 /// One installed plugin's frontmatter fields, as a bundle carries them.

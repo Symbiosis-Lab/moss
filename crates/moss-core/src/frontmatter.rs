@@ -286,6 +286,30 @@ impl ParsedDocument {
     }
 }
 
+/// A page's typed frontmatter, in either dialect, with field warnings dropped.
+pub fn typed(content: &str) -> crate::frontmatter_typed::FrontMatter {
+    read_page(content).0
+}
+
+/// A page's typed frontmatter and its body as the build parses it, in either
+/// dialect, the YAML body normalized by [`normalize_body`].
+pub fn read_page(content: &str) -> (crate::frontmatter_typed::FrontMatter, String) {
+    use crate::frontmatter_typed::{is_simplified_frontmatter, parse_simplified_frontmatter, project_typed};
+    if is_simplified_frontmatter(content) {
+        return parse_simplified_frontmatter(content);
+    }
+    let parsed = parse(content);
+    let mapping = parsed.frontmatter.iter().map(|(k, v)| (serde_yaml::Value::String(k.clone()), v.clone())).collect();
+    (project_typed(&mapping).0, normalize_body(parsed.render_body()))
+}
+
+/// A YAML page's body as the build has always read it: lines joined by `\n`
+/// (no `\r`, no final newline) and blank leading lines dropped.
+pub fn normalize_body(body: &str) -> String {
+    let joined = body.lines().collect::<Vec<&str>>().join("\n");
+    joined.trim_start_matches('\n').to_string()
+}
+
 /// Parse a markdown document, extracting frontmatter and body.
 ///
 /// If the content starts with `---\n`, the YAML frontmatter is extracted

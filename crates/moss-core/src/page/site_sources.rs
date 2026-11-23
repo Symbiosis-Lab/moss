@@ -1,5 +1,6 @@
 //! Assemble page context from bytes supplied by any host, without I/O.
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use crate::resolve::embeds::derived::DerivedRecord;
 use super::{BundlePlugin, SiteBundle};
 use super::listing_style::ListingStylePlan;
 use super::plugin_source::read_manifest;
@@ -16,6 +17,17 @@ pub struct SiteSources {
     #[serde(default)]
     pub plugins: Vec<PluginSource>,
     pub theme_style_css: Option<String>,
+    /// Each folder's inferred language code, keyed by folder path, as the
+    /// last build voted it over the folder's pages. Empty for a folder never built.
+    #[serde(default)]
+    pub folder_langs: BTreeMap<String, String>,
+    /// The derive cache's record for each embedded file whose current content
+    /// has been derived, keyed by its site-relative path. A host fills it at
+    /// call time: it hashes each embedded file's current bytes and reads the
+    /// synced derive cache by that hash and `derive:<plugin>/<derivation>`, so an
+    /// edited file reads as pending. Never persisted.
+    #[serde(default)]
+    pub derived: BTreeMap<String, DerivedRecord>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -141,6 +153,14 @@ pub fn site_bundle(mut sources: SiteSources) -> (SiteBundle, Vec<String>) {
         Some((name.as_str(), manifest.contributes.listing_styles.as_ref()?))
     }));
     warnings.extend(styles.conflicts.iter().cloned());
+    let mut derivable = BTreeMap::new();
+    for (_, manifest) in &manifests {
+        for claim in manifest.contributes.derivations.iter().flat_map(BTreeMap::values) {
+            for ext in &claim.accepts {
+                derivable.entry(ext.clone()).or_insert_with(|| claim.fragments.keys().cloned().collect());
+            }
+        }
+    }
     let plugins: Vec<_> = manifests.into_iter().map(|(name, manifest)| BundlePlugin {
         blocks: manifest.contributes.blocks.into_iter().flatten().map(|(short, _)| short).collect(),
         name, fields: manifest.contributes.frontmatter.map(|f| f.fields).unwrap_or_default(),
@@ -149,7 +169,9 @@ pub fn site_bundle(mut sources: SiteSources) -> (SiteBundle, Vec<String>) {
     sources.files.sort();
     let bundle = SiteBundle {
         files: sources.files, lang, declared_name_lists, plugins, listing_styles,
-        theme_css: sources.theme_style_css.unwrap_or_default(), ..Default::default()
+        theme_css: sources.theme_style_css.unwrap_or_default(),
+        folder_langs: sources.folder_langs, derived: sources.derived,
+        derivable, math: Some(config.math()), passthrough: config.passthrough().to_vec(), ..Default::default()
     };
     let schemas: Vec<_> = bundle.plugins.iter().map(|p| crate::schema::PluginSchema {
         name: &p.name, fields: Some(&p.fields),

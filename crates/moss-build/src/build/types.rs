@@ -1353,22 +1353,7 @@ impl moss_core::sort::SortableDoc for ParsedDocument {
     /// is unavailable (a hand-built test document, say), and to
     /// `clean_stem` after that, same as before.
     fn order_match_name(&self) -> &str {
-        if self.is_folder_index() {
-            self.source_path
-                .as_deref()
-                .and_then(|p| p.rsplit('/').nth(1))
-                .or_else(|| {
-                    self.url_path
-                        .trim_end_matches("index.html")
-                        .trim_end_matches('/')
-                        .rsplit('/')
-                        .next()
-                })
-                .filter(|s| !s.is_empty())
-                .unwrap_or(&self.clean_stem)
-        } else {
-            &self.clean_stem
-        }
+        moss_core::sort::order_match_name(self.is_folder_index(), self.source_path.as_deref(), &self.url_path, &self.clean_stem)
     }
 }
 

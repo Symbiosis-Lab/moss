@@ -68,6 +68,8 @@
 //! - `ship::ship_phase` — writes the generation from the sealed manifest.
 
 pub mod pipeline;
+#[cfg(test)]
+pub(crate) mod site_pages_tests;
 pub mod reason;
 pub use reason::BuildReason;
 pub mod cloud_ledger;

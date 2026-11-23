@@ -148,29 +148,14 @@ pub fn holds_only_storage(dir: &str, page_paths: &[&str]) -> bool {
     is_storage_path(dir) && !page_paths.iter().any(|p| p.starts_with(&prefix))
 }
 
-/// Directories whose `index.html` is copied verbatim: those holding a source
-/// file of exactly that name inside a passthrough root. Such a directory has no
-/// room for a page of its own at its folder address, so no markdown file or
-/// generated listing may take it.
-///
-/// Keys are source-relative directory paths without a trailing `/`.
+/// [`moss_core::source_edit::policy::verbatim_index_dirs`] over scanned files.
 pub fn verbatim_index_dirs(html_files: &[FileInfo], passthrough_roots: &HashSet<String>) -> HashSet<String> {
-    html_files
-        .iter()
-        .filter(|f| is_in_passthrough(&f.path, passthrough_roots))
-        .filter_map(|f| f.path.strip_suffix("/index.html"))
-        .map(str::to_string)
-        .collect()
+    moss_core::source_edit::policy::verbatim_index_dirs(html_files.iter().map(|f| f.path.as_str()), passthrough_roots)
 }
 
-/// The folders whose markdown cannot be the home: [`verbatim_index_dirs`]
-/// except a language tree's root whose `index.html` is named exactly in
-/// `[build].passthrough`. That pair behaves like the site root's: the
-/// `index.md` stays the home and is the document's metadata.
+/// [`moss_core::source_edit::policy::reserved_home_dirs`] over scanned files.
 pub fn reserved_home_dirs(html_files: &[FileInfo], passthrough_roots: &HashSet<String>) -> HashSet<String> {
-    let mut dirs = verbatim_index_dirs(html_files, passthrough_roots);
-    dirs.retain(|d| !(moss_core::home::is_known_language_code(d) && passthrough_roots.contains(&format!("{d}/{INDEX_HTML}"))));
-    dirs
+    moss_core::source_edit::policy::reserved_home_dirs(html_files.iter().map(|f| f.path.as_str()), passthrough_roots)
 }
 
 /// Each scanned directory that gets a folder-index page, paired with the
@@ -262,9 +247,6 @@ pub fn is_moss_internal(relative: &Path) -> bool {
         full == *allowed || full.starts_with(&format!("{allowed}/"))
     })
 }
-
-/// The name of the HTML file a passthrough entry can pair a page's settings with.
-const INDEX_HTML: &str = "index.html";
 
 /// Folders (project-relative, `""` for the root) whose `index.md` is the
 /// settings of a copied-as-is `index.html` that `[build].passthrough` names

@@ -32,39 +32,7 @@ use super::html_post::{
 /// nothing, so a second read of the same file (the page as authored) cannot
 /// repeat the build's warnings.
 fn parse_ready_body(content: &str) -> String {
-    let body = if is_simplified_frontmatter(content) {
-        parse_simplified_frontmatter(content).1
-    } else {
-        normalize_body_like_gray_matter(moss_core::frontmatter::parse(content).render_body())
-    };
-    moss_core::resolve::prepare_markdown_source(&body, 0).0
-}
-
-/// Reproduce gray_matter's body normalization byte-for-byte.
-///
-/// The traditional-YAML branch historically took the markdown body from
-/// `gray_matter`'s `result.content`. gray_matter (0.2.9) builds the body by
-/// re-emitting each line prefixed with `\n` and then calling
-/// `trim_start_matches('\n')` — the net effect is:
-///   * leading blank lines are removed, and
-///   * the trailing newline is dropped (the line-join leaves no terminator).
-/// Per-line content (including trailing spaces) is otherwise preserved verbatim.
-///
-/// `moss_core::frontmatter::parse` instead returns the verbatim slice after the
-/// closing `---\n`, keeping both the leading and trailing newlines. To switch to
-/// the unified parser without churning any snapshot, run that same transform on
-/// `moss_core`'s body. `str::lines()` joined with `\n` reproduces gray_matter's
-/// line walk (CRLF already normalized to LF by `moss_core::frontmatter::parse`),
-/// and `trim_start_matches('\n')` drops the leading blanks.
-///
-/// FOLLOW-UP: the verbatim body is the *correct* output; this shim
-/// only exists to keep the snapshot fixtures byte-stable across the gray_matter
-/// removal. A future cleanup should regenerate the snapshots against the
-/// verbatim body and delete this function — do NOT "simplify" the call site to
-/// `parsed.body` without that regeneration, or ~200 fixtures will churn.
-fn normalize_body_like_gray_matter(body: &str) -> String {
-    let joined = body.lines().collect::<Vec<&str>>().join("\n");
-    joined.trim_start_matches('\n').to_string()
+    moss_core::resolve::prepare_markdown_source(&moss_core::frontmatter::read_page(content).1, 0).0
 }
 
 /// Builds a [`moss_core::asset_snapshot::AssetSnapshot`] from the desktop
@@ -581,7 +549,7 @@ pub fn process_markdown_file(
             // `parsed.body` is the verbatim `content[fm_end..]` (leading + trailing
             // newlines intact). Reproduce gray_matter's exact transform so the body
             // text is byte-identical and snapshots don't churn.
-            let body = normalize_body_like_gray_matter(render_body);
+            let body = moss_core::frontmatter::normalize_body(render_body);
             // Plugin fields (e.g. `syndicated`) + children normalization come from
             // the raw serde_yaml map exactly as before.
             let raw_fm = crate::build::scan::article_map::parse_frontmatter(content);
@@ -961,7 +929,7 @@ pub fn process_markdown_file(
     //      CM6 (editor-main.ts `new CmEditor({ content: body })`) — the
     //      frontmatter-stripped body, NOT the raw file — so annotations must be
     //      relative to THAT buffer. The parser here sees a further-processed
-    //      body (`normalize_body_like_gray_matter`, which drops leading blanks
+    //      body (`moss_core::frontmatter::normalize_body`, which drops leading blanks
     //      + the trailing newline), so we bridge the two in two steps:
     //
     //        raw-body offset  — lines of `content` before the parser body's
