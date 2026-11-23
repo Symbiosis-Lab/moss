@@ -444,7 +444,7 @@ impl ServedPath {
         ServedPath(crate::build::emit::commerce::COMMERCE_PATH.to_string())
     }
 
-    /// The link hosts the site's comments refuse, as salted digests, at a
+    /// The link hosts the site's comments refuse, as sha256 digests, at a
     /// fixed address the comment server reads.
     pub fn for_comments_json() -> Self {
         ServedPath(crate::build::features::comment::link_block::COMMENTS_PATH.to_string())

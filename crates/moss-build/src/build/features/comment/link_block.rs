@@ -1,7 +1,7 @@
 //! Spam's second half: the link hosts a comment carries, the hosts the owner
 //! has blocked (signed `block`/`unblock` events in the same moderation log as
-//! `hide`/`unhide`), and `_moss/comments.json`, which publishes them as salted
-//! digests so the comment server can refuse a new comment linking to one
+//! `hide`/`unhide`), and `_moss/comments.json`, which publishes them as
+//! sha256 digests so the comment server can refuse a new comment linking to one
 //! without the site publishing a readable list.
 //!
 //! A host is matched exactly: parsed as a WHATWG URL, lowercased (IDN as
@@ -113,10 +113,11 @@ pub fn own_hosts(project_path: &str) -> BTreeSet<String> {
     hosts
 }
 
-/// `sha256("<salt>:<host>")` as lowercase hex, the form the comment server
-/// computes for each host of an incoming comment.
-pub fn digest(salt: &str, host: &str) -> String {
-    hex::encode(Sha256::digest(format!("{salt}:{host}").as_bytes()))
+/// `sha256(host)` as lowercase hex, the form the comment server computes for
+/// each host of an incoming comment. Unsalted, so lists from many sites can be
+/// joined; a guessable host falls to a dictionary either way.
+pub fn digest(host: &str) -> String {
+    hex::encode(Sha256::digest(host.as_bytes()))
 }
 
 /// What the build knows about a folder's moderation: how much of the log a
@@ -127,8 +128,6 @@ pub struct CommentModeration {
     pub verified: usize,
     /// The keys that signed events which do not apply, sorted.
     pub untrusted: Vec<String>,
-    /// The current key's id, which salts the published digests.
-    pub salt: Option<String>,
     pub blocked: BTreeSet<String>,
 }
 
@@ -144,7 +143,6 @@ impl CommentModeration {
             events: events.len(),
             verified: events.iter().filter(|e| owners.contains(&e.pubkey) && e.verify(&e.pubkey)).count(),
             untrusted: super::moderation::untrusted_signers(&events, &owners),
-            salt: owners.first().map(|k| k.chars().take(16).collect()),
             blocked: active_blocks(&events, &owners).into_keys().filter(|h| !own.contains(*h)).map(str::to_string).collect(),
         }
     }
@@ -165,9 +163,8 @@ impl CommentModeration {
     }
 
     fn published_json(&self) -> String {
-        let salt = self.salt.as_deref().unwrap_or("");
-        let hosts: BTreeSet<String> = self.blocked.iter().map(|h| digest(salt, h)).collect();
-        let mut doc = serde_json::json!({ "version": 1, "salt": salt, "blocked_hosts": hosts });
+        let hosts: BTreeSet<String> = self.blocked.iter().map(|h| digest(h)).collect();
+        let mut doc = serde_json::json!({ "version": 2, "blocked_hosts": hosts });
         if self.unverifiable() {
             doc["moderation"] = "unverified".into();
         }

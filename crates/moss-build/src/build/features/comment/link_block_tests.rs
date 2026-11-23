@@ -45,9 +45,8 @@ fn project() -> tempfile::TempDir {
 /// The comment server asserts the same vectors.
 #[test]
 fn digests_match_the_comment_servers_vectors() {
-    let salt = "0123456789abcdef";
-    assert_eq!(digest(salt, "spam.example"), "e42b528310ef41748f077faf1242ae0adb2c15ef0e7331a30bbabdb1640db06d");
-    assert_eq!(digest(salt, "resobang.example"), "b760a53c8669fd246dcfad144a89db847c6044dee5e2f878485ce5aee3a98bb2");
+    assert_eq!(digest("spam.example"), "8bb6634ad532175e1c706063fd69b452bf51917f61150b14da6500c018cf8df4");
+    assert_eq!(digest("resobang.example"), "93e292de116a637515877afab9b783fd388c9eaa0da0fc3a9968f5650fc1f82b");
 }
 
 #[test]
@@ -113,18 +112,17 @@ fn a_blocked_host_hides_comments_from_every_source_until_a_later_unhide() {
 }
 
 #[test]
-fn the_published_file_carries_salted_digests_and_an_unverifiable_log_says_so() {
+fn the_published_file_carries_host_digests_and_an_unverifiable_log_says_so() {
     let m = CommentModeration {
         events: 3,
         verified: 3,
         untrusted: vec![],
-        salt: Some("0123456789abcdef".into()),
         blocked: ["spam.example".to_string()].into(),
     };
     let doc: serde_json::Value = serde_json::from_str(&m.published_json()).unwrap();
     assert_eq!(
         doc,
-        serde_json::json!({ "version": 1, "salt": "0123456789abcdef", "blocked_hosts": ["e42b528310ef41748f077faf1242ae0adb2c15ef0e7331a30bbabdb1640db06d"] })
+        serde_json::json!({ "version": 2, "blocked_hosts": ["8bb6634ad532175e1c706063fd69b452bf51917f61150b14da6500c018cf8df4"] })
     );
     let unverified = CommentModeration { events: 2, ..Default::default() };
     let doc: serde_json::Value = serde_json::from_str(&unverified.published_json()).unwrap();
@@ -146,7 +144,6 @@ fn moderation_reads_the_folders_blocks_and_never_its_own_host() {
         let m = CommentModeration::load(ps);
         assert_eq!((m.events, m.verified, m.unverifiable()), (2, 2, false));
         assert_eq!(m.blocked.into_iter().collect::<Vec<_>>(), ["spam.example"]);
-        assert_eq!(m.salt.as_deref(), Some(&id.pubkey[..16]));
     });
 }
 
