@@ -28,7 +28,7 @@ use std::path::Path;
 use super::image::{
     apply_exif_orientation, flatten_alpha_to_white, read_exif_orientation, ImageCompressionConfig,
 };
-use super::sniff::is_cmyk_jpeg;
+use super::sniff::has_cmyk_profile;
 
 /// JPEG quality for the deployed, sized raster original.
 ///
@@ -435,8 +435,8 @@ pub(crate) fn encode_sized_raster(
 /// entirely.
 ///
 /// Returns `None` when the source cannot be safely sized — a decode failure
-/// (corrupt / mislabeled non-image), or a CMYK JPEG (libjpeg's CMYK→RGB is
-/// lossy; mirrors the WebP `SkipReason::Cmyk`). On `None` the caller keeps the
+/// (corrupt / mislabeled non-image), or a JPEG with a CMYK print profile
+/// (as the WebP `SkipReason::Cmyk`). On `None` the caller keeps the
 /// verbatim original. Never panics; never fails the build.
 ///
 /// Concurrent callers for the same source share one encode. Every build's
@@ -559,8 +559,7 @@ fn produce_sized_raster(
     }
 
     // ---- CMYK guard: keep verbatim rather than ship wrong colors. ----
-    // JPEG-only — PNG has no CMYK variant to worry about.
-    if (ext == "jpg" || ext == "jpeg") && is_cmyk_jpeg(source_file) {
+    if (ext == "jpg" || ext == "jpeg") && has_cmyk_profile(source_file) {
         log::debug!(
             "[sized-raster] {} is CMYK — keeping verbatim original",
             source_file.display()

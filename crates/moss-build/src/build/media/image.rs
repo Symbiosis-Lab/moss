@@ -62,7 +62,7 @@ use serde::{Deserialize, Serialize};
 // MIGRATION-STATE's image.rs debt row, Task 10.5). The dispatch-side rung loop
 // and the fingerprint-skip heal block stay here and CALL into it.
 use super::rungs::{decode_oriented, encode_rungs, redispatch_note, RungOutcome};
-use super::sniff::{is_animated_gif, is_animated_webp, is_cmyk_jpeg};
+use super::sniff::{has_cmyk_profile, is_animated_gif, is_animated_webp};
 
 // ---------------------------------------------------------------------------
 // Data types (foundation from Task 1)
@@ -101,8 +101,6 @@ pub struct ImageConversionItem {
     /// - [`SkipReason::Cmyk`] / [`SkipReason::NotAnImage`]: registered
     ///   `Failed`, so the post-seal degrade pass drops the
     ///   `<source>` and the page falls through to the original `<img>`.
-    ///   Before this a CMYK JPEG shipped a `<source>` that 404ed and the
-    ///   browser showed nothing at all (a painting on a real site, 2026-09-05).
     ///
     /// Every other verdict is a bare `<img>` on the emission side and needs
     /// no registration; those items are dropped in the collector.
@@ -245,7 +243,8 @@ pub(crate) enum SkipReason {
     AnimatedWebp,
     /// HEIC/HEIF — requires libheif, out of scope for v1.
     Heic,
-    /// CMYK JPEG — libwebp only supports RGB; colorspace conversion is lossy.
+    /// A JPEG with a CMYK print profile, which the browser colour-manages and
+    /// a plain decode would not match.
     Cmyk,
     /// Source is small AND already fits within max_edge — re-encoding wastes CPU.
     AlreadySmall,
@@ -391,7 +390,11 @@ const FORMAT_PROBE_TRANSFORM: &str = "format-probe";
 /// used to fail the read (and thus never skip) can now read real dimensions
 /// and be judged `AlreadySmall` — a different, newly-correct verdict the old
 /// version would still be serving.
-const FORMAT_PROBE_VERSION: u32 = 3;
+///
+/// **3 → 4**: a CMYK JPEG is skipped only when it embeds a CMYK profile.
+/// One without a profile is decoded by plain inversion, as libjpeg, Chromium
+/// and Firefox draw it (Safari assumes Generic CMYK), and is encoded.
+const FORMAT_PROBE_VERSION: u32 = 4;
 
 impl SkipReason {
     /// Whether a source skipped for this reason still has to be collected so
@@ -419,7 +422,7 @@ impl SkipReason {
     pub(crate) fn failure_message(&self) -> Option<&'static str> {
         match self {
             SkipReason::Cmyk => Some(
-                "CMYK JPEG: published as the original — WebP has no CMYK and the colour conversion is lossy",
+                "CMYK JPEG with a print profile: published as the original",
             ),
             SkipReason::NotAnImage => Some("not a recognised image format"),
             _ => None,
@@ -608,7 +611,7 @@ fn probe_cmyk_magic_already_small(
     file_size: u64,
     config: &ImageCompressionConfig,
 ) -> Option<SkipReason> {
-    if (ext_lower == "jpg" || ext_lower == "jpeg") && is_cmyk_jpeg(source_path) {
+    if (ext_lower == "jpg" || ext_lower == "jpeg") && has_cmyk_profile(source_path) {
         return Some(SkipReason::Cmyk);
     }
 

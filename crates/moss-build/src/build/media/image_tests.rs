@@ -2149,22 +2149,35 @@ fn should_skip_not_an_image_real_jpeg_passes() {
 
 // ----- format-probe cache -----
 
-/// Build a handcrafted CMYK JPEG: SOI, then SOF0 with a 4-component frame.
-/// Mirrors `is_cmyk_jpeg_handcrafted_sof_components4`'s fixture — a real
-/// decodable JPEG is not required since `is_cmyk_jpeg` only parses the SOF
-/// marker, and CMYK is checked (and short-circuits) before the magic-byte
-/// check in `probe_cmyk_magic_already_small`.
+/// A JPEG head that embeds a CMYK print profile: SOI, an APP2 profile larger
+/// than the sniffers' usual few KB, then SOF0 with a 4-component frame. Not
+/// decodable, which no caller needs: the profile is checked before the
+/// magic-byte check in `probe_cmyk_magic_already_small`.
 pub(crate) fn make_cmyk_jpeg(path: &Path) {
-    let mut bytes: Vec<u8> = vec![0xFF, 0xD8];
-    bytes.push(0xFF);
-    bytes.push(0xC0); // SOF0
-    bytes.extend_from_slice(&[0x00, 0x11]); // length = 17
-    bytes.push(0x08); // precision
-    bytes.extend_from_slice(&[0x00, 0x10]); // height
-    bytes.extend_from_slice(&[0x00, 0x10]); // width
-    bytes.push(0x04); // component count = 4 (CMYK)
-    bytes.extend_from_slice(&[0; 12]); // padding to satisfy length
+    let mut profile = vec![0u8; 6000];
+    profile[16..20].copy_from_slice(b"CMYK");
+    let mut bytes: Vec<u8> = vec![0xFF, 0xD8, 0xFF, 0xE2];
+    bytes.extend_from_slice(&u16::try_from(2 + 14 + profile.len()).unwrap().to_be_bytes());
+    bytes.extend_from_slice(b"ICC_PROFILE\0\x01\x01");
+    bytes.extend_from_slice(&profile);
+    bytes.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x11, 0x08, 0x00, 0x10, 0x00, 0x10, 0x04]);
+    bytes.extend_from_slice(&[0; 12]);
     fs::write(path, &bytes).unwrap();
+}
+
+/// A CMYK JPEG with no profile, made by ImageMagick from sRGB (216, 152, 27).
+pub(crate) const CMYK_UNTAGGED: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/images/cmyk-untagged.jpg"));
+
+#[test]
+fn a_cmyk_jpeg_without_a_profile_is_encoded_by_plain_inversion_as_chromium_and_firefox_draw_it() {
+    let h = harness();
+    let src = h._tmp.path().join("plate.jpg");
+    fs::write(&src, CMYK_UNTAGGED).unwrap();
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+    let cfg = ImageCompressionConfig { min_size_kb: 0, ..ImageCompressionConfig::default() };
+    assert_eq!(should_skip(&src, "jpg", CMYK_UNTAGGED.len() as u64, &cfg, &h.transforms, &source_oid, false), None);
+    let image::Rgb([r, g, b]) = *crate::build::media::rungs::decode_oriented(&src).unwrap().to_rgb8().get_pixel(5, 5);
+    assert!([(r, 216), (g, 152), (b, 27)].iter().all(|&(got, want)| got.abs_diff(want) <= 6), "decoded ({r}, {g}, {b})");
 }
 
 #[test]
