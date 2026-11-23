@@ -131,23 +131,25 @@ pub(crate) fn article_url(site_url: &str, url_path: &str) -> String {
     percent_encode_feed_url(&format!("{}/{}", site_url.trim_end_matches('/'), url_path.trim_start_matches('/')))
 }
 
-/// An article's body as a feed carries it. Its ids are scoped, since one feed
-/// holds every article and three footnoted ones would otherwise each ship an
-/// `fn-1`; `links` rewrites its links. Math and diagrams become the hosted PNGs
+/// The articles both feeds list, each with its body as a feed carries it. Its
+/// ids are scoped, since one feed holds every article and three footnoted ones
+/// would otherwise each ship an `fn-1`. Math and diagrams become the hosted PNGs
 /// email uses, because feed readers strip inline `<svg>` and the figure would
-/// vanish; refused-math `<code>` passes through.
-pub(crate) fn item_html(
-    article: &ParsedDocument,
-    index: usize,
-    scopes: &mut crate::build::folder_embed::inline_body::IdScopes,
-    site_url: &str,
-    links: impl Fn(&str) -> String,
-) -> String {
-    let body = crate::build::feeds::calendar::strip_links_paragraphs(&article.html_content);
-    let page = article_url(site_url, &article.url_path);
-    let html = links(for_readers(&scopes.scope(&body, &article.url_path, index), &page, site_url).trim_start());
-    let html = crate::build::emit::math_png::swap_math_svgs_for_email_imgs(&html, site_url);
-    crate::build::emit::diagram_png::swap_diagram_figures_for_feed_imgs(&html, site_url)
+/// vanish; refused-math `<code>` passes through. Computed once for `rss.xml`
+/// and `feed.json`: rewriting every body is most of either feed's cost.
+pub(crate) fn feed_items<'a>(documents: &'a [ParsedDocument], site_url: &str) -> Vec<(&'a ParsedDocument, String)> {
+    let mut scopes = crate::build::folder_embed::inline_body::IdScopes::default();
+    feed_articles(documents)
+        .into_iter()
+        .enumerate()
+        .map(|(index, article)| {
+            let body = crate::build::feeds::calendar::strip_links_paragraphs(&article.html_content);
+            let page = article_url(site_url, &article.url_path);
+            let html = for_readers(&scopes.scope(&body, &article.url_path, index), &page, site_url);
+            let html = crate::build::emit::math_png::swap_math_svgs_for_email_imgs(html.trim_start(), site_url);
+            (article, crate::build::emit::diagram_png::swap_diagram_figures_for_feed_imgs(&html, site_url))
+        })
+        .collect()
 }
 
 /// The body as a reader elsewhere sees it. The title goes, since every reader
@@ -194,24 +196,14 @@ fn for_readers(html: &str, page: &str, site: &str) -> String {
     .unwrap_or_else(|_| html.to_string())
 }
 
-/// Generates an RSS 2.0 feed XML string from articles.
-///
-/// # Arguments
-/// * `documents` - All parsed documents from the site
-/// * `site_title` - The site's title for the feed
-/// * `site_url` - Base URL of the site (e.g., "https://example.com")
-/// * `site_description` - Optional description for the feed
-///
-/// # Returns
-/// RSS 2.0 XML string
-pub fn generate_rss_feed(
-    documents: &[ParsedDocument],
+/// `rss.xml`, RSS 2.0, from the bodies [`feed_items`] made.
+pub(crate) fn rss_feed(
+    items: &[(&ParsedDocument, String)],
     site_title: &str,
     site_url: &str,
     site_description: Option<&str>,
     analytics: Option<&AnalyticsConfig>,
 ) -> String {
-    let articles = feed_articles(documents);
     let description = site_description.unwrap_or(site_title);
 
     let mut xml = String::new();
@@ -240,8 +232,7 @@ pub fn generate_rss_feed(
     ));
 
     // Add items for each article
-    let mut scopes = crate::build::folder_embed::inline_body::IdScopes::default();
-    for (index, article) in articles.into_iter().enumerate() {
+    for (article, body) in items {
         let article_url = article_url(site_url, &article.url_path);
         let article_url_with_utm =
             format!("{}?utm_source=rss&utm_medium=feed", article_url);
@@ -270,8 +261,7 @@ pub fn generate_rss_feed(
         }
 
         // Internal links carry UTM; an optional tracking pixel follows.
-        let mut description_html =
-            item_html(article, index, &mut scopes, site_url, |html| add_utm_to_internal_links(html, site_url));
+        let mut description_html = add_utm_to_internal_links(body, site_url);
 
         if let Some(analytics_config) = analytics {
             // Use pretty path (strip index.html/.html) to match browser page views
@@ -320,6 +310,10 @@ mod tests {
     use super::*;
     use moss_core::PageKind;
 
+    fn generate_rss_feed(documents: &[ParsedDocument], site_title: &str, site_url: &str, site_description: Option<&str>, analytics: Option<&AnalyticsConfig>) -> String {
+        rss_feed(&feed_items(documents, site_url), site_title, site_url, site_description, analytics)
+    }
+
     fn create_test_document(title: &str, date: Option<&str>, url_path: &str, html_content: &str) -> ParsedDocument {
         ParsedDocument {
             title: title.to_string(),
@@ -341,7 +335,7 @@ mod tests {
 <p data-source-line="2">See <a href="../other/">other</a>.</p><img src="bank.webp" alt="Bank">"#;
         let docs = vec![create_test_document("Spring", Some("2026-03-01"), "notes/spring/index.html", html)];
         let rss = generate_rss_feed(&docs, "A site", "https://example.org", None, None);
-        let json = crate::build::feeds::json_feed::generate_json_feed(&docs, "A site", "https://example.org", "en", &Default::default());
+        let json = crate::build::feeds::json_feed::json_feed(&feed_items(&docs, "https://example.org"), "A site", "https://example.org", "en", &Default::default());
         for feed in [&rss, &json] {
             assert!(!feed.contains("data-source"), "{feed}");
             assert!(!feed.contains("moss-article-title"), "{feed}");

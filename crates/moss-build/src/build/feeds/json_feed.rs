@@ -7,23 +7,18 @@ use std::collections::HashMap;
 
 use serde_json::{json, Map, Value};
 
-use super::rss::{article_url, feed_articles, item_html};
+use super::rss::{article_url, feed_items};
 use crate::build::types::ParsedDocument;
 
-/// The feed for a site at `site_url`. Each item's `id` is the page's note id
+/// `feed.json` for a site at `site_url`, from the bodies [`feed_items`] made. Each item's `id` is the page's note id
 /// once the page carries it or a publish recorded it, so it follows the page
 /// through renames; a derived note id changes with every edit, so until then
 /// the id is the page's address. `dir_overrides` maps source folders to the
 /// served ones, so a cover's address is the one the page itself shares.
-pub fn generate_json_feed(documents: &[ParsedDocument], site_title: &str, site_url: &str, site_lang: &str, dir_overrides: &HashMap<String, String>) -> String {
-    let mut scopes = crate::build::folder_embed::inline_body::IdScopes::default();
-    let items: Vec<Value> = feed_articles(documents)
-        .into_iter()
-        .enumerate()
-        .map(|(index, article)| {
-            let url = article_url(site_url, &article.url_path);
-            item(article, &url, item_html(article, index, &mut scopes, site_url, str::to_string), site_url, dir_overrides)
-        })
+pub(crate) fn json_feed(items: &[(&ParsedDocument, String)], site_title: &str, site_url: &str, site_lang: &str, dir_overrides: &HashMap<String, String>) -> String {
+    let items: Vec<Value> = items
+        .iter()
+        .map(|(article, body)| item(article, &article_url(site_url, &article.url_path), body, site_url, dir_overrides))
         .collect();
     let feed_url = article_url(site_url, crate::build::served_path::ServedPath::for_json_feed().as_str());
     let feed = json!({
@@ -37,7 +32,7 @@ pub fn generate_json_feed(documents: &[ParsedDocument], site_title: &str, site_u
     serde_json::to_string(&feed).expect("a JSON value serializes")
 }
 
-fn item(article: &ParsedDocument, url: &str, content_html: String, site_url: &str, dir_overrides: &HashMap<String, String>) -> Value {
+fn item(article: &ParsedDocument, url: &str, content_html: &str, site_url: &str, dir_overrides: &HashMap<String, String>) -> Value {
     let mut item = Map::new();
     let id = article.uid.as_deref().filter(|_| !article.uid_derived).unwrap_or(url);
     item.insert("id".into(), json!(id));
