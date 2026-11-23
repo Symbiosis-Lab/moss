@@ -52,6 +52,8 @@ pub(crate) mod source_oids;
 pub(crate) use process_memo::{KeyedMemo, MemoFile, ProcessMemo, ROOTS};
 use crate::build::cloud_readiness::StorageOperation;
 pub use records::{Merged, RecordMode};
+#[cfg(test)]
+pub(crate) use records::RecordRead;
 pub use fit::{Facts, Fit, Need};
 
 /// Size of the read buffer used by [`ObjectStore::hash_file`].

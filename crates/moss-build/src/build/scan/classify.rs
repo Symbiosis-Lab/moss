@@ -322,7 +322,7 @@ pub fn classify_extension(extension: &str) -> ScanBucket {
     }
     match extension {
         "html" | "htm" => ScanBucket::Html,
-        "jpg" | "jpeg" | "png" | "gif" | "svg" | "webp" | "avif" => ScanBucket::Image,
+        "jpg" | "jpeg" | "png" | "gif" | "svg" | "webp" | "avif" | "heic" | "heif" => ScanBucket::Image,
         "mov" | "mp4" | "webm" | "avi" | "mkv" | "m4v" => ScanBucket::Video,
         "ipynb" => ScanBucket::Notebook,
         "pages" | "docx" | "doc" => ScanBucket::Document,
@@ -412,7 +412,7 @@ mod tests {
         for ext in ["html", "htm"] {
             assert_eq!(classify_extension(ext), ScanBucket::Html, "{ext}");
         }
-        for ext in ["jpg", "jpeg", "png", "gif", "svg", "webp", "avif"] {
+        for ext in ["jpg", "jpeg", "png", "gif", "svg", "webp", "avif", "heic", "heif"] {
             assert_eq!(classify_extension(ext), ScanBucket::Image, "{ext}");
         }
         for ext in ["mov", "mp4", "webm", "avi", "mkv", "m4v"] {

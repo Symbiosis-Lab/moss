@@ -17,6 +17,7 @@ All notable changes to moss will be documented here.
 - A place-typed kind with `landscape = "detail"` draws its maps from the pack in the folder's `.moss/maps/` (`landscape-<sha256>.bin.br`, checked against the digest in its name). A pack still in the cloud is downloaded before the site publishes; a missing or damaged one is a problem under `--strict` and stops `moss deploy`, and the build draws moss's own map meanwhile.
 - `moss migrate --apply` gives a place-typed kind `landscape = "detail"` and copies moss's place-map pack into `.moss/maps/`, so the site's maps stay as they are once moss stops carrying the pack. It never replaces a usable pack already there, and a second run writes nothing. Until a site is migrated, its builds say so.
 - In the Obsidian plugin, the preview pane's header has two buttons while a page shows: "Open in browser" opens that page in your browser (also the command "moss: Open in browser"), and "Publish this folder" hands the previewed site to the moss app, whatever note is open.
+- A HEIC or HEIF photo, as an iPhone saves it, is a picture like any other: on a Mac or iPhone moss makes its webp copies, and its page, RSS feed and email name only those, since only Safari can show a HEIC. A computer that cannot read HEIC uses the copies a Mac kept in the folder; without them it shows the HEIC file as before and says to build once on a Mac or iPhone. A HEIC moss cannot read asks you to export it again.
 
 ### Changed
 
@@ -55,6 +56,7 @@ All notable changes to moss will be documented here.
 - A site that declares its language (`[site] lang`, or `lang:` on the home page) keeps it on every page. A Chinese page full of English names or bios was built as English (`<html lang="en">` and English interface text) because moss guessed its folder's language from the text. Now only a page's own `lang:`, a folder index's `lang:`, a language folder or a filename suffix overrides the site, and the guess is made only on a site that declares no language. A site that relied on the guess to make a folder another language sets `lang:` in that folder's `index.md`.
 - A theme that lays out a breadcrumb header itself by flattening `.nav-right` (`display: contents`) keeps that layout; moss no longer moves the search and theme buttons up beside the trail.
 - A theme that lays its header out itself keeps that layout at every width. One that keeps the header to one row (`flex-wrap: nowrap` on `.nav-content`, often with a fixed height) no longer has its links drop below the header onto the page when they do not fit, with a plain site name or a logo: they stay on the row and scroll sideways inside it, and an open submenu still hangs below the header. One that sets `display: contents` on `.nav-right` keeps its own order, and a long site name wraps as the theme's `white-space` says instead of being cut off.
+- On a computer that cannot read HEIC, a HEIC's picture gets the photo's own width and height instead of 800 by 600.
 
 ### Removed
 

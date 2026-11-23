@@ -241,7 +241,7 @@ pub(crate) enum SkipReason {
     AnimatedGif,
     /// Animated WebP — already WebP and animation-preserving re-encode is out of scope.
     AnimatedWebp,
-    /// HEIC/HEIF — requires libheif, out of scope for v1.
+    /// HEIF on a computer with no HEIF decoder, and no encode of it kept.
     Heic,
     /// A JPEG with a CMYK print profile, which the browser colour-manages and
     /// a plain decode would not match.
@@ -407,6 +407,7 @@ impl SkipReason {
     pub(crate) fn settles_a_promised_variant(&self, ext: &str) -> bool {
         match self {
             SkipReason::SourceInTheCloud => true,
+            SkipReason::Heic => true,
             SkipReason::Cmyk | SkipReason::NotAnImage => {
                 moss_core::asset_paths::is_ladder_source_ext(ext)
                     && !moss_core::asset_paths::is_webp_source_ext(ext)
@@ -425,6 +426,7 @@ impl SkipReason {
                 "CMYK JPEG with a print profile: published as the original",
             ),
             SkipReason::NotAnImage => Some("not a recognised image format"),
+            SkipReason::Heic => Some("this computer cannot read HEIC pictures: build once on a Mac or iPhone"),
             _ => None,
         }
     }
@@ -434,7 +436,7 @@ impl SkipReason {
 ///
 /// Called before any decoding work. Two tiers:
 ///
-/// 1. Extension-only checks (`Svg`/`Heic`) and the animated-gif/webp sniff —
+/// 1. Extension-only checks (`Svg`), a HEIF with no decoder and no kept encode, and the animated-gif/webp sniff —
 ///    always run fresh, never cached. The animated check is deliberately
 ///    left uncached per `scan.rs`'s documented policy (a stale cached
 ///    `is_animated` could silently mis-skip a file edited in place); it's
@@ -497,7 +499,14 @@ pub(crate) fn should_skip(
     if ext_lower == "svg" {
         return Some(SkipReason::Svg);
     }
-    if ext_lower == "heic" || ext_lower == "heif" {
+    // Before the format probe: a record another computer wrote says "encode
+    // it", which this one cannot. Its encodes, travelling with the folder,
+    // still serve; with none, nothing about the bytes is decided here, so
+    // nothing is written down.
+    if super::sniff::is_heif(source_path)
+        && !super::decode::decodes_heif(source_path)
+        && super::rungs::kept_base(transforms, source_oid, &config.to_params(), source_path, config.max_edge).is_none()
+    {
         return Some(SkipReason::Heic);
     }
     if ext_lower == "gif" && is_animated_gif(source_path) {
@@ -623,7 +632,6 @@ fn probe_cmyk_magic_already_small(
     // failed" advisory — alarming for something that was never an image.
     //
     // SVG is excluded above (no magic bytes to check for text formats).
-    // HEIC/HEIF is excluded above (handled by extension before we reach here).
     // For all other image extensions, a magic MISMATCH means NotAnImage —
     // an unreadable file means nothing at all, and takes the SourceInTheCloud
     // path so the caller registers the variant promise and the verdict is
@@ -748,6 +756,9 @@ pub(crate) fn collect_images_for_conversion(
             // has already promised — see `ImageConversionItem::skip`. The
             // `<picture>` promise is only ever made for png/jpg/jpeg, so a
             // `NotAnImage` gif or a mislabelled webp still drops here.
+            if let (SkipReason::Heic, Some(message)) = (&reason, reason.failure_message()) {
+                log::warn!("{}: {message}", media_meta.path);
+            }
             if reason.settles_a_promised_variant(&media_meta.file_type) {
                 log::debug!(
                     "Image {}: {:?} — registering its variants, skipping the encode",

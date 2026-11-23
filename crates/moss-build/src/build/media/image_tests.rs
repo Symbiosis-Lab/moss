@@ -1735,14 +1735,44 @@ fn should_skip_svg() {
     assert_eq!(reason, Some(SkipReason::Svg));
 }
 
+fn heic_at(h: &TestHarness, name: &str) -> (PathBuf, String) {
+    let src = h._tmp.path().join(name);
+    fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/images/heic/tiled-1100x700.heic"), &src).unwrap();
+    let oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+    (src, oid)
+}
+
 #[test]
-fn should_skip_heic() {
+fn a_heic_with_no_decoder_and_no_kept_encode_is_skipped_and_nothing_is_written_down() {
     let h = harness();
-    let src = h._tmp.path().join("pic.heic");
-    fs::write(&src, b"\x00\x00\x00\x20ftypheic").unwrap();
+    let (src, oid) = heic_at(&h, "pic.heic");
+    let _off = super::super::decode::no_heif_decoder::at(&src);
     let cfg = ImageCompressionConfig::default();
-    let reason = should_skip(&src, "heic", 100, &cfg, &h.transforms, "fake_oid", false);
-    assert_eq!(reason, Some(SkipReason::Heic));
+    let size = fs::metadata(&src).unwrap().len();
+    assert_eq!(should_skip(&src, "heic", size, &cfg, &h.transforms, &oid, false), Some(SkipReason::Heic));
+    assert!(
+        !matches!(h.transforms.read(&oid, crate::build::cache::RecordMode::Request), crate::build::cache::RecordRead::Present(_)),
+        "a computer without a decoder writes no verdict about the picture"
+    );
+}
+
+#[cfg(target_vendor = "apple")]
+#[test]
+fn a_heic_a_mac_encoded_builds_from_its_kept_encode_where_nothing_decodes_it() {
+    let h = harness();
+    let (src, oid) = heic_at(&h, "pic.heic");
+    let cfg = ImageCompressionConfig::default();
+    let size = fs::metadata(&src).unwrap().len();
+    // The Mac: decodes, probes, encodes.
+    assert_eq!(should_skip(&src, "heic", size, &cfg, &h.transforms, &oid, false), None);
+    let made = convert_single_image(&src, &oid, "pic.heic.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &cfg, None, None, &Default::default());
+    assert!(made.error.is_none(), "{:?}", made.error);
+    // A computer with no decoder, reading the same folder's cache.
+    let _off = super::super::decode::no_heif_decoder::at(&src);
+    assert_eq!(should_skip(&src, "heic", size, &cfg, &h.transforms, &oid, false), None);
+    fs::remove_file(h.staging.join("pic.heic.webp")).unwrap();
+    let again = convert_single_image(&src, &oid, "pic.heic.webp", &h.temp, &h.staging, &h.objects, &h.transforms, &cfg, None, None, &Default::default());
+    assert!(again.error.is_none() && h.staging.join("pic.heic.webp").exists(), "{:?}", again.error);
 }
 
 /// The probe's verdict is worked out again from the source: adding it to a
@@ -2814,17 +2844,18 @@ fn test_collect_images_filters_skipped() {
 
     let items = collect_images_for_conversion(&structure, &transforms, &mut hash_index, &cfg, None);
 
-    // svg and heic get a bare <img> and drop here; the html-as-png is a
-    // promised `<picture>` source, so it is collected WITH its verdict for the
-    // registration loop to settle (`ImageConversionItem::skip`).
+    // svg gets a bare <img> and drops here. The html-as-png and the heic that
+    // is not a picture both had variants promised, so each is collected WITH
+    // its verdict for the registration loop to settle (`ImageConversionItem::skip`).
     let by_path = |p: &str| {
         items
             .iter()
             .find(|i| i.source_path == PathBuf::from(p))
             .unwrap_or_else(|| panic!("{p} must be collected"))
     };
-    assert_eq!(items.len(), 2, "svg and heic must be filtered: {items:?}");
+    assert_eq!(items.len(), 3, "svg must be filtered: {items:?}");
     assert_eq!(by_path("Test.png").skip, Some(SkipReason::NotAnImage));
+    assert_eq!(by_path("pic.heic").skip, Some(SkipReason::NotAnImage));
     assert_eq!(by_path("photo.jpg").skip, None);
     assert_eq!(items[0].source_path, PathBuf::from("photo.jpg"));
     assert_eq!(items[0].ext, "jpg");
@@ -2951,6 +2982,23 @@ fn a_cmyk_jpeg_is_collected_with_its_verdict_so_its_source_can_be_settled() {
     let items = collect_images_for_conversion(&structure, &transforms, &mut hash_index, &cfg, None);
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].skip, Some(SkipReason::Cmyk));
+}
+
+#[test]
+fn a_heic_no_computer_here_can_read_is_collected_so_its_promised_encodes_settle() {
+    let (mut structure, _tmp) = build_project_with_images(&[("pic.heic", "heic", None, true)]);
+    let pic = _tmp.path().join("pic.heic");
+    fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/images/heic/tiled-1100x700.heic"), &pic).unwrap();
+    structure.image_files[0].size = fs::metadata(&pic).unwrap().len();
+    let _off = super::super::decode::no_heif_decoder::at(&pic);
+    let transforms = crate::build::cache::TransformCache::new(
+        _tmp.path().join("cache_transforms"),
+        crate::build::cache::ObjectStore::new(_tmp.path().join("cache_objects")),
+    );
+    let cfg = ImageCompressionConfig { min_size_kb: 0, ..Default::default() };
+
+    let items = collect_images_for_conversion(&structure, &transforms, &mut crate::build::cache::HashIndex::new(), &cfg, None);
+    assert_eq!(items.iter().map(|item| item.skip.clone()).collect::<Vec<_>>(), [Some(SkipReason::Heic)]);
 }
 
 #[test]

@@ -299,10 +299,7 @@ pub fn extract_media_metadata(
     modified: Option<String>,
     ffmpeg: Option<&FFmpegManager>,
 ) -> MediaMetadata {
-    let is_image = matches!(
-        extension,
-        "jpg" | "jpeg" | "png" | "gif" | "webp" | "svg" | "avif"
-    );
+    let is_image = classify_extension(extension) == ScanBucket::Image;
 
     // A cloud-evicted source cannot be probed. Image decoding reads bytes, and
     // ffprobe is a subprocess whose failure arrives as a non-zero exit status
@@ -397,7 +394,7 @@ pub(crate) const MEDIA_META_VERSION: u32 = 6;
 /// Images whose dominant colour and placeholder need a pixel decode (an SVG
 /// has neither).
 pub(crate) fn is_raster_image(extension: &str) -> bool {
-    matches!(extension, "jpg" | "jpeg" | "png" | "gif" | "webp" | "avif")
+    matches!(extension, "jpg" | "jpeg" | "png" | "gif" | "webp" | "avif" | "heic" | "heif")
 }
 
 /// Whether a `media/meta` entry written under `params` is still right for a
