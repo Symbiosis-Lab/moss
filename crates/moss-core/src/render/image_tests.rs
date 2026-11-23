@@ -2048,3 +2048,34 @@ fn a_contained_picture_gets_data_fit_and_no_colour_band() {
     let html = synthesize_image_html("pic.jpg", "", &s, ImageContext::MarkdownInline, &cover);
     assert!(html.contains(r#"style="background-color:#123456;object-fit:cover" data-fit="cover""#), "got: {html}");
 }
+
+#[test]
+fn a_heic_names_only_its_webp_encodes_and_the_phone_rung_in_src() {
+    let assets = snapshot_dims("IMG_1.heic", 4032, 3024);
+    let html = synthesize_image_html("IMG_1.heic", "alt", &assets, ImageContext::MarkdownInline, &ImageRenderOptions::default());
+    assert_eq!(
+        html,
+        r#"<img src="IMG_1.heic.w1200.webp" srcset="IMG_1.heic.w800.webp 800w, IMG_1.heic.w1200.webp 1200w, IMG_1.heic.w1600.webp 1600w, IMG_1.heic.webp 2400w" sizes="auto, (min-width: 48rem) 47.25rem, 100vw" width="4032" height="3024" loading="lazy" alt="alt" />"#
+    );
+}
+
+#[test]
+fn a_small_heic_names_its_base_webp() {
+    let assets = snapshot_dims("IMG_2.HEIC", 600, 400);
+    let html = synthesize_image_html("IMG_2.HEIC", "alt", &assets, ImageContext::MarkdownInline, &ImageRenderOptions::default());
+    assert_eq!(html, r#"<img src="IMG_2.HEIC.webp" width="600" height="400" loading="lazy" alt="alt" />"#);
+}
+
+#[test]
+fn a_heic_with_its_wider_rungs_cold_names_the_widest_kept_rung() {
+    let mut assets = snapshot_dims("IMG_3.heic", 4032, 3024);
+    assets.kept_rungs.insert(PathBuf::from("IMG_3.heic"), vec![800]);
+    let html = synthesize_image_html("IMG_3.heic", "alt", &assets, ImageContext::MarkdownInline, &ImageRenderOptions::default());
+    assert!(html.starts_with(r#"<img src="IMG_3.heic.w800.webp" srcset="IMG_3.heic.w800.webp 800w, IMG_3.heic.webp 2400w""#), "{html}");
+}
+
+#[test]
+fn a_heic_and_a_jpeg_of_one_name_never_share_an_encode() {
+    assert_ne!(crate::asset_paths::to_webp("IMG_1.HEIC"), crate::asset_paths::to_webp("IMG_1.JPG"));
+    assert_ne!(crate::asset_paths::to_webp_rung("IMG_1.HEIC", 800), crate::asset_paths::to_webp_rung("IMG_1.JPG", 800));
+}

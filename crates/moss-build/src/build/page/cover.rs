@@ -207,6 +207,16 @@ pub fn card_pictures_after_cover(listing_cover: Option<&str>, hero_image_url: Op
 /// because data-URIs are an opaque inline-payload scheme — they pass
 /// `ServedPath`'s structural rules (no `/`, no `..`, no reserved-prefix) but
 /// aren't valid as a served asset URL.
+/// A local cover as a picture every browser and crawler can draw: a HEIF,
+/// which only Safari draws, by its base webp encode, the one that exists
+/// whenever any encode of it does.
+fn drawable(path: &str) -> std::borrow::Cow<'_, str> {
+    match path.rsplit_once('.') {
+        Some((_, ext)) if moss_core::asset_paths::is_heif_source_ext(ext) => moss_core::asset_paths::to_webp(path).into(),
+        _ => path.into(),
+    }
+}
+
 fn cover_from_frontmatter(s: Option<&str>) -> Option<CoverRef> {
     let raw = s?;
     if raw.is_empty() {
@@ -240,6 +250,7 @@ fn cover_from_frontmatter(s: Option<&str>) -> Option<CoverRef> {
     let raw = moss_core::asset_paths::to_thumb_if_video(raw)
         .map(std::borrow::Cow::Owned)
         .unwrap_or(std::borrow::Cow::Borrowed(raw));
+    let raw = drawable(&raw);
     let stripped = raw.trim_start_matches('/');
     // `raw` arrives already percent-encoded (it is `PathResolver::resolve_url`
     // output), and `ServedPath::from_source` lowercases directory segments —
@@ -361,7 +372,7 @@ pub fn share_cover_url<F: Fn(&str) -> String>(
     if let Some(raw) = hero_image_url.filter(|s| !s.is_empty()) {
         let (path, _attrs) = moss_core::media::split_pipe(raw);
         if is_same_origin_url(path) && detect_cover_type(path, None) == CoverType::Image {
-            return Some(path.to_string());
+            return Some(drawable(path).into_owned());
         }
     }
 
@@ -372,7 +383,7 @@ pub fn share_cover_url<F: Fn(&str) -> String>(
         return None;
     }
     let url = resolve_cover(path);
-    is_same_origin_url(&url).then_some(url)
+    is_same_origin_url(&url).then(|| drawable(&url).into_owned())
 }
 
 /// The `data-share-cover` attribute for a page, or an empty string when the
@@ -491,6 +502,17 @@ mod tests {
             CoverRef::Local(sp) => assert_eq!(sp.as_str(), "images/page.jpg"),
             other => panic!("expected the path unchanged, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_heic_cover_or_hero_is_shared_as_its_webp_encode() {
+        let root = std::path::PathBuf::from("/tmp");
+        let mut inputs = empty_inputs(&root);
+        inputs.page_cover = Some("/notes/IMG_1.HEIC");
+        assert!(matches!(resolve_cover_chain(&inputs), Some(CoverRef::Local(sp)) if sp.as_str() == "notes/IMG_1.HEIC.webp"));
+        inputs.page_cover = None;
+        inputs.page_hero_image_url = Some("/notes/IMG_2.heic");
+        assert!(matches!(resolve_cover_chain(&inputs), Some(CoverRef::Local(sp)) if sp.as_str() == "notes/IMG_2.heic.webp"));
     }
 
     #[test]
@@ -698,6 +720,12 @@ mod tests {
         } else {
             format!("/{}", raw.trim_start_matches('/')) // allow:served-path-url-construct
         }
+    }
+
+    #[test]
+    fn a_heic_share_cover_is_its_webp_encode() {
+        assert_eq!(share_cover_url(Some("/notes/IMG_1.HEIC"), None, None, resolve).as_deref(), Some("/notes/IMG_1.HEIC.webp"));
+        assert_eq!(share_cover_url(None, Some("notes/IMG_2.heic"), None, resolve).as_deref(), Some("/notes/IMG_2.heic.webp"));
     }
 
     #[test]

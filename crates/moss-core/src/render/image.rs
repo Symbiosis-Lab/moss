@@ -50,8 +50,8 @@
 //! additive attrs only, for these bare-img paths.
 
 use crate::asset_paths::{
-    deployed_width, is_ladder_source_ext, is_scroll_shape, is_webp_source_ext, offered_rungs,
-    to_webp, to_webp_rung,
+    deployed_width, is_heif_source_ext, is_ladder_source_ext, is_scroll_shape, is_webp_source_ext, offered_rungs,
+    to_webp, to_webp_rung, PLAIN_SRC_MAX_WIDTH,
 };
 use crate::asset_snapshot::{AssetSnapshot, FALLBACK_HEIGHT, FALLBACK_WIDTH};
 use crate::contract::sizes as ctx_sizes;
@@ -586,6 +586,27 @@ fn synthesize_inner(
     // `scroll` arrives from the caller, decided once (`scroll_treatment`), so
     // the `<img>`'s own `data-aspect` and its container's cannot disagree.
 
+    // A HEIF draws only in Safari, so its page names its webp encodes alone:
+    // the base and rungs in `srcset`, and in `src`, which feeds and email keep,
+    // the widest rung up to `PLAIN_SRC_MAX_WIDTH`. When an encode fails, the
+    // build's repair falls `src` back to the original.
+    if is_heif_source(src) {
+        let base = to_webp(src);
+        let img_tag = match resolve_ladder(assets, src, false) {
+            None => render_img_at(src, &base, alt, assets, options, None, scroll),
+            Some((rungs, base_w)) => {
+                let srcset = build_srcset(src, &base, &rungs, base_w);
+                let plain = if base_w <= PLAIN_SRC_MAX_WIDTH {
+                    base
+                } else {
+                    rungs.iter().rev().find(|&&w| w <= PLAIN_SRC_MAX_WIDTH).map_or(base, |&w| to_webp_rung(src, w))
+                };
+                render_img_at(src, &plain, alt, assets, options, Some((&srcset, sizes_value)), scroll)
+            }
+        };
+        return wrap_scroll_container(img_tag, scroll, options.vertical);
+    }
+
     if is_webp_source(src) {
         let img_tag = match resolve_ladder(assets, src, lookup_animated(assets, src)) {
             None => render_img_tag(src, alt, assets, options, None, scroll),
@@ -731,6 +752,10 @@ fn wrap_scroll_container(img_tag: String, scroll: bool, vertical: bool) -> Strin
 fn is_raster_original(src: &str) -> bool {
     src.rsplit_once('.')
         .is_some_and(|(_, ext)| is_ladder_source_ext(ext))
+}
+
+fn is_heif_source(src: &str) -> bool {
+    src.rsplit_once('.').is_some_and(|(_, ext)| is_heif_source_ext(ext))
 }
 
 /// Returns true when `src` is a webp SOURCE (extension `.webp`, case-
@@ -962,6 +987,20 @@ pub(crate) fn render_img_tag(
     srcset_sizes: Option<(&str, &str)>,
     is_scroll: bool,
 ) -> String {
+    render_img_at(src, src, alt, assets, options, srcset_sizes, is_scroll)
+}
+
+/// [`render_img_tag`] for a source whose `<img src>` names another file
+/// (`shown`): its size and placeholder are still looked up under `src`.
+fn render_img_at(
+    src: &str,
+    shown: &str,
+    alt: &str,
+    assets: &AssetSnapshot,
+    options: &ImageRenderOptions<'_>,
+    srcset_sizes: Option<(&str, &str)>,
+    is_scroll: bool,
+) -> String {
     // AssetSnapshot's `dims` is keyed by PathBuf; the src arrives as the
     // resolved URL the upstream renderer baked (potentially absolute, e.g.
     // `/image/cover.jpg`). Scan stores relative keys (`image/cover.jpg`),
@@ -1032,7 +1071,7 @@ pub(crate) fn render_img_tag(
     format!(
         r#"<img{class_attr} src="{src_esc}"{srcset} width="{w}" height="{h}"{loading}{style}{scroll} alt="{alt}"{extra} />"#,
         class_attr = class_attr,
-        src_esc = html_escape(src),
+        src_esc = html_escape(shown),
         srcset = srcset_attr,
         w = width,
         h = height,
