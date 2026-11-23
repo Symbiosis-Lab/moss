@@ -5,7 +5,7 @@
 //! around an article for the build and for every host.
 
 use crate::frontmatter_typed::SeriesField;
-use crate::sort::{ResolvedSort, SortableDoc, SortableLabel};
+use crate::sort::{ResolvedSort, SortField, SortableDoc, SortableLabel};
 
 /// The site's not-found page, served at `/404/`.
 pub const NOT_FOUND_PAGE: &str = "404/index.html";
@@ -69,4 +69,76 @@ pub trait SitePage: SortableDoc + SortableLabel {
             series_default: false,
         })
     }
+}
+
+/// Every fact a whole-site pass reads about one page, as owned values. A host
+/// builds these from the site's texts; the build's documents produce the same
+/// through [`PageFacts::from_page`], so a test can hold the two equal.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PageFacts {
+    pub url_path: String,
+    /// The event `start` if the page has one, else its `date`.
+    pub date: Option<String>,
+    pub weight: Option<i32>,
+    pub declared_sort: Option<SortField>,
+    pub clean_stem: String,
+    pub is_folder_index: bool,
+    pub order_match_name: String,
+    pub label: String,
+    pub layout: Option<String>,
+    pub series: Option<SeriesField>,
+    pub draft: Option<bool>,
+    pub listed: Option<bool>,
+    pub search_engines: Option<bool>,
+    pub slot_only: bool,
+    pub hidden_home: Option<String>,
+    pub direct_children_sort: Option<ResolvedSort>,
+}
+
+impl PageFacts {
+    pub fn from_page<P: SitePage + ?Sized>(page: &P) -> Self {
+        Self {
+            url_path: page.url_path().to_string(),
+            date: page.date().map(str::to_string),
+            weight: page.weight(),
+            declared_sort: page.declared_sort().cloned(),
+            clean_stem: page.clean_stem().to_string(),
+            is_folder_index: page.is_folder_index(),
+            order_match_name: page.order_match_name().to_string(),
+            label: page.label().to_string(),
+            layout: page.layout().map(str::to_string),
+            series: page.series().cloned(),
+            draft: page.draft(),
+            listed: page.listed(),
+            search_engines: page.search_engines(),
+            slot_only: page.slot_only(),
+            hidden_home: page.hidden_home().map(str::to_string),
+            direct_children_sort: page.direct_children_sort().cloned(),
+        }
+    }
+}
+
+impl SortableDoc for PageFacts {
+    fn url_path(&self) -> &str { &self.url_path }
+    fn date(&self) -> Option<&str> { self.date.as_deref() }
+    fn weight(&self) -> Option<i32> { self.weight }
+    fn declared_sort(&self) -> Option<&SortField> { self.declared_sort.as_ref() }
+    fn clean_stem(&self) -> &str { &self.clean_stem }
+    fn is_folder_index(&self) -> bool { self.is_folder_index }
+    fn order_match_name(&self) -> &str { &self.order_match_name }
+}
+
+impl SortableLabel for PageFacts {
+    fn label(&self) -> &str { &self.label }
+}
+
+impl SitePage for PageFacts {
+    fn layout(&self) -> Option<&str> { self.layout.as_deref() }
+    fn series(&self) -> Option<&SeriesField> { self.series.as_ref() }
+    fn draft(&self) -> Option<bool> { self.draft }
+    fn listed(&self) -> Option<bool> { self.listed }
+    fn search_engines(&self) -> Option<bool> { self.search_engines }
+    fn slot_only(&self) -> bool { self.slot_only }
+    fn hidden_home(&self) -> Option<&str> { self.hidden_home.as_deref() }
+    fn direct_children_sort(&self) -> Option<&ResolvedSort> { self.direct_children_sort.as_ref() }
 }

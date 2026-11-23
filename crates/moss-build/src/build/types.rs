@@ -1473,6 +1473,34 @@ mod tests {
     /// never hit this, since its clean_stem already happened to equal
     /// "appendix"). `appendix` must keep its declared first position.
     #[test]
+    fn page_facts_sort_as_the_documents_they_come_from() {
+        let folder = ParsedDocument {
+            url_path: "trips/京都-鎌倉/index.html".to_string(),
+            source_path: Some("trips/京都・鎌倉/index.md".to_string()),
+            clean_stem: "index".to_string(),
+            kind: moss_core::PageKind::Folder,
+            ..Default::default()
+        };
+        let page = ParsedDocument {
+            url_path: "trips/osaka.html".to_string(),
+            clean_stem: "osaka".to_string(),
+            kind: moss_core::PageKind::Article,
+            ..Default::default()
+        };
+        let resolved = moss_core::sort::ResolvedSort {
+            axis: moss_core::sort::SortAxis::Title,
+            explicit_order: Some(vec!["京都・鎌倉".to_string(), "osaka".to_string()]),
+            series_default: true,
+        };
+        let docs: Vec<&ParsedDocument> = vec![&page, &folder];
+        let facts: Vec<moss_core::page::site_page::PageFacts> = docs.iter().map(|d| moss_core::page::site_page::PageFacts::from_page(*d)).collect();
+        let by_docs: Vec<&str> = moss_core::sort::sort_by_resolved(&docs, &resolved).iter().map(|d| d.url_path.as_str()).collect();
+        let by_facts: Vec<&str> = moss_core::sort::sort_by_resolved(&facts.iter().collect::<Vec<_>>(), &resolved).iter().map(|f| f.url_path.as_str()).collect();
+        assert_eq!(by_docs, ["trips/京都-鎌倉/index.html", "trips/osaka.html"]);
+        assert_eq!(by_facts, by_docs);
+    }
+
+    #[test]
     fn explicit_order_keeps_a_subfolder_in_its_declared_position() {
         let intro = ParsedDocument {
             url_path: "journal/intro.html".to_string(),
