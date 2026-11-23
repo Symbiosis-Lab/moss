@@ -1870,7 +1870,6 @@ const EN = {
   'login.failure.retry': 'Retry',             // Retry button label
   'login.closing.in': 'Signed in · closing in {n}',
   'login.closing.said': 'Signed in. Closing in {n} seconds.',
-  'login.closing.keep': 'Keep open',
 
   // [plugin settings — connection status row]
   // Shown for login-capable plugins in their settings section.
@@ -3541,7 +3540,6 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'login.failure.retry': 'Erneut versuchen',
     'login.closing.in': 'Angemeldet · schließt in {n}',
     'login.closing.said': 'Angemeldet. Schließt in {n} Sekunden.',
-    'login.closing.keep': 'Offen lassen',
     'plugin.connection.connected': 'Angemeldet als {user}',
     'plugin.connection.signed_in': 'Angemeldet',
     'plugin.connection.connect': 'Bei {name} anmelden',
@@ -5249,7 +5247,6 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'login.failure.retry': '重试',
     'login.closing.in': '已登录 · {n} 秒后关闭',
     'login.closing.said': '已登录。{n} 秒后关闭。',
-    'login.closing.keep': '保持打开',
 
     // [plugin settings — connection status row]
     'plugin.connection.connected': '已登录：{user}',
@@ -6961,7 +6958,6 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'login.failure.retry': '重試',
     'login.closing.in': '已登入 · {n} 秒後關閉',
     'login.closing.said': '已登入。{n} 秒後關閉。',
-    'login.closing.keep': '保持開啟',
 
     // [plugin settings — connection status row]
     'plugin.connection.connected': '已登入：{user}',

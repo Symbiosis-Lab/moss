@@ -783,10 +783,10 @@ mod tests {
         }
     }
 
-    /// Keep open shows a finished sign-in's page again; a click on it reaches a
-    /// listener that ended with the hook, and the next sign-in runs as usual.
+    /// A click on a finished sign-in's page reaches a listener that ended with
+    /// the hook, and the next sign-in runs as usual.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_click_on_a_signed_in_page_kept_open_reaches_nothing() {
+    async fn a_click_on_a_finished_sign_in_page_reaches_nothing() {
         let (_dir, project) = folder_with_channel(&format!(r#"{PICKS_A_SERVER}
             return {{ status: "completed", account: {{ id: server + "/1" }} }};"#));
         let (manager, plugin, desk) = manager_at_desk(&project);
