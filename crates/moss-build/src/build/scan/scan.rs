@@ -326,6 +326,7 @@ pub fn extract_media_metadata(
     let (dominant_color, lqip_data_uri) = if evicted {
         (None, None)
     } else if is_image {
+        let _permit = scan_decodes().acquire(crate::build::media::image::megapixels(dimensions));
         extract_color_and_lqip(path)
     } else if let Some(mgr) = ffmpeg {
         (crate::build::media::dimensions::extract_video_dominant_color(mgr, path), None)
@@ -343,6 +344,13 @@ pub fn extract_media_metadata(
         lqip_data_uri,
         is_animated: !evicted && sniff_is_animated(path, extension),
     }
+}
+
+/// Bounds every scan's full decodes together. A build's scan ends before its
+/// WebP encode starts, so the two never hold one build's budget at once.
+fn scan_decodes() -> &'static crate::build::media::image::MegapixelBudget {
+    static BUDGET: std::sync::OnceLock<crate::build::media::image::MegapixelBudget> = std::sync::OnceLock::new();
+    BUDGET.get_or_init(|| crate::build::media::image::MegapixelBudget::new(crate::build::media::image::decode_budget_mp()))
 }
 
 /// Transform name used for cached media metadata in the TransformCache.
@@ -1358,113 +1366,57 @@ pub(crate) fn scan_folder_with_dedup_emit_with_error(
 
     let walk_elapsed = scan_walk_start.elapsed();
 
-    // Extract raster-image metadata in PARALLEL. Each task uses a fresh
-    // local HashIndex (extract_media_metadata_cached needs `&mut`; on a warm
-    // build it records the file's carried-forward content hash) — merged into
-    // new_index in walk order afterward. `old_index` is read-only shared;
-    // ObjectStore/TransformCache are path-only structs (Sync) whose writes go
-    // through content-addressed / stat-keyed atomic temp+rename, so concurrent
-    // writes to distinct keys don't conflict. Videos are NOT here — their ffmpeg
-    // resolution uses a !Sync std OnceCell and stays on the serial walk.
+    // Image metadata on one worker per core. Preview reads only headers; build
+    // and deploy decode pixels for colour and placeholder, each decode inside
+    // a megapixel budget (`scan_decodes`). Each task records hashes
+    // in its own HashIndex, merged in walk order afterward; the stores write
+    // by content or stat key through temp+rename, so distinct keys never
+    // collide. Videos stay on the serial walk: their ffmpeg handle is !Sync.
     let img_phase_start = std::time::Instant::now();
     let img_n = image_entries.len();
-    if defer_placeholders {
-        // PREVIEW path — dimensions only (header read, ~1ms/image), the dominant
-        // cold-scan cost. Parallelize with RAW OS THREADS, not rayon: a full JPEG
-        // decode goes through jpeg-decoder, which itself parallelizes with rayon,
-        // so calling it from inside a rayon `par_iter` NESTS rayon on the same
-        // pool and non-deterministically corrupts decodes ("not an SOI marker" on
-        // valid files). std::thread keeps any jpeg-decoder rayon at top level.
-        // (Header-only dimension reads don't full-decode, so this path is doubly
-        // safe; the build/deploy branch below, which DOES full-decode for
-        // color+LQIP, must stay serial.)
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
 
-        let n_entries = image_entries.len();
-        let next = AtomicUsize::new(0);
-        // Indexed result slots preserve walk order regardless of completion order.
-        let results: Vec<Mutex<Option<(MediaMetadata, HashIndex)>>> =
-            (0..n_entries).map(|_| Mutex::new(None)).collect();
-
-        // Only RASTER images run on worker threads. They take the dimensions-only
-        // (header read) deferred path and never full-decode. SVG is NOT raster —
-        // `is_image` in extract_media_metadata_cached excludes it, so it falls
-        // through to the full-extract path that calls `image::open`. That must
-        // never run on a worker (image::open decodes via jpeg-decoder, which
-        // nests rayon → corruption). Today image 0.24 can't decode SVG so it's
-        // inert, but keep the parallel path structurally decode-free: process
-        // SVG (and any future non-raster) SERIALLY, into the same indexed slots.
-        let extract_one = |e: &ImageEntry| -> (MediaMetadata, HashIndex) {
-            let mut local_index = HashIndex::new();
-            let meta = extract_media_metadata_cached(
-                &e.abs_path,
-                &e.relative_path,
-                &e.extension,
-                &e.stat,
-                e.modified.clone(),
-                None, // images don't need FFmpeg
-                &old_index,
-                &mut local_index,
-                &transform_cache,
-                metadata_dedup,
-                defer_placeholders,
-            );
-            (meta, local_index)
-        };
-
-        let n_threads = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4)
-            .min(n_entries.max(1));
-        std::thread::scope(|scope| {
-            for _ in 0..n_threads {
-                scope.spawn(|| loop {
-                    let i = next.fetch_add(1, Ordering::Relaxed);
-                    if i >= n_entries {
-                        break;
-                    }
-                    let e = &image_entries[i];
-                    if !is_raster_image(&e.extension) {
-                        continue; // non-raster handled serially below
-                    }
-                    *results[i].lock().unwrap() = Some(extract_one(e));
-                });
-            }
-        });
-        // Serial pass for non-raster (SVG) entries — decode-free guarantee.
-        for (i, e) in image_entries.iter().enumerate() {
-            if is_raster_image(&e.extension) {
-                continue;
-            }
-            *results[i].lock().unwrap() = Some(extract_one(e));
+    let n_entries = image_entries.len();
+    let next = AtomicUsize::new(0);
+    // Indexed result slots preserve walk order regardless of completion order.
+    let results: Vec<Mutex<Option<(MediaMetadata, HashIndex)>>> =
+        (0..n_entries).map(|_| Mutex::new(None)).collect();
+    let extract_one = |e: &ImageEntry| -> (MediaMetadata, HashIndex) {
+        let mut local_index = HashIndex::new();
+        let meta = extract_media_metadata_cached(
+            &e.abs_path,
+            &e.relative_path,
+            &e.extension,
+            &e.stat,
+            e.modified.clone(),
+            None, // images don't need FFmpeg
+            &old_index,
+            &mut local_index,
+            &transform_cache,
+            metadata_dedup,
+            defer_placeholders,
+        );
+        (meta, local_index)
+    };
+    let n_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(n_entries.max(1));
+    std::thread::scope(|scope| {
+        for _ in 0..n_threads {
+            scope.spawn(|| loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                if i >= n_entries {
+                    break;
+                }
+                *results[i].lock().unwrap() = Some(extract_one(&image_entries[i]));
+            });
         }
-        for slot in results {
-            if let Some((meta, local_index)) = slot.into_inner().unwrap() {
-                new_index.entries.extend(local_index.entries);
-                image_files.push(meta);
-            }
-        }
-    } else {
-        // BUILD/DEPLOY path — full pixel decode for dominant color + LQIP. Runs
-        // SERIALLY: jpeg-decoder's internal rayon makes concurrent full decodes
-        // non-deterministic (verified: a colliding decode yields varying color/
-        // dims across runs). This path is not latency-critical (deploy, not the
-        // preview first paint), so correctness wins.
-        for e in &image_entries {
-            let meta = extract_media_metadata_cached(
-                &e.abs_path,
-                &e.relative_path,
-                &e.extension,
-                &e.stat,
-                e.modified.clone(),
-                None,
-                &old_index,
-                &mut new_index,
-                &transform_cache,
-                metadata_dedup,
-                defer_placeholders,
-            );
+    });
+    for slot in results {
+        if let Some((meta, local_index)) = slot.into_inner().unwrap() {
+            new_index.entries.extend(local_index.entries);
             image_files.push(meta);
         }
     }

@@ -1695,7 +1695,21 @@ impl ImageRunContext {
 /// An item's source megapixels, rounded up; unknown dimensions count as the
 /// largest possible.
 fn item_megapixels(item: &ImageConversionItem) -> u64 {
-    item.dimensions.map_or(u64::MAX, |(w, h)| (w as u64 * h as u64).div_ceil(1_000_000))
+    megapixels(item.dimensions)
+}
+
+/// Megapixels one build's full decodes may hold at once: ~64 MP ≈ ~256 MB of
+/// decoded RGBA + ~2-3× that in resize/encode scratch, under a GB even with a
+/// couple of huge images; an unbounded per-core decode runs out of memory on
+/// large photos. `MOSS_ENCODE_MP_BUDGET` overrides it for lower-RAM hardware
+/// without a recompile.
+pub(crate) fn decode_budget_mp() -> u64 {
+    std::env::var("MOSS_ENCODE_MP_BUDGET").ok().and_then(|s| s.parse::<u64>().ok()).filter(|&n| n > 0).unwrap_or(64)
+}
+
+/// Source megapixels to reserve; unknown dimensions reserve the whole budget.
+pub(crate) fn megapixels(dimensions: Option<(u32, u32)>) -> u64 {
+    dimensions.map_or(u64::MAX, |(w, h)| (w as u64 * h as u64).div_ceil(1_000_000))
 }
 
 /// A megapixels-in-flight budget: a counting semaphore whose unit is source
@@ -1715,19 +1729,19 @@ fn item_megapixels(item: &ImageConversionItem) -> u64 {
 /// self-throttle (a 34 MP image against a 64 MP budget runs ~alone). A permit is
 /// released on drop, so it's returned on a normal return, an early bail, or a
 /// panic mid-encode that unwinds.
-struct MegapixelBudget {
+pub(crate) struct MegapixelBudget {
     available: std::sync::Mutex<u64>,
     cv: std::sync::Condvar,
     total: u64,
 }
 
-struct MpPermit<'a> {
+pub(crate) struct MpPermit<'a> {
     budget: &'a MegapixelBudget,
     held: u64,
 }
 
 impl MegapixelBudget {
-    fn new(total_mp: u64) -> Self {
+    pub(crate) fn new(total_mp: u64) -> Self {
         Self {
             available: std::sync::Mutex::new(total_mp),
             cv: std::sync::Condvar::new(),
@@ -1737,7 +1751,7 @@ impl MegapixelBudget {
 
     /// Block until `want` megapixels are free (clamped to `[1, total]` so an
     /// image larger than the whole budget still runs — alone), then reserve them.
-    fn acquire(&self, want: u64) -> MpPermit<'_> {
+    pub(crate) fn acquire(&self, want: u64) -> MpPermit<'_> {
         let want = want.clamp(1, self.total);
         let mut available = self.available.lock().unwrap();
         while *available < want {
@@ -2034,19 +2048,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
             .map(|n| n.get())
             .unwrap_or(4)
             .min(n_items.max(1));
-        // ~64 MP in flight ≈ ~256 MB of decoded RGBA + ~2-3× that in transient
-        // resize/encode scratch → comfortably under a GB even with a couple of
-        // huge images, and safe running alongside the editor + a browser. This
-        // replaced an unbounded per-core encode that OOM-SIGKILLed the process
-        // on large-photo vaults (max 34 MP). Overridable via
-        // MOSS_ENCODE_MP_BUDGET so a future OOM on lower-RAM hardware (or a
-        // throughput bump on a big machine) needs no recompile.
-        let budget_mp = std::env::var("MOSS_ENCODE_MP_BUDGET")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .filter(|&n| n > 0)
-            .unwrap_or(64);
-        let mp_budget = MegapixelBudget::new(budget_mp);
+        let mp_budget = MegapixelBudget::new(decode_budget_mp());
         // Encodes keep running while the window is hidden, at background QoS.
         let gate = services.derived_work_gate();
         let work = crate::build::cache::LocalFirst::new(n_items);
