@@ -94,7 +94,7 @@ for (const scheme of ['light', 'dark'] as const) {
         const field = page.locator('.moss-form input.moss-input:not(.moss-input--boxed)').first();
         await field.click();
         expect(await field.evaluate((el) => getComputedStyle(el).outlineStyle), 'no outline, whatever the theme says').toBe('none');
-        expect(await field.evaluate((el) => getComputedStyle(el).boxShadow), 'the underline takes the accent').toContain('inset');
+        expect(await field.evaluate((el) => getComputedStyle(el).boxShadow), 'a 2px ring inside the field, not an underline alone').toMatch(/0px 0px 0px 2px inset|inset 0px 0px 0px 2px/);
         await expectNothingPaintedOutside(page, field, 'underline field');
       });
 

@@ -186,7 +186,7 @@ for (const scheme of ['light', 'dark'] as const) {
             `<main style="display:grid;gap:16px;max-width:360px">
 <input id="underline" class="moss-input" aria-label="a">
 <form class="moss-subscribe-form" data-moss-hosted="true"><input id="subscribe" class="moss-input" aria-label="b"></form>
-<form class="moss-form"><textarea id="boxed" class="moss-input moss-input--boxed" aria-label="c"></textarea></form>
+<form class="moss-form"><textarea id="boxed" class="moss-input moss-input--boxed" aria-label="c"></textarea><input id="request" class="moss-input" aria-label="h"></form>
 <form class="comment-form"><textarea id="comment-text" aria-label="d"></textarea><input id="comment-field" class="comment-field" aria-label="e"></form>
 <div class="moss-country-search"><input id="country" class="moss-input--boxed" type="text" aria-label="f"></div>
 <div id="search-panel" class="moss-search__panel"><div class="moss-search__field"><input id="search" class="moss-search__input" aria-label="g"></div></div>
@@ -275,6 +275,7 @@ const FOCUS_RULES: Record<string, string[]> = {
   '.moss-input:where(:not(select)):focus, .comment-field:focus, .comment-form textarea:focus': ['underline', 'subscribe', 'comment-text', 'comment-field'],
   '.moss-input:focus, .comment-field:focus, .comment-form textarea:focus': ['underline', 'subscribe', 'comment-text', 'comment-field'],
   '.moss-input--boxed.moss-input--boxed:focus': ['boxed', 'country'],
+  '.moss-form .moss-input:where(:not(select, textarea)):focus': ['request'],
   '.moss-search__panel:has(.moss-search__input:focus)': ['search'],
 };
 // Focus rules whose selector names an input that is a checkbox, not a text field.

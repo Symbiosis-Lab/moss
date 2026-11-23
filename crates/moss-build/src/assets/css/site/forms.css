@@ -70,8 +70,16 @@
   border-color: var(--moss-error, #c85450);
 }
 
-/* Text fields take the field-edge focus in site.css; a checkbox has no edge
-   to draw on, so it keeps a ring. */
+/* An underline field's focus is a 2px ring inside its box (WCAG 2.4.13), clear of the text and drawn
+   on the field's own edge so nothing paints outside it. A text area already has its border. */
+.moss-form .moss-input:where(:not(select, textarea)) {
+  padding-inline: var(--moss-space-xs, 0.5rem);
+}
+.moss-form .moss-input:where(:not(select, textarea)):focus {
+  box-shadow: inset 0 0 0 2px var(--moss-focus-ring);
+}
+
+/* A checkbox has no edge to draw on, so it keeps a ring. */
 .moss-form__choice input:focus-visible {
   outline: 2px solid var(--moss-color-ui-accent);
   outline-offset: 2px;
