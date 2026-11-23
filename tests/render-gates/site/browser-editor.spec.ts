@@ -844,9 +844,19 @@ test(PICTURE_GATE, async ({ page }) => {
   await preview.waitForFunction(() => document.body?.innerText.includes('An album'), null, { timeout: 30_000 });
   await editor.waitForSelector('.cm-line:has-text("Last line.")', { timeout: 30_000 });
 
+  /** A picture address's source, as a folder path without its extension: `/events/quay.w1200.webp` is `events/quay`. */
+  const stemOf = (pathname: string) => decodeURIComponent(pathname).replace(/^\//, '').replace(/(\.w\d+)?\.(webp|avif)$/, '');
+  const sourceStems = () => new Set(readdirSync(serve.site, { recursive: true, encoding: 'utf8' }).filter((f) => !f.startsWith('.moss')).map((f) => f.replace(/\.[^./]+$/, '')));
+  // A 404 counts only while the picture is at that path in the folder: a page the preview still shows may name a
+  // picture that has not landed yet, or has just been moved, until the build that replaces the page arrives.
   const notFound: string[] = [];
+  let settled = false;
+  const broken: string[] = [];
   page.on('response', (r) => {
-    if (r.status() === 404 && /harbour|quay|later/.test(r.url())) notFound.push(new URL(r.url()).pathname);
+    if (!/harbour|quay|later/.test(r.url())) return;
+    const pathname = new URL(r.url()).pathname;
+    if (r.status() === 404 && sourceStems().has(stemOf(pathname))) notFound.push(pathname);
+    if (settled && (r.status() === 404 || r.status() === 503)) broken.push(`${r.status()} ${pathname}`);
   });
   /**
    * The preview's picture whose address holds `name`: its drawn size, its `<source>` count and what it loaded.
@@ -890,8 +900,6 @@ test(PICTURE_GATE, async ({ page }) => {
   });
 
   await test.step('a picture the page already names lands in its folder', async () => {
-    // Until now the page named a file that was not there.
-    notFound.splice(0, notFound.length, ...notFound.filter((path) => !path.includes('later')));
     writeFileSync(join(serve.site, 'pictures', 'later.png'), gradient(900, 1200, 200));
     await shown('later');
   });
@@ -915,9 +923,13 @@ test(PICTURE_GATE, async ({ page }) => {
 
     await editor.locator(`.seg[data-path="${inFolder('quay.png')}"]`).dragTo(editor.locator('.seg[data-path="events"]:not(.bc)').first());
     await shown('events/quay');
+    settled = true;
+    await expect.poll(async () => (await picture('events/quay'))?.loaded ?? '', { message: 'the moved picture is loaded by the page that replaced the old one' }).toMatch(/events\/quay.*\.webp/);
+    await page.waitForTimeout(1_000);
   });
 
   expect(notFound, 'the preview answered 404 for a picture that is in the folder').toEqual([]);
+  expect(broken, 'the page shown after the move requested a picture that answered 404 or 503').toEqual([]);
 });
 
 test.describe(PICTURE_MENU, () => {
