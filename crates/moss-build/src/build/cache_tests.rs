@@ -3574,6 +3574,26 @@ fn media_meta_leaves_a_record_the_cloud_holds_unwritten() {
     });
 }
 
+/// A build that could not decode the picture left its content record without
+/// a colour; the first machine that finds one brings that record up to date.
+#[test]
+fn media_meta_fills_in_a_colour_a_content_record_lacked() {
+    crate::infra::home::with_moss_home(|_| {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = TransformCache::for_site(&crate::moss_paths::MossPaths::new(dir.path()));
+        let oid = "f".repeat(64);
+        let meta = |color: Option<&str>| crate::build::cache::CachedMediaMeta { dimensions: Some((4, 3)), dominant_color: color.map(str::to_string), lqip_data_uri: None, is_animated: false };
+        let write = |m| crate::build::scan::scan::write_media_meta(&cache, None, Some(&oid), "heic", 1, &m);
+        let read = || crate::build::scan::scan::read_cached_meta(&cache, &oid, "heic").and_then(|m| m.dominant_color);
+
+        write(meta(None));
+        write(meta(Some("#808080")));
+        assert_eq!(read().as_deref(), Some("#808080"));
+        write(meta(None));
+        assert_eq!(read().as_deref(), Some("#808080"), "a colourless record never replaces a coloured one");
+    });
+}
+
 fn write_record_file_for_test(path: &std::path::Path, record: &TransformRecord) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, serde_json::to_vec(record).unwrap()).unwrap();

@@ -181,6 +181,7 @@ mod token_declared_test;
 mod token_emit_test;
 mod translation_pairing_by_path_test;
 mod unbuilt_link_target_test;
+mod undecodable_heic_test;
 mod unpaired_rename_identity_test;
 mod url_folder_removal_test;
 mod watch_rebuild_stand_in_test;

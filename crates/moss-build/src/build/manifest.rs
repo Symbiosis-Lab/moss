@@ -168,6 +168,8 @@ pub struct PendingManifest {
     preview_embeds: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
     preview_uses_places: bool,
     preview_originals: std::collections::BTreeMap<String, Option<String>>,
+    /// Variant URLs promised that this build will never encode.
+    never_made: std::collections::BTreeSet<String>,
     /// Whether a page this build rendered is restricted to members.
     restricts_pages: bool,
     /// Redirect stub output → the page it forwards to, for each old address of
@@ -402,6 +404,7 @@ impl PendingManifest {
             page_stubs: Default::default(),
             waiting_link_cards: Default::default(),
             preview_originals: std::collections::BTreeMap::new(),
+            never_made: std::collections::BTreeSet::new(),
             blocking_keys: HashSet::new(),
             touched: HashSet::new(),
             late: None,

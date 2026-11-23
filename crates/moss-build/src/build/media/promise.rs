@@ -125,6 +125,7 @@ pub(crate) fn promise_image_variants(
         let never = item.skip.as_ref().and_then(SkipReason::failure_message);
         for url in variants {
             manifest.register_preview_original(url.clone(), item.source_path.to_string_lossy().into_owned());
+            if never.is_some() { manifest.register_never_made(url.clone()); }
             if let Some(registry) = registry { match never {
                 Some(why) => registry.set_failed(url, Failure::skip(why)),
                 None => {

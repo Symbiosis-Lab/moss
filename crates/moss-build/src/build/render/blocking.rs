@@ -3326,6 +3326,7 @@ pub fn generate_blocking_content_for_build(
             &rung_plan,
             source_path,
         );
+        site_files.never_made(pending.never_made_originals());
         // No page of this build is servable yet: pages reach the stage only in
         // `emit::slots::apply_to_stage_and_manifest`, after this function returns.
         if let (Some(shared), Some(own)) = (shared_registry, build_registry) {

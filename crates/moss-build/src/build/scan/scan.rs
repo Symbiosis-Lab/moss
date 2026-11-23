@@ -513,7 +513,9 @@ impl From<&MediaMetadata> for CachedMediaMeta {
 /// holds for this kind of file. The content-keyed record is the only one a fresh
 /// copy of the folder can read, so whoever computes the values brings it up to
 /// date; a current one is left unwritten, so a build that computes nothing writes
-/// nothing to the synced folder.
+/// nothing to the synced folder. A record without a colour is current only until
+/// a machine that can decode the picture finds one: a build that could not
+/// decode a HEIC must not leave every fresh copy without its placeholder.
 pub(crate) fn write_media_meta(
     transform_cache: &TransformCache,
     stat_key: Option<&str>,
@@ -525,7 +527,8 @@ pub(crate) fn write_media_meta(
     if let Some(key) = stat_key {
         write_cached_meta(transform_cache, key, source_size, meta);
     }
-    if let Some(hash) = content_hash.filter(|hash| read_cached_meta(transform_cache, hash, extension).is_none()) {
+    let stale = |old: CachedMediaMeta| old.dominant_color.is_none() && meta.dominant_color.is_some();
+    if let Some(hash) = content_hash.filter(|hash| read_cached_meta(transform_cache, hash, extension).is_none_or(stale)) {
         write_cached_meta(transform_cache, hash, source_size, meta);
     }
 }

@@ -50,6 +50,9 @@ pub(crate) struct SiteFiles {
     /// The site folder: a file it provides at one of these addresses is
     /// copied in as it is, and none is generated.
     folder: PathBuf,
+    /// Variants this build will never make, each mapped to its original: a
+    /// feed's `<img>` naming one names the original instead.
+    never_made: HashMap<String, String>,
 }
 
 impl SiteFiles {
@@ -67,7 +70,13 @@ impl SiteFiles {
             dir_overrides: dir_overrides.clone(),
             sitemap_pages: BTreeSet::new(),
             folder: folder.to_path_buf(),
+            never_made: HashMap::new(),
         }
+    }
+
+    /// See [`Self::never_made`]; read from the promise, before any encode.
+    pub(crate) fn never_made(&mut self, originals: HashMap<String, String>) {
+        self.never_made = originals;
     }
 
     fn declare(&mut self, kinds: &[Kind]) {
@@ -122,7 +131,7 @@ impl SiteFiles {
         let home = documents.iter().find(|d| d.url_path == "index.html");
         let site_title = home.map(|d| d.title.as_str()).unwrap_or(crate::i18n::t(self.site_lang, "site"));
         let url = self.site_url.as_str();
-        let items = self.kinds.iter().any(|k| matches!(k, Kind::Rss | Kind::JsonFeed)).then(|| crate::build::feeds::rss::feed_items(documents, url));
+        let items = self.kinds.iter().any(|k| matches!(k, Kind::Rss | Kind::JsonFeed)).then(|| crate::build::feeds::rss::feed_items(documents, url, &self.never_made));
         let mut out: Vec<(ServedPath, Vec<u8>)> = Vec::new();
         for &kind in &self.kinds {
             let bytes = match kind {

@@ -8240,6 +8240,16 @@ async fn a_cloud_held_picture_is_fetched_not_encoded_again() {
 /// A heartbeat tells an idle app from one still encoding by these totals, so
 /// every mark must end exactly once: finished by its worker, replaced by a
 /// newer dispatch, or dropped with its page.
+/// A HEIC the decoder refused has nothing a browser but Safari can show, so the
+/// person is asked to re-export it, by file.
+#[test]
+fn a_heic_that_could_not_be_read_asks_to_be_re_exported() {
+    let ItemStep::Handled { advisories, .. } = ItemStep::base_failed("photos/IMG_1.HEIC", "photos/IMG_1.HEIC.webp", Vec::new(), "decode failed".into()) else { panic!() };
+    assert_eq!(advisories[0].severity, crate::advisory::Severity::NeedsAction);
+    assert_eq!(advisories[0].item.as_deref(), Some("photos/IMG_1.HEIC"));
+    assert!(advisories[0].what.contains("re-export"), "{}", advisories[0].what);
+}
+
 #[test]
 fn image_work_counts_every_mark_until_it_ends() {
     let tmp = tempfile::tempdir().unwrap();

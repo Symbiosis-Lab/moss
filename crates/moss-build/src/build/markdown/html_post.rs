@@ -307,6 +307,49 @@ fn filter_srcset_candidates(
     Some(surviving.join(", "))
 }
 
+/// Each failed key a source was derived into, mapped to that source's key: the
+/// same folder, the source's own file name. `source_of` gives a key's vault
+/// source; a key with none (or with two) is not a variant and maps nowhere.
+pub(crate) fn failed_variant_originals<'a>(
+    failed: impl IntoIterator<Item = &'a String>,
+    source_of: impl Fn(&str) -> Option<&'a str>,
+) -> std::collections::HashMap<String, String> {
+    failed
+        .into_iter()
+        .filter_map(|key| {
+            let name = source_of(key)?.rsplit('/').next()?;
+            let original = match key.rsplit_once('/') { Some((dir, _)) => format!("{dir}/{name}"), None => name.to_string() };
+            (original != *key).then(|| (key.clone(), original))
+        })
+        .collect()
+}
+
+/// The `src` an `<img>` naming a failed variant takes instead: its original,
+/// behind the same page-relative prefix. `None` when `src` names no failed
+/// variant. A HEIF's page names only its encodes, so without this its `<img>`
+/// would point at a file that never ships.
+pub(crate) fn original_src(
+    src: &str,
+    doc_url_path: &str,
+    failed_originals: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    let key = resolve_to_root_relative(&decode_html_reference_path(src), doc_url_path);
+    let name = failed_originals.get(&key)?.rsplit('/').next()?;
+    let name = percent_encode_path_segments(name);
+    Some(match src.rsplit_once('/') { Some((prefix, _)) => format!("{prefix}/{name}"), None => name })
+}
+
+/// Whether a URL the page names is a failed variant. A deployed page names its
+/// share picture by absolute URL, so only an absolute URL's path is read.
+fn names_failed(url: &str, doc_url_path: &str, failed: &std::collections::HashSet<String>) -> bool {
+    let decoded = decode_html_reference_path(url);
+    let path = match decoded.split_once("://") {
+        Some((_, rest)) => rest.split_once('/').map_or_else(String::new, |(_, path)| format!("/{path}")),
+        None => decoded,
+    };
+    failed.contains(&resolve_to_root_relative(&path, doc_url_path))
+}
+
 /// Post-seal honest-degradation pass: drop webp `srcset`
 /// candidates that reference a terminally-failed image variant, in BOTH
 /// shapes moss-core's `synthesize_inner` (zero I/O) can emit them:
@@ -345,6 +388,9 @@ fn filter_srcset_candidates(
 ///   webp source file itself (`build_srcset`'s `base_url == src`), which is
 ///   never registry-tracked (same non-goal as the `<picture>` case above),
 ///   so this is always safe.
+/// - An `og:image` or `twitter:image` naming a failed variant goes, with the
+///   `:alt`/`:width`/`:height` tags after it, and so does a `data-share-cover`
+///   naming one: no share picture is better than one that 404s.
 /// - An element with no failed candidates is left byte-identical.
 ///
 /// Returns `Cow::Borrowed` when nothing changed, so the caller
@@ -354,17 +400,41 @@ pub(crate) fn degrade_failed_variants<'a>(
     html: &'a str,
     doc_url_path: &str,
     failed: &std::collections::HashSet<String>,
+    failed_originals: &std::collections::HashMap<String, String>,
 ) -> Result<std::borrow::Cow<'a, str>, String> {
     if failed.is_empty() {
         return Ok(std::borrow::Cow::Borrowed(html));
     }
 
     let changed = std::cell::Cell::new(false);
+    // Whether the last `og:image` / `twitter:image` went, so its siblings go too.
+    let (og_gone, twitter_gone) = (std::cell::Cell::new(false), std::cell::Cell::new(false));
     let mut output = Vec::new();
     {
         let mut rewriter = lol_html::HtmlRewriter::new(
             lol_html::Settings {
                 element_content_handlers: vec![
+                    lol_html::element!(r#"meta[property^="og:image"], meta[name^="twitter:image"]"#, |el| {
+                        let (key, gone) = match el.get_attribute("property") {
+                            Some(property) => (property, &og_gone),
+                            None => (el.get_attribute("name").unwrap_or_default(), &twitter_gone),
+                        };
+                        if key == "og:image" || key == "twitter:image" {
+                            gone.set(el.get_attribute("content").is_some_and(|url| names_failed(&url, doc_url_path, failed)));
+                        }
+                        if gone.get() {
+                            changed.set(true);
+                            el.remove();
+                        }
+                        Ok(())
+                    }),
+                    lol_html::element!("[data-share-cover]", |el| {
+                        if el.get_attribute("data-share-cover").is_some_and(|url| names_failed(&url, doc_url_path, failed)) {
+                            changed.set(true);
+                            el.remove_attribute("data-share-cover");
+                        }
+                        Ok(())
+                    }),
                     lol_html::element!("picture source[type=\"image/webp\"]", |el| {
                         let Some(srcset) = el.get_attribute("srcset") else {
                             return Ok(());
@@ -379,6 +449,16 @@ pub(crate) fn degrade_failed_variants<'a>(
                             el.remove();
                         } else {
                             el.set_attribute("srcset", &surviving)?;
+                        }
+                        Ok(())
+                    }),
+                    lol_html::element!("img[src]", |el| {
+                        let Some(src) = el.get_attribute("src") else {
+                            return Ok(());
+                        };
+                        if let Some(original) = original_src(&src, doc_url_path, failed_originals) {
+                            changed.set(true);
+                            el.set_attribute("src", &original)?;
                         }
                         Ok(())
                     }),
@@ -1372,11 +1452,22 @@ mod tests {
 
     // ── degrade_failed_variants ─────────────────────────────────────
 
+    /// A HEIC no build could read: its page named only encodes, so the `<img>`
+    /// falls back to the original, behind the same prefix and encoding.
+    #[test]
+    fn degrade_points_an_img_src_naming_a_failed_variant_at_its_original() {
+        let html = r#"<img src="../../assets/IMG%201.heic.w1200.webp" srcset="../../assets/IMG%201.heic.w800.webp 800w, ../../assets/IMG%201.heic.w1200.webp 1200w" sizes="100vw" alt="">"#;
+        let failed: std::collections::HashSet<String> = ["assets/IMG 1.heic.w800.webp", "assets/IMG 1.heic.w1200.webp", "assets/IMG 1.heic.webp"].map(String::from).into();
+        let originals = failed_variant_originals(&failed, |_| Some("photos/IMG 1.HEIC"));
+        let out = degrade_failed_variants(html, "posts/a/index.html", &failed, &originals).unwrap();
+        assert_eq!(out, r#"<img src="../../assets/IMG%201.HEIC" alt="">"#);
+    }
+
     #[test]
     fn degrade_noop_when_nothing_failed() {
         let html = r#"<picture><source srcset="assets/a.w800.webp 800w, assets/a.webp 1600w" type="image/webp" sizes="100vw"><img src="assets/a.jpg" alt=""></picture>"#;
         let failed = std::collections::HashSet::new();
-        let out = degrade_failed_variants(html, "index.html", &failed).unwrap();
+        let out = degrade_failed_variants(html, "index.html", &failed, &Default::default()).unwrap();
         assert!(matches!(out, std::borrow::Cow::Borrowed(_)), "empty failed set must not allocate");
         assert_eq!(out, html);
     }
@@ -1390,7 +1481,7 @@ mod tests {
         failed.insert("assets/Anthro_C.w1600.webp".to_string());
         failed.insert("assets/Anthro_C.webp".to_string());
 
-        let out = degrade_failed_variants(html, "index.html", &failed).unwrap();
+        let out = degrade_failed_variants(html, "index.html", &failed, &Default::default()).unwrap();
         assert!(matches!(out, std::borrow::Cow::Owned(_)));
         assert!(!out.contains("<source"), "source must be dropped: {out}");
         assert!(out.contains(r#"<img src="assets/Anthro_C.jpg" alt="">"#));
@@ -1403,7 +1494,7 @@ mod tests {
         let mut failed = std::collections::HashSet::new();
         failed.insert("assets/a.w1600.webp".to_string());
 
-        let out = degrade_failed_variants(html, "index.html", &failed).unwrap();
+        let out = degrade_failed_variants(html, "index.html", &failed, &Default::default()).unwrap();
         assert!(out.contains("assets/a.w800.webp 800w"));
         assert!(!out.contains("a.w1600.webp"));
         assert!(out.contains("assets/a.webp 2400w"));
@@ -1417,7 +1508,7 @@ mod tests {
         let mut failed = std::collections::HashSet::new();
         failed.insert("assets/small.webp".to_string());
 
-        let out = degrade_failed_variants(html, "index.html", &failed).unwrap();
+        let out = degrade_failed_variants(html, "index.html", &failed, &Default::default()).unwrap();
         assert!(!out.contains("<source"));
         assert!(out.contains("assets/small.jpg"));
     }
@@ -1430,7 +1521,7 @@ mod tests {
         let mut failed = std::collections::HashSet::new();
         failed.insert("assets/deep.webp".to_string());
 
-        let out = degrade_failed_variants(html, "research/index.html", &failed).unwrap();
+        let out = degrade_failed_variants(html, "research/index.html", &failed, &Default::default()).unwrap();
         assert!(!out.contains("<source"), "must resolve ../assets/deep.webp -> assets/deep.webp before matching: {out}");
     }
 
@@ -1439,7 +1530,7 @@ mod tests {
         let html = r#"<picture><source srcset="assets/a.webp" type="image/webp"><img src="assets/a.jpg"></picture><video><source src="assets/clip.mp4" type="video/mp4"></video>"#;
         let mut failed = std::collections::HashSet::new();
         failed.insert("assets/clip.mp4".to_string()); // not a webp source — must not match the selector
-        let out = degrade_failed_variants(html, "index.html", &failed).unwrap();
+        let out = degrade_failed_variants(html, "index.html", &failed, &Default::default()).unwrap();
         assert_eq!(out, html);
     }
 
@@ -1457,7 +1548,7 @@ mod tests {
         let mut failed = std::collections::HashSet::new();
         failed.insert("assets/bad.webp".to_string());
 
-        let out = degrade_failed_variants(html, "index.html", &failed).unwrap();
+        let out = degrade_failed_variants(html, "index.html", &failed, &Default::default()).unwrap();
         assert!(out.contains(r#"<source srcset="assets/ok.webp" type="image/webp">"#), "untouched picture must survive byte-identical: {out}");
         assert!(!out.contains("assets/bad.webp"), "failed picture's source must be dropped: {out}");
         assert!(out.contains(r#"<img src="assets/bad.jpg" alt="">"#));
@@ -1476,7 +1567,7 @@ mod tests {
         let mut failed = std::collections::HashSet::new();
         failed.insert("assets/photo.w800.webp".to_string());
 
-        let out = degrade_failed_variants(html, "index.html", &failed).unwrap();
+        let out = degrade_failed_variants(html, "index.html", &failed, &Default::default()).unwrap();
         assert!(!out.contains("photo.w800.webp"), "failed rung must be dropped: {out}");
         assert!(out.contains("assets/photo.w1600.webp 1600w"));
         assert!(out.contains("assets/photo.webp 2400w"));
@@ -1490,7 +1581,7 @@ mod tests {
         failed.insert("assets/photo.w800.webp".to_string());
         failed.insert("assets/photo.w1600.webp".to_string());
 
-        let out = degrade_failed_variants(html, "index.html", &failed).unwrap();
+        let out = degrade_failed_variants(html, "index.html", &failed, &Default::default()).unwrap();
         assert!(!out.contains("srcset"), "srcset must be removed entirely — there is no element to fall through to: {out}");
         assert!(!out.contains("sizes"), "sizes is meaningless without srcset and must go with it: {out}");
         assert!(out.contains(r#"src="assets/photo.webp""#), "the base <img src> is never registry-tracked and must survive: {out}");
@@ -1502,7 +1593,7 @@ mod tests {
         let mut failed = std::collections::HashSet::new();
         failed.insert("assets/unrelated.webp".to_string());
 
-        let out = degrade_failed_variants(html, "index.html", &failed).unwrap();
+        let out = degrade_failed_variants(html, "index.html", &failed, &Default::default()).unwrap();
         assert_eq!(out, html);
     }
 
@@ -1515,7 +1606,7 @@ mod tests {
         let mut failed = std::collections::HashSet::new();
         failed.insert("assets/a.w800.webp".to_string());
 
-        let out = degrade_failed_variants(html, "index.html", &failed).unwrap();
+        let out = degrade_failed_variants(html, "index.html", &failed, &Default::default()).unwrap();
         assert!(out.contains(r#"<img src="assets/a.jpg" alt="">"#), "inner <img> must be untouched: {out}");
     }
 
@@ -1567,7 +1658,7 @@ mod tests {
         let failed: std::collections::HashSet<String> =
             [amp_rung.to_string(), apos_rung.to_string()].into_iter().collect();
 
-        let out = degrade_failed_variants(&html, "index.html", &failed).unwrap();
+        let out = degrade_failed_variants(&html, "index.html", &failed, &Default::default()).unwrap();
         assert!(
             !out.contains("a&amp;b.w800.webp"),
             "the failed `&` rung is still promised — a chosen-source 404: {out}"

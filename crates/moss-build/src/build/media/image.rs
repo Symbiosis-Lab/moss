@@ -1939,14 +1939,18 @@ impl ItemStep {
     fn base_failed(source_path: &str, webp: &str, rungs: Vec<(u32, String)>, err: String) -> Self {
         let mut failed = vec![(webp.to_string(), Failure::encode(err.clone()))];
         failed.extend(rungs.into_iter().map(|(_, rung)| (rung, Failure::encode(err.clone()))));
+        // Only Safari draws a HEIC, so its page has nothing to show until the
+        // person re-exports it.
+        let heif = Path::new(source_path).extension().and_then(|e| e.to_str()).is_some_and(moss_core::asset_paths::is_heif_source_ext);
+        let (severity, key) = if heif { (Severity::NeedsAction, "heif_unreadable") } else { (Severity::ShippedDegraded, "shipped_without_optimizing") };
         Self::Handled {
             delivered: Vec::new(),
             failed,
             advisories: vec![Advisory::for_source(
                 Scope::File,
-                Severity::ShippedDegraded,
+                severity,
                 source_path,
-                crate::infra::app_advisory::fmt("shipped_without_optimizing", &[("err", &err)]),
+                crate::infra::app_advisory::fmt(key, &[("err", &err)]),
                 Action::None,
             )],
             encoded: false,

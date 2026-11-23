@@ -153,6 +153,7 @@ pub fn apply_to_staging(
     }
     let mut rewrites: HashMap<String, String> = HashMap::new();
     let mount = sealed.mount();
+    let originals = crate::build::markdown::html_post::failed_variant_originals(failed, |key| sealed.preview_original(key));
 
     for path in sealed.blocking_keys() {
         if !path.ends_with(".html") {
@@ -171,7 +172,7 @@ pub fn apply_to_staging(
             Err(_) => continue, // never expected for moss-generated HTML; skip defensively
         };
         let rewritten =
-            match crate::build::markdown::html_post::degrade_failed_variants(html, path, failed) {
+            match crate::build::markdown::html_post::degrade_failed_variants(html, path, failed, &originals) {
                 Ok(r) => r,
                 Err(e) => {
                     log::info!("degrade_failed_variants: rewrite failed for {}: {}", path, e);

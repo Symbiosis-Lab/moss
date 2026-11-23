@@ -66,6 +66,7 @@ advisory_strings! {
     },
     not_found => { en: "not found", zh_hans: "未找到", zh_hant: "找不到", de: "nicht gefunden" },
     could_not_read_file => { en: "could not read file", zh_hans: "无法读取文件", zh_hant: "無法讀取檔案", de: "Datei konnte nicht gelesen werden" },
+    heif_unreadable => { en: "could not be read — re-export it as JPEG ({err})", zh_hans: "无法读取 —— 请把它重新导出为 JPEG（{err}）", zh_hant: "無法讀取 —— 請把它重新匯出為 JPEG（{err}）", de: "konnte nicht gelesen werden — exportiere es neu als JPEG ({err})" },
     shipped_without_optimizing => { en: "shipped without optimizing — {err}", zh_hans: "已发布但未优化 —— {err}", zh_hant: "已發佈但未最佳化 —— {err}", de: "ohne Optimierung veröffentlicht — {err}" },
     // The floor under every can't-encode path gave way: not even the original
     // bytes reached the site, so the page has no video at all. Said separately
