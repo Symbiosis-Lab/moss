@@ -35,8 +35,9 @@ pub(crate) fn emit(
         .map(|d| d.title.as_str())
         .unwrap_or(crate::i18n::t(site_lang, "site"));
 
-    let rss_content = crate::build::feeds::rss::generate_rss_feed(
-        documents,
+    let items = crate::build::feeds::rss::feed_items(documents, url);
+    let rss_content = crate::build::feeds::rss::rss_feed(
+        &items,
         rss_site_title,
         url,
         None,
@@ -49,8 +50,8 @@ pub(crate) fn emit(
         .emit_held(&rss_path, rss_content, HashBucket::Files)
         .map_err(|e| format!("Failed to emit {}: {}", rss_path.as_str(), e))?;
 
-    let json_feed = crate::build::feeds::json_feed::generate_json_feed(
-        documents,
+    let json_feed = crate::build::feeds::json_feed::json_feed(
+        &items,
         rss_site_title,
         url,
         site_lang.as_bcp47_attr(),
