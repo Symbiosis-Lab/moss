@@ -17,10 +17,13 @@ pub struct SiteSources {
     #[serde(default)]
     pub plugins: Vec<PluginSource>,
     pub theme_style_css: Option<String>,
-    /// Each folder's inferred language code, keyed by folder path, as the
-    /// last build voted it over the folder's pages. Empty for a folder never built.
+    /// The language a host's detector found in each page, by site-relative
+    /// path, with the prose it read: the folder vote's input. A host fills it
+    /// at call time from each page's current text; one with no detector
+    /// leaves it empty, and folders then take only declared languages. This
+    /// is the one intended difference between hosts.
     #[serde(default)]
-    pub folder_langs: BTreeMap<String, String>,
+    pub detected: BTreeMap<String, crate::i18n::vote::Detected>,
     /// The derive cache's record for each embedded file whose current content
     /// has been derived, keyed by its site-relative path. A host fills it at
     /// call time: it hashes each embedded file's current bytes and reads the
@@ -111,15 +114,9 @@ pub fn resolve_site_lang(explicit: Option<&str>, home: impl FnOnce() -> Option<S
     SiteLang { code, declared: false }
 }
 
-/// [`resolve_site_lang`]'s code alone.
-pub fn resolve_site_default_lang(explicit: Option<&str>, home: impl FnOnce() -> Option<String>,
-    detected: impl FnOnce() -> Option<String>) -> String {
-    resolve_site_lang(explicit, home, detected).code
-}
-
 pub fn site_bundle(mut sources: SiteSources) -> (SiteBundle, Vec<String>) {
     let (config, mut warnings) = super::site_config::parse_config(sources.config_toml.as_deref().unwrap_or(""));
-    let lang = resolve_site_default_lang(config.site_lang(),
+    let site_lang = resolve_site_lang(config.site_lang(),
         || elect_home(&sources.files, &sources.texts).and_then(|p| declared_lang_in_text(sources.texts.get(&p)?)),
         || sources.detected_lang.take());
     let (declared_name_lists, problems) = crate::terms::config::declared_name_list_fields(&config.terms_kinds());
@@ -168,9 +165,9 @@ pub fn site_bundle(mut sources: SiteSources) -> (SiteBundle, Vec<String>) {
     let listing_styles = styles.ids().map(str::to_string).collect();
     sources.files.sort();
     let bundle = SiteBundle {
-        files: sources.files, lang, declared_name_lists, plugins, listing_styles,
+        files: sources.files, lang: site_lang.code, lang_declared: site_lang.declared, declared_name_lists, plugins, listing_styles,
         theme_css: sources.theme_style_css.unwrap_or_default(),
-        folder_langs: sources.folder_langs, derived: sources.derived,
+        detected: sources.detected, derived: sources.derived,
         derivable, math: Some(config.math()), passthrough: config.passthrough().to_vec(), ..Default::default()
     };
     let schemas: Vec<_> = bundle.plugins.iter().map(|p| crate::schema::PluginSchema {

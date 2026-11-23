@@ -54,6 +54,24 @@ fn home_election_and_its_language() {
 }
 
 #[test]
+fn the_bundle_says_whether_its_language_was_declared() {
+    let (bundle, _) = site_bundle(SiteSources {
+        files: vec!["index.md".into()],
+        texts: [("index.md".to_string(), "---\nlang: fr\n---\nHome".to_string())].into(),
+        detected_lang: Some("de".into()),
+        ..Default::default()
+    });
+    assert_eq!((bundle.lang.as_str(), bundle.lang_declared), ("fr", true));
+    let (bundle, _) = site_bundle(SiteSources {
+        files: vec!["index.md".into()],
+        texts: [("index.md".to_string(), "Home".to_string())].into(),
+        detected_lang: Some("de".into()),
+        ..Default::default()
+    });
+    assert_eq!((bundle.lang.as_str(), bundle.lang_declared), ("de", false));
+}
+
+#[test]
 fn language_ladder_normalizes_and_falls_through() {
     for (explicit, home, detected, expected) in [
         (Some(" FR "), Some("de"), Some("es"), "fr"),
@@ -63,10 +81,10 @@ fn language_ladder_normalizes_and_falls_through() {
         (None, None, None, "en"),
         (Some("invalid"), Some("invalid"), Some("invalid"), "en"),
     ] {
-        let lang = resolve_site_default_lang(explicit, || home.map(str::to_string), || detected.map(str::to_string));
+        let lang = resolve_site_lang(explicit, || home.map(str::to_string), || detected.map(str::to_string)).code;
         assert_eq!(lang, expected);
     }
-    let lang = resolve_site_default_lang(Some("de"), || panic!("home read"), || panic!("prose detected"));
+    let lang = resolve_site_lang(Some("de"), || panic!("home read"), || panic!("prose detected")).code;
     assert_eq!(lang, "de", "a later rung is never read once an earlier one holds");
     for (explicit, home, declared) in [(Some("zh-tw"), None, true), (Some("invalid"), Some("ja"), true), (Some("invalid"), Some("invalid"), false), (None, None, false)] {
         let site = resolve_site_lang(explicit, || home.map(str::to_string), || Some("zh-hans".to_string()));

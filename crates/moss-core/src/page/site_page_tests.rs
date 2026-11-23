@@ -76,3 +76,43 @@ fn a_folder_with_a_verbatim_index_html_has_no_markdown_home() {
     let open = pages(&[("app/app.md", "# App notes\n")], &[], SiteBundle::default());
     assert_eq!(open[0].url_path, "app/index.html");
 }
+
+fn langs_by_path(texts: &[(&str, &str)], detected: &[(&str, &str, usize)]) -> HashMap<String, crate::i18n::Language> {
+    langs_with(texts, detected, false)
+}
+
+fn langs_with(texts: &[(&str, &str)], detected: &[(&str, &str, usize)], lang_declared: bool) -> HashMap<String, crate::i18n::Language> {
+    let texts: HashMap<String, String> = texts.iter().map(|(p, t)| (p.to_string(), t.to_string())).collect();
+    let mut files: Vec<String> = texts.keys().cloned().collect();
+    files.sort();
+    let detected = detected.iter()
+        .map(|(p, code, weight)| (p.to_string(), crate::i18n::vote::Detected { lang: Some(code.to_string()), weight: *weight }))
+        .collect();
+    let site = site_pages(&texts, &SiteBundle { files, lang: "en".into(), lang_declared, detected, ..Default::default() }, "site");
+    site.paths.into_iter().zip(site.langs).collect()
+}
+
+#[test]
+fn a_folder_takes_the_language_its_pages_were_detected_in_unless_its_index_declares_one() {
+    use crate::i18n::Language;
+    let texts = [("notes/a.md", "# A\n"), ("notes/b.md", "# B\n"), ("essays/index.md", "---\nlang: en\n---\n"), ("essays/a.md", "# A\n")];
+    let detected = [("notes/a.md", "zh-hant", 40), ("notes/b.md", "zh-hant", 40), ("essays/a.md", "zh-hant", 400)];
+    let got = langs_by_path(&texts, &detected);
+    assert_eq!(got["notes/a.md"], Language::ZhHant);
+    assert_eq!(got["essays/a.md"], Language::En);
+}
+
+#[test]
+fn a_host_with_no_detector_gets_the_site_language_for_an_undeclared_folder() {
+    use crate::i18n::Language;
+    let got = langs_by_path(&[("notes/a.md", "# A\n"), ("zh/b.md", "# B\n")], &[]);
+    assert_eq!(got["notes/a.md"], Language::En);
+    assert_eq!(got["zh/b.md"], Language::ZhHans);
+}
+
+#[test]
+fn a_declared_site_language_holds_over_the_folder_vote() {
+    let texts = [("notes/a.md", "# A\n")];
+    let got = langs_with(&texts, &[("notes/a.md", "zh-hant", 400)], true);
+    assert_eq!(got["notes/a.md"], crate::i18n::Language::En);
+}

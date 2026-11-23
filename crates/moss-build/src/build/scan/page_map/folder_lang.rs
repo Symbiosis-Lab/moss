@@ -17,7 +17,7 @@
 //! ## The record is only a cache
 //!
 //! A folder's language is a function of its files' current bytes (and the
-//! author's declaration in its index, see [`declared_folder_lang`]), so a lost
+//! author's declaration in its index, see [`moss_core::i18n::vote::folder_languages`]), so a lost
 //! or copied record never changes a page: it costs one inference pass. The
 //! record ([`FolderLangCache`]) keeps each folder's verdict beside the stat of
 //! every file it was read from, and a rebuild reuses the verdict only while
@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 
 use crate::build::scan::path_collision::on_disk;
 use crate::build::stat::{recording_clock, stat_then, FileStat};
-use crate::i18n::{detect, filename::parse_filename_stem, path::ancestor_lang_from_path, Language};
+use crate::i18n::{detect, Language};
 
 /// One folder's cached inference result, plus the bytes it was computed from.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -126,54 +126,18 @@ pub(super) fn resolve_folder_languages_with(
     declarations: &super::frontmatter_cache::FrontmatterScanCache,
     site_lang_declared: bool,
 ) -> HashMap<String, Language> {
-    let mut by_folder: HashMap<String, Vec<&crate::types::content::FileInfo>> = HashMap::new();
-    for file_info in markdown_files {
-        if ancestor_lang_from_path(&file_info.path).is_some() {
-            continue; // already named — no inference needed for this file's folder
-        }
-        // A filename suffix (post.zh-hans.md) also already names its language
-        // — rung 2. Such a file neither needs the folder verdict nor may vote
-        // in it: a translation's body voting would tip every partially-
-        // translated folder toward the translation's language, turning e.g.
-        // an English site with one index.zh-hans.md monolingual Chinese.
-        let stem = Path::new(&file_info.path).file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        if parse_filename_stem(stem).lang.is_some() {
-            continue;
-        }
-        // A slot-only file is never a page, so its language only scopes where
-        // it shows; it neither votes nor needs the folder verdict.
-        if crate::build::footer::is_slot_only(
-            &file_info.path,
-            crate::build::footer::ShipFacts { partial: declarations.is_partial(&file_info.path) },
-        ) {
-            continue;
-        }
-        by_folder.entry(folder_of(&file_info.path)).or_default().push(file_info);
-    }
-
-    let mut result = HashMap::new();
-    for (folder, files) in by_folder {
-        // A declaration outranks any amount of inference.
-        match declared_folder_lang(&files, declarations) {
-            Declaration::Is(lang) => {
-                result.insert(folder, lang);
-                continue;
-            }
-            Declaration::Unrepresentable => continue,
-            Declaration::None if site_lang_declared => continue,
-            Declaration::None => {}
-        }
-
-        let mut files = files;
-        files.sort_by(|a, b| a.path.cmp(&b.path));
-
+    let by_path: HashMap<&str, &crate::types::content::FileInfo> = markdown_files.iter().map(|f| (f.path.as_str(), f)).collect();
+    let slot_only = |path: &str| crate::build::footer::is_slot_only(path, crate::build::footer::ShipFacts { partial: declarations.is_partial(path) });
+    let declared = |path: &str| declarations.declared_lang(path).map(str::to_string);
+    moss_core::i18n::vote::folder_languages(markdown_files.iter().map(|f| f.path.as_str()), &declared, &slot_only, site_lang_declared, &mut |folder, paths| {
+        let files: Vec<&crate::types::content::FileInfo> = paths.iter().map(|p| by_path[p]).collect();
         // Access can change without a file entering or leaving the folder, so
         // a folder holding members pages is inferred afresh and never cached.
         let has_members = files.iter().any(|f| declarations.is_members(&f.path));
-        let unchanged = !has_members && cache.entries.get(&folder).is_some_and(|e| e.vouches_for(&files, locate));
+        let unchanged = !has_members && cache.entries.get(folder).is_some_and(|e| e.vouches_for(&files, locate));
 
-        let lang = if unchanged {
-            cache.entries[&folder].lang.as_deref().and_then(Language::from_code)
+        if unchanged {
+            cache.entries[folder].lang.as_deref().and_then(Language::from_code)
         } else {
             let recorded_at = recording_clock();
             let mut read_whole = true;
@@ -194,97 +158,22 @@ pub(super) fn resolve_folder_languages_with(
                 }
             }
             let refs: Vec<&str> = bodies.iter().map(String::as_str).collect();
-            // The vote itself answers "was there evidence at all" — `None`
-            // when no file in the folder was long enough to vote or none that
-            // was classified, so the folder contributes nothing and callers
-            // fall through to the site default. This used to pre-scan every
-            // body with `detect_language` to make that distinction, then throw
-            // the result away and detect them all a second time; worse, the
-            // pre-scan and the vote have since stopped agreeing — a folder of
-            // stubs passes "something classified" and then votes to nothing,
-            // which the old `unwrap_or(En)` would have called English.
+            // `None` when the folder holds too little prose or none classified:
+            // it contributes nothing and its pages take the site default.
             let inferred = detect::site_language_vote(&refs);
 
             // A vote missing a file is not this folder's answer, only today's.
             if has_members || !read_whole {
-                cache.entries.remove(&folder);
+                cache.entries.remove(folder);
             } else {
                 cache.entries.insert(
-                    folder.clone(),
+                    folder.to_string(),
                     FolderLangEntry { files: stats, recorded_at, lang: inferred.map(|l| l.code().to_string()) },
                 );
             }
             inferred
-        };
-
-        if let Some(lang) = lang {
-            result.insert(folder, lang);
         }
-    }
-
-    result
-}
-
-/// The `lang:` a folder's own index file declares — `index.md`, `README.md` or
-/// the self-named `<folder>.md` — which speaks for every page in the folder.
-///
-/// Rung order for a page, top down: what the page says about ITSELF (its
-/// frontmatter, its filename suffix) wins; then a folder literally NAMED after
-/// a language, because a language TREE is a routing decision and the pages
-/// under it are reached by that path; then this; then the inference below. In
-/// other words a declaration outranks inference but not the tree it lives in —
-/// which is why the caller never reaches this for a file under `zh-hant/`.
-///
-/// Only the languages moss ships are representable, because this rung feeds
-/// `Language`. A folder declaring `fr` therefore gets NO folder-level answer at
-/// all — it is a declaration, so it stops the inference from overruling it, and
-/// its pages fall through to the site default (the same ceiling `<html lang>`
-/// has, and tracked with it).
-///
-/// Read on every build from the frontmatter-scan cache, which the page-map
-/// pass has already filled for every file, so it costs a map lookup rather
-/// than a file read per folder.
-fn declared_folder_lang(
-    files: &[&crate::types::content::FileInfo],
-    declarations: &super::frontmatter_cache::FrontmatterScanCache,
-) -> Declaration {
-    // The canonical priority (bare index stems, then language-suffixed, then
-    // the self-named folder note...) rather than "whichever file the scan
-    // enumerated first" — a folder holding both `index.md` and `notes.md`
-    // otherwise picked its declaring file by hash order.
-    let names: Vec<&str> =
-        files.iter().filter_map(|f| Path::new(&f.path).file_name()?.to_str()).collect();
-    let folder_name = files
-        .first()
-        .and_then(|f| Path::new(&f.path).parent())
-        .and_then(Path::file_name)
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
-    let home = moss_core::home::detect_home_file_in_folder(&names, folder_name);
-    let Some(index) = home.and_then(|name| files.iter().find(|f| f.path.ends_with(name))) else {
-        return Declaration::None;
-    };
-
-    match declarations.declared_lang(&index.path) {
-        // A code moss recognizes but has no `Language` for. The author still
-        // declared something, so the inference must not overrule it.
-        Some(code) => match Language::from_code(&code) {
-            Some(lang) => Declaration::Is(lang),
-            None => Declaration::Unrepresentable,
-        },
-        None => Declaration::None,
-    }
-}
-
-/// What a folder's index says about the folder's language.
-enum Declaration {
-    /// Declared, and one moss can represent.
-    Is(Language),
-    /// Declared, but not one of moss's three — no folder answer, and no
-    /// inference either, because guessing would overrule the author.
-    Unrepresentable,
-    /// Nothing declared: infer.
-    None,
+    })
 }
 
 #[cfg(test)]

@@ -183,13 +183,14 @@ pub fn site_pages(texts: &HashMap<String, String>, bundle: &super::SiteBundle, r
     }).collect();
     apply_cascading_dir_overrides(&mut entries, &dir_overrides);
 
+    let site_langs = SiteLangs { site: site_lang, folders: folder_languages(&paths, &read, bundle) };
     let mut pages = Vec::with_capacity(paths.len());
     let mut langs = Vec::with_capacity(paths.len());
     let mut cascades = Vec::with_capacity(paths.len());
     for ((path, url_path, _), (mut fm, body)) in entries.into_iter().zip(read) {
         cascades.push(fm.cascade.take());
         fill_inferred(&mut fm, &path, texts, &graph, bundle);
-        let (page, lang) = one_page(&path, url_path, fm, &body, root_name, site_lang, bundle);
+        let (page, lang) = one_page(&path, url_path, fm, &body, root_name, &site_langs, bundle);
         pages.push(page);
         langs.push(lang);
     }
@@ -274,6 +275,30 @@ fn fill_inferred(fm: &mut FrontMatter, path: &str, texts: &HashMap<String, Strin
     }
 }
 
+/// The site's language and each folder's, settled once for every page.
+struct SiteLangs {
+    site: Language,
+    folders: HashMap<String, Language>,
+}
+
+/// Each folder's language from its index's `lang:`, else a vote over the
+/// languages the host detected in its pages (none without a detector).
+fn folder_languages(paths: &[&str], read: &[(FrontMatter, String)], bundle: &super::SiteBundle) -> HashMap<String, Language> {
+    let declared: HashMap<&str, String> = paths.iter().zip(read)
+        .filter_map(|(p, (fm, _))| Some((*p, fm.lang.as_deref()?.trim().to_string())))
+        .filter(|(_, code)| crate::home::is_known_language_code(code))
+        .collect();
+    let partial: std::collections::HashSet<&str> = paths.iter().zip(read).filter(|(_, (fm, _))| fm.partial == Some(true)).map(|(p, _)| *p).collect();
+    let detected = |path: &str| bundle.detected.get(path).map(|d| (d.lang.as_deref().and_then(Language::from_code), d.weight));
+    crate::i18n::vote::folder_languages(
+        paths.iter().copied(),
+        &|p| declared.get(p).cloned(),
+        &|p| crate::source_edit::policy::is_excluded_from_pages(p) || partial.contains(p),
+        bundle.lang_declared,
+        &mut |_, files| crate::i18n::vote::language_vote(files.iter().filter_map(|f| detected(f))),
+    )
+}
+
 /// One page's own facts, before any other page is consulted, and its language.
 fn one_page(
     path: &str,
@@ -281,7 +306,7 @@ fn one_page(
     mut fm: FrontMatter,
     body: &str,
     root_name: &str,
-    site_lang: Language,
+    langs: &SiteLangs,
     bundle: &super::SiteBundle,
 ) -> (PageFacts, Language) {
     use crate::heading;
@@ -294,9 +319,9 @@ fn one_page(
     }
     let slot_only = crate::source_edit::policy::is_excluded_from_pages(path) || fm.partial == Some(true);
     let folder = path.rsplit_once('/').map_or("", |(dir, _)| dir);
-    let inferred = bundle.folder_langs.get(folder).and_then(|code| Language::from_code(code));
+    let inferred = langs.folders.get(folder).copied();
     let ancestor = crate::i18n::folder_language(path, inferred, slot_only);
-    let (lang, clean_stem) = crate::i18n::resolve_document_language(fm.lang.as_deref(), if stem.is_empty() { "untitled" } else { stem }, site_lang, ancestor);
+    let (lang, clean_stem) = crate::i18n::resolve_document_language(fm.lang.as_deref(), if stem.is_empty() { "untitled" } else { stem }, langs.site, ancestor);
 
     let parent_name = folder.rsplit('/').next().filter(|_| !folder.is_empty()).unwrap_or(root_name);
     let by_name = crate::home::is_home_file(&stem.to_lowercase(), parent_name);

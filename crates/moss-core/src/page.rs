@@ -30,6 +30,10 @@ pub struct SiteBundle {
     pub version: Option<String>,
     pub files: Vec<String>,
     pub lang: String,
+    /// Whether the author declared `lang` (`[site] lang` or the home page's
+    /// `lang:`). A declared language holds over every folder's vote.
+    #[serde(default)]
+    pub lang_declared: bool,
     /// The composed schema. When absent it is composed from the next three.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schema: Option<crate::schema::ContentSchema>,
@@ -44,10 +48,13 @@ pub struct SiteBundle {
     pub theme_css: String,
     #[serde(default)]
     pub notes: HashMap<String, String>,
-    /// Each folder's inferred language code, keyed by folder path, as the
-    /// last build voted it over the folder's pages. Empty for a folder never built.
+    /// The language a host's detector found in each page, by site-relative
+    /// path, with the prose it read: the folder vote's input. A host fills it
+    /// at call time from each page's current text; one with no detector
+    /// leaves it empty, and folders then take only declared languages. This
+    /// is the one intended difference between hosts.
     #[serde(default)]
-    pub folder_langs: std::collections::BTreeMap<String, String>,
+    pub detected: std::collections::BTreeMap<String, crate::i18n::vote::Detected>,
     /// The derive cache's record for each embedded file whose current content
     /// has been derived, keyed by its site-relative path. A host fills it at
     /// call time: it hashes each embedded file's current bytes and reads the

@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING:** `ast::block_images` returns `Vec<BlockImage>`, each picture's `src` with its `alt`, instead of `Vec<&Url>`.
 - `--moss-contents-lane` is 96px wide (was 92px): each row of the contents ruler is now a 24 px target.
 
+### Removed
+
+- **BREAKING:** `page::site_sources::resolve_site_default_lang` is gone; read `.code` off `resolve_site_lang`, which also says whether the language was declared.
+
 ## [0.29.0] - 2026-11-20
 
 ### Added

@@ -11,7 +11,6 @@ use moss_core::page::site_page::PageFacts;
 pub(crate) struct Captured {
     pub root_name: String,
     pub pages: BTreeMap<String, PageFacts>,
-    pub folder_langs: BTreeMap<String, String>,
 }
 
 static CAPTURED: Mutex<Vec<(PathBuf, Captured)>> = Mutex::new(Vec::new());
@@ -19,11 +18,9 @@ static CAPTURED: Mutex<Vec<(PathBuf, Captured)>> = Mutex::new(Vec::new());
 pub(crate) fn record(
     root: &crate::vault::paths::VaultRoot,
     docs: &[crate::build::types::ParsedDocument],
-    folder_langs: &HashMap<String, crate::i18n::Language>,
 ) {
     let pages = docs.iter().filter_map(|d| Some((d.source_path.clone()?, PageFacts::from_page(d)))).collect();
-    let folder_langs = folder_langs.iter().map(|(k, v)| (k.clone(), v.code().to_string())).collect();
-    let captured = Captured { root_name: root.name().to_string(), pages, folder_langs };
+    let captured = Captured { root_name: root.name().to_string(), pages };
     if let Ok(mut all) = CAPTURED.lock() {
         all.push((root.path().to_path_buf(), captured));
     }
@@ -115,7 +112,9 @@ fn core_site_pages_match_the_builds_pages_on_every_fixture() {
             .collect();
         let config_toml = std::fs::read_to_string(folder.join(".moss/config.toml")).ok();
         let (bundle, _) = moss_core::page::site_bundle(moss_core::page::SiteSources {
-            files, texts: texts.clone(), config_toml, folder_langs: captured.folder_langs.clone(), ..Default::default()
+            files, texts: texts.clone(), config_toml,
+            detected: texts.iter().map(|(p, t)| (p.clone(), crate::i18n::detect::detected(t))).collect(),
+            ..Default::default()
         });
         let site = moss_core::page::site_page::site_pages(&texts, &bundle, &captured.root_name);
         let core: BTreeMap<String, PageFacts> = site.paths.into_iter().zip(site.pages).collect();

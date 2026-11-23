@@ -1236,7 +1236,7 @@ pub fn generate_blocking_content_for_build(
         // (listing card renderer, series-nav, editor inferred-axis hint).
         populate_direct_children_sorts(&mut documents);
         #[cfg(test)]
-        crate::build::site_pages_tests::record(root, &documents, &folder_languages);
+        crate::build::site_pages_tests::record(root, &documents);
         log::debug!(target: "timing", "[reduce] populate_direct_children_sorts: {:?}", reduce_start.elapsed());
 
         // Term derivation:

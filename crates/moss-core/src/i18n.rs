@@ -6,6 +6,7 @@ pub mod filename;
 pub mod numerals;
 pub mod path;
 mod strings;
+pub mod vote;
 
 pub use strings::{diagram_type_name, hook_strings, sources_headings, t, term_root_title};
 
