@@ -26,7 +26,7 @@ use std::fs;
 use std::path::Path;
 
 use super::image::{
-    apply_exif_orientation, flatten_alpha_to_white, read_exif_orientation, ImageCompressionConfig,
+    flatten_alpha_to_white, ImageCompressionConfig,
 };
 use super::sniff::has_cmyk_profile;
 
@@ -386,15 +386,7 @@ pub(crate) fn encode_sized_raster(
     jpeg_quality: u8,
 ) -> Result<Vec<u8>, String> {
     super::count_encode();
-    // Content-sniffed and allocation-capped by `media::decode::sniff_decode`
-    // (same primitive the WebP decode path uses) rather than a second
-    // hand-rolled copy of that open/guess/decode sequence.
-    let orientation = read_exif_orientation(source_file);
-    let img = super::decode::sniff_decode(source_file)
-        .map_err(|e| format!("decode failed: {}", e))?;
-
-    // EXIF orientation must be applied so the sized image isn't rotated wrong.
-    let img = apply_exif_orientation(img, orientation);
+    let img = super::decode::sniff_decode_oriented(source_file).map_err(|e| format!("decode failed: {}", e))?;
 
     let (w, h) = (img.width(), img.height());
     let resized = if w.max(h) > max_edge {
