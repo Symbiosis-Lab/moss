@@ -177,6 +177,35 @@ ${paragraphs(2)}
 
 ${openBody}
 `,
+    // A four-column grid the theme widens into the left margin with CSS
+    // alone, with no `data-width`, as a site's own stylesheet may.
+    "Essays/Reading/Widened.md": `---
+title: Figures
+uid: "crg00107"
+---
+
+${[LONG_LATIN_TITLE, LONG_CJK_TITLE].map((t) => `## ${t}\n\n${paragraphs(4)}`).join("\n\n")}
+
+:::grid 4
+### 250
+entries
++++
+### 30
+readers
++++
+### 8
+awards
++++
+### 4
+finalists
+:::
+
+${SHORT_SECTIONS.map((t) => `## ${t}\n\n${paragraphs(4)}`).join("\n\n")}
+`,
+    ".moss/theme/style.css": `article.container > .moss-grid[data-columns="4"] {
+  margin-inline-start: -8rem;
+}
+`,
     ".moss/config.toml": `schema_version = 5
 
 [site]

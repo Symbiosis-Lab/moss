@@ -18,6 +18,7 @@ import { SECTIONS, SHORT_SECTIONS, LONG_CJK_TITLE, LONG_LATIN_TITLE, OPEN_SECTIO
 const ARTICLE = '/essays/reading/long/';
 const SHORT = '/essays/reading/short/';
 const OPEN = '/essays/reading/open/';
+const WIDENED = '/essays/reading/widened/';
 const HOME = '/';
 const OPEN_HOME = `http://localhost:${gatePort('contents-ruler:home')}/`;
 
@@ -295,6 +296,48 @@ for (const width of [1280, 1440]) {
       ruler: 'on',
       islandSections: false,
     });
+  });
+}
+
+/* A block the theme widens with CSS alone reaches into the margin as surely as
+   one with `data-width`: while it sits beside the ruler, the titles stop one
+   gutter short of it, or the ruler steps aside where that leaves them under
+   the narrowest useful title. The fixture leaves about 60px beside the grid at
+   1280 and about 158px at 1440, both far from the 96px threshold. */
+for (const [width, mode] of [[1280, 'steps aside'], [1440, 'clamped']] as const) {
+  test(`at ${width}px the titles stay clear of a grid the theme widens with CSS (${mode})`, async ({ page }) => {
+    await open(page, width, 900, WIDENED);
+    await page.evaluate(() => {
+      const grid = document.querySelector('main .moss-grid')!.getBoundingClientRect();
+      window.scrollBy(0, grid.top + grid.height / 2 - innerHeight / 2);
+    });
+    await frames(page);
+    const before = await geometry(page);
+    await page.mouse.move(before.dashes[0].x + 4, before.dashes[0].y);
+    await frames(page, 2);
+    const seen = await page.evaluate(() => {
+      const nav = document.querySelector<HTMLElement>('.moss-contents-ruler')!;
+      const list = nav.querySelector('ol')!.getBoundingClientRect();
+      const cells = [...document.querySelectorAll('main .moss-grid > *')].map((c) => c.getBoundingClientRect());
+      const beside = cells.filter((c) => c.top < list.bottom && c.bottom > list.top);
+      const labels = [...nav.querySelectorAll<HTMLElement>('.moss-contents-ruler-label')];
+      const boxes = labels.map((l) => l.getBoundingClientRect());
+      return {
+        cellLeft: Math.min(...beside.map((c) => c.left)),
+        textLeft: document.querySelector('main h2[id]')!.getBoundingClientRect().left,
+        labelRight: Math.max(...boxes.map((b) => b.right)),
+        wholeRight: Math.max(...labels.map((l, i) => boxes[i].left + l.scrollWidth)),
+        away: nav.hasAttribute('data-away'),
+      };
+    });
+    expect(seen.cellLeft, 'the theme widens the grid past the text').toBeLessThan(seen.textLeft - 24);
+    expect(seen.wholeRight, 'a whole title would reach the grid').toBeGreaterThan(seen.cellLeft - 24);
+    if (mode === 'clamped') {
+      expect(seen.away, 'the titles have room beside the grid').toBe(false);
+      expect(seen.labelRight, 'one gutter short of the grid').toBeLessThanOrEqual(seen.cellLeft - 24 + 0.5);
+    } else {
+      expect(seen.away, 'too little room beside the grid: the ruler steps aside').toBe(true);
+    }
   });
 }
 

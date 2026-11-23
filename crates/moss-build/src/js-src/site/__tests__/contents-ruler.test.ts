@@ -156,17 +156,17 @@ describe("the section name on the sections button", () => {
 
 /**
  * jsdom has no layout, so every box is empty and the ruler never finds room.
- * Give it some: headings far to the right of the labels, an article that ends
- * well below the middle of the window. After this the ruler is on screen.
+ * Give it some: the article's text far to the right of the labels, an article
+ * that ends well below the middle of the window. After this the ruler is on
+ * screen.
  */
 function giveItRoom(): void {
   vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
     this: Element,
   ) {
-    const isHeading = this.tagName === "H2";
     const isBar = this.classList.contains("moss-nav-island-bar");
     return {
-      left: isHeading ? 600 : 0,
+      left: this.closest("main") ? 600 : 0,
       top: 0,
       bottom: isBar ? 0 : 5000,
       height: 0,
@@ -273,6 +273,97 @@ describe("one pass per frame", () => {
     expect(island().dataset.ruler).toBe("off");
     style.remove();
   });
+});
+
+/**
+ * A block a theme pushes into the margin, as rects: the text column at 600,
+ * the labels from 0 (so 576px of room), a `data-at` block at its own left
+ * edge and 800 wide (as is a `.wide` one at 300), a `data-zero` node with no
+ * box. Everything shares the
+ * ruler's height, so every band sits beside it.
+ */
+function widenedPage(blocks: string): void {
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+    const at = this.getAttribute("data-at") ?? (this.classList.contains("wide") ? "300" : null);
+    const left = at !== null ? Number(at) : this.closest("main") && !this.hasAttribute("data-zero") ? 600 : 0;
+    const width = at !== null ? 800 : this.closest("main") && !this.hasAttribute("data-zero") ? 400 : 0;
+    const isBar = this.classList.contains("moss-nav-island-bar");
+    return { left, right: left + width, width, top: 0, bottom: isBar ? 0 : 5000, height: 0 } as DOMRect;
+  });
+  document.querySelector("main")!.innerHTML = `<h2 id="s0">一</h2><p>…</p>${blocks}<h2 id="s1">二</h2><p>…</p>`;
+}
+
+const labelWidth = () => document.querySelector<HTMLElement>(".moss-contents-ruler-label")!.style.maxWidth;
+
+describe("the labels beside a block the theme widens", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  test("stop one gutter short of a widened block's text, not of a link inside it", () => {
+    widenedPage(`<div data-at="300">Figures <a href="#">in full</a></div>`);
+    initNavIsland();
+    expect(labelWidth()).toBe("276px");
+  });
+
+  test("stop short of a widened block with no content of its own, such as a rule", () => {
+    widenedPage(`<hr data-at="300">`);
+    initNavIsland();
+    expect(labelWidth()).toBe("276px");
+  });
+
+  test("keep the text's gutter beside a band whose content stays in the column", () => {
+    widenedPage(`<div data-at="0"><p>in the column</p></div>`);
+    initNavIsland();
+    expect(labelWidth()).toBe("576px");
+  });
+
+  test("ignore a node that has no box", () => {
+    widenedPage(`<script data-zero>void 0</script>`);
+    initNavIsland();
+    expect([labelWidth(), rulers()[0].hasAttribute("data-away")]).toEqual(["576px", false]);
+  });
+
+  test("stop short of a widened block script adds after load, on the next pass", async () => {
+    widenedPage("");
+    initNavIsland();
+    expect(labelWidth()).toBe("576px");
+    document.querySelector("main h2")!.insertAdjacentHTML("afterend", `<div data-at="300">Figures</div>`);
+    await Promise.resolve();
+    window.dispatchEvent(new Event("scroll"));
+    await nextFrame();
+    expect(labelWidth()).toBe("276px");
+  });
+
+  test("stop short of a block a class change widens after load, on the next pass", async () => {
+    widenedPage(`<div id="figures">Figures</div>`);
+    initNavIsland();
+    expect(labelWidth()).toBe("576px");
+    document.getElementById("figures")!.classList.add("wide");
+    await Promise.resolve();
+    window.dispatchEvent(new Event("scroll"));
+    await nextFrame();
+    expect(labelWidth()).toBe("276px");
+  });
+});
+
+test("a pictures ruler on a vertical page is not sent away by where its text begins", () => {
+  // The lane is reserved and the dashes end at 40. Every block starts at 100
+  // except the first heading, whose left edge a vertical page puts left of the
+  // dashes, on a line above the ruler's span.
+  document.body.dataset.contents = "pictures";
+  document.body.dataset.typesetting = "vertical";
+  document.body.style.setProperty("--moss-contents-lane", "8rem");
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+    const inMain = this.closest("main") !== null;
+    const heading = this.matches("main h2#s0");
+    const left = heading ? 0 : inMain ? 100 : 0;
+    const width = inMain ? 400 : this.tagName === "OL" ? 40 : 0;
+    const [top, bottom] = heading ? [-600, -500] : [0, this.classList.contains("moss-nav-island-bar") ? 0 : 5000];
+    return { left, right: left + width, width, top, bottom, height: 0 } as DOMRect;
+  });
+  setPage(["一", "二"]);
+  initNavIsland();
+  expect([island().dataset.ruler, rulers()[0].hasAttribute("data-away")]).toEqual(["on", false]);
+  vi.restoreAllMocks();
 });
 
 describe("a section's short name", () => {
