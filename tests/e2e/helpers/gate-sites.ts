@@ -5188,6 +5188,14 @@ uid: "rfm00101"
 - Colour {type=select}
   - Red
   - Blue
+- Where did you hear about us {type=checkbox}
+  - [ ] A friend
+  - [ ] A talk
+  - [ ] A newsletter
+  - [ ] A search
+  - [ ] An article
+  - [ ] Other
+    - Where else
 - Anything we should know {type=textarea}
   Who is coming, and any ideas for the session.
 - Send me the newsletter {type=checkbox}

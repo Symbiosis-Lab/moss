@@ -39,7 +39,7 @@ for (const scheme of ['light', 'dark'] as const) {
           const form = document.querySelector('.moss-form form') as HTMLElement;
           const fr = form.getBoundingClientRect();
           const boxes = [...form.querySelectorAll('.moss-form__field')].map((f) => f.getBoundingClientRect());
-          const controls = [...form.querySelectorAll('input:not([type=hidden]), select, textarea')].map((c) => c.getBoundingClientRect());
+          const controls = [...form.querySelectorAll('input:not([type=hidden]), select, textarea')].map((c) => c.getBoundingClientRect()).filter((r) => r.width > 0);
           const btn = (form.querySelector('.moss-btn') as HTMLElement).getBoundingClientRect();
           return {
             scrollWidth: document.documentElement.scrollWidth,
@@ -143,3 +143,21 @@ for (const scheme of ['light', 'dark'] as const) {
     });
   }
 }
+
+test.describe('a follow-up box in a wide group', () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test('sits directly under the choice that opens it', async ({ page }) => {
+    await page.goto(url, { waitUntil: 'load' });
+    await page.getByLabel('Other', { exact: true }).check();
+    const m = await page.evaluate(() => {
+      const box = document.querySelector('.moss-form__other') as HTMLElement;
+      const choice = box.previousElementSibling as HTMLElement;
+      const rect = (e: Element) => e.getBoundingClientRect();
+      return { choiceLeft: rect(choice).left, choiceBottom: rect(choice).bottom, boxLeft: rect(box).left, boxTop: rect(box).top, columns: getComputedStyle(box.parentElement!).gridTemplateColumns.split(' ').length };
+    });
+    expect(m.columns, 'the group is laid in columns here').toBeGreaterThan(1);
+    expect(Math.abs(m.boxLeft - m.choiceLeft), 'indented a little, at the choice, not a column away').toBeLessThan(12);
+    expect(m.boxTop).toBeGreaterThanOrEqual(m.choiceBottom - 1);
+  });
+});
