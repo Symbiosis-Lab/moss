@@ -88,18 +88,16 @@ async function send(form: HTMLFormElement): Promise<void> {
 /**
  * Fills visible fields from the page's address (`?session=Family`). Sets a
  * value or ticks a matching choice and nothing else, so a link cannot reach
- * `_next`, `_hp` or any hidden input.
+ * `_next` or any hidden input.
  */
 export function prefill(form: HTMLFormElement, search: string): void {
   const params = new URLSearchParams(search);
   for (const name of new Set(params.keys())) {
-    if (name === '_next' || name === '_hp') continue;
     const values = params.getAll(name);
     const targets = Array.from(form.elements).filter(
       (el): el is HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement =>
         (el as HTMLInputElement).name === name &&
-        (el as HTMLInputElement).type !== 'hidden' &&
-        !el.closest('.moss-form__hp'),
+        (el as HTMLInputElement).type !== 'hidden',
     );
     for (const el of targets) {
       const type = (el as HTMLInputElement).type;

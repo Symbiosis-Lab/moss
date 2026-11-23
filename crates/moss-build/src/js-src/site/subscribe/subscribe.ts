@@ -43,15 +43,6 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
   if (!claim(form)) return;
 
   const captcha: ReturnType<typeof prewarmCaptcha> = inPreview() ? () => ({ turnstile_started: false }) : prewarmCaptcha(form);
-  const trap = document.createElement('label');
-  trap.hidden = true;
-  trap.textContent = 'Leave this field empty';
-  const honeypot = document.createElement('input');
-  honeypot.name = 'website';
-  honeypot.tabIndex = -1;
-  honeypot.autocomplete = 'off';
-  trap.appendChild(honeypot);
-  form.appendChild(trap);
 
   const lang: Lang = langBucket(document.documentElement.lang);
   const copy: SubscribeCopy = COPY[lang];
@@ -105,7 +96,6 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
     // `return` brings the reader back here once the mailed link signs this browser in.
     const jsonBody = {
       email,
-      website: honeypot.value,
       load_to_submit_ms: Math.round(performance.now()),
       scope: form.querySelector<HTMLInputElement>('input[name="scope"]')?.value,
       lang,

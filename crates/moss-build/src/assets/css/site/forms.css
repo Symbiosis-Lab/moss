@@ -137,16 +137,6 @@
   border-color: var(--moss-error, #c85450);
 }
 
-/* The honeypot is for software: out of sight, out of the tab order. */
-.moss-form__hp {
-  position: absolute;
-  inline-size: 1px;
-  block-size: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
 .moss-form .moss-btn-slot {
   align-self: flex-start;
   min-block-size: 2.75rem;

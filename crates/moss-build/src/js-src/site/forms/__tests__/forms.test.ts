@@ -45,7 +45,6 @@ function mount(): HTMLFormElement {
       <p class="moss-form__error" id="booking-news-error" hidden></p>
     </div>
     <input type="hidden" name="_next" value="/booking/received/">
-    <div class="moss-form__hp" aria-hidden="true"><input type="text" name="_hp" value="" tabindex="-1" autocomplete="off"></div>
     <span class="moss-btn-slot"><button type="submit" class="moss-btn"><span class="moss-btn__label">Send</span></button></span>
     <p class="moss-form__status" aria-live="polite"></p>
     ${COPY}
@@ -91,7 +90,7 @@ describe('forms', () => {
     expect(body.get('your_name')).toBe('Ada Example');
     expect(body.get('email')).toBe('ada@example.test');
     expect(body.get('_next')).toBe('/booking/received/');
-    expect(body.get('_hp')).toBe('');
+    expect(body.has('_hp')).toBe(false);
     expect(typeof init.body).toBe('string');
   });
 
@@ -214,10 +213,9 @@ describe('prefill from the address', () => {
     expect(form.querySelector<HTMLInputElement>('#booking-news')!.checked).toBe(true);
   });
 
-  test('never touches _next, _hp or any hidden input', () => {
+  test('never touches _next or any hidden input', () => {
     const form = mount();
-    prefill(form, '?_hp=x&_next=/evil/');
-    expect(form.querySelector<HTMLInputElement>('[name="_hp"]')!.value).toBe('');
+    prefill(form, '?_next=/evil/');
     expect(form.querySelector<HTMLInputElement>('[name="_next"]')!.value).toBe('/booking/received/');
     expect(form.dataset.next).toBe('/booking/received/');
   });

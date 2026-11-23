@@ -219,6 +219,7 @@ pub const RETIRED: &[Retired] = &[
     class("moss-syndication-label", Some("0.15.23"), Gone, SYNDICATION),
     class("moss-series-nav-text", Some("0.15.26"), Rename(".moss-series-nav-link"), "a series link holds its arrow and title directly"),
     class("moss-series-nav-label", Some("0.15.26"), Gone, "the direction word is hidden, read by screen readers only"),
+    class("moss-form__hp", Some("0.15.30"), Gone, "request forms no longer carry a honeypot field"),
     property("--moss-font-size", "0.7.4", Rename("--moss-reading-size"), "renamed"),
     property("--moss-font-size-base", "0.7.4", Rename("--moss-reading-size-base"), "renamed"),
     property("--moss-font-weight", "0.7.11", Rename("--moss-font-weight-body"), "renamed"),

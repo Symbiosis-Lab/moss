@@ -204,7 +204,6 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // Request forms
         "form_send" => ["Send", "Senden", "发送", "送出"],
         "form_optional" => ["Optional", "Optional", "选填", "選填"],
-        "form_hp_label" => ["Leave this field empty", "Dieses Feld leer lassen", "请留空此项", "請留空此項"],
         "form_required" => ["This field is required.", "Dieses Feld ist erforderlich.", "此项必填。", "此項必填。"],
         "form_pick_several" => ["Select all that apply.", "Mehrere Antworten möglich.", "可多选。", "可複選。"],
         "form_pick_one" => ["Select at least one.", "Wählen Sie mindestens eine Antwort.", "请至少选一项。", "請至少選一項。"],

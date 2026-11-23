@@ -1,7 +1,7 @@
 // A `:::form` stacks its fields in one column that never scrolls the page
 // sideways, keeps every control inside the form and the button 44px tall, shows
 // a focus ring a keyboard user can see, marks a refused field in a colour that
-// reads as text, and keeps the honeypot out of sight and out of the tab order.
+// reads as text.
 import { test, expect, type Page } from '../../support/browser-test';
 import { gatePort } from '../../../playwright/gate-ports';
 import { expectFocusOnOwnEdge, expectNothingPaintedOutside } from './field-focus-edge';
@@ -39,7 +39,7 @@ for (const scheme of ['light', 'dark'] as const) {
           const form = document.querySelector('.moss-form form') as HTMLElement;
           const fr = form.getBoundingClientRect();
           const boxes = [...form.querySelectorAll('.moss-form__field')].map((f) => f.getBoundingClientRect());
-          const controls = [...form.querySelectorAll('input:not([type=hidden]):not([name=_hp]), select, textarea')].map((c) => c.getBoundingClientRect());
+          const controls = [...form.querySelectorAll('input:not([type=hidden]), select, textarea')].map((c) => c.getBoundingClientRect());
           const btn = (form.querySelector('.moss-btn') as HTMLElement).getBoundingClientRect();
           return {
             scrollWidth: document.documentElement.scrollWidth,
@@ -60,7 +60,7 @@ for (const scheme of ['light', 'dark'] as const) {
         await page.screenshot({ path: `target/test-tmp/request-form-${scheme}-${width}.png`, fullPage: true });
       });
 
-      test('keyboard focus draws a ring and never lands on the honeypot', async ({ page }) => {
+      test('keyboard focus draws a ring on every control', async ({ page }) => {
         await page.goto(url, { waitUntil: 'load' });
         await page.locator('main, body').first().focus().catch(() => {});
         await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
@@ -82,9 +82,6 @@ for (const scheme of ['light', 'dark'] as const) {
         }
         expect(seen).toContain('your_name');
         expect(seen).toContain('anything_we_should_know'); // Safari's Tab skips radio buttons
-        expect(seen).not.toContain('_hp');
-        const hp = await page.locator('.moss-form__hp').boundingBox();
-        expect(hp!.width).toBeLessThanOrEqual(1);
       });
 
       test('a click into the text area shows focus on its own edge, under a theme focus ring', async ({ page }) => {

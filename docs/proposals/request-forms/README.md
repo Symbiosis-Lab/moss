@@ -35,7 +35,7 @@ A site that takes requests (a consultation, a quote, a seat on a course) needs a
 
 `[services.forms] endpoint = "<url>"` in `.moss/config.toml`. A form posts to `<endpoint>/<form>`. A site published to moss hosting will get moss's own form service as the default once that service exists. Until a form has an address to post to, the build warns, naming the setting; the form stays in the markup but is hidden on published pages (the rule subscribe uses for a form with no site yet), so a reader never meets a form that cannot send; and moss's own preview shows it, with sending simulated.
 
-Every form also carries two hidden fields the service reads: `_next`, the `next=` path, and `_hp`, an empty honeypot that people never see or reach by keyboard and that the service treats as spam when filled.
+Every form also carries a hidden field the service reads: `_next`, the `next=` path. There is no honeypot: a receiver that wants one names its own, and moss's receiver guards a form with its bot check.
 
 ## What the build writes
 

@@ -127,6 +127,13 @@ fn date(s: &str) -> Option<(u32, u32, u32)> {
     Some((parts.next()??, parts.next()??, parts.next()??))
 }
 
+/// Removals that skip the year of notice. Each one changes no theme's page,
+/// so the waiver is pinned here, where adding another is a reviewed test edit.
+const NOTICE_WAIVED: &[&str] = &[
+    // The honeypot div went with it, and its one rule only hid that div.
+    "class:moss-form__hp",
+];
+
 /// A feature leaves only after a year of notes saying it is going: a removal
 /// from the alias floor on names the day the notes began, at least 12 months
 /// before its release. An unreleased removal counts from today, which is
@@ -141,7 +148,7 @@ fn contract_lock_a_removal_had_twelve_months_notice() {
     };
     let early: Vec<String> = RETIRED
         .iter()
-        .filter(|r| !r.aliased)
+        .filter(|r| !r.aliased && !NOTICE_WAIVED.contains(&r.id().as_str()))
         .filter(|r| r.retired_in.is_some_and(|v| version(v) >= version(ALIAS_FLOOR)))
         .filter(|r| {
             let gone = released_on(changelog, r.retired_in.unwrap()).unwrap_or(today);

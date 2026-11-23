@@ -96,11 +96,10 @@ fn a_hint_comes_before_its_control() {
 }
 
 #[test]
-fn the_honeypot_and_next_are_present_and_hidden_from_readers() {
+fn next_is_the_one_hidden_field() {
     let h = html(Some("https://f.example"));
     assert!(h.contains(r#"<input type="hidden" name="_next" value="/booking/received/">"#), "{h}");
-    assert!(h.contains(r#"<div class="moss-form__hp" aria-hidden="true">"#), "{h}");
-    assert!(h.contains(r#"name="_hp" value="" tabindex="-1" autocomplete="off""#), "{h}");
+    assert!(!h.contains("_hp"), "{h}");
 }
 
 #[test]

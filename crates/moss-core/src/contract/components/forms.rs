@@ -128,15 +128,4 @@ pub(super) const ENTRIES: &[ComponentEntry] = &[
         since: "0",
         description: "The one live line under the button for errors that are not about a single field.",
     },
-    ComponentEntry {
-        class: "moss-form__hp",
-        kind: "instance",
-        parent: "moss-form",
-        data_attrs: &[],
-        example_html: r#"<div class="moss-form__hp" aria-hidden="true"><input type="text" name="_hp" tabindex="-1" autocomplete="off"></div>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "0",
-        description: "The honeypot: visually hidden, unreachable by keyboard, filled only by bots.",
-    },
 ];

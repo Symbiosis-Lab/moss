@@ -4,7 +4,7 @@
 //! The markup is a plain HTML form that works with no script and posts to
 //! `<endpoint>/<form name>`; `forms.js` upgrades it to a post that stays on
 //! the page. Wire contract: the body is `application/x-www-form-urlencoded`,
-//! `_next` is where the service sends the reader, and `_hp` is a honeypot.
+//! and `_next` is where the service sends the reader.
 
 use super::{html_escape, CHECK_SVG};
 use crate::i18n::{t, Language};
@@ -134,7 +134,6 @@ pub fn render_form(form: &FormShortcode, lang: Language, endpoint: Option<&str>)
 <form method="post" action="{action}" data-moss-form="{name}" data-next="{next}">
 {fields}
   <input type="hidden" name="_next" value="{next}">
-  <div class="moss-form__hp" aria-hidden="true"><label for="{name}-hp">{hp}</label><input type="text" id="{name}-hp" name="_hp" value="" tabindex="-1" autocomplete="off"></div>
 {button}
   <p class="moss-form__status" aria-live="polite"></p>
 {copy}
@@ -142,7 +141,6 @@ pub fn render_form(form: &FormShortcode, lang: Language, endpoint: Option<&str>)
 </div>"#,
         action = html_escape(&action),
         button = button_slot(&label),
-        hp = t(lang, "form_hp_label"),
     )
 }
 
