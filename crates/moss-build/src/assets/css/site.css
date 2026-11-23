@@ -3043,14 +3043,14 @@ body > header .site-name {
   }
 }
 
-/* A plain site name above the hamburger range: the toggles float at the end of row 1 and the links float in after them, so a short name keeps one row with the links a group gap before the toggles, and links that do not fit beside the name's last line drop to the end edge below. The name wraps beside the toggles at the float gap, the tight one on a phone: the toggles' shape is inset from their margin box by the difference, and only inline text reads a float's shape. This is the final layout from the first paint, with or without the script. The strut adds height above line 1 only, so its text centres on the toggles and the name's later lines keep their pitch. Vertical pages keep the flex strip (vertical.css). */
+/* A plain site name above the hamburger range: the toggles float at the end of row 1 and the links float in after them, so a short name keeps one row with the links a group gap before the toggles, and links that do not fit beside the name's last line drop to the end edge below. The name wraps beside the toggles at the float gap, the tight one on a phone: the toggles' shape is inset from their margin box by the difference, and only inline text reads a float's shape. This is the final layout from the first paint, with or without the script. The strut adds height above line 1 only, so its text centres on the toggles and the name's later lines keep their pitch. Vertical pages keep the flex strip (vertical.css). A theme that holds the masthead to one row (`flex-wrap: nowrap`) and whose links would drop below the name gets `data-nav-scroll` from nav-split.ts, which leaves this layout for the flex row with its links scrolling (below). */
 @media (20rem < width) {
-  .nav-content:not(:has(.breadcrumb-segment)) {
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-scroll]) {
     display: flow-root;
   }
 
   /* Half the toggles' height above the text's centre, which sits about half a cap height above the baseline. In the name's own font, so a logo whose name has no text sets the line's top itself. */
-  .nav-content:not(:has(.breadcrumb-segment)) .site-name::before {
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-scroll]) .site-name::before {
     content: "";
     display: inline-block;
     vertical-align: calc(var(--moss-nav-toggle-size) / 2 + 0.35em);
@@ -3058,7 +3058,7 @@ body > header .site-name {
   }
 
   /* Line 1 ends above the toggles' bottom; the name's second line keeps the full width from there. */
-  .nav-content:not(:has(.breadcrumb-segment)) > .nav-icons {
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-scroll]) > .nav-icons {
     --moss-nav-float-lift: max(0px, calc(var(--moss-nav-toggle-size) / 2 - 0.875em));
     --moss-nav-float-lift: max(0px, calc(var(--moss-nav-toggle-size) / 2 - 0.5lh));
     float: inline-end;
@@ -3067,55 +3067,55 @@ body > header .site-name {
   }
 
   /* Links that drop start at the bottom of the name's last line, so the strut at its end sets where they start: a clearance below the toggles, enough to keep the links' touch reach (16px above their text) off the theme button's (4px below it), and the 44px submenu toggle off both. It reaches below the line only, so the name keeps its pitch. The two margins cancel on a one-row header, which keeps its height, and keep the padding under a dropped row. */
-  .nav-content:not(:has(.breadcrumb-segment)):has(.nav-links) {
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-scroll]):has(.nav-links) {
     --moss-nav-drop-clear: 1rem;
     margin-block-end: calc(-1 * var(--moss-nav-drop-clear));
   }
 
-  .nav-content:not(:has(.breadcrumb-segment)):has(.nav-links) .nav-left::after {
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-scroll]):has(.nav-links) .nav-left::after {
     content: "";
     display: inline-block;
     block-size: calc(var(--moss-nav-toggle-size) + var(--moss-nav-drop-clear));
     vertical-align: top;
   }
 
-  .nav-content:not(:has(.breadcrumb-segment)) .nav-links {
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-scroll]) .nav-links {
     margin-block-end: var(--moss-nav-drop-clear);
   }
 
   /* With a mouse, links beside a second name line go under the toggles to the end edge: the toggles exclude other floats only as far as line 1 reaches. Where hit areas are enlarged (a touch screen, or a narrow window) they stay before the toggles, since a link's reach there would take taps meant for the toggles. */
   @media (width >= 48rem) and (pointer: fine) {
-    .nav-content:not(:has(.breadcrumb-segment)):has(.nav-links) > .nav-icons {
+    .nav-content:not(:has(.breadcrumb-segment), [data-nav-scroll]):has(.nav-links) > .nav-icons {
       margin-block-end: calc(-1 * var(--moss-nav-float-lift));
     }
   }
 
   /* inset() is physical. */
-  .nav-content:not(:has(.breadcrumb-segment)) > .nav-icons:dir(rtl) {
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-scroll]) > .nav-icons:dir(rtl) {
     shape-outside: inset(0 calc(var(--moss-nav-group-gap) - var(--moss-nav-float-gap)) var(--moss-nav-float-lift) 0) margin-box;
   }
 
-  .nav-content:not(:has(.breadcrumb-segment)) .nav-left {
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-scroll]) .nav-left {
     display: inline;
   }
 
-  .nav-content:not(:has(.breadcrumb-segment)) .nav-right {
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-scroll]) .nav-right {
     display: contents;
   }
 
   /* `.main-nav a` sets nowrap on the name. */
-  .nav-content:not(:has(.breadcrumb-segment)) .site-name {
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-scroll]) .site-name {
     white-space: normal;
     margin-inline-end: var(--moss-space-md);
   }
 
-  .nav-content:not(:has(.breadcrumb-segment)) .nav-links {
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-scroll]) .nav-links {
     float: inline-end;
     min-block-size: var(--moss-nav-toggle-size);
   }
 
   /* A float sits at the top of line 1, so with a logo taller than the toggles both floats take the logo's height from its hidden copy, which the theme sizes as it sizes the logo, and centre on it. The copy takes no inline room, and its negative margin gives back the gap after it. In the links its text sets the baseline the links align to, at the height of a centred link's. */
-  .nav-content:not(:has(.breadcrumb-segment)) .nav-logo-strut {
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-scroll]) .nav-logo-strut {
     display: flex;
     /* The name's size, so a logo sized in em gets the same height. */
     font-size: var(--moss-nav-name-size);
@@ -3126,11 +3126,11 @@ body > header .site-name {
     margin-inline-end: -0.25rem;
   }
 
-  .nav-content:not(:has(.breadcrumb-segment)) .nav-links > .nav-logo-strut {
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-scroll]) .nav-links > .nav-logo-strut {
     margin-inline-end: calc(-1 * var(--moss-nav-link-gap));
   }
 
-  .nav-content:not(:has(.breadcrumb-segment)) .nav-links > .nav-logo-strut::before {
+  .nav-content:not(:has(.breadcrumb-segment), [data-nav-scroll]) .nav-links > .nav-logo-strut::before {
     content: "\200b";
   }
 }
@@ -3142,6 +3142,34 @@ body > header .site-name {
 /* Tight single row (`data-nav-compact`, set by nav-split.ts): the outer and toggle gaps shrink; the link gap is already at its floor. */
 .nav-content[data-nav-compact] {
   column-gap: var(--moss-space-xs);
+}
+
+/* One row the theme will not wrap (`data-nav-scroll`, set by nav-split.ts in
+   place of the split when .nav-content is `flex-wrap: nowrap`): the links
+   scroll inline inside the row. The padding keeps a focused link's outline
+   inside the scroller and the matching negative margin keeps the row's
+   height. A group goes static so its submenu takes .nav-content as its
+   containing block and hangs below the row instead of being clipped by the
+   scroller; with no inline offset it stays under its own entry. */
+.nav-content[data-nav-scroll] .nav-right {
+  min-inline-size: 0;
+}
+
+.nav-content[data-nav-scroll] .nav-links {
+  min-inline-size: 0;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+  padding: 0.25rem;
+  margin-block: -0.25rem;
+}
+
+.nav-content[data-nav-scroll] .moss-nav-group {
+  position: static;
+}
+
+.nav-content[data-nav-scroll] .moss-nav-sub {
+  inset-inline-start: auto;
 }
 
 /* Same box as .nav-search-btn (search.css): a 2.25rem pill, transparent at

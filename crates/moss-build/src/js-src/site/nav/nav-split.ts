@@ -32,7 +32,11 @@
  * name's lines are counted with the stack cleared. Sizes are read on the
  * masthead's inline axis; on a vertical page its physical width is its block
  * size, which the split itself changes. A theme that keeps `.nav-right` a box
- * gets the plain wrap from the split's grid. With JS off nothing here runs: a
+ * gets the plain wrap from the split's grid; one that flattens it (`display:
+ * contents`) has laid a trail's masthead out itself and is left alone. A theme
+ * that sets `flex-wrap: nowrap` on `.nav-content` gets `data-nav-scroll` where
+ * the links would leave its one row, a plain name's float layout included: the
+ * row stays, its links scrolling inline. With JS off nothing here runs: a
  * trail is alone on row 1, the links and toggles on row 2. On a phone site.css
  * holds a trail's two rows at the toggles' height, so the split this makes
  * after the first paint moves only the toggles.
@@ -84,10 +88,11 @@ function contentSize(el: HTMLElement, vertical: boolean): number {
 const stack = teardownStack();
 const { on } = stack;
 
-function setMode(el: HTMLElement, mode: "compact" | "split" | "stack" | null): void {
+function setMode(el: HTMLElement, mode: "compact" | "split" | "stack" | "scroll" | null): void {
   el.removeAttribute("data-nav-split");
   el.removeAttribute("data-nav-compact");
   el.removeAttribute("data-nav-stack");
+  el.removeAttribute("data-nav-scroll");
   if (mode) el.setAttribute(`data-nav-${mode}`, "");
 }
 
@@ -152,6 +157,13 @@ function nameLines(name: HTMLElement, vertical: boolean): number {
   return lineCount(extents);
 }
 
+/** Whether the floated links start below the masthead's first line, which is where a float that fits sits. */
+function linksDropped(navContent: HTMLElement, links: HTMLElement): boolean {
+  const s = getComputedStyle(navContent);
+  const top = navContent.getBoundingClientRect().top + (parseFloat(s.borderTopWidth) || 0) + (parseFloat(s.paddingTop) || 0);
+  return links.getBoundingClientRect().top > top + 0.5;
+}
+
 function columnGap(el: Element, fallback: number): number {
   const parsed = parseFloat(getComputedStyle(el).columnGap);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -165,6 +177,7 @@ export function initNavSplit(): void {
 
   const navLeft = navContent.querySelector<HTMLElement>(".nav-left");
   const siteName = navLeft?.querySelector<HTMLElement>(".site-name");
+  const navRight = navContent.querySelector<HTMLElement>(".nav-right");
   const links = navContent.querySelector<HTMLElement>(".nav-links");
   const icons = navContent.querySelector<HTMLElement>(".nav-icons");
   const hamburger = navContent.querySelector<HTMLElement>(".mobile-menu-button");
@@ -179,10 +192,14 @@ export function initNavSplit(): void {
   function layout(): void {
     const vertical = isVertical(navContent!);
     const size = (el: HTMLElement) => inlineSize(el, vertical);
+    setMode(navContent!, null);
+    // A theme that holds the masthead to one row (`flex-wrap: nowrap`, often
+    // with a fixed height) has no room for a second: links that do not fit
+    // scroll inside that row instead.
+    const oneRow = getComputedStyle(navContent!).flexWrap === "nowrap";
     // ≤20rem the links are the hamburger's overlay panel, not a row: the
     // menu button stands in for them.
     if (hamburger && getComputedStyle(hamburger).display !== "none") {
-      setMode(navContent!, null);
       if (trail) {
         const beside = oneRowFits({
           container: contentSize(navContent!, vertical),
@@ -197,11 +214,16 @@ export function initNavSplit(): void {
       }
       return;
     }
-    // Above it a plain name floats beside the toggles in CSS alone (site.css).
+    // Above it a plain name floats beside the toggles in CSS alone (site.css),
+    // and links that do not fit beside its last line drop below it.
     if (!trail) {
-      setMode(navContent!, null);
+      if (oneRow && !vertical && linksDropped(navContent!, links!)) setMode(navContent!, "scroll");
       return;
     }
+    // A theme that flattens `.nav-right` itself has placed the links and
+    // toggles beside the trail; the split would only undo that. Read with no
+    // mode set: the split flattens it too.
+    if (navRight && getComputedStyle(navRight).display === "contents") return;
     const fitsOneRow = (): boolean => {
       const linkGap = columnGap(links!, 0);
       const linkWidths = [...links!.children].map((child) => size(child as HTMLElement));
@@ -214,13 +236,12 @@ export function initNavSplit(): void {
       });
     };
     // Full spacing, then (on a phone) tight gaps, then two rows.
-    setMode(navContent!, null);
     if (fitsOneRow()) return;
     if (getComputedStyle(navContent!).getPropertyValue("--moss-nav-phone").trim() === "1") {
       setMode(navContent!, "compact");
       if (fitsOneRow()) return;
     }
-    setMode(navContent!, "split");
+    setMode(navContent!, oneRow ? "scroll" : "split");
   }
 
   // The masthead resizes with the window and with the font arriving; the

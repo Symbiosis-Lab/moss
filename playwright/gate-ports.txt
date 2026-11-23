@@ -127,3 +127,6 @@ progress-line:ui
 progress-line:preview
 nav-split-order:nav
 nav-split-order:short
+nav-nowrap
+nav-nowrap:logo
+nav-flattened

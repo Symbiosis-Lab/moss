@@ -5508,3 +5508,94 @@ After.
 `,
   },
 };
+
+// A masthead held to one 64px row by its theme, the way a client theme does it: one row, no wrap, with
+// the theme's own menu button below 48rem. From 48rem until about 900px the links do not fit.
+export const NAV_NOWRAP_GATE: ScratchSiteSpec = {
+  name: "nav-nowrap-gate",
+  files: {
+    "index.md": `---
+title: Harbour Watch
+uid: "nnw00101"
+---
+
+# Harbour Watch
+`,
+    ...Object.fromEntries(
+      ["Training", "Veterans", "Application", "Contact", "Request A Consultation"].map((title, i) => [
+        `${title.replace(/ /g, "")}.md`,
+        `---\ntitle: ${title}\nuid: "nnw0020${i}"\nnav: true\nweight: ${i + 2}\n---\n\n# ${title}\n`,
+      ]),
+    ),
+    "Services/index.md": `---\ntitle: Services\nuid: "nnw00301"\nnav: true\nweight: 9\n---\n\n# Services\n`,
+    "Services/Patrol.md": `---\ntitle: Evening patrol\nuid: "nnw00302"\nnav: true\n---\n\n# Evening patrol\n`,
+    "Services/Gate.md": `---\ntitle: Gate watch\nuid: "nnw00303"\nnav: true\n---\n\n# Gate watch\n`,
+    ".moss/theme/style.css": `header { padding: 0; }
+.main-nav { max-inline-size: none; padding: 0; margin: 0; }
+.nav-content { inline-size: min(100% - 48px, 1264px); max-inline-size: none; margin-inline: auto; block-size: 64px; min-block-size: 64px; flex-wrap: nowrap; align-items: center; padding: 0; border: 0; }
+.nav-left { flex: none; }
+.nav-right { flex: 1; justify-content: flex-end; align-items: center; gap: 16px; flex-wrap: nowrap; }
+.site-name { font: 800 23px/1 sans-serif; text-transform: uppercase; white-space: nowrap; }
+.nav-links { gap: 8px; flex-wrap: nowrap; margin-inline-start: auto; }
+.nav-icons { display: none; }
+.nav-links a { font: 500 12px monospace; text-transform: uppercase; letter-spacing: .09em; padding: 12px; white-space: nowrap; }
+@media (max-width: 48rem) {
+  .mobile-menu-button { display: inline-flex; min-inline-size: 44px; min-block-size: 44px; order: 3; }
+  .nav-right { gap: 4px; min-inline-size: 0; }
+  .nav-links > :not(:last-child) { display: none; }
+}
+`,
+  },
+};
+
+// The same masthead with a logo beside the name, which the float layout sizes through its own strut.
+export const NAV_NOWRAP_LOGO_GATE: ScratchSiteSpec = {
+  name: "nav-nowrap-logo-gate",
+  files: {
+    ...NAV_NOWRAP_GATE.files,
+    "index.md": `---
+title: Harbour Watch
+uid: "nnw00101"
+logo: assets/mark.svg
+---
+
+# Harbour Watch
+`,
+    "assets/mark.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40"><rect width="40" height="40" fill="#1d3aa1"/></svg>`,
+    ".moss/theme/style.css": `${NAV_NOWRAP_GATE.files[".moss/theme/style.css"]}.site-logo { height: 40px; }\n`,
+  },
+};
+
+// A theme that lays a breadcrumb masthead out itself: `.nav-right` flattened, the trail alone on row 1 at a
+// full-row basis, the links at the start of row 2 and the toggles at its end, through `order`. The one-row sum
+// overflows at every width, so the split would otherwise take over everywhere.
+export const NAV_FLATTENED_GATE: ScratchSiteSpec = {
+  name: "nav-flattened-gate",
+  files: {
+    "index.md": `---
+title: Fifty Stations of the Coast Road
+uid: "nfl00101"
+breadcrumb: true
+---
+
+# Fifty Stations of the Coast Road
+`,
+    ...Object.fromEntries(
+      ["Prints", "Browse", "Map", "Weather", "Essays", "About"].map((title, i) => [
+        `${title}.md`,
+        `---\ntitle: ${title}\nuid: "nfl0020${i}"\nnav: true\nweight: ${i + 2}\n---\n\n# ${title}\n`,
+      ]),
+    ),
+    "Stations/index.md": `---\ntitle: Stations\nuid: "nfl00301"\n---\n\n# Stations\n`,
+    "Stations/Akasaka.md": `---\ntitle: Akasaka\nuid: "nfl00302"\n---\n\n# Akasaka\n`,
+    ".moss/theme/style.css": `.nav-content { gap: 0 20px; padding-block-end: 0; }
+.nav-content .nav-left { flex: 1 1 100%; padding-block: 22px 8px; }
+.nav-content .nav-right { display: contents; }
+.nav-content .nav-links { order: 1; flex: 1 1 0; justify-content: flex-start; gap: 0 28px; }
+.nav-content .nav-icons { order: 2; margin-inline-start: auto; }
+.site-name { font: 500 clamp(24px, 3.4vw, 34px) / 1.15 serif; white-space: normal; }
+.main-nav .nav-links a { font: 500 15px/1 sans-serif; padding-block: 15px 12px; }
+@media (max-width: 40rem) { .nav-content .nav-links { gap: 0 14px; } .main-nav .nav-links a { font-size: 14px; } .nav-content .nav-icons { gap: 4px; } }
+`,
+  },
+};
