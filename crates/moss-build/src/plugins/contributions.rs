@@ -18,6 +18,7 @@ pub mod blocks;
 pub mod derivation;
 pub mod identity;
 pub mod listing_style;
+pub mod newsletter_service;
 pub mod platform;
 pub mod public_data;
 pub mod site_settings;
@@ -107,6 +108,10 @@ pub struct PluginContributes {
     /// filled on every build from `[services.<plugin-id>]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<Vec<identity::Proof>>,
+
+    /// A mailing service the site's subscribers can be copied to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub newsletter_service: Option<newsletter_service::NewsletterServiceContribution>,
 }
 
 /// Job descriptors contributed by a plugin (§8).
@@ -559,9 +564,10 @@ impl PluginManifest {
                 || c.blocks.as_ref().is_some_and(|b| !b.is_empty())
                 || c.public_data.is_some()
                 || c.site_settings.is_some()
+                || c.newsletter_service.is_some()
         });
         if manifest.entry.is_none() && !declarative {
-            return Err(serde_json::Error::custom("manifest needs an `entry` unless it declares derivations, blocks, public_data or site_settings"));
+            return Err(serde_json::Error::custom("manifest needs an `entry` unless it declares derivations, blocks, public_data, site_settings or newsletter_service"));
         }
         for (short, block) in manifest.contributes.iter().flat_map(|c| c.blocks.iter().flatten()) {
             blocks::validate(&manifest.name, short, block).map_err(serde_json::Error::custom)?;
@@ -572,6 +578,9 @@ impl PluginManifest {
         if let Some(site) = manifest.contributes.as_mut().and_then(|c| c.site_settings.as_mut()) {
             site.validate().map_err(serde_json::Error::custom)?;
             bound_author_text_in(&mut site.settings);
+        }
+        if let Some(service) = manifest.contributes.as_mut().and_then(|c| c.newsletter_service.as_mut()) {
+            service.validate().map_err(serde_json::Error::custom)?;
         }
         if let Some(proofs) = manifest.contributes.as_ref().and_then(|c| c.identity.as_ref()) {
             let declared = manifest.contributes.as_ref().and_then(|c| c.site_settings.as_ref()).map_or(&[][..], |s| &s.settings[..]);
@@ -898,7 +907,7 @@ mod tests {
         for name in ["channel", "deploy_target", "derivations", "identity", "processor", "site_settings", "stack"] {
             assert!(names.contains(&name.to_string()), "{name} in {names:?}");
         }
-        assert_eq!(names.len(), 12, "{names:?}");
+        assert_eq!(names.len(), 13, "{names:?}");
     }
     use moss_core::untrusted_text::{MAX_NAME, MAX_SENTENCE};
 

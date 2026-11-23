@@ -154,6 +154,22 @@ A network that lets a person's domain stand for their account (a Bluesky handle,
 - A proof whose setting is unset is not written, without a warning: the person has not set that network up. A hand-written value that cannot be written (an `acct` without a host, a control character) is left out with a warning naming the setting.
 - Proofs are data, read even by a build that runs no plugin code (`moss build --no-plugins`), so a CI deploy keeps them. A path two suppliers claim is written once, from `[site]` first and then plugins by name, with a warning naming both. When a proof the last build served is gone, the build says so (`identity: .well-known/atproto-did removed`), since that was someone's live handle.
 
+## A newsletter service
+
+A mailing service a site's subscribers can be copied to declares `contributes.newsletter_service` and needs no `entry`. The person picks it under Subscribers in the app, which writes `service = "<plugin name>"` under `[channels.email]` in `.moss/config.toml`, then makes a key in the service and pastes it. moss draws the steps and checks the pasted key's prefix and length before anything is sent; the service's side runs on moss's server, which keeps a narrower key it makes from the pasted one.
+
+```json
+"newsletter_service": {
+  "display_name": "SendGrid",
+  "key": { "url": "https://app.sendgrid.com/settings/api_keys", "prefix": "SG.", "length": 69, "name": "moss", "permission": "Full Access" },
+  "steps": ["Open API Keys in SendGrid", "Create API Key, name it {name}, keep Full Access, then Create & View", "Copy the key and paste it here"],
+  "webhooks_url": "https://app.sendgrid.com/settings/mail_settings/webhook_settings",
+  "senders_url": "https://app.sendgrid.com/settings/sender_auth"
+}
+```
+
+The steps are written in the service's own words, since the person reads them beside the service's window; the first is the link to `key.url`, and `{name}` stands for `key.name`, the name the server looks for before it deletes the pasted key. `permission` is the service's word for the access the key needs. Every address is `https`. The steps are translated through the manifest's `translations` table, keyed by the English text.
+
 ## Setup: declare, don't build UI
 
 A contribution that needs anything from the user declares a `setup` block — moss draws all of it; a plugin never builds settings or first-publish UI. Three members, ordered by what they cost to evaluate:
