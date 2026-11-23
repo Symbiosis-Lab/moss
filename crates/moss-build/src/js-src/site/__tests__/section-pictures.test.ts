@@ -34,6 +34,16 @@ describe("section pictures", () => {
     expect(sectionPictures(heads).map((p) => p?.src)).toEqual(["deep-800.webp"]);
   });
 
+  test("a heading inside a grid cell does not end the section around it", () => {
+    document.body.innerHTML = `<main>
+      <h2 id="w">Winners</h2>
+      <div class="moss-grid"><div class="moss-grid-card"><h2 id="n">Name</h2>${pic("card")}</div></div>
+      <h2 id="x">Next</h2>
+    </main>`;
+    const heads = [...document.querySelectorAll<HTMLElement>("#w, #x")];
+    expect(sectionPictures(heads).map((p) => p?.src ?? null)).toEqual(["card-800.webp", null]);
+  });
+
   test("the thumbnail keeps the page image's focal point", () => {
     const heads = [...document.querySelectorAll<HTMLElement>("h2")];
     const picture = sectionPictures(heads)[2]!;

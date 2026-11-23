@@ -29,7 +29,7 @@
 
 import { applyFold, inlineAvailableExtent, placePanel, trailOverflows } from "./breadcrumb-fold";
 import { mountContentsRuler } from "./contents-ruler";
-import { contentsPictures, pictureImg, sectionPictures } from "./section-pictures";
+import { contentsPictures, inGridCell, pictureImg, sectionPictures } from "./section-pictures";
 import { markRows, SECTION_SYNC_EVENT } from "./section-event";
 import { mountSectionName } from "./section-name";
 import { teardownStack } from "./teardown";
@@ -92,12 +92,15 @@ const { on } = stack;
  * body whose author started at `###` or `####` answers with those instead of
  * reporting no sections at all.
  *
+ * A heading in a grid cell (`inGridCell`) is never a section; a page whose
+ * only `##` are in cells falls through to the next level.
+ *
  * Exported for the tests: which headings become the panel is a decision worth
  * stating as data, the same way `foldPlan` is.
  */
 export function sectionHeadings(root: ParentNode = document): HTMLElement[] {
   for (const level of ["h2", "h3", "h4", "h5", "h6"]) {
-    const found = [...root.querySelectorAll<HTMLElement>(`main ${level}[id]`)];
+    const found = [...root.querySelectorAll<HTMLElement>(`main ${level}[id]`)].filter((h) => !inGridCell(h));
     if (found.length > 0) return found;
   }
   return [];
@@ -421,11 +424,10 @@ export function initNavIsland(): void {
   }
 
   /**
-   * While the ruler is on screen it is the page's one contents list. A pinned
-   * island, there without being asked for, is put away, as it is wherever the
-   * page reserves the ruler's lane; true when it was. A trail island keeps
-   * its bar, the way back up the site, and loses only its sections, which
-   * site.css hides while the list is on screen.
+   * Wherever the ruler is the page's contents list, faded or not, a pinned
+   * island, there without being asked for, is put away; true when it was. A
+   * trail island keeps its bar, the way back up the site, and loses only its
+   * sections, which site.css hides.
    */
   function yieldToRuler(): boolean {
     const ruler = island.dataset.ruler ?? "off";
@@ -434,11 +436,11 @@ export function initNavIsland(): void {
       setShown(false);
       return true;
     }
-    if (ruler === "on" && sectionsMenu && !sectionsMenu.hidden) closeMenus(levelsMenu ?? undefined);
+    if (sectionsMenu && !sectionsMenu.hidden) closeMenus(levelsMenu ?? undefined);
     return false;
   }
-  // Keyboard focus can bring a faded ruler up between scroll passes: it takes
-  // over at once rather than on the next scroll.
+  // A ruler mounted or resized into place between scroll passes takes over at
+  // once rather than on the next scroll.
   if (typeof MutationObserver !== "undefined") {
     const mo = new MutationObserver(yieldToRuler);
     mo.observe(island, { attributes: true, attributeFilter: ["data-ruler"] });

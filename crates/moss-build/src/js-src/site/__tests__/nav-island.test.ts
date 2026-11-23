@@ -16,7 +16,7 @@
 import { describe, test, expect, beforeEach, vi } from "vitest";
 
 import { foldPlan, outerWidth } from "../nav/breadcrumb-fold";
-import { contentsEnd, initNavIsland, mainSectionCount } from "../nav/nav-island";
+import { contentsEnd, initNavIsland, mainSectionCount, sectionHeadings } from "../nav/nav-island";
 
 // A five-level trail: 河灣週刊 / 評選 / 小說組 / 第一屆 / 末代女礦工…
 const TRAIL = [100, 60, 70, 60, 220];
@@ -440,5 +440,26 @@ describe("which sections the ruler lists (contents=end)", () => {
 
   test("a marker before every section is ignored rather than emptying the list", () => {
     expect(page(`<main><div data-contents-end></div>${h(4)}</main>`)).toBe(4);
+  });
+});
+
+describe("which headings are sections", () => {
+  const ids = (root: ParentNode) => sectionHeadings(root).map((h) => h.id);
+  const page = (body: string): HTMLElement => {
+    const div = document.createElement("div");
+    div.innerHTML = `<main>${body}</main>`;
+    return div;
+  };
+  const stats = `<div class="moss-grid" data-columns="4">
+    <div class="moss-grid-card"><h2 id="n250">250</h2><p>entries</p></div>
+    <div class="moss-grid-card"><h2 id="n30">30</h2><p>judges</p></div></div>`;
+
+  test("a heading in a grid cell titles the cell, not a section of the page", () => {
+    expect(ids(page(`<h2 id="report">Report</h2>${stats}<h2 id="winners">Winners</h2>
+      <div class="band"><h2 id="notes">Notes</h2></div>`))).toEqual(["report", "winners", "notes"]);
+  });
+
+  test("a page whose only ## are in cells falls through to its ###", () => {
+    expect(ids(page(`${stats}<h3 id="first">First</h3><h3 id="second">Second</h3>`))).toEqual(["first", "second"]);
   });
 });

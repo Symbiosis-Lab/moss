@@ -21,11 +21,7 @@
  * - A `contents: pictures` ruler is up wherever the page reserves its lane:
  *   site.css narrows the column there and sets `--moss-contents-lane` on
  *   `body`, and this module reads only whether that is set, so the media
- *   condition has one owner and nothing here measures the margin. Where the
- *   lane is reserved the island's `data-ruler` is `lane` while the list is
- *   away, and a headerless island's bar never shows. The controls stand in
- *   the lane at the foot of the window while the list is up and are hidden
- *   with it (site.css).
+ *   condition has one owner and nothing here measures the margin.
  * - A site can switch it off with CSS (`display: none`, `visibility: hidden`);
  *   whether it is actually rendered is read on every pass, so the island
  *   comes back however it was hidden.
@@ -40,10 +36,11 @@
  * magnifies the rows in place around the pointer, the focused one showing its
  * section's picture after its name (contents-lens.ts).
  *
- * The ruler belongs on screen from the first section to the end of the main
- * sections: the author's `contents=end` marker passing the middle of the
- * window, else the page's closing picture coming into view, else the
- * article's bottom passing the middle.
+ * Where the page and the window give the ruler room, it is the page's one
+ * contents list from top to bottom, wherever the reader is: the island never
+ * takes the sections back on a scroll. It only fades where it would stand over
+ * something: the opening above the first section, a wide block, the page's
+ * closing picture, and whatever follows the author's `contents=end` marker.
  *
  * Which of this needs an engine — hit-testing, label clearance, clipping — is
  * asserted in tests/render-gates/site/contents-ruler.spec.ts.
@@ -62,11 +59,7 @@ const GUTTER = 24;
  *  is a few letters of a title, which names nothing. */
 const MIN_LABEL = 96;
 
-/** Fade out when the article's bottom is above the middle of the window. The
- *  list comes up when the first section's heading reaches the list's own top,
- *  so it never stands over an opening, whatever the window's height. Pinned to
- *  the window, the ruler only belongs on screen while the article's body is —
- *  not over a cover image above it or over the comments below it. */
+/** Fade out once the `contents=end` marker is above the middle of the window. */
 const HIDE_ABOVE = 0.5;
 
 export interface RulerOptions {
@@ -76,8 +69,8 @@ export interface RulerOptions {
   /** The nav's accessible name — the island's localized "sections" string. */
   label: string;
   /** The island: receives `data-ruler` (`on` while the list is on screen,
-   *  `lane` while it is away from a reserved lane, `off` otherwise), and
-   *  emits `SECTION_SYNC_EVENT`. */
+   *  `away` while it is the contents list but faded, `off` where the island
+   *  is), and emits `SECTION_SYNC_EVENT`. */
   island: HTMLElement;
   /** Space the island's bar occupies at the top of the window. */
   clearance: () => number;
@@ -156,18 +149,15 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     bands = [...scope.querySelectorAll("[data-width]:not([data-width=body])")].flatMap((band) => [...band.children]);
   };
   collectBands();
-  let away = true;
-  /** The page reserves the list's lane and the list fits: set on layout. */
-  let lane = false;
   let disposed = false;
 
   /**
    * One frame's reading and writing, run when the island's scrollspy reports.
    *
-   * The ruler counts as on screen when it is rendered (not `hidden`, and not
-   * hidden by the site's own CSS) and not faded. The island drops its own
-   * sections for exactly that case, so there is one contents list at a time.
-   * Reads come first, then the writes.
+   * The ruler is the contents list whenever it is rendered (not `hidden`, and
+   * not hidden by the site's own CSS), faded or not; the island drops its own
+   * sections for exactly that, so the list has one place on a page. Reads
+   * come first, then the writes.
    */
   function fade(): void {
     if (disposed) return;
@@ -176,9 +166,7 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     const inBody = zone === null || first.getBoundingClientRect().top <= zone.top;
     const notPast = opts.end
       ? opts.end.getBoundingClientRect().top > height * HIDE_ABOVE
-      : opts.closing
-        ? opts.closing.getBoundingClientRect().top > height
-        : article.getBoundingClientRect().bottom > height * HIDE_ABOVE;
+      : !opts.closing || opts.closing.getBoundingClientRect().top > height;
     // A wide block that reaches the ruler's column and shares its height would
     // be painted over: the ruler steps aside until the block has passed.
     // Only worth measuring while the ruler would otherwise be up.
@@ -195,9 +183,9 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
       (nav.checkVisibility
         ? nav.checkVisibility({ checkVisibilityCSS: true })
         : getComputedStyle(nav).display !== "none");
-    away = !(inBody && notPast && !covered) && !nav.matches(":focus-within");
+    const away = !(inBody && notPast && !covered) && !nav.matches(":focus-within");
     nav.toggleAttribute("data-away", away);
-    island.dataset.ruler = rendered && !away ? "on" : lane && rendered ? "lane" : "off";
+    island.dataset.ruler = !rendered ? "off" : away ? "away" : "on";
   }
 
   function layout(): void {
@@ -218,7 +206,6 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
       ? getComputedStyle(document.body).getPropertyValue("--moss-contents-lane").trim() !== "" && fits
       : !vertical && !rtl && room >= MIN_LABEL && fits;
     nav.hidden = !eligible;
-    lane = Boolean(opts.pictures) && eligible;
     if (eligible && !opts.pictures) labels.forEach((label) => (label.style.maxWidth = `${room}px`));
     fade();
   }

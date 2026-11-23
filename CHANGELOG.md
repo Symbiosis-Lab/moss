@@ -48,6 +48,8 @@ All notable changes to moss will be documented here.
 - A site with a long name keeps its header still while the page loads: the search, language and theme buttons sit at the end of the first line from the first paint, and the name wraps beside them. The header used to rearrange itself once the page's script ran, moving everything below it.
 - A publish never changes a `uid:` already in a page. A duplicated note's copy used to have the original's uid replaced in its file; it now keeps it, and is published under a uid of its own that it keeps when renamed unedited.
 - A channel not yet signed in shows only its Sign in action in settings, instead of "Couldn't check …": a plugin's `copy_account` refusal with cause `auth` now means signed out.
+- A heading inside a grid cell (a figure's number, a card's title) is no longer listed in the page's contents; a page whose only `##` headings are in cells lists its `###` sections.
+- On a wide screen, a page's contents stay in the left margin from the top of the page to the bottom. Before, near the end of a long article they faded out and moved back into the floating nav's sections button.
 
 ### Removed
 

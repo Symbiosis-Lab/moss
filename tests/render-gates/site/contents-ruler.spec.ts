@@ -225,7 +225,7 @@ for (const [width, height] of [
       }
     });
 
-    test('a scroll up brings the bar beside the ruler without its sections, which return once the ruler fades', async ({ page }) => {
+    test('a scroll up brings the bar beside the ruler without its sections', async ({ page }) => {
       const island = () =>
         page.evaluate(() => {
           const el = document.querySelector<HTMLElement>('.moss-nav-island')!;
@@ -243,36 +243,74 @@ for (const [width, height] of [
       await frames(page);
       await expect.poll(() => isAway(page)).toBe(false);
       await expect.poll(island).toEqual({ visible: true, inert: false, shown: 'true', sections: false, fits: true });
-
-      // Past the article the ruler fades and the bar has its sections again.
-      await scrollTo(page, 1e6);
-      await expect.poll(() => isAway(page)).toBe(true);
-      await page.evaluate(() => window.scrollBy(0, -120));
-      await frames(page);
-      await expect.poll(island).toEqual({ visible: true, inert: false, shown: 'true', sections: true, fits: true });
-
-      await intoArticle(page);
-      await expect.poll(async () => (await island()).sections).toBe(false);
     });
 
-    test('keyboard focus that brings a faded ruler up takes the bar\'s sections at once and leaves the bar', async ({ page }) => {
-      await scrollTo(page, 1e6);
+    test('keyboard focus brings a faded ruler up, and the island has no sections either way', async ({ page }) => {
+      await scrollTo(page, 0);
       await expect.poll(() => isAway(page)).toBe(true);
-      await page.evaluate(() => window.scrollBy(0, -120));
+      const read = () =>
+        page.evaluate(() => {
+          const el = document.querySelector<HTMLElement>('.moss-nav-island')!;
+          return { ruler: el.dataset.ruler, sections: el.querySelector<HTMLElement>('.moss-nav-island-sections')!.checkVisibility() };
+        });
+      expect(await read()).toEqual({ ruler: 'away', sections: false });
+      await page.evaluate(() => document.querySelector<HTMLElement>('.moss-contents-ruler a')!.focus({ preventScroll: true }));
       await frames(page);
-      await expect.poll(() => page.locator('.moss-nav-island').evaluate((el) => (el as HTMLElement).dataset.shown)).toBe('true');
-      // Focus and read in one task, with no scroll and no frame in between.
-      const after = await page.evaluate(async () => {
-        document.querySelector<HTMLElement>('.moss-contents-ruler a')!.focus();
-        await Promise.resolve();
-        const el = document.querySelector<HTMLElement>('.moss-nav-island')!;
-        const sections = el.querySelector<HTMLElement>('.moss-nav-island-sections')!.checkVisibility();
-        return { ruler: el.dataset.ruler, shown: el.dataset.shown, inert: el.inert, sections };
-      });
-      expect(after).toEqual({ ruler: 'on', shown: 'true', inert: false, sections: false });
+      expect(await read()).toEqual({ ruler: 'on', sections: false });
     });
   });
 }
+
+/* Where the contents go is the page's and the window's choice, never the
+   scroll position's: at the foot of the page, the article long past, a scroll
+   up brings the bar, and the contents are still the ruler's. */
+for (const width of [1280, 1440]) {
+  test(`at ${width}px the contents stay beside the article to the foot of the page and the island takes none`, async ({ page }) => {
+    await open(page, width, 900);
+    await intoArticle(page);
+    await scrollTo(page, 1e6);
+    await page.evaluate(() => window.scrollBy(0, -120));
+    await frames(page);
+    await expect.poll(() => page.locator('.moss-nav-island').evaluate((el) => (el as HTMLElement).dataset.shown)).toBe('true');
+    const state = () => page.evaluate(() => {
+      const nav = document.querySelector<HTMLElement>('.moss-contents-ruler')!;
+      const island = document.querySelector<HTMLElement>('.moss-nav-island')!;
+      const box = nav.querySelector('ol')!.getBoundingClientRect();
+      const article = (document.querySelector('main article') ?? document.querySelector('main'))!;
+      return {
+        footer: document.querySelector('footer')!.getBoundingClientRect().top < innerHeight,
+        articleAboveMiddle: article.getBoundingClientRect().bottom < innerHeight / 2,
+        rulerInWindow: !nav.hidden && box.top >= 0 && box.bottom <= innerHeight && box.height > 0,
+        rulerOpacity: getComputedStyle(nav).opacity,
+        ruler: island.dataset.ruler,
+        islandSections: island.querySelector<HTMLElement>('.moss-nav-island-sections')!.checkVisibility(),
+      };
+    });
+    // Polled: the ruler fades in over a few frames after the jump.
+    await expect.poll(state).toEqual({
+      footer: true,
+      articleAboveMiddle: true,
+      rulerInWindow: true,
+      rulerOpacity: '1',
+      ruler: 'on',
+      islandSections: false,
+    });
+  });
+}
+
+test('an island with no ruler state keeps its sections', async ({ page }) => {
+  await open(page, 1600, 900);
+  await intoArticle(page);
+  await page.evaluate(() => window.scrollBy(0, -120));
+  await frames(page);
+  // Read in the same task as the removal, before the next pass writes it back.
+  const sections = await page.evaluate(() => {
+    const island = document.querySelector<HTMLElement>('.moss-nav-island')!;
+    delete island.dataset.ruler;
+    return island.querySelector<HTMLElement>('.moss-nav-island-sections')!.checkVisibility();
+  });
+  expect(sections).toBe(true);
+});
 
 test.describe('when it shows', () => {
   test('hidden below the width that leaves a label 96px, and the smallest width that shows it is the one that does', async ({ page }) => {
@@ -301,7 +339,7 @@ test.describe('when it shows', () => {
     await expect(ruler(page)).toBeHidden();
   });
 
-  test('faded at the top over the cover, shown mid-article, faded once past the article', async ({ page }) => {
+  test('faded at the top over the cover, shown mid-article and to the foot of the page', async ({ page }) => {
     await open(page, 1600, 900);
     await expect.poll(() => isAway(page)).toBe(true);
     const opacity = () => ruler(page).evaluate((el) => getComputedStyle(el).opacity);
@@ -315,7 +353,7 @@ test.describe('when it shows', () => {
       () => (document.querySelector('main article') ?? document.querySelector('main'))!.getBoundingClientRect().bottom < window.innerHeight * 0.5,
     );
     expect(past, 'the fixture can scroll the article above the middle').toBe(true);
-    await expect.poll(() => isAway(page)).toBe(true);
+    await expect.poll(opacity).toBe('1');
   });
 
   test('faded is not removed: its links stay in the tab order, and focus brings it back', async ({ page }) => {

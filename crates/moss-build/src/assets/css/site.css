@@ -4299,9 +4299,9 @@ body {
   display: none;
 }
 
-/* While the contents ruler is on screen it is the page's one contents list,
-   so a trail island's bar keeps its trail and drops its sections. */
-.moss-nav-island:not([data-header="none"])[data-ruler="on"] :is(.moss-nav-island-sections, [data-island-menu="sections"]) {
+/* Where the contents ruler is the page's contents list, faded or not, a trail
+   island's bar keeps its trail and drops its sections. */
+.moss-nav-island:not([data-header="none"])[data-ruler]:not([data-ruler="off"]) :is(.moss-nav-island-sections, [data-island-menu="sections"]) {
   display: none;
 }
 
@@ -4322,11 +4322,11 @@ body {
    never moved in the DOM, so keyboard focus survives every move:
    - at the top of the page (`data-top`, and with scripting off) they are at
      the end of the bar's place and scroll away with the page's first block;
-   - where the contents ruler is on screen, or its lane is reserved
-     (`data-ruler` `on` or `lane`; the bar never shows), they stand in a column at the
-     foot of the window, starting where the ruler's dashes start, and are
-     hidden whenever the list is away (`lane`): over the opening, a wide block
-     and the closing picture, the top-of-page controls covering the opening;
+   - where the contents ruler is the contents list (`data-ruler` `on` or
+     `away`; the bar never shows), they stand in a column at the foot of the
+     window, starting where the ruler's dashes start, and are hidden whenever
+     the list is faded (`away`): over the opening, a wide block and the
+     closing picture, the top-of-page controls covering the opening;
    - anywhere else they are fixed in the slot the bar keeps free at its end.
    Both places are worked out from the bar's and the ruler's own geometry
    tokens (on `body`), never retyped. A `chrome: none` page has the controls
@@ -4420,7 +4420,7 @@ body:has(> .nav-icons) main > article:is(:has(> h1:not(.visually-hidden):first-c
   transition: opacity 250ms ease, visibility 250ms;
 }
 
-.moss-nav-island[data-header="none"][data-ruler="lane"]:not([data-top]) + .nav-icons:not(:focus-within) {
+.moss-nav-island[data-header="none"][data-ruler="away"]:not([data-top]) + .nav-icons:not(:focus-within) {
   opacity: 0;
   visibility: hidden;
 }
@@ -4600,9 +4600,9 @@ body:has(> .nav-icons) main > article:is(:has(> h1:not(.visually-hidden):first-c
   display: none;
 }
 
-/* Faded while the article's body is not what is on screen (over a cover above
-   it, over the comments below it). Opacity, not `visibility`: the links stay
-   in the tab order, and focusing one lifts the fade. */
+/* Faded where it would stand over something (contents-ruler.ts). Opacity, not
+   `visibility`: the links stay in the tab order, and focusing one lifts the
+   fade. */
 .moss-contents-ruler[data-away] {
   opacity: 0;
   pointer-events: none;

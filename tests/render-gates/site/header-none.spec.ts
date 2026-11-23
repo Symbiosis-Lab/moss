@@ -159,27 +159,28 @@ test.describe('a one-page site with header = "none"', () => {
     expect((await subtitle.boundingBox())!.y, 'the subtitle follows the title').toBeGreaterThan(box!.y);
   });
 
-  test('the ruler lists the main sections, is up inside them and steps aside past the marker', async ({ page }) => {
+  test('the ruler lists the main sections, is up inside them and steps aside past the marker, keeping the contents', async ({ page }) => {
     expect(await page.locator('.moss-contents-ruler a').count()).toBe(COLLECTIONS.length);
 
     await jumpTo(page, 2);
     await expect.poll(() => isAway(page)).toBe(false);
 
-    // The marker passes the middle of the window: the ruler goes, the island stays.
+    // The marker passes the middle of the window: the ruler fades, and the
+    // island does not take the contents back.
     await placeTop(page, '[data-contents-end]', 0.3);
     await expect.poll(() => isAway(page)).toBe(true);
-    expect(await shown(page)).toBe('true');
-    // The section after the marker still names itself on the island's button.
+    await expect.poll(() => rulerOn(page)).toBe('away');
+    expect(await shown(page)).not.toBe('true');
     await jumpTo(page, 5);
-    expect(await nameOf(page)).toBe(AFTER_END);
     expect(await isAway(page)).toBe(true);
+    expect(await shown(page)).not.toBe('true');
 
     // Scrolling back above the marker brings the ruler back.
     await jumpTo(page, 3);
     await expect.poll(() => isAway(page)).toBe(false);
   });
 
-  test('the bar is hidden wherever the ruler shows, and back where it does not', async ({ page }) => {
+  test('the bar is hidden wherever the ruler can show, faded or not', async ({ page }) => {
     const bar = () =>
       island(page).evaluate((el) => ({
         visible: getComputedStyle(el).visibility === 'visible' && getComputedStyle(el).opacity !== '0',
@@ -192,14 +193,14 @@ test.describe('a one-page site with header = "none"', () => {
     }
     await placeTop(page, '[data-contents-end]', 0.3);
     await expect.poll(() => isAway(page)).toBe(true);
-    await expect.poll(bar).toEqual({ visible: true, inert: false });
+    await expect.poll(bar).toEqual({ visible: false, inert: true });
     await jumpTo(page, 2);
     await expect.poll(bar).toEqual({ visible: false, inert: true });
   });
 });
 
 test.describe('a page that ends on a closing picture, with no marker', () => {
-  test('keeps the ruler until the closing picture comes into view, then the bar', async ({ page }) => {
+  test('keeps the ruler until the closing picture comes into view, and the bar stays away', async ({ page }) => {
     await open(page, CLOSING_PATH, WIDE, 900);
     await jumpTo(page, 2);
     await expect.poll(() => isAway(page)).toBe(false);
@@ -210,7 +211,8 @@ test.describe('a page that ends on a closing picture, with no marker', () => {
     // would have kept the ruler up.
     expect(await page.evaluate(() => document.querySelector('main')!.getBoundingClientRect().bottom > innerHeight / 2)).toBe(true);
     await expect.poll(() => isAway(page), 'its top is in view').toBe(true);
-    await expect.poll(() => shown(page)).toBe('true');
+    await expect.poll(() => rulerOn(page)).toBe('away');
+    expect(await shown(page)).not.toBe('true');
   });
 });
 
@@ -239,7 +241,7 @@ const toggleState = (page: Page) =>
       position: getComputedStyle(t).position,
       top: island.hasAttribute('data-top'),
       ruler: island.dataset.ruler,
-      lane: island.dataset.ruler === 'lane',
+      away: island.dataset.ruler === 'away',
       box: { left: r.left, right: r.right, top: r.top, bottom: r.bottom },
       bar: { right: bar.right, top: bar.top, bottom: bar.bottom },
       scrollY,
@@ -288,8 +290,8 @@ test.describe('one theme toggle', () => {
         await scrollTo(page, y);
         await frames(page);
         let s = await toggleState(page);
-        // Where the list is away from its lane (over the opening past the top, a wide block, the closing picture) the controls are away with it.
-        const away = s.lane && !s.top;
+        // Where the list is faded (over the opening past the top, a wide block, the closing picture, past the marker) the controls are away with it.
+        const away = s.away && !s.top;
         if (away) await expect.poll(async () => (s = await toggleState(page)).visible, `at ${y}px they have faded`).toBe(0);
         expect(s.visible, `at ${y}px: ${JSON.stringify(s)}`).toBe(away ? 0 : 1);
         if (!away) expect([s.search, s.lang], `search and language at ${y}px`).toEqual([true, true]);
@@ -299,7 +301,7 @@ test.describe('one theme toggle', () => {
         }
         places.add(s.top ? 'top' : away ? 'away' : s.ruler === 'on' ? 'list' : 'bar');
       }
-      const want = path === PICTURES_PATH ? ['away', 'list', 'top'] : width === WIDE ? ['bar', 'list', 'top'] : ['bar', 'top'];
+      const want = path === PICTURES_PATH || width === WIDE ? ['away', 'list', 'top'] : ['bar', 'top'];
       expect([...places].sort(), 'it has been in each of its places').toEqual(want);
       await expect(page.getByRole('button', { name: 'Toggle theme', includeHidden: true }), 'one in the page, shown or not').toHaveCount(1);
     });
@@ -381,7 +383,7 @@ test.describe('a contents: pictures page reserves a lane for its list', () => {
       return {
         list: !nav.hidden && !nav.hasAttribute('data-away'),
         bar: island.dataset.shown === 'true' || (ist.visibility === 'visible' && ist.opacity !== '0' && !island.inert),
-        lane: island.dataset.ruler === 'on' || island.dataset.ruler === 'lane',
+        lane: island.dataset.ruler === 'on' || island.dataset.ruler === 'away',
         textLeft: document.querySelector('main h2[id]')!.getBoundingClientRect().left,
         listRight: nav.querySelector('ol')!.getBoundingClientRect().right,
       };

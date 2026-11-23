@@ -178,25 +178,26 @@ function giveItRoom(): void {
 describe("the island's sections button while the ruler is up", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  test("is hidden exactly while the ruler is on screen", () => {
+  test("is hidden wherever the ruler is the contents list, whatever the scroll", async () => {
     giveItRoom();
     setPage(["一", "二"]);
     initNavIsland();
     expect(island().dataset.ruler).toBe("on");
-    expect(rulers()[0].hidden).toBe(false);
+    const place = (rect: (el: Element) => Partial<DOMRect>): Promise<void> => {
+      vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+        return { left: 600, top: 0, bottom: 0, height: 0, width: 0, ...rect(this) } as DOMRect;
+      });
+      window.dispatchEvent(new Event("scroll"));
+      return nextFrame();
+    };
 
-    // Scrolled past the article: the ruler fades, the button is its own again.
-    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
-      () => ({ left: 600, top: -4000, bottom: 0, height: 0, width: 0 }) as DOMRect,
-    );
-    window.dispatchEvent(new Event("scroll"));
-    return new Promise<void>((resolve) =>
-      requestAnimationFrame(() => {
-        expect(island().dataset.ruler).toBe("off");
-        expect(rulers()[0].hasAttribute("data-away")).toBe(true);
-        resolve();
-      }),
-    );
+    // Scrolled past the article, to the foot of the page: still the ruler's.
+    await place(() => ({ top: -4000, bottom: -3000 }));
+    expect([island().dataset.ruler, rulers()[0].hasAttribute("data-away")]).toEqual(["on", false]);
+
+    // Over the opening the ruler fades, and the island still has no sections.
+    await place((el) => (el.matches("main h2") ? { top: 900 } : { top: 300 }));
+    expect([island().dataset.ruler, rulers()[0].hasAttribute("data-away")]).toEqual(["away", true]);
   });
 
   test("the bar still comes on a scroll up, and an open sections panel closes", async () => {
