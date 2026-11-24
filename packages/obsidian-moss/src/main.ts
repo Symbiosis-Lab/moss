@@ -1,18 +1,18 @@
-import type { Extension } from "@codemirror/state";
-import { Events, MarkdownView, Notice, Platform, Plugin } from "obsidian";
+import type { EditorState, Extension } from "@codemirror/state";
+import { editorInfoField, Events, MarkdownView, Notice, Platform, Plugin } from "obsidian";
 import { BlockSuggest } from "./syntax/block-suggest";
 import { blockExtension } from "./syntax/cm-blocks";
 import { renderBlock } from "./syntax/block-render";
 import { registerEditorActions } from "./editor-actions";
 import { showMossFields } from "./property-types";
-import { contextChanged, frontmatterExtension } from "./cm-frontmatter";
+import { frontmatterExtension } from "./cm-frontmatter";
 import { initializeCore, MossSite } from "./core";
 import { MossFieldSuggest } from "./field-suggest";
 import { markRows, mossFolders } from "./folder-marks";
 import { PagePreviewView, PAGE_PREVIEW_VIEW_TYPE } from "./page-preview-view";
-import { siteSchema, type MossSchema } from "./schema";
+import { siteSchema } from "./schema";
 import { DEFAULT_SETTINGS, type MossSettings } from "./settings";
-import { readSiteContext } from "./site-context";
+import { contextChanged, readSiteContext, siteOf, type OpenSite, type SiteNote } from "./site-context";
 import { shortcodeExtension } from "./syntax/cm-shortcode";
 import type { DesktopCommands } from "./desktop";
 
@@ -20,18 +20,17 @@ const NO_SITE = { files: [], lang: "en" };
 
 export default class MossPlugin extends Plugin {
   settings: MossSettings = { ...DEFAULT_SETTINGS };
-  schema: MossSchema = { fields: new Map() };
-  site!: MossSite;
+  /** One per moss folder in the vault; a note belongs to the nearest above it. */
+  sites: OpenSite[] = [];
+  /** What a note outside every moss folder previews with. */
+  private plain!: OpenSite;
   private desktop?: DesktopCommands;
   private rebuildTimer?: ReturnType<typeof setTimeout>;
   private generation = 0;
   private disposed = false;
   private readonly aids = [
-    frontmatterExtension(() => this.schema, () => this.site), shortcodeExtension(),
-    blockExtension((markdown, doc) => {
-      const file = this.app.workspace.getActiveFile();
-      return file && renderBlock(this.site, this.app.vault.adapter, file.path, markdown, doc);
-    }),
+    frontmatterExtension((state) => this.noteOf(state)), shortcodeExtension((state) => this.noteOf(state)),
+    blockExtension((markdown, doc, note) => renderBlock(note, this.app.vault.adapter, markdown, doc), (state) => this.noteOf(state)),
   ];
   /** The registered editor extensions: the aids in a moss folder, none elsewhere. */
   private editorAids: Extension[] = [];
@@ -44,7 +43,8 @@ export default class MossPlugin extends Plugin {
     // Only the keys this version knows; a saved key from an older one is dropped.
     this.settings = { binaryPath: saved.binaryPath ?? DEFAULT_SETTINGS.binaryPath };
     initializeCore();
-    this.site = new MossSite(JSON.stringify(NO_SITE));
+    const plain = new MossSite(JSON.stringify(NO_SITE));
+    this.plain = { root: "/", site: plain, schema: siteSchema(plain) };
     this.registerEvent(this.app.workspace.on("layout-change", () => this.watchTree()));
     this.register(() => {
       this.tree.disconnect();
@@ -53,14 +53,17 @@ export default class MossPlugin extends Plugin {
     await this.rebuildContext();
     if (this.disposed) return;
     this.registerEditorExtension(this.editorAids);
-    this.registerEditorSuggest(new MossFieldSuggest(this, () => this.schema));
+    this.registerEditorSuggest(new MossFieldSuggest(this, (path) => this.siteOf(path)));
     this.registerEditorSuggest(new BlockSuggest(this.app));
     registerEditorActions(this);
     this.addCommand({
       id: "show-fields",
       name: "Show moss fields in Properties",
       callback: async () => {
-        const added = await showMossFields(this.app, this.schema);
+        const file = this.app.workspace.getActiveFile();
+        const schema = file && this.siteOf(file.path)?.schema;
+        if (!schema) return void new Notice("No moss folder in this vault.");
+        const added = await showMossFields(this.app, schema);
         if (added) new Notice(added.length ? `Typed ${added.length} fields.` : "Fields already typed.");
       },
     });
@@ -68,14 +71,11 @@ export default class MossPlugin extends Plugin {
     for (const event of ["create", "delete", "rename"] as const) {
       this.registerEvent((this.app.vault as Events).on(event, () => this.scheduleRebuild()));
     }
-    this.registerEvent(this.app.vault.on("modify", (file) => {
-      if (file.path.startsWith(".moss/")) this.scheduleRebuild();
-    }));
     // Hidden folders bypass Vault's file index, but still emit raw adapter events.
     this.registerEvent((this.app.vault as Events).on("raw", (path: unknown) => {
       if (typeof path !== "string") return;
-      // A nested folder that gains or loses `.moss` gains or loses its mark.
-      if (path === ".moss" || path.startsWith(".moss/") || path.endsWith("/.moss")) this.scheduleRebuild();
+      // A folder that gains or loses `.moss` gains or loses its site and mark.
+      if (/(^|\/)\.moss(\/|$)/.test(path)) this.scheduleRebuild();
     }));
     this.app.workspace.onLayoutReady(() => { if (!this.disposed) this.scheduleRebuild(); });
     // The mobile UI (a phone, or desktop Obsidian emulating one) gets the page door, as no program runs on a phone.
@@ -110,15 +110,29 @@ export default class MossPlugin extends Plugin {
   private async rebuildContext(): Promise<void> {
     const generation = ++this.generation;
     try {
-      const [context, folders] = await Promise.all([readSiteContext(this.app.vault), mossFolders(this.app.vault)]);
+      const folders = await mossFolders(this.app.vault);
+      const roots = [...folders];
+      const contexts = await Promise.all(roots.map((root) => readSiteContext(this.app.vault, root, roots)));
       if (this.disposed || generation !== this.generation) return;
       this.marked = folders;
       this.watchTree();
-      const site = new MossSite(JSON.stringify(context ?? NO_SITE));
-      this.site.free();
-      this.site = site;
-      this.schema = context ? siteSchema(site) : { fields: new Map() };
-      this.editorAids.splice(0, Infinity, ...(context ? this.aids : []));
+      const sites: OpenSite[] = [];
+      try {
+        roots.forEach((root, index) => {
+          const context = contexts[index];
+          if (!context) return;
+          // Listed before its schema is read, so the catch frees it too.
+          const open: OpenSite = { root, site: new MossSite(JSON.stringify(context)), schema: { fields: new Map() } };
+          sites.push(open);
+          open.schema = siteSchema(open.site);
+        });
+      } catch (error) {
+        for (const built of sites) built.site.free();
+        throw error;
+      }
+      for (const old of this.sites) old.site.free();
+      this.sites = sites;
+      this.editorAids.splice(0, Infinity, ...(sites.length ? this.aids : []));
       this.app.workspace.updateOptions();
       this.app.workspace.iterateAllLeaves((leaf) => {
         if (leaf.view instanceof MarkdownView) {
@@ -132,6 +146,21 @@ export default class MossPlugin extends Plugin {
       console.warn("[moss] Cannot refresh site context", error);
       new Notice("moss: could not read the site configuration.");
     }
+  }
+
+  /** The site of the note at vault path `path`, or null outside every moss folder. */
+  siteOf(path: string): SiteNote | null {
+    return siteOf(this.sites, path);
+  }
+
+  /** The note's site, or the plain one when no moss folder holds it. */
+  noteSite(path: string): SiteNote {
+    return this.siteOf(path) ?? { ...this.plain, path };
+  }
+
+  private noteOf(state: EditorState): SiteNote | null {
+    const path = state.field(editorInfoField, false)?.file?.path;
+    return path ? this.siteOf(path) : null;
   }
 
   private watchTree(): void {
@@ -169,6 +198,7 @@ export default class MossPlugin extends Plugin {
     ++this.generation;
     clearTimeout(this.rebuildTimer);
     this.desktop?.unload();
-    this.site?.free();
+    for (const open of this.sites) open.site.free();
+    this.plain?.site.free();
   }
 }

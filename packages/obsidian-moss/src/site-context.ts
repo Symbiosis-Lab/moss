@@ -1,6 +1,7 @@
+import { StateEffect, type EditorState } from "@codemirror/state";
 import type { DataAdapter, Vault } from "obsidian";
-import type { SitePlugin } from "./schema";
-import { initializeCore, siteBundle, siteTextPaths } from "./core";
+import type { MossSchema, SitePlugin } from "./schema";
+import { initializeCore, siteBundle, siteTextPaths, type MossSite } from "./core";
 
 export interface SiteContext {
   files: string[];
@@ -62,20 +63,26 @@ export async function ownsMoss(adapter: Pick<DataAdapter, "stat"> & { getBasePat
   return (await adapter.stat(`${inVault}.moss`))?.type === "folder";
 }
 
-/** The vault's site, or null when the vault is not a moss folder and moss has nothing to say about its notes. */
-export async function readSiteContext(vault: Pick<Vault, "adapter" | "getFiles">): Promise<SiteContext | null> {
+/**
+ * The site of the moss folder `root` ("/" is the vault), with every path as
+ * that site sees it, or null when `root` is not a moss folder. `roots` are the
+ * vault's moss folders: a note below another one is that folder's, as in
+ * moss's build, which leaves a nested site out of the site around it.
+ */
+export async function readSiteContext(vault: Pick<Vault, "adapter" | "getFiles">, root = "/", roots: readonly string[] = [root]): Promise<SiteContext | null> {
   const adapter = vault.adapter;
-  // Only the vault's root is read as a site.
-  if (!await ownsMoss(adapter, "/")) return null;
-  const config = await adapter.exists(".moss/config.toml") ? await adapter.read(".moss/config.toml") : "";
+  if (!await ownsMoss(adapter, root)) return null;
+  const at = root === "/" ? "" : `${root}/`;
+  const config = await adapter.exists(`${at}.moss/config.toml`) ? await adapter.read(`${at}.moss/config.toml`) : "";
   // The build serves only style.css; other sheets reach a page through its @import.
-  const css = await themeCss(adapter, ".moss/theme/style.css");
-  const files = vault.getFiles().map((file) => file.path);
+  const css = await themeCss(adapter, `${at}.moss/theme/style.css`);
+  const owners = roots.map((owner) => ({ root: owner }));
+  const files = vault.getFiles().filter((file) => siteOf(owners, file.path)?.root === root).map((file) => file.path.slice(at.length));
   initializeCore();
   const texts: Record<string, string> = {};
-  for (const path of siteTextPaths(files)) texts[path] = await adapter.read(path);
+  for (const path of siteTextPaths(files)) texts[path] = await adapter.read(at + path);
   const plugins = [];
-  const directory = await list(adapter, ".moss/plugins");
+  const directory = await list(adapter, `${at}.moss/plugins`);
   for (const folder of directory.folders) {
     const path = `${folder}/manifest.json`;
     if (!await adapter.exists(path)) continue;
@@ -95,9 +102,39 @@ export async function readSiteContext(vault: Pick<Vault, "adapter" | "getFiles">
   return result.bundle;
 }
 
-export function vaultBaseHref(adapter: Pick<DataAdapter, "getResourcePath">, filePath: string): string {
+/** A moss folder the plugin has read ("/" is the vault). */
+export interface OpenSite {
+  root: string;
+  site: MossSite;
+  schema: MossSchema;
+}
+
+/** A note as its site sees it: `path` is relative to the site's folder. */
+export interface SiteNote extends OpenSite {
+  path: string;
+}
+
+/** The site of an editor's note, or null when no moss folder holds it. */
+export type NoteOf = (state: EditorState) => SiteNote | null;
+
+/** Dispatched to every editor when the plugin has read the moss folders again. */
+export const contextChanged = StateEffect.define<void>();
+
+/** The nearest moss folder above the note at vault path `path`, or null when no moss folder holds it. */
+export function siteOf<Site extends { root: string }>(sites: readonly Site[], path: string): (Site & { path: string }) | null {
+  const depth = (root: string) => (root === "/" ? 0 : root.length + 1);
+  let owner: Site | undefined;
+  for (const site of sites) {
+    if (depth(site.root) && !path.startsWith(`${site.root}/`)) continue;
+    if (!owner || depth(site.root) > depth(owner.root)) owner = site;
+  }
+  return owner ? { ...owner, path: path.slice(depth(owner.root)) } : null;
+}
+
+/** The address of the folder `sitePath` is relative to, from the resource URL of the file at vault path `filePath`. */
+export function vaultBaseHref(adapter: Pick<DataAdapter, "getResourcePath">, filePath: string, sitePath = filePath): string {
   const resource = adapter.getResourcePath(filePath).split("?")[0];
   const parts = resource.split("/");
-  parts.splice(-filePath.split("/").length);
+  parts.splice(-sitePath.split("/").length);
   return `${parts.join("/")}/`;
 }

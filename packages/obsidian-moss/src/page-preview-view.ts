@@ -50,16 +50,17 @@ export class PagePreviewView extends ItemView {
       const text = editor?.file?.path === file.path && editor.editor
         ? editor.editor.getValue() : await vault.cachedRead(file);
       if (request !== this.request || this.closed) return;
-      const site = this.plugin.site;
-      const paths: string[] = JSON.parse(site.embeddedNotes(file.path, text));
+      const { site, root, path } = this.plugin.noteSite(file.path);
+      const at = root === "/" ? "" : `${root}/`;
+      const paths: string[] = JSON.parse(site.embeddedNotes(path, text));
       const notes: Record<string, string> = {};
-      await Promise.all(paths.map(async (path) => {
-        const note = vault.getAbstractFileByPath(path);
-        if (note instanceof TFile) notes[path] = await vault.cachedRead(note);
+      await Promise.all(paths.map(async (embedded) => {
+        const note = vault.getAbstractFileByPath(at + embedded);
+        if (note instanceof TFile) notes[embedded] = await vault.cachedRead(note);
       }));
-      if (this.closed || request !== this.request || site !== this.plugin.site) return;
+      if (this.closed || request !== this.request || site !== this.plugin.noteSite(file.path).site) return;
       site.setNotes(JSON.stringify(notes));
-      const result: PagePreview = JSON.parse(site.preview(file.path, text, vaultBaseHref(vault.adapter, file.path)));
+      const result: PagePreview = JSON.parse(site.preview(path, text, vaultBaseHref(vault.adapter, file.path, path)));
       this.showPreview(result, request);
     } catch (error) {
       if (!this.closed && request === this.request && this.iframe) {

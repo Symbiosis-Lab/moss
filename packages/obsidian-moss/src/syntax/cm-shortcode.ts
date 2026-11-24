@@ -6,6 +6,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
+import { contextChanged, type NoteOf } from "../site-context";
 import {
   scanShortcodeBlocks,
   type ShortcodeBlock,
@@ -36,7 +37,8 @@ function toDecorationSet(ranges: DecoRange[]): DecorationSet {
   );
 }
 
-export function shortcodeExtension(): Extension {
+/** Marks shortcode lines in notes a moss folder holds. */
+export function shortcodeExtension(noteOf: NoteOf): Extension {
   return ViewPlugin.fromClass(
     class {
       decorations: DecorationSet;
@@ -44,9 +46,12 @@ export function shortcodeExtension(): Extension {
         this.decorations = this.build(view);
       }
       update(u: ViewUpdate) {
-        if (u.docChanged) this.decorations = this.build(u.view);
+        if (u.docChanged || u.transactions.some((tr) => tr.effects.some((effect) => effect.is(contextChanged)))) {
+          this.decorations = this.build(u.view);
+        }
       }
       private build(view: EditorView): DecorationSet {
+        if (!noteOf(view.state)) return Decoration.none;
         const text = view.state.doc.toString();
         return toDecorationSet(shortcodeDecoRanges(scanShortcodeBlocks(text)));
       }

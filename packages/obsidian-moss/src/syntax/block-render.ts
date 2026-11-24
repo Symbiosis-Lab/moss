@@ -1,7 +1,7 @@
 // A `:::` block's Markdown through moss's page render, as markup and a stylesheet a shadow root can hold.
 import type { DataAdapter } from "obsidian";
-import type { MossSite, PagePreview } from "../core";
-import { vaultBaseHref } from "../site-context";
+import type { PagePreview } from "../core";
+import { vaultBaseHref, type SiteNote } from "../site-context";
 
 /** `html` is the article inside two wrappers standing in for the page's `<html>` and `<body>`. */
 export interface BlockRender { sheet: CSSStyleSheet; html: string }
@@ -69,11 +69,11 @@ export function blockMarkup(pageHtml: string, base: string): { css: string; html
   return { css, html: wrap(page.documentElement, ROOT, wrap(page.body, BODY, article)) };
 }
 
-/** `path` is the open note's vault path; `doc` is the document the block shows in. */
-export function renderBlock(site: MossSite, adapter: Pick<DataAdapter, "getResourcePath">, path: string, markdown: string, doc: Document): BlockRender | null {
+/** `note` is the block's note as its site sees it; `doc` is the document the block shows in. */
+export function renderBlock(note: SiteNote, adapter: Pick<DataAdapter, "getResourcePath">, markdown: string, doc: Document): BlockRender | null {
   try {
-    const base = vaultBaseHref(adapter, path);
-    const page: PagePreview = JSON.parse(site.preview(path, markdown, base));
+    const base = vaultBaseHref(adapter, note.root === "/" ? note.path : `${note.root}/${note.path}`, note.path);
+    const page: PagePreview = JSON.parse(note.site.preview(note.path, markdown, base));
     const { css, html } = blockMarkup(page.html, base);
     return { sheet: sheetFor(doc, css), html };
   } catch (error) {

@@ -9,16 +9,18 @@ import { PagePreviewView } from "../src/page-preview-view";
 initializeCore();
 afterEach(() => vi.useRealTimers());
 
-function fixture() {
-  const note = Object.assign(new TFile(), { path: "embed.md", extension: "md" });
-  const file = Object.assign(new TFile(), { path: "note.md", extension: "md" });
-  const site = new MossSite(JSON.stringify({ files: [file.path, note.path], lang: "en" }));
+/** `root` is the moss folder the notes sit in ("/" is the vault). */
+function fixture(root = "/") {
+  const at = root === "/" ? "" : `${root}/`;
+  const note = Object.assign(new TFile(), { path: `${at}embed.md`, extension: "md" });
+  const file = Object.assign(new TFile(), { path: `${at}note.md`, extension: "md" });
+  const site = new MossSite(JSON.stringify({ files: ["note.md", "embed.md"], lang: "en" }));
   const editor = { getValue: () => "# Unsaved page\n![[embed]]" };
   const events: Record<string, () => void> = {};
   const cachedRead = vi.fn(async () => "Embedded words");
-  const plugin = { site, app: {
-    vault: { cachedRead, getAbstractFileByPath: () => note, on: () => ({}),
-      adapter: { getResourcePath: () => "capacitor://localhost/vault/note.md?t=1" } },
+  const plugin = { noteSite: (path: string) => ({ root, site, path: path.slice(at.length) }), app: {
+    vault: { cachedRead, getAbstractFileByPath: (path: string) => (path === note.path ? note : null), on: () => ({}),
+      adapter: { getResourcePath: () => `capacitor://localhost/vault/${at}note.md?t=1` } },
     workspace: { activeEditor: { file, editor }, getActiveFile: () => file,
       on: (event: string, callback: () => void) => { events[event] = callback; return {}; } },
   } } as unknown as MossPlugin;
@@ -60,6 +62,17 @@ it("drops a stale revision after a newer render and after close", async () => {
   await f.view.onClose();
   f.view.showPreview(old, 4);
   expect(f.iframe.srcdoc).toBe(latest.html);
+  f.site.free();
+});
+
+it("previews a note in a moss folder inside the vault by its path there, with that folder's address", async () => {
+  vi.useFakeTimers();
+  const f = fixture("my garden");
+  await f.view.onOpen();
+  await vi.advanceTimersByTimeAsync(250);
+  expect(f.iframe.srcdoc).toContain("Embedded words");
+  expect(f.iframe.srcdoc).toContain('href="capacitor://localhost/vault/my garden/"');
+  await f.view.onClose();
   f.site.free();
 });
 

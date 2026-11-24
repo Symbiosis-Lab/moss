@@ -3,8 +3,7 @@ import { builtinModules, createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { afterEach, expect, it, vi } from "vitest";
-import type { MossSite } from "../src/core";
-import type { MossSchema } from "../src/schema";
+import type { SiteNote } from "../src/site-context";
 import * as obsidian from "./obsidian-stub";
 
 afterEach(() => vi.useRealTimers());
@@ -24,7 +23,7 @@ it("imports main and loads on mobile with Electron and every Node module forbidd
   const nativeRequire = createRequire(import.meta.url);
   const forbidden = new Set(builtinModules.flatMap((name) => [name, `node:${name}`]));
   const sandbox = {
-    module: { exports: {} as { default: new (app: unknown) => obsidian.Plugin & { onload(): Promise<void>; onunload(): void; site: MossSite; schema: MossSchema } } },
+    module: { exports: {} as { default: new (app: unknown) => obsidian.Plugin & { onload(): Promise<void>; onunload(): void; siteOf(path: string): SiteNote | null } } },
     exports: {}, desktopLoaded: false,
     require(name: string) {
       if (name === "electron" || name.startsWith("node:") || forbidden.has(name)) throw new Error(`Forbidden import: ${name}`);
@@ -60,7 +59,7 @@ it("imports main and loads on mobile with Electron and every Node module forbidd
   // Not a moss folder: no editor aid and no field to suggest.
   const [aids] = plugin.registeredExtensions;
   expect(aids).toEqual([]);
-  expect(plugin.schema.fields.size).toBe(0);
+  expect(plugin.siteOf("page.md")).toBeNull();
   expect(vaultName.marked).toBe(false);
   hidden[".moss/config.toml"] = "";
   events.raw(".moss/config.toml");
@@ -68,22 +67,35 @@ it("imports main and loads on mobile with Electron and every Node module forbidd
   expect(aids).toHaveLength(3);
   // The vault is the moss folder, so its name carries the mark.
   expect(vaultName.marked).toBe(true);
-  expect(plugin.schema.fields.has("title")).toBe(true);
-  expect(plugin.site.check("page.md", "[[new]]")).toContain("unresolved link");
+  expect(plugin.siteOf("page.md")!.schema.fields.has("title")).toBe(true);
+  expect(plugin.siteOf("page.md")!.site.check("page.md", "[[new]]")).toContain("unresolved link");
   files.push({ path: "new.md" });
   events.create();
   events.rename();
   await vi.advanceTimersByTimeAsync(249);
-  expect(plugin.site.check("page.md", "[[new]]")).toContain("unresolved link");
+  expect(plugin.siteOf("page.md")!.site.check("page.md", "[[new]]")).toContain("unresolved link");
   await vi.advanceTimersByTimeAsync(1);
-  expect(plugin.site.check("page.md", "[[new]]")).not.toContain("unresolved link");
+  expect(plugin.siteOf("page.md")!.site.check("page.md", "[[new]]")).not.toContain("unresolved link");
   hidden[".moss/config.toml"] = '[site]\nlang = "fr"';
   events.raw(".moss/config.toml");
   await vi.advanceTimersByTimeAsync(250);
-  expect(JSON.parse(plugin.site.preview("page.md", "# Page", "")).html).toContain('lang="fr"');
+  expect(JSON.parse(plugin.siteOf("page.md")!.site.preview("page.md", "# Page", "")).html).toContain('lang="fr"');
   files.pop();
   events.delete();
   await vi.advanceTimersByTimeAsync(250);
-  expect(plugin.site.check("page.md", "[[new]]")).toContain("unresolved link");
+  expect(plugin.siteOf("page.md")!.site.check("page.md", "[[new]]")).toContain("unresolved link");
+  // A moss folder inside the vault is a site of its own: its notes are read by their paths inside it, against its files.
+  files.push({ path: "notes/essay.md" }, { path: "notes/sources.md" });
+  hidden["notes/.moss/config.toml"] = '[site]\nlang = "de"';
+  events.raw("notes/.moss/config.toml");
+  await vi.advanceTimersByTimeAsync(250);
+  const nested = plugin.siteOf("notes/essay.md")!;
+  expect(nested.path).toBe("essay.md");
+  expect(nested.site).not.toBe(plugin.siteOf("page.md")!.site);
+  // The vault's own site leaves the nested one out, as moss's build does.
+  expect(plugin.siteOf("page.md")!.site.check("page.md", "[[notes/sources]]")).toContain("unresolved link");
+  expect(nested.site.check("essay.md", "[[sources]]")).not.toContain("unresolved link");
+  expect(nested.site.check("essay.md", "[[page]]")).toContain("unresolved link");
+  expect(JSON.parse(nested.site.preview("essay.md", "# Essay", "")).html).toContain('lang="de"');
   plugin.onunload();
 });
