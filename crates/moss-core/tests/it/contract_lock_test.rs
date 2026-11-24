@@ -10,6 +10,8 @@
 use moss_core::contract::components::COMPONENTS;
 use moss_core::contract::custom_props::CUSTOM_PROPS;
 use moss_core::contract::retired::{find, RetiredKind, ALIAS_FLOOR, RETIRED};
+use moss_core::contract::shortcodes::catalog;
+use moss_core::schema_fields::BUILTIN_FIELDS;
 use moss_core::contract::tokens::load_tokens;
 use std::collections::BTreeSet;
 
@@ -33,6 +35,18 @@ fn live() -> BTreeSet<String> {
     for p in CUSTOM_PROPS {
         names.insert(format!("property {}", p.name));
     }
+    // What an author writes in a folder, read from the parser's and the schema's own tables.
+    for e in catalog().into_iter().filter(|e| e.authorable) {
+        names.insert(format!("shortcode {}", e.name));
+        for a in e.attrs {
+            names.insert(format!("shortcode-attr {}", a.name));
+        }
+    }
+    for f in BUILTIN_FIELDS {
+        names.insert(format!("front-matter {}", f.name));
+    }
+    // Config keys are assembled in moss-build, out of this crate's reach, so a
+    // locked `config-key` line is never reported as gone here.
     names
 }
 
@@ -46,6 +60,10 @@ fn kind_of(line: &str) -> Option<(RetiredKind, &str)> {
         "class" => RetiredKind::Class,
         "data" => RetiredKind::Data,
         "property" => RetiredKind::Property,
+        "shortcode" => RetiredKind::Shortcode,
+        "shortcode-attr" => RetiredKind::ShortcodeAttr,
+        "front-matter" => RetiredKind::FrontMatter,
+        "config-key" => RetiredKind::ConfigKey,
         _ => return None,
     };
     Some((kind, name))

@@ -64,7 +64,9 @@ impl Spellings {
         let stored = |p: &Path| moss_core::slug::normalize_separators(&p.strip_prefix(root).unwrap_or(p).to_string_lossy());
         let mut groups: Vec<_> = by_logical.into_iter().filter(|(_, files)| files.len() > 1).collect();
         groups.sort_by(|a, b| a.0.cmp(&b.0));
-        for (logical, files) in groups {
+        for (logical, mut files) in groups {
+            // The walk's order is the file system's; `files[0]` must not depend on it.
+            files.sort();
             let read = on_disk(root, &logical);
             let kept = files.iter().copied().find(|f| *f == read).unwrap_or(files[0]);
             for other in files.into_iter().filter(|f| *f != kept) {
