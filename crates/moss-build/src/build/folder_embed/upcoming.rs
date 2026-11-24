@@ -29,7 +29,7 @@ pub(crate) fn ends_if_upcoming(start: EventTime, end: Option<EventTime>, now: ch
 /// When an event is over, as wall-clock `YYYY-MM-DDTHH:MM`: an all-day event
 /// at the start of the day after its last day, a timed one at its `end` (else
 /// its `start`). The one definition of "ended": the event is over from this
-/// minute on, and `hero-ends.ts` compares the same way.
+/// minute on, and `event-ends.ts` compares the same way.
 pub(crate) fn ends_at(start: EventTime, end: Option<EventTime>) -> String {
     let last = end.unwrap_or(start);
     if !last.is_all_day() {
@@ -41,10 +41,27 @@ pub(crate) fn ends_at(start: EventTime, end: Option<EventTime>) -> String {
         .map_or_else(|| last.day_key() + "T23:59", |next| format!("{}T00:00", next.format("%Y-%m-%d")))
 }
 
-/// `"upcoming"` or `"past"`: the `data-when` value of an event's page, card
-/// and row.
-pub(crate) fn when_of(ev: &crate::build::types::EventFields, now: chrono::NaiveDateTime) -> &'static str {
-    if span_is_upcoming(ev.start, ev.end, now) { "upcoming" } else { "past" }
+/// Where an event stands at `now`, as its page meta, card and row publish it.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum EventWhen {
+    /// Not ended; `ends` is [`ends_at`], read by `event-ends.js` to turn the
+    /// element past in the browser at that minute.
+    Upcoming { ends: String },
+    Past,
+}
+
+impl EventWhen {
+    pub(crate) fn of(ev: &crate::build::types::EventFields, now: chrono::NaiveDateTime) -> Self {
+        ends_if_upcoming(ev.start, ev.end, now).map_or(Self::Past, |ends| Self::Upcoming { ends })
+    }
+
+    /// ` data-when="…"`, with ` data-ends="…"` while upcoming.
+    pub(crate) fn attrs(&self) -> String {
+        match self {
+            Self::Upcoming { ends } => format!(r#" data-when="upcoming" data-ends="{ends}""#),
+            Self::Past => r#" data-when="past""#.to_string(),
+        }
+    }
 }
 
 /// The event's `tickets:` address while it has not ended. A past event sells

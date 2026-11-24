@@ -1066,10 +1066,6 @@ pub struct PageFeatures {
     /// `children_motion` is read from the document itself. Gates `marquee.js`
     /// via [`SiteAssets`].
     pub marquee: bool,
-    /// True if the page's hero is drawn from an event that has not ended, so
-    /// it must step aside at view time. Gates `hero-ends.js` via
-    /// [`SiteAssets`]. Set when the hero is drawn, after parsing.
-    pub hero_ends: bool,
     /// True if the page may have a picture the full-screen viewer opens: a
     /// figure, an image or a `:::gallery`. A coarse superset; `fullscreen.js`
     /// decides which pictures actually open. Gates the viewer via
@@ -1101,8 +1097,6 @@ impl PageFeatures {
             footnotes,
             scroll_rows,
             marquee,
-            // The page's hero is not part of the body a listing draws.
-            hero_ends: _,
             viewer,
             field_places,
             diagrams,
@@ -1166,8 +1160,9 @@ pub struct SiteAssets {
     pub scroll_rows: bool,
     /// Any page has a picture strip that slides sideways. Gates `marquee.js`.
     pub marquee: bool,
-    /// Any page's hero is drawn from an event. Gates `hero-ends.js`.
-    pub hero_ends: bool,
+    /// Some event has not ended at the build, so a hero, meta line, card or
+    /// row may turn past in the browser. Gates `event-ends.js`.
+    pub event_ends: bool,
     /// `[site].link_preview` — hover link previews. Defaults ON.
     pub link_preview: bool,
     /// Click-to-copy section permalinks. Absent `[site].heading_anchors` means
@@ -1249,6 +1244,7 @@ impl SiteAssets {
     pub fn of(
         pages: &[ParsedDocument],
         site_typesetting: Option<&str>,
+        now: chrono::NaiveDateTime,
         from_config: Self,
     ) -> Self {
         // One pass, no per-page clone: `PageFeatures` is a handful of bools,
@@ -1260,7 +1256,7 @@ impl SiteAssets {
             has_footnotes: false,
             scroll_rows: false,
             marquee: false,
-            hero_ends: false,
+            event_ends: false,
             viewer: false,
             field_places: false,
             diagrams: false,
@@ -1278,7 +1274,7 @@ impl SiteAssets {
             out.has_footnotes |= page.features.footnotes;
             out.scroll_rows |= page.features.scroll_rows;
             out.marquee |= page.features.marquee || page.children_motion.is_some();
-            out.hero_ends |= page.features.hero_ends;
+            out.event_ends |= crate::build::folder_embed::upcoming::is_upcoming(page, now);
             out.viewer |= page.features.viewer;
             out.diagrams |= page.features.diagrams;
             out.stream |= page.features.stream || page.declared.contains_key(moss_core::fields::IN_REPLY_TO);
@@ -1598,10 +1594,10 @@ mod tests {
         };
         let without = ParsedDocument::default();
 
-        let assets = SiteAssets::of(&[without.clone(), with_footnote], None, SiteAssets::default());
+        let assets = SiteAssets::of(&[without.clone(), with_footnote], None, chrono::NaiveDateTime::default(), SiteAssets::default());
         assert!(assets.has_footnotes, "one footnote page must set the flag");
 
-        let none = SiteAssets::of(&[without], None, SiteAssets::default());
+        let none = SiteAssets::of(&[without], None, chrono::NaiveDateTime::default(), SiteAssets::default());
         assert!(!none.has_footnotes, "no footnote page must leave it clear");
     }
 

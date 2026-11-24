@@ -150,10 +150,10 @@ pub const SITE_SCRIPTS: &[SiteScript] = &[
         load: Load::Shell { defer: false },
     },
     SiteScript {
-        name: "hero-ends",
-        dev_path: "src/assets/js/hero/hero-ends.js",
-        source: || include_str!("../../assets/js/hero/hero-ends.js"),
-        gate: |a| a.hero_ends,
+        name: "event-ends",
+        dev_path: "src/assets/js/event-ends.js",
+        source: || include_str!("../../assets/js/event-ends.js"),
+        gate: |a| a.event_ends,
         load: Load::Shell { defer: false },
     },
     SiteScript {

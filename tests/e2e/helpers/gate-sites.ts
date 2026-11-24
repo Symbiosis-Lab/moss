@@ -4542,6 +4542,23 @@ description: A play about bridges.
 
 Body.
 `,
+    "shows/late-show.md": `---
+title: Late Show
+uid: "hfg00105"
+start: 2099-04-01 19:30
+end: 2099-04-01 21:30
+tickets: https://example.test/tickets
+---
+
+Body.
+`,
+    "listing.md": `---
+title: Listing
+uid: "hfg00106"
+---
+
+![[shows/|style:summary]]
+`,
   },
   siteUrl: "https://example.test",
 };

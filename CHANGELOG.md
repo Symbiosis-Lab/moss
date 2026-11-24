@@ -63,6 +63,7 @@ All notable changes to moss will be documented here.
 - On a computer that cannot read HEIC, a HEIC's picture gets the photo's own width and height instead of 800 by 600.
 - A picture moss could not make smaller copies of, such as a damaged HEIC, shows its original on the page and in the feeds. Both used to name a copy that was never made, so readers saw a broken image.
 - On a computer, a page whose breadcrumb trail needs two rows in the header no longer jumps up as it finishes loading. The header keeps its height when the search, language and theme buttons move up beside the trail.
+- An event that has ended no longer offers Tickets or "Add to calendar" on its page, cards and rows (Online stays, since after an event it is often the recording), and one that ends after the site was built turns past in the reader's browser at that minute, so a finished event stops selling tickets without a rebuild.
 
 ### Removed
 

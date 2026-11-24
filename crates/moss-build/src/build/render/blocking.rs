@@ -1507,6 +1507,7 @@ pub fn generate_blocking_content_for_build(
     let site_assets = crate::build::types::SiteAssets::of(
         &documents,
         layout_config.typesetting.as_deref(),
+        now,
         crate::build::types::SiteAssets {
             media_pages,
             video_ladder: services

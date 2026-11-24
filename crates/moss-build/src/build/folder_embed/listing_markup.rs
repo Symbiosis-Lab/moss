@@ -10,7 +10,7 @@ pub fn is_listing_name(kind: char, name: &str) -> bool {
         "moss-card", "moss-folder-", "moss-prefix-link", "moss-event", "moss-when", "moss-credit", "moss-lang-mark",
         "moss-child-section-divider", "moss-embed-more", "moss-calendar-link",
     ];
-    const ATTRIBUTE_PREFIXES: &[&str] = &["data-layout", "data-embed", "data-list", "data-cover", "data-when", "datetime"];
+    const ATTRIBUTE_PREFIXES: &[&str] = &["data-layout", "data-embed", "data-list", "data-cover", "data-when", "data-ends", "datetime"];
     match kind {
         // The list rows' bare `date` and `title` spans and the minimal year group's `minimal`.
         '.' => matches!(name, "date" | "title" | "minimal") || CLASS_PREFIXES.iter().any(|p| name.starts_with(p)),

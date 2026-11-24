@@ -1672,7 +1672,6 @@ pub fn process_markdown_file(
             footnotes: has_footnotes,
             scroll_rows: has_scroll_row,
             marquee: moss_core::ast::has_marquee_recursive(&doc),
-            hero_ends: false,
             viewer: has_viewer,
             field_places: has_field_places,
             diagrams: moss_core::ast::has_diagram_recursive(&doc),

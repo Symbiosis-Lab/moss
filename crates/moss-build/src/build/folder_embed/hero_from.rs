@@ -26,8 +26,6 @@ pub(crate) struct HeroFrom {
 /// What a hero page carries after this pass.
 struct Hero {
     html: Option<String>,
-    /// The drawn event has not ended, so the page swaps to its fallback at view time.
-    hero_ends: bool,
     image_url: Option<String>,
     overlay_text: Option<String>,
     header_over: Option<crate::build::markdown::hero_ink::HeaderOver>,
@@ -55,7 +53,6 @@ pub(crate) fn resolve_all(
         })
         .collect();
     for (i, hero) in settled {
-        documents[i].features.hero_ends = hero.hero_ends;
         documents[i].hero_html = hero.html;
         documents[i].hero_image_url = hero.image_url;
         documents[i].hero_overlay_text = hero.overlay_text;
@@ -80,7 +77,6 @@ fn settle(
         Some(page) => draw(doc, plan, page, dir_overrides, media_lookup, now),
         None => Hero {
             html: plan.fallback_html.clone(),
-            hero_ends: false,
             image_url: plan.fallback_image_url.clone(),
             overlay_text: plan.fallback_overlay_text.clone(),
             header_over: doc.header_over,
@@ -189,14 +185,14 @@ fn draw(
         mobile_bg.as_deref(),
         lang,
     );
-    // An event not yet over is drawn for now; `hero-ends.js` swaps in the
+    // An event not yet over is drawn for now; `event-ends.js` swaps in the
     // fallback, kept inert in a template, once a visitor opens the page after
     // the end. The page is rebuilt with the next event at the next build.
     let ends = page.event.as_ref().and_then(|ev| super::upcoming::ends_if_upcoming(ev.start, ev.end, now));
-    let html = match &ends {
+    let html = match ends {
         Some(ends) => format!("{drawn}<template data-hero-ends=\"{ends}\">{}</template>", plan.fallback_html.as_deref().unwrap_or_default()),
         None => drawn,
     };
     let header_over = crate::build::markdown::typed_renderers::hero_header_over(&hero, Some(media_lookup));
-    Hero { html: Some(html), hero_ends: ends.is_some(), image_url, overlay_text: description, header_over }
+    Hero { html: Some(html), image_url, overlay_text: description, header_over }
 }

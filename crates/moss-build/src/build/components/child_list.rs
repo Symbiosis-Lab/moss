@@ -83,9 +83,9 @@ pub struct ArticleListItemProps {
     /// An event's written time as a `<time>` with its parts in spans
     /// (`event_meta::render_when`); shown in place of `date_display`.
     pub when_html: Option<String>,
-    /// `"upcoming"` or `"past"` for an event, published on the row as
-    /// `data-when`; `None` for any other page.
-    pub when: Option<&'static str>,
+    /// Where an event stands, published on the row as `data-when` (and
+    /// `data-ends`); `None` for any other page.
+    pub when: Option<crate::build::folder_embed::upcoming::EventWhen>,
     /// The page's listed names, pre-rendered (`ChildItemProps::credits`).
     pub credits: Option<String>,
     /// The page's `subtitle:` ([`card_subtitle`]), drawn under the title.
@@ -107,7 +107,7 @@ impl From<&ChildItemProps> for ArticleListItemProps {
             weight: item.weight,
             place: item.place.clone(),
             when_html: item.when_html.clone(),
-            when: item.when,
+            when: item.when.clone(),
             credits: item.credits.clone(),
             subtitle: item.subtitle.clone(),
             source_file: item.source_file.clone(),
@@ -138,14 +138,14 @@ pub(crate) fn link_or_box(url: Option<&str>, box_tag: &'static str, attrs: &str)
     }
 }
 
-/// ` data-when="…"` for an event's card or row, or nothing.
-fn when_attr(when: Option<&str>) -> String {
-    when.map(|w| format!(r#" data-when="{w}""#)).unwrap_or_default()
+/// An event's `data-when` and `data-ends` on its card or row, or nothing.
+fn when_attr(when: Option<&crate::build::folder_embed::upcoming::EventWhen>) -> String {
+    when.map(|w| w.attrs()).unwrap_or_default()
 }
 
 /// The attributes every listing card and row root carries: its source page
 /// and an event's upcoming/past state.
-pub(crate) fn root_attrs(source_file: Option<&str>, when: Option<&str>) -> String {
+pub(crate) fn root_attrs(source_file: Option<&str>, when: Option<&crate::build::folder_embed::upcoming::EventWhen>) -> String {
     format!("{}{}", source_file_attr(source_file), when_attr(when))
 }
 
@@ -219,7 +219,7 @@ pub fn render(
         let (open, close) = link_or_box(props.url.as_deref(), "span", r#" class="moss-prefix-link""#);
         return format!(
             r#"<p class="moss-card"{}>{open}{}{close}</p>"#,
-            root_attrs(props.source_file.as_deref(), props.when),
+            root_attrs(props.source_file.as_deref(), props.when.as_ref()),
             title_with_subtitle(
                 format!(r#"<span class="moss-prefix-link-title title"{}>{}{}</span>"#, lang_attr(props.lang.as_ref()), html_escape(&props.title), lang_mark(props.lang.as_ref())),
                 props.subtitle.as_deref(),
@@ -262,7 +262,7 @@ pub fn render(
     let (open, close) = link_or_box(props.url.as_deref(), "span", r#" class="moss-prefix-link""#);
     format!(
         r#"<p class="moss-card"{}>{open}{}{}{close}</p>"#,
-        root_attrs(props.source_file.as_deref(), props.when),
+        root_attrs(props.source_file.as_deref(), props.when.as_ref()),
         prefix,
         title_with_subtitle(
             format!(r#"<span class="moss-prefix-link-title title"{}>{}{}</span>"#, lang_attr(props.lang.as_ref()), html_escape(&props.title), lang_mark(props.lang.as_ref())),
@@ -331,9 +331,9 @@ pub struct ChildItemProps {
     /// An event's written time as a `<time>` with its parts in spans
     /// (`event_meta::render_when`); shown in place of `date_display`.
     pub when_html: Option<String>,
-    /// `"upcoming"` or `"past"` for an event, published on the card as
-    /// `data-when`; `None` for any other page.
-    pub when: Option<&'static str>,
+    /// Where an event stands, published on the card as `data-when` (and
+    /// `data-ends`); `None` for any other page.
+    pub when: Option<crate::build::folder_embed::upcoming::EventWhen>,
     /// The names a term kind with `cards = true` lists on this page, as one
     /// pre-rendered `moss-card-credits` span (`terms::roles`). Shown in a
     /// leaf's meta after its date and place; `None` for a folder.
@@ -374,7 +374,7 @@ impl ChildItemProps {
     }
 
     pub(crate) fn root_attrs(&self) -> String {
-        root_attrs(self.source_file.as_deref(), self.when)
+        root_attrs(self.source_file.as_deref(), self.when.as_ref())
     }
 
     /// The card's ` style="--moss-section-color: …"` attribute, or nothing for
@@ -595,7 +595,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         .then(|| path_resolver.resolve_url(&crate::build::scan::article_map::to_pretty_url(&doc.url_path)));
     let permalink = external_url.as_ref().and(local_url.clone());
 
-    let when = doc.event.as_ref().map(|e| crate::build::folder_embed::upcoming::when_of(e, now));
+    let when = doc.event.as_ref().map(|e| crate::build::folder_embed::upcoming::EventWhen::of(e, now));
     let term_count_shown = child_count.is_none() && term_count.is_some();
     // A listing's `children_count` applies to a card only where the card has no wording of its own.
     let count_setting = doc.term_card.as_ref().filter(|_| term_count_shown).and_then(|card| card.count_setting.clone());

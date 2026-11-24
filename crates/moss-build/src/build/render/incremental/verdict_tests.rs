@@ -132,7 +132,7 @@ impl Harness {
                 sealed_render_id: self.sealed_render_id.as_deref(),
                 staged_render_id: self.staged_render_id.as_deref(),
                 graph: None,
-                site_assets: &crate::build::types::SiteAssets::of(documents, None, Default::default()),
+                site_assets: &crate::build::types::SiteAssets::of(documents, None, chrono::NaiveDateTime::default(), Default::default()),
             },
         )
     }

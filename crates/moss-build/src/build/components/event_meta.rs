@@ -43,8 +43,8 @@ pub fn render(
     let status = ev.status.as_deref().map(str::trim).filter(|s| STATUSES.contains(s));
 
     let mut html = format!(
-        r#"<span class="date moss-event-meta" data-when="{}"{}{}>"#,
-        crate::build::folder_embed::upcoming::when_of(ev, now),
+        r#"<span class="date moss-event-meta"{}{}{}>"#,
+        crate::build::folder_embed::upcoming::EventWhen::of(ev, now).attrs(),
         status.map(|s| format!(r#" data-status="{s}""#)).unwrap_or_default(),
         if emit_source_lines { r#" data-source-fm="start""# } else { "" },
     );

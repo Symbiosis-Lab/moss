@@ -8327,6 +8327,21 @@ fn a_past_event_offers_no_calendar_link_with_or_without_a_meta_line() {
     }
 }
 
+#[test]
+fn an_upcoming_event_carries_its_end_for_the_browser_and_a_past_one_does_not() {
+    let (dir, _c) = event_site(&[
+        ("Next.md", "title: Next\nuid: nnnn0009\nstart: 2096-11-01 19:00\nend: 2096-11-01 21:00\ntimezone: Europe/London\n"),
+        ("Done.md", "title: Done\nuid: dddd0009\nstart: 2020-11-01 19:00\ntimezone: Europe/London\n"),
+    ]);
+    let next = staged(&dir, "events/next/index.html");
+    assert!(next.contains(r#"class="date moss-event-meta" data-when="upcoming" data-ends="2096-11-01T21:00""#), "{next}");
+    assert!(next.contains("/_moss/js/event-ends."), "the site has an upcoming event, so the script loads: {next}");
+    let listing = staged(&dir, "events/index.html");
+    assert_eq!(listing.matches(r#"data-ends="2096-11-01T21:00""#).count(), 1, "the upcoming row carries its end: {listing}");
+    assert!(listing.contains(r#"data-when="past""#) && listing.matches("data-ends=").count() == 1, "the past row carries none: {listing}");
+    assert!(!staged(&dir, "events/done/index.html").contains("data-ends="));
+}
+
 fn staged_exists(test_dir: &std::path::Path, rel: &str) -> bool {
     MossPaths::new(test_dir).staging_dir().join(rel).exists()
 }
