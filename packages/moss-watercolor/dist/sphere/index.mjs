@@ -77,11 +77,8 @@ vec3 pigment(sampler2D s0, sampler2D d0, sampler2D s1, sampler2D d1, float f, iv
   float density = dot(s, vec3(1.0 / 3.0));
   return min(d + .85 * max(density + (s - density) * 2.2, 0.0), vec3(4.0));
 }
-// Gradient of one warped wave of a density field. Moving grains along it gathers them
-// into curved folds, the way light gathers into caustics.
-vec3 fold(vec3 p, vec3 k, vec3 m, float t) {
-  float warp = dot(m, p) + t;
-  return cos(dot(k, p) + 1.4 * sin(warp)) * (k + 1.4 * cos(warp) * m);
+float wave(vec3 p, vec3 k, vec3 m, float t) {
+  return sin(dot(k, p) + 1.4 * sin(dot(m, p) + t));
 }
 void main() {
   if (uPass == 0) {
@@ -93,7 +90,6 @@ void main() {
   vec2 uv = (vec2(cell) + .5) / uGrid;
   vec3 a = uK >= 1.0 ? vec3(0.0) : pigment(uS0, uD0, uS1, uD1, uFx, cell);
   vec3 b = uK <= 0.0 ? vec3(0.0) : pigment(uS2, uD2, uS3, uD3, uFy, cell);
-  vInk = mix(a, b, uK);
   // Equal-area directions keep neighbouring cells' colours together; the jitter hides the
   // cell rows, which otherwise show as rings.
   vec2 jitter = vec2(hash(id, 3u), hash(id, 7u)) - .5;
@@ -102,19 +98,26 @@ void main() {
   // bending the map makes both wander. A stronger bend folds the map and piles grains into a dark line.
   z += .1 * (1.0 - z*z) * sin(2.0 * phi + 1.3 * sin(3.0 * z)); phi += 1.7 * z + .6 * sin(4.0 * z);
   vec3 direction = vec3(sqrt(max(0.0, 1.0 - z*z)) * vec2(cos(phi), sin(phi)), z);
+  // The change of scene moves through the ball in patches, so two pigments sit side by side
+  // instead of mixing to grey.
+  float turn = .5 + .32 * sin(dot(direction, vec3(2.3, -1.1, 1.7)) * 2.2 + 1.3 * sin(3.1 * direction.z))
+    + .18 * (hash(id, 17u) - .5);
+  vInk = mix(a, b, smoothstep(turn - .04, turn + .04, uK));
   float egg = .5 * (3.0*z*z - 1.0), pear = .5 * (5.0*z*z*z - 3.0*z);
-  // Most grains fill the ball evenly; one in five leaves it as a thinning halo.
-  float h = hash(id, 1u), halo = step(.8, hash(id, 11u));
-  float radius = mix(pow(.03 + .97 * h, .42) * .74, .68 + .3 * h * h, halo)
+  // A pale haze through the ball, most grains toward its rim, and one in eight as a thinning
+  // halo. Threads are drawn where a drifting wave field crosses zero, by opacity rather than
+  // by moving grains, so they stay soft and the outline holds.
+  float h = hash(id, 1u), halo = step(.88, hash(id, 11u)), shell = step(.45, hash(id, 13u));
+  float rim = .55 + .2 * pow(h, .6);
+  float radius = mix(mix(pow(.03 + .97 * h, .34) * .7, rim, shell), .7 + .3 * h * h, halo)
     * (1.0 + .07 * sin(uTime * .48) * egg + .05 * sin(uTime * .48 * 1.94 + .7) * pear);
   vec3 cloud = direction * radius;
   float t = uTime * .32;
-  vec3 at = cloud * 3.0;
-  vec3 gather = fold(at, vec3(3.1, 1.7, -2.3), vec3(-1.2, 2.1, 1.4), t)
-    + fold(at, vec3(-1.9, 3.4, 2.1), vec3(2.3, .6, -1.7), -t * .8)
-    + fold(at, vec3(2.2, -2.8, 3.0), vec3(1.1, 1.9, 2.2), t * 1.3);
-  gather -= .8 * direction * dot(gather, direction);
-  cloud += .0075 * gather * (1.0 - .6 * halo);
+  vec3 af = cloud * 2.0;
+  float F = wave(af, vec3(3.1, 1.7, -2.3), vec3(-1.2, 2.1, 1.4), t)
+    + wave(af, vec3(-1.9, 3.4, 2.1), vec3(2.3, .6, -1.7), -t * .8)
+    + .7 * wave(af, vec3(2.2, -2.8, 3.0), vec3(1.1, 1.9, 2.2), t * 1.3);
+  float thread = exp(-F * F * 3.0) * (.35 + .65 * smoothstep(.45, .72, radius));
   float c = cos(uTime * .26), s = sin(uTime * .26);
   cloud.xz = mat2(c, -s, s, c) * cloud.xz;
   cloud.xy = mat2(.94, -.342, .342, .94) * cloud.xy;
@@ -122,8 +125,9 @@ void main() {
   vec2 projected = cloud.xy * aspect / (1.0 - cloud.z * .22);
   gl_Position = vec4(mix(uv * 2.0 - 1.0, projected, uLift), 0.0, 1.0);
   float near = .5 + .5 * clamp(cloud.z, -1.0, 1.0);
-  vFade = mix(1.0, (.55 + .45 * near) * (1.0 - .65 * halo * smoothstep(.7, .98, radius)), uLift);
-  gl_PointSize = uPointSize * mix(1.0, (.7 + .6 * hash(id, 5u)) * (.85 + .3 * near), uLift);
+  float body = .2 + .8 * thread;
+  vFade = mix(1.0, (.6 + .4 * near) * body * (1.0 - .7 * halo * smoothstep(.72, 1.0, radius)), uLift);
+  gl_PointSize = uPointSize * mix(1.0, (.7 + .6 * hash(id, 5u)) * (.85 + .3 * near) * (1.0 + .6 * thread), uLift);
 }`;
 const FRAGMENT = `#version 300 es
 precision highp float; precision highp int;
