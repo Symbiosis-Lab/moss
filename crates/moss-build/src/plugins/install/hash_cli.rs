@@ -56,7 +56,11 @@ pub fn run(args: &[String]) -> i32 {
 fn hash(dir: &Path) -> Result<(String, String, String), String> {
     let manifest = crate::plugins::bundled::read_installed_manifest(dir)
         .ok_or_else(|| format!("{} has no readable manifest.json", dir.display()))?;
-    let hash = crate::plugins::bundled::code_hash(dir, &manifest)
-        .ok_or_else(|| format!("{} has no readable entry file", dir.display()))?;
+    // A plugin with no entry hashes its manifest alone, so only a declared
+    // entry that cannot be read leaves no hash.
+    let hash = crate::plugins::bundled::code_hash(dir, &manifest).ok_or_else(|| match &manifest.entry {
+        Some(entry) => format!("{} cannot read its entry file {entry}", dir.display()),
+        None => format!("{} cannot read its manifest.json", dir.display()),
+    })?;
     Ok((manifest.name, manifest.version, hash))
 }

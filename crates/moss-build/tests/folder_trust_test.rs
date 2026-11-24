@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 use moss_build::plugins::bundled::{code_hash, read_installed_manifest};
 use moss_build::plugins::install::registry_client::cache::{Anchor, CachedRegistry};
 use moss_build::plugins::install::registry_client::enforce::{
-    folder_answer, install, install_headless, is_trusted, publish, set_folder_trust,
+    carried, folder_answer, install, install_headless, is_trusted, publish, set_folder_trust,
     verdict, Refusal,
 };
-use moss_build::plugins::install::registry_client::index::accept_revoked;
+use moss_build::plugins::install::registry_client::index::{accept_index, accept_revoked};
 use moss_build::plugins::install::registry_client::trust;
 
 /// Folders the earlier approvals name live outside the system temporary
@@ -56,6 +56,48 @@ fn a_folder_s_answer_decides_whether_its_plugins_run() {
     assert_eq!((refusal(&later), refusal(&demo)), (None, None), "new and changed code in a trusted folder runs");
     assert_eq!(trust::load(&app_data).answer(&a), Some(true), "recorded in app data");
     assert!(!a.join(".moss").read_dir().unwrap().any(|e| e.unwrap().file_name() != "plugins"), "and nothing in the folder");
+
+    // A plugin that brings no code, listed by the registry at these exact
+    // bytes, is not asked about. An edited copy is, and so is one more
+    // contribution that runs code.
+    let unasked = site("unasked");
+    let service = serde_json::json!({"newsletter_service": {
+        "key": {"url": "https://mail.example/keys", "prefix": "MK.", "length": 20, "permission": "Full Access"},
+        "steps": ["Open the keys page", "Copy the key and paste it here"]}});
+    let with = |id: &str, extra: serde_json::Value| {
+        let dir = unasked.join(".moss/plugins").join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut contributes = service.clone();
+        contributes.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let manifest = serde_json::json!({"name": id, "version": "1.0.0", "contributes": contributes});
+        std::fs::write(dir.join("manifest.json"), manifest.to_string()).unwrap();
+        std::fs::write(dir.join("view.js"), "customElements.define('x-card', class extends HTMLElement {});").unwrap();
+        dir
+    };
+    let listed = with("service", serde_json::json!({}));
+    let edited = with("edited", serde_json::json!({}));
+    let listing = |id: &str| format!(
+        r#"{{"type":"plugin","id":"{id}","display_name":"{id}","version":"1.0.0","download_url":"https://example.invalid/{id}.zip","sha256":"aa","code_sha256":"{}"}}"#,
+        hash(&listed)
+    );
+    let index = format!(r#"{{"schema_version":1,"serial":1,"entries":[{},{}]}}"#, listing("service"), listing("edited"));
+    publish(CachedRegistry { index: Some(accept_index(&index, 0).unwrap()), ..CachedRegistry::default() });
+    assert_eq!(refusal(&listed), None);
+    assert_eq!(refusal(&edited), Some(Refusal::Untrusted), "a copy the registry does not list at these bytes");
+    let artifact = serde_json::json!({"kind": "download", "url": "https://example.invalid/u.tgz", "sha256": "ab", "archive_format": "tar.gz"});
+    let code = [
+        ("derivation", serde_json::json!({"derivations": {"pages": {"accepts": ["pdf"], "noun": {"one": "doc", "other": "docs"},
+            "fragments": {"text": "markdown"}, "stub": ["#text"], "run": {"binary": "ocr", "artifact": [artifact]}}}})),
+        ("stack", serde_json::json!({"stack": {"id": "companion", "version": "1.0.0", "sources": [{"kind": "path", "binary": "companion"}]}})),
+        ("block", serde_json::json!({"blocks": {"card": {"element": "x-card", "script": "view.js"}}})),
+    ];
+    for (id, extra) in code {
+        assert_eq!(refusal(&with(id, extra)), Some(Refusal::Untrusted), "{id}");
+    }
+    let mut asked_about: Vec<_> = carried(&unasked).into_iter().map(|(dir, _)| dir.file_name().unwrap().to_owned()).collect();
+    asked_about.sort();
+    assert_eq!(asked_about, ["block", "derivation", "edited", "stack"], "the folder's question names only what it covers");
+    publish(CachedRegistry::default());
 
     // The record follows the canonical folder.
     #[cfg(unix)]

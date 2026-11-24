@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock, RwLock};
 use std::time::SystemTime;
 
+use crate::plugins::contributions::runs_code;
 use crate::plugins::types::PluginManifest;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -337,7 +338,8 @@ impl Refusal {
 /// What vouches for the plugin decides what is asked. Bytes moss shipped are
 /// vouched for by the notarized binary they arrived in, so they are neither
 /// held to a floor nor wait for the folder's answer; anything else needs the
-/// registry's word that it is not withdrawn, a floor this moss meets, and a
+/// registry's word that it is not withdrawn, a floor this moss meets, and,
+/// unless it brings no code and the registry lists these exact bytes, a
 /// folder the user trusts.
 pub fn verdict(manifest: &PluginManifest, plugin_dir: &Path) -> Option<Refusal> {
     verdict_when(manifest, plugin_dir, false)
@@ -356,14 +358,22 @@ fn verdict_when(manifest: &PluginManifest, plugin_dir: &Path, consent_given: boo
     if let Some(refusal) = withheld(manifest, shipped) {
         return Some(refusal);
     }
-    (!consent_given && !vouched_for(manifest, plugin_dir)).then_some(Refusal::Untrusted)
+    (!consent_given && needs_folder_answer(manifest, plugin_dir) && !vouched_for(manifest, plugin_dir)).then_some(Refusal::Untrusted)
+}
+
+/// Does running this copy wait on the folder's answer? Code it brings does;
+/// so does a copy moss's registry does not list at these exact bytes, since a
+/// passed-on manifest's links and words are the sender's to choose.
+fn needs_folder_answer(manifest: &PluginManifest, plugin_dir: &Path) -> bool {
+    runs_code(manifest) || !is_moss_own(manifest, plugin_dir)
 }
 
 /// Does anything vouch for the code now in `plugin_dir`: did moss ship these
 /// exact bytes, or does the user trust the folder they are in?
 ///
 /// The trust half of [`verdict`] — that one returns `Untrusted` exactly when
-/// nothing does, so the rule lives here and not in both.
+/// nothing does and the folder's answer is needed, so the rule lives here and
+/// not in both.
 ///
 /// Asked on its own for a row's IDENTITY, which is not the same question as
 /// whether the plugin may run. Catalog rows merge by id, so a folder that
@@ -529,14 +539,16 @@ pub fn set_folder_trust(folder: &Path, trusted: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Each plugin directory in `folder` that moss did not ship, canonical, with
-/// the hash of its code now (`None` when it cannot be read).
+/// Each plugin directory in `folder` that moss did not ship and that waits on
+/// the folder's answer, canonical, with the hash of its code now (`None` when
+/// it cannot be read).
 pub fn carried(folder: &Path) -> Vec<(PathBuf, Option<String>)> {
     let Ok(entries) = std::fs::read_dir(folder.join(".moss").join("plugins")) else { return Vec::new() };
     entries
         .flatten()
         .map(|entry| canonical(&entry.path()))
         .filter_map(|dir| Some((crate::plugins::bundled::read_installed_manifest(&dir)?, dir)))
+        .filter(|(manifest, dir)| needs_folder_answer(manifest, dir))
         .filter_map(|(manifest, dir)| match code_of(&manifest, &dir) {
             Some(code) if code.shipped => None,
             code => Some((dir, code.map(|code| code.hash))),

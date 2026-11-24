@@ -114,6 +114,46 @@ pub struct PluginContributes {
     pub newsletter_service: Option<newsletter_service::NewsletterServiceContribution>,
 }
 
+/// Does installing this plugin run code it brought: JavaScript, a pinned
+/// binary, a companion process, or a script on the site's pages? Only such a
+/// plugin needs the folder's trust; one that only declares data moss reads
+/// does not.
+///
+/// Every field is named so a new contribution kind does not compile until
+/// someone says whether it runs code.
+pub fn runs_code(manifest: &PluginManifest) -> bool {
+    manifest.entry.is_some()
+        || manifest.requires_stack
+        || manifest.contributes.as_ref().is_some_and(PluginContributes::run_code)
+}
+
+impl PluginContributes {
+    fn run_code(&self) -> bool {
+        let PluginContributes {
+            frontmatter: _,
+            jobs: _,
+            site_settings: _,
+            public_data: _,
+            identity: _,
+            newsletter_service: _,
+            channel,
+            deploy_target,
+            processor,
+            stack,
+            derivations,
+            listing_styles,
+            blocks,
+        } = self;
+        channel.is_some()
+            || deploy_target.is_some()
+            || processor.is_some()
+            || stack.is_some()
+            || derivations.as_ref().is_some_and(|d| !d.is_empty())
+            || listing_styles.as_ref().is_some_and(|l| !l.is_empty())
+            || blocks.as_ref().is_some_and(|b| b.values().any(|block| block.script.is_some()))
+    }
+}
+
 /// Job descriptors contributed by a plugin (§8).
 ///
 /// `#[serde(transparent)]` over the inner map: the manifest wire shape is the
