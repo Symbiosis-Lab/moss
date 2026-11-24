@@ -117,6 +117,15 @@ impl PluginManager {
         self.call_channel(&job.channel, job.op.hook(), job).await
     }
 
+    /// End `channel`'s running copy hook, as when the person closes the panel
+    /// it waits on. Its send answers at once, so the copy is recorded as
+    /// unconfirmed and the next channel's turn starts.
+    pub fn cancel_copy(&self, channel: &str) {
+        for op in Op::ALL {
+            self.engine.cancel_hook(channel, op.hook());
+        }
+    }
+
     /// Ask `channel`'s `copy_account` which account it is signed in to.
     pub async fn copy_account(&self, channel: &str) -> Account {
         let query = AccountQuery { channel: channel.to_string(), config: Default::default() };

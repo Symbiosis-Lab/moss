@@ -635,6 +635,41 @@ pub(crate) fn seal_post_naming(root: &std::path::Path, own: Option<&[&str]>) -> 
     sealed
 }
 
+/// A copy whose channel waits on a panel the person closed ends when moss
+/// cancels it: the send goes on to the next channel instead of holding the
+/// folder's turn until the plugin gives up.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_copy_lets_the_next_channel_send() {
+    use crate::syndication::send::{after_live, Outcome, SendOptions, Sent};
+    let vault = tempfile::tempdir().unwrap();
+    let root = vault.path();
+    let posted = "async function (job) { return { success: true, copy: { id: job.post.url, url: 'https://example.social/1' } }; }";
+    crate::syndication::test_channel(root, "first", "{ publish_copy: async function () { await new Promise(r => setTimeout(r, 60000)); return { success: true }; } }");
+    crate::syndication::test_channel(root, "second", &format!("{{ publish_copy: {posted} }}"));
+    land(root, &seal_post_naming(root, Some(&["first", "second"]))).await;
+
+    let cache = std::sync::Arc::new(crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()));
+    let send = tokio::spawn({
+        let (cache, root) = (cache.clone(), root.to_path_buf());
+        async move {
+            let emit = |_: &Sent| {};
+            let opts = SendOptions::test("https://example.org", &emit);
+            after_live(&root, &opts, || cache.get_or_create(&root.to_string_lossy())).await
+        }
+    });
+    let manager = loop {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        if let Some(m) = cache.get_existing(&root.to_string_lossy()) { break m; }
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    manager.cancel_copy("first");
+
+    let sent = tokio::time::timeout(std::time::Duration::from_secs(10), send).await.expect("the send ends once the waiting copy is cancelled").unwrap();
+    let outcome = |channel: &str| sent.iter().find(|s| s.channel == channel).map(|s| s.outcome.clone());
+    assert!(matches!(outcome("first"), Some(Outcome::Unconfirmed { .. })), "{sent:?}");
+    assert!(matches!(outcome("second"), Some(Outcome::Posted { .. })), "{sent:?}");
+}
+
 /// Naming a channel on a live post changes no output, so the next publish
 /// seals the same generation. Its copy is still planned at that landing and sent.
 #[tokio::test]
