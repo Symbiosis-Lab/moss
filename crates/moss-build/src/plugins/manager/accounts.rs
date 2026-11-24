@@ -280,6 +280,7 @@ impl PluginManager {
     pub async fn sign_out(&self, plugin: &Plugin, context_json: &str, secrets: &crate::identity::secrets::SecretStore) -> Vec<String> {
         let name = &plugin.manifest.name;
         let mut failed = Vec::new();
+        let context_json = &self.with_plugin_config(plugin, context_json);
         match self.execute_plugin_javascript(plugin, "logout", context_json, super::AskedBy::Person).await {
             Err(e) if !crate::engine::is_missing_export(&e) => failed.push(format!("{name} could not sign out: {e}")),
             _ => {}
@@ -301,9 +302,44 @@ impl PluginManager {
         failed
     }
 
+    /// `context_json` with the plugin's own settings as `config`, read now:
+    /// a sign-in or sign-out has no dispatcher to fill them in.
+    fn with_plugin_config(&self, plugin: &Plugin, context_json: &str) -> String {
+        let Ok(mut context) = serde_json::from_str::<Value>(context_json) else { return context_json.to_string() };
+        if let (Some(object), Ok(config)) = (context.as_object_mut(), serde_json::to_value(super::hook_context::hook_config_for_plugin(&self.project_path, plugin))) {
+            object.insert("config".into(), config);
+        }
+        context.to_string()
+    }
+
     /// Run `plugin`'s `login` and record the account it names.
     pub async fn sign_in(&self, plugin: &Plugin, context_json: &str) -> Result<SignedIn, String> {
+        self.sign_in_asking(plugin, context_json, &Default::default()).await
+    }
+
+    /// [`Self::sign_in`] with the answers to the settings the sign-in row asks
+    /// for (`at_sign_in`): written to the plugin's `config.toml` first, so
+    /// `login` reads them as settings; a key the manifest does not ask for at
+    /// sign-in is refused.
+    pub async fn sign_in_asking(&self, plugin: &Plugin, context_json: &str, asked: &std::collections::HashMap<String, String>) -> Result<SignedIn, String> {
         let name = &plugin.manifest.name;
+        if !asked.is_empty() {
+            let asks = plugin.manifest.sign_in_asks();
+            if let Some(key) = asked.keys().find(|k| !asks.iter().any(|f| &f.key == *k)) {
+                return Err(format!("{name} does not ask for `{key}` at sign-in"));
+            }
+            if let Some((key, _)) = asked.iter().find(|(_, v)| v.trim().is_empty()) {
+                return Err(format!("`{key}` is empty"));
+            }
+            let values = asked.iter().map(|(k, v)| (k.clone(), Value::String(v.trim().to_string()))).collect();
+            crate::plugins::discovery::merge_plugin_config_values(&self.project_path, name, &values)?;
+        }
+        let config = super::hook_context::hook_config_for_plugin(&self.project_path, plugin);
+        if let Some(ask) = plugin.manifest.sign_in_asks().into_iter().find(|f| config.get(&f.key).and_then(Value::as_str).is_none_or(|v| v.trim().is_empty())) {
+            let shown = plugin.manifest.display_name_for(&crate::plugins::types::Capability::Login).unwrap_or(name);
+            return Err(format!("{shown} needs its {}", if ask.label.is_empty() { &ask.key } else { &ask.label }));
+        }
+        let context_json = &self.with_plugin_config(plugin, context_json);
         let before = account_binding(&self.project_path, name).is_some();
         // A press while this login waits on the browser starts it again rather
         // than joining it. The old run is cancelled, as the watchdog would, since
@@ -380,6 +416,47 @@ mod tests {
         assert!(!sign_in(&project).await.newly_bound, "signing in again binds nothing new");
         assert_eq!(std::fs::read(&path).unwrap(), bytes, "the same account again leaves the synced file alone");
         assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), modified);
+    }
+
+    /// A channel whose `server` setting is asked on the sign-in row; its `login` names the account after the `server` it reads from `ctx.config`.
+    fn folder_asking_for_a_server() -> (tempfile::TempDir, String) {
+        let (dir, project) = folder_with_channel(r#"return { status: "completed", account: { id: "1", name: String(ctx.config.server) } };"#);
+        write(&project, ".moss/plugins/social/manifest.json", r#"{"name":"social","version":"0.1.0","entry":"main.bundle.js","global_name":"Social","contributes":{"channel":{"login":true,
+            "setup":{"settings":[{"key":"server","type":"string","label":"Server","at_sign_in":true},{"key":"token","type":"secret","label":"Token","hidden":true}]}}}}"#);
+        (dir, project)
+    }
+
+    async fn sign_in_asking(project: &str, asked: &[(&str, &str)]) -> Result<SignedIn, String> {
+        let (manager, plugin) = manager(project);
+        let asked = asked.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        manager.sign_in_asking(&plugin, &context(project), &asked).await
+    }
+
+    #[tokio::test]
+    async fn the_answer_to_a_setting_asked_at_sign_in_is_in_config_toml_when_login_runs() {
+        let (_dir, project) = folder_asking_for_a_server();
+        let signed = sign_in_asking(&project, &[("server", " https://example.social ")]).await.unwrap();
+        assert_eq!(signed.outcome, completed("1", Some("https://example.social")), "login read the answer from its config");
+        let toml = std::fs::read_to_string(std::path::Path::new(&project).join(".moss/plugins/social/config.toml")).unwrap();
+        assert!(toml.contains(r#"server = "https://example.social""#), "{toml}");
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_whose_asked_setting_has_no_value_is_refused_before_login_runs() {
+        let (dir, project) = folder_asking_for_a_server();
+        write(&project, ".moss/plugins/social/main.bundle.js", r#"var Social = { async login(ctx) { await globalThis.__TAURI__.core.invoke("write_plugin_file", { relativePath: "login-ran", content: "yes" }); return { status: "cancelled" }; } };"#);
+        let refused = sign_in_asking(&project, &[]).await.unwrap_err();
+        assert_eq!(refused, "social needs its Server");
+        assert!(!dir.path().join(".moss/plugins/social/login-ran").exists(), "login never ran");
+    }
+
+    #[tokio::test]
+    async fn an_answer_for_a_setting_not_asked_at_sign_in_is_refused_and_written_nowhere() {
+        let (_dir, project) = folder_asking_for_a_server();
+        let refused = sign_in_asking(&project, &[("token", "stolen")]).await.unwrap_err();
+        assert_eq!(refused, "social does not ask for `token` at sign-in");
+        assert!(!std::path::Path::new(&project).join(".moss/plugins/social/config.toml").exists());
+        assert_eq!(sign_in_asking(&project, &[("server", "  ")]).await.unwrap_err(), "`server` is empty");
     }
 
     /// How Matters and every channel from before `LoginResult` bind: `login`

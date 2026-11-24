@@ -22,6 +22,7 @@ All notable changes to moss will be documented here.
 - `moss deploy` publishes a folder to your own server over SFTP. Name it once with `moss deploy --to deploy@example.com:/var/www/html`, then `moss deploy --check` shows the line to add to the server's `~/.ssh/authorized_keys` and the server's key to trust (`--trust <fingerprint>`). Each publish uploads only what changed, pages last, and deletes only files moss put there; other files in the folder are left alone.
 - `share_cover = "as-is"` under `[site]` shares a page's own cover, or its first usable body picture, as its link-preview image whatever its shape, so a portrait poster is not drawn into moss's generated card; the default `"auto"` keeps today's behaviour, and any other value stops the build. A shared cover's `og:image:width` and `:height` now state the size of the picture as served, not of the original.
 - A theme can sign the link-preview card moss draws with its logo instead of the site name: `--moss-share-card-logo: url("logo.svg")` in `:root`, a file in `.moss/theme/`. A card on the theme's own `--moss-share-card-bg` no longer carries moss's taupe edge.
+- A plugin can mark a `string` setting `"at_sign_in": true`: moss's sign-in row asks for it before the plugin's `login` runs, writes the answer to the plugin's `config.toml`, and the settings page does not draw it again. `login` and `logout` receive the plugin's settings as `ctx.config`.
 
 ### Changed
 

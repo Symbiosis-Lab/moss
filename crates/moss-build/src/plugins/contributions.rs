@@ -476,6 +476,12 @@ impl PluginManifest {
         found
     }
 
+    /// The settings moss's sign-in row asks for: written to `config.toml`
+    /// before `login` runs, and left off the settings page.
+    pub fn sign_in_asks(&self) -> Vec<&Field> {
+        self.declared_settings().into_iter().filter(|f| f.at_sign_in).collect()
+    }
+
     /// The `secret` fields that apply given the plugin's resolved settings —
     /// what the settings page draws as credentials and what the publish gate
     /// asks the store about.
@@ -818,6 +824,7 @@ impl PluginManifest {
                 scale: None,
                 unit: None,
                 from: None,
+                at_sign_in: false,
             });
         }
         fields
@@ -1102,6 +1109,17 @@ mod tests {
             r#"[{"key":"host","type":"string","label":"H","required":true,"default":"a"}]"#,
         );
         assert!(err.contains("both `required` and `default`"), "{err}");
+    }
+
+    #[test]
+    fn at_sign_in_asks_for_a_plain_drawn_string_only() {
+        for field in [
+            r#"{"key":"k","type":"secret","label":"K","at_sign_in":true}"#,
+            r#"{"key":"k","type":"string","label":"K","hidden":true,"at_sign_in":true}"#,
+        ] {
+            let err = settings_error(&format!("[{field}]"));
+            assert!(err.contains("`at_sign_in` asks for a plain, drawn `string`"), "{err}");
+        }
     }
 
     #[test]
@@ -1459,6 +1477,17 @@ mod tests {
         // And the name resolves off the same match, from the same contribution.
         assert_eq!(m.display_name_for(&Capability::Login), Some("Matters"));
         assert_eq!(m.display_name_for(&Capability::Deploy), None);
+    }
+
+    #[test]
+    fn sign_in_asks_are_the_settings_the_row_asks_for() {
+        let m = manifest_with_setup(
+            r#"{"settings":[
+                {"key":"server","type":"string","label":"Server","at_sign_in":true},
+                {"key":"tag","type":"string","label":"Tag"}
+            ]}"#,
+        );
+        assert_eq!(m.sign_in_asks().iter().map(|f| f.key.as_str()).collect::<Vec<_>>(), ["server"]);
     }
 
     /// The settings page's question: everything moss draws for this plugin,

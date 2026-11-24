@@ -564,6 +564,31 @@ pub fn plugin_needs_connection(project_path: &str, plugin_id: &str) -> bool {
 // (readers travel with the pipeline into `crates/moss-build`;
 // config.toml writers stay app-side).
 
+/// Merge setting values into `.moss/plugins/<plugin>/config.toml`, the file
+/// the settings form and moss's sign-in row write. Keys not in `values` are
+/// untouched; a JSON `null` clears its key.
+pub fn merge_plugin_config_values(
+    project_path: &str,
+    plugin: &str,
+    values: &std::collections::HashMap<String, serde_json::Value>,
+) -> Result<(), String> {
+    let path = crate::plugins::plugin_dir(project_path, plugin).join("config.toml");
+
+    // The file is hand-editable like the vault's, so the edit is rendered over
+    // the bytes it was read from, and an absent file is only ever stood in for
+    // one proven absent: an evicted one must not be rewritten from an empty table.
+    let crate::vault::config::ManagedToml { original, root: mut table } = crate::vault::config::load_managed_toml(&path)?;
+    for (key, value) in values {
+        if value.is_null() {
+            table.remove(key);
+            continue;
+        }
+        let toml_value = toml::Value::try_from(value.clone()).map_err(|e| format!("Setting '{key}' cannot be written as TOML: {e}"))?;
+        table.insert(key.clone(), toml_value);
+    }
+    crate::vault::config::write_managed_toml(&path, &original, &table, crate::config::migrations::CURRENT_VERSION)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

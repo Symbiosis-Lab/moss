@@ -235,6 +235,13 @@ pub struct Field {
     /// identity proof reads the signed-in account while the table has no value.
     #[serde(default)]
     pub from: Option<FieldSource>,
+
+    /// On a `string`: moss's own sign-in row asks for it before the plugin's
+    /// `login` runs and writes the answer to the plugin's `config.toml`, so
+    /// the plugin reads it as any setting and never collects it itself. The
+    /// settings page does not draw it again.
+    #[serde(default)]
+    pub at_sign_in: bool,
 }
 
 /// An entry of a `map` or a value of an `array` has no key of its own, so a
@@ -320,6 +327,7 @@ impl Field {
             scale: None,
             unit: None,
             from: None,
+            at_sign_in: false,
         }
     }
 }
@@ -459,6 +467,9 @@ fn shared_rules(fields: &[Field], index: usize, list: &str) -> Result<(), String
     }
     if field.from.is_some() && field.field_type != FieldType::Acct {
         return Err(format!("field `{key}`: `from` fills an `acct` setting only"));
+    }
+    if field.at_sign_in && (field.field_type != FieldType::String || field.hidden || !field.options.is_empty()) {
+        return Err(format!("field `{key}`: `at_sign_in` asks for a plain, drawn `string` setting"));
     }
     if fields[..index].iter().any(|earlier| earlier.key == *key) {
         return Err(format!(
