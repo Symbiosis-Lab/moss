@@ -16,7 +16,7 @@ use crate::build::types::ParsedDocument;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-const FILE: crate::build::cache::MemoFile = crate::build::cache::MemoFile::new("parse-cache", 3);
+const FILE: crate::build::cache::MemoFile = crate::build::cache::MemoFile::new("parse-cache", 4);
 
 #[derive(Serialize, Deserialize)]
 struct Saved {
@@ -78,7 +78,7 @@ struct Rest {
     lists_folders: bool,
     hero_image_url: Option<String>,
     body_cover_path: Option<String>,
-    body_cover_candidates: Vec<String>,
+    body_cover_candidates: Vec<crate::build::page::cover::BodyPicture>,
     opening_heading: Option<String>,
     hero_overlay_text: Option<String>,
     citations: Vec<moss_core::ast::quote_source::QuoteSource>,

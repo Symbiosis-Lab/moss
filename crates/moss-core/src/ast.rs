@@ -72,7 +72,7 @@ pub use hooks::{DefaultHooks, HeadingAnchors, HookStrings, RenderHooks, RequestF
 pub use node::{is_link_row, is_text_link_row, Block, CalloutKind, Fold, HeadingNumber, Inline};
 pub use parser::{clear_heading_ids, parse, parse_with_config, parser_options, unwrap_implicit_figures, ParseConfig};
 pub use plain_text::{inlines_to_plain_text, render_plain_text};
-pub use query::{block_images, find_first_block_image, has_raw_style_block, has_viewable_picture_recursive, images_without_text, marked_media_at, image_word_warnings, MarkedMedia, MediaMarker};
+pub use query::{block_images, BlockImage, find_first_block_image, has_raw_style_block, has_viewable_picture_recursive, images_without_text, marked_media_at, image_word_warnings, MarkedMedia, MediaMarker};
 pub use render::{render_block_with_meta, render_blocks, render_plugin_block, render_blocks_with_meta, render_document};
 pub use resolve_urls::{classify_remaining_urls, classify_url, resolve_document, resolve_urls, transform_markdown_link, UrlResolution};
 pub use shortcode::{

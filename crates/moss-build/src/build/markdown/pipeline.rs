@@ -1133,9 +1133,9 @@ pub fn process_markdown_file(
         }
         _ => None,
     };
-    let body_cover_path: Option<String> = body_images.first().and_then(|u| raster_href(u));
-    let body_cover_candidates: Vec<String> =
-        body_images.iter().filter_map(|u| raster_href(u)).collect();
+    let body_cover_path: Option<String> = body_images.first().and_then(|i| raster_href(i.src));
+    let body_cover_candidates: Vec<crate::build::page::cover::BodyPicture> =
+        body_images.iter().filter_map(|i| Some(crate::build::page::cover::BodyPicture { href: raster_href(i.src)?, alt: i.alt.to_string() })).collect();
 
     // 5. Final safety net: any `Url::Unresolved` that escaped phases 1-2
     //    (e.g., a future URL-bearing variant added before its phase wires

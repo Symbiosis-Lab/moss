@@ -1193,7 +1193,7 @@ pub(super) fn render_page<'d>(
     // The page's own picture, or the card moss draws when it has none — and
     // when the picture is a shape no platform crop can hold, the card it
     // draws AROUND that picture. `og_choice` holds the whole decision.
-    let (resolved_cover_for_og, cover_dims_for_og) = crate::build::page::og_choice::resolve(
+    let og_cover = crate::build::page::og_choice::resolve(
         &crate::build::page::og_choice::OgCoverInputs {
             doc,
             project,
@@ -1411,8 +1411,7 @@ pub(super) fn render_page<'d>(
                 &url,
                 &site_title,
                 d.date.as_deref(),
-                resolved_cover_for_og.as_ref(),
-                cover_dims_for_og,
+                og_cover.as_ref(),
                 d.tags.as_deref().unwrap_or(&[]),
                 "",          // locale — TODO(4.3c): plumb real per-page lang from frontmatter
                 site_url,
@@ -1446,8 +1445,7 @@ pub(super) fn render_page<'d>(
                 &site_title,
                 share_card_description_str,
                 &og_url,
-                resolved_cover_for_og.as_ref(),
-                cover_dims_for_og,
+                og_cover.as_ref(),
                 "",          // locale — TODO(4.3c): plumb real per-page lang from frontmatter
                 site_url,
             ))
@@ -1462,11 +1460,8 @@ pub(super) fn render_page<'d>(
             Some(crate::build::page::meta::build_twitter_tags(
                 &d.label,
                 share_card_description_str,
-                resolved_cover_for_og.as_ref(),
-                // When the cover came from auto-card, alt should match the
-                // card's visible text (page label). For frontmatter covers,
-                // leave None — build_twitter_tags falls back to title.
-                if cover_dims_for_og.is_some() { Some(&d.label) } else { None },
+                og_cover.as_ref().map(|o| &o.cover),
+                og_cover.as_ref().and_then(|o| o.alt.as_deref()),
                 site_url,
             ))
         } else if is_card_eligible {
@@ -1478,8 +1473,8 @@ pub(super) fn render_page<'d>(
             Some(crate::build::page::meta::build_twitter_tags(
                 card_title,
                 share_card_description_str,
-                resolved_cover_for_og.as_ref(),
-                if cover_dims_for_og.is_some() { Some(card_title) } else { None },
+                og_cover.as_ref().map(|o| &o.cover),
+                og_cover.as_ref().and_then(|o| o.alt.as_deref()),
                 site_url,
             ))
         } else {
@@ -1523,7 +1518,7 @@ pub(super) fn render_page<'d>(
         },
         schema_json_ld: crate::build::page::meta::page_json_ld(
             doc, is_article_page, is_homepage, share_card_description_str, &site_title,
-            resolved_cover_for_og.as_ref(), site_url, &homepage_meta_url, &page_lang_tag,
+            og_cover.as_ref().map(|o| &o.cover), site_url, &homepage_meta_url, &page_lang_tag,
         )?,
         embed_head_assets,
         lightbox: if doc.is_some_and(|d| d.features.viewer) {

@@ -3205,7 +3205,6 @@ pub fn generate_blocking_content_for_build(
                 homepage_description.as_deref().unwrap_or(""),
                 &site_root_url,
                 None,
-                None,
                 "", // locale; empty skips og:locale
                 &site_url,
             ))

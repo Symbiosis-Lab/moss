@@ -23,7 +23,7 @@
 //! that file further over its line budget. It is one decision with one
 //! answer, and it reads better away from the 1,700 lines it was inside.
 
-use crate::build::page::meta::CoverRef;
+use crate::build::page::meta::{CoverRef, OgCover};
 use crate::build::page::og_card::{CardInputs, CardPlate, OgSink};
 use crate::build::types::ParsedDocument;
 use crate::types::content::ProjectStructure;
@@ -51,7 +51,7 @@ pub struct OgCoverInputs<'a> {
 pub fn resolve(
     input: &OgCoverInputs<'_>,
     mut og_outputs: Option<&mut OgSink<'_>>,
-) -> (Option<CoverRef>, Option<(u32, u32)>) {
+) -> Option<OgCover> {
     let OgCoverInputs {
         doc,
         project,
@@ -183,20 +183,21 @@ pub fn resolve(
             })
             .flatten();
         match plate.as_ref().and_then(|p| render_card(Some(p.as_plate()))) {
-            Some(card) => (Some(card), Some((1200u32, 630u32))),
+            Some(card) => Some(OgCover { cover: card, dims: Some((1200u32, 630u32)), alt: None }),
             None => {
                 let dims = crate::build::page::cover::scanned_dims(
                     &project.image_files, &cover_ref, dir_overrides,
                 );
-                (Some(cover_ref), dims)
+                let alt = doc.and_then(|d| crate::build::page::cover::cover_alt(&cover_ref, &d.body_cover_candidates)).map(String::from);
+                Some(OgCover { cover: cover_ref, dims, alt })
             }
         }
     } else if can_render_card {
         match render_card(None) {
-            Some(card) => (Some(card), Some((1200u32, 630u32))),
-            None => (None, None),
+            Some(card) => Some(OgCover { cover: card, dims: Some((1200u32, 630u32)), alt: None }),
+            None => None,
         }
     } else {
-        (None, None)
+        None
     }
 }

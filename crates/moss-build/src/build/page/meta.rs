@@ -15,13 +15,22 @@ pub use moss_core::media::html_escape_attr as escape_html_attr;
 ///
 /// Every other URL emitted by moss goes through `ServedPath` directly;
 /// this enum is the one place where an "either" sum type is justified.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CoverRef {
     /// A typed served path: the cover lives inside the build output.
     Local(ServedPath),
     /// Already-absolute http(s):// URL: the cover lives on a CDN or
     /// other external host. Pass-through as-is.
     External(String),
+}
+
+/// The share image with what is known about it: its dimensions, and the
+/// author's alt text when it is a body picture that has one.
+#[derive(Debug, Clone)]
+pub struct OgCover {
+    pub cover: CoverRef,
+    pub dims: Option<(u32, u32)>,
+    pub alt: Option<String>,
 }
 
 impl CoverRef {
@@ -83,8 +92,7 @@ pub fn build_og_tags(
     url: &str,
     site_name: &str,
     date: Option<&str>,
-    cover: Option<&CoverRef>,
-    cover_dims: Option<(u32, u32)>,
+    cover: Option<&OgCover>,
     tags: &[String],
     locale: &str,
     site_url: &SiteUrl,
@@ -96,7 +104,6 @@ pub fn build_og_tags(
         site_name,
         description,
         cover,
-        cover_dims,
         locale,
         site_url,
         Some((date, tags)),
@@ -117,8 +124,7 @@ pub fn build_og_tags_website(
     site_name: &str,
     description: &str,
     url: &str,
-    cover: Option<&CoverRef>,
-    cover_dims: Option<(u32, u32)>,
+    cover: Option<&OgCover>,
     locale: &str,
     site_url: &SiteUrl,
 ) -> String {
@@ -129,7 +135,6 @@ pub fn build_og_tags_website(
         site_name,
         description,
         cover,
-        cover_dims,
         locale,
         site_url,
         None,
@@ -149,13 +154,12 @@ fn og_tags(
     url: &str,
     site_name: &str,
     description: &str,
-    cover: Option<&CoverRef>,
-    cover_dims: Option<(u32, u32)>,
+    cover: Option<&OgCover>,
     locale: &str,
     site_url: &SiteUrl,
     article: Option<(Option<&str>, &[String])>,
 ) -> String {
-    let cover_url = cover.map(|c| c.to_meta_url(site_url));
+    let cover_url = cover.map(|c| c.cover.to_meta_url(site_url));
     let meta = |property: &str, content: &str| {
         format!(
             r#"<meta property="{property}" content="{}">"#,
@@ -181,8 +185,9 @@ fn og_tags(
 
     if let Some(image) = cover_url.as_deref() {
         tags_html.push(meta("og:image", image));
-        tags_html.push(meta("og:image:alt", title));
-        if let Some((w, h)) = cover_dims {
+        let alt = cover.and_then(|c| c.alt.as_deref()).unwrap_or(title);
+        tags_html.push(meta("og:image:alt", alt));
+        if let Some((w, h)) = cover.and_then(|c| c.dims) {
             tags_html.push(format!(r#"<meta property="og:image:width" content="{w}">"#));
             tags_html.push(format!(r#"<meta property="og:image:height" content="{h}">"#));
         }

@@ -87,6 +87,23 @@ const _: () = assert!(
      which a 2:1 cover still clears the 300x157 social-card minimum"
 );
 
+/// A raster picture in the page body, as its resolved address and its alt text.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct BodyPicture {
+    pub href: String,
+    pub alt: String,
+}
+
+/// The alt text of the body picture `cover` is, when it has one. A share
+/// image is described by what the author wrote for the picture; a cover
+/// that is not in the body (or a picture with no alt) has none.
+pub fn cover_alt<'a>(cover: &CoverRef, pictures: &'a [BodyPicture]) -> Option<&'a str> {
+    pictures.iter()
+        .filter(|p| !p.alt.trim().is_empty())
+        .find(|p| cover_from_frontmatter(Some(&p.href)).as_ref() == Some(cover))
+        .map(|p| p.alt.trim())
+}
+
 /// Inputs to the cover-image resolver.
 pub struct CoverChainInputs<'a> {
     /// Already-resolved relative URL or external URL from page frontmatter.
@@ -125,17 +142,17 @@ pub fn resolve_cover_chain(inputs: &CoverChainInputs) -> Option<CoverRef> {
 /// reaches the plate card; a row of tall slices or a small icon ahead of a
 /// real photograph no longer decides the share image.
 pub fn pick_body_cover<'a>(
-    candidates: &'a [String],
+    candidates: &'a [BodyPicture],
     first: Option<&'a str>,
     images: &[crate::types::content::MediaMetadata],
     dir_overrides: &HashMap<String, String>,
 ) -> Option<&'a str> {
-    let as_is = |raw: &&String| {
-        let Some(CoverRef::Local(sp)) = cover_from_frontmatter(Some(raw)) else { return false };
+    let as_is = |picture: &&BodyPicture| {
+        let Some(CoverRef::Local(sp)) = cover_from_frontmatter(Some(&picture.href)) else { return false };
         scanned_dims(images, &CoverRef::Local(sp), dir_overrides)
             .is_some_and(|(w, h)| !needs_plate(w, h) && w.max(h) >= OG_IMAGE_LONG_EDGE_FLOOR)
     };
-    candidates.iter().find(as_is).map(String::as_str).or(first)
+    candidates.iter().find(as_is).map(|p| p.href.as_str()).or(first)
 }
 
 /// Whether a path names a raster picture. The share image and the listing card
@@ -168,10 +185,10 @@ fn card_picture_path(raw: &str) -> Option<String> {
 /// order: the hero picture, then the body's raster pictures, none repeating the
 /// cover or each other. Empty when the page has no listing cover (a page that
 /// opted out with `cover: false` stays out).
-pub fn card_pictures_after_cover(listing_cover: Option<&str>, hero_image_url: Option<&str>, body_images: &[String], n: usize) -> Vec<String> {
+pub fn card_pictures_after_cover(listing_cover: Option<&str>, hero_image_url: Option<&str>, body_images: &[BodyPicture], n: usize) -> Vec<String> {
     let Some(cover) = listing_cover else { return Vec::new() };
     let mut taken = vec![card_picture_path(cover).unwrap_or_else(|| cover.to_string())];
-    for path in hero_image_url.into_iter().chain(body_images.iter().map(String::as_str)).filter_map(card_picture_path) {
+    for path in hero_image_url.into_iter().chain(body_images.iter().map(|p| p.href.as_str())).filter_map(card_picture_path) {
         if taken.len() >= n {
             break;
         }
@@ -1036,7 +1053,9 @@ mod pick_body_cover_tests {
     }
 
     fn pick<'a>(candidates: &'a [String], images: &[MediaMetadata]) -> Option<&'a str> {
-        pick_body_cover(candidates, candidates.first().map(String::as_str), images, &HashMap::new())
+        let pictures: Vec<BodyPicture> = candidates.iter().map(|href| BodyPicture { href: href.clone(), alt: String::new() }).collect();
+        let picked = pick_body_cover(&pictures, candidates.first().map(String::as_str), images, &HashMap::new())?;
+        candidates.iter().map(String::as_str).find(|c| *c == picked)
     }
 
     #[test]

@@ -607,7 +607,7 @@ pub struct ParsedDocument {
     /// the first of these a platform can use as-is.
     #[serde(skip)]
     #[specta(skip)]
-    pub body_cover_candidates: Vec<String>,
+    pub body_cover_candidates: Vec<crate::build::page::cover::BodyPicture>,
     /// The `# Heading` the body opens with when its text is not the title: a
     /// case study's question over its name. A card for the page headlines it.
     #[serde(skip)]

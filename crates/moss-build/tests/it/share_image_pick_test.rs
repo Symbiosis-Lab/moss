@@ -91,3 +91,34 @@ fn the_share_image_is_the_first_picture_a_platform_can_take_as_is() {
     assert!(declared.ends_with("/pics/declared.png"), "an author's cover wins: {declared}");
     assert!(scroll.contains("/_moss/og/"), "a lone scroll becomes the plate card: {scroll}");
 }
+
+fn meta_content(root: &Path, slug: &str, selector: &str) -> Option<String> {
+    let html = fs::read_to_string(MossPaths::new(root).staging_dir().join(format!("{slug}/index.html"))).unwrap();
+    let doc = scraper::Html::parse_document(&html);
+    let found = doc.select(&scraper::Selector::parse(selector).unwrap()).next().and_then(|m| m.value().attr("content")).map(String::from);
+    found
+}
+
+/// A shared picture is described by the alt text the author wrote for it,
+/// so a platform that shows alt text (Mastodon's link card) reads what the
+/// picture shows rather than the page title again.
+#[test]
+fn the_share_image_carries_the_pictures_own_alt_text() {
+    let root = std::env::temp_dir().join(format!("moss_share_alt_{}", uuid::Uuid::new_v4()));
+    write(&root, ".moss/config.toml", "schema_version = 6\n\n[site]\nlang = \"en\"\n");
+    write(&root, "index.md", &page("", "Welcome."));
+    picture(&root, "pics/heron.png", 1600, 900);
+    picture(&root, "pics/plain.png", 1600, 900);
+    write(&root, "heron.md", &page("", "Text.\n\n![A grey heron wading at dusk](pics/heron.png)"));
+    write(&root, "declared.md", &page("cover: pics/heron.png\n", "![A grey heron wading at dusk](pics/heron.png)"));
+    write(&root, "plain.md", &page("", "![](pics/plain.png)"));
+    let built = build(&root);
+    assert!(built.is_ok(), "{built:?}");
+
+    for slug in ["heron", "declared"] {
+        assert_eq!(meta_content(&root, slug, r#"meta[property="og:image:alt"]"#).as_deref(), Some("A grey heron wading at dusk"), "{slug}");
+        assert_eq!(meta_content(&root, slug, r#"meta[name="twitter:image:alt"]"#).as_deref(), Some("A grey heron wading at dusk"), "{slug}");
+    }
+    assert_eq!(meta_content(&root, "plain", r#"meta[property="og:image:alt"]"#).as_deref(), Some("Page"), "a picture with no alt keeps the title");
+    let _ = fs::remove_dir_all(&root);
+}

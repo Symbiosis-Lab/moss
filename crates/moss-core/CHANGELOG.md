@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING:** `ast::block_images` returns `Vec<BlockImage>`, each picture's `src` with its `alt`, instead of `Vec<&Url>`.
 - `--moss-contents-lane` is 96px wide (was 92px): each row of the contents ruler is now a 24 px target.
 
 ## [0.29.0] - 2026-11-20
