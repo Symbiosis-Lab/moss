@@ -1299,6 +1299,12 @@ pub(crate) fn run_video_conversion(
                 }
             };
 
+            // Encodes another machine made and the cloud still holds are
+            // downloaded, not made again: an encode is not byte-identical, so a
+            // new one would publish every file of the video again. Before the
+            // cores, so a download holds none.
+            transforms.fetch_cloud_held(&source_oid, "video/", &superseded_or_cancelled);
+
             // The video's share of the process's encode cores, across dispatch
             // epochs and folders. LOCK ORDER (global, never reversed): cloud
             // gate -> cores -> singleflight -> ffmpeg.
@@ -4903,6 +4909,45 @@ pub(crate) mod tests {
         assert_eq!(second.mp4_oid.as_deref(), Some(original_mp4_oid.as_str()));
         assert_eq!(second.thumb_oid.as_deref(), Some(repaired_thumb_oid.as_str()));
         assert!(crate::build::media::decode::sniff_decode(&staged_thumb).is_ok());
+    }
+
+    /// A video another machine encoded, its MP4 still in the cloud here, is
+    /// downloaded rather than encoded again, so the published file keeps its
+    /// bytes.
+    #[test]
+    fn a_cloud_held_video_encode_is_fetched_not_made_again() {
+        use crate::build::cache::{BlobValidation, ObjectStore, RecordMode, TransformCache};
+        let Some(bin) = crate::build::media::ffmpeg::real_ffmpeg() else {
+            eprintln!("skipping: ffmpeg unavailable");
+            return;
+        };
+        let tmp = portable_tmpdir();
+        let (vault, staging, moss_dir) = (tmp.path().join("vault"), tmp.path().join("stage"), tmp.path().join(".moss"));
+        std::fs::create_dir_all(&staging).unwrap();
+        let item = "videos/clip.mov";
+        seed_cached_video_entries(&vault, &moss_dir, item, b"published mp4", b"published thumb", Some(b"published poster"));
+        let paths = MossPaths::from_moss_dir(moss_dir.clone());
+        let transforms = TransformCache::for_site(&paths);
+        let mut record = transforms.get_with(&ObjectStore::hash_file(&vault.join(item)).unwrap(), RecordMode::Request).unwrap();
+        for entry in record.transforms.values_mut() {
+            entry.validation = Some(BlobValidation { version: VALIDATOR_VERSION, size: entry.size });
+        }
+        transforms.put(&record, RecordMode::Request).unwrap();
+        let blob = ObjectStore::for_site(&paths).blob_path(&record.transforms["video/mp4"].oid);
+        let _in_cloud = crate::build::icloud::pretend::evicted_until_requested(&blob);
+
+        let ctx = BackgroundContext {
+            video_items: vec![item.to_string()],
+            source_path: vault.display().to_string(),
+            staging_dir: staging.clone(),
+            moss_dir,
+            ffmpeg_bin_path: Some(bin),
+            ..BackgroundContext::for_test()
+        };
+        let end = run_video_conversion(&BuildServices::headless(), &ctx, 0, None);
+
+        assert_eq!(std::fs::read(staging.join("videos/clip.mp4")).unwrap(), b"published mp4", "{end:?}");
+        assert_eq!(crate::build::icloud::pretend::requests_for(&blob), 1);
     }
 
     /// A video cached before hero posters existed has a valid MP4 and thumbnail
