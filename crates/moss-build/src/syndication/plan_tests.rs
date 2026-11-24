@@ -295,8 +295,8 @@ fn unavailable_first_work_cancels_and_resumes_on_a_fitting_edit() {
         let (plan, _) = replan_edit(&records, impossible);
         assert!(matches!(&plan[0].action, Action::Unavailable { reason } if reason.contains("take articles")));
         let blocked = records.get("u", "bluesky").unwrap();
-        assert_eq!(blocked.next_op(false), None, "stale first publication remains sendable: {state:?}");
-        assert_eq!(blocked.next_op(true), None);
+        assert_eq!(blocked.next_op(false, true), None, "stale first publication remains sendable: {state:?}");
+        assert_eq!(blocked.next_op(true, true), None);
         assert_eq!(blocked.state, State::Unavailable);
         assert!(blocked.post.is_none());
         assert!(blocked.reason.as_deref().unwrap().contains("take articles"));
@@ -304,7 +304,7 @@ fn unavailable_first_work_cancels_and_resumes_on_a_fitting_edit() {
         fitting.content = "Fits again.".into();
         replan_edit(&records, fitting);
         let resumed = records.get("u", "bluesky").unwrap();
-        assert_eq!(resumed.next_op(false), Some(super::super::job::Op::Publish));
+        assert_eq!(resumed.next_op(false, true), Some(super::super::job::Op::Publish));
         assert_eq!(resumed.post.unwrap().article.content, "Fits again.");
         assert_eq!(resumed.uid, r.uid);
     }
@@ -327,7 +327,7 @@ fn unavailable_posted_edits_cancel_queued_updates_and_resume_later() {
     impossible.content = "too long ".repeat(80);
     replan_edit(&records, impossible);
     let blocked = records.get("u", "bluesky").unwrap();
-    assert_eq!(blocked.next_op(false), None, "the older queued update must not send");
+    assert_eq!(blocked.next_op(false, true), None, "the older queued update must not send");
     assert_eq!(blocked.state, State::Posted);
     assert!(blocked.post.is_none() && !blocked.update_due);
     assert_eq!((&blocked.remote, &blocked.form, &blocked.hash, &blocked.parts), (&r.remote, &r.form, &r.hash, &r.parts));
@@ -335,7 +335,7 @@ fn unavailable_posted_edits_cancel_queued_updates_and_resume_later() {
     fitting.content = "Fits again.".into();
     replan_edit(&records, fitting);
     let resumed = records.get("u", "bluesky").unwrap();
-    assert_eq!(resumed.next_op(false), Some(super::super::job::Op::Update));
+    assert_eq!(resumed.next_op(false, true), Some(super::super::job::Op::Update));
     assert_eq!(resumed.post.unwrap().article.content, "Fits again.");
     assert_eq!(resumed.remote, r.remote);
 }

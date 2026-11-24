@@ -8,7 +8,7 @@ use std::path::Path;
 use serde::Serialize;
 
 use super::job::{site_icon, CopyJob, Op, PostRef, Previous, SiteRef};
-use super::record::{Cause, CopyOutcome, CopyRecord, PublishedPost, Records, State};
+use super::record::{Cause, CopyOutcome, CopyRecord, Edit, PublishedPost, Records, State, Stays};
 use super::shape::{idempotency_key, page_url, shape_record, ShapeOptions};
 use super::sign_ins::SignIns;
 use crate::build::scan::article_map::{ArticleInfo, ArticleMap};
@@ -25,6 +25,38 @@ const INTERRUPTED: &str = "the last send stopped before the network answered";
 /// How long after it was handed off a copy is looked up on its own; later, it
 /// is adopted when the author lists its address.
 const HANDOFF_LOOKUP_DAYS: i64 = 30;
+
+/// What a copy with no `update_copy` carries as its reason: set when the
+/// page change is said, cleared by the next one.
+const CANNOT_EDIT: &str = "the channel cannot edit the copy";
+
+/// What the author is told when a page changed under a copy that stays as posted.
+fn stays_posted(record: &CopyRecord, why: Stays) -> Outcome {
+    let url = record.remote.as_ref().map(|r| r.url.clone()).unwrap_or_default();
+    match why {
+        Stays::Locked => Outcome::AlreadyPosted { url },
+        Stays::Deleted => Outcome::Deleted { url },
+    }
+}
+
+/// How one attempt on a copy ended.
+enum Step {
+    Done(Option<Sent>),
+    /// The channel exports no `update_copy`: the run stops asking it.
+    NoUpdate(Option<Sent>),
+    /// The copy on the network is to be replaced: send this record as new.
+    Again(CopyRecord),
+}
+
+#[cfg(test)]
+impl Step {
+    fn sent(self) -> Option<Sent> {
+        match self {
+            Step::Done(s) | Step::NoUpdate(s) => s,
+            Step::Again(_) => None,
+        }
+    }
+}
 
 const OTHER_ACCOUNT: &str = "posted from another account. Sign in to that account.";
 
@@ -100,8 +132,11 @@ pub enum Outcome {
     Updated { url: String },
     /// The page changed but its copy would not.
     Unchanged,
-    /// The page changed and the network cannot edit a copy once posted.
-    CannotEdit,
+    /// The page changed and the copy stays as posted: the network cannot
+    /// edit it.
+    AlreadyPosted { url: String },
+    /// The page changed and the copy was deleted on the network.
+    Deleted { url: String },
     HandedOff { text: String, open_url: Option<String> },
     /// Nothing was posted; tried again next run.
     Refused { cause: Cause, reason: String },
@@ -164,6 +199,23 @@ pub struct SendOptions<'a> {
     /// This computer's sign-in records, updated from each channel's answer;
     /// `None` leaves them alone.
     pub sign_ins: Option<&'a SignIns>,
+}
+
+impl SendOptions<'_> {
+    /// The author pressed retry on one post's posted copy.
+    fn presses(&self, record: &CopyRecord) -> bool {
+        record.state == State::Posted && self.only_source.is_some() && self.retry.contains(&record.channel)
+    }
+
+    /// What a send does with `record` now. The press rewrites a posted copy
+    /// in place, or posts it again where it stays as it is.
+    fn op_for(&self, record: &CopyRecord, idempotent: bool, can_update: bool) -> Option<Op> {
+        match (self.presses(record), record.stays) {
+            (true, Some(_)) => Some(Op::Publish),
+            (true, None) => Some(Op::Update),
+            (false, _) => record.next_op(idempotent, can_update),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -261,7 +313,9 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
     // A channel with nothing to do takes no turn, so it never waits on another send.
     let mut queues: BTreeMap<String, Vec<(usize, CopyRecord)>> = BTreeMap::new();
     for (place, record) in due.into_iter().enumerate() {
-        let work = channels.get(&record.channel).and_then(|c| record.next_op(c.spec.idempotent)).is_some();
+        let work = channels.get(&record.channel).is_some_and(|c| {
+            opts.op_for(&record, c.spec.idempotent, true).is_some() || matches!(record.edit(true), Edit::Stays(_)) && record.update_due
+        });
         if work && asked_for(&record, post_now(&record, &by_uid), opts) {
             queues.entry(record.channel.clone()).or_default().push((place, record));
         }
@@ -314,6 +368,9 @@ impl Run<'_> {
         let queue: Vec<(usize, CopyRecord)> = queue.into_iter().filter_map(|(place, r)| Some((place, records.get(&r.uid, &r.channel)?))).collect();
         let mut sent_here = 0usize;
         let mut accounts = Accounts { seen: HashMap::new(), sign_ins: opts.sign_ins };
+        // Whether the channel exports `update_copy`, learned from its first
+        // answer and forgotten after this run.
+        let mut can_update = true;
         for (place, mut record) in queue {
             let push = |s: Sent| push(place, s);
             let now = post_now(&record, &by_uid);
@@ -326,7 +383,22 @@ impl Run<'_> {
                 continue;
             }
             let Some(channel) = channels.get(&record.channel) else { continue };
-            let Some(op) = record.next_op(channel.spec.idempotent) else { continue };
+            let op = opts.op_for(&record, channel.spec.idempotent, can_update);
+            let Some(op) = op else {
+                // The page changed under a copy that stays as posted: said on
+                // the run that meets the change, and again only after the next.
+                if let (Edit::Stays(why), true) = (record.edit(can_update), record.update_due) {
+                    let news = record.stays.is_some() || record.reason.is_none();
+                    if record.stays.is_some() { record.update_due = false; } else { record.reason = Some(CANNOT_EDIT.into()); }
+                    let outcome = stays_posted(&record, why);
+                    let s = settle(&records, record, outcome);
+                    if news { push(s); }
+                }
+                continue;
+            };
+            if op == Op::Publish && record.state == State::Posted {
+                record.start_over();
+            }
             // A handed-off copy rests there: it is handed off again only when the
             // author retries its channel for this one post.
             let retry = opts.retry.contains(&record.channel) && (record.state != State::HandedOff || opts.only_source.is_some());
@@ -378,6 +450,8 @@ impl Run<'_> {
                         push(adopt(folder, &records, record, outcome));
                         continue;
                     }
+                    // A retry rewrites the draft the network holds.
+                    Found::Waiting(_) if retry && record.draft().is_some() => Op::Update,
                     // A draft still waiting for the author is reported when it
                     // first becomes one, and whenever the author asks about its post.
                     Found::Waiting(handoff) => {
@@ -393,10 +467,12 @@ impl Run<'_> {
                     // unless they asked for it to be handed off again.
                     Found::Absent | Found::Unknown(_) if rests => continue,
                     Found::Absent => {
+                        record.handoff = None;
                         record.discard_attempt();
                         record.state = State::Due;
                         Op::Publish
                     }
+                    Found::Unknown(_) if retry && record.draft().is_some() => Op::Update,
                     Found::Unknown(_) if retry => {
                         if record.state == State::HandedOff {
                             record.discard_attempt();
@@ -431,9 +507,22 @@ impl Run<'_> {
                     }
                 }
             }
-            if let Some(s) = send_one(folder, manager, &records, record, channel, post, &shape, op, opts, self.icon.as_deref()).await {
-                push(s);
+            let icon = self.icon.as_deref();
+            let mut step = send_one(folder, manager, &records, record, channel, post, &shape, op, opts, icon).await;
+            // Again comes only from an Update, and a HandedOff Update only under the
+            // per-post retry: one copy the author pressed for, on a page that already
+            // answered, so the new-copy cap and the page check do not apply.
+            if let Step::Again(fresh) = step {
+                step = send_one(folder, manager, &records, fresh, channel, post, &shape, Op::Publish, opts, icon).await;
             }
+            match step {
+                Step::Done(s) => s.map(&push),
+                Step::NoUpdate(s) => {
+                    can_update = false;
+                    s.map(&push)
+                }
+                Step::Again(_) => None,
+            };
         }
     }
 }
@@ -472,25 +561,26 @@ async fn send_one(
     op: Op,
     opts: &SendOptions<'_>,
     icon: Option<&str>,
-) -> Option<Sent> {
+) -> Step {
     record.source_path.clone_from(&post.source_path);
     record.url_path.clone_from(&post.url_path);
     let (job, hash) = match build_job(&record, channel, post, shape, op, record.site(opts.site_url), icon.map(str::to_string)) {
         Ok(j) => j,
         // A copy already on the network keeps its saved record as it is.
-        Err(reason) if record.remote.is_some() => return Some(sent(&record, Outcome::Refused { cause: Cause::Content, reason })),
-        Err(reason) => return Some(settle(records, record, Outcome::Refused { cause: Cause::Content, reason })),
+        Err(reason) if record.remote.is_some() => return Step::Done(Some(sent(&record, Outcome::Refused { cause: Cause::Content, reason }))),
+        Err(reason) => return Step::Done(Some(settle(records, record, Outcome::Refused { cause: Cause::Content, reason }))),
     };
+    let press = opts.presses(&record);
     let had_uncertain_attempt = record.handoff.is_some()
         || matches!(record.state, State::Sending | State::Unconfirmed)
         || (record.state == State::Due && record.form.is_some());
     // The source changed but the copy would not (writing `syndicated:` back
     // is such an edit): nothing to send, nothing to say.
-    if op == Op::Update && record.hash.as_deref() == Some(hash.as_str()) {
+    if op == Op::Update && !press && record.state == State::Posted && record.hash.as_deref() == Some(hash.as_str()) {
         record.update_due = false;
         record.touch();
         let _ = records.save(&record);
-        return Some(sent(&record, Outcome::Unchanged));
+        return Step::Done(Some(sent(&record, Outcome::Unchanged)));
     }
 
     if let Some(copy) = &job.copy {
@@ -502,7 +592,7 @@ async fn send_one(
         record.state = State::Sending;
         record.touch();
         if let Err(e) = records.save(&record) {
-            return Some(sent(&record, Outcome::Held { why: HeldWhy::NotRecorded, reason: format!("its record could not be written, so nothing was sent ({e})") }));
+            return Step::Done(Some(sent(&record, Outcome::Held { why: HeldWhy::NotRecorded, reason: format!("its record could not be written, so nothing was sent ({e})") })));
         }
     }
 
@@ -521,7 +611,7 @@ async fn send_one(
         }
     };
 
-    Some(match manager.send_copy(&job).await {
+    Step::Done(Some(match manager.send_copy(&job).await {
         CopyCall::Answered(result) if !result.success => {
             let refusal = result.copy.and_then(|c| c.refused);
             let cause = refusal.as_ref().map(|r| r.cause).unwrap_or_default();
@@ -529,7 +619,13 @@ async fn send_one(
                 .and_then(|r| r.message)
                 .or(result.message)
                 .unwrap_or_else(|| "the network refused the copy".into());
-            if op != Op::Update && had_uncertain_attempt {
+            if op == Op::Update && cause == Cause::Locked && record.state == State::Posted {
+                if press { return again(record); }
+                record.stays = Some(Stays::Locked);
+                record.update_due = false;
+                let outcome = stays_posted(&record, Stays::Locked);
+                settle(records, record, outcome)
+            } else if op != Op::Update && had_uncertain_attempt {
                 unknown(record, reason)
             } else {
                 if op != Op::Update {
@@ -540,7 +636,17 @@ async fn send_one(
             }
         }
         CopyCall::Answered(result) => match result.copy {
+            // The network says the copy is gone: a draft is made again, a
+            // published copy only when the author presses.
+            Some(CopyOutcome { absent: true, .. }) if op == Op::Update => {
+                if press || record.state == State::HandedOff { return again(record); }
+                record.stays = Some(Stays::Deleted);
+                record.update_due = false;
+                let outcome = stays_posted(&record, Stays::Deleted);
+                settle(records, record, outcome)
+            }
             Some(CopyOutcome { handoff: Some(handoff), .. }) => {
+                record.update_due = false;
                 record.state = State::HandedOff;
                 record.hash = Some(hash);
                 record.handoff = Some(handoff.clone());
@@ -566,9 +672,17 @@ async fn send_one(
             }
             _ => unknown(record, format!("{} answered without the copy's id and address", op.hook())),
         },
+        // The record keeps the change: the export is read again next run.
+        CopyCall::NoExport if op == Op::Update && record.state == State::HandedOff => {
+            let again_said = opts.only_source.is_some().then(|| record.handoff.clone()).flatten();
+            return Step::NoUpdate(again_said.map(|h| sent(&record, Outcome::HandedOff { text: h.text, open_url: h.open_url })));
+        }
         CopyCall::NoExport if op == Op::Update => {
-            record.update_due = false;
-            settle(records, record, Outcome::CannotEdit)
+            if press { return again(record); }
+            let news = record.reason.is_none();
+            record.reason = Some(CANNOT_EDIT.into());
+            let outcome = stays_posted(&record, Stays::Locked);
+            return Step::NoUpdate(Some(settle(records, record, outcome)).filter(|_| news));
         }
         CopyCall::NoExport if had_uncertain_attempt => unknown(record, "the channel exports no publish_copy".into()),
         CopyCall::NoExport => {
@@ -577,7 +691,13 @@ async fn send_one(
             settle(records, record, Outcome::Refused { cause: Cause::Unknown, reason: "the channel exports no publish_copy".into() })
         }
         CopyCall::Unknown(reason) => unknown(record, reason),
-    })
+    }))
+}
+
+/// Replace the copy on the network: the loop sends the record as new.
+fn again(mut record: CopyRecord) -> Step {
+    record.start_over();
+    Step::Again(record)
 }
 
 /// Whether a reader elsewhere following `url` gets the page: a few tries,
@@ -728,7 +848,8 @@ pub fn render(sent: &[Sent]) -> String {
     for s in sent {
         let line = match &s.outcome {
             Outcome::Sending | Outcome::Unchanged => continue,
-            Outcome::CannotEdit => format!("{} cannot edit its copy; the page changed after it was posted", s.channel),
+            Outcome::AlreadyPosted { url } => format!("already posted to {}, which cannot edit it: {url}", s.channel),
+            Outcome::Deleted { url } => format!("deleted on {}: {url}", s.channel),
             Outcome::Posted { url } => format!("posted to {}: {url}", s.channel),
             Outcome::Updated { url } => format!("updated on {}: {url}", s.channel),
             Outcome::HandedOff { text, open_url } if text.is_empty() => {
@@ -758,6 +879,10 @@ pub fn render(sent: &[Sent]) -> String {
 #[cfg(test)]
 #[path = "send_account_tests.rs"]
 mod account_tests;
+
+#[cfg(test)]
+#[path = "send_retry_tests.rs"]
+mod retry_tests;
 
 #[cfg(test)]
 #[path = "send_turn_tests.rs"]
@@ -886,7 +1011,7 @@ mod tests {
             let post: ArticleInfo = serde_json::from_value(serde_json::json!({"source_path": "page.md", "title": "", "content": "Hello.", "url_path": "page/"})).unwrap();
             let emit = |_: &Sent| {};
             let opts = SendOptions::test("https://example.org", &emit);
-            send_one(root, &manager, &records, record, &channel, &post, &ShapeOptions::default(), op, &opts, None).await.unwrap();
+            send_one(root, &manager, &records, record, &channel, &post, &ShapeOptions::default(), op, &opts, None).await.sent().unwrap();
             let saved = records.get("u", "one").unwrap();
             assert_eq!(saved.state, expected_state, "{name}");
             assert_eq!(saved.form, expected_form, "{name}");
@@ -911,7 +1036,7 @@ mod tests {
         let channel = CopyChannel { spec: super::super::channel::ChannelSpec { forms: vec![super::super::channel::Form::Long], ..Default::default() }, ..Default::default() };
         let emit = |_: &Sent| panic!("a frozen copy cannot send");
         let opts = SendOptions::test("https://example.org", &emit);
-        let result = send_one(root, &manager, &records, record, &channel, &post, &ShapeOptions::default(), Op::Update, &opts, None).await.unwrap();
+        let result = send_one(root, &manager, &records, record, &channel, &post, &ShapeOptions::default(), Op::Update, &opts, None).await.sent().unwrap();
         assert!(matches!(result.outcome, Outcome::Refused { reason, .. } if reason.contains("retaining the prior version")));
         assert_eq!(records.get("u", "one").unwrap(), before);
     }

@@ -716,7 +716,12 @@ interface CopyJob {
  *
  * `find_copy` answers the copy, a hand-off still waiting, or `absent: true`.
  * Any other answer, an empty one included, leaves whether the copy exists
- * unknown, and only `absent` lets moss send it again.
+ * unknown, and only `absent` lets moss send it again. `update_copy` may also
+ * answer `absent: true`: a deleted draft is made again, a deleted published
+ * copy is left until the author presses retry on that post. An edit the
+ * network will not take (past its edit window or revision limit) is
+ * `success: false` with `refused.cause: "locked"`, said only on the network's
+ * explicit refusal; the copy then stays as posted.
  *
  * @category Copies
  */
@@ -730,7 +735,7 @@ interface CopyOutcome {
     open_url?: string;
     id?: string;
   };
-  /** `find_copy` only: the network says there is no such copy. */
+  /** `find_copy` or `update_copy`: the network says there is no such copy. */
   absent?: boolean;
   /**
    * What the site should carry so the network can tie this copy back to it. moss
@@ -759,7 +764,7 @@ interface CopyOutcome {
    */
   signed_out?: boolean;
   refused?: {
-    cause: "auth" | "content" | "rate" | "network" | "unknown";
+    cause: "auth" | "content" | "rate" | "network" | "locked" | "unknown";
     message?: string;
   };
 }

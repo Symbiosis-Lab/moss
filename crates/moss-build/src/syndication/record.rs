@@ -68,9 +68,9 @@ pub struct CopyOutcome {
     pub parts: Vec<RemoteRef>,
     #[serde(default)]
     pub handoff: Option<Handoff>,
-    /// `find_copy` only: the network says there is no such copy. The one
-    /// answer that lets moss post it again; any other answer without the copy
-    /// leaves whether it exists unknown.
+    /// `find_copy` or `update_copy`: the network says there is no such copy.
+    /// The one answer that lets moss post it again; any other answer without
+    /// the copy leaves whether it exists unknown.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub absent: bool,
     /// `copy_account` only: the account the channel is signed in to, as an
@@ -129,7 +129,12 @@ pub enum Cause {
     /// Too many posts for now.
     Rate,
     Network,
+    /// An edit the network will not take for this copy (past its edit window
+    /// or revision limit), said only on an explicit refusal.
+    Locked,
+    /// Also any cause this moss does not know yet, so a newer plugin's answer still parses.
     #[default]
+    #[serde(other)]
     Unknown,
 }
 
@@ -183,6 +188,9 @@ pub struct CopyRecord {
     /// The post's source changed in a landed publish after this copy was sent.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub update_due: bool,
+    /// Why the posted copy stays as it is, from the network's own answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stays: Option<Stays>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -202,19 +210,64 @@ pub struct CopyRecord {
     pub updated_at: String,
 }
 
+/// Why a posted copy is not rewritten when its page changes; only an
+/// explicit press posts it again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Stays {
+    /// The network refused the edit (`Cause::Locked`).
+    Locked,
+    /// The network says the copy is gone.
+    Deleted,
+}
+
+/// Whether a copy follows its page: see [`CopyRecord::edit`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edit {
+    Current,
+    /// The page changed and the copy can be rewritten.
+    Due,
+    /// The copy stays as posted. A channel without `update_copy` reads as
+    /// `Stays::Locked`.
+    Stays(Stays),
+}
+
 impl CopyRecord {
+    /// The one reader of a copy's standing. `can_update` is whether the
+    /// channel exports `update_copy` now; it is read each run and never
+    /// stored, so a channel that gains it updates copies it could not edit.
+    pub fn edit(&self, can_update: bool) -> Edit {
+        match (self.state, self.stays) {
+            (State::Posted, Some(why)) => Edit::Stays(why),
+            (State::Posted, None) if !can_update => Edit::Stays(Stays::Locked),
+            (State::Posted, None) if self.update_due => Edit::Due,
+            _ => Edit::Current,
+        }
+    }
+
     /// What a send does with this copy now, if anything.
-    pub fn next_op(&self, idempotent: bool) -> Option<Op> {
+    pub fn next_op(&self, idempotent: bool, can_update: bool) -> Option<Op> {
         match self.state {
             State::Unconfirmed => Some(Op::Find),
             // An interrupted send goes again where the key makes that safe,
             // and is looked up first everywhere else.
             State::Sending if !idempotent => Some(Op::Find),
             State::Due | State::Refused | State::Sending => Some(Op::Publish),
-            State::Posted if self.update_due => Some(Op::Update),
+            State::Posted => (self.edit(can_update) == Edit::Due).then_some(Op::Update),
             State::HandedOff => Some(Op::Find),
-            State::Posted | State::Unavailable => None,
+            State::Unavailable => None,
         }
+    }
+
+    /// Forget the copy on the network so the next send posts a new one.
+    pub(super) fn start_over(&mut self) {
+        self.state = State::Due;
+        self.remote = None;
+        self.handoff = None;
+        self.update_due = false;
+        self.stays = None;
+        self.reason = None;
+        self.discard_attempt();
     }
 
     /// No network copy or uncertain attempt exists, so a newer publish may replace this work.
@@ -240,9 +293,10 @@ impl CopyRecord {
         true
     }
 
-    /// A definitive refusal or absent lookup leaves no submitted copy to preserve.
+    /// A definitive refusal or absent lookup leaves no submitted copy to
+    /// preserve, unless the network holds one by id (a copy or a draft).
     pub(super) fn discard_attempt(&mut self) {
-        if self.remote.is_none() {
+        if self.remote.is_none() && self.draft().is_none() {
             self.form = None;
             self.part_count = None;
             self.hash = None;
@@ -277,6 +331,7 @@ impl CopyRecord {
             parts: Vec::new(),
             hash: None,
             update_due: false,
+            stays: None,
             reason: None,
             handoff: None,
             account: None,
@@ -424,7 +479,7 @@ impl Records {
     /// Settled copies need neither a publication snapshot nor an attempted count.
     pub fn save(&self, record: &CopyRecord) -> Result<(), String> {
         let mut saved = record.clone();
-        if saved.next_op(false).is_none() { saved.post = None; }
+        if saved.next_op(false, true).is_none() { saved.post = None; }
         if saved.remote.is_some() { saved.part_count = None; }
         let record = &saved;
         let path = self.path(&record.uid, &record.channel)?;
@@ -465,6 +520,13 @@ fn read(path: &Path) -> Option<CopyRecord> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_cause_this_moss_does_not_know_reads_as_unknown() {
+        let cause: Cause = serde_json::from_str("\"some_future_cause\"").unwrap();
+        assert_eq!(cause, Cause::Unknown);
+        assert_eq!(serde_json::from_str::<Cause>("\"locked\"").unwrap(), Cause::Locked);
+    }
+
     /// A child forked while the turn is held (an encoder, a plugin host)
     /// carries a copy of its descriptor until it execs, and the kernel keeps
     /// the lock while any copy is open.
@@ -485,7 +547,7 @@ mod tests {
             let mut r = CopyRecord::due("ab12cd34", "c", "a.md", "a/");
             r.state = state;
             r.update_due = update_due;
-            r.next_op(idempotent)
+            r.next_op(idempotent, true)
         };
         assert_eq!(at(State::Sending, false, true), Some(Op::Publish), "the same key makes a second copy impossible");
         assert_eq!(at(State::Sending, false, false), Some(Op::Find));
@@ -536,5 +598,44 @@ mod tests {
         let records = Records::at(PathBuf::from("/nowhere"));
         assert!(records.save(&CopyRecord::due("../x", "bluesky", "", "")).is_err());
         assert!(records.save(&CopyRecord::due("ab12", "blue/sky", "", "")).is_err());
+    }
+
+    fn posted(update_due: bool, stays: Option<Stays>) -> CopyRecord {
+        let mut r = CopyRecord::due("ab12cd34", "c", "a.md", "a/");
+        r.state = State::Posted;
+        r.remote = Some(RemoteRef { id: "1".into(), url: "https://x.example/1".into() });
+        r.update_due = update_due;
+        r.stays = stays;
+        r
+    }
+
+    #[test]
+    fn a_posted_copy_is_edited_only_when_due_capable_and_not_locked() {
+        assert_eq!(posted(true, None).next_op(false, true), Some(Op::Update));
+        assert_eq!(posted(true, None).edit(true), Edit::Due);
+        assert_eq!(posted(true, None).next_op(false, false), None, "no update_copy export: nothing to send");
+        assert_eq!(posted(true, None).edit(false), Edit::Stays(Stays::Locked));
+        assert_eq!(posted(true, Some(Stays::Locked)).next_op(false, true), None, "refused before: left as posted");
+        assert_eq!(posted(true, Some(Stays::Locked)).edit(true), Edit::Stays(Stays::Locked));
+        assert_eq!(posted(false, None).edit(true), Edit::Current);
+    }
+
+    #[test]
+    fn a_channel_that_gains_update_copy_updates_a_copy_it_could_not_edit() {
+        let r = posted(true, None);
+        assert_eq!(r.next_op(false, false), None);
+        assert_eq!(r.next_op(false, true), Some(Op::Update), "the record kept the change; only the capability moved");
+    }
+
+    #[test]
+    fn an_attempt_holding_an_id_is_never_discarded() {
+        let mut r = CopyRecord::due("ab12cd34", "c", "a.md", "a/");
+        r.state = State::HandedOff;
+        r.handoff = Some(Handoff { text: "t".into(), open_url: None, id: Some("d-1".into()) });
+        r.discard_attempt();
+        assert!(r.draft().is_some());
+        r.handoff.as_mut().unwrap().id = None;
+        r.discard_attempt();
+        assert!(r.handoff.is_none());
     }
 }

@@ -23,6 +23,7 @@ release heading.
 - `LoginResult.account.host`: the account's own server, for a channel whose accounts live on many servers. moss records it with the account and takes a `syndicated:` address on it as the channel's copy. Needs moss 0.15.29.
 - `SignInCancelled`: `BrowserSignIn.open` rejects with it when the person closes the sign-in or another one starts, so `login` can answer `cancelled` rather than fail.
 - `EditorFill.editor.upload`: a file field for a network whose post starts from pictures. moss gives the pictures to it first, as many as it allows and of the kinds it accepts, naming the rest in `missing`, then fills the editor once it appears.
+- `update_copy` may answer `absent: true` (the draft or post is gone) and refuse with `refused.cause: "locked"` (the network will not take the edit, which leaves the copy as posted). A retry on a handed-off draft now calls `update_copy` on the draft named by `previous`, instead of making a second draft.
 
 ### Removed
 
