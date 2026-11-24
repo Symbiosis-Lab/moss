@@ -798,10 +798,10 @@ A site on mosspub.com whose subscribers should also reach a mailing-list service
 
 ```toml
 [channels.email]
-service = "sendgrid"
+provider = "sendgrid"
 ```
 
-The list, the fields for the answers and the unsubscribe group are set up when the service is connected, never in the folder, and so is the service's API key. Without the line, or with it empty, subscribers stay with moss alone. The line names the service's plugin, which Settings › Newsletter services adds to the folder. The line on a site published elsewhere, a value that is not a name, or a name no plugin in the folder provides as a newsletter service, is a build problem; it is left out and the build goes on.
+The list, the fields for the answers and the unsubscribe group are set up when the service is connected, never in the folder, and so is the service's API key. Without the line, or with it empty, subscribers stay with moss alone. The line names the service's plugin, which Settings › Newsletter services adds to the folder, as does `moss plugin install sendgrid`. When the folder has no such plugin, the build warns with that command and subscribers stay with moss alone until it is installed. The line on a site published elsewhere, a value that is not a name, or a plugin that is not a newsletter service, is a build problem; it is left out and the build goes on. Only `--strict` fails the build for any of these.
 
 ### Welcome email
 

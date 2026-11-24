@@ -475,12 +475,12 @@ fn field_decls_in_reply_to_is_moss_s_own_and_cannot_be_redeclared() {
 #[test]
 fn the_email_channel_names_its_newsletter_service() {
     let service = |toml: &str| ConfigFile::parse(toml).unwrap().newsletter_service();
-    assert_eq!(service("[channels.email]\nservice = \"sendgrid\"\n"), Some(Ok("sendgrid".to_string())));
-    assert_eq!(service("[channels.email]\nservice = \" \"\n"), None, "empty keeps subscribers with moss");
+    assert_eq!(service("[channels.email]\nprovider = \"sendgrid\"\n"), Some(Ok("sendgrid".to_string())));
+    assert_eq!(service("[channels.email]\nprovider = \" \"\n"), None, "empty keeps subscribers with moss");
     assert_eq!(service("[channels.email]\nsend_mode = \"all\"\n"), None);
     assert_eq!(service("[services.newsletter]\nprovider = \"sendgrid\"\n"), None, "only the email channel names it");
-    assert_eq!(service("[channels.email]\nservice = \"mailchimp\"\n"), Some(Ok("mailchimp".to_string())), "the host decides which services exist");
-    assert!(service("[channels.email]\nservice = 3\n").unwrap().is_err());
-    let err = service("[channels.email]\nservice = \"a/b\"\n").unwrap().unwrap_err();
+    assert_eq!(service("[channels.email]\nprovider = \"mailchimp\"\n"), Some(Ok("mailchimp".to_string())), "the host decides which services exist");
+    assert!(service("[channels.email]\nprovider = 3\n").unwrap().is_err());
+    let err = service("[channels.email]\nprovider = \"a/b\"\n").unwrap().unwrap_err();
     assert!(err.contains("must be a name"), "{err}");
 }

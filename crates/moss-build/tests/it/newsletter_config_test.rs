@@ -1,4 +1,4 @@
-//! `[channels.email] service` in `.moss/config.toml` reaches the host as
+//! `[channels.email] provider` in `.moss/config.toml` reaches the host as
 //! `subscribe.newsletter` of `_moss/commerce.json`.
 
 use std::fs;
@@ -54,14 +54,14 @@ fn commerce(email_channel: &str, plugin: Option<&str>) -> serde_json::Value {
 
 #[test]
 fn the_service_is_published_beside_the_questions() {
-    let v = commerce("[channels.email]\nservice = \"sendgrid\"\n", Some(SERVICE));
+    let v = commerce("[channels.email]\nprovider = \"sendgrid\"\n", Some(SERVICE));
     assert_eq!(v["subscribe"]["newsletter"], serde_json::json!({"provider": "sendgrid"}));
     assert!(v["subscribe"]["fields"][""].is_array(), "{v}");
 }
 
 #[test]
 fn a_service_that_is_not_a_name_is_left_out_and_the_build_goes_on() {
-    let v = commerce("[channels.email]\nservice = 3\n", Some(SERVICE));
+    let v = commerce("[channels.email]\nprovider = 3\n", Some(SERVICE));
     assert!(v["subscribe"].get("newsletter").is_none(), "{v}");
     assert!(v["subscribe"]["fields"][""].is_array(), "the questions are still published: {v}");
 }
@@ -70,7 +70,7 @@ fn a_service_that_is_not_a_name_is_left_out_and_the_build_goes_on() {
 fn a_service_no_installed_plugin_provides_is_left_out() {
     let not_a_service = r#"{"name":"sendgrid","version":"0.1.0","entry":"index.js"}"#;
     for plugin in [None, Some(not_a_service)] {
-        let v = commerce("[channels.email]\nservice = \"sendgrid\"\n", plugin);
+        let v = commerce("[channels.email]\nprovider = \"sendgrid\"\n", plugin);
         assert!(v["subscribe"].get("newsletter").is_none(), "{plugin:?}: {v}");
         assert!(v["subscribe"]["fields"][""].is_array(), "{v}");
     }

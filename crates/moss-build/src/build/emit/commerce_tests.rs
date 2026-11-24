@@ -100,6 +100,6 @@ fn a_hosted_site_publishes_its_newsletter_service_and_a_refused_one_is_a_problem
     let v: serde_json::Value = serde_json::from_str(&json(&[], serde_json::json!({}), Some(dest), None, true)).unwrap();
     assert_eq!(v["subscribe"]["newsletter"], serde_json::json!({"provider": "sendgrid"}));
     assert!(destination(&Ok("sendgrid".into()), false).unwrap_err().contains("only by the moss host"));
-    let refused = problems(&[], None, None, Some(&Err("[channels.email] service \"x\" is not known".into())));
+    let refused = problems(&[], None, None, Some(&Err("[channels.email] provider \"x\" is not known".into())));
     assert!(refused[0].contains("newsletter service is left out"), "{refused:?}");
 }

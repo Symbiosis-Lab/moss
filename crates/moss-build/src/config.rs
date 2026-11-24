@@ -232,16 +232,16 @@ impl ConfigFile {
             .unwrap_or(true)
     }
 
-    /// `[channels.email] service`: the newsletter service the site's subscribers
+    /// `[channels.email] provider`: the newsletter service the site's subscribers
     /// also go to. `None` when unset or empty, which keeps them with moss alone.
     /// A name is ASCII letters, digits, `-` and `_`, since it is also a plugin's folder.
     pub fn newsletter_service(&self) -> Option<Result<String, String>> {
-        let value = self.section(&["channels", "email", "service"])?;
+        let value = self.section(&["channels", "email", "provider"])?;
         let plain = |s: &str| s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
         match value.as_str().map(str::trim) {
             Some("") => None,
             Some(service) if plain(service) => Some(Ok(service.to_string())),
-            _ => Some(Err(format!("[channels.email] service must be a name such as \"sendgrid\", not {value}"))),
+            _ => Some(Err(format!("[channels.email] provider must be a name such as \"sendgrid\", not {value}"))),
         }
     }
 

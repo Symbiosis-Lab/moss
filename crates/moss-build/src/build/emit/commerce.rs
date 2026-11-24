@@ -5,7 +5,7 @@
 //! subscribe script can pass the host's bot check, so the host may require it.
 //! And `subscribe.fields`, the questions the site's subscribe forms ask, keyed
 //! by the edition scope each form posts, so the host can check the answers.
-//! And `subscribe.newsletter`, the service `[channels.email] service` names,
+//! And `subscribe.newsletter`, the service `[channels.email] provider` names,
 //! for the host to send each subscriber on to.
 //!
 //! Written when the site has a form, a `[services.forms]` setting, a
@@ -159,7 +159,7 @@ fn problems(forms: &[FormShortcode], endpoint: Option<&str>, booking: Option<&Re
 /// `subscribe.newsletter` as published, or why it is left out.
 fn destination(service: &Result<String, String>, hosted: bool) -> Result<serde_json::Value, String> {
     match service {
-        Ok(_) if !hosted => Err("[channels.email] service is read only by the moss host, and this site is published elsewhere".to_string()),
+        Ok(_) if !hosted => Err("[channels.email] provider is read only by the moss host, and this site is published elsewhere".to_string()),
         s => s.clone().map(|provider| serde_json::json!({ "provider": provider })),
     }
 }

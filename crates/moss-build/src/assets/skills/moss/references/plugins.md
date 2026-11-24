@@ -157,7 +157,7 @@ A network that lets a person's domain stand for their account (a Bluesky handle,
 
 ## A newsletter service
 
-A mailing service a site's subscribers can be copied to declares `contributes.newsletter_service` and needs no `entry`. The person picks it under Subscribers in the app, which writes `service = "<plugin name>"` under `[channels.email]` in `.moss/config.toml`, then makes a key in the service and pastes it. moss draws the steps and checks the pasted key's prefix and length before anything is sent; the service's side runs on moss's server, which keeps a narrower key it makes from the pasted one.
+A mailing service a site's subscribers can be copied to declares `contributes.newsletter_service` and needs no `entry`. The person picks it under Subscribers in the app, which writes `provider = "<plugin name>"` under `[channels.email]` in `.moss/config.toml`, then makes a key in the service and pastes it. moss draws the steps and checks the pasted key's prefix and length before anything is sent; the service's side runs on moss's server, which keeps a narrower key it makes from the pasted one.
 
 ```json
 "newsletter_service": {

@@ -161,7 +161,7 @@ pub struct SiteConfig {
     pub public_data: Vec<crate::plugins::contributions::public_data::PublicFile>,
     /// `[services.booking]` as read: the offer, or why it could not be read.
     pub booking: Option<Result<crate::config::services::BookingService, String>>,
-    /// `[channels.email] service` as read: the newsletter service, or why it is refused.
+    /// `[channels.email] provider` as read: the newsletter service, or why it is refused.
     pub newsletter: Option<Result<String, String>>,
     /// Who may subscribe, which is what opens members pages.
     pub members: crate::config::services::MembersConfig,

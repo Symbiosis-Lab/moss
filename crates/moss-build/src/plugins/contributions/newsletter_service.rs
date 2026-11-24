@@ -3,21 +3,23 @@
 //! pastes into moss. moss draws the steps and checks the key's shape before
 //! anything is sent; the service's server side does the rest.
 //!
-//! The plugin's name is what `[channels.email] service` names.
+//! The plugin's name is what `[channels.email] provider` names.
 
 use serde::{Deserialize, Serialize};
 
-/// The site's `[channels.email] service`, refused unless a plugin of that
+/// The site's `[channels.email] provider`, refused unless a plugin of that
 /// name in the site's folder is a newsletter service.
 pub fn for_build(config: Option<&crate::config::ConfigFile>, site: &str) -> Option<Result<String, String>> {
     config?.newsletter_service().map(|service| service.and_then(|name| provided_in(site, &name)))
 }
 
 fn provided_in(site: &str, name: &str) -> Result<String, String> {
-    let manifest = crate::plugins::bundled::read_installed_manifest(&crate::plugins::plugin_dir(site, name));
-    match manifest.and_then(|m| m.contributes).and_then(|c| c.newsletter_service) {
+    let Some(manifest) = crate::plugins::bundled::read_installed_manifest(&crate::plugins::plugin_dir(site, name)) else {
+        return Err(format!("[channels.email] provider is \"{name}\", which is not installed in this site: run `moss plugin install {name}`"));
+    };
+    match manifest.contributes.and_then(|c| c.newsletter_service) {
         Some(_) => Ok(name.to_string()),
-        None => Err(format!("[channels.email] service is \"{name}\", and no newsletter service plugin of that name is installed in this site")),
+        None => Err(format!("[channels.email] provider is \"{name}\", and the plugin of that name in this site is not a newsletter service")),
     }
 }
 
@@ -104,6 +106,13 @@ mod tests {
 
     fn parse(manifest: Value) -> Result<PluginManifest, String> {
         PluginManifest::parse(&manifest.to_string()).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn a_provider_that_is_not_installed_names_the_install_command() {
+        let site = tempfile::tempdir().unwrap();
+        let err = super::provided_in(site.path().to_str().unwrap(), "sendgrid").unwrap_err();
+        assert!(err.contains("`moss plugin install sendgrid`"), "{err}");
     }
 
     #[test]
