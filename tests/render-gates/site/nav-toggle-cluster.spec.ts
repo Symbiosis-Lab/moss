@@ -1,7 +1,7 @@
 /**
  * Render gate: the nav toggle cluster is one optical family.
  *
- * Four assertions, each of which needs a real engine and cannot be read off
+ * Five assertions, each of which needs a real engine and cannot be read off
  * the emitted HTML:
  *
  *   1. The three `.nav-icons` children (search button, language toggle, theme
@@ -26,6 +26,9 @@
  *      overlaps or overflows. Whether it wrapped depends on measured text
  *      width, not a breakpoint, so only a layout engine can tell.
  *
+ *   5. When scripts then split that masthead, the header keeps its height and
+ *      the page below does not move (Chromium's layout-shift entries).
+ *
  * The fixture turns search on via `[site].search`.
  *
  * Run via:
@@ -33,6 +36,7 @@
  */
 
 import { test, expect, type Page, newPage } from "../../support/browser-test";
+import { holdScript, settle, shifts } from "./first-paint";
 
 /** Computed background-color of a throwaway element painted with `value`. */
 async function resolveColor(page: Page, value: string): Promise<string> {
@@ -167,6 +171,36 @@ test("a wrapped masthead keeps the toggles at the end edge of the last row", asy
     expect(r.right, `${name} inside the end edge: ${where}`).toBeLessThanOrEqual(box.end + 0.5);
   }
   await context.close();
+});
+
+// The split then swaps the links and the toggles. Both rows keep the toggles'
+// height in either layout, so the header and the page below stay where the
+// first paint put them.
+test("the split after a trail page's first paint moves only the links and toggles", async ({ browser, baseURL, browserName }) => {
+  test.skip(browserName !== "chromium", "layout-shift entries are Chromium's");
+  const path = "/programmes-and-long-form-reporting/field-notes-from-a-very-long-section-title/";
+  const viewport = { width: 1024, height: 900 };
+  const header = async (javaScriptEnabled: boolean) => {
+    const context = await browser.newContext({ baseURL, javaScriptEnabled, viewport });
+    const page = await newPage(context);
+    if (javaScriptEnabled) await holdScript(page);
+    await page.goto(path, { waitUntil: "load" });
+    if (javaScriptEnabled) await settle(page);
+    const shift = javaScriptEnabled ? await shifts(page) : null;
+    const read = await page.evaluate(() => ({
+      height: document.querySelector("header")!.getBoundingClientRect().height,
+      split: document.querySelector(".nav-content")!.hasAttribute("data-nav-split"),
+    }));
+    await context.close();
+    return { ...read, shift };
+  };
+  const plain = await header(false);
+  const scripted = await header(true);
+  const where = `plain=${JSON.stringify(plain)} scripted=${JSON.stringify(scripted)}`;
+  expect(scripted.split, `the fixture trail must split: ${where}`).toBe(true);
+  expect(scripted.shift!.paintedFirst, where).toBe(true);
+  expect(Math.abs(scripted.height - plain.height), where).toBeLessThanOrEqual(1);
+  expect(scripted.shift!.total, where).toBeLessThan(0.1);
 });
 
 test("a theme's own focus ring draws no second box inside the search field", async ({ page }) => {

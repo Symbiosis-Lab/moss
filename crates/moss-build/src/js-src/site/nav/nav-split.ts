@@ -42,9 +42,9 @@
  * masthead's inline axis; on a vertical page its physical width is its block
  * size, which the split itself changes. A theme that keeps `.nav-right` a box
  * gets the plain wrap from the split's grid. With JS off nothing here runs: a
- * trail is alone on row 1, the links and toggles on row 2. On a phone site.css
- * holds a trail's two rows at the toggles' height, so the split this makes
- * after the first paint moves only the toggles.
+ * trail shares row 1 with the links it fits beside and the toggles end the
+ * last row. site.css holds a trail's two rows at the toggles' height, so the
+ * split this makes after the first paint moves only the links and toggles.
  */
 
 import { isVertical } from "../writing-mode";

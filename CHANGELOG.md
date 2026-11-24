@@ -62,6 +62,7 @@ All notable changes to moss will be documented here.
 - A theme that lays its header out itself keeps that layout at every width. One that keeps the header to one row (`flex-wrap: nowrap` on `.nav-content`, often with a fixed height) no longer has its links drop below the header onto the page when they do not fit, with a plain site name or a logo: they stay on the row and scroll sideways inside it, and an open submenu still hangs below the header. One that sets `display: contents` on `.nav-right` keeps its own order, and a long site name wraps as the theme's `white-space` says instead of being cut off.
 - On a computer that cannot read HEIC, a HEIC's picture gets the photo's own width and height instead of 800 by 600.
 - A picture moss could not make smaller copies of, such as a damaged HEIC, shows its original on the page and in the feeds. Both used to name a copy that was never made, so readers saw a broken image.
+- On a computer, a page whose breadcrumb trail needs two rows in the header no longer jumps up as it finishes loading. The header keeps its height when the search, language and theme buttons move up beside the trail.
 
 ### Removed
 

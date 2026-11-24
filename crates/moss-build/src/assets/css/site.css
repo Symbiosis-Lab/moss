@@ -249,7 +249,7 @@
    OS setting regardless. */
 :root {
   color-scheme: light;
-  --moss-nav-toggle-size: 2.25rem; /* the search, language and theme buttons, and a phone trail's rows */
+  --moss-nav-toggle-size: 2.25rem; /* the search, language and theme buttons, and a breadcrumb trail's rows */
   --moss-nav-name-size: clamp(0.875rem, 1.5vw + 0.625rem, var(--moss-size-lg)); /* the site name and the trail */
 }
 
@@ -3026,20 +3026,24 @@ body > header .site-name {
   display: contents;
 }
 
-/* On a phone a breadcrumb trail usually needs two rows. Before the script
-   runs, the toggles wrap to row 2 with the links; the split lifts them to
-   row 1. Both rows are held at the toggles' height in either layout, so the
-   split moves only the toggles and the page below does not shift. This is the
-   masthead's phone band; `--moss-nav-phone` tells nav-split.ts it may try the
-   compact row. The hamburger range below places its own trail. */
+/* A breadcrumb trail that needs two rows paints first with the toggles on
+   row 2, beside or after the links; the split lifts them to row 1 and leaves
+   the links on row 2. Both rows are held at the toggles' height in either
+   layout, so the split moves only the links and toggles and the page below
+   does not shift. A one-row masthead is that tall already. The hamburger
+   range places its own trail. */
+@media (20rem < width) {
+  .nav-content:has(.breadcrumb-segment) :is(.nav-left, .nav-links) {
+    min-block-size: var(--moss-nav-toggle-size);
+  }
+}
+
+/* The masthead's phone band: `--moss-nav-phone` tells nav-split.ts it may try
+   the compact row. */
 @media (20rem < width < 48rem) {
   .nav-content {
     --moss-nav-phone: 1;
     --moss-nav-float-gap: var(--moss-space-xs);
-  }
-
-  .nav-content:has(.breadcrumb-segment) :is(.nav-left, .nav-links) {
-    min-block-size: var(--moss-nav-toggle-size);
   }
 }
 
