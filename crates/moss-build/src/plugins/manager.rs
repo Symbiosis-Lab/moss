@@ -924,14 +924,22 @@ impl PluginManager {
         // future invocation of a different hook name for this plugin starts clean.
         hook_state.unregister_executing_hook(&plugin.manifest.name);
 
+        // The browser's return page waits for how the login ended.
+        let is_login = hook_name == crate::plugins::types::Capability::Login.hook_name();
+        let signed_in = is_login && {
+            use accounts::LoginOutcome;
+            matches!(&result, Ok((_, returned)) if matches!(LoginOutcome::from_returned(returned.as_ref()), LoginOutcome::Completed(_) | LoginOutcome::Unsaid))
+        };
+        if is_login {
+            crate::plugins::runtime::browser_sign_in::answer(&plugin.manifest.name, signed_in);
+        }
+
         // A page left open waits on nobody once its hook is over. A sign-in's
         // page is also closed: a click on it would reach a listener that died
         // with the hook.
         let page_left_open = hook_state.take_window(&plugin.manifest.name);
-        if page_left_open && hook_name == crate::plugins::types::Capability::Login.hook_name() {
+        if page_left_open && is_login {
             if let Some(app) = &self.host.app {
-                use accounts::LoginOutcome;
-                let signed_in = matches!(&result, Ok((_, returned)) if matches!(LoginOutcome::from_returned(returned.as_ref()), LoginOutcome::Completed(_) | LoginOutcome::Unsaid));
                 let closed = if signed_in { app.close_signed_in_page().await } else { app.close_action_panel(Some(plugin.manifest.name.clone())).await };
                 if let Err(e) = closed {
                     log::warn!(target: "plugin", "{}: could not close the sign-in page: {e}", plugin.manifest.name);

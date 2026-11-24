@@ -666,7 +666,8 @@ async fn dispatch_command_core(
         "browser_sign_in_start" => {
             need_app(&host, "browser_sign_in_start").map_err(|_| "Sign in from the moss app".to_string())?;
             let plugin = caller_plugin(&host, "browser_sign_in_start")?;
-            reply_json(&serde_json::json!({ "redirectUri": crate::plugins::runtime::browser_sign_in::start(&plugin).await? }))
+            let channel = host.declared.and_then(|d| d.title.clone()).unwrap_or_else(|| plugin.clone());
+            reply_json(&serde_json::json!({ "redirectUri": crate::plugins::runtime::browser_sign_in::start(&plugin, &channel).await? }))
         }
         "browser_sign_in_wait" => {
             let app = need_app(&host, "browser_sign_in_wait").map_err(|_| "Sign in from the moss app".to_string())?;

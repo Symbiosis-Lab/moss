@@ -400,6 +400,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_browsers_return_page_says_how_the_login_ended() {
+        use crate::plugins::runtime::browser_sign_in::{start, tests::get};
+        for (login, expected) in [
+            (r#"return { status: "completed", account: { id: "did:plc:1" } };"#, "Signed in to X"),
+            (r#"return { status: "failed", message: "no" };"#, "didn\u{2019}t finish"),
+        ] {
+            let (_dir, project) = folder_with_channel(login);
+            let redirect = start("social", "X").await.unwrap();
+            let browser = tokio::spawn(async move { get(&format!("{redirect}?code=c&state=s")).await.1 });
+            let _ = try_sign_in(&project).await;
+            let body = browser.await.unwrap();
+            assert!(body.contains(expected), "{expected}: {body}");
+        }
+    }
+
+    #[tokio::test]
     async fn a_sign_in_waiting_on_nobody_is_cancelled_at_the_watchdogs_limit() {
         let (_dir, project) = folder_with_channel("await new Promise(() => {});");
         let watchdog = HookWatchdog { limit: std::time::Duration::from_secs(1), check: std::time::Duration::from_millis(100) };

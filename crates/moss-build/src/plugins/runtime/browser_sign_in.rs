@@ -14,6 +14,9 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 
+/// How long the return page waits for the login hook to finish the exchange.
+const VERDICT_WAIT: Duration = Duration::from_secs(20);
+
 /// How long a sign-in may take before moss stops listening.
 pub const SIGN_IN_LIMIT: Duration = Duration::from_secs(10 * 60);
 
@@ -56,19 +59,38 @@ struct SignIn {
     reply: Option<oneshot::Receiver<Result<Query, String>>>,
 }
 
+fn verdicts() -> MutexGuard<'static, HashMap<String, oneshot::Sender<bool>>> {
+    static VERDICTS: OnceLock<Mutex<HashMap<String, oneshot::Sender<bool>>>> = OnceLock::new();
+    VERDICTS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Tell the return page how `plugin`'s login ended, once its hook has returned.
+/// The page held back for the code's exchange; nothing is waiting if the
+/// redirect never arrived.
+pub fn answer(plugin: &str, signed_in: bool) {
+    if let Some(tx) = verdicts().remove(plugin) {
+        let _ = tx.send(signed_in);
+    }
+}
+
 fn sign_ins() -> MutexGuard<'static, HashMap<String, SignIn>> {
     static SIGN_INS: OnceLock<Mutex<HashMap<String, SignIn>>> = OnceLock::new();
     SIGN_INS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Bind a listener on `127.0.0.1` at a port the system picks, for `plugin`,
-/// ending any sign-in it had started. It answers the first request on
+/// ending any sign-in it had started. `channel` is the name the return page
+/// shows. It answers the first request on
 /// [`CALLBACK_PATH`] that carries `code` or `error` and stops; it stops anyway
 /// after [`SIGN_IN_LIMIT`]. The path is fixed because a provider matches a
 /// loopback redirect exactly except for its port (RFC 8252 §7.3), and atproto
 /// clients publish theirs; the plugin's `state` check, not the path, tells its
 /// reply from anything else on this computer.
-pub async fn start(plugin: &str) -> Result<String, String> {
+pub async fn start(plugin: &str, channel: &str) -> Result<String, String> {
+    start_bounded(plugin, channel, VERDICT_WAIT).await
+}
+
+async fn start_bounded(plugin: &str, channel: &str, verdict_wait: Duration) -> Result<String, String> {
     static TOKENS: AtomicU64 = AtomicU64::new(0);
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| format!("could not listen for the sign-in: {e}"))?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
@@ -77,11 +99,14 @@ pub async fn start(plugin: &str) -> Result<String, String> {
     let (mut reply_tx, reply) = oneshot::channel();
     let (stop_tx, stop) = oneshot::channel::<()>();
 
-    let plugin_name = plugin.to_string();
+    let (plugin_name, channel) = (plugin.to_string(), channel.to_string());
+    let (verdict_tx, verdict) = oneshot::channel::<bool>();
+    verdicts().insert(plugin.to_string(), verdict_tx);
+    let verdict = std::sync::Arc::new(tokio::sync::Mutex::new(Some(verdict)));
     let router = axum::Router::new().route(
         CALLBACK_PATH,
         axum::routing::get(move |axum::extract::RawQuery(query): axum::extract::RawQuery| {
-            let (got_tx, plugin) = (got_tx.clone(), plugin_name.clone());
+            let (got_tx, plugin, channel, verdict) = (got_tx.clone(), plugin_name.clone(), channel.clone(), verdict.clone());
             async move {
                 use axum::response::IntoResponse;
                 let params: Query = url::form_urlencoded::parse(query.unwrap_or_default().as_bytes()).into_owned().collect();
@@ -89,8 +114,29 @@ pub async fn start(plugin: &str) -> Result<String, String> {
                     log::info!(target: "plugin", "{plugin}: a request reached the sign-in redirect without a code or an error");
                     return axum::http::StatusCode::NOT_FOUND.into_response();
                 }
-                let _ = got_tx.try_send(params);
-                ([(axum::http::header::CACHE_CONTROL, "no-store")], axum::response::Html(PAGE)).into_response()
+                let outcome = if params.iter().any(|(k, _)| k == "code") {
+                    let _ = got_tx.try_send(params);
+                    // The plugin has yet to check `state` and exchange the code:
+                    // claim nothing until `sign_in` answers.
+                    let waiting = verdict.lock().await.take();
+                    match waiting {
+                        Some(rx) => match tokio::time::timeout(verdict_wait, rx).await {
+                            Ok(Ok(true)) => Return::SignedIn,
+                            Ok(Ok(false)) => Return::Failed(String::new()),
+                            _ => Return::Unknown,
+                        },
+                        None => Return::Unknown,
+                    }
+                } else {
+                    if let Some((_, why)) = params.iter().find(|(k, v)| k == "error_description" && !v.trim().is_empty()) {
+                        log::info!(target: "plugin", "{plugin}: the provider's error description: {why}");
+                    }
+                    let reason = failure_reason(&params);
+                    let _ = got_tx.try_send(params);
+                    Return::Failed(reason)
+                };
+                let page = return_page(&channel, &outcome);
+                ([(axum::http::header::CACHE_CONTROL, "no-store")], axum::response::Html(page)).into_response()
             }
         }),
     );
@@ -163,14 +209,65 @@ pub fn end_wait(plugin: &str) -> bool {
     waiting
 }
 
-/// The page the browser lands on, before the plugin has checked the reply.
-/// moss comes forward on its own; the tab is the one thing left for the person.
-const PAGE: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>moss</title>\
-<style>body{font:16px/1.5 -apple-system,system-ui,sans-serif;margin:0;min-height:100vh;display:grid;place-items:center;background:#faf9f6;color:#222}\
-@media (prefers-color-scheme:dark){body{background:#1c1c1c;color:#eee}}</style></head><body><p>You can close this tab.</p></body></html>";
+/// Brings moss forward: the app registers `moss` as its scheme, and a URL
+/// with no route it knows is answered by the system focusing the app.
+const MOSS_URL: &str = "moss://";
+
+const MOSS_MARK: &str = include_str!("../../assets/moss-mark.svg");
+
+/// Runs once on load; its hash is in the page's CSP, so nothing else may run.
+const OPEN_MOSS: &str = "location.href='moss://'";
+
+/// What the return page says.
+enum Return {
+    SignedIn,
+    /// With the provider's reason in plain words, or none.
+    Failed(String),
+    /// The login hook did not answer in time: the page claims nothing.
+    Unknown,
+}
+
+/// The page the browser lands on. Self-contained: the CSP allows no network,
+/// and only [`OPEN_MOSS`] to run.
+fn return_page(channel: &str, outcome: &Return) -> String {
+    use base64::Engine;
+    use moss_core::media::html_escape;
+    use sha2::{Digest, Sha256};
+    let channel = html_escape(channel);
+    let (title, reason, button) = match outcome {
+        Return::SignedIn => (format!("Signed in to {channel}"), String::new(), "Back to moss"),
+        Return::Failed(why) => (
+            format!("{channel} sign-in didn\u{2019}t finish"),
+            if why.is_empty() { String::new() } else { format!("<p>{}</p>", html_escape(why)) },
+            "Try again in moss",
+        ),
+        Return::Unknown => (channel.clone(), String::new(), "Back to moss"),
+    };
+    let hash = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(OPEN_MOSS));
+    format!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
+<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
+<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-{hash}'\">\
+<meta name=\"color-scheme\" content=\"light dark\"><title>{title}</title><style>{PAGE_CSS}</style></head>\
+<body><main><div class=\"mark\" aria-hidden=\"true\">{MOSS_MARK}</div><h1>{title}</h1>{reason}\
+<a class=\"button\" href=\"{MOSS_URL}\">{button}</a></main><script>{OPEN_MOSS}</script></body></html>"
+    )
+}
+
+/// The app's tokens (`moss-ui` shared/tokens.css), light and dark.
+const PAGE_CSS: &str = include_str!("../../assets/sign-in-return.css");
+
+/// The reason a refusal shows. Only the one code moss can say plainly: any
+/// other text is the provider's, for developers, and anything local can set it.
+fn failure_reason(params: &Query) -> String {
+    match params.iter().find(|(k, _)| k == "error") {
+        Some((_, code)) if code == "access_denied" => "Access was declined.".to_string(),
+        _ => String::new(),
+    }
+}
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -190,7 +287,7 @@ mod tests {
         assert!(!err.contains("secret-state"), "{err}");
     }
 
-    async fn get(url: &str) -> (u16, String) {
+    pub(crate) async fn get(url: &str) -> (u16, String) {
         // The listener is on this computer; a proxy from the environment must not carry the request away.
         let client = crate::system::proxy_reqwest::client_builder().no_proxy().build().unwrap();
         let r = client.get(url).send().await.expect("listener answers");
@@ -215,7 +312,7 @@ mod tests {
     #[tokio::test]
     async fn browser_sign_in_brings_back_the_redirect_with_a_code() {
         install_capture();
-        let redirect = start("browser-sign-in-reply").await.unwrap();
+        let redirect = start("browser-sign-in-reply", "Threads").await.unwrap();
         assert!(redirect.starts_with("http://127.0.0.1:") && redirect.ends_with("/callback"), "{redirect}");
         let (browser_tx, browser) = oneshot::channel();
         let got = wait("browser-sign-in-reply", "https://example.com/authorize", {
@@ -234,18 +331,71 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(got, vec![("code".into(), "abc".into()), ("state".into(), "s 1".into())]);
+        answer("browser-sign-in-reply", true);
         let (wrong_path, no_code, (status, body)) = browser.await.unwrap().await.unwrap();
         assert_eq!((wrong_path, no_code, status), (404, 404, 200), "only a /callback with a code or an error is answered");
-        assert!(body.contains("<p>You can close this tab.</p>"), "{body}");
+        assert!(body.contains("<h1>Signed in to Threads</h1>") && body.contains("href=\"moss://\""), "{body}");
+        assert!(!body.contains("close this tab"), "{body}");
         assert!(stops_listening(&redirect).await);
         assert_eq!(logged_count(log::Level::Info, "browser-sign-in-reply: a request reached the sign-in redirect without a code or an error"), 1);
         assert_eq!(logged_count(log::Level::Info, "browser-sign-in-reply: the sign-in redirect arrived with a code"), 1);
     }
 
+    #[test]
+    fn a_failure_reason_is_escaped_as_text() {
+        let page = return_page("Threads <b>", &Return::Failed("<script>alert(1)</script>".into()));
+        assert!(page.contains("<h1>Threads &lt;b&gt; sign-in didn\u{2019}t finish</h1>"), "{page}");
+        assert!(page.contains("<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>"), "{page}");
+        assert!(!page.contains("<script>alert"), "{page}");
+        assert!(page.contains("Try again in moss</a>") && page.contains("href=\"moss://\""), "{page}");
+        assert!(!page.contains("close this tab"), "{page}");
+    }
+
+    #[test]
+    fn only_a_declined_access_has_a_reason() {
+        let q = |pairs: &[(&str, &str)]| -> Query { pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() };
+        assert_eq!(failure_reason(&q(&[("error", "access_denied")])), "Access was declined.");
+        assert_eq!(failure_reason(&q(&[("error", "server_error"), ("error_description", "Try later")])), "");
+    }
+
+    /// The browser's request for `plugin`'s redirect, with the login hook's verdict (if any) given after the wait returns.
+    async fn return_body(plugin: &str, query: &'static str, verdict: Option<bool>, bound: Duration) -> String {
+        let redirect = start_bounded(plugin, "Threads", bound).await.unwrap();
+        let browser = tokio::spawn(async move { get(&format!("{redirect}?{query}")).await.1 });
+        let plugin_owned = plugin.to_string();
+        wait(plugin, "https://example.com/", |_| async { Ok(()) }).await.unwrap();
+        if let Some(signed_in) = verdict {
+            answer(&plugin_owned, signed_in);
+        }
+        browser.await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_page_follows_how_the_login_ended() {
+        let long = Duration::from_secs(20);
+        let ok = return_body("return-ok", "code=a&state=s", Some(true), long).await;
+        assert!(ok.contains("<h1>Signed in to Threads</h1>"), "{ok}");
+        let failed = return_body("return-failed", "code=a&state=s", Some(false), long).await;
+        assert!(failed.contains("sign-in didn\u{2019}t finish") && !failed.contains("Signed in"), "{failed}");
+    }
+
+    #[tokio::test]
+    async fn the_page_claims_nothing_when_the_login_does_not_answer() {
+        let page = return_body("return-silent", "code=a&state=s", None, Duration::from_millis(50)).await;
+        assert!(page.contains("<h1>Threads</h1>") && page.contains("href=\"moss://\""), "{page}");
+        assert!(!page.contains("Signed in") && !page.contains("didn\u{2019}t finish"), "{page}");
+    }
+
+    #[tokio::test]
+    async fn a_refusal_shows_no_provider_text() {
+        let page = return_body("return-refused", "error=server_error&error_description=%3Cscript%3Ex%3C%2Fscript%3E", None, Duration::from_secs(20)).await;
+        assert!(page.contains("sign-in didn\u{2019}t finish") && !page.contains("<p>") && !page.contains("<script>x"), "{page}");
+    }
+
     #[tokio::test]
     async fn a_redirect_with_an_error_is_logged_as_one() {
         install_capture();
-        let redirect = start("browser-sign-in-denied").await.unwrap();
+        let redirect = start("browser-sign-in-denied", "Threads").await.unwrap();
         let got = wait("browser-sign-in-denied", "https://example.com/", move |_| async move {
             tokio::spawn(async move { get(&format!("{redirect}?error=access_denied")).await });
             Ok(())
@@ -259,7 +409,7 @@ mod tests {
     #[tokio::test]
     async fn browser_sign_in_ends_at_a_refused_address() {
         install_capture();
-        let redirect = start("browser-sign-in-refused").await.unwrap();
+        let redirect = start("browser-sign-in-refused", "Threads").await.unwrap();
         let refused = wait("browser-sign-in-refused", "file:///etc/passwd", |_| async { panic!("must not open") }).await;
         assert!(refused.is_err());
         assert!(stops_listening(&redirect).await, "no listener may be left up");
@@ -273,7 +423,7 @@ mod tests {
     #[tokio::test]
     async fn browser_sign_in_cancel_ends_the_wait() {
         install_capture();
-        start("browser-sign-in-cancel").await.unwrap();
+        start("browser-sign-in-cancel", "Threads").await.unwrap();
         assert!(!end_wait("browser-sign-in-cancel"), "a sign-in not yet in the browser is not ended");
         let waiting = tokio::spawn(wait("browser-sign-in-cancel", "https://example.com/", |_| async { Ok(()) }));
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -286,14 +436,14 @@ mod tests {
     /// comes from the second one's listener.
     #[tokio::test]
     async fn browser_sign_in_started_again_replaces_the_first() {
-        let first = start("browser-sign-in-again").await.unwrap();
+        let first = start("browser-sign-in-again", "Threads").await.unwrap();
         let waiting = tokio::spawn(wait("browser-sign-in-again", "https://example.com/", |_| async { Ok(()) }));
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let second = start("browser-sign-in-again").await.unwrap();
+        let second = start("browser-sign-in-again", "Threads").await.unwrap();
         assert_eq!(soon(waiting).await, Err(CANCELLED.to_string()));
         assert!(stops_listening(&first).await);
 
-        let third = start("browser-sign-in-again").await.unwrap();
+        let third = start("browser-sign-in-again", "Threads").await.unwrap();
         assert!(stops_listening(&second).await, "a started sign-in nobody waited on ends too");
         let got = wait("browser-sign-in-again", "https://example.com/", move |_| async move {
             tokio::spawn(async move { get(&format!("{third}?code=c3")).await });
@@ -309,7 +459,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn browser_sign_in_stops_at_the_limit() {
         install_capture();
-        start("browser-sign-in-limit").await.unwrap();
+        start("browser-sign-in-limit", "Threads").await.unwrap();
         let outcome = tokio::time::timeout(SIGN_IN_LIMIT * 2, wait("browser-sign-in-limit", "https://example.com/", |_| async { Ok(()) })).await;
         assert_eq!(outcome, Ok(Err(TOO_LONG.to_string())));
         assert!(!sign_ins().contains_key("browser-sign-in-limit"));
