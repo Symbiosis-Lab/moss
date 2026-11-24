@@ -17,13 +17,18 @@ const TYPES: Record<string, string> = { '.html': 'text/html', '.css': 'text/css'
 type Post = { email: string; scope?: string; lang?: string; answers?: unknown };
 type Answer = (route: Route, n: number) => Promise<void>;
 
+/** What the form reported to the host's check page, in order. */
+const reports: string[] = [];
+
 /**
  * Serves the built site at ORIGIN. The nth subscribe POST goes to `answer`;
  * the host's check page posts `captcha` (a list of messages, in order) to the
- * page that opened it. Returns the POST bodies seen.
+ * page that opened it, or fails to load at all when `captcha` is 'blocked'.
+ * Returns the POST bodies seen.
  */
-async function serve(context: BrowserContext, answer: Answer, captcha: object[] = []): Promise<Post[]> {
+async function serve(context: BrowserContext, answer: Answer, captcha: object[] | 'blocked' = []): Promise<Post[]> {
   const posts: Post[] = [];
+  reports.length = 0;
   await context.route('**/*', async (route) => {
     const req = route.request();
     const url = new URL(req.url());
@@ -32,7 +37,12 @@ async function serve(context: BrowserContext, answer: Answer, captcha: object[] 
       return answer(route, posts.length);
     }
     if (url.origin !== ORIGIN) return route.abort();
+    if (url.pathname === '/captcha/report') {
+      reports.push(req.postData() ?? '');
+      return route.fulfill({ status: 204 });
+    }
     if (url.pathname === '/captcha/') {
+      if (captcha === 'blocked') return route.abort('blockedbyclient');
       const sends = captcha.map((m, i) => `setTimeout(() => parent.postMessage(${JSON.stringify(m)}, "*"), ${i * 200})`).join(';');
       return route.fulfill({ status: 200, headers: { 'content-type': 'text/html' }, body: `<script>${sends}</script>` });
     }
@@ -78,6 +88,19 @@ test('with scripts off the form posts the address itself, and the host answers i
     expect(posts).toEqual([expect.objectContaining({ email: 'reader@example.com' })]);
     await context.close();
   }
+});
+
+// An in-app browser that will not load the check's frame: after the quiet
+// wait the form reports it, and the host lets the next request through.
+test('a check frame the browser blocks still lets the reader subscribe', async ({ page, context }) => {
+  test.setTimeout(60_000);
+  const posts = await serve(context, checkThen(OK), 'blocked');
+  await submit(page);
+  await expect(page.locator('[role="dialog"]')).toBeHidden();
+  expect(await state(page)).toBe('loading');
+  await expect.poll(() => state(page), { timeout: 30_000 }).toBe('success');
+  expect(reports).toEqual(['reason=frame']);
+  expect(posts).toHaveLength(2);
 });
 
 for (const scheme of ['light', 'dark'] as const) {
@@ -146,11 +169,13 @@ for (const scheme of ['light', 'dark'] as const) {
         await expect.poll(() => state(page)).toBe('error');
       });
 
-      test('a failed check shows the error line', async ({ page, context }) => {
-        await serve(context, always(CHECK), [{ moss_captcha: 'interactive' }, { moss_captcha: 'failed' }]);
+      test('a check that cannot finish is reported, and the reader goes through', async ({ page, context }) => {
+        const posts = await serve(context, checkThen(OK), [{ moss_captcha: 'interactive' }, { moss_captcha: 'failed' }]);
         await submit(page);
-        await expect.poll(() => state(page)).toBe('error');
+        await expect.poll(() => state(page)).toBe('success');
         await expect(page.locator('[role="dialog"]')).toHaveCount(0);
+        expect(reports).toEqual(['reason=frame']);
+        expect(posts).toHaveLength(2);
       });
 
       test('closing the check by a click beside it brings the form back as it was, with nothing more sent', async ({ page, context }) => {
@@ -161,13 +186,6 @@ for (const scheme of ['light', 'dark'] as const) {
         await expect.poll(() => state(page)).toBe('idle');
         await expect(form(page).locator('input[type=email]')).toHaveValue('reader@example.com');
         expect(posts).toHaveLength(1);
-      });
-
-      test('a check cancelled with retry asks again', async ({ page, context }) => {
-        const posts = await serve(context, (route, n) => (n < 3 ? CHECK(route) : OK(route)), [{ moss_captcha: 'cancelled', retry: true }, { moss_captcha: 'passed' }]);
-        await submit(page);
-        await expect.poll(() => state(page)).toBe('success');
-        expect(posts.length).toBeGreaterThanOrEqual(2);
       });
 
       test('a members page leads the form with who the page is for, and that line names the field', async ({ page, context }) => {

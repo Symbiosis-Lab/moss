@@ -38,7 +38,7 @@ const COPY = Object.fromEntries(['en', 'zh-hans', 'zh-hant'].map((lang) => {
 /** One page with the network mocked; `next` sets how the next subscribe request is answered. */
 async function openForm(browser, locale, { reducedMotion = 'reduce', width = 1280, colorScheme = 'dark' } = {}) {
   const page = await browser.newPage({ reducedMotion, colorScheme, viewport: { width, height: width < 600 ? 844 : 900 } });
-  const mock = { calls: [], checks: [], tracked: [], answer: { status: 200, body: { subscribed: true, confirmationSent: true } }, challenge: false, verdict: 'passed', held: null, holdCaptcha: false };
+  const mock = { calls: [], checks: [], reports: [], tracked: [], answer: { status: 200, body: { subscribed: true, confirmationSent: true } }, challenge: false, verdict: 'passed', held: null, holdCaptcha: false };
   await page.route('https://api.mosspub.com/**', async (route) => {
     const url = new URL(route.request().url());
     if (/\/beacon$/.test(url.pathname)) {
@@ -46,8 +46,11 @@ async function openForm(browser, locale, { reducedMotion = 'reduce', width = 128
       if (event) mock.tracked.push(event);
       return route.fulfill({ status: 204 });
     }
-    // The page warms the host's bot check on load; it is neither a send nor the check a send asks for.
-    if (url.pathname.startsWith('/captcha/subscription-prewarm/')) return route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<!doctype html>' });
+    // A check that cannot finish is reported here, and the host lets the next send through.
+    if (url.pathname === '/captcha/report') {
+      mock.reports.push(route.request().postData() || '');
+      return route.fulfill({ status: 204 });
+    }
     if (url.pathname === '/captcha/') {
       mock.checks.push(url.search);
       const report = `<script>parent.postMessage({moss_captcha:"${mock.holdCaptcha ? 'interactive' : mock.verdict}"},"*")</script>`;
@@ -225,16 +228,19 @@ try {
           await reset(page);
         }
 
-        // the host's bot check: passed posts again, failed is an error, closed leaves the form as it was
-        const after = { passed: 'success', failed: 'error', cancelled: 'idle' };
+        // the host's bot check: passed posts again, failed is reported and posts again, closed leaves the form as it was
+        const after = { passed: 'success', failed: 'success', cancelled: 'idle' };
         for (const verdict of Object.keys(after)) {
           mock.challenge = true; mock.verdict = verdict;
           const before = mock.calls.length;
+          const reportsBefore = mock.reports.length;
           await submit(page, mock, { status: 200, body: { subscribed: true, confirmationSent: true } });
           await waitState(page, after[verdict]);
           const posts = mock.calls.length - before;
-          if (posts !== (verdict === 'passed' ? 2 : 1)) fail(`Bot check ${verdict}: ${posts} subscribe request(s)`);
-          if (verdict !== 'passed' && (await look(page)).email !== EMAIL) fail(`Bot check ${verdict} lost the address`);
+          if (posts !== (verdict === 'cancelled' ? 1 : 2)) fail(`Bot check ${verdict}: ${posts} subscribe request(s)`);
+          const reports = mock.reports.slice(reportsBefore);
+          if (JSON.stringify(reports) !== JSON.stringify(verdict === 'failed' ? ['reason=frame'] : [])) fail(`Bot check ${verdict} reported ${JSON.stringify(reports)}`);
+          if (verdict === 'cancelled' && (await look(page)).email !== EMAIL) fail(`Bot check ${verdict} lost the address`);
           await reset(page);
         }
         if (!mock.checks.length || !mock.checks.every((s) => s.startsWith('?quiet=1'))) fail(`The bot check was not asked for quietly: ${JSON.stringify(mock.checks)}`);

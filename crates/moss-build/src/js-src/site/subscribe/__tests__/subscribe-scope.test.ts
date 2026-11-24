@@ -68,7 +68,7 @@ describe('subscribe POST body', () => {
     form.requestSubmit();
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(body).toMatchObject({ email: 'alice@example.com', scope: 'zh', lang: 'en', return: '/', turnstile_started: false, load_to_submit_ms: expect.any(Number) });
+    expect(body).toMatchObject({ email: 'alice@example.com', scope: 'zh', lang: 'en', return: '/' });
   });
 
   it.each([

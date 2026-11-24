@@ -15,7 +15,7 @@
 
 import { COPY, langBucket, type Lang, type SubscribeCopy } from './i18n.js';
 import { claim, inPreview, lockSlotWidth, setState } from './hosted-form.js';
-import { observeCaptcha, prewarmCaptcha, solveCaptcha } from './captcha.js';
+import { solveCaptcha } from './captcha.js';
 import { clearField, markField } from '../forms/fields.js';
 import { answersOf, checkQuestions, showAddress, watchQuestions } from './questions.js';
 
@@ -30,7 +30,6 @@ type SubscribeResponse = {
   code?: string;
   need_captcha?: boolean;
   captcha_url?: string;
-  observation_url?: string;
 };
 
 /**
@@ -46,7 +45,6 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
   if (!input || !btn) return;
   if (!claim(form)) return;
 
-  const captcha: ReturnType<typeof prewarmCaptcha> = inPreview() ? () => ({ turnstile_started: false }) : prewarmCaptcha(form);
 
   const lang: Lang = langBucket(document.documentElement.lang);
   const copy: SubscribeCopy = COPY[lang];
@@ -100,40 +98,33 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
     // `return` brings the reader back here once the mailed link signs this browser in.
     const jsonBody = {
       email,
-      load_to_submit_ms: Math.round(performance.now()),
       scope: form.querySelector<HTMLInputElement>('input[name="scope"]')?.value,
       lang,
       return: location.pathname + location.search + location.hash,
       ...(asks ? { answers: answersOf(form) } : {}),
     };
 
-    let firstPost = true;
-    const signals = captcha();
     const post = async (): Promise<[Response, SubscribeResponse]> => {
       const res = await fetch(form.action, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ ...jsonBody, ...signals, turnstile_token: firstPost ? signals.turnstile_token : undefined }),
+        body: JSON.stringify(jsonBody),
         signal: AbortSignal.timeout(POST_MS),
       });
-      firstPost = false;
       return [res, await res.json().catch(() => ({}))];
     };
 
     try {
       let [res, data] = await post();
-      // The service asks for its bot check on a site that publishes
-      // `subscribe.turnstile`; the button keeps spinning while the modal is open.
-      while (res.status === 403 && data.need_captcha && data.captcha_url) {
-        let solved: boolean | 'retry';
-        try {
-          solved = await solveCaptcha(data.captcha_url);
-        } catch {
+      // The service asks for its bot check only when a request looks like
+      // abuse; the button keeps spinning while it runs. Two checks a press at most.
+      for (let checks = 0; res.status === 403 && data.need_captcha && data.captcha_url; checks++) {
+        if (checks === 2) {
           showStatus(form, 'error', copy, copy.verifyFailed);
           setState(form, 'error', btn);
           return;
         }
-        if (!solved) {
+        if (!(await solveCaptcha(data.captcha_url))) {
           setState(form, 'idle', btn);
           return;
         }
@@ -158,7 +149,6 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
       showStatus(form, 'check-email', copy);
       if (asks) showAddress(form, email);
       setState(form, 'success', btn);
-      if (data.observation_url && !signals.turnstile_token) observeCaptcha(data.observation_url);
     } catch {
       showStatus(form, 'error', copy);
       setState(form, 'error', btn);

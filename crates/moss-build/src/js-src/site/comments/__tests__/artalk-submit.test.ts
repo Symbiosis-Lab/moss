@@ -687,12 +687,13 @@ describe("artalk captcha handshake", () => {
     vi.useRealTimers();
   });
 
-  test("a failed check shows the form error at once", async () => {
-    const form = await submitChallenged();
+  test("a check that cannot finish is reported and the comment sent again", async () => {
+    await submitChallenged();
     tell("failed");
     await vi.advanceTimersByTimeAsync(0);
-    expect(form.dataset.state).toBe("error");
-    expect(document.getElementById("moss-comment-status")!.textContent).not.toBe("");
+    const calls = fetchMock.mock.calls.map(([url, opts]) => [String(url), (opts as RequestInit | undefined)?.mode]);
+    expect(calls.filter(([url]) => url.endsWith("/api/v2/captcha/report"))).toEqual([[expect.stringContaining("/api/v2/captcha/report"), "no-cors"]]);
+    expect(calls.filter(([url]) => url.endsWith("/api/v2/comments"))).toHaveLength(2);
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     vi.useRealTimers();
   });
