@@ -930,6 +930,17 @@
   overflow-wrap: anywhere;
   color: var(--moss-color-text);
 }
+/* A row's own action (Trust, a password and Connect) sits on a line under its message, so a field never squeezes the message. */
+.moss-setup-row:has(> .moss-setup-row__action) { flex-wrap: wrap; }
+.moss-setup-row__action {
+  flex: 1 0 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--moss-space-xs);
+  padding-inline-start: 1.625rem; /* the icon's 1rem and the row's gap */
+}
+.moss-setup-row__action > .moss-field-caption { flex-basis: 100%; }
 .moss-setup-row--checking .moss-setup-row__label,
 .moss-setup-row--warn     .moss-setup-row__label {
   color: var(--moss-color-text-secondary);

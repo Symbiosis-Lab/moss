@@ -10,10 +10,32 @@ use std::sync::Arc;
 
 use super::check;
 use super::server::{self, Keys, Server};
-use super::sftp::{connect, Refusal};
+use super::openssh::Ssh;
+use super::sftp::{Refusal, SftpDestination};
 use super::*;
 
 const SSHD: &str = "/usr/sbin/sshd";
+
+/// An ssh config naming no hosts and no `known_hosts`, so the person's own
+/// never reaches a test.
+pub(super) fn isolated() -> Ssh {
+    static CONFIG: std::sync::OnceLock<tempfile::NamedTempFile> = std::sync::OnceLock::new();
+    let file = CONFIG.get_or_init(|| {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), "UserKnownHostsFile /dev/null\nGlobalKnownHostsFile /dev/null\nIdentityAgent none\n").unwrap();
+        file
+    });
+    Ssh { config: Some(file.path().to_path_buf()) }
+}
+
+async fn connect(server: &Server, host_key: Option<&str>, key: Arc<russh::keys::PrivateKey>) -> Result<SftpDestination, Refusal> {
+    let resolved = super::sftp::resolve(&isolated(), server).await?;
+    super::sftp::connect(&isolated(), &resolved, &server.folder, host_key, key).await.1
+}
+
+pub(super) async fn check_isolated(folder: &Path, keys: &Keys, trust: Option<&str>) -> Result<check::Checked, String> {
+    check::check_among(&isolated(), folder, keys, trust, &check::web_folders()).await
+}
 
 fn sftp_server() -> Option<&'static str> {
     ["/usr/libexec/sftp-server", "/usr/lib/openssh/sftp-server", "/usr/lib/ssh/sftp-server"]
@@ -22,13 +44,13 @@ fn sftp_server() -> Option<&'static str> {
 }
 
 /// A running `sshd`, stopped when dropped.
-struct Sshd {
+pub(super) struct Sshd {
     child: Child,
-    port: u16,
-    dir: tempfile::TempDir,
+    pub port: u16,
+    pub dir: tempfile::TempDir,
     /// The folder the site is published into.
-    www: PathBuf,
-    keys: Keys,
+    pub www: PathBuf,
+    pub keys: Keys,
 }
 
 impl Drop for Sshd {
@@ -42,7 +64,7 @@ fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
 }
 
-fn keygen(kind: &str, path: &Path) {
+pub(super) fn keygen(kind: &str, path: &Path) {
     let ok = Command::new("ssh-keygen").args(["-q", "-t", kind, "-N", "", "-f"]).arg(path).status().unwrap();
     assert!(ok.success(), "ssh-keygen -t {kind}");
 }
@@ -58,6 +80,13 @@ impl Sshd {
     /// Start a server whose only host key is of `host_kind`, trusting
     /// moss's key for the publisher `PUBLISHER`.
     fn start(host_kind: &str) -> Option<Sshd> {
+        Sshd::start_with(host_kind, "", "")
+    }
+
+    /// [`Sshd::start`], also trusting the keys in the files `more_keys`
+    /// names, with `sftp_args` after the SFTP server (`-d <folder>` starts
+    /// sessions in a folder standing in for the home folder).
+    pub(super) fn start_with(host_kind: &str, more_keys: &str, sftp_args: &str) -> Option<Sshd> {
         let (Some(sftp), true) = (sftp_server(), Path::new(SSHD).exists()) else {
             eprintln!("skipped: no OpenSSH server on this system");
             return None;
@@ -72,8 +101,8 @@ impl Sshd {
         std::fs::create_dir(&www).unwrap();
         let port = free_port();
         let config = format!(
-            "Port {port}\nListenAddress 127.0.0.1\nHostKey {host}\nPidFile {pid}\nAuthorizedKeysFile {auth}\n\
-             StrictModes no\nUsePAM no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nSubsystem sftp {sftp}\n",
+            "Port {port}\nListenAddress 127.0.0.1\nHostKey {host}\nPidFile {pid}\nAuthorizedKeysFile {auth} {more_keys}\n\
+             StrictModes no\nUsePAM no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nSubsystem sftp {sftp} {sftp_args}\n",
             host = d.join("host").display(),
             pid = d.join("sshd.pid").display(),
             auth = d.join("authorized_keys").display(),
@@ -90,7 +119,7 @@ impl Sshd {
         panic!("sshd never listened: {}", std::fs::read_to_string(sshd.dir.path().join("sshd.log")).unwrap_or_default());
     }
 
-    fn server(&self) -> Server {
+    pub(super) fn server(&self) -> Server {
         Server {
             user: std::env::var("USER").unwrap_or_else(|_| whoami()),
             host: "127.0.0.1".into(),
@@ -99,7 +128,7 @@ impl Sshd {
         }
     }
 
-    fn host_key(&self) -> String {
+    pub(super) fn host_key(&self) -> String {
         fingerprint(&self.dir.path().join("host.pub"))
     }
 
@@ -112,7 +141,7 @@ fn whoami() -> String {
     String::from_utf8(Command::new("id").arg("-un").output().unwrap().stdout).unwrap().trim().to_string()
 }
 
-const PUBLISHER: &str = "0123456789abcdef";
+pub(super) const PUBLISHER: &str = "0123456789abcdef";
 
 struct Site {
     dir: tempfile::TempDir,
@@ -284,20 +313,20 @@ async fn the_check_names_the_host_key_then_pins_it_once_trusted() {
     std::fs::write(folder.path().join(".moss/config.toml"), format!("[deploy]\npublisher = \"{PUBLISHER}\"\n")).unwrap();
     server::save_server(folder.path(), &sshd.server()).unwrap();
 
-    let first = check::check(folder.path(), &sshd.keys, None).await.unwrap();
+    let first = check_isolated(folder.path(), &sshd.keys, None).await.unwrap();
     assert_eq!(first.trust, Some(sshd.host_key()));
     assert_eq!(first.steps.iter().map(|s| (s.kind, s.passed)).collect::<Vec<_>>(), [(check::StepKind::Reach, true), (check::StepKind::Trust, false)]);
 
-    let trusted = check::check(folder.path(), &sshd.keys, Some(&sshd.host_key())).await.unwrap();
+    let trusted = check_isolated(folder.path(), &sshd.keys, Some(&sshd.host_key())).await.unwrap();
     assert!(trusted.passed(), "{trusted:?}");
     assert_eq!(server::settings(folder.path()).unwrap().unwrap().host_key, Some(sshd.host_key()));
     assert!(walk(&sshd.www).is_empty(), "the check leaves nothing behind");
 
     // A rebuilt server: its new key stops every check until it is trusted.
     server::save_host_key(folder.path(), "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap();
-    let changed = check::check(folder.path(), &sshd.keys, None).await.unwrap();
+    let changed = check_isolated(folder.path(), &sshd.keys, None).await.unwrap();
     assert_eq!(changed.trust, Some(sshd.host_key()));
-    assert!(check::check(folder.path(), &sshd.keys, Some(&sshd.host_key())).await.unwrap().passed());
+    assert!(check_isolated(folder.path(), &sshd.keys, Some(&sshd.host_key())).await.unwrap().passed());
     assert_eq!(server::settings(folder.path()).unwrap().unwrap().host_key, Some(sshd.host_key()));
 }
 
@@ -313,20 +342,21 @@ async fn a_refused_key_comes_back_with_the_line_to_add() {
     server::save_host_key(folder.path(), &sshd.host_key()).unwrap();
     let this_computer = Keys::in_folder(&sshd.dir.path().join("this-computer"));
 
-    let refused = check::check(folder.path(), &this_computer, None).await.unwrap();
+    let refused = check_isolated(folder.path(), &this_computer, None).await.unwrap();
     assert_eq!(refused.steps.last().map(|s| (s.kind, s.passed)), Some((check::StepKind::SignIn, false)));
     let line = refused.authorized_key.expect("the line to add");
     std::fs::write(sshd.dir.path().join("authorized_keys"), format!("{line}\n")).unwrap();
-    assert!(check::check(folder.path(), &this_computer, None).await.unwrap().passed());
+    assert!(check_isolated(folder.path(), &this_computer, None).await.unwrap().passed());
 }
 
 /// A server that shows no plain key is never offered for trust: an empty
 /// fingerprint, once pinned, would read as a changed key at every connect.
 #[test]
 fn a_server_showing_no_plain_key_has_nothing_to_trust() {
-    let refusal = super::sftp::untrusted("example.com".into(), None, None);
+    let refusal = super::sftp::untrusted("example.com".into(), None, Default::default());
     assert!(matches!(refusal, Refusal::Broken { .. }), "{refusal:?}");
-    let seen = super::sftp::untrusted("example.com".into(), None, Some("SHA256:x".into()));
+    let shown = super::sftp::Seen { fingerprint: Some("SHA256:x".into()), known: None };
+    let seen = super::sftp::untrusted("example.com".into(), None, shown);
     assert_eq!(seen, Refusal::UnknownHostKey { host: "example.com".into(), fingerprint: "SHA256:x".into() });
 }
 
@@ -347,6 +377,7 @@ fn every_refusal_has_words_in_the_app() {
         Refusal::HostKeyChanged { host: s(), was: s(), now: s() },
         Refusal::RsaOnly { host: s() },
         Refusal::KeyRefused { host: s() },
+        Refusal::NoUser { host: s() },
         Refusal::SignInFailed { host: s(), reason: s() },
         Refusal::NoSftp { host: s() },
         Refusal::NoFolder { folder: s() },
@@ -357,15 +388,22 @@ fn every_refusal_has_words_in_the_app() {
         Refusal::WriteFailed { path: s(), reason: s() },
         Refusal::NoAtomicRename { host: s() },
         Refusal::Broken { host: s(), reason: s() },
+        Refusal::HostKeyDiffers { host: s(), fingerprint: s() },
+        Refusal::HostKeyRevoked { host: s() },
+        Refusal::NeedsPassword { host: s() },
+        Refusal::PasswordRefused { host: s() },
+        Refusal::KeysOnly { host: s() },
     ];
     for refusal in all {
         // A new kind does not compile here until it is listed above.
         match refusal {
             Refusal::NoSuchServer { .. } | Refusal::NoAnswer { .. } | Refusal::PortRefused { .. } | Refusal::UnknownHostKey { .. }
-            | Refusal::HostKeyChanged { .. } | Refusal::RsaOnly { .. } | Refusal::KeyRefused { .. } | Refusal::SignInFailed { .. }
+            | Refusal::HostKeyChanged { .. } | Refusal::RsaOnly { .. } | Refusal::KeyRefused { .. } | Refusal::NoUser { .. } | Refusal::SignInFailed { .. }
             | Refusal::NoSftp { .. } | Refusal::NoFolder { .. } | Refusal::NoWebFolder { .. } | Refusal::WhichFolder { .. }
             | Refusal::CannotWrite { .. } | Refusal::NotServed { .. } | Refusal::WriteFailed { .. }
-            | Refusal::NoAtomicRename { .. } | Refusal::Broken { .. } => {}
+            | Refusal::NoAtomicRename { .. } | Refusal::Broken { .. } | Refusal::HostKeyDiffers { .. }
+            | Refusal::HostKeyRevoked { .. } | Refusal::NeedsPassword { .. } | Refusal::PasswordRefused { .. }
+            | Refusal::KeysOnly { .. } => {}
         }
         let kind = serde_json::to_value(&refusal).unwrap()["kind"].as_str().unwrap().to_string();
         assert_eq!(strings.matches(&format!("'deployment.server.refusal.{kind}'")).count(), 4, "{kind} in each locale");
@@ -383,7 +421,7 @@ async fn a_key_trusted_at_a_check_that_stops_at_sign_in_stays_trusted() {
     server::save_server(folder.path(), &sshd.server()).unwrap();
     let this_computer = Keys::in_folder(&sshd.dir.path().join("this-computer"));
 
-    let refused = check::check(folder.path(), &this_computer, Some(&sshd.host_key())).await.unwrap();
+    let refused = check_isolated(folder.path(), &this_computer, Some(&sshd.host_key())).await.unwrap();
     assert_eq!(refused.steps.last().map(|s| (s.kind, s.passed)), Some((check::StepKind::SignIn, false)));
     assert_eq!(server::settings(folder.path()).unwrap().unwrap().host_key, Some(sshd.host_key()));
 }
@@ -478,13 +516,25 @@ fn a_server_address_is_read_in_the_url_and_scp_forms() {
     assert_eq!((v6.host.as_str(), v6.port, v6.folder.as_str()), ("2001:db8::1", 2222, "/srv/www"));
     assert_eq!(Server::parse(&v6.to_url()).unwrap(), v6);
     assert!(Server::parse("deploy@example.com:www").unwrap_err().contains("full path"), "a home-relative scp path is not read as /www");
+    let port = Server::parse("deploy@example.com:2222").unwrap();
+    assert_eq!((port.port, port.folder.as_str()), (2222, ""), "digits after the colon are a port");
+    assert_eq!(Server::parse(&port.to_url()).unwrap(), port);
+    for zero in ["deploy@example.com:0", "sftp://deploy@example.com:0/srv"] {
+        assert!(Server::parse(zero).unwrap_err().contains("isn't a server address"), "{zero}: port 0 is refused");
+    }
+    let port_folder = Server::parse("deploy@example.com:2222/var/www").unwrap();
+    assert_eq!((port_folder.port, port_folder.folder.as_str()), (2222, "/var/www"), "a port, then the folder");
     // No folder: the check looks for it.
     for bare in ["deploy@example.com", "sftp://deploy@example.com", "deploy@example.com:"] {
         let server = Server::parse(bare).unwrap();
         assert_eq!((server.host.as_str(), server.port, server.folder.as_str()), ("example.com", 22, ""), "{bare}");
         assert_eq!(Server::parse(&server.to_url()).unwrap(), server);
     }
-    for bad in ["example.com", "@example.com:/x", "sftp://deploy@example.com:port/x"] {
+    // No user: the ssh config names one.
+    let alias = Server::parse("box:/srv/www").unwrap();
+    assert_eq!((alias.user.as_str(), alias.host.as_str()), ("", "box"));
+    assert_eq!(Server::parse(&alias.to_url()).unwrap(), alias);
+    for bad in ["@example.com:/x", "sftp://deploy@example.com:port/x", "-oProxyCommand=x", "deploy@-x", "-l@x"] {
         assert!(Server::parse(bad).is_err(), "{bad}");
     }
 }
@@ -494,7 +544,8 @@ fn the_key_moss_makes_is_kept_and_shown_as_one_authorized_keys_line() {
     let dir = tempfile::tempdir().unwrap();
     let keys = Keys::in_folder(dir.path());
     let line = keys.public_line(PUBLISHER, "my-blog").unwrap();
-    assert!(line.starts_with("ssh-ed25519 AAAA") && line.ends_with(" my-blog"), "{line}");
+    let options = super::server::KEY_OPTIONS;
+    assert!(line.starts_with(&format!("{options} ssh-ed25519 AAAA")) && line.ends_with(" my-blog"), "{line}");
     assert_eq!(keys.public_line(PUBLISHER, "my-blog").unwrap(), line, "made once");
     assert_ne!(Keys::in_folder(dir.path()).public_line("another-site", "my-blog").unwrap(), line);
 }
@@ -546,7 +597,7 @@ async fn a_folder_left_out_is_the_one_the_address_shows() {
     let folder = site_without_folder(&sshd, &serve(&sshd.www));
     let candidates = [sshd.dir.path().join("absent"), other, sshd.www.clone()].map(|p| p.display().to_string());
 
-    let checked = check::check_among(folder.path(), &sshd.keys, None, &candidates).await.unwrap();
+    let checked = check::check_among(&isolated(), folder.path(), &sshd.keys, None, &candidates).await.unwrap();
     assert!(checked.passed() && checked.folders.is_empty(), "{checked:?}");
     assert_eq!(kinds(&checked).last(), Some(&(check::StepKind::Address, true)));
     let saved = server::settings(folder.path()).unwrap().unwrap().server.folder;
@@ -566,13 +617,13 @@ async fn web_folders_the_address_does_not_show_are_offered_to_pick() {
     std::fs::create_dir(&other).unwrap();
     let both = [sshd.www.clone(), other].map(|p| p.display().to_string());
 
-    let checked = check::check_among(folder.path(), &sshd.keys, None, &both).await.unwrap();
+    let checked = check::check_among(&isolated(), folder.path(), &sshd.keys, None, &both).await.unwrap();
     assert!(!checked.passed());
     assert!(matches!(checked.steps.last().and_then(|s| s.refusal.clone()), Some(Refusal::WhichFolder { .. })), "{checked:?}");
     assert_eq!(checked.folders.len(), 2);
     assert_eq!(server::settings(folder.path()).unwrap().unwrap().server.folder, "");
 
-    let one = check::check_among(folder.path(), &sshd.keys, None, &both[..1]).await.unwrap();
+    let one = check::check_among(&isolated(), folder.path(), &sshd.keys, None, &both[..1]).await.unwrap();
     assert!(one.passed() && one.folders.is_empty(), "{one:?}");
     assert!(matches!(one.steps.last().and_then(|s| s.refusal.clone()), Some(Refusal::NotServed { .. })), "{one:?}");
     let saved = server::settings(folder.path()).unwrap().unwrap().server.folder;
@@ -590,12 +641,12 @@ async fn a_web_folder_moss_cannot_write_to_keeps_its_refusal() {
     std::fs::create_dir(&locked).unwrap();
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
 
-    let checked = check::check_among(folder.path(), &sshd.keys, None, &[locked.display().to_string()]).await.unwrap();
+    let checked = check::check_among(&isolated(), folder.path(), &sshd.keys, None, &[locked.display().to_string()]).await.unwrap();
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert!(matches!(checked.steps.last().and_then(|s| s.refusal.clone()), Some(Refusal::CannotWrite { .. })), "{checked:?}");
     assert!(checked.folders.is_empty());
 
-    let none = check::check_among(folder.path(), &sshd.keys, None, &[sshd.dir.path().join("absent").display().to_string()]).await.unwrap();
+    let none = check::check_among(&isolated(), folder.path(), &sshd.keys, None, &[sshd.dir.path().join("absent").display().to_string()]).await.unwrap();
     assert!(matches!(none.steps.last().and_then(|s| s.refusal.clone()), Some(Refusal::NoWebFolder { .. })), "{none:?}");
 }
 
@@ -605,8 +656,34 @@ async fn a_web_folder_moss_cannot_write_to_keeps_its_refusal() {
 async fn an_address_that_does_not_show_the_folder_yet_does_not_stop_publishing() {
     let Some(sshd) = Sshd::start("ed25519") else { return };
     let folder = site_on(&sshd);
-    let checked = check::check(folder.path(), &sshd.keys, None).await.unwrap();
+    let checked = check_isolated(folder.path(), &sshd.keys, None).await.unwrap();
     assert!(checked.passed(), "{checked:?}");
     assert_eq!(kinds(&checked).last(), Some(&(check::StepKind::Address, false)));
     assert!(matches!(checked.steps.last().and_then(|s| s.refusal.clone()), Some(Refusal::NotServed { .. })));
+}
+
+/// With no user given and no `ssh` to name one, the user is asked for
+/// rather than a refused key reported, and the key trusted on the way is
+/// kept, so adding the user is the only step left.
+#[tokio::test]
+async fn no_user_is_asked_for_and_the_trusted_key_kept() {
+    let Some(sshd) = Sshd::start("ed25519") else { return };
+    let mut resolved = super::sftp::resolve(&isolated(), &sshd.server()).await.unwrap();
+    resolved.user.clear();
+    let key = Keys::in_folder(&sshd.dir.path().join("this-computer")).key_or_new(PUBLISHER).unwrap();
+    let (trusted, refused) = super::sftp::connect(&isolated(), &resolved, "", Some(&sshd.host_key()), key).await;
+    assert!(matches!(refused, Err(Refusal::NoUser { .. })), "{:?}", refused.err());
+    assert_eq!(trusted, Some(sshd.host_key()));
+}
+
+/// An `ssh` that fails to read its config stops the check, rather than
+/// connecting without the `known_hosts` that config names.
+#[tokio::test]
+async fn a_config_ssh_cannot_read_is_a_stop() {
+    let config = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(config.path(), "NotAnOption yes\n").unwrap();
+    let ssh = Ssh { config: Some(config.path().to_path_buf()) };
+    let server = Server { user: "deploy".into(), host: "example.com".into(), port: 22, folder: String::new() };
+    let refused = super::sftp::resolve(&ssh, &server).await.err();
+    assert!(matches!(&refused, Some(Refusal::Broken { host, .. }) if host == "example.com"), "{refused:?}");
 }

@@ -136,10 +136,6 @@ fn capture_accepting(host: &mut crate::build::HostPorts, accept_removals: bool) 
     captured
 }
 
-/// One headless build and what it sealed. The hosted deploy, the plugin
-/// deploy and `moss history` all build before they act; this is the build.
-/// Each caller keeps its own session guard (the session must outlive the
-/// action, not just the build) and decides when to `require_sealed`.
 /// The build every one-shot publish route runs before its upload: build and
 /// seal the folder, then apply what the person accepted to that seal.
 pub(crate) async fn build_for_publish(
@@ -156,6 +152,10 @@ pub(crate) async fn build_for_publish(
     Ok(sealed)
 }
 
+/// One headless build and what it sealed. The hosted deploy, the plugin
+/// deploy and `moss history` all build before they act; this is the build.
+/// Each caller keeps its own session guard (the session must outlive the
+/// action, not just the build) and decides when to `require_sealed`.
 pub(crate) async fn build_and_seal(
     root: &crate::vault::paths::VaultRoot,
     host: crate::build::HostPorts,

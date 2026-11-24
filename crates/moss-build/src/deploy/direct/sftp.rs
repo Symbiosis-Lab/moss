@@ -15,6 +15,7 @@ use russh_sftp::client::{error::Error as SftpError, RawSftpSession};
 use russh_sftp::protocol::{FileAttributes, OpenFlags, StatusCode};
 
 use super::destination::{Body, Destination};
+use super::openssh::{Known, Resolved, Ssh};
 use super::server::Server;
 
 /// How long a server has to answer before it counts as not answering.
@@ -47,8 +48,21 @@ pub enum Refusal {
     /// Seen for the first time: the person decides whether to trust it.
     UnknownHostKey { host: String, fingerprint: String },
     HostKeyChanged { host: String, was: String, now: String },
+    /// This computer's `known_hosts` lists another key for the server: what
+    /// `ssh` refuses, so moss refuses it too, with no way to trust it here.
+    HostKeyDiffers { host: String, fingerprint: String },
+    HostKeyRevoked { host: String },
     RsaOnly { host: String },
     KeyRefused { host: String },
+    /// No user given, and no `ssh` on this computer to name one.
+    NoUser { host: String },
+    /// Connecting: the person's ssh keys didn't sign in, and the server
+    /// takes a password.
+    NeedsPassword { host: String },
+    PasswordRefused { host: String },
+    /// Connecting: nothing the person has signs in, and the server takes
+    /// no password, so moss's key line is added by hand.
+    KeysOnly { host: String },
     /// Signing in failed for a reason other than a refused key.
     SignInFailed { host: String, reason: String },
     /// Signed in, but the server runs no SFTP.
@@ -82,13 +96,19 @@ impl std::fmt::Display for Refusal {
                 f,
                 "{host}'s key changed (was {was}, now {now}). Trust the new key only if you rebuilt the server."
             ),
+            Refusal::HostKeyDiffers { host, fingerprint } => {
+                write!(f, "{host}'s key ({fingerprint}) differs from the one this computer's ssh knows.")
+            }
+            Refusal::HostKeyRevoked { host } => write!(f, "{host}'s key is revoked in this computer's ssh."),
             Refusal::RsaOnly { host } => write!(
                 f,
                 "{host} only offers an RSA key, which moss doesn't use. Add an ed25519 host key to the server."
             ),
-            Refusal::KeyRefused { host } => {
-                write!(f, "{host} refused the key. Add the line above to ~/.ssh/authorized_keys.")
-            }
+            Refusal::KeyRefused { host } => write!(f, "{host} refused moss's key."),
+            Refusal::NoUser { host } => write!(f, "Who signs in to {host}? Add the user, like deploy@{host}."),
+            Refusal::NeedsPassword { host } => write!(f, "{host} didn't take your ssh keys."),
+            Refusal::PasswordRefused { host } => write!(f, "{host} refused the password."),
+            Refusal::KeysOnly { host } => write!(f, "{host} didn't take your ssh keys, and takes no password."),
             Refusal::SignInFailed { host, reason } => write!(f, "Couldn't sign in to {host}: {reason}"),
             Refusal::NoSftp { host } => write!(f, "Signed in, but {host} doesn't offer SFTP."),
             Refusal::NoFolder { folder } => write!(f, "Signed in, but there is no folder {folder}."),
@@ -108,21 +128,34 @@ impl std::fmt::Display for Refusal {
 
 /// Why a server's key was not trusted. Only a plain key has a fingerprint
 /// worth trusting; without one there is nothing to pin.
-pub(super) fn untrusted(host: String, pinned: Option<&str>, seen: Option<String>) -> Refusal {
-    let Some(now) = seen else {
+pub(super) fn untrusted(host: String, pinned: Option<&str>, seen: Seen) -> Refusal {
+    let Some(now) = seen.fingerprint else {
         return Refusal::Broken { host, reason: "it showed no plain host key".into() };
     };
-    match pinned {
-        None => Refusal::UnknownHostKey { host, fingerprint: now },
-        Some(was) => Refusal::HostKeyChanged { host, was: was.to_string(), now },
+    match (seen.known, pinned) {
+        (Some(Known::Differs), _) => Refusal::HostKeyDiffers { host, fingerprint: now },
+        (Some(Known::Revoked), _) => Refusal::HostKeyRevoked { host },
+        (_, None) => Refusal::UnknownHostKey { host, fingerprint: now },
+        (_, Some(was)) => Refusal::HostKeyChanged { host, was: was.to_string(), now },
     }
 }
 
-/// Checks the server's host key against the one pinned for it, and keeps the
-/// one it saw so a refusal can name it.
-struct Trust {
+/// The key a server showed, and what this computer's ssh says of it.
+#[derive(Default, Clone)]
+pub(super) struct Seen {
+    pub fingerprint: Option<String>,
+    pub known: Option<Known>,
+}
+
+/// Trusts a server's host key when `known_hosts` lists it, or when it is the
+/// one the folder pinned and `known_hosts` does not list another. A key
+/// `known_hosts` lists differently or revokes is refused whatever the pin
+/// says, since `ssh` would refuse it.
+pub(super) struct Trust {
     pinned: Option<String>,
-    seen: Arc<Mutex<Option<String>>>,
+    ssh: Ssh,
+    resolved: Resolved,
+    seen: Arc<Mutex<Seen>>,
 }
 
 impl russh::client::Handler for Trust {
@@ -132,9 +165,15 @@ impl russh::client::Handler for Trust {
         let PublicKeyOrCertificate::PublicKey { key, .. } = key else {
             return Ok(false);
         };
-        let seen = key.fingerprint(HashAlg::Sha256).to_string();
-        let trusted = self.pinned.as_deref() == Some(seen.as_str());
-        *self.seen.lock().unwrap_or_else(|p| p.into_inner()) = Some(seen);
+        let fingerprint = key.fingerprint(HashAlg::Sha256).to_string();
+        let (ssh, resolved, shown) = (self.ssh.clone(), self.resolved.clone(), key.clone());
+        let known = tokio::task::spawn_blocking(move || ssh.known(&resolved, &shown)).await.unwrap_or(Known::New);
+        let trusted = match known {
+            Known::Listed => true,
+            Known::Differs | Known::Revoked => false,
+            Known::New => self.pinned.as_deref() == Some(fingerprint.as_str()),
+        };
+        *self.seen.lock().unwrap_or_else(|p| p.into_inner()) = Seen { fingerprint: Some(fingerprint), known: Some(known) };
         Ok(trusted)
     }
 }
@@ -154,19 +193,38 @@ pub struct SftpDestination {
     _ssh: russh::client::Handle<Trust>,
 }
 
-/// Each step of reaching a server, run in order; the first that fails is the
-/// refusal. `host_key` is the fingerprint the folder pinned, if any.
-pub async fn connect(server: &Server, host_key: Option<&str>, key: Arc<PrivateKey>) -> Result<SftpDestination, Refusal> {
-    let host = server.host.clone();
-    let tcp = reach(&host, server.port).await?;
-    let seen = Arc::new(Mutex::new(None));
-    let trust = Trust { pinned: host_key.map(str::to_string), seen: seen.clone() };
+/// A server reached and its host key trusted, before anyone signs in.
+pub(super) struct Session {
+    pub ssh: russh::client::Handle<Trust>,
+    /// The fingerprint of the host key that was trusted.
+    pub host_key: String,
+}
+
+/// `server` as this computer's `ssh` would reach it, resolved once for a
+/// whole check, connect or publish.
+pub(super) async fn resolve(ssh_config: &Ssh, server: &Server) -> Result<Resolved, Refusal> {
+    let (ssh_config, given) = (ssh_config.clone(), server.clone());
+    let broken = |reason: String| Refusal::Broken { host: server.host.clone(), reason };
+    tokio::task::spawn_blocking(move || ssh_config.resolve(&given)).await.map_err(|e| broken(e.to_string()))?.map_err(broken)
+}
+
+/// Reach the resolved server and trust its key. `host_key` is the
+/// fingerprint the folder pinned, if any.
+pub(super) async fn session(ssh_config: &Ssh, resolved: &Resolved, host_key: Option<&str>) -> Result<Session, Refusal> {
+    let host = resolved.host.clone();
+    let tcp = reach(&host, resolved.port).await?;
+    let seen = Arc::new(Mutex::new(Seen::default()));
+    let kinds = {
+        let (ssh_config, resolved) = (ssh_config.clone(), resolved.clone());
+        tokio::task::spawn_blocking(move || ssh_config.known_kinds(&resolved)).await.unwrap_or_default()
+    };
+    let trust = Trust { pinned: host_key.map(str::to_string), ssh: ssh_config.clone(), resolved: resolved.clone(), seen: seen.clone() };
     let config = russh::client::Config {
         inactivity_timeout: Some(Duration::from_secs(60)),
-        preferred: russh::Preferred { key: std::borrow::Cow::Borrowed(HOST_KEYS), ..russh::Preferred::DEFAULT },
+        preferred: russh::Preferred { key: std::borrow::Cow::Owned(host_keys(&kinds)), ..russh::Preferred::DEFAULT },
         ..Default::default()
     };
-    let mut ssh = match russh::client::connect_stream(Arc::new(config), tcp, trust).await {
+    let ssh = match russh::client::connect_stream(Arc::new(config), tcp, trust).await {
         Ok(ssh) => ssh,
         Err(russh::Error::UnknownKey) => {
             return Err(untrusted(host, host_key, seen.lock().unwrap_or_else(|p| p.into_inner()).clone()));
@@ -178,26 +236,84 @@ pub async fn connect(server: &Server, host_key: Option<&str>, key: Arc<PrivateKe
         }
         Err(e) => return Err(Refusal::Broken { host, reason: e.to_string() }),
     };
+    let host_key = seen.lock().unwrap_or_else(|p| p.into_inner()).fingerprint.clone().unwrap_or_default();
+    Ok(Session { ssh, host_key })
+}
+
+/// The user to sign in as. Without OpenSSH nothing fills it in, and a
+/// sign-in as nobody would read as a refused key.
+pub(super) fn user(resolved: &Resolved) -> Result<&str, Refusal> {
+    match resolved.user.as_str() {
+        "" => Err(Refusal::NoUser { host: resolved.host.clone() }),
+        user => Ok(user),
+    }
+}
+
+/// [`HOST_KEYS`], with the types this computer's ssh already knows the server
+/// by first, so a server with several keys shows the one that can match.
+fn host_keys(known: &[String]) -> Vec<Algorithm> {
+    let mut order: Vec<Algorithm> = HOST_KEYS.iter().filter(|a| known.iter().any(|k| k == a.as_str())).cloned().collect();
+    let rest: Vec<Algorithm> = HOST_KEYS.iter().filter(|a| !order.contains(a)).cloned().collect();
+    order.extend(rest);
+    order
+}
+
+/// Open SFTP on a signed-in session.
+pub(super) async fn open_sftp(ssh: &russh::client::Handle<Trust>, host: &str) -> Result<RawSftpSession, Refusal> {
+    let no_sftp = || Refusal::NoSftp { host: host.to_string() };
+    let channel = ssh.channel_open_session().await.map_err(|_| no_sftp())?;
+    channel.request_subsystem(true, "sftp").await.map_err(|_| no_sftp())?;
+    let sftp = RawSftpSession::new(channel.into_stream());
+    sftp.set_timeout(ANSWER_WITHIN.as_secs());
+    Ok(sftp)
+}
+
+/// Each step of reaching a server with moss's key, run in order; the first
+/// that fails is the refusal. Returns, alongside, the fingerprint of the host
+/// key trusted on the way, whatever happened after.
+pub async fn connect(
+    ssh_config: &Ssh,
+    resolved: &Resolved,
+    folder: &str,
+    host_key: Option<&str>,
+    key: Arc<PrivateKey>,
+) -> (Option<String>, Result<SftpDestination, Refusal>) {
+    let Session { mut ssh, host_key } = match session(ssh_config, resolved, host_key).await {
+        Ok(session) => session,
+        Err(refusal) => return (None, Err(refusal)),
+    };
+    (Some(host_key), open_destination(&mut ssh, resolved, folder, key).await.map(|(sftp, root)| SftpDestination {
+        sftp,
+        root,
+        inside: Mutex::new(HashSet::new()),
+        _ssh: ssh,
+    }))
+}
+
+/// Sign in with moss's key and open `folder`, or the home folder when none
+/// is given.
+async fn open_destination(
+    ssh: &mut russh::client::Handle<Trust>,
+    resolved: &Resolved,
+    folder: &str,
+    key: Arc<PrivateKey>,
+) -> Result<(RawSftpSession, String), Refusal> {
+    let host = resolved.host.clone();
     let signed_in = ssh
-        .authenticate_publickey(&server.user, PrivateKeyWithHashAlg::new(key, None))
+        .authenticate_publickey(user(resolved)?, PrivateKeyWithHashAlg::new(key, None))
         .await
         .map_err(|e| Refusal::SignInFailed { host: host.clone(), reason: e.to_string() })?;
     if !signed_in.success() {
         return Err(Refusal::KeyRefused { host });
     }
-    let no_sftp = || Refusal::NoSftp { host: host.clone() };
-    let channel = ssh.channel_open_session().await.map_err(|_| no_sftp())?;
-    channel.request_subsystem(true, "sftp").await.map_err(|_| no_sftp())?;
-    let sftp = RawSftpSession::new(channel.into_stream());
-    sftp.set_timeout(ANSWER_WITHIN.as_secs());
-    let version = sftp.init().await.map_err(|_| no_sftp())?;
+    let sftp = open_sftp(ssh, &host).await?;
+    let version = sftp.init().await.map_err(|_| Refusal::NoSftp { host: host.clone() })?;
     if !version.extensions.contains_key(POSIX_RENAME) {
         return Err(Refusal::NoAtomicRename { host });
     }
     // OpenSSH answers realpath for a path that is not there.
-    let no_folder = || Refusal::NoFolder { folder: server.folder.clone() };
-    // No folder yet: open at the home folder, and look for the web folder there.
-    let wanted = if server.folder.is_empty() { "." } else { server.folder.as_str() };
+    let no_folder = || Refusal::NoFolder { folder: folder.to_string() };
+    let wanted = if folder.is_empty() { "." } else { folder };
     let root = match sftp.realpath(wanted).await {
         Ok(name) => name.files.into_iter().next().map(|f| f.filename).unwrap_or_default(),
         Err(_) => return Err(no_folder()),
@@ -205,8 +321,7 @@ pub async fn connect(server: &Server, host_key: Option<&str>, key: Arc<PrivateKe
     if !sftp.stat(&root).await.is_ok_and(|attrs| attrs.attrs.is_dir()) {
         return Err(no_folder());
     }
-    let root = root.trim_end_matches('/').to_string();
-    Ok(SftpDestination { sftp, root, inside: Mutex::new(HashSet::new()), _ssh: ssh })
+    Ok((sftp, root.trim_end_matches('/').to_string()))
 }
 
 async fn reach(host: &str, port: u16) -> Result<tokio::net::TcpStream, Refusal> {

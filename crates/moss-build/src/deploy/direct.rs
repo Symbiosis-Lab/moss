@@ -19,11 +19,13 @@
 //!   is what the mass-removal gate judges against.
 
 pub mod check;
+pub mod connect;
 pub mod destination;
 #[cfg(test)]
 mod folder;
 pub mod plan;
 pub mod server;
+pub mod openssh;
 pub mod sftp;
 
 use std::collections::HashMap;

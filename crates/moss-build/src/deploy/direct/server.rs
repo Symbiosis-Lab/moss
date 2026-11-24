@@ -33,7 +33,12 @@ impl Server {
         let text = text.trim();
         let wrong = || format!("{text:?} isn't a server address like deploy@example.com:/var/www/html");
         let url = text.strip_prefix("sftp://");
-        let (user, rest) = url.unwrap_or(text).split_once('@').ok_or_else(wrong)?;
+        // Without a user, the ssh config names one (or the account's own).
+        let (user, rest) = match url.unwrap_or(text).split_once('@') {
+            Some(("", _)) => return Err(wrong()),
+            Some(split) => split,
+            None => ("", url.unwrap_or(text)),
+        };
         let (host, rest) = match rest.strip_prefix('[') {
             Some(bracketed) => bracketed.split_once(']').ok_or_else(wrong)?,
             None => rest.split_at(rest.find([':', '/']).unwrap_or(rest.len())),
@@ -49,12 +54,20 @@ impl Server {
         } else if rest.is_empty() {
             (22, String::new())
         } else {
-            (22, rest.strip_prefix(':').ok_or_else(wrong)?.to_string())
+            let after = rest.strip_prefix(':').ok_or_else(wrong)?;
+            // `host:2222` and `host:2222/var/www` are how people write a port;
+            // as scp paths they would be home-relative, which is refused below.
+            let (head, tail) = after.split_once('/').map_or((after, None), |(head, tail)| (head, Some(tail)));
+            match head.parse::<u16>() {
+                Ok(port) if head.bytes().all(|b| b.is_ascii_digit()) => (port, tail.map(|t| format!("/{t}")).unwrap_or_default()),
+                _ => (22, after.to_string()),
+            }
         };
         if !folder.is_empty() && !folder.starts_with('/') {
             return Err(format!("{text:?} names a folder relative to the home folder; give its full path, like /home/deploy/www"));
         }
-        if user.is_empty() || host.is_empty() || user.contains(['/', ':']) {
+        // A leading dash would reach `ssh` as an option.
+        if port == 0 || host.is_empty() || host.starts_with('-') || user.starts_with('-') || user.contains(['/', ':']) {
             return Err(wrong());
         }
         Ok(Server { user: user.into(), host: host.into(), port, folder })
@@ -63,7 +76,8 @@ impl Server {
     /// The one shape the config stores.
     pub fn to_url(&self) -> String {
         let port = if self.port == 22 { String::new() } else { format!(":{}", self.port) };
-        format!("sftp://{}@{}{port}{}", self.user, self.authority(), self.folder)
+        let user = if self.user.is_empty() { String::new() } else { format!("{}@", self.user) };
+        format!("sftp://{user}{}{port}{}", self.authority(), self.folder)
     }
 
     /// Where the site is served when the folder names no address of its own.
@@ -111,6 +125,17 @@ pub fn save_server(folder: &Path, server: &Server) -> Result<(), String> {
     })
 }
 
+/// The server as a sign-in reached it, in place of the name it was given,
+/// so the folder publishes the same from a computer without this one's ssh
+/// config. The same server, so its pinned key stays.
+pub fn save_reached(folder: &Path, server: &Server) -> Result<(), String> {
+    edit_config(folder, |root| {
+        let table = subtable(subtable(root, "deploy")?, "server")?;
+        table.insert("to".into(), Value::String(server.to_url()));
+        Ok(())
+    })
+}
+
 /// Pin the server's host key.
 pub fn save_host_key(folder: &Path, fingerprint: &str) -> Result<(), String> {
     edit_config(folder, |root| {
@@ -148,6 +173,7 @@ pub struct Keys {
 }
 
 const KEY: &str = "key";
+pub(super) const KEY_OPTIONS: &str = "no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding";
 
 impl Keys {
     pub fn on_this_computer() -> Result<Keys, String> {
@@ -185,9 +211,11 @@ impl Keys {
     }
 
     /// The line to add to the server's `authorized_keys`, labelled `label`.
+    /// Its options stop the key opening a terminal or forwarding anything if
+    /// it leaks; every OpenSSH accepts them. It can still run a command.
     pub fn public_line(&self, publisher: &str, label: &str) -> Result<String, String> {
         let mut public: PublicKey = self.key_or_new(publisher)?.public_key().clone();
         public.set_comment(label);
-        public.to_openssh().map_err(|e| e.to_string())
+        Ok(format!("{KEY_OPTIONS} {}", public.to_openssh().map_err(|e| e.to_string())?))
     }
 }

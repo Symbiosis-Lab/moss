@@ -136,6 +136,9 @@ pub struct DeployFlags {
     /// `--trust <fingerprint>`, with `--check`: trust the server's host key,
     /// as the first check showed it.
     pub trust: Option<String>,
+    /// `--connect`: sign in once with your own ssh key or agent and add
+    /// moss's key for this folder to the server, then check as `--check`.
+    pub connect: bool,
     /// `--take-over`: publish into a server folder another site published to.
     /// Its files stay; only this site's are ever removed after.
     pub take_over: bool,
@@ -180,9 +183,10 @@ impl DeployArgs {
                 "--accept-stale-content" => flags.accept_stale_content = true,
                 "--dry-run" => flags.dry_run = true,
                 "--check" => flags.check = true,
+                "--connect" => flags.connect = true,
                 "--take-over" => flags.take_over = true,
-                a if a.starts_with("--to=") => flags.to = Some(a["--to=".len()..].to_string()),
-                a if a.starts_with("--trust=") => flags.trust = Some(a["--trust=".len()..].to_string()),
+                a if a.starts_with("--to=") => flags.to = a.strip_prefix("--to=").map(str::to_string),
+                a if a.starts_with("--trust=") => flags.trust = a.strip_prefix("--trust=").map(str::to_string),
                 "--to" | "--trust" => match args.next() {
                     Some(value) if arg == "--to" => flags.to = Some(value.clone()),
                     Some(value) => flags.trust = Some(value.clone()),
@@ -207,8 +211,11 @@ impl DeployArgs {
         if let Some(address) = &flags.email {
             crate::identity::verify_email::validate_email(address)?;
         }
-        if flags.json && !flags.dry_run && !flags.check {
-            return Err("error: --json goes with --dry-run or --check; a deploy itself prints the published address".to_string());
+        if flags.connect && (flags.check || flags.trust.is_some() || flags.take_over || flags.dry_run) {
+            return Err("error: --connect runs the check itself; it goes alone, or with --to".into());
+        }
+        if flags.json && !flags.dry_run && !flags.check && !flags.connect {
+            return Err("error: --json goes with --dry-run, --check or --connect; a deploy itself prints the published address".to_string());
         }
         if flags.dry_run && flags.to.is_some() {
             return Err("error: --dry-run doesn't cover your own server yet; --check says whether moss can publish there".into());
@@ -379,8 +386,8 @@ async fn dispatch(
         }
         return server_route(folder, host_ports, plugins, flags, sink).await;
     }
-    if flags.check || flags.take_over {
-        return Err("error: --check and --take-over are for a folder that publishes to your own server; name it with --to".into());
+    if flags.check || flags.connect || flags.take_over {
+        return Err("error: --check, --connect and --take-over are for a folder that publishes to your own server; name it with --to".into());
     }
     // Before the route's own send: a dry run is the same build with
     // everything after the gate left out, so it never reaches the match.
@@ -494,8 +501,11 @@ async fn server_route(
     flags: &DeployFlags,
     sink: &Arc<dyn DeploySink>,
 ) -> Result<DeployReport, String> {
-    use crate::deploy::direct::{check, server};
+    use crate::deploy::direct::{check, connect, server};
     let keys = server::Keys::on_this_computer()?;
+    if flags.connect {
+        return Ok(DeployReport::Checked(connect::connect(folder, &keys, None).await?));
+    }
     if flags.check {
         return Ok(DeployReport::Checked(check::check(folder, &keys, flags.trust.as_deref()).await?));
     }
@@ -515,6 +525,14 @@ fn check_lines(checked: &crate::deploy::direct::check::Checked, folder: &str) ->
     lines.extend(checked.steps.iter().map(|s| format!("{} {}", if s.passed { "✓" } else { "✗" }, s.text)));
     if let Some(fingerprint) = &checked.trust {
         lines.push(format!("To trust it: moss deploy {folder} --check --trust {fingerprint}"));
+    }
+    use crate::deploy::direct::sftp::Refusal;
+    match checked.steps.last().and_then(|s| s.refusal.as_ref()) {
+        Some(Refusal::KeyRefused { .. }) => lines.push(format!("To add it with your own ssh key: moss deploy {folder} --connect")),
+        Some(Refusal::NeedsPassword { .. } | Refusal::PasswordRefused { .. } | Refusal::KeysOnly { .. }) => {
+            lines.push("Add the line above to ~/.ssh/authorized_keys on the server.".into())
+        }
+        _ => {}
     }
     lines.join("\n")
 }
