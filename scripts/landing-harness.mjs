@@ -7,6 +7,7 @@
 // deployed site with no code change. Each script still launches and closes
 // its own engines, the same per-engine loop it had before — only the
 // boilerplate around it moved here.
+import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { readFile, stat } from 'node:fs/promises';
@@ -14,7 +15,6 @@ import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
-export const DEFAULT_BUILD_DIR = resolve(HERE, '..', 'site', '.moss', 'build.nosync', 'current');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
@@ -90,12 +90,20 @@ async function serveDirectory(root) {
 // still wins when given (so a script runs unchanged against a deployed
 // site), and its absence now serves `root` (default: the compiled build)
 // from a free local port instead of requiring a separately started server.
-export async function resolveBaseURL(argURL, { root = DEFAULT_BUILD_DIR } = {}) {
+// The build output lives in the computer's cache, not in the site folder, so
+// the only way to find the compiled landing is to build it and ask where it went.
+// MOSS_BIN names the moss to build with; the default is the one on PATH.
+export function buildLanding() {
+  const out = execFileSync(process.env.MOSS_BIN || 'moss', ['build', join(HERE, '..', 'site'), '--no-plugins', '--json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], maxBuffer: 1 << 26 });
+  return JSON.parse(out.trim().split('\n').pop()).output;
+}
+
+export async function resolveBaseURL(argURL, { root } = {}) {
   if (argURL) {
     const href = new URL(argURL).href;
     return { baseURL: href.endsWith('/') ? href : href + '/', close: async () => {} };
   }
-  const { server, baseURL } = await serveDirectory(root);
+  const { server, baseURL } = await serveDirectory(root ?? buildLanding());
   return { baseURL, close: () => new Promise((done) => server.close(done)) };
 }
 

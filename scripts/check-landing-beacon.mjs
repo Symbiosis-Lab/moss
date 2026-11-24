@@ -7,9 +7,9 @@
 import assert from 'node:assert/strict';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
-import { DEFAULT_BUILD_DIR, loadPlaywright } from './landing-harness.mjs';
+import { buildLanding, loadPlaywright } from './landing-harness.mjs';
 
-const ROOT = resolve(DEFAULT_BUILD_DIR);
+const ROOT = resolve(buildLanding());
 const ORIGIN = 'https://mosspub.com';
 const BEACON = 'https://api.mosspub.com/api/sites/landing/beacon';
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp' };
