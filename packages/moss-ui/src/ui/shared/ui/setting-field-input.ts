@@ -53,6 +53,8 @@ export interface SettingField {
   scale?: number | null;
   /** On a `number`: the word drawn after the input. */
   unit?: string | null;
+  /** On an `acct`: sign-in fills it, so the form does not draw it. */
+  from?: "account" | null;
 }
 
 /**

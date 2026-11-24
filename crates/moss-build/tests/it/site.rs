@@ -175,7 +175,7 @@ impl Site {
         site
     }
 
-    fn unbuilt(lang: &str, extra_config: &str, files: &[(&str, &str)]) -> Site {
+    pub fn unbuilt(lang: &str, extra_config: &str, files: &[(&str, &str)]) -> Site {
         let root = std::env::temp_dir().join(format!("moss_inline_site_{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let site = Site { root };

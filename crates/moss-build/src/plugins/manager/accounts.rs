@@ -13,7 +13,9 @@ use serde_json::Value;
 use std::path::Path;
 
 /// An account on a channel, as moss records it: `id` is the provider's stable
-/// identifier, opaque to moss; `name` is only shown.
+/// identifier, opaque to moss; `name` is shown, and where a channel's `acct`
+/// setting is filled by sign-in it is also the address an identity proof
+/// writes, so it must be `@name@host` on `host`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct AccountBinding {
     pub id: String,
@@ -123,7 +125,9 @@ fn slot(project_path: &str, plugin: &str) -> Option<Slot> {
     (!binding.id.trim().is_empty()).then_some(Slot::Bound(binding))
 }
 
-fn recorded(project_path: &str, plugin: &str) -> Option<AccountBinding> {
+/// The folder's typed record for `plugin`: a sign out reads as none, and the
+/// legacy `boundUserName` is not consulted.
+pub(crate) fn recorded(project_path: &str, plugin: &str) -> Option<AccountBinding> {
     match slot(project_path, plugin)? {
         Slot::Bound(binding) => Some(binding),
         Slot::SignedOut => None,

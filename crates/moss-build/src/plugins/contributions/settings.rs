@@ -104,6 +104,15 @@ pub struct FieldOption {
     pub description: Option<String>,
 }
 
+/// What fills a setting without the person typing it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "lowercase")]
+#[specta(rename = "SettingFieldSource")]
+pub enum FieldSource {
+    /// The account the folder is signed in to on this plugin's channel.
+    Account,
+}
+
 /// One field moss draws — in the settings form, and in a blocker's form. The
 /// vocabulary is Home Assistant's and JSON Schema's almost verbatim, so a
 /// plugin author arrives already knowing it.
@@ -221,6 +230,11 @@ pub struct Field {
     /// On a `number`: the word drawn after the input.
     #[serde(default)]
     pub unit: Option<String>,
+
+    /// On an `acct`: sign-in fills it, so the form does not draw it, and an
+    /// identity proof reads the signed-in account while the table has no value.
+    #[serde(default)]
+    pub from: Option<FieldSource>,
 }
 
 /// An entry of a `map` or a value of an `array` has no key of its own, so a
@@ -305,6 +319,7 @@ impl Field {
             add_label: None,
             scale: None,
             unit: None,
+            from: None,
         }
     }
 }
@@ -441,6 +456,9 @@ fn shared_rules(fields: &[Field], index: usize, list: &str) -> Result<(), String
     let key = &field.key;
     if key.is_empty() {
         return Err(format!("a field in {list} has no `key`"));
+    }
+    if field.from.is_some() && field.field_type != FieldType::Acct {
+        return Err(format!("field `{key}`: `from` fills an `acct` setting only"));
     }
     if fields[..index].iter().any(|earlier| earlier.key == *key) {
         return Err(format!(

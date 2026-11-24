@@ -817,6 +817,7 @@ impl PluginManifest {
                 add_label: None,
                 scale: None,
                 unit: None,
+                from: None,
             });
         }
         fields

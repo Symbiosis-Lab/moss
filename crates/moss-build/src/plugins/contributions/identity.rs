@@ -13,7 +13,7 @@ use crate::build::page::meta::escape_html_attr;
 use crate::config::ConfigFile;
 use crate::plugins::types::Plugin;
 
-use super::settings::{Field, FieldType};
+use super::settings::{Field, FieldSource, FieldType};
 
 /// The `<link rel>` values a proof may write into every page's head. Any other
 /// rel (`canonical`, `stylesheet`, `manifest`) would let a plugin reshape every
@@ -139,7 +139,10 @@ pub fn validate(plugin: &str, proofs: &[Proof], declared: &[Field]) -> Result<()
 /// whose settings are not all set is the person not having set that network
 /// up, and is skipped without a word; a value that cannot be written is
 /// skipped with a sentence.
-pub fn supplied(plugins: &[Plugin], config: &ConfigFile) -> (Vec<Supplied>, Vec<String>) {
+///
+/// An `acct` setting the manifest marks `from: "account"` reads the folder's
+/// signed-in account while its table has no value of its own.
+pub fn supplied(plugins: &[Plugin], config: &ConfigFile, project_path: &str) -> (Vec<Supplied>, Vec<String>) {
     let mut out = Vec::new();
     let mut problems = Vec::new();
     let mut sorted: Vec<&Plugin> = plugins.iter().collect();
@@ -147,19 +150,32 @@ pub fn supplied(plugins: &[Plugin], config: &ConfigFile) -> (Vec<Supplied>, Vec<
     for plugin in sorted {
         let Some(proofs) = plugin.manifest.contributes.as_ref().and_then(|c| c.identity.as_ref()) else { continue };
         let name = &plugin.manifest.name;
-        let Some(table) = config.section(&["services", name]) else { continue };
+        let table = config.section(&["services", name]);
         let declared: &[Field] = plugin.manifest.contributes.as_ref().and_then(|c| c.site_settings.as_ref()).map_or(&[], |s| &s.settings);
         let mut bad = Vec::new();
         let mut get = |key: &Key| -> Option<String> {
-            let raw = table.get(&key.name)?.as_str()?.trim();
-            if raw.is_empty() {
-                return None;
-            }
+            let field = declared.iter().find(|f| f.key == key.name);
+            let written = table.and_then(|t| t.get(&key.name)).and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty());
+            let signed_in;
+            let raw = match written {
+                Some(raw) => raw,
+                None if field.is_some_and(|f| f.from == Some(FieldSource::Account)) => {
+                    signed_in = match signed_in_acct(project_path, name)? {
+                        Some(acct) => acct,
+                        None => {
+                            bad.push(key.name.clone());
+                            return None;
+                        }
+                    };
+                    &signed_in
+                }
+                None => return None,
+            };
             if raw.len() > MAX_VALUE || raw.chars().any(char::is_control) {
                 bad.push(key.name.clone());
                 return None;
             }
-            let pattern = declared.iter().find(|f| f.key == key.name).and_then(|f| f.pattern.as_deref());
+            let pattern = field.and_then(|f| f.pattern.as_deref());
             if super::settings::pattern_refuses(pattern, raw) {
                 bad.push(key.name.clone());
                 return None;
@@ -192,6 +208,14 @@ pub fn supplied(plugins: &[Plugin], config: &ConfigFile) -> (Vec<Supplied>, Vec<
         problems.extend(bad.into_iter().map(|key| format!("[services.{name}] `{key}` cannot be written into the site's identity proof, so that proof is left out")));
     }
     (out, problems)
+}
+
+/// The folder's signed-in account as `@name@host`. Outer `None`: no account, or
+/// signed out. Inner `None`: the account's name is not an address on its own server.
+fn signed_in_acct(project_path: &str, plugin: &str) -> Option<Option<String>> {
+    let binding = crate::plugins::manager::accounts::recorded(project_path, plugin)?;
+    let name = binding.name?;
+    Some(split_acct(&name).filter(|(_, host)| Some(*host) == binding.host.as_deref()).map(|(user, host)| format!("@{user}@{host}")))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -385,7 +409,7 @@ mod tests {
 
     fn supplied_with(did: &str) -> (Vec<super::Supplied>, Vec<String>) {
         let config = crate::config::ConfigFile::parse(&format!("[services.net]\ndid = \"{did}\"\n")).unwrap();
-        super::supplied(&[did_plugin()], &config)
+        super::supplied(&[did_plugin()], &config, "")
     }
 
     #[test]

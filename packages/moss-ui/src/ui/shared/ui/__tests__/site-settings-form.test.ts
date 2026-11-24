@@ -102,6 +102,12 @@ describe("site settings form", () => {
     document.body.replaceChildren();
   });
 
+  it("does not draw a setting sign-in fills", () => {
+    draw({}, [{ key: "account", type: "acct", label: "Account", from: "account" }, { key: "name", type: "string", label: "Name" }]);
+    expect(container.querySelector('[data-field="account"]')).toBeNull();
+    expect(container.querySelector('[data-field="name"]')).not.toBeNull();
+  });
+
   it("shows an amount kept in cents in its units and writes it back in cents, at its own path", async () => {
     draw({ services: { walk: { name: "Walk", per_hour: 12000, hours: { min: 2, max: 6 } } } });
     const rate = input(entry("walk"), "per_hour");

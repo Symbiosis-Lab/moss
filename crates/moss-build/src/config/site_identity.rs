@@ -32,7 +32,7 @@ pub struct SiteIdentity {
 impl SiteIdentity {
     /// Read `[site].me`, `[site].atproto_did` and every plugin's proofs,
     /// warning about each value it drops and each path two suppliers claim.
-    pub fn from_config(config: Option<&ConfigFile>, plugins: &[Plugin]) -> Self {
+    pub fn from_config(config: Option<&ConfigFile>, plugins: &[Plugin], project_path: &Path) -> Self {
         let Some(config) = config else { return Self::default() };
         let mut claims: Vec<Supplied> = Vec::new();
         for address in config.site_strings("me") {
@@ -49,7 +49,7 @@ impl SiteIdentity {
                 log_warn_problem!("[site].atproto_did: \"{did}\" does not start with did:plc: or did:web:, so .well-known/atproto-did is not written");
             }
         }
-        let (from_plugins, problems) = identity::supplied(plugins, config);
+        let (from_plugins, problems) = identity::supplied(plugins, config, &project_path.to_string_lossy());
         for sentence in problems {
             log_warn_problem!(target: "plugin", "{sentence}");
         }

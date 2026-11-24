@@ -194,6 +194,7 @@ function drawTable(host: HTMLElement, fields: SettingField[], table: SettingTabl
 
   let previousGroup: string | null = null;
   for (const field of fields) {
+    if (field.from) continue;
     const els: HTMLElement[] = [];
     const group = field.group || null;
     // Each element goes in once, in drawing order: an object draws its rows after its own heading.
