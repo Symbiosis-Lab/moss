@@ -915,6 +915,10 @@ mod account_tests;
 mod retry_tests;
 
 #[cfg(test)]
+#[path = "send_state_tests.rs"]
+mod state_tests;
+
+#[cfg(test)]
 #[path = "send_turn_tests.rs"]
 mod turn_tests;
 

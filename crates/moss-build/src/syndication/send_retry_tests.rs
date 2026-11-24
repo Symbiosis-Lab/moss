@@ -3,13 +3,13 @@
 use super::*;
 use crate::syndication::record::{Handoff, RemoteRef, Stays};
 
-const SOURCE: &str = "a.md";
-const UID: &str = "aaaa0001";
-const URL: &str = "https://social.example.net/1";
+pub(super) const SOURCE: &str = "a.md";
+pub(super) const UID: &str = "aaaa0001";
+pub(super) const URL: &str = "https://social.example.net/1";
 const DRAFT: &str = "{ success: true, copy: { handoff: { text: '', open_url: 'https://social.example.net/draft', id: 'd-2' } } }";
-const NEVER: &str = "async function () { throw new Error('must not be called'); }";
+pub(super) const NEVER: &str = "async function () { throw new Error('must not be called'); }";
 
-fn channel(root: &Path, ops: &str) {
+pub(super) fn channel(root: &Path, ops: &str) {
     let js = format!("{{ {ops} }}");
     if root.join(".moss/plugins/social").exists() {
         std::fs::write(root.join(".moss/plugins/social/main.bundle.js"), format!("window.SOCIALPlugin = {js};")).unwrap();
@@ -19,7 +19,7 @@ fn channel(root: &Path, ops: &str) {
 }
 
 /// A site with one post and a record of it in `state`, shaped by `tweak`.
-fn site(root: &Path, state: State, tweak: impl FnOnce(&mut CopyRecord)) -> (Records, ArticleMap) {
+pub(super) fn site(root: &Path, state: State, tweak: impl FnOnce(&mut CopyRecord)) -> (Records, ArticleMap) {
     std::fs::write(root.join(SOURCE), "---\ntitle: A\n---\nBody.\n").unwrap();
     let records = Records::in_vault(&crate::moss_paths::MossPaths::new(root));
     let mut r = CopyRecord::due(UID, "social", SOURCE, "a/");
@@ -35,7 +35,7 @@ fn site(root: &Path, state: State, tweak: impl FnOnce(&mut CopyRecord)) -> (Reco
     (records, articles)
 }
 
-fn posted(r: &mut CopyRecord) {
+pub(super) fn posted(r: &mut CopyRecord) {
     r.remote = Some(RemoteRef { id: "1".into(), url: URL.into() });
     r.update_due = true;
 }
@@ -45,7 +45,7 @@ fn drafted(r: &mut CopyRecord) {
 }
 
 /// A run; `press` is the retry of this one post's copy on the channel.
-async fn run(root: &Path, articles: &ArticleMap, retry: bool, only_source: Option<&str>) -> Vec<Outcome> {
+pub(super) async fn run(root: &Path, articles: &ArticleMap, retry: bool, only_source: Option<&str>) -> Vec<Outcome> {
     let manager = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()).get_or_create(&root.to_string_lossy()).unwrap();
     let emit = |_: &Sent| {};
     let channels = ["social".to_string()];
@@ -53,11 +53,11 @@ async fn run(root: &Path, articles: &ArticleMap, retry: bool, only_source: Optio
     send_due(root, &manager, articles, &opts).await.into_iter().map(|s| s.outcome).filter(|o| *o != Outcome::Sending).collect()
 }
 
-fn refusal(cause: &str) -> String {
+pub(super) fn refusal(cause: &str) -> String {
     format!("update_copy: async function () {{ return {{ success: false, copy: {{ refused: {{ cause: '{cause}' }} }} }}; }}")
 }
 
-fn publishes(id: &str) -> String {
+pub(super) fn publishes(id: &str) -> String {
     format!("publish_copy: async function () {{ return {{ success: true, copy: {{ id: '{id}', url: 'https://social.example.net/{id}' }} }}; }}")
 }
 
