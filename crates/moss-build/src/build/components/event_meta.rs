@@ -26,7 +26,8 @@ pub enum UpcomingLabel {
 
 /// The event's meta span, or `None` when the page is not an event.
 /// `calendar_href` is the event file's address, from the calendar plan; the
-/// "Add to calendar" link goes after the tickets and online links. `label`
+/// "Add to calendar" link goes after the tickets and online links. The caller
+/// passes none for a past event, which shows no Tickets either. `label`
 /// says whether the "Upcoming" label follows the time while the event has not
 /// ended.
 pub fn render(
@@ -68,7 +69,7 @@ pub fn render(
             html_escape(&doc.location.join(", ")),
         ));
     }
-    if let Some(link) = ev.tickets.as_deref().and_then(|u| tickets_link(u, lang, None)) {
+    if let Some(link) = crate::build::folder_embed::upcoming::open_tickets(ev, now).and_then(|u| tickets_link(u, lang, None)) {
         html.push_str(&link);
     }
     if let Some(link) = ev.online.as_deref().and_then(|u| online_link(u, lang, None)) {

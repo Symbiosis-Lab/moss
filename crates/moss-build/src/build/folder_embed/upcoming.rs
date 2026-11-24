@@ -47,6 +47,13 @@ pub(crate) fn when_of(ev: &crate::build::types::EventFields, now: chrono::NaiveD
     if span_is_upcoming(ev.start, ev.end, now) { "upcoming" } else { "past" }
 }
 
+/// The event's `tickets:` address while it has not ended. A past event sells
+/// nothing, so every page, card and row that draws a Tickets link asks here.
+/// `online:` is not gated: after an event it is often the recording.
+pub(crate) fn open_tickets(ev: &crate::build::types::EventFields, now: chrono::NaiveDateTime) -> Option<&str> {
+    ev.tickets.as_deref().filter(|_| span_is_upcoming(ev.start, ev.end, now))
+}
+
 /// Whether `doc` passes a `when:` filter: `past` keeps whatever is not
 /// upcoming (articles included), `upcoming` keeps only events that have not
 /// ended. An event still waiting for its date (a `start` with no usable

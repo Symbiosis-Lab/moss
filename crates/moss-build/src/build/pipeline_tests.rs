@@ -8277,9 +8277,9 @@ fn cancelled_and_postponed_events_carry_the_matching_status() {
 #[test]
 fn a_folder_of_events_publishes_a_subscribable_calendar_and_links_it() {
     let (dir, _c) = event_site(&[
-        ("B.md", "title: Second\nuid: bbbb0002\nstart: 2026-11-08 19:00\ntimezone: Europe/London\n"),
-        ("A.md", "title: First\nuid: aaaa0001\nstart: 2026-11-01 19:00\ntimezone: Europe/London\n"),
-        ("C.md", "title: Third\nuid: cccc0003\nstart: 2026-11-15\n"),
+        ("B.md", "title: Second\nuid: bbbb0002\nstart: 2096-11-08 19:00\ntimezone: Europe/London\n"),
+        ("A.md", "title: First\nuid: aaaa0001\nstart: 2096-11-01 19:00\ntimezone: Europe/London\n"),
+        ("C.md", "title: Third\nuid: cccc0003\nstart: 2096-11-15\n"),
         ("Notes.md", "title: Not an event\nuid: nnnn0004\n"),
     ]);
     let text = staged(&dir, "events/calendar.ics");
@@ -8305,13 +8305,26 @@ fn a_folder_of_events_publishes_a_subscribable_calendar_and_links_it() {
 #[test]
 fn an_event_on_a_page_shell_keeps_its_calendar_link_once_at_the_end_of_the_body() {
     // `nav: true` pins a page to the Page shell, which renders no meta line.
-    let (dir, _c) = event_site(&[("Pinned.md", "title: Pinned\nuid: pppp0001\nstart: 2026-11-01 19:00\ntimezone: Europe/London\nnav: true\n")]);
+    let (dir, _c) = event_site(&[("Pinned.md", "title: Pinned\nuid: pppp0001\nstart: 2096-11-01 19:00\ntimezone: Europe/London\nnav: true\n")]);
     let page = staged(&dir, "events/pinned/index.html");
     assert!(!page.contains("moss-event-meta"), "a Page-shell event renders no meta line: {page}");
     assert_eq!(page.matches(">Add to calendar</a>").count(), 1, "{page}");
     let link = page.find(r#"<a class="moss-calendar-link" href="/events/pinned/event.ics" type="text/calendar">Add to calendar</a>"#);
     assert!(link.is_some(), "{page}");
     assert!(page.find("Body.").unwrap() < link.unwrap(), "the link closes the body, after the prose: {page}");
+}
+
+#[test]
+fn a_past_event_offers_no_calendar_link_with_or_without_a_meta_line() {
+    let (dir, _c) = event_site(&[
+        ("Pinned.md", "title: Pinned\nuid: pppp0001\nstart: 2020-11-01 19:00\ntimezone: Europe/London\nnav: true\n"),
+        ("Talk.md", "title: Talk\nuid: tttt0001\nstart: 2020-11-01 19:00\ntimezone: Europe/London\n"),
+    ]);
+    for (rel, shell) in [("events/pinned/index.html", "Page"), ("events/talk/index.html", "article")] {
+        let page = staged(&dir, rel);
+        assert!(page.contains("Body."), "{page}");
+        assert!(!page.contains(">Add to calendar</a>"), "a past {shell}-shell event: {page}");
+    }
 }
 
 fn staged_exists(test_dir: &std::path::Path, rel: &str) -> bool {

@@ -2436,7 +2436,7 @@ fn event_page_shows_event_facts_in_the_meta_line() {
     let concert = page("events/concert");
     let line = date_line(&concert);
     assert!(
-        line.contains(r#"<time class="moss-event-time" datetime="2026-11-01T14:00"><span class="moss-when-weekday">Sunday</span>, <span class="moss-when-month">November</span> <span class="moss-when-day">1</span>, <span class="moss-when-year">2026</span><span class="moss-when-sep">, </span><span class="moss-when-time">2:00–4:00 PM</span></time>"#),
+        line.contains(r#"<time class="moss-event-time" datetime="2054-11-01T14:00"><span class="moss-when-weekday">Sunday</span>, <span class="moss-when-month">November</span> <span class="moss-when-day">1</span>, <span class="moss-when-year">2054</span><span class="moss-when-sep">, </span><span class="moss-when-time">2:00–4:00 PM</span></time>"#),
         "{line}"
     );
     assert!(line.contains(r#"<span class="moss-event-place">Town Hall</span>"#), "{line}");

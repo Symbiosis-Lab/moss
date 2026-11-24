@@ -767,6 +767,26 @@ fn event_row_with_tickets_links_title_and_carries_its_own_tickets_link() {
 }
 
 #[test]
+fn a_past_event_card_carries_no_tickets_link() {
+    let d = vec![ParsedDocument {
+        event: Some(crate::build::types::EventFields {
+            start: moss_core::event::EventTime::parse("2026-11-21").unwrap(),
+            end: None,
+            when: moss_core::event::EventTime::parse("2026-11-21").unwrap().sort_key(),
+            timezone: None,
+            status: None,
+            tickets: Some("https://example.test/tickets".into()),
+            online: None,
+        }),
+        ..doc("a/index.html", "A")
+    }];
+    let at = |s: &str| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M").unwrap();
+    let props_at = |now| props_for_document(&d[0], &d, "", &HashMap::new(), None, now, None);
+    assert!(props_at(at("2026-11-21 23:59")).tickets.is_some());
+    assert_eq!(props_at(at("2026-11-22 00:00")).tickets, None);
+}
+
+#[test]
 fn event_row_without_tickets_keeps_its_whole_row_anchor() {
     let props = event_row_props(None);
     let html = render_child(&props, Language::En, None);

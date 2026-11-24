@@ -90,6 +90,23 @@ fn tickets_and_online_links_each_carry_their_own_class() {
 }
 
 #[test]
+fn a_past_event_drops_tickets_and_keeps_online() {
+    let mut d = doc("2026-11-01 14:00", Some("2026-11-01 16:00"));
+    d.event.as_mut().unwrap().tickets = Some("https://example.test/tickets".into());
+    d.event.as_mut().unwrap().online = Some("https://example.test/recording".into());
+    let at = |s: &str| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M").unwrap();
+    let meta = |now| render(&d, Language::En, false, Some("/e.ics"), UpcomingLabel::Shown, now).unwrap();
+
+    let before = meta(at("2026-11-01 15:59"));
+    assert!(before.contains("moss-event-tickets") && before.contains("moss-event-calendar"), "{before}");
+
+    let after = meta(at("2026-11-01 16:00"));
+    assert!(after.contains(r#"data-when="past""#), "{after}");
+    assert!(!after.contains("moss-event-tickets"), "{after}");
+    assert!(after.contains("moss-event-online"), "{after}");
+}
+
+#[test]
 fn an_event_page_prints_its_place_only_when_no_place_line_names_it() {
     let meta = |d: &ParsedDocument| render(d, Language::En, false, None, UpcomingLabel::Hidden, chrono::NaiveDateTime::default()).unwrap();
     let mut d = doc("2026-11-01", None);

@@ -1201,9 +1201,9 @@ pub(super) fn render_page<'d>(
     // legacy "above the body" position is no longer used.
     // An event page shows its event facts here instead of the posted date.
     // Its "Add to calendar" link goes in this meta line when the page has one,
-    // and closes the body otherwise (a Page-shell event has no meta line). This
-    // is the one place that decides which spot gets the link.
-    let event_calendar_href = doc.and_then(|d| context.shared.calendar.event_href(d));
+    // and closes the body otherwise (a Page-shell event has no meta line). Only
+    // here is it decided which spot gets the link, and that a past event has none.
+    let event_calendar_href = doc.filter(|d| d.event.as_ref().is_some_and(|ev| crate::build::folder_embed::upcoming::span_is_upcoming(ev.start, ev.end, now))).and_then(|d| context.shared.calendar.event_href(d));
     let event_meta_html = doc
         .filter(|_| is_article_page)
         .and_then(|d| components::event_meta::render(d, d.lang, emit_source_lines, event_calendar_href.as_deref(), components::event_meta::UpcomingLabel::Hidden, now));

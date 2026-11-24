@@ -636,7 +636,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         }),
         when,
         credits: doc.card_extras.clone(),
-        tickets: doc.event.as_ref().and_then(|e| e.tickets.clone()),
+        tickets: doc.event.as_ref().and_then(|e| crate::build::folder_embed::upcoming::open_tickets(e, now)).map(str::to_string),
         online: doc.event.as_ref().and_then(|e| e.online.clone()),
         section_color: doc.section.clone(),
         source_file: doc.source_path.clone(),
