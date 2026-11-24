@@ -1004,6 +1004,9 @@ const EN = {
   'publish_receipt.published_to': 'Published to {host}',    // {host} placeholder
   'publish_receipt.first_publish_note': 'Anyone with this address can read it.',
   'publish_receipt.row_uploaded': 'Uploaded',
+  'publish_receipt.row_pictures_gone': 'Pictures from other sites that no longer load',
+  'publish_receipt.pictures_gone_one': '1 picture',
+  'publish_receipt.pictures_gone_many': '{n} pictures', // {n} placeholder
   'publish_receipt.uploaded_summary': '{n} files uploaded',         // {n} placeholder
   'publish_receipt.uploaded_summary_removed': '{n} files uploaded, {m} removed', // {n}, {m} placeholders
   'publish_receipt.uploaded_summary_zero': 'Nothing new — nothing else changed',    // no placeholder: files_uploaded is always 0 here, and the receipt never shows a bare zero
@@ -2860,6 +2863,9 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'publish_receipt.published_to': 'Veröffentlicht auf {host}',
     'publish_receipt.first_publish_note': 'Jeder mit dieser Adresse kann sie lesen.',
     'publish_receipt.row_uploaded': 'Hochgeladen',
+    'publish_receipt.row_pictures_gone': 'Bilder von anderen Websites, die nicht mehr laden',
+    'publish_receipt.pictures_gone_one': '1 Bild',
+    'publish_receipt.pictures_gone_many': '{n} Bilder', // {n} placeholder
     'publish_receipt.uploaded_summary': '{n} Dateien hochgeladen',
     'publish_receipt.uploaded_summary_removed': '{n} Dateien hochgeladen, {m} entfernt',
     'publish_receipt.uploaded_summary_zero': 'Nichts Neues — sonst hat sich nichts geändert',
@@ -4600,6 +4606,9 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'publish_receipt.published_to': '已发布到 {host}',
     'publish_receipt.first_publish_note': '任何拥有此地址的人都能看到它。',
     'publish_receipt.row_uploaded': '已上传',
+    'publish_receipt.row_pictures_gone': '来自其他网站、已无法加载的图片',
+    'publish_receipt.pictures_gone_one': '1 张图片',
+    'publish_receipt.pictures_gone_many': '{n} 张图片', // {n} placeholder
     'publish_receipt.uploaded_summary': '已上传 {n} 个文件',
     'publish_receipt.uploaded_summary_removed': '已上传 {n} 个文件，移除 {m} 个',
     'publish_receipt.uploaded_summary_zero': '没有新内容 — 其他内容未变',
@@ -6380,6 +6389,9 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'publish_receipt.published_to': '已發布到 {host}',
     'publish_receipt.first_publish_note': '任何擁有此地址的人都能看到它。',
     'publish_receipt.row_uploaded': '已上傳',
+    'publish_receipt.row_pictures_gone': '來自其他網站、已無法載入的圖片',
+    'publish_receipt.pictures_gone_one': '1 張圖片',
+    'publish_receipt.pictures_gone_many': '{n} 張圖片', // {n} placeholder
     'publish_receipt.uploaded_summary': '已上傳 {n} 個檔案',
     'publish_receipt.uploaded_summary_removed': '已上傳 {n} 個檔案，移除 {m} 個',
     'publish_receipt.uploaded_summary_zero': '沒有新內容 — 其他內容未變',

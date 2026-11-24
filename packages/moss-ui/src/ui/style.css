@@ -5757,13 +5757,16 @@ body.own-titlebar.platform-linux:has(.action-panel-open) .moss-titlebar [data-ca
   overflow-wrap: anywhere;
 }
 /* The Copies line: a summary row, then its places on the receipt's own grid,
-   their labels indented one step so they read as belonging to it. */
-.receipt-copies-group {
+   their labels indented one step so they read as belonging to it. Gone
+   pictures stack the same way, their rows the preflight's. */
+.receipt-copies-group,
+.receipt-pictures-group {
   display: flex;
   flex-direction: column;
   gap: var(--moss-space-xs);
 }
 .receipt-copies-group > .receipt-row,
+.receipt-pictures-group > .receipt-row,
 .receipt-copies > .receipt-row {
   list-style: none;
 }
