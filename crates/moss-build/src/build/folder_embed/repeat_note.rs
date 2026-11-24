@@ -33,6 +33,14 @@ impl ListingHost {
             id_scopes: RefCell::new(IdScopes::around(&own_html)),
         }
     }
+
+    /// `pages` without those a listing above on this page drew (`repeat:none`).
+    /// Embeds expand in body order on one thread (this type is not `Sync`), so
+    /// `urls` holds exactly what came before.
+    pub(crate) fn not_yet_drawn<'a>(&self, pages: Vec<&'a ParsedDocument>) -> Vec<&'a ParsedDocument> {
+        let drawn = self.urls.borrow();
+        pages.into_iter().filter(|d| !drawn.contains(&d.url_path)).collect()
+    }
 }
 
 /// `children` is what the page's child listing shows.

@@ -8366,6 +8366,42 @@ fn site_of(files: &[(&str, &str)]) -> (std::path::PathBuf, impl Drop) {
     (dir, cleanup)
 }
 
+/// The titles a home page's listings show, in page order.
+fn listed_titles(dir: &std::path::Path, titles: &[&str]) -> Vec<String> {
+    let home = staged(dir, "index.html");
+    let body = &home[home.find("<main").unwrap_or(0)..];
+    let mut at: Vec<(usize, String)> = titles.iter().flat_map(|t| body.match_indices(&format!(">{t}<")).map(|(i, _)| (i, t.to_string())).collect::<Vec<_>>()).collect();
+    at.sort();
+    at.into_iter().map(|(_, t)| t).collect()
+}
+
+#[test]
+fn repeat_none_skips_what_a_listing_above_drew_and_counts_its_limit_after() {
+    let home = "---\ntitle: Home\nchildren: false\n---\n\n![[events/|group:upcoming,limit:1]]\n\n## Earlier\n\n![[events/|when:past,limit:2,repeat:none]]\n";
+    let titles = ["One", "Two", "Three", "Next"];
+    let build = |upcoming: bool| {
+        let (dir, cleanup) = create_test_dir();
+        fs::write(dir.join("index.md"), home).unwrap();
+        fs::create_dir_all(dir.join("events")).unwrap();
+        fs::write(dir.join("events/index.md"), "---\ntitle: Events\nchildren: false\n---\n").unwrap();
+        let mut events = vec![("one", "One", "2020-01-01"), ("two", "Two", "2020-02-01"), ("three", "Three", "2020-03-01")];
+        if upcoming {
+            events.push(("next", "Next", "2096-01-01"));
+        }
+        for (file, title, day) in events {
+            fs::write(dir.join(format!("events/{file}.md")), format!("---\ntitle: {title}\nstart: {day} 19:00\n---\n\nBody.\n")).unwrap();
+        }
+        build_test_sealed_at(dir.to_str().unwrap(), Some("https://example.test")).expect("build");
+        let shown = listed_titles(&dir, &titles);
+        drop(cleanup);
+        shown
+    };
+    // Nothing upcoming: the lead falls back to the newest past event, and the wall below skips it.
+    assert_eq!(build(false), ["Three", "Two", "One"]);
+    // An upcoming lead: the wall drops nothing.
+    assert_eq!(build(true), ["Next", "Three", "Two"]);
+}
+
 #[test]
 fn latest_sidebar_links_resolve_to_built_pages_from_home_and_nested_pages() {
     let (dir, _c) = site_of(&[

@@ -90,6 +90,8 @@ struct ParsedMarker<'a> {
     pictures: Option<usize>,
     /// `motion:marquee`: the strip slides sideways (`FolderEmbedParams::marquee`).
     marquee: bool,
+    /// `repeat:none` (`FolderEmbedParams::skip_repeats`).
+    skip_repeats: bool,
     /// Internal filter: root homepage's own listing — scope to the default language
     /// tree (drop language-prefix subtrees) when the site is multilingual (homepage only).
     scope_default_tree: bool,
@@ -171,6 +173,7 @@ fn parse_marker_body(body: &str) -> Option<ParsedMarker<'_>> {
                 "when" => out.when = Some(v.trim()),
                 "pictures" => out.pictures = folder_list::picture_count(v).ok(),
                 "motion" => out.marquee = v.trim() == "marquee",
+                "repeat" => out.skip_repeats = v.trim() == "none",
                 "width" => out.placement.width = moss_core::media::match_width_token(v.trim()),
                 "align" => {
                     out.placement.align = match v.trim() {
@@ -1552,6 +1555,7 @@ fn render_one(
             Listed::Iframe(html) => return Ok(html),
             Listed::Pages { folder_slug, target_doc, is_flatten, pages } => (folder_slug, target_doc, is_flatten, pages),
         };
+    let folder_docs = if parsed.skip_repeats { host.not_yet_drawn(folder_docs) } else { folder_docs };
 
     if is_embed && own_listing_open && is_own_listing_spot(parsed, target_doc, from, all_docs, place_maps) {
         return Ok(OWN_LISTING_PLACEHOLDER.to_string());
@@ -1865,6 +1869,8 @@ pub(crate) fn synthesize_children_marker_for(
         when: doc.children_when.clone(),
         pictures: doc.children_pictures.map(|n| n as usize),
         marquee: doc.children_motion.is_some(),
+        // `repeat:none` is an embed option only: no frontmatter key opts in.
+        skip_repeats: false,
         // Empty-string guard matches the embed grammar's own `more:`
         // key, which never carries an empty value either.
         more: doc.children_more.clone().filter(|s| !s.is_empty()),

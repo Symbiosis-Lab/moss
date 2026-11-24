@@ -32,6 +32,9 @@ pub struct FolderEmbedParams {
     pub pictures: Option<usize>,
     /// `motion:marquee`: the strip of `pictures:N` slides sideways in a loop.
     pub marquee: bool,
+    /// `repeat:none`: leave out the pages a listing earlier on the same page
+    /// already shows, before `limit` counts.
+    pub skip_repeats: bool,
     /// Raw sizing token (e.g. `"80%"`, `"800x600"`). Parsed to a `Sizing`
     /// at render time and applied ONLY to the static-index iframe branch
     /// (the card-grid listing branch ignores it). Stored raw so the
@@ -128,7 +131,7 @@ pub fn picture_count(raw: &str) -> Result<usize, String> {
 }
 
 /// Recognized keys for the keyed (`key:value` / `key=value`) grammar.
-pub const KNOWN_KEYS: &[&str] = &["limit", "sort", "style", "depth", "group", "covers", "when", "pictures", "motion", "more", "size"];
+pub const KNOWN_KEYS: &[&str] = &["limit", "sort", "style", "depth", "group", "covers", "when", "pictures", "motion", "more", "size", "repeat"];
 
 /// A segment is keyed when it has at least one known key.
 /// Unknown keys beside a known one are ignored and reported.
@@ -203,6 +206,10 @@ fn merge_keyed_params(out: &mut FolderEmbedParams, raw: &str) {
                 "motion" => match v.trim() {
                     "marquee" => out.marquee = true,
                     other => out.unknown_keys.push(format!("motion:{other}")),
+                },
+                "repeat" => match v.trim() {
+                    "none" => out.skip_repeats = true,
+                    other => out.unknown_keys.push(format!("repeat:{other}")),
                 },
                 "more" => {
                     let v = v.trim();
@@ -374,6 +381,9 @@ pub fn emit_marker(path: &str, from: &str, params: &FolderEmbedParams) -> String
     }
     if params.marquee {
         parts.push("motion=marquee".to_string());
+    }
+    if params.skip_repeats {
+        parts.push("repeat=none".to_string());
     }
     if let Some(ref m) = params.more {
         parts.push(format!("more={}", marker_encode(m)));
