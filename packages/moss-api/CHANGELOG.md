@@ -16,6 +16,8 @@ release heading.
 ### Added
 
 - `CopyJob.site` (`url`, `name`): the site the post lives on; `post.url` is built on `site.url`.
+- `CopyJob.site.icon`: the absolute URL of the site's own icon as a square PNG of at least 256 px; absent when the site has none.
+- `CopyOutcome.verify` (`page_link`, `site_file`): what the site should carry so the network can tie a copy back to it. moss writes it on the next build.
 - `CopyJob.article.text`: the page as written, in plain text, with no title and no link back.
 - `LoginResult`: what a channel's `login` answers, `completed` with the account's stable `id` (and a `name` to show), `cancelled` or `failed`. moss records a completed sign-in as the folder's account, so a plugin no longer writes `boundUserName` into its config. A `login` that returns nothing is read the old way. Needs moss 0.15.29.
 - `LoginResult.account.host`: the account's own server, for a channel whose accounts live on many servers. moss records it with the account and takes a `syndicated:` address on it as the channel's copy. Needs moss 0.15.29.

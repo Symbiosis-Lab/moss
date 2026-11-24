@@ -25,7 +25,11 @@ const META_NAMES: &[&str] = &["fediverse:creator"];
 /// The `.well-known` files a proof may write. Others (`webauthn`,
 /// `assetlinks.json`, `apple-app-site-association`) grant an app authority
 /// over the domain, so a network's proof file is added here by name.
-const WELL_KNOWN_FILES: &[&str] = &[".well-known/atproto-did", ".well-known/nostr.json"];
+const WELL_KNOWN_FILES: &[&str] = &[".well-known/atproto-did", ".well-known/nostr.json", ".well-known/site.standard.publication"];
+/// The one `<link rel>` a copy record may add to a single page's head, and the
+/// scheme its href must start with: a record of the page on a network.
+const PAGE_LINK_REL: &str = "site.standard.document";
+const PAGE_LINK_HREF_PREFIX: &str = "at:";
 /// Largest body a `.well-known` file may declare.
 const MAX_BODY: usize = 64 * 1024;
 /// Longest value a setting may fill into a proof.
@@ -268,6 +272,31 @@ pub(crate) fn split_acct(value: &str) -> Option<(&str, &str)> {
 
 pub(crate) fn well_known_path_ok(path: &str) -> Result<(), String> {
     if WELL_KNOWN_FILES.contains(&path) { Ok(()) } else { Err(format!("a proof writes only {}", WELL_KNOWN_FILES.join(", "))) }
+}
+
+/// A copy record's page link: only [`PAGE_LINK_REL`], with an `at:` address
+/// that fits a setting's cap.
+pub(crate) fn page_link_ok(rel: &str, href: &str) -> Result<(), String> {
+    if rel != PAGE_LINK_REL {
+        return Err(format!("a page link writes only rel {PAGE_LINK_REL}"));
+    }
+    if !href.starts_with(PAGE_LINK_HREF_PREFIX) || href.len() > MAX_VALUE || href.contains(char::is_whitespace) {
+        return Err(format!("a {PAGE_LINK_REL} link is an {PAGE_LINK_HREF_PREFIX} address of at most {MAX_VALUE} bytes"));
+    }
+    Ok(())
+}
+
+/// A copy record's `.well-known` file: an allowlisted path and a body under the cap.
+pub(crate) fn site_file_ok(path: &str, body: &str) -> Result<(), String> {
+    well_known_path_ok(path)?;
+    if body.len() > MAX_BODY {
+        return Err(format!("a body is at most {MAX_BODY} bytes"));
+    }
+    Ok(())
+}
+
+pub(crate) fn page_link_tag(href: &str) -> String {
+    format!("<link rel=\"{PAGE_LINK_REL}\" href=\"{}\">", escape_html_attr(href))
 }
 
 fn is_json(path: &str) -> bool {

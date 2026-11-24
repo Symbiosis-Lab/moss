@@ -1,11 +1,19 @@
 //! Rasterize a favicon (SVG, or a supplied PNG) to PNGs at the standard sizes
-//! in [`SIZES`] (16, 32, 180).
+//! in [`SIZES`] (16, 32, 180, 256, 512).
 
 use std::path::{Path, PathBuf};
 
 /// The one size list: every favicon raster moss writes is one of these,
 /// named `assets/favicon-<size>.png`.
-pub(crate) const SIZES: &[u32] = &[16, 32, 180];
+pub(crate) const SIZES: &[u32] = &[16, 32, 180, 256, 512];
+
+/// The files a site may supply as its own icon, in the order moss prefers them.
+const OWN_ICON_FILES: [&str; 3] = ["favicon.svg", "favicon.png", "favicon.ico"];
+
+/// The name of the site's own icon under `<folder>/assets`, if it has one.
+pub(crate) fn own_icon_file(folder: &Path) -> Option<&'static str> {
+    OWN_ICON_FILES.into_iter().find(|name| folder.join("assets").join(name).exists())
+}
 
 /// moss's paper: the value `site.css` uses and the one the app-icon plate is
 /// filled with, so the mark meets one background wherever it is given one.

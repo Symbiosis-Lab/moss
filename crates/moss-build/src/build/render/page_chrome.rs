@@ -54,6 +54,15 @@ pub(super) struct PageChromeContext<'a, 'd> {
     pub media_lookup: &'a crate::build::media::dimensions::MediaDimensionLookup,
 }
 
+/// What the page's own render takes from the site's layout, folded into its
+/// fingerprint so a change reaches exactly the pages it affects.
+pub(crate) fn shell_facts(layout: &LayoutConfig, doc: &ParsedDocument) -> crate::build::facade::ShellFacts {
+    crate::build::facade::ShellFacts {
+        nav_island: shows_nav_island(layout, Some(doc)),
+        verify_link: layout.page_link(&doc.url_path).map(str::to_string),
+    }
+}
+
 /// Whether a page that is not bare draws the floating nav island. The render
 /// verdict folds it into the page's fingerprint, so a `[site].floating_nav`
 /// toggle re-renders only the pages whose answer moved.
@@ -207,7 +216,7 @@ impl PageChromeContext<'_, '_> {
             footer: (!bare).then(|| nav.generate_footer(self.show_rss_in_footer)),
             favicon: Some(paths.favicon_link()),
             apple_touch_icon: paths.apple_touch_icon_link(),
-            head_alternates: Some([self.assets.head_alternates.unwrap_or_default(), self.layout.profile_links.as_str()]
+            head_alternates: Some([self.assets.head_alternates.unwrap_or_default(), self.layout.profile_links.as_str(), doc.and_then(|d| self.layout.page_link(&d.url_path)).unwrap_or_default()]
                 .iter().filter(|part| !part.is_empty()).copied().collect::<Vec<_>>().join("\n    "))
                 .filter(|tags| !tags.is_empty()),
             analytics: analytics_home.and_then(|d| d.analytics.as_ref()).map(|a| a.to_script_tag()),

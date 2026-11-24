@@ -332,7 +332,7 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
         .par_iter()
         .map(|doc| (
             crate::build::facade::PageKey::for_document(doc).cache_key().into_owned(),
-            PageFingerprints::of(doc, facade::ShellFacts { nav_island: crate::build::render::page_chrome::shows_nav_island(inputs.layout, Some(doc)) }),
+            PageFingerprints::of(doc, crate::build::render::page_chrome::shell_facts(inputs.layout, doc)),
         ))
         .collect();
 

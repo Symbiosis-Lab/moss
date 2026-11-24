@@ -124,3 +124,52 @@ A read that failed, or is not available on this host, is `success: false` instea
 ```ts
 optional url?: string;
 ```
+
+***
+
+### verify?
+
+```ts
+optional verify?: object;
+```
+
+What the site should carry so the network can tie this copy back to it. moss
+reads it on every build: `page_link` goes in the head of the copied page and
+`site_file` is written under `.well-known/`. Only `site.standard.document`
+(an `at:` href) and `.well-known/site.standard.publication` are accepted.
+
+#### page\_link?
+
+```ts
+optional page_link?: object;
+```
+
+##### page\_link.href
+
+```ts
+href: string;
+```
+
+##### page\_link.rel
+
+```ts
+rel: string;
+```
+
+#### site\_file?
+
+```ts
+optional site_file?: object;
+```
+
+##### site\_file.body
+
+```ts
+body: string;
+```
+
+##### site\_file.path
+
+```ts
+path: string;
+```

@@ -91,6 +91,31 @@ pub struct CopyOutcome {
     /// Why the network refused, with `success: false`.
     #[serde(default)]
     pub refused: Option<CopyRefusal>,
+    /// What the site should carry so the network can tie the copy back to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verify: Option<Verification>,
+}
+
+/// A channel's ask of the site: a link in the head of the copied page and a
+/// file under `.well-known/`. Both pass the identity allowlists at build time.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct Verification {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_link: Option<VerifyLink>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site_file: Option<VerifyFile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct VerifyLink {
+    pub rel: String,
+    pub href: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct VerifyFile {
+    pub path: String,
+    pub body: String,
 }
 
 /// What kind of refusal it was, so a person knows what to do about it.
@@ -171,6 +196,9 @@ pub struct CopyRecord {
     /// The run has said the copy waits for the account it was sent from.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub held_for_account: bool,
+    /// What the channel asked the site to carry; read on every build.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verify: Option<Verification>,
     pub updated_at: String,
 }
 
@@ -253,6 +281,7 @@ impl CopyRecord {
             handoff: None,
             account: None,
             held_for_account: false,
+            verify: None,
             updated_at: now(),
         }
     }

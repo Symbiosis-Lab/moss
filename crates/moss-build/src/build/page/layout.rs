@@ -65,6 +65,8 @@ pub struct LayoutConfig {
     pub term_nav: Vec<crate::build::terms::TermNavEntry>,
     /// `[site].me` as ready-to-place `<link rel="me">` tags, or `""`.
     pub profile_links: String,
+    /// Head elements for one page, from its copy records, keyed by its pretty url path.
+    pub page_links: std::collections::HashMap<String, String>,
 }
 
 impl LayoutConfig {
@@ -103,6 +105,7 @@ impl LayoutConfig {
             place_maps: None,
             term_nav: Vec::new(),
             profile_links: String::new(),
+            page_links: Default::default(),
         }
     }
 
@@ -110,6 +113,17 @@ impl LayoutConfig {
     pub fn with_profile_links(mut self, profile_links: String) -> Self {
         self.profile_links = profile_links;
         self
+    }
+
+    /// Set the per-page head links — see [`Self::page_links`].
+    pub fn with_page_links(mut self, page_links: std::collections::HashMap<String, String>) -> Self {
+        self.page_links = page_links;
+        self
+    }
+
+    /// The head elements the page at `url_path` (a document's) carries beyond the site's.
+    pub fn page_link(&self, url_path: &str) -> Option<&str> {
+        self.page_links.get(&crate::build::scan::article_map::to_pretty_url(url_path)).map(String::as_str)
     }
 
     /// Set the term kinds that are nav-bar entries — see [`Self::term_nav`].

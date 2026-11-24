@@ -447,10 +447,12 @@ pub struct PageFingerprints {
 /// What a page's own render takes from a site setting that may change without
 /// a full render (`inputs::FINGERPRINTED_KEYS`), decided for that page. Folded
 /// into its facade, so a toggle re-renders exactly the pages whose answer moved.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ShellFacts {
     /// `render::page_chrome::shows_nav_island`.
     pub nav_island: bool,
+    /// The head elements the page's copy records ask for (`LayoutConfig::page_link`).
+    pub verify_link: Option<String>,
 }
 
 impl PageFingerprints {

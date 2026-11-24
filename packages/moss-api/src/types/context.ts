@@ -198,8 +198,11 @@ export interface CopyJob {
   channel: string;
   /** The same on every send of this post to this channel, on every computer. */
   idempotency_key: string;
-  /** The site the post lives on: `post.url` is built on `url` (absolute, no trailing slash); `name` falls back to its host. */
-  site: { url: string; name: string };
+  /**
+   * The site the post lives on: `post.url` is built on `url` (absolute, no trailing slash); `name` falls back to its host.
+   * `icon` is the absolute URL of the largest square raster of at least 256 px, present only when the site has its own icon.
+   */
+  site: { url: string; name: string; icon?: string };
   /** The original the copy points back to; `url` is absolute, `title` empty for an untitled post. */
   post: { url: string; source_path: string; title: string; lang?: string | null; date?: string | null; tags?: string[] };
   /** Payload fields may be absent for a lookup whose copy no longer fits. */
@@ -253,6 +256,16 @@ export interface CopyOutcome {
   handoff?: { text: string; open_url?: string; id?: string };
   /** `find_copy` only: the network says there is no such copy. */
   absent?: boolean;
+  /**
+   * What the site should carry so the network can tie this copy back to it. moss
+   * reads it on every build: `page_link` goes in the head of the copied page and
+   * `site_file` is written under `.well-known/`. Only `site.standard.document`
+   * (an `at:` href) and `.well-known/site.standard.publication` are accepted.
+   */
+  verify?: {
+    page_link?: { rel: string; href: string };
+    site_file?: { path: string; body: string };
+  };
   /** `copy_account` only: the account the channel is signed in to, as an id that stays the same while it is that account. */
   account?: string;
   /** `copy_account` only: the account as a person knows it (`@ada`), for display; never compared. */

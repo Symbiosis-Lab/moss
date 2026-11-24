@@ -233,6 +233,13 @@ site: object;
 ```
 
 The site the post lives on: `post.url` is built on `url` (absolute, no trailing slash); `name` falls back to its host.
+`icon` is the absolute URL of the largest square raster of at least 256 px, present only when the site has its own icon.
+
+#### icon?
+
+```ts
+optional icon?: string;
+```
 
 #### name
 

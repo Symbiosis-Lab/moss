@@ -154,6 +154,7 @@ mod share_card_theme_test;
 mod share_image_pick_test;
 mod site;
 mod site_archival_test;
+mod site_icon_verify_test;
 mod site_identity_test;
 mod site_lang_holds_test;
 mod site_logo_served_url_test;

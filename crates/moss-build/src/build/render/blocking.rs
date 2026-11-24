@@ -1432,7 +1432,11 @@ pub fn generate_blocking_content_for_build(
         // [site].header (default "brand") rides along for the same reason:
         // the nav renderer reads LayoutConfig, not SiteConfig.
         let layout_config = layout_config.with_color_scheme(site_config.color_scheme).with_theme_color(crate::build::page::color_scheme::ThemeColor::of_theme(user_css_content.as_deref())).with_header_mode(site_config.header).with_header_scroll(site_config.header_scroll).with_term_nav(term_index.nav_entries(&site_config.term_nav));
-        let layout_config = layout_config.with_place_maps(site_config.place_maps.clone()).with_profile_links(site_config.identity.head_links());
+        site_config.identity.add_copy_verification(
+            crate::syndication::record::Records::in_vault(&crate::moss_paths::MossPaths::new(source_path_buf)).all(),
+            site_url.as_str(),
+        );
+        let layout_config = layout_config.with_place_maps(site_config.place_maps.clone()).with_profile_links(site_config.identity.head_links()).with_page_links(site_config.identity.page_links());
 
         // RSS feed: always generated when a real (https) URL is resolved.
         // Localhost fallbacks (no deployment configured) skip RSS/sitemap.
@@ -3461,11 +3465,7 @@ pub(super) fn resolve_favicon(
     crate::build::io_utils::create_output_dir_all(&favicon_dest_dir)
         .map_err(|e| format!("Failed to create assets directory: {}", e))?;
 
-    let candidates = ["favicon.svg", "favicon.png", "favicon.ico"];
-    let user_favicon = candidates
-        .iter()
-        .find(|name| assets_dir.join(name).exists())
-        .map(|s| s.to_string());
+    let user_favicon = crate::build::site_meta::favicon::own_icon_file(source_path).map(str::to_string);
 
     // Read it here, because an unreadable favicon must not fail the build.
     // This runs *before* the cloud gate is computed, so a hard error returns

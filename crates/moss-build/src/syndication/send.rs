@@ -7,7 +7,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use super::job::{CopyJob, Op, PostRef, Previous, SiteRef};
+use super::job::{site_icon, CopyJob, Op, PostRef, Previous, SiteRef};
 use super::record::{Cause, CopyOutcome, CopyRecord, PublishedPost, Records, State};
 use super::shape::{idempotency_key, page_url, shape_record, ShapeOptions};
 use super::sign_ins::SignIns;
@@ -266,7 +266,12 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
             queues.entry(record.channel.clone()).or_default().push((place, record));
         }
     }
-    let run = Run { folder, manager, records: &records, channels: &channels, by_uid: &by_uid, articles, config: &config, handoffs: &handoffs, opts };
+    // Said once per send, and only when a copy is about to be sent.
+    let icon = site_icon(folder, opts.site_url);
+    if icon.is_none() && !queues.is_empty() {
+        log::warn!(target: "syndication", "this site has no icon of its own at 256 px or more (assets/favicon.svg, or a PNG of at least 256 px), so channels that show one get none");
+    }
+    let run = Run { folder, manager, records: &records, channels: &channels, by_uid: &by_uid, articles, config: &config, handoffs: &handoffs, opts, icon };
     let out = std::sync::Mutex::new(Vec::new());
     let push = |place: usize, s: Sent| {
         (opts.emit)(&s);
@@ -289,6 +294,8 @@ struct Run<'a> {
     config: &'a crate::config::ConfigFile,
     handoffs: &'a HashSet<(String, String)>,
     opts: &'a SendOptions<'a>,
+    /// The site's own icon, offered to every channel's jobs.
+    icon: Option<String>,
 }
 
 impl Run<'_> {
@@ -296,7 +303,7 @@ impl Run<'_> {
     /// place in the whole send. Under the channel's turn, each record is
     /// read again: another send may have settled it meanwhile.
     async fn channel(&self, channel_id: String, queue: Vec<(usize, CopyRecord)>, push: &(dyn Fn(usize, Sent) + Sync)) {
-        let Run { folder, manager, records, channels, by_uid, articles, config, handoffs, opts } = *self;
+        let Run { folder, manager, records, channels, by_uid, articles, config, handoffs, opts, .. } = *self;
         let _turn = match records.channel_turn(&channel_id).await {
             Ok(turn) => turn,
             Err(e) => {
@@ -424,7 +431,7 @@ impl Run<'_> {
                     }
                 }
             }
-            if let Some(s) = send_one(folder, manager, &records, record, channel, post, &shape, op, opts).await {
+            if let Some(s) = send_one(folder, manager, &records, record, channel, post, &shape, op, opts, self.icon.as_deref()).await {
                 push(s);
             }
         }
@@ -464,10 +471,11 @@ async fn send_one(
     shape: &ShapeOptions,
     op: Op,
     opts: &SendOptions<'_>,
+    icon: Option<&str>,
 ) -> Option<Sent> {
     record.source_path.clone_from(&post.source_path);
     record.url_path.clone_from(&post.url_path);
-    let (job, hash) = match build_job(&record, channel, post, shape, op, record.site(opts.site_url)) {
+    let (job, hash) = match build_job(&record, channel, post, shape, op, record.site(opts.site_url), icon.map(str::to_string)) {
         Ok(j) => j,
         // A copy already on the network keeps its saved record as it is.
         Err(reason) if record.remote.is_some() => return Some(sent(&record, Outcome::Refused { cause: Cause::Content, reason })),
@@ -539,8 +547,9 @@ async fn send_one(
                 record.reason = None;
                 settle(records, record, Outcome::HandedOff { text: handoff.text, open_url: handoff.open_url })
             }
-            Some(CopyOutcome { id: Some(id), url: Some(url), parts, .. }) => {
+            Some(CopyOutcome { id: Some(id), url: Some(url), parts, verify, .. }) => {
                 record.state = State::Posted;
+                record.verify = verify.or(record.verify.take());
                 record.remote = Some(super::record::RemoteRef { id, url: url.clone() });
                 if op != Op::Update || !parts.is_empty() {
                     record.parts = parts;
@@ -604,7 +613,7 @@ enum Found {
 
 /// Ask the channel's `find_copy` whether the copy of an uncertain send exists.
 async fn reconcile(manager: &PluginManager, record: &CopyRecord, channel: &CopyChannel, post: &ArticleInfo, shape: &ShapeOptions, opts: &SendOptions<'_>) -> Found {
-    let (job, _) = match build_job(record, channel, post, shape, Op::Find, record.site(opts.site_url)) {
+    let (job, _) = match build_job(record, channel, post, shape, Op::Find, record.site(opts.site_url), None) {
         Ok(j) => j,
         Err(e) => return Found::Unknown(e),
     };
@@ -625,6 +634,7 @@ async fn reconcile(manager: &PluginManager, record: &CopyRecord, channel: &CopyC
 pub(super) fn adopt(folder: &Path, records: &Records, mut record: CopyRecord, outcome: CopyOutcome) -> Sent {
     let url = outcome.url.unwrap_or_default();
     record.state = State::Posted;
+    record.verify = outcome.verify.or(record.verify.take());
     record.remote = Some(super::record::RemoteRef { id: outcome.id.unwrap_or_default(), url: url.clone() });
     if !outcome.parts.is_empty() {
         record.parts = outcome.parts;
@@ -645,7 +655,7 @@ fn mark_unconfirmed(records: &Records, record: &mut CopyRecord, reason: &str) {
 
 
 /// The job for one copy, and the hash of the copy it carries.
-fn build_job(record: &CopyRecord, channel: &CopyChannel, post: &ArticleInfo, options: &ShapeOptions, op: Op, site_url: &str) -> Result<(CopyJob, String), String> {
+fn build_job(record: &CopyRecord, channel: &CopyChannel, post: &ArticleInfo, options: &ShapeOptions, op: Op, site_url: &str, icon: Option<String>) -> Result<(CopyJob, String), String> {
     let copy = match shape_record(post, &channel.spec, site_url, options, record) {
         Ok(copy) => Some(copy),
         // A lookup needs the stable identity even when changed limits prevent
@@ -661,6 +671,7 @@ fn build_job(record: &CopyRecord, channel: &CopyChannel, post: &ArticleInfo, opt
         site: SiteRef {
             url: site_url.trim_end_matches('/').to_string(),
             name: super::shape::site_name(options, site_url).unwrap_or_else(|| site_url.to_string()),
+            icon,
         },
         post: PostRef {
             url: page_url(site_url, &post.url_path),
@@ -814,6 +825,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_job_carries_the_site_icon_the_latest_build_served() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        super::super::test_channel(root, "one", "{ publish_copy: async function(job) {
+            if (job.site.icon !== 'https://example.org/assets/favicon-512.png') throw new Error('icon: ' + job.site.icon);
+            return { success: true, copy: { id: 'x', url: 'https://example.social/x', verify: { site_file: { path: '.well-known/site.standard.publication', body: 'at://p' } } } };
+        } }");
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        std::fs::write(root.join("assets/favicon.svg"), "<svg/>").unwrap();
+        let served = crate::moss_paths::MossPaths::new(root).current_ptr().join("assets");
+        std::fs::create_dir_all(&served).unwrap();
+        std::fs::write(served.join("favicon-512.png"), "png").unwrap();
+        let manager = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()).get_or_create(&root.to_string_lossy()).unwrap();
+        let records = Records::in_vault(&crate::moss_paths::MossPaths::new(root));
+        std::fs::write(root.join("page.md"), "---\nuid: aa11aa11\nsyndicate: one\n---\nHello.\n").unwrap();
+        let post: ArticleInfo = serde_json::from_value(serde_json::json!({"source_path": "page.md", "title": "", "content": "Hello.", "url_path": "page/", "uid": "aa11aa11", "syndicate": ["one"]})).unwrap();
+        let mut map = ArticleMap::default();
+        map.articles.insert(post.url_path.clone(), post);
+        records.save(&CopyRecord::due("aa11aa11", "one", "page.md", "page/")).unwrap();
+        let emit = |_: &Sent| {};
+        let opts = SendOptions::test("https://example.org", &emit);
+        let sent = send_due(root, &manager, &map, &opts).await;
+        assert_eq!(sent[0].outcome, Outcome::Posted { url: "https://example.social/x".into() }, "{:?}", sent[0].outcome);
+        let kept = records.get("aa11aa11", "one").unwrap().verify.expect("the record keeps what the channel asked the site to carry");
+        assert_eq!(kept.site_file.unwrap().body, "at://p");
+    }
+
+    #[tokio::test]
     async fn only_definitively_failed_first_publications_discard_their_form() {
         use super::super::channel::{ChannelSpec, Form};
         struct Case { name: &'static str, js: &'static str, op: Op, uncertain: bool, state: State, form: Option<Form> }
@@ -847,7 +886,7 @@ mod tests {
             let post: ArticleInfo = serde_json::from_value(serde_json::json!({"source_path": "page.md", "title": "", "content": "Hello.", "url_path": "page/"})).unwrap();
             let emit = |_: &Sent| {};
             let opts = SendOptions::test("https://example.org", &emit);
-            send_one(root, &manager, &records, record, &channel, &post, &ShapeOptions::default(), op, &opts).await.unwrap();
+            send_one(root, &manager, &records, record, &channel, &post, &ShapeOptions::default(), op, &opts, None).await.unwrap();
             let saved = records.get("u", "one").unwrap();
             assert_eq!(saved.state, expected_state, "{name}");
             assert_eq!(saved.form, expected_form, "{name}");
@@ -872,7 +911,7 @@ mod tests {
         let channel = CopyChannel { spec: super::super::channel::ChannelSpec { forms: vec![super::super::channel::Form::Long], ..Default::default() }, ..Default::default() };
         let emit = |_: &Sent| panic!("a frozen copy cannot send");
         let opts = SendOptions::test("https://example.org", &emit);
-        let result = send_one(root, &manager, &records, record, &channel, &post, &ShapeOptions::default(), Op::Update, &opts).await.unwrap();
+        let result = send_one(root, &manager, &records, record, &channel, &post, &ShapeOptions::default(), Op::Update, &opts, None).await.unwrap();
         assert!(matches!(result.outcome, Outcome::Refused { reason, .. } if reason.contains("retaining the prior version")));
         assert_eq!(records.get("u", "one").unwrap(), before);
     }
@@ -885,10 +924,10 @@ mod tests {
         record.part_count = Some(1);
         let channel = CopyChannel { spec: super::super::channel::ChannelSpec { forms: vec![super::super::channel::Form::Short], max_chars: Some(1), ..Default::default() }, ..Default::default() };
         let post: ArticleInfo = serde_json::from_value(serde_json::json!({ "source_path": "page.md", "title": "", "content": "Longer than allowed", "url_path": "page/", "date": null })).unwrap();
-        let (job, _) = build_job(&record, &channel, &post, &ShapeOptions::default(), Op::Find, "https://example.org").unwrap();
+        let (job, _) = build_job(&record, &channel, &post, &ShapeOptions::default(), Op::Find, "https://example.org", None).unwrap();
         assert_eq!(job.idempotency_key, idempotency_key("u", "one"));
         assert!(job.copy.is_none());
-        assert!(build_job(&record, &channel, &post, &ShapeOptions::default(), Op::Publish, "https://example.org").is_err());
+        assert!(build_job(&record, &channel, &post, &ShapeOptions::default(), Op::Publish, "https://example.org", None).is_err());
     }
 
     #[test]
@@ -896,12 +935,12 @@ mod tests {
         let record = CopyRecord::due("u", "one", "page.md", "page/");
         let channel = CopyChannel { spec: super::super::channel::ChannelSpec { forms: vec![super::super::channel::Form::Short], max_chars: Some(300), ..Default::default() }, ..Default::default() };
         let post: ArticleInfo = serde_json::from_value(serde_json::json!({ "source_path": "page.md", "title": "", "content": "Hi", "url_path": "page/", "date": null })).unwrap();
-        let (job, _) = build_job(&record, &channel, &post, &ShapeOptions::default(), Op::Publish, "https://example.org/").unwrap();
+        let (job, _) = build_job(&record, &channel, &post, &ShapeOptions::default(), Op::Publish, "https://example.org/", None).unwrap();
         assert_eq!(job.site.url, "https://example.org");
         assert!(job.post.url.starts_with(&job.site.url), "the post's address is built on the same base");
         assert_eq!(job.site.name, "example.org");
         let named = ShapeOptions { site_name: Some("山居".into()), ..Default::default() };
-        let (job, _) = build_job(&record, &channel, &post, &named, Op::Publish, "https://example.org").unwrap();
+        let (job, _) = build_job(&record, &channel, &post, &named, Op::Publish, "https://example.org", None).unwrap();
         assert_eq!(job.site.name, "山居");
         let json = serde_json::to_value(&job).unwrap();
         assert_eq!(json["site"], serde_json::json!({ "url": "https://example.org", "name": "山居" }));
