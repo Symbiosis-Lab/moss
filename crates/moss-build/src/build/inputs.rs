@@ -138,12 +138,12 @@ pub(crate) fn config_rest(folder: &Path) -> Option<String> {
 }
 
 /// Keys of `.moss/state.toml` that a publish rewrites and no page reads, by
-/// table: the DNS it observed and when, and each target's address. Each
+/// table: the DNS it observed and verified, and when, and each target's address. Each
 /// target's `last_deployment_at` counts only as set or unset, which is what the
 /// redirect advisory reads, and its `last_deployed_generation_id` is one of
-/// [`BuildInputs::generations`]. A key of the same name in any other table
+/// [`BuildInputs::generations`]. A CDN status counts only as active or not. A key of the same name in any other table
 /// counts.
-const OBSERVED_BOOKKEEPING: &[&str] = &["checked_at", "dns_target"];
+const OBSERVED_BOOKKEEPING: &[&str] = &["checked_at", "dns_target", "dns_configured"];
 const TARGET_BOOKKEEPING: &[&str] = &["last_deployment_url"];
 
 /// A digest of `.moss/state.toml` without the publish's bookkeeping, keyed and
@@ -158,6 +158,12 @@ pub(crate) fn state_rest(folder: &Path) -> Option<(String, BTreeMap<String, Stri
         let Some(deployment) = table(state, "deployment") else { return };
         if let Some(observed) = table(deployment, "observed") {
             OBSERVED_BOOKKEEPING.iter().for_each(|key| { observed.remove(*key); });
+            // The build reads only whether the CDN is `active` (www or apex in every canonical).
+            if let Some(status) = observed.remove("cdn_status") {
+                if status.as_str() == Some("active") {
+                    observed.insert("cdn_active".into(), toml::Value::Boolean(true));
+                }
+            }
         }
         for (name, target) in table(deployment, "targets").into_iter().flat_map(|t| t.iter_mut()) {
             let Some(target) = target.as_table_mut() else { continue };

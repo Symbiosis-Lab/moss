@@ -370,6 +370,54 @@ mod tests {
         assert!(signed_out.state_moved(dir.path()), "an unreadable one moved it");
     }
 
+    /// A publish's own record (outcome, DNS verified, CDN status) leaves the
+    /// generation current; only a sign-in moves it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_publishs_own_record_does_not_move_the_state() {
+        use crate::vault::deployment_state as record;
+        let _builds = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = two_page_site("---\ntitle: About\n---\n\nAbout.\n");
+        let folder = dir.path().to_string_lossy().to_string();
+        let outcome = |at: &str, url: &str| record::PublishOutcome {
+            url: url.into(),
+            deployed_at: at.into(),
+            site_url: Some("https://example.com".into()),
+            dns_target: Some(crate::config::deployment::DnsTarget {
+                records: vec![crate::config::deployment::DnsRecord { record_type: "A".into(), name: "@".into(), value: url.into(), ttl: None }],
+            }),
+            generation_id: Some("g1".into()),
+            ..Default::default()
+        };
+        record::record_publish(&folder, outcome("2026-11-01T00:00:00Z", "a.example.net")).unwrap();
+        let built = deploy_build(dir.path()).await;
+        assert!(!built.state_moved(dir.path()), "a fresh build is current");
+        record::record_publish(&folder, outcome("2026-11-02T00:00:00Z", "b.example.net")).unwrap();
+        record::record_dns_verified(&folder).unwrap();
+        record::record_cdn_status(&folder, "pending").unwrap();
+        assert!(!built.state_moved(dir.path()), "a publish's own record moved nothing a page reads");
+        let binding = crate::plugins::manager::accounts::AccountBinding { id: "acct:1".into(), name: None, host: None };
+        crate::plugins::manager::accounts::bind_account(&folder, "social", &binding).unwrap();
+        assert!(built.state_moved(dir.path()), "a sign-in moved it");
+    }
+
+    /// The build reads only whether the CDN is active, to pick www or the apex.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn only_an_active_cdn_moves_the_state() {
+        use crate::vault::deployment_state::record_cdn_status;
+        let _builds = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = two_page_site("---\ntitle: About\n---\n\nAbout.\n");
+        let folder = dir.path().to_string_lossy().to_string();
+        crate::vault::deployment_state::record_dns_verified(&folder).unwrap();
+        let built = deploy_build(dir.path()).await;
+        record_cdn_status(&folder, "pending").unwrap();
+        assert!(!built.state_moved(dir.path()), "a non-active word moved nothing");
+        record_cdn_status(&folder, "active").unwrap();
+        assert!(built.state_moved(dir.path()), "going active moved it");
+        let active = deploy_build(dir.path()).await;
+        record_cdn_status(&folder, "active").unwrap();
+        assert!(!active.state_moved(dir.path()), "a repeated active moved nothing");
+    }
+
     fn two_page_site(about: &str) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("index.md"), "---\ntitle: Home\n---\n\nHello.\n").unwrap();
