@@ -649,22 +649,26 @@ async fn a_cancelled_copy_lets_the_next_channel_send() {
     land(root, &seal_post_naming(root, Some(&["first", "second"]))).await;
 
     let cache = std::sync::Arc::new(crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()));
+    let started = std::sync::Arc::new(tokio::sync::Notify::new());
     let send = tokio::spawn({
-        let (cache, root) = (cache.clone(), root.to_path_buf());
+        let (cache, root, started) = (cache.clone(), root.to_path_buf(), started.clone());
         async move {
-            let emit = |_: &Sent| {};
+            let emit = |s: &Sent| if s.channel == "first" && s.outcome == Outcome::Sending { started.notify_one() };
             let opts = SendOptions::test("https://example.org", &emit);
             after_live(&root, &opts, || cache.get_or_create(&root.to_string_lossy())).await
         }
     });
-    let manager = loop {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        if let Some(m) = cache.get_existing(&root.to_string_lossy()) { break m; }
-    };
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    manager.cancel_copy("first");
-
-    let sent = tokio::time::timeout(std::time::Duration::from_secs(10), send).await.expect("the send ends once the waiting copy is cancelled").unwrap();
+    let wait = std::time::Duration::from_secs(10);
+    tokio::time::timeout(wait, started.notified()).await.expect("the first channel's copy starts");
+    let manager = cache.get_existing(&root.to_string_lossy()).expect("the send made the folder's manager");
+    // The hook becomes cancellable a moment after the send reports it started.
+    let sent = tokio::time::timeout(wait, async move {
+        while !send.is_finished() {
+            manager.cancel_copy("first");
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        send.await.unwrap()
+    }).await.expect("the send ends once the waiting copy is cancelled");
     let outcome = |channel: &str| sent.iter().find(|s| s.channel == channel).map(|s| s.outcome.clone());
     assert!(matches!(outcome("first"), Some(Outcome::Unconfirmed { .. })), "{sent:?}");
     assert!(matches!(outcome("second"), Some(Outcome::Posted { .. })), "{sent:?}");

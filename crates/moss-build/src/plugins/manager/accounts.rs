@@ -750,7 +750,7 @@ mod tests {
             self.pages.lock().unwrap().push(html);
             Ok(())
         }
-        async fn close_action_panel(&self) -> Result<(), String> {
+        async fn close_action_panel(&self, _: Option<String>) -> Result<(), String> {
             self.closes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.fire("browser-closed", r#"{"reason":"programmatic"}"#);
             Ok(())

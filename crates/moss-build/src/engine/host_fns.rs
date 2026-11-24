@@ -622,7 +622,7 @@ async fn dispatch_command_core(
         }
         "close_action_panel" => {
             let app = need_app(&host, "close_action_panel")?;
-            app.close_action_panel().await?;
+            app.close_action_panel(host.plugin.map(String::from)).await?;
             Ok("null".into())
         }
         "open_system_browser" => {
@@ -1940,7 +1940,7 @@ mod tests {
             async fn clear_plugin_cookies(&self, _: &str, _: &str) -> std::result::Result<(), String> { unreachable!() }
             async fn open_action_panel(&self, _: Option<String>, _: Option<String>, _: bool, _: Option<String>) -> std::result::Result<(), String> { unreachable!() }
             async fn set_action_panel_html(&self, _: String, _: Option<String>, _: Option<String>) -> std::result::Result<(), String> { unreachable!() }
-            async fn close_action_panel(&self) -> std::result::Result<(), String> { unreachable!() }
+            async fn close_action_panel(&self, _: Option<String>) -> std::result::Result<(), String> { unreachable!() }
             async fn open_system_browser(&self, _: String) -> std::result::Result<(), String> { unreachable!() }
             async fn return_to_editor(&self) -> std::result::Result<(), String> { unreachable!() }
             async fn fill_browser_panel(&self, _: &str, _: &str, _: serde_json::Value) -> std::result::Result<serde_json::Value, String> { unreachable!() }

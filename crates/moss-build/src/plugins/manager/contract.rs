@@ -253,7 +253,7 @@ impl AppHost for ScriptedPerson {
         self.react(On::Page, &html);
         Ok(())
     }
-    async fn close_action_panel(&self) -> Result<(), String> {
+    async fn close_action_panel(&self, _: Option<String>) -> Result<(), String> {
         self.record.note("panel-closed", Value::Null);
         Ok(())
     }

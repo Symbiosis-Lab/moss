@@ -68,12 +68,15 @@ pub trait AppHost: Send + Sync {
         plugin: Option<String>,
     ) -> Result<(), String>;
 
-    async fn close_action_panel(&self) -> Result<(), String>;
+    /// `plugin` is the plugin closing its own page. Any other close (`None`:
+    /// the person or moss) ends the running copy of the plugin that opened it,
+    /// since that copy waits on a page that is gone.
+    async fn close_action_panel(&self, plugin: Option<String>) -> Result<(), String>;
 
     /// Close the page of a sign-in that succeeded. A host may first show the
     /// person that it worked, then close; the panel's ✕ still closes at once.
     async fn close_signed_in_page(&self) -> Result<(), String> {
-        self.close_action_panel().await
+        self.close_action_panel(None).await
     }
 
     async fn open_system_browser(&self, url: String) -> Result<(), String>;

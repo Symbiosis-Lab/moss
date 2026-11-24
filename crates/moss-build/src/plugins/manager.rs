@@ -929,7 +929,7 @@ impl PluginManager {
             if let Some(app) = &self.host.app {
                 use accounts::LoginOutcome;
                 let signed_in = matches!(&result, Ok((_, returned)) if matches!(LoginOutcome::from_returned(returned.as_ref()), LoginOutcome::Completed(_) | LoginOutcome::Unsaid));
-                let closed = if signed_in { app.close_signed_in_page().await } else { app.close_action_panel().await };
+                let closed = if signed_in { app.close_signed_in_page().await } else { app.close_action_panel(Some(plugin.manifest.name.clone())).await };
                 if let Err(e) = closed {
                     log::warn!(target: "plugin", "{}: could not close the sign-in page: {e}", plugin.manifest.name);
                 }
