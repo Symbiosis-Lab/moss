@@ -179,6 +179,45 @@ fn an_unidentified_volume_never_follows_a_rename() {
 }
 
 #[test]
+fn a_known_folder_is_not_asked_its_volume_again() {
+    static LOOKUPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    fn counted(p: &Path) -> Option<Volume> {
+        LOOKUPS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        volume_a(p)
+    }
+    let w = World::new();
+    let stores = w.stores(counted);
+    let site = w.site("blog");
+    let first = stores.resolve(&site).unwrap();
+    assert_eq!(stores.resolve(&site).unwrap(), first);
+    assert_eq!(LOOKUPS.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_folder_first_seen_without_a_volume_follows_a_rename_once_it_has_one() {
+    let w = World::new();
+    let site = w.site("blog");
+    let before = w.stores(unidentified).resolve(&site).unwrap();
+    w.stores(volume_a).resolve(&site).unwrap();
+    let renamed = site.with_file_name("journal");
+    std::fs::rename(&site, &renamed).unwrap();
+    assert_eq!(w.stores(volume_a).resolve(&renamed).unwrap().id, before.id);
+}
+
+#[test]
+fn a_stale_recorded_volume_costs_a_fresh_store_after_a_rename_and_nothing_else() {
+    let w = World::new();
+    let site = w.site("blog");
+    let before = w.stores(volume_a).resolve(&site).unwrap();
+    // The folder now reports another volume; the record keeps the first one.
+    assert_eq!(w.stores(volume_b).resolve(&site).unwrap(), before);
+    let renamed = site.with_file_name("journal");
+    std::fs::rename(&site, &renamed).unwrap();
+    assert_ne!(w.stores(volume_b).resolve(&renamed).unwrap().id, before.id);
+    assert!(keypair::proven_pubkey(&renamed).is_some(), "the folder itself is untouched");
+}
+
+#[test]
 fn a_folder_replaced_in_place_never_sees_the_old_store() {
     let w = World::new();
     let stores = w.stores(volume_a);
