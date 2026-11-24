@@ -237,8 +237,9 @@ pub fn generate_favicons_from_raster(
     Ok(written)
 }
 
-/// Rasterizes an SVG favicon at every size in [`SIZES`]. Returns the sizes
-/// written, which is all of them.
+/// Rasterizes an SVG favicon at every size in [`SIZES`], fitted whole inside
+/// the square and centred, like the PNG path. Returns the sizes written,
+/// which is all of them.
 pub fn generate_favicons(source_svg: &Path, output_root: &Path) -> Result<Vec<u32>, FaviconError> {
     let mut written = Vec::with_capacity(SIZES.len());
     let svg = std::fs::read_to_string(source_svg).map_err(FaviconError::Io)?;
@@ -269,12 +270,12 @@ pub fn generate_favicons(source_svg: &Path, output_root: &Path) -> Result<Vec<u3
         let mut pixmap = tiny_skia::Pixmap::new(size, size)
             .ok_or_else(|| FaviconError::Encode("pixmap alloc".into()))?;
         pixmap.fill(paper());
-        let scale = size as f32 / tree.size().width();
-        resvg::render(
-            &tree,
-            tiny_skia::Transform::from_scale(scale, scale),
-            &mut pixmap.as_mut(),
-        );
+        let (w, h) = (tree.size().width(), tree.size().height());
+        let side = size as f32;
+        let scale = side / w.max(h);
+        let transform = tiny_skia::Transform::from_scale(scale, scale)
+            .post_translate((side - w * scale) / 2.0, (side - h * scale) / 2.0);
+        resvg::render(&tree, transform, &mut pixmap.as_mut());
 
         let png = pixmap.encode_png().map_err(|e| FaviconError::Encode(e.to_string()))?;
         write_size_png(output_root, size, &png)?;
@@ -454,6 +455,38 @@ mod tests {
         assert_eq!(sizes, SIZES);
         for &size in SIZES {
             assert_png(&dir.path().join(format!("favicon-{size}.png")), size);
+        }
+    }
+
+    /// A wordmark wider than it is tall fits the square whole and sits on its
+    /// middle line; a tall one fits by height and sits on the middle column.
+    #[test]
+    fn a_non_square_svg_is_fitted_whole_and_centred() {
+        for (view_box, rect) in [
+            ("0 0 200 100", r#"<rect width="200" height="100"/>"#),
+            ("0 0 100 200", r#"<rect width="100" height="200"/>"#),
+        ] {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let svg_path = dir.path().join("favicon.svg");
+            std::fs::write(
+                &svg_path,
+                format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="{view_box}">{rect}</svg>"#),
+            )
+            .unwrap();
+
+            generate_favicons(&svg_path, dir.path()).expect("generate");
+
+            let png = std::fs::read(dir.path().join("favicon-180.png")).unwrap();
+            let pm = tiny_skia::Pixmap::decode_png(&png).unwrap();
+            let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+            for (i, p) in pm.pixels().iter().enumerate() {
+                if p.red() < 128 {
+                    let (x, y) = (i as u32 % 180, i as u32 / 180);
+                    (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+                }
+            }
+            let ink = if view_box.ends_with("100") { (0, 45, 179, 134) } else { (45, 0, 134, 179) };
+            assert_eq!((x0, y0, x1, y1), ink, "viewBox {view_box}: ink box");
         }
     }
 
