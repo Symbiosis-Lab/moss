@@ -61,9 +61,9 @@ fn a_folder_s_answer_decides_whether_its_plugins_run() {
     // bytes, is not asked about. An edited copy is, and so is one more
     // contribution that runs code.
     let unasked = site("unasked");
-    let service = serde_json::json!({"newsletter_service": {
-        "key": {"url": "https://mail.example/keys", "prefix": "MK.", "length": 20, "permission": "Full Access"},
-        "steps": ["Open the keys page", "Copy the key and paste it here"]}});
+    let service = serde_json::json!({"provider": {"part": "newsletter",
+        "credentials": [{"kind": "key", "env": "MAIL_KEY", "url": "https://mail.example/keys", "prefix": "MK.", "length": 20, "permission": "Full Access"}],
+        "newsletter": {"steps": ["Open the keys page", "Copy the key and paste it here"]}}});
     let with = |id: &str, extra: serde_json::Value| {
         let dir = unasked.join(".moss/plugins").join(id);
         std::fs::create_dir_all(&dir).unwrap();

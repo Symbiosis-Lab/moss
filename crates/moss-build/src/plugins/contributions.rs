@@ -18,7 +18,7 @@ pub mod blocks;
 pub mod derivation;
 pub mod identity;
 pub mod listing_style;
-pub mod newsletter_service;
+pub mod provider;
 pub mod platform;
 pub mod public_data;
 pub mod site_settings;
@@ -109,9 +109,9 @@ pub struct PluginContributes {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<Vec<identity::Proof>>,
 
-    /// A mailing service the site's subscribers can be copied to.
+    /// A third-party provider of one of the site's parts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub newsletter_service: Option<newsletter_service::NewsletterServiceContribution>,
+    pub provider: Option<provider::ProviderContribution>,
 }
 
 /// Does installing this plugin run code it brought: JavaScript, a pinned
@@ -135,7 +135,7 @@ impl PluginContributes {
             site_settings: _,
             public_data: _,
             identity: _,
-            newsletter_service: _,
+            provider: _,
             channel,
             deploy_target,
             processor,
@@ -604,10 +604,10 @@ impl PluginManifest {
                 || c.blocks.as_ref().is_some_and(|b| !b.is_empty())
                 || c.public_data.is_some()
                 || c.site_settings.is_some()
-                || c.newsletter_service.is_some()
+                || c.provider.is_some()
         });
         if manifest.entry.is_none() && !declarative {
-            return Err(serde_json::Error::custom("manifest needs an `entry` unless it declares derivations, blocks, public_data, site_settings or newsletter_service"));
+            return Err(serde_json::Error::custom("manifest needs an `entry` unless it declares derivations, blocks, public_data, site_settings or provider"));
         }
         for (short, block) in manifest.contributes.iter().flat_map(|c| c.blocks.iter().flatten()) {
             blocks::validate(&manifest.name, short, block).map_err(serde_json::Error::custom)?;
@@ -619,8 +619,8 @@ impl PluginManifest {
             site.validate().map_err(serde_json::Error::custom)?;
             bound_author_text_in(&mut site.settings);
         }
-        if let Some(service) = manifest.contributes.as_mut().and_then(|c| c.newsletter_service.as_mut()) {
-            service.validate().map_err(serde_json::Error::custom)?;
+        if let Some(provider) = manifest.contributes.as_mut().and_then(|c| c.provider.as_mut()) {
+            provider.validate().map_err(serde_json::Error::custom)?;
         }
         if let Some(proofs) = manifest.contributes.as_ref().and_then(|c| c.identity.as_ref()) {
             let declared = manifest.contributes.as_ref().and_then(|c| c.site_settings.as_ref()).map_or(&[][..], |s| &s.settings[..]);

@@ -14,9 +14,9 @@ fn write(root: &Path, rel: &str, body: &str) {
 }
 
 /// A newsletter service plugin's manifest, as Settings › Newsletter services installs it.
-const SERVICE: &str = r#"{"name":"sendgrid","version":"0.1.0","contributes":{"newsletter_service":{
-    "key":{"url":"https://mail.example/keys","prefix":"SG.","length":69,"permission":"Full Access"},
-    "steps":["Open the keys page","Copy the key and paste it here"]}}}"#;
+const SERVICE: &str = r#"{"name":"sendgrid","version":"0.1.0","contributes":{"provider":{"part":"newsletter",
+    "credentials":[{"kind":"key","url":"https://mail.example/keys","prefix":"SG.","length":69,"permission":"Full Access"}],
+    "newsletter":{"steps":["Open the keys page","Copy the key and paste it here"]}}}}"#;
 
 /// Builds a hosted site with a subscribe form, and `.moss/plugins/sendgrid/`
 /// holding `plugin` when given, and returns its `commerce.json`.

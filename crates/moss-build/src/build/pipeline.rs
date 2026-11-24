@@ -1535,7 +1535,7 @@ fn build_inner(
         blocks: std::sync::Arc::new(crate::plugins::contributions::blocks::BlockPlan::from_plugins(&enabled_plugins)),
         public_data: public_files,
         booking: core_booking(cfg.as_ref(), &enabled_plugins),
-        newsletter: crate::plugins::contributions::newsletter_service::for_build(cfg.as_ref(), folder_path),
+        newsletter: crate::plugins::contributions::provider::for_build(cfg.as_ref(), folder_path),
         members: cfg.as_ref().map(crate::config::services::MembersConfig::read).transpose()?.unwrap_or_default(),
         comment_moderation: crate::build::features::comment::link_block::CommentModeration::for_build(folder_path, services_config.as_ref()),
         place_maps,

@@ -364,10 +364,10 @@ fn config_tables() -> Vec<ConfigTableInfo> {
     },
     ConfigTableInfo {
         name: "channels.email",
-        entry: "service = \"sendgrid\"",
-        description: "The newsletter. `service` names a mailing-list service the site's subscribers and their answers to the subscribe form also go to, published as `subscribe.newsletter` of /_moss/commerce.json for the moss host to deliver; unset or empty, subscribers stay with moss alone.",
+        entry: "provider = \"sendgrid\"",
+        description: "The newsletter. `provider` names a mailing-list service the site's subscribers and their answers to the subscribe form also go to, published as `subscribe.newsletter` of /_moss/commerce.json for the moss host to deliver; unset or empty, subscribers stay with moss alone.",
         rules: vec![
-            "A value that is not a name, a name no installed plugin provides as a newsletter service, or the line on a site the moss host does not serve, is a build problem and is left out of commerce.json until it is fixed; the build goes on.",
+            "A name with no plugin in the folder warns with `moss plugin install <name>`. A value that is not a name, a plugin that is not a newsletter provider, or the line on a site the moss host does not serve, is a build problem. Each is left out of commerce.json until it is fixed, and the build goes on; only --strict fails it.",
             "The service's API key never goes in the folder: it is given to the moss host.",
         ],
     }]

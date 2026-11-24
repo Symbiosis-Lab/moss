@@ -155,20 +155,26 @@ A network that lets a person's domain stand for their account (a Bluesky handle,
 - A proof whose setting is unset is not written, without a warning: the person has not set that network up. A hand-written value that cannot be written (an `acct` without a host, a control character) is left out with a warning naming the setting.
 - Proofs are data, read even by a build that runs no plugin code (`moss build --no-plugins`), so a CI deploy keeps them. A path two suppliers claim is written once, from `[site]` first and then plugins by name, with a warning naming both. When a proof the last build served is gone, the build says so (`identity: .well-known/atproto-did removed`), since that was someone's live handle.
 
-## A newsletter service
+## A newsletter provider
 
-A mailing service a site's subscribers can be copied to declares `contributes.newsletter_service` and needs no `entry`. The person picks it under Subscribers in the app, which writes `provider = "<plugin name>"` under `[channels.email]` in `.moss/config.toml`, then makes a key in the service and pastes it. moss draws the steps and checks the pasted key's prefix and length before anything is sent; the service's side runs on moss's server, which keeps a narrower key it makes from the pasted one.
+A third-party provider of one of a site's parts declares `contributes.provider`: the part it serves, every outside address the site's pages or moss reach for it (none, for a newsletter, whose form posts to moss's server), the credentials it asks for, and the part's own fields. A mailing service a site's subscribers are copied to is a provider of the `newsletter` part and needs no `entry`. The person picks it under Subscribers in the app, which writes `provider = "<plugin name>"` under `[channels.email]` in `.moss/config.toml`, then makes a key in the service and pastes it. moss draws the steps and checks the key's prefix and length before anything is sent; the service's side runs on moss's server, which keeps a narrower key it makes from the pasted one.
 
 ```json
-"newsletter_service": {
-  "key": { "url": "https://app.sendgrid.com/settings/api_keys", "prefix": "SG.", "length": 69, "permission": "Full Access" },
-  "steps": ["Open API Keys in SendGrid", "Create API Key, name it {name}, keep {permission}, then Create & View", "Copy the key and paste it here"],
-  "webhooks_url": "https://app.sendgrid.com/settings/mail_settings/webhook_settings",
-  "senders_url": "https://app.sendgrid.com/settings/sender_auth"
+"provider": {
+  "part": "newsletter",
+  "addresses": [],
+  "credentials": [
+    { "kind": "key", "env": "SENDGRID_API_KEY", "url": "https://app.sendgrid.com/settings/api_keys", "prefix": "SG.", "length": 69, "permission": "Full Access" }
+  ],
+  "newsletter": {
+    "steps": ["Open API Keys in SendGrid", "Create API Key, name it {name}, keep {permission}, then Create & View", "Copy the key and paste it here"],
+    "webhooks_url": "https://app.sendgrid.com/settings/mail_settings/webhook_settings",
+    "senders_url": "https://app.sendgrid.com/settings/sender_auth"
+  }
 }
 ```
 
-The steps are written in the service's own words, since the person reads them beside the service's window; the first is the link to `key.url`. `{name}` stands for `moss`, the name the server looks for before it deletes the pasted key, and `{permission}` for `key.permission`, the service's word for the access the key needs, which stays in the service's words in every translation. The service is shown by the manifest's `display_name`. Every address is `https`. The steps are translated through the manifest's `translations` table, keyed by the English text.
+A newsletter provider has exactly one credential, a key. `env` names the environment variable that may hold it, in the service's own documented spelling; moss reads it only for a command the person runs for that part, never for a build or a preview. The steps are written in the service's own words, since the person reads them beside the service's window; the first is the link to the key's `url`. `{name}` stands for `moss`, the name the server looks for before it deletes the pasted key, and `{permission}` for the key's `permission`, the service's word for the access it needs, which stays in the service's words in every translation. The service is shown by the manifest's `display_name`. Every address is `https`, and a field moss does not know is refused. The steps are translated through the manifest's `translations` table, keyed by the English text. A provider brings no code, so one installed from the registry at the registry's bytes needs no folder trust; an edited copy does.
 
 ## Setup: declare, don't build UI
 
