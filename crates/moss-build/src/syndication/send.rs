@@ -455,6 +455,16 @@ impl Run<'_> {
                     }
                     // A retry rewrites the draft the network holds.
                     Found::Waiting(_) if (retry || reopen) && record.draft().is_some() => Op::Update,
+                    // A copy handed off before drafts had ids cannot be rewritten:
+                    // one new draft, made once and only on a channel that can
+                    // rewrite it, opens the editor and records its id; every
+                    // later reopen rewrites that one.
+                    Found::Waiting(_) | Found::Unknown(_) if reopen && can_update && !record.redrafted && record.draft().is_none() => {
+                        record.redrafted = true;
+                        record.discard_attempt();
+                        record.state = State::Due;
+                        Op::Publish
+                    }
                     // A draft still waiting for the author is reported when it
                     // first becomes one, and whenever the author asks about its post.
                     Found::Waiting(handoff) => {
@@ -690,7 +700,10 @@ async fn send_one(
             let again_said = (opts.only_source.is_some() || record.update_due).then(|| record.handoff.clone()).flatten();
             if record.update_due {
                 record.update_due = false;
-                let _ = records.save(&record);
+                if let Err(e) = records.save(&record) {
+                    let reason = format!("its record was not saved ({e})");
+                    return Step::Done(Some(sent(&record, Outcome::Held { why: HeldWhy::Failed, reason })));
+                }
             }
             return Step::NoUpdate(again_said.map(|h| sent(&record, Outcome::HandedOff { text: h.text, open_url: h.open_url })));
         }
@@ -1510,6 +1523,94 @@ mod tests {
             records.save(&r).unwrap();
         }
         (records, articles)
+    }
+
+    /// `waiting_drafts` from before drafts had ids: no handoff carries one, and
+    /// `publish_copy` makes the new draft `d-new`, or one with no id.
+    fn waiting_without_ids(root: &Path, find: &str, new_id: bool) -> (Records, ArticleMap) {
+        let (records, articles) = waiting_drafts(root, find, true, false);
+        let bundle = root.join(".moss/plugins/social/main.bundle.js");
+        let js = std::fs::read_to_string(&bundle).unwrap().replace(
+            "throw new Error('a second draft');",
+            "globalThis.__publishes = (globalThis.__publishes || 0) + 1; return { success: true, copy: { handoff: { text: 'New', open_url: 'https://social.example.net/new'{} } } };",
+        ).replace("{}", if new_id { ", id: 'd-new'" } else { "" });
+        std::fs::write(&bundle, js).unwrap();
+        for uid in ["aaaa0000", "aaaa0001"] {
+            let mut r = records.get(uid, "social").unwrap();
+            r.handoff.as_mut().unwrap().id = None;
+            records.save(&r).unwrap();
+        }
+        (records, articles)
+    }
+
+    /// A copy handed off before drafts had ids gets one new draft on a page
+    /// publish, whether the lookup answers or fails; its id is kept, so the
+    /// next page publish rewrites it.
+    #[tokio::test]
+    async fn a_page_publish_of_an_idless_draft_makes_one_draft_and_keeps_its_id() {
+        for find in [WAITING, "null"] {
+            let dir = tempfile::tempdir().unwrap();
+            let (records, articles) = waiting_without_ids(dir.path(), find, true);
+            let out = run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await;
+            assert!(only_a0_said(&out, "New"), "{find}: {out:?}");
+            let a = records.get("aaaa0000", "social").unwrap();
+            assert_eq!(a.draft().map(|d| d.id), Some("d-new".into()), "{find}");
+            assert!(records.get("aaaa0001", "social").unwrap().draft().is_none(), "{find}: the other draft is left");
+            let again = run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await;
+            assert!(only_a0_said(&again, "Updated"), "{find}: the second publish rewrites: {again:?}");
+        }
+    }
+
+    /// A publish that returned no draft id is not made again: the next page
+    /// publish says the draft as it stands.
+    #[tokio::test]
+    async fn a_publish_that_returned_no_draft_id_is_not_repeated() {
+        let dir = tempfile::tempdir().unwrap();
+        let (records, articles) = waiting_without_ids(dir.path(), "null", false);
+        let out = run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await;
+        assert!(only_a0_said(&out, "New"), "{out:?}");
+        assert!(records.get("aaaa0000", "social").unwrap().draft().is_none());
+        let bundle = dir.path().join(".moss/plugins/social/main.bundle.js");
+        let js = std::fs::read_to_string(&bundle).unwrap().replace("return { success: true, copy: { handoff: { text: 'New'", "throw new Error('a third draft'); return { success: true, copy: { handoff: { text: 'New'");
+        std::fs::write(&bundle, js).unwrap();
+        let again = run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await;
+        assert!(only_a0_said(&again, "New"), "{again:?}");
+        assert_eq!(records.get("aaaa0000", "social").unwrap().state, State::HandedOff);
+    }
+
+    /// A channel found to have no `update_copy` earlier in the run is not
+    /// given a draft it cannot rewrite.
+    #[tokio::test]
+    async fn an_idless_draft_on_a_channel_without_update_copy_is_not_remade() {
+        let dir = tempfile::tempdir().unwrap();
+        let (records, articles) = waiting_without_ids(dir.path(), WAITING, true);
+        let bundle = dir.path().join(".moss/plugins/social/main.bundle.js");
+        let js = std::fs::read_to_string(&bundle).unwrap();
+        let start = js.find(", update_copy").unwrap();
+        let end = js.rfind(" }").unwrap();
+        std::fs::write(&bundle, format!("{}{}", &js[..start], &js[end..])).unwrap();
+        let mut posted = records.get("aaaa0000", "social").unwrap();
+        posted.state = State::Posted;
+        posted.handoff = None;
+        posted.remote = Some(super::super::record::RemoteRef { id: "r".into(), url: "https://social.example.net/r".into() });
+        posted.update_due = true;
+        records.save(&posted).unwrap();
+        let mut a = records.get("aaaa0001", "social").unwrap();
+        a.update_due = true;
+        records.save(&a).unwrap();
+        run_lookups(dir.path(), &articles, &[], None, PER_RUN).await;
+        let a = records.get("aaaa0001", "social").unwrap();
+        assert!(!a.redrafted && a.handoff.as_ref().is_some_and(|h| h.text == "Body"), "{a:?}");
+    }
+
+    /// A draft the network says is gone, with no id, is not made again.
+    #[tokio::test]
+    async fn a_page_publish_of_an_idless_absent_draft_makes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (records, articles) = waiting_without_ids(dir.path(), "{ success: true, copy: { absent: true } }", true);
+        assert!(run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await.is_empty());
+        let a = records.get("aaaa0000", "social").unwrap();
+        assert!(a.state == State::HandedOff && a.draft().is_none());
     }
 
     const WAITING: &str = "{ success: true, copy: { handoff: { text: 'Body', open_url: 'https://social.example.net/new', id: 'd-1' } } }";

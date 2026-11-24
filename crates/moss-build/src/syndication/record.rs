@@ -188,6 +188,9 @@ pub struct CopyRecord {
     /// The post's source changed in a landed publish after this copy was sent.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub update_due: bool,
+    /// A new draft was made for a handed-off copy that had no draft id, once.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub redrafted: bool,
     /// Why the posted copy stays as it is, from the network's own answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stays: Option<Stays>,
@@ -265,6 +268,7 @@ impl CopyRecord {
         self.remote = None;
         self.handoff = None;
         self.update_due = false;
+        self.redrafted = false;
         self.stays = None;
         self.reason = None;
         self.discard_attempt();
@@ -331,6 +335,7 @@ impl CopyRecord {
             parts: Vec::new(),
             hash: None,
             update_due: false,
+            redrafted: false,
             stays: None,
             reason: None,
             handoff: None,
