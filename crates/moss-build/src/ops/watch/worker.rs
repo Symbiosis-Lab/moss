@@ -249,6 +249,10 @@ pub struct WorkerHandle {
     /// The attempt in flight stopped on a file still in the cloud. Cleared
     /// before each attempt, so it only ever describes the current one.
     cloud_wait: std::sync::atomic::AtomicBool,
+    /// The port this process's own server bound for the folder, or 0. A
+    /// rebuild that knows it previews like the app's watcher, leaving picture
+    /// colour and blur to the background.
+    served_port: std::sync::atomic::AtomicU16,
 }
 
 impl WorkerHandle {
@@ -263,7 +267,16 @@ impl WorkerHandle {
             watchers: std::sync::atomic::AtomicUsize::new(0),
             last_completed: Mutex::new(None),
             cloud_wait: std::sync::atomic::AtomicBool::new(false),
+            served_port: std::sync::atomic::AtomicU16::new(0),
         }
+    }
+
+    pub fn set_served_port(&self, port: u16) {
+        self.served_port.store(port, Ordering::SeqCst);
+    }
+
+    pub fn served_port(&self) -> Option<u16> {
+        Some(self.served_port.load(Ordering::SeqCst)).filter(|&p| p != 0)
     }
 
     /// Record a completed admission (build ran, or the gate disposed of the
