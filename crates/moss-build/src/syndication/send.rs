@@ -399,11 +399,14 @@ impl Run<'_> {
             if op == Op::Publish && record.state == State::Posted {
                 record.start_over();
             }
-            // A handed-off copy rests there: it is handed off again only when the
-            // author retries its channel for this one post.
+            // A handed-off copy rests there until the author retries its channel
+            // for this one post. A publish of its page (this one post, or a deploy
+            // that changed it: `update_due`) rewrites the draft the network still
+            // shows with the page as it is now, never through `opts.retry`.
             let retry = opts.retry.contains(&record.channel) && (record.state != State::HandedOff || opts.only_source.is_some());
+            let reopen = record.state == State::HandedOff && (record.update_due || opts.only_source.is_some());
             let rests = record.state == State::HandedOff && !retry;
-            if rests && !handoffs.contains(&(record.uid.clone(), record.channel.clone())) {
+            if rests && !reopen && !handoffs.contains(&(record.uid.clone(), record.channel.clone())) {
                 continue;
             }
             match accounts.check(manager, &mut record).await {
@@ -451,7 +454,7 @@ impl Run<'_> {
                         continue;
                     }
                     // A retry rewrites the draft the network holds.
-                    Found::Waiting(_) if retry && record.draft().is_some() => Op::Update,
+                    Found::Waiting(_) if (retry || reopen) && record.draft().is_some() => Op::Update,
                     // A draft still waiting for the author is reported when it
                     // first becomes one, and whenever the author asks about its post.
                     Found::Waiting(handoff) => {
@@ -460,6 +463,16 @@ impl Run<'_> {
                             record.handoff = Some(handoff.clone());
                             record.reason = None;
                             push(settle(&records, record, Outcome::HandedOff { text: handoff.text, open_url: handoff.open_url }));
+                        }
+                        continue;
+                    }
+                    // A page publish whose lookup fails still reaches the draft: rewritten
+                    // when the network gave an id for it, else said again as it stands.
+                    Found::Unknown(_) if reopen && record.draft().is_some() => Op::Update,
+                    Found::Unknown(_) if reopen && !retry => {
+                        record.update_due = false;
+                        if let Some(h) = record.handoff.clone() {
+                            push(settle(&records, record, Outcome::HandedOff { text: h.text, open_url: h.open_url }));
                         }
                         continue;
                     }
@@ -674,7 +687,11 @@ async fn send_one(
         },
         // The record keeps the change: the export is read again next run.
         CopyCall::NoExport if op == Op::Update && record.state == State::HandedOff => {
-            let again_said = opts.only_source.is_some().then(|| record.handoff.clone()).flatten();
+            let again_said = (opts.only_source.is_some() || record.update_due).then(|| record.handoff.clone()).flatten();
+            if record.update_due {
+                record.update_due = false;
+                let _ = records.save(&record);
+            }
             return Step::NoUpdate(again_said.map(|h| sent(&record, Outcome::HandedOff { text: h.text, open_url: h.open_url })));
         }
         CopyCall::NoExport if op == Op::Update => {
@@ -1473,6 +1490,111 @@ mod tests {
         let out = run_lookups(root, &articles, &[], None, PER_RUN).await;
         assert_eq!(out[0].outcome, Outcome::Posted { url: "https://social.example.net/f-a0.md".into() });
         assert!(std::fs::read_to_string(root.join("a0.md")).unwrap().contains("f-a0.md"));
+    }
+
+    /// Two waiting drafts with ids on one channel whose `find_copy` answers
+    /// `find`; `a0.md`'s record is flagged when `a0_changed` (a deploy changed
+    /// its page). `publish_copy` throws: a new draft is never made.
+    fn waiting_drafts(root: &Path, find: &str, update_copy: bool, a0_changed: bool) -> (Records, ArticleMap) {
+        let (records, articles) = lookup_site(root, &[State::HandedOff, State::HandedOff]);
+        lookup_channel(root, "waiting");
+        let update = if update_copy {
+            ", update_copy: async function () { return { success: true, copy: { handoff: { text: 'Updated', open_url: 'https://social.example.net/new', id: 'd-1' } } }; }"
+        } else { "" };
+        let js = format!("{{ publish_copy: async function () {{ throw new Error('a second draft'); }}, find_copy: async function () {{ return {find}; }}{update} }}");
+        std::fs::write(root.join(".moss/plugins/social/main.bundle.js"), format!("window.SOCIALPlugin = {js};")).unwrap();
+        for uid in ["aaaa0000", "aaaa0001"] {
+            let mut r = records.get(uid, "social").unwrap();
+            r.handoff.as_mut().unwrap().id = Some("d-1".into());
+            r.update_due = a0_changed && uid == "aaaa0000";
+            records.save(&r).unwrap();
+        }
+        (records, articles)
+    }
+
+    const WAITING: &str = "{ success: true, copy: { handoff: { text: 'Body', open_url: 'https://social.example.net/new', id: 'd-1' } } }";
+
+    fn only_a0_said(out: &[Sent], text: &str) -> bool {
+        matches!(out, [Sent { source_path, outcome: Outcome::HandedOff { text: t, open_url: Some(_) }, .. }] if source_path == "a0.md" && t == text)
+    }
+
+    /// A one-page publish rewrites that post's waiting draft with the page as
+    /// it is now, and leaves the other waiting draft alone.
+    #[tokio::test]
+    async fn a_page_publish_rewrites_its_waiting_draft() {
+        let dir = tempfile::tempdir().unwrap();
+        let (records, articles) = waiting_drafts(dir.path(), WAITING, true, false);
+        let out = run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await;
+        assert!(only_a0_said(&out, "Updated"), "{out:?}");
+        let (a, b) = (records.get("aaaa0000", "social").unwrap(), records.get("aaaa0001", "social").unwrap());
+        assert!(a.state == State::HandedOff && a.handoff.as_ref().is_some_and(|h| h.text == "Updated" && h.id.as_deref() == Some("d-1")));
+        assert_eq!(b.handoff.as_ref().unwrap().text, "Body");
+    }
+
+    /// A deploy rewrites the drafts of the pages it changed once; pages it did
+    /// not change rest, and the same deploy's second send says nothing.
+    #[tokio::test]
+    async fn a_deploy_rewrites_only_the_drafts_of_changed_pages() {
+        let dir = tempfile::tempdir().unwrap();
+        let (records, articles) = waiting_drafts(dir.path(), WAITING, true, true);
+        let out = run_lookups(dir.path(), &articles, &[], None, PER_RUN).await;
+        assert!(only_a0_said(&out, "Updated"), "{out:?}");
+        assert!(!records.get("aaaa0000", "social").unwrap().update_due);
+        let (_, articles) = waiting_drafts(dir.path(), WAITING, true, false);
+        assert!(run_lookups(dir.path(), &articles, &[], None, PER_RUN).await.is_empty(), "no page changed: neither update nor publish");
+    }
+
+    /// A failed lookup does not leave the draft stale: it is rewritten.
+    #[tokio::test]
+    async fn a_page_publish_rewrites_a_draft_whose_lookup_failed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (records, articles) = waiting_drafts(dir.path(), "null", true, false);
+        let out = run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await;
+        assert!(only_a0_said(&out, "Updated"), "{out:?}");
+        assert_eq!(records.get("aaaa0000", "social").unwrap().handoff.unwrap().text, "Updated");
+    }
+
+    /// A channel installed before `update_copy` existed says the stored draft
+    /// again, once, whether its lookup answers or fails; it makes no new one.
+    #[tokio::test]
+    async fn a_channel_without_update_copy_says_its_draft_again() {
+        for find in [WAITING, "null"] {
+            let dir = tempfile::tempdir().unwrap();
+            let (records, articles) = waiting_drafts(dir.path(), find, false, true);
+            let out = run_lookups(dir.path(), &articles, &[], None, PER_RUN).await;
+            assert!(only_a0_said(&out, "Body"), "{find}: {out:?}");
+            assert!(!records.get("aaaa0000", "social").unwrap().update_due);
+            assert!(run_lookups(dir.path(), &articles, &[], None, PER_RUN).await.is_empty(), "{find}");
+        }
+    }
+
+    /// A channel with no `find_copy` at all (LinkedIn) still has its draft
+    /// rewritten by a page publish: `update_copy` runs, `publish_copy` never.
+    #[tokio::test]
+    async fn a_channel_without_find_copy_has_its_draft_rewritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let (records, articles) = waiting_drafts(dir.path(), "null", true, false);
+        let bundle = dir.path().join(".moss/plugins/social/main.bundle.js");
+        let js = std::fs::read_to_string(&bundle).unwrap().replace("find_copy: async function () { return null; }, ", "");
+        assert!(!js.contains("find_copy"), "{js}");
+        std::fs::write(&bundle, js).unwrap();
+        let out = run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await;
+        assert!(only_a0_said(&out, "Updated"), "{out:?}");
+        assert_eq!(records.get("aaaa0000", "social").unwrap().handoff.unwrap().text, "Updated");
+    }
+
+    /// A draft the author already published is adopted, never overwritten; one
+    /// the author deleted is left, and no new one is made.
+    #[tokio::test]
+    async fn a_page_publish_never_overwrites_a_published_draft_or_remakes_a_deleted_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let (records, articles) = waiting_drafts(dir.path(), "{ success: true, copy: { absent: true } }", true, true);
+        assert!(run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await.is_empty());
+        assert_eq!(records.get("aaaa0000", "social").unwrap().state, State::HandedOff);
+        let (records, articles) = waiting_drafts(dir.path(), "{ success: true, copy: { id: 'f', url: 'https://social.example.net/f' } }", true, true);
+        let out = run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await;
+        assert_eq!(out[0].outcome, Outcome::Posted { url: "https://social.example.net/f".into() });
+        assert_eq!(records.get("aaaa0000", "social").unwrap().state, State::Posted);
     }
 
     /// Only an explicit absence lets an interrupted send go again: an empty

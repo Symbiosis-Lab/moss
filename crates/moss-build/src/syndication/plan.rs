@@ -121,6 +121,8 @@ pub(super) fn verdict(channel: &str, info: Option<&ChannelInfo>, post: &PostFact
     if records.exists(post.uid, channel) {
         return match records.get(post.uid, channel) {
             Some(r) if r.state == State::Posted && edited => Verdict::Update,
+            // The author's waiting draft is said again, never sent again.
+            Some(r) if r.state == State::HandedOff && edited => adopt().unwrap_or(Verdict::Update),
             Some(r) if r.definite_first() && edited => {
                 adopt().unwrap_or(Verdict::Due)
             }

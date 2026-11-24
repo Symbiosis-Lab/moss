@@ -226,6 +226,15 @@ fn edited_refusals_refresh_the_snapshot_while_uncertain_copies_keep_it() {
             assert_eq!(saved.state, State::Due);
             assert!(saved.form.is_none());
             assert_eq!(saved.post.unwrap().article.content, "Edited");
+        } else if state == State::HandedOff {
+            // The waiting draft is said again, and only the flag changes.
+            assert_eq!(actions(&plans)[0].2, Action::Update);
+            apply(plans, &records, Some("https://example.org"), Some(&m), &HashMap::new());
+            let saved = records.get("u", "bluesky").unwrap();
+            assert!(saved.update_due && saved.state == State::HandedOff && saved.form == r.form);
+            let none = HashSet::new();
+            let calm = PlanInputs { edited_sources: &none, ..inputs };
+            assert!(decide(&calm, &records).is_empty(), "an unchanged page rests");
         } else {
             assert!(plans.is_empty(), "{state:?}");
             assert_eq!(records.get("u", "bluesky").unwrap().form, r.form);
