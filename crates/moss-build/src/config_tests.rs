@@ -481,4 +481,6 @@ fn the_email_channel_names_its_newsletter_service() {
     assert_eq!(service("[services.newsletter]\nprovider = \"sendgrid\"\n"), None, "only the email channel names it");
     assert_eq!(service("[channels.email]\nservice = \"mailchimp\"\n"), Some(Ok("mailchimp".to_string())), "the host decides which services exist");
     assert!(service("[channels.email]\nservice = 3\n").unwrap().is_err());
+    let err = service("[channels.email]\nservice = \"a/b\"\n").unwrap().unwrap_err();
+    assert!(err.contains("must be a name"), "{err}");
 }

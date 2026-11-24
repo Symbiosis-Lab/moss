@@ -7,6 +7,20 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The site's `[channels.email] service`, refused unless a plugin of that
+/// name in the site's folder is a newsletter service.
+pub fn for_build(config: Option<&crate::config::ConfigFile>, site: &str) -> Option<Result<String, String>> {
+    config?.newsletter_service().map(|service| service.and_then(|name| provided_in(site, &name)))
+}
+
+fn provided_in(site: &str, name: &str) -> Result<String, String> {
+    let manifest = crate::plugins::bundled::read_installed_manifest(&crate::plugins::plugin_dir(site, name));
+    match manifest.and_then(|m| m.contributes).and_then(|c| c.newsletter_service) {
+        Some(_) => Ok(name.to_string()),
+        None => Err(format!("[channels.email] service is \"{name}\", and no newsletter service plugin of that name is installed in this site")),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct NewsletterServiceContribution {
     pub key: ServiceKey,

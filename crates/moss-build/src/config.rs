@@ -234,13 +234,14 @@ impl ConfigFile {
 
     /// `[channels.email] service`: the newsletter service the site's subscribers
     /// also go to. `None` when unset or empty, which keeps them with moss alone.
-    /// The host owns which services exist, so moss checks only that it is a name.
+    /// A name is ASCII letters, digits, `-` and `_`, since it is also a plugin's folder.
     pub fn newsletter_service(&self) -> Option<Result<String, String>> {
         let value = self.section(&["channels", "email", "service"])?;
+        let plain = |s: &str| s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
         match value.as_str().map(str::trim) {
             Some("") => None,
-            Some(service) => Some(Ok(service.to_string())),
-            None => Some(Err(format!("[channels.email] service must be a name such as \"sendgrid\", not {value}"))),
+            Some(service) if plain(service) => Some(Ok(service.to_string())),
+            _ => Some(Err(format!("[channels.email] service must be a name such as \"sendgrid\", not {value}"))),
         }
     }
 
