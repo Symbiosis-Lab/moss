@@ -33,6 +33,7 @@
 #   bash scripts/render-gates.sh --list                 # print the selected gate names, one per line, and exit
 #   bash scripts/render-gates.sh --group nobuild --list   # same, scoped to one group
 #   bash scripts/render-gates.sh --select               # skip each gate whose inputs are byte-for-byte a green run's (scripts/render-gate-select.mjs)
+#   bash scripts/render-gates.sh --select-shadow        # run every gate, but print WOULD-SKIP for each --select would skip, and MISSED-INPUT for each file it reads now that its green record lacks
 #   bash scripts/render-gates.sh --jobs 6               # six gates at a time, one browser each; see "Sharding" below
 #   bash scripts/render-gates.sh --jobs auto            # as many as RENDER_GATES_MEM_GB allows; see "Sharding" below
 #   bash scripts/render-gates.sh --check                # every playwright/*.config.ts is classified exactly once; exit 1 and name it otherwise
@@ -265,6 +266,7 @@ PROJECT=""
 DO_LIST=false
 DO_CHECK=false
 SELECT=false
+SHADOW=false
 JOBS=1
 POSITIONAL=()
 while [ $# -gt 0 ]; do
@@ -285,6 +287,10 @@ while [ $# -gt 0 ]; do
       ;;
     --select)
       SELECT=true
+      shift
+      ;;
+    --select-shadow)
+      SELECT=true SHADOW=true
       shift
       ;;
     --jobs)
@@ -377,6 +383,8 @@ pw() {
 }
 record_green() {
   [ "$SELECT" = true ] || return 0
+  # Before recording, so the green record the check matched (its digest ends the SKIP line) is still in the store.
+  [ -z "$matched" ] || node scripts/render-gate-select.mjs missed "$gate" "$PROJECT" "${matched##* }" "$inputs" || true
   # A gate whose inputs cannot be stored simply runs again next time.
   GATE_HEAD="$(git rev-parse --short=10 HEAD 2>/dev/null || true)" node scripts/render-gate-select.mjs record "$gate" "$PROJECT" "$inputs" || true
 }
@@ -434,10 +442,16 @@ export RENDER_GATES_WORKERS="${RENDER_GATES_WORKERS:-$workers}"
 # One gate: its Playwright run(s), then exit 0 green, 1 red, 2 skipped by --select.
 run_gate() {
   # pw and record_green read inputs through bash's dynamic scope.
-  local gate=$1 cfg="playwright/$1.config.ts" list_output="" result=0 inputs=""
+  local gate=$1 cfg="playwright/$1.config.ts" list_output="" result=0 inputs="" matched=""
   echo "── $gate ────────────────────────────────────────────"
   if [ "$SELECT" = true ]; then
-    if node scripts/render-gate-select.mjs check "$gate" "$PROJECT"; then return 2; fi
+    if matched="$(node scripts/render-gate-select.mjs check "$gate" "$PROJECT")"; then
+      echo "$matched"
+      [ "$SHADOW" = true ] || return 2
+      echo "WOULD-SKIP $gate"
+    else
+      matched=""
+    fi
     inputs="$(mktemp -t render-gate-inputs)"
   fi
   if [ -n "$PROJECT" ]; then
@@ -491,7 +505,7 @@ else
   done
   echo "── ${#spread[@]} gates on $JOBS lanes, one worker each, then ${#serial[@]} alone; logs in $logs"
   export -f run_logged run_gate pw record_green
-  export SELECT PROJECT JOBS logs
+  export SELECT SHADOW PROJECT JOBS logs
   pool() { RENDER_GATES_WORKERS=1 xargs -P "$JOBS" -I{} "$BASH" -c 'run_logged "$1"' _ {} < "$logs/queue"; }
   serial_tail() { for gate in "$@"; do run_logged "$gate"; done; }
   # Job control gives each phase its own process group, so an interrupt ends every Playwright it started.

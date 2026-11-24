@@ -1,12 +1,12 @@
 // A gate is skipped only when every input its green run recorded is unchanged.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { check, record, inputsFromLog, specPattern } from '../render-gate-select.mjs';
+import { check, record, missed, inputsFromLog, specPattern } from '../render-gate-select.mjs';
 
 const RECORDER = fileURLToPath(new URL('../../tests/support/gate-inputs.cjs', import.meta.url));
 
@@ -113,6 +113,19 @@ test('a change to a file the gate never read leaves it skipped', () => {
   record(t.root, 'demo-gate', '', greenLog(t.root, t.mossBin), { env: t.env, mossBin: t.mossBin });
   t.w('unrelated.md', 'docs');
   assert.ok(check(t.root, 'demo-gate', '', { env: t.env, mossBin: t.mossBin }));
+});
+
+test('a skipped gate that reads a file its green record lacks names that file, and only it', () => {
+  const t = tree();
+  const opts = { env: t.env, mossBin: t.mossBin };
+  record(t.root, 'demo-gate', '', greenLog(t.root, t.mossBin), opts);
+  t.w('assets/extra.css', 'b {}');
+  const hit = check(t.root, 'demo-gate', '', opts);
+  assert.ok(hit);
+  const now = `${greenLog(t.root, t.mossBin)}\nread\t${t.root}/assets/extra.css`;
+  assert.deepEqual(missed(t.root, 'demo-gate', '', now, hit.digest, opts), [['read', 'assets/extra.css']]);
+  assert.deepEqual(missed(t.root, 'demo-gate', '', greenLog(t.root, t.mossBin), hit.digest, opts), []);
+  assert.equal(missed(t.root, 'demo-gate', '', now, 'not-a-digest', opts), null);
 });
 
 test('a green entry is per project, and a gate never recorded runs', () => {
@@ -263,4 +276,33 @@ test('a site whose rebuild fails is not taken for its last green build', async (
   assert.ok(check(t.root, 'demo-gate', '', { env: t.env }), 'unchanged: skipped');
   assert.throws(() => buildScratchSite({ name: 'rebuilt', files: { 'index.md': '# two', fail: '' } }));
   assert.equal(check(t.root, 'demo-gate', '', { env: t.env }), null, 'the rebuild failed: runs');
+});
+
+test('--select-shadow runs a gate --select would skip, says so, and names what its run read beyond the record', () => {
+  const root = fileURLToPath(new URL('../..', import.meta.url));
+  const gate = 'comments-cascade';
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-shadow-'));
+  const env = { ...process.env, MOSS_RENDER_GATE_CACHE: path.join(dir, 'cache'), MOSS_BIN: '/usr/bin/true',
+    RENDER_GATES_TIMES: path.join(dir, 'times.tsv'), RENDER_GATES_LOGS: path.join(dir, 'logs'), PATH: `${dir}:${process.env.PATH}` };
+  record(root, gate, '', `read\t${root}/playwright/${gate}.config.ts`, { env });
+  // A stand-in for Playwright: it notes that the gate ran, and its recorder saw the config and one file more.
+  fs.writeFileSync(path.join(dir, 'npx'), `#!/bin/bash
+case " $* " in *" --list "*) exit 0;; esac
+echo ran >> "${dir}/ran"
+[ -z "$GATE_INPUTS_OUT" ] || printf 'read\\t%s/playwright/${gate}.config.ts\\nread\\t%s/package.json\\n' "$PWD" "$PWD" > "$GATE_INPUTS_OUT"
+`, { mode: 0o755 });
+  const run = (flag) => {
+    fs.rmSync(path.join(dir, 'ran'), { force: true });
+    const r = spawnSync('/bin/bash', ['scripts/render-gates.sh', flag, gate], { cwd: root, encoding: 'utf8', env });
+    return { ...r, ran: fs.existsSync(path.join(dir, 'ran')) };
+  };
+  const shadow = run('--select-shadow');
+  assert.equal(shadow.status, 0, shadow.stderr);
+  assert.ok(shadow.ran);
+  assert.match(shadow.stdout, new RegExp(`^WOULD-SKIP ${gate}$`, 'm'));
+  assert.match(shadow.stdout, new RegExp(`^MISSED-INPUT ${gate}\tread\tpackage\\.json$`, 'm'));
+  const select = run('--select');
+  assert.equal(select.status, 0, select.stderr);
+  assert.ok(!select.ran);
+  fs.rmSync(dir, { recursive: true, force: true });
 });
