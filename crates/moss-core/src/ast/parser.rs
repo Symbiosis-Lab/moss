@@ -26,6 +26,7 @@ use super::document::{BlockMeta, Document};
 use super::footnotes::FootnoteIndex;
 use super::math_text::{math_inline, math_source};
 use super::nesting::{cap_nesting, MAX_BLOCK_NESTING};
+use super::plain_text::inlines_to_plain_text;
 use super::node::{Block, CalloutKind, ColumnAlignment, Fold, HeadingNumber, Inline};
 use super::shortcode::Shortcode;
 use super::shortcode_extract::{extract_shortcodes_with_config, ExtractedShortcode};
@@ -1582,6 +1583,10 @@ fn build_caption_inlines(
     caption
 }
 
+fn is_line_end(e: &Event<'_>) -> bool {
+    matches!(e, Event::SoftBreak | Event::HardBreak | Event::End(TagEnd::Paragraph))
+}
+
 /// Collect a contiguous run of inline events into `Vec<Inline>`. Stops
 /// when `is_end(event)` returns true or events run out. Returns the
 /// collected inlines and the end-event index.
@@ -1951,35 +1956,12 @@ fn detect_and_assemble_callout(
     if !matches!(events.get(start), Some(Event::Start(Tag::Paragraph))) {
         return None;
     }
-    // Coalesce the leading run of `Event::Text` into one logical
-    // string. Stops at SoftBreak, HardBreak, any Start/End tag, or
-    // any non-Text inline.
-    //
-    // Math events join the run as their markdown source. `Callout.title`
-    // is a `String`, so source text is the only shape it can hold — and
-    // breaking here instead would not merely drop the equation, it would
-    // TRUNCATE the title at the first `$` and spill the remainder into the
-    // callout body (`[!note] Energy $E=mc^2$ explained` → title "Energy ").
-    // If a later phase needs a typed title, this is the line that has to
-    // become `Vec<Inline>`.
+    // The marker sits in the paragraph's leading run of text.
     let mut leading = String::new();
     let mut i = start + 1;
-    while let Some(event) = events.get(i) {
-        match event {
-            Event::Text(t) => {
-                leading.push_str(t);
-                i += 1;
-            }
-            Event::InlineMath(t) => {
-                leading.push_str(&math_source(t, false));
-                i += 1;
-            }
-            Event::DisplayMath(t) => {
-                leading.push_str(&math_source(t, true));
-                i += 1;
-            }
-            _ => break,
-        }
+    while let Some(Event::Text(t)) = events.get(i) {
+        leading.push_str(t);
+        i += 1;
     }
     if leading.is_empty() {
         return None;
@@ -1989,10 +1971,19 @@ fn detect_and_assemble_callout(
     let known = CalloutKind::from_raw(raw_kind);
     let unknown_kind = known.is_none().then(|| raw_kind.to_string());
     let kind = known.unwrap_or(CalloutKind::Note);
-    let title: Option<String> = title.map(|s| s.to_string()).filter(|s| !s.is_empty());
+    // The title is the whole marker line. Inline markup on it (`**name**`, a
+    // link) ends the leading text run, so the rest of the line is collected
+    // up to the line break and read as plain text: `title` is a `String`.
+    let title = title
+        .map(|head| {
+            let (tail, stop) = collect_inlines_until(events, i, is_line_end);
+            i = stop;
+            format!("{head}{}", inlines_to_plain_text(&tail)).trim().to_string()
+        })
+        .filter(|s| !s.is_empty());
 
-    // We've consumed the leading Text events. `i` now points at the
-    // first non-Text event in the (still-open) marker paragraph.
+    // With a title, `i` is at the marker line's end; without one, at the
+    // first event after the marker in the (still-open) marker paragraph.
     //
     // Three shapes from here:
     //   (A) SoftBreak / HardBreak → body lines continue in the same
@@ -2000,13 +1991,10 @@ fn detect_and_assemble_callout(
     //       End(Paragraph). Wrap them in a synthetic Block::Paragraph.
     //   (B) End(Paragraph) immediately → marker-only callout (no body
     //       in the marker paragraph). Skip End(Paragraph).
-    //   (C) Another inline event (Start(Emphasis), Code, etc.) → the
-    //       marker was actually followed by inline markup on the same
-    //       line. Currently treated as title continuation — but we
-    //       lack a clean event-level coalescer for inline tags, so we
-    //       just collect remaining inlines and wrap them as a body
-    //       paragraph. The author can use a separator paragraph for
-    //       clarity if they want clean title isolation.
+    //   (C) Another inline event directly after a marker with no space
+    //       (`[!note]**x**`): there is no title, and the inlines start
+    //       the body paragraph. With a space they were already taken
+    //       into the title above.
     let mut body_blocks: Vec<Block> = Vec::new();
     // This match chooses WHERE the callout body starts; it does not collect
     // content. A math event directly after the marker falls into the `_` arm,
@@ -2025,12 +2013,7 @@ fn detect_and_assemble_callout(
             i += 1;
             None
         }
-        _ => {
-            // Other inline events directly following the marker —
-            // collect them as body paragraph content. (Edge case;
-            // see method comment.)
-            Some(i)
-        }
+        _ => Some(i),
     };
 
     if let Some(body_start) = body_paragraph_start {

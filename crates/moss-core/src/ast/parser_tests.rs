@@ -34,6 +34,17 @@ fn parses_basic_callout_with_inline_title() {
 }
 
 #[test]
+fn a_callout_title_with_inline_markup_is_the_whole_marker_line() {
+    match first_block("> [!quote]- 〈x〉 **作者** y\n> Body.\n") {
+        Block::Callout { title, children, .. } => {
+            assert_eq!(title.as_deref(), Some("〈x〉 作者 y"));
+            assert_eq!(format!("{children:?}").matches("作者").count(), 0, "title spilled into the body: {children:?}");
+        }
+        other => panic!("expected Callout, got {other:?}"),
+    }
+}
+
+#[test]
 fn parses_titleless_callout() {
     match first_block("> [!warning]\n> Watch out.\n") {
         Block::Callout {
