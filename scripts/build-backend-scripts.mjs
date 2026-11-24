@@ -29,6 +29,8 @@ export const BUNDLES = [
   { entry: "crates/moss-build/src/js-src/bridge/preview-shim.ts", out: "crates/moss-build/src/ops/serve/js/comment-preview-shim.js" },
 
   { entry: "crates/moss-build/src/js-src/site/theme.ts", out: "crates/moss-build/src/assets/js/theme.js" },
+  // Inlined into every page right after the masthead, not fetched (emit/scripts.rs, `Load::Inline`).
+  { entry: "crates/moss-build/src/js-src/site/nav/nav-owned.ts", out: "crates/moss-build/src/assets/js/nav-owned.js" },
   { entry: "crates/moss-build/src/js-src/site/fullscreen.ts", out: "crates/moss-build/src/assets/js/fullscreen.js" },
   { entry: "crates/moss-build/src/js-src/site/link-preview.ts", out: "crates/moss-build/src/assets/js/preview.js" },
   { entry: "crates/moss-build/src/js-src/site/selection.ts", out: "crates/moss-build/src/assets/js/selection.js" },

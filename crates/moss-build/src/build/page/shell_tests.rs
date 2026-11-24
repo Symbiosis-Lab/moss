@@ -1657,6 +1657,7 @@ fn make_test_vars(has_sidebar_layout: bool) -> ShellVars {
         embed_head_assets: String::new(),
         post_article: String::new(),
         runtime_js_tags: String::new(),
+        inline_js: String::new(),
         lightbox: String::new(),
         robots_meta: None,
         colophon: true,
@@ -3638,6 +3639,18 @@ fn test_shell_html_runtime_js_tags_var() {
         !off.contains("runtime_js_tags") && !off.contains("/_moss/js/preview"),
         "an empty runtime_js_tags must leave no residue in the page"
     );
+}
+
+/// The inline scripts run before the first paint only if nothing below the
+/// masthead comes before them, and sit inside `<header>` so that whatever
+/// follows it stays its next sibling.
+#[test]
+fn test_shell_places_inline_js_at_the_end_of_the_header() {
+    let vars = ShellVars { inline_js: "<script>/*owned*/</script>".to_string(), ..test_vars() };
+    let result = ShellProcessor::new().process(ShellType::Page, vars);
+    let nav_end = result.find("</nav>").expect("the test page has a masthead") + "</nav>".len();
+    let rest = result[nav_end..].strip_prefix("<script>/*owned*/</script>");
+    assert!(rest.is_some_and(|r| r.trim_start().starts_with("</header>")), "{}", &result[nav_end..]);
 }
 
 // ---- The blueprint placeholder is PREVIEW-ONLY ----

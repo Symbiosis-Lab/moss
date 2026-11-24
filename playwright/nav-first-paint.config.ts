@@ -12,12 +12,13 @@
  */
 import './localhost-no-proxy';
 import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
-import { NAV_FIRST_PAINT_GATE } from '../tests/e2e/helpers/gate-sites';
+import { NAV_FIRST_PAINT_GATE, NAV_NOWRAP_GATE } from '../tests/e2e/helpers/gate-sites';
 import { defineGateConfig } from './define-gate-config';
 import { gatePort } from './gate-ports';
 
 const PORT = gatePort('nav-first-paint');
 const serveDir = buildScratchSite(NAV_FIRST_PAINT_GATE);
+const ownedServeDir = buildScratchSite(NAV_NOWRAP_GATE);
 
 export default defineGateConfig({
   gate: 'nav-first-paint',
@@ -25,5 +26,8 @@ export default defineGateConfig({
     baseURL: `http://localhost:${PORT}/`,
     colorScheme: 'light',
   },
-  webServer: { serveDir, port: PORT },
+  webServer: [
+    { serveDir, port: PORT },
+    { serveDir: ownedServeDir, port: gatePort('nav-first-paint:owned') },
+  ],
 });

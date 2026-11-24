@@ -49,6 +49,7 @@
 
 import { isVertical } from "../writing-mode";
 import { teardownStack } from "./teardown";
+import { readOwned, setMode, type Mode } from "./nav-owned";
 
 /** Widths (px) of everything a one-row masthead has to seat. */
 export interface RowWidths {
@@ -92,16 +93,6 @@ function contentSize(el: HTMLElement, vertical: boolean): number {
 /** Everything the previous `initNavSplit()` bound, undone on the next call. */
 const stack = teardownStack();
 const { on } = stack;
-
-const MODES = ["compact", "split", "stack", "scroll", "flat"] as const;
-type Mode = (typeof MODES)[number];
-
-/** The one writer of `.nav-content`'s `data-nav-*`: at most one mode, plus `data-nav-owned` for a masthead its theme lays out. */
-function setMode(el: HTMLElement, mode: Mode | null, owned = false): void {
-  for (const m of MODES) el.removeAttribute(`data-nav-${m}`);
-  if (mode) el.setAttribute(`data-nav-${mode}`, "");
-  el.toggleAttribute("data-nav-owned", owned);
-}
 
 /**
  * A breadcrumb trail's extent, read from a max-content copy beside it, out of
@@ -177,14 +168,15 @@ export function initNavSplit(): void {
 
   const navLeft = navContent.querySelector<HTMLElement>(".nav-left");
   const siteName = navLeft?.querySelector<HTMLElement>(".site-name");
-  const navRight = navContent.querySelector<HTMLElement>(".nav-right");
   const links = navContent.querySelector<HTMLElement>(".nav-links");
   const icons = navContent.querySelector<HTMLElement>(".nav-icons");
   const hamburger = navContent.querySelector<HTMLElement>(".mobile-menu-button");
 
-  // A masthead with no link set has nothing to move.
+  // A masthead with no link set has nothing to move; who lays it out still
+  // stands, as the inline read before the first paint decided it. It is read
+  // once: a theme that flattens only below some width is not followed here.
   if (!navLeft || !siteName || !links || !icons || links.children.length === 0) {
-    setMode(navContent, null);
+    readOwned(navContent);
     return;
   }
   const trail = navLeft.querySelector(".breadcrumb-segment") !== null;
@@ -192,17 +184,8 @@ export function initNavSplit(): void {
   function layout(): void {
     const vertical = isVertical(navContent!);
     const size = (el: HTMLElement) => inlineSize(el, vertical);
-    // A theme that flattens `.nav-right` or holds the masthead to one row
-    // (`flex-wrap: nowrap`, often with a fixed height) lays the masthead out
-    // itself. Its signals are read with the float layout off, since the float
-    // flattens `.nav-right` too, and on every call: a theme may flatten only
-    // below some width, and may show the menu button above 20rem.
-    setMode(navContent!, null, true);
-    const flattened = navRight !== null && getComputedStyle(navRight).display === "contents";
-    const oneRow = getComputedStyle(navContent!).flexWrap === "nowrap";
-    const owned = flattened || oneRow;
+    const { owned, flattened } = readOwned(navContent!);
     const mode = (m: Mode | null) => setMode(navContent!, m, owned);
-    mode(null);
     // Where the menu button shows (≤20rem, or wider where a theme shows it)
     // the links are its overlay panel, not a row: the button stands in for them.
     if (hamburger && getComputedStyle(hamburger).display !== "none") {
@@ -247,7 +230,7 @@ export function initNavSplit(): void {
       if (fitsOneRow()) return;
     }
     // A one-row theme has no room for a second: its links scroll in the row.
-    mode(oneRow ? "scroll" : "split");
+    mode(owned ? "scroll" : "split");
   }
 
   // The masthead resizes with the window and with the font arriving; the

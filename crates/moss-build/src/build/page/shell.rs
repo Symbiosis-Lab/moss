@@ -283,6 +283,12 @@ pub struct ShellVars {
     /// than one var per script because every gate is SITE-level: the set is
     /// identical on every page of a build.
     pub runtime_js_tags: String,
+    /// The inline scripts placed at the end of `<header>`, after the masthead
+    /// (`emit::scripts::ScriptAssets::inline_tags`), so they run before the
+    /// first paint. Inside it, not after it: `header:has(+ .moss-hero)` and a
+    /// theme's own `header + …` need the next sibling. Site-level, like
+    /// `runtime_js_tags`.
+    pub inline_js: String,
     /// The full-screen viewer's markup (`media_collection::lightbox_html`),
     /// set only on a page that has a picture the viewer opens; empty elsewhere. Dropped in
     /// just before the runtime scripts, which `fullscreen.js` finds it through.
@@ -361,9 +367,10 @@ impl ShellProcessor {
             String::new()
         } else {
             format!(
-                "<header{}>\n        <nav class=\"main-nav container\">\n            <div class=\"nav-content\">\n                {}\n            </div>\n        </nav>\n    </header>",
+                "<header{}>\n        <nav class=\"main-nav container\">\n            <div class=\"nav-content\">\n                {}\n            </div>\n        </nav>{}\n    </header>",
                 vars.header_attrs,
-                vars.navigation
+                vars.navigation,
+                vars.inline_js,
             )
         };
 

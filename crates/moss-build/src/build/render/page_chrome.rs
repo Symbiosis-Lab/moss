@@ -229,6 +229,7 @@ impl PageChromeContext<'_, '_> {
             theme_importmap,
             has_sidebar_layout: self.has_sidebar_layout,
             runtime_js_tags: self.assets.scripts.shell_tags(&self.layout.assets, paths),
+            inline_js: self.assets.scripts.inline_tags(&self.layout.assets),
             content_width_attr: resolve_data_attr(page_width.as_ref(), site_width.as_ref(), "content-width", None),
             typesetting_attr: resolve_data_attr(doc.and_then(|d| d.typesetting.as_ref()), self.layout.typesetting.as_ref(), "typesetting", Some("horizontal")),
             comments_attr: resolve_comments_attr(doc.and_then(|d| d.comments), self.layout.comments),

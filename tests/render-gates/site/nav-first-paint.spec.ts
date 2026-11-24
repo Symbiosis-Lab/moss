@@ -15,6 +15,7 @@
 
 import { test, expect, type Page, newPage } from "../../support/browser-test";
 import { holdScript, settle, shifts, themeKeepsNavRightABox } from "./first-paint";
+import { gatePort } from "../../../playwright/gate-ports";
 
 const LONG_TRAIL = "/survey/river/fourth-volume/";
 const SHORT_TRAIL = "/notes/rain/";
@@ -51,6 +52,23 @@ async function masthead(page: Page, forceSplit = false): Promise<Masthead> {
       iconsStart: box(".nav-icons").left,
     };
   }, forceSplit);
+}
+
+// A plain name under a theme that holds the masthead to one row, with its own
+// menu button below 48rem: the float the stylesheet paints first is not the
+// theme's layout, so the masthead must not move when the script hands it over.
+for (const width of [375, 769, 1280]) {
+  test(`a theme-owned plain-name masthead does not move when the script runs at ${width}px`, async ({ page, browserName }) => {
+    test.skip(browserName !== "chromium", "layout-shift entries are Chromium's");
+    await page.setViewportSize({ width, height: 900 });
+    await holdScript(page);
+    await page.goto(`http://localhost:${gatePort("nav-first-paint:owned")}/`, { waitUntil: "load" });
+    await settle(page);
+    const shift = await shifts(page);
+    const where = shift.entries.join("\n");
+    expect(shift.paintedFirst, `the first paint must come before the script: ${where}`).toBe(true);
+    expect(shift.total, where).toBeLessThan(0.01);
+  });
 }
 
 // 412 is a phone; 700 is high in the phone band, where a foldable trail fits

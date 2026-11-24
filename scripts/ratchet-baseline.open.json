@@ -77,7 +77,7 @@
         "crates/moss-build/src/cli": 25,
         "crates/moss-build/src/build/components": 15,
         "crates/moss-build/src/build/emit": 20,
-        "crates/moss-build/src/assets/js": 18,
+        "crates/moss-build/src/assets/js": 19,
         "crates/moss-build/src/build/place_map": 16,
         "packages/moss-ui/src/ui/shared/ui": 19,
         "packages/moss-ui/src/ui": 20,

@@ -121,6 +121,7 @@ fn gates_change_which_scripts_ship() {
     // page, but the preview server injects it — no row here, and nothing in a
     // published site.)
     assert!(off.contains("theme"), "'theme' must ship regardless of config");
+    assert!(off.contains("nav-owned"), "every masthead's owner is read before the first paint");
     // And the gated ones are genuinely absent.
     for gated in ["preview", "heading-anchor", "math-copy", "search", "fullscreen", "share-card", "selection"] {
         assert!(!off.contains(gated), "'{gated}' must not ship when its gate is off");
@@ -155,7 +156,7 @@ fn each_gate_reads_a_distinct_fact() {
         let gated: BTreeSet<&str> = on
             .iter()
             .copied()
-            .filter(|n| *n != "theme")
+            .filter(|n| !["theme", "nav-owned"].contains(n))
             .collect();
         assert_eq!(
             gated,
@@ -352,4 +353,25 @@ fn link_preview_not_prose_lists_each_component_class() {
         let selector = format!(".{class}");
         assert!(selectors.contains(selector.as_str()), "{selector} is missing from NOT_PROSE");
     }
+}
+
+/// An inline row reaches the page as one `<script>` with its bytes, and never
+/// as a file or a `<script src>`: nothing would serve the file.
+#[test]
+fn inline_scripts_are_written_into_the_page_not_emitted() {
+    let scripts = ScriptAssets::resolve();
+    let inline = scripts.inline_tags(&SiteAssets::default());
+    assert!(inline.starts_with("<script>") && inline.contains("data-nav-owned"), "{inline}");
+    assert_eq!(inline.matches("</script").count(), 1, "the bytes must not close the tag early: {inline}");
+    assert!(!inline.contains("<!--"), "a comment opener changes how the tag's end is parsed: {inline}");
+    let dir = tempfile::tempdir().unwrap();
+    let mut pending = crate::build::manifest::PendingManifest::new(Default::default());
+    scripts.emit(&SiteAssets::default(), dir.path(), &mut pending).unwrap();
+    let names: Vec<String> = walkdir::WalkDir::new(dir.path())
+        .into_iter()
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(!names.iter().any(|n| n.starts_with("nav-owned")), "{names:?}");
+    assert!(names.iter().any(|n| n.starts_with("theme.")), "the emit ran: {names:?}");
 }
