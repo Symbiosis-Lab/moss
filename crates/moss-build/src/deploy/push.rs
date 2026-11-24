@@ -982,6 +982,7 @@ mod tests {
                 missing_references: Vec::new(),
                 unresolved_inputs: vec!["about.md".into()],
                 drafts_linked: vec![],
+                remote_pictures: vec![],
             },
         );
         let identity = Identity::generate().unwrap();

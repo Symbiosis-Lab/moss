@@ -1750,6 +1750,7 @@ pub fn process_markdown_file(
         // still logged here, but they are not physical-source coordinates and
         // must not become publish evidence.
         missing_reference_occurrences: Vec::new(),
+        remote_picture_occurrences: Vec::new(),
     })
 }
 

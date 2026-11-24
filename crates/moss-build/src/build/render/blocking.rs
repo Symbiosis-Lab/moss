@@ -52,7 +52,7 @@ use super::page_chrome::{ChromeAssets, PageChromeContext, PageFamily, PageOwnedA
 use super::image_util::PREVIEW_MAX_CHARS;
 use super::preflight::{check_misplaced_theme_files, check_mixed_multilingual_structure};
 use super::html::{RenderCtx, render_page, tab_title};
-use super::source_evidence::{flatten_missing_reference_occurrences, SourceRecord};
+use super::source_evidence::{flatten_occurrences, AuthoredEvidence, SourceRecord};
 
 /// # Note
 /// The caller is responsible for creating the output directory and managing
@@ -1064,14 +1064,16 @@ pub fn generate_blocking_content_for_build(
     for record in &source_records {
         let doc = &mut documents[record.document_index];
         let public_source = members_policy.public_source(&record.source_path, &record.source);
-        doc.missing_reference_occurrences = parse_session.recording(&record.source_path, &parse_answers, || {
-            crate::build::types::MissingReferenceOccurrence::from_authored_source(
+        let evidence = parse_session.recording(&record.source_path, &parse_answers, || {
+            AuthoredEvidence::from_authored_source(
                 &record.source_path,
                 &public_source,
                 &authored_evidence_parse_config,
                 &reference_context,
             )
         });
+        doc.missing_reference_occurrences = evidence.missing;
+        doc.remote_picture_occurrences = evidence.remote_pictures;
         gated_embeds.extend(crate::build::scan::members::gated_embeds(members_policy, &record.source_path, &public_source, doc.members_full.is_some().then_some(record.source.as_str()), &authored_evidence_parse_config, &content_graph));
         parse_session.note_source_bytes(&record.source_path, record.source.as_bytes(), record.stat());
         parse_session.verify_shadow(&record.source_path, doc);
@@ -1084,7 +1086,8 @@ pub fn generate_blocking_content_for_build(
         reporter.report(&event);
     }
 
-    let missing_references = flatten_missing_reference_occurrences(&documents);
+    let missing_references = flatten_occurrences(&documents, |d| &d.missing_reference_occurrences);
+    let remote_pictures = flatten_occurrences(&documents, |d| &d.remote_picture_occurrences);
 
     // The PRE-reduce cache boundary: the passes below fold other documents'
     // state into a parsed document.
@@ -3369,6 +3372,7 @@ pub fn generate_blocking_content_for_build(
             hashes: site_hashes,
             deferred_paths,
             missing_references,
+            remote_pictures,
             term_index,
             now,
             places_data,

@@ -90,6 +90,8 @@ pub struct DryRun {
     /// Scripts in a members folder that are published to everyone; `None`
     /// when no build listed them.
     pub public_scripts: Option<Vec<String>>,
+    /// Pictures from other sites whose hosts say they are gone.
+    pub remote_pictures: super::remote_pictures::RemotePictureReport,
 }
 
 impl DryRun {
@@ -114,6 +116,7 @@ impl DryRun {
             copies,
             owner,
             public_scripts,
+            remote_pictures,
         } = self;
         let mut change_set = serde_json::to_value(set).expect("a change set serializes");
         if let Some(fields) = change_set.as_object_mut() {
@@ -149,6 +152,7 @@ impl DryRun {
             "copies": copies,
             "owner": owner,
             "public_scripts": public_scripts,
+            "remote_pictures": remote_pictures,
         })
     }
 
@@ -191,6 +195,9 @@ impl DryRun {
             Transfer::NotCounted => out.push_str("Transfer: not counted for a deploy plugin.\n"),
         }
         if let Some(line) = crate::build::scan::members::public_scripts_line(self.public_scripts.as_deref()) {
+            out.push_str(&format!("{line}\n"));
+        }
+        for line in self.remote_pictures.lines() {
             out.push_str(&format!("{line}\n"));
         }
         if let Some(site) = &self.would_register {
@@ -463,7 +470,11 @@ pub async fn run_dry_run(
             None => Transfer::NoRecord,
         }
     };
-    let (owner, server) = ask_server(folder, &local, overwrite_newer).await;
+    let page_address = |source: &str| super::remote_pictures::page_address(&sealed, source);
+    let ((owner, server), remote_pictures) = tokio::join!(
+        ask_server(folder, &local, overwrite_newer),
+        super::remote_pictures::check(&folder_str, &page_address),
+    );
     use crate::deploy::Refusal;
     let local_refusal = crate::deploy::removal_gate::refuse_output_collisions(&sealed).err()
         .map(|t| Refusal::new(crate::deploy::RefusalKind::OutputCollision, t))
@@ -489,6 +500,7 @@ pub async fn run_dry_run(
         copies: crate::syndication::preview::for_dry_run(folder, &sealed),
         owner,
         public_scripts: crate::system::build_records::records().public_scripts(&folder_str),
+        remote_pictures,
     })
 }
 
@@ -563,6 +575,7 @@ pub async fn run_prebuilt_dry_run(
         owner,
         // Nothing was built, so no members cascade applies.
         public_scripts: Some(Vec::new()),
+        remote_pictures: Default::default(),
     })
 }
 
@@ -596,6 +609,7 @@ mod tests {
             copies: Vec::new(),
             owner: Owner::Unchecked { reason: "this folder has no site".into() },
             public_scripts: Some(Vec::new()),
+            remote_pictures: Default::default(),
         }
     }
 
@@ -643,6 +657,7 @@ mod tests {
             copies: Vec::new(),
             owner: Owner::Unchecked { reason: "this folder has no site".into() },
             public_scripts: Some(Vec::new()),
+            remote_pictures: Default::default(),
         };
 
         let text = dry.render();
@@ -755,6 +770,7 @@ mod tests {
             copies: Vec::new(),
             owner: Owner::Unchecked { reason: "this folder has no site".into() },
             public_scripts: Some(Vec::new()),
+            remote_pictures: Default::default(),
         };
         let text = dry.render();
         assert!(text.contains("Pages: not classified"), "{text}");

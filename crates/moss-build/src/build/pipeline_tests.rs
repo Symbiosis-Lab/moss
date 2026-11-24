@@ -129,7 +129,7 @@ fn build_test_full(
     server_port: Option<u16>,
     services: Option<&BuildServices>,
     resolved_slots: &ResolvedSlots,
-) -> Result<(bool, Vec<crate::build::types::MissingReferenceOccurrence>), String> {
+) -> Result<(bool, Vec<crate::build::types::ReferenceOccurrence>), String> {
     build_test_full_with_gates(
         folder_path,
         site_dir_state,
@@ -149,7 +149,7 @@ fn build_test_full_with_gates(
     services: Option<&BuildServices>,
     resolved_slots: &ResolvedSlots,
     gates: crate::build::render::IncrementalGates,
-) -> Result<(bool, Vec<crate::build::types::MissingReferenceOccurrence>), String> {
+) -> Result<(bool, Vec<crate::build::types::ReferenceOccurrence>), String> {
     build_test_with_stash(folder_path, site_dir_state, progress_sender, server_port, services, resolved_slots, gates)
         .map(|(is_empty, missing, _)| (is_empty, missing))
 }
@@ -163,7 +163,7 @@ fn build_test_with_stash(
     services: Option<&BuildServices>,
     resolved_slots: &ResolvedSlots,
     gates: crate::build::render::IncrementalGates,
-) -> Result<(bool, Vec<crate::build::types::MissingReferenceOccurrence>, crate::types::content::SiteHashes), String> {
+) -> Result<(bool, Vec<crate::build::types::ReferenceOccurrence>, crate::types::content::SiteHashes), String> {
     let ps = scan_folder(folder_path)?;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -188,6 +188,7 @@ fn build_test_with_stash(
             build_documents: _documents,
             content_hashes,
             missing_references,
+            remote_pictures: _remote_pictures,
             unresolved_inputs: _unresolved_inputs,
             cancelled: _cancelled,
             home_ready: _home_ready,

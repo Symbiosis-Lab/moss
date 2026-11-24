@@ -142,7 +142,7 @@ async fn deploy_profile_refusal_records_once_without_error_text() {
     crate::system::build_records::records().install_publish_preflight(
         folder.to_str().unwrap(), crate::build::types::PublishPreflightProjection {
             build_generation: 1, missing_references: vec![],
-            unresolved_inputs: vec!["private-note.md".into()], drafts_linked: vec![],
+            unresolved_inputs: vec!["private-note.md".into()], drafts_linked: vec![], remote_pictures: vec![],
         },
     );
     let sealed = crate::build::manifest::PendingManifest::for_build(

@@ -225,6 +225,7 @@ impl BuildRecords {
             missing_references: evidence.missing_references.clone(),
             unresolved_inputs: Vec::new(),
             drafts_linked: evidence.drafts_linked.clone(),
+            remote_pictures: evidence.remote_pictures.clone(),
         });
         self.record_promised_dead_links(folder_path, PromisedDeadLinks::default());
         self.record_pending_derivations(folder_path, 0);
@@ -442,7 +443,7 @@ mod tests {
     fn projection(generation: u64, reference: &str) -> PublishPreflightProjection {
         PublishPreflightProjection {
             build_generation: generation,
-            missing_references: vec![crate::build::types::MissingReferenceOccurrence {
+            missing_references: vec![crate::build::types::ReferenceOccurrence {
                 source_path: "page.md".to_string(),
                 source_revision: crate::build::types::SourceRevision::from_source("page"),
                 reference: reference.to_string(),
@@ -454,6 +455,7 @@ mod tests {
             }],
             unresolved_inputs: vec![],
             drafts_linked: vec![],
+            remote_pictures: vec![],
         }
     }
 

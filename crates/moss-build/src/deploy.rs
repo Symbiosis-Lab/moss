@@ -53,6 +53,7 @@ pub use publish_error::PublishError;
 // credential store, and the two refusals are asked by the same call sites.
 pub mod publish_setup;
 pub mod push;
+pub mod remote_pictures;
 // Cross-process exclusion for the machine-scoped OnionPress stack: the install
 // lock the app takes, and the publish lease a terminal publish writes. Here
 // rather than app-side because `moss deploy` is the second process the
@@ -623,7 +624,7 @@ fn files_are(count: usize, state: &str) -> String {
 /// The refusal a user reads. Says what did not happen, not which subsystem said
 /// no, and where each missing file is named: this text is the only place a
 /// driver without a problems panel learns which line to fix.
-pub(crate) fn refusal_text(missing: &[crate::build::types::MissingReferenceOccurrence]) -> String {
+pub(crate) fn refusal_text(missing: &[crate::build::types::ReferenceOccurrence]) -> String {
     let subject = files_are(missing.len(), "missing");
     let lines = removal_gate::capped_lines(missing, |m| {
         format!("`{}` line {} names `{}`.", m.source_path, m.source_span.line, m.reference)

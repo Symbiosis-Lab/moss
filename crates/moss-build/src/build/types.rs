@@ -12,7 +12,7 @@ use specta::Type;
 
 // SeriesField moved to moss-core. Re-exported for backward compat.
 pub use moss_core::frontmatter_typed::SeriesField;
-pub use crate::build::render::{DraftLinkOccurrence, MissingReferenceOccurrence, PublishPreflightProjection, SourceRevision, SourceSpan};
+pub use crate::build::render::{DraftLinkOccurrence, ReferenceOccurrence, PublishPreflightProjection, SourceRevision, SourceSpan};
 
 /// Validated event facts shared by page metadata, listings and calendar files.
 /// Present when `start` parses; `end` must also parse and not precede it.
@@ -817,7 +817,11 @@ pub struct ParsedDocument {
     /// Missing references with physical source evidence; not serialized.
     #[serde(skip)]
     #[specta(skip)]
-    pub missing_reference_occurrences: Vec<MissingReferenceOccurrence>,
+    pub missing_reference_occurrences: Vec<ReferenceOccurrence>,
+    /// Pictures from other sites, with the same evidence; not serialized.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub remote_picture_occurrences: Vec<ReferenceOccurrence>,
 }
 
 /// Whether `folder` is `root` or a folder inside it. The one test for "at or

@@ -16,7 +16,7 @@ use crate::build::types::ParsedDocument;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-const FILE: crate::build::cache::MemoFile = crate::build::cache::MemoFile::new("parse-cache", 2);
+const FILE: crate::build::cache::MemoFile = crate::build::cache::MemoFile::new("parse-cache", 3);
 
 #[derive(Serialize, Deserialize)]
 struct Saved {
@@ -103,7 +103,8 @@ struct Rest {
     body_plan: Option<SavedPlan>,
     outgoing_links: Vec<moss_core::resolve::OutgoingLink>,
     embed_deps: Vec<(String, String)>,
-    missing_reference_occurrences: Vec<crate::build::types::MissingReferenceOccurrence>,
+    missing_reference_occurrences: Vec<crate::build::types::ReferenceOccurrence>,
+    remote_picture_occurrences: Vec<crate::build::types::ReferenceOccurrence>,
 }
 
 /// A body plan of HTML, folder-embed sections and inline subscribe forms. A plan
@@ -303,6 +304,7 @@ impl SavedDoc {
             outgoing_links,
             embed_deps,
             missing_reference_occurrences,
+            remote_picture_occurrences,
         } = doc;
         if !translations.is_empty() || !placed_fields.is_empty() || !declared.is_empty() || hero_from.is_some() {
             return None;
@@ -384,6 +386,7 @@ impl SavedDoc {
                 outgoing_links: outgoing_links.clone(),
                 embed_deps: embed_deps.clone(),
                 missing_reference_occurrences: missing_reference_occurrences.clone(),
+                remote_picture_occurrences: remote_picture_occurrences.clone(),
             },
         })
     }
@@ -454,6 +457,7 @@ impl SavedDoc {
             outgoing_links,
             embed_deps,
             missing_reference_occurrences,
+            remote_picture_occurrences,
         } = rest;
         doc.logo = logo;
         doc.card_cover = card_cover;
@@ -518,6 +522,7 @@ impl SavedDoc {
         doc.outgoing_links = outgoing_links;
         doc.embed_deps = embed_deps;
         doc.missing_reference_occurrences = missing_reference_occurrences;
+        doc.remote_picture_occurrences = remote_picture_occurrences;
         doc
     }
 }

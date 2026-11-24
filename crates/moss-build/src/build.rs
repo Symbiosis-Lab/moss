@@ -1014,7 +1014,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
         crate::system::build_records::records().install_publish_preflight(
             &folder_path, types::PublishPreflightProjection {
                 build_generation, missing_references: Vec::new(), unresolved_inputs: evidence.unresolved_structural(),
-                drafts_linked: Vec::new(),
+                drafts_linked: Vec::new(), remote_pictures: Vec::new(),
             },
         );
         if matches!(&failure, scan::scan::ScanFailure::Storage(unavailable) if unavailable.pending.is_some()) {
@@ -1255,7 +1255,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
         })
     };
 
-    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_references, unresolved_inputs, cancelled, home_ready: _home_ready, publishable, reloads, render, unready_derivations, folder_lock, locked_at_nanos } = {
+    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_references, remote_pictures, unresolved_inputs, cancelled, home_ready: _home_ready, publishable, reloads, render, unready_derivations, folder_lock, locked_at_nanos } = {
         // One attempt: its own clones, its own `SlotResolver`.
         let attempt = || {
             let root_owned = config.root.clone();
@@ -1341,10 +1341,10 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
         |src| std::fs::read_to_string(config.source().join(src)).ok(),
     );
     // Under the folder lock, so the records are this render's own.
-    let seal_evidence = crate::build::inputs::SealEvidence::of_render(&folder_path, !cancelled && unresolved_inputs.is_empty() && unready_derivations.pending == 0, &missing_references, &drafts_linked);
+    let seal_evidence = crate::build::inputs::SealEvidence::of_render(&folder_path, !cancelled && unresolved_inputs.is_empty() && unready_derivations.pending == 0, &missing_references, &drafts_linked, &remote_pictures);
     crate::system::build_records::records().install_publish_preflight(
         &folder_path,
-        crate::build::types::PublishPreflightProjection { build_generation, missing_references, unresolved_inputs, drafts_linked },
+        crate::build::types::PublishPreflightProjection { build_generation, missing_references, unresolved_inputs, drafts_linked, remote_pictures },
     );
 
     // Beside the other seal-time gate records: how many derived-text blocks

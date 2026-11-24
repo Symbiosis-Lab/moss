@@ -1324,7 +1324,7 @@ export type LoginKind = "matters" | "ghost"
 /**
  * Physical-source evidence for a missing authored asset.
  */
-export type MissingReferenceOccurrence = { 
+export type ReferenceOccurrence = { 
 /**
  * Markdown file holding the reference, relative to the site root.
  */
@@ -2037,7 +2037,7 @@ export type PublishPreflightProjection = {
  * Ordered at build admission, so a later build cannot be overwritten by
  * an older build that happens to complete after it.
  */
-build_generation: number; missing_references: MissingReferenceOccurrence[]; 
+build_generation: number; missing_references: ReferenceOccurrence[]; 
 /**
  * Required inputs this attempt could not read. A clean later attempt
  * replaces this list, even while an older complete seal remains selected.

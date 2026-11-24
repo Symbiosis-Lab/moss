@@ -955,6 +955,24 @@ mod dry_run_tests {
         assert!(fx.record_bytes().is_empty(), "nothing published, so no record");
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dry_run_marks_a_picture_from_another_site_that_is_gone_and_refuses_nothing() {
+        let mut host = mockito::Server::new_async().await;
+        let _gone = host.mock("HEAD", "/gone.jpg").with_status(404).create_async().await;
+        let _here = host.mock("HEAD", "/here.jpg").with_status(200).create_async().await;
+        let fx = Fixture::new(false).await;
+        let page = format!("---\ntitle: Home\n---\n\n![a]({0}/here.jpg)\n\n![b]({0}/gone.jpg)\n", host.url());
+        std::fs::write(fx.dir.path().join("index.md"), page).unwrap();
+
+        let dry = dry_run_against(&fx).await;
+
+        assert!(dry.refusal.is_none(), "{dry:?}");
+        let gone = &dry.to_json()["remote_pictures"]["gone"];
+        assert_eq!(gone.as_array().map(Vec::len), Some(1), "{gone}");
+        assert_eq!((gone[0]["source_path"].as_str(), gone[0]["reference"].as_str(), gone[0]["status"].as_u64()), (Some("index.md"), Some(format!("{}/gone.jpg", host.url()).as_str()), Some(404)));
+        assert!(dry.render().contains(&format!("index.md:7  {}/gone.jpg  no longer loads (404)", host.url())), "{}", dry.render());
+    }
+
     async fn dry_run_with(fx: &Fixture, flags: DeployFlags) -> crate::deploy::dry_run::DryRun {
         let report = fx.run_with(flags).await.expect("a dry run reports");
         let DeployReport::DryRun(dry) = report else { panic!("expected a dry run, got {report:?}") };

@@ -137,6 +137,7 @@ fn empty_site_result() -> crate::types::content::SiteResult {
         hashes: crate::types::content::SiteHashes::default(),
         deferred_paths: Vec::new(),
         missing_references: Vec::new(),
+        remote_pictures: Vec::new(),
         term_index: Default::default(),
         now: Default::default(),
         places_data: None,

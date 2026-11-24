@@ -383,7 +383,11 @@ pub struct SiteResult {
     /// while this is non-empty.
     #[serde(skip)]
     #[specta(skip)]
-    pub missing_references: Vec<crate::build::types::MissingReferenceOccurrence>,
+    pub missing_references: Vec<crate::build::types::ReferenceOccurrence>,
+    /// Pictures the pages show from other sites, for the publish to probe.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub remote_pictures: Vec<crate::build::types::ReferenceOccurrence>,
     /// The terms this build derived, for passes that run after render (a
     /// plugin-drawn listing links names to their term pages).
     #[serde(skip)]

@@ -1,11 +1,11 @@
 //! The publish gate: what it refuses, and — just as load-bearing — what it lets through.
 
 use super::{refusal_text, refuse_publish};
-use crate::build::types::{MissingReferenceOccurrence, PublishPreflightProjection, SourceRevision, SourceSpan};
+use crate::build::types::{ReferenceOccurrence, PublishPreflightProjection, SourceRevision, SourceSpan};
 
 /// The records are process-global, so every case keys on its own folder —
 /// otherwise two tests running in parallel share one verdict.
-fn record(folder: &str, generation: u64, missing_references: Vec<MissingReferenceOccurrence>) {
+fn record(folder: &str, generation: u64, missing_references: Vec<ReferenceOccurrence>) {
     crate::system::build_records::records().install_publish_preflight(
         folder,
         PublishPreflightProjection {
@@ -13,12 +13,13 @@ fn record(folder: &str, generation: u64, missing_references: Vec<MissingReferenc
             missing_references,
             unresolved_inputs: Vec::new(),
             drafts_linked: Vec::new(),
+            remote_pictures: Vec::new(),
         },
     );
 }
 
-fn missing(source: &str, reference: &str) -> MissingReferenceOccurrence {
-    MissingReferenceOccurrence {
+fn missing(source: &str, reference: &str) -> ReferenceOccurrence {
+    ReferenceOccurrence {
         source_path: source.into(),
         source_revision: SourceRevision::from_source("revision"),
         reference: reference.into(),
@@ -152,6 +153,7 @@ fn a_published_page_linking_to_a_draft_blocks_the_publish() {
             missing_references: Vec::new(),
             unresolved_inputs: Vec::new(),
             drafts_linked: vec![draft_link("about/team.md", "/notes/wip/", "notes/wip.md")],
+            remote_pictures: Vec::new(),
         },
     );
     let err = refuse_publish("/links-a-draft").expect_err("a link to a draft must stop the publish");

@@ -863,7 +863,9 @@ pub struct PipelineRunOutput {
     pub content_hashes: SiteHashes,
     /// Missing authored asset evidence from this exact build. Empty is the
     /// completed clean answer and is meaningful.
-    pub missing_references: Vec<crate::build::types::MissingReferenceOccurrence>,
+    pub missing_references: Vec<crate::build::types::ReferenceOccurrence>,
+    /// Pictures from other sites in this build, for the publish to probe.
+    pub remote_pictures: Vec<crate::build::types::ReferenceOccurrence>,
     /// Structural inputs this attempt still needs before its generation can
     /// replace the durable baseline.
     pub unresolved_inputs: Vec<String>,
@@ -1653,6 +1655,7 @@ fn build_inner(
     // detached seal task writes later.
     let content_hashes_for_watch = site_result.hashes.clone();
     let missing_references_for_publish = site_result.missing_references.clone();
+    let remote_pictures_for_publish = site_result.remote_pictures.clone();
     let (changed, new, deleted) = (
         site_result.hashes.get_changed_files(&previous_hashes),
         site_result.hashes.get_new_files(&previous_hashes),
@@ -1713,6 +1716,7 @@ fn build_inner(
             build_documents: std::sync::Arc::new(documents),
             content_hashes: content_hashes_for_watch,
             missing_references: missing_references_for_publish,
+            remote_pictures: remote_pictures_for_publish,
             unresolved_inputs: input_evidence.unresolved_structural(),
             cancelled: true,
             home_ready,
@@ -2143,6 +2147,7 @@ fn build_inner(
         build_documents: documents,
         content_hashes: content_hashes_for_watch,
         missing_references: missing_references_for_publish,
+        remote_pictures: remote_pictures_for_publish,
         unresolved_inputs: input_evidence.unresolved_structural(),
         cancelled: false,
         home_ready,

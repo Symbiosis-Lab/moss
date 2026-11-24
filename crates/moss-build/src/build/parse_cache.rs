@@ -1648,7 +1648,7 @@ mod tests {
         reset_for_tests();
         let doc = ParsedDocument {
             source_path: Some("a.md".to_string()),
-            missing_reference_occurrences: vec![crate::build::types::MissingReferenceOccurrence {
+            missing_reference_occurrences: vec![crate::build::types::ReferenceOccurrence {
                 source_path: "a.md".to_string(),
                 source_revision: crate::build::types::SourceRevision::from_source("revision"),
                 reference: "gone.png".to_string(),

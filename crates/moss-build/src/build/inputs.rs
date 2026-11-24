@@ -79,8 +79,10 @@ pub struct BuildInputs {
 /// and a folder change never stops at entry.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SealEvidence {
-    pub missing_references: Vec<crate::build::types::MissingReferenceOccurrence>,
+    pub missing_references: Vec<crate::build::types::ReferenceOccurrence>,
     pub drafts_linked: Vec<crate::build::types::DraftLinkOccurrence>,
+    #[serde(default)]
+    pub remote_pictures: Vec<crate::build::types::ReferenceOccurrence>,
     /// Scripts a members folder published to everyone; `None` when the build
     /// recorded no list.
     pub public_scripts: Option<Vec<String>>,
@@ -96,11 +98,12 @@ pub struct SealEvidence {
 impl SealEvidence {
     /// The render's half, or `None` when it left something transient; `settled`
     /// is the render's own part of that answer.
-    pub(crate) fn of_render(folder: &str, settled: bool, missing: &[crate::build::types::MissingReferenceOccurrence], drafts: &[crate::build::types::DraftLinkOccurrence]) -> Option<Self> {
+    pub(crate) fn of_render(folder: &str, settled: bool, missing: &[crate::build::types::ReferenceOccurrence], drafts: &[crate::build::types::DraftLinkOccurrence], remote_pictures: &[crate::build::types::ReferenceOccurrence]) -> Option<Self> {
         let records = crate::system::build_records::records();
         (settled && records.unverifiable_moderation(folder).is_none_or(|n| n == 0)).then(|| Self {
             missing_references: missing.to_vec(),
             drafts_linked: drafts.to_vec(),
+            remote_pictures: remote_pictures.to_vec(),
             public_scripts: records.public_scripts(folder),
             ..Default::default()
         })
