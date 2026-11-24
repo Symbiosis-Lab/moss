@@ -8,4 +8,5 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export default defineConfig({
   root: repoRoot,
   server: { port: gatePort('iframe-open-url'), strictPort: true },
+  optimizeDeps: { noDiscovery: true, entries: [] },
 });

@@ -18,5 +18,6 @@ export function defineHarnessConfig(options: { port: number; extraPlugins?: Plug
       port: options.port,
       strictPort: true,
     },
+    optimizeDeps: { noDiscovery: true, entries: [] },
   });
 }
