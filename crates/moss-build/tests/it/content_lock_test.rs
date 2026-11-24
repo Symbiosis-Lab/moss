@@ -10,6 +10,11 @@
 //! former path. A redirect stub is written at the old address, so a path a
 //! redirect answers is still served.
 //!
+//! What a shape promises a page shows is declared beside its folder, in
+//! `<shape>.shows`: one `<page> <css selector>` per line, naming only moss's
+//! own released markup, and part of the frozen input. A fixture without one
+//! promises only that it builds, its count and its paths.
+//!
 //! Only a release cut writes the lock, and only by appending a new fixture,
 //! a lower total or a newly served path:
 //!
@@ -43,6 +48,8 @@ struct Outcome {
     input: String,
     problems: usize,
     paths: BTreeSet<String>,
+    /// The `.shows` lines the built pages do not match.
+    unshown: Vec<String>,
 }
 
 fn parse(text: &str) -> BTreeMap<String, Recorded> {
@@ -76,6 +83,7 @@ fn broken(r: &Recorded, out: &Outcome) -> Vec<String> {
             why.push(format!("{} problems, over the released {ceiling}", out.problems));
         }
     }
+    why.extend(out.unshown.iter().map(|line| format!("no longer shows {line}")));
     let former = |p: &str| FORMER_PATHS.iter().any(|(old, _)| old.trim_start_matches('/') == p);
     for p in r.paths.iter().filter(|p| !out.paths.contains(*p) && !former(p)) {
         why.push(format!("{p} is no longer served"));
@@ -99,7 +107,7 @@ fn appended(shape: &str, r: Option<&Recorded>, out: &Outcome) -> Vec<String> {
     lines
 }
 
-fn tree_hash(root: &Path) -> String {
+fn input_hash(root: &Path, shows: Option<&str>) -> String {
     let mut files: Vec<(String, PathBuf)> = walkdir::WalkDir::new(root)
         .into_iter()
         .filter_map(Result::ok)
@@ -115,15 +123,42 @@ fn tree_hash(root: &Path) -> String {
         h.update((bytes.len() as u64).to_le_bytes());
         h.update(&bytes);
     }
+    if let Some(shows) = shows {
+        h.update(b".shows\0");
+        h.update(shows.as_bytes());
+    }
     format!("{:x}", h.finalize())
+}
+
+/// The `.shows` lines no built page matches.
+fn unshown(site: &Site, shows: &str) -> Vec<String> {
+    shows
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter(|line| {
+            let (page, selector) = line.split_once(' ').unwrap_or_else(|| panic!("unreadable .shows line: {line}"));
+            let selector = scraper::Selector::parse(selector).unwrap_or_else(|e| panic!("bad selector in {line}: {e}"));
+            let html = std::fs::read_to_string(site.output(page)).unwrap_or_default();
+            scraper::Html::parse_document(&html).select(&selector).next().is_none()
+        })
+        .map(String::from)
+        .collect()
 }
 
 /// Build a copy of the fixture, since the build writes into its folder.
 fn build(fixture: &Path) -> Result<Outcome, String> {
+    let shows = std::fs::read_to_string(fixture.with_extension("shows")).ok();
     let site = Site { root: std::env::temp_dir().join(format!("moss_content_lock_{}", uuid::Uuid::new_v4())) };
     copy_dir_recursive(fixture, &site.root).unwrap();
     let built = site::build_logged(&site.root.to_string_lossy(), moss_build::build::BuildTrigger::Full)?;
-    Ok(Outcome { input: tree_hash(fixture), problems: built.cli_problems, paths: site.served() })
+    Ok(Outcome {
+        input: input_hash(fixture, shows.as_deref()),
+        // What `--strict` counts: logged warnings that are not notes, and the problems the CLI reports itself.
+        problems: built.problems.len() + built.cli_problems,
+        paths: site.served(),
+        unshown: shows.as_deref().map(|s| unshown(&site, s)).unwrap_or_default(),
+    })
 }
 
 #[test]
@@ -154,9 +189,9 @@ fn content_lock_every_released_fixture_still_builds_as_released() {
             }
         };
         let recorded = lock.get(&shape);
-        if let Some(r) = recorded {
-            failures.extend(broken(r, &out).into_iter().map(|why| format!("{shape}: {why}")));
-        }
+        // A declared promise holds before the first release records the fixture.
+        let why = broken(recorded.unwrap_or(&Recorded::default()), &out);
+        failures.extend(why.into_iter().map(|why| format!("{shape}: {why}")));
         lines.extend(appended(&shape, recorded, &out));
     }
     assert!(failures.is_empty(), "the content lock is broken:\n  {}", failures.join("\n  "));
@@ -169,7 +204,7 @@ fn content_lock_every_released_fixture_still_builds_as_released() {
 #[test]
 fn content_lock_holds_a_fixture_to_its_lowest_released_total() {
     let lock = parse("shape problems 3\nshape problems 1\n");
-    let out = |problems| Outcome { input: String::new(), problems, paths: BTreeSet::new() };
+    let out = |problems| Outcome { input: String::new(), problems, paths: BTreeSet::new(), unshown: Vec::new() };
     assert_eq!(broken(&lock["shape"], &out(2)), vec!["2 problems, over the released 1".to_string()]);
     assert!(broken(&lock["shape"], &out(1)).is_empty());
 }
@@ -177,7 +212,7 @@ fn content_lock_holds_a_fixture_to_its_lowest_released_total() {
 #[test]
 fn content_lock_a_release_appends_only_a_lower_total_and_new_paths() {
     let lock = parse("shape input abc\nshape problems 2\nshape path index.html\n");
-    let out = Outcome { input: "abc".into(), problems: 1, paths: ["index.html".to_string(), "rss.xml".to_string()].into() };
+    let out = Outcome { input: "abc".into(), problems: 1, paths: ["index.html".to_string(), "rss.xml".to_string()].into(), unshown: Vec::new() };
     assert_eq!(appended("shape", lock.get("shape"), &out), vec!["shape problems 1", "shape path rss.xml"]);
     let same = Outcome { problems: 2, ..out };
     assert_eq!(appended("shape", lock.get("shape"), &same), vec!["shape path rss.xml"]);

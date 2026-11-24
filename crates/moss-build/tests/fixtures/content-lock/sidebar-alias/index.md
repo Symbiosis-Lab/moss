@@ -1,6 +1,5 @@
 ---
 title: Home
-sidebar: "[[Home]]"
 ---
 
-Text.
+A small site.
