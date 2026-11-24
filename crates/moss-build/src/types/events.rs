@@ -406,9 +406,9 @@ pub enum MossEvent {
     /// Design: C3.
     LoginBrowserFailed { reason: LoginFailureReason },
 
-    /// A sign-in worked and the host hid its page, `panel` naming that page.
-    /// The shell counts down, then closes that panel unless the person keeps
-    /// it open. Routed via `emit_to("main", …)` — NOT broadcast.
+    /// A sign-in worked; `panel` names the panel showing it. The page stays in
+    /// view while the shell dries the drop over it, then closes that panel.
+    /// Routed via `emit_to("main", …)` — NOT broadcast.
     SignInClosing { panel: u64 },
 
     /// A plugin whose process hook needs its account has none bound for this
