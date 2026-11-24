@@ -40,6 +40,7 @@ pub mod site_guard;
 // The client crossed into this crate, and every other door this file opens
 // (VaultRoot, site_config, Identity::load_for_signing) was already here.
 pub mod domain;
+pub mod provider;
 pub mod site;
 // Argument parsing for `moss import`, over the engine in
 // `vault::import::scrape::run`.

@@ -72,7 +72,7 @@
         "crates/moss-build/src/ops/serve": 19,
         "crates/moss-build/src/js-src/site/maps/places-explorer": 18,
         "crates/moss-build/src/vault/import/scrape": 17,
-        "crates/moss-build/src/cli": 25,
+        "crates/moss-build/src/cli": 26,
         "crates/moss-build/src/build/components": 15,
         "crates/moss-build/src/build/emit": 20,
         "crates/moss-build/src/assets/js": 19,
@@ -178,7 +178,7 @@
       "letter": "j",
       "disposition": "permanent",
       "armed": true,
-      "value": 27
+      "value": 28
     },
     "artifact_bytes": {
       "letter": "k",

@@ -7,6 +7,7 @@ mod redact;
 pub(crate) mod wire;
 pub mod signing;
 pub mod domains;
+pub mod newsletter;
 pub mod dns;
 pub mod cdn;
 pub(crate) mod tls;

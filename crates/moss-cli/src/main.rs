@@ -24,6 +24,7 @@ const CROSSED: &[(&str, fn(&[String]) -> i32)] = &[
     ("env", moss_build::cli::env::run),
     ("tools", moss_build::cli::tools::run),
     ("domain", moss_build::cli::domain::run),
+    ("provider", moss_build::cli::provider::run),
     ("site", moss_build::cli::site::run),
     ("map", moss_build::cli::map::run),
     ("import", moss_build::cli::import::run),

@@ -230,6 +230,22 @@ pub fn save_site_bool(project_path: &str, field: &str, value: bool) -> Result<()
     save_site_value(project_path, field, Value::Boolean(value))
 }
 
+/// Write `[channels.email] provider`, or remove it for `None`; the channel's
+/// other keys stay.
+pub fn save_newsletter_provider(project_path: &str, provider: Option<&str>) -> Result<(), String> {
+    if let Some(name) = provider {
+        crate::config::provider_name(name)?;
+    }
+    let config_path = Path::new(project_path).join(".moss").join("config.toml");
+    let ManagedToml { original, mut root } = load_managed_toml(&config_path)?;
+    let email = subtable(subtable(&mut root, "channels")?, "email")?;
+    match provider {
+        Some(provider) => email.insert("provider".to_string(), Value::String(provider.to_string())),
+        None => email.remove("provider"),
+    };
+    write_managed_toml(&config_path, &original, &root, crate::config::migrations::CURRENT_VERSION)
+}
+
 /// Set the site's address to a custom domain: `[site].url = "https://<domain>/"`
 /// in config.toml (dropping an older `[site].domain`), the one place the build
 /// reads it from. When the domain actually changed, resets the
@@ -465,5 +481,16 @@ mod tests {
         assert!(after.contains("schema_version = 6"), "got: {after}");
         let sevens = saved_config("schema_version = 7\n");
         assert!(sevens.contains("schema_version = 7"), "a stamped site is not lowered: {sevens}");
+    }
+
+    #[test]
+    fn a_provider_line_is_written_only_as_a_name_the_build_reads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().to_str().unwrap();
+        assert!(save_newsletter_provider(path, Some("Send Grid")).is_err());
+        assert!(save_newsletter_provider(path, Some("")).is_err());
+        save_newsletter_provider(path, Some("sendgrid")).unwrap();
+        let config = crate::build::site_config::read_project_config(path).unwrap();
+        assert_eq!(config.newsletter_service(), Some(Ok("sendgrid".to_string())));
     }
 }

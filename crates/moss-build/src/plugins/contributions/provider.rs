@@ -12,15 +12,16 @@ use serde::{Deserialize, Serialize};
 /// The site's `[channels.email] provider`, refused unless a plugin of that
 /// name in the site's folder is a newsletter service.
 pub fn for_build(config: Option<&crate::config::ConfigFile>, site: &str) -> Option<Result<String, String>> {
-    config?.newsletter_service().map(|service| service.and_then(|name| provided_in(site, &name)))
+    config?.newsletter_service().map(|service| service.and_then(|name| newsletter_provider(site, &name).map(|_| name)))
 }
 
-fn provided_in(site: &str, name: &str) -> Result<String, String> {
+/// The newsletter provider the plugin `name` in the site's folder contributes.
+pub fn newsletter_provider(site: &str, name: &str) -> Result<ProviderContribution, String> {
     let Some(manifest) = crate::plugins::bundled::read_installed_manifest(&crate::plugins::plugin_dir(site, name)) else {
         return Err(format!("[channels.email] provider is \"{name}\", which is not installed in this site: run `moss plugin install {name}`"));
     };
     match manifest.contributes.and_then(|c| c.provider) {
-        Some(p) if p.part == Part::Newsletter => Ok(name.to_string()),
+        Some(p) if p.part == Part::Newsletter => Ok(p),
         _ => Err(format!("[channels.email] provider is \"{name}\", and the plugin of that name in this site is not a newsletter service")),
     }
 }
@@ -99,6 +100,15 @@ fn key_name() -> String {
     KEY_NAME.to_string()
 }
 
+impl Credential {
+    /// The key in `paste`, without the spaces and line breaks a copy carries,
+    /// when it has this service's prefix and length.
+    pub fn fits(&self, paste: &str) -> Option<String> {
+        let key: String = paste.split_whitespace().collect();
+        (key.starts_with(&self.prefix) && key.chars().count() == self.length as usize).then_some(key)
+    }
+}
+
 impl ProviderContribution {
     pub(crate) fn validate(&mut self) -> Result<(), String> {
         use moss_core::untrusted_text::{bounded, MAX_NAME, MAX_SENTENCE};
@@ -161,7 +171,7 @@ mod tests {
     #[test]
     fn a_provider_that_is_not_installed_names_the_install_command() {
         let site = tempfile::tempdir().unwrap();
-        let err = super::provided_in(site.path().to_str().unwrap(), "sendgrid").unwrap_err();
+        let err = super::newsletter_provider(site.path().to_str().unwrap(), "sendgrid").unwrap_err();
         assert!(err.contains("`moss plugin install sendgrid`"), "{err}");
     }
 

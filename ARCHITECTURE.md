@@ -104,7 +104,7 @@ One line each, matching `crates/moss-build/src/lib.rs` as it stands today:
 - `identity` — vault identity: the keypair vocabulary, the on-disk identity service, the file-based keystore.
 - `infra` — shared infrastructure the build tree and the plugin runtime both reach: atomic file writers, the advisory display vocabulary, the app-data directory resolver, the surgical `config.toml` editor.
 - `platform` — cloud-file materialization primitives (today: macOS file-provider I/O policy and file coordination), and the moss folder icon a full build gives a site's root folder.
-- `seta` — the HTTP client for the hosting service: sites, domains, DNS, CDN, TLS, request signing.
+- `seta` — the HTTP client for the hosting service: sites, domains, newsletter, DNS, CDN, TLS, request signing.
 - `plugins` — the plugin vocabulary, the bundled-plugin installer and registry client, and the plugin manager runtime.
 - `system` — small OS-facing utilities the build tree needs: per-folder session state, proxy resolution, a resumable verified download, "reveal in file manager".
 - `vault` — the vault family's crossed members: path aliases and the plugin-facing filesystem sandbox.

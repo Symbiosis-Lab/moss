@@ -237,11 +237,10 @@ impl ConfigFile {
     /// A name is ASCII letters, digits, `-` and `_`, since it is also a plugin's folder.
     pub fn newsletter_service(&self) -> Option<Result<String, String>> {
         let value = self.section(&["channels", "email", "provider"])?;
-        let plain = |s: &str| s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
         match value.as_str().map(str::trim) {
             Some("") => None,
-            Some(service) if plain(service) => Some(Ok(service.to_string())),
-            _ => Some(Err(format!("[channels.email] provider must be a name such as \"sendgrid\", not {value}"))),
+            Some(service) => Some(provider_name(service).map(str::to_string)),
+            None => Some(Err(provider_name_refusal(&value.to_string()))),
         }
     }
 
@@ -654,6 +653,18 @@ fn written_key_orders(text: &str) -> std::collections::BTreeMap<String, Vec<Stri
         }
     }
     orders
+}
+
+
+/// A `[channels.email] provider` name: ASCII letters, digits, `-` and `_`,
+/// since it is also a plugin's folder. The one check its reader and writer share.
+pub fn provider_name(name: &str) -> Result<&str, String> {
+    let plain = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if plain { Ok(name) } else { Err(provider_name_refusal(&format!("{name:?}"))) }
+}
+
+fn provider_name_refusal(shown: &str) -> String {
+    format!("[channels.email] provider must be a name such as \"sendgrid\", not {shown}")
 }
 
 #[cfg(test)]
