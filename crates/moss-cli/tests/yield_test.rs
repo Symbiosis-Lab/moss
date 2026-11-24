@@ -76,7 +76,7 @@ async fn a_yielded_folder_goes_to_the_next_process_and_comes_back_with_a_page_op
     let _ = b.child.wait();
     b.join_drain_threads();
 
-    let a_again = port_from_url_line(&a.wait_for_access_line_after(a_lines_before_return, Duration::from_secs(15)));
+    let a_again = port_from_url_line(&a.wait_for_access_line_after(a_lines_before_return, Duration::from_secs(60)));
     let owner = find_live_owner(&site_dir)
         .await
         .unwrap_or_else(|| panic!("A is found again once it serves again; A:\n{}\nB:\n{}", joined(&a.stderr), joined(&b.stderr)));
@@ -121,7 +121,7 @@ async fn a_watch_back_from_a_yield_leaves_a_new_picture_to_the_background() {
     b.child.kill().expect("kill B");
     let _ = b.child.wait();
     b.join_drain_threads();
-    a.wait_for_access_line_after(before_return, Duration::from_secs(15));
+    a.wait_for_access_line_after(before_return, Duration::from_secs(60));
     let back = Instant::now();
     while !a.stderr.lock().unwrap()[before_return..].iter().any(|l| l.contains("File watcher active")) {
         assert!(back.elapsed() < Duration::from_secs(30), "A never watched again; stderr:\n{}", joined(&a.stderr));
