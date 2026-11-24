@@ -2396,12 +2396,12 @@ header[data-header="over"] :where(a, button, input, select, textarea, summary, l
   --_over-ink: var(--moss-hero-tone-color, #2c2825);
 }
 
-/* Nav links and the site name set their own colour from the base sheet, which
-   would stay dark over the photo; they take the header's ink back.
+/* Nav links, the site name and the language toggle set their own colour from
+   the base sheet, which would stay dark over the photo; they take the header's ink back.
    The phone menu's sheet is opaque and not over the photo, so its links keep
    their own colour, as does a submenu panel, which has its own background. The open sheet is excluded by `.mobile-open`, a closing
    one by `inert`, which it carries through the fade after `.mobile-open` goes. */
-header[data-header="over"] :where(a, button, .site-name):not(.nav-links:is(.mobile-open, [inert]) *, .moss-nav-sub *) {
+header[data-header="over"] :where(a, button, .site-name, .nav-lang-toggle, .nav-lang-current):not(.nav-links:is(.mobile-open, [inert]) *, .moss-nav-sub *) {
   color: inherit;
 }
 

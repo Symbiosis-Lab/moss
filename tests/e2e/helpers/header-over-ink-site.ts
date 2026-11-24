@@ -2,7 +2,7 @@
  * The scratch site the header-over-ink render gate builds: three pages whose
  * opening hero carries `header=over`, over a pale, a dark and a mid-tone
  * picture, each with faint invented lines, a fourth with the words at the top,
- * and a footer with a picture wider than a phone above its closing picture. Served by
+ * translations of the pale and dark pages for the language toggle, and a footer with a picture wider than a phone above its closing picture. Served by
  * playwright/header-over-ink.config.ts.
  */
 import { deflateSync } from "node:zlib";
@@ -57,6 +57,9 @@ export const HEADER_OVER_INK_GATE: ScratchSiteSpec = {
     "haze.png": lined(1600, 700, 128, 140),
     "index.md": page("Pale chart", "hoi00001", "pale.png"),
     "dusk.md": page("Dusk", "hoi00002", "dusk.png"),
+    // A translation puts the language toggle in the header.
+    "index.zh-hans.md": page("淡色图", "hoi00006", "pale.png"),
+    "dusk.zh-hans.md": page("黄昏", "hoi00007", "dusk.png"),
     "haze.md": page("Haze", "hoi00003", "haze.png"),
     "top.md": `---
 title: Top
