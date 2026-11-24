@@ -399,6 +399,11 @@ pub struct SiteResult {
     #[serde(skip)]
     #[specta(skip)]
     pub places_data: Option<String>,
+    /// The render left pages showing an older image placeholder to the
+    /// settled build, so the generation is not complete.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub placeholders_deferred: bool,
 }
 
 /// Hash map of generated site files for change detection.

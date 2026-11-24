@@ -8214,6 +8214,31 @@ fn image_work_counts_every_mark_until_it_ends() {
     assert!(image_work().queued >= 3, "the process total includes this folder");
 }
 
+/// A save that left pages to the settled build gets exactly one, and only once
+/// the images it saw with a worker are done; a seal before then keeps it.
+#[test]
+fn a_promised_settled_build_is_enqueued_once_when_the_image_work_ends() {
+    let tmp = tempfile::tempdir().unwrap();
+    make_big_jpeg(&tmp.path().join("pic.jpg"), 40, 30);
+    let folder = tmp.path().to_string_lossy();
+    let seen = compute_image_item_fingerprint(&folder, Path::new("pic.jpg"), &ImageCompressionConfig::default()).unwrap();
+    let mark = std::sync::Arc::new(seen);
+    let handle = crate::ops::watch::worker::register(&folder);
+    let run = mark_image_items_pending(&folder, [("pic.jpg".to_string(), mark.clone())]);
+
+    promise_settled_build(&folder);
+    crate::build::media::promise::keep_settle_promise(&folder);
+    assert!(handle.take().is_none(), "a seal while the picture is with its worker keeps the promise");
+
+    end_image_item(&folder, "pic.jpg", &mark, true, &[]);
+    drop(run);
+    crate::build::media::promise::keep_settle_promise(&folder);
+    assert_eq!(handle.take().map(|r| r.trigger), Some(crate::build::BuildTrigger::ImagesSettled { edited: false }));
+    crate::build::media::promise::keep_settle_promise(&folder);
+    assert!(handle.take().is_none(), "the promise is kept once");
+    crate::ops::watch::worker::deregister(&folder, &handle);
+}
+
 /// Two paths with the same bytes share one encode. When the converter's own
 /// picture is withdrawn while it waits for a core, the other path, still
 /// wanted, runs the encode itself instead of inheriting nothing.

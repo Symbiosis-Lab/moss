@@ -237,6 +237,7 @@ fn warm_parse_cache_replays_then_replaces_missing_reference_evidence() {
     let gates = crate::build::render::IncrementalGates {
         render_skip: false,
         parse_cache: true,
+        defer_image_placeholders: false,
     };
 
     let (_, first) = build_test_full_with_gates(
@@ -272,7 +273,7 @@ fn a_raw_img_src_to_a_missing_file_is_a_missing_reference() {
     fs::create_dir_all(dir.join("img")).unwrap();
     fs::write(dir.join("img/here.svg"), r#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>"#).unwrap();
     fs::write(dir.join("index.md"), "---\ntitle: marks\n---\n<img src=\"img/here.svg\" alt=\"\">\n\n<img src=\"img/gone.svg\" alt=\"\">\n").unwrap();
-    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: false };
+    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: false, defer_image_placeholders: false };
 
     let (_, missing) = build_test_full_with_gates(dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(), gates).expect("build");
     let named: Vec<&str> = missing.iter().map(|m| m.reference.as_str()).collect();
@@ -290,7 +291,7 @@ fn a_replayed_page_records_the_bytes_it_was_replayed_from() {
     crate::build::parse_cache::reset_for_tests();
     let (dir, _cleanup) = create_test_dir();
     let folder = dir.to_str().unwrap();
-    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true };
+    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true, defer_image_placeholders: false };
     let build = || build_test_full_with_gates(folder, None, None, None, None, &ResolvedSlots::empty(), gates).expect("build");
     let hashes = crate::moss_paths::MossPaths::new(&dir).hashes();
 
@@ -322,7 +323,7 @@ fn the_stash_records_the_bytes_the_render_read_not_a_later_save() {
     crate::build::parse_cache::reset_for_tests();
     let (dir, _cleanup) = create_test_dir();
     let folder = dir.to_str().unwrap();
-    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true };
+    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true, defer_image_placeholders: false };
     let hash = |s: &str| crate::build::render::blocking::source_metadata(None, s.as_bytes()).hash;
     let build = || build_test_with_stash(folder, None, None, None, None, &ResolvedSlots::empty(), gates).expect("build").2;
     let build_saving_during = |read: (&str, &str), page: &'static str, footer: &'static str| {
@@ -363,7 +364,7 @@ fn the_parse_cache_never_holds_a_uid_the_build_assigned() {
     fs::write(dir.join("index.md"), "---\ntitle: Home\n---\nHi").unwrap();
     fs::write(dir.join("a.md"), "---\ntitle: A\nuid: \"aaaa1111\"\n---\nA").unwrap();
     fs::write(dir.join("copy.md"), "---\ntitle: Copy\nuid: \"aaaa1111\"\n---\nCopy").unwrap();
-    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true };
+    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true, defer_image_placeholders: false };
 
     build_test_full_with_gates(dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(), gates)
         .expect("build");
@@ -422,7 +423,7 @@ fn a_duplicate_uid_keeps_cacheable_missing_reference_evidence_and_both_files() {
         )
         .unwrap();
     }
-    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true };
+    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true, defer_image_placeholders: false };
     let (_, first) = build_test_full_with_gates(
         dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(), gates,
     )
@@ -7404,7 +7405,7 @@ fn notebook_sources_appear_in_sealed_sources() {
     without_jupyterlite_assets(|| {
         for incremental in [false, true] {
             build_test_full_with_gates(folder_path, None, None, None, None, &ResolvedSlots::empty(),
-                crate::build::render::IncrementalGates { render_skip: incremental, parse_cache: incremental }).unwrap();
+                crate::build::render::IncrementalGates { render_skip: incremental, parse_cache: incremental, defer_image_placeholders: false }).unwrap();
             let hashes = load_previous_hashes(folder_path);
             let meta = hashes.sources.get("lab.ipynb").expect("a walked notebook needs a sealed source hash");
             assert_eq!(meta.hash, format!("{:x}", Sha256::digest(notebook)));
@@ -9011,7 +9012,7 @@ async fn a_build_whose_published_page_links_to_a_draft_refuses_the_publish() {
 }
 
 fn build_with_preview_cache(dir: &std::path::Path) -> String {
-    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true };
+    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true, defer_image_placeholders: false };
     build_test_full_with_gates(dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(), gates)
         .expect("build");
     fs::read_to_string(MossPaths::new(dir).staging_dir().join("_moss/previews.json")).expect("previews.json")

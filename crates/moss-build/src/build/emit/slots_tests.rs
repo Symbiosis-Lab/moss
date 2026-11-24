@@ -18,7 +18,7 @@ use crate::build::ship::{apply_transform, transform_for};
 use std::path::PathBuf;
 use tempfile::TempDir;
 
-const CARRY: IncrementalGates = IncrementalGates { render_skip: true, parse_cache: false };
+const CARRY: IncrementalGates = IncrementalGates { render_skip: true, parse_cache: false, defer_image_placeholders: false };
 
 /// A vault in a temp dir, built the way the test harness builds everything.
 struct Site {
@@ -140,6 +140,7 @@ fn empty_site_result() -> crate::types::content::SiteResult {
         term_index: Default::default(),
         now: Default::default(),
         places_data: None,
+        placeholders_deferred: false,
     }
 }
 

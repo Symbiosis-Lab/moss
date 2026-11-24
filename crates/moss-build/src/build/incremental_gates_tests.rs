@@ -177,3 +177,23 @@ async fn the_stop_measures_again_after_the_passes_that_read_from_outside() {
     };
     assert_eq!(check(&new_comment), AtEntry::Build { comments_refreshed: true });
 }
+
+// ── Leaving placeholder pages to the settled build ────────────────────────
+
+/// Only a save beside a watcher may leave a page to the settled build: the
+/// watcher runs that build. The encodes may already be done, since beside a
+/// watcher they outlive the seal of the build that started them.
+#[test]
+fn only_a_save_beside_a_watcher_defers_placeholders() {
+    let tmp = tempfile::tempdir().unwrap();
+    let folder = tmp.path().to_string_lossy().into_owned();
+    let defers = |trigger: BuildTrigger| IncrementalGates::for_build(&trigger, tmp.path(), "", &LastSeal::default()).defer_image_placeholders;
+    let save = || BuildTrigger::ContentOnly(paths(&["a.md"]));
+
+    assert!(!defers(save()), "without a watcher nothing runs the settled build");
+    let handle = crate::ops::watch::worker::register(&folder);
+    assert!(defers(save()));
+    assert!(!defers(BuildTrigger::ImagesSettled { edited: false }), "the settled build renders them");
+    assert!(!defers(BuildTrigger::Unobserved));
+    crate::ops::watch::worker::deregister(&folder, &handle);
+}

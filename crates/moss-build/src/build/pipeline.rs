@@ -1573,7 +1573,9 @@ fn build_inner(
     let build_now = site_result.now;
     let build_day = crate::build::inputs::BuildDay { date: build_now.date(), zone: crate::build::inputs::site_zone(&documents).map(str::to_string) };
     let reused = (incremental.render_skip || incremental.parse_cache).then_some(previous_hashes.build_inputs.as_ref());
-    pending.set_render_facts(build_day, crate::build::inputs::complete(&project_structure.image_files, exits_after_build, reused));
+    if site_result.placeholders_deferred { crate::build::media::image::promise_settled_build(root.as_str()); }
+    let complete = crate::build::inputs::complete(&project_structure.image_files, exits_after_build, reused) && !site_result.placeholders_deferred;
+    pending.set_render_facts(build_day, complete);
     log::debug!(target: "timing", "[build] staging: generate_blocking_content: {:?}", build_start.elapsed());
 
     // Places-explorer data file (`_moss/places.<hash>.json`): the bytes the

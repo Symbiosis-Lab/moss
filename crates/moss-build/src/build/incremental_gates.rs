@@ -33,6 +33,13 @@ pub struct IncrementalGates {
     /// Same entry-point and kill-switch rules; the difference is which changed
     /// paths it tolerates (markdown plus a parse-irrelevant allowlist).
     pub parse_cache: bool,
+    /// May the render leave a page that only shows an image whose placeholder
+    /// moved to the `ImagesSettled` build the folder's image work ends in? Only
+    /// a save beside a watcher, which runs that build once it is promised
+    /// (`media::image::promise_settled_build`). Beside a watcher the encodes
+    /// outlive the seal of the build that started them, so a save made after
+    /// they finished is still the first build to see their placeholders.
+    pub defer_image_placeholders: bool,
 }
 
 impl IncrementalGates {
@@ -47,7 +54,9 @@ impl IncrementalGates {
         if let (ChangeProof::Manifest, Some(generation)) = (&proof, seal.generation_id()) {
             crate::build::parse_cache::note_proven_seal(folder, generation);
         }
-        Self { render_skip: proof.allows_incremental_skip(), parse_cache: proof.allows_parse_cache_reuse() }
+        let defer_image_placeholders =
+            matches!(trigger, BuildTrigger::ContentOnly(_)) && crate::ops::watch::worker::get(&folder.to_string_lossy()).is_some();
+        Self { render_skip: proof.allows_incremental_skip(), parse_cache: proof.allows_parse_cache_reuse(), defer_image_placeholders }
     }
 }
 

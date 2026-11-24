@@ -333,6 +333,20 @@ pub(crate) fn trigger_media_settle_rerender(
     false
 }
 
+/// Keep the settled build a save promised when it left pages on a moved image
+/// placeholder (`image::promise_settled_build`), once the image work it saw is
+/// done. Called at a shipping seal, the point the settled placeholders are on
+/// disk for the next build's scan.
+pub(crate) fn keep_settle_promise(folder_path: &str) {
+    if !crate::build::media::image::take_settle_promise(folder_path) {
+        return;
+    }
+    if let Some(worker) = crate::ops::watch::worker::get(folder_path) {
+        log::info!("media settle: the pictures a save left to this build settled for '{folder_path}' — re-rendering the pages showing them");
+        worker.enqueue(crate::ops::watch::worker::RebuildRequest::images_settled());
+    }
+}
+
 /// A one-shot build (`moss build`, `moss deploy`) renders its pages once more
 /// only for what a page could not name the first time round: a video still or a
 /// streaming master that the previous manifest did not hold. Those are the files

@@ -1438,6 +1438,9 @@ struct ImageLedger {
     /// Marks ever made. Every mark leaves `pending` once, so the ones gone
     /// are this less what `pending` still holds.
     queued: u64,
+    /// A build left pages on a placeholder that moved to the build this work
+    /// ends in ([`promise_settled_build`]).
+    settle_promised: bool,
 }
 
 /// Images handed to a worker since the process started, and how many of
@@ -1467,6 +1470,23 @@ pub fn image_work() -> ImageWork {
 #[cfg(test)]
 pub(crate) fn image_work_in(folder: &str) -> ImageWork {
     with_image_ledger(folder, |ledger| ledger.work())
+}
+
+/// Promise one `ImagesSettled` build for `folder`, for a build that left the
+/// pages showing a moved placeholder to it; [`take_settle_promise`] keeps it.
+pub(crate) fn promise_settled_build(folder: &str) {
+    with_image_ledger(folder, |ledger| ledger.settle_promised = true);
+}
+
+/// Whether a settled build is promised and no image is in flight. Takes the
+/// promise when it answers yes. A promise made with pictures in flight is taken
+/// at the next shipping seal after they drain (the next save, beside a watcher,
+/// whose encodes are not joined to a seal); until then those pages are as stale
+/// as any page between a detached encode and the next seal. A build that never
+/// ships leaves only the restored digests, which the next build renders from.
+pub(crate) fn take_settle_promise(folder: &str) -> bool {
+    let mut ledgers = IMAGE_LEDGERS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    ledgers.get_mut(folder).is_some_and(|ledger| ledger.pending.is_empty() && std::mem::take(&mut ledger.settle_promised))
 }
 
 /// `folder`'s ledger. One per folder, process-wide: two folders can hold an

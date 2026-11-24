@@ -3372,6 +3372,7 @@ pub fn generate_blocking_content_for_build(
             term_index,
             now,
             places_data,
+            placeholders_deferred: verdict.defers_to_settle(),
         },
         background_ctx,
         // Surface the parsed page slice to the caller so

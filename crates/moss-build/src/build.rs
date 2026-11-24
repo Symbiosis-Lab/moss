@@ -2222,6 +2222,9 @@ async fn advertise_sealed(
             changed: settled_changed,
         });
     }
+    if verdict == crate::build::ship::ShipVerdict::Ship {
+        media::promise::keep_settle_promise(folder_path);
+    }
 
     // The render's second FileChanged, with the number of the one sent when it
     // was shown: what the background wrote after the show, and the repairs.
