@@ -140,14 +140,19 @@ impl FolderStores {
         let _held = self.lock()?;
         let name = name_for(&path);
         let key = keypair::proven_pubkey(&path);
-        let volume = (self.volume_of)(&path).and_then(|v| {
-            Some((RecordedVolume { id: v.id, rel: path.strip_prefix(&v.root).ok()?.to_path_buf() }, v.root))
-        });
-        let fresh = Record {
+        // The volume lookup costs milliseconds, so a known folder keeps the
+        // volume it recorded. A stale one can only make a later rename miss,
+        // which starts a fresh store: a lost cache, never lost data.
+        let volume_of = || {
+            (self.volume_of)(&path).and_then(|v| {
+                Some((RecordedVolume { id: v.id, rel: path.strip_prefix(&v.root).ok()?.to_path_buf() }, v.root))
+            })
+        };
+        let fresh = |volume: Option<(RecordedVolume, PathBuf)>| Record {
             id: uuid::Uuid::new_v4().to_string(),
             path: path.clone(),
             pubkey: key.clone(),
-            volume: volume.as_ref().map(|(v, _)| v.clone()),
+            volume: volume.map(|(v, _)| v),
         };
 
         let record = match self.read(&name) {
@@ -155,35 +160,40 @@ impl FolderStores {
                 (Some(old), Some(new)) if old != new && !chain_of(&path).contains(old) => {
                     // Replaced in place by another site: its stores are not ours.
                     self.set_aside(&name)?;
-                    fresh
+                    fresh(volume_of())
                 }
                 _ => {
                     // A rotation in the chain, a folder's first key, or a key
                     // not readable right now: same folder, same stores.
+                    if rec.volume.is_none() {
+                        rec.volume = volume_of().map(|(v, _)| v);
+                    }
                     if key.is_some() {
                         rec.pubkey = key;
                     }
                     rec.path = path;
-                    rec.volume = fresh.volume;
                     rec
                 }
             },
-            None => match self.renamed_from(&key, &volume, &path)? {
-                Some((old_name, mut rec)) => {
-                    // allow:raw_write this computer's per-folder stores, outside any synced folder
-                    std::fs::create_dir_all(&self.record_root)?;
-                    crate::platform::rename_exclusive(&self.record_root.join(&old_name), &self.record_root.join(&name))?;
-                    let old_cache = self.cache_root.join(&old_name);
-                    if old_cache.exists() && !self.cache_root.join(&name).exists() {
-                        crate::platform::rename_exclusive(&old_cache, &self.cache_root.join(&name))?;
+            None => {
+                let volume = volume_of();
+                match self.renamed_from(&key, &volume, &path)? {
+                    Some((old_name, mut rec)) => {
+                        // allow:raw_write this computer's per-folder stores, outside any synced folder
+                        std::fs::create_dir_all(&self.record_root)?;
+                        crate::platform::rename_exclusive(&self.record_root.join(&old_name), &self.record_root.join(&name))?;
+                        let old_cache = self.cache_root.join(&old_name);
+                        if old_cache.exists() && !self.cache_root.join(&name).exists() {
+                            crate::platform::rename_exclusive(&old_cache, &self.cache_root.join(&name))?;
+                        }
+                        rec.pubkey = key;
+                        rec.path = path;
+                        rec.volume = volume.map(|(v, _)| v);
+                        rec
                     }
-                    rec.pubkey = key;
-                    rec.path = path;
-                    rec.volume = fresh.volume;
-                    rec
+                    None => fresh(volume),
                 }
-                None => fresh,
-            },
+            }
         };
         self.write(&name, &record)?;
         Ok(FolderStore { id: record.id, cache_dir: self.cache_root.join(&name), record_dir: self.record_root.join(&name) })
