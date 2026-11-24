@@ -383,11 +383,12 @@ impl PluginHookState {
     /// falling back to `hook_name` when nothing is registered (out-of-hook
     /// callers). Anything that wants to reach the watchdog's key resolves here.
     fn executing_hook_key(&self, plugin_name: &str, hook_name: &str) -> String {
-        self.executing_hooks
-            .lock()
-            .ok()
-            .and_then(|map| map.get(plugin_name).cloned())
-            .unwrap_or_else(|| hook_name.to_string())
+        self.executing_hook(plugin_name).unwrap_or_else(|| hook_name.to_string())
+    }
+
+    /// The hook `plugin_name` is running, if any.
+    pub fn executing_hook(&self, plugin_name: &str) -> Option<String> {
+        self.executing_hooks.lock().ok().and_then(|map| map.get(plugin_name).cloned())
     }
 
     /// Mark the plugin as blocked on a host-function call until the returned
@@ -484,12 +485,7 @@ impl PluginHookState {
     /// Restamp the clock under the hook the watchdog keys on. Nothing executing
     /// means nothing to restamp.
     fn restart_activity_clock(&self, plugin_name: &str) {
-        let hook = self
-            .executing_hooks
-            .lock()
-            .ok()
-            .and_then(|map| map.get(plugin_name).cloned());
-        if let Some(hook) = hook {
+        if let Some(hook) = self.executing_hook(plugin_name) {
             self.update_activity(plugin_name, &hook);
         }
     }

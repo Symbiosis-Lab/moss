@@ -137,4 +137,70 @@ pub trait AppHost: Send + Sync {
     /// caller over a delivery problem. (`plugin-message` never reaches this;
     /// it rides the dispatch bridge regardless of app.)
     fn emit_plugin_event(&self, name: &str, payload_json: Option<String>);
+
+    /// The action panel's turn. The app has one panel, so every folder's
+    /// copies share one turn for the process.
+    fn panel_turn(&self) -> &PanelTurn {
+        static TURN: std::sync::LazyLock<PanelTurn> = std::sync::LazyLock::new(PanelTurn::default);
+        &TURN
+    }
+}
+
+/// A copy hook, by its folder and plugin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Holder {
+    pub folder: String,
+    pub plugin: String,
+}
+
+/// One copy at a time shows its pages in the action panel, so one copy's
+/// page never replaces another's. Granted in request order; the holder keeps
+/// it through every page it opens (a sign-in, then the editor) until its hook
+/// ends. Lock order: a send takes its channel's turn before this one.
+#[derive(Default)]
+pub struct PanelTurn {
+    queue: std::sync::Arc<tokio::sync::Mutex<()>>,
+    held: std::sync::Mutex<Option<(Holder, tokio::sync::OwnedMutexGuard<()>)>>,
+}
+
+impl PanelTurn {
+    /// Wait for the turn, unless `holder` has it already.
+    pub async fn take(&self, holder: Holder) {
+        if self.holder().as_ref() == Some(&holder) {
+            return;
+        }
+        let guard = self.queue.clone().lock_owned().await;
+        *self.held.lock().unwrap_or_else(|e| e.into_inner()) = Some((holder, guard));
+    }
+
+    pub fn holder(&self) -> Option<Holder> {
+        self.held.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|(h, _)| h.clone())
+    }
+
+    /// Hand the turn to the next in line, if `holder` has it.
+    pub fn release(&self, holder: &Holder) {
+        let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
+        if held.as_ref().is_some_and(|(h, _)| h == holder) {
+            *held = None;
+        }
+    }
+}
+
+/// Hands the panel's turn on when dropped, so a hook that ends any way at all,
+/// cancelled included, never leaves later copies waiting on it.
+pub struct TurnHeld {
+    app: SharedAppHost,
+    holder: Holder,
+}
+
+impl TurnHeld {
+    pub fn new(app: SharedAppHost, holder: Holder) -> Self {
+        Self { app, holder }
+    }
+}
+
+impl Drop for TurnHeld {
+    fn drop(&mut self) {
+        self.app.panel_turn().release(&self.holder);
+    }
 }

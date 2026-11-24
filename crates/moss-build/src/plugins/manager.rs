@@ -855,6 +855,9 @@ impl PluginManager {
             hook_state.unregister_executing_hook(&plugin.manifest.name);
             return HookRun::NeverRan(e);
         }
+        // Dropped when this function returns, after the sign-in page close
+        // below, so the next copy's page is not closed with this one's.
+        let _turn = self.host.app.clone().map(|app| crate::engine::app_host::TurnHeld::new(app, crate::engine::app_host::Holder { folder: self.project_path.clone(), plugin: plugin.manifest.name.clone() }));
 
         // Activity-based timeout: check for inactivity instead of fixed timeout.
         // This allows plugins to run as long as they're making progress.

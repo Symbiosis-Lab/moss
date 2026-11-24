@@ -257,6 +257,35 @@ fn window_opened(host: &EngineHost<'_>) {
     }
 }
 
+fn holder(host: &EngineHost<'_>) -> Option<super::app_host::Holder> {
+    host.plugin.map(|plugin| super::app_host::Holder { folder: host.project_path.to_string(), plugin: plugin.to_string() })
+}
+
+/// A copy whose turn has passed closes nothing: the page showing is the next copy's.
+async fn close_panel(host: &EngineHost<'_>, app: &dyn AppHost) -> std::result::Result<(), String> {
+    if let Some(me) = holder(host) {
+        if app.panel_turn().holder().is_some_and(|h| h != me) {
+            log::info!(target: "plugin", "{}: its panel close was refused; another copy holds the panel", me.plugin);
+            return Ok(());
+        }
+    }
+    app.close_action_panel(host.plugin.map(String::from)).await
+}
+
+/// A copy hook waits for the panel's turn before it shows a page, and keeps
+/// it until the hook ends (released in the manager's `run_hook`). Waiting
+/// in line is waiting on a person, so the watchdog does not end it.
+async fn take_panel_turn(host: &EngineHost<'_>, app: &dyn AppHost) {
+    let Some(me) = holder(host) else { return };
+    let turn = app.panel_turn();
+    let copying = host.state.hooks.executing_hook(&me.plugin).is_some_and(|h| crate::syndication::job::Op::ALL.iter().any(|op| op.hook() == h));
+    if !copying || turn.holder().as_ref() == Some(&me) {
+        return;
+    }
+    let _in_line = host.state.hooks.begin_person_wait(&me.plugin);
+    turn.take(me).await;
+}
+
 fn need_app<'a>(host: &EngineHost<'a>, cmd: &str) -> std::result::Result<&'a dyn AppHost, String> {
     host.app.ok_or_else(|| format!("{cmd} requires an app handle (not available in this test host)"))
 }
@@ -610,6 +639,7 @@ async fn dispatch_command_core(
                 .transpose()?;
             let title = args.get("title").and_then(|v| v.as_str()).map(String::from);
             let below = args.get("belowTitlebar").and_then(|v| v.as_bool()).unwrap_or(true);
+            take_panel_turn(&host, app).await;
             app.open_action_panel(url, title, below, host.plugin.map(String::from)).await.map(|()| window_opened(&host))?;
             Ok("null".into())
         }
@@ -617,12 +647,13 @@ async fn dispatch_command_core(
             let app = need_app(&host, "set_action_panel_html")?;
             let html = req_str(&args, "html")?;
             let title = args.get("title").and_then(|v| v.as_str()).map(String::from);
+            take_panel_turn(&host, app).await;
             app.set_action_panel_html(html, title, host.plugin.map(String::from)).await.map(|()| window_opened(&host))?;
             Ok("null".into())
         }
         "close_action_panel" => {
             let app = need_app(&host, "close_action_panel")?;
-            app.close_action_panel(host.plugin.map(String::from)).await?;
+            close_panel(&host, app).await?;
             Ok("null".into())
         }
         "open_system_browser" => {
