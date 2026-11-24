@@ -75,6 +75,14 @@ If you use **"Send Logs"** to report a problem, moss uploads your recent app log
 
 If you ask us to maintain your site, we can agree with you that moss sends that site's activity log to us while the site is open in moss, on any computer, so we see problems as they happen. We set this up in your site's folder ourselves; the app has no setting for it, and nobody else's moss does it. The log is scrubbed the same way as Send Logs and deleted after 30 days. Tell us any time and we stop it and delete what we hold.
 
+## Threads
+
+If you connect Threads to a site, you sign in on Threads' own page and allow moss to read your Threads profile and posts (`threads_basic`) and to publish and delete posts on your behalf (`threads_content_publish`, `threads_delete`). moss uses this only to post copies of your pages, with a link back, and to find and remove those copies later. It reads your Threads user ID and the posts it made.
+
+When you approve, Threads sends a one-time code to our server, which swaps it for an access token. Our server holds the token in memory for up to five minutes, hands it once to the moss app on your computer, and then forgets it; it is never written to disk or to a log. The app keeps the token in the secret store of the plugin on your computer and refreshes it there. We keep no Threads data on our servers, so there is nothing for us to delete.
+
+To disconnect, remove Threads in moss, or remove moss in Threads under Settings → Account → Website permissions. A deletion request from Threads is answered at `https://api.mosspub.com/connect/threads/deletion`. Posts moss already made stay on your Threads account until you delete them there or from moss.
+
 ## Where your data is processed
 
 Our server is in the **United States**, and some of the services we rely on (Stripe, Resend, Cloudflare) are US‑based; our domain registrar (OpenSRS / Tucows) is in **Canada**. If you're in the EU or UK, your data may be processed outside your country.
@@ -95,4 +103,4 @@ Questions, or want your data deleted? Email us at **hi@symbiosis-lab.org**.
 
 moss is early, and this policy will grow with it. We'll update this page when our practices change.
 
-*Last updated: 2026‑11‑08.*
+*Last updated: 2026‑11‑23.*
