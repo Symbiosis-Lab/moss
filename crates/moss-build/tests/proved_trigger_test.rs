@@ -994,3 +994,36 @@ fn a_publish_rewriting_its_bookkeeping_leaves_the_last_seal_standing() {
     assert!(rendered_everything(&record), "{record}");
     assert_publishes_a_full_render(&site);
 }
+
+/// A publish of the sealed generation writes its record and names it in
+/// `.moss/state.toml`. The build after a publish renders the generation it
+/// published, so the next build stops at entry and serves what a full render
+/// does. A publish of any other generation renders every page.
+#[test]
+fn a_publish_of_the_sealed_generation_leaves_the_last_seal_standing() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let site = Site::new();
+    site.write(".moss/state.toml", &deployment_state("2026-11-01T00:00:00Z", "a.example.net", "site-1.example.org"));
+    site.sealed();
+    let paths = MossPaths::new(site.root());
+    let manifest: serde_json::Value = serde_json::from_str(&fs::read_to_string(paths.hashes()).unwrap()).unwrap();
+    let files: std::collections::HashMap<String, String> = serde_json::from_value(manifest["files"].clone()).unwrap();
+    let publish = |generation: &str| {
+        let record = serde_json::json!({
+            "generation_id": generation, "target": "moss:site-1", "published_at": "2026-11-02T00:00:00Z",
+            "sources": {}, "source_to_output": {}, "files": files,
+        });
+        site.write(moss_build::build::manifest::published_record::path_for(&paths, "moss:site-1"), &record.to_string());
+        site.write(".moss/state.toml", &format!("{}last_deployed_generation_id = \"{generation}\"\n", deployment_state("2026-11-02T00:00:00Z", "a.example.net", "site-1.example.org")));
+    };
+
+    publish(&moss_build::build::assets::paths::compute_manifest_generation_id(&files));
+    let record = build(site.root(), BuildTrigger::Unobserved);
+    assert!(stopped(&record), "{record}");
+    assert_publishes_a_full_render(&site);
+
+    publish("another-generation");
+    let record = build(site.root(), BuildTrigger::Unobserved);
+    assert!(rendered_everything(&record), "{record}");
+    assert_publishes_a_full_render(&site);
+}

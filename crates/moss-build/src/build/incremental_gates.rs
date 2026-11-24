@@ -78,15 +78,16 @@ impl LastSeal {
     pub fn read(folder: &Path, options: std::collections::BTreeMap<String, String>, completes: bool) -> Self {
         let _trace = crate::build::phase::PhaseTrace::start("seal_read");
         let manifest = crate::ops::watch::sweep::walk::read_baseline_from_disk(folder);
-        let moss = crate::build::inputs::measure(folder, manifest.as_ref().and_then(|m| m.build_inputs.as_ref()), options);
-        Self { manifest, moss, completes }
+        let mut seal = Self { manifest, moss: Default::default(), completes };
+        seal.remeasure(folder, options);
+        seal
     }
 
     /// Measure `.moss/` again, against the same record, after something wrote
     /// to it; whether it still holds. A build proves from one measurement,
     /// taken after the last such write.
     pub(super) fn remeasure(&mut self, folder: &Path, options: std::collections::BTreeMap<String, String>) -> bool {
-        self.moss = crate::build::inputs::measure(folder, self.manifest.as_ref().and_then(|m| m.build_inputs.as_ref()), options);
+        self.moss = crate::build::inputs::measure(folder, self.manifest.as_ref().and_then(|m| m.build_inputs.as_ref()), self.generation_id().as_deref(), options);
         self.moss.holds
     }
 

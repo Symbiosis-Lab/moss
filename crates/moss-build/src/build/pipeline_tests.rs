@@ -7071,7 +7071,9 @@ fn the_build_after_a_publish_renders_the_published_generation() {
     assert!(published.all_files().contains_key("moved/index.html"), "the moved page leaves a stub: {:?}", published.all_files().keys().collect::<Vec<_>>());
     publish(&published);
 
-    let (_, _, _, again) = build_test_promoted_or_withheld(folder_path).unwrap();
+    let (_, rendered, _, again) = build_test_promoted_or_withheld(folder_path).unwrap();
+    let unrendered: Vec<_> = published.all_files().keys().filter(|path| path.ends_with(".html") && !rendered.contains(*path)).collect();
+    assert!(unrendered.is_empty(), "the rebuild must be a render, not the published generation kept: {unrendered:?}");
     let mut differ: Vec<_> = published.all_files().iter()
         .filter(|(path, hash)| again.all_files().get(*path) != Some(*hash))
         .map(|(path, _)| path.clone())

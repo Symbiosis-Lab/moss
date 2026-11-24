@@ -66,6 +66,12 @@ pub struct BuildInputs {
     /// only its own bookkeeping leaves the last seal standing.
     #[serde(default)]
     pub state_rest: Option<String>,
+    /// The published generation each pointer under `.moss/` names: every
+    /// publish record (`records/<file>`) and each target's last publish in
+    /// `state.toml` (`state/<target>`). Proved by what they name rather than
+    /// their bytes; see [`generations_hold`].
+    #[serde(default)]
+    pub generations: Option<BTreeMap<String, String>>,
 }
 
 /// [`BuildInputs::evidence`]: the lasting refusals and report lines of a seal
@@ -131,28 +137,33 @@ pub(crate) fn config_rest(folder: &Path) -> Option<String> {
 /// Keys of `.moss/state.toml` that a publish rewrites and no page reads, by
 /// table: the DNS it observed and when, and each target's address. Each
 /// target's `last_deployment_at` counts only as set or unset, which is what the
-/// redirect advisory reads. `last_deployed_generation_id` is not here: it names
-/// the published records the build reads. A key of the same name in any other
-/// table counts.
+/// redirect advisory reads, and its `last_deployed_generation_id` is one of
+/// [`BuildInputs::generations`]. A key of the same name in any other table
+/// counts.
 const OBSERVED_BOOKKEEPING: &[&str] = &["checked_at", "dns_target"];
 const TARGET_BOOKKEEPING: &[&str] = &["last_deployment_url"];
 
 /// A digest of `.moss/state.toml` without the publish's bookkeeping, keyed and
-/// read like [`config_rest`]. Every other key counts, so a key added later
-/// reaches the proof until a test shows no page reads it.
-pub(crate) fn state_rest(folder: &Path) -> Option<String> {
+/// read like [`config_rest`], and the generation each target last published.
+/// Every other key counts, so a key added later reaches the proof until a test
+/// shows no page reads it.
+pub(crate) fn state_rest(folder: &Path) -> Option<(String, BTreeMap<String, String>)> {
     fn table<'a>(parent: &'a mut toml::Table, key: &str) -> Option<&'a mut toml::Table> {
         parent.get_mut(key).and_then(toml::Value::as_table_mut)
     }
-    fn strip(state: &mut toml::Table) {
+    fn strip(state: &mut toml::Table, generations: &mut BTreeMap<String, String>) {
         let Some(deployment) = table(state, "deployment") else { return };
         if let Some(observed) = table(deployment, "observed") {
             OBSERVED_BOOKKEEPING.iter().for_each(|key| { observed.remove(*key); });
         }
-        for target in table(deployment, "targets").into_iter().flat_map(|t| t.iter_mut().map(|(_, v)| v)).filter_map(toml::Value::as_table_mut) {
+        for (name, target) in table(deployment, "targets").into_iter().flat_map(|t| t.iter_mut()) {
+            let Some(target) = target.as_table_mut() else { continue };
             TARGET_BOOKKEEPING.iter().for_each(|key| { target.remove(*key); });
             if let Some(at) = target.get_mut("last_deployment_at") {
                 *at = toml::Value::Boolean(true);
+            }
+            if let Some(toml::Value::String(generation)) = target.remove("last_deployed_generation_id") {
+                generations.insert(format!("state/{name}"), generation);
             }
         }
     }
@@ -162,8 +173,54 @@ pub(crate) fn state_rest(folder: &Path) -> Option<String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => toml::Table::new(),
         Err(_) => return None,
     };
-    strip(&mut table);
-    Some(value_hash(Some(&serde_json::to_string(&table).ok()?)))
+    let mut generations = BTreeMap::new();
+    strip(&mut table, &mut generations);
+    Some((value_hash(Some(&serde_json::to_string(&table).ok()?)), generations))
+}
+
+/// Adds the generation each publish record names to `generations`, keyed
+/// `records/<file>`; a record that names none is keyed by its bytes. `None`
+/// when one is in the cloud or cannot be read, which proves nothing.
+fn record_generations(folder: &Path, generations: &mut BTreeMap<String, String>) -> Option<()> {
+    #[derive(serde::Deserialize)]
+    struct Names {
+        generation_id: String,
+    }
+    let dir = crate::moss_paths::MossPaths::new(folder).deploy_records_dir();
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(()),
+        Err(_) => return None,
+    };
+    for entry in entries {
+        let path = entry.ok()?.path();
+        let name = path.file_name()?.to_string_lossy().into_owned();
+        if !is_record_name(&name) {
+            continue;
+        }
+        if crate::build::icloud::is_evicted(&path) {
+            return None;
+        }
+        let bytes = std::fs::read(&path).ok()?;
+        let named = serde_json::from_slice::<Names>(&bytes).map(|n| n.generation_id)
+            .or_else(|_| crate::build::cache::ObjectStore::hash_file(&path).map(|hash| format!("bytes {hash}")))
+            .ok()?;
+        generations.insert(format!("records/{name}"), named);
+    }
+    Some(())
+}
+
+fn is_record_name(name: &str) -> bool {
+    !name.starts_with('.') && !name.contains('/') && name.ends_with(".json")
+}
+
+/// Whether every generation pointer still names the generation the seal
+/// rendered against, or names the seal's own (`sealed`, just published): the
+/// build after a publish renders the generation it published, so either one
+/// gives the seal's pages. Any other generation, or a pointer gone, renders.
+fn generations_hold(then: &BTreeMap<String, String>, now: &BTreeMap<String, String>, sealed: Option<&str>) -> bool {
+    then.keys().all(|key| now.contains_key(key))
+        && now.iter().all(|(key, named)| then.get(key) == Some(named) || sealed == Some(named.as_str()))
 }
 
 /// [`BuildInputs::day`]: the date [`effective_now`] gave, and the site zone it
@@ -202,10 +259,11 @@ pub struct Measured {
 }
 
 /// Measure the `.moss/` inputs once, before anything in the build reads them,
-/// and compare the environment and this build's `options` with `previous`.
+/// and compare the environment and this build's `options` with `previous`,
+/// the record of the seal whose generation is `sealed`.
 /// `previous` lends its hash to a file its stat still vouches for, so an
 /// unchanged file is not reread.
-pub(crate) fn measure(folder: &Path, previous: Option<&BuildInputs>, options: BTreeMap<String, String>) -> Measured {
+pub(crate) fn measure(folder: &Path, previous: Option<&BuildInputs>, sealed: Option<&str>, options: BTreeMap<String, String>) -> Measured {
     let taken_at = crate::build::stat::recording_clock();
     let Some((moss, unchanged)) = moss_files(folder, previous) else { return Measured::default() };
     let now = |name: &str| if is_option(name) {
@@ -214,9 +272,15 @@ pub(crate) fn measure(folder: &Path, previous: Option<&BuildInputs>, options: BT
         value_hash(std::env::var(name).ok().as_deref())
     };
     let env_holds = previous.is_some_and(|p| p.env.iter().all(|(name, seen)| now(name) == *seen));
-    let state_rest = state_rest(folder);
+    let (state_rest, mut generations) = state_rest(folder).unzip();
+    if let Some(generations) = generations.as_mut() {
+        if record_generations(folder, generations).is_none() {
+            return Measured::default();
+        }
+    }
     let state_holds = state_rest.is_some() && previous.is_some_and(|p| p.state_rest == state_rest);
-    Measured { holds: unchanged && env_holds && state_holds, record: Some(BuildInputs { moss, env: options, taken_at, config_rest: config_rest(folder), state_rest, ..Default::default() }) }
+    let generations_hold = previous.and_then(|p| p.generations.as_ref()).zip(generations.as_ref()).is_some_and(|(then, now)| generations_hold(then, now, sealed));
+    Measured { holds: unchanged && env_holds && state_holds && generations_hold, record: Some(BuildInputs { moss, env: options, taken_at, config_rest: config_rest(folder), state_rest, generations, ..Default::default() }) }
 }
 
 /// The build's own options that reach a page, hashed like a variable: the
@@ -296,8 +360,9 @@ fn record_key(folder: &Path, link_meta: &Path, path: &Path) -> Option<String> {
         return is_card_name(&card.to_string_lossy()).then(|| format!("link-meta/{}", card.to_string_lossy()));
     }
     let rel = moss_core::slug::normalize_separators(&path.strip_prefix(folder).ok()?.to_string_lossy());
-    // Proved through `state_rest` instead.
-    (crate::moss_paths::is_materialized_rel(&rel) && rel != ".moss/state.toml").then_some(rel)
+    // Proved through `state_rest` and `generations` instead.
+    let proved_otherwise = rel == ".moss/state.toml" || rel.strip_prefix(".moss/deploy/records/").is_some_and(is_record_name);
+    (crate::moss_paths::is_materialized_rel(&rel) && !proved_otherwise).then_some(rel)
 }
 
 /// Re-records the `.moss/` files this build wrote or removed after it was
@@ -409,7 +474,7 @@ mod tests {
         let rest = |text: &str| {
             std::fs::create_dir_all(folder.path().join(".moss")).unwrap();
             std::fs::write(folder.path().join(".moss/state.toml"), text).unwrap();
-            state_rest(folder.path()).unwrap()
+            state_rest(folder.path()).unwrap().0
         };
         let target = "[deployment.targets.\"moss:site-1\"]\n";
         let first = rest(&format!("{target}last_deployment_at = \"2026-11-01T00:00:00Z\"\n"));
@@ -423,7 +488,7 @@ mod tests {
         let rest = |text: &str| {
             std::fs::create_dir_all(folder.path().join(".moss")).unwrap();
             std::fs::write(folder.path().join(".moss/state.toml"), text).unwrap();
-            state_rest(folder.path()).unwrap()
+            state_rest(folder.path()).unwrap().0
         };
         let observed = "[deployment.observed]\nchecked_at = \"2026-11-01T00:00:00Z\"\n";
         assert_eq!(rest(observed), rest("[deployment.observed]\nchecked_at = \"2026-11-02T00:00:00Z\"\n"));
@@ -431,6 +496,28 @@ mod tests {
             let at = |value: &str| rest(&format!("[{table}]\n{key} = \"{value}\"\n"));
             assert_ne!(at("one"), at("two"), "{table}.{key}");
         }
+    }
+
+    #[test]
+    fn a_publish_pointer_holds_while_it_names_the_rendered_or_the_sealed_generation() {
+        let folder = tempfile::tempdir().unwrap();
+        let records = folder.path().join(".moss/deploy/records");
+        std::fs::create_dir_all(&records).unwrap();
+        let point = |generation: &str| {
+            std::fs::write(records.join("moss-1.json"), format!("{{\"generation_id\": \"{generation}\", \"files\": {{}}}}")).unwrap();
+            std::fs::write(folder.path().join(".moss/state.toml"), format!("[deployment.targets.\"moss:site-1\"]\nlast_deployed_generation_id = \"{generation}\"\n")).unwrap();
+        };
+        point("g1");
+        let seal = measure(folder.path(), None, None, BTreeMap::new()).record.unwrap();
+        let holds = || measure(folder.path(), Some(&seal), Some("g2"), BTreeMap::new()).holds;
+        assert!(holds(), "nothing published since");
+        point("g2");
+        assert!(holds(), "the seal itself was published");
+        point("g3");
+        assert!(!holds(), "another generation was published");
+        point("g2");
+        std::fs::remove_file(records.join("moss-1.json")).unwrap();
+        assert!(!holds(), "a record went");
     }
 
     #[test]
