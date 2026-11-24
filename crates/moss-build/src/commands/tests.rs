@@ -37,7 +37,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("get_cloud_unavailable_files", json!({ "folderPath": "/open/folder" })),
         (
             "list_versions",
-            json!({ "projectPath": "/ignored", "scope": "site", "path": null }),
+            json!({ "projectPath": "/ignored", "scope": { "kind": "folder", "path": "posts" }, "version": null }),
         ),
         ("read_version", json!({ "id": "v1", "path": "a.md" })),
         ("reveal_history_store", json!({ "projectPath": "/ignored" })),
@@ -89,7 +89,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         (
             "restore_version",
-            json!({ "projectPath": "/ignored", "id": "v1", "path": null, "mode": "page" }),
+            json!({ "projectPath": "/ignored", "id": "v1", "scope": { "kind": "site" }, "mode": "in_place" }),
         ),
         ("save_version", json!({ "projectPath": "/ignored", "label": null })),
     ]

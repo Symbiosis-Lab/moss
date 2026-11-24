@@ -18,10 +18,10 @@ export interface VersionsRestoreModalOptions {
   /** The version's own moment, already formatted ("Sep 8, 11:20") — the
    *  same string the header above this button shows. */
   when: string;
-  /** `changed_since.length` for the version being restored to. */
+  /** The pages the restore writes back. */
   pages: number;
-  /** Of those, the ones with verb `"added"` — created after this moment,
-   *  so a restore sends them to the Trash rather than reverting them. */
+  /** The pages added since this moment that the restore moves to the Trash
+   *  (the drill-down's `to_trash`). */
   added: number;
   /** The folder's display name for a folder-scope restore, or `null` for the
    *  whole site — picks which title/confirm-label pair this renders. */

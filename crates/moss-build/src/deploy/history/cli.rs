@@ -33,7 +33,7 @@ use std::path::Path;
 use super::record::{PublishRecord, Trigger};
 use super::restore::{self, RestoreMode, RestoreReport};
 use super::store;
-use super::{HistoryStore, SourceTree};
+use super::{HistoryStore, SourceTree, VersionScope};
 use crate::build::manifest::published_record;
 use crate::build::scan::path_collision::logical_path;
 use crate::cli::list::fail;
@@ -492,7 +492,7 @@ fn run_restore_site(root: &VaultRoot, at: &str, yes: bool) -> i32 {
         }
     };
 
-    let report = prep.store.restore_site(root.path(), &prep.id, &prep.current, &restore::real_trash);
+    let report = prep.store.restore_site(root.path(), &prep.id, &prep.current, &VersionScope::Site, &restore::real_trash);
     print_restore_report(&report);
     if report.failed.is_empty() {
         0
@@ -638,7 +638,7 @@ fn run_site_timeline(root: &VaultRoot, json: bool) -> i32 {
     }
     let by_id: HashMap<String, PublishRecord> = records.into_iter().collect();
     let mut live = LiveResolver::new(root.path());
-    let rows = decorate(store.store_dir(), store.site_timeline(), &by_id, &mut live, None);
+    let rows = decorate(store.store_dir(), store.site_timeline(&VersionScope::Site), &by_id, &mut live, None);
 
     if json {
         print_json(&rows);

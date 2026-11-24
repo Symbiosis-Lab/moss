@@ -251,7 +251,7 @@ describe('Versions as an in-place mode of the editor body', () => {
 
     // The list is here, fed by the data command through the platform seam …
     expect(cm().querySelector('.moss-versions')).not.toBeNull();
-    expect(mockCommands.listVersions).toHaveBeenCalledWith('page', FILE);
+    expect(mockCommands.listVersions).toHaveBeenCalledWith({ kind: 'page', path: FILE }, null);
     // The subject name and "‹ Editor" no longer render inside the surface
     // They're the editor's own
     // breadcrumb now, which this harness's mocked FileTree never builds (see
@@ -284,7 +284,7 @@ describe('Versions as an in-place mode of the editor body', () => {
 
     // A non-page scope keeps its path rather than always
     // asking for the whole site.
-    expect(mockCommands.listVersions).toHaveBeenCalledWith('folder', 'content/posts');
+    expect(mockCommands.listVersions).toHaveBeenCalledWith({ kind: 'folder', path: 'content/posts' }, null);
     expect(cm().querySelector('.moss-versions__caption')?.textContent).toBe('Versions');
   });
 
@@ -295,7 +295,7 @@ describe('Versions as an in-place mode of the editor body', () => {
     await vi.waitFor(() => expect(cm().getAttribute('data-editor-surface')).toBe('versions'));
     await drain();
 
-    expect(mockCommands.listVersions).toHaveBeenCalledWith('site', '');
+    expect(mockCommands.listVersions).toHaveBeenCalledWith({ kind: 'site' }, null);
     expect(cm().querySelector('.moss-versions__caption')?.textContent).toBe('Site versions');
   });
 
@@ -343,7 +343,7 @@ describe('Versions as an in-place mode of the editor body', () => {
     content.querySelector<HTMLButtonElement>('.moss-versions__restore')!.click();
 
     await vi.waitFor(() => expect(cm().hasAttribute('data-editor-surface')).toBe(false));
-    expect(mockCommands.restoreVersion).toHaveBeenCalledWith('v1', FILE, 'in_place');
+    expect(mockCommands.restoreVersion).toHaveBeenCalledWith('v1', { kind: 'page', path: FILE }, 'in_place');
     expect(mockCommands.parseFrontmatter).toHaveBeenLastCalledWith(`/Users/test/blog/${FILE}`);
     expect(cm().querySelector('.editor-band')).not.toBeNull();
     expect(document.getElementById('nav-right')!.classList.contains('is-chrome-faded')).toBe(false);

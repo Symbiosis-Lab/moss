@@ -110,7 +110,7 @@ fn site_timeline_counts_changed_added_and_removed_against_the_previous_record() 
     // a.md edited, b.md removed, c.md added.
     publish(&history_root, &vault, &[("a.md", "a/index.html", b"v2"), ("c.md", "c/index.html", b"v1")], "2026-01-02T00:00:00Z");
 
-    let rows = site_timeline(&history_root);
+    let rows = site_timeline(&history_root, &VersionScope::Site);
 
     assert_eq!(rows.len(), 2);
     assert_eq!((rows[0].changed, rows[0].added, rows[0].removed), (0, 2, 0), "the first record has nothing to diff against");
@@ -144,7 +144,7 @@ fn site_version_pages_reports_edited_added_and_deleted_since_and_the_unchanged_r
     seed_page(&vault, &mut pending, "new.md", "new/index.html", b"new");
     let current = pending.seal();
 
-    let result = site_version_pages(&history_root, &id, &SourceTree::from_sealed(&current)).unwrap();
+    let result = site_version_pages(&history_root, &id, &SourceTree::from_sealed(&current), &VersionScope::Site).unwrap();
 
     let mut changed = result.changed_since.clone();
     changed.sort_by(|a, b| a.source_path.cmp(&b.source_path));
@@ -167,7 +167,7 @@ fn site_version_pages_errors_for_an_unknown_id() {
     let history_root = dir.path().join("history");
     let current = PendingManifest::new(SiteHashes::default()).seal();
 
-    let err = site_version_pages(&history_root, "no-such-id", &SourceTree::from_sealed(&current)).unwrap_err();
+    let err = site_version_pages(&history_root, "no-such-id", &SourceTree::from_sealed(&current), &VersionScope::Site).unwrap_err();
     assert!(err.contains("no such version"), "{err}");
 }
 
@@ -207,7 +207,7 @@ fn the_site_timeline_leaves_out_a_kept_outside_edit_and_counts_past_it() {
     let history_root = dir.path().join("history");
     publish_displace_publish(&history_root, &vault);
 
-    let rows = site_timeline(&history_root);
+    let rows = site_timeline(&history_root, &VersionScope::Site);
     assert_eq!(rows.iter().map(|r| r.trigger).collect::<Vec<_>>(), vec![Trigger::Publish, Trigger::Publish]);
     assert_eq!((rows[1].changed, rows[1].added, rows[1].removed), (0, 0, 0), "R2 changed nothing since R1");
 }
@@ -220,6 +220,6 @@ fn a_kept_outside_edit_has_no_site_version_pages() {
     let history_root = dir.path().join("history");
     let id = record::snapshot_displaced(&history_root, "a.md", b"x").unwrap();
 
-    let err = site_version_pages(&history_root, &id, &SourceTree::from_sealed(&PendingManifest::new(SiteHashes::default()).seal())).unwrap_err();
+    let err = site_version_pages(&history_root, &id, &SourceTree::from_sealed(&PendingManifest::new(SiteHashes::default()).seal()), &VersionScope::Site).unwrap_err();
     assert!(err.contains("not a site version"), "{err}");
 }

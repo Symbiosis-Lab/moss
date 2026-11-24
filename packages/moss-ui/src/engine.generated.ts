@@ -1287,7 +1287,11 @@ export type ListDirectoryArgs = { path: VaultPath; showInternal: boolean }
  */
 export type ListTreeArgs = { showInternal: boolean }
 
-export type ListVersionsArgs = { scope: string; path: string | null }
+export type ListVersionsArgs = { scope: VersionScope; 
+/**
+ * A site or folder version's id: its drill-down instead of the timeline.
+ */
+version: string | null }
 
 /**
  * The reason the login browser-panel triggered the failure view.
@@ -2374,6 +2378,20 @@ offers_original: boolean }
 export type RestoreFailure = { path: string; error: string }
 
 /**
+ * Where a restored page's bytes go.
+ */
+export type RestoreMode = 
+/**
+ * Overwrite the file at its current vault path.
+ */
+"in_place" | 
+/**
+ * Write beside the current file as `<stem> (<date>).<ext>`, leaving the
+ * present content untouched.
+ */
+"as_copy"
+
+/**
  * [`restore_version`]'s answer, unified across the page and site forms (design
  * rule 4, "best-effort with an honest count"): a page restore reports itself
  * as a one-entry `restored`/`failed`, matching the shape a site restore's
@@ -2388,7 +2406,7 @@ export type RestoreFailure = { path: string; error: string }
  */
 export type RestoreReport = { restored: string[]; failed: RestoreFailure[]; trashed: string[]; undo_id: string | null }
 
-export type RestoreVersionArgs = { id: string; path: string | null; mode: string }
+export type RestoreVersionArgs = { id: string; scope: VersionScope; mode: RestoreMode }
 
 /**
  * String-shape classification of the opened root, wire form. Mirrors
@@ -3223,13 +3241,11 @@ export type Verb = string
 export type VersionContent = { kept: boolean; text: string | null }
 
 /**
- * [`list_versions`]'s answer. `rows` is the day-grouped list the panel renders
- * for either scope ("This page" → `page_timeline`, "Whole site" with no
- * `path` → `site_timeline`); `changed_since`/`unchanged` are populated ONLY
- * for a site-scope drill-down (`scope: "site"`, `path: Some(<version id>)`)
- * — the "A site version" sub-view's Changed-since/Unchanged groups — and
- * `rows` is empty in that mode. One command rather than two: the drill-down
- * reuses [`HistoryStore::site_version_pages`] in the same body as the list.
+ * [`list_versions`]'s answer. Without a `version`, `rows` is the scope's
+ * timeline. With one (site or folder scope), `rows` is empty and
+ * `changed_since`/`unchanged`/`to_trash` describe that version's pages in
+ * scope against the disk now: the drill-down screen and its restore's
+ * confirmation.
  */
 export type VersionList = { rows: VersionRow[]; 
 /**
@@ -3241,16 +3257,21 @@ live_id: string | null; has_multiple_targets: boolean;
 /**
  * "Show in Finder" footer target.
  */
-store_dir: string; changed_since: ChangedPage[]; unchanged: string[] }
+store_dir: string; changed_since: ChangedPage[]; unchanged: string[]; to_trash: string[] }
 
 /**
  * One row in the Versions list — a publish, a manual save, a pre-restore
  * save, or a kept outside edit of one page. `trigger` is
- * `"publish" | "manual" | "restore" | "displaced"`, the same flattened-
- * string convention [`restore_version`]'s `mode` argument uses, so the
- * frontend never imports a second enum shape for the same words.
+ * `"publish" | "manual" | "restore" | "displaced"`.
  */
 export type VersionRow = { id: string; published_at: string; target: string; trigger: string; label: string | null; changed: number; added: number; removed: number }
+
+/**
+ * What a Versions request is about: the whole site, everything under one
+ * folder, or one page. A path is a key into a version's records, never
+ * joined onto the folder.
+ */
+export type VersionScope = { kind: "site" } | { kind: "folder"; path: string } | { kind: "page"; path: string }
 
 /**
  * Fine-grained video conversion progress for real-time UI updates.
@@ -3490,7 +3511,7 @@ export type EngineParams = {
 	get_publish_preflight: [folderPath: string];
 	list_vault_terms: [];
 	get_cloud_unavailable_files: [folderPath: string];
-	list_versions: [scope: string, path: string | null];
+	list_versions: [scope: VersionScope, version: string | null];
 	read_version: [id: string, path: string];
 	reveal_history_store: [];
 	resolve_attachment_dir: [pageRelativePath: VaultPath];
@@ -3519,7 +3540,7 @@ export type EngineParams = {
 	clean_references_and_delete: [paths: VaultPath[]];
 	undo_rename: [undoId: string];
 	save_editor_content: [filePath: VaultPath, frontmatter: JsonValue, body: string, expectedHash: string, keepDisplaced?: boolean];
-	restore_version: [id: string, path: string | null, mode: string];
+	restore_version: [id: string, scope: VersionScope, mode: RestoreMode];
 	save_version: [label: string | null];
 	write_editor_file_binary: [relativePath: VaultPath, dataBase64: string];
 	expand_derived: [pagePath: VaultPath, content: string];
@@ -3551,7 +3572,7 @@ export const ENGINE_PARAMS = {
 	get_publish_preflight: ["folderPath"],
 	list_vault_terms: [],
 	get_cloud_unavailable_files: ["folderPath"],
-	list_versions: ["scope", "path"],
+	list_versions: ["scope", "version"],
 	read_version: ["id", "path"],
 	reveal_history_store: [],
 	resolve_attachment_dir: ["pageRelativePath"],
@@ -3580,7 +3601,7 @@ export const ENGINE_PARAMS = {
 	clean_references_and_delete: ["paths"],
 	undo_rename: ["undoId"],
 	save_editor_content: ["filePath", "frontmatter", "body", "expectedHash", "keepDisplaced"],
-	restore_version: ["id", "path", "mode"],
+	restore_version: ["id", "scope", "mode"],
 	save_version: ["label"],
 	write_editor_file_binary: ["relativePath", "dataBase64"],
 	expand_derived: ["pagePath", "content"],

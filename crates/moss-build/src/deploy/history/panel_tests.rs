@@ -120,27 +120,15 @@ fn save_compare_and_restore_need_no_build() {
     let saved = save_version(&vault, Some("First draft".to_string())).unwrap();
     std::fs::write(vault.join("a.md"), b"second").unwrap();
 
-    let drill = list_versions(&vault, "site", Some(saved.id.clone())).unwrap();
+    let drill = list_versions(&vault, VersionScope::Site, Some(saved.id.clone())).unwrap();
     assert_eq!(drill.changed_since.len(), 1, "the edit since the save is seen without a build");
     assert_eq!(drill.changed_since[0].source_path, "a.md");
 
-    let report = restore_version(&vault, &saved.id, Some("a.md".to_string()), "in_place").unwrap();
+    let report = restore_version(&vault, &saved.id, VersionScope::Page("a.md".to_string()), RestoreMode::InPlace).unwrap();
     assert!(report.failed.is_empty(), "{:?}", report.failed);
     assert_eq!(std::fs::read(vault.join("a.md")).unwrap(), b"first");
     let undo = report.undo_id.expect("the edited page was saved before the restore");
     assert_eq!(read_version(&vault, &undo, "a.md").unwrap().text.as_deref(), Some("second"));
-}
-
-/// The editor opens site scope with the site's own path, which is empty: that
-/// asks for the timeline, not a version whose id is "".
-#[test]
-fn site_scope_with_the_empty_site_path_lists_the_timeline() {
-    let (_dir, vault) = tmp_vault();
-    std::fs::write(vault.join("a.md"), b"first").unwrap();
-    let saved = save_version(&vault, None).unwrap();
-
-    let list = list_versions(&vault, "site", Some(String::new())).unwrap();
-    assert_eq!(list.rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), [saved.id.as_str()]);
 }
 
 /// A version id is joined into a filename by the store, so an id the store
@@ -166,14 +154,14 @@ fn a_version_id_the_store_does_not_list_never_reaches_the_filesystem() {
     assert!(outside.exists(), "the escape target must exist for this to mean anything");
 
     for escape in ["../planted", &format!("../publishes/{real_id}")] {
-        let err = restore_version(&vault, escape, None, "in_place")
+        let err = restore_version(&vault, escape, VersionScope::Site, RestoreMode::InPlace)
             .expect_err("an unlisted id must be refused");
         assert!(err.contains("no such version"), "got: {err}");
     }
     let err = read_version(&vault, "../planted", "a.md").expect_err("unlisted id");
     assert!(err.contains("no such version"), "got: {err}");
 
-    let err = list_versions(&vault, "site", Some("../planted".to_string()))
+    let err = list_versions(&vault, VersionScope::Site, Some("../planted".to_string()))
         .expect_err("unlisted id");
     assert!(err.contains("no such version"), "got: {err}");
 
@@ -208,7 +196,7 @@ fn a_site_restore_trashes_pages_added_since_the_version() {
         trashed.lock().unwrap().push(rel.to_string());
         Ok(())
     };
-    let report = restore_version_with(&vault, &id, None, "in_place", &trash).unwrap();
+    let report = restore_version_with(&vault, &id, VersionScope::Site, RestoreMode::InPlace, &trash).unwrap();
 
     assert_eq!(report.trashed, vec!["since.md".to_string()], "failed: {:?}", report.failed);
     assert_eq!(*trashed.lock().unwrap(), vec!["since.md".to_string()]);
@@ -224,7 +212,7 @@ fn a_site_restore_to_a_kept_outside_edit_is_refused_before_any_backup() {
     let store = HistoryStore::in_vault(&vault);
     let id = store.keep_displaced(&vault, "a.md", b"theirs").unwrap().unwrap();
 
-    let err = restore_version(&vault, &id, None, "in_place").unwrap_err();
+    let err = restore_version(&vault, &id, VersionScope::Site, RestoreMode::InPlace).unwrap_err();
 
     assert!(err.contains("kept outside edit"), "{err}");
     assert_eq!(store.list_records().len(), 1, "nothing but the kept edit itself");
@@ -241,10 +229,104 @@ fn a_page_restore_names_its_own_backup_even_when_another_record_is_newer() {
     let (id, _) = store.list_records().pop().unwrap();
     store.keep_displaced(&vault, "b.md", b"an agent's page").unwrap();
 
-    let report = restore_version(&vault, &id, Some("a.md".to_string()), "in_place").unwrap();
+    let report = restore_version(&vault, &id, VersionScope::Page("a.md".to_string()), RestoreMode::InPlace).unwrap();
 
     let undo = store.load_record(report.undo_id.as_deref().expect("a backup was written")).unwrap();
     assert_eq!(undo.trigger, Trigger::Restore);
+}
+
+/// Publishes `pages` (written to disk first) as one version and returns its id.
+fn publish(vault: &Path, pages: &[(&str, &[u8])], at: &str) -> String {
+    for (path, bytes) in pages {
+        let full = vault.join(path);
+        std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+        std::fs::write(full, bytes).unwrap();
+    }
+    let store = HistoryStore::in_vault(vault);
+    store.snapshot(vault, &SourceTree::from_sealed(&manifest_of(pages)), "moss", at).unwrap().expect("a new version")
+}
+
+/// A folder's timeline holds the publishes that changed something under it,
+/// counted under it only; `posts-old.md` shares the folder's prefix and is
+/// outside it.
+#[test]
+fn a_folder_lists_only_the_versions_that_touched_it_with_its_own_counts() {
+    let (_dir, vault) = tmp_vault();
+    let first = publish(&vault, &[("posts/a.md", b"a1"), ("about.md", b"x1"), ("posts-old.md", b"o1")], "2026-01-01T00:00:00Z");
+    publish(&vault, &[("posts/a.md", b"a1"), ("about.md", b"x2"), ("posts-old.md", b"o2")], "2026-01-02T00:00:00Z");
+    let third = publish(&vault, &[("posts/a.md", b"a2"), ("posts/b.md", b"b1"), ("about.md", b"x2"), ("posts-old.md", b"o2")], "2026-01-03T00:00:00Z");
+
+    let list = list_versions(&vault, VersionScope::Folder("posts/".to_string()), None).unwrap();
+
+    let rows: Vec<_> = list.rows.iter().map(|r| (r.id.as_str(), r.changed, r.added, r.removed)).collect();
+    assert_eq!(rows, [(first.as_str(), 0, 1, 0), (third.as_str(), 1, 1, 0)]);
+}
+
+/// A folder version's drill-down and its restore see only the folder: the
+/// confirmation's Trash list is what the restore then trashes, and an edit
+/// outside the folder survives the restore.
+#[test]
+fn a_folder_restore_reverts_and_trashes_only_under_the_folder() {
+    let (_dir, vault) = tmp_vault();
+    let id = publish(&vault, &[("posts/a.md", b"a1"), ("about.md", b"x1")], "2026-01-01T00:00:00Z");
+    std::fs::write(vault.join("posts/a.md"), b"a2").unwrap();
+    std::fs::write(vault.join("posts/new.md"), b"new").unwrap();
+    std::fs::write(vault.join("posts/new.png"), b"picture").unwrap();
+    std::fs::write(vault.join("about.md"), b"x2").unwrap();
+    std::fs::write(vault.join("since.md"), b"outside").unwrap();
+    let folder = VersionScope::Folder("posts".to_string());
+
+    let drill = list_versions(&vault, folder.clone(), Some(id.clone())).unwrap();
+    let mut changed: Vec<_> = drill.changed_since.iter().map(|c| c.source_path.as_str()).collect();
+    changed.sort();
+    assert_eq!(changed, ["posts/a.md", "posts/new.md", "posts/new.png"]);
+    assert_eq!(drill.to_trash, ["posts/new.md"], "a picture added since is left on disk");
+
+    let trashed = std::sync::Mutex::new(Vec::new());
+    let trash = |_: &Path, rel: &str| -> Result<(), String> {
+        trashed.lock().unwrap().push(rel.to_string());
+        Ok(())
+    };
+    let report = restore_version_with(&vault, &id, folder, RestoreMode::InPlace, &trash).unwrap();
+
+    assert_eq!(report.restored, ["posts/a.md"], "failed: {:?}", report.failed);
+    assert_eq!(report.trashed, drill.to_trash);
+    assert_eq!(*trashed.lock().unwrap(), drill.to_trash);
+    assert_eq!(std::fs::read(vault.join("posts/a.md")).unwrap(), b"a1");
+    assert_eq!(std::fs::read(vault.join("about.md")).unwrap(), b"x2", "outside the folder is untouched");
+}
+
+/// "Save a copy" writes one file beside one page; for a folder or the site
+/// it is refused before any backup is written.
+#[test]
+fn only_a_page_restores_as_a_copy() {
+    let (_dir, vault) = tmp_vault();
+    let id = publish(&vault, &[("posts/a.md", b"a1")], "2026-01-01T00:00:00Z");
+    std::fs::write(vault.join("posts/a.md"), b"a2").unwrap();
+
+    for scope in [VersionScope::Site, VersionScope::Folder("posts".to_string())] {
+        let err = restore_version(&vault, &id, scope, RestoreMode::AsCopy).unwrap_err();
+        assert!(err.contains("only a page"), "{err}");
+    }
+    assert_eq!(HistoryStore::in_vault(&vault).list_records().len(), 1, "no backup for a refused restore");
+
+    let report = restore_version(&vault, &id, VersionScope::Page("posts/a.md".to_string()), RestoreMode::AsCopy).unwrap();
+    assert!(report.failed.is_empty(), "{:?}", report.failed);
+    assert_eq!(std::fs::read(vault.join("posts/a.md")).unwrap(), b"a2", "the present page is left alone");
+}
+
+/// A folder or page path that names nothing inside the site is refused
+/// rather than answered with an empty history.
+#[test]
+fn a_scope_path_outside_the_site_is_refused() {
+    let (_dir, vault) = tmp_vault();
+    for bad in ["", "/", "../posts", "posts/../..", "/etc", "./posts"] {
+        let err = list_versions(&vault, VersionScope::Folder(bad.to_string()), None).unwrap_err();
+        assert!(err.contains("not a path inside the site"), "{bad:?}: {err}");
+    }
+    let err = list_versions(&vault, VersionScope::Page(String::new()), None).unwrap_err();
+    assert!(err.contains("not a path inside the site"), "{err}");
+    assert!(list_versions(&vault, VersionScope::Page("posts/a.md".to_string()), Some("id".to_string())).is_err());
 }
 
 /// `reveal_history_store` resolves the vault's own store directory, with no

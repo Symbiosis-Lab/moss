@@ -26,28 +26,6 @@
  * own full date+time instead of a bare time under a "Today"/"Yesterday"
  * heading.
  *
- * Two backend gaps this frontend papers over — noted here rather than
- * silently worked around, because both need a real decision when the Rust
- * side of this lands (today `list_versions`/`restore_version` only ever saw
- * `scope: "page" | "site"`, and the mock in
- * `packages/moss-ui/src/ui/editor/__tests__/mock-data.ts` fakes both):
- *
- * - `restoreVersion`'s `path` already means "restore the entry at this path"
- *   for a page. Folder-scope restore (`openTreeDetail`) asks for the same
- *   parameter with a folder path, which only works if the backend widens
- *   the match from equality to "at or under this path" — a page path has no
- *   descendants, so this is backward compatible, not a new parameter.
- * - The folder/site detail screen's "Changed since / Unchanged" split has no
- *   such easy path: the existing drill-down (`listVersions('site',
- *   <record id>)`) already spends its one `path` slot on the record id, so
- *   there's no room left to also say which folder to filter to. This
- *   surface still always drills down with literal scope `'site'` (the
- *   existing, unextended contract) and filters the two returned arrays to
- *   `ctx.path`'s subtree client-side when `ctx.scope === 'folder'` — a
- *   filter over an answer Rust already computed, not a second diff. The
- *   real fix is a fourth `at` parameter on `list_versions`; this is the
- *   stopgap until that lands.
- *
  * One `root` element is reused across screens — a row click tears down the
  * current screen's DOM and builds the next one in place. Only screen one's
  * "‹ Editor" link and a completed restore leave the surface, through
@@ -67,7 +45,7 @@
 
 import { uiEvent } from "../log";
 import { engine } from '../engine';
-import type { VersionRow, VersionList, ChangedPage, PageVerb } from '@symbiosis-lab/moss-ui';
+import type { VersionRow, VersionList, VersionScope, ChangedPage, PageVerb } from '@symbiosis-lab/moss-ui';
 import { bindAction, runAction } from "../shared/ui/run-action";
 import { t, formatNumber, formatDate } from "../i18n/index";
 import { VersionsRestoreModal } from './versions-restore-modal';
@@ -101,7 +79,8 @@ function versionsFailMessage(detail: string): string {
  *  site, and whether the restore was partial); the editor only displays it. */
 export interface VersionsRestored {
   undoId: string | null;
-  path: string | null;
+  /** What Undo restores from `undoId`: the scope that was restored. */
+  scope: VersionScope;
   message: string;
 }
 
@@ -133,6 +112,7 @@ const EMPTY_LIST: VersionList = {
   store_dir: '',
   changed_since: [],
   unchanged: [],
+  to_trash: [],
 };
 
 function timeLabel(d: Date): string {
@@ -206,14 +186,6 @@ function buildDetailSubject(row: VersionRow, isLive: boolean): HTMLElement {
   return el;
 }
 
-/** A file or folder path lies at or under `folder` — folder-scope's filter
- *  over an already-fetched site-wide answer (file header, "Two backend
- *  gaps"). `folder` is never '' here; callers only reach for this in
- *  'folder' scope. */
-function underFolder(path: string, folder: string): boolean {
-  return path === folder || path.startsWith(`${folder}/`);
-}
-
 /** `PageVerb` → the sub-line text on a "Changed since then" row. `restyled`
  *  (template-only re-render, no source bytes changed) has no dedicated
  *  string in the design; it reads as an edit, the closest of the three. */
@@ -256,6 +228,8 @@ export function renderVersionsSurface(root: HTMLElement, ctx: VersionsSurfaceCon
 
   let destroyed = false;
   const scope = ctx.scope;
+  const versionScope: VersionScope =
+    ctx.scope === 'site' ? { kind: 'site' } : { kind: ctx.scope, path: ctx.path };
   let list: VersionList = EMPTY_LIST;
   const stale = () => destroyed || !root.isConnected;
 
@@ -544,7 +518,7 @@ export function renderVersionsSurface(root: HTMLElement, ctx: VersionsSurfaceCon
     }
 
     bindAction(restoreBtn, {
-      run: () => engine.restoreVersion(row.id, path, 'in_place'),
+      run: () => engine.restoreVersion(row.id, { kind: 'page', path }, 'in_place'),
       onOk: (report) => {
         if (report.failed.length > 0) {
           showRestoreError(report.failed[0].error);
@@ -552,7 +526,7 @@ export function renderVersionsSurface(root: HTMLElement, ctx: VersionsSurfaceCon
         }
         ctx.onExit({
           undoId: report.undo_id,
-          path,
+          scope: { kind: 'page', path },
           message: t('versions.restored', { what: basename(path), when: fullWhenLabel(new Date(row.published_at)) }),
         });
       },
@@ -584,9 +558,8 @@ export function renderVersionsSurface(root: HTMLElement, ctx: VersionsSurfaceCon
   /**
    * Screen three, "A folder or site version". `row` is the top-level
    * folder/site-scope row that was clicked — its id is what the drill-down
-   * `listVersions` call keys off. Folder scope additionally filters the
-   * drill-down's two arrays to `ctx.path`'s subtree (file header, "Two
-   * backend gaps") and restores only that subtree.
+   * `listVersions` call keys off; in folder scope the drill-down and the
+   * restore cover only that folder.
    */
   function openTreeDetail(row: VersionRow): void {
     root.innerHTML = '';
@@ -621,6 +594,7 @@ export function renderVersionsSurface(root: HTMLElement, ctx: VersionsSurfaceCon
 
     let changedSince: ChangedPage[] = [];
     let unchanged: string[] = [];
+    let toTrash: string[] = [];
 
     function pageRow(label: string, sub: string | null, onOpen: () => void): HTMLElement {
       const el = document.createElement('div');
@@ -676,20 +650,18 @@ export function renderVersionsSurface(root: HTMLElement, ctx: VersionsSurfaceCon
     }
 
     restoreBtn.addEventListener('click', () => {
-      // A page with verb "added" was created after this moment: a restore
-      // trashes it rather than reverting it, so it does not "go back" — the
-      // pages count excludes it from changed_since's total.
-      const added = changedSince.filter((p) => p.verb === 'added').length;
-      const pages = changedSince.length - added;
+      // A file added since this moment has nothing to go back to: the pages
+      // it trashes are counted from the engine's own list instead.
+      const pages = changedSince.filter((p) => p.verb !== 'added').length;
       new VersionsRestoreModal({
         when: fullWhenLabel(new Date(row.published_at)),
         pages,
-        added,
+        added: toTrash.length,
         folderName: isSite ? null : ctx.title,
         onConfirm: () => {
           void runAction({
             key: 'versions-restore-tree',
-            run: () => engine.restoreVersion(row.id, isSite ? null : ctx.path, 'in_place'),
+            run: () => engine.restoreVersion(row.id, versionScope, 'in_place'),
             onOk: (report) => {
               // A partial restore's own string already says what came back
               // ("Restored 1 of 2 pages"); running it through the generic
@@ -705,7 +677,7 @@ export function renderVersionsSurface(root: HTMLElement, ctx: VersionsSurfaceCon
                       what: isSite ? t('versions.scope_site') : ctx.title,
                       when: fullWhenLabel(new Date(row.published_at)),
                     });
-              ctx.onExit({ undoId: report.undo_id, path: null, message });
+              ctx.onExit({ undoId: report.undo_id, scope: versionScope, message });
             },
             failMessage: versionsFailMessage,
             stale: treeStale,
@@ -714,24 +686,21 @@ export function renderVersionsSurface(root: HTMLElement, ctx: VersionsSurfaceCon
       }).open();
     });
 
-    void engine.listVersions('site', row.id).then((result) => {
+    void engine.listVersions(versionScope, row.id).then((result) => {
       if (treeStale()) return;
       if (result.status !== 'ok') {
         console.error('[versions-surface] listVersions (tree detail) failed:', result.error);
         return;
       }
-      changedSince = isSite
-        ? result.data.changed_since
-        : result.data.changed_since.filter((p) => underFolder(p.source_path, ctx.path));
-      unchanged = isSite
-        ? result.data.unchanged
-        : result.data.unchanged.filter((p) => underFolder(p, ctx.path));
+      changedSince = result.data.changed_since;
+      unchanged = result.data.unchanged;
+      toTrash = result.data.to_trash;
       renderTreeBody();
     });
   }
 
   async function loadInitial(): Promise<void> {
-    const result = await engine.listVersions(ctx.scope, ctx.path);
+    const result = await engine.listVersions(versionScope, null);
     if (stale()) return;
     if (result.status === 'ok') {
       uiEvent('versions.list-loaded', { scope: ctx.scope, count: result.data.rows.length });
