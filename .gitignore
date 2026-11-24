@@ -12,6 +12,9 @@ dist/
 site/.moss/build/
 site/.moss/build.nosync/
 site/.moss/cache/
+site/.moss/article-map.json
+site/.moss/hashes.json
+site/.moss/site-stage/
 site/.moss/*.bak-*
 target/
 .DS_Store
@@ -25,7 +28,8 @@ packages/moss-ui/dist-browser/
 # The folder stamp moss writes into a site folder ("Icon" + carriage return).
 # The pattern is the exact name: "Icon?" would also hide every icons/ folder
 # on a case-insensitive checkout.
-Icon
+Icon
+
 
 # release assets, built or downloaded at the repo root
 /moss-linux-x86_64
