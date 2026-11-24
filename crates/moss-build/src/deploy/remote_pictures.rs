@@ -11,7 +11,7 @@ use futures::stream::{self, StreamExt};
 use std::time::Duration;
 
 /// A picture whose host answered that it is gone.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct GonePicture {
     #[serde(flatten)]
     pub occurrence: ReferenceOccurrence,
@@ -20,7 +20,7 @@ pub struct GonePicture {
 
 /// What the probe found. `offline`: no host answered at all, so nothing was
 /// checked; `unchecked`: pictures the run's time limit left unasked.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct RemotePictureReport {
     pub gone: Vec<GonePicture>,
     pub unchecked: usize,
@@ -67,6 +67,17 @@ pub async fn check(folder: &str, referer: &(dyn Fn(&str) -> Option<String> + Syn
         .map(|p| p.remote_pictures)
         .unwrap_or_default();
     probe_all(candidates, referer, BUDGET).await
+}
+
+/// [`check`] after a publish to `site` landed: each page's `Referer` is its
+/// address in the publish record just written.
+pub async fn check_published(folder: &std::path::Path, site: &str) -> RemotePictureReport {
+    let mp = crate::moss_paths::MossPaths::new(folder);
+    let outputs = crate::build::manifest::published_record::load_for(&mp, crate::build::manifest::backfill::publish_target(&mp).as_deref())
+        .map(|record| record.source_to_output)
+        .unwrap_or_default();
+    let referer = |source: &str| Some(page_address(site, outputs.get(source).map(String::as_str)));
+    check(&folder.to_string_lossy(), &referer).await
 }
 
 /// The published address of a page whose build output is `output`, for the

@@ -302,16 +302,9 @@ pub fn publish(
     if let Some(url) = report.as_ref().ok().filter(|r| r.landed()).and_then(|r| r.site_url()) {
         let print = |s: &crate::syndication::send::Sent| eprint!("{}", crate::syndication::send::render(std::slice::from_ref(s)));
         let _phase = crate::build::phase::PhaseTrace::start("after_publish");
-        let site = url.to_string();
-        let mp = crate::moss_paths::MossPaths::new(folder);
-        let outputs = crate::build::manifest::published_record::load_for(&mp, crate::build::manifest::backfill::publish_target(&mp).as_deref())
-            .map(|record| record.source_to_output)
-            .unwrap_or_default();
-        let referer = |source: &str| Some(crate::deploy::remote_pictures::page_address(&site, outputs.get(source).map(String::as_str)));
-        let folder_str = folder.to_string_lossy();
         let (_sent, pictures) = tokio::join!(
             crate::syndication::send::after_publish(folder, url, host_ports, &flags.retry_copies, flags.copies_of.as_deref(), &print),
-            crate::deploy::remote_pictures::check(&folder_str, &referer),
+            crate::deploy::remote_pictures::check_published(folder, url),
         );
         for line in pictures.lines() {
             eprintln!("{line}");
@@ -985,6 +978,34 @@ mod dry_run_tests {
         assert_eq!(gone.as_array().map(Vec::len), Some(1), "{gone}");
         assert_eq!((gone[0]["source_path"].as_str(), gone[0]["reference"].as_str(), gone[0]["status"].as_u64()), (Some("index.md"), Some(format!("{}/gone.jpg", host.url()).as_str()), Some(404)));
         assert!(dry.render().contains(&format!("index.md:7  {}/gone.jpg  no longer loads (404)", host.url())), "{}", dry.render());
+    }
+
+    /// A host that guards against hotlinking serves the picture to the page's
+    /// own published address, which the publish record gives.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn after_a_publish_each_picture_is_asked_for_from_its_page_address() {
+        let mut host = mockito::Server::new_async().await;
+        let _for_the_page = host.mock("HEAD", "/guarded.jpg").match_header("referer", "https://site.example/posts/cat/").with_status(200).create_async().await;
+        let _for_others = host.mock("GET", "/guarded.jpg").with_status(404).create_async().await;
+        let fx = Fixture::new(false).await;
+        std::fs::create_dir_all(fx.dir.path().join("posts")).unwrap();
+        std::fs::write(fx.dir.path().join("posts/cat.md"), format!("---\ntitle: Cat\n---\n\n![a]({}/guarded.jpg)\n", host.url())).unwrap();
+        dry_run_against(&fx).await;
+        crate::build::manifest::published_record::save(
+            &MossPaths::new(fx.dir.path()),
+            &PublishedSnapshot {
+                generation_id: "ours".into(),
+                target: "moss:dry-test".into(),
+                published_at: "2026-09-20T09:12:30+00:00".into(),
+                source_to_output: [("posts/cat.md".to_string(), "posts/cat/index.html".to_string())].into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let report = crate::deploy::remote_pictures::check_published(fx.dir.path(), "https://site.example").await;
+
+        assert_eq!(report.gone, [], "{report:?}");
     }
 
     async fn dry_run_with(fx: &Fixture, flags: DeployFlags) -> crate::deploy::dry_run::DryRun {
