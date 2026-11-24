@@ -7,7 +7,7 @@
 // based sync. The anchor ID algorithm must match Rust's
 // obsidian_heading_anchor() in crates/moss-core/src/heading/anchor.rs.
 
-import { EditorView } from '@codemirror/view';
+import { EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view';
 
 // ── Pure functions (tested directly) ────────────────────────────────────
 
@@ -229,6 +229,29 @@ export function revealLine(view: Pick<EditorView, 'scrollDOM' | 'contentDOM' | '
   if (top >= 0 && top < sd.clientHeight * REVEAL_KEEP_ABOVE) return;
   scrollEditorToLine(view, n, REVEAL_FRACTION);
 }
+
+/**
+ * Room below the last line, so a jump can lift a file's last lines to
+ * REVEAL_FRACTION, but only while the file already overflows the editor. A
+ * file that fits gets none: the room would make it scroll, and WebKit's
+ * scrollbar would narrow the measure. The room is `.moss-room-below`'s margin
+ * (editor.css), so it changes neither the content's height (the test for
+ * overflow) nor its width.
+ */
+export const roomBelowLastLine = ViewPlugin.fromClass(class {
+  constructor(readonly view: EditorView) {
+    this.measure();
+  }
+  update(u: ViewUpdate): void {
+    if (u.geometryChanged || u.heightChanged) this.measure();
+  }
+  measure(): void {
+    this.view.requestMeasure({
+      read: (v) => v.contentDOM.offsetHeight > v.scrollDOM.clientHeight,
+      write: (overflows, v) => { v.dom.classList.toggle('moss-room-below', overflows); },
+    });
+  }
+});
 
 type RevealView = Pick<EditorView, 'scrollDOM' | 'contentDOM' | 'state' | 'dispatch' | 'lineBlockAt' | 'documentTop' | 'focus'>;
 

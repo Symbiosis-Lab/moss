@@ -48,6 +48,7 @@ import { sourceAssetUrl } from './source-asset-url';
 import { jsonEditingExtension } from './cm-json';
 import { osDropCaret, blockDropCursor } from './cm-os-drop-caret';
 import { clearOutsideWashLater, outsideWashOf, revealFlashExtension } from './cm-reveal-flash';
+import { roomBelowLastLine } from './cm-scroll-sync';
 import { dropExtension, type DestinationFor } from './cm-drop';
 import { focusPointExtension, pictureActExtension, pictureAtCaretField, heroWordsExtension, sourceMarkdownExtensions } from './cm';
 import { host as uiHost } from "../host";
@@ -290,6 +291,7 @@ export class CmEditor {
       // Single-click reveal wash from the preview (any file type — a css/js
       // file opened via a page's asset link maps clicks too).
       ...revealFlashExtension(),
+      roomBelowLastLine,
       EditorView.lineWrapping,
       ...(options.onHistoryKey
         ? [
