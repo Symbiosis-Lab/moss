@@ -302,7 +302,20 @@ pub fn publish(
     if let Some(url) = report.as_ref().ok().filter(|r| r.landed()).and_then(|r| r.site_url()) {
         let print = |s: &crate::syndication::send::Sent| eprint!("{}", crate::syndication::send::render(std::slice::from_ref(s)));
         let _phase = crate::build::phase::PhaseTrace::start("after_publish");
-        crate::syndication::send::after_publish(folder, url, host_ports, &flags.retry_copies, flags.copies_of.as_deref(), &print).await;
+        let site = url.to_string();
+        let mp = crate::moss_paths::MossPaths::new(folder);
+        let outputs = crate::build::manifest::published_record::load_for(&mp, crate::build::manifest::backfill::publish_target(&mp).as_deref())
+            .map(|record| record.source_to_output)
+            .unwrap_or_default();
+        let referer = |source: &str| Some(crate::deploy::remote_pictures::page_address(&site, outputs.get(source).map(String::as_str)));
+        let folder_str = folder.to_string_lossy();
+        let (_sent, pictures) = tokio::join!(
+            crate::syndication::send::after_publish(folder, url, host_ports, &flags.retry_copies, flags.copies_of.as_deref(), &print),
+            crate::deploy::remote_pictures::check(&folder_str, &referer),
+        );
+        for line in pictures.lines() {
+            eprintln!("{line}");
+        }
         if let Some(page) = flags.copies_of.as_deref().filter(|p| !crate::syndication::send::is_a_page(folder, p)) {
             eprintln!("--copies-of={page} names no page of this site; no copies sent");
         }
@@ -959,6 +972,7 @@ mod dry_run_tests {
     async fn a_dry_run_marks_a_picture_from_another_site_that_is_gone_and_refuses_nothing() {
         let mut host = mockito::Server::new_async().await;
         let _gone = host.mock("HEAD", "/gone.jpg").with_status(404).create_async().await;
+        let _gone_get = host.mock("GET", "/gone.jpg").with_status(404).create_async().await;
         let _here = host.mock("HEAD", "/here.jpg").with_status(200).create_async().await;
         let fx = Fixture::new(false).await;
         let page = format!("---\ntitle: Home\n---\n\n![a]({0}/here.jpg)\n\n![b]({0}/gone.jpg)\n", host.url());

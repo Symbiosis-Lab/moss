@@ -21,13 +21,19 @@ async fn only_a_picture_its_host_calls_gone_is_marked() {
     let mut server = mockito::Server::new_async().await;
     let _ok = server.mock("HEAD", "/ok.jpg").with_status(200).with_header("content-type", "image/jpeg").create_async().await;
     let _gone = server.mock("HEAD", "/gone.jpg").with_status(404).create_async().await;
+    let _gone_get = server.mock("GET", "/gone.jpg").with_status(404).create_async().await;
     let _removed = server.mock("HEAD", "/removed.jpg").with_status(410).create_async().await;
+    let _removed_get = server.mock("GET", "/removed.jpg").with_status(410).create_async().await;
+    // A signed-URL CDN: HEAD says 404, the GET a browser sends is served.
+    let _signed = server.mock("HEAD", "/signed.jpg").with_status(404).create_async().await;
+    let _signed_get = server.mock("GET", "/signed.jpg").match_header("range", "bytes=0-0").with_status(206).create_async().await;
     let _no_head = server.mock("HEAD", "/no-head.jpg").with_status(405).create_async().await;
     let _ranged = server.mock("GET", "/no-head.jpg").match_header("range", "bytes=0-0").with_status(206).create_async().await;
     let _busy = server.mock("HEAD", "/busy.jpg").with_status(503).create_async().await;
     // A hotlink-protected host: the picture is there for a visitor's browser.
     let _guarded_ok = server.mock("HEAD", "/guarded.jpg").match_header("referer", "https://site.example/posts/cat").with_status(200).create_async().await;
     let _guarded = server.mock("HEAD", "/guarded.jpg").match_header("referer", mockito::Matcher::Missing).with_status(404).create_async().await;
+    let _guarded_get = server.mock("GET", "/guarded.jpg").match_header("referer", mockito::Matcher::Missing).with_status(404).create_async().await;
     let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let hang = format!("http://{}/hang.jpg", silent.local_addr().unwrap());
     let url = |p: &str| format!("{}{p}", server.url());
@@ -40,6 +46,7 @@ async fn only_a_picture_its_host_calls_gone_is_marked() {
             picture("posts/cat.md", &url("/removed.jpg")),
             picture("posts/cat.md", &url("/no-head.jpg")),
             picture("posts/cat.md", &url("/busy.jpg")),
+            picture("posts/cat.md", &url("/signed.jpg")),
             picture("posts/cat.md", &url("/guarded.jpg")),
             picture("posts/cat.md", &hang),
         ],

@@ -470,7 +470,7 @@ pub async fn run_dry_run(
             None => Transfer::NoRecord,
         }
     };
-    let page_address = |source: &str| super::remote_pictures::page_address(&sealed, source);
+    let page_address = |source: &str| sealed.site_url().map(|site| super::remote_pictures::page_address(site, sealed.source_to_output().get(source).map(String::as_str)));
     let ((owner, server), remote_pictures) = tokio::join!(
         ask_server(folder, &local, overwrite_newer),
         super::remote_pictures::check(&folder_str, &page_address),

@@ -1321,28 +1321,6 @@ export type LoginFailureReason =
  */
 export type LoginKind = "matters" | "ghost"
 
-/**
- * Physical-source evidence for a missing authored asset.
- */
-export type ReferenceOccurrence = { 
-/**
- * Markdown file holding the reference, relative to the site root.
- */
-source_path: string; 
-/**
- * SHA-256 of the exact source bytes this occurrence was extracted from.
- */
-source_revision: SourceRevision; 
-/**
- * The reference exactly as the author typed it.
- */
-reference: string; 
-/**
- * Exact destination bytes in the physical source, never a post-resolution
- * or transclusion coordinate.
- */
-source_span: SourceSpan }
-
 export type MossEvent = { kind: "BackgroundProgress"; payload: BackgroundProgress } | { kind: "AssetReady"; payload: AssetReady } | 
 /**
  * Post-seal sweep of materialized image/video variants (page-agnostic
@@ -2046,7 +2024,12 @@ unresolved_inputs?: string[];
 /**
  * Links from published pages to drafts, which would be dead on the live site.
  */
-drafts_linked?: DraftLinkOccurrence[] }
+drafts_linked?: DraftLinkOccurrence[]; 
+/**
+ * Pictures the pages show from other sites: candidates the publish
+ * probes, never a verdict.
+ */
+remote_pictures?: ReferenceOccurrence[] }
 
 /**
  * The single record a finished publish hands to the frontend, replacing
@@ -2250,6 +2233,29 @@ export type ReferenceKind = { kind: "link"; data: { anchor: string | null } } | 
  * resolved reference carries `canonical` so following it lands there.
  */
 { kind: "moved"; data: { canonical: string } }
+
+/**
+ * Physical-source evidence for one authored reference: a missing asset, or a
+ * picture from another site.
+ */
+export type ReferenceOccurrence = { 
+/**
+ * Markdown file holding the reference, relative to the site root.
+ */
+source_path: string; 
+/**
+ * SHA-256 of the exact source bytes this occurrence was extracted from.
+ */
+source_revision: SourceRevision; 
+/**
+ * The reference exactly as the author typed it.
+ */
+reference: string; 
+/**
+ * Exact destination bytes in the physical source, never a post-resolution
+ * or transclusion coordinate.
+ */
+source_span: SourceSpan }
 
 /**
  * Why a public address that was live is not in this build.

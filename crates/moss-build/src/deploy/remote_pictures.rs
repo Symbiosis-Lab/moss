@@ -69,17 +69,12 @@ pub async fn check(folder: &str, referer: &(dyn Fn(&str) -> Option<String> + Syn
     probe_all(candidates, referer, BUDGET).await
 }
 
-/// The published address of `source`'s page in a build, for the `Referer` a
-/// visitor's browser would send; `None` before the site has an address.
-pub fn page_address(sealed: &crate::build::manifest::SealedManifest, source: &str) -> Option<String> {
-    let site = sealed.site_url()?.trim_end_matches('/');
-    let page = sealed.source_to_output().get(source).map(|out| crate::build::served_path::served_address(out));
-    Some(format!("{site}{}", page.as_deref().unwrap_or("/")))
-}
-
-enum Answer {
-    Status(u16),
-    NoAnswer,
+/// The published address of a page whose build output is `output`, for the
+/// `Referer` a visitor's browser would send; the site root when the page has
+/// no output of its own.
+pub fn page_address(site: &str, output: Option<&str>) -> String {
+    let page = output.map(crate::build::served_path::served_address);
+    format!("{}{}", site.trim_end_matches('/'), page.as_deref().unwrap_or("/"))
 }
 
 pub(crate) async fn probe_all(
@@ -87,6 +82,7 @@ pub(crate) async fn probe_all(
     referer: &(dyn Fn(&str) -> Option<String> + Sync),
     budget: Budget,
 ) -> RemotePictureReport {
+    use std::collections::HashMap;
     if candidates.is_empty() {
         return RemotePictureReport::default();
     }
@@ -95,14 +91,18 @@ pub(crate) async fn probe_all(
         Err(_) => return RemotePictureReport { offline: true, ..Default::default() },
     };
     // One probe per URL, sent with the first page that shows it.
-    let mut urls: Vec<(String, Option<String>)> = Vec::new();
-    for c in &candidates {
-        if !urls.iter().any(|(u, _)| *u == c.reference) {
-            urls.push((c.reference.clone(), referer(&c.source_path)));
-        }
-    }
+    let mut seen = std::collections::HashSet::new();
+    let mut urls: Vec<(String, Option<String>)> = candidates
+        .iter()
+        .filter(|c| seen.insert(c.reference.as_str()))
+        .map(|c| (c.reference.clone(), referer(&c.source_path)))
+        .collect();
     let total = urls.len();
-    let mut answers: Vec<(String, Answer)> = Vec::with_capacity(total);
+    // A site over budget starts somewhere else each run, so with no cache the
+    // same first pictures are not the only ones ever checked.
+    let offset = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as usize);
+    urls.rotate_left(offset % total);
+    let mut answers: HashMap<String, Option<u16>> = HashMap::with_capacity(total);
     let mut probes = stream::iter(urls)
         .map(|(url, referer)| {
             let client = client.clone();
@@ -117,32 +117,32 @@ pub(crate) async fn probe_all(
     loop {
         tokio::select! {
             next = probes.next() => match next {
-                Some(answer) => answers.push(answer),
+                Some((url, answer)) => { answers.insert(url, answer); }
                 None => break,
             },
             _ = &mut deadline => break,
         }
     }
-    if !answers.iter().any(|(_, a)| matches!(a, Answer::Status(_))) {
+    if answers.values().all(Option::is_none) {
         return RemotePictureReport { offline: true, ..Default::default() };
     }
-    let gone_status = |url: &str| {
-        answers.iter().find_map(|(u, a)| match a {
-            Answer::Status(s @ (404 | 410)) if u == url => Some(*s),
-            _ => None,
-        })
-    };
     RemotePictureReport {
+        unchecked: total - answers.len(),
         gone: candidates
             .into_iter()
-            .filter_map(|occurrence| gone_status(&occurrence.reference).map(|status| GonePicture { occurrence, status }))
+            .filter_map(|occurrence| match answers.get(&occurrence.reference) {
+                Some(Some(status @ (404 | 410))) => Some(GonePicture { status: *status, occurrence }),
+                _ => None,
+            })
             .collect(),
-        unchecked: total - answers.len(),
         offline: false,
     }
 }
 
-async fn probe(client: &reqwest::Client, url: &str, referer: Option<&str>) -> Answer {
+/// The status a picture's host answers, `None` when it does not answer. Only a
+/// GET answer can say a picture is gone: some hosts and signed-URL CDNs refuse
+/// or 404 a HEAD that a GET serves.
+async fn probe(client: &reqwest::Client, url: &str, referer: Option<&str>) -> Option<u16> {
     let send = |method: reqwest::Method| {
         let mut request = client.request(method.clone(), url).header(reqwest::header::ACCEPT, ACCEPT);
         if method == reqwest::Method::GET {
@@ -153,13 +153,11 @@ async fn probe(client: &reqwest::Client, url: &str, referer: Option<&str>) -> An
         }
         request.send()
     };
-    let status = match send(reqwest::Method::HEAD).await {
-        // Many hosts refuse HEAD and answer GET.
-        Ok(r) if matches!(r.status().as_u16(), 403 | 405 | 501) => send(reqwest::Method::GET).await.map(|r| r.status().as_u16()),
-        Ok(r) => Ok(r.status().as_u16()),
-        Err(e) => Err(e),
-    };
-    status.map_or(Answer::NoAnswer, Answer::Status)
+    let head = send(reqwest::Method::HEAD).await.ok()?.status().as_u16();
+    if !matches!(head, 403 | 404 | 405 | 410 | 501) {
+        return Some(head);
+    }
+    send(reqwest::Method::GET).await.ok().map(|r| r.status().as_u16())
 }
 
 #[cfg(test)]
