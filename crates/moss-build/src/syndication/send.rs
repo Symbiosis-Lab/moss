@@ -419,8 +419,8 @@ impl Run<'_> {
                     }
                     continue;
                 }
-                // A handed-off copy has nothing to send, so it waits without a word.
-                Err(_) if rests => continue,
+                // A handed-off copy with no draft to rewrite has nothing to send, so it waits without a word.
+                Err(_) if rests && !reopen => continue,
                 Err(held) => {
                     push(sent(&record, held));
                     continue;
@@ -1630,6 +1630,36 @@ mod tests {
         let (a, b) = (records.get("aaaa0000", "social").unwrap(), records.get("aaaa0001", "social").unwrap());
         assert!(a.state == State::HandedOff && a.handoff.as_ref().is_some_and(|h| h.text == "Updated" && h.id.as_deref() == Some("d-1")));
         assert_eq!(b.handoff.as_ref().unwrap().text, "Body");
+    }
+
+    /// `waiting_drafts` on a channel that is signed out, and that fails the
+    /// test if a copy is made or rewritten.
+    fn signed_out_drafts(root: &Path, a0_changed: bool) -> ArticleMap {
+        let (_, articles) = waiting_drafts(root, WAITING, true, a0_changed);
+        let bundle = root.join(".moss/plugins/social/main.bundle.js");
+        let js = std::fs::read_to_string(&bundle).unwrap()
+            .replace("return { success: true, copy: { handoff: { text: 'Updated'", "throw new Error('rewritten'); return { success: true, copy: { handoff: { text: 'Updated'")
+            .replace("{ publish_copy:", "{ copy_account: async function () { return { success: true, copy: { signed_out: true } }; }, publish_copy:");
+        std::fs::write(&bundle, js).unwrap();
+        articles
+    }
+
+    /// A signed-out channel says so for the draft a page publish would
+    /// rewrite, and neither makes nor rewrites a copy.
+    #[tokio::test]
+    async fn a_page_publish_of_a_draft_on_a_signed_out_channel_says_signed_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let articles = signed_out_drafts(dir.path(), false);
+        let out = run_lookups(dir.path(), &articles, &[], Some("a0.md"), PER_RUN).await;
+        assert!(matches!(&out[..], [Sent { source_path, outcome: Outcome::Held { why: HeldWhy::SignedOut, .. }, .. }] if source_path == "a0.md"), "{out:?}");
+    }
+
+    /// A draft nothing is rewriting rests without a word, signed out or not.
+    #[tokio::test]
+    async fn a_resting_draft_on_a_signed_out_channel_stays_silent() {
+        let dir = tempfile::tempdir().unwrap();
+        let articles = signed_out_drafts(dir.path(), false);
+        assert!(run_lookups(dir.path(), &articles, &[], None, PER_RUN).await.is_empty());
     }
 
     /// A deploy rewrites the drafts of the pages it changed once; pages it did
