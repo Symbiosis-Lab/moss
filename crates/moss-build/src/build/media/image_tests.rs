@@ -922,7 +922,7 @@ async fn base_failure_fails_registered_rung_promises() {
             ext: "jpg".to_string(),
             dimensions: Some((2000, 1200)),
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -1003,7 +1003,7 @@ async fn base_failed_advisory_names_the_full_nested_source_path() {
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -1100,7 +1100,7 @@ async fn unhashable_source_fails_its_promises_instead_of_going_quiet() {
             ext: "jpg".to_string(),
             dimensions: Some((2000, 1200)),
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -1175,7 +1175,7 @@ async fn rung_collision_keeps_user_file_and_produces_other_rungs() {
             ext: "jpg".to_string(),
             dimensions: Some((2000, 1200)),
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -3062,7 +3062,7 @@ fn test_dispatch_image_conversions_with_items_produces_webp_headless() {
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -3120,7 +3120,7 @@ async fn an_image_that_panics_its_worker_does_not_leave_the_folder_busy() {
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging,
@@ -3186,7 +3186,7 @@ async fn an_image_whose_worker_panicked_is_converted_by_the_next_build() {
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -3262,7 +3262,7 @@ fn cached_base_of_size(root: &Path, file_dimensions: (u32, u32), scan_dimensions
             ext: "jpg".to_string(),
             dimensions: Some(scan_dimensions),
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -3329,6 +3329,44 @@ fn an_unchanged_image_with_no_promised_rung_is_still_skipped() {
 
     assert!(staging.join("photo.webp").exists(), "the base is carried forward");
     assert!(!staging.join("photo.w800.webp").exists(), "skipped: the worker never ran");
+}
+
+/// On a machine new to the folder the fingerprints say unchanged, while the
+/// preview scan's own record holds the size alone. The cached encode is reused
+/// and the picture gets the colour and blur its pages wait on.
+#[test]
+fn an_unchanged_image_the_preview_recorded_without_colour_gets_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut ctx, staging) = unchanged_image_with_cached_base(tmp.path(), (700, 420));
+    ctx.image_items[0].scanned_without_colour = true;
+    let source = tmp.path().join("photo.jpg");
+    let meta = fs::metadata(&source).unwrap();
+    let mtime = meta.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let key = crate::build::scan::scan::image_meta_stat_key("photo.jpg", meta.len(), mtime);
+    let transforms = crate::build::cache::TransformCache::for_site(&MossPaths::from_moss_dir(ctx.moss_dir.clone()));
+    let size_only = crate::build::cache::CachedMediaMeta { dimensions: Some((1000, 600)), dominant_color: None, lqip_data_uri: None, is_animated: false };
+    crate::build::scan::scan::write_media_meta(&transforms, Some(&key), None, "jpg", meta.len(), &size_only);
+
+    dispatch_image_conversions(Some(&BuildServices::headless()), &ctx, None, None).unwrap();
+
+    let settled = crate::build::scan::scan::read_cached_meta(&transforms, &key, "jpg").unwrap();
+    assert!(settled.dominant_color.is_some() && settled.lqip_data_uri.is_some(), "{settled:?}");
+    assert_eq!(fs::read(staging.join("photo.webp")).unwrap(), b"CACHED BASE", "the cached base is reused, not re-encoded");
+}
+
+/// The scan tells the dispatch which pictures have no colour yet, so a
+/// settled picture costs the dispatch no read.
+#[test]
+fn a_picture_the_scan_recorded_without_colour_is_marked_for_it() {
+    let (mut structure, tmp) = build_project_with_images(&[("plain.jpg", "jpg", None, true), ("settled.jpg", "jpg", None, true)]);
+    structure.image_files[1].dominant_color = Some("#808080".to_string());
+    let transforms = crate::build::cache::TransformCache::new(tmp.path().join("t"), crate::build::cache::ObjectStore::new(tmp.path().join("o")));
+    let cfg = ImageCompressionConfig { min_size_kb: 0, ..Default::default() };
+
+    let items = collect_images_for_conversion(&structure, &transforms, &mut crate::build::cache::HashIndex::new(), &cfg, None);
+
+    let marked: Vec<_> = items.iter().map(|i| (i.source_path.to_string_lossy().into_owned(), i.scanned_without_colour)).collect();
+    assert_eq!(marked, [("plain.jpg".to_string(), true), ("settled.jpg".to_string(), false)]);
 }
 
 /// A clock the test moves by hand.
@@ -3497,7 +3535,7 @@ fn test_image_dispatch_applies_dir_overrides_to_served_path() {
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -3649,7 +3687,7 @@ async fn test_webp_survives_stale_cleanup_after_dispatch() {
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -3785,7 +3823,7 @@ async fn a_new_image_only_dispatches_the_new_one_others_survive_seal_and_stale_s
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         };
         let webp_rel = format!("{}.webp", name.trim_end_matches(".jpg"));
         let webp_path = staging.join(&webp_rel);
@@ -3820,7 +3858,7 @@ async fn a_new_image_only_dispatches_the_new_one_others_survive_seal_and_stale_s
         ext: "jpg".to_string(),
         dimensions: None,
         skip: None,
-        fingerprint: None,
+        fingerprint: None, scanned_without_colour: false,
     });
 
     let ctx = BackgroundContext {
@@ -3985,7 +4023,7 @@ async fn a_skip_carried_images_advisory_rides_the_terminal_ticks_full_set() {
                 ext: "jpg".to_string(),
                 dimensions: None,
                 skip: None,
-                fingerprint: None,
+                fingerprint: None, scanned_without_colour: false,
             },
             ImageConversionItem {
                 source_path: PathBuf::from(fresh_name),
@@ -3993,7 +4031,7 @@ async fn a_skip_carried_images_advisory_rides_the_terminal_ticks_full_set() {
                 ext: "jpg".to_string(),
                 dimensions: None,
                 skip: None,
-                fingerprint: None,
+                fingerprint: None, scanned_without_colour: false,
             },
         ],
         source_path: root.to_string_lossy().to_string(),
@@ -4123,7 +4161,7 @@ async fn a_deleted_images_advisory_still_fires_a_tick_with_nothing_to_dispatch()
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -4214,7 +4252,7 @@ fn an_unreferenced_image_is_not_redispatched_until_a_page_references_it() {
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -4311,7 +4349,7 @@ async fn test_image_cancel_aborts_image_runner() {
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
@@ -4396,7 +4434,7 @@ async fn test_image_hashes_updated_on_cancellation() {
                 ext: "jpg".to_string(),
                 dimensions: None,
                 skip: None,
-                fingerprint: None,
+                fingerprint: None, scanned_without_colour: false,
             },
             ImageConversionItem {
                 source_path: PathBuf::from(img2_rel),
@@ -4404,7 +4442,7 @@ async fn test_image_hashes_updated_on_cancellation() {
                 ext: "jpg".to_string(),
                 dimensions: None,
                 skip: None,
-                fingerprint: None,
+                fingerprint: None, scanned_without_colour: false,
             },
         ],
         source_path: root.to_string_lossy().to_string(),
@@ -6322,7 +6360,7 @@ async fn ship_phase_ships_a_freshly_encoded_webp_from_cas_despite_stage_overwrit
         ext: "jpg".to_string(),
         dimensions: None,
         skip: None,
-        fingerprint: None,
+        fingerprint: None, scanned_without_colour: false,
     };
     let ctx = BackgroundContext {
         video_items: vec![],
@@ -6405,7 +6443,7 @@ async fn run_image_conversion_always_records_a_staged_oid_for_base_and_rungs() {
         ext: "jpg".to_string(),
         dimensions: Some((1000, 750)),
         skip: None,
-        fingerprint: None,
+        fingerprint: None, scanned_without_colour: false,
     };
     let ctx = BackgroundContext {
         video_items: vec![],
@@ -6479,7 +6517,7 @@ async fn skip_path_carry_forward_registers_the_verified_cas_oid_not_a_stale_or_f
         ext: "jpg".to_string(),
         dimensions: None,
         skip: None,
-        fingerprint: None,
+        fingerprint: None, scanned_without_colour: false,
     };
     let ctx = BackgroundContext {
         video_items: vec![],
@@ -6563,7 +6601,7 @@ async fn skip_path_takes_a_carried_variants_hash_from_the_memo_by_oid() {
         ext: "jpg".to_string(),
         dimensions: None,
         skip: None,
-        fingerprint: None,
+        fingerprint: None, scanned_without_colour: false,
     };
     let ctx = BackgroundContext {
         image_items: vec![item.clone()],
@@ -6649,7 +6687,7 @@ fn a_stale_staged_webp_from_an_earlier_generation_is_not_shipped_as_unchanged() 
         ext: "jpg".to_string(),
         dimensions: None,
         skip: None,
-        fingerprint: None,
+        fingerprint: None, scanned_without_colour: false,
     };
     // The disk hash index already knows the source's CURRENT content, as if
     // the scan phase had just re-hashed it — but nothing has ever encoded a
@@ -6747,7 +6785,7 @@ fn a_missing_output_is_dispatched_while_its_unaffected_sibling_takes_the_skip_pa
             ext: "jpg".to_string(),
             dimensions: None,
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         })
         .collect();
 
@@ -8108,7 +8146,7 @@ async fn an_image_the_walk_hashed_this_build_is_not_read_again() {
             ext: "webp".to_string(),
             dimensions: Some((2600, 8)),
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging,
@@ -8149,7 +8187,7 @@ async fn a_picture_waits_for_a_core_from_the_folder_budget() {
             ext: "jpg".to_string(),
             dimensions: Some((400, 300)),
             skip: None,
-            fingerprint: None,
+            fingerprint: None, scanned_without_colour: false,
         }],
         source_path: root.to_string_lossy().to_string(),
         staging_dir: staging,
@@ -8200,7 +8238,7 @@ async fn a_cloud_held_picture_is_fetched_not_encoded_again() {
     // The run's encode count.
     let run = |source_oid: String| {
         let ctx = ImageRunContext {
-            items: vec![ImageConversionItem { source_path: PathBuf::from("photo.jpg"), source_oid, ext: "jpg".to_string(), dimensions: Some((2000, 1250)), skip: None, fingerprint: None }],
+            items: vec![ImageConversionItem { source_path: PathBuf::from("photo.jpg"), source_oid, ext: "jpg".to_string(), dimensions: Some((2000, 1250)), skip: None, fingerprint: None , scanned_without_colour: false}],
             source_path: root.to_string_lossy().to_string(),
             staging_dir: staging.clone(),
             moss_dir: moss_dir.clone(),

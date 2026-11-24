@@ -112,6 +112,9 @@ pub struct ImageConversionItem {
     /// The `Arc` is the mark's identity: a later dispatch of the same unchanged
     /// source makes its own.
     pub(crate) fingerprint: Option<Arc<ImageFingerprint>>,
+    /// The scan found no colour for this picture, so the dispatch asks whether a
+    /// preview is waiting on it; a settled picture costs no read.
+    pub(crate) scanned_without_colour: bool,
 }
 
 /// Where a picture's WebP base is written and served: under its folder's
@@ -772,6 +775,7 @@ pub(crate) fn collect_images_for_conversion(
                     dimensions: media_meta.dimensions,
                     skip: Some(reason),
                     fingerprint: None,
+                    scanned_without_colour: media_meta.dominant_color.is_none(),
                 });
                 continue;
             }
@@ -796,6 +800,7 @@ pub(crate) fn collect_images_for_conversion(
             dimensions: media_meta.dimensions,
             skip: None,
             fingerprint: None,
+            scanned_without_colour: media_meta.dominant_color.is_none(),
         });
     }
 
@@ -1381,6 +1386,16 @@ fn settle_placeholder(transforms: &crate::build::cache::TransformCache, meta_sta
     // The scan sniffed `is_animated`; this write replaces the whole entry.
     let meta = crate::build::cache::CachedMediaMeta { dimensions: Some((img.width(), img.height())), dominant_color, lqip_data_uri, is_animated: prev.map_or(false, |prev| prev.is_animated) };
     write_media_meta(transforms, Some(key), Some(source_oid), extension, original_size, &meta);
+}
+
+/// A picture a preview scan recorded under its stat key without the colour and
+/// blur only a decode finds. No record means no scan is waiting (a build that
+/// bakes them found none), and an evicted source cannot be decoded.
+fn placeholder_unsettled(transforms: &crate::build::cache::TransformCache, rel_source: &str, stat: &crate::build::stat::FileStat, source_file: &Path) -> bool {
+    let key = crate::build::scan::scan::image_meta_stat_key(rel_source, stat.size, stat.mtime);
+    let extension = source_file.extension().and_then(|e| e.to_str()).unwrap_or("");
+    crate::build::scan::scan::read_cached_meta(transforms, &key, extension).is_some_and(|meta| meta.dominant_color.is_none())
+        && !crate::build::icloud::is_evicted(source_file)
 }
 
 // ---------------------------------------------------------------------------
@@ -2864,7 +2879,10 @@ pub(crate) fn dispatch_image_conversions_at(
             // cause that persists does not re-encode this image on every build.
             let missing_rung = redispatch_note::to_retry(&ctx.moss_dir, disk_source_oid.as_deref().unwrap_or_default(), &missing_rungs, clock());
 
-            if disk_source_oid.is_some() && outputs_present && missing_rung.is_none() {
+            // The worker's cache hit settles a placeholder without encoding again.
+            let unsettled = item.scanned_without_colour
+                && fingerprint.as_ref().is_some_and(|fp| placeholder_unsettled(&heal_transforms, &rel_source, &fp.stat, &on_disk(Path::new(&ctx.source_path), &rel_source)));
+            if disk_source_oid.is_some() && outputs_present && missing_rung.is_none() && !unsettled {
                 // Re-register every key the encode path delivers for this
                 // image so seal() keeps them. `emit_image_outputs_via_channel`'s
                 // existence check drops any key whose staging file is absent
@@ -2908,7 +2926,7 @@ pub(crate) fn dispatch_image_conversions_at(
                     }
                 }
             } else {
-                if disk_source_oid.is_some() {
+                if disk_source_oid.is_some() && !(outputs_present && missing_rung.is_none()) {
                     log::info!(
                         "Image '{}' unchanged but {} is missing — \
                          re-dispatching to self-heal instead of skipping",
