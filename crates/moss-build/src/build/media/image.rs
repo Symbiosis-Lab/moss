@@ -2454,7 +2454,9 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                 });
             }
         });
-        work.report(encodes.into_inner());
+        let encodes = encodes.into_inner();
+        work.report("image outputs", encodes);
+        crate::build::phase::record_count("image_encodes", encodes);
     }
 
     // ---- Reduce the parallel accumulators ----
