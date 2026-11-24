@@ -202,6 +202,7 @@ export const mockCommands = {
     status: 'ok' as const,
     data: { position: 'page', auto: {} } satisfies PageFacts,
   }),
+  pageComments: async (_filePath: string) => ({ status: 'ok' as const, data: { comments: [] } }),
   // Batched cold-start bootstrap (editor-main.ts:456) — replaced the serial
   // getSchema → getProjectPath → parseFrontmatter chain. Mirror those three
   // mock values; `initial_file: null` makes the frontend fall back to
