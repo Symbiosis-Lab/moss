@@ -27,7 +27,8 @@ if (paths.length === 0) throw new Error(`no page listed in ${baseURL}sitemap.xml
 
 // What the page says about its mark: the picture drawn, its box and the first opaque ground behind it.
 const describe = async () => {
-  const mark = document.querySelector(MARK_SELECTOR);
+  // The masthead keeps a hidden copy of the mark to size its row; the one a reader sees is the other.
+  const mark = [...document.querySelectorAll(MARK_SELECTOR)].find((el) => !el.closest('.nav-logo-strut')) || null;
   if (!mark) return null;
   // An image has no box of its own until its file arrives, and a file swapped in by `content` arrives after `src`.
   if (mark.getBoundingClientRect().width === 0 && document.readyState !== 'complete') await new Promise((done) => addEventListener('load', done));
@@ -92,7 +93,7 @@ try {
             const key = `${mark.picture} on ${mark.ground}`;
             if (!measured.has(key)) {
               await page.waitForLoadState('load'); // the picture itself has arrived
-              const png = await page.locator(MARK).first().screenshot();
+              const png = await page.locator(MARK).locator('visible=true').first().screenshot();
               const ink = await mainInk(reader, png, mark.ground);
               const ratio = ink ? contrast(ink, mark.ground) : 1;
               measured.set(key, { ink, ratio });
