@@ -8,3 +8,6 @@ CHANGELOG.md merge=moss-changelog
 playwright/gate-ports.txt merge=union
 packages/moss-ui/src/ui/i18n/rust-keys.generated.json merge=moss-json-keys
 scripts/ratchet-baseline.open.json merge=moss-ratchet
+
+# The content lock hashes these bytes; a line-ending rewrite would read as a changed fixture.
+crates/moss-build/tests/fixtures/content-lock/** -text

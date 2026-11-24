@@ -20,7 +20,6 @@
 use crate::site;
 
 use site::Site;
-use std::collections::BTreeSet;
 
 const LIST: &str = "tests/served_paths.txt";
 
@@ -41,36 +40,14 @@ const PAGES: &[(&str, &str)] = &[
 
 const CONFIG: &str = "domain = \"example.com\"\nai_answers = true\nai_training = false\nselection_tools = true\n";
 
-/// A content hash in a file name is part of the file, not of its address.
-fn without_hash(path: &str) -> String {
-    let mut out = Vec::new();
-    for part in path.split('.') {
-        let hashed = part.len() >= 8 && part.bytes().all(|b| b.is_ascii_hexdigit());
-        out.push(if hashed { "HASH" } else { part });
-    }
-    out.join(".")
-}
-
-fn served(site: &Site) -> BTreeSet<String> {
-    let staging = site.output("");
-    walkdir::WalkDir::new(&staging)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file())
-        .map(|e| e.path().strip_prefix(&staging).unwrap().to_string_lossy().replace('\\', "/"))
-        .filter(|p| moss_build::build::served_path::is_public_address(p))
-        .map(|p| without_hash(&p))
-        .collect()
-}
-
 #[test]
 fn a_site_with_every_generator_on_serves_the_listed_paths() {
     let site = Site::with_config(CONFIG, PAGES);
     std::fs::write(site.root.join("notes/bank.png"), PIXEL_PNG).unwrap();
     site.rebuild();
-    let now = served(&site);
+    let now = site.served();
     let list = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(LIST);
-    let listed: BTreeSet<String> =
+    let listed: std::collections::BTreeSet<String> =
         std::fs::read_to_string(&list).unwrap().lines().filter(|l| !l.is_empty()).map(str::to_string).collect();
     if std::env::var("SERVED_PATHS").as_deref() == Ok("overwrite") {
         std::fs::write(&list, listed.union(&now).map(|p| format!("{p}\n")).collect::<String>()).unwrap();

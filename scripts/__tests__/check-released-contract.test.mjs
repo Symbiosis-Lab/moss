@@ -75,3 +75,15 @@ test("before any tag carries the list there is nothing to compare", () => {
   const sha = commit(RELEASED, "introduce the list");
   assert.ok(push(dir, sha, "refs/heads/develop").ok);
 });
+
+test("the content lock is held the same way", () => {
+  const LOCK = "crates/moss-build/tests/content.lock";
+  const r = repo();
+  r.commit("grid input abc\ngrid problems 1\n", "release", LOCK);
+  r.git("tag", "v0.1.0");
+  const sha = r.commit("grid input abc\ngrid problems 1\ngrid problems 0\n", "append", LOCK);
+  const res = push(r.dir, sha, "refs/heads/develop");
+  assert.ok(!res.ok);
+  assert.match(res.err, /only a release cut writes it/);
+  assert.ok(push(r.dir, sha, "refs/heads/release/v0.2.0").ok);
+});

@@ -1,0 +1,5 @@
+---
+title: Notes
+---
+
+A note.

@@ -1,0 +1,2 @@
+# What released moss promised each folder under fixtures/content-lock/: one fact per line.
+# Written only at a release cut (CONTRACT_LOCK=update cargo test -p moss-build --test it content_lock), only by appending, never by hand.

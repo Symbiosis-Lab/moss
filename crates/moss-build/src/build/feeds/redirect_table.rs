@@ -39,7 +39,7 @@ use std::path::Path;
 /// its replacement. Feed readers store the URL they subscribed to, so a path
 /// the generator renames is added here, never just changed. Only the
 /// replacement is linked from pages or listed in the sitemap.
-pub(crate) const FORMER_PATHS: [(&str, &str); 1] = [("/feed.xml", "/rss.xml")];
+pub const FORMER_PATHS: [(&str, &str); 1] = [("/feed.xml", "/rss.xml")];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Kind {
