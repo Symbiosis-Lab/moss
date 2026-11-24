@@ -359,6 +359,7 @@ fn run_notebook_processing(
     evidence: &super::cloud_ledger::InputEvidence,
     robots_tag: Option<String>,
     color_scheme: crate::build::page::color_scheme::ColorScheme,
+    dir_overrides: &std::collections::HashMap<String, String>,
 ) -> Vec<NotebookReceipt> {
     use crate::build::assets::asset_resolver::resolve_asset_directory;
     use crate::build::notebook::{collect_notebooks, generate_contents_manifest, generate_viewer_html_with_content, jupyterlite_asset_config, patch_jupyterlite_config, CONTENTS_ALL_JSON_FILE};
@@ -612,14 +613,10 @@ fn run_notebook_processing(
         let staging_owned = staging_dir.to_path_buf();
         let evidence_for_copy = evidence.clone();
         let robots_tag = robots_tag.clone();
+        let Ok(ipynb_out) = crate::build::notebook::copy_path(&item.source_path, dir_overrides) else { continue };
+        let Ok(viewer_relative) = crate::build::notebook::viewer_of(ipynb_out.as_str()) else { continue };
         let notebook_paths = with_io_timeout(&item.source_path, move || {
             let mut produced = Vec::new();
-            // Copy .ipynb to its natural served path. Both this path and the
-            // viewer .html below normalize through ServedPath so the manifest
-            // registration matches what's on disk regardless of source-folder
-            // casing.
-            // .unwrap(): source_path comes from the notebook scanner — known valid.
-            let ipynb_out = crate::build::notebook::copy_path(&item_source_path).unwrap();
             let hash = stage_copy(&source, &ipynb_out, &staging_owned)
                 .map_err(|e| format!("Failed to copy notebook: {}", e))?;
             produced.push((ipynb_out, hash));
@@ -649,7 +646,6 @@ fn run_notebook_processing(
                 robots_tag.as_deref(),
                 color_scheme,
             );
-            let viewer_relative = crate::build::notebook::viewer_path(&item_source_path).unwrap();
             match stage_write(&viewer_html, &viewer_relative, &staging_owned) {
                 Ok(hash) => produced.push((viewer_relative, hash)),
                 Err(e) => log::info!("Failed to write viewer HTML: {}", e),
@@ -1839,6 +1835,7 @@ fn build_inner(
             &input_evidence,
             site_ai.robots_tag(false),
             color_scheme,
+            &background_ctx.dir_overrides,
         );
         // Register the receipts. `pending` is still alive here (constructed in
         // build_inner before generate_blocking_content and passed as &mut); the

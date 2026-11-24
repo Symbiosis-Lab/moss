@@ -65,6 +65,7 @@ All notable changes to moss will be documented here.
 - A picture moss could not make smaller copies of, such as a damaged HEIC, shows its original on the page and in the feeds. Both used to name a copy that was never made, so readers saw a broken image.
 - On a computer, a page whose breadcrumb trail needs two rows in the header no longer jumps up as it finishes loading. The header keeps its height when the search, language and theme buttons move up beside the trail.
 - An event that has ended no longer offers Tickets or "Add to calendar" on its page, cards and rows (Online stays, since after an event it is often the recording), and one that ends after the site was built turns past in the reader's browser at that minute, so a finished event stops selling tickets without a rebuild.
+- A notebook is served under its folder's address, beside the folder's page: a folder named `Lab Notes` serves `lab-notes/analysis.ipynb` and `lab-notes/analysis.html`, and a folder whose page sets `url:` serves its notebooks there too, so a page's link to the notebook reaches it. A notebook published before at its old address keeps answering there.
 
 ### Removed
 

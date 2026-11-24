@@ -219,11 +219,10 @@ impl PublishedSnapshot {
 }
 
 /// Each folder file with the public address it was published at: the one its
-/// writer recorded, or with no entry, its source path. Notebook processing
-/// copies a notebook to its [`notebook::copy_path`](crate::build::notebook::copy_path).
+/// writer recorded, or with no entry, its source path.
 ///
 /// A file with no shipped public output is left out: it explains no address.
-fn asset_sources_to_outputs(sealed: &SiteHashes) -> HashMap<String, String> {
+pub(crate) fn asset_sources_to_outputs(sealed: &SiteHashes) -> HashMap<String, String> {
     let files = sealed.files();
     let recorded = &sealed.asset_outputs;
     sealed
@@ -231,11 +230,8 @@ fn asset_sources_to_outputs(sealed: &SiteHashes) -> HashMap<String, String> {
         .keys()
         .filter(|src| !is_page_source_key(src) && !sealed.source_to_output.contains_key(*src))
         .filter_map(|src| {
-            let out = match bucket(src) {
-                ScanBucket::Notebook => crate::build::notebook::copy_path(src).ok()?.as_str().to_string(),
-                _ => recorded.get(src).map_or(src.as_str(), String::as_str).to_string(),
-            };
-            (is_public_address(&out) && files.contains_key(out.as_str())).then(|| (src.clone(), out))
+            let out = recorded.get(src).map_or(src.as_str(), String::as_str);
+            (is_public_address(out) && files.contains_key(out)).then(|| (src.clone(), out.to_string()))
         })
         .collect()
 }
@@ -738,7 +734,7 @@ pub fn removed_addresses(
                     match bucket(src) {
                         ScanBucket::Html => { written.insert(out.to_string(), srcs.clone()); }
                         ScanBucket::Notebook => {
-                            if let Ok(page) = crate::build::notebook::viewer_path(src) {
+                            if let Ok(page) = crate::build::notebook::viewer_of(out) {
                                 written.insert(page.as_str().to_string(), vec![*src]);
                             }
                         }
@@ -835,7 +831,7 @@ pub fn opened_addresses(previous: &HashMap<String, String>, current: &HashMap<St
 }
 
 /// What the folder scan reads `path` as, by its extension.
-fn bucket(path: &str) -> ScanBucket {
+pub(crate) fn bucket(path: &str) -> ScanBucket {
     let ext = path.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
     crate::build::scan::classify::classify_extension(&ext)
 }

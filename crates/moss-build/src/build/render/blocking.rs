@@ -2986,11 +2986,13 @@ pub fn generate_blocking_content_for_build(
         .iter()
         .filter_map(|f| Some((ServedPath::from_source(&resolve_path_with_overrides(&f.path, &dir_overrides)).ok()?, f.path.as_str())))
         .collect();
-    let notebook_viewers: Vec<ServedPath> = project_structure
-        .notebook_files
-        .iter()
-        .filter_map(|f| crate::build::notebook::viewer_path(&f.path).ok())
-        .collect();
+    // The publish record reads each notebook's address from here.
+    let mut notebook_viewers: Vec<ServedPath> = Vec::new();
+    for f in &project_structure.notebook_files {
+        let Ok(copy) = crate::build::notebook::copy_path(&f.path, &dir_overrides) else { continue };
+        pending.record_asset_output(&f.path, copy.as_str());
+        notebook_viewers.extend(crate::build::notebook::viewer_of(copy.as_str()).ok());
+    }
 
     // Gap #3 fix: emit the redirect table into the pending manifest so the seal
     // (and therefore the generation-id) covers it. The baseline is the record

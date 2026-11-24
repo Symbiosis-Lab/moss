@@ -328,19 +328,28 @@ pub fn extract_notebook_title(ipynb_json: &str) -> Option<String> {
     None
 }
 
-/// Where a notebook's own `.ipynb` is served: at its source path.
+/// Where a notebook's own `.ipynb` is served: under its folder's address, as
+/// any other file in the folder is (folder names slugged, a folder page's
+/// `url:` applied), so it sits beside the folder's page.
 pub(crate) fn copy_path(
     notebook_source_path: &str,
+    dir_overrides: &std::collections::HashMap<String, String>,
 ) -> Result<crate::build::served_path::ServedPath, crate::build::served_path::ServedPathError> {
-    crate::build::served_path::ServedPath::from_source(notebook_source_path)
+    let address = crate::build::render::resolve_path_with_overrides(notebook_source_path, dir_overrides);
+    crate::build::served_path::ServedPath::from_source(&address)
 }
 
-/// Where a notebook's viewer page is served: beside its `.ipynb`, as `.html`.
+/// The viewer page served beside a notebook copy at `copy`, as `.html`.
+pub(crate) fn viewer_of(copy: &str) -> Result<crate::build::served_path::ServedPath, crate::build::served_path::ServedPathError> {
+    crate::build::served_path::ServedPath::from_source(&std::path::Path::new(copy).with_extension("html").to_string_lossy())
+}
+
+/// Where a notebook's viewer page is served.
 pub(crate) fn viewer_path(
     notebook_source_path: &str,
+    dir_overrides: &std::collections::HashMap<String, String>,
 ) -> Result<crate::build::served_path::ServedPath, crate::build::served_path::ServedPathError> {
-    let raw = std::path::Path::new(notebook_source_path).with_extension("html");
-    crate::build::served_path::ServedPath::from_source(&raw.to_string_lossy())
+    viewer_of(copy_path(notebook_source_path, dir_overrides)?.as_str())
 }
 
 /// Generates a viewer HTML page that embeds JupyterLite with a specific notebook.
@@ -483,6 +492,20 @@ fn url_encode_path(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_notebook_is_served_under_its_folder_pages_address() {
+        let folder_page = |overrides: &std::collections::HashMap<String, String>| {
+            crate::build::render::resolve_path_with_overrides("Sub Section/index.html", overrides)
+        };
+        let plain = std::collections::HashMap::new();
+        let moved: std::collections::HashMap<String, String> = [("Sub Section".to_string(), "work".to_string())].into();
+        for (overrides, folder) in [(&plain, "sub-section"), (&moved, "work")] {
+            assert_eq!(folder_page(overrides), format!("{folder}/index.html"));
+            assert_eq!(copy_path("Sub Section/a.ipynb", overrides).unwrap().as_str(), format!("{folder}/a.ipynb"));
+            assert_eq!(viewer_path("Sub Section/a.ipynb", overrides).unwrap().as_str(), format!("{folder}/a.html"));
+        }
+    }
 
     #[test]
     fn viewer_dark_styles_follow_the_site_policy() {

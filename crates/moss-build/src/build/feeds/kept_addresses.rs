@@ -1,6 +1,6 @@
 //! Keeps old addresses answering from what the seal serves.
 //!
-//! Three kinds of address need the final list of outputs, or their bytes,
+//! Four kinds of address need the final list of outputs, or their bytes,
 //! which only the seal has: the redirect table is planned before the image
 //! pipeline has said what it produces.
 //!
@@ -15,6 +15,8 @@
 //!   address under the old folder: each output served under the new folder
 //!   gets a forwarding page (an `.html` file) or a copy of its served bytes at
 //!   the same path under the old one.
+//! - A notebook whose folder address changed keeps its old `.ipynb` address
+//!   (a copy) and its old viewer page (a forwarding page).
 //!
 //! The next build's stale-page sweep spares what this pass will write again
 //! ([`moved_folder_files`] over the live addresses), so the preview keeps
@@ -24,6 +26,8 @@ use crate::build::assets::paths::compute_binary_hash_file;
 use crate::build::cli_output::log_warn_problem;
 use crate::build::feeds::redirect_table::FolderMove;
 use crate::build::manifest::{backfill, change_set, published_record, SealedManifest};
+use crate::build::notebook;
+use crate::build::scan::classify::ScanBucket;
 use crate::build::scan::path_collision::on_disk;
 use crate::build::served_path::{is_public_address, served_address};
 use crate::moss_paths::MossPaths;
@@ -65,6 +69,26 @@ pub(crate) fn kept_derivatives(
             Some((out.clone(), picture))
         })
         .collect();
+    kept.sort();
+    kept
+}
+
+/// Notebooks the last publish served at another address than this build
+/// does: `(old, new)` output paths for the `.ipynb` copy and its viewer page,
+/// sorted. `current` is this build's [`change_set::asset_sources_to_outputs`].
+pub(crate) fn moved_notebooks(
+    baseline: &change_set::PublishedSnapshot,
+    current: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    let Some(before) = baseline.asset_source_to_output.as_ref() else { return Vec::new() };
+    let mut kept: Vec<(String, String)> = Vec::new();
+    for (src, new) in current.iter().filter(|(src, _)| matches!(change_set::bucket(src), ScanBucket::Notebook)) {
+        let Some(old) = before.get(src).filter(|old| *old != new) else { continue };
+        kept.push((old.clone(), new.clone()));
+        if let (Ok(old), Ok(new)) = (notebook::viewer_of(old), notebook::viewer_of(new)) {
+            kept.push((old.as_str().to_string(), new.as_str().to_string()));
+        }
+    }
     kept.sort();
     kept
 }
@@ -142,7 +166,8 @@ pub(crate) fn moved_folder_qr_codes(moves: &[FolderMove], files: &HashMap<String
 
 /// Write each kept address into `stage_dir` and `sealed`. An old address two
 /// sources reach takes the first: a declared file redirect, then a dropped
-/// derivative of a served picture, then a file or QR code under a folder move. Returns
+/// derivative of a served picture, then a moved notebook, then a file or QR
+/// code under a folder move. Returns
 /// the `(old, served)` pairs written that no line names on its own, for the
 /// report. An address the build already serves is never overwritten.
 pub(crate) fn keep(mp: &MossPaths, stage_dir: &Path, sealed: &mut SealedManifest, late: &LateRedirects) -> Vec<(String, String)> {
@@ -159,13 +184,19 @@ pub(crate) fn keep(mp: &MossPaths, stage_dir: &Path, sealed: &mut SealedManifest
             log_warn_problem!("redirect '/{}' skipped: the site already serves that address and every one under it the line would keep", m.from);
         }
     }
-    let derivatives = published_record::load_address_baseline(mp, backfill::publish_target(mp).as_deref())
-        .map(|baseline| kept_derivatives(&baseline, &files))
-        .unwrap_or_default();
+    let baseline = published_record::load_address_baseline(mp, backfill::publish_target(mp).as_deref());
+    let derivatives = baseline.as_ref().map(|b| kept_derivatives(b, &files)).unwrap_or_default();
+    let notebooks: Vec<(String, String)> = baseline
+        .as_ref()
+        .map(|b| moved_notebooks(b, &change_set::asset_sources_to_outputs(sealed.site_hashes_view())))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(old, _)| !files.contains_key(old))
+        .collect();
     let mut planned: BTreeMap<&str, (&str, Origin)> = BTreeMap::new();
     let copies = late.copies.iter().filter(|c| !files.contains_key(&c.from));
     let copies = copies.map(|c| (c.from.as_str(), c.to.as_str(), Origin::Declared { raw: &c.raw }));
-    let own = derivatives.iter().chain(&folder_files).chain(&folder_qr).map(|(from, to)| (from.as_str(), to.as_str(), Origin::Kept));
+    let own = derivatives.iter().chain(&notebooks).chain(&folder_files).chain(&folder_qr).map(|(from, to)| (from.as_str(), to.as_str(), Origin::Kept));
     for (from, to, origin) in copies.chain(own) {
         planned.entry(from).or_insert((to, origin));
     }

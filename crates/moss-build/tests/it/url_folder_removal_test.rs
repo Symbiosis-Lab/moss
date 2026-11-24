@@ -1,8 +1,9 @@
 //! The publish record holds the address each folder file was published at, so
 //! a later build can tell what the author removed: an HTML page deleted at its
-//! own path or from a folder whose page sets `url:`, a deleted notebook in a
-//! folder whose name is served lowercased, and a WebP picture whose old sizes
-//! keep answering while it stays.
+//! own path or from a folder whose page sets `url:`, a deleted notebook, and
+//! a WebP picture whose old sizes keep answering while it stays. A notebook is
+//! served under its folder's address, and one published elsewhere before
+//! keeps its old addresses.
 
 use crate::site;
 
@@ -76,13 +77,58 @@ fn a_deleted_notebook_is_named_by_its_viewer_page() {
         ("Lab Notes/analysis.ipynb", NOTEBOOK),
     ]);
     let last = last_publish(&site);
-    assert!(last.files.contains_key("lab notes/analysis.html"), "{:?}", last.files.keys());
+    assert!(last.files.contains_key("lab-notes/analysis.html"), "{:?}", last.files.keys());
     published_record::save(&MossPaths::new(&site.root), &last).unwrap();
 
     std::fs::remove_file(site.root.join("Lab Notes/analysis.ipynb")).unwrap();
     site.rebuild();
 
-    assert_eq!(reasons_for(&site, "lab notes/analysis.html"), [RemovalReason::AuthorRemoved]);
+    assert_eq!(reasons_for(&site, "lab-notes/analysis.html"), [RemovalReason::AuthorRemoved]);
+}
+
+#[test]
+fn a_notebook_is_served_under_its_folders_address_where_the_page_links_it() {
+    for (folder_page, folder) in [("---\ntitle: Lab Notes\n---\n", "lab-notes"), ("---\ntitle: Lab Notes\nurl: lab\n---\n", "lab")] {
+        let site = Site::new(&[
+            ("index.md", "---\ntitle: Example Hall\n---\n\n[Analysis](Lab%20Notes/analysis.ipynb)\n"),
+            ("Lab Notes/index.md", folder_page),
+            ("Lab Notes/analysis.ipynb", NOTEBOOK),
+        ]);
+        let last = last_publish(&site);
+        for file in ["index.html", "analysis.ipynb", "analysis.html"] {
+            let address = format!("{folder}/{file}");
+            assert!(last.files.contains_key(&address), "{address} in {:?}", last.files.keys());
+        }
+        let home = std::fs::read_to_string(MossPaths::new(&site.root).current_ptr().join("index.html")).unwrap();
+        let href = home.split("href=\"").filter_map(|h| h.split('"').next()).find(|h| h.contains("analysis")).expect("the home page links the notebook");
+        let target = href.trim_start_matches('/');
+        assert!(last.files.contains_key(target), "the link {href} reaches nothing served: {:?}", last.files.keys());
+    }
+}
+
+#[test]
+fn a_notebook_published_at_its_old_folder_address_keeps_both_old_addresses() {
+    let site = Site::new(&[
+        ("index.md", "---\ntitle: Example Hall\n---\n\n[Analysis](Lab%20Notes/analysis.ipynb)\n"),
+        ("Lab Notes/analysis.ipynb", NOTEBOOK),
+    ]);
+    let mut last = last_publish(&site);
+    let assets = last.asset_source_to_output.as_mut().unwrap();
+    assert_eq!(assets.get("Lab Notes/analysis.ipynb").map(String::as_str), Some("lab-notes/analysis.ipynb"));
+    assets.insert("Lab Notes/analysis.ipynb".into(), "lab notes/analysis.ipynb".into());
+    for (old, new) in [("lab notes/analysis.ipynb", "lab-notes/analysis.ipynb"), ("lab notes/analysis.html", "lab-notes/analysis.html")] {
+        let entry = last.files.remove(new).unwrap();
+        last.files.insert(old.into(), entry);
+    }
+    published_record::save(&MossPaths::new(&site.root), &last).unwrap();
+
+    site.rebuild();
+
+    assert_eq!(reasons_for(&site, "lab notes/analysis.html"), []);
+    let live = MossPaths::new(&site.root).current_ptr();
+    assert_eq!(std::fs::read_to_string(live.join("lab notes/analysis.ipynb")).unwrap(), NOTEBOOK);
+    let forward = std::fs::read_to_string(live.join("lab notes/analysis.html")).unwrap();
+    assert!(forward.contains("lab-notes/analysis.html"), "{forward}");
 }
 
 #[test]

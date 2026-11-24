@@ -618,8 +618,16 @@ impl PendingManifest {
     /// the ones `register_page_source_hash` just wrote. Re-inserting them here
     /// keeps the fix inside the type that owns the invariant, rather than
     /// asking the asset walk to know about pages.
+    /// Outputs recorded for a page source (a notebook's copy, which the
+    /// render phase places) survive this replacement.
     pub(crate) fn replace_sources(&mut self, sources: HashMap<String, crate::build::types::SourceMetadata>, asset_outputs: HashMap<String, String>) {
+        let page_outputs: Vec<(String, String)> = self
+            .page_sources
+            .iter()
+            .filter_map(|k| self.inner.asset_outputs.get(k).map(|o| (k.clone(), o.clone())))
+            .collect();
         self.inner.asset_outputs = asset_outputs;
+        self.inner.asset_outputs.extend(page_outputs);
         let pages: Vec<(String, crate::build::types::SourceMetadata)> = self
             .page_sources
             .iter()
@@ -627,6 +635,11 @@ impl PendingManifest {
             .collect();
         self.inner.sources = sources;
         self.inner.sources.extend(pages);
+    }
+
+    /// Record that the folder file `source` was published at `out`.
+    pub(crate) fn record_asset_output(&mut self, source: &str, out: &str) {
+        self.inner.record_output(source, out);
     }
 
     /// Register a source-path → output-path mapping for a markdown page.
