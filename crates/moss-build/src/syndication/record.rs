@@ -318,8 +318,7 @@ impl Records {
     }
 
     fn path(&self, uid: &str, channel: &str) -> Result<PathBuf, String> {
-        let safe = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
-        if !safe(uid) || !safe(channel) {
+        if !plain_id(uid) || !plain_id(channel) {
             return Err(format!("a copy record needs a plain note id and channel id, not {uid:?} / {channel:?}"));
         }
         Ok(self.dir.join(format!("{uid}.{channel}.json")))
@@ -362,15 +361,8 @@ impl Records {
     /// that took it, however that process ends.
     pub fn turn(&self) -> Option<SendTurn> {
         let path = self.dir.with_extension("lock");
-        let taken = path
-            .parent()
-            .map_or(Ok(()), std::fs::create_dir_all)
-            // allow:raw_write the lock file under .moss/deploy, opened without truncating; its bytes are never read
-            .and_then(|()| std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&path))
-            .map_err(std::fs::TryLockError::Error)
-            .and_then(|file| file.try_lock().map(|()| file));
-        match taken {
-            Ok(file) => Some(SendTurn(file)),
+        match lock(&path) {
+            Ok(turn) => Some(turn),
             Err(std::fs::TryLockError::WouldBlock) => {
                 log::info!(target: "syndication", "another run is sending this site's copies; the rest stay due for the next run");
                 None
@@ -378,6 +370,24 @@ impl Records {
             Err(std::fs::TryLockError::Error(e)) => {
                 log::warn!(target: "syndication", "copies not sent: {} could not be locked ({e})", path.display());
                 None
+            }
+        }
+    }
+
+    /// This run's turn on one channel's copies, waited for while another send
+    /// holds it, so two sends never post the same record: whoever holds it
+    /// re-reads the channel's records under it. Lock order: a channel turn is
+    /// taken before the action panel's turn, never while holding it.
+    pub async fn channel_turn(&self, channel: &str) -> Result<SendTurn, String> {
+        if !plain_id(channel) {
+            return Err(format!("a channel needs a plain id, not {channel:?}"));
+        }
+        let path = self.dir.with_extension(format!("{channel}.lock"));
+        loop {
+            match lock(&path) {
+                Ok(turn) => return Ok(turn),
+                Err(std::fs::TryLockError::WouldBlock) => tokio::time::sleep(CHANNEL_TURN_POLL).await,
+                Err(std::fs::TryLockError::Error(e)) => return Err(format!("{} could not be locked ({e})", path.display())),
             }
         }
     }
@@ -393,6 +403,22 @@ impl Records {
         let json = serde_json::to_string_pretty(record).map_err(|e| e.to_string())?;
         crate::infra::atomic_write::write_atomic(&path, &json)
     }
+}
+
+fn plain_id(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+const CHANNEL_TURN_POLL: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// An OS lock on `path`, which ends with the process however it ends.
+fn lock(path: &Path) -> Result<SendTurn, std::fs::TryLockError> {
+    path.parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        // allow:raw_write the lock file under .moss/deploy, opened without truncating; its bytes are never read
+        .and_then(|()| std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(path))
+        .map_err(std::fs::TryLockError::Error)
+        .and_then(|file| file.try_lock().map(|()| SendTurn(file)))
 }
 
 fn read(path: &Path) -> Option<CopyRecord> {
