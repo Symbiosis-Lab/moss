@@ -329,6 +329,31 @@ mod tests {
             plugins, false).await.unwrap()).unwrap()
     }
 
+    /// A sign-in or sign-out after the build leaves the generation behind the
+    /// account an identity tag reads; the publish's own record does not.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_account_change_after_the_build_moves_the_state() {
+        let _builds = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = two_page_site("---\ntitle: About\n---\n\nAbout.\n");
+        let folder = dir.path().to_string_lossy().to_string();
+        let built = deploy_build(dir.path()).await;
+        assert!(!built.state_moved(dir.path()), "a fresh build is current");
+        let binding = crate::plugins::manager::accounts::AccountBinding { id: "acct:1".into(), name: None, host: None };
+        crate::plugins::manager::accounts::bind_account(&folder, "social", &binding).unwrap();
+        assert!(built.state_moved(dir.path()), "a sign-in moved it");
+        let signed_in = deploy_build(dir.path()).await;
+        assert!(!signed_in.state_moved(dir.path()), "a rebuild catches up");
+        crate::plugins::manager::accounts::unbind_account(&folder, "social").unwrap();
+        assert!(signed_in.state_moved(dir.path()), "a sign-out moved it");
+        let signed_out = deploy_build(dir.path()).await;
+        assert!(!signed_out.state_moved(dir.path()));
+        let state = dir.path().join(".moss/state.toml");
+        std::fs::remove_file(&state).unwrap();
+        assert!(signed_out.state_moved(dir.path()), "a removed state file moved it");
+        std::fs::create_dir(&state).unwrap();
+        assert!(signed_out.state_moved(dir.path()), "an unreadable one moved it");
+    }
+
     fn two_page_site(about: &str) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("index.md"), "---\ntitle: Home\n---\n\nHello.\n").unwrap();

@@ -1259,6 +1259,15 @@ impl SealedManifest {
         self.inner.site_url.as_deref()
     }
 
+    /// Whether `.moss/state.toml` holds something a page reads that this
+    /// generation was not built with, such as a sign-in or sign-out whose
+    /// account an identity tag comes from, or the file's removal. A publish's own bookkeeping does
+    /// not count. A manifest with no record of it answers `false`.
+    pub fn state_moved(&self, folder: &std::path::Path) -> bool {
+        let Some(sealed) = self.inner.build_inputs.as_ref().and_then(|i| i.state_rest.as_ref()) else { return false };
+        crate::build::inputs::state_rest(folder).map(|(now, _)| now).as_ref() != Some(sealed)
+    }
+
     /// See [`SiteHashes::mount`].
     pub(crate) fn mount(&self) -> crate::build::site_meta::mount::Mount {
         self.inner.mount()
