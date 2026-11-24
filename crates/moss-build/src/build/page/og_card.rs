@@ -304,6 +304,9 @@ pub fn render_card(
     if let Some((picture, rect)) = layout::theme_strip(inputs) {
         draw_plate(&mut pixmap, &picture.image, rect)?;
     }
+    if let Some((logo, rect)) = layout::theme_logo(inputs, inputs.plate.is_some()) {
+        draw_plate(&mut pixmap, &logo.image, rect)?;
+    }
     let bytes = pixmap.encode_png().map_err(|e| CardError::Encode(e.to_string()))?;
 
     // `write_output`, not a bare write: `output_root` is under `.moss/build.nosync/`,
