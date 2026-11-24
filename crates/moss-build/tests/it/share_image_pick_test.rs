@@ -122,3 +122,51 @@ fn the_share_image_carries_the_pictures_own_alt_text() {
     assert_eq!(meta_content(&root, "plain", r#"meta[property="og:image:alt"]"#).as_deref(), Some("Page"), "a picture with no alt keeps the title");
     let _ = fs::remove_dir_all(&root);
 }
+
+fn poster_site(share_cover: &str) -> std::path::PathBuf {
+    let root = std::env::temp_dir().join(format!("moss_share_cover_{}", uuid::Uuid::new_v4()));
+    write(&root, ".moss/config.toml", &format!("schema_version = 6\n\n[site]\nlang = \"en\"\n{share_cover}"));
+    picture(&root, "pics/wide.png", 1600, 900);
+    picture(&root, "pics/poster.png", 1080, 1350);
+    // The home page has its own landscape picture so that no page needs a generated card.
+    write(&root, "index.md", &page("", "![h](pics/wide.png)"));
+    write(&root, "event.md", &page("cover: pics/poster.png\n", "Doors at eight."));
+    root
+}
+
+#[test]
+fn share_cover_as_is_shares_a_portrait_poster_itself() {
+    let root = poster_site("share_cover = \"as-is\"\n");
+    let built = build(&root);
+    assert!(built.is_ok(), "{built:?}");
+    let shared = share_image(&root, "event");
+    let cards = MossPaths::new(&root).staging_dir().join("_moss/og");
+    let drawn = cards.exists();
+    let _ = fs::remove_dir_all(&root);
+
+    assert!(shared.ends_with("/pics/poster.png"), "the poster is the share image: {shared}");
+    assert!(!drawn, "no generated card is written");
+}
+
+#[test]
+fn share_cover_auto_draws_a_portrait_poster_into_the_card() {
+    let root = poster_site("");
+    let built = build(&root);
+    assert!(built.is_ok(), "{built:?}");
+    let shared = share_image(&root, "event");
+    let drawn = MossPaths::new(&root).staging_dir().join("_moss/og").exists();
+    let _ = fs::remove_dir_all(&root);
+
+    assert!(shared.contains("/_moss/og/"), "the poster is drawn into the card: {shared}");
+    assert!(drawn, "the card is written where the as-is test looks for it");
+}
+
+#[test]
+fn share_cover_with_an_unknown_value_stops_the_build_naming_the_key() {
+    let root = poster_site("share_cover = \"original\"\n");
+    let built = build(&root);
+    let _ = fs::remove_dir_all(&root);
+
+    let error = built.expect_err("an unknown value is a build error");
+    assert!(error.contains("share_cover") && error.contains("original"), "{error}");
+}

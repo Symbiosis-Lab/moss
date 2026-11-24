@@ -115,6 +115,8 @@ pub struct SiteConfig {
     pub header: crate::build::components::nav::HeaderMode,
     /// `[site].header_scroll` — resolved (`HeaderScroll::from_config`).
     pub header_scroll: crate::build::components::nav::HeaderScroll,
+    /// `[site].share_cover` — resolved (`ShareCover::from_config`).
+    pub share_cover: crate::build::page::cover::ShareCover,
     /// `[site].color_scheme` — automatic reader choice or a fixed palette.
     pub color_scheme: crate::build::page::color_scheme::ColorScheme,
     /// CLI `--site-url` override. When set, `resolve_site_url` will use this
@@ -228,6 +230,7 @@ impl Default for SiteConfig {
             colophon_credit: None,
             header: crate::build::components::nav::HeaderMode::Brand,
             header_scroll: crate::build::components::nav::HeaderScroll::Static,
+            share_cover: Default::default(),
             site_url_override: None,
             declared_redirects: Vec::new(),
             ai: Default::default(),

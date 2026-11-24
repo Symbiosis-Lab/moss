@@ -1433,7 +1433,7 @@ pub fn generate_blocking_content_for_build(
         let layout_config = layout_config.with_floating_nav(site_config.floating_nav).with_ai(site_config.ai).with_colophon(site_config.colophon).with_colophon_credit(site_config.colophon_credit.clone());
         // [site].header (default "brand") rides along for the same reason:
         // the nav renderer reads LayoutConfig, not SiteConfig.
-        let layout_config = layout_config.with_color_scheme(site_config.color_scheme).with_theme_color(crate::build::page::color_scheme::ThemeColor::of_theme(user_css_content.as_deref())).with_header_mode(site_config.header).with_header_scroll(site_config.header_scroll).with_term_nav(term_index.nav_entries(&site_config.term_nav));
+        let layout_config = layout_config.with_color_scheme(site_config.color_scheme).with_theme_color(crate::build::page::color_scheme::ThemeColor::of_theme(user_css_content.as_deref())).with_header_mode(site_config.header).with_header_scroll(site_config.header_scroll).with_share_cover(site_config.share_cover).with_term_nav(term_index.nav_entries(&site_config.term_nav));
         site_config.identity.add_copy_verification(
             crate::syndication::record::Records::in_vault(&crate::moss_paths::MossPaths::new(source_path_buf)).all(),
             site_url.as_str(),

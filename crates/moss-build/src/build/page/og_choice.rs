@@ -13,9 +13,9 @@
 //      cover on rasterization error.
 //
 // The same (cover, dims) tuple is reused by og_tags and twitter_tags below
-// so the auto-card is only rendered once per page. The auto-card is the
-// ONLY source that sets `cover_dims_for_og = Some((1200, 630))` — the
-// other sources leave dims `None` (we don't probe arbitrary cover URLs).
+// so the auto-card is only rendered once per page. The auto-card's size is
+// 1200x630; a scanned cover carries the served file's size, any other
+// `None` (moss probes no cover URL).
 // `vertical_typesetting` / `resolved_typesetting` are computed near the
 // top of this function (beside `ui_lang`) — `resolve_page_body` needs
 // them earlier than this point.//!
@@ -45,6 +45,7 @@ pub struct OgCoverInputs<'a> {
     pub ui_lang: crate::i18n::Language,
     pub vertical_typesetting: bool,
     pub output_dir: Option<&'a std::path::Path>,
+    pub share_cover: crate::build::page::cover::ShareCover,
 }
 
 /// The cover to emit, and its dimensions when moss knows them.
@@ -64,6 +65,7 @@ pub fn resolve(
         ui_lang,
         vertical_typesetting,
         output_dir,
+        share_cover,
     } = *input;
     let resolve_cover_url = |raw: &str| -> String {
         let (path_part, _) = moss_core::media::split_pipe(raw);
@@ -90,6 +92,7 @@ pub fn resolve(
             d.body_cover_path.as_deref(),
             &project.image_files,
             dir_overrides,
+            share_cover,
         )
     });
 
@@ -171,21 +174,21 @@ pub fn resolve(
         // Frontmatter, filename convention, hero, or first body image. A
         // cover no platform crop can hold becomes a PLATE — drawn whole
         // into a card moss composes — and everything else is handed over
-        // as-is with the dimensions moss scanned; `cover::plate_source`
+        // as-is with the served file's size; `cover::plate_source`
         // holds both decisions and their reasons. Failing to render the
         // plate lands in the same arm as never wanting one: the file
         // itself is what moss sent before plates existed.
         let plate = can_render_card
             .then(|| {
                 crate::build::page::cover::plate_source(
-                    &project.image_files, &cover_ref, dir_overrides, source_root,
+                    &project.image_files, &cover_ref, dir_overrides, source_root, share_cover,
                 )
             })
             .flatten();
         match plate.as_ref().and_then(|p| render_card(Some(p.as_plate()))) {
             Some(card) => Some(OgCover { cover: card, dims: Some((1200u32, 630u32)), alt: None }),
             None => {
-                let dims = crate::build::page::cover::scanned_dims(
+                let dims = crate::build::page::cover::served_cover_dims(
                     &project.image_files, &cover_ref, dir_overrides,
                 );
                 let alt = doc.and_then(|d| crate::build::page::cover::cover_alt(&cover_ref, &d.body_cover_candidates)).map(String::from);

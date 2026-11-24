@@ -66,6 +66,12 @@ pub(crate) const SIZED_JPEG_QUALITY: u8 = 82;
 /// caller-lowered global cap authoritative.
 pub(crate) const FALLBACK_MAX_EDGE: u32 = 1200;
 
+/// The formats the deploy pass re-encodes at [`FALLBACK_MAX_EDGE`]; every other
+/// image is served verbatim at its source size. `ext` is lowercase.
+pub(crate) fn is_resized_raster(ext: &str) -> bool {
+    matches!(ext, "jpg" | "jpeg" | "png")
+}
+
 /// Encode a `DynamicImage` as a baseline JPEG byte vector at `quality`.
 ///
 /// Mirrors [`encode_webp`] but emits JPEG. JPEG has no alpha channel, so the

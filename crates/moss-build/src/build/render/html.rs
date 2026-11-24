@@ -1189,6 +1189,7 @@ pub(super) fn render_page<'d>(
             ui_lang,
             vertical_typesetting,
             output_dir: context.output_dir,
+            share_cover: layout_config.share_cover,
         },
         og_outputs.as_deref_mut(),
     );

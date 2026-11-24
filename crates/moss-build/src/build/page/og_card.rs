@@ -994,7 +994,7 @@ mod tests {
                     .and_then(|f| f.set_modified(t))
                     .expect("set mtime");
             }
-            let source = plate_source(&scanned, &cover, &no_previous(), dir.path()).expect("plate");
+            let source = plate_source(&scanned, &cover, &no_previous(), dir.path(), crate::build::page::cover::ShareCover::Auto).expect("plate");
             let inputs = CardInputs { plate: Some(source.as_plate()), ..sample_inputs() };
             card_identity(&inputs).expect("identity").0.as_str().to_string()
         };

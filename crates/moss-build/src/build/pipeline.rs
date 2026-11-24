@@ -1508,6 +1508,7 @@ fn build_inner(
         // logs a warning on the latter).
         header: crate::build::components::nav::HeaderMode::from_config(site_str("header").as_deref()),
         header_scroll: crate::build::components::nav::HeaderScroll::from_config(site_str("header_scroll").as_deref()),
+        share_cover: crate::build::page::cover::ShareCover::from_config(site_str("share_cover").as_deref())?,
         site_url_override,
         declared_redirects: cfg.as_ref().map(|c| c.declared_redirects()).unwrap_or_default(),
         ai: crate::build::feeds::robots::AiSettings::from_config(cfg.as_ref()),

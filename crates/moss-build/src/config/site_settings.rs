@@ -178,6 +178,12 @@ pub(crate) fn site_settings() -> Vec<SiteSettingInfo> {
             description: "Whether search engines may list the site. false adds `noindex` to every page (search engines stay free to read pages, so they see it), asks AI search crawlers not to in robots.txt and drops its Sitemap line. Unset follows `ai_policy`.",
         },
         SiteSettingInfo {
+            name: "share_cover",
+            r#type: "string",
+            default: Some("auto"),
+            description: "Which picture a page's link preview shows when its cover is not landscape. \"auto\" shares a landscape cover as it is and a portrait or square one inside moss's generated card. \"as-is\" shares a page's own cover, or its first usable body picture, whatever its shape; only a page with no picture gets the generated card. Any other value stops the build.",
+        },
+        SiteSettingInfo {
             name: "typesetting",
             r#type: "string",
             default: None,

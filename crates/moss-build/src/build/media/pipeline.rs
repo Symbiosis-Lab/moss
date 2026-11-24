@@ -1365,7 +1365,7 @@ fn copy_asset_entry(
             // Raster originals retain their format at the optimized size.
             // Unsupported or unavailable inputs use the verbatim CAS blob;
             // warm transform records can be reused without reading the source.
-            let raster = matches!(ext.as_str(), "jpg" | "jpeg" | "png");
+            let raster = crate::build::media::fallback_raster::is_resized_raster(&ext);
             if raster && run.defer_cloud_held_raster(transforms, file_path, &oid) {
                 return;
             }

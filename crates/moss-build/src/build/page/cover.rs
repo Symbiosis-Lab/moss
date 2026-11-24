@@ -63,7 +63,8 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 /// size-capped deploy raster `copy_deferred_assets` lands at the source's own
 /// filename — never the author's original bytes. moss probes no cover, so it
 /// emits `og:image:width`/`:height` only for the auto-generated 1200×630 card
-/// and enforces no dimension floor of its own. The floor therefore lives
+/// and for a scanned cover, at the served raster's size ([`served_dims`]), and
+/// enforces no dimension floor of its own. The floor therefore lives
 /// entirely in the cap that sizes that raster, and this is where it is
 /// written down.
 ///
@@ -146,11 +147,12 @@ pub fn pick_body_cover<'a>(
     first: Option<&'a str>,
     images: &[crate::types::content::MediaMetadata],
     dir_overrides: &HashMap<String, String>,
+    share_cover: ShareCover,
 ) -> Option<&'a str> {
     let as_is = |picture: &&BodyPicture| {
         let Some(CoverRef::Local(sp)) = cover_from_frontmatter(Some(&picture.href)) else { return false };
         scanned_dims(images, &CoverRef::Local(sp), dir_overrides)
-            .is_some_and(|(w, h)| !needs_plate(w, h) && w.max(h) >= OG_IMAGE_LONG_EDGE_FLOOR)
+            .is_some_and(|(w, h)| !needs_plate(w, h, share_cover) && w.max(h) >= OG_IMAGE_LONG_EDGE_FLOOR)
     };
     candidates.iter().find(as_is).map(|p| p.href.as_str()).or(first)
 }
@@ -880,9 +882,58 @@ mod tests {
 pub const PASSTHROUGH_MIN_AR: f32 = 1.25;
 pub const PASSTHROUGH_MAX_AR: f32 = 2.4;
 
-/// Is this cover's shape one a platform's centre crop would gut?
-pub fn needs_plate(width: u32, height: u32) -> bool {
-    if width == 0 || height == 0 {
+/// `[site].share_cover`: whether a cover outside the passthrough band is
+/// shared as itself or drawn into the generated card.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShareCover {
+    #[default]
+    Auto,
+    AsIs,
+}
+
+impl ShareCover {
+    /// An unknown value is an error, not a fallback: a site that asked for its
+    /// poster to be shared as it is must not quietly get the card.
+    pub fn from_config(value: Option<&str>) -> Result<Self, String> {
+        match value {
+            None | Some("auto") => Ok(Self::Auto),
+            Some("as-is") => Ok(Self::AsIs),
+            Some(other) => Err(format!("[site].share_cover must be \"auto\" or \"as-is\", not \"{other}\"")),
+        }
+    }
+}
+
+/// The size a scanned cover is served at: a re-encoded raster caps the long
+/// edge at [`crate::build::media::fallback_raster::FALLBACK_MAX_EDGE`] and never
+/// upscales; any other format is served at its source size.
+pub fn served_dims(path: &str, (w, h): (u32, u32)) -> (u32, u32) {
+    let ext = path.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+    let cap = crate::build::media::fallback_raster::FALLBACK_MAX_EDGE;
+    let long = w.max(h);
+    if !crate::build::media::fallback_raster::is_resized_raster(&ext) || long <= cap {
+        return (w, h);
+    }
+    let scale = |edge: u32| ((u64::from(edge) * u64::from(cap) + u64::from(long) / 2) / u64::from(long)).max(1) as u32;
+    (scale(w), scale(h))
+}
+
+/// `og:image:width`/`:height` for a local cover: the served file's size.
+pub fn served_cover_dims(
+    images: &[crate::types::content::MediaMetadata],
+    cover: &CoverRef,
+    dir_overrides: &std::collections::HashMap<String, String>,
+) -> Option<(u32, u32)> {
+    match cover {
+        CoverRef::External(_) => None,
+        CoverRef::Local(sp) => scanned_cover(images, &sp.to_relative_url(), dir_overrides)
+            .map(|(meta, d)| served_dims(&meta.path, d)),
+    }
+}
+
+/// Is this cover's shape one a platform's centre crop would gut? Under
+/// [`ShareCover::AsIs`] no shape is.
+pub fn needs_plate(width: u32, height: u32, share_cover: ShareCover) -> bool {
+    if share_cover == ShareCover::AsIs || width == 0 || height == 0 {
         return false;
     }
     let ar = width as f32 / height as f32;
@@ -944,12 +995,13 @@ pub fn plate_source(
     cover: &CoverRef,
     dir_overrides: &std::collections::HashMap<String, String>,
     source_root: &Path,
+    share_cover: ShareCover,
 ) -> Option<PlateSource> {
     let CoverRef::Local(sp) = cover else {
         return None;
     };
     let (meta, (width, height)) = scanned_cover(images, &sp.to_relative_url(), dir_overrides)?;
-    if !needs_plate(width, height) {
+    if !needs_plate(width, height, share_cover) {
         return None;
     }
     use sha2::{Digest, Sha256};
@@ -1019,15 +1071,40 @@ mod plate_tests {
     /// scroll, a handscroll and a square seal do not.
     #[test]
     fn only_shapes_a_centre_crop_would_gut_become_plates() {
-        assert!(!needs_plate(1200, 630), "1.91:1, the shape the slots were drawn for");
-        assert!(!needs_plate(1920, 1080), "16:9");
-        assert!(!needs_plate(2000, 1500), "4:3");
-        assert!(needs_plate(2290, 4000), "a hanging scroll");
-        assert!(needs_plate(3400, 447), "a handscroll");
-        assert!(needs_plate(480, 480), "a square seal");
-        assert!(needs_plate(1080, 1350), "a portrait photograph");
+        assert!(!needs_plate(1200, 630, ShareCover::Auto), "1.91:1, the shape the slots were drawn for");
+        assert!(!needs_plate(1920, 1080, ShareCover::Auto), "16:9");
+        assert!(!needs_plate(2000, 1500, ShareCover::Auto), "4:3");
+        assert!(needs_plate(2290, 4000, ShareCover::Auto), "a hanging scroll");
+        assert!(needs_plate(3400, 447, ShareCover::Auto), "a handscroll");
+        assert!(needs_plate(480, 480, ShareCover::Auto), "a square seal");
+        assert!(needs_plate(1080, 1350, ShareCover::Auto), "a portrait photograph");
         // Nothing to divide by, and nothing to decide.
-        assert!(!needs_plate(0, 100));
+        assert!(!needs_plate(0, 100, ShareCover::Auto));
+    }
+
+    #[test]
+    fn as_is_needs_no_plate_for_any_shape() {
+        for (w, h) in [(2290, 4000), (3400, 447), (480, 480), (1080, 1350)] {
+            assert!(!needs_plate(w, h, ShareCover::AsIs), "{w}x{h}");
+        }
+    }
+
+    #[test]
+    fn share_cover_names_two_values_and_refuses_the_rest() {
+        assert_eq!(ShareCover::from_config(None), Ok(ShareCover::Auto));
+        assert_eq!(ShareCover::from_config(Some("auto")), Ok(ShareCover::Auto));
+        assert_eq!(ShareCover::from_config(Some("as-is")), Ok(ShareCover::AsIs));
+        assert!(ShareCover::from_config(Some("asis")).unwrap_err().contains("share_cover"));
+    }
+
+    #[test]
+    fn served_dims_follow_the_served_file() {
+        assert_eq!(served_dims("a.jpg", (900, 1200)), (900, 1200), "at the cap, as scanned");
+        assert_eq!(served_dims("a.JPG", (1080, 1350)), (960, 1200));
+        assert_eq!(served_dims("a.png", (2000, 1145)), (1200, 687));
+        assert_eq!(served_dims("a.jpeg", (3400, 447)), (1200, 158));
+        assert_eq!(served_dims("a.webp", (2000, 1145)), (2000, 1145), "webp is served verbatim");
+        assert_eq!(served_dims("a.gif", (1600, 2000)), (1600, 2000));
     }
 
     /// An SVG cover has a scanned size (its layout box) but is neither drawn
@@ -1038,8 +1115,8 @@ mod plate_tests {
         std::fs::write(dir.path().join("mark.svg"), r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"/>"#).unwrap();
         let images = vec![scanned("mark.svg", (800, 800))];
         let cover = CoverRef::Local(crate::build::served_path::ServedPath::from_source("mark.svg").unwrap());
-        assert!(needs_plate(800, 800));
-        assert!(plate_source(&images, &cover, &std::collections::HashMap::new(), dir.path()).is_none());
+        assert!(needs_plate(800, 800, ShareCover::Auto));
+        assert!(plate_source(&images, &cover, &std::collections::HashMap::new(), dir.path(), ShareCover::Auto).is_none());
         assert_eq!(scanned_dims(&images, &cover, &std::collections::HashMap::new()), None);
     }
 
@@ -1082,7 +1159,7 @@ mod pick_body_cover_tests {
 
     fn pick<'a>(candidates: &'a [String], images: &[MediaMetadata]) -> Option<&'a str> {
         let pictures: Vec<BodyPicture> = candidates.iter().map(|href| BodyPicture { href: href.clone(), alt: String::new() }).collect();
-        let picked = pick_body_cover(&pictures, candidates.first().map(String::as_str), images, &HashMap::new())?;
+        let picked = pick_body_cover(&pictures, candidates.first().map(String::as_str), images, &HashMap::new(), ShareCover::Auto)?;
         candidates.iter().map(String::as_str).find(|c| *c == picked)
     }
 

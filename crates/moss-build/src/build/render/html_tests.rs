@@ -7158,9 +7158,9 @@ mod og_url_tests {
             "a 1.75:1 cover should be handed over as itself: {wide}"
         );
         assert!(
-            wide.contains(r#"og:image:width" content="2000""#)
-                && wide.contains(r#"og:image:height" content="1145""#),
-            "a passed-through cover should carry the dimensions moss scanned: {wide}"
+            wide.contains(r#"og:image:width" content="1200""#)
+                && wide.contains(r#"og:image:height" content="687""#),
+            "a passed-through cover should carry the size of the served raster: {wide}"
         );
     }
 
