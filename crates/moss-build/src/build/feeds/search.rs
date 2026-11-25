@@ -232,6 +232,8 @@ pub(crate) fn lock_index_counter() -> std::sync::MutexGuard<'static, ()> {
 /// preview indexes — a fixed cost paid again for every rebuild, and
 /// one that no per-page cache could ever collapse. It is immutable and `Sync`,
 /// so the segmentation threads share this one.
+/// Only [`segment_han_runs`] touches it, after finding Han text, so a site
+/// with none never loads it.
 static JIEBA: LazyLock<Jieba> = LazyLock::new(Jieba::new);
 
 /// The segmented HTML of every page the most recent index build read, keyed
@@ -278,7 +280,7 @@ fn is_han(c: char) -> bool {
 // Every slice below is bounded by an index from `str::find`/`str::len`, which
 // only ever land on a char boundary — none of these can panic.
 #[allow(clippy::string_slice)]
-fn segment_han_runs(text: &str, jieba: &Jieba) -> Option<String> {
+fn segment_han_runs(text: &str) -> Option<String> {
     if !text.chars().any(is_han) {
         return None;
     }
@@ -293,7 +295,7 @@ fn segment_han_runs(text: &str, jieba: &Jieba) -> Option<String> {
         if out.chars().next_back().is_some_and(|c| !c.is_whitespace()) {
             out.push(' ');
         }
-        let words: Vec<&str> = jieba
+        let words: Vec<&str> = JIEBA
             .cut(&tail[..end], true)
             .into_iter()
             .map(|t| t.word)
@@ -321,7 +323,10 @@ fn segment_han_runs(text: &str, jieba: &Jieba) -> Option<String> {
 /// boundary. Replacement uses `ContentType::Html` because `as_str()` hands
 /// back the raw source text — entities such as `&amp;` must go back out as
 /// they came in, not re-escaped.
-fn segment_html(html: &str, jieba: &Jieba) -> Result<String, String> {
+fn segment_html(html: &str) -> Result<String, String> {
+    if !html.contains(is_han) {
+        return Ok(html.to_string());
+    }
     // Depth of the innermost SKIP_TEXT_IN element we are inside, if any.
     let skip_depth = Rc::new(RefCell::new(0usize));
     let depth_for_open = Rc::clone(&skip_depth);
@@ -354,7 +359,7 @@ fn segment_html(html: &str, jieba: &Jieba) -> Result<String, String> {
                         buf.push_str(chunk.as_str());
                         if chunk.last_in_text_node() {
                             let replacement =
-                                segment_han_runs(&buf, jieba).unwrap_or_else(|| buf.clone());
+                                segment_han_runs(&buf).unwrap_or_else(|| buf.clone());
                             chunk.replace(&replacement, ContentType::Html);
                             buf.clear();
                         } else {
@@ -526,7 +531,7 @@ fn segment_pages(pages: Vec<PageSource>) -> (Vec<SegmentedPage>, usize, usize) {
         .into_par_iter()
         .map(|slot| match slot {
             Ok(page) => Some(page),
-            Err(PageSource { rel_path, key, source }) => match segment_html(&source, &JIEBA) {
+            Err(PageSource { rel_path, key, source }) => match segment_html(&source) {
                 Ok(html) => Some(SegmentedPage { rel_path, key, html: html.into() }),
                 Err(e) => {
                     log::info!(target: "search", "skipping {:?} for search index: {}", rel_path, e);

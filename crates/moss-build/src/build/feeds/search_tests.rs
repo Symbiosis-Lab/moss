@@ -2,9 +2,7 @@ use super::*;
 use std::path::Path;
 
 fn segment(html: &str) -> String {
-    // The shared dictionary, not a fresh `Jieba::new()` per call — that parses
-    // ~5 MB of embedded dictionary, once per test in this file.
-    segment_html(html, &JIEBA).expect("rewrite should succeed")
+    segment_html(html).expect("rewrite should succeed")
 }
 
 /// Latin text must survive byte-for-byte: the segmentation pass is a no-op
