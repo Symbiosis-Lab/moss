@@ -667,14 +667,14 @@ async fn dispatch_command_core(
             need_app(&host, "browser_sign_in_start").map_err(|_| "Sign in from the moss app".to_string())?;
             let plugin = caller_plugin(&host, "browser_sign_in_start")?;
             let channel = host.declared.and_then(|d| d.title.clone()).unwrap_or_else(|| plugin.clone());
-            reply_json(&serde_json::json!({ "redirectUri": crate::plugins::runtime::browser_sign_in::start(&plugin, &channel).await? }))
+            reply_json(&serde_json::json!({ "redirectUri": host.state.hooks.sign_ins.start(&plugin, &channel).await? }))
         }
         "browser_sign_in_wait" => {
             let app = need_app(&host, "browser_sign_in_wait").map_err(|_| "Sign in from the moss app".to_string())?;
             let plugin = caller_plugin(&host, "browser_sign_in_wait")?;
             // The person is in their browser: the watchdog waits for them, as for any question moss asks.
             let _waiting = host.state.hooks.begin_person_wait(&plugin);
-            let params = crate::plugins::runtime::browser_sign_in::wait(&plugin, &req_str(&args, "url")?, |url| app.open_system_browser(url)).await?;
+            let params = host.state.hooks.sign_ins.wait(&plugin, &req_str(&args, "url")?, |url| app.open_system_browser(url)).await?;
             reply_json(&serde_json::json!({ "params": params }))
         }
         // Bridged 2026-08-28: a Tauri command since onboarding, but never an
@@ -1719,15 +1719,8 @@ mod tests {
         desk.seen("panel-opened").last().map(|p| p["url"].as_str().map(str::to_string))
     }
 
-    async fn browser_call(desk: &ScriptedPerson, cmd: &str, args: serde_json::Value) -> std::result::Result<String, String> {
-        browser_call_as(desk, "mastodon", cmd, args).await
-    }
-
-    /// Sign-ins are keyed by plugin across the process, so a test that waits
-    /// on one uses a plugin no parallel test does.
-    async fn browser_call_as(desk: &ScriptedPerson, plugin: &str, cmd: &str, args: serde_json::Value) -> std::result::Result<String, String> {
-        let state = HostState::standalone();
-        let host = EngineHost { app: Some(desk), state: &state, project_path: "/tmp/none", plugin: Some(plugin), asked_by: None, declared: None };
+    async fn browser_call(desk: &ScriptedPerson, state: &HostState, cmd: &str, args: serde_json::Value) -> std::result::Result<String, String> {
+        let host = EngineHost { app: Some(desk), state, project_path: "/tmp/none", plugin: Some("mastodon"), asked_by: None, declared: None };
         dispatch_command_core(host, cmd, &args.to_string()).await
     }
 
@@ -1735,24 +1728,24 @@ mod tests {
     /// both ways in: the plain open and the sign-in.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_system_browser_opens_only_web_pages() {
-        let desk = ScriptedPerson::default();
+        let (desk, state) = (ScriptedPerson::default(), HostState::standalone());
         for refused in ["file:///etc/passwd", "javascript:alert(1)", "moss://open?path=/"] {
-            assert!(browser_call(&desk, "open_system_browser", serde_json::json!({ "url": refused })).await.is_err(), "{refused}");
-            browser_call(&desk, "browser_sign_in_start", serde_json::json!({})).await.unwrap();
-            let waited = browser_call(&desk, "browser_sign_in_wait", serde_json::json!({ "url": refused })).await;
+            assert!(browser_call(&desk, &state, "open_system_browser", serde_json::json!({ "url": refused })).await.is_err(), "{refused}");
+            browser_call(&desk, &state, "browser_sign_in_start", serde_json::json!({})).await.unwrap();
+            let waited = browser_call(&desk, &state, "browser_sign_in_wait", serde_json::json!({ "url": refused })).await;
             assert!(waited.is_err(), "{refused}");
         }
         assert!(browser(&desk).is_empty(), "nothing may reach the browser: {:?}", browser(&desk));
-        browser_call(&desk, "open_system_browser", serde_json::json!({ "url": "https://example.com/a" })).await.unwrap();
+        browser_call(&desk, &state, "open_system_browser", serde_json::json!({ "url": "https://example.com/a" })).await.unwrap();
         assert_eq!(browser(&desk), vec!["https://example.com/a".to_string()]);
     }
 
     /// The fill goes to the plugin that called, whatever name it passes.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fill_browser_panel_reaches_the_app_as_the_calling_plugin() {
-        let desk = ScriptedPerson::default();
+        let (desk, state) = (ScriptedPerson::default(), HostState::standalone());
         let fill = serde_json::json!({ "editor": { "body": ".editor" }, "parts": [{ "html": "<p>a</p>" }] });
-        let reply = browser_call(&desk, "fill_browser_panel", serde_json::json!({ "pluginName": "matters", "fill": fill })).await.unwrap();
+        let reply = browser_call(&desk, &state, "fill_browser_panel", serde_json::json!({ "pluginName": "matters", "fill": fill })).await.unwrap();
         assert_eq!(reply, r#"{"filled":true}"#);
         assert_eq!(desk.seen("panel-filled"), vec![serde_json::json!({ "plugin": "mastodon", "project": "/tmp/none", "fill": fill })]);
     }
@@ -1762,11 +1755,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_superseded_sign_in_rejects_with_the_text_moss_api_reads_as_cancelled() {
         use crate::plugins::runtime::browser_sign_in::CANCELLED;
-        let desk = std::sync::Arc::new(ScriptedPerson::default());
-        browser_call_as(&desk, "cancel-probe", "browser_sign_in_start", serde_json::json!({})).await.unwrap();
+        let (desk, state) = (std::sync::Arc::new(ScriptedPerson::default()), HostState::standalone());
+        browser_call(&desk, &state, "browser_sign_in_start", serde_json::json!({})).await.unwrap();
         let waiting = {
-            let desk = desk.clone();
-            tokio::spawn(async move { browser_call_as(&desk, "cancel-probe", "browser_sign_in_wait", serde_json::json!({ "url": "https://example.com/authorize" })).await })
+            let (desk, state) = (desk.clone(), state.clone());
+            tokio::spawn(async move { browser_call(&desk, &state, "browser_sign_in_wait", serde_json::json!({ "url": "https://example.com/authorize" })).await })
         };
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
             while browser(&desk).is_empty() {
@@ -1775,7 +1768,7 @@ mod tests {
         })
         .await
         .expect("the sign-in never opened the browser");
-        browser_call_as(&desk, "cancel-probe", "browser_sign_in_start", serde_json::json!({})).await.unwrap();
+        browser_call(&desk, &state, "browser_sign_in_start", serde_json::json!({})).await.unwrap();
         assert_eq!(waiting.await.unwrap(), Err(CANCELLED.to_string()));
         let moss_api = include_str!("../../../../packages/moss-api/src/utils/browser.ts");
         assert!(moss_api.contains(&format!("const CANCELLED = \"{CANCELLED}\";")), "moss-api's SignInCancelled reads a different text");

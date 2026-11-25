@@ -150,6 +150,8 @@ pub struct PluginHookState {
     /// person-wait. One per plugin: a second page replaces the first in the
     /// same panel.
     windows: Arc<Mutex<HashMap<String, PersonWaitGuard>>>,
+    /// Each plugin's sign-in through the person's browser.
+    pub sign_ins: crate::plugins::runtime::browser_sign_in::SignIns,
 }
 
 /// Who asked for a hook run, which decides where in the folder it may write.
@@ -194,6 +196,7 @@ impl PluginHookState {
             runs: Arc::new(Mutex::new(HashMap::new())),
             run_ended: Arc::new(tokio::sync::Notify::new()),
             windows: Arc::new(Mutex::new(HashMap::new())),
+            sign_ins: Default::default(),
         }
     }
 

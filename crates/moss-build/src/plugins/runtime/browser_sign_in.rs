@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
@@ -59,154 +59,160 @@ struct SignIn {
     reply: Option<oneshot::Receiver<Result<Query, String>>>,
 }
 
-fn verdicts() -> MutexGuard<'static, HashMap<String, oneshot::Sender<bool>>> {
-    static VERDICTS: OnceLock<Mutex<HashMap<String, oneshot::Sender<bool>>>> = OnceLock::new();
-    VERDICTS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
+/// The sign-ins under way, one per plugin, and the return pages waiting for
+/// how each login ended. A host's hook state holds one, so two hosts in one
+/// process (two test managers) never answer each other's sign-in.
+#[derive(Clone, Default)]
+pub struct SignIns {
+    listening: Arc<Mutex<HashMap<String, SignIn>>>,
+    verdicts: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
 }
 
-/// Tell the return page how `plugin`'s login ended, once its hook has returned.
-/// The page held back for the code's exchange; nothing is waiting if the
-/// redirect never arrived.
-pub fn answer(plugin: &str, signed_in: bool) {
-    if let Some(tx) = verdicts().remove(plugin) {
-        let _ = tx.send(signed_in);
+fn locked<T>(map: &Mutex<T>) -> MutexGuard<'_, T> {
+    map.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+impl SignIns {
+    /// Bind a listener on `127.0.0.1` at a port the system picks, for `plugin`,
+    /// ending any sign-in it had started. `channel` is the name the return page
+    /// shows. It answers the first request on
+    /// [`CALLBACK_PATH`] that carries `code` or `error` and stops; it stops anyway
+    /// after [`SIGN_IN_LIMIT`]. The path is fixed because a provider matches a
+    /// loopback redirect exactly except for its port (RFC 8252 §7.3), and atproto
+    /// clients publish theirs; the plugin's `state` check, not the path, tells its
+    /// reply from anything else on this computer.
+    pub async fn start(&self, plugin: &str, channel: &str) -> Result<String, String> {
+        self.start_bounded(plugin, channel, VERDICT_WAIT).await
     }
-}
 
-fn sign_ins() -> MutexGuard<'static, HashMap<String, SignIn>> {
-    static SIGN_INS: OnceLock<Mutex<HashMap<String, SignIn>>> = OnceLock::new();
-    SIGN_INS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
-}
+    async fn start_bounded(&self, plugin: &str, channel: &str, verdict_wait: Duration) -> Result<String, String> {
+        static TOKENS: AtomicU64 = AtomicU64::new(0);
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| format!("could not listen for the sign-in: {e}"))?;
+        let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+        let token = TOKENS.fetch_add(1, Ordering::Relaxed);
+        let (got_tx, mut got) = mpsc::channel::<Query>(1);
+        let (mut reply_tx, reply) = oneshot::channel();
+        let (stop_tx, stop) = oneshot::channel::<()>();
 
-/// Bind a listener on `127.0.0.1` at a port the system picks, for `plugin`,
-/// ending any sign-in it had started. `channel` is the name the return page
-/// shows. It answers the first request on
-/// [`CALLBACK_PATH`] that carries `code` or `error` and stops; it stops anyway
-/// after [`SIGN_IN_LIMIT`]. The path is fixed because a provider matches a
-/// loopback redirect exactly except for its port (RFC 8252 §7.3), and atproto
-/// clients publish theirs; the plugin's `state` check, not the path, tells its
-/// reply from anything else on this computer.
-pub async fn start(plugin: &str, channel: &str) -> Result<String, String> {
-    start_bounded(plugin, channel, VERDICT_WAIT).await
-}
-
-async fn start_bounded(plugin: &str, channel: &str, verdict_wait: Duration) -> Result<String, String> {
-    static TOKENS: AtomicU64 = AtomicU64::new(0);
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| format!("could not listen for the sign-in: {e}"))?;
-    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-    let token = TOKENS.fetch_add(1, Ordering::Relaxed);
-    let (got_tx, mut got) = mpsc::channel::<Query>(1);
-    let (mut reply_tx, reply) = oneshot::channel();
-    let (stop_tx, stop) = oneshot::channel::<()>();
-
-    let (plugin_name, channel) = (plugin.to_string(), channel.to_string());
-    let (verdict_tx, verdict) = oneshot::channel::<bool>();
-    verdicts().insert(plugin.to_string(), verdict_tx);
-    let verdict = std::sync::Arc::new(tokio::sync::Mutex::new(Some(verdict)));
-    let router = axum::Router::new().route(
-        CALLBACK_PATH,
-        axum::routing::get(move |axum::extract::RawQuery(query): axum::extract::RawQuery| {
-            let (got_tx, plugin, channel, verdict) = (got_tx.clone(), plugin_name.clone(), channel.clone(), verdict.clone());
-            async move {
-                use axum::response::IntoResponse;
-                let params: Query = url::form_urlencoded::parse(query.unwrap_or_default().as_bytes()).into_owned().collect();
-                if !params.iter().any(|(k, _)| k == "code" || k == "error") {
-                    log::info!(target: "plugin", "{plugin}: a request reached the sign-in redirect without a code or an error");
-                    return axum::http::StatusCode::NOT_FOUND.into_response();
-                }
-                let outcome = if params.iter().any(|(k, _)| k == "code") {
-                    let _ = got_tx.try_send(params);
-                    // The plugin has yet to check `state` and exchange the code:
-                    // claim nothing until `sign_in` answers.
-                    let waiting = verdict.lock().await.take();
-                    match waiting {
-                        Some(rx) => match tokio::time::timeout(verdict_wait, rx).await {
-                            Ok(Ok(true)) => Return::SignedIn,
-                            Ok(Ok(false)) => Return::Failed(String::new()),
-                            _ => Return::Unknown,
-                        },
-                        None => Return::Unknown,
+        let (plugin_name, channel) = (plugin.to_string(), channel.to_string());
+        let (verdict_tx, verdict) = oneshot::channel::<bool>();
+        locked(&self.verdicts).insert(plugin.to_string(), verdict_tx);
+        let verdict = Arc::new(tokio::sync::Mutex::new(Some(verdict)));
+        let router = axum::Router::new().route(
+            CALLBACK_PATH,
+            axum::routing::get(move |axum::extract::RawQuery(query): axum::extract::RawQuery| {
+                let (got_tx, plugin, channel, verdict) = (got_tx.clone(), plugin_name.clone(), channel.clone(), verdict.clone());
+                async move {
+                    use axum::response::IntoResponse;
+                    let params: Query = url::form_urlencoded::parse(query.unwrap_or_default().as_bytes()).into_owned().collect();
+                    if !params.iter().any(|(k, _)| k == "code" || k == "error") {
+                        log::info!(target: "plugin", "{plugin}: a request reached the sign-in redirect without a code or an error");
+                        return axum::http::StatusCode::NOT_FOUND.into_response();
                     }
-                } else {
-                    if let Some((_, why)) = params.iter().find(|(k, v)| k == "error_description" && !v.trim().is_empty()) {
-                        log::info!(target: "plugin", "{plugin}: the provider's error description: {why}");
-                    }
-                    let reason = failure_reason(&params);
-                    let _ = got_tx.try_send(params);
-                    Return::Failed(reason)
-                };
-                let page = return_page(&channel, &outcome);
-                ([(axum::http::header::CACHE_CONTROL, "no-store")], axum::response::Html(page)).into_response()
-            }
-        }),
-    );
-    let plugin_name = plugin.to_string();
-    tokio::spawn(async move {
-        let ended = async move {
-            // One fixed line per ending, its own call site each, so a support
-            // log says whether the browser ever came back.
-            let outcome = tokio::select! {
-                Some(query) = got.recv() => {
-                    if query.iter().any(|(k, _)| k == "code") {
-                        log::info!(target: "plugin", "{plugin_name}: the sign-in redirect arrived with a code");
+                    let outcome = if params.iter().any(|(k, _)| k == "code") {
+                        let _ = got_tx.try_send(params);
+                        // The plugin has yet to check `state` and exchange the code:
+                        // claim nothing until `sign_in` answers.
+                        let waiting = verdict.lock().await.take();
+                        match waiting {
+                            Some(rx) => match tokio::time::timeout(verdict_wait, rx).await {
+                                Ok(Ok(true)) => Return::SignedIn,
+                                Ok(Ok(false)) => Return::Failed(String::new()),
+                                _ => Return::Unknown,
+                            },
+                            None => Return::Unknown,
+                        }
                     } else {
-                        log::info!(target: "plugin", "{plugin_name}: the sign-in redirect arrived with an error");
+                        if let Some((_, why)) = params.iter().find(|(k, v)| k == "error_description" && !v.trim().is_empty()) {
+                            log::info!(target: "plugin", "{plugin}: the provider's error description: {why}");
+                        }
+                        let reason = failure_reason(&params);
+                        let _ = got_tx.try_send(params);
+                        Return::Failed(reason)
+                    };
+                    let page = return_page(&channel, &outcome);
+                    ([(axum::http::header::CACHE_CONTROL, "no-store")], axum::response::Html(page)).into_response()
+                }
+            }),
+        );
+        let plugin_name = plugin.to_string();
+        let listening = self.listening.clone();
+        tokio::spawn(async move {
+            let ended = async move {
+                // One fixed line per ending, its own call site each, so a support
+                // log says whether the browser ever came back.
+                let outcome = tokio::select! {
+                    Some(query) = got.recv() => {
+                        if query.iter().any(|(k, _)| k == "code") {
+                            log::info!(target: "plugin", "{plugin_name}: the sign-in redirect arrived with a code");
+                        } else {
+                            log::info!(target: "plugin", "{plugin_name}: the sign-in redirect arrived with an error");
+                        }
+                        Ok(query)
                     }
-                    Ok(query)
+                    _ = stop => {
+                        log::info!(target: "plugin", "{plugin_name}: the sign-in ended before its redirect arrived");
+                        Err(CANCELLED.to_string())
+                    }
+                    // The waiter gave up: a refused address, a browser that would not open.
+                    _ = reply_tx.closed() => {
+                        log::info!(target: "plugin", "{plugin_name}: the sign-in stopped waiting before its redirect arrived");
+                        Err(CANCELLED.to_string())
+                    }
+                    _ = tokio::time::sleep(SIGN_IN_LIMIT) => {
+                        log::warn!(target: "plugin", "{plugin_name}: no sign-in redirect arrived in ten minutes");
+                        Err(TOO_LONG.to_string())
+                    }
+                };
+                let mut map = locked(&listening);
+                if map.get(&plugin_name).is_some_and(|s| s.token == token) {
+                    map.remove(&plugin_name);
                 }
-                _ = stop => {
-                    log::info!(target: "plugin", "{plugin_name}: the sign-in ended before its redirect arrived");
-                    Err(CANCELLED.to_string())
-                }
-                // The waiter gave up: a refused address, a browser that would not open.
-                _ = reply_tx.closed() => {
-                    log::info!(target: "plugin", "{plugin_name}: the sign-in stopped waiting before its redirect arrived");
-                    Err(CANCELLED.to_string())
-                }
-                _ = tokio::time::sleep(SIGN_IN_LIMIT) => {
-                    log::warn!(target: "plugin", "{plugin_name}: no sign-in redirect arrived in ten minutes");
-                    Err(TOO_LONG.to_string())
-                }
+                drop(map);
+                let _ = reply_tx.send(outcome);
             };
-            let mut map = sign_ins();
-            if map.get(&plugin_name).is_some_and(|s| s.token == token) {
-                map.remove(&plugin_name);
-            }
-            drop(map);
-            let _ = reply_tx.send(outcome);
-        };
-        let _ = axum::serve(listener, router).with_graceful_shutdown(ended).await;
-    });
+            let _ = axum::serve(listener, router).with_graceful_shutdown(ended).await;
+        });
 
-    sign_ins().insert(plugin.to_string(), SignIn { token, _stop: stop_tx, reply: Some(reply) });
-    Ok(format!("http://127.0.0.1:{port}{CALLBACK_PATH}"))
-}
-
-/// Open `address` with `open` and wait for the provider's redirect to the
-/// sign-in `plugin` started. Returns the redirect's query, `error` included:
-/// what a refusal means is the plugin's to say. Any error here ends the
-/// sign-in.
-pub async fn wait<F, Fut>(plugin: &str, address: &str, open: F) -> Result<Query, String>
-where
-    F: FnOnce(String) -> Fut,
-    Fut: std::future::Future<Output = Result<(), String>>,
-{
-    let reply = sign_ins().get_mut(plugin).and_then(|s| s.reply.take()).ok_or_else(|| format!("{plugin} has no sign-in to wait on"))?;
-    let url = check_browser_address(address)?;
-    open(url.into()).await?;
-    reply.await.unwrap_or_else(|_| Err("the sign-in stopped listening".to_string()))
-}
-
-/// End `plugin`'s sign-in if it is waiting on the browser, answering whether
-/// it was. The browser tells moss nothing when its tab closes, so a press on
-/// Sign in while one waits is the person's only sign that they left it.
-pub fn end_wait(plugin: &str) -> bool {
-    let mut map = sign_ins();
-    let waiting = map.get(plugin).is_some_and(|s| s.reply.is_none());
-    if waiting {
-        map.remove(plugin);
+        locked(&self.listening).insert(plugin.to_string(), SignIn { token, _stop: stop_tx, reply: Some(reply) });
+        Ok(format!("http://127.0.0.1:{port}{CALLBACK_PATH}"))
     }
-    waiting
+
+    /// Open `address` with `open` and wait for the provider's redirect to the
+    /// sign-in `plugin` started. Returns the redirect's query, `error` included:
+    /// what a refusal means is the plugin's to say. Any error here ends the
+    /// sign-in.
+    pub async fn wait<F, Fut>(&self, plugin: &str, address: &str, open: F) -> Result<Query, String>
+    where
+        F: FnOnce(String) -> Fut,
+        Fut: std::future::Future<Output = Result<(), String>>,
+    {
+        let reply = locked(&self.listening).get_mut(plugin).and_then(|s| s.reply.take()).ok_or_else(|| format!("{plugin} has no sign-in to wait on"))?;
+        let url = check_browser_address(address)?;
+        open(url.into()).await?;
+        reply.await.unwrap_or_else(|_| Err("the sign-in stopped listening".to_string()))
+    }
+
+    /// End `plugin`'s sign-in if it is waiting on the browser, answering whether
+    /// it was. The browser tells moss nothing when its tab closes, so a press on
+    /// Sign in while one waits is the person's only sign that they left it.
+    pub fn end_wait(&self, plugin: &str) -> bool {
+        let mut map = locked(&self.listening);
+        let waiting = map.get(plugin).is_some_and(|s| s.reply.is_none());
+        if waiting {
+            map.remove(plugin);
+        }
+        waiting
+    }
+
+    /// Tell the return page how `plugin`'s login ended, once its hook has returned.
+    /// The page held back for the code's exchange; nothing is waiting if the
+    /// redirect never arrived.
+    pub fn answer(&self, plugin: &str, signed_in: bool) {
+        if let Some(tx) = locked(&self.verdicts).remove(plugin) {
+            let _ = tx.send(signed_in);
+        }
+    }
 }
 
 /// Brings moss forward: the app registers `moss` as its scheme, and a URL
@@ -311,11 +317,12 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn browser_sign_in_brings_back_the_redirect_with_a_code() {
+        let s = SignIns::default();
         install_capture();
-        let redirect = start("browser-sign-in-reply", "Threads").await.unwrap();
+        let redirect = s.start("browser-sign-in-reply", "Threads").await.unwrap();
         assert!(redirect.starts_with("http://127.0.0.1:") && redirect.ends_with("/callback"), "{redirect}");
         let (browser_tx, browser) = oneshot::channel();
-        let got = wait("browser-sign-in-reply", "https://example.com/authorize", {
+        let got = s.wait("browser-sign-in-reply", "https://example.com/authorize", {
             let redirect = redirect.clone();
             move |opened| async move {
                 assert_eq!(opened, "https://example.com/authorize");
@@ -331,7 +338,7 @@ pub(crate) mod tests {
         .await
         .unwrap();
         assert_eq!(got, vec![("code".into(), "abc".into()), ("state".into(), "s 1".into())]);
-        answer("browser-sign-in-reply", true);
+        s.answer("browser-sign-in-reply", true);
         let (wrong_path, no_code, (status, body)) = browser.await.unwrap().await.unwrap();
         assert_eq!((wrong_path, no_code, status), (404, 404, 200), "only a /callback with a code or an error is answered");
         assert!(body.contains("<h1>Signed in to Threads</h1>") && body.contains("href=\"moss://\""), "{body}");
@@ -360,12 +367,13 @@ pub(crate) mod tests {
 
     /// The browser's request for `plugin`'s redirect, with the login hook's verdict (if any) given after the wait returns.
     async fn return_body(plugin: &str, query: &'static str, verdict: Option<bool>, bound: Duration) -> String {
-        let redirect = start_bounded(plugin, "Threads", bound).await.unwrap();
+        let s = SignIns::default();
+        let redirect = s.start_bounded(plugin, "Threads", bound).await.unwrap();
         let browser = tokio::spawn(async move { get(&format!("{redirect}?{query}")).await.1 });
         let plugin_owned = plugin.to_string();
-        wait(plugin, "https://example.com/", |_| async { Ok(()) }).await.unwrap();
+        s.wait(plugin, "https://example.com/", |_| async { Ok(()) }).await.unwrap();
         if let Some(signed_in) = verdict {
-            answer(&plugin_owned, signed_in);
+            s.answer(&plugin_owned, signed_in);
         }
         browser.await.unwrap()
     }
@@ -394,9 +402,10 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn a_redirect_with_an_error_is_logged_as_one() {
+        let s = SignIns::default();
         install_capture();
-        let redirect = start("browser-sign-in-denied", "Threads").await.unwrap();
-        let got = wait("browser-sign-in-denied", "https://example.com/", move |_| async move {
+        let redirect = s.start("browser-sign-in-denied", "Threads").await.unwrap();
+        let got = s.wait("browser-sign-in-denied", "https://example.com/", move |_| async move {
             tokio::spawn(async move { get(&format!("{redirect}?error=access_denied")).await });
             Ok(())
         })
@@ -408,12 +417,18 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn browser_sign_in_ends_at_a_refused_address() {
+        let s = SignIns::default();
         install_capture();
-        let redirect = start("browser-sign-in-refused", "Threads").await.unwrap();
-        let refused = wait("browser-sign-in-refused", "file:///etc/passwd", |_| async { panic!("must not open") }).await;
+        let redirect = s.start("browser-sign-in-refused", "Threads").await.unwrap();
+        let refused = s.wait("browser-sign-in-refused", "file:///etc/passwd", |_| async { panic!("must not open") }).await;
         assert!(refused.is_err());
         assert!(stops_listening(&redirect).await, "no listener may be left up");
         assert_eq!(logged_count(log::Level::Info, "browser-sign-in-refused: the sign-in stopped waiting before its redirect arrived"), 1);
+    }
+
+    fn waiting_on(s: &SignIns, plugin: &'static str) -> tokio::task::JoinHandle<Result<Query, String>> {
+        let s = s.clone();
+        tokio::spawn(async move { s.wait(plugin, "https://example.com/", |_| async { Ok(()) }).await })
     }
 
     async fn soon(waiting: tokio::task::JoinHandle<Result<Query, String>>) -> Result<Query, String> {
@@ -422,12 +437,13 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn browser_sign_in_cancel_ends_the_wait() {
+        let s = SignIns::default();
         install_capture();
-        start("browser-sign-in-cancel", "Threads").await.unwrap();
-        assert!(!end_wait("browser-sign-in-cancel"), "a sign-in not yet in the browser is not ended");
-        let waiting = tokio::spawn(wait("browser-sign-in-cancel", "https://example.com/", |_| async { Ok(()) }));
+        s.start("browser-sign-in-cancel", "Threads").await.unwrap();
+        assert!(!s.end_wait("browser-sign-in-cancel"), "a sign-in not yet in the browser is not ended");
+        let waiting = waiting_on(&s, "browser-sign-in-cancel");
         tokio::time::sleep(Duration::from_millis(50)).await;
-        assert!(end_wait("browser-sign-in-cancel"));
+        assert!(s.end_wait("browser-sign-in-cancel"));
         assert_eq!(soon(waiting).await, Err(CANCELLED.to_string()));
         assert_eq!(logged_count(log::Level::Info, "browser-sign-in-cancel: the sign-in ended before its redirect arrived"), 1);
     }
@@ -436,16 +452,17 @@ pub(crate) mod tests {
     /// comes from the second one's listener.
     #[tokio::test]
     async fn browser_sign_in_started_again_replaces_the_first() {
-        let first = start("browser-sign-in-again", "Threads").await.unwrap();
-        let waiting = tokio::spawn(wait("browser-sign-in-again", "https://example.com/", |_| async { Ok(()) }));
+        let s = SignIns::default();
+        let first = s.start("browser-sign-in-again", "Threads").await.unwrap();
+        let waiting = waiting_on(&s, "browser-sign-in-again");
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let second = start("browser-sign-in-again", "Threads").await.unwrap();
+        let second = s.start("browser-sign-in-again", "Threads").await.unwrap();
         assert_eq!(soon(waiting).await, Err(CANCELLED.to_string()));
         assert!(stops_listening(&first).await);
 
-        let third = start("browser-sign-in-again", "Threads").await.unwrap();
+        let third = s.start("browser-sign-in-again", "Threads").await.unwrap();
         assert!(stops_listening(&second).await, "a started sign-in nobody waited on ends too");
-        let got = wait("browser-sign-in-again", "https://example.com/", move |_| async move {
+        let got = s.wait("browser-sign-in-again", "https://example.com/", move |_| async move {
             tokio::spawn(async move { get(&format!("{third}?code=c3")).await });
             Ok(())
         })
@@ -458,11 +475,12 @@ pub(crate) mod tests {
     /// sign-in is gone afterwards.
     #[tokio::test(start_paused = true)]
     async fn browser_sign_in_stops_at_the_limit() {
+        let s = SignIns::default();
         install_capture();
-        start("browser-sign-in-limit", "Threads").await.unwrap();
-        let outcome = tokio::time::timeout(SIGN_IN_LIMIT * 2, wait("browser-sign-in-limit", "https://example.com/", |_| async { Ok(()) })).await;
+        s.start("browser-sign-in-limit", "Threads").await.unwrap();
+        let outcome = tokio::time::timeout(SIGN_IN_LIMIT * 2, s.wait("browser-sign-in-limit", "https://example.com/", |_| async { Ok(()) })).await;
         assert_eq!(outcome, Ok(Err(TOO_LONG.to_string())));
-        assert!(!sign_ins().contains_key("browser-sign-in-limit"));
+        assert!(!locked(&s.listening).contains_key("browser-sign-in-limit"));
         assert_eq!(logged_count(log::Level::Warn, "browser-sign-in-limit: no sign-in redirect arrived in ten minutes"), 1);
     }
 }

@@ -346,7 +346,7 @@ impl PluginManager {
         // its code may catch the cancellation and keep waiting. The engine's
         // answer to the cancel must reach the old run, and its teardown (which
         // closes the panel) must finish, before the new run registers.
-        if crate::plugins::runtime::browser_sign_in::end_wait(name) {
+        if self.host.state.hooks.sign_ins.end_wait(name) {
             self.engine.cancel_hook(name, "login");
             self.host.state.hooks.in_flight_hooks.settled(&super::singleflight_key(name, "login", super::AskedBy::Person)).await;
         }
@@ -476,20 +476,27 @@ mod tests {
         assert_eq!(account_binding(&project, "social"), None);
     }
 
+    /// Two folders signing in to the same channel at once: each browser's
+    /// return page says how its own folder's login ended.
     #[tokio::test]
     async fn the_browsers_return_page_says_how_the_login_ended() {
-        use crate::plugins::runtime::browser_sign_in::{start, tests::get};
-        for (login, expected) in [
-            (r#"return { status: "completed", account: { id: "did:plc:1" } };"#, "Signed in to X"),
-            (r#"return { status: "failed", message: "no" };"#, "didn\u{2019}t finish"),
-        ] {
-            let (_dir, project) = folder_with_channel(login);
-            let redirect = start("social", "X").await.unwrap();
-            let browser = tokio::spawn(async move { get(&format!("{redirect}?code=c&state=s")).await.1 });
-            let _ = try_sign_in(&project).await;
-            let body = browser.await.unwrap();
-            assert!(body.contains(expected), "{expected}: {body}");
+        use crate::plugins::runtime::browser_sign_in::tests::get;
+        let (_ok_dir, ok) = folder_with_channel(r#"return { status: "completed", account: { id: "did:plc:1" } };"#);
+        let (_failed_dir, failed) = folder_with_channel(r#"return { status: "failed", message: "no" };"#);
+        let headless = |project: &str| PluginManager::new(project, AdapterHost::headless(crate::build::ports::reporter::discard_owned())).unwrap();
+        let (ok_manager, failed_manager) = (headless(&ok), headless(&failed));
+        let mut browsers = Vec::new();
+        for manager in [&ok_manager, &failed_manager] {
+            let redirect = manager.host.state.hooks.sign_ins.start("social", "X").await.unwrap();
+            browsers.push(tokio::spawn(async move { get(&format!("{redirect}?code=c&state=s")).await.1 }));
         }
+        let social = |manager: &PluginManager| manager.plugins().into_iter().find(|p| p.manifest.name == "social").unwrap();
+        let (ok_plugin, failed_plugin) = (social(&ok_manager), social(&failed_manager));
+        let (ok_context, failed_context) = (context(&ok), context(&failed));
+        let _ = tokio::join!(ok_manager.sign_in(&ok_plugin, &ok_context), failed_manager.sign_in(&failed_plugin, &failed_context));
+        let [signed_in, not] = [browsers.remove(0).await.unwrap(), browsers.remove(0).await.unwrap()];
+        assert!(signed_in.contains("Signed in to X"), "{signed_in}");
+        assert!(not.contains("didn\u{2019}t finish"), "{not}");
     }
 
     #[tokio::test]

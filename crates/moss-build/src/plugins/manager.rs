@@ -931,7 +931,7 @@ impl PluginManager {
             matches!(&result, Ok((_, returned)) if matches!(LoginOutcome::from_returned(returned.as_ref()), LoginOutcome::Completed(_) | LoginOutcome::Unsaid))
         };
         if is_login {
-            crate::plugins::runtime::browser_sign_in::answer(&plugin.manifest.name, signed_in);
+            hook_state.sign_ins.answer(&plugin.manifest.name, signed_in);
         }
 
         // A page left open waits on nobody once its hook is over. A sign-in's
