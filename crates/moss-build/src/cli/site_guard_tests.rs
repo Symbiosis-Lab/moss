@@ -216,3 +216,54 @@ fn restore_never_replaces_a_moss_that_arrived() {
     assert!(tmp.path().join(".moss 2/cache").is_dir());
     assert!(restore_moss_copy(tmp.path(), "pages").is_err(), "not a copy");
 }
+
+fn tree(root: &Path, depth: usize) -> std::path::PathBuf {
+    let deep = (0..depth).fold(root.to_path_buf(), |p, i| p.join(format!("level-{i}")));
+    std::fs::create_dir_all(&deep).unwrap();
+    deep
+}
+
+#[test]
+fn the_command_line_builds_a_folder_deeper_than_the_apps_scan_reaches() {
+    let tmp = tempfile::tempdir().unwrap();
+    tree(tmp.path(), default_limits().max_depth + 1);
+    guard_cli_open_in(&tmp.path().to_string_lossy(), "build", None).unwrap();
+}
+
+#[test]
+fn the_command_line_builds_a_folder_wider_than_the_apps_scan_reaches() {
+    let tmp = tempfile::tempdir().unwrap();
+    for i in 0..=default_limits().max_dirs {
+        std::fs::create_dir(tmp.path().join(format!("f{i}"))).unwrap();
+    }
+    guard_cli_open_in(&tmp.path().to_string_lossy(), "build", None).unwrap();
+}
+
+#[test]
+fn the_command_line_still_refuses_a_site_nested_below_the_apps_reach() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(tree(tmp.path(), 8).join(".moss")).unwrap();
+    let refusal = guard_cli_open_in(&tmp.path().to_string_lossy(), "build", None).unwrap_err();
+    assert!(refusal.contains("level-7"), "{refusal}");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_folder_is_refused_with_a_step_that_works() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let locked = tmp.path().join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    // Restored on drop, so a failing assertion cannot leave a 000 folder the tempdir cannot remove.
+    struct Unlock(std::path::PathBuf);
+    impl Drop for Unlock {
+        fn drop(&mut self) {
+            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let _unlock = Unlock(locked.clone());
+    let refusal = guard_cli_open_in(&tmp.path().to_string_lossy(), "build", None).unwrap_err();
+    assert!(refusal.contains("could not read every folder"), "{refusal}");
+    assert!(!refusal.contains("on the site folder itself"), "{refusal}");
+}
