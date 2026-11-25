@@ -78,7 +78,7 @@ pub struct LastSeal {
     manifest: Option<crate::types::content::SiteHashes>,
     moss: crate::build::inputs::Measured,
     completes: bool,
-    problems_at_entry: usize,
+    problems_at_entry: crate::build::cli_output::ProblemMark,
 }
 
 impl LastSeal {
@@ -88,7 +88,7 @@ impl LastSeal {
     pub fn read(folder: &Path, options: std::collections::BTreeMap<String, String>, completes: bool) -> Self {
         let _trace = crate::build::phase::PhaseTrace::start("seal_read");
         let manifest = crate::ops::watch::sweep::walk::read_baseline_from_disk(folder);
-        let problems_at_entry = crate::build::cli_output::problems_counted();
+        let problems_at_entry = crate::build::cli_output::problem_mark();
         let mut seal = Self { manifest, moss: Default::default(), completes, problems_at_entry };
         seal.remeasure(folder, options);
         seal
@@ -108,8 +108,8 @@ impl LastSeal {
         self.moss.record.clone()
     }
 
-    /// The process's problem count when this build began.
-    pub(crate) fn problems_at_entry(&self) -> usize {
+    /// Where the process's problems stood when this build began.
+    pub(crate) fn problems_at_entry(&self) -> crate::build::cli_output::ProblemMark {
         self.problems_at_entry
     }
 
@@ -416,8 +416,12 @@ pub(super) async fn stop_at_entry(config: &PipelineConfig, pass: Pass, seal: &mu
     hand_over(config, pass, seal, port).await.ok_or(AtEntry::Build { comments_refreshed: false })
 }
 
-/// What a build that ended at its entry reports: the generation it kept.
-fn unchanged_at_entry(config: &PipelineConfig, port: Option<u16>) -> PassOutcome {
+/// What a build that ended at its entry reports: the generation it kept, and
+/// the problems its seal reported, again.
+fn unchanged_at_entry(config: &PipelineConfig, port: Option<u16>, problems: &[String]) -> PassOutcome {
+    for line in problems {
+        crate::build::cli_output::cli_warn!("{line}");
+    }
     crate::build::phase::record_value("unchanged_at_entry", 1);
     PassOutcome { message: format!("Unchanged since the last build.\n{}", super::generated_message(config, port)), owed: false, is_empty: false, port }
 }
@@ -440,7 +444,8 @@ async fn hand_over(config: &PipelineConfig, pass: Pass, seal: &LastSeal, port: O
     let folder = config.root.as_str();
     let records = crate::system::build_records::records();
     records.record_content_hashes(folder, manifest.clone());
-    records.install_kept_seal(folder, manifest.build_inputs.as_ref()?.evidence.as_ref()?);
+    let inputs = manifest.build_inputs.as_ref()?;
+    records.install_kept_seal(folder, inputs.evidence.as_ref()?);
     let removed = backfill::removed_for_seal(&paths, manifest);
     records.record_removed_addresses(folder, removed.clone());
     let verdict = backfill::for_seal(&paths, Some(manifest)).await;
@@ -457,7 +462,7 @@ async fn hand_over(config: &PipelineConfig, pass: Pass, seal: &LastSeal, port: O
         }
         super::emit_build_complete(&config.progress, port, false, None);
     }
-    Some(unchanged_at_entry(config, port))
+    Some(unchanged_at_entry(config, port, &inputs.problems))
 }
 
 /// The passes a stopped build still owes the site, since they read from

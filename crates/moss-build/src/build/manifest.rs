@@ -172,8 +172,8 @@ pub struct PendingManifest {
     never_made: std::collections::BTreeSet<String>,
     /// Whether a page this build rendered is restricted to members.
     restricts_pages: bool,
-    /// The process's problem count when this build began; see [`SealedManifest::note_warned`].
-    problems_at_entry: usize,
+    /// Where the process's problems stood when this build began; see [`SealedManifest::note_problems`].
+    problems_at_entry: crate::build::cli_output::ProblemMark,
     /// Redirect stub output → the page it forwards to, for each old address of
     /// one of the author's pages.
     page_stubs: std::collections::BTreeMap<String, String>,
@@ -403,7 +403,7 @@ impl PendingManifest {
             preview_embeds: std::collections::BTreeMap::new(),
             preview_uses_places: false,
             restricts_pages: false,
-            problems_at_entry: 0,
+            problems_at_entry: Default::default(),
             page_stubs: Default::default(),
             waiting_link_cards: Default::default(),
             preview_originals: std::collections::BTreeMap::new(),
@@ -729,7 +729,7 @@ impl PendingManifest {
         &mut self,
         inputs: Option<crate::build::inputs::BuildInputs>,
         carried_env: Option<std::collections::BTreeMap<String, String>>,
-        problems_at_entry: usize,
+        problems_at_entry: crate::build::cli_output::ProblemMark,
     ) {
         self.problems_at_entry = problems_at_entry;
         self.inner.build_inputs = inputs.map(|mut inputs| {
@@ -1114,7 +1114,7 @@ pub struct SealedManifest {
     preview_uses_places: bool,
     preview_originals: std::collections::BTreeMap<String, Option<String>>,
     restricts_pages: bool,
-    problems_at_entry: usize,
+    problems_at_entry: crate::build::cli_output::ProblemMark,
     page_stubs: std::collections::BTreeMap<String, String>,
     waiting_link_cards: std::collections::BTreeSet<String>,
     blocking_keys: HashSet<String>,
@@ -1415,10 +1415,12 @@ impl SealedManifest {
         }
     }
 
-    /// See [`BuildInputs::warned`](crate::build::inputs::BuildInputs::warned).
-    pub(crate) fn note_warned(&mut self) {
+    /// See [`BuildInputs::problems`](crate::build::inputs::BuildInputs::problems).
+    pub(crate) fn note_problems(&mut self) {
         if let Some(inputs) = self.inner.build_inputs.as_mut() {
-            inputs.warned = crate::build::cli_output::problems_counted() > self.problems_at_entry;
+            let since = crate::build::cli_output::problems_since(self.problems_at_entry);
+            inputs.warned = since.is_none();
+            inputs.problems = since.unwrap_or_default();
         }
     }
 
@@ -1445,7 +1447,7 @@ impl SealedManifest {
             preview_uses_places: false,
             preview_originals: Default::default(),
             restricts_pages: evidence.restricts_pages,
-            problems_at_entry: 0,
+            problems_at_entry: Default::default(),
             page_stubs: Default::default(),
             waiting_link_cards: Default::default(),
             blocking_keys: Default::default(),

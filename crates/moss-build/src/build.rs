@@ -2176,7 +2176,7 @@ async fn advertise_sealed(
     // tail leaves before this write, so the write that stands is the newest
     // sealed render's.
     sealed.set_media_settled(crate::build::inputs::media_settled(previous_hashes.as_ref(), sealed.site_hashes_view()));
-    sealed.note_warned();
+    sealed.note_problems();
     sealed.set_evidence(evidence.filter(|_| unfulfilled.is_empty()).map(|evidence| crate::build::inputs::SealEvidence { kept, ..evidence }));
     if verdict == crate::build::ship::ShipVerdict::Ship {
         if let Err(e) = crate::phase!("seal_write", { sealed.write_to_disk(hashes_path) }) {

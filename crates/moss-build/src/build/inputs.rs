@@ -72,11 +72,14 @@ pub struct BuildInputs {
     /// their bytes; see [`generations_hold`].
     #[serde(default)]
     pub generations: Option<BTreeMap<String, String>>,
-    /// Whether the build reported a problem before it sealed. A build that
-    /// ends at its entry reports none, so only a seal that reported none
-    /// may be kept that way.
+    /// Whether the build reported a problem it cannot print again, so the
+    /// next build must render to report it.
     #[serde(default)]
     pub warned: bool,
+    /// The problem lines the build printed before it sealed, which a build
+    /// that ends at its entry prints again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub problems: Vec<String>,
 }
 
 /// [`BuildInputs::evidence`]: the lasting refusals and report lines of a seal

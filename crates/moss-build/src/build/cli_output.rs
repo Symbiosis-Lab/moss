@@ -72,9 +72,10 @@ pub fn eprint_status_line(args: std::fmt::Arguments<'_>) {
     // A problem is `note_cli_problem()` followed by its line on the same thread,
     // so this is the one place the problem's text is at hand.
     if PENDING_PROBLEM.with(|p| p.take()) {
-        let first_time = with_reported(|r| {
-            // Bounded: a long-lived host that never drains the count must not grow it forever.
-            r.len() >= 1000 || r.insert(args.to_string())
+        let line = args.to_string();
+        let first_time = with_printed(|p| {
+            let since_take = p.total - p.taken;
+            since_take > p.lines.len() || !p.lines.iter().skip(p.lines.len() - since_take).any(|l| *l == line)
         });
         if quiet_now() {
             // Held problem, not yet counted: a repeat of one already shown is dropped,
@@ -84,6 +85,13 @@ pub fn eprint_status_line(args: std::fmt::Arguments<'_>) {
             }
             with_problem_count(|n| n[0].fetch_add(1, Ordering::Relaxed));
         }
+        with_printed(|p| {
+            p.total += 1;
+            if p.lines.len() == PRINTED_KEPT {
+                p.lines.pop_front();
+            }
+            p.lines.push_back(line);
+        });
     } else if quiet_now() {
         return;
     }
@@ -93,27 +101,6 @@ pub fn eprint_status_line(args: std::fmt::Arguments<'_>) {
 thread_local! {
     /// A problem was noted on this thread and its line has not been printed yet.
     static PENDING_PROBLEM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// The text of every problem line printed since the count was last taken.
-/// Process-wide, because the passes of a build run their problems on different
-/// threads; per thread under test, for the reason `CLI_PROBLEMS` is.
-#[cfg(not(test))]
-static REPORTED: std::sync::Mutex<Option<std::collections::HashSet<String>>> = std::sync::Mutex::new(None);
-
-#[cfg(test)]
-thread_local! {
-    static REPORTED: std::cell::RefCell<std::collections::HashSet<String>> = Default::default();
-}
-
-fn with_reported<R>(f: impl FnOnce(&mut std::collections::HashSet<String>) -> R) -> R {
-    #[cfg(not(test))]
-    {
-        let mut guard = REPORTED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        f(guard.get_or_insert_with(Default::default))
-    }
-    #[cfg(test)]
-    REPORTED.with(|r| f(&mut r.borrow_mut()))
 }
 
 #[cfg(not(test))]
@@ -264,15 +251,62 @@ pub fn note_cli_problem() {
     with_problem_count(|n| n[0].fetch_add(1, Ordering::Relaxed));
 }
 
-/// Every problem this process has counted.
-pub(crate) fn problems_counted() -> usize {
-    with_problem_count(|n| n[0].load(Ordering::Relaxed))
+/// The problem lines this process has printed: how many, how many when the
+/// count was last taken, and the last [`PRINTED_KEPT`] of them. Under
+/// `quiet` a line already printed since the take is dropped; a build that
+/// ends at its entry prints its seal's again. Process-wide, because the
+/// passes of a build print their problems on different threads; per thread
+/// under test, for the reason `CLI_PROBLEMS` is.
+struct Printed {
+    total: usize,
+    taken: usize,
+    lines: std::collections::VecDeque<String>,
+}
+const PRINTED_KEPT: usize = 1000;
+const NONE_PRINTED: Printed = Printed { total: 0, taken: 0, lines: std::collections::VecDeque::new() };
+
+#[cfg(not(test))]
+static PRINTED: std::sync::Mutex<Printed> = std::sync::Mutex::new(NONE_PRINTED);
+
+#[cfg(test)]
+thread_local! {
+    static PRINTED: std::cell::RefCell<Printed> = const { std::cell::RefCell::new(NONE_PRINTED) };
+}
+
+fn with_printed<R>(f: impl FnOnce(&mut Printed) -> R) -> R {
+    #[cfg(not(test))]
+    return f(&mut PRINTED.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+    #[cfg(test)]
+    PRINTED.with(|p| f(&mut p.borrow_mut()))
+}
+
+/// Where the problem count and the printed problem lines stood when a build
+/// began.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ProblemMark {
+    counted: usize,
+    printed: usize,
+}
+
+pub(crate) fn problem_mark() -> ProblemMark {
+    ProblemMark { counted: with_problem_count(|n| n[0].load(Ordering::Relaxed)), printed: with_printed(|p| p.total) }
+}
+
+/// The problem lines printed since `mark`; `None` when a problem counted
+/// since cannot be printed again, because its line went to a host's own
+/// logger or fell out of the kept window.
+pub(crate) fn problems_since(mark: ProblemMark) -> Option<Vec<String>> {
+    let counted = with_problem_count(|n| n[0].load(Ordering::Relaxed)) - mark.counted;
+    with_printed(|p| {
+        let printed = p.total - mark.printed;
+        (printed == counted && printed <= p.lines.len()).then(|| p.lines.iter().skip(p.lines.len() - printed).cloned().collect())
+    })
 }
 
 /// The problems counted since the last take, which moves the mark: each build
 /// (and each `--watch` rebuild) reports only its own.
 pub fn take_cli_problems() -> usize {
-    with_reported(|r| r.clear());
+    with_printed(|p| p.taken = p.total);
     with_problem_count(|n| {
         let now = n[0].load(Ordering::Relaxed);
         now.saturating_sub(n[1].fetch_max(now, Ordering::Relaxed))
