@@ -2311,6 +2311,7 @@ pub(crate) fn collect_build_store(
     }
     store_gc::maybe_gc_cache(mp);
     crate::infra::folder_lock::spawn_litter_sweep();
+    crate::infra::folder_store::collect_gone();
 }
 
 

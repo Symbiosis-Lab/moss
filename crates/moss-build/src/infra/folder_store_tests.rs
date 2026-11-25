@@ -287,6 +287,41 @@ fn the_collector_removes_a_gone_folders_stores_and_keeps_the_rest() {
 }
 
 #[test]
+fn a_disk_short_of_room_takes_gone_stores_before_their_grace_longest_unused_first() {
+    let w = World::new();
+    let stores = w.stores(volume_a);
+    let (a, b, kept) = (w.folder("a"), w.folder("b"), w.folder("kept"));
+    let [a_store, b_store, kept_store] = [&a, &b, &kept].map(|f| stores.resolve(f).unwrap());
+    for store in [&a_store, &b_store, &kept_store] {
+        mark(store);
+    }
+    // The store the listing gives last is the one unused longest, so the order
+    // cannot come from the listing.
+    let listed: Vec<_> = std::fs::read_dir(&stores.record_root).unwrap().flatten().map(|e| e.path()).collect();
+    let (older, newer) = if listed.iter().position(|p| *p == a_store.record_dir) > listed.iter().position(|p| *p == b_store.record_dir) {
+        (&a_store, &b_store)
+    } else {
+        (&b_store, &a_store)
+    };
+    let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    std::fs::File::open(older.record_dir.join(RECORD)).unwrap().set_modified(hour_ago).unwrap();
+    std::fs::remove_dir_all(&a).unwrap();
+    std::fs::remove_dir_all(&b).unwrap();
+    let grace = std::time::Duration::from_secs(30 * 24 * 3600);
+
+    assert_eq!(stores.collect_within(grace, &|| false).unwrap(), 0, "with room, a gone store waits out its grace");
+    let room_after = std::cell::Cell::new(1u32);
+    let short = || room_after.replace(room_after.get().saturating_sub(1)) > 0;
+    assert_eq!(stores.collect_within(grace, &short).unwrap(), 1, "the sweep stops once there is room");
+    assert!(!older.cache_dir.exists(), "the store unused longest goes first");
+    assert!(marked(newer));
+
+    assert_eq!(stores.collect_within(grace, &|| true).unwrap(), 1);
+    assert!(!newer.cache_dir.exists());
+    assert!(marked(&kept_store), "a folder that is still there keeps its store however short the disk");
+}
+
+#[test]
 fn a_cache_written_for_a_folder_that_never_came_goes_after_a_day() {
     let w = World::new();
     let stores = w.stores(volume_a);
