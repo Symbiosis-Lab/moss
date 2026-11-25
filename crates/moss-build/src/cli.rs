@@ -6,7 +6,7 @@ pub mod agents;
 // table. Every input was already here or in moss-core; only the binary's
 // version is not, so `run` takes it from the caller.
 pub mod describe;
-// The command table + `<cmd> --help`, read by both binaries.
+// The command table, `<cmd> --help` and the verb dispatch table, read by both binaries.
 pub mod commands;
 // `doctor` and `list` read a vault and print — no window, no app state, no
 // network. Both already called nothing but moss-build (`vault_root`,

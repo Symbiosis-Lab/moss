@@ -417,6 +417,53 @@ pub fn top_level_help(version: &str, answers: &dyn Fn(&str) -> bool) -> String {
     text
 }
 
+// ---- the verbs both binaries dispatch by name ----
+//
+// Each binary keeps only its own arms (`build`, `preview`, `edit`, `desktop`,
+// and the app's `deploy`, matched before this table) and looks every other
+// verb up here, so moss and the app cannot answer different sets.
+
+pub type Run = fn(&[String]) -> i32;
+
+const VERBS: &[(&str, Run)] = &[
+    ("sessions", crate::ops::serve::ui::sessions::run),
+    ("guide", super::guide::run),
+    ("agents", super::agents::run),
+    ("list", super::list::run),
+    ("doctor", super::doctor::run),
+    ("migrate", super::doctor::migrate::run),
+    ("render", super::render::run),
+    ("root", super::root::run),
+    ("plugin", crate::plugins::install::hash_cli::run),
+    // The caller seeds its own version before dispatch; moss-build's would be wrong.
+    ("describe", |args| super::describe::run(args, crate::system::app_version())),
+    ("env", super::env::run),
+    ("tools", super::tools::run),
+    ("domain", super::domain::run),
+    ("provider", super::provider::run),
+    ("site", super::site::run),
+    ("map", super::map::run),
+    ("import", super::import::run),
+    ("deploy", super::deploy::run),
+    ("rename", super::rename::run),
+    ("mv", super::rename::run),
+    ("new", super::new::run),
+    ("expand", super::expand::run),
+    ("fetch", crate::build::cloud_readiness::fetch::run),
+    ("sync", crate::build::process_hooks::sync),
+    ("history", crate::deploy::history::cli::run),
+    ("comments", crate::build::features::comment::cli::run),
+    ("data", crate::vault::read_back::cli::run),
+];
+
+pub fn verb(verb: &str) -> Option<Run> {
+    VERBS.iter().find(|(name, _)| *name == verb).map(|(_, run)| *run)
+}
+
+pub fn verb_names() -> impl Iterator<Item = &'static str> {
+    VERBS.iter().map(|(name, _)| *name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
