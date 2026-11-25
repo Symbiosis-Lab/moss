@@ -48,7 +48,7 @@ function fullyParsed(state: EditorState): EditorState {
 function stateFor(doc: string, cursor = 0): EditorState {
   return fullyParsed(EditorState.create({
     doc, selection: { anchor: cursor },
-    extensions: [markdown({ extensions: [shortcodeBlockConfig] })],
+    extensions: [markdown({ extensions: [shortcodeBlockConfig] }), shortcodeBlockExtension()],
   }));
 }
 

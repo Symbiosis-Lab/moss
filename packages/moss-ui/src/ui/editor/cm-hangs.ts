@@ -4,6 +4,7 @@
 
 import type { EditorState } from '@codemirror/state';
 import { syntaxTree } from '@codemirror/language';
+import { shortcodeFences } from '@symbiosis-lab/moss-syntax/cm6';
 
 // ── What is a hang ───────────────────────────────────────────────────────
 //
@@ -21,8 +22,8 @@ export interface Hang {
   from: number;
   to: number;
   atomFrom: number;
-  /** What the indicator says about its line, and how deep: a heading's `#` count, a quote's `>` count. */
-  kind: 'heading' | 'quote';
+  /** What the indicator says about its line, and how deep: a heading's `#` count, a quote's `>` count, a paired fence's nesting depth. */
+  kind: 'heading' | 'quote' | 'fence-open' | 'fence-close';
   level: number;
 }
 
@@ -36,8 +37,9 @@ const isHeading = (name: string): boolean => /^ATXHeading[1-6]$/.test(name);
  * it starts exactly where the previous one on that line ended, which
  * `iterate`'s top-down visit guarantees lands in nesting order. A heading inside
  * a quote (`> ## x`) is a second hang on the same line, after the quote's.
- * Nothing else hangs: a list marker, a fence or a footnote definition stays in
- * the text column. `from`/`to` must be line boundaries.
+ * A paired `:::` fence hangs too: an opening fence's colons, a closing fence
+ * whole (an unpaired one stays text). Nothing else hangs: a list marker or a
+ * footnote definition stays in the text column. `from`/`to` must be line boundaries.
  */
 export function hangsIn(state: EditorState, from: number, to: number): Hang[] {
   const out: Hang[] = [];
@@ -70,6 +72,13 @@ export function hangsIn(state: EditorState, from: number, to: number): Hang[] {
       }
     },
   });
+  const fences = shortcodeFences(state);
+  let lo = 0, hi = fences.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (fences[mid].from < from) lo = mid + 1; else hi = mid; }
+  for (; lo < fences.length && fences[lo].from <= to; lo++) {
+    const f = fences[lo];
+    span(f.from, f.to, f.role === 'open' ? 'fence-open' : 'fence-close', f.depth);
+  }
   for (const run of runs.values()) span(run.from, run.to, 'quote', (state.doc.sliceString(run.from, run.to).match(/>/g) ?? []).length);
   return out.sort((a, b) => a.from - b.from);
 }

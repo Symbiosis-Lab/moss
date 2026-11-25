@@ -1,24 +1,16 @@
 /**
- * Block-decoration StateField for shortcode blocks. Reads the SYNCHRONOUS Lezer
- * syntax tree and pairs Open↔Close fence markers with a stack, so
- * positions are always current for tr.state — no stale offsets, no glitches.
+ * Block-decoration StateField for shortcode blocks: pairs Open↔Close fence
+ * markers from the synchronous Lezer tree and decorates them. The document alone
+ * decides how a block renders, never the caret. The colons of a paired opening
+ * fence and the whole closing fence hang into the margin (see `shortcodeFences`).
  *
- * The document alone decides how a block renders, never the caret: every
- * fence is shown as source and token-highlighted; body lines are tinted;
- * nothing hangs into the margin. Editing a line ABOVE the block
- * does not change anything below it — there is nothing caret-driven left to
- * toggle.
- *
- * Large-doc caveat: syntaxTree(state) may be incomplete past the viewport for
- * very long docs. The parse worker extends the tree via effect-only
- * transactions; the field rebuilds on that advance (see `treeAdvanced`), so
- * late-parsed blocks decorate as soon as the parse reaches them. We do not
- * assert whole-doc completeness at any single point in time.
+ * On a long document the tree can stop short of the end; the field rebuilds when
+ * the parse advances (`treeAdvanced`), so late blocks decorate once it reaches them.
  */
 
 import { EditorView, Decoration, WidgetType } from '@codemirror/view';
 import type { DecorationSet } from '@codemirror/view';
-import { EditorState, StateField, RangeSetBuilder, type Extension, type Transaction } from '@codemirror/state';
+import { EditorState, Facet, StateField, RangeSetBuilder, type Extension, type Transaction } from '@codemirror/state';
 import { syntaxTree } from '@codemirror/language';
 import { SHORTCODE_OPEN_RE, isOpenMatch, parseAttrKvSpans } from '../shortcode.js';
 
@@ -51,17 +43,34 @@ export interface ShortcodeBlockInfo {
   children: ShortcodeBlockInfo[]; // nested blocks (e.g. `::::buttons` in `:::grid`)
 }
 
+/** The margin run of a paired fence: an opening fence's colons, a closing fence whole. `depth` is the nesting depth (1 outermost). */
+export interface ShortcodeFence {
+  from: number;
+  to: number;
+  role: 'open' | 'close';
+  depth: number;
+}
+
+type Tree = ReturnType<typeof syntaxTree>;
+
+interface ShortcodePairs {
+  blocks: ShortcodeBlockInfo[];
+  /** Document order. */
+  fences: ShortcodeFence[];
+}
+
 /**
- * Pair Open↔Close fence markers with a plain stack: a close pops the innermost open. Returns the TOP-LEVEL
- * blocks; each carries its nested `children` so the decoration layer can render
- * `::::buttons` inside `:::grid` instead of leaking the inner fences as raw
- * text. (Nesting parity with the Rust extractor — see cm-shortcode-scanner.)
+ * Pair Open↔Close fence markers with a plain stack: a close pops the innermost
+ * open, whatever its colon count. Each block carries its nested `children`.
+ * When the tree stops short of the document, an open still waiting for its close
+ * keeps its margin run, so it does not flicker unhung when the parse reaches the close.
  */
-export function collectShortcodeBlocks(state: EditorState): ShortcodeBlockInfo[] {
-  interface OpenMarker { from: number; arity: number; name: string; attrs: string; children: ShortcodeBlockInfo[]; }
+function pairShortcodes(state: EditorState, tree: Tree): ShortcodePairs {
+  interface OpenMarker { from: number; arity: number; name: string; attrs: string; children: ShortcodeBlockInfo[]; fence: ShortcodeFence; }
   const stack: OpenMarker[] = [];
-  const out: ShortcodeBlockInfo[] = [];
-  syntaxTree(state).iterate({
+  const blocks: ShortcodeBlockInfo[] = [];
+  const fences: ShortcodeFence[] = [];
+  tree.iterate({
     enter(node) {
       if (node.name === 'ShortcodeOpenLine') {
         const lineFrom = state.doc.lineAt(node.from).from;
@@ -75,7 +84,8 @@ export function collectShortcodeBlocks(state: EditorState): ShortcodeBlockInfo[]
             else if (c.name === 'ShortcodeAttrs') attrs = state.doc.sliceString(c.from, c.to).trim();
           } while (c.nextSibling());
         }
-        stack.push({ from: lineFrom, arity, name, attrs, children: [] });
+        const fence: ShortcodeFence = { from: node.from, to: node.from + arity, role: 'open', depth: stack.length + 1 };
+        stack.push({ from: lineFrom, arity, name, attrs, children: [], fence });
       } else if (node.name === 'ShortcodeCloseLine') {
         // A bare colon line closes the innermost open block, whatever its
         // colon count; with nothing open it is ordinary text.
@@ -86,13 +96,60 @@ export function collectShortcodeBlocks(state: EditorState): ShortcodeBlockInfo[]
             closeFrom: node.from, arity: open.arity, children: open.children,
           };
           if (stack.length > 0) stack[stack.length - 1].children.push(block);
-          else out.push(block);
+          else blocks.push(block);
+          fences.push(open.fence, {
+            from: node.from, to: node.from + state.doc.sliceString(node.from, node.to).trimEnd().length, role: 'close', depth: open.fence.depth,
+          });
         }
       }
     },
   });
-  return out;
+  if (tree.length < state.doc.length) for (const open of stack) fences.push(open.fence);
+  return { blocks, fences: fences.sort((a, b) => a.from - b.from) };
 }
+
+/**
+ * True when the incremental parse extended the tree without a doc change —
+ * the parse worker's effect-only transactions on large documents. Without
+ * this trigger, blocks beyond the initially-parsed region never decorate
+ * until the next edit or cursor move (scrolling produces no transaction at
+ * all for StateFields).
+ */
+function treeAdvanced(tr: Transaction): boolean {
+  return syntaxTree(tr.state) != syntaxTree(tr.startState);
+}
+
+interface ShortcodeBlockState extends ShortcodePairs { decorations: DecorationSet }
+
+const shortcodeStringsFacet = Facet.define<Partial<ShortcodeBlockStrings>, ShortcodeBlockStrings>({
+  combine: (parts) => Object.assign({ ...DEFAULT_STRINGS }, ...parts),
+});
+
+const buildState = (state: EditorState): ShortcodeBlockState => {
+  const pairs = pairShortcodes(state, syntaxTree(state));
+  return { ...pairs, decorations: buildBlockDecorations(state, pairs.blocks, state.facet(shortcodeStringsFacet)) };
+};
+
+/** The pairing every reader of the blocks needs, rebuilt with the decorations when the document changes or the parse advances. An extension that reads it lists it; the editor's `shortcodeBlockExtension` shares it. */
+export const shortcodeBlockField = StateField.define<ShortcodeBlockState>({
+  create: buildState,
+  update(value, tr) {
+    if (!tr.docChanged && !treeAdvanced(tr)) return value;
+    return buildState(tr.state);
+  },
+  provide: (f) => EditorView.decorations.from(f, (v) => v.decorations),
+});
+
+const pairsOf = (state: EditorState): ShortcodeBlockState => state.field(shortcodeBlockField);
+
+/** The TOP-LEVEL blocks of the document as the field last paired them (needs `shortcodeBlockField` installed); each carries its nested `children`. On a long document that is only as far as the parse has reached: a command that must see every pair uses `shortcodeBlocksIn` on a forced tree. */
+export const collectShortcodeBlocks = (state: EditorState): ShortcodeBlockInfo[] => pairsOf(state).blocks;
+
+/** The top-level blocks of `tree`, paired afresh (the field's pairing stops where its tree does). */
+export const shortcodeBlocksIn = (state: EditorState, tree: Tree): ShortcodeBlockInfo[] => pairShortcodes(state, tree).blocks;
+
+/** The margin runs of every paired fence, in document order. */
+export const shortcodeFences = (state: EditorState): readonly ShortcodeFence[] => pairsOf(state).fences;
 
 /** Flatten a block tree to a document-ordered list (parent before children). */
 export function flattenBlocks(blocks: ShortcodeBlockInfo[]): ShortcodeBlockInfo[] {
@@ -186,6 +243,18 @@ export function legacyDividesCellsAt(lineFrom: number, subtree: ShortcodeBlockIn
   return innermostBlockAt(lineFrom, subtree)?.name === 'grid';
 }
 
+/** The lines of `block`'s own cell dividers (`+++`, and the old `---` in a grid), never those of a block nested in it. */
+export function ownDividerLines(state: EditorState, block: ShortcodeBlockInfo): { from: number; to: number }[] {
+  const subtree = flattenBlocks([block]);
+  const out: { from: number; to: number }[] = [];
+  for (let n = state.doc.lineAt(block.from).number + 1; n < state.doc.lineAt(block.closeFrom).number; n++) {
+    const ln = state.doc.line(n);
+    const divider = (isCellDividerLine(ln.text) && dividesCellsAt(ln.from, subtree)) || (isLegacyDividerLine(ln.text) && legacyDividesCellsAt(ln.from, subtree));
+    if (divider && innermostBlockAt(ln.from, subtree) === block) out.push({ from: ln.from, to: ln.to });
+  }
+  return out;
+}
+
 /**
  * Count the legacy `---` dividers the Rust `editor_scan` would also count:
  * only those directly in a TOP-LEVEL `:::grid` body. Exists so the dev-only
@@ -247,8 +316,8 @@ class LegacyDividerHintWidget extends WidgetType {
 // Every fence is shown as RAW SOURCE, regardless of caret — and raw is not
 // plain: the fence gets token-level syntax highlighting — delimiters muted,
 // payload styled — mirroring Obsidian's formatting/payload class split. The
-// fence characters stay in the text column, like the name and attributes after
-// them: only a heading's or quote's marker hangs into the margin.
+// colons of a paired fence hang into the margin (the editor's hang reader); the
+// name and attributes after them stay in the text column.
 const MARK_SC_DELIM = Decoration.mark({ class: 'cm-sc-delim' });         // { }
 const MARK_SC_FENCE = Decoration.mark({ class: 'cm-sc-delim' }); // ::: / +++
 const MARK_SC_NAME = Decoration.mark({ class: 'cm-sc-name' });
@@ -297,33 +366,40 @@ function addFenceLineMark(
 
 function buildBlockDecorations(
   state: EditorState,
+  blocks: ShortcodeBlockInfo[],
   strings: ShortcodeBlockStrings,
 ): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
-  for (const top of collectShortcodeBlocks(state)) {
+  const line = (kind: string, depth: number) => Decoration.line({
+    class: `cm-sc-line cm-sc-line-${kind} cm-sc-rail`,
+    attributes: { style: `--sc-depth:${depth}` },
+  });
+  for (const top of blocks) {
     const subtree = flattenBlocks([top]);
     const openByStart = new Map<number, ShortcodeBlockInfo>();
     const closeByStart = new Map<number, ShortcodeBlockInfo>();
     for (const b of subtree) { openByStart.set(b.from, b); closeByStart.set(b.closeFrom, b); }
 
+    // Lines inside n nested blocks sit beside n stacked rails; a fence line counts its own block.
+    let depth = 0;
     let pos = state.doc.lineAt(top.from).from;
     while (pos <= top.to) {
       const ln = state.doc.lineAt(pos);
       if (openByStart.has(ln.from)) {
-        builder.add(ln.from, ln.from, Decoration.line({ class: 'cm-sc-line cm-sc-line-fence' }));
+        builder.add(ln.from, ln.from, line('fence', ++depth));
         addOpenFenceTokenMarks(builder, ln);
       } else if (closeByStart.has(ln.from)) {
-        builder.add(ln.from, ln.from, Decoration.line({ class: 'cm-sc-line cm-sc-line-fence' }));
+        builder.add(ln.from, ln.from, line('fence', depth--));
         addFenceLineMark(builder, ln);
       } else if (isCellDividerLine(ln.text) && dividesCellsAt(ln.from, subtree)) {
-        builder.add(ln.from, ln.from, Decoration.line({ class: 'cm-sc-line cm-sc-line-divider' }));
+        builder.add(ln.from, ln.from, line('divider', depth));
         addFenceLineMark(builder, ln);
       } else if (isLegacyDividerLine(ln.text) && legacyDividesCellsAt(ln.from, subtree)) {
-        builder.add(ln.from, ln.from, Decoration.line({ class: 'cm-sc-line cm-sc-line-legacy-divider' }));
+        builder.add(ln.from, ln.from, line('legacy-divider', depth));
         builder.add(ln.to, ln.to,
           Decoration.widget({ widget: new LegacyDividerHintWidget(ln.from, strings), side: 1 }));
       } else {
-        builder.add(ln.from, ln.from, Decoration.line({ class: 'cm-sc-line cm-sc-line-body' }));
+        builder.add(ln.from, ln.from, line('body', depth));
       }
       if (ln.to + 1 > top.to) break;
       pos = ln.to + 1;
@@ -332,33 +408,10 @@ function buildBlockDecorations(
   return builder.finish();
 }
 
-/**
- * True when the incremental parse extended the tree without a doc change —
- * the parse worker's effect-only transactions on large documents. Without
- * this trigger, blocks beyond the initially-parsed region never decorate
- * until the next edit or cursor move (scrolling produces no transaction at
- * all for StateFields).
- */
-function treeAdvanced(tr: Transaction): boolean {
-  return syntaxTree(tr.state) != syntaxTree(tr.startState);
-}
-
-function shortcodeBlockField(opts: ShortcodeBlockOptions): StateField<DecorationSet> {
-  const strings: ShortcodeBlockStrings = { ...DEFAULT_STRINGS, ...opts.strings };
-  return StateField.define<DecorationSet>({
-    create: (state) => buildBlockDecorations(state, strings),
-    update(value, tr) {
-      if (!tr.docChanged && !treeAdvanced(tr)) return value;
-      return buildBlockDecorations(tr.state, strings);
-    },
-    provide: (f) => EditorView.decorations.from(f),
-  });
-}
-
 export interface ShortcodeBlockOptions {
   strings?: Partial<ShortcodeBlockStrings>;
 }
 
 export function shortcodeBlockExtension(opts: ShortcodeBlockOptions = {}): Extension {
-  return [shortcodeBlockField(opts)];
+  return [shortcodeStringsFacet.of(opts.strings ?? {}), shortcodeBlockField];
 }

@@ -17,6 +17,7 @@ import { isolateHistory } from '@codemirror/commands';
 import { ensureSyntaxTree, syntaxTree } from '@codemirror/language';
 import { t } from "../i18n/index";
 import { openCtxMenu, type CtxMenuEntry } from "../shared/ui/ctx-menu";
+import { flattenBlocks, ownDividerLines, shortcodeBlockField, shortcodeBlocksIn } from '@symbiosis-lab/moss-syntax/cm6';
 import { hangsOnLine, indicatorEndingAt, type Hang } from './cm-hangs';
 import type { SyntaxNode } from './cm-markdown-style';
 import { columnsOf, indentOf, itemOnLine, markerColumn, type Tree } from './cm-lists';
@@ -165,7 +166,7 @@ export function toggleBlockquote(view: EditorView): boolean {
 }
 
 export function formatKeysExtension(): Extension {
-  return [blockMoveKeymap(),
+  return [shortcodeBlockField, blockMoveKeymap(),
     // Above minimalSetup's defaultKeymap, whose Mod-i (selectParentSyntax) runs
     // first at equal precedence and almost always succeeds.
     Prec.high(keymap.of([{ key: 'Mod-i', run: (view) => formatMark(view, 'italic') }])),
@@ -345,21 +346,22 @@ const linesOf = (state: EditorState, node: SyntaxNode): Span => ({
 });
 
 /**
- * The parser gives a `:::` block's fences as siblings of the blocks between them, so
- * they are paired here as the build pairs them (a closing line closes the innermost
- * open block, whatever its colon count; an unpaired fence is an ordinary block). A
- * paired block is one item of its container, and its body is a container of its own,
- * so nothing is moved across a fence.
+ * The parser gives a `:::` block's fences as siblings of the blocks between them;
+ * the editor's one pairing (moss-syntax) says which are paired. A paired block is
+ * one item of its container, and its body is a container of its own, so nothing is
+ * moved across a fence. A fence the pairing leaves out, or one whose partner sits
+ * inside a list or quote, is an ordinary block.
  */
 function blocksOf(state: EditorState): Blocks {
   const tree = treeUpTo(state, state.doc.length);
   const kids = childrenOf(tree.topNode);
+  const at = new Map<number, number>();
+  kids.forEach((c, i) => { if (/^Shortcode(Open|Close)Line$/.test(c.name)) at.set(state.doc.lineAt(c.from).from, i); });
   const closeOf = new Map<number, number>();
-  const open: number[] = [];
-  kids.forEach((c, i) => {
-    if (c.name === 'ShortcodeOpenLine') open.push(i);
-    else if (c.name === 'ShortcodeCloseLine' && open.length) closeOf.set(open.pop()!, i);
-  });
+  for (const b of flattenBlocks(shortcodeBlocksIn(state, tree))) {
+    const o = at.get(b.from), c = at.get(state.doc.lineAt(b.closeFrom).from);
+    if (o !== undefined && c !== undefined) closeOf.set(o, c);
+  }
   const where: Blocks['where'] = [];
   const fill = (c: Container, lo: number, hi: number) => {
     for (let i = lo; i < hi; i++) {
@@ -481,16 +483,19 @@ function blockMoveKeymap(): Extension {
 
 // ── Line type ──────────────────────────────────────────────────────────────
 // Editing a line's type through its margin indicator. The indicator — a heading's
-// `##`, a quote's `>` — is real source
+// `##`, a quote's `>`, a paired fence's `:::`, which has no line type and no menu — is real source
 // drawn in the margin by cm-markdown-style.ts, and the caret never enters it, so
 // it is edited from the text start and by pointer:
 //
 //   Backspace (Ctrl-H on a Mac) at the start of the text
 //                                        removes ONE level (`###` -> `##` -> `#`
 //                                        -> paragraph; `> ` -> paragraph), one
-//                                        undo step each
+//                                        undo step each; on a paired `:::` fence
+//                                        it unwraps the block (both fences go,
+//                                        the body stays)
 //   ⌘Backspace at the start of the text  the one exception: every indicator goes
-//                                        at once and the line is a paragraph
+//                                        at once and the line is a paragraph (a
+//                                        fence unwraps its block, as Backspace does)
 //   click on the indicator               opens a menu: Heading 1-3, Paragraph,
 //                                        Quote; a pick rewrites the clicked
 //                                        indicator in one transaction (a heading
@@ -503,6 +508,9 @@ function blockMoveKeymap(): Extension {
 type LineType = { kind: 'heading'; level: number } | { kind: 'paragraph' } | { kind: 'quote' };
 
 const PARAGRAPH: LineType = { kind: 'paragraph' };
+
+/** A fence has no line type: retyping one would orphan its partner. */
+const isFence = (h: Hang): boolean => h.kind === 'fence-open' || h.kind === 'fence-close';
 
 const prefixFor = (type: LineType): string =>
   type.kind === 'heading' ? '#'.repeat(type.level) + ' ' : type.kind === 'quote' ? '> ' : '';
@@ -531,6 +539,7 @@ const isType = (h: Hang, type: LineType): boolean =>
 export function setLineType(view: EditorView, lineFrom: number, type: LineType, target?: Hang): boolean {
   const { state } = view;
   const hangs = hangsOnLine(state, lineFrom);
+  if (hangs.some(isFence)) return false;
   const slot = target ?? (type.kind === 'paragraph' ? undefined : hangs.find((h) => h.kind === type.kind));
   if (slot && isType(slot, type)) return false;
   const insert = prefixFor(type);
@@ -550,6 +559,32 @@ export function setLineType(view: EditorView, lineFrom: number, type: LineType, 
   return true;
 }
 
+/**
+ * Remove a paired block's two fence lines and its own cell dividers, keeping the
+ * body, in one transaction: `+++` left behind would be a stray paragraph and `---`
+ * a rule. A nested block is body and stays whole. Returns false for a fence the
+ * pairing does not know.
+ */
+function unwrapBlock(view: EditorView, fence: Hang): boolean {
+  const { state } = view;
+  const { doc } = state;
+  const lineFrom = doc.lineAt(fence.from).from;
+  const block = flattenBlocks(shortcodeBlocksIn(state, treeUpTo(state, doc.length))).find((b) => b.from === lineFrom || doc.lineAt(b.closeFrom).from === lineFrom);
+  if (!block) return false;
+  const lines: { from: number; to: number }[] = [doc.lineAt(block.from), ...ownDividerLines(state, block), doc.lineAt(block.closeFrom)];
+  // Each line goes with its newline: the one after it, or the one before the last line of the document.
+  const specs: { from: number; to: number }[] = [];
+  for (const l of lines) {
+    const span = l.to < doc.length ? { from: l.from, to: l.to + 1 } : { from: Math.max(0, l.from - 1), to: l.to };
+    const prev = specs[specs.length - 1];
+    if (prev && span.from <= prev.to) prev.to = Math.max(prev.to, span.to);
+    else specs.push(span);
+  }
+  const changes = state.changes(specs);
+  view.dispatch({ changes, selection: state.selection.map(changes, 1), userEvent: 'delete.backward', annotations: isolateHistory.of('full'), scrollIntoView: true });
+  return true;
+}
+
 /** Backspace at the first character of a heading's or quote's text: one level off, never the whole marker at once. */
 function stepBackspace(view: EditorView): boolean {
   if (view.composing) return false;
@@ -557,6 +592,7 @@ function stepBackspace(view: EditorView): boolean {
   const r = state.selection.main; // one range: the editor never allows several (allowMultipleSelections is not set)
   const h = r.empty ? indicatorEndingAt(state, r.head) : null;
   if (!h) return false; // any other range: CM6's own Backspace
+  if (isFence(h)) return unwrapBlock(view, h);
   const change: ChangeSpec =
     h.kind === 'heading' && h.level > 1 ? { from: h.from, to: h.from + 1 }
     : h.kind === 'quote' ? { from: h.from + state.doc.sliceString(h.from, h.to).lastIndexOf('>'), to: h.to }
@@ -572,6 +608,7 @@ function removeIndicators(view: EditorView): boolean {
   const r = view.state.selection.main;
   const hangs = hangsOnLine(view.state, r.head);
   if (!r.empty || !hangs.length || hangs[hangs.length - 1].to !== r.head) return false;
+  if (isFence(hangs[hangs.length - 1])) return unwrapBlock(view, hangs[hangs.length - 1]);
   view.dispatch({ changes: { from: hangs[0].from, to: r.head }, userEvent: 'delete.line', annotations: isolateHistory.of('full'), scrollIntoView: true });
   return true;
 }

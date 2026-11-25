@@ -23,7 +23,7 @@ import { t, onLocaleChange } from "../i18n/index";
 import { hangsInRanges, type Hang } from './cm-hangs';
 import { headFitExtension } from './cm-head-fit';
 import { listDecorations, listHangExtension, type DecoRange, type SyntaxNode } from './cm-lists';
-import { footnoteDecorations, type FootnoteDeco } from '@symbiosis-lab/moss-syntax/cm6';
+import { footnoteDecorations, shortcodeBlockField, type FootnoteDeco } from '@symbiosis-lab/moss-syntax/cm6';
 
 const HEADING_CLASSES: Record<string, string> = {
   ATXHeading1: 'cm-lp-h1',
@@ -41,12 +41,16 @@ const LINE_HEADING: Record<string, Decoration> = Object.fromEntries(
 const indicatorLabel = (h: Pick<Hang, 'kind' | 'level'>): string =>
   h.kind === 'heading' ? t('indicator.heading', { level: String(h.level) }) : t('indicator.quote');
 
-/** An indicator in the margin: brightens on hover, names its line type in a tooltip, and is the click target of the line-type menu (cm-format-keys.ts). */
+const MARK_HANG_FENCE = Decoration.mark({ class: 'cm-hang' });
+
+/** An indicator in the margin: brightens on hover, names its line type in a tooltip, and is the click target of the line-type menu (cm-format-keys.ts). A fence has no line type, so its marker carries none of that. */
 const markHang = (h: Hang) =>
-  Decoration.mark({
-    class: 'cm-hang',
-    attributes: { 'data-indicator': h.kind, 'data-tooltip': indicatorLabel(h), 'data-tooltip-position': 'top' },
-  });
+  h.kind === 'heading' || h.kind === 'quote'
+    ? Decoration.mark({
+        class: 'cm-hang',
+        attributes: { 'data-indicator': h.kind, 'data-tooltip': indicatorLabel(h), 'data-tooltip-position': 'top' },
+      })
+    : MARK_HANG_FENCE;
 const LINE_HUNG = Decoration.line({ class: 'cm-hung' });
 const MARK_HANG_RUN = Decoration.mark({ class: 'cm-hang-run' });
 
@@ -525,6 +529,7 @@ const hungPrefixAtomicRanges = (view: EditorView): RangeSet<Decoration> => view.
 
 export function markdownStyleExtension(): Extension {
   return [
+    shortcodeBlockField,
     markdownStylePlugin,
     listHangExtension(),
     EditorView.atomicRanges.of(hungPrefixAtomicRanges),

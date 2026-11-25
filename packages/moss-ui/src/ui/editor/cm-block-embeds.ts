@@ -13,7 +13,7 @@ import { Decoration, type DecorationSet, EditorView, type ViewUpdate } from '@co
 import { syntaxTree } from '@codemirror/language';
 import {
   embedParts, extractImageTargets, isEmbedNode, folderParamsFromEmbed, linkUnitOfEmbed, type EmbedParts,
-  shortcodeBodyRanges, inShortcodeBody,
+  shortcodeBodyRanges, inShortcodeBody, shortcodeBlockField,
 } from '@symbiosis-lab/moss-syntax/cm6';
 import { folderCardDetail, type MediaEmbedKind, type FolderListingFacts } from './cm-media-embed';
 import { refsResolvedEffect } from './cm-reference-resolver';
@@ -318,7 +318,7 @@ export function blockEmbedsExtension(opts: BlockEmbedsOptions): Extension {
     },
     provide(f) { return EditorView.decorations.from(f); },
   });
-  return [
+  return [shortcodeBlockField,
     field,
     // [perf] On a geometry change (editor resize / divider drag — no state
     // transaction, so toDOM never re-runs), refresh the shared column-width

@@ -1,3 +1,4 @@
+import { shortcodeBlockExtension } from '@symbiosis-lab/moss-syntax/cm6';
 import { describe, test, expect, vi } from 'vitest';
 import { EditorSelection, EditorState, type EditorStateConfig } from '@codemirror/state';
 import { cursorCharLeft, cursorCharRight, cursorLineBoundaryBackward, deleteCharBackward, selectCharLeft } from '@codemirror/commands';
@@ -28,7 +29,7 @@ function parsedState(config: EditorStateConfig): EditorState {
 function decosFor(doc: string): { from: number; to: number; cls?: string }[] {
   const state = parsedState({
     doc,
-    extensions: [markdown({ extensions: [GFM, wikilinkConfig, mathConfig, footnoteConfig] })],
+    extensions: [shortcodeBlockExtension(), markdown({ extensions: [GFM, wikilinkConfig, mathConfig, footnoteConfig] })],
   });
   const set = buildMarkdownStyleDecorations(state, [{ from: 0, to: doc.length }]);
   const out: { from: number; to: number; cls?: string }[] = [];
@@ -130,7 +131,7 @@ describe('thematic break', () => {
   });
   test('lists replace nothing either: every decoration is a class, or a zero-width widget that hides no text', () => {
     const doc = ['- a', '  - nested', '    - deeper wrapped item', '    lazy tail', '1. one', '10. ten', '- [ ] task', '- [x] done', '\t- tab nested', '-\ttab after marker', '> - quoted', '- # heading item', '  continued', ''].join('\n');
-    const state = parsedState({ doc, extensions: [markdown({ extensions: [GFM, wikilinkConfig, mathConfig, footnoteConfig] })] });
+    const state = parsedState({ doc, extensions: [shortcodeBlockExtension(), markdown({ extensions: [GFM, wikilinkConfig, mathConfig, footnoteConfig] })] });
     const set = buildMarkdownStyleDecorations(state, [{ from: 0, to: doc.length }]);
     let widgets = 0, lists = 0;
     for (const cur = set.iter(); cur.value; cur.next()) {
@@ -279,7 +280,7 @@ describe('table styling comes from mossHighlight, not this module', () => {
   test('table pipes and header row already come from mossHighlight, not this module', () => {
     const state = parsedState({
       doc: '| a | b |\n| - | - |\n| 1 | 2 |',
-      extensions: [markdown({ extensions: [Table] }), syntaxHighlighting(mossHighlight)],
+      extensions: [shortcodeBlockExtension(), markdown({ extensions: [Table] }), syntaxHighlighting(mossHighlight)],
     });
     const dom = document.createElement('div');
     const view = new EditorView({ state, parent: dom });
@@ -317,7 +318,7 @@ describe('caret invariance', () => {
     ].join('\n');
     const state = parsedState({
       doc: corpus,
-      extensions: [markdown({ extensions: [GFM, wikilinkConfig, mathConfig] })],
+      extensions: [shortcodeBlockExtension(), markdown({ extensions: [GFM, wikilinkConfig, mathConfig] })],
     });
     const flatten = (set: DecorationSet) => {
       const out: unknown[] = [];
@@ -330,7 +331,7 @@ describe('caret invariance', () => {
     };
     const baseline = flatten(
       buildMarkdownStyleDecorations(
-        parsedState({ doc: corpus, extensions: [markdown({ extensions: [GFM, wikilinkConfig, mathConfig] })] }),
+        parsedState({ doc: corpus, extensions: [shortcodeBlockExtension(), markdown({ extensions: [GFM, wikilinkConfig, mathConfig] })] }),
         [{ from: 0, to: corpus.length }],
       ),
     );
@@ -354,7 +355,7 @@ describe('no needless rebuild', () => {
     // instance itself (not a facet-provided DecorationSet) is what we ask
     // for an identity from.
     const plugin = markdownStylePlugin;
-    const state = parsedState({ doc: '# H1\n\nsome text', extensions: [markdown(), markdownStyleExtension()] });
+    const state = parsedState({ doc: '# H1\n\nsome text', extensions: [shortcodeBlockExtension(), markdown(), markdownStyleExtension()] });
     const dom = document.createElement('div');
     const view = new EditorView({ state, parent: dom });
     const before = view.plugin(plugin as never) as { decorations: DecorationSet } | null;
@@ -373,7 +374,7 @@ describe('the caret rules read one line, never the document', () => {
   test('a keystroke asks the tree about the typed line only', () => {
     const doc = Array.from({ length: 200 }, (_, i) => (i % 5 === 0 ? `## Heading ${i}` : `> quote ${i}`)).join('\n');
     const view = new EditorView({
-      state: parsedState({ doc, extensions: [markdown({ extensions: [GFM] }), markdownStyleExtension()] }),
+      state: parsedState({ doc, extensions: [shortcodeBlockExtension(), markdown({ extensions: [GFM] }), markdownStyleExtension()] }),
       parent: document.body,
     });
     const line = view.state.doc.line(100);
@@ -403,7 +404,7 @@ describe('a hung indicator is not a caret position', () => {
     const state = parsedState({
       doc,
       selection: { anchor },
-      extensions: [markdown({ extensions: [GFM, wikilinkConfig, mathConfig] }), markdownStyleExtension()],
+      extensions: [shortcodeBlockExtension(), markdown({ extensions: [GFM, wikilinkConfig, mathConfig] }), markdownStyleExtension()],
     });
     return new EditorView({ state, parent: document.body });
   }
@@ -517,7 +518,7 @@ describe('the caret filter pins the text side inside the transaction', () => {
     const state = parsedState({
       doc,
       selection,
-      extensions: [markdown({ extensions: [GFM, wikilinkConfig, mathConfig] }), markdownStyleExtension()],
+      extensions: [shortcodeBlockExtension(), markdown({ extensions: [GFM, wikilinkConfig, mathConfig] }), markdownStyleExtension()],
     });
     return new EditorView({ state, parent: document.body });
   }
@@ -638,7 +639,7 @@ describe('ArrowDown/ArrowUp handler (moveLine)', () => {
   // jsdom has no layout, so the pixel probe is stubbed: what is under test is
   // what the handler does with the answer, not where CM6 puts it.
   function setup(doc = 'one\n\ntwo') {
-    const state = parsedState({ doc, selection: EditorSelection.single(1), extensions: [markdown({ extensions: [GFM] }), markdownStyleExtension()] });
+    const state = parsedState({ doc, selection: EditorSelection.single(1), extensions: [shortcodeBlockExtension(), markdown({ extensions: [GFM] }), markdownStyleExtension()] });
     const view = new EditorView({ state, parent: document.body });
     const moved = vi.spyOn(view, 'moveVertically').mockReturnValue(EditorSelection.cursor(6, 1, 1));
     vi.spyOn(view, 'coordsAtPos').mockReturnValue({ left: 10, right: 10, top: 0, bottom: 10 });
@@ -715,7 +716,7 @@ describe('an indicator tooltip follows the app language', () => {
   const tooltip = (view: EditorView) => view.dom.querySelector('.cm-hang')?.getAttribute('data-tooltip');
   test('switching language relabels the tooltip without an edit, and stops listening when the view is destroyed', () => {
     const view = new EditorView({
-      state: parsedState({ doc: '## Title', extensions: [markdown({ extensions: [GFM] }), markdownStyleExtension()] }),
+      state: parsedState({ doc: '## Title', extensions: [shortcodeBlockExtension(), markdown({ extensions: [GFM] }), markdownStyleExtension()] }),
       parent: document.body,
     });
     try {

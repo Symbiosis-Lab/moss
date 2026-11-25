@@ -8,6 +8,7 @@
  * the MediaEmbedBlockWidget via buildImageDecorations.
  */
 
+import { shortcodeBlockExtension } from '@symbiosis-lab/moss-syntax/cm6';
 import { describe, test, expect, vi } from 'vitest';
 import { EditorState } from '@codemirror/state';
 import { markdown } from '@codemirror/lang-markdown';
@@ -169,7 +170,7 @@ describe('MediaEmbedBlockWidget — resize handle on native player', () => {
     const embed = '![[demo.mp4]]';
     const state = EditorState.create({
       doc: embed,
-      extensions: [markdown({ extensions: [wikilinkConfig] })],
+      extensions: [markdown({ extensions: [wikilinkConfig] }), shortcodeBlockExtension()],
     });
     const fakeView = {
       state,
@@ -240,7 +241,7 @@ describe('buildImageDecorations — src forwarded to video widget', () => {
   test('resolveEmbed with src produces a widget carrying that src', () => {
     const state = EditorState.create({
       doc: '![[clip.mp4]]',
-      extensions: [markdown({ extensions: [wikilinkConfig] })],
+      extensions: [markdown({ extensions: [wikilinkConfig] }), shortcodeBlockExtension()],
     });
     const resolveEmbed = () => ({
       kind: 'video' as const,
@@ -264,7 +265,7 @@ describe('buildImageDecorations — src forwarded to video widget', () => {
   test('resolveEmbed without src falls back to placeholder', () => {
     const state = EditorState.create({
       doc: '![[clip.mp4]]',
-      extensions: [markdown({ extensions: [wikilinkConfig] })],
+      extensions: [markdown({ extensions: [wikilinkConfig] }), shortcodeBlockExtension()],
     });
     // kind=video but no src (e.g. asset not yet in registry)
     const resolveEmbed = () => ({ kind: 'video' as const });
@@ -341,7 +342,7 @@ describe('buildImageDecorations — a linked card follows its link', () => {
   ) {
     const state = EditorState.create({
       doc,
-      extensions: [markdown({ extensions: [wikilinkConfig] })],
+      extensions: [markdown({ extensions: [wikilinkConfig] }), shortcodeBlockExtension()],
     });
     const resolveEmbed = () => ({
       kind: 'pdf' as const,
@@ -415,7 +416,7 @@ describe('buildImageDecorations — a linked IMAGE follows the same rules', () =
   function imageIn(doc: string, canFollowLink: (href: string) => boolean, nav: string[]) {
     const state = EditorState.create({
       doc,
-      extensions: [markdown({ extensions: [wikilinkConfig] })],
+      extensions: [markdown({ extensions: [wikilinkConfig] }), shortcodeBlockExtension()],
     });
     const resolveImage = () => ({ url: 'moss-source://localhost/cover.png' });
     const set = buildImageDecorations(

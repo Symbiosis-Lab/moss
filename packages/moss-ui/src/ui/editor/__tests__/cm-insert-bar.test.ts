@@ -1,3 +1,4 @@
+import { shortcodeBlockExtension } from '@symbiosis-lab/moss-syntax/cm6';
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EditorView } from '@codemirror/view';
 import { EditorState } from '@codemirror/state';
@@ -23,7 +24,7 @@ function makeState(doc: string, anchor: number, head?: number) {
   return EditorState.create({
     doc,
     selection: { anchor, head: head ?? anchor },
-    extensions: [slashMenuField],
+    extensions: [slashMenuField, shortcodeBlockExtension()],
   });
 }
 
@@ -84,7 +85,7 @@ describe('insertBarContext', () => {
 // from the line alone.
 
 function stateWithDoc(doc: string) {
-  return EditorState.create({ doc, extensions: [markdown({ extensions: [TaskList, wikilinkConfig] }), slashMenuField] });
+  return EditorState.create({ doc, extensions: [shortcodeBlockExtension(), markdown({ extensions: [TaskList, wikilinkConfig] }), slashMenuField] });
 }
 
 describe('insertBarContext — only the line decides', () => {
@@ -624,7 +625,7 @@ describe('insertBarExtension lifecycle', () => {
       state: EditorState.create({
         doc: '',
         selection: { anchor: 0 },
-        extensions: [slashMenuField, insertBarExtension(hooks)],
+        extensions: [slashMenuField, shortcodeBlockExtension(), insertBarExtension(hooks)],
       }),
       parent: container,
     });
