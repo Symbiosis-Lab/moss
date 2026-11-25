@@ -6,6 +6,7 @@ import { history } from '@codemirror/commands';
 import { MARKDOWN_EXTENSIONS } from '../cm-editor';
 import { formatKeysExtension, lineIndicatorExtension } from '../cm-format-keys';
 import { markdownStyleExtension } from '../cm-markdown-style';
+import { collectShortcodeBlocks } from '@symbiosis-lab/moss-syntax/cm6';
 import { hangsOnLine } from '../cm-hangs';
 
 // The parse never finishes within its budget: ensureSyntaxTree gives up and the
@@ -49,6 +50,7 @@ describe('a hung fence the partial parse has not paired', () => {
   test('the opening fence hangs, and no pair is known', () => {
     mount(src);
     expect(hangsOnLine(view.state, view.state.selection.main.head).map((h) => h.kind)).toEqual(['fence-open']);
+    expect(collectShortcodeBlocks(view.state)).toHaveLength(0);
   });
   test('Backspace at the text start leaves the document unchanged', () => {
     mount(src);

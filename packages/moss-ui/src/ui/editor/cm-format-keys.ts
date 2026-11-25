@@ -439,8 +439,8 @@ export function blockUnitAt(state: EditorState, pos: number): Span | null {
 export function moveBlock(view: EditorView, dir: -1 | 1): boolean {
   const { state } = view;
   if (state.readOnly) return false;
-  if (hungUnpairedFence(state, state.selection.main.head)) return true;
   const blocks = blocksOf(state);
+  if (hungUnpairedFence(state, state.selection.main.head, blocks.tree)) return true;
   const range = state.selection.main;
   const { doc } = state;
   // A selection that ends at a line start has not touched that line.
@@ -529,8 +529,7 @@ const PARAGRAPH: LineType = { kind: 'paragraph' };
 const isFence = (h: Hang): boolean => h.kind === 'fence-open' || h.kind === 'fence-close';
 
 /** A hung fence the partial parse has not paired: the key does nothing, since falling through would delete a colon or move one fence line. */
-const hungUnpairedFence = (state: EditorState, pos: number): boolean => {
-  const tree = treeUpTo(state, state.doc.length);
+const hungUnpairedFence = (state: EditorState, pos: number, tree = treeUpTo(state, state.doc.length)): boolean => {
   if (tree.length >= state.doc.length || !hangsOnLine(state, pos).some(isFence)) return false;
   const line = state.doc.lineAt(pos).from;
   return !flattenBlocks(shortcodeBlocksIn(state, tree)).some((b) => b.from === line || state.doc.lineAt(b.closeFrom).from === line);
@@ -593,8 +592,9 @@ function unwrapBlock(view: EditorView, fence: Hang): boolean {
   const { state } = view;
   const { doc } = state;
   const lineFrom = doc.lineAt(fence.from).from;
-  const block = flattenBlocks(shortcodeBlocksIn(state, treeUpTo(state, doc.length))).find((b) => b.from === lineFrom || doc.lineAt(b.closeFrom).from === lineFrom);
-  if (!block) return hungUnpairedFence(state, fence.from);
+  const tree = treeUpTo(state, doc.length);
+  const block = flattenBlocks(shortcodeBlocksIn(state, tree)).find((b) => b.from === lineFrom || doc.lineAt(b.closeFrom).from === lineFrom);
+  if (!block) return hungUnpairedFence(state, fence.from, tree);
   const lines: { from: number; to: number }[] = [doc.lineAt(block.from), ...ownDividerLines(state, block), doc.lineAt(block.closeFrom)];
   // Each line goes with its newline: the one after it, or the one before the last line of the document.
   const specs: { from: number; to: number }[] = [];

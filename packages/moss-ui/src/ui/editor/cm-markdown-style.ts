@@ -41,20 +41,15 @@ const LINE_HEADING: Record<string, Decoration> = Object.fromEntries(
 const indicatorLabel = (h: Pick<Hang, 'kind' | 'level'>): string =>
   h.kind === 'heading' ? t('indicator.heading', { level: String(h.level) }) : t('indicator.quote');
 
-const MARK_HANG_FENCE = Decoration.mark({ class: 'cm-hang' });
-const MARK_GRIP_FENCE = Decoration.mark({ class: 'cm-hang', attributes: { 'data-grip': '' } });
-
 /** An indicator in the margin: brightens on hover, names its line type in a tooltip, and is the click target of the line-type menu (cm-format-keys.ts). A fence has no line type, so its marker carries none of that. A grip (cm/grip-drag.ts) is also dragged. */
-const markHang = (h: Hang, lineFrom: number) => {
-  const grip = isGrip(h, lineFrom);
-  if (h.kind === 'fence-open') return grip ? MARK_GRIP_FENCE : MARK_HANG_FENCE;
-  return h.kind === 'heading' || h.kind === 'quote'
-    ? Decoration.mark({
-        class: 'cm-hang',
-        attributes: { 'data-indicator': h.kind, 'data-tooltip': indicatorLabel(h), 'data-tooltip-position': 'top', ...(grip && { 'data-grip': '' }) },
-      })
-    : MARK_HANG_FENCE;
-};
+const markHang = (h: Hang, lineFrom: number) =>
+  Decoration.mark({
+    class: 'cm-hang',
+    attributes: {
+      ...((h.kind === 'heading' || h.kind === 'quote') && { 'data-indicator': h.kind, 'data-tooltip': indicatorLabel(h), 'data-tooltip-position': 'top' }),
+      ...(isGrip(h, lineFrom) && { 'data-grip': '' }),
+    },
+  });
 const LINE_HUNG = Decoration.line({ class: 'cm-hung' });
 const MARK_HANG_RUN = Decoration.mark({ class: 'cm-hang-run' });
 
