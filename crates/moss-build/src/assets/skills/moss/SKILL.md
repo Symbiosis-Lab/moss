@@ -242,6 +242,10 @@ For shortcodes and partials (content reuse, not styling tiers), see
 
 For a quotation and its source, and for footnotes that move into the margin on a wide window, see `moss guide authoring`, "Quotations and their sources" and "Footnotes and margin notes".
 
+## Pages stay plain
+
+A page is plain Markdown: words, headings, links, pictures, lists and moss's typed blocks. A fact about the page goes in its frontmatter, where the theme reads it, and a look goes in the theme, on moss's own markup. `moss doctor --surface` names, with its line, each thing in a page that breaks this: a classed div repeated across pages (`::: {.eyebrow}`), a `{.class}` written after text, a heading or a picture, which moss prints as text, and a raw HTML block, which the theme and the editor cannot reach. It exits 1 when it finds any of these, or a theme rule that styles nothing, a selector keyed on a page address or a class the theme invents, so a script or a hook can hold a site to plain pages.
+
 ## Keep the theme stylesheet readable
 
 `.moss/theme/style.css` is read and edited by the person who owns the site long after you finish, so write it for them. Before handing it over, simplify and consolidate:

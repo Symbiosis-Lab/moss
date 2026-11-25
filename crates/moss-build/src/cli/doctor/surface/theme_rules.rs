@@ -39,6 +39,13 @@ pub struct UnmatchedRule {
     pub listing: Vec<String>,
 }
 
+impl UnmatchedRule {
+    /// No script or empty listing can explain the miss: the rule styles nothing.
+    pub fn is_dead(&self) -> bool {
+        self.scripted.is_empty() && self.listing.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ThemeRules {
     /// No built page to match against.

@@ -1,5 +1,6 @@
 //! `moss doctor --surface` — a read-only report of markdown constructs that a
-//! cleaner form could replace. Reported, never enforced: findings exit 0.
+//! cleaner form could replace. It exits 1 when it finds any, so a script or a
+//! hook can hold a site to plain pages.
 //!
 //! ## Classed divs repeated across pages
 //!
@@ -25,6 +26,10 @@
 //! Class names in the theme's stylesheets that moss does not write, each
 //! with whether the pages use it; see `own_classes.rs`.
 //!
+//! ## Markup in pages
+//!
+//! `{.class}` text and raw HTML blocks a page writes; see `page_markup.rs`.
+//!
 //! ## Theme selectors keyed on a page address
 //!
 //! A selector such as `body[data-path^="/housing/"]` in a theme stylesheet
@@ -38,8 +43,10 @@ use moss_core::ast::shortcode_extract::{extract_shortcodes_with_config, CssRegio
 use moss_core::ast::ParseConfig;
 
 mod own_classes;
+mod page_markup;
 mod theme_rules;
 pub use own_classes::OwnClass;
+pub use page_markup::{MarkupKind, PageMarkup};
 pub use theme_rules::{ThemeRules, UnmatchedRule};
 
 /// A class must sit on at least this many pages before it is reported, unless `--all`.
@@ -77,6 +84,26 @@ pub struct SurfaceReport {
     pub address_selectors: Vec<AddressSelector>,
     /// Classes the theme names that moss does not write.
     pub own_classes: Vec<OwnClass>,
+    /// `{.class}` text and raw HTML blocks in pages.
+    pub page_markup: Vec<PageMarkup>,
+}
+
+impl SurfaceReport {
+    /// How many of the report's checks found something.
+    pub fn finding_kinds(&self) -> usize {
+        let dead = matches!(&self.theme_rules, ThemeRules::Checked { unmatched, .. } if unmatched.iter().any(UnmatchedRule::is_dead));
+        [
+            !self.classed_divs.is_empty(),
+            !self.own_classes.is_empty(),
+            dead,
+            !self.address_selectors.is_empty(),
+            self.page_markup.iter().any(|m| m.kind == MarkupKind::ClassSpan),
+            self.page_markup.iter().any(|m| m.kind == MarkupKind::RawHtml),
+        ]
+        .into_iter()
+        .filter(|&found| found)
+        .count()
+    }
 }
 
 /// Per-class tally while the pages are walked in sorted order.
@@ -202,10 +229,11 @@ pub fn audit(folder: &Path, all: bool) -> SurfaceReport {
         theme_rules: theme_rules::check(&sheets, &built),
         address_selectors: address_selectors(&sheets),
         own_classes: own_classes::check(folder, &sheets),
+        page_markup: page_markup::check(folder),
     }
 }
 
-/// Print the report and return the exit code. Findings exit 0.
+/// Print the report and return the exit code: 1 when anything was found.
 pub fn run(folder: &Path, json: bool, all: bool) -> i32 {
     let report = audit(folder, all);
     if json {
@@ -213,7 +241,7 @@ pub fn run(folder: &Path, json: bool, all: bool) -> i32 {
     } else {
         print!("{}", render_text(&report));
     }
-    0
+    i32::from(report.finding_kinds() > 0)
 }
 
 fn to_json(report: &SurfaceReport) -> serde_json::Value {
@@ -261,12 +289,24 @@ fn to_json(report: &SurfaceReport) -> serde_json::Value {
             })
         })
         .collect();
+    let page_markup: Vec<serde_json::Value> = report
+        .page_markup
+        .iter()
+        .map(|m| {
+            let kind = match m.kind {
+                MarkupKind::ClassSpan => "class_span",
+                MarkupKind::RawHtml => "raw_html",
+            };
+            serde_json::json!({ "kind": kind, "path": m.path, "line": m.line, "text": m.text })
+        })
+        .collect();
     serde_json::json!({
         "min_pages": report.min_pages,
         "classed_divs": classed,
         "theme_rules": theme_rules,
         "address_selectors": selectors,
         "theme_own_classes": own_classes,
+        "page_markup": page_markup,
     })
 }
 
@@ -313,7 +353,7 @@ fn render_text(report: &SurfaceReport) -> String {
     }
     out.push('\n');
 
-    let dead = render_theme_rules(&report.theme_rules, &mut out);
+    render_theme_rules(&report.theme_rules, &mut out);
     out.push('\n');
 
     if report.address_selectors.is_empty() {
@@ -331,7 +371,10 @@ fn render_text(report: &SurfaceReport) -> String {
     render_own_classes(&report.own_classes, &mut out);
     out.push('\n');
 
-    let kinds = usize::from(!report.classed_divs.is_empty()) + usize::from(!report.own_classes.is_empty()) + usize::from(dead) + usize::from(!report.address_selectors.is_empty());
+    render_page_markup(&report.page_markup, &mut out);
+    out.push('\n');
+
+    let kinds = report.finding_kinds();
     if kinds == 0 {
         out.push_str("Nothing found.\n");
     } else {
@@ -343,6 +386,30 @@ fn render_text(report: &SurfaceReport) -> String {
 
 fn pages_text(n: usize) -> String {
     if n == 1 { "1 page".to_string() } else { format!("{n} pages") }
+}
+
+/// The page-markup section: pages stay plain Markdown.
+fn render_page_markup(found: &[PageMarkup], out: &mut String) {
+    if found.is_empty() {
+        out.push_str("Every page is plain Markdown.\n");
+        return;
+    }
+    for (kind, heading) in [
+        (MarkupKind::ClassSpan, "`{.class}` in pages — moss prints it as text; a frontmatter field or moss's own markup can carry it:"),
+        (MarkupKind::RawHtml, "Raw HTML blocks in pages — the theme and the editor cannot reach them; Markdown or a typed block can:"),
+    ] {
+        let of_kind: Vec<&PageMarkup> = found.iter().filter(|m| m.kind == kind).collect();
+        if of_kind.is_empty() {
+            continue;
+        }
+        out.push_str(heading);
+        out.push('\n');
+        let loc = |m: &PageMarkup| format!("{}:{}", m.path, m.line);
+        let width = of_kind.iter().map(|m| loc(m).chars().count()).max().unwrap_or(0);
+        for m in of_kind {
+            out.push_str(&format!("  {:<width$}  {}\n", loc(m), m.text));
+        }
+    }
 }
 
 /// The class-names section.
@@ -367,17 +434,18 @@ fn render_own_classes(classes: &[OwnClass], out: &mut String) {
     }
 }
 
-/// The theme-rules section. Returns whether it found a rule that styles nothing.
-fn render_theme_rules(rules: &ThemeRules, out: &mut String) -> bool {
+/// The theme-rules section.
+fn render_theme_rules(rules: &ThemeRules, out: &mut String) {
     let (pages, unmatched) = match rules {
         ThemeRules::NoBuild => {
             out.push_str("Theme rules were not checked: the site has no build yet. Run `moss build`, then this again.\n");
-            return false;
+            return;
         }
         ThemeRules::Checked { pages, unmatched } => (pages, unmatched),
     };
-    let (scripted, rest): (Vec<&UnmatchedRule>, Vec<&UnmatchedRule>) = unmatched.iter().partition(|r| !r.scripted.is_empty());
-    let (listing, dead): (Vec<&UnmatchedRule>, Vec<&UnmatchedRule>) = rest.into_iter().partition(|r| !r.listing.is_empty());
+    let dead: Vec<&UnmatchedRule> = unmatched.iter().filter(|r| r.is_dead()).collect();
+    let scripted: Vec<&UnmatchedRule> = unmatched.iter().filter(|r| !r.scripted.is_empty()).collect();
+    let listing: Vec<&UnmatchedRule> = unmatched.iter().filter(|r| r.scripted.is_empty() && !r.listing.is_empty()).collect();
     let loc = |r: &UnmatchedRule| format!("{}:{}", r.path, r.line);
     let width = unmatched.iter().map(|r| loc(r).chars().count()).max().unwrap_or(0);
     if dead.is_empty() {
@@ -400,7 +468,6 @@ fn render_theme_rules(rules: &ThemeRules, out: &mut String) -> bool {
             out.push_str(&format!("  {:<width$}  {}  (listing class {})\n", loc(r), r.selector, r.listing.join(", ")));
         }
     }
-    !dead.is_empty()
 }
 
 #[cfg(test)]
@@ -539,6 +606,22 @@ mod tests {
     fn empty_site_says_nothing_found() {
         let dir = tempfile::tempdir().unwrap();
         assert!(render_text(&audit(dir.path(), false)).ends_with("Nothing found.\n"));
+    }
+
+    #[test]
+    fn a_finding_exits_1_and_a_plain_site_exits_0() {
+        let plain = tempfile::tempdir().unwrap();
+        write(plain.path(), "index.md", "---\ntitle: Home\n---\n\nWelcome.\n");
+        assert_eq!(run(plain.path(), false, false), 0);
+        let marked = tempfile::tempdir().unwrap();
+        write(marked.path(), "index.md", "---\ntitle: Home\n---\n\nA [word]{.hl} here.\n\n<div>raw</div>\n");
+        let report = audit(marked.path(), false);
+        assert_eq!(report.finding_kinds(), 2, "{:?}", report.page_markup);
+        assert!(render_text(&report).contains("index.md:5  A [word]{.hl} here."), "{}", render_text(&report));
+        assert_eq!(run(marked.path(), true, false), 1);
+        let classed = tempfile::tempdir().unwrap();
+        write(classed.path(), "index.md", "---\ntitle: Home\n---\n\n::: {.note}\nHi.\n:::\n");
+        assert_eq!(audit(classed.path(), true).finding_kinds(), 1);
     }
 
     #[test]
