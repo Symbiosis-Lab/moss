@@ -40,6 +40,9 @@
  * preview shows it at its address before it has any text, in no listing, and
  * after one typed word it is an ordinary page its folder lists.
  *
+ * Then Alt with an arrow on a `:::` block's opening fence moves the whole
+ * block, and on a line in its body stops at the closing fence.
+ *
  * Then the create menu offers a page's version in another language only when
  * it has none: a version linked by `translationKey` under another file name
  * counts.
@@ -75,6 +78,8 @@ const EVENTS: Record<string, string> = {
   'walk.md': '---\ntitle: Walk\nstart: 2026-12-1\nend: 2026-12-02T10:00\n---\nA walk. [Next](fair.md)\n',
   'fair.md': '---\ntitle: Fair\nstart:\n---\nA fair.\n',
 };
+
+const BLOCKS = '---\ntitle: Blocks\n---\nIntro paragraph.\n\n:::callout\nFirst inside.\n\nSecond inside.\n:::\n\nAfter the block.\n';
 
 const ONE_PAGE_PDF =
   '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n' +
@@ -165,6 +170,7 @@ const serve = useEditServe('browser-editor', (site, testInfo) => {
     writeFileSync(join(site, 'pictures', 'door.png'), gradient(800, 600, 40));
     writeFileSync(join(site, 'album.md'), '---\ntitle: Album\n---\nAn album.\n\n![Door](pictures/door.png)\n\n![Later](pictures/later.png)\n\nLast line.\n');
   }
+  writeFileSync(join(site, 'blocks.md'), BLOCKS);
   writeFileSync(join(site, 'about.md'), '---\ntitle: About\ntranslationKey: about\n---\nAbout the garden. [Talk](talk.md)\n');
   writeFileSync(join(site, 'zh-hans', '关于.md'), '---\ntitle: 关于\ntranslationKey: about\n---\n关于花园。\n');
   // A published address gives the site its feed, which every page links as
@@ -355,6 +361,32 @@ test('a click on text in the page washes its line in the editor and brings it in
   await preview.locator('.moss-grid-card p:has-text("The pond freezes last.")').click();
   await expect.poll(washed, { timeout: 10_000, message: 'the washed lines after a click inside a grid column' })
     .toEqual([{ text: 'The pond freezes last.', shown: true }]);
+});
+
+test('Alt with an arrow moves a ::: block whole from its fence, and keeps a body block inside it', async ({ page }) => {
+  const { editor } = await openEditor(page);
+  await editor.waitForSelector('.cm-content', { timeout: 30_000 });
+  if ((await editor.locator('.seg[data-path="blocks.md"]').count()) === 0) await openTreeRoot(editor);
+  await editor.click('.seg[data-path="blocks.md"]');
+  await expect(editor.locator('.cm-content')).toContainText('Second inside.', { timeout: 15_000 });
+  const file = () => readFileSync(join(serve.site, 'blocks.md'), 'utf8');
+  const caretLine = () => editor.evaluate(() => {
+    const at = getSelection()?.focusNode;
+    return (at instanceof Element ? at : at?.parentElement)?.closest('.cm-line')?.textContent ?? null;
+  });
+
+  await editor.locator('.cm-line', { hasText: ':::callout' }).click();
+  await page.keyboard.press('Alt+ArrowUp');
+  await expect.poll(file, { timeout: 15_000, message: 'the file after Alt-Up on the opening fence' })
+    .toBe('---\ntitle: Blocks\n---\n:::callout\nFirst inside.\n\nSecond inside.\n:::\n\nIntro paragraph.\n\nAfter the block.\n');
+  expect(await caretLine(), 'the caret stays on the moved fence').toBe(':::callout');
+
+  await editor.locator('.cm-line', { hasText: 'Second inside.' }).click();
+  await page.keyboard.press('Alt+ArrowDown');
+  await page.keyboard.press('Alt+ArrowUp');
+  await expect.poll(file, { timeout: 15_000, message: 'the file after Alt-Down then Alt-Up on a body line' })
+    .toBe('---\ntitle: Blocks\n---\n:::callout\nSecond inside.\n\nFirst inside.\n:::\n\nIntro paragraph.\n\nAfter the block.\n');
+  expect(await caretLine(), 'the caret moves with its block').toBe('Second inside.');
 });
 
 test("an event's start and end open date and time controls that write what the build reads", async ({ page }, testInfo) => {
