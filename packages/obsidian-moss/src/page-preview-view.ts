@@ -1,5 +1,5 @@
 import { ItemView, TFile, type MarkdownFileInfo, type WorkspaceLeaf } from "obsidian";
-import type { PagePreview } from "./core";
+import { styledDocument, type PagePreview } from "./core";
 import type MossPlugin from "./main";
 import { vaultBaseHref } from "./site-context";
 
@@ -61,7 +61,7 @@ export class PagePreviewView extends ItemView {
       if (this.closed || request !== this.request || site !== this.plugin.noteSite(file.path).site) return;
       site.setNotes(JSON.stringify(notes));
       const result: PagePreview = JSON.parse(site.preview(path, text, vaultBaseHref(vault.adapter, file.path, path)));
-      this.showPreview(result, request);
+      this.showPreview({ ...result, html: styledDocument(site, result.html) }, request);
     } catch (error) {
       if (!this.closed && request === this.request && this.iframe) {
         this.iframe.srcdoc = "<p>Could not preview this page.</p>";

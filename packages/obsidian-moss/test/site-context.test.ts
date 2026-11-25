@@ -65,8 +65,8 @@ describe("site context through the mobile adapter", () => {
     expect(schema.frontmatter.fields.children_style.enum_values).toEqual(expect.arrayContaining(["cards", "board"]));
     const preview = JSON.parse(site.preview("note.md", "# Test", ""));
     expect(preview.html).toContain('lang="fr"');
-    expect(preview.html).toContain("/* served-sheet */");
-    expect(preview.html).not.toContain("unserved-sheet");
+    expect(site.stylesheet()).toContain("/* served-sheet */");
+    expect(site.stylesheet()).not.toContain("unserved-sheet");
     site.free();
     expect(context).toMatchObject({
       files: ["images/pic.png", "note.md"], lang: "fr", theme_css: "/* served-sheet */",

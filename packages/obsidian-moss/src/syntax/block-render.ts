@@ -1,6 +1,6 @@
 // A `:::` block's Markdown through moss's page render, as markup and a stylesheet a shadow root can hold.
 import type { DataAdapter } from "obsidian";
-import type { PagePreview } from "../core";
+import { stylesheetOf, type MossSite, type PagePreview } from "../core";
 import { vaultBaseHref, type SiteNote } from "../site-context";
 
 /** `html` is the article inside two wrappers standing in for the page's `<html>` and `<body>`. */
@@ -24,16 +24,16 @@ export function scopeCss(css: string): string {
   ));
 }
 
-/** One sheet per window, shared by every block while the site's CSS stays the same. */
-const sheets = new WeakMap<Document, { css: string; sheet: CSSStyleSheet }>();
+/** One sheet per window, shared by every block of the same site. */
+const sheets = new WeakMap<Document, { site: MossSite; sheet: CSSStyleSheet }>();
 
-function sheetFor(doc: Document, css: string): CSSStyleSheet {
+function sheetFor(doc: Document, site: MossSite): CSSStyleSheet {
   const cached = sheets.get(doc);
-  if (cached?.css === css) return cached.sheet;
+  if (cached && cached.site === site) return cached.sheet;
   // A constructed sheet can only be adopted in the document whose window made it.
   const sheet = new doc.defaultView!.CSSStyleSheet();
-  sheet.replaceSync(scopeCss(css));
-  sheets.set(doc, { css, sheet });
+  sheet.replaceSync(scopeCss(stylesheetOf(site)));
+  sheets.set(doc, { site, sheet });
   return sheet;
 }
 
@@ -49,7 +49,7 @@ const runsScript = ({ name, value, ownerElement }: Attr) => {
 const executes = (attr: Attr) => attr.name.startsWith("on") || attr.name === "srcdoc" || (URL_ATTRS.has(attr.name) && runsScript(attr));
 
 /** The page's markup without what must not run or repeat inside a note. */
-export function blockMarkup(pageHtml: string, base: string): { css: string; html: string } {
+export function blockMarkup(pageHtml: string, base: string): string {
   const page = new DOMParser().parseFromString(pageHtml, "text/html");
   page.querySelectorAll("script, source, .moss-article-title").forEach((el) => el.remove());
   // moss passes a page's raw HTML through, and a shadow root does not stop its handlers.
@@ -57,7 +57,7 @@ export function blockMarkup(pageHtml: string, base: string): { css: string; html
     for (const attr of Array.from(el.attributes)) if (executes(attr)) el.removeAttribute(attr.name);
   }
   page.querySelectorAll("img").forEach((img) => img.setAttribute("src", new URL(img.getAttribute("src") ?? "", base).href));
-  const css = Array.from(page.querySelectorAll("style")).map((el) => el.textContent).join("\n");
+  page.querySelectorAll("style").forEach((style) => { style.textContent = scopeCss(style.textContent ?? ""); });
   const wrap = (from: Element, marker: string, inner: string) => {
     const el = page.createElement("div");
     for (const attr of Array.from(from.attributes)) el.setAttribute(attr.name, attr.value);
@@ -66,7 +66,7 @@ export function blockMarkup(pageHtml: string, base: string): { css: string; html
     return el.outerHTML;
   };
   const article = page.querySelector("article")?.innerHTML ?? "";
-  return { css, html: wrap(page.documentElement, ROOT, wrap(page.body, BODY, article)) };
+  return wrap(page.documentElement, ROOT, wrap(page.body, BODY, article));
 }
 
 /** `note` is the block's note as its site sees it; `doc` is the document the block shows in. */
@@ -74,8 +74,7 @@ export function renderBlock(note: SiteNote, adapter: Pick<DataAdapter, "getResou
   try {
     const base = vaultBaseHref(adapter, note.root === "/" ? note.path : `${note.root}/${note.path}`, note.path);
     const page: PagePreview = JSON.parse(note.site.preview(note.path, markdown, base));
-    const { css, html } = blockMarkup(page.html, base);
-    return { sheet: sheetFor(doc, css), html };
+    return { sheet: sheetFor(doc, note.site), html: blockMarkup(page.html, base) };
   } catch (error) {
     console.warn("[moss] Cannot render block", error);
     return null;

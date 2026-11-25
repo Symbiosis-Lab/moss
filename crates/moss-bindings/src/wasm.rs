@@ -37,6 +37,10 @@ impl MossSite {
         self.0.set_texts(texts_json, root_name).map_err(|e| JsValue::from_str(&e))
     }
 
+    pub fn stylesheet(&self) -> String {
+        self.0.stylesheet().to_owned()
+    }
+
     pub fn preview(&self, path: &str, text: &str, base_href: &str) -> String {
         self.0.preview(path, text, base_href)
     }

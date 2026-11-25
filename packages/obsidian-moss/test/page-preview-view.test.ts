@@ -14,7 +14,7 @@ function fixture(root = "/") {
   const at = root === "/" ? "" : `${root}/`;
   const note = Object.assign(new TFile(), { path: `${at}embed.md`, extension: "md" });
   const file = Object.assign(new TFile(), { path: `${at}note.md`, extension: "md" });
-  const site = new MossSite(JSON.stringify({ files: ["note.md", "embed.md"], lang: "en" }));
+  const site = new MossSite(JSON.stringify({ files: ["note.md", "embed.md"], lang: "en", theme_css: "/* theme-sheet */" }));
   const editor = { getValue: () => "# Unsaved page\n![[embed]]" };
   const events: Record<string, () => void> = {};
   const cachedRead = vi.fn(async () => "Embedded words");
@@ -41,6 +41,8 @@ it("previews current editor text and embedded notes after 250ms in a script-free
   expect(f.iframe.srcdoc).toContain("Unsaved page");
   expect(f.iframe.srcdoc).toContain("Embedded words");
   expect(f.iframe.srcdoc).toContain('href="capacitor://localhost/vault/"');
+  expect(f.iframe.srcdoc.split("/* theme-sheet */")).toHaveLength(2);
+  expect(f.iframe.srcdoc).toMatch(/<style>[^]*\/\* theme-sheet \*\/<\/style><\/head>/);
   expect(f.attributes.sandbox).toBe("");
   f.editor.getValue = () => "# Edited page";
   f.events["editor-change"]();

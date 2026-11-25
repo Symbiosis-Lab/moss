@@ -85,16 +85,19 @@ fn all_severities_are_lsp_numbers_including_info() {
 }
 
 #[test]
-fn preview_wraps_page_text_title_language_css_and_base() {
+fn preview_wraps_page_text_title_language_and_base_and_the_site_carries_the_stylesheet() {
     let themed = Site::from_json(r#"{"files":["a.md"],"lang":"en","theme_css":"body { color: red; }"}"#).unwrap();
     let result = json_value(&themed.preview("a.md", "---\ntitle: Example\n---\nVisible **words**", "https://example.com/site/"));
     let html = result["html"].as_str().unwrap();
     assert!(html.starts_with("<!doctype html>"));
     assert!(html.contains("<html lang=\"en\">"));
     assert!(html.contains("<base href=\"https://example.com/site/\">"));
+    assert!(!html.contains("<style") && !html.contains("@layer"), "the stylesheet is the site's, not each preview's");
     // moss's own stylesheet first, the site's theme after it so the theme wins.
-    let theme_at = html.find("body { color: red; }</style>").unwrap();
-    assert!(html.find(".moss-article-title").is_some_and(|at| at < theme_at));
+    let css = themed.stylesheet();
+    let (page, theme) = css.split_at(css.find("body { color: red; }").unwrap());
+    assert!(page.contains(".moss-article-title"));
+    assert_eq!(theme, "body { color: red; }");
     assert!(html.contains("Visible <strong>words</strong>"));
     assert!(html.ends_with("</html>"));
     assert_eq!(result["title"], "Example");

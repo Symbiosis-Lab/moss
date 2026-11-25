@@ -60,6 +60,12 @@ impl Site {
             .expect("note paths are strings")
     }
 
+    /// moss's page stylesheet, then the site's theme so the theme wins. It is the same for every
+    /// page, so `preview` leaves it out and the host adds it once.
+    pub fn stylesheet(&self) -> &str {
+        &self.css
+    }
+
     /// A full document, its title, and the renderer's diagnostics. Use `check` for validation.
     pub fn preview(&self, path: &str, text: &str, base_href: &str) -> String {
         let mut page = page::render_page(path, text, &self.inputs);
@@ -68,7 +74,7 @@ impl Site {
         if let Some(nav) = self.pages.series_nav(path, &url, typesetting.as_deref()) {
             page.body_html.push_str(&nav);
         }
-        let html = page::preview_document(&page, &self.inputs.lang, &self.css, base_href);
+        let html = page::preview_document(&page, &self.inputs.lang, base_href);
         serde_json::to_string(&page::PagePreview {
             revision: page::content_hash(text.as_bytes()),
             html,
