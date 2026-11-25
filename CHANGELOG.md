@@ -68,6 +68,8 @@ All notable changes to moss will be documented here.
 - An event that has ended no longer offers Tickets or "Add to calendar" on its page, cards and rows (Online stays, since after an event it is often the recording), and one that ends after the site was built turns past in the reader's browser at that minute, so a finished event stops selling tickets without a rebuild.
 - A notebook is served under its folder's address, beside the folder's page: a folder named `Lab Notes` serves `lab-notes/analysis.ipynb` and `lab-notes/analysis.html`, and a folder whose page sets `url:` serves its notebooks there too, so a page's link to the notebook reaches it. A notebook published before at its old address keeps answering there.
 - A wikilink inside a `:::buttons` block (`[[subscribe|Subscribe]]`) is a button to its page, as a markdown link is; it used to be left out of the page.
+- A Finder alias in a copy of a site folder publishes the copy's own file; it used to be skipped as pointing outside the folder, taking its address offline.
+- An article with comments no longer logs a 405 in the `moss edit` preview.
 
 ### Removed
 

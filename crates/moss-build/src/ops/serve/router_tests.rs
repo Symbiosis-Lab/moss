@@ -3738,3 +3738,19 @@ async fn a_save_that_keeps_an_outside_edit_announces_it_on_the_event_stream() {
 
     let _ = shutdown_tx.send(());
 }
+
+/// The comment widget reads the page's list with a GET before any post; the
+/// preview answers it with an empty list instead of a 405.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_comment_list_read_is_answered_in_preview() {
+    let _viewers = event_stream_lock();
+    let site = tempfile::TempDir::new().unwrap();
+    let (port, _, shutdown_tx) = start_server(ServeConfig::new(crate::moss_paths::Served::test_cell(site.path().to_path_buf()), 64233))
+        .await
+        .expect("server should start");
+    let url = format!("http://localhost:{port}/__moss/comments/api/v2/comments?limit=1000&offset=0&flat_mode=true&page_key=p&site_name=localhost");
+    let resp = ureq::get(&url).set("Sec-Fetch-Dest", "empty").timeout(std::time::Duration::from_secs(5)).call().expect("the list read succeeds");
+    let body: serde_json::Value = resp.into_json().unwrap();
+    assert_eq!(body["comments"], serde_json::json!([]));
+    let _ = shutdown_tx.send(());
+}

@@ -66,6 +66,12 @@ pub async fn handle_comment_stub(Json(payload): Json<serde_json::Value>) -> impl
     }
 }
 
+/// The widget's list read. The preview keeps no comment, so there are none
+/// beyond the ones the page was built with.
+pub async fn handle_comment_list_stub() -> impl IntoResponse {
+    Json(serde_json::json!({ "comments": [], "count": 0 }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

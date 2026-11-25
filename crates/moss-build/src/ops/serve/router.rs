@@ -364,15 +364,16 @@ pub async fn start_server(
                 let site_dir = state.clone();
                 move |axum::extract::Path(p): axum::extract::Path<String>| page_for_source_route(site_dir.clone(), p)
             }))
-            // Preview-only comment stub: receives the comment form POST and
-            // returns an Artalk-shaped success without real-server traffic.
+            // Preview-only comment stub: answers the comment list read and the
+            // form's POST in Artalk's shape without real-server traffic.
             // Registered before .fallback() so a user file cannot shadow it.
             // The serve-time shim (comment-preview-shim.js) rewrites the
             // form's data-server-url to "/__moss/comments"; the client then
             // POSTs to `/__moss/comments/api/v2/comments`.
             .route(
                 "/__moss/comments/api/v2/comments",
-                axum::routing::post(super::comment_stub::handle_comment_stub),
+                axum::routing::post(super::comment_stub::handle_comment_stub)
+                    .get(super::comment_stub::handle_comment_list_stub),
             )
             .route("/__moss/reload", get(super::events::handle_reload))
             // Unconditional like health/source/comments — see `yield_route`.
