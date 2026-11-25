@@ -250,6 +250,19 @@
 .moss-info-grid > .moss-site-settings-add[hidden] {
   display: none;
 }
+.moss-site-settings-secret {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--moss-space-sm);
+}
+.moss-site-settings-secret > .moss-pill-input {
+  flex: 1 1 16em;
+  min-inline-size: 0;
+}
+.moss-site-settings-secret__state[data-error] {
+  color: var(--moss-error);
+}
 .moss-site-settings-entry {
   border: 1px solid var(--moss-border-light);
   border-radius: var(--moss-border-radius);

@@ -26,12 +26,35 @@ export interface SiteSettingAction {
   group?: string | null;
 }
 
+/** A credential the manifest declares; the host keeps it and hands it to the service. */
+export interface SiteSettingSecret {
+  id: string;
+  label: string;
+  group?: string | null;
+  placeholder?: string | null;
+  pattern_message?: string | null;
+}
+
+/** The service's state of a secret, never its value. */
+export interface SiteSecretState {
+  connected: boolean;
+  host: string | null;
+  read_at: number | null;
+  error: string | null;
+}
+
 export interface SiteSettingsFormOptions {
   /** Write every change in one save; resolves false when it failed and nothing was written. */
   write(changes: SettingChange[]): Promise<boolean>;
   actions?: SiteSettingAction[];
   /** Run an action's call; a rejection or an error result is shown by the button. */
   run?(action: SiteSettingAction): Promise<unknown>;
+  secrets?: SiteSettingSecret[];
+  /** Ask the host for a secret's state, or send a new value (`null` disconnects). */
+  secret?: {
+    status(id: string): Promise<SiteSecretState>;
+    set(id: string, value: string | null): Promise<SiteSecretState>;
+  };
 }
 
 const SAVED_MS = 2000;
@@ -50,6 +73,7 @@ export function drawSiteSettings(
     container.replaceChildren();
     drawTable(container, fields, values, [], ctx).refresh(true);
     drawActions(container, options);
+    drawSecrets(container, options);
   };
   const ctx: Ctx = { write: options.write, redraw: draw };
   draw();
@@ -463,4 +487,105 @@ function drawActions(host: HTMLElement, options: SiteSettingsFormOptions): void 
     row.appendChild(button);
     host.appendChild(row);
   }
+}
+
+/** Each secret's row: a field and Connect, or what the service last did with it. */
+function drawSecrets(host: HTMLElement, options: SiteSettingsFormOptions): void {
+  const api = options.secret;
+  if (!api) return;
+  let previousGroup: string | null = null;
+  for (const secret of options.secrets ?? []) {
+    const group = secret.group || null;
+    if (group && group !== previousGroup) host.appendChild(heading(group));
+    previousGroup = group;
+    const { row, body } = createFieldRow({ label: secret.label, dataset: { secret: secret.id } });
+    host.appendChild(row);
+    const show = (state: SiteSecretState | null, editing = false) => {
+      body.replaceChildren(state?.connected && !editing ? connectedView(secret, state, api, show) : entryView(secret, api, show, state?.connected === true));
+    };
+    show(null);
+    api.status(secret.id).then((state) => show(state), (err) => {
+      show(null);
+      report(body.querySelector<HTMLElement>(".moss-input-feedback"), false, err instanceof Error ? err.message : String(err));
+    });
+  }
+}
+
+type Show = (state: SiteSecretState | null, editing?: boolean) => void;
+
+function linkButton(label: string, action: string): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "moss-link";
+  button.dataset.action = action;
+  button.textContent = label;
+  return button;
+}
+
+function entryView(secret: SiteSettingSecret, api: NonNullable<SiteSettingsFormOptions["secret"]>, show: Show, replacing: boolean): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "moss-site-settings-secret";
+  const input = createPillInput({ type: "password", placeholder: secret.placeholder ?? undefined, ariaLabel: secret.label });
+  const connect = document.createElement("button");
+  connect.type = "button";
+  connect.className = "moss-btn moss-btn-primary";
+  connect.dataset.action = "connect";
+  connect.textContent = t("site_settings.secret.connect");
+  const feedback = feedbackSlot(secret.id);
+  bindAction(connect, {
+    run: async () => {
+      const value = input.value.trim();
+      if (!value) return;
+      try {
+        show(await api.set(secret.id, value));
+      } catch (err) {
+        const why = err instanceof Error ? err.message : String(err);
+        report(feedback, false, why === "pattern" ? (secret.pattern_message ?? undefined) : why);
+        throw err;
+      }
+    },
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") connect.click();
+  });
+  wrap.append(input, connect);
+  if (replacing) {
+    const cancel = linkButton(t("site_settings.secret.cancel"), "cancel");
+    cancel.addEventListener("click", () => void api.status(secret.id).then((s) => show(s)));
+    wrap.appendChild(cancel);
+  }
+  wrap.appendChild(feedback);
+  return wrap;
+}
+
+function connectedView(secret: SiteSettingSecret, state: SiteSecretState, api: NonNullable<SiteSettingsFormOptions["secret"]>, show: Show): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "moss-site-settings-secret";
+  const text = document.createElement("span");
+  text.className = "moss-site-settings-secret__state";
+  if (state.error) text.dataset.error = state.error;
+  const read = state.error === "gone"
+    ? t("site_settings.secret.gone")
+    : state.error
+      ? t("site_settings.secret.unreadable")
+      : state.read_at == null
+        ? t("site_settings.secret.not_read")
+        : t("site_settings.secret.read", { when: ago(state.read_at) });
+  text.textContent = [state.host ?? t("site_settings.secret.connected"), read].join(" · ");
+  const replace = linkButton(t("site_settings.secret.replace"), "replace");
+  replace.addEventListener("click", () => show(state, true));
+  const disconnect = linkButton(t("site_settings.secret.disconnect"), "disconnect");
+  bindAction(disconnect, { run: async () => show(await api.set(secret.id, null)) });
+  wrap.append(text, replace, disconnect);
+  return wrap;
+}
+
+/** "3 minutes ago", in the reader's language. */
+function ago(unixSeconds: number): string {
+  const seconds = Math.round(unixSeconds - Date.now() / 1000);
+  const format = new Intl.RelativeTimeFormat(document.documentElement.lang || undefined, { numeric: "auto" });
+  for (const [unit, size] of [["day", 86400], ["hour", 3600], ["minute", 60]] as const) {
+    if (Math.abs(seconds) >= size) return format.format(Math.round(seconds / size), unit);
+  }
+  return format.format(0, "minute");
 }
