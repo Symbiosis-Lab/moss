@@ -899,4 +899,29 @@ mod tests {
             assert_eq!(snapshot(dir.path()), before);
         }
     }
+
+    /// Opening a deploy writes a record on the server, so a dry run only reads.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dry_run_never_opens_a_deploy() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let seta = crate::seta::client::tests::StandIn::json(404, "{}").await;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".moss")).unwrap();
+        std::fs::write(dir.path().join(".moss/state.toml"), "[deployment]\nsite_id = \"dry-open\"\n").unwrap();
+        crate::identity::Identity::generate().unwrap().save(dir.path()).unwrap();
+        std::fs::create_dir_all(dir.path().join("_site")).unwrap();
+        std::fs::write(dir.path().join("_site/index.html"), "home").unwrap();
+        let prev = std::env::var("MOSS_SETA_URL").ok();
+        std::env::set_var("MOSS_SETA_URL", seta.url());
+
+        let report = run_prebuilt_dry_run(dir.path(), &dir.path().join("_site"), None, false, false).await;
+
+        match prev {
+            Some(u) => std::env::set_var("MOSS_SETA_URL", u),
+            None => std::env::remove_var("MOSS_SETA_URL"),
+        }
+        let seen = seta.requests();
+        assert!(!seen.is_empty(), "the dry run asked the server nothing: {:?}", report.err());
+        assert!(seen.iter().all(|r| r.method == "GET"), "a dry run wrote: {:?}", seen.iter().map(|r| format!("{} {}", r.method, r.path_and_query)).collect::<Vec<_>>());
+    }
 }

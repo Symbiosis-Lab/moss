@@ -2364,4 +2364,24 @@ mod tests {
         assert_eq!(counts["server_files_updated"], 1039, "server site total stays separate");
     }
 
+    /// A folder with no site answers `NeedsSetup` before the build, asking the
+    /// server nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_folder_with_no_site_needs_setup_and_asks_the_server_nothing() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let seta = crate::seta::client::tests::StandIn::json(404, "{}").await;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.md"), "# Home\n").unwrap();
+        let prev = std::env::var("MOSS_SETA_URL").ok();
+        std::env::set_var("MOSS_SETA_URL", seta.url());
+
+        let result = run_hosted_deploy(dir.path(), &crate::cli::host::cli_host_ports, crate::build::PluginMode::Skip, None, Default::default(), &progress::silent()).await;
+
+        match prev {
+            Some(u) => std::env::set_var("MOSS_SETA_URL", u),
+            None => std::env::remove_var("MOSS_SETA_URL"),
+        }
+        assert!(matches!(result, Ok(PushResult::NeedsSetup)), "got {:?}", result.map_err(|e| e.to_string()));
+        assert!(seta.requests().is_empty(), "asked {:?}", seta.requests().iter().map(|r| r.path_and_query.clone()).collect::<Vec<_>>());
+    }
 }
