@@ -170,6 +170,35 @@ pub struct SearchIndex {
     /// Pages the walk left out on purpose: redirect stubs and the not-found
     /// page. They are part of the tree, so a check of coverage counts them.
     pub left_out: usize,
+    /// Every page Pagefind took, with the URL it filed the page under.
+    pub indexed: Vec<IndexedPage>,
+}
+
+/// A page in a bundle: where it was read from, its content key and its URL.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexedPage {
+    pub rel_path: String,
+    pub key: u128,
+    pub url: String,
+}
+
+/// Each fragment's id (a search result's `id`) by the URL of its page.
+/// A fragment is gzip over `pagefind_dcd` and the page's JSON.
+pub(crate) fn fragment_ids(files: &[SearchIndexFile]) -> HashMap<String, String> {
+    #[derive(serde::Deserialize)]
+    struct Fragment {
+        url: String,
+    }
+    files
+        .iter()
+        .filter_map(|file| {
+            let id = file.rel_path.strip_prefix("fragment/")?.strip_suffix(".pf_fragment")?;
+            let mut json = Vec::new();
+            std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(&file.bytes[..]), &mut json).ok()?;
+            let fragment: Fragment = serde_json::from_slice(json.strip_prefix(b"pagefind_dcd")?).ok()?;
+            Some((fragment.url, id.to_string()))
+        })
+        .collect()
 }
 
 /// Elements whose text is markup, not prose. Segmenting them would insert
@@ -247,9 +276,9 @@ static WORDS: LazyLock<WordSegmenterBorrowed<'static>> =
 /// tree, generation or folder the bytes were read from.
 ///
 /// In-process only, like `build::parse_cache`: the saving exists only in a
-/// long-lived process that re-indexes as the author edits. Each build replaces
-/// the map with exactly the pages it read, so it never holds more than one
-/// corpus; two folders indexed in turn simply miss.
+/// long-lived process that re-indexes as the author edits. Each whole index
+/// replaces the map with exactly the pages it read, so it never holds more
+/// than one corpus and the edits since; two folders indexed in turn miss.
 ///
 /// The cost is that corpus, segmented, kept for the life of the process:
 /// 12.3 MiB for a 473-page bilingual site (logged at debug level after every
@@ -393,7 +422,7 @@ struct SegmentedPage {
 pub(crate) struct PageSource {
     pub(crate) rel_path: String,
     /// Content key of `source` (see [`SEGMENTED`]).
-    key: u128,
+    pub(crate) key: u128,
     source: String,
 }
 
@@ -504,17 +533,19 @@ pub(crate) fn corpus_key(pages: &[PageSource]) -> String {
 
 /// Segment `pages`, replaying [`SEGMENTED`] for every page whose bytes it holds.
 /// Returns the segmented pages, how many failed to rewrite (skipped, like an
-/// unreadable page), and how many were segmented afresh.
+/// unreadable page), and how many were segmented afresh. A whole corpus
+/// replaces the cache; a delta adds to it, since the next whole index replays
+/// the pages the delta did not read.
 ///
 /// Segmentation runs on rayon's global pool, like the markdown-parse and
 /// HTML-render loops in `render/blocking.rs`. It runs to completion *before*
 /// Pagefind is handed the pages, so the two never contend for the pool. Keep
 /// them sequential phases — see `scan/scan.rs` and `media/image.rs`, which
 /// both carry scars from nesting.
-fn segment_pages(pages: Vec<PageSource>) -> (Vec<SegmentedPage>, usize, usize) {
+fn segment_pages(pages: Vec<PageSource>, scope: Scope) -> (Vec<SegmentedPage>, usize, usize) {
     // Taken, not locked for the pass: a concurrent index build finds the map
     // empty and misses, which costs time and never correctness.
-    let prior = std::mem::take(&mut *SEGMENTED.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+    let mut prior = std::mem::take(&mut *SEGMENTED.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
     let slots: Vec<Result<SegmentedPage, PageSource>> = pages
         .into_iter()
         .map(|page| match prior.get(&page.key) {
@@ -522,7 +553,9 @@ fn segment_pages(pages: Vec<PageSource>) -> (Vec<SegmentedPage>, usize, usize) {
             None => Err(page),
         })
         .collect();
-    drop(prior);
+    if scope == Scope::Whole {
+        prior.clear();
+    }
 
     // Segment the rest in parallel.
     let resegmented = slots.iter().filter(|s| s.is_err()).count();
@@ -543,8 +576,8 @@ fn segment_pages(pages: Vec<PageSource>) -> (Vec<SegmentedPage>, usize, usize) {
     let pages: Vec<SegmentedPage> = segmented.into_iter().flatten().collect();
     let held: usize = pages.iter().map(|p| p.html.len()).sum();
     log::debug!(target: "search", "segmentation cache: {} pages, {} KiB", pages.len(), held / 1024);
-    *SEGMENTED.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
-        pages.iter().map(|p| (p.key, Arc::clone(&p.html))).collect();
+    prior.extend(pages.iter().map(|p| (p.key, Arc::clone(&p.html))));
+    *SEGMENTED.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = prior;
     (pages, failed, resegmented)
 }
 
@@ -575,7 +608,14 @@ pub(crate) fn clear_segment_cache() {
 pub fn build_search_index(site_dir: &Path) -> Result<SearchIndex, String> {
     let _phase = crate::build::phase::PhaseTrace::start("search_index");
     let t_read = std::time::Instant::now();
-    index_pages(read_pages(site_dir), t_read)
+    index_pages(read_pages(site_dir), t_read, Scope::Whole)
+}
+
+/// Whether an index covers a whole corpus or only the pages that changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Scope {
+    Whole,
+    Delta,
 }
 
 /// Pages handed to Pagefind per parallel parse: enough to keep every core busy,
@@ -587,10 +627,11 @@ const FOSSICK_CHUNK: usize = 512;
 pub(crate) fn index_pages(
     PageRead { pages, unreadable, left_out }: PageRead,
     t_read: std::time::Instant,
+    scope: Scope,
 ) -> Result<SearchIndex, String> {
     INDEX_BUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-    let (pages, failed, resegmented) = segment_pages(pages);
+    let (pages, failed, resegmented) = segment_pages(pages, scope);
     let skipped = unreadable + failed;
     let readable = pages.len();
     crate::build::phase::record_count("search_pages", readable);
@@ -620,32 +661,34 @@ pub(crate) fn index_pages(
                 // copies of page HTML held at once. A page Pagefind cannot
                 // parse is left out, as its own directory walk left it out.
                 let t_fossick = std::time::Instant::now();
-                let mut page_count = 0;
+                let mut indexed = Vec::with_capacity(pages.len());
                 let mut pages = pages.into_iter().peekable();
                 while pages.peek().is_some() {
-                    let chunk: Vec<_> = pages
-                        .by_ref()
-                        .take(FOSSICK_CHUNK)
-                        .map(|page| (Some(page.rel_path), None, page.html.to_string()))
+                    let chunk: Vec<_> = pages.by_ref().take(FOSSICK_CHUNK).collect();
+                    let html = chunk
+                        .iter()
+                        .map(|page| (Some(page.rel_path.clone()), None, page.html.to_string()))
                         .collect();
                     let added = index
-                        .add_html_files(chunk)
+                        .add_html_files(html)
                         .await
                         .map_err(|e| format!("failed to index pages: {}", e))?;
-                    for result in added {
+                    // One result per input, in input order.
+                    for (page, result) in chunk.into_iter().zip(added) {
                         match result {
-                            Ok(_) => page_count += 1,
+                            Ok(added) => indexed.push(IndexedPage { rel_path: page.rel_path, key: page.key, url: added.page_url }),
                             Err(e) => log::info!(target: "search", "search index skipped a page: {}", e),
                         }
                     }
                 }
+                let page_count = indexed.len();
                 let fossick_ms = t_fossick.elapsed().as_millis();
 
                 if page_count == 0 {
                     // Not an error and not necessarily a success — the census
                     // travels so `publish_bundle` can tell "no indexable
                     // content" from "the tree went away".
-                    return Ok(SearchIndex { files: Vec::new(), pages: readable, skipped, left_out });
+                    return Ok(SearchIndex { files: Vec::new(), pages: readable, skipped, left_out, indexed });
                 }
 
                 // `get_files()` is `build_indexes()` PLUS `write_files_to_memory()`
@@ -693,6 +736,7 @@ pub(crate) fn index_pages(
                     pages: readable,
                     skipped,
                     left_out,
+                    indexed,
                 })
             })
         })

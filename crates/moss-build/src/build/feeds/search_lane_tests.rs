@@ -293,7 +293,7 @@ fn a_bundle_that_covers_fewer_pages_than_its_page_set_is_refused() {
     let want = PageSet { fp: PageSetFp(0xfeed), pages: 3 };
 
     // Nothing could be read at all — a generation GC'd or evicted mid-walk.
-    let nothing = search::SearchIndex { files: vec![], pages: 0, skipped: 0, left_out: 0 };
+    let nothing = search::SearchIndex::default();
     let err = with_holding(&index_dir, |h| publish_bundle(h, &index_dir, want, None, &nothing))
         .expect_err("a zero-page bundle must not be stamped with a 3-page fingerprint");
     assert!(err.contains("0 of 3"), "unhelpful refusal: {err}");
@@ -305,7 +305,7 @@ fn a_bundle_that_covers_fewer_pages_than_its_page_set_is_refused() {
         files: vec![search::SearchIndexFile { rel_path: "pagefind.js".into(), bytes: vec![1] }],
         pages: 2,
         skipped: 1,
-        left_out: 0,
+        ..Default::default()
     };
     assert!(
         with_holding(&index_dir, |h| publish_bundle(h, &index_dir, want, None, &partial)).is_err(),
@@ -350,7 +350,7 @@ fn a_refused_publish_leaves_the_previous_bundle_adoptable() {
     let one = PageSet { fp: PageSetFp(0x1111), pages: 1 };
     with_holding(&index_dir, |h| publish_bundle(h, &index_dir, one, None, &good)).unwrap();
 
-    let nothing = search::SearchIndex { files: vec![], pages: 0, skipped: 0, left_out: 0 };
+    let nothing = search::SearchIndex::default();
     let two = PageSet { fp: PageSetFp(0x2222), pages: 2 };
     assert!(with_holding(&index_dir, |h| publish_bundle(h, &index_dir, two, None, &nothing)).is_err());
 
@@ -454,7 +454,7 @@ fn settle_is_a_no_op_when_current_ships_the_covering_bundle() {
     sealed_with_a_covering_receipt(&mp, true);
 
     let before = search::index_build_count();
-    assert!(!settle_index(&mp), "a fresh, shipped index must not force a rebuild");
+    assert!(!settle_index(&mp, search::Scope::Whole), "a fresh, shipped index must not force a rebuild");
     assert_eq!(search::index_build_count(), before);
 }
 
@@ -467,7 +467,7 @@ fn settle_asks_for_a_rebuild_when_current_ships_another_bundle() {
     sealed_with_a_covering_receipt(&mp, false);
 
     let before = search::index_build_count();
-    assert!(settle_index(&mp), "current does not ship the receipt's bundle");
+    assert!(settle_index(&mp, search::Scope::Whole), "current does not ship the receipt's bundle");
     assert_eq!(search::index_build_count(), before, "the receipt already covers the page set");
 }
 
@@ -490,7 +490,7 @@ fn settle_reindexes_when_the_receipt_is_for_an_older_page_set() {
     hashes.files.insert("index.html".to_string(), "100644:abc".to_string());
     std::fs::write(mp.hashes(), serde_json::to_string(&hashes).unwrap()).unwrap();
 
-    assert!(settle_index(&mp), "a stale index must force a rebuild");
+    assert!(settle_index(&mp, search::Scope::Whole), "a stale index must force a rebuild");
     assert_eq!(
         read_receipt(&mp.index_dir()).unwrap().fp(),
         PageSetFp::of(&hashes.files),
@@ -516,9 +516,9 @@ fn a_second_settle_of_a_page_set_with_a_page_left_out_indexes_nothing() {
     }
     std::fs::write(mp.hashes(), serde_json::to_string(&hashes).unwrap()).unwrap();
 
-    settle_index(&mp);
+    settle_index(&mp, search::Scope::Whole);
     let before = search::index_build_count();
-    settle_index(&mp);
+    settle_index(&mp, search::Scope::Whole);
     assert_eq!(search::index_build_count(), before, "the first settle's bundle covers this page set");
 }
 
@@ -539,7 +539,7 @@ fn settle_does_not_accept_an_empty_bundle_for_a_page_set_that_has_pages() {
         pages: 0,
         left_out: 0,
         files: vec![],
-        staged: None,
+        ..Default::default()
     };
     std::fs::create_dir_all(mp.index_dir()).unwrap();
     std::fs::write(mp.index_receipt(), serde_json::to_vec(&empty).unwrap()).unwrap();
@@ -549,7 +549,7 @@ fn settle_does_not_accept_an_empty_bundle_for_a_page_set_that_has_pages() {
     std::fs::write(gen.join("index.html"), PAGE).unwrap();
     mp.set_current_ptr("g").unwrap();
 
-    assert!(settle_index(&mp), "an empty bundle must not pass for a real page set");
+    assert!(settle_index(&mp, search::Scope::Whole), "an empty bundle must not pass for a real page set");
     let after = read_receipt(&mp.index_dir()).unwrap();
     assert_eq!(after.pages, 1);
     assert!(!after.files.is_empty());
@@ -581,7 +581,7 @@ fn a_build_adopts_while_a_settle_indexes() {
         *record.lock().unwrap() = rx.recv_timeout(std::time::Duration::from_secs(5)).ok();
     }));
 
-    assert!(settle_index(&mp));
+    assert!(settle_index(&mp, search::Scope::Whole));
     assert_eq!(
         *adopted_mid_index.lock().unwrap(),
         Some(Adoption::Unindexed),
@@ -617,7 +617,7 @@ fn a_promote_between_the_manifest_read_and_the_page_read_publishes_nothing() {
         std::fs::write(promote.hashes(), serde_json::to_string(&b).unwrap()).unwrap();
     }));
 
-    assert!(!settle_index(&mp), "nothing was indexed for a publish to ship");
+    assert!(!settle_index(&mp, search::Scope::Whole), "nothing was indexed for a publish to ship");
     assert!(read_receipt(&mp.index_dir()).is_none(), "a bundle was published for a page set current no longer holds");
 }
 
@@ -736,4 +736,181 @@ fn a_laid_file_rewritten_in_place_is_laid_again() {
     assert!(matches!(adopt_into(&mp, &mp.staging_dir(), &mut second, true, Freshness::Now), Adoption::Adopted(_)), "the same pages serve the held bundle");
 
     assert_eq!(std::fs::read(&staged).unwrap(), good, "staging serves the receipt's bytes again");
+}
+
+// ── The preview's delta ─────────────────────────────────────────────────────
+
+const WORDS: [&str; 8] = ["amber", "birch", "cedar", "dahlia", "elder", "fennel", "ginkgo", "hazel"];
+
+fn page(word: &str) -> String {
+    format!("<html lang=\"en\"><body><h1>{word}</h1><p>A page about {word} trees and nothing else.</p></body></html>")
+}
+
+/// Make generation `name` hold `pages` and point `current` and `hashes.json` at it.
+fn generation(mp: &MossPaths, name: &str, pages: &[(String, String)]) -> PageSet {
+    let dir = mp.generation_dir(name);
+    let mut hashes = crate::types::content::SiteHashes::default();
+    for (rel, html) in pages {
+        std::fs::create_dir_all(dir.join(rel).parent().unwrap()).unwrap();
+        std::fs::write(dir.join(rel), html).unwrap();
+        hashes.files.insert(rel.clone(), format!("100644:{:x}", xxhash_rust::xxh3::xxh3_64(html.as_bytes())));
+    }
+    std::fs::write(mp.hashes(), serde_json::to_string(&hashes).unwrap()).unwrap();
+    mp.set_current_ptr(name).unwrap();
+    PageSet::of(&hashes.files)
+}
+
+fn eight_pages() -> Vec<(String, String)> {
+    WORDS.iter().map(|w| (format!("{w}/index.html"), page(w))).collect()
+}
+
+fn fragment_of(mp: &MossPaths, receipt: &BundleReceipt, rel: &str) -> String {
+    let held = with_holding(&mp.index_dir(), |h| delta::held_fragments(h, &mp.index_dir(), receipt)).unwrap();
+    held.into_iter().find(|(r, ..)| r == rel).unwrap().2
+}
+
+/// What the delta's manifest tells the search panel.
+fn manifest(mp: &MossPaths) -> serde_json::Value {
+    let path = held_delta_file(mp, DELTA_MANIFEST).expect("a delta is served");
+    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+}
+
+/// The URLs of the pages a delta's bundle holds.
+fn delta_urls(mp: &MossPaths) -> Vec<String> {
+    let delta = delta::read_delta(&mp.index_dir()).unwrap();
+    let files: Vec<search::SearchIndexFile> = delta
+        .files
+        .iter()
+        .map(|rel| search::SearchIndexFile { rel_path: rel.clone(), bytes: std::fs::read(held_delta_file(mp, rel).unwrap()).unwrap() })
+        .collect();
+    let mut urls: Vec<String> = search::fragment_ids(&files).into_keys().collect();
+    urls.sort();
+    urls
+}
+
+/// An edit seen by the preview's search is indexed on its own: the held
+/// bundle stays as it was, and the delta holds the edited page and names the
+/// held bundle's copy of it as replaced.
+#[test]
+fn a_preview_edit_indexes_only_the_changed_page_into_a_delta() {
+    let _serialize = search::lock_index_counter();
+    let (_root, mp) = project(PAGE);
+    let mut pages = eight_pages();
+    generation(&mp, "g1", &pages);
+    settle_index(&mp, search::Scope::Delta);
+    let base = read_receipt(&mp.index_dir()).unwrap();
+    assert!(held_delta_file(&mp, DELTA_MANIFEST).is_none(), "a first index has no delta");
+
+    pages[2].1 = page("zephyr");
+    let want = generation(&mp, "g2", &pages);
+    settle_index(&mp, search::Scope::Delta);
+
+    assert_eq!(read_receipt(&mp.index_dir()).unwrap().fp, base.fp, "the held bundle is not re-indexed");
+    assert_eq!(delta::read_delta(&mp.index_dir()).unwrap().fp, want.fp.hex());
+    assert_eq!(delta_urls(&mp), ["/cedar/"], "the delta holds the edited page alone");
+    assert_eq!(
+        manifest(&mp),
+        serde_json::json!({ "bundle": true, "supersede": [fragment_of(&mp, &base, "cedar/index.html")] }),
+    );
+
+    let before = search::index_build_count();
+    settle_index(&mp, search::Scope::Delta);
+    assert_eq!(search::index_build_count(), before, "the delta covers the page set");
+}
+
+/// A deleted page needs no bundle, only its fragment named as removed.
+#[test]
+fn a_deleted_page_is_superseded_without_a_bundle() {
+    let _serialize = search::lock_index_counter();
+    let (_root, mp) = project(PAGE);
+    let mut pages = eight_pages();
+    generation(&mp, "g1", &pages);
+    settle_index(&mp, search::Scope::Delta);
+    let base = read_receipt(&mp.index_dir()).unwrap();
+
+    pages.remove(5);
+    generation(&mp, "g2", &pages);
+    settle_index(&mp, search::Scope::Delta);
+
+    assert_eq!(read_receipt(&mp.index_dir()).unwrap().fp, base.fp);
+    assert_eq!(manifest(&mp), serde_json::json!({ "bundle": false, "supersede": [fragment_of(&mp, &base, "fennel/index.html")] }));
+}
+
+/// An edit undone makes the held bundle current again; its delta goes.
+#[test]
+fn an_undone_edit_clears_the_delta() {
+    let _serialize = search::lock_index_counter();
+    let (_root, mp) = project(PAGE);
+    let mut pages = eight_pages();
+    generation(&mp, "g1", &pages);
+    settle_index(&mp, search::Scope::Delta);
+    pages[0].1 = page("zephyr");
+    generation(&mp, "g2", &pages);
+    settle_index(&mp, search::Scope::Delta);
+    assert!(held_delta_file(&mp, DELTA_MANIFEST).is_some());
+
+    generation(&mp, "g3", &eight_pages());
+    settle_index(&mp, search::Scope::Delta);
+    assert!(held_delta_file(&mp, DELTA_MANIFEST).is_none(), "the held bundle answers for every page again");
+}
+
+/// Past a quarter of the held pages, the delta is a whole index instead.
+#[test]
+fn a_delta_over_a_quarter_of_the_pages_takes_a_whole_index() {
+    let _serialize = search::lock_index_counter();
+    let (_root, mp) = project(PAGE);
+    let mut pages = eight_pages();
+    generation(&mp, "g1", &pages);
+    settle_index(&mp, search::Scope::Delta);
+    for (i, word) in ["xylem", "yarrow", "zephyr"].iter().enumerate() {
+        pages[i].1 = page(word);
+    }
+    let want = generation(&mp, "g2", &pages);
+    settle_index(&mp, search::Scope::Delta);
+
+    assert_eq!(read_receipt(&mp.index_dir()).unwrap().fp, want.fp.hex(), "the whole index is the new held bundle");
+    assert!(delta::read_delta(&mp.index_dir()).is_none());
+}
+
+/// The whole index a publish settles for replaces the delta, and is the
+/// bundle a cold build of the same pages makes, byte for byte.
+#[test]
+fn a_whole_settle_after_a_delta_matches_a_cold_build_and_clears_the_delta() {
+    let _serialize = search::lock_index_counter();
+    let (_root, mp) = project(PAGE);
+    let mut pages = eight_pages();
+    generation(&mp, "g1", &pages);
+    settle_index(&mp, search::Scope::Delta);
+    pages[4].1 = page("zephyr");
+    let want = generation(&mp, "g2", &pages);
+    settle_index(&mp, search::Scope::Delta);
+    assert!(delta::read_delta(&mp.index_dir()).is_some());
+
+    settle_index(&mp, search::Scope::Whole);
+    let compacted = read_receipt(&mp.index_dir()).unwrap();
+    assert_eq!(compacted.fp, want.fp.hex());
+    assert!(delta::read_delta(&mp.index_dir()).is_none() && !mp.index_dir().join(delta::DELTA_DIR).exists(), "no delta outlives a whole index");
+
+    search::clear_segment_cache();
+    let cold = search::build_search_index(&mp.generation_dir("g2")).unwrap();
+    let mut cold: Vec<(String, String)> =
+        cold.files.iter().map(|f| (f.rel_path.clone(), crate::build::assets::paths::compute_binary_hash(&f.bytes))).collect();
+    cold.sort();
+    assert_eq!(compacted.files, cold, "the compacted bundle is a cold build's");
+}
+
+/// A whole index records its pages for a later delta without reading its own
+/// fragments back, and keeps them out of the receipt every search read parses.
+#[test]
+fn a_whole_index_records_its_pages_without_mapping_fragments() {
+    let _serialize = search::lock_index_counter();
+    let (_root, mp) = project(PAGE);
+    generation(&mp, "g1", &eight_pages());
+    settle_index(&mp, search::Scope::Whole);
+
+    let pages: serde_json::Value = serde_json::from_slice(&std::fs::read(mp.index_dir().join("pages.json")).unwrap()).unwrap();
+    assert_eq!(pages["pages"].as_array().unwrap().len(), 8);
+    assert!(pages.get("fragments").is_none(), "only a delta maps fragments");
+    let receipt: serde_json::Value = serde_json::from_slice(&std::fs::read(mp.index_receipt()).unwrap()).unwrap();
+    assert_eq!(receipt.as_object().unwrap().keys().filter(|k| !["fp", "pages", "left_out", "files", "staged"].contains(&k.as_str())).count(), 0);
 }

@@ -676,6 +676,14 @@ impl ServedPath {
         "/_moss/pagefind/"
     }
 
+    /// Root-relative URL where the preview serves its search delta: the pages
+    /// edited since the held bundle, which the search panel merges into it.
+    /// Never a prefix of [`Self::search_mount_url`], since Pagefind skips a
+    /// merge whose path starts its own. Never written to the build output.
+    pub fn search_delta_mount_url() -> &'static str {
+        "/_moss/pagefind-delta/"
+    }
+
     /// Whether a manifest key addresses the search-index bundle.
     ///
     /// Manifest-key domain (no leading slash), which is why this is not

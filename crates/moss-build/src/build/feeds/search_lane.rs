@@ -268,6 +268,7 @@ fn publish_bundle(
     }
 
     let _phase = crate::build::phase::PhaseTrace::start("search_publish");
+    clear_delta(_holding, index_dir);
     let fp = want.fp;
     let files = &produced.files;
     let dir = holding_dir(index_dir, fp);
@@ -307,6 +308,7 @@ fn publish_bundle(
         .map_err(|e| format!("failed to serialize search receipt: {}", e))?;
     crate::build::io_utils::write_output(&index_dir.join("receipt.json"), &json)
         .map_err(|e| format!("failed to write search receipt: {}", e))?;
+    delta::record_pages(index_dir, &receipt.fp, &produced.indexed);
     drop(_phase);
     gc_holding(index_dir, fp, &receipt);
     Ok(receipt)
@@ -471,7 +473,7 @@ impl SearchJob {
         let _phase = crate::build::phase::PhaseTrace::start("search_index");
         let SearchJob { index_dir, links, stage_dir, read, key, t_read } = self;
         with_holding(&index_dir, |h| {
-            let published = search::index_pages(read, t_read)
+            let published = search::index_pages(read, t_read, search::Scope::Whole)
                 .and_then(|produced| publish_bundle(h, &index_dir, PageSet::UNKNOWN, Some(&key), &produced));
             lay_indexed(h, &index_dir, &links, &stage_dir, published)
         })
@@ -704,15 +706,27 @@ fn lay(
 /// that build never adopted. A one-shot build indexes inside
 /// the build instead ([`Freshness::Now`]).
 pub async fn settle(mp: &MossPaths, enabled: bool) -> bool {
+    settle_scoped(mp, enabled, search::Scope::Whole).await
+}
+
+/// [`settle`] for the preview's own search panel: the pages that changed since
+/// the held bundle are indexed into a delta beside it (see [`index_delta`]),
+/// and the held bundle stays as it is for a build to adopt and a publish to
+/// replace with a whole index.
+pub async fn settle_preview(mp: &MossPaths) {
+    settle_scoped(mp, true, search::Scope::Delta).await;
+}
+
+async fn settle_scoped(mp: &MossPaths, enabled: bool, scope: search::Scope) -> bool {
     if !enabled {
         return false;
     }
     crate::build::seal_phase::settle(mp).await;
     let mp = mp.clone();
-    tokio::task::spawn_blocking(move || settle_index(&mp)).await.unwrap_or(false)
+    tokio::task::spawn_blocking(move || settle_index(&mp, scope)).await.unwrap_or(false)
 }
 
-fn settle_index(mp: &MossPaths) -> bool {
+fn settle_index(mp: &MossPaths, scope: search::Scope) -> bool {
     let index_dir = mp.index_dir();
     let locks = folder_locks(&index_dir);
     let _one_settle = locks.settle.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -741,7 +755,25 @@ fn settle_index(mp: &MossPaths) -> bool {
                 && receipt.files.iter().all(|(rel, _)| holding.join(rel).is_file())
         })
     };
-    match with_holding(&index_dir, covering).or_else(|| index_current(mp, &generation, want, covering)) {
+    if let Some(receipt) = with_holding(&index_dir, |h| {
+        let held = covering(h);
+        if held.is_some() {
+            // An edit undone: the held bundle is current again, and a delta
+            // against it would answer for pages as they no longer are.
+            clear_delta(h, &index_dir);
+        }
+        held
+    }) {
+        return !ships(&hashes, &receipt);
+    }
+    if scope == search::Scope::Delta {
+        if let Some(base) = read_receipt(&index_dir) {
+            if index_delta(mp, &generation, want, &base) == DeltaOutcome::Done {
+                return false;
+            }
+        }
+    }
+    match index_current(mp, &generation, want, covering) {
         Some(receipt) => !ships(&hashes, &receipt),
         // Publishing or searching without a fresh index beats neither.
         None => false,
@@ -784,7 +816,7 @@ fn index_current(
         log::info!(target: "search", "search index not generated: a promote moved current during the read");
         return None;
     }
-    let published = search::index_pages(read, t_read).and_then(|produced| {
+    let published = search::index_pages(read, t_read, search::Scope::Whole).and_then(|produced| {
         with_holding(&index_dir, |h| covering(h).map_or_else(|| publish_bundle(h, &index_dir, want, None, &produced), Ok))
     });
     match published {
@@ -824,6 +856,10 @@ pub fn held_file(mp: &MossPaths, rel: &str) -> Option<PathBuf> {
     let receipt = read_receipt(&index_dir)?;
     receipt.files.iter().any(|(named, _)| named == rel).then(|| holding_dir(&index_dir, receipt.fp()).join(rel))
 }
+
+mod delta;
+pub use delta::{held_delta_file, DELTA_MANIFEST};
+use delta::{clear_delta, index_delta, DeltaOutcome};
 
 #[cfg(test)]
 #[path = "search_lane_tests.rs"]

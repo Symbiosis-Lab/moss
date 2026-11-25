@@ -207,8 +207,7 @@ fn bundle_via_scratch_copy(site_dir: &Path) -> SearchIndex {
     SearchIndex {
         files: files.into_iter().map(bundle_file).collect::<Result<_, _>>().unwrap(),
         pages: rels.len(),
-        skipped: 0,
-        left_out: 0,
+        ..Default::default()
     }
 }
 

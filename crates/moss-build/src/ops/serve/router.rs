@@ -78,15 +78,21 @@ pub(super) async fn page_for_source_route(
 /// ends. A picture or video batch is not: the newest bundle answers at once and
 /// the settle runs behind it, so a search never waits on pictures. With no
 /// bundle yet there is nothing to answer with, and the settle is awaited.
+///
+/// The delta's mount is answered from what that settle left, without another.
 async fn search_bundle_file(served: &crate::moss_paths::Served, normalized: &str) -> Option<std::path::PathBuf> {
     use crate::build::feeds::search_lane;
-    let rel = normalized.strip_prefix(crate::build::served_path::ServedPath::search_mount_url().trim_start_matches('/'))?;
+    use crate::build::served_path::ServedPath;
     let vault = &served.folder;
     let mp = crate::moss_paths::MossPaths::new(vault.path());
+    if let Some(rel) = normalized.strip_prefix(ServedPath::search_delta_mount_url().trim_start_matches('/')) {
+        return search_lane::held_delta_file(&mp, rel);
+    }
+    let rel = normalized.strip_prefix(ServedPath::search_mount_url().trim_start_matches('/'))?;
     if matches!(rel, "pagefind.js" | "pagefind-entry.json") && search_lane::enabled_for(&mp) {
         let session = crate::system::folder_session::registry().get(&vault.path().to_string_lossy());
         let settling = mp.clone();
-        let settle = async move { search_lane::settle(&settling, true).await };
+        let settle = async move { search_lane::settle_preview(&settling).await };
         let converting = || session.as_ref().is_some_and(|s| s.is_converting());
         if converting() && search_lane::held_file(&mp, rel).is_some() {
             tokio::spawn(settle);

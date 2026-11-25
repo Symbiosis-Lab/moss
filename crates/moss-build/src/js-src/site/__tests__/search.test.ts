@@ -20,7 +20,7 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 
 import "../search";
-import { renderExcerpt, joinSegmentedHan } from "../search";
+import { renderExcerpt, joinSegmentedHan, mergeDelta } from "../search";
 
 /** Nav markup as `build/components/nav.rs` emits it when search is enabled. */
 function setupPage(): HTMLButtonElement {
@@ -395,5 +395,49 @@ describe("CJK de-segmentation for display", () => {
     renderExcerpt(container, "程式 <mark>碼</mark> <img src=x onerror=alert(1)> 之後");
     expect(container.querySelector("img")).toBeNull();
     expect(container.textContent).toContain("<img src=x onerror=alert(1)>");
+  });
+});
+
+describe("the preview's search delta", () => {
+  const fakeIndex = () => ({ options: vi.fn(), init: vi.fn(), search: vi.fn(), mergeIndex: vi.fn(async () => {}) });
+  const serve = (status: number, body: unknown) =>
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(body), { status }));
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    document.body.removeAttribute("data-moss-preview");
+  });
+
+  test("the preview merges the delta and drops the pages it replaces", async () => {
+    document.body.setAttribute("data-moss-preview", "");
+    const fetched = serve(200, { bundle: true, supersede: ["en_1a2b"] });
+    const mod = fakeIndex();
+
+    expect(await mergeDelta(mod)).toEqual(new Set(["en_1a2b"]));
+    expect(String(fetched.mock.calls[0][0])).toBe("/_moss/pagefind-delta/moss-delta.json");
+    expect(mod.mergeIndex).toHaveBeenCalledWith("/_moss/pagefind-delta/", { baseUrl: "/" });
+  });
+
+  test("a delta of deletions only drops pages and merges nothing", async () => {
+    document.body.setAttribute("data-moss-preview", "");
+    serve(200, { bundle: false, supersede: ["en_dead"] });
+    const mod = fakeIndex();
+
+    expect(await mergeDelta(mod)).toEqual(new Set(["en_dead"]));
+    expect(mod.mergeIndex).not.toHaveBeenCalled();
+  });
+
+  test("with no delta the index answers alone", async () => {
+    document.body.setAttribute("data-moss-preview", "");
+    serve(404, {});
+    const mod = fakeIndex();
+    expect(await mergeDelta(mod)).toEqual(new Set());
+    expect(mod.mergeIndex).not.toHaveBeenCalled();
+  });
+
+  test("a published page never asks for a delta", async () => {
+    const fetched = serve(200, { bundle: true, supersede: [] });
+    expect(await mergeDelta(fakeIndex())).toEqual(new Set());
+    expect(fetched).not.toHaveBeenCalled();
   });
 });
