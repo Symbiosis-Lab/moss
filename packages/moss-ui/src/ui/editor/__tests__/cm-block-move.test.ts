@@ -5,7 +5,7 @@ import { EditorState } from '@codemirror/state';
 import { history, undo } from '@codemirror/commands';
 import { ensureSyntaxTree } from '@codemirror/language';
 import { MARKDOWN_EXTENSIONS } from '../cm-editor';
-import { formatKeysExtension, blockUnitAt } from '../cm-format-keys';
+import { formatKeysExtension, blockUnitAt, moveToGap, siblingsAt } from '../cm-format-keys';
 
 // jsdom implements no layout; CM6's deferred measure pass calls Range.getClientRects after a test and needs a harmless answer, not a throw.
 beforeAll(() => {
@@ -216,5 +216,72 @@ describe('Alt-ArrowDown / Alt-ArrowUp', () => {
     expect(doc()).toBe('- b\n- a\n- c');
     undo(view);
     expect(doc()).toBe('- a\n- b\n- c');
+  });
+});
+
+/** Move the unit holding the line that starts with `lead` to gap `gap` of its siblings. */
+function moveTo(src: string, lead: string, gap: number): boolean {
+  mount('¦' + src);
+  const from = view.state.doc.toString().indexOf(lead);
+  const level = siblingsAt(view.state, view.state.doc.lineAt(from).from)!;
+  return moveToGap(view, level.siblings, level.at, level.at, gap);
+}
+
+describe('moveToGap: drag and Alt-arrow share one move', () => {
+  test('a block goes past several siblings in one step, one undo restores it', () => {
+    const src = 'a\n\nb\n\nc\n\nd';
+    expect(moveTo(src, 'a', 3)).toBe(true);
+    expect(doc()).toBe('b\n\nc\n\na\n\nd');
+    undo(view);
+    expect(doc()).toBe(src);
+  });
+
+  test('to the front and to the end, with no final newline', () => {
+    expect(moveTo('a\n\nb\n\nc', 'c', 0)).toBe(true);
+    expect(doc()).toBe('c\n\na\n\nb');
+    expect(moveTo('a\n\nb\n\nc', 'a', 3)).toBe(true);
+    expect(doc()).toBe('b\n\nc\n\na');
+  });
+
+  test('a section moves whole, sub-headings included', () => {
+    expect(moveTo('# A\n\ntext\n\n## A1\n\nsub\n\n# B\n\nmore\n\n# C', '# A', 2)).toBe(true);
+    expect(doc()).toBe('# B\n\nmore\n\n# A\n\ntext\n\n## A1\n\nsub\n\n# C');
+  });
+
+  test('a nested block stays inside its :::grid', () => {
+    const src = ':::grid\nA\n\n::::buttons\n[a](b)\n::::\n\nC\n:::\n\nafter';
+    expect(moveTo(src, '::::buttons', 3)).toBe(true);
+    expect(doc()).toBe(':::grid\nA\n\nC\n\n::::buttons\n[a](b)\n::::\n:::\n\nafter');
+    expect(moveTo(src, '::::buttons', 4)).toBe(false); // there is no gap past the body's last block
+    expect(doc()).toBe(src);
+  });
+
+  test('a block does not cross a heading or a fence: its gaps are its own section only', () => {
+    const src = '# A\n\np\n\nq\n\n# B\n\n:::x\nin\n:::';
+    expect(moveTo(src, 'p', 3)).toBe(false);
+    expect(moveTo(src, 'p', 0)).toBe(false);
+    expect(doc()).toBe(src);
+    expect(moveTo(src, 'p', 2)).toBe(true);
+    expect(doc()).toBe('# A\n\nq\n\np\n\n# B\n\n:::x\nin\n:::');
+  });
+
+  test('its own gaps are a no-op with no history entry', () => {
+    const src = 'a\n\nb\n\nc';
+    expect(moveTo(src, 'b', 1)).toBe(false);
+    expect(moveTo(src, 'b', 2)).toBe(false);
+    expect(doc()).toBe(src);
+    expect(undo(view)).toBe(false);
+  });
+
+  test('siblings with no blank line between them keep their single newline', () => {
+    expect(moveTo(':::a\nx\n:::\n:::b\ny\n:::', ':::a', 2)).toBe(true);
+    expect(doc()).toBe(':::b\ny\n:::\n:::a\nx\n:::');
+  });
+
+  test('the caret moves with its block', () => {
+    mount('a\n\nb¦x\n\nc');
+    const level = siblingsAt(view.state, view.state.doc.line(3).from)!;
+    moveToGap(view, level.siblings, level.at, level.at, 0);
+    expect(withCaret()).toBe('b¦x\n\na\n\nc');
   });
 });

@@ -456,17 +456,31 @@ export function moveBlock(view: EditorView, dir: -1 | 1): boolean {
 
   const run = top[0].level.siblings;
   const lo = top[0].level.at, hi = top[top.length - 1].level.at;
-  const moving = { from: run[lo].from, to: run[hi].to };
-  const other = run[dir < 0 ? lo - 1 : hi + 1];
-  if (!other) return true;
+  const gap = dir < 0 ? lo - 1 : hi + 2;
+  if (gap >= 0 && gap <= run.length) moveToGap(view, run, lo, hi, gap);
+  return true;
+}
 
-  const [a, b] = dir < 0 ? [other, moving] : [moving, other]; // a is the earlier span
-  const gap = doc.sliceString(a.to, b.from);
-  const text = doc.sliceString(b.from, b.to) + gap + doc.sliceString(a.from, a.to);
-  const shift = (dir < 0 ? -1 : 1) * (other.to - other.from + gap.length);
+/** The unit holding the line at `lineFrom` and the run of siblings it sits in, as whole-line spans; null on a blank line. */
+export function siblingsAt(state: EditorState, lineFrom: number): { siblings: Span[]; at: number } | null {
+  return levelOf(blocksOf(state), lineFrom);
+}
+
+/**
+ * Move the siblings `run[lo..hi]` to gap `gap`: gap `k` lies before `run[k]`, and `run.length` is after the last. One transaction and one undo step; the text between neighbours (blank lines, a missing final newline) stays where it is, and a selection endpoint inside the moved text or inside what it passes moves with it. Returns false, changing nothing, for the unit's own gaps (`lo`, `hi + 1`).
+ */
+export function moveToGap(view: EditorView, run: readonly Span[], lo: number, hi: number, gap: number): boolean {
+  if (view.state.readOnly || gap < 0 || gap > run.length || (gap >= lo && gap <= hi + 1)) return false;
+  const { doc, selection } = view.state;
+  const moving = { from: run[lo].from, to: run[hi].to };
+  const passed = gap < lo ? { from: run[gap].from, to: run[lo - 1].to } : { from: run[hi + 1].from, to: run[gap - 1].to };
+  const [a, b] = gap < lo ? [passed, moving] : [moving, passed]; // a is the earlier span
+  const sep = doc.sliceString(a.to, b.from);
+  const aLen = a.to - a.from, bLen = b.to - b.from;
+  const at = (pos: number): number => pos <= a.to ? (pos >= a.from ? pos + bLen + sep.length : pos) : pos >= b.from ? (pos <= b.to ? pos - aLen - sep.length : pos) : pos + bLen - aLen;
   view.dispatch({
-    changes: { from: a.from, to: b.to, insert: text },
-    selection: EditorSelection.single(range.anchor + shift, range.head + shift),
+    changes: { from: a.from, to: b.to, insert: doc.sliceString(b.from, b.to) + sep + doc.sliceString(a.from, a.to) },
+    selection: EditorSelection.single(at(selection.main.anchor), at(selection.main.head)),
     userEvent: 'move.line',
     annotations: isolateHistory.of('full'),
     scrollIntoView: true,
