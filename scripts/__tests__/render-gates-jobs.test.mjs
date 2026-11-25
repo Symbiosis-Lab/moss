@@ -80,6 +80,31 @@ test('inside a slot, --jobs above 1 without a declared grant is refused', () => 
   assert.equal(run(['--jobs', '6', ...SPREAD], { MOSS_SLOT_HELD: '/tmp/moss-heavy-slots/slot1' }).status, 0, 'a declared grant runs');
 });
 
+test('inside a slot with a declared grant, no --jobs takes as many lanes as the grant allows', () => {
+  const r = run(SPREAD, { RENDER_GATES_MEM_GB: '17', MOSS_SLOT_HELD: '/tmp/moss-heavy-slots/slot1' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /on 5 lanes/);
+});
+
+test('inside a slot, one lane is refused before any gate starts only when its recorded times pass the slot limit', () => {
+  const s = setup();
+  fs.writeFileSync(s.env.RENDER_GATES_TIMES, SPREAD.map((g) => `${g}\t700\n`).join(''));
+  const slot = { ...s.env, RENDER_GATES_MEM_GB: '8', MOSS_SLOT_HELD: '/tmp/moss-heavy-slots/slot1' };
+  const go = (env) => spawnSync('/bin/bash', [SCRIPT, ...SPREAD], { encoding: 'utf8', env: { ...slot, ...env } });
+  const over = go({ MOSS_SLOT_LIMIT_SEC: '3600' });
+  assert.equal(over.status, 2, over.stderr);
+  assert.match(over.stderr, /took 70 min last time, past the slot's limit of 60 min/);
+  assert.equal(s.events().length, 0, 'no gate starts');
+  const select = spawnSync('/bin/bash', [SCRIPT, '--select', ...SPREAD], { encoding: 'utf8', env: { ...slot, MOSS_SLOT_LIMIT_SEC: '3600' } });
+  assert.doesNotMatch(select.stderr, /past the slot's limit/, '--select decides its skips per gate, so it is not refused');
+  // Each run rewrites the times with the stub's; restore them before the next cell.
+  fs.writeFileSync(s.env.RENDER_GATES_TIMES, SPREAD.map((g) => `${g}\t700\n`).join(''));
+  assert.equal(go({ MOSS_SLOT_LIMIT_SEC: '7200' }).status, 0, 'a declared 120-minute limit runs');
+  fs.rmSync(s.env.RENDER_GATES_TIMES);
+  assert.equal(go({ MOSS_SLOT_LIMIT_SEC: '3600' }).status, 0, 'with no recorded times it runs');
+  s.done();
+});
+
 test('RENDER_GATES_MEM_GB, by default half the machine, caps --jobs N and sizes --jobs auto', () => {
   const capped = run(['--jobs', '6', ...SPREAD], { RENDER_GATES_MEM_GB: '13' });
   assert.match(capped.stderr, /running 3/);

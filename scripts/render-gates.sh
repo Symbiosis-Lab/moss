@@ -267,7 +267,7 @@ DO_LIST=false
 DO_CHECK=false
 SELECT=false
 SHADOW=false
-JOBS=1
+JOBS=""
 POSITIONAL=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -416,6 +416,9 @@ fi
 WORKER_GB=2 LANE_FIRST_GB=9 LANE_MORE_GB=2
 TIMES="${RENDER_GATES_TIMES:-target/render-gate-times.tsv}"
 granted="${RENDER_GATES_MEM_GB:-}"
+# In a slot that declared its memory, no --jobs means as many lanes as the grant allows:
+# the full suite on one lane takes 60 to 90 minutes, past a slot's time limit.
+if [ -z "$JOBS" ]; then JOBS=1; [ -n "${MOSS_SLOT_HELD:-}" ] && [ -n "$granted" ] && JOBS=auto; fi
 if [ -z "${RENDER_GATES_MEM_GB:-}" ] && [ "$JOBS" != 1 ]; then
   # Inside heavy-slot.sh the slot reserved less than half the machine; cargo-slot exports the grant only when --mem-gb was declared.
   [ -z "${MOSS_SLOT_HELD:-}" ] || { echo "--jobs $JOBS inside a slot needs its memory declared: pass --mem-gb to heavy-slot.sh" >&2; exit 2; }
@@ -434,6 +437,23 @@ esac
 if [ "$JOBS" -gt "$max_lanes" ]; then
   echo "── --jobs $JOBS needs more than RENDER_GATES_MEM_GB=$RENDER_GATES_MEM_GB ($LANE_FIRST_GB GB for one lane, $LANE_MORE_GB more for each further one): running $max_lanes" >&2
   JOBS=$max_lanes
+fi
+# recorded_times <default s> <gate>...: "<seconds>\t<gate>" per gate, from the last run's TIMES.
+recorded_times() {
+  local dflt=$1; shift
+  { cat "$TIMES" 2>/dev/null || true; printf '=\t%s\n' "$@"; } |
+    awk -F'\t' -v d="$dflt" '$1 != "=" { if (!($1 in t)) t[$1] = $2; next } { print ($2 in t ? t[$2] : d) "\t" $2 }'
+}
+# One lane in a slot: refuse before any gate starts if the gates' recorded times add up past the slot's
+# limit (MOSS_SLOT_LIMIT_SEC, exported by cargo-slot.sh). A gate with no recorded time counts 0. Not under
+# --select, which decides each skip only as the gate comes up, so the sum would count gates it skips.
+if [ -n "${MOSS_SLOT_HELD:-}" ] && [ "$JOBS" = 1 ] && { [ "$SELECT" = false ] || [ "$SHADOW" = true ]; }; then
+  slot_limit=${MOSS_SLOT_LIMIT_SEC:-3600}
+  serial_s=$(recorded_times 0 "${GATES[@]}" | awk '{ s += $1 } END { print int(s) }')
+  if [ "$serial_s" -gt "$slot_limit" ]; then
+    echo "${#GATES[@]} gates on one lane took $((serial_s / 60)) min last time, past the slot's limit of $((slot_limit / 60)) min: give heavy-slot.sh --mem-gb 20 for five lanes, a longer --timeout-min, or name the gates" >&2
+    exit 2
+  fi
 fi
 # A grant also caps the browsers a gate run alone may start.
 workers=$(awk -v g="${granted:-8}" -v w="$WORKER_GB" 'BEGIN { n = int(g / w); print (n > 4 ? 4 : (n < 1 ? 1 : n)) }')
@@ -515,8 +535,7 @@ else
   trap '[ -z "$group" ] || kill -TERM -- "-$group" 2>/dev/null; exit 143' TERM
   if [ ${#spread[@]} -gt 0 ]; then
     # A gate with no recorded time counts 60 s.
-    { cat "$TIMES" 2>/dev/null || true; printf '=\t%s\n' "${spread[@]}"; } |
-      awk -F'\t' '$1 != "=" { t[$1] = $2; next } { print ($2 in t ? t[$2] : 60) "\t" $2 }' | sort -rn | cut -f2 > "$logs/queue"
+    recorded_times 60 "${spread[@]}" | sort -rn | cut -f2 > "$logs/queue"
     in_group pool
   fi
   [ ${#serial[@]} -eq 0 ] || in_group serial_tail "${serial[@]}"
