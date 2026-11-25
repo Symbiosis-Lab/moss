@@ -309,14 +309,18 @@ fn stamp_one(root: &Path, source_path: &str, uid: &str, published_hash: &str) ->
         if hash(bytes) != published_hash {
             return Ok(None);
         }
-        let before = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
-        if crate::build::markdown::parse_typed_frontmatter(before).uid.is_some() {
-            return Ok(None);
-        }
-        let set = moss_core::frontmatter::FieldEdit::Set { key: "uid".into(), value: serde_yaml::Value::String(uid.to_string()) };
-        moss_core::frontmatter::edit_fields(before, &[set]).map(Some)
+        with_uid_stamp(std::str::from_utf8(bytes).map_err(|e| e.to_string())?, uid)
     })?;
     Ok(written.map(|after| hash(after.as_bytes())))
+}
+
+/// `before` with the note ID written in, or `None` when it already names one.
+pub(crate) fn with_uid_stamp(before: &str, uid: &str) -> Result<Option<String>, String> {
+    if crate::build::markdown::parse_typed_frontmatter(before).uid.is_some() {
+        return Ok(None);
+    }
+    let set = moss_core::frontmatter::FieldEdit::Set { key: "uid".into(), value: serde_yaml::Value::String(uid.to_string()) };
+    moss_core::frontmatter::edit_fields(before, &[set]).map(Some)
 }
 
 /// Write the publish record for a prebuilt tree that just went live.

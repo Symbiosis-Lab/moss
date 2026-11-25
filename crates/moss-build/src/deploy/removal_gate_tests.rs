@@ -404,6 +404,10 @@ fn a_redirect_line_quotes_an_address_toml_can_read_back() {
 }
 
 fn source_version(hash: &str, mtime: Option<(u64, u32)>) -> crate::build::manifest::SealedManifest {
+    source_version_of(hash, mtime, None)
+}
+
+fn source_version_of(hash: &str, mtime: Option<(u64, u32)>, uid: Option<&str>) -> crate::build::manifest::SealedManifest {
     use crate::build::manifest::{HashBucket, PendingManifest};
     use crate::build::served_path::ServedPath;
     let mut pending = PendingManifest::new(Default::default());
@@ -417,6 +421,8 @@ fn source_version(hash: &str, mtime: Option<(u64, u32)>) -> crate::build::manife
             ..crate::build::stat::FileStat::whole_second(1, mtime.map_or(0, |t| t.0))
         },
     });
+    let meta = crate::types::content::PageMeta { title: "Note".into(), uid: uid.map(String::from), ..Default::default() };
+    pending.register_page_meta("note.md".into(), meta);
     pending.seal()
 }
 
@@ -459,6 +465,25 @@ fn stale_content_old_published_hash_needs_acceptance_even_with_a_fresh_timestamp
     accept_version(dir.path(), "old", Some((300, 0)));
     assert!(check_version(dir.path(), "old", Some((300, 0))).is_ok());
     assert!(check_version(dir.path(), "other rollback", Some((50, 0))).is_err(), "acceptance names content");
+}
+
+#[test]
+fn a_source_lacking_only_the_note_id_stamped_after_its_publish_is_not_older_content() {
+    let dir = tempfile::tempdir().unwrap();
+    let hash = |text: &str| crate::build::render::blocking::source_metadata(None, text.as_bytes()).hash;
+    let older = "---\ntitle: Note\n---\nFirst draft.\n";
+    let unstamped = "---\ntitle: Note\n---\nFinal words.\n";
+    let stamped = super::landed::with_uid_stamp(unstamped, "a1b2c3d4").unwrap().unwrap();
+    publish_version(dir.path(), &hash(older), Some((100, 0)), 1);
+    publish_version(dir.path(), &hash(unstamped), Some((200, 0)), 2);
+    publish_version(dir.path(), &hash(&stamped), Some((300, 0)), 3);
+    let check = |text: &str| {
+        std::fs::write(dir.path().join("note.md"), text).unwrap();
+        super::removal_gate::refuse_stale_generation(dir.path(), &source_version_of(&hash(text), Some((400, 0)), Some("a1b2c3d4")))
+    };
+    assert!(check(unstamped).is_ok(), "the published page without moss's own stamp");
+    let error = check(older).unwrap_err();
+    assert!(error.contains("note.md"), "{error}");
 }
 
 #[test]
