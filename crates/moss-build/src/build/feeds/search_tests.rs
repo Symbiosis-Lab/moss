@@ -104,7 +104,7 @@ fn latin_han_boundaries_get_a_space() {
     assert!(out.contains(" v2"), "no space before latin: {}", out);
 }
 
-/// Kana and Hangul are out of jieba's scope and must pass through
+/// Kana and Hangul are out of scope and must pass through
 /// untouched rather than be mis-split by a Chinese dictionary.
 #[test]
 fn kana_and_hangul_pass_through() {
@@ -350,7 +350,7 @@ fn chinese_page_is_indexed_as_multiple_words() {
         .expect("fragments are gzipped");
 
     assert!(
-        json.contains("这是 一段"),
+        json.contains("这 是 一段 简单 的 测试 文本"),
         "fragment text is not segmented: {}",
         json
     );
@@ -451,4 +451,51 @@ fn pages_that_ask_to_stay_out_of_search_are_not_read() {
     let names: Vec<&str> = read.pages.iter().map(|p| p.rel_path.as_str()).collect();
     assert_eq!(names, ["raw.html", "site-switch.html"]);
     assert_eq!(read.left_out, 2);
+}
+
+/// Runs Pagefind's own search script from a bundle on disk under Node, which
+/// segments the query with `Intl.Segmenter` as a browser does. Prints the URL
+/// of every hit as JSON.
+const PAGEFIND_SEARCH: &str = r#"
+import fs from "node:fs"; import path from "node:path"; import { pathToFileURL } from "node:url";
+const [bundle, query] = process.argv.slice(2);
+globalThis.fetch = async (url) =>
+  new Response(fs.readFileSync(path.join(bundle, new URL(url, "http://local").pathname.replace(/^\/pagefind\//, ""))));
+const pagefind = await import(pathToFileURL(path.join(bundle, "pagefind.js")));
+await pagefind.options({ basePath: "/pagefind/" });
+const found = await pagefind.search(query);
+console.log(JSON.stringify(await Promise.all(found.results.map(async (r) => (await r.data()).url))));
+"#;
+
+/// The index splits Han words as the reader's query is split. A search for
+/// 酷兒 finds the page whose only 兒 is inside 酷兒性, though another page
+/// has a word that starts with 兒 (a dictionary that keeps 酷兒性 whole
+/// leaves the query's 兒 matching only that other page).
+#[test]
+fn a_chinese_query_finds_its_page_through_pagefinds_own_search() {
+    let site = tempfile::tempdir().unwrap();
+    let page = |body: &str| format!("<html lang=\"zh-Hant\"><body><p>{body}</p></body></html>");
+    std::fs::write(site.path().join("queer.html"), page("這部紀錄片談酷兒性與身體。")).unwrap();
+    std::fs::write(site.path().join("children.html"), page("兒童節的活動在公園舉行。")).unwrap();
+
+    let _serialize = lock_index_counter();
+    let index = build_search_index(site.path()).expect("index should build");
+    let bundle = tempfile::tempdir().unwrap();
+    for file in &index.files {
+        let path = bundle.path().join(&file.rel_path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, &file.bytes).unwrap();
+    }
+    let script = bundle.path().join("search.mjs");
+    std::fs::write(&script, PAGEFIND_SEARCH).unwrap();
+
+    let out = std::process::Command::new("node")
+        .arg(&script)
+        .arg(bundle.path())
+        .arg("酷兒")
+        .output()
+        .expect("node runs Pagefind's search script; install Node to run this test");
+    assert!(out.status.success(), "search failed: {}", String::from_utf8_lossy(&out.stderr));
+    let urls: Vec<String> = serde_json::from_slice(&out.stdout).expect("a JSON list of hits");
+    assert!(urls.iter().any(|u| u.contains("queer")), "酷兒 did not find the page with 酷兒性: {urls:?}");
 }

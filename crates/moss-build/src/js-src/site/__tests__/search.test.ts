@@ -332,7 +332,7 @@ describe("renderExcerpt", () => {
 });
 
 /**
- * The index is built from a jieba-segmented copy of each page ("這是一段文字" →
+ * The index is built from a word-segmented copy of each page ("這是一段文字" →
  * "這 是 一段 文字" — build/feeds/search.rs), and Pagefind's excerpts and titles
  * are slices of that segmented text. Display must invert it: remove exactly the
  * spaces segmentation inserted, and no others.

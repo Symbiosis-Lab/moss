@@ -57,14 +57,20 @@
 //! Instead moss segments the text itself before Pagefind ever sees it, the
 //! same trick `vitepress-plugin-pagefind` uses (it pre-segments with the
 //! browser's `Intl.Segmenter`): [`segment_html`] rewrites every text node,
-//! replacing each run of Han characters with its `jieba-rs` words joined by
-//! spaces. Pagefind then indexes ordinary whitespace-delimited words.
+//! replacing each run of Han characters with its words joined by spaces.
+//! Pagefind then indexes ordinary whitespace-delimited words.
+//!
+//! The words come from ICU's dictionary segmenter, the dictionary behind
+//! `Intl.Segmenter` in browsers, because Pagefind's search script splits the
+//! reader's query with `Intl.Segmenter` and prefix-matches each piece. An
+//! index split by another dictionary misses pages: one that keeps 酷兒性 as
+//! a word leaves the query 酷兒, split into 酷 and 兒, no word starting
+//! with 兒 on that page.
 //!
 //! The segmented HTML is handed to Pagefind in memory; `site_dir` is the real
 //! build output that gets deployed and is never written to.
 //!
-//! Scope: Han runs only. Japanese kana and Hangul are left untouched — jieba
-//! is a Chinese dictionary and would mis-split them. Latin/ASCII text is
+//! Scope: Han runs only. Japanese kana and Hangul are left untouched. Latin/ASCII text is
 //! byte-for-byte unchanged. `<script>`, `<style>`, `<code>` and `<pre>` are
 //! skipped so code samples and URLs are not corrupted.
 
@@ -74,7 +80,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock, Mutex};
 
-use jieba_rs::Jieba;
+use icu_segmenter::{options::WordBreakInvariantOptions, WordSegmenter, WordSegmenterBorrowed};
 use lol_html::html_content::ContentType;
 use lol_html::{element, text, HtmlRewriter, Settings};
 use rayon::prelude::*;
@@ -225,23 +231,18 @@ pub(crate) fn lock_index_counter() -> std::sync::MutexGuard<'static, ()> {
     LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// The jieba dictionary, loaded once per process.
-///
-/// `Jieba::new()` parses a ~5 MB embedded dictionary. It used to be built once
-/// per index build, which is per-publish today and would be per-*save* once
-/// preview indexes — a fixed cost paid again for every rebuild, and
-/// one that no per-page cache could ever collapse. It is immutable and `Sync`,
-/// so the segmentation threads share this one.
-/// Only [`segment_han_runs`] touches it, after finding Han text, so a site
-/// with none never loads it.
-static JIEBA: LazyLock<Jieba> = LazyLock::new(Jieba::new);
+/// ICU's word segmenter: its Chinese/Japanese dictionary, and small models
+/// rather than the large dictionaries for Southeast Asian scripts. Only
+/// [`segment_han_runs`] touches it, after finding Han text.
+static WORDS: LazyLock<WordSegmenterBorrowed<'static>> =
+    LazyLock::new(|| WordSegmenter::new_auto(WordBreakInvariantOptions::default()));
 
 /// The segmented HTML of every page the most recent index build read, keyed
 /// by the xxh3-128 of the page bytes it was made from.
 ///
 /// Segmentation is a pure function of those bytes (the dictionary is
 /// static), so a page that did not change replays its previous output instead
-/// of paying for jieba and a rewrite pass again — on a one-page edit, every
+/// of paying for segmentation and a rewrite pass again — on a one-page edit, every
 /// page but one. Keyed by content rather than path, so a hit is sound whatever
 /// tree, generation or folder the bytes were read from.
 ///
@@ -257,7 +258,7 @@ static JIEBA: LazyLock<Jieba> = LazyLock::new(Jieba::new);
 /// page is copied once, one at a time, as Pagefind takes it.
 static SEGMENTED: LazyLock<Mutex<HashMap<u128, Arc<str>>>> = LazyLock::new(Default::default);
 
-/// True for the Han ranges jieba is trained on. Kana and Hangul are
+/// True for the Han ranges moss segments. Kana and Hangul are
 /// deliberately absent — see the module docs.
 fn is_han(c: char) -> bool {
     matches!(c as u32,
@@ -270,7 +271,7 @@ fn is_han(c: char) -> bool {
     )
 }
 
-/// Replace every run of Han characters with its jieba words joined by single
+/// Replace every run of Han characters with its words joined by single
 /// spaces, leaving everything else byte-for-byte alone. Returns `None` when
 /// the input has no Han at all, so pure-Latin text costs one scan and no
 /// allocation.
@@ -295,11 +296,9 @@ fn segment_han_runs(text: &str) -> Option<String> {
         if out.chars().next_back().is_some_and(|c| !c.is_whitespace()) {
             out.push(' ');
         }
-        let words: Vec<&str> = JIEBA
-            .cut(&tail[..end], true)
-            .into_iter()
-            .map(|t| t.word)
-            .collect();
+        let run = &tail[..end];
+        let breaks: Vec<usize> = WORDS.segment_str(run).collect();
+        let words: Vec<&str> = breaks.windows(2).filter_map(|w| run.get(w[0]..w[1])).collect();
         out.push_str(&words.join(" "));
 
         rest = &tail[end..];
@@ -525,7 +524,7 @@ fn segment_pages(pages: Vec<PageSource>) -> (Vec<SegmentedPage>, usize, usize) {
         .collect();
     drop(prior);
 
-    // Segment the rest in parallel — jieba is the expensive part.
+    // Segment the rest in parallel.
     let resegmented = slots.iter().filter(|s| s.is_err()).count();
     let segmented: Vec<Option<SegmentedPage>> = slots
         .into_par_iter()

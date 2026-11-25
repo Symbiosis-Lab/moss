@@ -76,11 +76,12 @@ flate2 = "1"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "tiff"] }
 # HEIF dimensions (applying `irot`) without a decoder; already in the tree through usvg.
 imagesize = "0.12"
-# Already in the tree transitively via jieba-rs; version must keep matching
-# what Cargo.lock resolves there (`cargo tree -d` is the check).
+# Search segments Han text with the dictionary browsers use for
+# `Intl.Segmenter`, so the index splits words as the query does. Held at the
+# minor version of the other ICU crates in the lock (`cargo tree -d` is the check).
+icu_segmenter = { version = "~2.3", default-features = false, features = ["compiled_data", "auto"] }
 include-flate = "0.3.4"
 include_dir = "0.7"
-jieba-rs = "0.10"
 k256 = { version = "0.14", features = ["schnorr", "ecdsa"] }
 kamadak-exif = "0.5"
 lol_html = "1.2"
@@ -146,6 +147,9 @@ hex = "0.4"
 # Marks a machine-store entry used, by its modification time.
 filetime = "0.2"
 libc = "0.2"
+# No `extended` feature: it adds about 48 MB and a second HTTP/TLS stack, and it
+# would re-split the Han text moss has already segmented with charabia and jieba,
+# a dictionary the query side (`Intl.Segmenter`) does not share (`feeds/search.rs`).
 pagefind = { version = "1.5.2", default-features = false }
 png = "0.18"
 serde_yaml = "0.9"

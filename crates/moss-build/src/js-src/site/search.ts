@@ -436,7 +436,7 @@ const SPACE_BEFORE_HAN = new RegExp(
 );
 
 /**
- * Undo the indexer's jieba word segmentation for display.
+ * Undo the indexer's word segmentation for display.
  *
  * The index is built from a copy of each page whose Han runs were re-joined
  * with spaces (`segment_han_runs`) so the non-`extended` Pagefind build gets
