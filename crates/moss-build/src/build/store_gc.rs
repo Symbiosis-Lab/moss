@@ -406,6 +406,11 @@ impl WholeGeneration {
         Some(Self { version: WHOLE_RECORD_VERSION, id: gen_id.to_string(), dir: dir_identity(gen_dir)?, files })
     }
 
+    /// The bytes of every file it holds, as the build finished them.
+    fn bytes(&self) -> u64 {
+        self.files.values().map(|finished| finished.size).sum()
+    }
+
     /// The generation this record is of.
     pub fn id(&self) -> &str {
         &self.id
@@ -676,6 +681,50 @@ pub fn gc_old_generations(
         kept.sort_unstable();
         log::info!("generation GC: removed [{}], kept roots [{}]", removed.join(", "), kept.join(", "));
     }
+    Ok(())
+}
+
+/// A store's recorded size, beside its generations.
+const STORE_SIZE: &str = "size.json";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoreSize {
+    bytes: u64,
+}
+
+/// Record what the store at `build_dir` holds, for the store budget: the
+/// generations' bytes as their records say, and staging as one more copy of
+/// the current generation, which it mirrors. Never walks the disk. Facts and
+/// the object cache are not counted, since their total is not kept anywhere;
+/// a generation without a record counts as nothing.
+pub fn record_store_size(build_dir: &Path) {
+    let generations = build_dir.join("generations");
+    let current = std::fs::read_to_string(build_dir.join("current.generation")).unwrap_or_default();
+    let mut bytes = 0;
+    for id in list_generations(&generations) {
+        let held = WholeGeneration::load(&generations, &id).map_or(0, |whole| whole.bytes());
+        bytes += if id == current.trim() { 2 * held } else { held };
+    }
+    if let Err(e) = crate::infra::atomic_write::write_json_atomic(&build_dir.join(STORE_SIZE), &StoreSize { bytes }) {
+        log::info!("store size not recorded: {e}");
+    }
+}
+
+/// The size [`record_store_size`] last wrote for the store at `build_dir`; none for a store sealed before it did.
+pub fn recorded_store_size(build_dir: &Path) -> Option<u64> {
+    let text = std::fs::read_to_string(build_dir.join(STORE_SIZE)).ok()?;
+    serde_json::from_str::<StoreSize>(&text).ok().map(|size| size.bytes)
+}
+
+/// Remove every generation of the store at `build_dir` but the current one,
+/// the last-deployed one and any a deploy or the preview has open. A store
+/// with no current generation is left whole.
+pub fn trim_to_current(build_dir: &Path, last_deployed: Option<&str>) -> std::io::Result<()> {
+    let marker = build_dir.join("current.generation");
+    let current = std::fs::read_to_string(&marker)?;
+    let roots = gc_roots(current.trim(), &HashSet::new(), last_deployed);
+    gc_old_generations(&build_dir.join("generations"), &marker, &roots, 0)?;
+    record_store_size(build_dir);
     Ok(())
 }
 

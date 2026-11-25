@@ -532,3 +532,27 @@ fn a_file_changed_since_the_record_is_not_held_and_a_written_one_is_stat_again()
     let next = WholeGeneration::record(&gen_dir, "g2", &files, &stats).unwrap();
     assert_eq!(next.files["a.html"].size, "<p>a, transformed</p>".len() as u64);
 }
+
+/// A generation `id` under `build_dir` holding one file of `size` bytes, with its record.
+fn sealed_generation(build_dir: &std::path::Path, id: &str, size: usize) {
+    let gens = build_dir.join("generations");
+    let dir = gens.join(id);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("index.html"), vec![b'x'; size]).unwrap();
+    let files = std::collections::HashMap::from([("index.html".to_string(), "100644:x".to_string())]);
+    WholeGeneration::record(&dir, id, &files, &Default::default()).unwrap().save(&gens);
+}
+
+#[test]
+fn a_seal_records_the_stores_size_as_its_generations_plus_a_stage_like_the_current_one() {
+    let folder = tempfile::tempdir().unwrap();
+    let mp = crate::moss_paths::MossPaths::new(folder.path());
+    let build = mp.build_dir();
+    sealed_generation(&build, "aaaa", 100);
+    sealed_generation(&build, "bbbb", 250);
+    std::fs::write(mp.current_generation_marker(), "bbbb").unwrap();
+
+    assert_eq!(recorded_store_size(&build), None, "a store sealed before sizes were kept has none");
+    crate::build::collect_build_store(&mp, "bbbb", &HashSet::new());
+    assert_eq!(recorded_store_size(&build), Some(100 + 250 + 250));
+}

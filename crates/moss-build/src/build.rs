@@ -2311,6 +2311,7 @@ pub(crate) fn collect_build_store(
     if let Err(e) = store_gc::gc_old_generations(&mp.generations_dir(), &mp.current_generation_marker(), &roots, keep) {
         log::info!("generation GC failed (non-fatal): {}", e);
     }
+    store_gc::record_store_size(&mp.build_dir());
     store_gc::maybe_gc_cache(mp);
     crate::infra::folder_lock::spawn_litter_sweep();
     crate::infra::folder_store::collect_gone();
